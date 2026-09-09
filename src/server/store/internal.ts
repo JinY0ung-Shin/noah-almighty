@@ -373,6 +373,19 @@ export class StoreBase {
 
   protected migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS direct_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL REFERENCES users(id),
+        recipient_id TEXT NOT NULL REFERENCES users(id),
+        text TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        read_at TEXT,
+        UNIQUE(sender_id, nonce)
+      );
+      CREATE INDEX IF NOT EXISTS dm_pair ON direct_messages(sender_id, recipient_id, id);
+      CREATE INDEX IF NOT EXISTS dm_unread ON direct_messages(recipient_id, sender_id) WHERE read_at IS NULL;
+      CREATE INDEX IF NOT EXISTS dm_rate ON direct_messages(sender_id, created_at);
       CREATE TABLE IF NOT EXISTS avatar_api_keys (
         id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, name TEXT NOT NULL,
         prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT

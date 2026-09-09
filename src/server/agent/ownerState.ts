@@ -324,3 +324,6 @@ export function summarizePersonalAgentState(
     adoptedSkills: agent.selectedSkills,
   };
 }
+
+/** Product-wide UI capability; never reads private DM content or presence into agent context. */
+export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in users via the sidebar DM button, across groups. It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";

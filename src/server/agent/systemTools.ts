@@ -1,3 +1,4 @@
+import { DIRECT_MESSAGE_STATE } from "./ownerState.js";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import {
@@ -292,6 +293,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const user = store.getUserById(ctx.avatarUserId);
         const publicGuide = [
           "Noah Almighty avatar-chat system summary:",
+          DIRECT_MESSAGE_STATE,
           "- System tools are always available on local avatar runs; individual handlers still enforce owner, group and bot scope. Other tool groups follow the current selection and policy.",
           "- Official usage manual: call mcp__system__read_manual (omit topic for the index) for setup steps, examples and limitations. Use topic external-tasks for the external Task API. The manual documents features; the current state below determines this run's actual capabilities.",
           "- The avatar converses by loading its profile/persona, base skills, owner plugins, and personal knowledge repository together.",

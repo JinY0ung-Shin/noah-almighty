@@ -5,7 +5,7 @@ import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATIONS_PER_TURN,
 } from "../personalAgents.js";
-import { gettingStartedGaps } from "./ownerState.js";
+import { DIRECT_MESSAGE_STATE, gettingStartedGaps } from "./ownerState.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
   effectiveMcpToolGroups,
@@ -744,6 +744,7 @@ export function buildSystemPromptAppend(
     "System meta-cognition: this service is Noah Almighty (avatar-chat). An avatar operates from a combination of its profile/persona, default skills, owner plugins, a personal knowledge repository, scheduled routines, secret names, and trusted-user settings. " +
       "When you describe system state or what changes are possible, do not guess — base your answer on the provided tools and the current configuration.",
   );
+  lines.push(DIRECT_MESSAGE_STATE);
   lines.push(
     "Official Noah usage manual — feature index (not a claim that every feature is enabled):\n" +
       systemManualIndex(true) +

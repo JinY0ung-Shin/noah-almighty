@@ -1,3 +1,4 @@
+import { createDirectMessagesRouter } from "./routes/directMessages.js";
 import fs from "node:fs";
 import path from "node:path";
 import express from "express";
@@ -189,6 +190,7 @@ export function createApp(services = createServices()) {
   // matching is unchanged; each router owns a disjoint set of paths.
   app.use(createAuthRouter(deps));
   app.use(createProfileRouter(deps));
+  app.use(createDirectMessagesRouter(deps));
   app.use(createPluginsRouter(deps));
   app.use(createKnowledgeRepoRouter(deps));
   app.use(createGroupsRouter(deps));

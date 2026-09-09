@@ -9,6 +9,22 @@
  */
 export const SYSTEM_MANUAL_TOPICS = [
   {
+    id: "direct-messages",
+    title: "Human-to-human direct messages",
+    summary: "Sidebar DM, recent-active contacts, unread badges and private conversation history.",
+    body: `## Use
+Open DM at the bottom of the sidebar, choose a recently active user or an existing conversation, type a message and press 보내기 or Enter. Shift+Enter inserts a newline. Messages are plain text, up to 4000 characters. DM is available to all signed-in users across groups, independent of avatar visibility; no setup or admin role is required.
+
+## Presence and delivery
+접속 중 means activity within the last hour plus an unexpired login session, not an exact live socket connection. Visible app tabs refresh every 5 seconds. Hidden tabs pause refresh and catch up when visible. Previously contacted users remain listed offline and can still receive messages. The sidebar badge counts unread incoming messages; opening their conversation in a visible tab acknowledges displayed messages. Previous messages loads older history in pages of 50. Network failures keep the draft; retrying the same message uses the same delivery identifier to prevent duplicates. Sending is limited to 60 messages per minute per user.
+
+## Permissions and limits
+Only the two participants can retrieve their conversation through the DM API; system administrators have no special DM-reading endpoint. Sender identity always comes from the browser session. Messages persist in the server SQLite database, survive restarts, and are deleted in both directions when a participant account is permanently deleted. Suspended accounts cannot use DM or receive new messages. This is not end-to-end encryption. There are no attachments, typing indicators, read receipts, message editing/deletion, blocking, or browser push notifications in this version.
+
+## Avatar boundary
+DM is human-to-human UI functionality. DM content and contact lists are not added to avatar prompts, tools, knowledge repositories or AI conversation history. There is no avatar DM tool and personal avatar API keys do not authenticate to these endpoints. Explain the UI workflow; never claim to have sent a DM or read one.`,
+  },
+  {
     id: "network-policy",
     title: "Shared server outbound network policy",
     summary: "Domain blocking, proxy denials, browser scope and deployment setup.",

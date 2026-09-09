@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import DirectMessages from "./DirectMessages.svelte";
   import AvatarImage from "./AvatarImage.svelte";
   import Icon from "./Icon.svelte";
   import { api } from "../lib/api";
@@ -866,6 +867,7 @@
   </div>
 
   <div class="rail-footer">
+    {#key user.id}<DirectMessages userId={user.id} />{/key}
     {#if streaming}
       <div class="svelte-rail-streaming"><span class="spinner"></span><span>응답 중</span></div>
     {/if}
