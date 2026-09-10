@@ -37,6 +37,7 @@ Companion to the server-area philosophy in [`../src/server/CLAUDE.md`](../src/se
 | [routines.md](architecture/routines.md) | Working on scheduled runs: the scheduler tick, the job model, and how a routine run differs from an interactive chat turn. |
 | [avatar-task-api.md](architecture/avatar-task-api.md) | Touching 외부 작업 API (the personal Bearer-key task API an external system drives the owner's main avatar with): the `avatar_api_keys`/`avatar_tasks` schema, the Bearer-only auth boundary, the 1-second dispatcher and its concurrency/backoff/cancel windows, the `externalTaskApi` provenance stamp, and every prune and cascade. |
 | [stt.md](architecture/stt.md) | Touching the composer's mic button or `/api/stt`: the JSON-data-URL-in / multipart-out contract, the validator it mirrors from `chatImages.ts`, the limits that make a self-hosted unauthenticated GPU service safe to sit behind, why the client cannot use `blob:`, and the `STT_URL` engine seam. |
+| [direct-messages.md](architecture/direct-messages.md) | Touching human-to-human DM (사용자 간 DM): the `/api/dm` routes and their session-only auth, the `direct_messages` schema and idempotent nonce send, the presence window shared with the admin panel, the read-ack scoping, the bottom-right 메시지 dock, and why DM stays outside every avatar tool. |
 
 ## Agent & MCP tools (`src/server/agent/`)
 

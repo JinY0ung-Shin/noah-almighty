@@ -4,6 +4,7 @@
   import Shell from "./components/Shell.svelte";
   import Toasts from "./components/Toasts.svelte";
   import ConfirmationDialog from "./components/ConfirmationDialog.svelte";
+  import DirectMessageDock from "./components/DirectMessageDock.svelte";
   import OnboardingModal from "./components/OnboardingModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import WhatsNewModal from "./components/WhatsNewModal.svelte";
@@ -250,6 +251,18 @@
     </main>
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{activeViewLabel} 화면</div>
   </section>
+{/if}
+
+<!-- The messenger dock is NOT part of the layout: it floats in the viewport's
+     bottom-right corner, so it mounts once for the logged-in state and shows on
+     EVERY view — including the rail-less 봇 오피스 — rather than living in the
+     rail footer where a whole view had no access to it. Non-modal, so it is
+     placed BEFORE the modal stack whose DOM order is load-bearing
+     (DESIGN.md §4.4) and must not be reordered. -->
+{#if $appState.user}
+  {#key $appState.user.id}
+    <DirectMessageDock userId={$appState.user.id} hidden={mobileRailOpen} />
+  {/key}
 {/if}
 
 {#if showOnboarding && $appState.user}

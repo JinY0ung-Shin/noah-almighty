@@ -1,7 +1,7 @@
 import type { DirectMessage, DirectMessageInbox, DirectMessagePage } from "../../shared/directMessages.js";
-import { type Constructor, type StoreBase, now } from "./internal.js";
+import { type Constructor, type StoreBase, PRESENCE_WINDOW_MS, now } from "./internal.js";
 
-const WINDOW_MS = 60 * 60_000;
+// DM presence deliberately shares the admin presence window (PRESENCE_WINDOW_MS) so both surfaces agree on "접속 중".
 const MESSAGE_COLUMNS = "id, sender_id AS senderId, recipient_id AS recipientId, text, created_at AS createdAt";
 
 export function withDirectMessages<TBase extends Constructor<StoreBase>>(Base: TBase) {
@@ -21,13 +21,13 @@ export function withDirectMessages<TBase extends Constructor<StoreBase>>(Base: T
             WHERE (d.sender_id = @id AND d.recipient_id = u.id)
                OR (d.sender_id = u.id AND d.recipient_id = @id))
         ) ORDER BY unread DESC, online DESC, u.display_name, u.id
-      `).all({ id: userId, since: new Date(Date.now() - WINDOW_MS).toISOString(), now: now() }) as {
+      `).all({ id: userId, since: new Date(Date.now() - PRESENCE_WINDOW_MS).toISOString(), now: now() }) as {
         id: string; username: string; displayName: string; online: number | null; available: number; unread: number;
       }[];
       return {
         peers: peers.map(p => ({ ...p, online: Boolean(p.online), available: Boolean(p.available) })),
         unread: peers.reduce((sum, p) => sum + p.unread, 0),
-        windowMinutes: WINDOW_MS / 60_000,
+        windowMinutes: Math.round(PRESENCE_WINDOW_MS / 60_000),
       };
     }
 

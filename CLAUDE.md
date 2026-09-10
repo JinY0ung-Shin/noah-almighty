@@ -203,7 +203,7 @@ These are the invariants the project is built around. New work should reinforce 
 
 ## Module map
 - **HTTP:** `app.ts` is thin glue (`createApp` mounts per-domain routers); handlers in
-  `src/server/routes/{auth,profile,plugins,knowledgeRepo,groups,routines,chat,admin,browserExtension}.ts`,
+  `src/server/routes/{auth,profile,directMessages,plugins,knowledgeRepo,groups,routines,chat,admin,browserExtension}.ts`,
   with external avatar admin CRUD registered from `routes/adminExternalAgents.ts` (+ `_shared.ts`).
 - **Agent:** `claudeAgent.ts` re-exports `buildPrompt` / `buildSystemPromptAppend` / `buildUserPrompt`
   (`agent/promptBuilder.ts`), SDK-message handlers (`agent/sdkMessageHandlers.ts`), the PreToolUse hook

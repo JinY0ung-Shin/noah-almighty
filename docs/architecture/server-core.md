@@ -8,7 +8,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
 
 ## HTTP layout (after the Tier-1/2 refactor)
 - **`app.ts` is thin glue.** `createApp` builds middleware + mounts per-domain routers from
-  `routes/`. Handlers live in `routes/{auth,profile,plugins,knowledgeRepo,groups,routines,chat,admin}.ts`,
+  `routes/`. Handlers live in `routes/{auth,profile,directMessages,plugins,knowledgeRepo,groups,routines,chat,admin}.ts`,
   each a `(deps) => Router` factory. Shared route helpers (`apiError`, `safeString`, `looksLikeRepo`,
   `avatarDir`, MIME/size/password consts, `AppServices`) live in `routes/_shared.ts`.
   **`createApp`/`createServices`/`expandChatSlashCommand`/`conversationHistoryForPrompt`/`AppServices`/

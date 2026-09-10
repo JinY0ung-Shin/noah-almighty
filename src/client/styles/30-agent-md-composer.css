@@ -1200,6 +1200,21 @@ textarea::placeholder {
   min-width: 0;
   max-width: 100%;
 }
+/* The DM dock's pill floats over the bottom-right corner of every view, and
+   this row's right-aligned meta lands in exactly that spot — the browser-bridge
+   status chip there is a BUTTON into the install guide, so it has to stay
+   reachable. `--dm-dock-inset` is published by DirectMessageDock.svelte and is
+   absent (→ 0px) whenever the dock is hidden.
+   Scoped to the column that is LAST in the layout, because a side panel
+   (canvas / file preview) already sits under the pill and shifting the badges
+   then would buy nothing. Two selectors, because the single-pane branch puts
+   `.chat-col` directly in `.chat-layout` while the split branch nests panes in
+   `.chat-workbench` — the panel is a sibling of the WORKBENCH, not of the pane
+   (verified against ChatView.svelte's two `.chat-layout` branches). */
+.chat-layout > .chat-col:last-child .composer-hint,
+.chat-layout > .chat-workbench:last-child > .chat-col:last-child .composer-hint {
+  padding-right: var(--dm-dock-inset, 0px);
+}
 .composer-hint kbd {
   font-family: inherit;
   background: var(--panel-strong);
