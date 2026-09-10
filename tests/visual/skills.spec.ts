@@ -169,6 +169,68 @@ async function waitForKoreanFont(page: Page): Promise<void> {
       }),
     )
     .toBe(true);
+  await assertNoFallbackHangul(page);
+}
+
+/**
+ * `document.fonts` can report every face loaded while a text node still RENDERS
+ * with the system fallback — on this Korean-font-less box that is a row of tofu
+ * boxes. Text shaped by a layout forced during the app's mount task (before the
+ * @font-face subsets started loading) never re-resolves in headless Chromium, and
+ * `fonts.check()` / `fonts.ready` cannot see it: only the renderer knows which
+ * platform font a node actually used. So ask it, and fail loudly instead of baking
+ * tofu into a baseline (docs/architecture/client.md, "forced layout during mount").
+ * `CSS.getPlatformFontsForNode` counts glyphs for the whole subtree, and Latin runs
+ * ("@jinyoung", digits, <kbd>) legitimately use a system font, so a node is an
+ * offender only when the system-font glyphs outnumber its non-Hangul characters.
+ * Visually hidden nodes (the skip link) are skipped: they never reach a screenshot.
+ */
+async function assertNoFallbackHangul(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const hangul = /[ㄱ-ㆎ가-힣]/;
+    for (const element of document.querySelectorAll<HTMLElement>("body *")) {
+      const own = [...element.childNodes]
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent ?? "")
+        .join("");
+      if (!hangul.test(own)) continue;
+      const rect = element.getBoundingClientRect();
+      // Never painted → never in a screenshot (the skip link parks at translateY(-200%)).
+      if (rect.width < 2 || rect.height < 2 || rect.bottom <= 0 || rect.right <= 0) continue;
+      // Collapsible whitespace runs become one space glyph; under pre/pre-wrap every
+      // whitespace character is its own glyph. Everything else non-Hangul is one glyph.
+      const preserved = /^(pre|pre-wrap|break-spaces)$/.test(getComputedStyle(element).whiteSpace);
+      const text = element.textContent ?? "";
+      const counted = preserved ? text : text.replace(/\s+/g, " ").trim();
+      const nonHangul = [...counted].filter((ch) => !hangul.test(ch)).length;
+      element.setAttribute("data-hangul-probe", String(nonHangul));
+    }
+  });
+  const client = await page.context().newCDPSession(page);
+  try {
+    await client.send("DOM.enable");
+    await client.send("CSS.enable");
+    const { root } = await client.send("DOM.getDocument", { depth: -1 });
+    const { nodeIds } = await client.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector: "[data-hangul-probe]" });
+    const offenders: string[] = [];
+    for (const nodeId of nodeIds) {
+      const { node } = await client.send("DOM.describeNode", { nodeId, depth: 1 });
+      const attributes = node.attributes ?? [];
+      const nonHangul = Number(attributes[attributes.indexOf("data-hangul-probe") + 1] ?? 0);
+      const { fonts } = await client.send("CSS.getPlatformFontsForNode", { nodeId });
+      const systemGlyphs = fonts.filter((font) => !font.isCustomFont).reduce((sum, font) => sum + font.glyphCount, 0);
+      if (systemGlyphs > nonHangul) {
+        const text = (node.children ?? []).filter((child) => child.nodeType === 3).map((child) => child.nodeValue).join("");
+        offenders.push(`<${node.localName}> "${text.trim().slice(0, 24)}" → ${fonts.map((font) => `${font.familyName}×${font.glyphCount}`).join(", ")} (non-Hangul chars ${nonHangul})`);
+      }
+    }
+    expect(offenders, "Hangul rendered with a system fallback font (tofu) — see assertNoFallbackHangul").toEqual([]);
+  } finally {
+    await client.detach();
+    await page.evaluate(() => {
+      for (const element of document.querySelectorAll("[data-hangul-probe]")) element.removeAttribute("data-hangul-probe");
+    });
+  }
 }
 
 test("skills view pins the explore-density layout", async ({ page }) => {
