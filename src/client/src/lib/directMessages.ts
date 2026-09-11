@@ -5,6 +5,14 @@
 // exactly the branches worth unit-testing without a DOM.
 import type { DirectMessage, DirectMessageInbox, DirectMessagePeer } from "../../../shared/directMessages";
 
+export interface DirectMessageReceipts {
+  /** Highest id among MY messages the peer has opened — the one bubble that
+      carries a 읽음 mark. `null` when the peer has opened none of them. */
+  lastReadId: number | null;
+  /** Ids of MY messages the peer has not opened yet. */
+  unreadIds: Set<number>;
+}
+
 export interface DirectMessageDay {
   /** Human separator text — "오늘" / "어제" / a full Korean date. */
   label: string;
@@ -116,4 +124,26 @@ export function groupByDay(messages: DirectMessage[], now: Date = new Date()): D
     else days.push({ key, label: dayLabel(message.createdAt, now), messages: [message] });
   }
   return days;
+}
+
+/**
+ * Where the other person's reading stopped, as the two marks a messenger shows.
+ * Only MY messages can carry a receipt — a stamp on the peer's own row says when
+ * *I* read it, which the sender of that row would be the one to care about.
+ *
+ * `read_at` is monotonic per thread (the server acknowledges everything up to a
+ * boundary id), so one `lastReadId` describes the whole transcript: the bubbles
+ * before it need no label, and the ones after it are the unread tail. A row that
+ * predates the field entirely (an old mock, a stale cache) counts as unread
+ * rather than throwing the boundary off.
+ */
+export function receiptMarks(messages: DirectMessage[], userId: string): DirectMessageReceipts {
+  let lastReadId: number | null = null;
+  const unreadIds = new Set<number>();
+  for (const message of messages ?? []) {
+    if (!message || !Number.isFinite(message.id) || message.senderId !== userId) continue;
+    if (message.readAt) lastReadId = lastReadId === null ? message.id : Math.max(lastReadId, message.id);
+    else unreadIds.add(message.id);
+  }
+  return { lastReadId, unreadIds };
 }

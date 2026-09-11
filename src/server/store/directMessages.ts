@@ -2,7 +2,10 @@ import type { DirectMessage, DirectMessageInbox, DirectMessagePage } from "../..
 import { type Constructor, type StoreBase, PRESENCE_WINDOW_MS, now } from "./internal.js";
 
 // DM presence deliberately shares the admin presence window (PRESENCE_WINDOW_MS) so both surfaces agree on "접속 중".
-const MESSAGE_COLUMNS = "id, sender_id AS senderId, recipient_id AS recipientId, text, created_at AS createdAt";
+// `readAt` travels to BOTH participants: the recipient never renders it, the sender needs it for the
+// 읽음 boundary. It is the recipient's own row, so exposing it leaks nothing the sender did not write.
+const MESSAGE_COLUMNS =
+  "id, sender_id AS senderId, recipient_id AS recipientId, text, created_at AS createdAt, read_at AS readAt";
 
 export function withDirectMessages<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class DirectMessages extends Base {
@@ -57,7 +60,7 @@ export function withDirectMessages<TBase extends Constructor<StoreBase>>(Base: T
         const result = this.db.prepare(`INSERT INTO direct_messages
           (sender_id, recipient_id, text, nonce, created_at) VALUES (?, ?, ?, ?, ?)`)
           .run(userId, peerId, text, nonce, createdAt);
-        return { message: { id: Number(result.lastInsertRowid), senderId: userId, recipientId: peerId, text, createdAt }, replay: false };
+        return { message: { id: Number(result.lastInsertRowid), senderId: userId, recipientId: peerId, text, createdAt, readAt: null }, replay: false };
       }).immediate();
     }
 

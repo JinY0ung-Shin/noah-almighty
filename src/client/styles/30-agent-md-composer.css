@@ -1135,7 +1135,12 @@ tbody tr:hover td {
   border-color: var(--accent);
 }
 
-.composer textarea {
+/* Widened to `.composer-box textarea`: the DM dock reuses the SAME
+   `.composer-box` + `.send-button` pair outside `.composer`, and this reset —
+   the borderless, transparent field the box draws its ring around — is part of
+   that pair, not of the chat column. */
+.composer textarea,
+.composer-box textarea {
   width: 100%;
   border: 0;
   outline: none;

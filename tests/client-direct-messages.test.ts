@@ -10,6 +10,7 @@ import {
   makeNonce,
   mergeMessages,
   normalizeInbox,
+  receiptMarks,
   timeLabel,
 } from "../src/client/src/lib/directMessages.js";
 import type { DirectMessage } from "../src/shared/directMessages.js";
@@ -18,7 +19,7 @@ import type { DirectMessage } from "../src/shared/directMessages.js";
 const NONCE = /^[a-zA-Z0-9_-]{16,80}$/;
 
 function message(id: number, createdAt: string, text = `m${id}`): DirectMessage {
-  return { id, senderId: "peer", recipientId: "me", text, createdAt };
+  return { id, senderId: "peer", recipientId: "me", text, createdAt, readAt: null };
 }
 
 /** Local-noon ISO for an offset in days from now — never straddles a day edge. */
@@ -178,5 +179,41 @@ describe("groupByDay", () => {
     ]);
 
     expect(new Set(days.map((day) => day.key)).size).toBe(days.length);
+  });
+});
+
+describe("receiptMarks", () => {
+  /** One of MY messages — `readAt` is the only field a receipt reads. */
+  function mine(id: number, readAt: string | null): DirectMessage {
+    return { id, senderId: "me", recipientId: "peer", text: `m${id}`, createdAt: localNoon(0), readAt };
+  }
+
+  it("has nothing to mark when none of the messages are mine", () => {
+    const empty = { lastReadId: null, unreadIds: new Set<number>() };
+    expect(receiptMarks([], "me")).toEqual(empty);
+    expect(receiptMarks(undefined as unknown as DirectMessage[], "me")).toEqual(empty);
+    expect(receiptMarks([message(1, localNoon(0)), message(2, localNoon(0))], "me")).toEqual(empty);
+  });
+
+  it("marks the newest read message of mine and every later one as unread", () => {
+    const marks = receiptMarks(
+      [mine(1, localNoon(-1)), message(2, localNoon(0)), mine(3, localNoon(0)), mine(4, null), mine(5, null)],
+      "me",
+    );
+
+    // A boundary, not per-bubble state: id 1 is read too but carries no label.
+    expect(marks.lastReadId).toBe(3);
+    expect([...marks.unreadIds]).toEqual([4, 5]);
+  });
+
+  it("ignores the peer's rows and treats a missing readAt as unread", () => {
+    // A peer bubble's own stamp records when *I* read it — never my receipt.
+    const peerRead: DirectMessage = { ...message(1, localNoon(0)), readAt: localNoon(0) };
+    // Rows from before the field existed (an old mock, a stale cached page).
+    const legacy = { id: 2, senderId: "me", recipientId: "peer", text: "구버전", createdAt: localNoon(0) } as DirectMessage;
+    const marks = receiptMarks([peerRead, legacy], "me");
+
+    expect(marks.lastReadId).toBe(null);
+    expect([...marks.unreadIds]).toEqual([2]);
   });
 });

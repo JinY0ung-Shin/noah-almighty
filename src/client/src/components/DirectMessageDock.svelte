@@ -12,7 +12,7 @@
   import AvatarImage from "./AvatarImage.svelte";
   import Icon from "./Icon.svelte";
   import { api } from "../lib/api";
-  import { groupByDay, makeNonce, mergeMessages, normalizeInbox, timeLabel } from "../lib/directMessages";
+  import { groupByDay, makeNonce, mergeMessages, normalizeInbox, receiptMarks, timeLabel } from "../lib/directMessages";
   import { autosize } from "../lib/dom";
   import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
   import type {
@@ -88,15 +88,27 @@
 
   let panelY = 0;
   let dragging = false;
+  /** A spring owns the transform right now — mirrors `.rail.rail-springing`. */
+  let springing = false;
   let closing = false;
   let closeTimer = 0;
-  let cancelSpring: () => void = () => {};
+  /** Presentation velocity of the running spring, px/s. A toggle that catches a
+      spring mid-flight continues from the speed the panel ALREADY had, so a
+      reversal reads as one continuous motion instead of a brick wall at 0. */
+  let panelVelocity = 0;
+  let stopSpring: (() => void) | null = null;
 
   const controller = new AbortController();
   const mobileMedia =
     typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(max-width: 640px)") : null;
 
   $: onlineCount = inbox.peers.filter((peer) => peer.online).length;
+  // Read receipts, derived HERE rather than per bubble: the marks are a property
+  // of the whole transcript (one boundary), and a `$:` statement is also what
+  // makes the recomputation legible to the legacy-mode compiler — `messages` and
+  // `userId` are named in the statement, so a poll that only refreshes `readAt`
+  // still re-renders.
+  $: marks = receiptMarks(messages, userId);
 
   // AbortSignal.any is newer than the browsers/jsdom this ships into; without
   // the guard its absence throws before the request is even made (mirrors the
@@ -323,6 +335,14 @@
 
   // ---- open/close motion -------------------------------------------------
 
+  type SpringParams = { dampingRatio: number; response: number };
+  /** Tap-driven open/close (bar, chevron, Escape, back): critically damped, the
+      DESIGN §2.5 default — a settle nobody is touching must not overshoot. */
+  const TAP_SPRING: SpringParams = { dampingRatio: 1, response: 0.35 };
+  /** A released sheet drag. The only path carrying the user's flick momentum,
+      which is the only case §2.5 lets damping drop to ~0.8. */
+  const FLICK_SPRING: SpringParams = { dampingRatio: 0.84, response: 0.3 };
+
   /** Measured while mounted; estimated from the CSS sizing rules otherwise. */
   function panelHeight(): number {
     const measured = panelEl?.getBoundingClientRect().height ?? 0;
@@ -331,20 +351,65 @@
     return mobileMedia?.matches ? viewport * 0.75 : Math.min(520, viewport * 0.7);
   }
 
-  function settle(from: number, to: number, velocity = 0, complete?: () => void): void {
+  /** Drop the running spring. A caller that means to CONTINUE its motion reads
+      `panelVelocity` before calling this — the reset is what keeps a stale
+      velocity from leaking into an unrelated later spring. */
+  function cancelSpring(): void {
+    stopSpring?.();
+    stopSpring = null;
+    springing = false;
+    panelVelocity = 0;
+  }
+
+  /**
+   * Retarget the panel with a spring. The parameters come from the CALLER, per
+   * DESIGN §2.5: a tap is critically damped (no overshoot on a programmatic
+   * settle), and only a released drag — which has real flick momentum behind
+   * it — is allowed to underdamp.
+   */
+  function settle(
+    from: number,
+    to: number,
+    spring: SpringParams,
+    velocity = 0,
+    complete?: () => void,
+  ): void {
     cancelSpring();
-    cancelSpring = springValue({
+    springing = true;
+    panelVelocity = velocity;
+    let settled = false;
+    let last = from;
+    let lastTime = performance.now();
+    const stop = springValue({
       from,
       to,
       velocity,
-      response: 0.3,
-      dampingRatio: 0.84,
-      onUpdate: (value) => (panelY = value),
+      response: spring.response,
+      dampingRatio: spring.dampingRatio,
+      onUpdate: (value) => {
+        const now = performance.now();
+        const elapsed = now - lastTime;
+        // Real frames only. springValue's reduced-motion path calls onUpdate
+        // once, synchronously, and that zero-length interval would read as a
+        // near-infinite velocity.
+        if (elapsed >= 1) {
+          panelVelocity = ((value - last) / elapsed) * 1000;
+          last = value;
+          lastTime = now;
+        }
+        panelY = value;
+      },
       onComplete: () => {
-        cancelSpring = () => {};
+        settled = true;
+        stopSpring = null;
+        springing = false;
+        panelVelocity = 0;
         complete?.();
       },
     });
+    // springValue can finish SYNCHRONOUSLY (reduced motion), before this
+    // assignment — keeping its canceller then would strand `springing` on.
+    if (!settled) stopSpring = stop;
   }
 
   function clearCloseTimer(): void {
@@ -355,7 +420,7 @@
     closing = false;
   }
 
-  function closePanel(from: number, velocity = 0): void {
+  function closePanel(from: number, spring: SpringParams, velocity = 0): void {
     clearCloseTimer();
     if (prefersReducedMotion()) {
       // No vestibular travel: cross-fade out over the same 120ms instead.
@@ -367,7 +432,7 @@
       }, FADE_MS);
       return;
     }
-    settle(from, panelHeight() + OFFSCREEN_GAP, velocity, () => {
+    settle(from, panelHeight() + OFFSCREEN_GAP, spring, velocity, () => {
       panelMounted = false;
       panelY = 0;
     });
@@ -392,7 +457,9 @@
 
   async function expand(): Promise<void> {
     if (expanded) return;
-    // A toggle mid-flight retargets the SAME value rather than restarting.
+    // A toggle mid-flight retargets the SAME value rather than restarting, and
+    // inherits the dying spring's velocity. Read BEFORE cancelSpring() clears it.
+    const handoff = panelVelocity;
     clearCloseTimer();
     cancelSpring();
     expanded = true;
@@ -405,19 +472,23 @@
       if (!expanded) return;
     }
     if (reduce) panelY = 0;
-    else settle(panelY, 0);
+    else settle(panelY, 0, TAP_SPRING, handoff);
     if (selected) void choose(selected, false);
     else void refresh();
     void focusIntoPanel();
   }
 
-  function collapse(options: { from?: number; velocity?: number; focusBar?: boolean } = {}): void {
+  function collapse(
+    options: { from?: number; velocity?: number; spring?: SpringParams; focusBar?: boolean } = {},
+  ): void {
     if (!expanded) return;
+    // Same handoff as expand(), read before closePanel cancels the spring.
+    const handoff = panelVelocity;
     expanded = false;
     setPref(OPEN_KEY, "0");
     generation++;
     if (selected) drafts[selected.id] = draft;
-    closePanel(options.from ?? panelY, options.velocity ?? 0);
+    closePanel(options.from ?? panelY, options.spring ?? TAP_SPRING, options.velocity ?? handoff);
     if (options.focusBar !== false) void focusBar();
   }
 
@@ -460,12 +531,15 @@
     };
     const onUp = () => {
       cleanup();
-      if (project(position, velocity) > height / 2) collapse({ from: position, velocity });
-      else settle(position, 0, velocity);
+      // The one momentum-driven path: the finger's own velocity, underdamped.
+      if (project(position, velocity) > height / 2)
+        collapse({ from: position, velocity, spring: FLICK_SPRING });
+      else settle(position, 0, FLICK_SPRING, velocity);
     };
     const onCancel = () => {
       cleanup();
-      settle(position, 0);
+      // A cancelled gesture released nothing, so it settles like a tap.
+      settle(position, 0, TAP_SPRING);
     };
     handle.addEventListener("pointermove", onMove);
     handle.addEventListener("pointerup", onUp);
@@ -558,6 +632,7 @@
       class="dm-dock-panel"
       class:closing
       class:dragging
+      class:springing
       bind:this={panelEl}
       role="complementary"
       aria-label="메시지"
@@ -626,35 +701,61 @@
             {#each day.messages as message (message.id)}
               <article class="dm-dock-bubble" class:mine={message.senderId === userId}>
                 <p>{message.text}</p>
-                <small>{timeLabel(message.createdAt)}</small>
+                <small>
+                  {timeLabel(message.createdAt)}
+                  {#if message.id === marks.lastReadId}
+                    <span
+                      class="dm-dock-receipt read"
+                      title={message.readAt ? `${timeLabel(message.readAt)}에 읽음` : "읽음"}
+                    >읽음</span>
+                  {:else if marks.unreadIds.has(message.id)}
+                    <span class="dm-dock-receipt">안 읽음</span>
+                  {/if}
+                </small>
               </article>
             {/each}
           {/each}
         </div>
 
+        <!-- The chat composer's own building blocks, not a look-alike: one
+             rounded material box that owns the focus ring, a borderless
+             textarea, an icon-only accent send button. `no-attach no-stt`
+             picks the two-column grid — there is no image or mic control
+             here. The keyboard hint moved off the placeholder (which vanishes
+             the moment you type) onto an sr-only description plus the button's
+             title. -->
         <form class="dm-dock-composer" on:submit|preventDefault={send}>
-          <textarea
-            bind:this={composerEl}
-            bind:value={draft}
-            use:autosize={draft}
-            aria-label="DM 메시지 입력"
-            placeholder={selected.available
-              ? "메시지 입력 (Enter 전송, Shift+Enter 줄바꿈)"
-              : "이용 정지된 사용자에게 보낼 수 없습니다"}
-            maxlength={4000}
-            rows="1"
-            disabled={!selected.available}
-            on:keydown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-          ></textarea>
-          <button class="btn primary" type="submit" disabled={sending || !draft.trim() || !selected.available}>
-            <Icon name="send" size={15} />
-            <span>{sending ? "전송 중…" : "보내기"}</span>
-          </button>
+          <div class="composer-box no-attach no-stt">
+            <textarea
+              bind:this={composerEl}
+              bind:value={draft}
+              use:autosize={draft}
+              aria-label="DM 메시지 입력"
+              aria-describedby="dm-dock-composer-hint"
+              placeholder={selected.available
+                ? `${selected.displayName}에게 메시지…`
+                : "이용 정지된 사용자에게 보낼 수 없습니다"}
+              maxlength={4000}
+              rows="1"
+              disabled={!selected.available}
+              on:keydown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+                  event.preventDefault();
+                  void send();
+                }
+              }}
+            ></textarea>
+            <button
+              class="send-button"
+              type="submit"
+              aria-label={sending ? "전송 중" : "보내기"}
+              title="보내기 (Enter) · 줄바꿈 (Shift+Enter)"
+              disabled={sending || !draft.trim() || !selected.available}
+            >
+              <Icon name="send" />
+            </button>
+          </div>
+          <span id="dm-dock-composer-hint" class="sr-only">Enter로 보내고 Shift+Enter로 줄을 바꿉니다.</span>
         </form>
       {:else}
         <div class="dm-dock-peers scroll-thin">
@@ -770,6 +871,13 @@
     backdrop-filter: saturate(180%) blur(var(--material-blur-thick));
     overflow: hidden;
     transform: translate3d(0, var(--dm-dock-y, 0px), 0);
+  }
+
+  /* The transform is JS-driven on both of these, so promote the layer for the
+     duration and hand it back at rest — same deal as `.rail.rail-springing`. */
+  .dm-dock-panel.dragging,
+  .dm-dock-panel.springing {
+    will-change: transform;
   }
 
   .dm-dock-panel:not(.dragging) {
@@ -1008,27 +1116,36 @@
     text-align: right;
   }
 
+  /* Read receipt. Only the BOUNDARY bubble is labelled — the newest message the
+     other person has opened, plus the unread tail after it — so a long thread of
+     my own messages carries two marks, not one per bubble. The middle dot is CSS
+     so the label stays the element's whole text (a locator, and a screen reader,
+     read "읽음", not "· 읽음"). */
+  .dm-dock-receipt::before {
+    content: "·";
+    margin: 0 var(--s-1);
+  }
+
+  .dm-dock-receipt.read {
+    color: var(--text-soft);
+  }
+
+  /* A plain strip — `.composer-box` inside is the control, and it brings its
+     own border, material, radius and focus ring from the composer layer.
+     `flex: none` so the panel's flex column never squeezes the composer to
+     buy the transcript room. */
   .dm-dock-composer {
-    display: flex;
-    align-items: flex-end;
-    gap: var(--s-2);
     flex: none;
     padding: var(--s-2-5);
     border-top: 1px solid var(--line-soft);
   }
 
+  /* Everything else (borderless, transparent, padded, 1.5 line-height) comes
+     from the shared `.composer-box textarea` reset. The dock only overrides
+     what its smaller window needs. */
   .dm-dock-composer textarea {
-    flex: 1;
-    min-width: 0;
     max-height: 120px;
-    resize: none;
     font-size: var(--t-sm);
-  }
-
-  .dm-dock-composer .btn {
-    flex: none;
-    padding: var(--s-2) var(--s-2-5);
-    font-size: var(--t-xs);
   }
 
   /* The tokens above already swap to opaque surfaces here; the blur is the one
@@ -1036,6 +1153,19 @@
   @media (prefers-reduced-transparency: reduce) {
     .dm-dock-bar,
     .dm-dock-panel {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
+  /* Increased contrast: the material tokens already go opaque here, so what is
+     left for the component to withdraw is the blur — plus a full-strength
+     border, since a hairline over a sharp surface is the edge that carries the
+     window's shape. */
+  @media (prefers-contrast: more) {
+    .dm-dock-bar,
+    .dm-dock-panel {
+      border-color: var(--line);
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }

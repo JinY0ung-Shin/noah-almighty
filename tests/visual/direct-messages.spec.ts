@@ -60,10 +60,13 @@ async function install(page: Page, options: { failFirstSend?: boolean } = {}): P
     posts: [],
     failFirstSend: options.failFirstSend ?? false,
     errors: [],
+    // Two of MY messages, the earlier one already opened by the peer and the
+    // latest not: the exact state a read-receipt boundary has to distinguish.
     messages: [
-      { id: 1, senderId: "peer", recipientId: admin.id, text: "안녕하세요", createdAt: today(9, 1) },
-      { id: 2, senderId: admin.id, recipientId: "peer", text: "네, 반갑습니다", createdAt: today(9, 2) },
-      { id: 3, senderId: "peer", recipientId: admin.id, text: "잠깐 시간 되세요?", createdAt: today(9, 3) },
+      { id: 1, senderId: "peer", recipientId: admin.id, text: "안녕하세요", createdAt: today(9, 1), readAt: null },
+      { id: 2, senderId: admin.id, recipientId: "peer", text: "네, 반갑습니다", createdAt: today(9, 2), readAt: today(9, 4) },
+      { id: 3, senderId: "peer", recipientId: admin.id, text: "잠깐 시간 되세요?", createdAt: today(9, 3), readAt: null },
+      { id: 4, senderId: admin.id, recipientId: "peer", text: "확인해 보고 답드릴게요", createdAt: today(9, 5), readAt: null },
     ],
   };
   page.on("pageerror", (error) => state.errors.push(error.message));
@@ -104,6 +107,7 @@ async function install(page: Page, options: { failFirstSend?: boolean } = {}): P
           recipientId: "peer",
           text: payload.text,
           createdAt: new Date().toISOString(),
+          readAt: null,
         });
         await route.abort("failed");
         return;
@@ -117,6 +121,7 @@ async function install(page: Page, options: { failFirstSend?: boolean } = {}): P
           recipientId: "peer",
           text: payload.text,
           createdAt: new Date().toISOString(),
+          readAt: null,
         } satisfies DirectMessage);
       if (!replay) state.messages.push(message);
       await route.fulfill({
@@ -191,6 +196,10 @@ test("dock bar carries the inbox, expands into a non-modal panel, and keeps poll
   await expect(panel(page).getByText("잠깐 시간 되세요?", { exact: true })).toBeVisible();
   await expect(panel(page).locator(".dm-dock-day")).toHaveText("오늘");
   await expect(panel(page).locator(".dm-dock-who strong")).toHaveText("이민지");
+  // The composer is the chat composer's own building blocks, not a look-alike:
+  // the rounded box with the icon-only accent send button inside it.
+  await expect(composer(page)).toBeVisible();
+  await expect(panel(page).locator(".composer-box .send-button")).toBeVisible();
   await expect.poll(() => state.reads).toBeGreaterThan(0);
   await expect(bar(page).locator(".tag.accent")).toHaveCount(0);
 
@@ -201,8 +210,41 @@ test("dock bar carries the inbox, expands into a non-modal panel, and keeps poll
     recipientId: admin.id,
     text: "실시간 답장",
     createdAt: new Date().toISOString(),
+    readAt: null,
   });
   await expect(panel(page).getByText("실시간 답장", { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  expect(state.errors).toEqual([]);
+});
+
+test("the sender's 읽음 boundary follows what the other person has opened", async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  const state = await install(page);
+  await page.goto("/");
+  await openThread(page);
+
+  // A boundary, not a label per bubble: 읽음 under the newest message the peer
+  // has opened, 안 읽음 under the ones after it, nothing on the rest.
+  const mine = panel(page).locator(".dm-dock-bubble.mine");
+  await expect(mine).toHaveCount(2);
+  await expect(mine.nth(0).locator(".dm-dock-receipt")).toHaveText("읽음");
+  await expect(mine.nth(1).locator(".dm-dock-receipt")).toHaveText("안 읽음");
+  await expect(panel(page).getByText("읽음", { exact: true })).toHaveCount(1);
+  await expect(panel(page).getByText("안 읽음", { exact: true })).toHaveCount(1);
+  // Never on the other person's own bubbles — their read stamp is my reading.
+  await expect(panel(page).locator(".dm-dock-bubble:not(.mine) .dm-dock-receipt")).toHaveCount(0);
+  // The read mark carries when, which the bubble itself has no room to say.
+  await expect(mine.nth(0).locator(".dm-dock-receipt")).toHaveAttribute("title", /에 읽음$/);
+
+  // The peer opens the latest one. The mark moves on the thread's existing 5s
+  // refresh — no receipt-specific request, so nothing new is mocked here.
+  state.messages = state.messages.map((item) => (item.id === 4 ? { ...item, readAt: new Date().toISOString() } : item));
+
+  await expect(mine.nth(1).locator(".dm-dock-receipt")).toHaveText("읽음", { timeout: 10_000 });
+  await expect(panel(page).getByText("안 읽음", { exact: true })).toHaveCount(0);
+  // And the boundary MOVED rather than multiplied: the earlier one is bare now.
+  await expect(panel(page).getByText("읽음", { exact: true })).toHaveCount(1);
+  await expect(mine.nth(0).locator(".dm-dock-receipt")).toHaveCount(0);
 
   expect(state.errors).toEqual([]);
 });

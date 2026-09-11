@@ -27,14 +27,26 @@ it("delivers between ordinary users, isolates history, and acknowledges only dis
   expect(Object.keys(inbox.peers[0]).sort()).toEqual(["available", "displayName", "id", "online", "unread", "username"]);
   const first = (await bob.post(`/api/dm/${e}`).send(payload("비공개 메시지")).expect(201)).body.message;
   const second = (await bob.post(`/api/dm/${e}`).send(payload("나중에 도착", "2")).expect(201)).body.message;
+  expect(first.readAt).toBe(null);
+  // The sender's own view of read_at — the only thing a 읽음 receipt can be built on.
+  const senderStamps = async (): Promise<Record<number, string | null>> => Object.fromEntries(
+    ((await bob.get(`/api/dm/${e}`).expect(200)).body.messages as { id: number; readAt: string | null }[])
+      .map(m => [m.id, m.readAt]));
   expect((await eve.get(`/api/dm/${b}`).expect(200)).body.messages).toHaveLength(2);
   expect((await alice.get(`/api/dm/${b}`).expect(200)).body.messages).toEqual([]);
   await alice.post(`/api/dm/${b}/read`).send({ throughId: second.id }).expect(200);
   expect((await eve.get("/api/dm")).body.unread).toBe(2);
   await eve.post(`/api/dm/${b}/read`).send({ throughId: first.id }).expect(200);
   expect((await eve.get("/api/dm")).body.unread).toBe(1);
+  const acked = await senderStamps();
+  expect(acked[first.id]).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+  expect(acked[second.id]).toBe(null);
   await eve.post(`/api/dm/${b}/read`).send({ throughId: second.id }).expect(200);
   expect((await eve.get("/api/dm")).body.unread).toBe(0);
+  const bothAcked = await senderStamps();
+  expect(bothAcked[second.id]).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+  // The earlier stamp does not move: read_at is set once, never re-stamped.
+  expect(bothAcked[first.id]).toBe(acked[first.id]);
   await eve.post(`/api/dm/${b}`).send(payload("답장")).expect(201);
   expect((await bob.get("/api/dm")).body.unread).toBe(1);
   expect((await alice.get(`/api/dm/${a}`).expect(404)).body.error).toBeTruthy();

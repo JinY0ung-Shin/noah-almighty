@@ -19,6 +19,10 @@ send.
 - `GET /api/dm/:peerId?before=<id>` → `DirectMessagePage { messages, hasMore }`, oldest-first, 50 per
   page (the query takes `LIMIT 51` and reports the extra row as `hasMore`). `before` must be a safe
   positive integer or the route 400s; absent it defaults to `Number.MAX_SAFE_INTEGER`.
+- **Message rows carry `readAt`** (the RECIPIENT's `read_at`, `null` while unread) to BOTH participants:
+  the recipient never renders it, the sender builds the 읽음 boundary from it, and it is the recipient's
+  own timestamp so exposing it leaks nothing the sender did not write. A fresh `POST` insert answers
+  `readAt: null`; a replay answers the stored row, stamp included.
 - `POST /api/dm/:peerId {text, nonce}` → `201 {message}` for a new row, **`200` for a replay** of the
   same nonce. `text` is 1–4000 chars (trimmed before storage), `nonce` must match
   `/^[a-zA-Z0-9_-]{16,80}$/`. Store errors map to `404` (peer missing / suspended / self),
@@ -80,10 +84,37 @@ send.
   `DirectMessages.svelte` modal is gone.
 - `z-index: var(--z-popover)`; hidden while the mobile rail drawer is open. Expanded state and last peer
   persist in `localStorage` (`dmDockOpen`, `dmDockPeer`). At ≤640 px it becomes a full-width bottom sheet
-  (75dvh) collapsed by dragging its grabber down. Motion uses the sheet spring from `lib/motion.ts`
-  (`springValue({response: 0.3, dampingRatio: 0.84})`).
+  (75dvh) collapsed by dragging its grabber down.
+- **The composer is the chat composer's own building blocks, not a look-alike.** The thread view renders
+  `.composer-box.no-attach.no-stt` around a borderless `<textarea>` and the icon-only `.send-button`, so
+  the rounded material box, its `:focus-within` ring and the accent button all arrive from the composer
+  layer instead of being re-invented. The textarea reset lives on the WIDENED
+  `.composer textarea, .composer-box textarea` selector in `30-agent-md-composer.css` — the dock sits
+  outside `.composer`, so the original selector missed it — and the dock's scoped CSS only overrides
+  `max-height: 120px` + `font-size`. The Enter/Shift+Enter hint moved off the placeholder, which
+  disappears the moment you type, onto an `sr-only` `aria-describedby` line plus the button's `title`;
+  the placeholder now names the peer the way the chat's names the avatar.
+- **Motion: one spring per intent** — `settle()` takes its parameters per call (`lib/motion.ts`
+  `springValue`). A tap (bar, header chevron, Escape, back) is critically damped
+  (`dampingRatio: 1`, `response: 0.35`), the DESIGN §2.5 default for a settle nobody is touching; only a
+  RELEASED sheet drag underdamps (`0.84`, `response: 0.3`), and only because it continues the finger's own
+  velocity. A spring interrupted mid-flight hands its instantaneous velocity (Δvalue/Δt sampled in
+  `onUpdate`) to its replacement, so a toggle caught mid-flight REVERSES as one continuous motion instead
+  of restarting from a standstill. `.dm-dock-panel` carries `.springing` while a spring runs, which with
+  `.dragging` is what promotes the layer (`will-change: transform`), and the reduced-motion path is still
+  the 120 ms cross-fade with no travel at all.
 - Expanding the dock on a conversation in a VISIBLE tab is what sends the read ack, for exactly the
   messages displayed. Messages render as bubbles with time-only stamps and day separators.
+- **Read receipts render as a BOUNDARY, not a per-bubble label.** `receiptMarks(messages, userId)`
+  (`lib/directMessages.ts`) reduces the transcript to `{lastReadId, unreadIds}` over the viewer's OWN
+  messages — `read_at` is monotonic per thread, so one id describes the whole history — and the dock
+  derives it in a `$:` statement (naming `messages`/`userId`, per the legacy-mode compile-time
+  dependency rule) and appends 읽음 / 안 읽음 inside each of MY bubbles' existing `<small>`, with the
+  middle-dot separator drawn by CSS so the label stays the element's whole text. Peer bubbles never get
+  one, read bubbles BEFORE the boundary carry no label, and a row missing `readAt` entirely (an old
+  mock) counts as unread. The 5 s thread re-fetch plus last-writer-wins `mergeMessages` is the ONLY
+  transport: a stamp set after the fact arrives on the next poll, so nothing receipt-specific is
+  requested. Older pages beyond the latest 50 keep the `readAt` they were fetched with.
 - The dock publishes **`--dm-dock-inset`** on `<html>` — viewport right edge → the bar's left edge, plus
   8 px — kept fresh by a `ResizeObserver` on the bar (its width follows the label and badge) plus a
   window `resize` listener, and REMOVED while the dock is `hidden` or unmounted. The single consumer is
@@ -114,10 +145,12 @@ send.
   recently-active user, independent of `avatar_sharing`, avatar visibility and group membership — the
   opposite of avatar discovery (`SHARING_TEAMMATES`). It is human contact, not an avatar ACL; don't
   route it through `isTrustedFor`.
-- There is **no block, mute, typing indicator, read receipt for the sender, edit/delete or push
-  notification**, and no end-to-end encryption: plaintext rows in the server SQLite file, readable by
-  anyone with DB access. Only the two participants can read a thread over HTTP — admins have no
-  DM-reading endpoint, by design.
+- There is **no block, mute, typing indicator, edit/delete or push notification**, and no end-to-end
+  encryption: plaintext rows in the server SQLite file, readable by anyone with DB access. Only the two
+  participants can read a thread over HTTP — admins have no DM-reading endpoint, by design.
+- **Read receipts are sender-side only, and they add no signal** — they RENDER the ack the recipient's
+  dock was already sending. Looking at a thread sends nothing extra, and the reader is never told
+  whether their own messages were read except by the same marks on their own side.
 - **Adding an avatar-facing DM tool would need a privacy review**, not just a new MCP handler: it would
   put another person's private message into a model prompt. The avatar-boundary sentence in the manual
   and in `DIRECT_MESSAGE_STATE` is the current answer.
