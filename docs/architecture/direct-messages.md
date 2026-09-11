@@ -82,6 +82,20 @@ send.
   online count and the unread badge; pressing it expands a 360×520 **non-modal** chat window upward
   (peer list → thread with a back button). The bar's badge replaces the old sidebar DM badge; the old
   `DirectMessages.svelte` modal is gone.
+- **Light dismiss: a `pointerdown` anywhere OUTSIDE the dock collapses it.** The listener is on
+  `document` in the CAPTURE phase — a target that stops propagation cannot keep the dock open — and it
+  calls `collapse({ focusBar: false })`, because the pointer is already committing to something else and
+  pulling focus back to the bar would fight it (Escape and the header chevron still hand focus over).
+  Still non-modal: with no scrim the same press reaches what it hit, so a rail nav press navigates AND
+  collapses, and on mobile a tap on the page above the sheet closes it. The selected thread and the
+  per-peer draft survive, so re-expanding lands where it left off.
+- **The unread badge is the filled-red `.tag.unread` chip** (defined with the chip family in
+  `30-agent-md-composer.css`; `--danger` fill, `--on-danger` text, tokens only) on BOTH the bar total and
+  the peer row — one semantic, one colour. It pops only on ARRIVAL: a `$:` statement bumps `popKey` when
+  the total RISES, `{#key popKey}` re-mounts the bar badge so the `dm-badge-pop` keyframes replay, and
+  `prefers-reduced-motion` drops it to `animation: none`. The FIRST inbox to land seeds the comparison
+  instead of popping (the initializer's placeholder reads 0), and the keyframes are declared `-global-`
+  because Svelte hashes a component's own keyframe names and the visual spec asserts the NAME.
 - `z-index: var(--z-popover)`; hidden while the mobile rail drawer is open. Expanded state and last peer
   persist in `localStorage` (`dmDockOpen`, `dmDockPeer`). At ≤640 px it becomes a full-width bottom sheet
   (75dvh) collapsed by dragging its grabber down.

@@ -4,6 +4,10 @@
   // collapses back down. Deliberately NON-modal — no scrim, no focus trap, no
   // `role="dialog"` — so the app behind it stays usable while a conversation is
   // open (the old modal made reading a message and acting on it exclusive).
+  // Non-modal does NOT mean sticky, though: a pointer landing outside the dock
+  // collapses it (light dismiss), and with no scrim that same press still
+  // reaches whatever it hit. The thread and its draft are kept, so reopening
+  // lands exactly where it left off.
   //
   // Mounted once at the App root for every logged-in view, so it must survive
   // whatever `/api/dm` answers, including the `{}` that unmocked routes return
@@ -110,6 +114,28 @@
   // still re-renders.
   $: marks = receiptMarks(messages, userId);
 
+  /** `{#key}` handle for the bar badge — bumping it re-mounts the span so the
+      pop keyframes replay. Only an INCREASE bumps it: a count falling back to
+      zero is the owner catching up, not news arriving. */
+  let popKey = 0;
+  /** The total the next one is compared against. `null` until the FIRST server
+      inbox lands, which is what keeps the badge from popping on the initial
+      paint — the initializer's placeholder reads 0, so a first poll finding 2
+      would otherwise look like an arrival. */
+  let previousUnread: number | null = null;
+  let inboxLoaded = false;
+
+  // Both dependencies are NAMED in the statement: a legacy-mode reactive
+  // statement tracks only what it mentions, and a total read inside notePop's
+  // closure would be untracked (src/client/CLAUDE.md).
+  $: notePop(inboxLoaded, inbox.unread);
+
+  function notePop(loaded: boolean, total: number): void {
+    if (!loaded) return;
+    if (previousUnread !== null && total > previousUnread) popKey += 1;
+    previousUnread = total;
+  }
+
   // AbortSignal.any is newer than the browsers/jsdom this ships into; without
   // the guard its absence throws before the request is even made (mirrors the
   // AbortSignal.timeout guard in lib/api.ts).
@@ -186,6 +212,7 @@
     refreshing = true;
     try {
       inbox = normalizeInbox(await request<unknown>("/api/dm"));
+      inboxLoaded = true;
       if (restorePeerId) {
         const wanted = restorePeerId;
         restorePeerId = "";
@@ -557,6 +584,23 @@
       collapse();
     };
     rootEl?.addEventListener("keydown", onKeydown);
+    // Light dismiss: a pointer landing anywhere outside the dock means the owner
+    // has moved on, so the panel gets out of the way. Bound on `document` in the
+    // CAPTURE phase, so a target that stops propagation (a menu, a drag handler)
+    // cannot keep the dock open, and on `pointerdown` rather than `click` so the
+    // collapse is already under way when the click lands. Focus is deliberately
+    // NOT returned to the bar: the pointer is committing to something else on
+    // the page, and pulling focus back would fight it.
+    const onPointerDown = (event: PointerEvent) => {
+      if (!expanded || hidden) return;
+      const target = event.target;
+      // An event target need not be a Node (`window` is one) and `contains`
+      // would throw on it. Everything inside the dock counts as inside — the
+      // pill, the panel, and the grabber's captured drag.
+      if (!(target instanceof Node) || rootEl?.contains(target)) return;
+      collapse({ focusBar: false });
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
     // The bar's width follows its label and badge, so the reservation is
     // observed rather than computed once. jsdom has no real ResizeObserver
     // (tests/setup-dom.ts installs a no-op), hence the explicit first publish.
@@ -598,6 +642,7 @@
       // dock that no longer exists.
       document.documentElement.style.removeProperty(INSET_PROPERTY);
       rootEl?.removeEventListener("keydown", onKeydown);
+      document.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", wake);
       window.removeEventListener("online", wake);
@@ -621,7 +666,9 @@
       <span class="dm-dock-bar-online" title={`최근 ${inbox.windowMinutes}분 내 활동 기준`}>접속 {onlineCount}</span>
     {/if}
     {#if inbox.unread > 0}
-      <span class="tag accent" aria-label={`읽지 않은 메시지 ${inbox.unread}개`}>{inbox.unread}</span>
+      {#key popKey}
+        <span class="tag unread dm-dock-badge" aria-label={`읽지 않은 메시지 ${inbox.unread}개`}>{inbox.unread}</span>
+      {/key}
     {/if}
     <Icon name="chevron-up" size={14} />
   </button>
@@ -773,7 +820,7 @@
                 <small>@{peer.username}</small>
               </span>
               {#if peer.unread > 0}
-                <span class="tag accent" aria-label={`읽지 않은 메시지 ${peer.unread}개`}>{peer.unread}</span>
+                <span class="tag unread" aria-label={`읽지 않은 메시지 ${peer.unread}개`}>{peer.unread}</span>
               {:else}
                 <span class="dm-peer-status">{statusText(peer)}</span>
               {/if}
@@ -847,6 +894,34 @@
     font-size: var(--t-2xs);
     font-weight: 400;
     white-space: nowrap;
+  }
+
+  /* The unread count is the one chip in here meant to be NOTICED rather than
+     read, so it takes the filled `--danger` pill (`.tag.unread`, defined with
+     the chip family in 30-agent-md-composer.css) and pops once on arrival —
+     `{#key popKey}` re-mounts the span, which restarts the keyframes. Declared
+     `-global-` on purpose: Svelte hashes a component's own keyframe names, and
+     the visual spec asserts the NAME to prove the pop really ran. */
+  .dm-dock-badge {
+    animation: dm-badge-pop 360ms var(--ease-out);
+  }
+
+  @keyframes -global-dm-badge-pop {
+    from {
+      transform: scale(0.6);
+    }
+    60% {
+      transform: scale(1.15);
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dm-dock-badge {
+      animation: none;
+    }
   }
 
   .dm-dock-panel {

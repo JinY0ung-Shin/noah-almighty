@@ -1,8 +1,9 @@
 // The human-to-human DM dock. What only a real browser can settle is pinned
 // here: that the dock is NON-modal (the app behind it keeps working), that the
-// bar's badge and label track the inbox while collapsed, that a failed send
-// keeps its draft AND its nonce, that the bottom sheet follows a finger, and
-// that the open thread survives a reload.
+// bar's badge and label track the inbox while collapsed, that a press outside
+// collapses it without eating the thread or the draft, that a failed send keeps
+// its draft AND its nonce, that the bottom sheet follows a finger, and that the
+// open thread survives a reload.
 //
 // MOTION: playwright.config sets `reducedMotion: "reduce"` at the top level of
 // `use`, but Playwright 1.61 only reads that key under `contextOptions` — so it
@@ -34,6 +35,8 @@ const admin = {
 
 const DESKTOP = { width: 1440, height: 900 };
 const MOBILE = { width: 390, height: 844 };
+/** Typed and never sent: neither a peer switch nor a light dismiss may eat it. */
+const DRAFT = "보존할 초안";
 const XSS = "<img src=x onerror=alert(1)> 직접 답장";
 
 /** Local-clock ISO for today, so the day separator must read "오늘". */
@@ -163,7 +166,7 @@ test("dock bar carries the inbox, expands into a non-modal panel, and keeps poll
   await expect(bar(page)).toBeVisible();
   await expect(bar(page)).toContainText("메시지");
   await expect(bar(page)).toContainText("접속 1");
-  await expect(bar(page).locator(".tag.accent")).toHaveText("2");
+  await expect(bar(page).locator(".tag.unread")).toHaveText("2");
   await expect(page.locator("[role=dialog]")).toHaveCount(0);
   await expect(panel(page)).toHaveCount(0);
 
@@ -182,13 +185,6 @@ test("dock bar carries the inbox, expands into a non-modal panel, and keeps poll
   await expect(bar(page)).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("[role=dialog]")).toHaveCount(0);
 
-  // Non-modal: no scrim, no focus trap — the rail still navigates underneath and
-  // the panel is untouched by it.
-  await expect(page.locator(".view-header h1")).toHaveText("탐색");
-  await page.locator(".rail-nav").getByRole("button", { name: "알림" }).click();
-  await expect(page.locator(".view-header h1")).toHaveText("알림");
-  await expect(panel(page)).toBeVisible();
-
   // Thread mode: every mocked message, one day separator, and a read receipt.
   await panel(page).getByRole("button", { name: /이민지/ }).click();
   await expect(panel(page).getByText("안녕하세요", { exact: true })).toBeVisible();
@@ -201,7 +197,7 @@ test("dock bar carries the inbox, expands into a non-modal panel, and keeps poll
   await expect(composer(page)).toBeVisible();
   await expect(panel(page).locator(".composer-box .send-button")).toBeVisible();
   await expect.poll(() => state.reads).toBeGreaterThan(0);
-  await expect(bar(page).locator(".tag.accent")).toHaveCount(0);
+  await expect(bar(page).locator(".tag.unread")).toHaveCount(0);
 
   // A message that arrives while the thread is open shows up on the next poll.
   state.messages.push({
@@ -213,6 +209,83 @@ test("dock bar carries the inbox, expands into a non-modal panel, and keeps poll
     readAt: null,
   });
   await expect(panel(page).getByText("실시간 답장", { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  // A pointer landing INSIDE the dock is not a dismiss — reading a transcript
+  // must never close the window being read.
+  await panel(page).locator(".dm-dock-transcript").click();
+  await expect(panel(page)).toBeVisible();
+
+  // Light dismiss: a press anywhere OUTSIDE collapses the dock. Still
+  // non-modal, so with no scrim the same press reaches the rail and navigates —
+  // but the dock steps aside instead of hanging over the view it just opened.
+  await composer(page).fill(DRAFT);
+  await expect(page.locator(".view-header h1")).toHaveText("탐색");
+  await page.locator(".rail-nav").getByRole("button", { name: "알림" }).click();
+  await expect(page.locator(".view-header h1")).toHaveText("알림");
+  await expect(panel(page)).toBeHidden();
+  await expect(bar(page)).toBeVisible();
+  // The pointer is committing to something else, so focus must NOT be yanked
+  // back to the bar the way Escape or the 접기 button hands it over.
+  await expect(bar(page)).not.toBeFocused();
+
+  // The thread and the unsent draft survive the dismiss.
+  await bar(page).click();
+  await expect(panel(page).locator(".dm-dock-who strong")).toHaveText("이민지");
+  await expect(composer(page)).toHaveValue(DRAFT);
+
+  expect(state.errors).toEqual([]);
+});
+
+test("the unread badge is a filled red pill that pops on arrival", async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  // Asserted explicitly rather than inherited: the pop is motion, so which way
+  // the config's inert `reducedMotion` key is later fixed must not decide
+  // whether this scenario has an animation to look at.
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const state = await install(page);
+  await page.goto("/");
+
+  // The one chip here meant to be NOTICED rather than read, so it is the FILLED
+  // state colour — checked against the token itself, not against "some red".
+  const badge = bar(page).locator(".tag.unread");
+  await expect(badge).toHaveText("2");
+  await expect(badge).toHaveClass(/\btag\b.*\bunread\b/);
+  const fill = await badge.evaluate((element) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--danger)";
+    element.parentElement!.append(probe);
+    const token = getComputedStyle(probe).color;
+    probe.remove();
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, text: style.color, token };
+  });
+  expect(fill.background).toBe(fill.token);
+  expect(fill.text).not.toBe(fill.background);
+
+  // Same semantic, same colour: the peer row's own count is the same pill.
+  await bar(page).click();
+  await expect(panel(page).getByRole("button", { name: /이민지/ }).locator(".tag.unread")).toHaveText("2");
+  await panel(page).getByRole("button", { name: "접기" }).click();
+  await expect(panel(page)).toBeHidden();
+
+  // Arrival pops. Mark the badge that is already there: a replayed animation
+  // means the span REMOUNTED, which is what restarts the keyframes.
+  await badge.evaluate((element) => element.setAttribute("data-seen", "1"));
+  state.unread = 3;
+  state.messages.push({
+    id: state.messages.length + 1,
+    senderId: "peer",
+    recipientId: admin.id,
+    text: "새 메시지",
+    createdAt: new Date().toISOString(),
+    readAt: null,
+  });
+
+  await expect(badge).toHaveText("3", { timeout: 10_000 });
+  await expect
+    .poll(() => badge.evaluate((element) => getComputedStyle(element).animationName))
+    .toBe("dm-badge-pop");
+  await expect(badge).not.toHaveAttribute("data-seen", "1");
 
   expect(state.errors).toEqual([]);
 });
@@ -256,13 +329,13 @@ test("drafts survive a peer switch and a failed send retries on the same nonce",
   await openThread(page);
 
   // Per-peer drafts: switching away and back restores what was typed.
-  await composer(page).fill("보존할 초안");
+  await composer(page).fill(DRAFT);
   await panel(page).getByRole("button", { name: "대화 목록으로" }).click();
   await panel(page).getByRole("button", { name: /다른 사용자/ }).click();
   await expect(composer(page)).toHaveValue("");
   await panel(page).getByRole("button", { name: "대화 목록으로" }).click();
   await panel(page).getByRole("button", { name: /이민지/ }).click();
-  await expect(composer(page)).toHaveValue("보존할 초안");
+  await expect(composer(page)).toHaveValue(DRAFT);
 
   // First attempt fails at the network. The draft must stay put — retyping a
   // lost message is the whole failure people remember.
@@ -452,6 +525,12 @@ test.describe("with reduced motion", () => {
     const state = await install(page);
     await page.goto("/");
     expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+
+    // The badge's arrival pop is motion too, and here it is withdrawn outright.
+    await expect(bar(page).locator(".tag.unread")).toHaveText("2");
+    expect(
+      await bar(page).locator(".tag.unread").evaluate((element) => getComputedStyle(element).animationName),
+    ).toBe("none");
 
     await page.evaluate(() => {
       const samples: number[] = [];

@@ -1606,6 +1606,15 @@ button.composer-bridge:focus-visible {
   border-color: var(--accent-soft-strong);
   background: var(--accent-soft);
 }
+/* The one chip meant to be NOTICED rather than read: an unread count. Filled
+   state colour (docs/DESIGN.md §2.1) instead of the family's soft tint, because
+   it has to carry across a busy screen from the corner of the eye. */
+.tag.unread {
+  color: var(--on-danger);
+  background: var(--danger);
+  border-color: var(--danger);
+  font-weight: 700;
+}
 .tag.read {
   color: var(--info);
   border-color: var(--info-line);
