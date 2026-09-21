@@ -1030,6 +1030,26 @@ tbody tr:hover td {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+/* A mid-turn send button joins the row for as long as a turn streams (disabled
+   until something is typed, never unmounted — the column list must not change
+   under the user's fingers), so every combination above needs its list one
+   `auto` longer; an unlisted column would wrap the button onto its own row.
+   External avatars take no mid-turn messages, so the `.no-attach` pairs are
+   unreachable today; they are here so the row can't silently break if that ever
+   changes. */
+.composer-box.with-steer {
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+}
+.composer-box.with-steer.no-attach {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+.composer-box.with-steer.no-stt {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+.composer-box.with-steer.no-attach.no-stt {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 /* Image-attach button (left of the textarea). A label wrapping a hidden file
    input, so clicking it opens the picker with no per-pane ref. */
 .composer-attach {

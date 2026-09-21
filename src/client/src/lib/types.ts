@@ -62,6 +62,43 @@ export interface RoutinePreset {
   daysOfWeek?: number[];
 }
 
+/**
+ * A mid-turn message ("steer") as the server reports it — on the POST response
+ * and on every `steer` SSE frame. `followUp: true` means the model got it AFTER
+ * a result boundary, so it starts its own turn inside the same run.
+ *
+ * Hand-mirrors the `SteerPublic` exported from `src/server/routes/chat.ts`. It
+ * is NOT re-exported from `server/types.ts` the way the rest of this barrel is:
+ * the type lives in the route module, which `tsconfig.client.json` must not
+ * include (it reaches express and better-sqlite3 through its imports). Nothing
+ * type-checks across that gap, so keep the two declarations in lockstep.
+ */
+export interface SteerPublic {
+  id: string;
+  text: string;
+  state: "queued" | "delivered" | "completed" | "dropped";
+  createdAt: string;
+  followUp: boolean;
+  /**
+   * The persisted `kind: "steer"` user row, `null` when the conversation was
+   * deleted mid-run. Present only on the `delivered` SSE frame — the POST
+   * response's steer never carries it, and the other three states omit the key.
+   */
+  message?: import("../../../server/types.js").StoredMessage | null;
+}
+
+/**
+ * A steer the server accepted but has NOT handed to the model yet (state
+ * `queued` only). Rendered as a dimmed "전달 대기 중" bubble under the transcript
+ * until the matching `steer{delivered}` frame replaces it with the persisted
+ * user row. Rebuilt from the replayed event log on reattach, never persisted.
+ */
+export interface PendingSteer {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
 export type ViewName =
   | "explore"
   | "chat"
@@ -144,6 +181,14 @@ export interface ChatPane {
   skills?: import("../../../server/types.js").SkillInfo[];
   /** Guards the one-shot skills fetch (set once the request settles, success or fail). */
   skillsLoaded?: boolean;
+  /**
+   * Mid-turn messages the server accepted but has not delivered to the model
+   * yet. Live-only: `resetLive` clears the list and a reattach rebuilds it from
+   * the replayed `steer` frames.
+   */
+  steers?: PendingSteer[];
+  /** A steer POST is in flight — guards a double submit from Enter + the button. */
+  steerSending?: boolean;
   /** Images staged in the composer, not yet sent (data URLs for preview + upload). */
   pendingImages?: PendingImage[];
   /**

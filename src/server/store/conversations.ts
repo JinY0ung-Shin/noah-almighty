@@ -485,6 +485,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         content: string;
         response_json: string | null;
         attachments_json: string | null;
+        kind: string | null;
         created_at: string;
       }[];
       return rows.map((r) => ({
@@ -493,6 +494,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         role: r.role as StoredMessage["role"],
         content: r.content,
         attachments: this.parseAttachmentsJson(r.attachments_json),
+        // Spread CONDITIONALLY: an ordinary row keeps the exact shape it had
+        // before the column existed (no `kind` key at all), so nothing that
+        // compares stored messages has to learn about it.
+        ...(r.kind === "steer" ? { kind: "steer" as const } : {}),
         response: this.parseResponseJson(r.response_json),
         createdAt: r.created_at,
       }));
@@ -505,6 +510,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         content: string;
         response?: AgentResponse | null;
         attachments?: MessageAttachment[];
+        /**
+         * `"steer"` for a USER row the viewer sent mid-turn (see
+         * StoredMessage.kind). Only ever set at DELIVERY time — a mid-turn
+         * message the model never received must not appear in history at all.
+         */
+        kind?: "steer";
       },
     ): StoredMessage {
       const id = crypto.randomUUID();
@@ -512,8 +523,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const attachments = input.attachments?.length ? input.attachments : undefined;
       this.db
         .prepare(
-          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -522,6 +533,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           input.content,
           input.response ? JSON.stringify(input.response) : null,
           attachments ? JSON.stringify(attachments) : null,
+          input.kind ?? null,
           createdAt,
         );
       return {
@@ -530,6 +542,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         role: input.role,
         content: input.content,
         attachments,
+        ...(input.kind ? { kind: input.kind } : {}),
         response: input.response ?? null,
         createdAt,
       };

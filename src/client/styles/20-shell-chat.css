@@ -1328,6 +1328,17 @@ body.col-resizing {
   max-width: min(560px, 88%);
 }
 
+/* Mid-turn message ("steer") sent while the avatar was still answering. The
+   pending bubble is dimmed because it is not in the model's hands yet; the chip
+   on a delivered one drops the `.msg-role` bold so it reads as a label, not as
+   part of the name. */
+.message.user.steer-pending .bubble {
+  opacity: 0.6;
+}
+.steer-badge {
+  font-weight: 500;
+}
+
 /* Attached images inside a chat bubble. `white-space: pre-wrap` on the bubble
    would otherwise add stray whitespace around the block, so the strip is a flex
    row; a margin separates it from any caption text below. */

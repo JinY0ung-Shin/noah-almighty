@@ -19,6 +19,7 @@ import {
   rollbackCanvas,
   selectConversation,
   sendMessage,
+  sendSteer,
   setActiveCanvas,
   startChatWith,
   startNewChat,
@@ -2032,6 +2033,213 @@ describe("background phase", () => {
     expect(p.messages.at(-1)).toMatchObject({ content: "모델이 응답하지 못했습니다." });
     expect(p.messages.at(-1)!.response).toMatchObject({ summary: "오류" });
     expect(get(toasts).some((t) => t.message.includes("모델이 응답하지 못했습니다."))).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* mid-turn messages ("steers")                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A `steer` frame. `extra` lands INSIDE the steer object, which is where the
+ * persisted user row rides on the `delivered` frame.
+ */
+function steerFrame(
+  id: string,
+  state: "queued" | "delivered" | "completed" | "dropped",
+  text: string,
+  extra: Record<string, unknown> = {},
+): [string, unknown] {
+  return [
+    "steer",
+    { steer: { id, text, state, createdAt: "2026-09-21T01:00:00.000Z", followUp: false, ...extra } },
+  ];
+}
+
+function steerUserRow(id: string, content: string) {
+  return {
+    id,
+    conversationId: "conv-x",
+    role: "user",
+    content,
+    kind: "steer",
+    response: null,
+    createdAt: "2026-09-21T01:00:01.000Z",
+  };
+}
+
+describe("mid-turn messages (steers)", () => {
+  it("a queued steer becomes a pending row, and its replay does not double it", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      steerFrame("s-queue-1", "queued", "이것도 봐 주세요"),
+      steerFrame("s-queue-1", "queued", "이것도 봐 주세요"),
+    ]);
+    expect(pane(id).steers).toEqual([
+      { id: "s-queue-1", text: "이것도 봐 주세요", createdAt: "2026-09-21T01:00:00.000Z" },
+    ]);
+  });
+
+  it("a delivered steer swaps its pending row for the persisted user message, once", async () => {
+    const id = seedPane();
+    const row = steerUserRow("um-1", "이것도 봐 주세요");
+    await driveEvents(id, [
+      steerFrame("s-deliver-1", "queued", "이것도 봐 주세요"),
+      ["delta", { text: "답변 본문" }],
+      steerFrame("s-deliver-1", "delivered", "이것도 봐 주세요", { message: row }),
+      // A reattach replays the whole log; the row must not land twice.
+      steerFrame("s-deliver-1", "delivered", "이것도 봐 주세요", { message: row }),
+      ["done", {}],
+    ]);
+    const p = pane(id);
+    expect(p.steers).toEqual([]);
+    expect(p.messages.filter((m) => m.id === "um-1")).toHaveLength(1);
+    expect(p.messages.find((m) => m.id === "um-1")).toMatchObject({ role: "user", kind: "steer" });
+    // It was handed to the model mid-turn, so it reads BEFORE the answer it changed.
+    const userIndex = p.messages.findIndex((m) => m.id === "um-1");
+    const lastIndex = p.messages.length - 1;
+    expect(userIndex).toBeLessThan(lastIndex);
+    expect(p.messages[lastIndex]).toMatchObject({ role: "assistant", content: "답변 본문" });
+  });
+
+  it("a delivered steer the server could not persist still shows what the model saw", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      steerFrame("s-local-1", "delivered", "대화가 사라져도 보여야 함", { message: null }),
+      steerFrame("s-local-1", "delivered", "대화가 사라져도 보여야 함", { message: null }),
+    ]);
+    const p = pane(id);
+    expect(p.messages.filter((m) => m.id === "s-local-1")).toHaveLength(1);
+    expect(p.messages[0]).toMatchObject({
+      role: "user",
+      kind: "steer",
+      content: "대화가 사라져도 보여야 함",
+    });
+  });
+
+  it("a dropped steer returns its text to the composer exactly once", async () => {
+    const id = seedPane({ draft: "이미 쓰고 있던 글" });
+    await driveEvents(id, [
+      steerFrame("s-drop-1", "queued", "너무 늦은 한마디"),
+      steerFrame("s-drop-1", "dropped", "너무 늦은 한마디"),
+      steerFrame("s-drop-1", "dropped", "너무 늦은 한마디"),
+    ]);
+    const p = pane(id);
+    expect(p.steers).toEqual([]);
+    // The returned text is the older thought, so it goes ABOVE the newer draft.
+    expect(p.draft).toBe("너무 늦은 한마디\n\n이미 쓰고 있던 글");
+    expect(get(toasts).filter((t) => t.message.includes("되돌려 두었습니다"))).toHaveLength(1);
+  });
+
+  it("a completed steer just drops any pending row it still has", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      steerFrame("s-complete-1", "queued", "확인 부탁해요"),
+      steerFrame("s-complete-1", "completed", "확인 부탁해요"),
+    ]);
+    expect(pane(id).steers).toEqual([]);
+    expect(pane(id).messages).toEqual([]);
+  });
+
+  it("turn_end seals the turn so far but keeps the run streaming into a fresh bubble", async () => {
+    const id = seedPane();
+    const notes = useOsNotifications();
+    const samples = trackState((state) => {
+      const p = state.chatPanes.find((item) => item.id === id);
+      return p ? { streaming: p.streaming, count: p.messages.length, liveText: p.liveText } : null;
+    });
+    const first = {
+      id: "seg-1",
+      conversationId: "conv-x",
+      role: "assistant",
+      content: "첫 번째 턴",
+      createdAt: "t",
+      response: { kind: "text", runtime: "claude", text: "첫 번째 턴" },
+    };
+    await driveEvents(id, [
+      ["delta", { text: "첫 번째 턴" }],
+      ["turn_end", { message: first, response: first.response }],
+      steerFrame("s-turn-1", "delivered", "그럼 이건요?", {
+        followUp: true,
+        message: steerUserRow("um-turn-1", "그럼 이건요?"),
+      }),
+      ["delta", { text: "이어지는 턴" }],
+      // No message on the final done: the bubble is built from liveText, which
+      // proves the second turn started from an empty one.
+      ["done", {}],
+    ]);
+    const p = pane(id);
+    expect(p.messages.map((m) => m.content)).toEqual(["첫 번째 턴", "그럼 이건요?", "이어지는 턴"]);
+    expect(p.liveText).toBe("");
+    // The run never stopped streaming at the boundary — the pane only settles
+    // when the reader detaches after the terminal `done`.
+    expect(samples().some((s) => s?.streaming === true && s.count === 1 && s.liveText === "")).toBe(true);
+    // turn_end is not the end of anything the viewer was waiting for: only the
+    // run's real ending is announced, and it carries the SECOND turn's text.
+    expect(notes.map((n) => n.body)).toEqual(["이어지는 턴"]);
+  });
+
+  it("sendSteer posts to the run, clears the draft and holds the accepted row", async () => {
+    const id = seedPane({ streaming: true, liveRunId: "run-77", draft: "중간에 한마디" });
+    const fetchFn = useFetch((url) =>
+      url === "/api/chat/runs/run-77/message"
+        ? jsonRes({
+            ok: true,
+            steer: {
+              id: "s-post-1",
+              text: "중간에 한마디",
+              state: "queued",
+              createdAt: "2026-09-21T02:00:00.000Z",
+              followUp: false,
+            },
+          })
+        : undefined,
+    );
+    await sendSteer(id, "중간에 한마디");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(String(fetchFn.mock.calls[0][0])).toBe("/api/chat/runs/run-77/message");
+    expect(body(fetchFn.mock.calls[0][1] as RequestInit)).toEqual({ message: "중간에 한마디" });
+    const p = pane(id);
+    expect(p.draft).toBe("");
+    expect(p.steerSending).toBe(false);
+    expect(p.steers).toEqual([
+      { id: "s-post-1", text: "중간에 한마디", createdAt: "2026-09-21T02:00:00.000Z" },
+    ]);
+  });
+
+  it("a 410 puts the text back in the composer and shows the server's own reason", async () => {
+    const id = seedPane({ streaming: true, liveRunId: "run-78" });
+    useFetch(() =>
+      jsonRes(
+        { error: "응답이 마무리되는 중이라 전달할 수 없습니다. 응답이 끝난 뒤 다시 보내 주세요." },
+        410,
+      ),
+    );
+    await sendSteer(id, "늦은 한마디");
+    const p = pane(id);
+    expect(p.draft).toBe("늦은 한마디");
+    expect(p.steerSending).toBe(false);
+    expect(get(toasts).some((t) => t.message.includes("응답이 마무리되는 중이라"))).toBe(true);
+  });
+
+  it("an external pane never reaches the steer route", async () => {
+    const id = seedPane({
+      streaming: true,
+      liveRunId: "run-79",
+      draft: "외부 아바타",
+      avatar: { id: "ext-1", alias: "외부", displayName: "External", runtime: "external" } as any,
+    });
+    const fetchFn = noFetch();
+    await sendSteer(id, "외부 아바타");
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).draft).toBe("외부 아바타");
+  });
+
+  it("a steer needs a live run: no run id, no request", async () => {
+    const id = seedPane({ streaming: true, liveRunId: null, draft: "보낼 곳이 없음" });
+    const fetchFn = noFetch();
+    await sendSteer(id, "보낼 곳이 없음");
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
 

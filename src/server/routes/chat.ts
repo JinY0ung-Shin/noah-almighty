@@ -128,9 +128,11 @@ import {
   isRunCancelled,
   markRunBackground,
   openRun,
+  pushRunSteer,
   submitResponse,
   CANCELLED,
 } from "../agent/runRegistry.js";
+import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { workspaceDirFor } from "../workspace.js";
 import {
   apiError,
@@ -653,6 +655,52 @@ export interface ChatTurnDeps {
  */
 export const BACKGROUND_TURN_PLACEHOLDER = "백그라운드 작업을 진행 중입니다.";
 
+/**
+ * Filler text for a visible segment a steer cut short before the model wrote
+ * anything: the run stays open and the follow-up turn answers next, but the
+ * segment is still persisted as its own assistant row so the transcript keeps
+ * its user/assistant alternation. User-facing → Korean.
+ */
+export const STEER_TURN_END_PLACEHOLDER = "(이어서 다음 메시지에 답합니다.)";
+
+/**
+ * Cap on one mid-turn message. Generous enough for a pasted log excerpt and
+ * small enough that ten queued ones cannot blow up the turn they land in.
+ */
+export const MAX_STEER_LENGTH = 20_000;
+
+/**
+ * A mid-turn message as the client sees it — the POST response body carries
+ * exactly this, and every `steer` SSE frame carries it as `data.steer`.
+ * `followUp: true` means the model got it only AFTER a result boundary, so it
+ * runs as its own turn inside the same run.
+ *
+ * On the DELIVERED frame the persisted user row rides INSIDE this object as
+ * `message` (null when the conversation was deleted mid-run), not beside it —
+ * the client reads one object per frame. Hand-mirrored in the client's
+ * `src/client/src/lib/types.ts`; nothing type-checks across that gap.
+ */
+export interface SteerPublic {
+  id: string;
+  text: string;
+  state: SteerRecord["state"];
+  createdAt: string;
+  followUp: boolean;
+  /** The persisted `kind: "steer"` user row. Only on the `delivered` frame. */
+  message?: StoredMessage | null;
+}
+
+/** Project a channel record onto the wire shape (drops nothing sensitive; it is the viewer's own text). */
+function publicSteer(record: SteerRecord): SteerPublic {
+  return {
+    id: record.id,
+    text: record.text,
+    state: record.state,
+    createdAt: record.createdAt,
+    followUp: record.followUp,
+  };
+}
+
 export interface ChatTurnContext {
   ownerUserId: string;
   ownerDisplayName: string;
@@ -1160,11 +1208,55 @@ export async function executeChatTurn(
     }
 
     const abortController = new AbortController();
+    // Mid-turn messages ("steers"): the viewer can keep typing while this run
+    // streams. Two run kinds get no channel, and POST …/message answers 409 for
+    // both. An EXTERNAL gateway avatar is one stateless request/response with no
+    // live stdin to fold a message into. An EXTERNAL-TASK-API turn is the
+    // interactive-only gate every such capability carries (`AgentRequest`'s own
+    // contract: midTurnMessages is never set there) — nobody typed it, the key
+    // holder answers only through /respond, and both metacognition surfaces
+    // already tell the avatar no person is on the other side.
+    const steers =
+      externalAgent || ctx.externalTaskId ? undefined : new SteerChannel();
     openRun(runId, ownerUserId, {
       conversationId,
       avatarId: threadAvatarId,
       onEvent: hooks.onEvent,
       abortController,
+      steers,
+    });
+    // Subscribe BEFORE the agent starts, so the very first accepted steer is
+    // already observable. Every state change becomes one `steer` frame; the
+    // DELIVERED one additionally persists the user row (only then — a message
+    // the model never received must not appear in history).
+    steers?.onChange((record) => {
+      if (record.state !== "delivered") {
+        emitRunEvent(runId, "steer", { steer: publicSteer(record) });
+        return;
+      }
+      // The conversation may have been deleted mid-run; skip the insert (the FK
+      // would reject it) and report the frame without a message, exactly like
+      // the other persist sites here. The channel SWALLOWS a listener throw, so
+      // guard the insert rather than the whole sink: a failed write must still
+      // let the `delivered` frame out, or the viewer's pending bubble never
+      // resolves.
+      let message: StoredMessage | null = null;
+      try {
+        if (store.conversationOwner(conversationId) === ownerUserId) {
+          message = store.addMessage(conversationId, {
+            role: "user",
+            content: record.text,
+            kind: "steer",
+          });
+        }
+      } catch (err) {
+        logger.error({ err, runId, steerId: record.id }, "steer could not be persisted");
+      }
+      logger.info(
+        { runId, steerId: record.id, followUp: record.followUp },
+        "steer delivered",
+      );
+      emitRunEvent(runId, "steer", { steer: { ...publicSteer(record), message } });
     });
     // openRun sits BEFORE the run's own try/finally { closeRun }, so guard the
     // SSE handshake: a throw here (headers already sent, client detached) would
@@ -1607,6 +1699,10 @@ export async function executeChatTurn(
         config,
         store,
         {
+          // Mid-turn messages: the run loop yields whatever lands here into the
+          // CLI's stdin and feeds its command_lifecycle frames back, which is
+          // what drives the `steer` frames subscribed above.
+          steers,
           onDelta: (text) => {
             streamedText += text;
             emitRunEvent(runId, "delta", { text });
@@ -1691,7 +1787,53 @@ export async function executeChatTurn(
           onTurnResult: (segment) => {
             if (!turnFinalized) {
               if (segment.backgroundTasks.length === 0) {
-                return; // normal turn — the post-await done path handles it
+                if (!segment.steerPending) {
+                  return; // normal turn — the post-await done path handles it
+                }
+                // A mid-turn message the model never got to fold in: the CLI
+                // runs it as a SECOND turn in this same session, so the run
+                // stays open and the visible segment becomes its own assistant
+                // message (a `turn_end` frame, not `done`). Deliberately does
+                // NOT set turnFinalized — the follow-up turn's answer is still
+                // this run's real `done`.
+                if (runSessionId) {
+                  store.setAgentSessionId(
+                    ownerUserId,
+                    conversationId,
+                    runSessionId,
+                  );
+                }
+                const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
+                const attachmentsTail = shownAttachments.slice(persistedAttachmentsOffset);
+                const segResponse: AgentResponse = {
+                  kind: "text",
+                  runtime: config.agentRuntime,
+                  summary: "Claude Agent SDK 실행이 완료되었습니다.",
+                  text: segment.text || STEER_TURN_END_PLACEHOLDER,
+                  ...(latestPlan ? { plan: latestPlan } : {}),
+                  ...(thinkingTail ? { thinking: thinkingTail } : {}),
+                  ...(segment.usage ? { usage: segment.usage } : {}),
+                };
+                const message =
+                  store.conversationOwner(conversationId) === ownerUserId
+                    ? store.addMessage(conversationId, {
+                        role: "assistant",
+                        content: segResponse.text,
+                        response: segResponse,
+                        attachments: attachmentsTail,
+                      })
+                    : null;
+                emitRunEvent(runId, "turn_end", {
+                  message,
+                  response: segResponse,
+                });
+                persistedTextOffset = streamedText.length;
+                persistedThinkingOffset = streamedThinking.length;
+                persistedAttachmentsOffset = shownAttachments.length;
+                // The plan belongs to the segment just persisted; the follow-up
+                // turn carries its own (or none).
+                latestPlan = null;
+                return;
               }
               turnFinalized = true;
               markRunBackground(runId, segment.backgroundTasks.length);
@@ -2485,8 +2627,13 @@ export async function executeChatTurn(
       }
       // Carry the turn's reasoning so the collapsible "생각 과정" view rebuilds
       // on reload (streaming path only — headless runs emit no onThinking).
-      if (streamedThinking) {
-        response.thinking = streamedThinking;
+      // Only the TAIL since the last persisted boundary: a run whose turn was
+      // cut by a mid-turn message already stored the earlier reasoning on that
+      // segment's own message. With no boundary the offset is 0 and this is the
+      // whole string, exactly as before.
+      const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
+      if (thinkingTail) {
+        response.thinking = thinkingTail;
       }
 
       // Remember this run's SDK session so the next turn resumes its context.
@@ -2527,7 +2674,10 @@ export async function executeChatTurn(
                 role: "assistant",
                 content: response.text || response.summary,
                 response,
-                attachments: shownAttachments,
+                // Same tail rule as the reasoning above: cards already carried
+                // by a `turn_end` segment must not be attached twice. Offset 0
+                // on an ordinary run, so this is the full array.
+                attachments: shownAttachments.slice(persistedAttachmentsOffset),
               })
             : null;
         emitRunEvent(runId, "done", { message: assistantMessage, response });
@@ -3566,6 +3716,47 @@ export function createChatRouter({
         return;
       }
       res.json({ ok: true });
+    },
+  );
+
+  // Send ANOTHER message while the run is still streaming (a "steer"). It is
+  // not a new turn: the run's held-open prompt generator writes it to the CLI's
+  // stdin, which folds it into the running turn after the next tool call — or
+  // starts it as a follow-up turn in the same session. Session cookie only,
+  // exactly like /api/chat/respond; personal API keys are never accepted here.
+  // Plain text by design: no slash-command expansion, no images, no canvas.
+  router.post(
+    "/api/chat/runs/:runId/message",
+    requireAuth(store),
+    (req: AuthenticatedRequest, res) => {
+      const runId = safeString(req.params.runId);
+      const message = safeString(req.body?.message).trim();
+      if (!message) {
+        apiError(res, 400, "메시지를 입력해 주세요.");
+        return;
+      }
+      if (message.length > MAX_STEER_LENGTH) {
+        apiError(res, 400, "메시지가 너무 깁니다.");
+        return;
+      }
+      const pushed = pushRunSteer(runId, req.user!.id, message);
+      if (!pushed.ok) {
+        if (pushed.reason === "unsupported") {
+          apiError(res, 409, "이 대화에서는 응답 중에 메시지를 보낼 수 없습니다.");
+        } else if (pushed.reason === "closed") {
+          apiError(
+            res,
+            410,
+            "응답이 마무리되는 중이라 전달할 수 없습니다. 응답이 끝난 뒤 다시 보내 주세요.",
+          );
+        } else if (pushed.reason === "too_many") {
+          apiError(res, 409, "전달 대기 중인 메시지가 너무 많습니다.");
+        } else {
+          apiError(res, 404, "진행 중인 실행을 찾을 수 없습니다.");
+        }
+        return;
+      }
+      res.json({ ok: true, steer: publicSteer(pushed.steer) });
     },
   );
 

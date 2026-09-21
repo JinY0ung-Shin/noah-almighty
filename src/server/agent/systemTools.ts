@@ -122,6 +122,14 @@ export interface SystemToolsContext {
    */
   headless?: boolean;
   /**
+   * True when the viewer can send ADDITIONAL messages while this turn is still
+   * running (an interactive streaming chat with a live steer channel). Mirrors
+   * `AgentRequest.midTurnMessages` so the prompt and describe_system report the
+   * SAME capability — the avatar has to expect a late instruction rather than
+   * read it as noise.
+   */
+  midTurnMessages?: boolean;
+  /**
    * Set ONLY for GROUP SHARED-AGENT runs: describe_system then reports the
    * group's self-state (summarizeGroupAgentState — the same facts the prompt
    * branch gets) instead of an owner block. Management tools keep refusing via
@@ -579,6 +587,11 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                 ? "an UNATTENDED run (a scheduled routine or another automated task) — nobody is watching, so nothing you ask here will be answered this turn; finish the task and report the result"
                 : "interactive chat — a person is on the other side of this conversation"
           }`,
+          // Mirrors buildSystemPromptAppend's standing mid-turn-message line:
+          // the run either has a live steer channel or it does not, and the
+          // avatar must not promise a viewer it can be interrupted when it
+          // cannot (or ignore a message that arrives when it can).
+          `- Mid-turn user messages: ${ctx.midTurnMessages ? "ENABLED — the person can send more messages while you work; each arrives as a user message between your tool calls (or starts the next turn if you had already finished). Read it when it appears and let the newest instruction win when it conflicts with an earlier one" : "not available in this run"}`,
           `- runtime: ${ctx.config.agentRuntime}`,
           ...(webProxy.egressPolicy === "domain-proxy"
             ? ["- Server egress: bootstrap reports shared domain-proxy policy for all local avatars, server tools and shell commands; direct outbound connections and external DNS blocked. User-PC browser traffic is outside this boundary. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials."]

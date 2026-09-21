@@ -1,3 +1,5 @@
+import type { SteerChannel } from "./steerChannel.js";
+
 export type PluginStatus = "started" | "installed" | "failed" | "completed";
 
 export interface PluginEvent {
@@ -193,6 +195,13 @@ export interface TurnResultEvent {
   errorSubtype?: string;
   /** Live background tasks at this boundary (empty = the run is truly over). */
   backgroundTasks: BackgroundTaskSummary[];
+  /**
+   * A steer accepted for this run had not reached the model when this result
+   * boundary passed; the CLI will start it as a follow-up turn and the run
+   * stays open. The host finalizes the visible segment as its own assistant
+   * message (a `turn_end` frame) rather than the run's terminal `done`.
+   */
+  steerPending?: boolean;
 }
 
 /** A tool was denied without an interactive prompt (read-only colleague, deny rule, dontAsk). */
@@ -586,6 +595,12 @@ export interface AgentEvents {
    * and treat later boundaries as background follow-up reports.
    */
   onTurnResult?: (event: TurnResultEvent) => void;
+  /**
+   * Inbound mid-turn user messages for this run; the held-open prompt generator
+   * yields them to the SDK and the run loop feeds `command_lifecycle` frames
+   * back. Absent on headless/external runs.
+   */
+  steers?: SteerChannel;
   /** A tool was auto-denied (no interactive prompt). */
   onBlocked?: (event: BlockedEvent) => void;
   /** A second-brain note was saved (repo write under wiki/) — display notice. */

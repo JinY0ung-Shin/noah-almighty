@@ -37,6 +37,7 @@ import type {
   LiveTaskRow,
   LiveToolRow,
   PaneCanvas,
+  SteerPublic,
   StoredMessage,
 } from "./types";
 
@@ -941,6 +942,51 @@ export async function sendMessage(
   }
 }
 
+/**
+ * Send a mid-turn message ("steer") into the RUN that is already streaming: the
+ * server hands it to the model between tool calls, or — if the turn wraps up
+ * first — as the head of a follow-up turn inside the same run.
+ *
+ * Deliberately NOT a variant of `sendMessage`: there is no new run to open, no
+ * slash expansion (the server never sees an expanded steer) and no image
+ * attachment (those wait for the turn to end). External avatars run behind the
+ * gateway, which has no mid-turn channel at all, so they never reach the POST.
+ *
+ * The draft is cleared optimistically and put BACK on any failure, because the
+ * text only exists in the composer until the server has acknowledged it.
+ */
+export async function sendSteer(paneId: string, rawText: string): Promise<void> {
+  const pane = readState().chatPanes.find((item) => item.id === paneId);
+  if (!pane || !pane.streaming || !pane.liveRunId || pane.steerSending) return;
+  if (pane.avatar?.runtime === "external") return;
+  const message = rawText.trim();
+  if (!message) return;
+  const runId = pane.liveRunId;
+  updatePane(paneId, (target) => {
+    target.draft = "";
+    target.steerSending = true;
+  });
+  try {
+    const result = await api<{ steer?: SteerPublic }>(
+      `/api/chat/runs/${encodeURIComponent(runId)}/message`,
+      { method: "POST", body: JSON.stringify({ message }) },
+    );
+    // The `steer{queued}` frame carries the same row; whichever lands first wins
+    // and the other is deduped on the id.
+    if (result?.steer?.id)
+      updatePane(paneId, (target) => upsertPendingSteer(target, result.steer!));
+  } catch (err) {
+    restoreSteerDraft(paneId, message);
+    // `api()` already localizes the server's Korean `apiError` text; the generic
+    // line only covers a body that carried no message at all.
+    notify((err as Error)?.message || "메시지를 전달하지 못했습니다.", "warn");
+  } finally {
+    updatePane(paneId, (target) => {
+      target.steerSending = false;
+    });
+  }
+}
+
 export async function attachActiveRun(paneId: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
   if (!pane || pane.streaming || !pane.conversationId) return;
@@ -1584,6 +1630,21 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "bg_end":
       finalizeBackgroundPhase(paneId, "done");
       return;
+    case "steer":
+      // One frame per state change, journaled server-side and replayed on
+      // reattach — every branch below has to be idempotent. The persisted user
+      // row rides INSIDE the steer object, on the `delivered` frame only; the
+      // other three states omit the key. Nothing type-checks across this gap,
+      // and reading the wrong position would silently produce a synthesized
+      // bubble that no reload can dedupe against.
+      if (data?.steer?.id)
+        handleSteer(paneId, data.steer, data.steer.message ?? null);
+      return;
+    case "turn_end":
+      // NOT terminal: the visible turn was sealed as its own message because a
+      // steer is pending, and the follow-up turn continues on this same run.
+      finalizeTurnSegment(paneId, data);
+      return;
     case "done":
       finalizeDone(paneId, data);
       return;
@@ -1600,6 +1661,110 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       const pane = readState().chatPanes.find((p) => p.id === paneId);
       if (pane?.backgroundPhase) finalizeBackgroundPhase(paneId, "failed");
       finalizeError(paneId, data?.error || "오류가 발생했습니다.");
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+/* ---------- mid-turn messages ("steers") ---------- */
+
+/**
+ * Steer ids that have LEFT the queued state (delivered / completed / dropped).
+ * One set, two jobs — both of them replay guards, since a reattach re-applies
+ * the whole event log: a repeated `steer{dropped}` must not push its text into
+ * the composer twice, and the POST's own 200 must not re-add a pending bubble
+ * for a steer the stream already resolved while the request was in flight.
+ * Bounded like `handledBrowserOps`; ids settle in order, so the oldest goes first.
+ */
+const settledSteers = new Set<string>();
+
+/** Mark a steer settled, reporting whether THIS call was the first to do so. */
+function settleSteer(id: string): boolean {
+  if (settledSteers.has(id)) return false;
+  settledSteers.add(id);
+  if (settledSteers.size > 500)
+    settledSteers.delete(settledSteers.values().next().value as string);
+  return true;
+}
+
+function upsertPendingSteer(pane: ChatPane, steer: SteerPublic): void {
+  if (settledSteers.has(steer.id)) return;
+  const list = pane.steers || [];
+  if (list.some((item) => item.id === steer.id)) return;
+  pane.steers = [
+    ...list,
+    { id: steer.id, text: steer.text, createdAt: steer.createdAt },
+  ];
+}
+
+function dropPendingSteer(pane: ChatPane, id: string): void {
+  if (!pane.steers?.length) return;
+  pane.steers = pane.steers.filter((item) => item.id !== id);
+}
+
+/**
+ * Put a steer's text back where the user typed it. A draft written since the
+ * send goes BELOW it: the returned text is the older thought, and appending
+ * would bury it under whatever is half-typed.
+ */
+function restoreSteerDraft(paneId: string, text: string): void {
+  updatePane(paneId, (pane) => {
+    pane.draft = pane.draft.trim() ? `${text}\n\n${pane.draft}` : text;
+  });
+}
+
+function handleSteer(
+  paneId: string,
+  steer: SteerPublic,
+  persisted: StoredMessage | null,
+): void {
+  switch (steer.state) {
+    case "queued":
+      updatePane(paneId, (pane) => upsertPendingSteer(pane, steer));
+      return;
+    case "delivered":
+      settleSteer(steer.id);
+      updatePane(paneId, (pane) => {
+        dropPendingSteer(pane, steer.id);
+        // The persisted user row when the server has one; otherwise a local
+        // stand-in keyed on the steer id, so the transcript still shows what the
+        // model was handed after the conversation was deleted mid-run.
+        const row: StoredMessage | null =
+          persisted?.role === "user"
+            ? persisted
+            : persisted
+              ? null
+              : {
+                  id: steer.id,
+                  conversationId: pane.conversationId,
+                  role: "user",
+                  content: steer.text,
+                  kind: "steer",
+                  response: null,
+                  createdAt: steer.createdAt,
+                };
+        // Once per id: a reload loads the row from the conversation and the
+        // replayed frame delivers it again.
+        if (row && !pane.messages.some((m) => m.id === row.id))
+          pane.messages.push(row);
+      });
+      return;
+    case "completed":
+      // Informational — the pending bubble is normally gone by now.
+      settleSteer(steer.id);
+      updatePane(paneId, (pane) => dropPendingSteer(pane, steer.id));
+      return;
+    case "dropped": {
+      updatePane(paneId, (pane) => dropPendingSteer(pane, steer.id));
+      // It never reached the model, so the text is the user's again.
+      if (!settleSteer(steer.id)) return;
+      restoreSteerDraft(paneId, steer.text);
+      notify(
+        "응답이 끝나 전달되지 않은 메시지를 입력창에 되돌려 두었습니다.",
+        "warn",
+      );
       return;
     }
     default:
@@ -1827,6 +1992,10 @@ function resetLive(pane: ChatPane): void {
   pane.backgroundPhase = false;
   pane.backgroundTasks = [];
   pane.backgroundMessageId = null;
+  // Pending steers belong to the LIVE turn: a reattach replays every `steer`
+  // frame, so the list is rebuilt from the log rather than carried across.
+  pane.steers = [];
+  pane.steerSending = false;
 }
 
 /* ---------- finalizers ---------- */
@@ -1892,6 +2061,31 @@ function finalizeDone(paneId: string, data: any): void {
     finalizeBackgroundTurn(paneId, data);
     return;
   }
+  // Only a turn that actually landed is announced: a reconnect replays the whole
+  // event log, and the deduped frame must not re-fire the notification.
+  if (finalizeVisibleTurn(paneId, data, false)) notifyTurnComplete(paneId);
+}
+
+/**
+ * `turn_end`: the visible turn so far was sealed as its own assistant message
+ * because a steer is still pending, and the model answers it as a follow-up turn
+ * on the SAME run. Identical to `done`'s bubble handling, but the stream stays
+ * open — and there is nothing to announce yet, so no OS notification fires.
+ */
+function finalizeTurnSegment(paneId: string, data: any): void {
+  finalizeVisibleTurn(paneId, data, true);
+}
+
+/**
+ * Seal the visible turn into an assistant message. Shared by `done` (the run is
+ * over) and `turn_end` (`segment`: a follow-up turn continues on this run).
+ * Returns whether a bubble was actually appended.
+ */
+function finalizeVisibleTurn(
+  paneId: string,
+  data: any,
+  segment: boolean,
+): boolean {
   // A persisted server message id + its activity → persist the
   // snapshot so the completed tool/agent tree survives reload.
   let persistMessageId: string | null = null;
@@ -1911,7 +2105,7 @@ function finalizeDone(paneId: string, data: any): void {
       message.id &&
       pane.messages.some((m) => m.id === message.id)
     ) {
-      clearLive(pane);
+      endLiveTurn(pane, segment);
       return;
     }
     if (message?.role === "assistant") {
@@ -1942,7 +2136,7 @@ function finalizeDone(paneId: string, data: any): void {
       appended = true;
       pane.usage = response?.usage ?? pane.usage;
     }
-    clearLive(pane);
+    endLiveTurn(pane, segment);
   });
   if (persistMessageId && persistActivity) {
     // Best effort: the in-session display already works without this; it only adds
@@ -1952,9 +2146,27 @@ function finalizeDone(paneId: string, data: any): void {
       body: JSON.stringify({ activity: persistActivity }),
     }).catch(() => {});
   }
-  // Only a turn that actually landed is announced: a reconnect replays the whole
-  // event log, and the deduped frame must not re-fire the notification.
-  if (appended) notifyTurnComplete(paneId);
+  return appended;
+}
+
+/**
+ * Wind the live turn down. `done` ends the stream with it (`clearLive`);
+ * `turn_end` keeps `streaming` / `liveRunId` / `abortController` — those belong
+ * to the RUN, not to the turn — so the follow-up turn streams into a clean
+ * bubble. The pending steer survives the reset by design: it is delivered a beat
+ * later and its own frame is what clears it.
+ */
+function endLiveTurn(pane: ChatPane, segment: boolean): void {
+  if (!segment) {
+    clearLive(pane);
+    return;
+  }
+  const steers = pane.steers;
+  const steerSending = pane.steerSending;
+  resetLive(pane);
+  pane.steers = steers;
+  pane.steerSending = steerSending;
+  pane.liveStatus = "이어서 응답 준비 중…";
 }
 
 // OS notification when a turn finishes — only fires while the app is backgrounded

@@ -20,6 +20,7 @@
     respondPlanReview,
     selectConversation,
     sendMessage,
+    sendSteer,
     startChatWith,
     stopPane,
   } from "../lib/chat";
@@ -982,9 +983,24 @@
     }
     if (!enterSends) return;
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
-      // While a response is streaming we can't send yet — let Enter insert a
-      // newline so the user can compose the next message instead of swallowing it.
-      if (item.streaming) return;
+      if (item.streaming) {
+        // Mid-turn message: the server hands it to the model between the running
+        // turn's tool calls. An external avatar runs behind the gateway, which
+        // has no such channel — there Enter keeps inserting a newline.
+        if (isExternalPane(item)) return;
+        if (item.pendingImages?.length) {
+          // Swallow the Enter too: the user meant "send", and a stray newline on
+          // top of the refusal is noise.
+          event.preventDefault();
+          notify("이미지는 응답이 끝난 뒤 보낼 수 있어요.", "warn");
+          return;
+        }
+        // Nothing typed — fall through so Enter still breaks the line.
+        if (!item.draft.trim()) return;
+        event.preventDefault();
+        void sendSteer(item.id, item.draft);
+        return;
+      }
       if (!canSendMessage(item)) {
         event.preventDefault();
         return;
@@ -992,6 +1008,44 @@
       event.preventDefault();
       void submit(item);
     }
+  }
+
+  /**
+   * Can this pane take a mid-turn message at all? Local panes only — an external
+   * gateway run has no channel for one — for as long as a turn is streaming. It
+   * deliberately does NOT look at the draft: the control is a standing part of
+   * the streaming composer, disabled while there is nothing to send, so the grid
+   * column list never changes under the user's fingers as they type. Reads only
+   * its arguments, so the template expression that calls it re-evaluates
+   * whenever the pane object changes.
+   */
+  function canSteer(item: ChatPane): boolean {
+    return Boolean(!isExternalPane(item) && item.streaming);
+  }
+
+  /**
+   * The mid-turn send button's tooltip. A control disabled with no stated
+   * prerequisite reads as broken, so the empty-draft state names what would make
+   * it work rather than just greying out.
+   */
+  function steerSendTitle(item: ChatPane): string {
+    return item.draft.trim()
+      ? "응답 중 메시지 보내기 (다음 작업 사이에 전달됩니다)"
+      : "메시지를 입력하면 응답 중에도 보낼 수 있어요";
+  }
+
+  /**
+   * The composer's placeholder while a turn is streaming. Local panes say that a
+   * message sent now is delivered between the avatar's next two actions, and name
+   * the gesture that actually sends on this device — Enter only sends where a
+   * physical keyboard was detected. External panes keep the old wording: there
+   * the draft really is only a head start on the next turn.
+   */
+  function streamingPlaceholder(item: ChatPane, sends: boolean): string {
+    if (isExternalPane(item)) return "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)";
+    return sends
+      ? "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다"
+      : "응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 다음 작업 사이에 전달됩니다";
   }
 
   function onComposerInput(event: Event, item: ChatPane) {
@@ -1391,6 +1445,10 @@
             <div class="msg-role">
               <span class="role-dot"></span>
               <span>{message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>
+              <!-- A message the viewer sent WHILE the avatar was answering. The
+                   badge is what tells it apart from an ordinary turn: it landed
+                   between the previous turn's tool calls, not after it. -->
+              {#if message.role === "user" && message.kind === "steer"}<span class="tag steer-badge">응답 중 전달</span>{/if}
               {#if message.createdAt}<time class="msg-time" datetime={message.createdAt}>{timeLabel(message.createdAt)}</time>{/if}
             </div>
             <div class={`bubble ${message.response?.summary === "오류" ? "errored" : ""}`}>
@@ -1472,6 +1530,20 @@
         {/each}
 
         {#if item.streaming}
+          <!-- Accepted by the server, not handed to the model yet. Rendered from
+               `item.steers` (named in the markup, so legacy-mode tracking sees
+               it) and replaced by the persisted user row on `steer{delivered}`.
+               Above the live bubble: it is waiting on the answer below it. -->
+          {#each item.steers ?? [] as steer (steer.id)}
+            <div class="message user steer-pending">
+              <div class="msg-role">
+                <span class="role-dot"></span>
+                <span>나</span>
+                <span class="tag steer-badge">전달 대기 중</span>
+              </div>
+              <div class="bubble">{steer.text}</div>
+            </div>
+          {/each}
           <div class="message assistant" aria-live="off">
             <div class="msg-role">
               <span class="role-dot"></span>
@@ -1645,7 +1717,12 @@
             {/each}
           </div>
         {/if}
-        <div class="composer-box" class:no-attach={isExternalPane(item)} class:no-stt={!$appState.bootstrap?.sttEnabled}>
+        <div
+          class="composer-box"
+          class:no-attach={isExternalPane(item)}
+          class:no-stt={!$appState.bootstrap?.sttEnabled}
+          class:with-steer={canSteer(item)}
+        >
           {#if !isExternalPane(item)}
             <label
               class="composer-attach"
@@ -1666,12 +1743,12 @@
           {/if}
           <!-- Intentionally NOT disabled while streaming: disabling blurs the
                textarea (focus loss after every send) and blocks composing the
-               next message. Sending mid-stream is already prevented (Enter is
-               gated below; the button is a Stop button), so leaving it editable
-               only lets the user keep focus + draft the follow-up. -->
+               next message. On a local pane what is typed mid-stream can now be
+               SENT into the running turn (see `canSteer`); on an external one it
+               is still only a head start on the next turn. -->
           <textarea
             rows="1"
-            placeholder={item.streaming ? "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)" : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
+            placeholder={item.streaming ? streamingPlaceholder(item, enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
             value={item.draft}
             aria-label={`${item.avatar.alias || item.avatar.displayName}에게 보낼 메시지`}
             aria-describedby={paneDomId("composer-hint", item.id)}
@@ -1714,6 +1791,24 @@
               on:click={() => toggleVoiceInput(item)}
             >
               <Icon name={recording ? "stop" : "mic"} />
+            </button>
+          {/if}
+          <!-- Mid-turn send, LEFT of the stop button: two different actions on a
+               streaming turn — hand the model another message, or kill the run —
+               so they are two controls, never one that changes meaning. It stays
+               mounted for the whole stream and merely disables, so the row never
+               reflows mid-keystroke and the affordance is visible BEFORE the
+               user has typed anything to use it on. -->
+          {#if canSteer(item)}
+            <button
+              class="send-button steer-send"
+              type="button"
+              aria-label="응답 중 메시지 보내기"
+              title={steerSendTitle(item)}
+              disabled={item.steerSending || !item.draft.trim()}
+              on:click={() => sendSteer(item.id, item.draft)}
+            >
+              <Icon name="send" />
             </button>
           {/if}
           <button

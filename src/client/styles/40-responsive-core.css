@@ -186,6 +186,22 @@
   .composer-hint {
     margin-top: var(--s-1);
   }
+  /* While a turn streams on a local pane the row also carries the mid-turn
+     send button (`.with-steer`, see 30-agent-md-composer.css). Four icon
+     buttons plus the textarea do fit at 390px, but leave the textarea barely
+     40% of the row — so drop the image-attach button for the duration: an image
+     cannot be sent mid-turn anyway (the composer refuses it until the turn
+     ends), and the freed column goes back to the text. The `.no-attach` pairs
+     never carry the column, so only the two attach-bearing lists change. */
+  .composer-box.with-steer .composer-attach {
+    display: none;
+  }
+  .composer-box.with-steer {
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+  }
+  .composer-box.with-steer.no-stt {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
 }
 
 /* ----------------------------------------------------------------------------

@@ -48,7 +48,7 @@ Companion to the agent-area philosophy in [`../src/server/agent/CLAUDE.md`](../s
 | [agent-core.md](architecture/agent-core.md) | Changing how a run is assembled: what `claudeAgent.ts` re-exports and why, the admin builtin tool/skill on-off policy, agent teams, and the **checklist for adding or changing an MCP tool server** (every in-process server must self-gate — the `mcp__` auto-allow fires before the owner check). |
 | [avatar-collab.md](architecture/avatar-collab.md) | Working on avatar-to-avatar features: `mcp__avatars__ask_avatar` consultation runs, `mcp__skill_exchange__*` sharing and the copy-into-the-learner's-repo transfer, and the helpers both reuse instead of re-copying. |
 | [browser-bridge.md](architecture/browser-bridge.md) | **Its own hub** (5 pages) — the largest subsystem here. Any `mcp__browser__*` op, the AX snapshot format, or the shipped Chrome extension. Start with its `contract.md`. |
-| [chat-sse-media.md](architecture/chat-sse-media.md) | Touching the chat turn itself or anything the avatar hands back: SSE sessions and stored history, image attachments, `share_file` / PPTX / draw.io delivery, and the visual canvas. |
+| [chat-sse-media.md](architecture/chat-sse-media.md) | Touching the chat turn itself or anything the avatar hands back: SSE sessions and stored history, the background phase and mid-turn user messages (steers), image attachments, `share_file` / PPTX / draw.io delivery, and the visual canvas. |
 | [agent-misc.md](architecture/agent-misc.md) | Experimental feature flags, hex-ssh remote SSH, server-expanded slash commands, why git remote work is MCP-only, and how to test repo tools offline. |
 
 ## Client (`src/client/` — Svelte + Vite)

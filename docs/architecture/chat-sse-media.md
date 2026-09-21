@@ -96,9 +96,64 @@
   keeps `streaming=true` through the phase (stop button = the kill switch), renders the `bg-task-note`
   chip from `pane.backgroundTasks`, keeps the live tree mounted until `bg_end`, then re-PUTs the sealed
   snapshot onto the first message (`backgroundMessageId`). Replay-safety: every message push dedupes by
-  id (a reattach replays the whole event log). Known v1 limits (deliberate): a new user message still
-  409s during the phase, and a server restart kills pending background work — both stated in the
-  standing prompt guidance (`promptBuilder.ts`) and `describe_system`.
+  id (a reattach replays the whole event log). Known v1 limits (deliberate): a new `POST
+  /api/chat/stream` still 409s during the phase — but the composer no longer strands the viewer there,
+  it delivers the text as a MID-TURN message (next bullet) whose answer arrives as a `bg_message`
+  wake-up turn — and a server restart kills pending background work; both are stated in the standing
+  prompt guidance (`promptBuilder.ts`) and `describe_system`.
+- **Mid-turn user messages ("steers") ride the held-open input, and the CLI's own queue does the
+  folding.** Someone watching an agentic turn wants to correct it, not wait it out — the same thing
+  typing into Claude Code mid-run does. Streaming turns already pass an async generator as the SDK
+  `prompt` (`buildHeldOpenQueryPrompt`, the background-phase keepalive above), so with a channel
+  attached its park becomes a LOOP: each accepted message is yielded as another
+  `{type:"user", uuid, message}`, the SDK's `Query.streamInput` writes it to the CLI's stdin at once,
+  and the CLI folds it into the running turn after the next `tool_result`. Verified by a live spike on
+  the SDK-BUNDLED CLI 2.1.251 (the SDK spawns its own binary, never the machine's `claude`):
+  (1) `command_lifecycle {command_uuid, state: queued|started|completed|cancelled}` keyed by OUR uuid is
+  the ONLY delivery signal — a folded steer is never echoed back as a stream `user` message, `started`
+  is the moment the text reached the model, and `result.queued_turn_count` LIES (0 with a steer still
+  queued), so never read it; (2) with no tool boundary left a queued message runs as a SECOND turn right
+  after the first `result`, even if stdin was closed at that result, and the public `Query` interface
+  has no way to cancel a queued message — so an undelivered steer at a boundary ALWAYS means a follow-up
+  turn; (3) the wire shape is the verified DEFAULT one (`steerToSdkUserMessage`) — no `origin`,
+  `priority` or `shouldQuery`, and `priority:"now"` stays unused BY DESIGN because it ABORTS the running
+  turn. **`SteerChannel`** (`agent/steerChannel.ts`) is the per-run queue + state machine between those
+  halves (`queued` → `delivered` → `completed`, or → `dropped`): `push`/`next(until)`/`noteLifecycle`/
+  `noteResultBoundary`/`hasUndelivered`/`close`/`onChange`, bounded by `MAX_UNDELIVERED_STEERS` (10). It
+  rides `openRun` meta, `pushRunSteer(runId, userId, text)` is the only writer
+  (`not_found|unsupported|closed|too_many`), and `cancelRun`/`cancelAllRuns`/`closeRun` close it so every
+  undelivered record reports `dropped` BEFORE the run's terminal frame.
+  **Release rule at a `result` boundary** (`claudeAgent.ts`): `noteResultBoundary()` runs first (every
+  still-queued record is flagged `followUp`), and the held input is released + the channel closed ONLY
+  when there are neither live background tasks NOR undelivered steers — the CLI is about to run that
+  steer, and closing here would drop a message the viewer already sent. `onTurnResult` carries
+  `steerPending`; on a steer-pending, task-free boundary the fold anchors (`textFold.chunkIndex`/
+  `deltaIndex`) jump past the segment just persisted, so the follow-up turn neither folds the previous
+  answer into 생각 과정 nor repeats it in the run's final text. The empty-turn self-heal retry is SKIPPED
+  once any steer was accepted (a re-run replays only the FIRST prompt and the CLI ignores a re-sent
+  uuid), and the attempt loop's `finally` closes the channel on every other exit. **`turn_end` vs `done`
+  vs `bg_message`:** with a pending steer and no background tasks the chat route persists the visible
+  segment (its text, or `STEER_TURN_END_PLACEHOLDER` when the steer cut it short) and emits `turn_end
+  {message, response}` — payload shape identical to `done`, but the run is kept OPEN, the
+  `persisted*Offset`s advance and `turnFinalized` is deliberately NOT set, so the follow-up turn's answer
+  is this run's real `done`. That `done` carries only the TAIL, by two different mechanisms: the text
+  because the fold anchors moved (`partialText` is `assistantChunks.slice(textFold.chunkIndex)`), the
+  reasoning and attachments because it slices at `persistedThinkingOffset`/`persistedAttachmentsOffset`
+  (`persistedTextOffset` feeds only the cancel/error tails). Once the BACKGROUND phase has started, a
+  steer is simply another wake-up turn and its answer rides the existing `bg_message` path.
+  **Persistence happens at DELIVERY, never at accept:** the `delivered` listener
+  writes the user row with `kind:"steer"` (`messages.kind`, `addColumnIfMissing`) and carries it back
+  inside the frame as `steer.message`, so a message the model never saw never enters history.
+  **Endpoint:** `POST /api/chat/runs/:runId/message` — session cookie only (never a personal API key),
+  plain text capped at `MAX_STEER_LENGTH` (20k chars); 400 empty/too long, 404 unknown/ended/other-user
+  run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **Out of scope by design:** external
+  gateway avatars and external-task-API turns get NO channel (`steers` undefined → `midTurnMessages`
+  false on both metacognition surfaces), a steer carries no images, no slash expansion and no canvas, and
+  a queued steer cannot be cancelled. Client: pending steers render as dimmed 전달 대기 중 bubbles above
+  the live bubble, `delivered` moves them into `pane.messages` (응답 중 전달 badge), `dropped` returns the
+  text to the composer with a toast, and `turn_end` seals the bubble via `finalizeVisibleTurn` while
+  `endLiveTurn` keeps `streaming` true. **Both frames must be replay-idempotent** — they ride the ordered
+  run-event log, so a reattach re-applies them (see [`client.md`](./client.md) for the wire contract).
 
 ## Image attachments
 - The user message can carry images. The composer stages images (`ChatPane.pendingImages`, downscaled to

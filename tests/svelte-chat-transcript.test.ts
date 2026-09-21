@@ -239,3 +239,50 @@ describe("ChatView transcript", () => {
     ).toBe(true);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* mid-turn messages ("steers")                                        */
+/* ------------------------------------------------------------------ */
+
+describe("ChatView transcript · mid-turn messages", () => {
+  it("shows a steer the server has not delivered yet as a pending bubble", () => {
+    const live = pane([]);
+    (live as unknown as Record<string, unknown>).streaming = true;
+    (live as unknown as Record<string, unknown>).steers = [
+      { id: "s-1", text: "이것도 확인해 주세요", createdAt: "2026-09-21T01:00:00.000Z" },
+    ];
+    replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const pending = container.querySelector(".message.user.steer-pending")!;
+    expect(pending).toBeTruthy();
+    expect(pending.querySelector(".steer-badge")?.textContent).toBe("전달 대기 중");
+    expect(pending.querySelector(".bubble")?.textContent).toBe("이것도 확인해 주세요");
+    // It waits at the streaming edge: after the transcript, above the live answer.
+    const liveBubble = container.querySelector(".message.assistant")!;
+    expect(
+      Boolean(pending.compareDocumentPosition(liveBubble) & Node.DOCUMENT_POSITION_FOLLOWING),
+      "the pending steer sits above the live assistant bubble",
+    ).toBe(true);
+  });
+
+  it("marks a delivered steer in the transcript so it is not read as an ordinary turn", () => {
+    const steered = {
+      id: "u-steer",
+      conversationId: "conv-1",
+      role: "user",
+      content: "중간에 끼어든 말",
+      kind: "steer",
+      createdAt: "2026-07-26T01:00:00.000Z",
+      response: null,
+    } as unknown as StoredMessage;
+    const plain = { ...steered, id: "u-plain", content: "평범한 질문", kind: undefined } as unknown as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([plain, steered])], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const rows = Array.from(container.querySelectorAll(".message.user"));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector(".steer-badge")).toBeNull();
+    expect(rows[1].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
+  });
+});

@@ -736,6 +736,10 @@ export class StoreBase {
     // User-message image attachments (metadata only; the bytes live on disk
     // under dataDir/chat-images — see chatImages.ts).
     this.addColumnIfMissing("messages", "attachments_json", "TEXT");
+    // Mid-turn user messages: `"steer"` marks a user row the viewer sent WHILE
+    // the previous turn was still running (see StoredMessage.kind). NULL on
+    // every ordinary row, so the mapper omits the field entirely for those.
+    this.addColumnIfMissing("messages", "kind", "TEXT");
     this.addColumnIfMissing("users", "auto_approve", "INTEGER DEFAULT 0");
     // Account suspension: blocks login and kills active sessions. Also the
     // "pending approval" state for signups created while signup mode = approval.

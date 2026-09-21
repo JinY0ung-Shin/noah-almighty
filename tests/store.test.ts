@@ -511,6 +511,29 @@ describe("store agent session resume", () => {
     expect(store.setMessageActivity(ownerId, bare.id, activity)).toBe(false);
   });
 
+  it("round-trips a mid-turn user row's kind and leaves ordinary rows shapeless", () => {
+    const { store, ownerId } = makeStore();
+    store.touchConversation(ownerId, "conv-steer", ownerId, "hi");
+    const ordinary = store.addMessage("conv-steer", { role: "user", content: "처음 요청" });
+    const steer = store.addMessage("conv-steer", {
+      role: "user",
+      content: "응답 중에 보낸 메시지",
+      kind: "steer",
+    });
+    expect(steer.kind).toBe("steer");
+    // An ordinary row keeps the exact shape it had before the column existed:
+    // the key is ABSENT, not undefined, so equality checks elsewhere are safe.
+    expect("kind" in ordinary).toBe(false);
+
+    const [first, second] = store.listMessages(ownerId, "conv-steer");
+    expect("kind" in first).toBe(false);
+    expect(second.kind).toBe("steer");
+    expect(second.content).toBe("응답 중에 보낸 메시지");
+    // Insertion order is the transcript order: the steer sits where it landed.
+    expect(first.id).toBe(ordinary.id);
+    expect(second.id).toBe(steer.id);
+  });
+
   it("persists task-only activity snapshots and deletes only regular chats in bulk", () => {
     const { store, ownerId } = makeStore();
     const avatar = store.createUser({ username: "taskavatar", displayName: "Task Avatar", password: "password123" });

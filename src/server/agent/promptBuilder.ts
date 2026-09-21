@@ -921,6 +921,15 @@ export function buildSystemPromptAppend(
   if (canvasBlock) {
     lines.push(canvasBlock);
   }
+  // Mid-turn user messages (steers). ONE standing line for every viewer class
+  // of a run that carries a live steer channel — the person can talk while the
+  // avatar works, so it must expect a late instruction instead of treating it
+  // as a stray. Mirrored by describe_system (AgentRequest.midTurnMessages).
+  if (request.midTurnMessages === true) {
+    lines.push(
+      "The user may send additional messages while you are working. They arrive as ordinary user messages between your tool calls (or as the next turn if you have already finished). Read them as they arrive, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch.",
+    );
+  }
   const fileOutputBlock = fileOutputSection(request);
   if (fileOutputBlock) {
     lines.push(fileOutputBlock);

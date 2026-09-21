@@ -1033,6 +1033,14 @@ export interface StoredMessage {
   content: string;
   /** Images attached to this message; absent/[] when none. */
   attachments?: MessageAttachment[];
+  /**
+   * `"steer"` marks a USER message the viewer sent WHILE the avatar's previous
+   * turn was still running (a mid-turn message, delivered to the model between
+   * tool calls or as the head of the follow-up turn). Absent on ordinary rows.
+   * Persisted in `messages.kind`; the client renders these with a small
+   * "응답 중 전달" badge. Only ever set on `role: "user"` rows.
+   */
+  kind?: "steer";
   response: AgentResponse | null;
   createdAt: string;
 }
@@ -1464,6 +1472,17 @@ export interface AgentRequest {
    * through the task API or the Noah UI.
    */
   externalTaskApi?: boolean;
+  /**
+   * True when the viewer can send ADDITIONAL user messages while this turn is
+   * still running (an interactive streaming chat with a live steer channel —
+   * see `agent/steerChannel.ts`). Such a message reaches the model between
+   * tool calls of the current turn, or starts the next turn if the current one
+   * has already finished. META-COGNITION only: surfaced in
+   * `buildSystemPromptAppend` and `describe_system` so the avatar expects
+   * late-arriving instructions instead of treating them as noise. Never set on
+   * headless / external-task-API runs.
+   */
+  midTurnMessages?: boolean;
   /**
    * Auto-approve tool use: skip the interactive permission prompt and run
    * non-read-only tools without asking. Honored on the elevated, non-headless

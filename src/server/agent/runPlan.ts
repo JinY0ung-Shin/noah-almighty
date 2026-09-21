@@ -825,6 +825,10 @@ export async function buildAgentRunPlan(
     // branch, so describe_system has to omit the same owner-conversation facts
     // or the two surfaces contradict each other on the same run.
     headless: request.headless,
+    // Mid-turn user messages (steers): this run carries a live steer channel,
+    // so the viewer can send more messages WHILE it works. Mirrors
+    // buildSystemPromptAppend's standing line and `AgentRequest.midTurnMessages`.
+    midTurnMessages: Boolean(events?.steers),
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for

@@ -1,3 +1,7 @@
+// Two composer behaviours that are easy to break apart: image intake in "file
+// mode", and the mid-turn message ("steer") controls that appear while a turn is
+// streaming.
+//
 // Composer image intake when the pane's model has NO vision ("file mode"). The
 // server no longer rejects those uploads — it stages them as files in the agent
 // workspace and hands the model only the path — so the composer must let them
@@ -11,9 +15,17 @@ import { get } from "svelte/store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatView from "../src/client/src/views/ChatView.svelte";
+import { sendSteer } from "../src/client/src/lib/chat.js";
 import { readState, replaceState, toasts } from "../src/client/src/lib/state.js";
 import type { ChatPane } from "../src/client/src/lib/types.js";
 import type { AvatarDetail } from "../src/server/types.js";
+
+// Only the steer sender is faked; everything else ChatView imports from the chat
+// module (mount-time loaders included) stays real.
+vi.mock("../src/client/src/lib/chat.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/client/src/lib/chat.js")>()),
+  sendSteer: vi.fn(async () => {}),
+}));
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]);
 
@@ -110,6 +122,7 @@ beforeEach(() => {
     })),
   );
   toasts.set([]);
+  vi.mocked(sendSteer).mockClear();
 });
 
 describe("composer image attach in file mode", () => {
@@ -155,5 +168,99 @@ describe("composer image attach in file mode", () => {
     seed("seeing");
     const { container } = render(ChatView);
     expect(attachLabel(container).title).toBe("이미지 첨부");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* mid-turn messages ("steers")                                        */
+/* ------------------------------------------------------------------ */
+
+/** A pane mid-answer with something typed — the only state that offers a steer. */
+function seedStreaming(overrides: Partial<ChatPane> = {}): void {
+  const target = { ...pane("seeing"), streaming: true, liveRunId: "run-1", draft: "중간에 한마디", ...overrides } as ChatPane;
+  replaceState({
+    avatars: [],
+    chatPanes: [target],
+    activePaneId: target.id,
+    view: "chat",
+    bootstrap: { visionEnabled: true },
+  } as unknown as Parameters<typeof replaceState>[0]);
+}
+
+const externalAvatar = { ...avatar, id: "avatar-ext", runtime: "external" } as unknown as AvatarDetail;
+
+function composerTextarea(container: HTMLElement): HTMLTextAreaElement {
+  const el = container.querySelector<HTMLTextAreaElement>(".composer-box textarea");
+  expect(el).toBeTruthy();
+  return el!;
+}
+
+describe("composer mid-turn messages", () => {
+  it("offers the steer button on a streaming local pane, and Enter sends through it", async () => {
+    seedStreaming();
+    const { container } = render(ChatView);
+
+    const steerButton = container.querySelector<HTMLButtonElement>(".send-button.steer-send");
+    expect(steerButton).toBeTruthy();
+    expect(steerButton!.getAttribute("aria-label")).toBe("응답 중 메시지 보내기");
+    expect(steerButton!.disabled).toBe(false);
+    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (다음 작업 사이에 전달됩니다)");
+    // The stop button is untouched — killing the run and messaging it are two acts.
+    expect(container.querySelector(".send-button.is-stop")).toBeTruthy();
+    // And the extra column is declared, or the button would wrap onto its own row.
+    expect(container.querySelector(".composer-box.with-steer")).toBeTruthy();
+
+    await fireEvent.keyDown(composerTextarea(container), { key: "Enter" });
+    expect(vi.mocked(sendSteer)).toHaveBeenCalledWith("pane-1", "중간에 한마디");
+  });
+
+  it("keeps the steer button mounted on an empty draft, disabled and saying why", () => {
+    seedStreaming({ draft: "   " });
+    const { container } = render(ChatView);
+
+    const steerButton = container.querySelector<HTMLButtonElement>(".send-button.steer-send");
+    expect(steerButton).toBeTruthy();
+    expect(steerButton!.disabled).toBe(true);
+    // A disabled control with an unstated prerequisite reads as broken.
+    expect(steerButton!.title).toBe("메시지를 입력하면 응답 중에도 보낼 수 있어요");
+    // The column list is the same one the typed state uses, so the row cannot
+    // reflow on the first keystroke.
+    expect(container.querySelector(".composer-box.with-steer")).toBeTruthy();
+  });
+
+  it("an external pane keeps the old mid-stream composer: no button, Enter breaks the line", async () => {
+    seedStreaming({ avatar: externalAvatar });
+    const { container } = render(ChatView);
+
+    expect(container.querySelector(".send-button.steer-send")).toBeNull();
+    expect(container.querySelector(".composer-box.with-steer")).toBeNull();
+    await fireEvent.keyDown(composerTextarea(container), { key: "Enter" });
+    expect(vi.mocked(sendSteer)).not.toHaveBeenCalled();
+  });
+
+  it("says a message can be sent mid-answer — but only where one actually can", () => {
+    seedStreaming();
+    const local = render(ChatView);
+    expect(composerTextarea(local.container).placeholder).toBe(
+      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다",
+    );
+    local.unmount();
+
+    seedStreaming({ avatar: externalAvatar });
+    const external = render(ChatView);
+    expect(composerTextarea(external.container).placeholder).toBe(
+      "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)",
+    );
+  });
+
+  it("refuses to steer while an image is staged, and says when it can go", async () => {
+    seedStreaming({
+      pendingImages: [{ id: "img-1", dataUrl: "data:image/png;base64,AA", name: "shot.png", mediaType: "image/png" }],
+    });
+    const { container } = render(ChatView);
+
+    await fireEvent.keyDown(composerTextarea(container), { key: "Enter" });
+    expect(vi.mocked(sendSteer)).not.toHaveBeenCalled();
+    expect(get(toasts).some((t) => t.message.includes("이미지는 응답이 끝난 뒤"))).toBe(true);
   });
 });

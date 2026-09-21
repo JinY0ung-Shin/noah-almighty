@@ -2187,6 +2187,24 @@ describe("system tools (avatar system management)", () => {
     );
   });
 
+  it("describe_system reports whether the user can send messages mid-turn", async () => {
+    const s = setup("st-steer");
+    const off = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(off).toContain("Mid-turn user messages: not available in this run");
+
+    const on = (await callTool(
+      buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, midTurnMessages: true }),
+      "describe_system",
+      {},
+    )).content[0].text ?? "";
+    expect(on).toContain("Mid-turn user messages: ENABLED");
+    // Mirrors buildSystemPromptAppend's standing line: same two instructions,
+    // so the avatar cannot read one surface and act against the other.
+    expect(on).toContain("between your tool calls");
+    expect(on).toContain("let the newest instruction win");
+    expect(on).not.toContain("Mid-turn user messages: not available");
+  });
+
   it("describe_system matches the prompt's headless branch on an unattended routine", async () => {
     const s = setup("st-headless");
     const routine = (await callTool(

@@ -21,6 +21,7 @@ import {
 } from "../src/server/chatFiles.js";
 import { MAX_CHAT_IMAGES_PER_MESSAGE } from "../src/server/chatImages.js";
 import { getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
+import { MAX_STEER_LENGTH } from "../src/server/routes/chat.js";
 
 // Shared control surface for the mocked agent layer. `impl`, when set, fully
 // drives a turn (fires the events callbacks the route wires); otherwise a default
@@ -2209,6 +2210,280 @@ describe("SDK-native background phase", () => {
     expect(assistants[0].response?.summary).toBe("Claude Agent SDK 실행이 완료되었습니다.");
     // Each report carries only ITS OWN tail of the streamed reasoning.
     expect(assistants[1].response).toMatchObject({ summary: "백그라운드 작업 보고", thinking: "두번째 생각" });
+  }, LIVE);
+});
+
+describe("mid-turn user messages (steers)", () => {
+  it("404s a message for a run that does not exist", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    await signup(owner, "steer404").expect(201);
+    const res = await owner
+      .post("/api/chat/runs/no-such-run/message")
+      .send({ message: "안녕" })
+      .expect(404);
+    expect(res.body.error).toBe("진행 중인 실행을 찾을 수 없습니다.");
+  });
+
+  it("rejects an empty message and one past the length cap before touching the run", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    await signup(owner, "steerbad").expect(201);
+    // Validated ahead of the run lookup, so an unknown run still 400s here.
+    const empty = await owner
+      .post("/api/chat/runs/whatever/message")
+      .send({ message: "   " })
+      .expect(400);
+    expect(empty.body.error).toBe("메시지를 입력해 주세요.");
+    const missing = await owner.post("/api/chat/runs/whatever/message").send({}).expect(400);
+    expect(missing.body.error).toBe("메시지를 입력해 주세요.");
+    const long = await owner
+      .post("/api/chat/runs/whatever/message")
+      .send({ message: "가".repeat(MAX_STEER_LENGTH + 1) })
+      .expect(400);
+    expect(long.body.error).toBe("메시지가 너무 깁니다.");
+  });
+
+  it("accepts a message mid-run, persists it on DELIVERY, and reports both states over SSE", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "steerlive").expect(201)).body.user.id as string;
+
+    let captured: AgentEvents | null = null;
+    let release!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    H.impl = async (_req, _pr, config, _store, events) => {
+      captured = events;
+      events.onSessionId?.("sess-steer");
+      events.onDelta?.("확인 중");
+      await parked;
+      return { kind: "text", runtime: config.agentRuntime, summary: "완료", text: "바꿔서 처리했습니다" };
+    };
+
+    const streamDone = fireStream(owner, {
+      avatarId: ownerId,
+      conversationId: "conv-steer",
+      message: "a.ts 봐줘",
+    });
+    await waitUntil(async () => (await activeRun(owner, "conv-steer")) !== null, "run active");
+    const run = (await activeRun(owner, "conv-steer"))!;
+
+    const accepted = await owner
+      .post(`/api/chat/runs/${run.runId}/message`)
+      .send({ message: "  사실 b.ts부터 봐줘  " })
+      .expect(200);
+    expect(accepted.body.ok).toBe(true);
+    expect(accepted.body.steer).toMatchObject({
+      id: expect.any(String),
+      // The server trims before anything else sees it.
+      text: "사실 b.ts부터 봐줘",
+      state: "queued",
+      followUp: false,
+      createdAt: expect.any(String),
+    });
+
+    // Nothing is persisted at accept time — a message the model never receives
+    // must not show up in the transcript.
+    expect(store.listMessages(ownerId, "conv-steer").filter((m) => m.role === "user")).toHaveLength(1);
+
+    // The CLI reports it reached the model.
+    captured!.steers!.noteLifecycle(accepted.body.steer.id as string, "started");
+    release();
+    const frames = parseSse((await streamDone).text);
+
+    const steerFrames = frames.filter((f) => f.event === "steer");
+    expect(steerFrames.map((f) => frameData(f).steer.state)).toEqual(["queued", "delivered"]);
+    expect(frameData(steerFrames[0]).steer.id).toBe(accepted.body.steer.id);
+    // The persisted row rides INSIDE the steer object, and only on `delivered`
+    // — one object per frame, never a sibling field.
+    expect(frameData(steerFrames[0]).steer.message).toBeUndefined();
+    expect(frameData(steerFrames[0]).message).toBeUndefined();
+    const delivered = frameData(steerFrames[1]).steer;
+    expect(delivered).toMatchObject({ state: "delivered", followUp: false });
+    expect(delivered.message).toMatchObject({ role: "user", content: "사실 b.ts부터 봐줘", kind: "steer" });
+
+    // The persisted row sits BETWEEN the original user turn and the answer, so
+    // a reload reads the thread in the order it happened.
+    const rows = store.listMessages(ownerId, "conv-steer");
+    expect(rows.map((m) => [m.role, m.content])).toEqual([
+      ["user", "a.ts 봐줘"],
+      ["user", "사실 b.ts부터 봐줘"],
+      ["assistant", "바꿔서 처리했습니다"],
+    ]);
+    expect(rows[1].kind).toBe("steer");
+    expect(rows[1].id).toBe(delivered.message.id);
+    // The POST body's `steer` is the same projection WITHOUT the row, so a
+    // client can key both off the same id.
+    expect(accepted.body.steer.message).toBeUndefined();
+    expect("kind" in rows[0]).toBe(false);
+  }, LIVE);
+
+  it("closes the visible turn with turn_end when a steer outlived it, keeping the run open", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "steerturn").expect(201)).body.user.id as string;
+
+    let sawActiveAfterTurnEnd = false;
+    H.impl = async (agentRequest, _pr, config, _store, events) => {
+      fs.writeFileSync(path.join(agentRequest.cwd!, "shot.png"), PNG_BYTES);
+      events.onSessionId?.("sess-turnend");
+      events.onDelta?.("첫 답변");
+      events.onThinking?.("첫 생각");
+      await events.onFile!({ path: "shot.png", caption: "첫 장면" });
+      // The viewer's message arrived too late to fold in: the run stays open
+      // and the CLI runs it as a follow-up turn.
+      events.onTurnResult?.({ text: "첫 답변", backgroundTasks: [], steerPending: true });
+      // Still live for the client — no `done` yet.
+      sawActiveAfterTurnEnd = getActiveRunForConversation(ownerId, "conv-turnend") !== null;
+      events.onDelta?.("이어서 답변");
+      events.onThinking?.("두번째 생각");
+      await events.onFile!({ path: "shot.png", caption: "두번째 장면" });
+      events.onTurnResult?.({ text: "이어서 답변", backgroundTasks: [], steerPending: false });
+      return { kind: "text", runtime: config.agentRuntime, summary: "완료", text: "이어서 답변" };
+    };
+
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-turnend", message: "봐줘" })
+      .expect(200);
+    const frames = parseSse(res.text);
+
+    expect(sawActiveAfterTurnEnd).toBe(true);
+    const turnEnd = frames.filter((f) => f.event === "turn_end");
+    expect(turnEnd).toHaveLength(1);
+    expect(frameData(turnEnd[0]).response).toMatchObject({ text: "첫 답변", thinking: "첫 생각" });
+    expect(frameData(turnEnd[0]).message.content).toBe("첫 답변");
+    // turn_end is NOT terminal: the follow-up turn's answer is the run's done.
+    const done = frames.filter((f) => f.event === "done");
+    expect(done).toHaveLength(1);
+    expect(frames.indexOf(turnEnd[0])).toBeLessThan(frames.indexOf(done[0]));
+    expect(frameData(done[0]).message.content).toBe("이어서 답변");
+
+    // Two assistant rows, each carrying only ITS OWN tail of reasoning + cards.
+    const assistants = store.listMessages(ownerId, "conv-turnend").filter((m) => m.role === "assistant");
+    expect(assistants.map((m) => m.content)).toEqual(["첫 답변", "이어서 답변"]);
+    expect(assistants[0].response?.thinking).toBe("첫 생각");
+    expect(assistants[1].response?.thinking).toBe("두번째 생각");
+    expect(assistants[0].attachments?.map((a) => a.caption)).toEqual(["첫 장면"]);
+    expect(assistants[1].attachments?.map((a) => a.caption)).toEqual(["두번째 장면"]);
+    // The session id is persisted at the boundary — the follow-up turn is the
+    // same transcript and the next turn has to resume it.
+    expect(store.getAgentSessionId(ownerId, "conv-turnend")).toBe("sess-turnend");
+  }, LIVE);
+
+  it("409s a mid-turn message on an external gateway avatar's run", async () => {
+    const external: ExternalAgentConfig = {
+      id: "research",
+      displayName: "Research Agent",
+      alias: "리서처",
+      bio: "외부 조사 에이전트",
+      persona: "공개 소개",
+      intro: "외부 Gateway에서 실행됩니다.",
+      hashtags: ["research"],
+      endpoint: "https://gateway.example.com/v1/agents/messages",
+      agent: "claude",
+      apiKey: "gateway-secret",
+      visibleToGroupIds: [],
+    };
+    const services = createServices({
+      dataDir: tempDir,
+      agentRuntime: "claude",
+      sessionSecret: "test",
+      externalAgents: [external],
+    });
+    const app = createApp(services);
+    const viewer = request.agent(app);
+    const viewerId = (await signup(viewer, "steerext").expect(201)).body.user.id as string;
+    const group = services.store.createGroup({ name: "ext-viewers" });
+    services.store.addGroupMember(group.id, viewerId);
+    external.visibleToGroupIds = [group.id];
+
+    let release!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let refused: { status: number; error: string } | null = null;
+    H.externalImpl = async (_req, _ext, events) => {
+      events.onDelta?.("외부 답변");
+      const runId = getActiveRunForConversation(viewerId, "conv-steerext")!.runId;
+      const res = await viewer.post(`/api/chat/runs/${runId}/message`).send({ message: "중간에" });
+      refused = { status: res.status, error: res.body.error };
+      release();
+      await parked;
+      return { kind: "text", runtime: "external", summary: "완료", text: "외부 답변" };
+    };
+
+    await viewer
+      .post("/api/chat/stream")
+      .send({ avatarId: "external:research", conversationId: "conv-steerext", message: "조사해줘" })
+      .expect(200);
+
+    // A stateless gateway turn has no live stdin to fold a message into, so the
+    // capability is refused rather than silently dropped.
+    expect(refused).toEqual({
+      status: 409,
+      error: "이 대화에서는 응답 중에 메시지를 보낼 수 없습니다.",
+    });
+  }, LIVE);
+
+  it("410s a mid-turn message once the run was stopped, and reports the queued one as dropped", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "steerstop").expect(201)).body.user.id as string;
+    // Park on the abort like parkUntilAborted, then HOLD: the run must still be
+    // in the registry (cancelled, not yet closed) while the test probes it, or
+    // the second POST would race the SSE socket's teardown and 404 instead.
+    let unhold!: () => void;
+    const held = new Promise<void>((resolve) => {
+      unhold = resolve;
+    });
+    H.impl = async (_req, _pr, _config, _store, events, ac) => {
+      events.onDelta?.("부분 답변");
+      await new Promise<void>((resolve) => {
+        if (ac.signal.aborted) return resolve();
+        ac.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await held;
+      throw new Error("aborted");
+    };
+
+    const streamDone = fireStream(owner, {
+      avatarId: ownerId,
+      conversationId: "conv-steerstop",
+      message: "느린 요청",
+    });
+    await waitUntil(async () => (await activeRun(owner, "conv-steerstop")) !== null, "run active");
+    const run = (await activeRun(owner, "conv-steerstop"))!;
+
+    const accepted = await owner
+      .post(`/api/chat/runs/${run.runId}/message`)
+      .send({ message: "전달되지 않을 메시지" })
+      .expect(200);
+    await owner.post(`/api/chat/runs/${run.runId}/cancel`).send({}).expect(200);
+
+    const refused = await owner
+      .post(`/api/chat/runs/${run.runId}/message`)
+      .send({ message: "중지 후" })
+      .expect(410);
+    expect(refused.body.error).toBe(
+      "응답이 마무리되는 중이라 전달할 수 없습니다. 응답이 끝난 뒤 다시 보내 주세요.",
+    );
+
+    unhold();
+    const frames = parseSse((await streamDone).text);
+    const steerFrames = frames.filter((f) => f.event === "steer");
+    expect(steerFrames.map((f) => frameData(f).steer.state)).toEqual(["queued", "dropped"]);
+    expect(frameData(steerFrames[1]).steer.id).toBe(accepted.body.steer.id);
+    // The drop lands BEFORE the terminal frame, so the client can retire the
+    // pending bubble before it stops reading.
+    const cancelled = frames.find((f) => f.event === "cancelled")!;
+    expect(frames.indexOf(steerFrames[1])).toBeLessThan(frames.indexOf(cancelled));
+    // It never reached the model, so it is not in the transcript.
+    expect(
+      store.listMessages(ownerId, "conv-steerstop").some((m) => m.kind === "steer"),
+    ).toBe(false);
   }, LIVE);
 });
 

@@ -114,6 +114,7 @@ import {
   dispatchSdkMessage,
   traceSdkMessage,
 } from "../src/server/agent/sdkMessageHandlers.js";
+import { SteerChannel } from "../src/server/agent/steerChannel.js";
 
 // ---------------------------------------------------------------------------
 // SDK-message + query-handle builders (shapes copied from sdkMessageHandlers /
@@ -162,6 +163,16 @@ const successResult = (result: string, extra: Record<string, unknown> = {}) => (
   subtype: "success",
   result,
   ...extra,
+});
+/**
+ * The CLI's report on a mid-turn message we wrote to its stdin. `started` is
+ * the ONLY delivery signal — a folded steer is never echoed back as a stream
+ * `user` message.
+ */
+const lifecycleMsg = (commandUuid: string, state: string) => ({
+  type: "command_lifecycle",
+  command_uuid: commandUuid,
+  state,
 });
 
 /** A query handle that yields a fixed message list, optionally with a getContextUsage control method. */
@@ -1144,6 +1155,187 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(onTurnResult).toHaveBeenCalledTimes(2);
     expect(onTurnResult.mock.calls[0][0].backgroundTasks).toHaveLength(1);
     expect(onTurnResult.mock.calls[1][0].backgroundTasks).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Mid-turn user messages ("steers"). The channel is the seam between the
+  // held-open prompt generator (which writes them to the CLI's stdin) and the
+  // CLI's command_lifecycle frames (the only delivery signal).
+  // -------------------------------------------------------------------------
+
+  it("yields a mid-turn message into the live prompt and marks it delivered inside the turn", async () => {
+    const { config, store, baseRequest } = setup();
+    const steers = new SteerChannel();
+    const onTurnResult = vi.fn();
+    const events = makeEvents({ steers, onTurnResult });
+
+    const yielded: Record<string, unknown>[] = [];
+    let promptCompleted = false;
+    let steerId = "";
+    sdkMock.impl = (args) => {
+      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
+      void (async () => {
+        for await (const message of prompt) {
+          yielded.push(message);
+        }
+        promptCompleted = true;
+      })();
+      async function* messages() {
+        yield initMsg();
+        // Mid-turn: the model is between tool calls when the viewer types.
+        yield assistantMsg([toolUseBlock("tu-1", "Read", { file_path: "a.ts" })]);
+        yield toolResultMsg("tu-1");
+        steerId = steers.push("사실 b.ts부터 봐줘")!.id;
+        // Let the prompt generator pick it up the way the CLI's stdin would.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        yield lifecycleMsg(steerId, "queued");
+        yield lifecycleMsg(steerId, "started");
+        yield assistantMsg([textBlock("b.ts로 바꿔서 확인했습니다")]);
+        yield successResult("b.ts로 바꿔서 확인했습니다");
+      }
+      return messages() as QueryHandle;
+    };
+
+    const response = await runAgentStream(baseRequest, [], config, store, events);
+    expect(response.text).toBe("b.ts로 바꿔서 확인했습니다");
+
+    // The steer rode the SAME held-open generator as the turn's first prompt,
+    // as its second item, keyed by the record id the CLI echoes back.
+    expect(yielded).toHaveLength(2);
+    expect(yielded[1].uuid).toBe(steerId);
+    expect(yielded[1].parent_tool_use_id).toBeNull();
+    expect(
+      (yielded[1].message as { content: { text: string }[] }).content[0].text,
+    ).toBe("사실 b.ts부터 봐줘");
+
+    // Folded INTO the running turn: delivered before the result, so it never
+    // becomes a follow-up.
+    const record = steers.records()[0];
+    expect(record.state).toBe("delivered");
+    expect(record.followUp).toBe(false);
+    expect(onTurnResult).toHaveBeenCalledTimes(1);
+    expect(onTurnResult.mock.calls[0][0].steerPending).toBe(false);
+
+    // Task-free, steer-free boundary → the gate released and the channel closed.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(promptCompleted).toBe(true);
+    expect(steers.closed).toBe(true);
+  });
+
+  it("keeps the run open for a steer the turn ended before, and segments the follow-up turn", async () => {
+    const { config, store, baseRequest } = setup();
+    const steers = new SteerChannel();
+    const onTurnResult = vi.fn();
+    const onTextFold = vi.fn();
+    const events = makeEvents({ steers, onTurnResult, onTextFold });
+
+    let promptCompleted = false;
+    let completedBeforeFollowUp: boolean | null = null;
+    let steerId = "";
+    sdkMock.impl = (args) => {
+      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
+      void (async () => {
+        for await (const _message of prompt) {
+          /* drain */
+        }
+        promptCompleted = true;
+      })();
+      async function* messages() {
+        yield initMsg();
+        yield deltaMsg("첫 답변");
+        yield assistantMsg([textBlock("첫 답변")]);
+        // The viewer types just as the turn wraps up: the CLI has it queued but
+        // has not handed it to the model, so this result is NOT the run's end.
+        steerId = steers.push("한 가지 더 확인해줘")!.id;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        yield successResult("첫 답변");
+        // A released gate's microtasks get a beat to land before sampling, so a
+        // regression cannot pass on scheduling luck.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        completedBeforeFollowUp = promptCompleted;
+        // The CLI starts it as its OWN turn in the same session.
+        yield lifecycleMsg(steerId, "started");
+        yield initMsg("sess-1", "opus");
+        yield deltaMsg("추가 확인 결과");
+        yield assistantMsg([textBlock("추가 확인 결과")]);
+        yield successResult("추가 확인 결과");
+      }
+      return messages() as QueryHandle;
+    };
+
+    const response = await runAgentStream(baseRequest, [], config, store, events);
+
+    expect(onTurnResult).toHaveBeenCalledTimes(2);
+    expect(onTurnResult.mock.calls[0][0]).toMatchObject({
+      text: "첫 답변",
+      backgroundTasks: [],
+      steerPending: true,
+    });
+    expect(onTurnResult.mock.calls[1][0]).toMatchObject({
+      text: "추가 확인 결과",
+      steerPending: false,
+    });
+
+    // The gate stayed shut across the first result (the CLI still had to run
+    // the steer) and opened at the second.
+    expect(completedBeforeFollowUp).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(promptCompleted).toBe(true);
+    expect(steers.closed).toBe(true);
+
+    const record = steers.records()[0];
+    expect(record.state).toBe("delivered");
+    expect(record.followUp).toBe(true);
+
+    // The first segment was already handed to the host as its own message, so
+    // the run's final text is the FOLLOW-UP turn only, and the first segment is
+    // never folded into the reasoning view behind it.
+    expect(response.text).toBe("추가 확인 결과");
+    expect(onTextFold).not.toHaveBeenCalledWith("첫 답변");
+    expect(onTextFold).not.toHaveBeenCalled();
+  });
+
+  it("tells the model it can be interrupted only when the run really has a channel", async () => {
+    const { config, store, baseRequest } = setup();
+    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+
+    await runAgentStream(baseRequest, [], config, store, makeEvents({ steers: new SteerChannel() }));
+    const withChannel = (sdkMock.calls[0].options.systemPrompt as { append: string }).append;
+    expect(withChannel).toContain(
+      "The user may send additional messages while you are working",
+    );
+
+    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    await runAgentStream(baseRequest, [], config, store, makeEvents());
+    const without = (sdkMock.calls[1].options.systemPrompt as { append: string }).append;
+    expect(without).not.toContain(
+      "The user may send additional messages while you are working",
+    );
+  });
+
+  it("drops a still-queued mid-turn message when the run is aborted", async () => {
+    const { config, store, baseRequest } = setup();
+    const steers = new SteerChannel();
+    const abort = new AbortController();
+    sdkMock.impl = () => {
+      async function* messages() {
+        yield initMsg();
+        steers.push("중간에 보낸 메시지");
+        abort.abort();
+        throw new Error("aborted");
+      }
+      return messages() as QueryHandle;
+    };
+
+    await expect(
+      runAgentStream(baseRequest, [], config, store, makeEvents({ steers }), abort),
+    ).rejects.toThrow("aborted");
+
+    // The model never saw it, so it must not look delivered — and the channel
+    // is closed, which is what stops the route from persisting it.
+    expect(steers.closed).toBe(true);
+    expect(steers.records().map((r) => r.state)).toEqual(["dropped"]);
+    expect(steers.hasUndelivered()).toBe(false);
   });
 
   it("keeps the plain string prompt on headless runs (single-turn teardown)", async () => {

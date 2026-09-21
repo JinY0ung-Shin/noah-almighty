@@ -169,6 +169,27 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   - repo-href building ↔ server `githubHost` resolution
   - the schedule builder (`RoutineModal.svelte` + `formatRoutineSchedule`/`timeToMinute`/`minuteToTime` in
     `lib/format.ts`) ↔ server `routineSchedule.ts` (once/daily/weekly/interval semantics)
+- **`SteerPublic` is hand-mirrored because it lives in a ROUTE module, not `server/types.ts`.**
+  `lib/types.ts` re-exports server types through that barrel, but this one is exported from
+  `routes/chat.ts`, which `tsconfig.client.json` must never include (it reaches express and
+  better-sqlite3 through its imports) — so the interface is declared twice and nothing type-checks across
+  the gap. Fields: `id`, `text`, `state` (`queued|delivered|completed|dropped`), `createdAt`, `followUp`
+  (the model got it only AFTER a result boundary, so it starts its own turn in the same run), and
+  `message` — the persisted `kind:"steer"` user row, present ONLY on the `delivered` frame and `null`
+  when the conversation was deleted mid-run. `PendingSteer` (`pane.steers`) has no server counterpart and
+  is LIVE-only: `resetLive` clears it and a reattach rebuilds it from the replayed frames.
+- **`steer` and `turn_end` are the two frames of a mid-turn message, and `turn_end` is NOT terminal.**
+  One `steer {steer}` frame per state change, in order (`queued` → `delivered` → `completed`, or →
+  `dropped`), and a `dropped` ALWAYS precedes the run's `cancelled`/`error` frame — `cancelRun`/`closeRun`
+  and the run loop's `finally` close the channel before the terminal path emits, so the viewer is told why
+  the text came back before being told the run stopped. `turn_end {message, response}` carries the same payload shape as `done` but
+  is deliberately absent from `isTerminalFrame` (`lib/chat.ts`), so the reader keeps reading: the visible
+  turn was sealed only because a steer is pending and the follow-up turn continues on the SAME run.
+  `finalizeVisibleTurn` appends the bubble for both, and `endLiveTurn(pane, true)` keeps
+  `streaming`/`liveRunId`/`abortController` where `clearLive` would drop them. Both frames ride the
+  replayed event log, so **every handler has to be re-appliable**: messages dedupe by id, and a bounded
+  `settledSteers` set keeps a replayed `dropped` from pushing its text into the composer twice and the
+  POST's own 200 from re-adding a pending bubble the stream already resolved.
 - **Admin presence badge: the client poll interval bounds the server window from BELOW.**
   `users.last_seen_at` is stamped by EVERY authenticated request, and `startKnowledgeWatch`
   (`lib/loaders.ts`) is what keeps it warm for an idle-but-open tab — it polls once a minute and ONLY while

@@ -3850,6 +3850,41 @@ describe("buildPrompt", () => {
     expect(p).toContain("stop retrying");
   });
 
+  it("tells a run with a live steer channel that the user may keep typing", () => {
+    const p = buildSystemPromptAppend(
+      req({ viewerIsOwner: true, midTurnMessages: true }),
+    );
+    expect(p).toContain(
+      "The user may send additional messages while you are working",
+    );
+    expect(p).toContain("let the newest instruction take precedence");
+    expect(p).toContain("briefly acknowledge the change instead of restarting");
+  });
+
+  it("says nothing about mid-turn messages on a run without the channel", () => {
+    // Every other viewer class reaches the same standing block, so the absence
+    // has to come from the flag, not from the branch the run happens to take.
+    for (const over of [
+      { viewerIsOwner: true },
+      { viewerIsOwner: false, viewerName: "동료" },
+      { viewerIsOwner: true, midTurnMessages: false },
+    ]) {
+      const p = buildSystemPromptAppend(req(over));
+      expect(p).not.toContain(
+        "The user may send additional messages while you are working",
+      );
+    }
+  });
+
+  it("gives a colleague run the same mid-turn standing line (not an owner-only branch)", () => {
+    const p = buildSystemPromptAppend(
+      req({ viewerIsOwner: false, viewerName: "동료", midTurnMessages: true }),
+    );
+    expect(p).toContain(
+      "The user may send additional messages while you are working",
+    );
+  });
+
   it("keeps the owner's name on the external-task identity line", () => {
     const p = buildSystemPromptAppend(
       req({ viewerIsOwner: true, viewerName: "지영", externalTaskApi: true }),

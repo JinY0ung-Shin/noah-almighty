@@ -9,7 +9,13 @@ import {
   emitRunEvent,
   getRunPrompts,
   openRun,
+  pushRunSteer,
 } from "../src/server/agent/runRegistry.js";
+import {
+  MAX_UNDELIVERED_STEERS,
+  SteerChannel,
+  type SteerState,
+} from "../src/server/agent/steerChannel.js";
 
 /** Minimal SSE sink: records every chunk `writeSse` emits. */
 function sseSink() {
@@ -71,5 +77,98 @@ describe("runRegistry: prompts that arrive after an abort", () => {
     openRun("ab-2", "u", { conversationId: "c-ab2" });
     closeRun("ab-2");
     await expect(awaitResponse("ab-2", "gone")).resolves.toBe(CANCELLED);
+  });
+});
+
+describe("runRegistry: mid-turn messages", () => {
+  it("accepts a steer for a live run and refuses every other case by reason", () => {
+    const channel = new SteerChannel();
+    openRun("st-1", "u", { conversationId: "c-st1", steers: channel });
+
+    const accepted = pushRunSteer("st-1", "u", "이것부터 해줘");
+    expect(accepted).toEqual({ ok: true, steer: expect.objectContaining({ text: "이것부터 해줘", state: "queued" }) });
+    expect(channel.undelivered()).toHaveLength(1);
+
+    // Unknown run, and a run that belongs to someone else, are indistinguishable.
+    expect(pushRunSteer("st-nope", "u", "x")).toEqual({ ok: false, reason: "not_found" });
+    expect(pushRunSteer("st-1", "other", "x")).toEqual({ ok: false, reason: "not_found" });
+
+    // A run with no channel at all (an external gateway avatar).
+    openRun("st-ext", "u", { conversationId: "c-stext" });
+    expect(pushRunSteer("st-ext", "u", "x")).toEqual({ ok: false, reason: "unsupported" });
+
+    // Cap: MAX_UNDELIVERED_STEERS already waiting.
+    for (let i = 1; i < MAX_UNDELIVERED_STEERS; i += 1) {
+      expect(pushRunSteer("st-1", "u", `메시지 ${i}`).ok).toBe(true);
+    }
+    expect(pushRunSteer("st-1", "u", "하나 더")).toEqual({ ok: false, reason: "too_many" });
+    // Delivering one frees a slot — the cap counts UNDELIVERED, not total.
+    channel.noteLifecycle(channel.records()[0].id, "started");
+    expect(pushRunSteer("st-1", "u", "자리 났음").ok).toBe(true);
+
+    closeRun("st-1");
+    closeRun("st-ext");
+  });
+
+  it("refuses a steer once the channel closed on its own, and after the run is stopped", () => {
+    const drained = new SteerChannel();
+    openRun("st-2", "u", { conversationId: "c-st2", steers: drained });
+    drained.close();
+    expect(pushRunSteer("st-2", "u", "늦었다")).toEqual({ ok: false, reason: "closed" });
+    closeRun("st-2");
+
+    openRun("st-3", "u", { conversationId: "c-st3", steers: new SteerChannel() });
+    expect(cancelRun("st-3", "u")).toBe(true);
+    expect(pushRunSteer("st-3", "u", "중지 후")).toEqual({ ok: false, reason: "closed" });
+    closeRun("st-3");
+  });
+
+  it("cancelRun drops the queued steers at once, and the frames survive for a late viewer", () => {
+    const channel = new SteerChannel();
+    const seen: SteerState[] = [];
+    openRun("st-4", "u", { conversationId: "c-st4", steers: channel });
+    // The chat route's sink: one frame per state change.
+    channel.onChange((record) => {
+      seen.push(record.state);
+      emitRunEvent("st-4", "steer", { steer: { id: record.id, state: record.state } });
+    });
+    const live = sseSink();
+    attachRunClient("st-4", "u", live.res);
+
+    const pushed = pushRunSteer("st-4", "u", "전달되지 못할 메시지");
+    expect(pushed.ok).toBe(true);
+    expect(cancelRun("st-4", "u")).toBe(true);
+
+    // Dropped as part of the cancel, so the notice precedes the stop status.
+    expect(seen).toEqual(["queued", "dropped"]);
+    expect(channel.closed).toBe(true);
+    const joined = live.chunks.join("");
+    expect(joined.indexOf('"state":"queued"')).toBeLessThan(joined.indexOf('"state":"dropped"'));
+    expect(joined.indexOf('"state":"dropped"')).toBeLessThan(joined.indexOf("응답을 중지하는 중"));
+
+    // Journaled: a client attaching after the fact replays both states.
+    const late = sseSink();
+    attachRunClient("st-4", "u", late.res, 0);
+    const replayed = late.chunks.join("");
+    expect(replayed).toContain('"state":"queued"');
+    expect(replayed).toContain('"state":"dropped"');
+    closeRun("st-4");
+  });
+
+  it("closeRun drops queued steers BEFORE the run ends, so their frames still go out", () => {
+    const channel = new SteerChannel();
+    const seen: SteerState[] = [];
+    openRun("st-5", "u", { conversationId: "c-st5", steers: channel });
+    channel.onChange((record) => {
+      seen.push(record.state);
+      // emitRunEvent refuses an ENDED run, so a drop after `ended` would be
+      // silently swallowed — this return value is the actual regression guard.
+      expect(emitRunEvent("st-5", "steer", { steer: { id: record.id, state: record.state } })).toBe(true);
+    });
+    expect(pushRunSteer("st-5", "u", "마무리 중 도착").ok).toBe(true);
+
+    closeRun("st-5");
+    expect(seen).toEqual(["queued", "dropped"]);
+    expect(channel.closed).toBe(true);
   });
 });

@@ -10,7 +10,8 @@ import type {
 import type { Store } from "../store.js";
 import type { AgentEvents } from "./events.js";
 import logger from "../logger.js";
-import { isRecord, asNumber } from "./agentUtils.js";
+import { isRecord, asNumber, asString } from "./agentUtils.js";
+import { steerToSdkUserMessage, type SteerChannel } from "./steerChannel.js";
 import {
   buildSystemPromptAppend,
   buildUserPrompt,
@@ -68,11 +69,20 @@ const agentLogger = logger.child({ module: "agent" });
  * inline; `parent_tool_use_id: null` marks a top-level turn. The wire format is
  * identical to the string path (the SDK writes a string prompt as this same
  * stream-json user message), so `resume` and all `options` behave the same.
+ *
+ * With a `steers` channel the park becomes a LOOP: every mid-turn message the
+ * viewer sends is yielded here as another SDK user message, which writes it to
+ * the CLI's stdin at once — the CLI queues it and folds it into the running
+ * turn after the next tool_result (or runs it as the next turn). The generator
+ * returns when `closed` settles or the channel closes; it never closes the
+ * channel itself (the run loop owns that, so a self-heal retry can rebuild this
+ * generator and keep consuming).
  */
 export async function* buildHeldOpenQueryPrompt(
   promptText: string,
   images: AgentImageInput[],
   closed: Promise<void>,
+  steers?: SteerChannel,
 ): AsyncGenerator<Record<string, unknown>> {
   yield {
     type: "user",
@@ -94,7 +104,17 @@ export async function* buildHeldOpenQueryPrompt(
       ],
     },
   };
-  await closed;
+  if (!steers) {
+    await closed;
+    return;
+  }
+  for (;;) {
+    const steer = await steers.next(closed);
+    if (!steer) {
+      return;
+    }
+    yield steerToSdkUserMessage(steer);
+  }
 }
 
 /**
@@ -352,6 +372,10 @@ export async function runClaudeAgent(
     personalAgentNames: personalAgentCreateActive
       ? ownerState.personalAgentNames
       : [],
+    // Mid-turn messages (steers) — META-COGNITION only, no capability change:
+    // this run has a live steer channel, so the viewer can keep typing while it
+    // works. Same boolean describe_system reports (runPlan's system ctx).
+    midTurnMessages: Boolean(events?.steers),
   };
 
   const setSystemPrompt = () => {
@@ -406,256 +430,322 @@ export async function runClaudeAgent(
   // empty-turn retry: re-running the whole query after a background phase would
   // duplicate work the host already delivered as messages.
   let backgroundTurnSeen = false;
+  // Mid-turn user messages for THIS run (interactive streaming chat only). The
+  // held-open generator yields them into the CLI's stdin and the loop below
+  // feeds the CLI's `command_lifecycle` frames back so the host can report
+  // delivery. Absent on headless/external runs.
+  const steers = events?.steers;
 
   // Run the SDK query, walking the model fallback chain (single-element unless a
   // routine opted in). A retry re-runs from scratch on a fresh attempt, so it is
   // only safe for headless routines (no live stream consuming partial output);
   // chat always has a single-element chain.
-  for (let attempt = 0; attempt < modelChain.length; attempt += 1) {
-    const model = modelChain[attempt];
-    if (model) {
-      options.model = model;
-      usedModel = model;
-    }
-    // Reset per-attempt accumulators so a retry never inherits a failed
-    // attempt's partial text / usage.
-    state = createLoopState();
-    assistantChunks = [];
-    textFold = createTextFoldState();
-    deltaChunks = [];
-    resultText = "";
-    resultErrorSubtype = "";
-    runUsage = undefined;
-    contextTokens = undefined;
-    contextUsage = undefined;
-    segmentAssistantStart = 0;
-    segmentDeltaStart = 0;
-    // Build the prompt fresh each attempt: the generator paths are single-use,
-    // so a retry needs a new one (the headless string path is reused as-is).
-    // Streaming turns ALWAYS go through the held-open generator — an input that
-    // ends makes the SDK close the CLI's stdin at the first result, killing
-    // still-running background tasks with the process (see
-    // buildHeldOpenQueryPrompt). The gate resolves at a task-free result
-    // boundary (below) and in this attempt's `finally`, so normal turns still
-    // tear down promptly while a live background phase keeps the session open
-    // for wake-up turns (delivered via onTurnResult → bg_message).
-    let releaseHeldInput: (() => void) | undefined;
-    const queryPrompt = streaming
-      ? buildHeldOpenQueryPrompt(
-          promptText,
-          request.images ?? [],
-          new Promise<void>((resolve) => {
-            releaseHeldInput = resolve;
-          }),
-        )
-      : request.images && request.images.length > 0
-        ? buildImageQueryPrompt(promptText, request.images)
-        : promptText;
+  //
+  // The steer channel spans the WHOLE loop, not one attempt: a self-heal retry
+  // rebuilds the prompt generator, which must keep consuming messages the
+  // viewer sent in between. It closes at the task-free steer-free result
+  // boundary above, and here on every other exit (abort, error, normal end).
+  try {
+    for (let attempt = 0; attempt < modelChain.length; attempt += 1) {
+      const model = modelChain[attempt];
+      if (model) {
+        options.model = model;
+        usedModel = model;
+      }
+      // Reset per-attempt accumulators so a retry never inherits a failed
+      // attempt's partial text / usage.
+      state = createLoopState();
+      assistantChunks = [];
+      textFold = createTextFoldState();
+      deltaChunks = [];
+      resultText = "";
+      resultErrorSubtype = "";
+      runUsage = undefined;
+      contextTokens = undefined;
+      contextUsage = undefined;
+      segmentAssistantStart = 0;
+      segmentDeltaStart = 0;
+      // Build the prompt fresh each attempt: the generator paths are single-use,
+      // so a retry needs a new one (the headless string path is reused as-is).
+      // Streaming turns ALWAYS go through the held-open generator — an input that
+      // ends makes the SDK close the CLI's stdin at the first result, killing
+      // still-running background tasks with the process (see
+      // buildHeldOpenQueryPrompt). The gate resolves at a task-free result
+      // boundary (below) and in this attempt's `finally`, so normal turns still
+      // tear down promptly while a live background phase keeps the session open
+      // for wake-up turns (delivered via onTurnResult → bg_message).
+      let releaseHeldInput: (() => void) | undefined;
+      const queryPrompt = streaming
+        ? buildHeldOpenQueryPrompt(
+            promptText,
+            request.images ?? [],
+            new Promise<void>((resolve) => {
+              releaseHeldInput = resolve;
+            }),
+            steers,
+          )
+        : request.images && request.images.length > 0
+          ? buildImageQueryPrompt(promptText, request.images)
+          : promptText;
 
-    try {
-      // Keep the Query handle (not just its iterator) so we can call the
-      // getContextUsage() control method on it during the turn.
-      const queryHandle = sdk.query({ prompt: queryPrompt, options });
-      for await (const message of queryHandle) {
-        if (!isRecord(message)) {
-          continue;
-        }
-        // A delta arriving while completed chunks are still unfolded means a
-        // NEW text block just started (block k's deltas stream BEFORE block
-        // k's assembled `assistantText` is recorded), so the narration so far
-        // demotes to the reasoning view. The fold must run BEFORE dispatch:
-        // dispatch emits this very delta through onDelta, and the fold has to
-        // reach the sinks ahead of the new block's first chunk — behind it,
-        // they sweep that chunk into the reasoning view and the kept text
-        // loses its head (live bubble always; persisted text on the
-        // cancel/error paths via foldedTextOffset). Later deltas of the SAME
-        // block no-op: chunkIndex already caught up.
-        if (peekMainTextDelta(message)) {
-          foldPendingText(textFold, assistantChunks, deltaChunks, events, false);
-        }
-        const dispatched = dispatchSdkMessage(message, events, state);
-        if (dispatched.delta) {
-          deltaChunks.push(dispatched.delta);
-        }
-        if (dispatched.assistantText) {
-          assistantChunks.push(dispatched.assistantText);
-        }
-        if (dispatched.contextTokens !== undefined) {
-          contextTokens = dispatched.contextTokens;
-        }
-        if (dispatched.resultText) {
-          resultText = dispatched.resultText;
-        }
-        if (dispatched.errorSubtype) {
-          resultErrorSubtype = dispatched.errorSubtype;
-        }
-        if (dispatched.usage) {
-          runUsage = dispatched.usage;
-        }
+      try {
+        // Keep the Query handle (not just its iterator) so we can call the
+        // getContextUsage() control method on it during the turn.
+        const queryHandle = sdk.query({ prompt: queryPrompt, options });
+        for await (const message of queryHandle) {
+          if (!isRecord(message)) {
+            continue;
+          }
+          // The CLI's lifecycle report for a mid-turn message we wrote to its
+          // stdin. `started` is the ONLY signal that the text actually reached
+          // the model (a folded steer is never echoed back as a stream `user`
+          // message), so the channel's whole delivery state machine hangs off
+          // these frames. Nothing else consumes them — dispatchSdkMessage would
+          // just answer `other`.
+          if (message.type === "command_lifecycle") {
+            steers?.noteLifecycle(
+              asString(message.command_uuid),
+              asString(message.state),
+            );
+            continue;
+          }
+          // A delta arriving while completed chunks are still unfolded means a
+          // NEW text block just started (block k's deltas stream BEFORE block
+          // k's assembled `assistantText` is recorded), so the narration so far
+          // demotes to the reasoning view. The fold must run BEFORE dispatch:
+          // dispatch emits this very delta through onDelta, and the fold has to
+          // reach the sinks ahead of the new block's first chunk — behind it,
+          // they sweep that chunk into the reasoning view and the kept text
+          // loses its head (live bubble always; persisted text on the
+          // cancel/error paths via foldedTextOffset). Later deltas of the SAME
+          // block no-op: chunkIndex already caught up.
+          if (peekMainTextDelta(message)) {
+            foldPendingText(textFold, assistantChunks, deltaChunks, events, false);
+          }
+          const dispatched = dispatchSdkMessage(message, events, state);
+          if (dispatched.delta) {
+            deltaChunks.push(dispatched.delta);
+          }
+          if (dispatched.assistantText) {
+            assistantChunks.push(dispatched.assistantText);
+          }
+          if (dispatched.contextTokens !== undefined) {
+            contextTokens = dispatched.contextTokens;
+          }
+          if (dispatched.resultText) {
+            resultText = dispatched.resultText;
+          }
+          if (dispatched.errorSubtype) {
+            resultErrorSubtype = dispatched.errorSubtype;
+          }
+          if (dispatched.usage) {
+            runUsage = dispatched.usage;
+          }
 
-        if (dispatched.kind === "assistant") {
-          // PREFERRED source: ask the SDK for the authoritative current context
-          // usage while the session is still live. The control channel answers
-          // until the result message closes it, so we call it per main-agent
-          // assistant message and keep the latest — the LAST one ≈ the final
-          // request's true occupancy (totalTokens) and real window (maxTokens).
-          // Streaming chat only (control methods need the live streaming
-          // session); headless/non-streaming turns keep the scraped fallback.
-          if (streaming && dispatched.mainAssistant) {
-            try {
-              const cu = await queryHandle.getContextUsage?.();
-              const total = asNumber(cu?.totalTokens);
-              if (total > 0) {
-                contextUsage = { total, window: asNumber(cu?.maxTokens) };
+          if (dispatched.kind === "assistant") {
+            // PREFERRED source: ask the SDK for the authoritative current context
+            // usage while the session is still live. The control channel answers
+            // until the result message closes it, so we call it per main-agent
+            // assistant message and keep the latest — the LAST one ≈ the final
+            // request's true occupancy (totalTokens) and real window (maxTokens).
+            // Streaming chat only (control methods need the live streaming
+            // session); headless/non-streaming turns keep the scraped fallback.
+            if (streaming && dispatched.mainAssistant) {
+              try {
+                const cu = await queryHandle.getContextUsage?.();
+                const total = asNumber(cu?.totalTokens);
+                if (total > 0) {
+                  contextUsage = { total, window: asNumber(cu?.maxTokens) };
+                }
+              } catch {
+                // Session closing or control unsupported on this backend — fall
+                // back to the contextTokens snapshot captured above.
               }
-            } catch {
-              // Session closing or control unsupported on this backend — fall
-              // back to the contextTokens snapshot captured above.
+            }
+          }
+
+          if (dispatched.kind === "result") {
+            // Anything still queued at a result boundary can no longer be folded
+            // INTO the turn the viewer watched — the CLI will start it as its own
+            // follow-up turn in the same session. Mark that before reading the
+            // pending flag, so `delivered` can report which it was.
+            steers?.noteResultBoundary();
+            const steerPending = steers?.hasUndelivered() === true;
+            if (state.backgroundTasks.size === 0 && !steerPending) {
+              // Task-free, steer-free result boundary → let the held-open input
+              // generator return: the SDK then closes the CLI's stdin and the
+              // process winds down. A task notification already queued by a
+              // settle racing this close is not lost — the CLI drains queued
+              // turns after stdin EOF (that drain is how tasks that settle
+              // mid-turn ever reported at all). With live tasks the input stays
+              // open and the session survives to run them; their wake-up turns
+              // end in another result, which closes here once the task set is
+              // empty. An UNDELIVERED steer keeps it open for the same reason:
+              // the CLI is about to run it as a follow-up turn, and closing the
+              // channel here would drop a message the viewer already sent.
+              releaseHeldInput?.();
+              steers?.close();
+            }
+            if (events?.onTurnResult) {
+              // Result boundary: hand the host this segment's text (chunks since
+              // the previous boundary; the boundary's own resultText is only a
+              // fallback — it duplicates the last assistant turn's text) plus the
+              // live background-task set, so it can finalize the visible turn while
+              // the SDK keeps running background work underneath.
+              //
+              // Sweep first (non-delta backends never hit the delta trigger above):
+              // everything but the LAST block folds, so the segment text is exactly
+              // the block the model ended the boundary on.
+              foldPendingText(textFold, assistantChunks, deltaChunks, events, true);
+              const segmentText =
+                assistantChunks
+                  .slice(Math.max(segmentAssistantStart, textFold.chunkIndex))
+                  .join("\n\n")
+                  .trim() ||
+                deltaChunks
+                  .slice(Math.max(segmentDeltaStart, textFold.deltaIndex))
+                  .join("")
+                  .trim() ||
+                (dispatched.resultText || "").trim();
+              segmentAssistantStart = assistantChunks.length;
+              segmentDeltaStart = deltaChunks.length;
+              const backgroundTasks = [...state.backgroundTasks.values()];
+              if (backgroundTasks.length > 0) {
+                backgroundTurnSeen = true;
+              }
+              events.onTurnResult({
+                text: segmentText,
+                ...(dispatched.usage ? { usage: dispatched.usage } : {}),
+                ...(dispatched.errorSubtype
+                  ? { errorSubtype: dispatched.errorSubtype }
+                  : {}),
+                backgroundTasks,
+                // Always present, unlike the conditional fields above: the host
+                // branches on it at EVERY boundary, and "no channel" and "the
+                // channel is drained" mean the same thing to it — false.
+                steerPending,
+              });
+              if (steerPending && backgroundTasks.length === 0) {
+                // The steer's follow-up turn streams into this SAME run, and the
+                // host just persisted the segment above as its own message. Move
+                // the fold anchors past it so the follow-up's first delta neither
+                // folds the previous answer into the reasoning view (the viewer
+                // would watch it vanish) nor leaves it in the run's final text
+                // (it would be persisted twice).
+                textFold.chunkIndex = assistantChunks.length;
+                textFold.deltaIndex = deltaChunks.length;
+              }
             }
           }
         }
-
-        if (dispatched.kind === "result" && state.backgroundTasks.size === 0) {
-          // Task-free result boundary → let the held-open input generator
-          // return: the SDK then closes the CLI's stdin and the process winds
-          // down. A task notification already queued by a settle racing this
-          // close is not lost — the CLI drains queued turns after stdin EOF
-          // (that drain is how tasks that settle mid-turn ever reported at
-          // all). With live tasks the input stays open and the session
-          // survives to run them; their wake-up turns end in another result,
-          // which closes here once the task set is empty.
-          releaseHeldInput?.();
+        // Attempt finished (success or an in-band error result, e.g. max_turns) —
+        // those are not transient model-server failures, so don't fall back.
+        //
+        // Empty-turn self-heal: a `success` result that yielded NO text anywhere
+        // (no streamed/assistant text, no result string) and carried NO error
+        // subtype means the model ended on a thinking-only turn. Re-run the SAME
+        // model once with a nudge to emit a visible answer; mirrors the resume
+        // self-heal (re-run, don't consume a fallback step). Skip if aborted or
+        // already retried — then fall through to the empty-text fallback below.
+        const producedText = Boolean(
+          assistantChunks.join("").trim() ||
+            deltaChunks.join("").trim() ||
+            resultText.trim(),
+        );
+        // A steer accepted this run also blocks the retry: a re-run replays only
+        // the FIRST prompt, so the viewer's mid-turn message would be silently
+        // lost (the CLI already consumed its uuid and ignores a re-send). Same
+        // reasoning as backgroundTurnSeen above.
+        const steerAccepted = Boolean(steers && steers.records().length > 0);
+        if (
+          !producedText &&
+          !resultErrorSubtype &&
+          !emptyTurnRetryTried &&
+          !backgroundTurnSeen &&
+          !steerAccepted &&
+          !abortController?.signal.aborted
+        ) {
+          emptyTurnRetryTried = true;
+          promptText = `${promptText}\n\n${EMPTY_TURN_RETRY_NUDGE}`;
+          agentLogger.warn(
+            {
+              avatarId: request.avatar.id,
+              conversationId: request.conversationId,
+              model,
+            },
+            "empty turn (thinking-only); retrying once with a text-answer nudge",
+          );
+          // Drop the throwaway attempt's streamed reasoning so the kept turn's
+          // thinking doesn't render concatenated onto it (the chat-route/client
+          // thinking accumulators live outside this loop and never reset on retry).
+          events?.onThinkingReset?.();
+          events?.onStatus?.("응답을 다시 생성하는 중…");
+          attempt -= 1; // re-run the SAME model (don't consume a fallback step)
+          continue;
         }
-        if (dispatched.kind === "result" && events?.onTurnResult) {
-          // Result boundary: hand the host this segment's text (chunks since
-          // the previous boundary; the boundary's own resultText is only a
-          // fallback — it duplicates the last assistant turn's text) plus the
-          // live background-task set, so it can finalize the visible turn while
-          // the SDK keeps running background work underneath.
-          //
-          // Sweep first (non-delta backends never hit the delta trigger above):
-          // everything but the LAST block folds, so the segment text is exactly
-          // the block the model ended the boundary on.
-          foldPendingText(textFold, assistantChunks, deltaChunks, events, true);
-          const segmentText =
-            assistantChunks
-              .slice(Math.max(segmentAssistantStart, textFold.chunkIndex))
-              .join("\n\n")
-              .trim() ||
-            deltaChunks
-              .slice(Math.max(segmentDeltaStart, textFold.deltaIndex))
-              .join("")
-              .trim() ||
-            (dispatched.resultText || "").trim();
-          segmentAssistantStart = assistantChunks.length;
-          segmentDeltaStart = deltaChunks.length;
-          const backgroundTasks = [...state.backgroundTasks.values()];
-          if (backgroundTasks.length > 0) {
-            backgroundTurnSeen = true;
-          }
-          events.onTurnResult({
-            text: segmentText,
-            ...(dispatched.usage ? { usage: dispatched.usage } : {}),
-            ...(dispatched.errorSubtype
-              ? { errorSubtype: dispatched.errorSubtype }
-              : {}),
-            backgroundTasks,
-          });
+        break;
+      } catch (error) {
+        // Self-heal a stale/missing resume target: re-run this same attempt with
+        // `resume` dropped so the stored history (now injected by buildPrompt once
+        // resumeSessionId is unset) rebuilds the context. The viewer never sees the
+        // error. On success the run reports a FRESH session id, which the chat route
+        // persists in place of the dangling one — so the next turn resumes cleanly.
+        if (
+          !resumeFallbackTried &&
+          options.resume &&
+          !abortController?.signal.aborted &&
+          isMissingResumeSessionError(error)
+        ) {
+          resumeFallbackTried = true;
+          delete options.resume;
+          promptRequest.resumeSessionId = undefined;
+          setSystemPrompt();
+          promptText = buildUserPrompt(promptRequest);
+          agentLogger.warn(
+            {
+              avatarId: request.avatar.id,
+              conversationId: request.conversationId,
+            },
+            "resume session missing; retrying with stored history",
+          );
+          attempt -= 1; // re-run the SAME model (don't consume a fallback step)
+          continue;
         }
-      }
-      // Attempt finished (success or an in-band error result, e.g. max_turns) —
-      // those are not transient model-server failures, so don't fall back.
-      //
-      // Empty-turn self-heal: a `success` result that yielded NO text anywhere
-      // (no streamed/assistant text, no result string) and carried NO error
-      // subtype means the model ended on a thinking-only turn. Re-run the SAME
-      // model once with a nudge to emit a visible answer; mirrors the resume
-      // self-heal (re-run, don't consume a fallback step). Skip if aborted or
-      // already retried — then fall through to the empty-text fallback below.
-      const producedText = Boolean(
-        assistantChunks.join("").trim() ||
-          deltaChunks.join("").trim() ||
-          resultText.trim(),
-      );
-      if (
-        !producedText &&
-        !resultErrorSubtype &&
-        !emptyTurnRetryTried &&
-        !backgroundTurnSeen &&
-        !abortController?.signal.aborted
-      ) {
-        emptyTurnRetryTried = true;
-        promptText = `${promptText}\n\n${EMPTY_TURN_RETRY_NUDGE}`;
+        const nextModel = modelChain[attempt + 1];
+        const canFallback =
+          Boolean(nextModel) &&
+          !abortController?.signal.aborted &&
+          isRetryableModelError(error);
+        if (!canFallback) {
+          throw error;
+        }
         agentLogger.warn(
           {
             avatarId: request.avatar.id,
-            conversationId: request.conversationId,
-            model,
+            from: model,
+            to: nextModel,
+            detail: error instanceof Error ? error.message : String(error),
           },
-          "empty turn (thinking-only); retrying once with a text-answer nudge",
+          "model fallback after transient error",
         );
-        // Drop the throwaway attempt's streamed reasoning so the kept turn's
-        // thinking doesn't render concatenated onto it (the chat-route/client
-        // thinking accumulators live outside this loop and never reset on retry).
-        events?.onThinkingReset?.();
-        events?.onStatus?.("응답을 다시 생성하는 중…");
-        attempt -= 1; // re-run the SAME model (don't consume a fallback step)
-        continue;
+        // No live viewer on a routine, but keep the channel consistent.
+        events?.onStatus?.(`모델을 ${nextModel}(으)로 전환해 다시 시도 중…`);
+      } finally {
+        // Whatever ended this attempt — the normal `break`, an abort, an error,
+        // or a self-heal retry's `continue` — release the held-open input so the
+        // generator never leaks a parked promise (a crashed CLI can no longer be
+        // waiting on stdin, and a retry builds a fresh gate). The steer channel
+        // is deliberately NOT closed here: a retry must still be able to consume
+        // what the viewer sent in the meantime.
+        releaseHeldInput?.();
       }
-      break;
-    } catch (error) {
-      // Self-heal a stale/missing resume target: re-run this same attempt with
-      // `resume` dropped so the stored history (now injected by buildPrompt once
-      // resumeSessionId is unset) rebuilds the context. The viewer never sees the
-      // error. On success the run reports a FRESH session id, which the chat route
-      // persists in place of the dangling one — so the next turn resumes cleanly.
-      if (
-        !resumeFallbackTried &&
-        options.resume &&
-        !abortController?.signal.aborted &&
-        isMissingResumeSessionError(error)
-      ) {
-        resumeFallbackTried = true;
-        delete options.resume;
-        promptRequest.resumeSessionId = undefined;
-        setSystemPrompt();
-        promptText = buildUserPrompt(promptRequest);
-        agentLogger.warn(
-          {
-            avatarId: request.avatar.id,
-            conversationId: request.conversationId,
-          },
-          "resume session missing; retrying with stored history",
-        );
-        attempt -= 1; // re-run the SAME model (don't consume a fallback step)
-        continue;
-      }
-      const nextModel = modelChain[attempt + 1];
-      const canFallback =
-        Boolean(nextModel) &&
-        !abortController?.signal.aborted &&
-        isRetryableModelError(error);
-      if (!canFallback) {
-        throw error;
-      }
-      agentLogger.warn(
-        {
-          avatarId: request.avatar.id,
-          from: model,
-          to: nextModel,
-          detail: error instanceof Error ? error.message : String(error),
-        },
-        "model fallback after transient error",
-      );
-      // No live viewer on a routine, but keep the channel consistent.
-      events?.onStatus?.(`모델을 ${nextModel}(으)로 전환해 다시 시도 중…`);
-    } finally {
-      // Whatever ended this attempt — the normal `break`, an abort, an error,
-      // or a self-heal retry's `continue` — release the held-open input so the
-      // generator never leaks a parked promise (a crashed CLI can no longer be
-      // waiting on stdin, and a retry builds a fresh gate).
-      releaseHeldInput?.();
     }
+  } finally {
+    // Every exit path: no more mid-turn messages can reach the model, so drop
+    // whatever is still queued. The host reports each as `dropped`, and this
+    // close runs BEFORE the route's own `cancelled`/`error` frame, which is the
+    // order the client relies on.
+    steers?.close();
   }
 
   // The answer is what the model STREAMED, not the SDK's terminal `result`

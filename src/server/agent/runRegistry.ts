@@ -13,6 +13,11 @@
 
 import logger from "../logger.js";
 import type { Response } from "express";
+import {
+  MAX_UNDELIVERED_STEERS,
+  type SteerChannel,
+  type SteerRecord,
+} from "./steerChannel.js";
 
 const regLogger = logger.child({ module: "runRegistry" });
 
@@ -68,6 +73,12 @@ interface Run {
   background: boolean;
   /** Live background task count (from the SDK level signal), for snapshots. */
   backgroundTasks: number;
+  /**
+   * Mid-turn user messages for this run, when it has one (a local streaming
+   * chat turn). `pushRunSteer` writes to it and the run loop drains it; absent
+   * on external-gateway runs, which have no CLI stdin to write to.
+   */
+  steers?: SteerChannel;
 }
 
 interface RunMeta {
@@ -75,6 +86,8 @@ interface RunMeta {
   conversationId?: string;
   avatarId?: string;
   abortController?: AbortController;
+  /** See `Run.steers`. Omitted by callers whose run cannot take mid-turn messages. */
+  steers?: SteerChannel;
 }
 
 export interface RunSnapshot {
@@ -112,6 +125,7 @@ export function openRun(runId: string, userId: string, meta: RunMeta = {}): void
     cancelled: false,
     background: false,
     backgroundTasks: 0,
+    steers: meta.steers,
   });
   if (meta.conversationId) {
     conversationRuns.set(conversationKey(userId, meta.conversationId), runId);
@@ -296,6 +310,10 @@ export function cancelRun(runId: string, userId: string): boolean {
   }
   run.cancelled = true;
   run.abortController?.abort();
+  // Drop every mid-turn message that never reached the model, NOW: the SDK call
+  // may take a moment to unwind, and the viewer's `dropped` notices have to
+  // precede the `cancelled` frame the chat route emits when it does.
+  run.steers?.close();
   resolvePending(runId, run, { notify: true });
   emitRunEvent(runId, "status", { label: "응답을 중지하는 중…" });
   regLogger.debug({ runId }, "run cancellation requested");
@@ -312,6 +330,7 @@ export function cancelAllRuns(): void {
   for (const [runId, run] of runs) {
     run.cancelled = true;
     run.abortController?.abort();
+    run.steers?.close();
     resolvePending(runId, run, { notify: true });
   }
 }
@@ -366,6 +385,49 @@ export function awaitResponse(
 }
 
 /**
+ * Accept a MID-TURN user message ("steer") for a live run: the viewer typed
+ * something while the avatar was still answering. The run's held-open prompt
+ * generator picks it up and writes it to the CLI's stdin, which folds it into
+ * the running turn after the next tool call (or starts it as the next turn).
+ *
+ * Scoped exactly like the other run endpoints — an unknown, ended, or
+ * other-user run is `not_found` and says nothing more. The refusals map 1:1 to
+ * the route's statuses:
+ *  - `unsupported` the run has no channel at all (an external gateway avatar).
+ *  - `closed`      the turn is wrapping up (or was stopped), so nothing more
+ *                  can reach the model.
+ *  - `too_many`    MAX_UNDELIVERED_STEERS are already waiting.
+ */
+export function pushRunSteer(
+  runId: string,
+  userId: string,
+  text: string,
+): { ok: true; steer: SteerRecord } | { ok: false; reason: "not_found" | "unsupported" | "closed" | "too_many" } {
+  const run = runs.get(runId);
+  if (!run || run.ended || run.userId !== userId) {
+    return { ok: false, reason: "not_found" };
+  }
+  const channel = run.steers;
+  if (!channel) {
+    return { ok: false, reason: "unsupported" };
+  }
+  if (run.cancelled || channel.closed) {
+    return { ok: false, reason: "closed" };
+  }
+  if (channel.undelivered().length >= MAX_UNDELIVERED_STEERS) {
+    return { ok: false, reason: "too_many" };
+  }
+  const steer = channel.push(text);
+  if (!steer) {
+    // Closed between the check and the push (the run loop reached its result
+    // boundary on another tick) — same answer as a closed channel.
+    return { ok: false, reason: "closed" };
+  }
+  regLogger.debug({ runId, steerId: steer.id }, "mid-turn message accepted");
+  return { ok: true, steer };
+}
+
+/**
  * Deliver a user's answer. Returns false if the run is unknown, owned by
  * another user, or the request id isn't outstanding.
  */
@@ -402,6 +464,9 @@ export function closeRun(runId: string): void {
   if (!run) {
     return;
   }
+  // BEFORE `ended`: closing drops the still-undelivered steers, and their
+  // listeners report each one through emitRunEvent, which refuses an ended run.
+  run.steers?.close();
   run.ended = true;
   const pendingCount = run.pending.size;
   resolvePending(runId, run, { notify: false });

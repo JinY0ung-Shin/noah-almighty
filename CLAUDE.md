@@ -101,6 +101,14 @@ These are the invariants the project is built around. New work should reinforce 
   conversation, backs off on 409, records a graceful restart as `failed`), independent of routines;
   the run's audit rows keep their own action names (only `chat` becomes `avatar_api_task`). Mechanics →
   `docs/architecture/avatar-task-api.md`.
+- **A mid-turn user message ("steer") rides the SDK streaming input, never a second run.**
+  `POST /api/chat/runs/:runId/message` pushes text into the live run's `SteerChannel`; the held-open
+  prompt generator writes it to the CLI's stdin and the CLI folds it in after the next `tool_result`.
+  `command_lifecycle` is the ONLY delivery signal (`result.queued_turn_count` lies), and an UNDELIVERED
+  steer at a result boundary ALWAYS becomes a follow-up turn — the run stays OPEN and the segment so far
+  persists as its own message (`turn_end`, not `done`). Persist at DELIVERY only, local SDK runs only
+  (never external avatars / external-task-API turns), `midTurnMessages` on BOTH metacognition surfaces.
+  Mechanics → `docs/architecture/chat-sse-media.md`.
 - **git remote work is MCP-only BY DESIGN.** The agent shell has NO git credentials (stripped from the
   subprocess env), so Bash `git push`/`gh` can never authenticate. Route every git-ish capability through
   an in-process MCP bridge (`mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*`) and keep the
