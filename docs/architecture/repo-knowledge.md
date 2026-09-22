@@ -98,17 +98,22 @@
 - **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store.** `wiki/` (curated)
   + `raw/` (capture) are just directories inside the existing personal/group knowledge repo. **Recall**
   is read-only search: `mcp__brain__*` (personal, `search`/`get_note`, gated `elevated`) and
-  `mcp__group_brain__*` (one group, read gated on group-MEMBERship). **Capture/consolidate** is the
+  `mcp__group_brain__*` (one group, read gated on group-MEMBERship). Both metacognition surfaces (the
+  prompt's `brainSection`/`groupsSection` and the `describe_system` brain lines) check the per-conversation
+  `personal_knowledge`/`group_knowledge` tool-group toggle FIRST — mirroring runPlan's
+  `brainActive`/`groupBrainActive` — so a deselected group reads as OFF, never as active. **Capture/consolidate** is the
   `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` (personal) /
   `mcp__group_repo__write_file` (group) + `commit` — there is NO separate "brain write" tool, so a
   capture is a repo write plus a commit (uncommitted = not persisted). It composes with the backfill
   loop: `request_info` ESCALATES a true unknown to the owner, `brain-ingest` RETAINS the answer.
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
   hygiene default-skill — skill-only, no server lint code; the `[[link]]` resolution the graph view uses
-  lives in `knowledgeGraph.ts`) strips "previously X, changed to Y on <date>" narrative out of `wiki/`
-  notes and never edits `raw/` (the original-capture archive) or `wiki/log.md` (brain-reflect's
-  append-only pass log); removed history is NOT relocated anywhere. Fixes go through `edit_file`
-  (snippet replacement), never a `write_file` rewrite. The WRITE side carries the same rule:
+  lives in `knowledgeGraph.ts`; the structural `wiki/index.md`, `wiki/log.md` and `_template.md` are
+  excluded from BOTH `rankBrainNotes` and `buildKnowledgeGraph`, so an empty vault renders the
+  empty state and the TOC never becomes a hub) strips "previously X, changed to Y on <date>" narrative
+  out of `wiki/` notes and never edits `raw/` (the original-capture archive) or `wiki/log.md`
+  (brain-reflect's append-only pass log); removed history is NOT relocated anywhere. Fixes go through
+  `edit_file` (snippet replacement), never a `write_file` rewrite. The WRITE side carries the same rule:
   brain-reflect REPLACES a changed value and records it as one terse `old → new` line in `wiki/log.md`,
   brain-ingest keeps the dated context in the `raw/` capture — `tests/agent-core.test.ts` pins all
   three wordings. The standing prompt states the same rule too (`brainSection` in `promptBuilder.ts`,

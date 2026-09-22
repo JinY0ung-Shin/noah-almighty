@@ -282,11 +282,17 @@ describe("knowledge-repo content routes", () => {
       ".claude-plugin/marketplace.json": JSON.stringify({ name: "kbg", plugins: [] }),
       "wiki/concepts/foo.md": "---\ntitle: Foo\n---\n\nRelated: [[Bar]].",
       "wiki/concepts/bar.md": "---\ntitle: Bar\n---\n\nStandalone.",
+      // Structural vault files — readable, but never graph nodes.
+      "wiki/index.md": "# Index\n\n- [[Foo]]",
+      "wiki/log.md": "# Reflection log",
     });
     store.setKnowledgeRepo(userId, remote, "main");
     const graph = await agent.get("/api/me/knowledge-repo/graph").expect(200);
     expect(Array.isArray(graph.body.graph.nodes)).toBe(true);
-    expect(graph.body.graph.nodes.length).toBeGreaterThanOrEqual(2);
+    expect(graph.body.graph.nodes.length).toBe(2);
+    const nodeIds = graph.body.graph.nodes.map((n: { id: string }) => n.id);
+    expect(nodeIds).not.toContain("wiki/index.md");
+    expect(nodeIds).not.toContain("wiki/log.md");
     expect(Array.isArray(graph.body.graph.edges)).toBe(true);
 
     store.setKnowledgeRepo(userId, path.join(config.dataDir, "missing.git"), "main");

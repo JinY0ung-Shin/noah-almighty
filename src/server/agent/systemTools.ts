@@ -370,6 +370,11 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           const gaLabels = MCP_TOOL_GROUPS
             .filter((group) => gaEnabled.includes(group.id))
             .map((group) => group.labelEn);
+          // Mirrors runPlan's `groupBrainActive` / `groupRepoActive`, which both
+          // require `groupKnowledgeToolsEnabled`: with the group deselected the
+          // team-brain and group-repo servers are not registered this turn, so
+          // the repo fact below must not read as a usable capability.
+          const gaGroupKnowledgeOff = !gaEnabled.includes("group_knowledge");
           return text(
             [
               ...publicGuide,
@@ -378,7 +383,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
               `- Kind: shared agent '${ga.displayName}' of the group '${ga.groupName}' (a team resource, not a personal avatar; the group may have other shared agents)`,
               `- Enabled: ${ga.enabled ? "yes" : "no — disabled by a group admin"}`,
               `- Capture policy: ${ga.captureScope === "members" ? "all group members may capture" : "group admins only"}; the member in this conversation (role: ${ga.viewerRole ?? "removed — no longer a group member"}) ${ga.captureAllowed ? "MAY capture (write + commit)" : "may NOT capture (recall/read only)"}`,
-              `- Team second brain (shared knowledge repository): ${ga.knowledgeRepoConfigured ? `${ga.knowledgeRepo.repo}${ga.knowledgeRepo.branch ? ` @ ${ga.knowledgeRepo.branch}` : ""}` : "(none — ask a group admin to connect one in group settings)"}`,
+              `- Team second brain (shared knowledge repository): ${ga.knowledgeRepoConfigured ? `${ga.knowledgeRepo.repo}${ga.knowledgeRepo.branch ? ` @ ${ga.knowledgeRepo.branch}` : ""}${gaGroupKnowledgeOff ? " — but the group knowledge tool group is OFF for this conversation, so mcp__group_brain__* and mcp__group_repo__* are not registered this turn (no team-brain recall or capture until it is re-enabled)" : ""}` : `(none — ask a group admin to connect one in group settings)${gaGroupKnowledgeOff ? " — and the group knowledge tool group is OFF for this conversation" : ""}`}`,
               `- This member's internal Git token (GIT_TOKEN): ${ga.viewerGitTokenSet ? "set" : "not set — capture's commit/push will fail until they register one in Settings"}`,
               `- Self-configuration: persona/instructions ${ga.personaSet ? "SET" : "NOT set"}; this member ${ga.selfConfigAllowed ? "MAY update the agent's persona/alias/bio/intro via mcp__group_agent__update_profile (applies to every member, from the next turn)" : "may NOT update them — only group admins may (mcp__group_agent__update_profile refuses others)"}`,
               `- Model in use: ${gaModelLine}`,
@@ -610,8 +615,14 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Admin-disabled skills: ${ctx.toolSkillPolicy?.disabledSkills.length ? ctx.toolSkillPolicy.disabledSkills.map((name) => `\`${name}\``).join(", ") + " (deployment-wide; they may still appear in a skill listing but every invocation is blocked)" : "(none)"}`,
           `- Knowledge repository: ${knowledgeRepo.repo || "(none)"}${knowledgeRepo.branch ? ` @ ${knowledgeRepo.branch}` : ""}`,
           `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted same-group teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
-          `- Second brain (personal): ${state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
-          `- Team second brain: ${groups.filter((g) => g.knowledgeRepoConfigured).length > 0 ? `${groups.filter((g) => g.knowledgeRepoConfigured).length} group(s) expose \`mcp__group_brain__search\` (members search; admins consolidate)` : "none (no group has a connected shared repository)"}`,
+          // Both brain lines check the per-conversation TOOL GROUP first: this
+          // mirrors runPlan's `brainActive` (needs `personalKnowledgeToolsEnabled`)
+          // and `groupBrainActive`/`groupRepoActive` (need `groupKnowledgeToolsEnabled`),
+          // which withhold those servers entirely when the group is deselected,
+          // and the prompt's matching `brainSection`/`groupsSection` gating — so
+          // the report and the run's real tool roster can't drift.
+          `- Second brain (personal): ${!enabledMcpToolGroups.includes("personal_knowledge") ? "OFF for this conversation (personal knowledge tool group deselected — no brain recall or capture tools are registered this turn)" : state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
+          `- Team second brain: ${!enabledMcpToolGroups.includes("group_knowledge") ? "OFF for this conversation (group knowledge tool group deselected)" : groups.filter((g) => g.knowledgeRepoConfigured).length > 0 ? `${groups.filter((g) => g.knowledgeRepoConfigured).length} group(s) expose \`mcp__group_brain__search\` (members search; admins consolidate)` : "none (no group has a connected shared repository)"}`,
           `- General git repos: ${state.gitRepoCount}`,
           `- Working repository: ${ctx.activeRepoName ? `${ctx.activeRepoName} (opened via open_repo; local edits/commit native, push via mcp__git_repo__push)` : "(none open)"}`,
           `- Local image output: ${ctx.fileOutputEnabled ? "enabled — use `mcp__file_output__show_file` for PNG/JPEG/WebP/GIF files in the working directories" : "unavailable in this run"}`,

@@ -47,7 +47,7 @@ Zero new MCP servers. Ships via SKILL.md + a `writeRepoTemplate` refactor.
 
 - `src/server/agent/brainSearch.ts` (new): `rankBrainNotes(repoRoot, query, opts?)` — walk
   `wiki/**/*.md`, per-file try/catch (skip `FILE_TOO_LARGE`/unreadable), self-contained
-  `parseNoteFrontmatter`, score `title > aliases > tags > body`, stable sort, top-N (MAX 12).
+  `parseNoteFrontmatter`, score `title > aliases > tags > body`, stable sort, top-N (default 8, MAX 20).
   Explicit `NO_VAULT` sentinel when neither `wiki/` nor `raw/` exists (distinct from zero matches).
 - `src/server/agent/brainTools.ts` (new): `mcp__brain__{search,get_note}`. Resolve repo ONLY
   from `ctx.avatarUserId` (the owner), never the viewer. Gate reads on `ctx.elevated`. No write tool.
@@ -75,7 +75,8 @@ Zero new MCP servers. Ships via SKILL.md + a `writeRepoTemplate` refactor.
 - `claudeAgent.ts`: `const groupBrainActive = ownerToolAccess && ownerGroups.some(g => g.knowledgeRepoConfigured);`
 - `promptBuilder.ts`: extend `groupsSection()` with the team-brain trigger.
 - `systemTools.ts` `describe_system`: brain-state lines from existing `state.knowledgeRepoConfigured` + `state.groups`
-  (no new OwnerState field — keeps buildPrompt/describe_system parity).
+  (no new OwnerState field — keeps buildPrompt/describe_system parity), checked AFTER the per-conversation
+  `personal_knowledge`/`group_knowledge` tool-group toggle so a deselected group reports OFF, like the prompt.
 
 ---
 
@@ -101,7 +102,7 @@ npx svelte-check --tsconfig ./tsconfig.client.json
 
 ## Resolved open decisions (defaults adopted)
 1. No group repo-only nightly routine (routines are single-owner → orphan on leave). On-demand only.
-2. Search = keyword/path + frontmatter ranking (no embeddings), MAX 12, stable sort.
+2. Search = keyword/path + frontmatter ranking (no embeddings), default 8 / MAX 20 hits, stable sort.
 3. `resolveGroup` copied into `groupBrainTools.ts` (independent testability).
 4. Personal `CLAUDE.md` bilingual (English structure + Korean examples).
 5. Nightly personal reflection = bundled skill the owner schedules (no auto-created routine).

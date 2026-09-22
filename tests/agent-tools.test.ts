@@ -3166,6 +3166,18 @@ describe("system tools (avatar system management)", () => {
     expect(after).toContain("Team second brain: 1 group(s) expose `mcp__group_brain__search`");
     expect(after).toContain("플랫폼팀(member, shared repository connected)");
     expect(after).toContain("지식전용팀(member, shared repository none)");
+
+    // The per-conversation tool group wins over the repo count: deselecting
+    // 그룹 지식 makes runPlan skip mcp__group_brain__*/mcp__group_repo__*, so the
+    // report must not keep advertising a search tool this turn cannot call.
+    // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
+    const groupOff = (await callTool(
+      buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, enabledMcpToolGroups: [] }),
+      "describe_system",
+      {},
+    )).content[0].text ?? "";
+    expect(groupOff).toContain("Team second brain: OFF for this conversation (group knowledge tool group deselected)");
+    expect(groupOff).not.toContain("group(s) expose `mcp__group_brain__search`");
   });
 
   it("describe_system fails closed when a shared group agent's group is gone", async () => {
@@ -4082,6 +4094,20 @@ describe("system conversation-read tools + brain self-state", () => {
     s.store.setKnowledgeRepo(s.owner.id, "/tmp/repo", "main");
     const on = await callTool(ownerTools(s), "describe_system", {});
     expect(on.content[0].text).toContain("Second brain (personal): active");
+
+    // A connected repo is NOT enough: with the 개인 지식 tool group deselected
+    // runPlan's `brainActive` is false, so no brain recall/capture tool is
+    // registered and the report must say OFF rather than active.
+    // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
+    const groupOff = await callTool(
+      buildSystemTools(s.store, { ...s.ctx, viewerIsOwner: true, enabledMcpToolGroups: [] }),
+      "describe_system",
+      {},
+    );
+    expect(groupOff.content[0].text).toContain(
+      "Second brain (personal): OFF for this conversation (personal knowledge tool group deselected",
+    );
+    expect(groupOff.content[0].text).not.toContain("Second brain (personal): active");
   });
 });
 

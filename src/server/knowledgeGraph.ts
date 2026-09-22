@@ -21,9 +21,10 @@ const WIKILINK_RE = /\[\[([^\]\[\n]+?)\]\]/g;
 
 /**
  * A repo-relative path the graph view may read as a note: a markdown file inside
- * the second-brain vault (`wiki/` or `raw/`), never a `_template.md`. Mirrors the
- * filter `buildKnowledgeGraph` uses to pick note files, so every real node id
- * (which IS a repo-relative path) passes — the content endpoint can trust it.
+ * the second-brain vault (`wiki/` or `raw/`), never a `_template.md`. A permissive
+ * SUPERSET of the filter `buildKnowledgeGraph` uses: every real node id (which IS a
+ * repo-relative path) passes, so the content endpoint can trust it — while the
+ * structural `wiki/index.md` / `wiki/log.md` stay readable here but are never nodes.
  */
 export function isVaultNotePath(relPath: unknown): relPath is string {
   return (
@@ -75,12 +76,18 @@ export async function buildKnowledgeGraph(repoRoot: string): Promise<KnowledgeGr
     return { nodes: [], edges: [], noVault: true };
   }
 
+  // `wiki/index.md` (the table of contents) and `wiki/log.md` (brain-reflect's
+  // append-only pass log) are STRUCTURAL, not knowledge notes — excluded here exactly
+  // as `rankBrainNotes` excludes them from search, so a freshly seeded vault renders
+  // the client's empty state and the TOC never becomes a hub wired to every note.
   const noteFiles = entries
     .filter(
       (e) =>
         e.type === "file" &&
         e.path.endsWith(".md") &&
         !e.path.endsWith("_template.md") &&
+        e.path !== "wiki/index.md" &&
+        e.path !== "wiki/log.md" &&
         (e.path.startsWith("wiki/") || e.path.startsWith("raw/")),
     )
     .slice(0, SCAN_CAP);

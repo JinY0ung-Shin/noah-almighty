@@ -743,6 +743,26 @@ describe("group-agent tool factories", () => {
     expect(body).toContain("Self-configuration: persona/instructions NOT set");
     expect(body).toContain("may NOT update them — only group admins may");
     expect(body).toContain("Capability boundary: NO personal knowledge repository");
+    // All tool groups on (no `enabledMcpToolGroups` passed) → the repo fact
+    // stands alone, with no OFF caveat.
+    expect(body).not.toContain("group knowledge tool group is OFF");
+
+    // 그룹 지식 deselected for this conversation: runPlan registers neither
+    // mcp__group_brain__* nor mcp__group_repo__*, so the shared-repo line must
+    // carry that caveat instead of reading as a usable capability.
+    const offTools = buildSystemTools(store, {
+      avatarUserId: avatarId,
+      owner: { id: avatarId, username: "", displayName: "팀 에이전트", alias: "" },
+      viewerIsOwner: false,
+      config,
+      groupAgent: { agentId: agent.id, actingUserId: member.id },
+      enabledMcpToolGroups: [],
+    });
+    const offBody = (await callTool(offTools, "describe_system", {})).content[0].text;
+    expect(offBody).toContain("Team second brain (shared knowledge repository): ");
+    expect(offBody).toContain(
+      "— but the group knowledge tool group is OFF for this conversation, so mcp__group_brain__* and mcp__group_repo__* are not registered this turn (no team-brain recall or capture until it is re-enabled)",
+    );
   });
 
   it("describe_system lists only the REGISTERED tool groups and fails closed on a removed member", async () => {

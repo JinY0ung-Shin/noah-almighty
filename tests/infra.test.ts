@@ -111,6 +111,7 @@ import {
   writeRepoTemplate,
 } from "../src/server/knowledgeRepo.js";
 import { buildKnowledgeGraph, isVaultNotePath } from "../src/server/knowledgeGraph.js";
+import { rankBrainNotes } from "../src/server/agent/brainSearch.js";
 import {
   buildRepoTools,
   createRemoteRepo,
@@ -858,6 +859,9 @@ describe("knowledge graph (wikilink extraction)", () => {
       "wiki/entities/cluster.md": "---\ntitle: Prod Cluster\n---\nManaged by [[CD]].",
       "wiki/entities/k8s-notes.md": "---\ntitle: Kubernetes\n---\nNo links here.",
       "wiki/_template.md": "---\ntitle:\n---\n[[ignored]]",
+      // Structural files (TOC + brain-reflect's pass log) — never nodes, never link sources.
+      "wiki/index.md": "# Index\n\n- [[Deploy Pipeline]]\n- [[Prod Cluster]]",
+      "wiki/log.md": "# Reflection log\n\n2026-06-16: added [[Deploy Pipeline]]",
       "raw/2026-06-16-note.md": "raw capture mentioning [[Deploy Pipeline]] and [[Ghost Note]].",
     });
     const g = await buildKnowledgeGraph(root);
@@ -867,6 +871,9 @@ describe("knowledge graph (wikilink extraction)", () => {
     // Template is excluded; three real notes + one raw note = 4 real nodes.
     expect(byId.has("wiki/concepts/deploy.md")).toBe(true);
     expect(byId.has("wiki/_template.md")).toBe(false);
+    // index.md/log.md are structural, excluded exactly like brainSearch's noteFiles filter.
+    expect(byId.has("wiki/index.md")).toBe(false);
+    expect(byId.has("wiki/log.md")).toBe(false);
     expect(byId.get("wiki/concepts/deploy.md")?.label).toBe("Deploy Pipeline");
     expect(byId.get("wiki/concepts/deploy.md")?.section).toBe("concepts");
     expect(byId.get("raw/2026-06-16-note.md")?.section).toBe("raw");
@@ -886,6 +893,12 @@ describe("knowledge graph (wikilink extraction)", () => {
     expect(ghost).toBeTruthy();
     expect(ghost?.section).toBe("unresolved");
     expect(edgeSet.has(`raw/2026-06-16-note.md->${ghost!.id}`)).toBe(true);
+
+    // Structural files contribute no edges either, and the rest of the graph is unchanged:
+    // 4 real notes + 1 dangling node, 5 edges (the ones asserted above).
+    expect(g.edges.some((e) => e.source === "wiki/index.md" || e.source === "wiki/log.md")).toBe(false);
+    expect(g.nodes).toHaveLength(5);
+    expect(g.edges).toHaveLength(5);
   });
 
   it("strips alias/anchor suffixes and ignores self-links", async () => {
@@ -899,6 +912,22 @@ describe("knowledge graph (wikilink extraction)", () => {
     const edges = g.edges.filter((e) => e.source === "wiki/concepts/a.md");
     // Both [[B|...]] and [[B#...]] resolve to b.md and de-dupe to ONE edge; self-link dropped.
     expect(edges).toEqual([{ source: "wiki/concepts/a.md", target: "wiki/concepts/b.md" }]);
+  });
+
+  it("a freshly seeded vault has no nodes (empty state), not noVault", async () => {
+    const root = path.join(tempDir, "graph-seeded");
+    fs.mkdirSync(root, { recursive: true });
+    // The REAL seeder (fs-level writes only, no git): the vault it creates holds
+    // nothing but wiki/index.md, wiki/log.md, wiki/_template.md and .gitkeep stubs.
+    expect(await writeRepoTemplate(root, "brain-empty", "personal")).toBe(true);
+
+    const g = await buildKnowledgeGraph(root);
+    expect(g.noVault).toBeUndefined(); // the vault EXISTS — it is merely empty
+    expect(g.nodes).toEqual([]);
+    expect(g.edges).toEqual([]);
+
+    // Search agrees: present-but-empty is {ok, hits:[]}, never a hit on the TOC itself.
+    expect(await rankBrainNotes(root, "index")).toEqual({ kind: "ok", hits: [] });
   });
 
   it("isVaultNotePath gates the note-content endpoint to vault markdown", () => {
