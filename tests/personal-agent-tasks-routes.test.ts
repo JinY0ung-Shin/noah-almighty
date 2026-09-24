@@ -3,7 +3,7 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRequest, AppConfig, BotTask } from "../src/server/types.js";
 import type { AgentEvents } from "../src/server/agent/events.js";
-import { parseSse, signup, withTempDir } from "./helpers.js";
+import { gitInit, parseSse, signup, withTempDir } from "./helpers.js";
 
 /**
  * Delegated bot tasks (내 봇 작업) over the HTTP surface: the chat route's task
@@ -62,6 +62,9 @@ import {
 import { executeChatTurn, resolveChatTarget } from "../src/server/routes/chat.js";
 import { executeRoutineJob } from "../src/server/scheduler.js";
 import { personalAgentAvatarId } from "../src/server/personalAgents.js";
+import { acquireActiveRepo, releaseActiveRepo } from "../src/server/activeRepoLock.js";
+import { setWorkspaceRepo } from "../src/server/repoWorkspace.js";
+import { gitRepoClonePath } from "../src/server/gitRepos.js";
 
 const tempDir = withTempDir("personal-agent-tasks-routes");
 
@@ -648,6 +651,76 @@ describe("봇 루틴 — scheduler", () => {
     // A failed firing never disables a recurring routine.
     expect(after.enabled).toBe(true);
     expect(after.nextRunAt).toBeTruthy();
+  });
+
+  it("holds a bot routine to the BOT budget, never the API's longer one", async () => {
+    // Only botTaskRunTimeoutMs is shortened (an explicit override bypasses
+    // loadConfig's 1-minute floor); the API budget stays at its 5-hour default.
+    // A bot routine holds a scheduler slot for its whole run, so reading
+    // the API budget here would hang this test instead of timing out.
+    const { store, ownerId, agent, ...svc } = await bootWithBot("routine-timeout", {
+      botTaskRunTimeoutMs: 40,
+    });
+    const job = store.createRoutineJob(ownerId, {
+      prompt: "끝나지 않는 예약 작업",
+      minuteOfDay: 0,
+      personalAgentId: agent.id,
+    });
+    H.script.push(
+      (_req, _events, abort) =>
+        new Promise<void>((resolve) => {
+          // The 40 ms deadline is armed before the turn's prelude (plugin and
+          // knowledge loading), so on a loaded machine it can fire first.
+          if (abort!.signal.aborted) return resolve();
+          abort!.signal.addEventListener("abort", () => resolve());
+        }),
+    );
+
+    const result = await executeRoutineJob(
+      { config: svc.config, store, observedModel: svc.observedModel },
+      job,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("실행 제한 시간");
+    expect(store.getRoutineJob(ownerId, job.id)!.lastStatus).toBe("error");
+  });
+
+  it("skips a bot routine whose working repo is open elsewhere, then runs it once it frees", async () => {
+    const { store, ownerId, agent, ...svc } = await bootWithBot("routine-repo-locked");
+    const services = { config: svc.config, store, observedModel: svc.observedModel };
+    const job = store.createRoutineJob(ownerId, {
+      prompt: "저장소 점검",
+      minuteOfDay: 0,
+      personalAgentId: agent.id,
+    });
+    // A bot turn resolves the OWNER's registered repos (request.avatar is the
+    // owner's row), so the lock is on the owner's clone of "app". The remote
+    // needs a commit: unlike the owner-avatar path, a chat turn whose repo fails
+    // to open refuses instead of falling back to scratch.
+    const remote = path.join(tempDir(), "routine-repo-locked");
+    gitInit(remote);
+    store.upsertGitRepo(ownerId, "app", remote, null);
+    setWorkspaceRepo(store, job.conversationId, "app");
+    const clonePath = gitRepoClonePath(ownerId, "app", svc.config);
+    expect(acquireActiveRepo(clonePath, "another-conversation")).toBe(true);
+    try {
+      const skipped = await executeRoutineJob(services, job);
+      expect(skipped).toMatchObject({ ok: false, skipped: true });
+      expect(skipped.error).toContain("작업 저장소");
+      // The turn refused before writing anything: no task row, no bubble, no
+      // recorded outcome — the job stays due for the next tick.
+      expect(H.requests).toHaveLength(0);
+      expect(store.listBotTasksForConversation(job.conversationId)).toHaveLength(0);
+      expect(store.listMessages(ownerId, job.conversationId)).toHaveLength(0);
+      expect(store.getRoutineJob(ownerId, job.id)!.lastRunAt).toBeNull();
+    } finally {
+      releaseActiveRepo(clonePath, "another-conversation");
+    }
+    await expect(executeRoutineJob(services, job)).resolves.toEqual({ ok: true });
+    expect(store.listBotTasksForConversation(job.conversationId)).toMatchObject([
+      { status: "done", routineJobId: job.id },
+    ]);
   });
 
   it("ENQUEUES a firing that lands on a busy thread, and skips the next one", async () => {

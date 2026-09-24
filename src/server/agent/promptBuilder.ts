@@ -6,6 +6,7 @@ import {
   MAX_DELEGATIONS_PER_TURN,
 } from "../personalAgents.js";
 import { DIRECT_MESSAGE_STATE, gettingStartedGaps } from "./ownerState.js";
+import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
   effectiveMcpToolGroups,
@@ -1196,6 +1197,11 @@ export function buildSystemPromptAppend(
           // the bridge as CONNECTED with no client attached. The owner CAN
           // attach mid-run, so this is a caveat, not a capability correction.
           "If browser control is available on this turn, it reaches the owner's browser only while they have this conversation open in Noah with the extension running — nobody may be there. A browser op that times out means the bridge is not attached, so stop retrying it, do the rest of the work without it, and say so in your result. " +
+          // THIS run's budget, stamped from config so the operator's value is
+          // the one stated. Same sentences as describe_system's origin line.
+          (request.avatarTaskRunTimeoutMs
+            ? `This run has a hard wall-clock budget of ${Math.round(request.avatarTaskRunTimeoutMs / 60_000)} minutes covering the WHOLE run, time spent waiting on questions and background work included; when it runs out the run is stopped and the task fails — the calling system gets an error instead of your result, and only what was produced so far is kept in this conversation. A single pending question or permission request also expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer. Scope the work to fit, and if it cannot fit, do the most important part first and say in your result what remains. `
+            : "") +
           "Your final reply is stored as the task's `result.text` and is the only thing the calling system reads, so end with a clear, self-contained summary of what you did and what remains.",
       );
     }
@@ -1272,7 +1278,13 @@ export function buildSystemPromptAppend(
     // system drive you?" from state instead of guessing. The per-turn half —
     // whether THIS turn came in that way — is the provenance paragraph above.
     if (request.avatarApiKeyCount !== undefined) {
-      lines.push(`External task API: ${request.avatarApiKeyCount} active personal API keys. The owner can issue/revoke keys in 내 아바타 → 권한·연결 → 외부 작업 API. External systems send arbitrary instructions as JSON {message, conversationId?} to POST /api/v1/avatar/tasks with a Bearer key to run the owner's main avatar. Tasks are queued, results stay in the conversation, and questions/permissions can be answered in Noah or through the task respond API. This is independent of scheduled routines. Never ask the owner to paste an API key into chat.`);
+      // How long a task may run is the CONFIGURED budget (stamped from config),
+      // so "how long can an API task run?" gets the live value. Same sentence as
+      // describe_system's External task API line.
+      const taskBudget = request.avatarTaskRunTimeoutMs
+        ? ` Each task may run for up to ${Math.round(request.avatarTaskRunTimeoutMs / 60_000)} minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES), including time spent waiting on questions and background work, and a single pending question or permission request expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer.`
+        : "";
+      lines.push(`External task API: ${request.avatarApiKeyCount} active personal API keys. The owner can issue/revoke keys in 내 아바타 → 권한·연결 → 외부 작업 API. External systems send arbitrary instructions as JSON {message, conversationId?} to POST /api/v1/avatar/tasks with a Bearer key to run the owner's main avatar. Tasks are queued, results stay in the conversation, and questions/permissions can be answered in Noah or through the task respond API.${taskBudget} This is independent of scheduled routines. Never ask the owner to paste an API key into chat.`);
     }
     // Personal bots: the create trigger, on the owner's OWN avatar only (the
     // stamped flag is false on a bot run, which has update_profile instead —

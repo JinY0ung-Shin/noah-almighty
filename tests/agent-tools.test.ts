@@ -61,6 +61,7 @@ import {
   getActiveRunForConversation,
   isRunCancelled,
   openRun,
+  PROMPT_TTL_MS,
   submitResponse,
 } from "../src/server/agent/runRegistry.js";
 import {
@@ -2141,6 +2142,22 @@ describe("system tools (avatar system management)", () => {
     expect(res.content[0].text).toContain("Remote SSH tools: enabled");
   });
 
+  it("describe_system reports the live routine concurrency caps", async () => {
+    const s = setup("st-routine-caps");
+    // Not the shipped 10/2, so the text must come from the configured values.
+    s.config.routineMaxConcurrentRuns = 7;
+    s.config.routineMaxConcurrentRunsPerUser = 3;
+    const res = await callTool(toolsFor(s), "describe_system", {});
+    expect(res.content[0].text).toContain(
+      "Up to 3 of the owner's routines run at the same time (7 across the server)",
+    );
+    expect(res.content[0].text).toContain("never rely on one routine's output being ready");
+    expect(res.content[0].text).toContain('a manual "지금 실행" run is never refused and can add more');
+    // The action trigger where routines are actually made carries the same warning.
+    const create = toolsFor(s).find((t) => t.name === "create_routine")!;
+    expect(create.description).toContain("never make one routine depend on another's output");
+  });
+
   it("describe_system names the turn's origin, and drops bot tools on a task-API run", async () => {
     const s = setup("st-origin");
     const interactive = await callTool(toolsFor(s), "describe_system", {});
@@ -2236,6 +2253,56 @@ describe("system tools (avatar system management)", () => {
     const interactive = (await callTool(toolsFor(s), "describe_system", {}))
       .content[0].text ?? "";
     expect(interactive).toContain("External task API:");
+  });
+
+  it("describe_system states the configured task API budget, per run only on an API turn", async () => {
+    const s = setup("st-task-budget");
+    // 90, not the 300-minute default: both lines must read the live config.
+    const config = { ...s.config, avatarTaskRunTimeoutMs: 90 * 60_000 };
+    const ttlMinutes = PROMPT_TTL_MS / 60_000;
+    const external = (await callTool(
+      buildSystemTools(s.store, {
+        ...s.baseCtx,
+        config,
+        viewerIsOwner: true,
+        externalTaskApi: true,
+      }),
+      "describe_system",
+      {},
+    )).content[0].text ?? "";
+    // The origin line carries THIS run's budget in the prompt provenance
+    // paragraph's own sentences, so the two surfaces agree.
+    expect(external).toContain(
+      "This run has a hard wall-clock budget of 90 minutes covering the WHOLE run",
+    );
+    expect(external).toContain(
+      "the calling system gets an error instead of your result",
+    );
+    expect(external).toContain(
+      `A single pending question or permission request also expires after ${ttlMinutes} minutes without an answer`,
+    );
+    expect(external).toContain(
+      "do the most important part first and say in your result what remains",
+    );
+    // ...and the standing line says how long any task may run.
+    expect(external).toContain(
+      "Each task may run for up to 90 minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES)",
+    );
+
+    const interactive = (await callTool(
+      buildSystemTools(s.store, { ...s.baseCtx, config, viewerIsOwner: true }),
+      "describe_system",
+      {},
+    )).content[0].text ?? "";
+    expect(interactive).toContain(
+      "Each task may run for up to 90 minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES)",
+    );
+    expect(interactive).toContain(
+      `a single pending question or permission request expires after ${ttlMinutes} minutes without an answer`,
+    );
+    // Not an API run: the per-run budget stays out of the origin line.
+    expect(interactive).toContain("This turn's origin: interactive chat");
+    expect(interactive).not.toContain("This run has a hard wall-clock budget");
   });
 
   it("describe_system reports text-only model vision honestly", async () => {

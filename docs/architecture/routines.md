@@ -49,8 +49,34 @@
   timeout a fronting reverse proxy allows — past it the button reports a network failure while the run
   keeps going server-side. Making run-now return 202 + poll is the prerequisite for a much larger value.
   Two more costs scale with the deadline: a wedged job stays un-runnable for the whole window (the
-  `runningJobs` overlap guard makes the scheduler skip its ticks), and it holds the active-repo lock,
-  which REFUSES (409) rather than queues any other conversation opening the same clone.
+  `runningJobs` overlap guard makes the scheduler skip its ticks) while holding one of the scheduler's
+  slots, and it holds the active-repo lock, which REFUSES (409) any chat opening the same clone (another
+  routine skips and retries — see below).
+- **The scheduler runs routines in parallel, capped** (`startRoutineScheduler`). Each 30 s tick STARTS
+  due jobs without awaiting them while fewer than `config.routineMaxConcurrentRuns` (env
+  `ROUTINE_MAX_CONCURRENT_RUNS`, default 10) are in flight server-wide and fewer than
+  `config.routineMaxConcurrentRunsPerUser` (`ROUTINE_MAX_CONCURRENT_RUNS_PER_USER`, default 2) for the
+  job's owner; a job over a cap stays due and a later tick starts it. The ledger (`runningJobs` +
+  `runningPerOwner`, module-level like the overlap guard) is claimed inside `executeRoutineJob` BEFORE
+  its first await — that is what lets the tick count a job it just started on its next iteration — and
+  it is shared with "지금 실행": a manual run is never refused by the caps but occupies its owner's slot.
+  Bot routines count too. It was strictly sequential until 2026-09 for the burst reason, which let ONE
+  long run (a bot routine holds its slot for the whole delegated turn) stall every routine on the
+  server; the per-owner cap is what keeps one owner with many due routines from taking every slot.
+- **A routine whose working repo is locked SKIPS rather than running without it.** The owner-avatar
+  path resolves the working repo FIRST (before plugin/knowledge loading, so a waiting job costs one lock
+  lookup per tick, not a git fetch) and returns `skipped` on `locked`: no outcome recorded, the next
+  tick retries. Other open failures still fall back to the scratch workspace. A bot routine gets the
+  same skip from `executeChatTurn`'s `repo_locked` refusal reason — the turn refuses before writing any
+  message or task row (the firing's `touchConversation` still bumps the thread's `updated_at` on each
+  retry). The chat route itself still answers that refusal with 409.
+- **A restart re-runs every routine that was mid-run — at-least-once, not exactly-once.** Owner-avatar
+  routine runs are not in the run registry, so shutdown's `cancelAllRuns()` cannot reach them: the
+  process exit kills them before `markRoutineRun`, `next_run_at` never advances, and each fires again
+  from the start on the first tick after boot, repeating any external side effect it had already done.
+  With the parallel scheduler that is up to `routineMaxConcurrentRuns` (plus manual runs) per restart
+  instead of one. Recording them as failed on shutdown (the task API's `AVATAR_TASK_RESTART_ERROR`
+  precedent) would make it at-most-once instead; that is a product decision, not yet taken.
 - **Never surface the SDK's abort message to the owner.** The SDK labels EVERY abort
   `"Claude Code process aborted by user"` (it only checks `signal.aborted`), so storing it verbatim blamed
   a user for a run nothing but the deadline touched — routines have no cancel route and are NOT in the run

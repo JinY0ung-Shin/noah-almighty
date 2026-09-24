@@ -21,7 +21,7 @@ import {
 } from "../src/server/chatFiles.js";
 import { MAX_CHAT_IMAGES_PER_MESSAGE } from "../src/server/chatImages.js";
 import { getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
-import { MAX_STEER_LENGTH } from "../src/server/routes/chat.js";
+import { formatDurationKo, MAX_STEER_LENGTH } from "../src/server/routes/chat.js";
 
 // Shared control surface for the mocked agent layer. `impl`, when set, fully
 // drives a turn (fires the events callbacks the route wires); otherwise a default
@@ -2915,4 +2915,13 @@ describe("working-repo resolution (opened repo becomes the run cwd)", () => {
   // version of this test passes in isolation but goes load-sensitive when the
   // chat files run together, so the branch is left uncovered rather than
   // flaky-covered.
+});
+
+describe("formatDurationKo", () => {
+  it("renders an unattended-run budget in minutes, hours, or both", () => {
+    expect(formatDurationKo(30 * 60_000)).toBe("30분");
+    expect(formatDurationKo(60 * 60_000)).toBe("1시간");
+    expect(formatDurationKo(90 * 60_000)).toBe("1시간 30분");
+    expect(formatDurationKo(300 * 60_000)).toBe("5시간");
+  });
 });

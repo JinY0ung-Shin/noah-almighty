@@ -238,15 +238,47 @@ export interface AppConfig {
    */
   routineRunTimeoutMs: number;
   /**
-   * Hard wall-clock deadline for ONE unattended delegated bot task — a queued
-   * turn the SERVER dispatched, with nobody watching the stream (env
-   * `BOT_TASK_TIMEOUT_MINUTES`, default 30 minutes, floor 1 minute, same
-   * "cannot be disabled" reasoning as {@link AppConfig.routineRunTimeoutMs}).
+   * How many routine runs the scheduler keeps in flight at once, server-wide
+   * (env `ROUTINE_MAX_CONCURRENT_RUNS`, default 10; a non-integer or < 1 falls
+   * back to the default). Each run is a full agent process, so this bounds the
+   * burst when many routines fall due together or after downtime. A manual
+   * "지금 실행" is never refused by it but occupies a slot while it runs.
+   */
+  routineMaxConcurrentRuns: number;
+  /**
+   * How many of ONE owner's routines run at once (env
+   * `ROUTINE_MAX_CONCURRENT_RUNS_PER_USER`, default 2, same fallback). Kept
+   * below {@link AppConfig.routineMaxConcurrentRuns} so one owner with many due
+   * routines can't take every slot and delay everyone else's.
+   */
+  routineMaxConcurrentRunsPerUser: number;
+  /**
+   * Hard wall-clock deadline for ONE unattended 내 봇 run — a queued delegated
+   * task or a bot routine firing (`runBotRoutineJobNow`), a turn the SERVER
+   * started with nobody watching the stream (env `BOT_TASK_TIMEOUT_MINUTES`,
+   * default 30 minutes, floor 1 minute, same "cannot be disabled" reasoning as
+   * {@link AppConfig.routineRunTimeoutMs}).
    *
-   * Only the dispatcher arms it: a turn the owner typed themselves stays
+   * Only those unattended paths arm it: a turn the owner typed themselves stays
    * un-deadlined, because a live viewer already has the stop button.
    */
   botTaskRunTimeoutMs: number;
+  /**
+   * Hard wall-clock deadline for ONE external task API run (env
+   * `AVATAR_TASK_TIMEOUT_MINUTES`, default 300 minutes = 5 hours, floor 1 minute,
+   * same "cannot be disabled" reasoning as {@link AppConfig.routineRunTimeoutMs};
+   * capped at setTimeout's ~24.8-day maximum). Covers the whole turn, time
+   * parked on a question and the background phase included.
+   *
+   * Deliberately separate from {@link AppConfig.botTaskRunTimeoutMs}, which stays
+   * short: a bot routine run holds one of the routine scheduler's slots (and one
+   * of its owner's) for its whole duration, and a hung bot turn pins its
+   * thread's queue. API runs have their own dispatcher (one per owner, four
+   * process-wide), which
+   * is their own stall surface: a long or hung run holds its owner's only slot,
+   * and one of the four, for up to this budget — the cancel route frees it.
+   */
+  avatarTaskRunTimeoutMs: number;
   /**
    * Optional override for the autocompact trigger: the working context window
    * (in tokens) the agent compacts near the top of. Maps to the CLI settings key
@@ -1721,6 +1753,15 @@ export interface AgentRequest {
    * carries `update_profile` instead.
    */
   avatarApiKeyCount?: number;
+  /**
+   * The configured wall-clock budget for ONE external task API run
+   * (`config.avatarTaskRunTimeoutMs`, META-COGNITION), stamped by
+   * `runClaudeAgent` so the prompt can state it: on an API run
+   * (`externalTaskApi`) it is THIS run's budget, and the standing External task
+   * API line tells the owner how long a task may run. describe_system reads
+   * the same config value directly.
+   */
+  avatarTaskRunTimeoutMs?: number;
   personalAgentsEnabled?: boolean;
   /**
    * Display names of the owner's ENABLED bots only (a disabled bot is not

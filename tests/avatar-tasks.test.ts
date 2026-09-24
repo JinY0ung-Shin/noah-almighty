@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 async function boot() {
   H.requests = []; H.script = [];
-  const services = createServices({ dataDir: path.join(dir(), "data"), agentRuntime: "local", sessionSecret: "test", botTaskRunTimeoutMs: 1000 });
+  const services = createServices({ dataDir: path.join(dir(), "data"), agentRuntime: "local", sessionSecret: "test", avatarTaskRunTimeoutMs: 1000 });
   current = services;
   const app = createApp(services);
   const owner = request.agent(app);
@@ -192,7 +192,7 @@ describe("avatar task API", () => {
     dispatchAvatarTasks(services);
     await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, task.id)?.status).toBe("failed"));
     expect(services.store.getAvatarTask(user.id, task.id)?.error).toContain("test failure");
-    services.config.botTaskRunTimeoutMs = 30;
+    services.config.avatarTaskRunTimeoutMs = 30;
     H.script.push(async (_events, abort) => new Promise<void>(resolve => abort!.signal.addEventListener("abort", () => resolve(), { once: true })));
     const timed = (await call("post", endpoint).send({ message: "hang" }).expect(202)).body.task;
     dispatchAvatarTasks(services);
@@ -229,7 +229,7 @@ describe("avatar task API", () => {
 
   it("releases unanswered questions when the execution deadline expires", async () => {
     const { call, services, user } = await boot();
-    services.config.botTaskRunTimeoutMs = 30;
+    services.config.avatarTaskRunTimeoutMs = 30;
     H.script.push(async events => { await events.onQuestion?.({ dialogKind: "question", payload: {} }); });
     const task = (await call("post", endpoint).send({ message: "질문해 줘" }).expect(202)).body.task;
     dispatchAvatarTasks(services);
@@ -301,7 +301,7 @@ describe("avatar task API", () => {
 
   it("reports a graceful shutdown as a restart failure, not a cancellation", async () => {
     const { call, services, user } = await boot();
-    services.config.botTaskRunTimeoutMs = 60_000;
+    services.config.avatarTaskRunTimeoutMs = 60_000;
     H.script.push(async (_events, abort) => new Promise<void>(resolve => abort!.signal.addEventListener("abort", () => resolve(), { once: true })));
     const task = (await call("post", endpoint).send({ message: "재시작" }).expect(202)).body.task;
     const stop = startAvatarTaskDispatcher(services);

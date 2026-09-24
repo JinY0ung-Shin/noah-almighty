@@ -71,6 +71,7 @@ import {
   getActiveRunForConversation,
   isRunCancelled,
   openRun,
+  PROMPT_TTL_MS,
   submitResponse,
 } from "../src/server/agent/runRegistry.js";
 import {
@@ -3908,6 +3909,65 @@ describe("buildPrompt", () => {
     expect(p).not.toContain(
       "this conversation open in Noah with the extension running",
     );
+  });
+
+  it("states THIS run's configured budget in an API run's provenance paragraph", () => {
+    // 90, not the 300-minute default: the sentence must come from the stamped
+    // config value, never from the manual.
+    const p = buildSystemPromptAppend(
+      req({
+        viewerIsOwner: true,
+        externalTaskApi: true,
+        avatarTaskRunTimeoutMs: 90 * 60_000,
+      }),
+    );
+    expect(p).toContain(
+      "This run has a hard wall-clock budget of 90 minutes covering the WHOLE run",
+    );
+    expect(p).toContain(
+      "the calling system gets an error instead of your result",
+    );
+    // The per-prompt clock is its own constant, separate from the run budget.
+    expect(p).toContain(
+      `A single pending question or permission request also expires after ${PROMPT_TTL_MS / 60_000} minutes without an answer`,
+    );
+    expect(p).toContain(
+      "do the most important part first and say in your result what remains",
+    );
+  });
+
+  it("tells the owner how long an API task may run on the standing line", () => {
+    const p = buildSystemPromptAppend(
+      req({
+        viewerIsOwner: true,
+        avatarApiKeyCount: 2,
+        avatarTaskRunTimeoutMs: 90 * 60_000,
+      }),
+    );
+    expect(p).toContain("External task API: 2 active personal API keys.");
+    expect(p).toContain(
+      "Each task may run for up to 90 minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES)",
+    );
+    expect(p).toContain(
+      `a single pending question or permission request expires after ${PROMPT_TTL_MS / 60_000} minutes without an answer`,
+    );
+    // The line still ends on the key warning.
+    expect(p).toContain(
+      "This is independent of scheduled routines. Never ask the owner to paste an API key into chat.",
+    );
+    // An interactive chat is not itself on the API budget: it gets the
+    // standing fact only, never the per-run sentence.
+    expect(p).not.toContain("This run has a hard wall-clock budget");
+  });
+
+  it("states no task budget when the request carries no stamped value", () => {
+    const p = buildSystemPromptAppend(
+      req({ viewerIsOwner: true, externalTaskApi: true, avatarApiKeyCount: 1 }),
+    );
+    expect(p).toContain("**EXTERNAL SYSTEM**");
+    expect(p).toContain("External task API: 1 active personal API keys.");
+    expect(p).not.toContain("hard wall-clock budget");
+    expect(p).not.toContain("Each task may run for up to");
   });
 
   it("lists vision-off attachments as staged FILE paths in the user prompt", () => {

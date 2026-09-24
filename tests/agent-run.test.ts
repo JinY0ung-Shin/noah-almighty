@@ -540,6 +540,23 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     );
   });
 
+  it("stamps the configured task API budget into an owner run's prompt", async () => {
+    // 90, not the 300-minute default: the stamp must carry the live config.
+    const { config, store, baseRequest } = setup({ avatarTaskRunTimeoutMs: 90 * 60_000 });
+    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    const appendOf = (i: number) =>
+      (sdkMock.calls[i].options.systemPrompt as { append: string }).append;
+
+    await runAgentStream({ ...baseRequest, externalTaskApi: true }, [], config, store, makeEvents());
+    expect(appendOf(0)).toContain("This run has a hard wall-clock budget of 90 minutes");
+    expect(appendOf(0)).toContain("Each task may run for up to 90 minutes");
+
+    // An interactive owner run hears the standing fact, never the per-run one.
+    await runAgentStream(baseRequest, [], config, store, makeEvents());
+    expect(appendOf(1)).toContain("Each task may run for up to 90 minutes");
+    expect(appendOf(1)).not.toContain("hard wall-clock budget");
+  });
+
   it("registers the brain + canvas servers when a repo is connected and canvas is enabled", async () => {
     const { config, store, baseRequest, owner } = setup();
     store.setKnowledgeRepo(owner.id, "owner/kb", "main");

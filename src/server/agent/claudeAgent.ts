@@ -364,10 +364,16 @@ export async function runClaudeAgent(
     // carrying the same facts describe_system's bot block reports. Null on every
     // non-bot run, which is also what the prompt's identity swap keys off.
     personalAgentState,
+    // External task API self-state, owner (non-group-agent) runs only: the live
+    // key count, plus the CONFIGURED per-run budget — config, not store, so an
+    // operator's AVATAR_TASK_TIMEOUT_MINUTES is what the avatar states, never
+    // the manual's default. An API run is an owner run, so the same gate covers
+    // its provenance paragraph; describe_system reads the same config value.
+    avatarApiKeyCount: request.viewerIsOwner && !request.groupAgent ? ownerState.avatarApiKeyCount : undefined,
+    avatarTaskRunTimeoutMs: request.viewerIsOwner && !request.groupAgent ? config.avatarTaskRunTimeoutMs : undefined,
     // Bot-creation self-state, rides ONLY runs that registered create_agent
     // (the skillExchangeActive precedent) so the standing guidance and the tool
     // can't diverge. The roster is the owner's ENABLED bots.
-    avatarApiKeyCount: request.viewerIsOwner && !request.groupAgent ? ownerState.avatarApiKeyCount : undefined,
     personalAgentsEnabled: personalAgentCreateActive,
     personalAgentNames: personalAgentCreateActive
       ? ownerState.personalAgentNames

@@ -36,6 +36,16 @@ function parseMinutes(value: string, fallbackMinutes: number): number {
   return Math.round(n * 60_000);
 }
 
+// setTimeout's delay is a 32-bit signed int: Node fires anything longer after
+// 1 ms, so an "effectively unlimited" deadline would abort every run at once.
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** A whole number >= 1, else the fallback (empty, junk, 0, negative, 2.5). */
+function parsePositiveInt(value: string, fallback: number): number {
+  const n = Number(value);
+  return value && Number.isInteger(n) && n >= 1 ? n : fallback;
+}
+
 export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const isProduction = process.env.NODE_ENV === "production";
   const dataDir = overrides.dataDir ?? env("APP_DATA_DIR", path.join(process.cwd(), "data"));
@@ -115,9 +125,20 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // minute: parseMinutes maps "0" to 0ms, which here would abort every run
     // instantly instead of meaning "no deadline" as it does for plugin refresh.
     routineRunTimeoutMs: Math.max(60_000, parseMinutes(env("ROUTINE_RUN_TIMEOUT_MINUTES"), 30)),
+    // Routine scheduler concurrency (see AppConfig): how many routines may be in
+    // flight at once, server-wide and per owner.
+    routineMaxConcurrentRuns: parsePositiveInt(env("ROUTINE_MAX_CONCURRENT_RUNS"), 10),
+    routineMaxConcurrentRunsPerUser: parsePositiveInt(env("ROUTINE_MAX_CONCURRENT_RUNS_PER_USER"), 2),
     // Same shape and same floor reasoning as the routine deadline above: the
     // budget for one unattended delegated bot task, which nobody is watching.
     botTaskRunTimeoutMs: Math.max(60_000, parseMinutes(env("BOT_TASK_TIMEOUT_MINUTES"), 30)),
+    // The external task API's own budget (see AppConfig), split from the bot one
+    // so a long API job never lengthens bot runs. Same floor, plus a ceiling:
+    // this is the knob operators set to hours or days.
+    avatarTaskRunTimeoutMs: Math.min(
+      MAX_TIMER_MS,
+      Math.max(60_000, parseMinutes(env("AVATAR_TASK_TIMEOUT_MINUTES"), 300)),
+    ),
     // Optional: compact the conversation near this many context tokens instead
     // of waiting for the model's full window. Unset → SDK/CLI default.
     autoCompactWindow: parseAutoCompactWindow(env("AUTO_COMPACT_WINDOW")),

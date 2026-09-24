@@ -194,7 +194,7 @@ export async function maybeDispatchNextBotTask(
  * registry a restart erased, so anything still marked `running` is failed
  * first; then every thread that still carries backlog gets one dispatch,
  * sequentially (a burst of restarts must not fan out into N concurrent agent
- * runs — the scheduler's reasoning).
+ * runs — the same burst the routine scheduler caps).
  *
  * Returns a stop function for symmetry with `startRoutineScheduler`; there is
  * no ticker to cancel, so it is a no-op.

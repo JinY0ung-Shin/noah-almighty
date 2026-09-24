@@ -139,9 +139,19 @@ off a `WeakMap` keyed by `AppServices`, so a test's second app never shares a qu
   the conversation does not already store (a per-conversation choice always wins). `executeChatTurn`
   persists a non-null request onto the conversation, so this fires once per thread, exactly like a
   first interactive turn.
-- **Unattended-run behavior**: `unattendedDeadlineMs = config.botTaskRunTimeoutMs`
-  (`BOT_TASK_TIMEOUT_MINUTES`, shared with bot tasks) covers the WHOLE turn including time parked on a
-  question, and `modelFallback: true` walks down the model tiers on a transient model failure (nobody
+- **Unattended-run behavior**: `unattendedDeadlineMs = config.avatarTaskRunTimeoutMs`
+  (`AVATAR_TASK_TIMEOUT_MINUTES`, default 300 = 5 hours, 1-minute floor, capped at setTimeout's
+  ~24.8-day maximum) covers the WHOLE turn including time parked on a question and the background
+  phase up to `bg_end`. It is the API's OWN knob, split from `BOT_TASK_TIMEOUT_MINUTES` (still 30) on
+  purpose: a bot routine run holds one of the routine scheduler's slots (and one of its owner's) for
+  its whole duration, and a hung bot turn pins its thread's queue — the split was made while the
+  scheduler was still strictly sequential, when an hour-long bot budget would have stalled every
+  routine on the server (see [routines.md](routines.md)). API runs sit behind this dispatcher's caps
+  instead — which are their own stall surface:
+  a long or hung task holds its owner's only slot, and one of the four, for up to the full budget, so
+  the cancel route is the lever for stuck work. A single parked prompt still expires after
+  `PROMPT_TTL_MS` (30 min) regardless of the run budget.
+  `modelFallback: true` walks down the model tiers on a transient model failure (nobody
   is there to switch models — the routine scheduler's reasoning). The run is NOT `headless`: prompts
   still park, answerable from Noah or through `/respond`.
 - **Shutdown records `failed`, never `cancelled`.** `index.ts` calls the stop function
@@ -192,6 +202,18 @@ read by BOTH `promptBuilder.ts`'s standing paragraph and `systemTools.ts`'s `des
 the settings path (내 아바타 → 권한·연결 → 외부 작업 API), state that the API is independent of scheduled
 routines, and end with **never ask the owner to paste an API key into chat**. Add a new fact to both
 or neither.
+
+The run budget is the second fact, and it is CONFIG, not store: `runClaudeAgent` stamps
+`config.avatarTaskRunTimeoutMs` as `AgentRequest.avatarTaskRunTimeoutMs` under the same owner,
+non-group-agent gate, and `describe_system` reads `ctx.config.avatarTaskRunTimeoutMs` directly, so
+both state the operator's `AVATAR_TASK_TIMEOUT_MINUTES`, never the default. The standing line says how
+long ANY task may run (inserted before the routines sentence, so it still ends on the key warning); an
+API run additionally hears THIS run's budget in the provenance paragraph / the `This turn's origin:`
+line: overrun fails the task (the caller gets an error, not `result.text`, and only the partial output
+stays in the thread), so scope the work to fit and say what remains. Both also state the separate
+per-prompt expiry, from the imported `PROMPT_TTL_MS`, never a literal. The `external-tasks` manual
+keeps only the default plus a pointer to describe_system: `read_manual` must never read config
+(`tests/system-manual.test.ts` proxies it to throw).
 
 ## Audit
 `avatar_api_key_create` / `avatar_api_key_revoke` (session routes, via `auditAs`),

@@ -52,6 +52,23 @@ function routineFailureMessage(error: unknown): string {
  * run twice concurrently.
  */
 const runningJobs = new Set<string>();
+/**
+ * Routines in flight per owner — the per-owner cap's ledger, kept beside
+ * `runningJobs` for the same reason: a "run now" occupies its owner's slot too.
+ */
+const runningPerOwner = new Map<string, number>();
+
+function claimRoutineSlot(job: RoutineJob): void {
+  runningJobs.add(job.id);
+  runningPerOwner.set(job.avatarUserId, (runningPerOwner.get(job.avatarUserId) ?? 0) + 1);
+}
+
+function releaseRoutineSlot(job: RoutineJob): void {
+  runningJobs.delete(job.id);
+  const left = (runningPerOwner.get(job.avatarUserId) ?? 1) - 1;
+  if (left > 0) runningPerOwner.set(job.avatarUserId, left);
+  else runningPerOwner.delete(job.avatarUserId);
+}
 
 export function isRoutineRunning(jobId: string): boolean {
   return runningJobs.has(jobId);
@@ -69,6 +86,8 @@ const BOT_UNAVAILABLE =
   "봇이 비활성화되었거나 삭제되어 예약 작업을 실행할 수 없습니다.";
 const BOT_ROUTINE_STILL_QUEUED =
   "이전 예약 실행이 아직 대기열에 있어 이번 회차를 건너뜁니다.";
+const ROUTINE_REPO_BUSY =
+  "작업 저장소를 다른 대화에서 사용 중이라 예약 작업을 건너뜁니다.";
 
 /**
  * 봇 루틴: fire a routine that belongs to one of the owner's personal agents.
@@ -208,6 +227,13 @@ async function runBotRoutineJobNow(
     if (outcome.refusal.reason === "active_run") {
       return enqueue(outcome.refusal.userMessagePersisted === true);
     }
+    // The thread's working repo is open in ANOTHER conversation. The turn
+    // refused before writing any message or task row, so this is a skip like
+    // the owner-avatar path's: no outcome recorded, the next tick retries. (The
+    // touchConversation above still bumps the thread's updated_at each retry.)
+    if (outcome.refusal.reason === "repo_locked") {
+      return { ok: false, skipped: true, error: ROUTINE_REPO_BUSY };
+    }
     return { ok: false, error: outcome.refusal.message };
   }
   // Cap the routine thread like the legacy path — a long-lived routine must not
@@ -271,31 +297,13 @@ async function runRoutineJobNow(
       return { ok: false, error: "아바타를 찾을 수 없습니다." };
     }
 
-    // Mirror the chat endpoint's plugin loading via the shared helper (default +
-    // avatar plugins + personal & group knowledge-repo skill roots) so routines
-    // can USE the same skills an owner chat would; tolerate clone/resolve fails
-    // but leave a trace — there is no client to stream the warnings to.
-    const pluginWarnings: string[] = [];
-    const pluginRoots: PluginRoot[] = await loadAgentPluginRoots(store, avatar.id, config, (w) =>
-      pluginWarnings.push(w),
-    );
-    if (pluginWarnings.length > 0) {
-      schedLogger.warn({ jobId: job.id, warnings: pluginWarnings }, "routine plugin warnings");
-    }
-
-    // Standing CLAUDE.md memory, same as an owner chat. Routines have no
-    // per-conversation toggle UI, so every group is included (no disabled set).
-    const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config);
-
-    const workspaceDir = workspaceDirFor(config, avatar.id, job.conversationId);
-    fs.mkdirSync(workspaceDir, { recursive: true });
-
     // Working repository: a routine may open one registered git repo as its cwd
     // via `mcp__git_repo__open_repo`. The selection persists on the conversation
     // (conversations.working_repo), so it survives between spaced-out scheduled
     // runs and restarts — and an interactive open in the routine's thread carries
-    // here. Resolve it the SAME way the chat route does (shared resolver). On any
-    // failure, log and fall back to the scratch workspace — the routine still runs.
+    // here. Resolve it the SAME way the chat route does (shared resolver).
+    // Resolved FIRST, before any plugin or knowledge loading, so a job waiting
+    // on a locked repo costs one lock lookup per tick rather than a git fetch.
     const repoResolution = await resolveActiveWorkspaceRepo({
       store,
       config,
@@ -315,12 +323,39 @@ async function runRoutineJobNow(
       activeRepoCwd = repoResolution.cwd;
       activeRepoName = repoResolution.repoName;
       releaseActiveRepoLock = repoResolution.release;
+    } else if (repoResolution.kind === "error" && repoResolution.reason === "locked") {
+      // Another conversation is working in this repo's clone right now.
+      // Running anyway would do the routine's work WITHOUT the repo it was set
+      // up for — and record success. Skip instead: nothing has been written,
+      // no outcome is recorded, and the next tick retries.
+      return { ok: false, skipped: true, error: ROUTINE_REPO_BUSY };
     } else if (repoResolution.kind === "error") {
+      // Any other failure (repo gone, clone failed): log and fall back to the
+      // scratch workspace — the routine still runs.
       schedLogger.warn(
         { jobId: job.id, reason: repoResolution.reason, detail: repoResolution.detail },
         "routine working repo unavailable; running in scratch workspace",
       );
     }
+
+    // Mirror the chat endpoint's plugin loading via the shared helper (default +
+    // avatar plugins + personal & group knowledge-repo skill roots) so routines
+    // can USE the same skills an owner chat would; tolerate clone/resolve fails
+    // but leave a trace — there is no client to stream the warnings to.
+    const pluginWarnings: string[] = [];
+    const pluginRoots: PluginRoot[] = await loadAgentPluginRoots(store, avatar.id, config, (w) =>
+      pluginWarnings.push(w),
+    );
+    if (pluginWarnings.length > 0) {
+      schedLogger.warn({ jobId: job.id, warnings: pluginWarnings }, "routine plugin warnings");
+    }
+
+    // Standing CLAUDE.md memory, same as an owner chat. Routines have no
+    // per-conversation toggle UI, so every group is included (no disabled set).
+    const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config);
+
+    const workspaceDir = workspaceDirFor(config, avatar.id, job.conversationId);
+    fs.mkdirSync(workspaceDir, { recursive: true });
 
     const response = await runAgentStream(
       {
@@ -451,7 +486,9 @@ export async function executeRoutineJob(
   ) {
     return { ok: false, skipped: true, error: "대화에서 응답을 생성 중이라 예약 작업을 건너뜁니다." };
   }
-  runningJobs.add(job.id);
+  // Synchronous, before the first await: the scheduler tick starts jobs without
+  // awaiting them and reads these counts on its very next iteration.
+  claimRoutineSlot(job);
   schedLogger.info({ jobId: job.id, avatarUserId: job.avatarUserId }, "routine job started");
   const jobStart = Date.now();
   try {
@@ -480,29 +517,34 @@ export async function executeRoutineJob(
     schedLogger.error({ jobId: job.id, err: error }, "routine failed to record outcome");
     return { ok: false, error: detail };
   } finally {
-    runningJobs.delete(job.id);
+    releaseRoutineSlot(job);
   }
 }
 
 /**
- * Start the routine-job ticker. Every `tickMs` it fires any due jobs, one at a
- * time. Returns a stop function.
+ * Start the routine-job ticker. Every `tickMs` it STARTS due jobs without
+ * waiting for them, as long as fewer than `routineMaxConcurrentRuns` routines
+ * are in flight server-wide and fewer than `routineMaxConcurrentRunsPerUser`
+ * for that job's owner. A job over a cap (or already running) simply stays due
+ * and a later tick picks it up once a slot frees. Returns a stop function.
  *
- * Sequential on purpose: daily jobs have no latency requirement, and a burst
- * of due jobs (e.g. after server downtime past many slots) must not fan out
- * into N simultaneous agent runs. Runs missed while the server was down fire
- * once on the next tick, then roll forward; there is no per-missed-day
- * catch-up.
+ * Capped rather than unbounded because each run is a full agent process: a
+ * burst of due jobs (many routines on the same minute, or a restart after
+ * downtime past many slots) must not fan out into one process per job. It used
+ * to be strictly sequential for that reason, which let ONE long run — a bot
+ * routine holds its slot for the whole delegated turn — delay every routine on
+ * the server. The per-owner cap keeps one owner with many due routines from
+ * taking every slot. Runs missed while the server was down fire once on the
+ * next tick, then roll forward; there is no per-missed-day catch-up.
  */
 export function startRoutineScheduler(
   services: AppServices,
   options: { tickMs?: number } = {},
 ): () => void {
-  const { store } = services;
+  const { config, store } = services;
   const tickMs = options.tickMs ?? DEFAULT_TICK_MS;
-  let ticking = false;
 
-  const tick = async (): Promise<void> => {
+  const tick = (): void => {
     let due: RoutineJob[];
     try {
       due = store.listDueRoutineJobs(new Date().toISOString());
@@ -511,19 +553,20 @@ export function startRoutineScheduler(
       return;
     }
     for (const job of due) {
-      await executeRoutineJob(services, job);
+      if (runningJobs.size >= config.routineMaxConcurrentRuns) break;
+      // Already firing from an earlier tick or "지금 실행"; that run records
+      // the outcome.
+      if (runningJobs.has(job.id)) continue;
+      if ((runningPerOwner.get(job.avatarUserId) ?? 0) >= config.routineMaxConcurrentRunsPerUser) {
+        continue;
+      }
+      // Never throws, and claims its slot before its first await, so the caps
+      // above already count it on the next iteration.
+      void executeRoutineJob(services, job);
     }
   };
 
-  const timer = setInterval(() => {
-    if (ticking) {
-      return; // previous tick still draining its due list
-    }
-    ticking = true;
-    void tick().finally(() => {
-      ticking = false;
-    });
-  }, tickMs);
+  const timer = setInterval(tick, tickMs);
   // Don't keep the process alive solely for the scheduler.
   timer.unref?.();
   return () => clearInterval(timer);

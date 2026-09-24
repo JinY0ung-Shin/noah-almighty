@@ -98,7 +98,7 @@ async function runTask(services: AppServices, task: AvatarTask, attempts: number
       ownerUserId: owner.id, ownerDisplayName: owner.displayName, target: target.target,
       conversationId: task.conversationId, agentMessage: task.message, displayMessage: task.message,
       images: [], regenerate: false, skipUserMessagePersist: task.userMessagePersisted, ...requested,
-      unattendedDeadlineMs: config.botTaskRunTimeoutMs,
+      unattendedDeadlineMs: config.avatarTaskRunTimeoutMs,
       // Unattended: nobody can switch models, so fall down the tier chain on a
       // transient model failure (same reasoning as the routine scheduler).
       modelFallback: true,

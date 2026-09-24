@@ -220,6 +220,87 @@ describe("routine run timeout config", () => {
   });
 });
 
+/** Set (or, with `undefined`, unset) several env vars around `fn`, then restore them. */
+function withEnvVars(values: Record<string, string | undefined>, fn: () => void) {
+  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
+  const apply = (entries: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(entries)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+  try {
+    apply(values);
+    fn();
+  } finally {
+    apply(saved);
+  }
+}
+
+describe("avatar task API run timeout config", () => {
+  const withEnv = withEnvVars;
+  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test" });
+  const unset = { AVATAR_TASK_TIMEOUT_MINUTES: undefined, BOT_TASK_TIMEOUT_MINUTES: undefined };
+
+  it("defaults to 5 hours while bot tasks keep 30 minutes", () => {
+    withEnv(unset, () => {
+      expect(load().avatarTaskRunTimeoutMs).toBe(300 * 60_000);
+      expect(load().botTaskRunTimeoutMs).toBe(30 * 60_000);
+    });
+  });
+
+  it("takes AVATAR_TASK_TIMEOUT_MINUTES when set, independent of BOT_TASK_TIMEOUT_MINUTES", () => {
+    withEnv({ ...unset, AVATAR_TASK_TIMEOUT_MINUTES: "90" }, () => {
+      expect(load().avatarTaskRunTimeoutMs).toBe(90 * 60_000);
+      expect(load().botTaskRunTimeoutMs).toBe(30 * 60_000);
+    });
+    withEnv({ ...unset, BOT_TASK_TIMEOUT_MINUTES: "7" }, () => {
+      expect(load().avatarTaskRunTimeoutMs).toBe(300 * 60_000);
+      expect(load().botTaskRunTimeoutMs).toBe(7 * 60_000);
+    });
+  });
+
+  it("clamps to a 1-minute floor and falls back to the default on junk", () => {
+    withEnv({ ...unset, AVATAR_TASK_TIMEOUT_MINUTES: "0" }, () => expect(load().avatarTaskRunTimeoutMs).toBe(60_000));
+    withEnv({ ...unset, AVATAR_TASK_TIMEOUT_MINUTES: "-5" }, () => expect(load().avatarTaskRunTimeoutMs).toBe(300 * 60_000));
+    withEnv({ ...unset, AVATAR_TASK_TIMEOUT_MINUTES: "soon" }, () => expect(load().avatarTaskRunTimeoutMs).toBe(300 * 60_000));
+  });
+
+  it("caps at setTimeout's maximum so a huge value can't abort every run after 1 ms", () => {
+    withEnv({ ...unset, AVATAR_TASK_TIMEOUT_MINUTES: "100000" }, () =>
+      expect(load().avatarTaskRunTimeoutMs).toBe(2_147_483_647),
+    );
+  });
+});
+
+describe("routine concurrency config", () => {
+  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test" });
+  const unset = { ROUTINE_MAX_CONCURRENT_RUNS: undefined, ROUTINE_MAX_CONCURRENT_RUNS_PER_USER: undefined };
+
+  it("defaults to 10 routines server-wide and 2 per owner", () => {
+    withEnvVars(unset, () => {
+      expect(load().routineMaxConcurrentRuns).toBe(10);
+      expect(load().routineMaxConcurrentRunsPerUser).toBe(2);
+    });
+  });
+
+  it("takes both env values when set", () => {
+    withEnvVars({ ROUTINE_MAX_CONCURRENT_RUNS: "4", ROUTINE_MAX_CONCURRENT_RUNS_PER_USER: "1" }, () => {
+      expect(load().routineMaxConcurrentRuns).toBe(4);
+      expect(load().routineMaxConcurrentRunsPerUser).toBe(1);
+    });
+  });
+
+  it("falls back to the default on anything but a whole number >= 1", () => {
+    for (const junk of ["0", "-3", "2.5", "many"]) {
+      withEnvVars({ ROUTINE_MAX_CONCURRENT_RUNS: junk, ROUTINE_MAX_CONCURRENT_RUNS_PER_USER: junk }, () => {
+        expect(load().routineMaxConcurrentRuns).toBe(10);
+        expect(load().routineMaxConcurrentRunsPerUser).toBe(2);
+      });
+    }
+  });
+});
+
 describe("model tiers", () => {
   it("registers the fable/opus/sonnet/haiku aliases with user-facing labels", () => {
     expect(MODEL_TIER_IDS).toEqual(["fable", "opus", "sonnet", "haiku"]);

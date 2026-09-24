@@ -473,8 +473,11 @@ export interface ChatTurnRefusal {
    * `task_gone` means the delegated row the caller handed us is no longer
    * runnable (the owner cancelled it while it was being popped) — the
    * dispatcher skips to the next item rather than treating it as contention.
+   * `repo_locked` means the conversation's working repo is open in ANOTHER
+   * conversation right now; the turn refused before writing any message or task
+   * row, so a routine firing treats it as "try again on the next tick".
    */
-  reason?: "active_run" | "task_gone";
+  reason?: "active_run" | "task_gone" | "repo_locked";
   /** True when the turn already wrote the user message before refusing. */
   userMessagePersisted?: boolean;
 }
@@ -495,14 +498,24 @@ function activeRunMessage(background: boolean): string {
 export { botTaskTitle, MAX_QUEUED_BOT_TASKS };
 
 /**
- * User-facing note stored on a timed-out delegated task, derived from the SAME
- * config value that armed the deadline. The SDK labels EVERY abort "Claude Code
+ * User-facing note stored on a timed-out unattended run (delegated bot task,
+ * bot routine, external task API run), derived from the SAME config value that
+ * armed the deadline. The SDK labels EVERY abort "Claude Code
  * process aborted by user" (it only checks `signal.aborted`), and nobody was
  * present to cancel an unattended task — see the routine scheduler's identical
  * substitution.
  */
 function botTaskTimeoutMessage(timeoutMs: number): string {
-  return `실행 제한 시간(${Math.round(timeoutMs / 60_000)}분)을 초과해 작업이 중단되었습니다. 작업을 더 작은 단위로 나눠 다시 맡겨 주세요.`;
+  return `실행 제한 시간(${formatDurationKo(timeoutMs)})을 초과해 작업이 중단되었습니다. 작업을 더 작은 단위로 나눠 다시 맡겨 주세요.`;
+}
+
+/** "30분" / "5시간" / "1시간 30분" — the external task API budget runs to hours. */
+export function formatDurationKo(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${minutes}분`;
+  return rest === 0 ? `${hours}시간` : `${hours}시간 ${rest}분`;
 }
 
 /**
@@ -732,8 +745,10 @@ export interface ChatTurnContext {
    */
   existingBotTaskId?: string;
   /**
-   * Wall-clock budget for an UNATTENDED turn. Set only by the dispatcher: an
-   * owner-typed turn has a live stop button, so it stays un-deadlined.
+   * Wall-clock budget for an UNATTENDED turn. Set only by the unattended callers:
+   * the bot-task dispatcher and bot routines pass `botTaskRunTimeoutMs`, the
+   * external task API `avatarTaskRunTimeoutMs`. An owner-typed turn has a live
+   * stop button, so it stays un-deadlined.
    */
   unattendedDeadlineMs?: number;
   /** Fall down the model tier chain on transient failures (unattended runs). */
@@ -957,6 +972,7 @@ export async function executeChatTurn(
                   status: 409,
                   message:
                     "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
+                  reason: "repo_locked",
                 }
               : {
                   status: 502,
