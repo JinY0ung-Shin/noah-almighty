@@ -40,6 +40,8 @@ import {
   deckToolchainLogFields,
   probeDeckRendering,
   probeDeckToolchain,
+  probeDocumentPreviews,
+  renderDocumentPreviews,
   type DeckToolchainState,
 } from "../src/server/deckRender.js";
 
@@ -743,5 +745,54 @@ describe("pptx skill names, modes and authoring status", () => {
       libreOffice: false,
       definitive: true,
     });
+  });
+});
+
+describe("share_file preview gate (LibreOffice + pdftoppm, not python-pptx)", () => {
+  /** A fake `pdftoppm` first on PATH: writes one PNG page and logs each call. */
+  function fakePdftoppm(): { calls: string } {
+    const bin = path.join(tempDir(), "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    const calls = path.join(tempDir(), "pdftoppm-calls.log");
+    const script = path.join(bin, "pdftoppm");
+    fs.writeFileSync(
+      script,
+      `#!/bin/sh\necho "$@" >> '${calls}'\nfor a in "$@"; do last="$a"; done\nprintf '\\211PNG\\r\\n\\032\\n' > "$last-1.png"\n`,
+    );
+    fs.chmodSync(script, 0o755);
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+    return { calls };
+  }
+
+  function samplePdf(): string {
+    const pdf = path.join(tempDir(), "report.pdf");
+    fs.writeFileSync(pdf, "%PDF-1.4\n");
+    return pdf;
+  }
+
+  it("probeDocumentPreviews needs soffice + pdftoppm only", () => {
+    __setDeckRenderingForTests({ soffice: true, pdftoppm: true, pythonPptx: false });
+    expect(probeDeckRendering()).toBe(false);
+    expect(probeDocumentPreviews()).toBe(true);
+    __setDeckRenderingForTests({ soffice: true, pdftoppm: false, pythonPptx: true });
+    expect(probeDocumentPreviews()).toBe(false);
+    __setDeckRenderingForTests({ pdftoppm: true, pythonPptx: true });
+    expect(probeDocumentPreviews()).toBe(false);
+  });
+
+  it("renders share_file previews on a host without python-pptx", async () => {
+    const { calls } = fakePdftoppm();
+    __setDeckRenderingForTests({ soffice: true, pdftoppm: true, pythonPptx: false });
+    const pages = await renderDocumentPreviews(samplePdf(), "pdf");
+    expect(pages).toHaveLength(1);
+    expect(pages[0].subarray(0, 4).toString("latin1")).toBe("\x89PNG");
+    expect(fs.readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+  });
+
+  it("skips previews without spawning when pdftoppm is missing", async () => {
+    const { calls } = fakePdftoppm();
+    __setDeckRenderingForTests({ soffice: true, pdftoppm: false, pythonPptx: true });
+    expect(await renderDocumentPreviews(samplePdf(), "pdf")).toEqual([]);
+    expect(fs.existsSync(calls)).toBe(false);
   });
 });

@@ -358,7 +358,8 @@ environment (all optional):
 
 ## Probe, markers and where they surface
 - **One probe** (`deckRender.ts` `probeDeckToolchain`, deployment-level — NOT owner state, so it is not in
-  `ownerState.ts`). The legacy half is unchanged (`python3 -c "import pptx"`, `soffice` + `pdftoppm`); the
+  `ownerState.ts`). The legacy half is unchanged (`python3 -c "import pptx"`, `soffice` + `pdftoppm`; the
+  LibreOffice fallback previews need only the last two — `probeDocumentPreviews`); the
   converter half spawns `process.execPath <DEFAULT_PLUGINS_DIR>/skills/pptx/converter/tools/deck.mjs probe
   --json` (spawnSync, 10 s, never launches a browser) with an ALLOWLISTED env (`PATH`, `HOME`, `LANG`, `LC_ALL`,
   `TMPDIR`, `NODE_ENV`, every `NOAH_PPTX_*`, plus `PYTHONDONTWRITEBYTECODE=1`) — no secret reaches it.

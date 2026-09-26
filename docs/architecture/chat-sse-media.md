@@ -229,6 +229,9 @@
      — async execFile soffice→pdf with an isolated profile, then `pdftoppm -l 30`; **direct pptx→png
      converts only the FIRST slide**; pdf skips soffice) attaches the pages via `savePreviewImages`
      (chatImages.ts, trusted-input hidden PNGs) — best-effort, a render failure still delivers the file.
+     It is gated on `probeDocumentPreviews` (soffice + pdftoppm) ONLY: python-pptx gates the legacy
+     authoring state (`probeDeckRendering`), never previews, so a host with LibreOffice but no
+     system-python python-pptx (a non-Docker install) still gets them.
      Agent-made images NEVER take the `savePreviewImages` path.
 
   The tool result carries facts only (`previews`, `previewSource`, `previewTotal`, `deckSidecar`) and

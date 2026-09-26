@@ -19,9 +19,11 @@ const deckLogger = logger.child({ module: "deck-render" });
  * drives from the agent shell. Two halves, both reported from here:
  *
  * - LEGACY (`probeDeckRendering`): LibreOffice (`soffice`, pptx→pdf), poppler's
- *   `pdftoppm` (pdf→slide PNGs) and the `python-pptx` library. They back the
- *   python-pptx authoring path AND the server's own approximate share_file
- *   previews (`renderDocumentPreviews`).
+ *   `pdftoppm` (pdf→slide PNGs) and the `python-pptx` library — all three back
+ *   the python-pptx authoring path. The server's own approximate share_file
+ *   previews (`renderDocumentPreviews`) need only the first two
+ *   (`probeDocumentPreviews`): gating them on python-pptx too would silently
+ *   switch previews off on a host that installs LibreOffice without it.
  * - CONVERTER (`probeDeckToolchain`): the skill's HTML→editable-PPTX converter,
  *   probed by running its own `deck.mjs probe --json` (Chromium, playwright-core,
  *   the pinned Python modules, fonts, limits and the build-time self-test
@@ -47,7 +49,7 @@ const deckLogger = logger.child({ module: "deck-render" });
 const PROBE_TIMEOUT_MS = 5_000;
 
 /** The three legacy command checks, memoized together (one spawn each, ever). */
-interface LegacyDeckProbe {
+export interface LegacyDeckProbe {
   soffice: boolean;
   pdftoppm: boolean;
   pythonPptx: boolean;
@@ -77,7 +79,13 @@ function legacyDeckProbe(): LegacyDeckProbe {
   const pythonPptx = commandWorks("python3", ["-c", "import pptx"]);
   legacyCached = { soffice, pdftoppm, pythonPptx };
   deckLogger.info(
-    { soffice, pdftoppm, pythonPptx, available: soffice && pdftoppm && pythonPptx },
+    {
+      soffice,
+      pdftoppm,
+      pythonPptx,
+      available: soffice && pdftoppm && pythonPptx,
+      previews: soffice && pdftoppm,
+    },
     "deck rendering probe",
   );
   return legacyCached;
@@ -89,10 +97,28 @@ export function probeDeckRendering(): boolean {
   return probe.soffice && probe.pdftoppm && probe.pythonPptx;
 }
 
-/** Test hook: override or clear (null) the memoized probe result. */
-export function __setDeckRenderingForTests(value: boolean | null): void {
-  legacyCached =
-    value === null ? null : { soffice: value, pdftoppm: value, pythonPptx: value };
+/** True when soffice + pdftoppm can rasterize documents for share_file previews. */
+export function probeDocumentPreviews(): boolean {
+  const probe = legacyDeckProbe();
+  return probe.soffice && probe.pdftoppm;
+}
+
+/**
+ * Test hook: override or clear (null) the memoized probe result. A boolean pins
+ * all three commands; an object pins each one (unlisted commands are false).
+ */
+export function __setDeckRenderingForTests(value: boolean | Partial<LegacyDeckProbe> | null): void {
+  if (value === null) {
+    legacyCached = null;
+  } else if (typeof value === "boolean") {
+    legacyCached = { soffice: value, pdftoppm: value, pythonPptx: value };
+  } else {
+    legacyCached = {
+      soffice: value.soffice ?? false,
+      pdftoppm: value.pdftoppm ?? false,
+      pythonPptx: value.pythonPptx ?? false,
+    };
+  }
 }
 
 // ---- HTML→PPTX converter probe ---------------------------------------------
@@ -741,7 +767,7 @@ export async function renderDocumentPreviews(
   sourcePath: string,
   ext: string,
 ): Promise<Buffer[]> {
-  if (!probeDeckRendering() || !isPreviewableExtension(ext)) {
+  if (!probeDocumentPreviews() || !isPreviewableExtension(ext)) {
     return [];
   }
   let workDir: string | null = null;
