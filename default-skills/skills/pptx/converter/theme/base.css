@@ -1,0 +1,528 @@
+/* theme/base.css — the pptx skill's design system for slides converted into editable PowerPoint.
+ *
+ * This file does two jobs:
+ *   1. RENDERING RULES (section 1): make Chromium lay text out the way PowerPoint will. They are load-bearing
+ *      for the conversion — removing one silently breaks HTML/PPTX parity. The why: the skill's
+ *      reference/AUTHORING.md §3 (maintainers: converter/docs/CONTRACT.md "v2 decisions").
+ *   2. DESIGN TOKENS + SHARED COMPONENTS (sections 0, 2, 3): the visual language every slide uses
+ *      (reference/AUTHORING.md §8–§9). Never edit it for one deck: override tokens in <deck>/deck.css.
+ *
+ * Slides link exactly two stylesheets: ../theme/base.css and ../theme/fonts.css (the extractor serves the
+ * active profile's theme/fonts-<profile>.css under that name; it defines --font-sans). Slide-specific
+ * composition lives in a <style> block inside the slide.
+ *
+ * Convertibility, in one breath: weights 400/600/700/800 only; explicit px line-heights; no filter,
+ * backdrop-filter, blend modes, clip-path, mask, radial/conic gradients, background-image url(), text-shadow,
+ * pseudo-element content, non-uniform or elliptical radii; at most one outer box-shadow (spread 0) and only
+ * on opaque boxes; transforms only rotate()/translate(); text only in leaf text elements; nothing outside
+ * the 1280x720 slide; no overflow.
+ */
+
+/* ------------------------------------------------------------------------------------------------ */
+/* 0. Design tokens                                                                                  */
+/* ------------------------------------------------------------------------------------------------ */
+:root {
+  /* Brand — royal blue. 600 is the primary; 900 carries dark surfaces (cover, table head, dark panel). */
+  --c-brand-950: #0A1433;
+  --c-brand-900: #0F1D4A;
+  --c-brand-800: #162C72;
+  --c-brand-700: #1F3DA6;
+  --c-brand-600: #2A52D9;
+  --c-brand-500: #4A6EF2;
+  --c-brand-400: #7591F6;
+  --c-brand-300: #A3B6FA;
+  --c-brand-200: #CBD6FC;
+  --c-brand-100: #E4EAFE;
+  --c-brand-50:  #F1F4FF;
+
+  /* Accent — warm amber-coral. Sparingly: one focal element per slide at most. Pick the shade by what it sits on:
+     500 on dark surfaces and for decoration (2.35:1 on white — too light for a data mark there), 600 for a data
+     mark on white (a chart series, a goal bar: 3.16:1), 700 for small text and for a mark on the ink-50 page. */
+  --c-accent-700: #C2410C;   /* accent as small text (4.8:1 on the slide background), a mark on ink-50 */
+  --c-accent-600: #EC6A24;   /* accent as a data mark on white (3.16:1, WCAG 1.4.11 non-text contrast) */
+  --c-accent-500: #FF8A3D;   /* accent on dark surfaces (6.9:1 on brand-900) and decoration */
+  --c-accent-100: #FFEADB;
+
+  /* Neutrals — cool slate. */
+  --c-ink-900: #111A2E;   /* titles, big numbers */
+  --c-ink-800: #1F2A40;
+  --c-ink-700: #344056;   /* body text */
+  --c-ink-600: #4A5568;
+  --c-ink-500: #667085;   /* labels, captions, footer (>= 4.6:1 on ink-50) */
+  --c-ink-400: #98A2B3;   /* decorative only — too light for text (2.4:1) */
+  --c-ink-300: #C9D0DB;   /* axis lines */
+  --c-ink-200: #E3E8EF;   /* borders */
+  --c-ink-100: #EDF0F5;   /* dividers, row rules */
+  --c-ink-50:  #F4F6FA;   /* content-slide background */
+  --c-white:   #FFFFFF;
+
+  /* Semantic — deltas. Text colour on its own 50-tint (pills), or text colour alone (tables).
+     Both pairs >= 4.5:1 (WCAG AA for small text): up 4.8:1 on tint / 5.4:1 on white, down 4.6:1 / 5.3:1. */
+  --c-up-600:   #0B7A47;
+  --c-up-50:    #E3F5EA;
+  --c-down-600: #C8322D;
+  --c-down-50:  #FDEBEA;
+
+  /* Chart series (ChartSpec needs literal RRGGBB — keep these in sync with the data-chart JSON). */
+  --c-series-prev: #8A94A6;   /* previous year: 3.06:1 on white (WCAG 1.4.11 non-text contrast >= 3:1) */
+  --c-series-curr: #2A52D9;   /* current year = brand-600 (6.35:1) */
+  --c-series-fcst: #6F8FF0;   /* forecast point: lighter brand blue, 3.06:1 on white */
+
+  /* Type scale — every line-height is an explicit px value on the 4/8 px grid AND at least the tallest
+     profile's glyph content area (malgun substitute: ascent+descent = 1.33 em), so no text box ever reports
+     scroll overflow: line-height >= ceil(1.33 * size). Measured minimums per size: reference/AUTHORING.md §4.2. */
+  --fs-display: 60px;  --lh-display: 80px;   /* cover title, 800 */
+  --fs-title:   40px;  --lh-title:   56px;   /* slide title, 800 */
+  --fs-stat-lg: 48px;  --lh-stat-lg: 64px;   /* hero stat callout, 800 */
+  --fs-stat:    44px;  --lh-stat:    60px;   /* KPI number, 800 */
+  --fs-lead:    22px;  --lh-lead:    32px;   /* cover subtitle, 400 */
+  --fs-h3:      18px;  --lh-h3:      28px;   /* card title, 700 */
+  --fs-body:    18px;  --lh-body:    28px;   /* body, 400 */
+  --fs-body-sm: 16px;  --lh-body-sm: 24px;   /* dense body / table, 400 */
+  --fs-label:   14px;  --lh-label:   20px;   /* section label, 600 + tracking */
+  --fs-caption: 14px;  --lh-caption: 20px;   /* captions, 400 */
+  --fs-micro:   12px;  --lh-micro:   16px;   /* footer */
+  --tracking-display: -0.025em;
+  --tracking-tight:   -0.02em;
+  --tracking-label:    0.06em;
+  --tracking-caps:     0.12em;
+
+  /* Spacing — 8 px grid. */
+  --sp-1: 8px;  --sp-2: 16px; --sp-3: 24px; --sp-4: 32px;
+  --sp-5: 40px; --sp-6: 48px; --sp-8: 64px; --sp-10: 80px;
+
+  /* Slide grid — 80 px side margins, 1120 px content column. */
+  --margin-x: 80px;
+  --content-w: 1120px;
+  --header-top: 56px;
+  --content-top: 184px;
+  --content-bottom: 624px;
+  --footer-top: 664px;
+
+  /* Shape. Radii are uniform (PowerPoint roundRect); shadows are ONE outer shadow with spread 0. */
+  --radius-card: 20px;
+  --radius-box:  16px;
+  --radius-sm:   4px;
+  --radius-pill: 999px;
+  --shadow-card: 0 8px 24px rgba(17, 26, 46, 0.07);
+  --shadow-sheet: 0 6px 20px rgba(17, 26, 46, 0.06);
+
+  /* PowerPoint theme colours (a:clrScheme): the extractor reads --pptx-<slot>, the builder writes the deck theme,
+     so shapes, tables and charts a user INSERTS in PowerPoint use the deck palette. The converted objects carry
+     literal colours (srgbClr), so Design > Variants > Colors does not recolour them. */
+  --pptx-dk1: var(--c-ink-900);
+  --pptx-lt1: var(--c-white);
+  --pptx-dk2: var(--c-brand-900);
+  --pptx-lt2: var(--c-ink-50);
+  --pptx-accent1: var(--c-brand-600);
+  --pptx-accent2: var(--c-accent-500);
+  --pptx-accent3: var(--c-up-600);
+  --pptx-accent4: var(--c-down-600);
+  --pptx-accent5: var(--c-brand-300);
+  --pptx-accent6: var(--c-series-prev);
+  --pptx-hlink: var(--c-brand-700);
+  --pptx-folHlink: var(--c-ink-600);
+}
+
+/* ------------------------------------------------------------------------------------------------ */
+/* 1. Rendering rules (v2 decisions) — do not remove                                                */
+/* ------------------------------------------------------------------------------------------------ */
+html {
+  background: #FFFFFF;
+}
+html, body {
+  margin: 0;
+  padding: 0;
+}
+body {
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  font-family: var(--font-sans);                 /* defined by theme/fonts.css (profile) */
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);                   /* explicit: every text element resolves to px */
+  font-weight: 400;
+  color: var(--c-ink-700);
+  text-rendering: geometricPrecision;            /* the font's own advances, like PowerPoint */
+  font-kerning: none;                            /* the builder writes kern="0" */
+  font-variant-ligatures: none;                  /* PowerPoint applies no liga/clig/calt */
+  font-synthesis-weight: none;                   /* never fake bold: every weight maps to a real face */
+  word-break: normal;                            /* NOT keep-all: PowerPoint breaks Hangul between syllables */
+  overflow-wrap: normal;
+  line-break: auto;
+  hyphens: manual;
+}
+* {
+  box-sizing: border-box;
+}
+h1, h2, h3, h4, h5, h6, p, ul, ol, li, figure, blockquote, dl, dd {
+  margin: 0;
+  padding: 0;
+}
+b, strong {
+  font-weight: 700;                              /* the UA default "bolder" turns 600 into 900 */
+}
+sup, sub {
+  font-size: .58em;                              /* PowerPoint draws baseline-shifted runs at ~58 % */
+  line-height: 0;                                /* keep the line box = the paragraph's line-height */
+}
+ul {
+  list-style-type: "• ";                         /* a string marker: Chromium draws the same glyph as PowerPoint */
+  list-style-position: outside;
+}
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+svg {
+  display: block;
+}
+
+/* The slide root: 1280x720 CSS px at the page origin (1 px = 9525 EMU). */
+main.slide {
+  position: relative;
+  display: block;
+  width: 1280px;
+  height: 720px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--c-ink-50);
+}
+
+/* ------------------------------------------------------------------------------------------------ */
+/* 2. Slide chrome — header system and footer shared by content slides                              */
+/* ------------------------------------------------------------------------------------------------ */
+.slide-header {
+  position: absolute;
+  left: var(--margin-x);
+  top: var(--header-top);
+  width: var(--content-w);
+}
+.eyebrow {                                        /* section label: "01  핵심 지표" */
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  color: var(--c-brand-600);
+}
+.eyebrow-num {
+  color: var(--c-accent-700);
+}
+.slide-title {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-title);
+  line-height: var(--lh-title);
+  font-weight: 800;
+  letter-spacing: var(--tracking-tight);
+  color: var(--c-ink-900);
+}
+
+/* Title + context chip on one flex row: the title's box ends 24 px before the chip, so a longer title
+   wraps before it instead of running under it — in the HTML and in the PPTX (the title placeholder gets the same
+   width). The chip's bottom sits 8 px above the title's line box. */
+.title-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  margin-top: var(--sp-1);
+}
+.title-row .slide-title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-top: 0;
+}
+.title-row .period {
+  margin-bottom: 8px;
+}
+
+.slide-sub {                                      /* optional takeaway line under the title: the evidence for it */
+  margin-top: 4px;
+  font-size: var(--fs-body-sm);
+  line-height: var(--lh-body-sm);
+  color: var(--c-ink-600);
+}
+.slide-sub strong {
+  color: var(--c-ink-900);
+}
+
+.slide-footer {
+  position: absolute;
+  left: var(--margin-x);
+  top: var(--footer-top);
+  width: var(--content-w);
+  height: 32px;
+  border-top: 1px solid var(--c-ink-200);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+.footer-left,
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.footer-brand {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  font-weight: 700;
+  color: var(--c-ink-600);
+}
+.footer-text {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--c-ink-500);                       /* 4.6:1 — the sample-data note must stay legible */
+}
+.page-num {
+  min-width: 16px;                               /* fixed box: the footer is identical on every slide (up to 99), */
+  text-align: right;                             /* so the builder can move it into the slide layout */
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  font-weight: 700;
+  color: var(--c-ink-900);
+}
+
+/* Brand mark: two overlapping circles (shapes only). */
+.mark {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 20px;
+}
+.mark-a,
+.mark-b {
+  position: absolute;
+  top: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+.mark-a { left: 0;    background: var(--c-brand-600); }
+.mark-b { left: 10px; background: rgba(255, 138, 61, 0.85); }
+.mark--sm { width: 21px; height: 14px; }
+.mark--sm .mark-a,
+.mark--sm .mark-b { width: 14px; height: 14px; }
+.mark--sm .mark-b { left: 7px; }
+
+/* ------------------------------------------------------------------------------------------------ */
+/* 3. Components                                                                                     */
+/* ------------------------------------------------------------------------------------------------ */
+
+/* Card — white, uniform radius, ONE soft outer shadow (spread 0), opaque fill. */
+.card {
+  background: var(--c-white);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* Icon badge — tinted circle holding one inline <svg> (explicit width/height, one stroke colour). */
+.icon-badge {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--c-brand-50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-badge--sm {
+  width: 40px;
+  height: 40px;
+}
+.icon-badge--white {
+  background: var(--c-white);
+}
+
+/* Pill — a standalone block (never inline inside a paragraph): a roundRect shape + one text run. */
+.pill {
+  display: inline-block;
+  flex: none;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pill--up     { background: var(--c-up-50);    color: var(--c-up-600); }
+.pill--down   { background: var(--c-down-50);  color: var(--c-down-600); }
+.pill--brand  { background: var(--c-brand-50); color: var(--c-brand-700); }   /* on white surfaces only */
+/* Context chip on the ink-50 page background (header period chips): a brand-50 tint would vanish there (1.02:1),
+   so the chip is white with a brand-200 outline; the 1 px border replaces 1 px of padding (same 28 px chip). */
+.pill--outline {
+  padding: 3px 11px;
+  border: 1px solid var(--c-brand-200);
+  background: var(--c-white);
+  color: var(--c-brand-700);
+}
+.pill--glass  { background: rgba(255, 255, 255, 0.12); color: var(--c-white); }
+/* On dark surfaces (brand-900 cards and panels): 7.2:1 / 6.9:1 there, >= 4.7:1 even on the cover gradient's light end.
+   A pill's colour says favourable (up) or unfavourable (down), NOT the direction: a churn or cost rise is
+   "▲ 0.9%p" in pill--down / pill--down-on-dark (AUTHORING §8.5). */
+.pill--up-on-dark   { background: rgba(52, 211, 140, 0.16); color: #5FE0A5; }
+.pill--down-on-dark { background: rgba(255, 107, 107, 0.16); color: #FFA39D; }
+
+/* Stat — label / big number (+ smaller unit run) / caption. */
+.stat-label {
+  font-size: var(--fs-body-sm);
+  line-height: var(--lh-body-sm);
+  font-weight: 600;
+  color: var(--c-ink-500);
+}
+.stat-value {
+  font-size: var(--fs-stat);
+  line-height: var(--lh-stat);
+  font-weight: 800;
+  letter-spacing: var(--tracking-tight);
+  color: var(--c-ink-900);
+  white-space: nowrap;
+}
+.stat-unit {                                      /* inline run: colour/size/weight only, no box styling */
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--c-ink-600);
+}
+.caption {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--c-ink-500);
+}
+.up   { color: var(--c-up-600); }
+.down { color: var(--c-down-600); }
+
+/* Summary box — tinted, radius 16, bold lead-in run + one or two sentences. */
+.summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-box);
+  background: var(--c-brand-50);
+}
+.summary-text {
+  flex: 1;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--c-ink-700);
+}
+.summary-text strong {
+  color: var(--c-brand-700);
+}
+
+/* Data table — collapsed borders, text-only cells, right-aligned numbers (the first column left). */
+.data-table {
+  width: var(--content-w);
+  background: var(--c-white);
+  box-shadow: var(--shadow-sheet);
+}
+.data-table th {
+  padding: 14px 24px;
+  background: var(--c-brand-900);
+  color: var(--c-white);
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 700;
+  text-align: right;
+  vertical-align: middle;
+}
+.data-table td {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--c-ink-100);
+  font-size: 17px;
+  line-height: 24px;
+  color: var(--c-ink-700);
+  text-align: right;
+  vertical-align: middle;
+}
+.data-table th:first-child,
+.data-table td:first-child {
+  text-align: left;
+}
+.data-table td:first-child {
+  font-weight: 600;
+  color: var(--c-ink-900);
+}
+.data-table tr.is-highlight td {
+  background: var(--c-brand-50);
+}
+.data-table tr.is-highlight td:first-child {
+  color: var(--c-brand-700);
+  font-weight: 700;
+}
+.data-table tr.is-total td {
+  padding-top: 18px;
+  padding-bottom: 18px;
+  border-top: 2px solid var(--c-ink-900);
+  border-bottom: 0;
+  font-weight: 700;
+  color: var(--c-ink-900);
+}
+/* A table of words, not figures (a schedule, a directory, a checklist): every column left-aligned. Give it a width
+   of its own (style="width: …") when the content does not need the full 1120 px column. */
+.data-table--text th,
+.data-table--text td {
+  text-align: left;
+}
+.footnote {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--c-ink-500);
+}
+
+/* Chart panel — a card with a header (title + HTML legend) above a data-chart element. */
+.chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.card-title {
+  font-size: var(--fs-h3);
+  line-height: var(--lh-h3);
+  font-weight: 700;
+  color: var(--c-ink-900);
+}
+.card-sub {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--c-ink-500);
+}
+.legend {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-top: 4px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-sm);
+}
+.legend-label {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--c-ink-600);
+}
+.chart {
+  position: relative;
+}
+
+/* Insight list — one text element, one paragraph per <li>; padding-left >= the "• " marker advance. */
+.insights {
+  padding-left: 16px;                             /* >= "• " advance (0.77 em = 13 px at 17 px) */
+}
+.insights li {
+  font-size: 17px;
+  line-height: 26px;
+}
+.insights li + li {
+  margin-top: var(--sp-2);
+}

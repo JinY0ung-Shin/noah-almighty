@@ -21,7 +21,7 @@ Companion docs: [`DESIGN.md`](DESIGN.md) (design language), [`REFACTORING-BACKLO
 
 | Page | Read it when |
 |---|---|
-| [build-run-verify.md](architecture/build-run-verify.md) | Running or verifying anything: dev servers and ports, the lint/test/build gate and the rtk caveat, single-test-file runs, Docker + native HTTPS + per-stage CA trust, and the release procedure (including the two browser-extension assets every release must attach). |
+| [build-run-verify.md](architecture/build-run-verify.md) | Running or verifying anything: dev servers and ports, the lint/test/build gate and the rtk caveat, single-test-file runs, Docker + native HTTPS + per-stage CA trust, the release procedure (including the two browser-extension assets every release must attach), and the deck converter's dev venv, opt-in e2e suites and Docker smoke. |
 
 ## Server (`src/server/`)
 
@@ -49,6 +49,7 @@ Companion to the agent-area philosophy in [`../src/server/agent/CLAUDE.md`](../s
 | [avatar-collab.md](architecture/avatar-collab.md) | Working on avatar-to-avatar features: `mcp__avatars__ask_avatar` consultation runs, `mcp__skill_exchange__*` sharing and the copy-into-the-learner's-repo transfer, and the helpers both reuse instead of re-copying. |
 | [browser-bridge.md](architecture/browser-bridge.md) | **Its own hub** (5 pages) — the largest subsystem here. Any `mcp__browser__*` op, the AX snapshot format, or the shipped Chrome extension. Start with its `contract.md`. |
 | [chat-sse-media.md](architecture/chat-sse-media.md) | Touching the chat turn itself or anything the avatar hands back: SSE sessions and stored history, the background phase and mid-turn user messages (steers), image attachments, `share_file` / PPTX / draw.io delivery, and the visual canvas. |
+| [pptx-converter.md](architecture/pptx-converter.md) | Touching the pptx skill's converter, deck previews or the deck toolchain probe: the two roots and the deck folder, the `deck.sh` CLI and its exit codes, budgets and kernel-held locks, the gate policy, the CSP/network isolation, the hash-bound preview sidecar `share_file` validates, the probe states behind both metacognition surfaces (describe_system's `converter:` markers, the prompt's deck branch), the Docker layers and build args, fonts, golden drift, and the smoke. |
 | [agent-misc.md](architecture/agent-misc.md) | Experimental feature flags, hex-ssh remote SSH, server-expanded slash commands, why git remote work is MCP-only, and how to test repo tools offline. |
 
 ## Client (`src/client/` — Svelte + Vite)

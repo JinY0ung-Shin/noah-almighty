@@ -119,7 +119,21 @@ export function sanitizeDownloadName(raw: string | undefined): string | null {
 }
 
 export type PublishWorkspaceFileResult =
-  | { attachment: MessageAttachment }
+  | {
+      attachment: MessageAttachment;
+      /**
+       * Realpath of the workspace file that was read (server-side only — the
+       * browser never receives it). share_file looks for the deck converter's
+       * preview sidecar next to THIS path, so sharing through a symlink still
+       * finds the renders beside the real file.
+       */
+      sourcePath: string;
+      /**
+       * Lowercase hex SHA-256 of the SAME buffer written to the store — what a
+       * deck preview sidecar's `pptxSha256` must equal (no re-read, no TOCTOU).
+       */
+      sha256: string;
+    }
   | {
       error:
         | "OUTSIDE_WORKSPACE"
@@ -134,9 +148,11 @@ export type PublishWorkspaceFileResult =
 /**
  * Copy a generated document from one of this run's explicit working roots into
  * the owner-scoped conversation file store, returning the download-card
- * attachment metadata. Same containment discipline as `publishWorkspaceImage`:
- * realpath + root membership, byte caps, and a content check where the format
- * has magic bytes. The browser never receives the source path.
+ * attachment metadata plus the resolved source path and the stored bytes'
+ * SHA-256 (the deck-preview sidecar binding, `deckPreview.ts`). Same
+ * containment discipline as `publishWorkspaceImage`: realpath + root
+ * membership, byte caps, and a content check where the format has magic bytes.
+ * The browser never receives the source path.
  */
 export function publishWorkspaceFile(
   config: AppConfig,
@@ -210,6 +226,8 @@ export function publishWorkspaceFile(
       name: name.toLowerCase().endsWith(`.${ext}`) ? name : `${name}.${ext}`,
       size: buffer.length,
     },
+    sourcePath: source,
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
   };
 }
 

@@ -35,6 +35,15 @@ Non-obvious infrastructure constraints:
   starts its own Vite dev server on `127.0.0.1:5173` (`strictPort`) — so it fails if 5173 is occupied, and
   `npx playwright test` run directly (skipping the script) connection-refuses. See the memory note on the
   `.bin` symlink quirk.
+- **The deck converter's toolchain e2e suites are OPT-IN** (`deck-converter.test.ts`, `deck-contract.test.ts`):
+  they run only with `NOAH_PPTX_E2E=1` AND a converter probe that says installed — a Python with the pinned
+  set (`NOAH_PPTX_PYTHON=<venv python>`, from `default-skills/skills/pptx/converter/requirements.txt`) and a
+  resolvable Chromium (`NOAH_PPTX_DEV=1` accepts Playwright's cached one on a dev box). Everywhere else they
+  SKIP, so a green `npm test` proves nothing about conversion itself; only their toolchain-free parts (the
+  CLI contract, caps, locks and static greps; the committed converter fixture through the server loader, the
+  real probe's JSON through the server parser, the describe_system markers vs SKILL.md, the `--help` docs block)
+  and the static `deck-packaging.test.ts` always run. Recipe: `docs/architecture/build-run-verify.md` §Deck
+  converter.
 - **Coverage thresholds are a single global gate under `--coverage` only** (`test:coverage`). An all-green
   test list with a failing `test:coverage` is a threshold miss, not flakiness — the floor is set "a hair
   under" achieved coverage and is meant to rise, never fall.

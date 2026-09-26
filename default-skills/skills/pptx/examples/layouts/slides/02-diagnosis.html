@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>02 현황 진단 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Diagnosis: the evidence for the headline in the subtitle, then two native charts — the trend (line) and the
+     mix (doughnut) — each with a one-line finding under a divider. One colour code on both charts: phone = navy
+     (brand-900), digital channels = brand blues. */
+  .trend { position: absolute; left: var(--margin-x); top: 200px; width: 656px; height: 424px; padding: var(--sp-4);
+           display: flex; flex-direction: column; }
+  .trend .chart { margin-top: var(--sp-2); width: 592px; height: 248px; }
+  .finding { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--c-ink-100); }
+  .finding strong { color: var(--c-ink-900); }
+
+  .mix { position: absolute; left: 760px; top: 200px; width: 440px; height: 424px; padding: var(--sp-4);
+         display: flex; flex-direction: column; }
+  .mix-body { margin-top: var(--sp-4); display: flex; align-items: center; gap: var(--sp-4); }
+  .donut-wrap { position: relative; flex: none; width: 192px; height: 192px; }
+  .donut-wrap .chart { width: 192px; height: 192px; }
+  /* the centre label is a text box on top of the chart (a sibling, never inside the chart element) */
+  .donut-center { position: absolute; left: 0; top: 68px; width: 192px; text-align: center; }
+  .donut-value { font-size: 28px; line-height: 40px; font-weight: 800; letter-spacing: var(--tracking-tight); color: var(--c-ink-900); }
+  .donut-label { font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-ink-500); }
+
+  .shares { flex: 1; min-width: 0; }
+  .share { display: flex; align-items: center; gap: var(--sp-1); padding: 10px 0; border-top: 1px solid var(--c-ink-100); }
+  .share:first-child { border-top: 0; }
+  .share-label { flex: 1; font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--c-ink-600); }
+  .share-value { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-ink-900); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">01</span> 현황 진단</p>
+    <h1 class="slide-title">문의는 3년 새 2.4배, 응대는 여전히 전화 중심</h1>
+    <p class="slide-sub">연간 문의 <strong>48만 → 115만 건</strong> · 전화 비중 <strong>68%</strong> · 평균 응대 시간 <strong>6분 40초</strong>(3년 새 1분 50초 증가)</p>
+  </header>
+
+  <section class="card trend">
+    <div class="chart-head">
+      <div>
+        <p class="card-title">연도별 고객 문의량</p>
+        <p class="card-sub">단위: 만 건</p>
+      </div>
+      <div class="legend" data-group="범례">
+        <div class="legend-item"><div class="swatch" style="background:#0F1D4A"></div><p class="legend-label">전화</p></div>
+        <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">채팅·메신저</p></div>
+      </div>
+    </div>
+    <div class="chart" data-chart='{"type":"line","categories":["2023년","2024년","2025년","2026년"],"series":[{"name":"전화","values":[38,46,60,78],"color":"0F1D4A"},{"name":"채팅·메신저","values":[10,17,26,37],"color":"2A52D9"}],"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"344056","sizePx":13,"cssWeight":600},"valueAxis":{"visible":false,"min":0,"max":90},"categoryAxis":{"visible":true,"labelColor":"667085","sizePx":14,"lineColor":"C9D0DB"},"legend":{"position":"none"},"fontCssWeight":400}'></div>
+    <p class="caption finding"><strong>비대면 문의가 3.7배로 가장 빠르게 증가</strong>, 전화 문의도 2배 넘게 증가</p>
+  </section>
+
+  <section class="card mix">
+    <p class="card-title">채널별 문의 비중</p>
+    <p class="card-sub">2026년 · 전체 115만 건</p>
+    <div class="mix-body">
+      <div class="donut-wrap">
+        <div class="chart" data-chart='{"type":"doughnut","categories":["전화","채팅","메신저"],"series":[{"name":"2026년 비중","values":[68,21,11]}],"pointColors":{"0":["0F1D4A","2A52D9","6F8FF0"]},"dataLabels":{"show":false},"holeSize":64,"legend":{"position":"none"},"fontCssWeight":400}'></div>
+        <div class="donut-center"><p class="donut-value">68%</p><p class="donut-label">전화</p></div>
+      </div>
+      <div class="shares" data-group="범례">
+        <div class="share"><div class="swatch" style="background:#0F1D4A"></div><p class="share-label">전화</p><p class="share-value">68%</p></div>
+        <div class="share"><div class="swatch" style="background:#2A52D9"></div><p class="share-label">채팅</p><p class="share-value">21%</p></div>
+        <div class="share"><div class="swatch" style="background:#6F8FF0"></div><p class="share-label">메신저</p><p class="share-value">11%</p></div>
+      </div>
+    </div>
+    <p class="caption finding">전화 비중은 3년 새 79%에서 68%로 낮아졌지만<br><strong>여전히 문의 3건 중 2건이 전화</strong></p>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2027년 고객 경험 혁신 계획</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">2</p>
+    </div>
+  </footer>
+</main>
+<script src="../lib/chart.js"></script>
+</body>
+</html>

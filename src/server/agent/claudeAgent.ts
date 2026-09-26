@@ -12,6 +12,7 @@ import type { AgentEvents } from "./events.js";
 import logger from "../logger.js";
 import { isRecord, asNumber, asString } from "./agentUtils.js";
 import { steerToSdkUserMessage, type SteerChannel } from "./steerChannel.js";
+import { deckGuidanceFlags } from "../deckRender.js";
 import {
   buildSystemPromptAppend,
   buildUserPrompt,
@@ -264,6 +265,8 @@ export async function runClaudeAgent(
     fileOutputActive,
     skillExchangeActive,
     deckRenderingAvailable,
+    deckToolchain,
+    deckAuthoring,
   } = plan;
 
   if (events) {
@@ -286,6 +289,18 @@ export async function runClaudeAgent(
   // turns or if the control call fails — then we fall back to contextTokens.
   let contextUsage: { total: number; window: number } | undefined;
   let usedModel = effectiveModel;
+
+  // Deck standing guidance: the deployment toolchain (legacy and/or the pptx
+  // skill's converter) AND a turn that can publish files (preview embeds + the
+  // download card) AND a viewer allowed to author — deckAuthoring, the SAME
+  // status describe_system's deck line branches on, so a read-only colleague or
+  // an admin-disabled `pptx` skill gets no deck guidance on either surface.
+  const deckGuidance = deckGuidanceFlags({
+    deckRenderingAvailable,
+    deckConverterInstalled: deckToolchain.converter,
+    fileOutputActive,
+    deckAuthoring,
+  });
 
   // Owner self-state (secret names, group memberships) flows to every
   // OWNER-DRIVEN turn: interactive owner chats AND owner-scheduled routines
@@ -344,9 +359,10 @@ export async function runClaudeAgent(
     canvasEnabled: canvasActive,
     browserEnabled: browserActive,
     fileOutputEnabled: fileOutputActive,
-    // Deck standing guidance needs BOTH the deployment toolchain and a turn
-    // that can publish files (preview embeds + the download card).
-    deckRenderingEnabled: deckRenderingAvailable && fileOutputActive,
+    // Deck standing guidance (see deckGuidance above): the converter branch
+    // wins in promptBuilder's deckSection when both flags are set.
+    deckRenderingEnabled: deckGuidance.deckRenderingEnabled,
+    deckConverterEnabled: deckGuidance.deckConverterEnabled,
     visionEnabled: runVisionEnabled,
     experimentalFeatures: ownerToolAccess
       ? ownerState.experimentalFeatures

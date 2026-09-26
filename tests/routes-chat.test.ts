@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,7 +20,8 @@ import {
   MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
   MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
 } from "../src/server/chatFiles.js";
-import { MAX_CHAT_IMAGES_PER_MESSAGE } from "../src/server/chatImages.js";
+import { chatImagesDir, MAX_CHAT_IMAGES_PER_MESSAGE, resolveStoredImage } from "../src/server/chatImages.js";
+import { renderDocumentPreviews } from "../src/server/deckRender.js";
 import { getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
 import { formatDurationKo, MAX_STEER_LENGTH } from "../src/server/routes/chat.js";
 
@@ -1936,6 +1938,37 @@ describe("publishing images and documents mid-turn (onFile / onShareFile)", () =
     expect(messages[1]).toContain("cp /tmp/image.png");
   });
 
+  it("redirects a share_file outside the roots; for a .pptx it keeps the converter's renders (copy the deck folder)", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "sharefail").expect(201)).body.user.id as string;
+
+    const results: FileOutputResult[] = [];
+    H.impl = async (agentRequest, _pr, config, _store, events) => {
+      // Real files, parked one level above the run cwd and the scratch workspace.
+      fs.writeFileSync(path.join(agentRequest.cwd!, "..", "outside.pptx"), PPTX_BYTES);
+      fs.writeFileSync(path.join(agentRequest.cwd!, "..", "outside.pdf"), PDF_BYTES);
+      results.push(await events.onShareFile!({ path: "../outside.pptx" }));
+      results.push(await events.onShareFile!({ path: "../outside.pdf" }));
+      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "실패" };
+    };
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-sharefail", message: "공유해줘" })
+      .expect(200);
+
+    const [deckMsg, pdfMsg] = results.map((r) => (r.behavior === "error" ? r.message : "SHOWN"));
+    for (const m of [deckMsg, pdfMsg]) {
+      expect(m).toContain("must stay inside the current working directory");
+      expect(m).toContain('cp /tmp/deck.pptx "$PWD/deck.pptx"');
+    }
+    // a converter deck's renders sit in <name>.preview/ next to the .pptx: the redirect must not strand them
+    expect(deckMsg).toContain("copy its WHOLE deck folder instead");
+    expect(deckMsg).toContain(".preview/ folder next to it");
+    expect(pdfMsg).not.toContain("deck folder");
+  });
+
   it("shares documents up to the per-turn cap, attaching server-rendered previews", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
@@ -2123,6 +2156,248 @@ describe("publishing images and documents mid-turn (onFile / onShareFile)", () =
     expect(done.data.message).toBeNull();
     expect(store.listMessages(ownerId, "conv-gone")).toEqual([]);
   }, LIVE);
+});
+
+describe("share_file deck previews from the converter's hash-bound sidecar", () => {
+  const sha256 = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
+
+  /**
+   * What `deck.sh build` leaves in the workspace (the sidecar contract,
+   * docs/architecture/pptx-converter.md): `<deck>/<deck>.pptx`
+   * plus `<deck>/<deck>.preview/` holding the renders and, written last,
+   * `manifest.json` bound to the pptx bytes. `boundTo` overrides the digest the
+   * manifest claims (a later edit of the .pptx = stale).
+   */
+  function writeConverterDeck(
+    cwd: string,
+    name: string,
+    slides: { file: string; bytes: Buffer; mediaType: "image/png" | "image/jpeg"; title?: string }[],
+    opts: { boundTo?: Buffer; profile?: "embedded" | "malgun" } = {},
+  ): string {
+    const deckDir = path.join(cwd, name);
+    const previewDir = path.join(deckDir, `${name}.preview`);
+    fs.mkdirSync(previewDir, { recursive: true });
+    fs.writeFileSync(path.join(deckDir, `${name}.pptx`), PPTX_BYTES);
+    fs.writeFileSync(path.join(previewDir, ".gitignore"), "*\n");
+    for (const slide of slides) fs.writeFileSync(path.join(previewDir, slide.file), slide.bytes);
+    fs.writeFileSync(
+      path.join(previewDir, "manifest.json"),
+      JSON.stringify({
+        format: "noah-deck-preview",
+        version: 1,
+        generator: "noah-pptx-converter/1.0.0",
+        pptx: `${name}.pptx`,
+        pptxSha256: sha256(opts.boundTo ?? PPTX_BYTES),
+        profile: opts.profile ?? "embedded",
+        createdAt: "2026-09-26T03:00:00Z",
+        slideCount: slides.length,
+        slides: slides.map((slide, i) => ({
+          index: i + 1,
+          file: slide.file,
+          mediaType: slide.mediaType,
+          sha256: sha256(slide.bytes),
+          width: 1920,
+          height: 1080,
+          ...(slide.title ? { title: slide.title } : {}),
+        })),
+      }),
+    );
+    return deckDir;
+  }
+
+  const SLIDES = [
+    { file: "slide-01.png", bytes: PNG_BYTES, mediaType: "image/png" as const, title: "3분기 실적 요약" },
+    { file: "slide-02.jpg", bytes: JPEG_BYTES, mediaType: "image/jpeg" as const },
+  ];
+
+  it("attaches the converter's renders to the card instead of LibreOffice pages", async () => {
+    const { store, app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "deckconv").expect(201)).body.user.id as string;
+    H.previewPages = [Buffer.from("lo-page")]; // what LibreOffice WOULD produce
+    vi.mocked(renderDocumentPreviews).mockClear();
+
+    let shared!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      writeConverterDeck(agentRequest.cwd!, "q3-review", SLIDES);
+      shared = await events.onShareFile!({ path: "q3-review/q3-review.pptx", name: "3분기 보고.pptx" });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "덱 완성" };
+    };
+
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-deckconv", message: "PPT 만들어줘" })
+      .expect(200);
+
+    expect(shared).toMatchObject({
+      behavior: "shown",
+      previews: 2,
+      previewSource: "converter",
+      previewTotal: 2,
+      deckSidecar: { status: "loaded", profile: "embedded" },
+    });
+    // The converter's renders replace the LibreOffice pass entirely.
+    expect(vi.mocked(renderDocumentPreviews).mock.calls.length).toBe(0);
+
+    // SSE: the card first, then the slides in deck order, linked to the card.
+    const streamed = parseSse(res.text)
+      .filter((f) => f.event === "file")
+      .map((f) => frameData(f).attachment);
+    expect(streamed).toHaveLength(3);
+    const card = streamed[0];
+    expect(card).toMatchObject({ kind: "file", name: "3분기 보고.pptx" });
+    expect(shared.behavior === "shown" && shared.attachment.id).toBe(card.id);
+    expect(streamed.slice(1)).toEqual([
+      expect.objectContaining({
+        kind: "image",
+        hidden: true,
+        parentId: card.id,
+        mediaType: "image/png",
+        name: "슬라이드 1 – 3분기 실적 요약",
+      }),
+      expect.objectContaining({ kind: "image", hidden: true, parentId: card.id, mediaType: "image/jpeg", name: "슬라이드 2" }),
+    ]);
+    // The stored slide bytes are the converter's renders, byte for byte.
+    const first = resolveStoredImage(config, "conv-deckconv", streamed[1].id)!;
+    expect(first.mediaType).toBe("image/png");
+    expect(fs.readFileSync(first.path).equals(PNG_BYTES)).toBe(true);
+    const second = resolveStoredImage(config, "conv-deckconv", streamed[2].id)!;
+    expect(fs.readFileSync(second.path).equals(JPEG_BYTES)).toBe(true);
+
+    // …and they persist on the assistant message exactly as streamed.
+    const assistant = store.listMessages(ownerId, "conv-deckconv").find((m) => m.role === "assistant")!;
+    expect(assistant.attachments!.map((a) => a.id)).toEqual(streamed.map((a) => a.id));
+  });
+
+  it("falls back to LibreOffice pages when the .pptx changed after the build", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "deckstale").expect(201)).body.user.id as string;
+    H.previewPages = [Buffer.from("lo-1"), Buffer.from("lo-2"), Buffer.from("lo-3")];
+    vi.mocked(renderDocumentPreviews).mockClear();
+
+    let shared!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      // The sidecar describes an EARLIER build; the .pptx was edited since.
+      writeConverterDeck(agentRequest.cwd!, "q3-review", SLIDES, { boundTo: Buffer.from("an earlier build") });
+      shared = await events.onShareFile!({ path: "q3-review/q3-review.pptx" });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "덱" };
+    };
+
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-deckstale", message: "PPT" })
+      .expect(200);
+
+    expect(shared).toMatchObject({
+      behavior: "shown",
+      previews: 3,
+      previewSource: "libreoffice",
+      deckSidecar: { status: "stale", detail: expect.any(String) },
+    });
+    expect(shared).not.toHaveProperty("previewTotal");
+    expect(vi.mocked(renderDocumentPreviews).mock.calls.length).toBe(1);
+    const slides = parseSse(res.text)
+      .filter((f) => f.event === "file")
+      .map((f) => frameData(f).attachment)
+      .slice(1);
+    // The trusted LibreOffice path, not the agent's renders.
+    expect(slides.map((a) => a.name)).toEqual(["slide-1.png", "slide-2.png", "slide-3.png"]);
+  });
+
+  it("finds the sidecar next to the real file when the shared path is a symlink", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "decklink").expect(201)).body.user.id as string;
+    vi.mocked(renderDocumentPreviews).mockClear();
+
+    let shared!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      const deckDir = writeConverterDeck(agentRequest.cwd!, "q3-review", SLIDES, { profile: "malgun" });
+      fs.mkdirSync(path.join(agentRequest.cwd!, "out"));
+      fs.symlinkSync(path.join(deckDir, "q3-review.pptx"), path.join(agentRequest.cwd!, "out", "final.pptx"));
+      shared = await events.onShareFile!({ path: "out/final.pptx", name: "최종.pptx" });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "덱" };
+    };
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-decklink", message: "PPT" })
+      .expect(200);
+
+    expect(shared).toMatchObject({
+      behavior: "shown",
+      previews: 2,
+      previewSource: "converter",
+      deckSidecar: { status: "loaded", profile: "malgun" },
+    });
+    expect(vi.mocked(renderDocumentPreviews).mock.calls.length).toBe(0);
+  });
+
+  it("reports a rejected sidecar and keeps the non-pptx shares sidecar-free", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "deckbad").expect(201)).body.user.id as string;
+    H.previewPages = []; // no LibreOffice toolchain either
+
+    let deck!: FileOutputResult;
+    let pdf!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      const deckDir = writeConverterDeck(agentRequest.cwd!, "q3-review", SLIDES);
+      // A render rewritten after the manifest: the whole set is rejected.
+      fs.writeFileSync(path.join(deckDir, "q3-review.preview", "slide-02.jpg"), Buffer.concat([JPEG_BYTES, Buffer.from("x")]));
+      fs.writeFileSync(path.join(agentRequest.cwd!, "report.pdf"), PDF_BYTES);
+      deck = await events.onShareFile!({ path: "q3-review/q3-review.pptx" });
+      pdf = await events.onShareFile!({ path: "report.pdf" });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "문서" };
+    };
+
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-deckbad", message: "PPT" })
+      .expect(200);
+
+    expect(deck).toMatchObject({
+      behavior: "shown",
+      previews: 0,
+      deckSidecar: { status: "invalid", detail: "slide 2's render does not match its sha256" },
+    });
+    expect(deck).not.toHaveProperty("previewSource");
+    expect(pdf).toMatchObject({ behavior: "shown", previews: 0 });
+    expect(pdf).not.toHaveProperty("deckSidecar");
+    // Only the two download cards: no partial set of agent renders.
+    expect(parseSse(res.text).filter((f) => f.event === "file")).toHaveLength(2);
+  });
+
+  it("falls back cleanly when the renders cannot be stored", async () => {
+    const { app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "deckdisk").expect(201)).body.user.id as string;
+    H.previewPages = [];
+    vi.mocked(renderDocumentPreviews).mockClear();
+    // Block the conversation's image dir with a FILE: every hidden-image write fails.
+    fs.mkdirSync(path.join(config.dataDir, "chat-images"), { recursive: true });
+    fs.writeFileSync(chatImagesDir(config, "conv-deckdisk"), "not a directory");
+
+    let shared!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      writeConverterDeck(agentRequest.cwd!, "q3-review", SLIDES);
+      shared = await events.onShareFile!({ path: "q3-review/q3-review.pptx" });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "덱" };
+    };
+
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-deckdisk", message: "PPT" })
+      .expect(200);
+
+    // The card still lands; the sidecar was valid, but nothing could be
+    // attached, so the LibreOffice pass ran (and produced nothing here).
+    expect(shared).toMatchObject({ behavior: "shown", previews: 0, deckSidecar: { status: "loaded" } });
+    expect(shared).not.toHaveProperty("previewSource");
+    expect(vi.mocked(renderDocumentPreviews).mock.calls.length).toBe(1);
+    expect(parseSse(res.text).filter((f) => f.event === "file")).toHaveLength(1);
+  });
 });
 
 describe("SDK-native background phase", () => {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/server/types.js";
 import {
   decodeChatImages,
@@ -231,6 +231,193 @@ describe("chatImages", () => {
     expect(publishWorkspaceImage(config(), "conv-safe", "../outside.png", [workspace])).toEqual({ error: "OUTSIDE_WORKSPACE" });
     expect(publishWorkspaceImage(config(), "conv-safe", "text.png", [workspace])).toEqual({ error: "UNSUPPORTED" });
     expect(publishWorkspaceImage(config(), "conv-safe", "huge.png", [workspace])).toEqual({ error: "TOO_LARGE" });
+  });
+});
+
+// ---- async workspace reads (share_file's deck-preview loader) ----
+import { execFileSync } from "node:child_process";
+import {
+  MAX_CHAT_IMAGE_BYTES,
+  readRegularFileAsync,
+  readWorkspaceImage,
+  readWorkspaceImageAsync,
+} from "../src/server/chatImages.js";
+
+describe("readWorkspaceImageAsync", () => {
+  let root: string;
+  const getTempDir = withTempDir("chat-images-async", () => {
+    root = getTempDir();
+  });
+  const png = () => Buffer.from(PNG_B64, "base64");
+
+  /** Both readers on the same input; the async one must agree with the sync one exactly. */
+  async function both(allowedRoots: string[], inputPath: string) {
+    const sync = readWorkspaceImage(allowedRoots, inputPath);
+    const async = await readWorkspaceImageAsync(allowedRoots, inputPath);
+    expect(async).toEqual(sync);
+    return async;
+  }
+
+  it("reads the same bytes, sniffed type and realpath as the sync reader", async () => {
+    const ws = path.join(root, "ws");
+    fs.mkdirSync(path.join(ws, "renders"), { recursive: true });
+    fs.writeFileSync(path.join(ws, "renders", "slide.bin"), png());
+    fs.symlinkSync(path.join(ws, "renders", "slide.bin"), path.join(ws, "link.png"));
+
+    const direct = await both([ws], "renders/slide.bin");
+    expect(direct).toMatchObject({ mediaType: "image/png", sourcePath: fs.realpathSync(path.join(ws, "renders", "slide.bin")) });
+    expect("buffer" in direct && direct.buffer.equals(png())).toBe(true);
+    // Absolute path, a symlink inside the root, and an unresolvable extra root.
+    await both([path.join(root, "gone"), ws], path.join(ws, "renders", "slide.bin"));
+    expect(await both([ws], "link.png")).toMatchObject({ sourcePath: fs.realpathSync(path.join(ws, "renders", "slide.bin")) });
+  });
+
+  it("agrees with the sync reader on every error code", async () => {
+    const ws = path.join(root, "ws");
+    fs.mkdirSync(path.join(ws, "folder.png"), { recursive: true });
+    fs.writeFileSync(path.join(root, "outside.png"), png());
+    fs.symlinkSync(path.join(root, "outside.png"), path.join(ws, "escape.png"));
+    fs.writeFileSync(path.join(ws, "empty.png"), "");
+    fs.writeFileSync(path.join(ws, "huge.png"), Buffer.alloc(MAX_CHAT_IMAGE_BYTES + 1));
+    fs.writeFileSync(path.join(ws, "text.png"), "not an image");
+    fs.symlinkSync(path.join(ws, "loop-b.png"), path.join(ws, "loop-a.png"));
+    fs.symlinkSync(path.join(ws, "loop-a.png"), path.join(ws, "loop-b.png"));
+
+    const cases: [string[], string, string][] = [
+      [[], "anything.png", "OUTSIDE_WORKSPACE"],
+      [[path.join(root, "gone")], "anything.png", "OUTSIDE_WORKSPACE"],
+      [[ws], "../outside.png", "OUTSIDE_WORKSPACE"],
+      [[ws], path.join(root, "outside.png"), "OUTSIDE_WORKSPACE"],
+      [[ws], "escape.png", "OUTSIDE_WORKSPACE"],
+      [[ws], "ghost.png", "NOT_FOUND"],
+      [[ws], "folder.png", "NOT_FILE"],
+      [[ws], "empty.png", "EMPTY"],
+      [[ws], "huge.png", "TOO_LARGE"],
+      [[ws], "text.png", "UNSUPPORTED"],
+      [[ws], "loop-a.png", "READ_FAILED"],
+      [[ws], "empty.png/child.png", "READ_FAILED"],
+    ];
+    for (const [roots, input, code] of cases) {
+      expect(await both(roots, input), `${input} under ${roots.join(",")}`).toEqual({ error: code });
+    }
+  });
+
+  it.runIf(process.platform === "linux")("agrees on a FIFO (NOT_FILE) without blocking on it", async () => {
+    const ws = path.join(root, "ws");
+    fs.mkdirSync(ws);
+    execFileSync("mkfifo", [path.join(ws, "pipe.png")]);
+    expect(await both([ws], "pipe.png")).toEqual({ error: "NOT_FILE" });
+  });
+
+  it.runIf(typeof process.getuid === "function" && process.getuid() !== 0)(
+    "agrees on an unreadable file (READ_FAILED)",
+    async () => {
+      const ws = path.join(root, "ws");
+      fs.mkdirSync(ws);
+      const locked = path.join(ws, "locked.png");
+      fs.writeFileSync(locked, png());
+      fs.chmodSync(locked, 0o000);
+      try {
+        expect(await both([ws], "locked.png")).toEqual({ error: "READ_FAILED" });
+      } finally {
+        fs.chmodSync(locked, 0o600);
+      }
+    },
+  );
+});
+
+describe("readRegularFileAsync", () => {
+  let root: string;
+  const getTempDir = withTempDir("chat-images-regular", () => {
+    root = getTempDir();
+  });
+
+  it("returns the bytes of a regular file within the cap", async () => {
+    const file = path.join(root, "manifest.json");
+    fs.writeFileSync(file, '{"ok":true}');
+    const read = await readRegularFileAsync(file, 64);
+    expect("buffer" in read && read.buffer.toString("utf8")).toBe('{"ok":true}');
+  });
+
+  it("refuses oversized, empty, missing, directory and final-symlink paths", async () => {
+    const file = path.join(root, "big.json");
+    fs.writeFileSync(file, "x".repeat(65));
+    expect(await readRegularFileAsync(file, 64)).toEqual({ error: "TOO_LARGE" });
+    expect(await readRegularFileAsync(file, 65)).toMatchObject({ buffer: expect.any(Buffer) });
+
+    fs.writeFileSync(path.join(root, "empty.json"), "");
+    expect(await readRegularFileAsync(path.join(root, "empty.json"), 64)).toEqual({ error: "EMPTY" });
+    expect(await readRegularFileAsync(path.join(root, "ghost.json"), 64)).toEqual({ error: "READ_FAILED" });
+    fs.mkdirSync(path.join(root, "dir.json"));
+    expect(await readRegularFileAsync(path.join(root, "dir.json"), 64)).toEqual({ error: "NOT_FILE" });
+    // Callers pass a realpath: a symlink in the final component means it was
+    // swapped in after their checks, so it is refused rather than followed.
+    fs.symlinkSync(file, path.join(root, "swapped.json"));
+    expect(await readRegularFileAsync(path.join(root, "swapped.json"), 1024)).toEqual({ error: "READ_FAILED" });
+  });
+
+  it.runIf(process.platform === "linux")("refuses a FIFO without waiting for a writer", async () => {
+    const fifo = path.join(root, "manifest.json");
+    execFileSync("mkfifo", [fifo]);
+    expect(await readRegularFileAsync(fifo, 1024)).toEqual({ error: "NOT_FILE" });
+  });
+
+  describe("when the file changes between the descriptor stat and the read", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /** Open for real, but run `mutate` right after the handle reports its size. */
+    function mutateAfterStat(mutate: () => void, readFails = false) {
+      const realOpen = fs.promises.open;
+      vi.spyOn(fs.promises, "open").mockImplementationOnce(async (file, flags) => {
+        const handle = await realOpen(file, flags);
+        const realStat = handle.stat.bind(handle);
+        handle.stat = (async () => {
+          const stat = await realStat();
+          mutate();
+          return stat;
+        }) as typeof handle.stat;
+        if (readFails) {
+          handle.read = (async () => {
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          }) as typeof handle.read;
+        }
+        return handle;
+      });
+    }
+
+    it("never returns more than the size it checked (growth = READ_FAILED)", async () => {
+      const file = path.join(root, "grow.json");
+      fs.writeFileSync(file, '{"a":1}');
+      mutateAfterStat(() => fs.appendFileSync(file, "x".repeat(4096)));
+      expect(await readRegularFileAsync(file, 64)).toEqual({ error: "READ_FAILED" });
+    });
+
+    it("returns what is left after a shrink, and EMPTY once nothing is", async () => {
+      const file = path.join(root, "shrink.json");
+      fs.writeFileSync(file, "abcdef");
+      mutateAfterStat(() => fs.truncateSync(file, 3));
+      const read = await readRegularFileAsync(file, 64);
+      expect("buffer" in read && read.buffer.toString("utf8")).toBe("abc");
+
+      mutateAfterStat(() => fs.truncateSync(file, 0));
+      expect(await readRegularFileAsync(file, 64)).toEqual({ error: "EMPTY" });
+    });
+
+    it("maps a failing read to READ_FAILED", async () => {
+      const file = path.join(root, "eio.json");
+      fs.writeFileSync(file, "abc");
+      mutateAfterStat(() => {}, true);
+      expect(await readRegularFileAsync(file, 64)).toEqual({ error: "READ_FAILED" });
+    });
+
+    it("maps a render that vanishes after its realpath to READ_FAILED", async () => {
+      const file = path.join(root, "slide.png");
+      fs.writeFileSync(file, Buffer.from(PNG_B64, "base64"));
+      vi.spyOn(fs.promises, "stat").mockRejectedValueOnce(Object.assign(new Error("gone"), { code: "ENOENT" }));
+      expect(await readWorkspaceImageAsync([root], "slide.png")).toEqual({ error: "READ_FAILED" });
+    });
   });
 });
 

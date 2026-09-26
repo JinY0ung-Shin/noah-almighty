@@ -1697,12 +1697,21 @@ export interface AgentRequest {
    */
   fileOutputEnabled?: boolean;
   /**
-   * The deployment image carries the PPTX rendering toolchain (LibreOffice +
-   * pdftoppm + python-pptx) AND this turn can publish files. Drives the deck
-   * standing guidance (pptx skill → slide preview → share_file). Mirrored by
-   * describe_system (META-COGNITION).
+   * The deployment image carries the LEGACY PPTX toolchain (LibreOffice +
+   * pdftoppm + python-pptx) AND this turn can publish files AND its viewer may
+   * author a deck (`deckAuthoring === "allowed"`: Bash/Write access, `pptx`
+   * skill not admin-disabled). Drives the legacy deck standing guidance
+   * (python-pptx → share_file). Mirrored by describe_system (META-COGNITION).
    */
   deckRenderingEnabled?: boolean;
+  /**
+   * The pptx skill's HTML→editable-PPTX converter is installed (boot probe,
+   * `deckToolchain.converter`) AND the same file-output + authoring conditions
+   * as `deckRenderingEnabled` hold. Selects the CONVERTER branch of the deck
+   * standing guidance, which wins when both flags are set. Mirrored by
+   * describe_system's `converter: INSTALLED` deck line (META-COGNITION).
+   */
+  deckConverterEnabled?: boolean;
   /**
    * Whether the active model accepts image input. `false` injects the
    * no-vision standing warning (image/PDF Read blocked, uploads disabled);

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>02 문단·목록·노트 · 기능 점검 덱</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  .wrap-card { position: absolute; left: var(--margin-x); top: var(--content-top); width: 520px; padding: var(--sp-4); }
+  .wrap-text { margin-top: var(--sp-2); font-size: var(--fs-body); line-height: var(--lh-body); color: var(--c-ink-700); }
+  .list-card { position: absolute; left: 632px; top: var(--content-top); width: 568px; padding: var(--sp-4); }
+  .list-card .insights { margin-top: var(--sp-2); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow">02 본문 서식</p>
+    <h1 class="slide-title">긴 문단과 목록, 발표자 노트</h1>
+  </header>
+
+  <section class="card wrap-card">
+    <p class="card-title">자동 줄바꿈 문단</p>
+    <p class="wrap-text">이 문단에는 줄바꿈 태그가 없습니다. 변환기는 브라우저가 나눈 줄을 측정해 PowerPoint가 같은 자리에서 줄을 바꾸도록 글상자 폭을 고르고, 그런 폭이 없으면 브라우저의 줄바꿈 위치를 강제 줄바꿈으로 옮깁니다.</p>
+  </section>
+
+  <section class="card list-card">
+    <p class="card-title">글머리 기호 목록</p>
+    <ul class="insights">
+      <li>목록 전체가 글상자 하나가 됩니다</li>
+      <li>항목마다 글머리 기호 문단이 됩니다</li>
+      <li>항목 사이 간격은 문단 앞 간격이 됩니다</li>
+    </ul>
+  </section>
+
+  <footer class="slide-footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">기능 점검 덱</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">셀프 테스트용 예시</p>
+      <p class="page-num" data-field="slidenum">2</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">첫째 문단: 이 슬라이드는 자동 줄바꿈 문단과 글머리 기호 목록, 발표자 노트를 점검합니다.
+둘째 문단: 노트는 두 문단으로 들어가고, 노트 마스터가 프레젠테이션 목록에 올라갑니다.</template>
+</body>
+</html>

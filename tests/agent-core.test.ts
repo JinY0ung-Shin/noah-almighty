@@ -118,6 +118,7 @@ import {
   SDK_UI_HANDLED_TOOLS,
 } from "../src/shared/sdkToolPresentation.js";
 import { emptyOwnerState, summarizeOwnerState } from "../src/server/agent/ownerState.js";
+import { deckAuthoringStatusFor, deckGuidanceFlags } from "../src/server/deckRender.js";
 import { executeRoutineJob } from "../src/server/scheduler.js";
 import {
   formatMinuteOfDay,
@@ -191,7 +192,7 @@ import {
 } from "../src/server/agent/confluenceTools.js";
 import { generateSshKeyPair } from "../src/server/sshIdentity.js";
 import { workspaceDirFor } from "../src/server/workspace.js";
-import type { AppConfig, Plugin } from "../src/server/types.js";
+import type { AgentRequest, AppConfig, Plugin } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
   normalizeHexSshToolPolicy,
@@ -296,7 +297,13 @@ describe("chat slash commands", () => {
         "the extension never runs JavaScript on their pages",
       ],
       capture: ["Step 3 — recall it back, out loud", "기억 → 회상 → 위임"],
-      pptx: ["keep the deck SMALL: 3-4 slides"],
+      // The converter-only steps key on describe_system's I12 marker, never
+      // on prose, so a legacy deployment's tour stays truthful.
+      pptx: [
+        "keep the deck SMALL: 3-4 slides",
+        "when describe_system reports `converter: INSTALLED`",
+        "for a converter-built deck, edit the slide HTML and rebuild",
+      ],
       skill: [
         "the skill loads from the NEXT conversation",
         "`mcp__repo__scaffold_skill`",
@@ -4367,6 +4374,97 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("`pptx` skill");
     expect(prompt).toContain("hidden:true");
     expect(prompt).toContain("mcp__file_output__share_file");
+  });
+
+  // The legacy deck section as it shipped before the converter: the plan keeps
+  // it byte-for-byte for deployments without the converter.
+  const LEGACY_DECK_SECTION =
+    "**PowerPoint decks**: when the user asks for a presentation/PPT/slide deck (or to edit a .pptx you can reach), use the `pptx` skill — author with python-pptx, then deliver with `mcp__file_output__share_file`. " +
+    "Delivery previews are AUTOMATIC: share_file renders the slides server-side into the file card's side panel, so do NOT rasterize or publish slide images just to deliver. " +
+    "Render slides yourself (soffice → pdftoppm, see the skill) only for MID-WORK needs: self-checking layout by Reading a PNG, or an interactive canvas review — publish those with `show_file` + `hidden:true` and embed the returned URLs in ONE canvas artifact.";
+
+  it("keeps the legacy deck section byte-for-byte when only the legacy toolchain is enabled", () => {
+    const prompt = buildPrompt(req({ viewerIsOwner: true, fileOutputEnabled: true, deckRenderingEnabled: true }), 0);
+    expect(prompt).toContain(LEGACY_DECK_SECTION);
+    expect(prompt).not.toContain("edit its HTML");
+  });
+
+  it("injects the converter deck section when the converter is enabled", () => {
+    const prompt = buildPrompt(req({ viewerIsOwner: true, fileOutputEnabled: true, deckConverterEnabled: true }), 0);
+    // The I10 pins every deck section carries…
+    expect(prompt).toContain("PowerPoint decks");
+    expect(prompt).toContain("`pptx` skill");
+    expect(prompt).toContain("hidden:true");
+    expect(prompt).toContain("mcp__file_output__share_file");
+    // …plus the converter workflow: HTML → one build → share the built file in place.
+    expect(prompt).toContain("IN PLACE");
+    expect(prompt).toContain("edit its HTML");
+    expect(prompt).toContain("in the user's language");
+    expect(prompt).toContain("never patch the .pptx");
+    expect(prompt).toContain("python-pptx is only for an EXISTING .pptx or a user template");
+    expect(prompt).not.toContain("author with python-pptx, then deliver");
+    // Appendix A.1: ONE paragraph, no line breaks inside it.
+    const section = prompt.slice(prompt.indexOf("**PowerPoint decks**"));
+    const paragraph = section.split("\n")[0];
+    expect(paragraph).toContain("into ONE canvas artifact.");
+    expect(paragraph.length).toBeGreaterThan(700);
+    expect(paragraph.length).toBeLessThan(900);
+  });
+
+  it("lets the converter section win when both deck flags are set, and drops both when neither is", () => {
+    const both = buildPrompt(
+      req({ viewerIsOwner: true, fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true }),
+      0,
+    );
+    expect(both).toContain("edit its HTML");
+    expect(both).not.toContain(LEGACY_DECK_SECTION);
+    expect(both.match(/\*\*PowerPoint decks\*\*/g)).toHaveLength(1);
+
+    const neither = buildPrompt(req({ viewerIsOwner: true, fileOutputEnabled: true }), 0);
+    expect(neither).not.toContain("PowerPoint decks");
+    expect(neither).not.toContain("edit its HTML");
+  });
+
+  it("gives deck guidance only to a viewer who may author: not a plain colleague, not an admin-disabled pptx", () => {
+    // The runtime computes the prompt flags exactly this way (claudeAgent via
+    // deckGuidanceFlags), from the same tool-access derivation the PreToolUse
+    // hook's Bash/Write gate uses.
+    const pptxSkillNames = ["pptx", "avatar-defaults:pptx"];
+    const promptFor = (over: Partial<AgentRequest>, disabledSkills: string[] = []) => {
+      const request: AgentRequest = { message: "PPT 만들어줘", avatar: avatar(), ...over };
+      const { elevatedToolAccess } = deriveAgentToolAccess(request);
+      const deckAuthoring = deckAuthoringStatusFor({ elevatedToolAccess, disabledSkills, pptxSkillNames });
+      const flags = deckGuidanceFlags({
+        deckRenderingAvailable: true,
+        deckConverterInstalled: true,
+        fileOutputActive: true,
+        deckAuthoring,
+      });
+      return { deckAuthoring, prompt: buildPrompt(req({ ...over, fileOutputEnabled: true, ...flags }), 0) };
+    };
+
+    const owner = promptFor({ viewerIsOwner: true });
+    expect(owner.deckAuthoring).toBe("allowed");
+    expect(owner.prompt).toContain("edit its HTML");
+
+    // A trusted teammate has Bash/Write through the owner's avatar.
+    const trusted = promptFor({ viewerIsOwner: false, elevated: true });
+    expect(trusted.deckAuthoring).toBe("allowed");
+    expect(trusted.prompt).toContain("PowerPoint decks");
+
+    // A plain colleague is read-only: no deck section in either branch.
+    const colleague = promptFor({ viewerIsOwner: false });
+    expect(colleague.deckAuthoring).toBe("read-only");
+    expect(colleague.prompt).not.toContain("PowerPoint decks");
+
+    // An admin-disabled pptx skill (bare or plugin-qualified) silences it too…
+    for (const disabled of [["pptx"], ["avatar-defaults:pptx"]]) {
+      const off = promptFor({ viewerIsOwner: true }, disabled);
+      expect(off.deckAuthoring).toBe("skill-disabled");
+      expect(off.prompt).not.toContain("PowerPoint decks");
+    }
+    // …but another plugin's `pptx` skill is a different skill.
+    expect(promptFor({ viewerIsOwner: true }, ["other:pptx"]).prompt).toContain("PowerPoint decks");
   });
 
   it("injects draw.io diagram guidance whenever file output is active", () => {

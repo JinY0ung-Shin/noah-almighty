@@ -14,9 +14,12 @@ ARG NPM_CONFIG_REGISTRY=
 # registration (the image has no ssh-keygen/ssh-keyscan); installed via apt to
 # avoid PEP 668 pip restrictions on Debian and to resolve through the apt mirror.
 #
-# libreoffice-impress + poppler-utils back the pptx skill's slide rendering:
-# soffice --headless converts pptx->pdf, then pdftoppm renders pdf->png, with
-# fonts-nanum supplying Korean fonts so Hangul renders in headless conversions.
+# libreoffice-impress + poppler-utils back the server's APPROXIMATE document
+# previews (share_file) and the pptx skill's render_deck.sh: soffice --headless
+# converts pptx/docx/xlsx->pdf, then pdftoppm renders pdf->png, with fonts-nanum
+# supplying Korean fonts so Hangul renders in headless conversions. Decks built
+# by the skill's converter carry their own exact renders (see the converter
+# layers below); LibreOffice previews those only after the .pptx was edited.
 COPY docker/apt_mirror_sources.sh /usr/local/bin/apt_mirror_sources.sh
 RUN sh /usr/local/bin/apt_mirror_sources.sh \
   && apt-get update \
@@ -84,24 +87,49 @@ RUN case "$TARGETARCH" in \
   && uv --version \
   && uvx --version
 
-# python-pptx is the library the pptx skill uses to build .pptx decks. It is
-# NOT packaged in Debian bookworm, so apt can't provide it, hence pip with
-# --break-system-packages, which overrides PEP 668's externally-managed guard
-# for this ONE library (system python; no venv in this image).
-# PIP_INDEX_URL / PIP_TRUSTED_HOST follow the NPM_CONFIG_REGISTRY pattern above
-# (empty = upstream PyPI); --trusted-host is added only when set, for an HTTP
-# mirror with a self-signed cert. The trailing self-test asserts soffice,
-# pdftoppm, and the pptx module are present so a broken mirror fails the build.
+# fontconfig + the Chromium headless shell back the pptx skill's HTML→editable-PPTX
+# converter (default-skills/skills/pptx/converter; docs/architecture/pptx-converter.md).
+# Its own layer AFTER uv, so the cached base apt, CA and uv layers survive. The first
+# layer's apt_mirror_sources.sh rewrote /etc/apt/sources.list.d/debian.sources in
+# place and that file persists, so this apt run goes through the same mirror — which
+# must serve chromium-headless-shell + chromium-common (bookworm-security, or bookworm
+# main) and their ~70 dependencies. chromium-headless-shell, not `chromium`: no
+# GTK3/dbus/systemd and ~155 MB smaller; the converter drives
+# /usr/lib/chromium/chromium-headless-shell directly, bypassing Debian's /usr/bin
+# wrapper (and its /etc/chromium.d). fontconfig is installed explicitly because the
+# font registration below needs fc-cache (libreoffice-core happens to pull it in today).
+# DECK_CONVERTER=0 builds a legacy image without Chromium (and without the self-test):
+# the pptx skill then falls back to python-pptx, and the probe reports why.
+ARG DECK_CONVERTER=1
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends fontconfig $( [ "$DECK_CONVERTER" != "0" ] && echo chromium-headless-shell ) \
+  && apt-get clean && rm -rf /var/lib/apt/lists/* \
+  && command -v fc-cache \
+  && { [ "$DECK_CONVERTER" = "0" ] || /usr/lib/chromium/chromium-headless-shell --version; }
+
+# The pptx skill's Python set, PINNED in default-skills/skills/pptx/converter/requirements.txt
+# (python-pptx, lxml, Pillow, XlsxWriter, fonttools, defusedxml, openpyxl + their pinned
+# deps). Installed regardless of DECK_CONVERTER: python-pptx is the legacy path too.
+# python-pptx is NOT packaged in Debian bookworm and apt's python3-fonttools would drag in
+# ~664 MB of scipy & co., hence pip with --break-system-packages, which overrides PEP 668's
+# externally-managed guard for this pinned set (system python; no venv in this image).
+# PIP_INDEX_URL / PIP_TRUSTED_HOST follow the NPM_CONFIG_REGISTRY pattern above (empty =
+# upstream PyPI); --trusted-host is added only when set, for an HTTP mirror with a
+# self-signed cert. The mirror must carry every pinned version for CPython 3.11. The
+# trailing self-test asserts soffice, pdftoppm and every module the skill imports, so a
+# broken mirror fails the build here.
 ARG PIP_INDEX_URL=
 ARG PIP_TRUSTED_HOST=
+COPY default-skills/skills/pptx/converter/requirements.txt /tmp/deck-requirements.txt
 RUN if [ -n "$PIP_INDEX_URL" ]; then \
-      pip3 install --break-system-packages --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} python-pptx; \
+      pip3 install --break-system-packages --no-cache-dir --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt; \
     else \
-      pip3 install --break-system-packages python-pptx; \
+      pip3 install --break-system-packages --no-cache-dir -r /tmp/deck-requirements.txt; \
     fi \
+  && rm -f /tmp/deck-requirements.txt \
   && soffice --version \
   && command -v pdftoppm \
-  && python3 -c "import pptx"
+  && python3 -c "import pptx, lxml, PIL, fontTools, defusedxml, openpyxl, xlsxwriter"
 
 # Always use npm install (not npm ci) so the build doesn't fail when the lock
 # file drifts out of sync with package.json, and so a corporate mirror can
@@ -147,6 +175,39 @@ RUN if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
 
 COPY . .
 RUN npm run build
+
+# Deck converter wiring, after COPY so it sees the skill tree (read-only at runtime):
+# 1. register the vendored OFL fonts with fontconfig for LibreOffice's fallback previews
+#    (docker/fontconfig/60-noah-deck-fonts.conf: Pretendard, Gothic A1, Selawik — never the
+#    NotoSansKR variable font — plus a 맑은 고딕/Malgun Gothic alias);
+# 2. precompile the converter's Python with the image's python3 (a syntax error fails here);
+# 3. run the converter's self-test (two frozen decks × both font profiles, ~40 s) as the
+#    build's gate: an integrity failure FAILS the build, while golden drift (the image's
+#    Chromium laying the reference decks out differently from the committed goldens) is
+#    RECORDED in deck-selftest.json — reported by `deck.sh probe`, the boot log and
+#    describe_system — unless DECK_CONVERTER_STRICT_GOLDEN=1 makes it fatal
+#    (README.md#deck-converter-golden-drift). Drift is not fatal by default so that the next
+#    Chromium security update cannot block every unrelated deploy.
+# The self-test runs as root with TMPDIR and HOME pointed at a throwaway dir removed in the
+# same RUN, and the last line fails the build if anything leaked into /tmp that the
+# unprivileged `node` user could later trip over. The converter's locks are abstract UNIX
+# sockets and never touch the filesystem. DECK_CONVERTER=0 writes a "disabled" record.
+ARG DECK_CONVERTER_STRICT_GOLDEN=0
+RUN cp docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/ \
+  && fc-cache -f >/dev/null && fc-list | grep -q Pretendard \
+  && python3 -m compileall -q default-skills/skills/pptx/converter/tools \
+  && mkdir -p /usr/local/share/noah-almighty \
+  && if [ "$DECK_CONVERTER" != "0" ]; then \
+       T="$(mktemp -d)"; \
+       TMPDIR="$T" HOME="$T" node default-skills/skills/pptx/converter/tools/deck.mjs selftest \
+         --record /usr/local/share/noah-almighty/deck-selftest.json \
+         $( [ "$DECK_CONVERTER_STRICT_GOLDEN" = "1" ] && echo --fail-on-drift ); rc=$?; \
+       rm -rf "$T"; [ "$rc" -eq 0 ]; \
+     else \
+       printf '{"format":"noah-deck-selftest-record","version":1,"status":"disabled"}\n' \
+         > /usr/local/share/noah-almighty/deck-selftest.json; \
+     fi \
+  && ! ls -A /tmp | grep -Eq '^(noah-pptx|playwright|deck-)'
 
 # uv was installed into /root during the base layer, then COPIED (not symlinked)
 # to /usr/local/bin/uv so the unprivileged `node` user can execute it — a symlink

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>03 사업부별 실적 · 2026년 3분기 사업 실적 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* header = eyebrow + title + subtitle (168): content starts 32 px below it (slides 2/4: 44 px below the title) */
+  .data-table { position: absolute; left: var(--margin-x); top: 200px; }
+  .data-table td { padding-top: 14px; padding-bottom: 14px; }
+  .data-table tr.is-total td { padding-top: 16px; padding-bottom: 16px; }
+  /* label column sized to its longest label with >= 30 % free width in the wider malgun profile (AUTHORING §8.9;
+     the check lists cells under that), numbers on an even 168 px pitch: 280 + 5 x 168 = 1120 */
+  .data-table col.c-unit   { width: 280px; }
+  .data-table col.c-num    { width: 168px; }
+  .data-table col.c-margin { width: 168px; }
+  .data-table td.is-key  { font-weight: 600; color: var(--c-ink-900); }
+  .data-table td.is-prev { color: var(--c-ink-500); }
+  .data-table tr.is-total td.is-key,
+  .data-table tr.is-total td.is-prev { font-weight: 700; color: var(--c-ink-900); }
+  .notes { position: absolute; left: var(--margin-x); top: 600px; width: var(--content-w);
+           display: flex; justify-content: space-between; align-items: flex-start; }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">02</span> 사업부별 실적</p>
+    <div class="title-row">
+      <h1 class="slide-title">클라우드 서비스가 전사 성장을 견인</h1>
+      <p class="pill pill--outline period">2026년 3분기 · 전년 동기 대비</p>
+    </div>
+    <p class="slide-sub">전사 매출 증가분 142억 원 중 <strong>110억 원(77%)</strong>이 클라우드에서 발생 · 매출 비중 <strong>39.9%</strong>(+4.7%p)</p>
+  </header>
+
+  <table class="data-table">
+    <colgroup>
+      <col class="c-unit"><col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num"><col class="c-margin">
+    </colgroup>
+    <thead>
+      <tr><th>사업부</th><th>3분기 매출</th><th>전년 동기</th><th>증감률</th><th>영업이익</th><th>영업이익률</th></tr>
+    </thead>
+    <tbody>
+      <tr class="is-highlight"><td>클라우드 서비스</td><td class="is-key">512</td><td class="is-prev">402</td><td><span class="up">+27.4%</span></td><td>98</td><td>19.1%</td></tr>
+      <tr><td>엔터프라이즈 솔루션</td><td class="is-key">318</td><td class="is-prev">311</td><td><span class="up">+2.3%</span></td><td>41</td><td>12.9%</td></tr>
+      <tr><td>스마트 제조</td><td class="is-key">227</td><td class="is-prev">208</td><td><span class="up">+9.1%</span></td><td>29</td><td>12.8%</td></tr>
+      <tr><td>금융 IT</td><td class="is-key">164</td><td class="is-prev">172</td><td><span class="down">–4.7%</span></td><td>16</td><td>9.8%</td></tr>
+      <tr><td>AI·데이터 신사업</td><td class="is-key">63</td><td class="is-prev">49</td><td><span class="up">+28.6%</span></td><td>2</td><td>3.2%</td></tr>
+      <tr class="is-total"><td>합계</td><td class="is-key">1,284</td><td class="is-prev">1,142</td><td><span class="up">+12.4%</span></td><td>186</td><td>14.5%</td></tr>
+    </tbody>
+  </table>
+
+  <div class="notes">
+    <p class="footnote">단위: 억 원 · 증감률은 전년 동기 대비 · 영업이익률 = 영업이익 ÷ 매출액</p>
+    <p class="footnote">금융 IT는 대형 프로젝트 종료 영향으로 역성장</p>
+  </div>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 3분기 사업 실적 보고</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">3</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

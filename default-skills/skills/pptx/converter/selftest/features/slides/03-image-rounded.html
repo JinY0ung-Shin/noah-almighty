@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>03 그림 · 기능 점검 덱</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  .figure-card { position: absolute; left: var(--margin-x); top: var(--content-top); width: 544px; padding: var(--sp-4); }
+  .figure { display: block; width: 480px; height: 320px; border-radius: var(--radius-box); object-fit: cover; }
+  .figure-card .caption { margin-top: var(--sp-2); }
+  .icon-card { position: absolute; left: 656px; top: var(--content-top); width: 544px; padding: var(--sp-4); }
+  .icon-card .card-title { margin-top: var(--sp-2); }
+  .icon-card .caption { margin-top: var(--sp-1); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow">03 그림</p>
+    <h1 class="slide-title">둥근 모서리 그림과 SVG 아이콘</h1>
+  </header>
+
+  <section class="card figure-card">
+    <img class="figure" src="../assets/rounded.png" alt="청록색에서 파란색으로 바뀌는 추상 그림 (합성 이미지)">
+    <p class="caption">둥근 모서리는 투명 PNG에 그려 넣습니다</p>
+  </section>
+
+  <section class="card icon-card">
+    <div class="icon-badge">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0E7C66" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    </div>
+    <p class="card-title">SVG 아이콘</p>
+    <p class="caption">단순한 아이콘은 원본 SVG와<br>PNG 대체 이미지로 함께 들어갑니다</p>
+  </section>
+
+  <footer class="slide-footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">기능 점검 덱</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">셀프 테스트용 예시</p>
+      <p class="page-num" data-field="slidenum">3</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

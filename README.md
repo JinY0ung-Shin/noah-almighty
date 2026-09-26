@@ -36,9 +36,13 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
 - **Delegation loop**: grow your avatar by turning repeated work, project rules, runbooks,
   and answers to teammate questions into skills / knowledge files / routines, then delegate
   more of that work back to the avatar over time.
-- **PowerPoint decks**: the avatar can generate PowerPoint (`.pptx`) presentations, preview the
-  rendered slides in the chat (in the canvas side panel when enabled, inline otherwise), and hand
-  over the finished deck as a download card.
+- **PowerPoint decks**: the avatar designs new decks as HTML/CSS slides and converts them into a
+  `.pptx` whose text boxes, shapes, tables and charts are native, editable PowerPoint objects
+  (charts keep their data for *데이터 편집*). Pretendard is embedded in the file by default; a
+  맑은 고딕 build is available on request. The deck arrives as a download card whose side panel
+  shows the converter's exact slide renders. Existing decks and user templates are edited in place
+  with python-pptx and previewed approximately by LibreOffice. Mechanics:
+  [`docs/architecture/pptx-converter.md`](docs/architecture/pptx-converter.md).
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,
   e.g. Confluence attachments) and hand them over as download cards; the chat renders them as
   interactive diagrams (zoom/pan/pages) in the file side panel, fully offline via a vendored
@@ -142,16 +146,108 @@ docker compose up --build
 ```
 
 The image includes Node.js, git, GitHub CLI (`gh`), Python 3, ripgrep, `jq`, `uv`, LibreOffice,
-poppler-utils, Korean (Nanum) fonts, and `python-pptx` (backing the avatar's PowerPoint generation).
-SQLite data and uploaded avatar images persist under `APP_DATA_DIR`. The container runs as the
-non-root `node` user.
+poppler-utils and Korean (Nanum) fonts, plus what backs the avatar's PowerPoint decks: the Chromium
+headless shell (Debian `chromium-headless-shell`, which the pptx skill's converter drives with the
+network blocked), `fontconfig`, and a pinned Python set (`python-pptx`, `lxml`, Pillow, `fonttools`,
+`defusedxml`, `openpyxl`, `XlsxWriter` — `default-skills/skills/pptx/converter/requirements.txt`).
+The converter's OFL fonts (Pretendard, Gothic A1, Selawik, Noto Sans KR) are vendored in the skill
+with their license texts and registered with fontconfig for LibreOffice's previews. The build ends
+with the converter's self-test (about 40 s). SQLite data and uploaded avatar images persist under
+`APP_DATA_DIR`. The container runs as the non-root `node` user.
 
 On a closed corporate network, optional build args (in `docker-compose.yml`, all empty by default =
 public upstreams) route installs through internal mirrors. Alongside the existing `APT_MIRROR_HOST`,
-`NPM_CONFIG_REGISTRY`, and `CA_CERT_FILE`, two cover the PyPI fetch of `python-pptx`:
+`NPM_CONFIG_REGISTRY`, and `CA_CERT_FILE`, two cover the PyPI fetch of the pinned Python set:
 
 - `PIP_INDEX_URL` — internal PyPI index URL used by `pip install` at build time.
 - `PIP_TRUSTED_HOST` — host to trust when that PyPI mirror uses HTTP or a self-signed cert.
+
+What the mirrors must serve for the deck converter:
+
+- **apt** — `chromium-headless-shell` and `chromium-common`, from `bookworm-security` (Chromium 154
+  when this was written) or `bookworm` main (150, verified to convert identically), plus about 70
+  dependencies (~132 MB of `.deb`s). `APT_MIRROR_HOST` rewrites both suites, so the mirror has to
+  proxy `/debian-security` for the newer build.
+- **PyPI** — every version pinned in `requirements.txt`, as CPython 3.11 wheels.
+- **npm** — nothing new: `playwright-core` (pinned `1.61.1`, a runtime dependency) was already in the
+  lockfile through `@playwright/test`.
+
+Two build args control the converter (compose passes them through; set them in `.env` or the shell):
+
+- `DECK_CONVERTER=0` builds a legacy image without Chromium: new decks fall back to python-pptx and
+  `describe_system` tells the avatar the converter is not installed. Use it only when the apt mirror
+  cannot serve Chromium.
+- `DECK_CONVERTER_STRICT_GOLDEN=1` makes golden drift fail the build (next section).
+
+The converter adds about 0.21 GB compressed / 0.54 GB uncompressed to the image.
+
+### Deck converter golden drift
+
+The build-time self-test converts two frozen reference decks in both font profiles.
+
+- An **integrity** failure — a gate rejects a deck, a stage crashes, the toolchain is incomplete —
+  always FAILS the build.
+- **Golden drift** — the image's Chromium lays the reference decks out differently from the committed
+  golden IR (a numeric delta beyond 0.01 px, or a changed lint/warning set) while every integrity gate
+  still passes — is RECORDED, not fatal. The build log prints
+  `deck converter selftest: DRIFT (Chromium <ver>; max Δ <x> px on <n> leaves; lint set changed: …)`,
+  the record lands in `/usr/local/share/noah-almighty/deck-selftest.json`, and the running server
+  reports it: in the `deck toolchain probe` boot log line plus a warn line, and in `describe_system`.
+  Decks keep building and passing every integrity gate; their layout may differ slightly from the
+  reference renders.
+
+Drift is not fatal by default because the apt mirror follows `bookworm-security`: the next Chromium
+security update must not be able to block every unrelated deploy. `DECK_CONVERTER_STRICT_GOLDEN=1`
+makes it fatal; the Docker smoke (`scripts/deck-docker-smoke.sh`) always treats it as fatal.
+
+When drift is recorded, maintainers:
+
+1. Render the reference decks with the image's own Chromium and open them in desktop PowerPoint
+   (opens without a repair prompt, text inside its boxes, tables and charts editable):
+   ```bash
+   IMG=noah-almighty:deck-verify   # the image that recorded the drift
+   mkdir -p /tmp/deck-drift
+   docker run --rm --network none -u "$(id -u):$(id -g)" -v /tmp/deck-drift:/out "$IMG" \
+     bash /app/default-skills/skills/pptx/scripts/deck.sh selftest --keep /out/selftest
+   ```
+2. If they look right, regenerate the goldens on a dev box —
+   `bash default-skills/skills/pptx/scripts/deck.sh selftest --update-golden` — with that SAME
+   Chromium build (point `NOAH_PPTX_CHROMIUM` at it, or run the command inside the image with the
+   checkout's converter directory bind-mounted over `/app/default-skills/skills/pptx/converter`;
+   `--update-golden` refuses a read-only skill tree), commit them, and rebuild the image.
+3. If they look wrong, keep the previous image (next section) and report the regression; do not
+   update the goldens.
+
+### Deck converter rollback
+
+Moving an EXISTING deployment to the converter image needs no DB, volume or `.env` migration and no
+new required env; uid 1000 is unchanged, and old download cards keep their stored previews. The
+compose service has no `image:` key, so `docker compose build` overwrites
+`<project>-noah-almighty:latest` — tag the running image first:
+
+1. Tag the running image for rollback:
+   ```bash
+   IMG="$(docker compose config --images noah-almighty)"
+   docker image tag "$IMG:latest" "$IMG:pre-deck"
+   ```
+2. `git pull`, then `docker compose build` with the same mirror args as before (add
+   `DECK_CONVERTER=0` only if the apt mirror cannot serve Chromium).
+   `docker compose --progress plain build` shows the self-test's output.
+3. Watch the build log for `deck converter selftest: PASS`. On `DRIFT` the build continues and the
+   drift is reported at runtime (previous section).
+4. `docker compose up -d`. The boot log shows the probe with `"mode":"converter"`:
+   `docker compose logs noah-almighty | grep 'deck toolchain probe'`.
+5. **Rollback** (same shell, `IMG` from step 1):
+   ```bash
+   docker image tag "$IMG:pre-deck" "$IMG:latest" && docker compose up -d --no-build noah-almighty
+   ```
+
+Delete the `:pre-deck` tag (`docker image rm "$IMG:pre-deck"`) once the new image has proven itself;
+until then it keeps the old image's layers on disk. Egress-overlay deployments run
+`noah-almighty:egress`, built FROM `noah-almighty:egress-base`: tag those two the same way, rebuild
+both as in [docs/egress-policy.md](docs/egress-policy.md), and roll back by re-tagging them and
+running `up -d --no-build` with both compose files. The converter needs nothing from the egress
+boundary: its Chromium only talks to loopback, which the egress firewall allows.
 
 ## Speech-to-text (optional)
 
@@ -269,7 +365,8 @@ host can run speaches/faster-whisper instead, with no code change.
 | `ROUTINE_MAX_CONCURRENT_RUNS_PER_USER` | How many of one user's routines may run at once (default `2`, same validation). Keep it below `ROUTINE_MAX_CONCURRENT_RUNS` so one user with many due routines can't take every slot. |
 | `AVATAR_TASK_TIMEOUT_MINUTES` | Wall-clock deadline for one external task API run (`POST /api/v1/avatar/tasks`; default `300` = 5 hours, minimum `1` — it cannot be disabled). Covers the whole run, including time waiting on a question and any background phase. A single pending request (question, permission, plan review or canvas input) still expires after 30 minutes without a response. |
 | `BOT_TASK_TIMEOUT_MINUTES` | Wall-clock deadline for one unattended 내 봇 run — a queued delegated task or a bot routine (default `30`, minimum `1`). Keep it short: a bot routine run holds one of the routine scheduler's slots (see `ROUTINE_MAX_CONCURRENT_RUNS`) for its whole duration, and a hung bot turn blocks its thread's queue. |
-| `DEFAULT_PLUGINS_DIR` | Path to built-in skills loaded for every avatar (default `<cwd>/default-skills`). |
+| `DEFAULT_PLUGINS_DIR` | Path to built-in skills loaded for every avatar (default `<cwd>/default-skills`). Keep it inside the app tree: the pptx skill's converter resolves `playwright-core` from the app's `node_modules`. |
+| `NOAH_PPTX_*` | Optional tuning of the pptx skill's deck converter: `NOAH_PPTX_MAX_CONCURRENT` (host-wide conversion slots, default `2` — each running conversion is one headless Chromium inside the app container), `NOAH_PPTX_SLOT_WAIT_SECONDS` (`150`), `NOAH_PPTX_MAX_SECONDS` (`540`; keep it below the agent's 600 s Bash ceiling), `NOAH_PPTX_MAX_SLIDES` (`60`), `NOAH_PPTX_CHROMIUM` / `NOAH_PPTX_PYTHON` (explicit executables), `NOAH_PPTX_SELFTEST_RECORD`. `NOAH_PPTX_DEV` and `NOAH_PPTX_LOCK_NAMESPACE` are for dev boxes and tests. See `.env.example` and [docs/architecture/pptx-converter.md](docs/architecture/pptx-converter.md). |
 | `PLUGIN_AUTO_REFRESH_MINUTES` | Minutes before an enabled avatar plugin clone is refreshed from git at chat/routine start (default `10`; `0` disables auto refresh after the first clone). |
 | `BROWSER_BRIDGE_MULTIMEDIA_NOTICE` | `true`/`1`/`on` adds a corporate-policy line to the browser-bridge install guide telling users to unpack the extension into the upload-approved **Multimedia** folder. Default: hidden. |
 | `ENV_FILE` | Override the `.env` file path loaded at startup (default `.env` in cwd). |

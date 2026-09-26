@@ -31,7 +31,11 @@ import type {
 import type { Store } from "../store.js";
 import { CLAUDE_OAUTH_TOKEN_KEY } from "../store.js";
 import type { AgentEvents, FileOutputResult } from "./events.js";
-import { probeDeckRendering } from "../deckRender.js";
+import {
+  deckAuthoringStatusFor,
+  probeDeckRendering,
+  probeDeckToolchain,
+} from "../deckRender.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { readWorkspaceImage } from "../chatImages.js";
 import {
@@ -775,10 +779,21 @@ export async function buildAgentRunPlan(
     canvasToolsEnabled &&
     Boolean(events?.onCanvas) &&
     ownerState.experimentalFeatures.includes("canvas");
-  // Deployment-level PPTX toolchain (LibreOffice/pdftoppm/python-pptx) probe —
-  // memoized per process. Deck guidance additionally needs a turn that can
-  // publish files (the preview/download path), hence the && below.
+  // Deployment-level PPTX toolchain probes — memoized per process (boot pays
+  // the spawn cost): the legacy LibreOffice/pdftoppm/python-pptx half, and the
+  // pptx skill's HTML→PPTX converter (`deck.mjs probe`), whose state rides into
+  // describe_system with the `converter: INSTALLED` / `NOT INSTALLED` markers.
+  // Deck guidance additionally needs a turn that can publish files (the
+  // preview/download path) and a viewer who may author one: deckAuthoring is
+  // the admin skill policy (the hook's exact `pptx` / `<plugin>:pptx` rule),
+  // then the same elevated-tools gate the PreToolUse hook applies to Bash.
   const deckRenderingAvailable = probeDeckRendering();
+  const deckToolchain = probeDeckToolchain(config);
+  const deckAuthoring = deckAuthoringStatusFor({
+    elevatedToolAccess,
+    disabledSkills: toolSkillPolicy.disabledSkills,
+    pptxSkillNames: deckToolchain.pptxSkillNames,
+  });
   const systemServer = buildSystemServer(store, {
     avatarUserId: request.avatar.id,
     owner,
@@ -815,6 +830,8 @@ export async function buildAgentRunPlan(
     browserEnabled: browserActive,
     canvasEnabled: canvasActive,
     deckRenderingAvailable,
+    deckToolchain,
+    deckAuthoring,
     visionEnabled: runVisionEnabled,
     toolSkillPolicy,
     // Turn PROVENANCE (META-COGNITION), mirroring buildSystemPromptAppend's
@@ -1135,6 +1152,9 @@ export async function buildAgentRunPlan(
               behavior: "error" as const,
               message: "File sharing is unavailable in this run.",
             }),
+        // share_file's description names the converter's in-place/exact-render
+        // workflow only when the deployment actually has the converter.
+        deckConverterInstalled: deckToolchain.converter,
       })
     : null;
 
@@ -1644,6 +1664,8 @@ export async function buildAgentRunPlan(
     fileOutputActive,
     skillExchangeActive,
     deckRenderingAvailable,
+    deckToolchain,
+    deckAuthoring,
   };
 }
 

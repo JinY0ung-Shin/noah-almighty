@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>02 첫 주 일정 · 2026년 신입사원 온보딩 가이드</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* A week grid as ONE native table (words, not figures: .data-table--text left-aligns every column), so the user
+     edits a session in PowerPoint's table like any other. The kind of session is the cell fill (brand-50 = the
+     company-wide programme, white = the team's own, accent-100 = the one key meeting), named in a legend below.
+     Cells stay on one line with >= 30 % free width in the wider malgun profile: 120 + 5 x 200 = 1120 px. */
+  .week { position: absolute; left: var(--margin-x); top: 200px; }
+  .week col.c-time { width: 120px; }
+  .week col.c-day  { width: 200px; }
+  .week th { padding: 14px 14px; }
+  .week td { padding: 16px 14px; font-size: 15px; line-height: 20px; }
+  .week td:first-child { font-weight: 600; color: var(--c-ink-500); }
+  .week td.is-common { background: var(--c-brand-50); }
+  .week td.is-key { background: var(--c-accent-100); font-weight: 700; color: var(--c-ink-900); }
+  .week td strong { color: var(--c-brand-700); }
+
+  .below { position: absolute; left: var(--margin-x); top: 590px; width: var(--content-w);
+           display: flex; align-items: center; justify-content: space-between; }
+  .kinds { display: flex; align-items: center; gap: var(--sp-3); }
+  .kinds .swatch { border: 1px solid var(--c-ink-300); }
+  .swatch.is-common { background: var(--c-brand-50); border-color: var(--c-brand-300); }
+  .swatch.is-team { background: var(--c-white); }
+  .swatch.is-key { background: var(--c-accent-100); border-color: var(--c-accent-600); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">02</span> 첫 주 일정</p>
+    <div class="title-row">
+      <h1 class="slide-title">첫 이틀은 전사 교육, 수요일부터 팀 적응</h1>
+      <p class="pill pill--outline period">입사 첫 주 · 월~금</p>
+    </div>
+    <p class="slide-sub">필수 교육 3종은 <strong>화요일</strong>에 모두 마치고, <strong>금요일 팀장 1:1 면담</strong>으로 첫 주를 정리합니다</p>
+  </header>
+
+  <table class="data-table data-table--text week">
+    <colgroup>
+      <col class="c-time"><col class="c-day"><col class="c-day"><col class="c-day"><col class="c-day"><col class="c-day">
+    </colgroup>
+    <thead>
+      <tr><th>시간</th><th>월 · 1일 차</th><th>화 · 2일 차</th><th>수 · 3일 차</th><th>목 · 4일 차</th><th>금 · 5일 차</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>09:30</td><td class="is-common">입사 서류 제출</td><td class="is-common"><strong>정보보안 교육</strong></td><td>버디 첫 만남</td><td>직무 교육 2</td><td>실습 결과 공유</td></tr>
+      <tr><td>10:30</td><td class="is-common">장비·계정 수령</td><td class="is-common"><strong>개인정보 교육</strong></td><td>팀 업무 소개</td><td>고객 사례 학습</td><td>첫 주 회고</td></tr>
+      <tr><td>13:30</td><td class="is-common">회사 소개</td><td class="is-common"><strong>성희롱 예방 교육</strong></td><td>직무 교육 1</td><td>팀 주간 회의</td><td class="is-key">팀장 1:1 면담</td></tr>
+      <tr><td>14:30</td><td class="is-common">사내 시스템 설정</td><td class="is-common">조직문화 워크숍</td><td>제품 시연 참관</td><td>실습 과제 1</td><td>30일 목표 작성</td></tr>
+      <tr><td>15:30</td><td class="is-common">업무 규정 안내</td><td class="is-common">복리후생 안내</td><td>업무 문서 읽기</td><td>실습 과제 2</td><td class="is-common">온보딩 설문</td></tr>
+      <tr><td>16:30</td><td class="is-common">팀 배치 안내</td><td class="is-common">질의응답</td><td>하루 정리</td><td>버디 피드백</td><td>자유 정리</td></tr>
+    </tbody>
+  </table>
+
+  <div class="below">
+    <div class="legend kinds" data-group="범례">
+      <div class="legend-item"><div class="swatch is-common"></div><p class="legend-label">전사 공통 · People팀 진행</p></div>
+      <div class="legend-item"><div class="swatch is-team"></div><p class="legend-label">팀별 진행 · 버디와 팀장</p></div>
+      <div class="legend-item"><div class="swatch is-key"></div><p class="legend-label">핵심 일정</p></div>
+    </div>
+    <p class="footnote">굵은 글씨 = 필수 교육 · 장소: 본사 7층 교육장 (세부 일정은 입사 전날 메일로 안내)</p>
+  </div>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 신입사원 온보딩 가이드</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 정보</p>
+      <p class="page-num" data-field="slidenum">2</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

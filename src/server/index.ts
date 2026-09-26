@@ -9,7 +9,11 @@ import { startRoutineScheduler } from "./scheduler.js";
 import { startBotTaskDispatcher } from "./botTaskRunner.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
-import { probeDeckRendering } from "./deckRender.js";
+import {
+  deckToolchainLogFields,
+  probeDeckRendering,
+  probeDeckToolchain,
+} from "./deckRender.js";
 
 const services = createServices();
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
@@ -17,8 +21,18 @@ const services = createServices();
 applyCustomGithubCa(services.config, logger);
 // Probe the PPTX toolchain now (memoized) so the synchronous spawnSync cost is
 // paid at boot rather than on the first chat turn — the result can't change
-// without a container rebuild.
+// without a container rebuild. Two halves: the legacy LibreOffice/python-pptx
+// check, then the pptx skill's converter (`deck.mjs probe --json`, 10 s cap,
+// allowlisted env; an unreadable result is re-probed in the background).
 probeDeckRendering();
+const deckToolchain = probeDeckToolchain(services.config);
+logger.info(deckToolchainLogFields(deckToolchain), "deck toolchain probe");
+if (deckToolchain.selftest === "drift") {
+  logger.warn(
+    { chromiumVersion: deckToolchain.chromiumVersion ?? null },
+    "deck converter golden drift recorded at image build (README.md#deck-converter-golden-drift)",
+  );
+}
 const app = createApp(services);
 
 const { server, protocol } = createAppServer(app, services.config);

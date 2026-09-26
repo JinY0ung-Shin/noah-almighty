@@ -189,6 +189,59 @@ limit shipped with it:
   back. Standard-tier fitting is exact for every Claude model, so the cost of waiting is fidelity only.
 - **risk:** med · **effort:** M · **breaking:** no
 
+## PPTX converter (2026-09) — deferred follow-ups
+
+The pptx skill's HTML→editable-PPTX converter shipped with the server hand-off (hash-bound previews) and
+no client change (see [`architecture/pptx-converter.md`](architecture/pptx-converter.md)). Recorded, not
+built:
+
+### PC1 — Client polish for converter previews (none needed for correctness)
+- **Files:** `src/client/src/components/FilePreviewPanel.svelte`, `panelSlides` (`views/ChatView.svelte`,
+  `lib/bubbleSegments.ts`).
+- **What (four optional fixes):** (a) append slides that arrive late to an already-open panel; (b) prefer
+  the stamped slides (`parentId` = the card) in `panelSlides`; (c) the status line's handling of hidden
+  attachments; (d) empty-state copy when the renders failed.
+- **Why deferred:** the existing hidden-image + `parentId` shape already renders any aspect ratio and size,
+  and the LibreOffice race behind (a) is pre-existing and nearly absent for converter decks.
+- **risk:** low · **effort:** S–M · **breaking:** no
+
+### PC2 — Open production questions (the converter runs with these defaults)
+- **Concurrency sizing:** `NOAH_PPTX_MAX_CONCURRENT=2` — each conversion is a ~0.4–0.5 GiB Chromium inside the
+  app container (1.1 GiB for three at once on the dev box, which is NOT a production sizing); ask the deploy
+  host's RAM/CPU and adjust.
+- **Mirrors:** does the corporate apt mirror proxy `/debian-security` (Chromium 154)? Without it bookworm main's
+  150 installs, verified IR-identical. Does the PyPI mirror carry the pinned cp311 wheels?
+- **Disk:** +0.55 GB uncompressed per image, plus the `:pre-deck` rollback tag until it is pruned, plus the
+  build cache.
+- **Defaults to confirm with the user:** docProps author `Noah Almighty` (the skill passes `--author` when it
+  knows the user's name); the tour's `약 2분` duration after the first real runs; Korean in-deck metadata
+  (layout names, placeholder prompts, alt text) for non-Korean users; the 60-slide cap per build (a higher cap
+  needs the 540 s budget and the 600 s Bash ceiling revisited); the what's-new entry (drafted, added only by
+  the release step after the wording is approved).
+
+### PC3 — Run the deck Docker smoke in the release checklist
+- **Files:** `.claude/skills/release/SKILL.md` (+ `architecture/build-run-verify.md`'s release bullet, kept in
+  sync with it).
+- **What:** when a release contains converter or Dockerfile changes, run
+  `scripts/deck-docker-smoke.sh --image <fresh build> --baseline-image <fresh build of the previous release>
+  --require-validator` before tagging. Nothing but this smoke exercises the image's Chromium, the pinned Python
+  set and the container hardening together.
+- **risk:** low · **effort:** S · **breaking:** no
+
+### PC4 — Move the converter locks to `flock` if the agent Bash ever gets its own network namespace
+- **Files:** `default-skills/skills/pptx/converter/tools/lib/locks.mjs`.
+- **Why:** the host-wide slots and per-deck locks are abstract UNIX socket names, which are per network
+  namespace. Today every conversion in the container shares one namespace (the agent Bash is not sandboxed),
+  so they are truly host-wide. A Bash sandbox with its own namespace would silently give each sandbox its own
+  slots — then switch to `flock` on a file every sandbox sees (and keep the kernel-release-on-death property).
+- **risk:** med · **effort:** S · **breaking:** no
+
+### PC5 — Out of scope for the first version (recorded)
+- Converter support for user templates/masters (the python-pptx path covers them); localized in-deck
+  metadata; MicroType Express font compression; a Hanja-only NotoSansKR subset (an OFL Modified Version);
+  LibreOffice ≥ 25.8 (embedded-font support in previews); decks over 60 slides in one build; background
+  (`run_in_background`) conversions.
+
 ## Recommended order when picking this up
 1. Cheap + independent: the two coverage-gap tests, T3.9(a).
 2. After Tier-1/2 settle: T3.2 → T3.5 (test-guarded, medium).

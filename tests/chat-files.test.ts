@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,6 +48,27 @@ describe("chatFiles", () => {
       expect(resolved).not.toBeNull();
       expect(resolved!.mediaType).toContain("presentationml");
       expect(fs.readFileSync(resolved!.path).equals(PPTX_BYTES)).toBe(true);
+    });
+
+    it("returns the realpath it read and the SHA-256 of the stored bytes", () => {
+      const ws = workspace();
+      fs.mkdirSync(path.join(ws, "q3-review"));
+      fs.writeFileSync(path.join(ws, "q3-review", "q3-review.pptx"), PPTX_BYTES);
+      // Shared through a symlink: the source is the REAL file (the deck-preview
+      // sidecar lives next to it), never the link.
+      fs.symlinkSync(path.join(ws, "q3-review", "q3-review.pptx"), path.join(ws, "final.pptx"));
+
+      for (const input of ["q3-review/q3-review.pptx", "final.pptx", path.join(ws, "final.pptx")]) {
+        const result = publishWorkspaceFile(config(), "conv-sha", input, [ws]);
+        expect("attachment" in result).toBe(true);
+        if (!("attachment" in result)) return;
+        expect(result.sourcePath).toBe(fs.realpathSync(path.join(ws, "q3-review", "q3-review.pptx")));
+        const stored = resolveStoredFile(config(), "conv-sha", result.attachment.id)!;
+        const storedSha = crypto.createHash("sha256").update(fs.readFileSync(stored.path)).digest("hex");
+        expect(result.sha256).toBe(storedSha);
+        expect(result.sha256).toBe(crypto.createHash("sha256").update(PPTX_BYTES).digest("hex"));
+        expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+      }
     });
 
     it("honors a requested download name and keeps the real extension", () => {

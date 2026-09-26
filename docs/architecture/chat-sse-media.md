@@ -209,20 +209,40 @@
   image + returns its serving URL to the model (for canvas markdown embeds), but every ChatView render
   loop filters hidden entries. Per-turn caps: 6 visible images (unchanged), 30 hidden, 3 files —
   enforced in the `onFile`/`onShareFile` handlers, counted per kind off `shownAttachments`.
-- **Deck (PPTX) pipeline**: bundled `pptx` skill = python-pptx authoring (NanumGothic — 맑은 고딕 is not
-  in the image, LibreOffice would silently substitute) → `share_file`. **Delivery previews are
-  SERVER-AUTOMATIC**: the `onShareFile` handler calls `renderDocumentPreviews` (deckRender.ts —
-  async execFile soffice→pdf with an isolated profile, then `pdftoppm -l 30`; **direct pptx→png
-  converts only the FIRST slide**; pdf skips soffice; also docx/xlsx) and attaches the pages via
-  `savePreviewImages` (chatImages.ts, trusted-input hidden PNGs) — best-effort, a render failure
-  still delivers the file. The agent renders manually (scripts/render_deck.sh + hidden `show_file`
-  + ONE canvas markdown) only for mid-work review/self-check. **Availability = boot-time probe**
-  (`deckRender.ts`, memoized `spawnSync` soffice/pdftoppm/python-pptx — a NEW pattern, nothing else
-  probes at boot), threaded per-run like `fileOutputEnabled`: `AgentRequest.deckRenderingEnabled`
-  (probe && fileOutput) drives the promptBuilder `deckSection`, `SystemToolsContext.deckRenderingAvailable`
-  the describe_system line (UNAVAILABLE → "admin must rebuild the image"). Docker: `libreoffice-impress` +
-  `fonts-nanum` + `poppler-utils` via apt mirror; `python-pptx` is NOT in Debian → pip at build with
-  `PIP_INDEX_URL`/`PIP_TRUSTED_HOST` build-args (compose passthrough).
+- **Deck (PPTX) pipeline — TWO preview sources, tried in a fixed order.** New decks come from the bundled
+  `pptx` skill's HTML→PPTX converter, a foreground `deck.sh build` in the agent shell (CLI, budgets, locks,
+  isolation, probe and Docker → [`pptx-converter.md`](pptx-converter.md)); existing decks and user templates
+  are still edited with python-pptx. **Delivery previews stay SERVER-AUTOMATIC** in `onShareFile`:
+  1. **The converter's renders, pptx only.** `publishWorkspaceFile` also returns `sourcePath` (the realpath
+     it read) and `sha256` (of the SAME buffer it stored — no TOCTOU gap); `await loadConverterPreviews(…)`
+     (`deckPreview.ts`, async, pure fs, no shell) reads `<stem>.preview/manifest.json` next to the REAL file
+     (sharing through a symlink still finds it) and accepts it only when its `pptxSha256` equals that hash —
+     checked BEFORE any image is read — and every image passes `readWorkspaceImageAsync` (the same
+     realpath/roots/5 MB/magic containment as `readWorkspaceImage`, sharing its pure checks) with the declared
+     media type and sha256: ≤ 30 attached (`MAX_PREVIEW_PAGES`), ≤ 32 MiB, all or nothing. Loaded slides go
+     through `saveHiddenChatImage(…, card.id)` — hidden, `parentId` = the card, alt text
+     `슬라이드 N – <title>`, the same per-turn hidden budget as before — and LibreOffice is skipped. They are
+     all saved first, then pushed and emitted in slide order; if a save fails midway, the saved ones are
+     deleted and the card falls back to LibreOffice.
+  2. **LibreOffice otherwise** — no sidecar (`none`), `stale` (the .pptx changed after the build: a copy, a
+     rename, a python-pptx edit), `invalid`, and every docx/xlsx/pdf: `renderDocumentPreviews` (deckRender.ts
+     — async execFile soffice→pdf with an isolated profile, then `pdftoppm -l 30`; **direct pptx→png
+     converts only the FIRST slide**; pdf skips soffice) attaches the pages via `savePreviewImages`
+     (chatImages.ts, trusted-input hidden PNGs) — best-effort, a render failure still delivers the file.
+     Agent-made images NEVER take the `savePreviewImages` path.
+
+  The tool result carries facts only (`previews`, `previewSource`, `previewTotal`, `deckSidecar`) and
+  `fileOutputTools.ts` composes the English notes from them (first 30 of N, the malgun stand-in font, a
+  redirect to rebuild / share in place for stale / invalid / none). The agent renders manually (hidden
+  `show_file` + ONE canvas markdown) only for mid-work review. **Availability = ONE boot-time probe**
+  (`deckRender.ts`: the legacy soffice/pdftoppm/python-pptx checks + `deck.mjs probe --json` for the
+  converter, memoized only when definitive — still the only thing that probes at boot), threaded per-run like
+  `fileOutputEnabled`: `AgentRequest.deckConverterEnabled` / `deckRenderingEnabled` (toolchain && fileOutput
+  && authoring `allowed`) pick the promptBuilder `deckSection` branch, and `SystemToolsContext.deckToolchain`
+  + `deckAuthoring` drive the describe_system line with its `converter: INSTALLED` / `converter: NOT
+  INSTALLED` markers (UNAVAILABLE → "an administrator must rebuild the server image"). Docker:
+  `libreoffice-impress` + `fonts-nanum` + `poppler-utils` as before, plus `chromium-headless-shell`,
+  `fontconfig` and the pinned Python set ([`pptx-converter.md`](pptx-converter.md#docker-packaging)).
 - **draw.io viewer (.drawio share): preview is CLIENT-side, not a deckRender format.** `drawio` sits in
   the `chatFiles.ts` allowlist (mediaType `application/vnd.jgraph.mxfile`, no magic — text like csv/md/txt)
   but deliberately NOT in `PREVIEWABLE_EXTENSIONS`: `FilePreviewPanel.svelte` fetches the file and renders

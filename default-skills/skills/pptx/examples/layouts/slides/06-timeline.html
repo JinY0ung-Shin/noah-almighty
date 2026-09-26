@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>06 추진 일정 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Timeline: a month grid (208 px label column + 12 months x 76 px = 1120 px), one row per workstream, and the
+     milestones on a rail below. Every coordinate is relative to .gantt (x 80, y 184); a bar spanning months a..b
+     sits at left = 208 + (a - 1) * 76 + 4 with width = (b - a + 1) * 76 - 8, a milestone of month m is centred at
+     208 + (m - 1) * 76 + 38. Colour = kind of work (brand = a strategy's own work, grey = the shared work that
+     enables it), the accent = the one key milestone — its dot in accent-700, the shade a mark on the ink-50 page
+     needs (4.8:1; accent-500 is 2.2:1 there). Bars and dots are drawn shapes: when a date changes, move them by
+     hand (their group names say so). */
+  .gantt { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w); height: 440px; }
+  .gantt > * { position: absolute; }
+
+  .kinds { left: 0; top: 2px; display: flex; flex-direction: column; gap: 4px; }
+  .kinds .legend-label { font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-ink-600); }
+  .quarter { top: 0; width: 228px; text-align: center; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm);
+             font-weight: 700; color: var(--c-ink-900); }
+  .months { left: 208px; top: 28px; width: 912px; display: grid; grid-template-columns: repeat(12, 76px); }
+  .month { text-align: center; font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-ink-500); }
+  .rule-head { left: 0; top: 52px; width: 1120px; height: 1px; background: var(--c-ink-300); }
+  .grid-line { top: 53px; width: 1px; height: 280px; background: var(--c-ink-200); }
+
+  /* the go-live line: the key milestone's month centre, behind the bars (painted first), down to the rail */
+  .golive { left: 853px; top: 53px; width: 2px; height: 306px; background: rgba(255, 138, 61, 0.40); }
+  .track { left: 0; width: 1120px; height: 56px; border-bottom: 1px solid var(--c-ink-100); }
+  .track-name { position: absolute; left: 0; top: 6px; width: 192px; font-size: var(--fs-body-sm);
+                line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-ink-900); }
+  .track-owner { position: absolute; left: 0; top: 30px; width: 192px; font-size: 13px; line-height: 20px;
+                 color: var(--c-ink-500); }
+  .bar { position: absolute; top: 12px; height: 32px; padding: 6px 16px; border-radius: 16px;
+         background: var(--c-brand-600); }
+  .bar--shared { background: var(--c-ink-500); }
+  .bar-label { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 600; color: var(--c-white);
+               white-space: nowrap; }
+
+  .rail-name { left: 0; top: 356px; width: 192px; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm);
+               font-weight: 700; color: var(--c-ink-900); }
+  .rail { left: 208px; top: 367px; width: 912px; height: 2px; background: var(--c-ink-300); }
+  .milestone { top: 359px; width: 128px; display: flex; flex-direction: column; align-items: center; }
+  .dot-slot { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--c-brand-600); }
+  .ms-date { margin-top: 8px; width: 128px; text-align: center; font-size: var(--fs-caption); line-height: var(--lh-caption);
+             font-weight: 700; color: var(--c-brand-600); }
+  .ms-name { width: 128px; text-align: center; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm);
+             font-weight: 600; color: var(--c-ink-900); }
+  .milestone.is-key .dot { width: 18px; height: 18px; background: var(--c-accent-700); }   /* the one focal point */
+  .milestone.is-key .ms-date { color: var(--c-accent-700); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">03</span> 실행 계획</p>
+    <div class="title-row">
+      <h1 class="slide-title">5월 시범 오픈을 거쳐 9월 전면 전환</h1>
+      <p class="pill pill--outline period">2027년 1~12월</p>
+    </div>
+  </header>
+
+  <section class="gantt">
+    <div class="kinds" data-group="범례">
+      <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">전략 과제</p></div>
+      <div class="legend-item"><div class="swatch" style="background:#667085"></div><p class="legend-label">공통 과제</p></div>
+    </div>
+    <p class="quarter" style="left: 208px">1분기</p>
+    <p class="quarter" style="left: 436px">2분기</p>
+    <p class="quarter" style="left: 664px">3분기</p>
+    <p class="quarter" style="left: 892px">4분기</p>
+    <div class="months">
+      <p class="month">1월</p><p class="month">2월</p><p class="month">3월</p><p class="month">4월</p>
+      <p class="month">5월</p><p class="month">6월</p><p class="month">7월</p><p class="month">8월</p>
+      <p class="month">9월</p><p class="month">10월</p><p class="month">11월</p><p class="month">12월</p>
+    </div>
+    <div class="rule-head"></div>
+    <div class="grid-line" style="left: 208px"></div>
+    <div class="grid-line" style="left: 436px"></div>
+    <div class="grid-line" style="left: 664px"></div>
+    <div class="grid-line" style="left: 892px"></div>
+    <div class="golive"></div>
+
+    <div class="track" style="top: 53px">
+      <p class="track-name">플랫폼 구축</p>
+      <p class="track-owner">IT전략팀 · 채널 통합</p>
+      <div class="bar" style="left: 212px; width: 296px" data-group="일정 막대 — 1~4월 (날짜 변경 시 직접 이동)"><p class="bar-label">클라우드 계약 · 구축 · 이관</p></div>
+    </div>
+    <div class="track" style="top: 109px">
+      <p class="track-name">챗봇·FAQ</p>
+      <p class="track-owner">디지털채널팀 · 셀프 서비스</p>
+      <div class="bar" style="left: 364px; width: 448px" data-group="일정 막대 — 3~8월 (날짜 변경 시 직접 이동)"><p class="bar-label">상위 문의 50종 챗봇 · FAQ 개편</p></div>
+    </div>
+    <div class="track" style="top: 165px">
+      <p class="track-name">AI 상담 지원</p>
+      <p class="track-owner">데이터팀 · 상담 지능화</p>
+      <div class="bar" style="left: 516px; width: 448px" data-group="일정 막대 — 5~10월 (날짜 변경 시 직접 이동)"><p class="bar-label">상담 요약 · 답변 추천 도입</p></div>
+    </div>
+    <div class="track" style="top: 221px">
+      <p class="track-name">상담사 교육</p>
+      <p class="track-owner">고객지원팀 · 공통</p>
+      <div class="bar bar--shared" style="left: 440px; width: 448px" data-group="일정 막대 — 4~9월 (날짜 변경 시 직접 이동)"><p class="bar-label">단계별 교육 3회</p></div>
+    </div>
+    <div class="track" style="top: 277px">
+      <p class="track-name">고객 안내</p>
+      <p class="track-owner">마케팅팀 · 공통</p>
+      <div class="bar bar--shared" style="left: 744px; width: 372px" data-group="일정 막대 — 8~12월 (날짜 변경 시 직접 이동)"><p class="bar-label">채널 전환 안내 · 홍보</p></div>
+    </div>
+
+    <p class="rail-name">주요 일정</p>
+    <div class="rail"></div>
+    <div class="milestone" style="left: 258px" data-group="마일스톤 — 2월 착수 보고">
+      <div class="dot-slot"><div class="dot"></div></div><p class="ms-date">2월</p><p class="ms-name">착수 보고</p>
+    </div>
+    <div class="milestone" style="left: 486px" data-group="마일스톤 — 5월 시범 오픈">
+      <div class="dot-slot"><div class="dot"></div></div><p class="ms-date">5월</p><p class="ms-name">시범 오픈</p>
+    </div>
+    <div class="milestone is-key" style="left: 790px" data-group="마일스톤 — 9월 전면 전환">
+      <div class="dot-slot"><div class="dot"></div></div><p class="ms-date">9월</p><p class="ms-name">전면 전환</p>
+    </div>
+    <div class="milestone" style="left: 942px" data-group="마일스톤 — 11월 구 시스템 종료">
+      <div class="dot-slot"><div class="dot"></div></div><p class="ms-date">11월</p><p class="ms-name">구 시스템 종료</p>
+    </div>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2027년 고객 경험 혁신 계획</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">6</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

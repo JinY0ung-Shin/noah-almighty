@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>01 전면 사진 · 기능 점검 덱</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* a full-bleed 3000x2000 JPEG: the extractor caps it at 2560 px and keeps it a JPEG (opaque, object-fit: cover) */
+  .photo { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; object-fit: cover; }
+  .title-card { position: absolute; left: var(--margin-x); top: 200px; width: 560px; padding: var(--sp-5); }
+  .accent { width: 48px; height: 6px; border-radius: 3px; background: var(--c-brand-600); }
+  .title-card .eyebrow { margin-top: var(--sp-3); }
+  .cover-title { margin-top: var(--sp-1); font-size: 44px; line-height: 60px; font-weight: 800;
+                 letter-spacing: var(--tracking-tight); color: var(--c-ink-900); }
+  .lead { margin-top: var(--sp-2); font-size: var(--fs-body); line-height: var(--lh-body); color: var(--c-ink-600); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="표지">
+  <img class="photo" src="../assets/photo.jpg" alt="해 질 녘 언덕 풍경 (합성 이미지)">
+  <section class="card title-card">
+    <div class="accent"></div>
+    <p class="eyebrow">기능 점검 덱</p>
+    <h1 class="cover-title">사진과 덱 스타일<br>변환 점검</h1>
+    <p class="lead">전면 사진은 JPEG로 들어갑니다.<br>강조색은 deck.css의 청록색입니다.</p>
+  </section>
+</main>
+</body>
+</html>

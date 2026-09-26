@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>04 분기별 매출 추이 · 2026년 3분기 사업 실적 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  .chart-card { position: absolute; left: var(--margin-x); top: var(--content-top); width: 672px; height: 440px;
+                padding: var(--sp-4); }
+  .chart-card .chart { margin-top: var(--sp-3); width: 608px; height: 304px; }
+
+  .panel { position: absolute; left: 776px; top: var(--content-top); width: 424px; height: 440px;
+           padding: var(--sp-4); border-radius: var(--radius-card); background: var(--c-brand-900); color: var(--c-white); }
+  .panel-label { font-size: 15px; line-height: 20px; font-weight: 600; color: rgba(255, 255, 255, 0.64); }
+  .panel-stat { margin-top: 4px; font-size: var(--fs-stat-lg); line-height: var(--lh-stat-lg); font-weight: 800;
+                letter-spacing: var(--tracking-tight); color: var(--c-white); white-space: nowrap; }
+  .panel-stat .stat-unit { font-size: 22px; color: rgba(255, 255, 255, 0.80); }
+  .panel-delta { margin-top: var(--sp-1); display: flex; align-items: center; gap: 12px; }
+  .panel-caption { font-size: var(--fs-caption); line-height: var(--lh-caption); color: rgba(255, 255, 255, 0.60); }
+  .panel-rule { margin-top: var(--sp-3); height: 1px; background: rgba(255, 255, 255, 0.14); }
+  .panel .insights { margin-top: var(--sp-3); color: var(--c-white); }
+  .panel .insights li { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); }
+  .panel .insights li + li { margin-top: var(--sp-2); }
+  .insight-detail { color: rgba(255, 255, 255, 0.66); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">03</span> 분기별 매출 추이</p>
+    <div class="title-row">
+      <h1 class="slide-title">3개 분기 연속 전년 대비 매출 성장</h1>
+      <p class="pill pill--outline period">1~3분기 실적 · 4분기 전망</p>
+    </div>
+  </header>
+
+  <section class="card chart-card">
+    <div class="chart-head">
+      <div>
+        <p class="card-title">분기별 매출</p>
+        <p class="card-sub">단위: 억 원 · 4분기는 전망치</p>
+      </div>
+      <div class="legend" data-group="범례">
+        <div class="legend-item"><div class="swatch" style="background:#8A94A6"></div><p class="legend-label">2025년</p></div>
+        <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">2026년</p></div>
+        <div class="legend-item"><div class="swatch" style="background:#6F8FF0"></div><p class="legend-label">4Q 전망</p></div>
+      </div>
+    </div>
+    <div class="chart" data-chart='{"type":"column","grouping":"clustered","categories":["1Q","2Q","3Q","4Q"],"series":[{"name":"2025년","values":[1012,1087,1142,1236],"color":"8A94A6"},{"name":"2026년","values":[1148,1209,1284,1410],"color":"2A52D9"}],"pointColors":{"1":["2A52D9","2A52D9","2A52D9","6F8FF0"]},"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"344056","sizePx":13,"cssWeight":600},"valueAxis":{"visible":false,"min":0,"max":1600,"numberFormat":"#,##0"},"categoryAxis":{"visible":true,"labelColor":"667085","sizePx":14,"lineColor":"C9D0DB"},"legend":{"position":"none"},"gapWidth":90,"overlap":-8,"fontCssWeight":400}'></div>
+  </section>
+
+  <aside class="panel">
+    <p class="panel-label">2026년 1~3분기 누적 매출</p>
+    <p class="panel-stat">3,641<span class="stat-unit">억 원</span></p>
+    <div class="panel-delta">
+      <p class="pill pill--up-on-dark">▲ 12.3%</p>
+      <p class="panel-caption">전년 동기 3,241억 원</p>
+    </div>
+    <div class="panel-rule"></div>
+    <ul class="insights">
+      <li><strong>분기 최대 매출 경신</strong><br><span class="insight-detail">3분기 1,284억 원, 전년 대비 12.4% 증가</span></li>
+      <li><strong>클라우드 고성장 지속</strong><br><span class="insight-detail">구독 매출 3개 분기 연속 20% 이상 성장</span></li>
+      <li><strong>연 매출 5천억 원 돌파 전망</strong><br><span class="insight-detail">4분기 1,410억 원 전망, 성수기 효과 반영</span></li>
+    </ul>
+  </aside>
+
+  <footer class="slide-footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 3분기 사업 실적 보고</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">4</p>
+    </div>
+  </footer>
+</main>
+<script src="../lib/chart.js"></script>
+</body>
+</html>

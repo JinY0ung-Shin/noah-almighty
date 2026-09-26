@@ -11,6 +11,14 @@ services:
         NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
         PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        # The pptx skill's HTML→editable-PPTX converter
+        # (docs/architecture/pptx-converter.md). DECK_CONVERTER=0 builds a
+        # legacy image without Chromium (python-pptx only) — for an apt mirror
+        # that cannot serve chromium-headless-shell. DECK_CONVERTER_STRICT_GOLDEN=1
+        # makes golden drift in the build-time converter self-test FAIL the
+        # build instead of being recorded and reported at runtime.
+        DECK_CONVERTER: ${DECK_CONVERTER:-1}
+        DECK_CONVERTER_STRICT_GOLDEN: ${DECK_CONVERTER_STRICT_GOLDEN:-0}
         # Corporate proxy CA to trust for HTTPS clones (path within the build
         # context). Override in your shell: export CA_CERT_FILE=docker/tls-fullchain.crt
         CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}

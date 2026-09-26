@@ -1,0 +1,69 @@
+{
+  "profiles": {
+    "embedded": {
+      "label": "무료 글꼴 임베딩",
+      "cssFamily": "Pretendard",
+      "embed": true,
+      "faces": [
+        {
+          "cssWeight": 400,
+          "typeface": "Pretendard",
+          "bold": false,
+          "italic": false,
+          "slot": "regular",
+          "file": "fonts/Pretendard-Regular.ttf"
+        },
+        {
+          "cssWeight": 600,
+          "typeface": "Pretendard SemiBold",
+          "bold": false,
+          "italic": false,
+          "slot": "regular",
+          "file": "fonts/Pretendard-SemiBold.ttf"
+        },
+        {
+          "cssWeight": 700,
+          "typeface": "Pretendard",
+          "bold": true,
+          "italic": false,
+          "slot": "bold",
+          "file": "fonts/Pretendard-Bold.ttf"
+        },
+        {
+          "cssWeight": 800,
+          "typeface": "Pretendard ExtraBold",
+          "bold": false,
+          "italic": false,
+          "slot": "regular",
+          "file": "fonts/Pretendard-ExtraBold.ttf"
+        }
+      ]
+    },
+    "malgun": {
+      "label": "맑은 고딕 지정",
+      "cssFamily": "PoC Malgun Substitute",
+      "embed": false,
+      "faces": [
+        {
+          "cssWeight": 400,
+          "typeface": "맑은 고딕",
+          "bold": false,
+          "italic": false,
+          "slot": "regular",
+          "file": null,
+          "measureFile": "fonts/GothicA1-Regular.ttf"
+        },
+        {
+          "cssWeight": 700,
+          "typeface": "맑은 고딕",
+          "bold": true,
+          "italic": false,
+          "slot": "bold",
+          "file": null,
+          "measureFile": "fonts/GothicA1-Bold.ttf"
+        }
+      ],
+      "notes": "Measurement substitute for 맑은 고딕 (Malgun Gothic 6.69; not redistributable, not installable on the Linux server). Why: no free font has Malgun's advances (Hangul 1.000 em for all 11,172 syllables, space 0.3516 em, tabular digits 0.5508/0.5796 em); the best plain OFL fonts are 2-13% narrower on a 77-line Korean business corpus (Gothic A1 Bold -2.2%, NanumGothic Regular -4.1%, Noto Sans KR -7.6%, Pretendard -12.3%), so \"PoC Malgun Substitute\" in theme/fonts-malgun.css combines UNMODIFIED OFL files by unicode-range, each face with its own size-adjust (Regular / Bold): Gothic A1 2.50 fonts/GothicA1-*.ttf for Hangul syllables 104.0650% / 100.3922% (exact) and for jamo, CJK symbols, fullwidth and everything else 100% (Malgun and Gothic A1 are both 1.000 em there); Selawik 1.01 fonts/selawk.ttf, selawkb.ttf (Microsoft's OFL Segoe UI metric-compatible font; Malgun's Latin = Segoe UI x1.0216) for Latin and punctuation 101.7949% / 99.3958% (corpus fit), digits 102.1739% / 100.7640% (exact) and space + NBSP 128.3422% / 127.4336% (exact); Noto Sans KR 2.004 variable fonts/NotoSansKR-VF.ttf for Hanja 100% (exact). Every face also sets ascent/descent/line-gap overrides so the effective CSS line metrics equal Malgun's hhea/win metrics (2229/495/0 per 2048 = 1.0884/0.2417/0 em). measureFile = the Gothic A1 file of that weight (the Hangul carrier): any server-side width computation must apply the per-range factors above; better use Chromium's layout. Measured error: Chromium 149 launched with --font-render-hinting=none, all corpus lines at 13-100 px, substitute vs REAL Malgun Gothic (read in place from C:\\Windows\\Fonts, never copied): per-line width ratio mean 0.999-1.001, sd 0.26%; slack (Malgun/substitute) p99 1.003 Regular / 1.009 Bold, max 1.006 / 1.019 (Latin-heavy Bold line); line boxes and baselines pixel-identical. Builder slack: widen wrapped (wrap=true) text boxes by 2% (factor 1.02; it also covers Malgun's own kern table, <=1.0%). The extractor must launch Chromium with --font-render-hinting=none: default hinting rounds every glyph advance to whole CSS px at any DSF (errors of -6.6%..+4.2% per run) and makes Malgun's line boxes hinted/VDMX-dependent. Details: docs/research/fonts.md."
+    }
+  }
+}

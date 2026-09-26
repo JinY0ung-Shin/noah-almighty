@@ -45,7 +45,7 @@ export const TOUR_SCENARIOS: readonly TourScenario[] = [
   {
     slug: "pptx",
     titleKo: "PPT 초안 만들기",
-    descriptionKo: "주제만 말하면 슬라이드 초안을 만들어 미리 보여 드려요.",
+    descriptionKo: "주제만 말하면 바로 고쳐 쓸 수 있는 디자인 슬라이드를 만들어 드려요.",
     durationKo: "약 2분",
   },
   {

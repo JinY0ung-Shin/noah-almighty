@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>01 목차 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Agenda: the report's argument on the left (a dark overview card: why, and the one goal in numbers), the four
+     sections on the right as rows that each promise their headline figure. */
+  .overview { position: absolute; left: var(--margin-x); top: var(--content-top); width: 392px; height: 440px;
+              padding: var(--sp-4); display: flex; flex-direction: column; background: var(--c-brand-900); }
+  .overview-label { font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 600;
+                    letter-spacing: var(--tracking-label); color: rgba(255, 255, 255, 0.64); }
+  /* soft-wraps ON PURPOSE (fixed 328 px column, no <br>): 16/24 is exactly 125 % in PowerPoint, so any number of
+     lines keeps its baselines; the goal block is pinned to the bottom, leaving room for the wider profile's line */
+  .lead { margin-top: 12px; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: rgba(255, 255, 255, 0.86); }
+
+  .goal { margin-top: auto; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.14); }
+  .goal-label { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 600; color: rgba(255, 255, 255, 0.64); }
+  .goal-value { margin-top: 4px; font-size: var(--fs-stat); line-height: var(--lh-stat); font-weight: 800;
+                letter-spacing: var(--tracking-tight); color: var(--c-white); white-space: nowrap; }
+  .goal-unit { font-size: 20px; line-height: 1; font-weight: 700; letter-spacing: 0; color: rgba(255, 255, 255, 0.72); }
+  .goal-bars { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .goal-bar { display: flex; align-items: center; gap: 12px; }
+  .goal-bar-label { flex: none; width: 28px; font-size: var(--fs-micro); line-height: var(--lh-micro); color: rgba(255, 255, 255, 0.64); }
+  .goal-bar-track { flex: 1; height: 8px; }
+  .goal-bar-fill { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.28); }
+  .goal-bar-fill.is-target { background: var(--c-accent-500); }          /* the slide's one accent: the goal */
+  .goal-bar-value { flex: none; width: 64px; text-align: right; font-size: var(--fs-micro); line-height: var(--lh-micro);
+                    font-weight: 700; color: var(--c-white); }
+  /* what the report asks for: a translucent box on the dark card (its fill is opaque-equivalent, no shadow) */
+  .ask { margin-top: var(--sp-2); padding: 12px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.08);
+         display: flex; align-items: center; gap: 12px; }
+  .ask-label { flex: none; font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 600; color: rgba(255, 255, 255, 0.64); }
+  .ask-text { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-white); }
+
+  /* the sections: white rows, number | title + one-line description | the section's headline figure */
+  .agenda { position: absolute; left: 496px; top: var(--content-top); width: 704px;
+            display: flex; flex-direction: column; gap: var(--sp-2); }
+  .agenda-item { height: 98px; padding: 0 var(--sp-4) 0 var(--sp-3); border-radius: var(--radius-box);
+                 display: flex; align-items: center; gap: var(--sp-3); }
+  .agenda-num { flex: none; width: 48px; font-size: 28px; line-height: 40px; font-weight: 800;
+                letter-spacing: var(--tracking-tight); color: var(--c-brand-600); }
+  .agenda-body { flex: 1; min-width: 0; }
+  .agenda-title { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--c-ink-900); }
+  .agenda-desc { margin-top: 4px; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: var(--c-ink-600); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow">목차</p>
+    <h1 class="slide-title">응대 시간을 절반으로 줄이는 네 단계 계획</h1>
+  </header>
+
+  <section class="card overview">
+    <p class="overview-label">보고 개요</p>
+    <p class="lead">고객 문의는 3년 새 2.4배로 늘었지만 응대는 여전히 전화에 의존합니다. 채널 통합과 셀프 서비스 확대로 평균 응대 시간을 절반으로 줄이겠습니다.</p>
+    <div class="goal">
+      <p class="goal-label">2027년 목표 · 평균 응대 시간</p>
+      <p class="goal-value">50%<span class="goal-unit"> 단축</span></p>
+      <div class="goal-bars" data-group="비교 막대 — 현재 6분 40초 · 목표 3분 20초 (수치 수정 시 길이 직접 조정)">
+        <div class="goal-bar"><p class="goal-bar-label">현재</p><div class="goal-bar-track"><div class="goal-bar-fill" style="width: 100%"></div></div><p class="goal-bar-value">6분 40초</p></div>
+        <div class="goal-bar"><p class="goal-bar-label">목표</p><div class="goal-bar-track"><div class="goal-bar-fill is-target" style="width: 50%"></div></div><p class="goal-bar-value">3분 20초</p></div>
+      </div>
+    </div>
+    <div class="ask">
+      <p class="ask-label">요청 사항</p>
+      <p class="ask-text">B안 클라우드 전환 추진 승인</p>
+    </div>
+  </section>
+
+  <section class="agenda" data-group="목차">
+    <div class="card agenda-item">
+      <p class="agenda-num">01</p>
+      <div class="agenda-body"><p class="agenda-title">현황 진단</p><p class="agenda-desc">채널별 문의 추이와 응대 품질의 병목</p></div>
+      <p class="pill pill--brand">문의 2.4배 증가</p>
+    </div>
+    <div class="card agenda-item">
+      <p class="agenda-num">02</p>
+      <div class="agenda-body"><p class="agenda-title">추진 전략</p><p class="agenda-desc">채널 통합 · 셀프 서비스 · 상담 지능화</p></div>
+      <p class="pill pill--brand">3대 전략</p>
+    </div>
+    <div class="card agenda-item">
+      <p class="agenda-num">03</p>
+      <div class="agenda-body"><p class="agenda-title">실행 계획</p><p class="agenda-desc">2027년 과제별 일정과 담당 조직</p></div>
+      <p class="pill pill--brand">9월 전면 전환</p>
+    </div>
+    <div class="card agenda-item">
+      <p class="agenda-num">04</p>
+      <div class="agenda-body"><p class="agenda-title">기대 효과</p><p class="agenda-desc">응대 시간 · 셀프 해결률 · 고객 만족도</p></div>
+      <p class="pill pill--brand">만족도 85점</p>
+    </div>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2027년 고객 경험 혁신 계획</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">1</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

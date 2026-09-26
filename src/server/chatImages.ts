@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type {
@@ -183,6 +184,41 @@ export type ReadWorkspaceImageResult =
   | { buffer: Buffer; mediaType: ImageMediaType; sourcePath: string }
   | { error: "OUTSIDE_WORKSPACE" | "NOT_FOUND" | "NOT_FILE" | "EMPTY" | "TOO_LARGE" | "UNSUPPORTED" | "READ_FAILED" };
 
+// The PURE steps of the workspace-image read, shared by the sync and async
+// readers below so the two cannot drift on path safety: only the fs calls
+// between these steps differ (tests/chat-images.test.ts pins their parity).
+
+/** The requested path before realpath: absolute as given, else under the FIRST root. */
+function requestedImagePath(roots: string[], inputPath: string): string {
+  return path.isAbsolute(inputPath) ? inputPath : path.resolve(roots[0], inputPath);
+}
+
+/** A failed realpath of the requested file: only a missing file reads as NOT_FOUND. */
+function realpathFailure(error: unknown): "NOT_FOUND" | "READ_FAILED" {
+  return (error as NodeJS.ErrnoException).code === "ENOENT" ? "NOT_FOUND" : "READ_FAILED";
+}
+
+function insideAnyRoot(roots: string[], source: string): boolean {
+  return roots.some((root) => isInside(root, source));
+}
+
+/** Type/size verdict on the stat of the RESOLVED file (null = acceptable). */
+function imageStatFailure(stat: fs.Stats): "NOT_FILE" | "EMPTY" | "TOO_LARGE" | null {
+  if (!stat.isFile()) return "NOT_FILE";
+  if (stat.size === 0) return "EMPTY";
+  if (stat.size > MAX_CHAT_IMAGE_BYTES) return "TOO_LARGE";
+  return null;
+}
+
+/** Content verdict on the bytes actually read: MIME comes from the bytes, never the name. */
+function imageFromBytes(buffer: Buffer, sourcePath: string): ReadWorkspaceImageResult {
+  if (buffer.length === 0) return { error: "EMPTY" };
+  if (buffer.length > MAX_CHAT_IMAGE_BYTES) return { error: "TOO_LARGE" };
+  const mediaType = detectImageMediaType(buffer);
+  if (!mediaType) return { error: "UNSUPPORTED" };
+  return { buffer, mediaType, sourcePath };
+}
+
 /**
  * Resolve a run-supplied image path against its allowed working roots and read
  * its bytes, detecting MIME from CONTENT (never the caller-supplied extension).
@@ -203,15 +239,13 @@ export function readWorkspaceImage(
   });
   if (!roots.length) return { error: "OUTSIDE_WORKSPACE" };
 
-  const unresolved = path.isAbsolute(inputPath) ? inputPath : path.resolve(roots[0], inputPath);
   let source: string;
   try {
-    source = fs.realpathSync(unresolved);
+    source = fs.realpathSync(requestedImagePath(roots, inputPath));
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return { error: code === "ENOENT" ? "NOT_FOUND" : "READ_FAILED" };
+    return { error: realpathFailure(error) };
   }
-  if (!roots.some((root) => isInside(root, source))) {
+  if (!insideAnyRoot(roots, source)) {
     return { error: "OUTSIDE_WORKSPACE" };
   }
 
@@ -221,9 +255,8 @@ export function readWorkspaceImage(
   } catch {
     return { error: "READ_FAILED" };
   }
-  if (!stat.isFile()) return { error: "NOT_FILE" };
-  if (stat.size === 0) return { error: "EMPTY" };
-  if (stat.size > MAX_CHAT_IMAGE_BYTES) return { error: "TOO_LARGE" };
+  const statError = imageStatFailure(stat);
+  if (statError) return { error: statError };
 
   let buffer: Buffer;
   try {
@@ -231,11 +264,108 @@ export function readWorkspaceImage(
   } catch {
     return { error: "READ_FAILED" };
   }
-  if (buffer.length === 0) return { error: "EMPTY" };
-  if (buffer.length > MAX_CHAT_IMAGE_BYTES) return { error: "TOO_LARGE" };
-  const mediaType = detectImageMediaType(buffer);
-  if (!mediaType) return { error: "UNSUPPORTED" };
-  return { buffer, mediaType, sourcePath: source };
+  return imageFromBytes(buffer, source);
+}
+
+/**
+ * {@link readWorkspaceImage} for callers that must not block the event loop
+ * (the share_file deck-preview loader reads up to 30 renders per share). Same
+ * steps, same results, same containment; the bytes come through
+ * {@link readRegularFileAsync}, so a file swapped for a FIFO or a symlink after
+ * the checks is refused instead of parking a threadpool thread or escaping.
+ */
+export async function readWorkspaceImageAsync(
+  allowedRoots: string[],
+  inputPath: string,
+): Promise<ReadWorkspaceImageResult> {
+  const roots = (
+    await Promise.all(
+      allowedRoots.map((root) =>
+        fs.promises.realpath(root).then(
+          (real) => [real],
+          () => [],
+        ),
+      ),
+    )
+  ).flat();
+  if (!roots.length) return { error: "OUTSIDE_WORKSPACE" };
+
+  let source: string;
+  try {
+    source = await fs.promises.realpath(requestedImagePath(roots, inputPath));
+  } catch (error) {
+    return { error: realpathFailure(error) };
+  }
+  if (!insideAnyRoot(roots, source)) {
+    return { error: "OUTSIDE_WORKSPACE" };
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(source);
+  } catch {
+    return { error: "READ_FAILED" };
+  }
+  const statError = imageStatFailure(stat);
+  if (statError) return { error: statError };
+
+  const read = await readRegularFileAsync(source, MAX_CHAT_IMAGE_BYTES);
+  if ("error" in read) return { error: read.error };
+  return imageFromBytes(read.buffer, source);
+}
+
+// O_NONBLOCK: opening a FIFO never waits for a writer (a blocked open would
+// hold a libuv threadpool thread forever). O_NOFOLLOW: the final component was
+// just realpath'd, so a symlink there now means it was swapped in since — refuse
+// it. Both are no-ops for the regular files these readers expect; 0 where the
+// platform lacks the flag.
+const SAFE_READ_FLAGS =
+  fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0);
+
+export type ReadRegularFileResult =
+  | { buffer: Buffer }
+  | { error: "NOT_FILE" | "EMPTY" | "TOO_LARGE" | "READ_FAILED" };
+
+/**
+ * Read one REGULAR file by an already resolved (realpath'd, containment-checked)
+ * path without trusting that it is still the file the caller checked: the
+ * type/size checks run on the OPENED descriptor, and at most its stat size is
+ * buffered (a file that grows mid-read is READ_FAILED, never a partial answer
+ * past `maxBytes`). Shared by {@link readWorkspaceImageAsync} and the deck
+ * preview manifest reader (`deckPreview.ts`).
+ */
+export async function readRegularFileAsync(
+  realPath: string,
+  maxBytes: number,
+): Promise<ReadRegularFileResult> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.promises.open(realPath, SAFE_READ_FLAGS);
+  } catch {
+    return { error: "READ_FAILED" };
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) return { error: "NOT_FILE" };
+    if (stat.size === 0) return { error: "EMPTY" };
+    if (stat.size > maxBytes) return { error: "TOO_LARGE" };
+    // One spare byte: filling it means the file grew after the stat.
+    const buffer = Buffer.alloc(stat.size + 1);
+    let total = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total === buffer.length) break;
+    }
+    if (total > stat.size) return { error: "READ_FAILED" };
+    if (total === 0) return { error: "EMPTY" };
+    return { buffer: buffer.subarray(0, total) };
+  } catch {
+    return { error: "READ_FAILED" };
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 /**

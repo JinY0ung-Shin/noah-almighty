@@ -170,6 +170,17 @@ These are the invariants the project is built around. New work should reinforce 
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool`/`onUserDialog` don't fire headlessly. The `mcp__`-prefix auto-allow fires BEFORE the owner
   check, so every in-process MCP server MUST self-gate in its handlers.
+- **New decks are HTML converted SHELL-side, bounded by the converter itself; share_file's exact previews are
+  HASH-BOUND.** The bundled `pptx` skill renders agent-authored slide HTML in a network-blocked, CSP-locked
+  headless Chromium and converts it into native, editable objects from ONE foreground Bash command
+  (`scripts/deck.sh`) — never an MCP tool (the `mcp__` auto-allow and the server's secrets make an in-process
+  Chromium the wrong place). Elevated viewers run it unprompted (autoApprove), so the converter's own lints, CSP,
+  network block, kernel-held locks and time/size budgets (every run ends before the 600 s Bash ceiling) ARE the
+  boundary. The build writes `<stem>.preview/manifest.json` bound to the .pptx's sha256; `onShareFile` attaches
+  those renders only when the hash matches the bytes it stored (realpath/roots/magic checks like every workspace
+  read), else falls back to LibreOffice with a redirecting note. Toolchain state = ONE probe (`deckRender.ts` →
+  the skill's `deck.mjs probe`), reported on BOTH metacognition surfaces with explicit `converter: INSTALLED` /
+  `converter: NOT INSTALLED` markers the skill keys on. Mechanics → `docs/architecture/pptx-converter.md`.
 - **Knowledge repo = one per user, agent-managed** (the avatar edits its own repo via `mcp__repo__*`).
   **Second brain = a CONVENTION (`wiki/`+`raw/`) over that SAME repo, NOT a new store** — recall is
   read-only MCP search; capture writes through the repo-write tools + commit (uncommitted = not persisted).

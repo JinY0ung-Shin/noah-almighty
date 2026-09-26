@@ -16,3 +16,13 @@ docker/stt-models/*
 .claude.local.md
 .claude/worktrees/
 .claude/settings.local.json
+# Python bytecode and the pptx converter's per-deck scratch dirs (`.build/`).
+# The already-tracked docker/egress/__pycache__ .pyc predates this rule and
+# stays tracked: ignore rules never untrack a file.
+**/__pycache__/
+**/*.pyc
+**/.build/
+# Build output of the dev/CI-only Open XML SDK validator (build it outside the
+# repo — see scripts/openxml-validator/README.md).
+scripts/openxml-validator/bin/
+scripts/openxml-validator/obj/

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>04 전략 체계 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Strategy framework ("house"): the goal as the roof (dark band), the three strategies as pillars (a target
+     metric from → to, then the actions), and the shared foundation as the base band. Every pillar has the same
+     rows in the same order, so the eye compares across. */
+  .roof { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w); height: 72px;
+          padding: 0 var(--sp-4); border-radius: var(--radius-box); background: var(--c-brand-900);
+          display: flex; align-items: center; gap: var(--sp-2); }
+  .roof-text { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--c-white); }
+  .roof-text strong { color: var(--c-accent-500); }                 /* the slide's one accent: the goal */
+  .roof-meta { margin-left: auto; font-size: var(--fs-caption); line-height: var(--lh-caption); color: rgba(255, 255, 255, 0.72); }
+
+  .pillars { position: absolute; left: var(--margin-x); top: 272px; width: var(--content-w);
+             display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); }
+  .pillar { height: 288px; padding: var(--sp-3); display: flex; flex-direction: column; }
+  .pillar-head { display: flex; align-items: center; gap: 12px; }
+  .pillar-kicker { font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 600; letter-spacing: var(--tracking-label);
+                   color: var(--c-brand-600); }
+  .pillar-name { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--c-ink-900); }
+
+  /* the target metric: label, then from → to on one row (the arrow is an icon, never a text glyph) */
+  .metric { margin-top: var(--sp-2); padding: 12px var(--sp-2); border-radius: 12px; background: var(--c-brand-50); }
+  .metric-label { font-size: 13px; line-height: 20px; font-weight: 600; color: var(--c-ink-600); }
+  .metric-row { display: flex; align-items: center; gap: var(--sp-1); }
+  .metric-from { font-size: 18px; line-height: 28px; font-weight: 600; color: var(--c-ink-500); }
+  .metric-to { font-size: 28px; line-height: 40px; font-weight: 800; letter-spacing: var(--tracking-tight); color: var(--c-brand-600);
+               white-space: nowrap; }
+
+  .actions { margin-top: var(--sp-2); padding-left: 13px; }            /* >= the "• " marker advance at 16 px */
+  .actions li { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: var(--c-ink-700); }
+  .actions li + li { margin-top: 4px; }
+
+  .base { position: absolute; left: var(--margin-x); top: 576px; width: var(--content-w); height: 48px;
+          padding: 0 var(--sp-4); border-radius: var(--radius-box); background: var(--c-brand-100);
+          display: flex; align-items: center; gap: var(--sp-3); }
+  .base-label { font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 700; letter-spacing: var(--tracking-label);
+                color: var(--c-brand-700); }
+  .base-text { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 600; color: var(--c-ink-800); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">02</span> 추진 전략</p>
+    <h1 class="slide-title">3대 전략과 9개 실행 과제로 응대 시간 50% 단축</h1>
+  </header>
+
+  <section class="roof">
+    <p class="pill pill--glass">목표</p>
+    <p class="roof-text">2027년 평균 응대 시간 <strong>50% 단축</strong> · 6분 40초에서 3분 20초로</p>
+    <p class="roof-meta">고객 만족도 72점 → 85점</p>
+  </section>
+
+  <section class="pillars">
+    <article class="card pillar">
+      <div class="pillar-head">
+        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+        <div><p class="pillar-kicker">전략 1</p><p class="pillar-name">채널 통합</p></div>
+      </div>
+      <div class="metric">
+        <p class="metric-label">재문의율</p>
+        <div class="metric-row">
+          <p class="metric-from">23%</p>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#667085" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          <p class="metric-to">12%</p>
+        </div>
+      </div>
+      <ul class="actions">
+        <li>통합 상담 화면과 고객 이력 조회</li>
+        <li>채팅·메신저 상담 동시 처리</li>
+        <li>상담 예약과 콜백 도입</li>
+      </ul>
+    </article>
+
+    <article class="card pillar">
+      <div class="pillar-head">
+        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
+        <div><p class="pillar-kicker">전략 2</p><p class="pillar-name">셀프 서비스</p></div>
+      </div>
+      <div class="metric">
+        <p class="metric-label">셀프 해결률</p>
+        <div class="metric-row">
+          <p class="metric-from">12%</p>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#667085" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          <p class="metric-to">40%</p>
+        </div>
+      </div>
+      <ul class="actions">
+        <li>상위 문의 50종 챗봇 자동 응답</li>
+        <li>주문·배송 조회 셀프 처리</li>
+        <li>FAQ 검색과 안내 문구 개편</li>
+      </ul>
+    </article>
+
+    <article class="card pillar">
+      <div class="pillar-head">
+        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+        <div><p class="pillar-kicker">전략 3</p><p class="pillar-name">상담 지능화</p></div>
+      </div>
+      <div class="metric">
+        <p class="metric-label">건당 후처리 시간</p>
+        <div class="metric-row">
+          <p class="metric-from">90초</p>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#667085" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          <p class="metric-to">30초</p>
+        </div>
+      </div>
+      <ul class="actions">
+        <li>AI 상담 요약과 자동 분류</li>
+        <li>답변 추천과 지식 검색</li>
+        <li>상담 품질 모니터링 자동화</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="base">
+    <p class="base-label">공통 기반</p>
+    <p class="base-text">클라우드 컨택센터 · 통합 고객 데이터 · 상담 품질 관리 체계</p>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2027년 고객 경험 혁신 계획</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">4</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

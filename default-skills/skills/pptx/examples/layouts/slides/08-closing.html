@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>08 요청 사항 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Closing: the ask, not a "thank you". Its own dark layout (data-layout="맺음"): the request as the title, what
+     exactly is to be approved on the right (numbered, one fact each), and the next three dates on a rail. */
+  main.slide.closing {
+    background: linear-gradient(135deg, #0A1433 0%, #1B3796 100%);
+    color: var(--c-white);
+  }
+
+  .brand { position: absolute; left: var(--margin-x); top: 64px; display: flex; align-items: center; gap: 8px; }
+  .brand .mark-a { background: var(--c-white); }
+  .wordmark { font-size: 18px; line-height: 24px; font-weight: 800; letter-spacing: -0.01em; color: var(--c-white); }
+
+  .kicker { position: absolute; left: var(--margin-x); top: 184px; font-size: var(--fs-label); line-height: var(--lh-label);
+            font-weight: 700; letter-spacing: var(--tracking-label); color: var(--c-accent-500); }
+  .closing-title { position: absolute; left: var(--margin-x); top: 216px; width: 544px;
+                   font-size: var(--fs-stat-lg); line-height: var(--lh-stat-lg); font-weight: 800;
+                   letter-spacing: var(--tracking-display); color: var(--c-white); }
+  .closing-sub { position: absolute; left: var(--margin-x); top: 368px; width: 544px;
+                 font-size: var(--fs-body); line-height: var(--lh-body); color: rgba(255, 255, 255, 0.76); }
+
+  /* what to approve: three translucent rows (number, label, the one fact) */
+  .asks { position: absolute; left: 688px; top: 184px; width: 512px; display: flex; flex-direction: column; gap: 12px; }
+  .ask { height: 80px; padding: 0 var(--sp-3); border-radius: var(--radius-box); background: rgba(255, 255, 255, 0.08);
+         display: flex; align-items: center; gap: 20px; }
+  .ask-num { flex: none; width: 32px; font-size: 22px; line-height: 32px; font-weight: 800; color: var(--c-white); }
+  .ask-body { flex: 1; min-width: 0; }
+  .ask-label { font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 600; letter-spacing: var(--tracking-label);
+               color: rgba(255, 255, 255, 0.60); }
+  .ask-text { margin-top: 2px; font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-white); }
+
+  /* next steps: three dates on one rail (fixed 384 px pitch, identical in both profiles), the first one lit */
+  .next-label { position: absolute; left: var(--margin-x); top: 480px; font-size: var(--fs-label); line-height: var(--lh-label);
+                font-weight: 600; letter-spacing: var(--tracking-label); color: rgba(255, 255, 255, 0.60); }
+  .next { position: absolute; left: var(--margin-x); top: 516px; width: var(--content-w); height: 96px; }
+  .next > * { position: absolute; }
+  .next-rail { left: 9px; top: 8px; width: 768px; height: 2px; background: rgba(255, 255, 255, 0.20); }   /* dot to dot */
+  .step { top: 0; width: 352px; }
+  .step-dot { width: 18px; height: 18px; border-radius: 50%; background: rgba(255, 255, 255, 0.36); }
+  .step.is-now .step-dot { background: var(--c-white); }
+  .step-date { margin-top: 12px; font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 700;
+               color: rgba(255, 255, 255, 0.72); }
+  .step.is-now .step-date { color: var(--c-white); }
+  .step-name { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 600; color: var(--c-white); }
+
+  .closing-note { position: absolute; left: var(--margin-x); top: 680px; font-size: var(--fs-micro);
+                  line-height: var(--lh-micro); color: rgba(255, 255, 255, 0.60); }
+  .closing-page { position: absolute; left: 1168px; top: 680px; width: 32px; text-align: right;
+                  font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 700;
+                  color: rgba(255, 255, 255, 0.60); }
+</style>
+</head>
+<body>
+<main class="slide closing" data-layout="맺음">
+  <div class="brand" data-group="브랜드">
+    <div class="mark" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+    <p class="wordmark">예시테크</p>
+  </div>
+
+  <p class="kicker">의사결정 요청</p>
+  <h1 class="closing-title">B안 클라우드 전환<br>추진을 승인해 주십시오</h1>
+  <p class="closing-sub">3년 총비용 30억 원으로 5월 시범 오픈,<br>9월 전면 전환까지 연내에 마칩니다.</p>
+
+  <section class="asks" data-group="승인 요청 사항">
+    <div class="ask"><p class="ask-num">1</p><div class="ask-body"><p class="ask-label">구축 방식</p><p class="ask-text">B안 · 구독형 클라우드 컨택센터</p></div></div>
+    <div class="ask"><p class="ask-num">2</p><div class="ask-body"><p class="ask-label">2027년 예산</p><p class="ask-text">초기 투자 3억 원 · 운영비 9억 원</p></div></div>
+    <div class="ask"><p class="ask-num">3</p><div class="ask-body"><p class="ask-label">추진 조직</p><p class="ask-text">IT전략팀 주관 전담 TF, 1월 발족</p></div></div>
+  </section>
+
+  <p class="next-label">다음 단계</p>
+  <div class="next" data-group="다음 단계 — 12월 18일 · 1월 6일 · 2월 3일 (날짜 변경 시 직접 수정)">
+    <div class="next-rail"></div>
+    <div class="step is-now" style="left: 0"><div class="step-dot"></div><p class="step-date">12월 18일</p><p class="step-name">경영위원회 승인</p></div>
+    <div class="step" style="left: 384px"><div class="step-dot"></div><p class="step-date">2027년 1월 6일</p><p class="step-name">사업자 계약 · TF 발족</p></div>
+    <div class="step" style="left: 768px"><div class="step-dot"></div><p class="step-date">2027년 2월 3일</p><p class="step-name">착수 보고</p></div>
+  </div>
+
+  <p class="closing-note">샘플 데이터 · 본 자료의 기업명과 수치는 모두 가상으로 구성한 예시입니다</p>
+  <p class="closing-page" data-field="slidenum">8</p>
+</main>
+</body>
+</html>

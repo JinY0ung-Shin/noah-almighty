@@ -1,0 +1,6 @@
+/* Features self-test deck: a deck-wide token override, served to every slide as ../deck.css.
+   The brand colour becomes teal; the theme's accent1 (--pptx-accent1 = --c-brand-600) follows it. */
+:root {
+  --c-brand-600: #0E7C66;
+  --c-brand-50:  #E6F4F0;
+}

@@ -111,6 +111,23 @@ export interface ShareFileRequest {
   name?: string;
 }
 
+/**
+ * share_file, pptx only: what became of the deck converter's preview sidecar
+ * (`<stem>.preview/manifest.json` next to the shared file — `deckPreview.ts`).
+ * FACTS, no prose: `fileOutputTools.ts` composes the model-facing notes.
+ */
+export interface DeckSidecarFact {
+  /**
+   * loaded = valid and bound to these exact bytes; none = no sidecar there;
+   * stale = it describes an earlier build of the .pptx; invalid = rejected.
+   */
+  status: "loaded" | "none" | "stale" | "invalid";
+  /** Short English reason (stale/invalid). */
+  detail?: string;
+  /** Font profile the renders were built with (loaded only). */
+  profile?: "embedded" | "malgun";
+}
+
 export type FileOutputResult =
   | {
       behavior: "shown";
@@ -123,6 +140,17 @@ export type FileOutputResult =
        * slides itself.
        */
       previews?: number;
+      /**
+       * share_file only: where the attached previews came from — the deck
+       * converter's own renders (hash-bound sidecar) or the server's
+       * LibreOffice rasterization. Undefined when none were attached (older
+       * hosts: `previews` alone means LibreOffice).
+       */
+      previewSource?: "converter" | "libreoffice";
+      /** share_file, converter previews only: total slides in the sidecar manifest (≥ `previews`). */
+      previewTotal?: number;
+      /** share_file, pptx only: the sidecar outcome (see {@link DeckSidecarFact}). */
+      deckSidecar?: DeckSidecarFact;
     }
   | { behavior: "error"; message: string };
 

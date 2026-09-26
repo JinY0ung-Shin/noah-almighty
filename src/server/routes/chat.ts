@@ -34,6 +34,7 @@ import type {
   BrowserCookie,
   BrowserStorageEntry,
   BrowserTab,
+  DeckSidecarFact,
 } from "../agent/events.js";
 import {
   formatSubmission,
@@ -59,6 +60,7 @@ import {
   readChatImages,
   resolveStoredImage,
   saveChatImages,
+  saveHiddenChatImage,
   savePreviewImages,
   stageChatImageFilesFromAttachments,
   MAX_CHAT_IMAGES_PER_MESSAGE,
@@ -68,6 +70,7 @@ import {
 } from "../chatImages.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { isPreviewableExtension, renderDocumentPreviews } from "../deckRender.js";
+import { loadConverterPreviews } from "../deckPreview.js";
 import {
   deleteChatFileAttachments,
   deleteConversationFiles,
@@ -1052,6 +1055,11 @@ export async function executeChatTurn(
     if (!externalAgent) {
       fs.mkdirSync(workspaceDir, { recursive: true });
     }
+    // The run's explicit output roots — the active repo clone first (the run
+    // cwd) when one is open, then the conversation scratch workspace. show_file,
+    // share_file and share_file's deck-preview sidecar lookup all resolve
+    // against exactly this list, so they cannot disagree on containment.
+    const outputRoots = [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])];
     store.touchConversation(
       ownerUserId,
       conversationId,
@@ -2531,7 +2539,7 @@ export async function executeChatTurn(
               config,
               conversationId,
               requestData.path,
-              [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])],
+              outputRoots,
               requestData.caption,
             );
             if ("error" in result) {
@@ -2577,13 +2585,18 @@ export async function executeChatTurn(
               config,
               conversationId,
               requestData.path,
-              [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])],
+              outputRoots,
               requestData.name,
             );
             if ("error" in result) {
               const maxMb = Math.round(MAX_CHAT_FILE_BYTES / (1024 * 1024));
+              // A converter-built deck's exact slide renders live in <stem>.preview/ NEXT TO the .pptx
+              // (deckPreview.ts), so copying the .pptx alone would trade them for LibreOffice previews.
+              const deckFolderHint = /\.pptx$/i.test(requestData.path.trim())
+                ? " For a deck built by the pptx skill's converter, copy its WHOLE deck folder instead (for example: cp -r /tmp/q3-review \"$PWD/\") and share q3-review/q3-review.pptx from there — a .pptx copied on its own loses the exact slide renders kept in the <name>.preview/ folder next to it."
+                : "";
               const messages = {
-                OUTSIDE_WORKSPACE: "The file path must stay inside the current working directory or conversation scratch workspace. Copy it into the current directory with Bash (for example: cp /tmp/deck.pptx \"$PWD/deck.pptx\"), then retry share_file with ./deck.pptx.",
+                OUTSIDE_WORKSPACE: `The file path must stay inside the current working directory or conversation scratch workspace. Copy it into the current directory with Bash (for example: cp /tmp/deck.pptx "$PWD/deck.pptx"), then retry share_file with ./deck.pptx.${deckFolderHint}`,
                 NOT_FOUND: "The file does not exist.",
                 NOT_FILE: "The supplied path is not a regular file.",
                 EMPTY: "The file is empty.",
@@ -2599,34 +2612,104 @@ export async function executeChatTurn(
               runId,
               attachment: result.attachment,
             });
-            // Auto-render page previews SERVER-SIDE (pptx/docx/xlsx/pdf →
-            // hidden PNG attachments on this same message) so the agent
-            // never has to rasterize and publish slides one by one.
-            // Best-effort: a missing toolchain or a render failure still
-            // delivers the file, just without the panel preview.
+            // Page previews for the card's side panel, as HIDDEN image
+            // attachments on this same message (parentId = the card), so the
+            // agent never rasterizes and publishes slides one by one. A pptx
+            // the deck converter built carries its own EXACT renders in a
+            // hash-bound sidecar (deckPreview.ts); anything else — or a deck
+            // whose sidecar is missing, stale or invalid — is rasterized
+            // SERVER-SIDE by LibreOffice (pptx/docx/xlsx/pdf). Best-effort: a
+            // missing toolchain or a render failure still delivers the file,
+            // just without the panel preview.
+            const attachPreview = (attachment: MessageAttachment) => {
+              shownAttachments.push(attachment);
+              emitRunEvent(runId, "file", { runId, attachment });
+            };
             let previewCount = 0;
+            let previewSource: "converter" | "libreoffice" | undefined;
+            let previewTotal: number | undefined;
+            let deckSidecar: DeckSidecarFact | undefined;
             const stored = resolveStoredFile(config, conversationId, result.attachment.id);
             if (stored && isPreviewableExtension(stored.ext)) {
-              const pages = await renderDocumentPreviews(stored.path, stored.ext);
-              if (pages.length) {
-                const previewAttachments = savePreviewImages(
-                  config,
-                  conversationId,
-                  pages,
-                  result.attachment.id,
-                );
-                previewCount = previewAttachments.length;
-                for (const attachment of previewAttachments) {
-                  shownAttachments.push(attachment);
-                  emitRunEvent(runId, "file", { runId, attachment });
+              if (stored.ext === "pptx") {
+                const sidecar = await loadConverterPreviews({
+                  sourcePath: result.sourcePath,
+                  sha256: result.sha256,
+                  allowedRoots: outputRoots,
+                });
+                deckSidecar =
+                  sidecar.status === "loaded"
+                    ? { status: "loaded", profile: sidecar.profile }
+                    : sidecar.status === "none"
+                      ? { status: "none" }
+                      : { status: sidecar.reason, detail: sidecar.detail };
+                if (sidecar.status === "loaded") {
+                  // Agent-written bytes, but already validated by the loader
+                  // (containment, magic = declared type, per-file sha256) —
+                  // never the trusted-renderer path (savePreviewImages).
+                  const saved: MessageAttachment[] = [];
+                  try {
+                    for (const slide of sidecar.slides) {
+                      saved.push(
+                        saveHiddenChatImage(
+                          config,
+                          conversationId,
+                          slide.buffer,
+                          slide.mediaType,
+                          slide.name,
+                          result.attachment.id,
+                        ),
+                      );
+                    }
+                  } catch (err) {
+                    // All or nothing: drop the partial set and fall back.
+                    deleteChatImageAttachments(config, conversationId, saved);
+                    saved.length = 0;
+                    logger.warn(
+                      { err, conversationId, fileId: result.attachment.id },
+                      "deck converter previews could not be stored",
+                    );
+                  }
+                  if (saved.length) {
+                    saved.forEach(attachPreview);
+                    previewCount = saved.length;
+                    previewSource = "converter";
+                    previewTotal = sidecar.total;
+                  }
                 }
               }
+              if (!previewSource) {
+                const pages = await renderDocumentPreviews(stored.path, stored.ext);
+                if (pages.length) {
+                  const previewAttachments = savePreviewImages(
+                    config,
+                    conversationId,
+                    pages,
+                    result.attachment.id,
+                  );
+                  previewCount = previewAttachments.length;
+                  previewSource = "libreoffice";
+                  previewAttachments.forEach(attachPreview);
+                }
+              }
+              logger.info(
+                {
+                  conversationId,
+                  fileId: result.attachment.id,
+                  previewSource: previewSource ?? null,
+                  sidecar: deckSidecar ?? null,
+                },
+                "share_file previews",
+              );
             }
             return {
               behavior: "shown",
               attachment: result.attachment,
               url: `/api/conversations/${encodeURIComponent(conversationId)}/files/${encodeURIComponent(result.attachment.id)}`,
               previews: previewCount,
+              ...(previewSource ? { previewSource } : {}),
+              ...(previewTotal !== undefined ? { previewTotal } : {}),
+              ...(deckSidecar ? { deckSidecar } : {}),
             };
           },
         },

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>03 간지 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Section divider: its own layout (data-layout="간지") with a dark background — the builder gives it a layout of
+     its own and keeps a copy of the dark background on the slide, so its white text stays readable on any
+     template. It previews what the section argues (the three strategies) instead of decorating empty space. */
+  main.slide.section {
+    background: linear-gradient(160deg, #0F1D4A 0%, #0A1433 100%);
+    color: var(--c-white);
+  }
+
+  .brand { position: absolute; left: var(--margin-x); top: 64px; display: flex; align-items: center; gap: 8px; }
+  .brand .mark-a { background: var(--c-white); }
+  .wordmark { font-size: 18px; line-height: 24px; font-weight: 800; letter-spacing: -0.01em; color: var(--c-white); }
+
+  .section-num { position: absolute; left: var(--margin-x); top: 176px; font-size: 72px; line-height: 96px;
+                 font-weight: 800; letter-spacing: var(--tracking-display); color: var(--c-accent-500); }
+  .section-title { position: absolute; left: var(--margin-x); top: 272px; width: 520px;
+                   font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 800;
+                   letter-spacing: var(--tracking-display); color: var(--c-white); }
+  .section-sub { position: absolute; left: var(--margin-x); top: 368px; width: 520px;
+                 font-size: var(--fs-lead); line-height: var(--lh-lead); color: rgba(255, 255, 255, 0.76); }
+
+  /* what this section covers: one translucent row per strategy (icon, name, one line) */
+  .preview { position: absolute; left: 688px; top: 176px; width: 512px; display: flex; flex-direction: column; gap: var(--sp-2); }
+  .item { height: 96px; padding: 0 var(--sp-3); border-radius: var(--radius-box); background: rgba(255, 255, 255, 0.06);
+          display: flex; align-items: center; gap: 20px; }
+  .item-icon { flex: none; width: 48px; height: 48px; border-radius: 50%; background: rgba(255, 255, 255, 0.10);
+               display: flex; align-items: center; justify-content: center; }
+  .item-body { flex: 1; min-width: 0; }
+  .item-kicker { font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 600; letter-spacing: var(--tracking-label);
+                 color: rgba(255, 255, 255, 0.56); }
+  .item-title { margin-top: 2px; font-size: 20px; line-height: 28px; font-weight: 700; color: var(--c-white); }
+  .item-desc { font-size: var(--fs-caption); line-height: var(--lh-caption); color: rgba(255, 255, 255, 0.68); }
+
+  /* where this section sits in the deck: one bar + label per section, the current one lit */
+  .progress { position: absolute; left: var(--margin-x); top: 568px; width: var(--content-w);
+              display: grid; grid-template-columns: repeat(4, 268px); column-gap: 16px; }
+  .step-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.20); }
+  .step-label { margin-top: 12px; font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 600;
+                color: rgba(255, 255, 255, 0.56); }
+  .step.is-current .step-bar { background: var(--c-white); }
+  .step.is-current .step-label { font-weight: 700; color: var(--c-white); }
+
+  .section-note { position: absolute; left: var(--margin-x); top: 680px; font-size: var(--fs-micro);
+                  line-height: var(--lh-micro); color: rgba(255, 255, 255, 0.60); }
+  .section-page { position: absolute; left: 1168px; top: 680px; width: 32px; text-align: right;
+                  font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 700;
+                  color: rgba(255, 255, 255, 0.60); }
+</style>
+</head>
+<body>
+<main class="slide section" data-layout="간지">
+  <div class="brand" data-group="브랜드">
+    <div class="mark" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+    <p class="wordmark">예시테크</p>
+  </div>
+
+  <p class="section-num">02</p>
+  <h1 class="section-title">추진 전략</h1>
+  <p class="section-sub">세 가지 전략으로 응대 시간을 절반으로</p>
+
+  <section class="preview" data-group="이 장의 내용">
+    <div class="item">
+      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+      <div class="item-body"><p class="item-kicker">전략 1</p><p class="item-title">채널 통합</p><p class="item-desc">전화·채팅·메신저를 하나의 상담 화면으로</p></div>
+    </div>
+    <div class="item">
+      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
+      <div class="item-body"><p class="item-kicker">전략 2</p><p class="item-title">셀프 서비스</p><p class="item-desc">단순 문의는 챗봇과 FAQ로 고객이 직접 해결</p></div>
+    </div>
+    <div class="item">
+      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+      <div class="item-body"><p class="item-kicker">전략 3</p><p class="item-title">상담 지능화</p><p class="item-desc">AI 요약·답변 추천으로 후처리 시간 단축</p></div>
+    </div>
+  </section>
+
+  <div class="progress" data-group="진행 단계">
+    <div class="step"><div class="step-bar"></div><p class="step-label">01 현황 진단</p></div>
+    <div class="step is-current"><div class="step-bar"></div><p class="step-label">02 추진 전략</p></div>
+    <div class="step"><div class="step-bar"></div><p class="step-label">03 실행 계획</p></div>
+    <div class="step"><div class="step-bar"></div><p class="step-label">04 기대 효과</p></div>
+  </div>
+
+  <p class="section-note">샘플 데이터 · 본 자료의 기업명과 수치는 모두 가상으로 구성한 예시입니다</p>
+  <p class="section-page" data-field="slidenum">3</p>
+</main>
+</body>
+</html>

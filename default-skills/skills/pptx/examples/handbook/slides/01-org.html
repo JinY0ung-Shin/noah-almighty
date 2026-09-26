@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>01 조직 · 2026년 신입사원 온보딩 가이드</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Org chart: a tree of boxes joined by connector lines. Connectors are 2 px rectangles painted FIRST (DOM order =
+     paint order), so the boxes cover their ends; PowerPoint has no connector that follows a moved box, so their
+     group name says to move them by hand. Every coordinate is relative to .org (x 80, y 184): the four division
+     cards sit on a 286 px pitch (262 + 24), card k is centred at 131 + k * 286, the CEO box at 560. Headcounts are
+     the sum of their teams (86 + … = 314, + 6 in the strategy office = 320). */
+  .org { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w); height: 440px; }
+  .org > * { position: absolute; }
+  .wires { left: 0; top: 0; width: 1120px; height: 440px; }
+  .wire { position: absolute; background: var(--c-ink-300); }
+
+  .node { height: 48px; border-radius: var(--radius-box); display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .node--ceo { left: 460px; top: 8px; width: 200px; background: var(--c-brand-900); }
+  .node--ceo .node-name { color: var(--c-white); }
+  .node--staff { left: 700px; top: 8px; width: 280px; background: var(--c-white); border: 1px solid var(--c-brand-200); }
+  .node-name { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-ink-900); }
+  .node-note { font-size: 13px; line-height: 20px; color: var(--c-ink-500); }
+
+  .unit { top: 128px; width: 262px; height: 312px; padding: 20px var(--sp-3); display: flex; flex-direction: column; }
+  .unit-head { display: flex; align-items: center; justify-content: space-between; }
+  .unit-name { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-ink-900); }
+  .unit-count { font-size: 20px; line-height: 28px; font-weight: 800; color: var(--c-brand-600); }
+  .unit-role { margin-top: 2px; font-size: 13px; line-height: 20px; color: var(--c-ink-500); }
+  .teams { margin-top: auto; }
+  .team { height: 50px; display: flex; align-items: center; gap: var(--sp-1); border-top: 1px solid var(--c-ink-100); }
+  .team-name { flex: 1; min-width: 0; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: var(--c-ink-700); }
+  .team-count { flex: none; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 600; color: var(--c-ink-900); }
+  .team.is-owner .team-name { font-weight: 700; color: var(--c-brand-700); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">01</span> 조직</p>
+    <div class="title-row">
+      <h1 class="slide-title">4개 본부 16개 팀, 320명이 함께 일합니다</h1>
+      <p class="pill pill--outline period">2026년 10월 1일 기준</p>
+    </div>
+  </header>
+
+  <section class="org">
+    <div class="wires" data-group="조직도 연결선 (상자를 옮기면 직접 조정)">
+      <div class="wire" style="left: 660px; top: 31px; width: 40px; height: 2px"></div>
+      <div class="wire" style="left: 559px; top: 56px; width: 2px; height: 40px"></div>
+      <div class="wire" style="left: 130px; top: 96px; width: 860px; height: 2px"></div>
+      <div class="wire" style="left: 130px; top: 96px; width: 2px; height: 32px"></div>
+      <div class="wire" style="left: 416px; top: 96px; width: 2px; height: 32px"></div>
+      <div class="wire" style="left: 702px; top: 96px; width: 2px; height: 32px"></div>
+      <div class="wire" style="left: 988px; top: 96px; width: 2px; height: 32px"></div>
+    </div>
+    <div class="node node--ceo"><p class="node-name">대표이사</p></div>
+    <div class="node node--staff"><p class="node-name">전략기획실</p><p class="node-note">대표이사 직속 · 6명</p></div>
+
+    <article class="card unit" style="left: 0">
+      <div class="unit-head"><p class="unit-name">클라우드사업본부</p><p class="unit-count">96명</p></div>
+      <p class="unit-role">클라우드 서비스 기획·개발·운영</p>
+      <div class="teams">
+        <div class="team"><p class="team-name">클라우드기획팀</p><p class="team-count">18명</p></div>
+        <div class="team"><p class="team-name">플랫폼개발팀</p><p class="team-count">34명</p></div>
+        <div class="team"><p class="team-name">서비스운영팀</p><p class="team-count">26명</p></div>
+        <div class="team"><p class="team-name">기술영업팀</p><p class="team-count">18명</p></div>
+      </div>
+    </article>
+    <article class="card unit" style="left: 286px">
+      <div class="unit-head"><p class="unit-name">솔루션사업본부</p><p class="unit-count">88명</p></div>
+      <p class="unit-role">기업·제조·금융 고객 솔루션</p>
+      <div class="teams">
+        <div class="team"><p class="team-name">엔터프라이즈팀</p><p class="team-count">30명</p></div>
+        <div class="team"><p class="team-name">스마트제조팀</p><p class="team-count">24명</p></div>
+        <div class="team"><p class="team-name">금융IT팀</p><p class="team-count">22명</p></div>
+        <div class="team"><p class="team-name">컨설팅팀</p><p class="team-count">12명</p></div>
+      </div>
+    </article>
+    <article class="card unit" style="left: 572px">
+      <div class="unit-head"><p class="unit-name">기술연구소</p><p class="unit-count">84명</p></div>
+      <p class="unit-role">AI·데이터·보안 핵심 기술</p>
+      <div class="teams">
+        <div class="team"><p class="team-name">AI연구팀</p><p class="team-count">28명</p></div>
+        <div class="team"><p class="team-name">데이터플랫폼팀</p><p class="team-count">24명</p></div>
+        <div class="team"><p class="team-name">보안기술팀</p><p class="team-count">18명</p></div>
+        <div class="team"><p class="team-name">품질팀</p><p class="team-count">14명</p></div>
+      </div>
+    </article>
+    <article class="card unit" style="left: 858px">
+      <div class="unit-head"><p class="unit-name">경영지원본부</p><p class="unit-count">46명</p></div>
+      <p class="unit-role">인사·재무·법무·IT 지원</p>
+      <div class="teams">
+        <div class="team is-owner"><p class="team-name">People팀</p><p class="pill pill--brand">온보딩 담당</p><p class="team-count">12명</p></div>
+        <div class="team"><p class="team-name">재무팀</p><p class="team-count">12명</p></div>
+        <div class="team"><p class="team-name">법무팀</p><p class="team-count">8명</p></div>
+        <div class="team"><p class="team-name">IT지원팀</p><p class="team-count">14명</p></div>
+      </div>
+    </article>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 신입사원 온보딩 가이드</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 정보</p>
+      <p class="page-num" data-field="slidenum">1</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>02 핵심 지표 · 2026년 3분기 사업 실적 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  .kpi-grid { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w);
+              display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3); }
+  .kpi { height: 288px; padding: var(--sp-3); display: flex; flex-direction: column; }
+  .kpi-top { display: flex; align-items: center; justify-content: space-between; }
+  .kpi .stat-label { margin-top: var(--sp-2); }
+  .kpi-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--c-ink-100); }
+
+  /* prior vs current: two bars on one scale (the larger value = the full track), rect shapes only. Their lengths are
+     drawn, not linked to the numbers: each group's name (data-group -> PowerPoint's Selection Pane) states the two
+     values it encodes and that the bars must be resized by hand when a number changes (fixer round 3, EDIT-03) */
+  .kpi-bars { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .kpi-bar { display: flex; align-items: center; gap: var(--sp-1); }
+  .kpi-bar-label { flex: none; width: 28px; font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-ink-500); }
+  .kpi-bar-track { flex: 1; height: 8px; }
+  .kpi-bar-fill { height: 8px; border-radius: 4px; background: var(--c-series-prev); }
+  .kpi-bar-fill.is-current { background: var(--c-series-curr); }
+
+  /* the title's two claims (매출, 영업이익) lead: dark cards, as the navy panel / table head elsewhere in the deck */
+  .kpi--hero { background: var(--c-brand-900); }
+  .kpi--hero .stat-label { color: rgba(255, 255, 255, 0.64); }
+  .kpi--hero .stat-value { color: var(--c-white); }
+  .kpi--hero .stat-unit { color: rgba(255, 255, 255, 0.72); }
+  .kpi--hero .kpi-bar-label { color: rgba(255, 255, 255, 0.60); }
+  .kpi--hero .kpi-bar-fill { background: rgba(255, 255, 255, 0.28); }
+  .kpi--hero .kpi-bar-fill.is-current { background: var(--c-white); }
+  .kpi--hero .kpi-foot { border-top-color: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.64); }
+  .icon-badge--glass { background: rgba(255, 255, 255, 0.10); }
+
+  .summary { position: absolute; left: var(--margin-x); top: 496px; width: var(--content-w); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">01</span> 핵심 지표</p>
+    <div class="title-row">
+      <h1 class="slide-title">매출과 영업이익 모두 두 자릿수 성장</h1>
+      <p class="pill pill--outline period">2026년 3분기 · 전년 동기 대비</p>
+    </div>
+  </header>
+
+  <section class="kpi-grid">
+    <article class="card kpi kpi--hero">
+      <div class="kpi-top">
+        <div class="icon-badge icon-badge--sm icon-badge--glass">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><path d="M7 16v-4"/><path d="M12 16V6"/><path d="M17 16V9"/></svg>
+        </div>
+        <p class="pill pill--up-on-dark">▲ 12.4%</p>
+      </div>
+      <p class="stat-label">매출액</p>
+      <p class="stat-value">1,284<span class="stat-unit">억 원</span></p>
+      <div class="kpi-bars" data-group="비교 막대 — 전년 1,142 · 올해 1,284 (수치 수정 시 길이 직접 조정)">
+        <div class="kpi-bar"><p class="kpi-bar-label">전년</p><div class="kpi-bar-track"><div class="kpi-bar-fill" style="width: 88.9%"></div></div></div>
+        <div class="kpi-bar"><p class="kpi-bar-label">올해</p><div class="kpi-bar-track"><div class="kpi-bar-fill is-current" style="width: 100%"></div></div></div>
+      </div>
+      <p class="caption kpi-foot">전년 동기 1,142억 원</p>
+    </article>
+
+    <article class="card kpi kpi--hero">
+      <div class="kpi-top">
+        <div class="icon-badge icon-badge--sm icon-badge--glass">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5l6-6 4 4 7.5-7.5"/><path d="M14.5 7h6v6"/></svg>
+        </div>
+        <p class="pill pill--up-on-dark">▲ 21.6%</p>
+      </div>
+      <p class="stat-label">영업이익</p>
+      <p class="stat-value">186<span class="stat-unit">억 원</span></p>
+      <div class="kpi-bars" data-group="비교 막대 — 전년 153 · 올해 186 (수치 수정 시 길이 직접 조정)">
+        <div class="kpi-bar"><p class="kpi-bar-label">전년</p><div class="kpi-bar-track"><div class="kpi-bar-fill" style="width: 82.3%"></div></div></div>
+        <div class="kpi-bar"><p class="kpi-bar-label">올해</p><div class="kpi-bar-track"><div class="kpi-bar-fill is-current" style="width: 100%"></div></div></div>
+      </div>
+      <p class="caption kpi-foot">영업이익률 14.5%, 1.1%p 개선</p>
+    </article>
+
+    <article class="card kpi">
+      <div class="kpi-top">
+        <div class="icon-badge icon-badge--sm">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/></svg>
+        </div>
+        <p class="pill pill--up">▲ 8.9%</p>
+      </div>
+      <p class="stat-label">신규 계약</p>
+      <p class="stat-value">342<span class="stat-unit">건</span></p>
+      <div class="kpi-bars" data-group="비교 막대 — 전년 314 · 올해 342 (수치 수정 시 길이 직접 조정)">
+        <div class="kpi-bar"><p class="kpi-bar-label">전년</p><div class="kpi-bar-track"><div class="kpi-bar-fill" style="width: 91.8%"></div></div></div>
+        <div class="kpi-bar"><p class="kpi-bar-label">올해</p><div class="kpi-bar-track"><div class="kpi-bar-fill is-current" style="width: 100%"></div></div></div>
+      </div>
+      <p class="caption kpi-foot">10억 원 이상 대형 계약 27건</p>
+    </article>
+
+    <article class="card kpi">
+      <div class="kpi-top">
+        <div class="icon-badge icon-badge--sm">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5A8 8 0 1 1 10.5 4.5"/><path d="M14 3v7h7a7 7 0 0 0-7-7z"/></svg>
+        </div>
+        <p class="pill pill--down">▼ 0.8%p</p>
+      </div>
+      <p class="stat-label">시장 점유율</p>
+      <p class="stat-value">23.6<span class="stat-unit">%</span></p>
+      <div class="kpi-bars" data-group="비교 막대 — 전년 24.4 · 올해 23.6 (수치 수정 시 길이 직접 조정)">
+        <div class="kpi-bar"><p class="kpi-bar-label">전년</p><div class="kpi-bar-track"><div class="kpi-bar-fill" style="width: 100%"></div></div></div>
+        <div class="kpi-bar"><p class="kpi-bar-label">올해</p><div class="kpi-bar-track"><div class="kpi-bar-fill is-current" style="width: 96.7%"></div></div></div>
+      </div>
+      <p class="caption kpi-foot">경쟁사 가격 인하로 소폭 하락</p>
+    </article>
+  </section>
+
+  <section class="summary">
+    <div class="icon-badge icon-badge--sm icon-badge--white">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2v.2h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>
+    </div>
+    <p class="summary-text"><strong>종합 평가</strong>  클라우드 구독 매출 확대로 매출과 영업이익이 모두 두 자릿수 성장했습니다.<br>다만 시장 점유율이 0.8%p 하락해 4분기에는 중견기업 대상 영업을 강화할 계획입니다.</p>
+  </section>
+
+  <footer class="slide-footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 3분기 사업 실적 보고</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">2</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

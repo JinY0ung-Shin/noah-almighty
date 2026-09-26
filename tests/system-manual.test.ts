@@ -22,10 +22,12 @@ describe("official system manual", () => {
       avatar: { id: "owner", displayName: "Owner", alias: "", persona: "" },
       viewerIsOwner: true, knowledgeRepoConfigured: true, gitTokenSet: true,
       browserEnabled: true, canvasEnabled: true, visionEnabled: false,
-      fileOutputEnabled: true, deckRenderingEnabled: true,
+      fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true,
       personalAgentsEnabled: true, personalAgentNames: ["Research"],
     });
     expect(prompt.length).toBeLessThan(18000);
+    // The converter deck section (the longer of the two) is what this budgets.
+    expect(prompt).toContain("edit its HTML and rebuild");
     expect(prompt).toContain("topic `browser-operations`");
     expect(prompt).toContain("topic `canvas-operations`");
     expect(prompt).toContain("Screenshots and pixel-mode clicks are unavailable");
@@ -56,6 +58,22 @@ describe("official system manual", () => {
       expect(page.text.length).toBeLessThan(16000);
     }
     expect(index.text).not.toContain("curl -sS");
+  });
+
+  it("documents the deck converter without claiming it is available", () => {
+    const page = readSystemManual("files-canvas").text;
+    expect(page).toContain("New PowerPoint decks are designed as HTML/CSS slides and converted by the pptx skill");
+    expect(page).toContain("charts keep their data for Edit Data");
+    expect(page).toContain("a 맑은 고딕 build is available on request");
+    expect(page).toContain("is previewed approximately by LibreOffice");
+    expect(page).toContain("Existing decks and user templates are edited in place with python-pptx");
+    // Availability is a runtime fact (describe_system), never a manual claim.
+    expect(page).toContain("Whether the converter is installed, and its limits, are runtime facts reported by describe_system");
+    expect(page).not.toContain("converter: INSTALLED");
+    expect(page).not.toContain("requires the server's presentation toolchain");
+    // The draw.io paragraph is unchanged.
+    expect(page).toContain("For draw.io, author an uncompressed mxfile XML .drawio file and publish it.");
+    expect(page.length).toBeLessThan(16000);
   });
 
   it.each(["../../.env", "/etc/passwd", "https://example.com", "constructor", "toString", "external-task", "x".repeat(1000)])(

@@ -172,6 +172,8 @@ import {
 } from "../src/server/agent/webFetchTools.js";
 import { generateSshKeyPair } from "../src/server/sshIdentity.js";
 import { workspaceDirFor } from "../src/server/workspace.js";
+import type { DeckToolchainState } from "../src/server/deckRender.js";
+import { groupAgentAvatarId } from "../src/server/groupAgents.js";
 import type { AgentRequest, AgentResponse, AppConfig, Plugin } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
@@ -2435,6 +2437,287 @@ describe("system tools (avatar system management)", () => {
     expect(on.content[0].text).toContain("Document deck generation (PPTX): toolchain available");
     expect(on.content[0].text).toContain("`pptx` skill");
     expect(on.content[0].text).toContain("mcp__file_output__share_file");
+  });
+
+  // ---- deck line with the probe state (I12 markers) -------------------------
+  const deckState = (over: Partial<DeckToolchainState> = {}): DeckToolchainState => ({
+    pythonPptx: true,
+    libreOffice: true,
+    converter: true,
+    converterVersion: "1.0.0",
+    chromiumVersion: "154.0.8037.57",
+    profiles: ["embedded", "malgun"],
+    limits: {
+      maxSlides: 60,
+      maxSeconds: 540,
+      maxSlideHtmlBytes: 2097152,
+      maxDomElements: 2500,
+      maxAssetBytes: 20971520,
+      maxDeckInputBytes: 104857600,
+      maxConcurrent: 2,
+      slotWaitSeconds: 150,
+    },
+    selftest: "pass",
+    converterMissing: [],
+    pptxSkillNames: ["pptx", "avatar-defaults:pptx"],
+    definitive: true,
+    ...over,
+  });
+  const legacyDeckState = (over: Partial<DeckToolchainState> = {}) =>
+    deckState({
+      converter: false,
+      profiles: [],
+      limits: undefined,
+      selftest: "disabled",
+      converterMissing: ["Chromium headless shell is not installed in this image"],
+      ...over,
+    });
+  const DECK_PREFIX = "- Document deck generation (PPTX): ";
+  const deckLineOf = (body: string) => body.split("\n").find((line) => line.startsWith(DECK_PREFIX)) ?? "";
+  async function describeAs(s: ReturnType<typeof setup>, ctx: Partial<SystemToolsContext>) {
+    return (
+      (await callTool(buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, ...ctx }), "describe_system", {}))
+        .content[0].text ?? ""
+    );
+  }
+  const CONVERTER_HEAD =
+    "toolchain available — converter: INSTALLED (HTML→editable-PPTX v1.0.0, Chromium 154.0.8037.57; font profiles: embedded = Pretendard embedded in the file (default), malgun = 맑은 고딕 declared, not embedded; limits: ≤60 slides and ≤9 min per build)";
+
+  it("describe_system reports an installed converter: marker, version, profiles, limits, LibreOffice clause", async () => {
+    const s = setup("st-deck-converter");
+    const line = deckLineOf(await describeAs(s, { deckToolchain: deckState(), fileOutputEnabled: true }));
+    expect(line).toBe(
+      `${DECK_PREFIX}${CONVERTER_HEAD} — use the \`pptx\` skill: author slides as HTML, run its deck.sh check/build in the foreground, then \`mcp__file_output__share_file\` the built .pptx IN PLACE (the card shows the converter's exact slide renders). python-pptx remains for editing an EXISTING .pptx or a user template (LibreOffice previews those approximately).`,
+    );
+    // The I12 markers never collide: the converter line has no NOT marker.
+    expect(line).not.toContain("NOT INSTALLED");
+    expect(line).not.toContain("self-test");
+
+    // No LibreOffice in the image → existing decks get no previews at all.
+    const noLo = deckLineOf(
+      await describeAs(s, { deckToolchain: deckState({ libreOffice: false }), fileOutputEnabled: true }),
+    );
+    expect(noLo).toContain("(no LibreOffice in this image, so those get no previews).");
+    expect(noLo).not.toContain("LibreOffice previews those approximately");
+
+    // python3 cannot import python-pptx (the probe's own fact): the in-place editing path is reported as missing
+    // instead of promised, and the converter path is unaffected.
+    const noPy = deckLineOf(
+      await describeAs(s, { deckToolchain: deckState({ pythonPptx: false }), fileOutputEnabled: true }),
+    );
+    expect(noPy).toContain("converter: INSTALLED");
+    expect(noPy).toContain(
+      "python-pptx is NOT importable by python3 in this deployment, so an EXISTING .pptx or a user template cannot be edited in place here",
+    );
+    expect(noPy).not.toContain("python-pptx remains");
+
+    // Unknown versions / a lone profile / an odd budget are stated as such.
+    const sparse = deckLineOf(
+      await describeAs(s, {
+        deckToolchain: deckState({
+          converterVersion: undefined,
+          chromiumVersion: undefined,
+          profiles: ["embedded"],
+          limits: { ...deckState().limits!, maxSlides: 40, maxSeconds: 500 },
+        }),
+        fileOutputEnabled: true,
+      }),
+    );
+    expect(sparse).toContain(
+      "converter: INSTALLED (HTML→editable-PPTX, Chromium version unknown; font profiles: embedded = Pretendard embedded in the file (default); limits: ≤40 slides and ≤8.3 min per build)",
+    );
+    expect(sparse).not.toContain("malgun");
+  });
+
+  it("describe_system adds the golden-drift clause only when the self-test recorded drift", async () => {
+    const s = setup("st-deck-drift");
+    const drift = deckLineOf(
+      await describeAs(s, { deckToolchain: deckState({ selftest: "drift" }), fileOutputEnabled: true }),
+    );
+    expect(drift).toContain(
+      "limits: ≤60 slides and ≤9 min per build; self-test: reference-render drift was recorded at image build — output still passes every integrity gate; mention it only if the user reports layout problems)",
+    );
+    expect(drift).toContain("converter: INSTALLED");
+    for (const selftest of ["pass", "disabled", "not-recorded"] as const) {
+      const clean = deckLineOf(await describeAs(s, { deckToolchain: deckState({ selftest }), fileOutputEnabled: true }));
+      expect(clean, selftest).not.toContain("drift");
+    }
+  });
+
+  it("describe_system picks ONE tail: skill-disabled > read-only > no file output > allowed", async () => {
+    const s = setup("st-deck-tails");
+    const SKILL_OFF =
+      "; the administrator disabled the `pptx` skill in this deployment, so do not build decks — say so if asked";
+    const READ_ONLY =
+      "; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can";
+    const NO_OUTPUT = "; preview/download need an interactive chat turn";
+    for (const toolchain of [deckState(), legacyDeckState()]) {
+      const head = deckLineOf(await describeAs(s, { deckToolchain: toolchain, fileOutputEnabled: true }))
+        .split(" — use the `pptx` skill")[0];
+      const lineFor = async (ctx: Partial<SystemToolsContext>) =>
+        deckLineOf(await describeAs(s, { deckToolchain: toolchain, ...ctx }));
+
+      expect(await lineFor({ deckAuthoring: "skill-disabled", fileOutputEnabled: true })).toBe(`${head}${SKILL_OFF}`);
+      expect(await lineFor({ deckAuthoring: "read-only", fileOutputEnabled: true })).toBe(`${head}${READ_ONLY}`);
+      expect(await lineFor({ deckAuthoring: "allowed", fileOutputEnabled: false })).toBe(`${head}${NO_OUTPUT}`);
+      // Precedence among the tails.
+      expect(await lineFor({ deckAuthoring: "skill-disabled", fileOutputEnabled: false })).toBe(`${head}${SKILL_OFF}`);
+      expect(await lineFor({ deckAuthoring: "read-only", fileOutputEnabled: false })).toBe(`${head}${READ_ONLY}`);
+      // No file output never promises the skill workflow (the I10 pin).
+      expect(await lineFor({ fileOutputEnabled: false })).not.toContain("`pptx` skill");
+      // Undefined authoring = allowed.
+      expect(await lineFor({ fileOutputEnabled: true })).toContain(" — use the `pptx` skill");
+    }
+  });
+
+  it("describe_system reports the legacy toolchain with the NOT INSTALLED marker and the missing facts", async () => {
+    const s = setup("st-deck-legacy");
+    const line = deckLineOf(await describeAs(s, { deckToolchain: legacyDeckState(), fileOutputEnabled: true }));
+    expect(line).toBe(
+      `${DECK_PREFIX}toolchain available (python-pptx + LibreOffice + pdftoppm) — converter: NOT INSTALLED (Chromium headless shell is not installed in this image); an administrator must rebuild the server image to enable it — do not install anything yourself — use the \`pptx\` skill (python-pptx), then \`mcp__file_output__share_file\` for the download (slide previews render automatically)`,
+    );
+    expect(line).not.toContain("converter: INSTALLED");
+
+    const noFacts = deckLineOf(
+      await describeAs(s, { deckToolchain: legacyDeckState({ converterMissing: [] }), fileOutputEnabled: true }),
+    );
+    expect(noFacts).toContain("converter: NOT INSTALLED; an administrator must rebuild the server image");
+    const twoFacts = deckLineOf(
+      await describeAs(s, {
+        deckToolchain: legacyDeckState({ converterMissing: ["fact one", "fact two"] }),
+        fileOutputEnabled: true,
+      }),
+    );
+    expect(twoFacts).toContain("converter: NOT INSTALLED (fact one; fact two);");
+
+    // Older callers without a probe state keep the marker-less legacy wording.
+    const older = deckLineOf(await describeAs(s, { deckRenderingAvailable: true, fileOutputEnabled: true }));
+    expect(older).toBe(
+      `${DECK_PREFIX}toolchain available (python-pptx + LibreOffice + pdftoppm) — use the \`pptx\` skill (python-pptx), then \`mcp__file_output__share_file\` for the download (slide previews render automatically)`,
+    );
+    expect(older).not.toContain("converter:");
+    // The toolchain state wins over the legacy flag once it is present.
+    const wins = deckLineOf(
+      await describeAs(s, {
+        deckRenderingAvailable: false,
+        deckToolchain: legacyDeckState(),
+        fileOutputEnabled: true,
+      }),
+    );
+    expect(wins).toContain("toolchain available (python-pptx + LibreOffice + pdftoppm) — converter: NOT INSTALLED");
+  });
+
+  it("describe_system reports UNAVAILABLE with the NOT INSTALLED marker and no tail", async () => {
+    const s = setup("st-deck-unavailable");
+    const state = legacyDeckState({
+      pythonPptx: false,
+      libreOffice: false,
+      converterMissing: ["the image was built without the converter (DECK_CONVERTER=0)"],
+    });
+    const expected = `${DECK_PREFIX}UNAVAILABLE — converter: NOT INSTALLED and this deployment image lacks the python-pptx/LibreOffice toolchain (the image was built without the converter (DECK_CONVERTER=0)); tell the user a system administrator must rebuild the server image to enable PPT generation (do not attempt shell workarounds such as pip/apt installs)`;
+    for (const ctx of [
+      { fileOutputEnabled: true },
+      { fileOutputEnabled: false },
+      { deckAuthoring: "read-only" as const, fileOutputEnabled: true },
+      { deckAuthoring: "skill-disabled" as const, fileOutputEnabled: true },
+    ]) {
+      expect(deckLineOf(await describeAs(s, { deckToolchain: state, ...ctx })), JSON.stringify(ctx)).toBe(expected);
+    }
+    // Only one of the two legacy halves is still UNAVAILABLE.
+    const halfLegacy = deckLineOf(
+      await describeAs(s, { deckToolchain: legacyDeckState({ libreOffice: false }), fileOutputEnabled: true }),
+    );
+    expect(halfLegacy).toContain("UNAVAILABLE — converter: NOT INSTALLED");
+    // A probe that could not be read says so, next to the marker.
+    const failed = deckLineOf(
+      await describeAs(s, {
+        deckToolchain: legacyDeckState({
+          pythonPptx: false,
+          libreOffice: false,
+          definitive: false,
+          converterMissing: ["converter probe failed: timed out after 10 s"],
+        }),
+      }),
+    );
+    expect(failed).toContain("(converter probe failed: timed out after 10 s)");
+    expect(failed).not.toContain("converter: INSTALLED");
+  });
+
+  it("describe_system shows the deck line on the group-agent AND non-owner branches too", async () => {
+    const s = setup("st-deck-branches");
+    s.store.setGitToken(s.owner.id, "ghp_secretvalue");
+    // Non-owner: a trusted teammate may build through this avatar, a plain
+    // colleague may not — the tail says which, and no owner state leaks.
+    const colleague = (
+      await callTool(
+        buildSystemTools(s.store, {
+          ...s.baseCtx,
+          viewerIsOwner: false,
+          deckToolchain: deckState(),
+          deckAuthoring: "read-only",
+          fileOutputEnabled: true,
+        }),
+        "describe_system",
+        {},
+      )
+    ).content[0].text ?? "";
+    expect(colleague).toContain("conversation partner is not the owner");
+    expect(colleague).toContain("Deployment capabilities for this run:");
+    expect(deckLineOf(colleague)).toBe(
+      `${DECK_PREFIX}${CONVERTER_HEAD}; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can`,
+    );
+    expect(colleague).not.toContain("Current avatar state:");
+    expect(colleague).not.toContain("ghp_secretvalue");
+    const trusted = (
+      await callTool(
+        buildSystemTools(s.store, {
+          ...s.baseCtx,
+          viewerIsOwner: false,
+          deckToolchain: deckState(),
+          deckAuthoring: "allowed",
+          fileOutputEnabled: true,
+        }),
+        "describe_system",
+        {},
+      )
+    ).content[0].text ?? "";
+    expect(deckLineOf(trusted)).toContain(`${CONVERTER_HEAD} — use the \`pptx\` skill: author slides as HTML`);
+    // The default non-owner ctx (no probe state) still answers honestly.
+    expect(deckLineOf((await callTool(toolsFor(s, false), "describe_system", {})).content[0].text ?? "")).toContain(
+      "UNAVAILABLE",
+    );
+
+    // Group shared agent: every member gets the elevated built-ins, so the SAME
+    // deck line as the owner block, inside the GROUP state block.
+    const group = s.store.createGroup({ name: "팀" });
+    s.store.addGroupMember(group.id, s.owner.id, "member");
+    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
+    const avatarId = groupAgentAvatarId(group.id, agent.id);
+    const groupBody = (
+      await callTool(
+        buildSystemTools(s.store, {
+          avatarUserId: avatarId,
+          owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
+          viewerIsOwner: false,
+          config: s.config,
+          groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
+          deckToolchain: deckState({ selftest: "drift" }),
+          deckAuthoring: "allowed",
+          fileOutputEnabled: true,
+        }),
+        "describe_system",
+        {},
+      )
+    ).content[0].text ?? "";
+    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
+    const groupLine = deckLineOf(groupBody);
+    expect(groupLine).toContain("converter: INSTALLED");
+    expect(groupLine).toContain("self-test: reference-render drift was recorded at image build");
+    expect(groupLine).toContain("`mcp__file_output__share_file` the built .pptx IN PLACE");
+    // It sits inside the group block (after the capability boundary), once.
+    expect(groupBody.indexOf("Capability boundary")).toBeLessThan(groupBody.indexOf(DECK_PREFIX));
+    expect(groupBody.split(DECK_PREFIX)).toHaveLength(2);
+    expect(groupBody).not.toContain("Current avatar state:");
   });
 
   it("describe_system reports the drawio viewer with file-output gating", async () => {

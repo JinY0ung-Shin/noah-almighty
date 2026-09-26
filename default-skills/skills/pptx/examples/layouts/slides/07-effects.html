@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>07 기대 효과 · 2027년 고객 경험 혁신 계획</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Expected effects as a scorecard: one row per KPI — what it measures, the current value and the target as two
+     bars on the row's own scale (the larger value = 440 px), and the change as a green pill (favourable, whichever
+     direction the metric moves). The headline goal keeps the deck's goal colour, the accent — as accent-600, the
+     shade a data mark on white needs (3.16:1; accent-500 is 2.35:1). Bars are drawn shapes: their group names
+     state the values they encode. */
+  .scorecard { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w);
+               padding: 4px var(--sp-4); }
+  .kpi-row { height: 88px; display: flex; align-items: center; gap: var(--sp-3); border-top: 1px solid var(--c-ink-100); }
+  .kpi-row:first-child { border-top: 0; }
+  .kpi-name-block { flex: none; width: 264px; }
+  .kpi-name { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-ink-900); }
+  .kpi-def { font-size: 13px; line-height: 20px; color: var(--c-ink-500); }
+
+  .pair { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .pair-row { display: flex; align-items: center; gap: 12px; }
+  .pair-label { flex: none; width: 28px; font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-ink-500); }
+  .pair-bar { flex: none; height: 12px; border-radius: 6px; background: var(--c-series-prev); }
+  .pair-bar.is-target { background: var(--c-brand-600); }
+  .pair-bar.is-goal { background: var(--c-accent-600); }
+  .pair-value { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 600; color: var(--c-ink-600); white-space: nowrap; }
+  .pair-value.is-target { font-weight: 800; color: var(--c-ink-900); }
+  .change { flex: none; width: 120px; display: flex; justify-content: flex-end; }
+
+  .summary { position: absolute; left: var(--margin-x); top: 560px; width: var(--content-w); padding: 12px var(--sp-4); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">04</span> 기대 효과</p>
+    <div class="title-row">
+      <h1 class="slide-title">응대 시간은 절반으로, 만족도는 85점으로</h1>
+      <p class="pill pill--outline period">2026년 실적 → 2027년 말 목표</p>
+    </div>
+  </header>
+
+  <section class="card scorecard">
+    <div class="kpi-row">
+      <div class="kpi-name-block"><p class="kpi-name">평균 응대 시간</p><p class="kpi-def">전화·채팅 상담 1건의 연결부터 후처리까지</p></div>
+      <div class="pair" data-group="비교 막대 — 현재 6분 40초 · 목표 3분 20초 (수치 수정 시 길이 직접 조정)">
+        <div class="pair-row"><p class="pair-label">현재</p><div class="pair-bar" style="width: 440px"></div><p class="pair-value">6분 40초</p></div>
+        <div class="pair-row"><p class="pair-label">목표</p><div class="pair-bar is-goal" style="width: 220px"></div><p class="pair-value is-target">3분 20초</p></div>
+      </div>
+      <div class="change"><p class="pill pill--up">50% 단축</p></div>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi-name-block"><p class="kpi-name">셀프 해결률</p><p class="kpi-def">상담사 연결 없이 챗봇·FAQ로 끝난 문의</p></div>
+      <div class="pair" data-group="비교 막대 — 현재 12% · 목표 40% (수치 수정 시 길이 직접 조정)">
+        <div class="pair-row"><p class="pair-label">현재</p><div class="pair-bar" style="width: 132px"></div><p class="pair-value">12%</p></div>
+        <div class="pair-row"><p class="pair-label">목표</p><div class="pair-bar is-target" style="width: 440px"></div><p class="pair-value is-target">40%</p></div>
+      </div>
+      <div class="change"><p class="pill pill--up">+28%p</p></div>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi-name-block"><p class="kpi-name">고객 만족도</p><p class="kpi-def">상담 직후 설문, 100점 만점</p></div>
+      <div class="pair" data-group="비교 막대 — 현재 72점 · 목표 85점 (100점 만점 기준, 수치 수정 시 길이 직접 조정)">
+        <div class="pair-row"><p class="pair-label">현재</p><div class="pair-bar" style="width: 317px"></div><p class="pair-value">72점</p></div>
+        <div class="pair-row"><p class="pair-label">목표</p><div class="pair-bar is-target" style="width: 374px"></div><p class="pair-value is-target">85점</p></div>
+      </div>
+      <div class="change"><p class="pill pill--up">+13점</p></div>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi-name-block"><p class="kpi-name">상담 1건당 비용</p><p class="kpi-def">인건비와 시스템 비용 ÷ 처리 건수</p></div>
+      <div class="pair" data-group="비교 막대 — 현재 4,200원 · 목표 2,900원 (수치 수정 시 길이 직접 조정)">
+        <div class="pair-row"><p class="pair-label">현재</p><div class="pair-bar" style="width: 440px"></div><p class="pair-value">4,200원</p></div>
+        <div class="pair-row"><p class="pair-label">목표</p><div class="pair-bar is-target" style="width: 304px"></div><p class="pair-value is-target">2,900원</p></div>
+      </div>
+      <div class="change"><p class="pill pill--up">31% 절감</p></div>
+    </div>
+  </section>
+
+  <section class="summary">
+    <div class="icon-badge icon-badge--sm icon-badge--white">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+    </div>
+    <p class="summary-text"><strong>연간 효과</strong>  1건당 1,300원 절감 × 연 115만 건 = 상담 비용 약 15억 원 절감</p>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2027년 고객 경험 혁신 계획</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">7</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

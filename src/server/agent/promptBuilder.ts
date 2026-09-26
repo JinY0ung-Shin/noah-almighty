@@ -479,13 +479,29 @@ function noVisionSection(request: AgentRequest): string | null {
 }
 
 /**
- * Standing guidance for PowerPoint deck work. Present only when the deployment
- * image carries the toolchain (LibreOffice + pdftoppm + python-pptx) AND this
- * turn can publish files — `request.deckRenderingEnabled` bundles both (see
- * `claudeAgent.ts`). The `pptx` skill holds the detailed workflow; this note is
- * the per-turn action trigger.
+ * Standing guidance for PowerPoint deck work, in one of two branches:
+ * - CONVERTER (`request.deckConverterEnabled`): the pptx skill's HTML→editable-
+ *   PPTX converter is installed — new decks are authored as HTML and built by
+ *   the skill's one converter command, then shared IN PLACE so the card shows
+ *   the converter's exact renders. Wins when both flags are set.
+ * - LEGACY (`request.deckRenderingEnabled`): python-pptx + LibreOffice only;
+ *   this text is unchanged from before the converter existed.
+ * Both flags already bundle the deployment probe, a turn that can publish
+ * files and a viewer allowed to author (see `deckGuidanceFlags` in
+ * `deckRender.ts` / `claudeAgent.ts`); neither → no section. The `pptx` skill
+ * holds the detailed workflow; this note is the per-turn action trigger.
  */
 function deckSection(request: AgentRequest): string | null {
+  if (request.deckConverterEnabled) {
+    return (
+      "**PowerPoint decks**: for a presentation/PPT/slide deck use the `pptx` skill. " +
+      "NEW decks: write each slide as HTML/CSS with the skill's component kit, check the renders, then build with the skill's ONE converter command — the .pptx gets native, editable text, shapes, tables and charts (Pretendard embedded by default; a 맑은 고딕 build on request). " +
+      "Deliver the built file IN PLACE with `mcp__file_output__share_file` (a `name` in the user's language): its side panel shows the converter's exact slide renders, so never rasterize or publish slides to deliver. " +
+      "To change a converted deck, edit its HTML and rebuild; never patch the .pptx. " +
+      "python-pptx is only for an EXISTING .pptx or a user template. " +
+      "Mid-work review WITH the user: publish renders via `show_file` + `hidden:true` into ONE canvas artifact."
+    );
+  }
   if (!request.deckRenderingEnabled) return null;
   return (
     "**PowerPoint decks**: when the user asks for a presentation/PPT/slide deck (or to edit a .pptx you can reach), use the `pptx` skill — author with python-pptx, then deliver with `mcp__file_output__share_file`. " +

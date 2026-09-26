@@ -1,0 +1,1984 @@
+{
+ "version": 1,
+ "profile": "malgun",
+ "slideSizePx": {
+  "w": 1280,
+  "h": 720
+ },
+ "theme": {
+  "colors": {
+   "dk1": "111A2E",
+   "lt1": "FFFFFF",
+   "dk2": "0F1D4A",
+   "lt2": "F4F6FA",
+   "accent1": "0E7C66",
+   "accent2": "FF8A3D",
+   "accent3": "0B7A47",
+   "accent4": "C8322D",
+   "accent5": "A3B6FA",
+   "accent6": "8A94A6",
+   "hlink": "1F3DA6",
+   "folHlink": "4A5568"
+  }
+ },
+ "slides": [
+  {
+   "index": 1,
+   "name": "01-photo",
+   "source": "../../slides/01-photo.html",
+   "referencePng": "html/01-photo.png",
+   "referencePng2x": "html/01-photo@2x.png",
+   "background": {
+    "type": "solid",
+    "color": "F4F6FA",
+    "alpha": 1
+   },
+   "elements": [
+    {
+     "id": "main.slide > img.photo:nth-child(1)::image",
+     "kind": "image",
+     "box": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "src": "assets/01-photo-img1.jpg",
+     "svg": null,
+     "alt": "해 질 녘 언덕 풍경 (합성 이미지)"
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 200,
+      "w": 560,
+      "h": 330
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "roundRect",
+     "radiusPx": 20,
+     "fill": {
+      "type": "solid",
+      "color": "FFFFFF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": {
+      "offsetXPx": 0,
+      "offsetYPx": 8,
+      "blurPx": 24,
+      "spreadPx": 0,
+      "color": "111A2E",
+      "alpha": 0.07
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > div.accent:nth-child(1)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 120,
+      "y": 240,
+      "w": 48,
+      "h": 6
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "roundRect",
+     "radiusPx": 3,
+     "fill": {
+      "type": "solid",
+      "color": "0E7C66",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": null
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > p.eyebrow:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 120,
+      "y": 270,
+      "w": 480,
+      "h": 20
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 20,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "기능 점검 덱",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 600,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 14,
+         "color": "0E7C66",
+         "alpha": 1,
+         "letterSpacingPx": 0.84,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 271,
+       "bottom": 289,
+       "baseline": 285,
+       "text": "기능 점검 덱",
+       "paragraph": 0,
+       "left": 120,
+       "right": 205.6875,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 120,
+      "y": 270,
+      "w": 480,
+      "h": 20
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > h1.cover-title:nth-child(3)::text",
+     "kind": "text",
+     "box": {
+      "x": 120,
+      "y": 298,
+      "w": 480,
+      "h": 120
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": true,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 60,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "사진과 덱 스타일",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 800,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 44,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": -0.88,
+         "baseline": "normal"
+        },
+        {
+         "break": true
+        },
+        {
+         "text": "변환 점검",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 800,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 44,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": -0.88,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 298,
+       "bottom": 357,
+       "baseline": 346,
+       "text": "사진과 덱 스타일",
+       "paragraph": 0,
+       "left": 120,
+       "right": 450.90625,
+       "hardBreak": true
+      },
+      {
+       "top": 358,
+       "bottom": 417,
+       "baseline": 406,
+       "text": "변환 점검",
+       "paragraph": 0,
+       "left": 120,
+       "right": 307.015625,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 120,
+      "y": 298,
+      "w": 480,
+      "h": 120
+     },
+     "placeholder": "title"
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > p.lead:nth-child(4)::text",
+     "kind": "text",
+     "box": {
+      "x": 120,
+      "y": 434,
+      "w": 480,
+      "h": 56
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": true,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 28,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "전면 사진은 JPEG로 들어갑니다.",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 18,
+         "color": "4A5568",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        },
+        {
+         "break": true
+        },
+        {
+         "text": "강조색은 deck.css의 청록색입니다.",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 18,
+         "color": "4A5568",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 436,
+       "bottom": 460,
+       "baseline": 455,
+       "text": "전면 사진은 JPEG로 들어갑니다.",
+       "paragraph": 0,
+       "left": 120,
+       "right": 379.4375,
+       "hardBreak": true
+      },
+      {
+       "top": 464,
+       "bottom": 488,
+       "baseline": 483,
+       "text": "강조색은 deck.css의 청록색입니다.",
+       "paragraph": 0,
+       "left": 120,
+       "right": 400.390625,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 120,
+      "y": 434,
+      "w": 480,
+      "h": 56
+     }
+    }
+   ],
+   "notes": null,
+   "layout": "표지",
+   "components": [
+    {
+     "id": "main.slide > section.card:nth-child(2)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > section.card:nth-child(2)::bg",
+      "main.slide > section.card:nth-child(2) > div.accent:nth-child(1)::bg",
+      "main.slide > section.card:nth-child(2) > p.eyebrow:nth-child(2)::text",
+      "main.slide > section.card:nth-child(2) > h1.cover-title:nth-child(3)::text",
+      "main.slide > section.card:nth-child(2) > p.lead:nth-child(4)::text"
+     ]
+    }
+   ]
+  },
+  {
+   "index": 2,
+   "name": "02-notes-wrap",
+   "source": "../../slides/02-notes-wrap.html",
+   "referencePng": "html/02-notes-wrap.png",
+   "referencePng2x": "html/02-notes-wrap@2x.png",
+   "background": {
+    "type": "solid",
+    "color": "F4F6FA",
+    "alpha": 1
+   },
+   "elements": [
+    {
+     "id": "main.slide > header.slide-header:nth-child(1) > p.eyebrow:nth-child(1)::text",
+     "kind": "text",
+     "box": {
+      "x": 80,
+      "y": 56,
+      "w": 1120,
+      "h": 20
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 20,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "02 본문 서식",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 600,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 14,
+         "color": "0E7C66",
+         "alpha": 1,
+         "letterSpacingPx": 0.84,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 57,
+       "bottom": 75,
+       "baseline": 71,
+       "text": "02 본문 서식",
+       "paragraph": 0,
+       "left": 80,
+       "right": 168.75,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 80,
+      "y": 56,
+      "w": 1120,
+      "h": 20
+     }
+    },
+    {
+     "id": "main.slide > header.slide-header:nth-child(1) > h1.slide-title:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 80,
+      "y": 84,
+      "w": 1120,
+      "h": 56
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 56,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "긴 문단과 목록, 발표자 노트",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 800,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 40,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": -0.8,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 85,
+       "bottom": 139,
+       "baseline": 129,
+       "text": "긴 문단과 목록, 발표자 노트",
+       "paragraph": 0,
+       "left": 80,
+       "right": 574.046875,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 80,
+      "y": 84,
+      "w": 1120,
+      "h": 56
+     },
+     "placeholder": "title"
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 184,
+      "w": 520,
+      "h": 220
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "roundRect",
+     "radiusPx": 20,
+     "fill": {
+      "type": "solid",
+      "color": "FFFFFF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": {
+      "offsetXPx": 0,
+      "offsetYPx": 8,
+      "blurPx": 24,
+      "spreadPx": 0,
+      "color": "111A2E",
+      "alpha": 0.07
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > p.card-title:nth-child(1)::text",
+     "kind": "text",
+     "box": {
+      "x": 112,
+      "y": 216,
+      "w": 456,
+      "h": 28
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 28,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "자동 줄바꿈 문단",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 18,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 218,
+       "bottom": 242,
+       "baseline": 237,
+       "text": "자동 줄바꿈 문단",
+       "paragraph": 0,
+       "left": 112,
+       "right": 250.59375,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 112,
+      "y": 216,
+      "w": 456,
+      "h": 28
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > p.wrap-text:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 112,
+      "y": 260,
+      "w": 456,
+      "h": 112
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": true,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 28,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "이 문단에는 줄바꿈 태그가 없습니다. 변환기는 브라우저가 나눈 줄을 측정해 PowerPoint가 같은 자리에서 줄을 바꾸도록 글상자 폭을 고르고, 그런 폭이 없으면 브라우저의 줄바꿈 위치를 강제 줄바꿈으로 옮깁니다.",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 18,
+         "color": "344056",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 262,
+       "bottom": 286,
+       "baseline": 281,
+       "text": "이 문단에는 줄바꿈 태그가 없습니다. 변환기는 브라우저",
+       "paragraph": 0,
+       "left": 112,
+       "right": 567.640625,
+       "hardBreak": false
+      },
+      {
+       "top": 290,
+       "bottom": 314,
+       "baseline": 309,
+       "text": "가 나눈 줄을 측정해 PowerPoint가 같은 자리에서 줄을 ",
+       "paragraph": 0,
+       "left": 112,
+       "right": 554.234375,
+       "hardBreak": false
+      },
+      {
+       "top": 318,
+       "bottom": 342,
+       "baseline": 337,
+       "text": "바꾸도록 글상자 폭을 고르고, 그런 폭이 없으면 브라우",
+       "paragraph": 0,
+       "left": 112,
+       "right": 555.984375,
+       "hardBreak": false
+      },
+      {
+       "top": 346,
+       "bottom": 370,
+       "baseline": 365,
+       "text": "저의 줄바꿈 위치를 강제 줄바꿈으로 옮깁니다.",
+       "paragraph": 0,
+       "left": 112,
+       "right": 489.375,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 112,
+      "y": 260,
+      "w": 456,
+      "h": 112
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 632,
+      "y": 184,
+      "w": 568,
+      "h": 218
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "roundRect",
+     "radiusPx": 20,
+     "fill": {
+      "type": "solid",
+      "color": "FFFFFF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": {
+      "offsetXPx": 0,
+      "offsetYPx": 8,
+      "blurPx": 24,
+      "spreadPx": 0,
+      "color": "111A2E",
+      "alpha": 0.07
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > p.card-title:nth-child(1)::text",
+     "kind": "text",
+     "box": {
+      "x": 664,
+      "y": 216,
+      "w": 504,
+      "h": 28
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 28,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "글머리 기호 목록",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 18,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 218,
+       "bottom": 242,
+       "baseline": 237,
+       "text": "글머리 기호 목록",
+       "paragraph": 0,
+       "left": 664,
+       "right": 802.59375,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 664,
+      "y": 216,
+      "w": 504,
+      "h": 28
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > ul.insights:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 667,
+      "y": 260,
+      "w": 501,
+      "h": 110
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": true,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 26,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 13,
+       "indentPx": -13,
+       "bullet": {
+        "type": "char",
+        "char": "•",
+        "color": null
+       },
+       "runs": [
+        {
+         "text": "목록 전체가 글상자 하나가 됩니다",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 17,
+         "color": "344056",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      },
+      {
+       "align": "l",
+       "lineHeightPx": 26,
+       "spaceBeforePx": 16,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 13,
+       "indentPx": -13,
+       "bullet": {
+        "type": "char",
+        "char": "•",
+        "color": null
+       },
+       "runs": [
+        {
+         "text": "항목마다 글머리 기호 문단이 됩니다",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 17,
+         "color": "344056",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      },
+      {
+       "align": "l",
+       "lineHeightPx": 26,
+       "spaceBeforePx": 16,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 13,
+       "indentPx": -13,
+       "bullet": {
+        "type": "char",
+        "char": "•",
+        "color": null
+       },
+       "runs": [
+        {
+         "text": "항목 사이 간격은 문단 앞 간격이 됩니다",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 17,
+         "color": "344056",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 262,
+       "bottom": 284,
+       "baseline": 279,
+       "text": "목록 전체가 글상자 하나가 됩니다",
+       "paragraph": 0,
+       "left": 680,
+       "right": 941.84375,
+       "hardBreak": false
+      },
+      {
+       "top": 304,
+       "bottom": 326,
+       "baseline": 321,
+       "text": "항목마다 글머리 기호 문단이 됩니다",
+       "paragraph": 1,
+       "left": 680,
+       "right": 958.84375,
+       "hardBreak": false
+      },
+      {
+       "top": 346,
+       "bottom": 368,
+       "baseline": 363,
+       "text": "항목 사이 간격은 문단 앞 간격이 됩니다",
+       "paragraph": 2,
+       "left": 680,
+       "right": 987.78125,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 667,
+      "y": 260,
+      "w": 501,
+      "h": 110
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4)::border-top",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 664,
+      "w": 1120,
+      "h": 1
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "rect",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "E3E8EF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": null
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > p.footer-brand:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 117,
+      "y": 680,
+      "w": 68.359375,
+      "h": 16
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": true,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 16,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "기능 점검 덱",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 12,
+         "color": "4A5568",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 680,
+       "bottom": 696,
+       "baseline": 693,
+       "text": "기능 점검 덱",
+       "paragraph": 0,
+       "left": 117,
+       "right": 185.359375,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 117,
+      "y": 680,
+      "w": 68.359375,
+      "h": 16
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.footer-text:nth-child(1)::text",
+     "kind": "text",
+     "box": {
+      "x": 1063.703125,
+      "y": 680,
+      "w": 104.296875,
+      "h": 16
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": true,
+     "paragraphs": [
+      {
+       "align": "r",
+       "lineHeightPx": 16,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "셀프 테스트용 예시",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 12,
+         "color": "667085",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 680,
+       "bottom": 696,
+       "baseline": 693,
+       "text": "셀프 테스트용 예시",
+       "paragraph": 0,
+       "left": 1063.703125,
+       "right": 1168,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 1063.703125,
+      "y": 680,
+      "w": 104.296875,
+      "h": 16
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.page-num:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 1184,
+      "y": 680,
+      "w": 16,
+      "h": 16
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": true,
+     "paragraphs": [
+      {
+       "align": "r",
+       "lineHeightPx": 16,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "2",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 12,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal",
+         "field": "slidenum"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 680,
+       "bottom": 696,
+       "baseline": 693,
+       "text": "2",
+       "paragraph": 0,
+       "left": 1193.046875,
+       "right": 1200,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 1184,
+      "y": 680,
+      "w": 16,
+      "h": 16
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-a:nth-child(1)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 681,
+      "w": 14,
+      "h": 14
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "ellipse",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "0E7C66",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": null
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-b:nth-child(2)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 87,
+      "y": 681,
+      "w": 14,
+      "h": 14
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "ellipse",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "FF8A3D",
+      "alpha": 0.85
+     },
+     "line": null,
+     "shadow": null
+    }
+   ],
+   "notes": "첫째 문단: 이 슬라이드는 자동 줄바꿈 문단과 글머리 기호 목록, 발표자 노트를 점검합니다.\n둘째 문단: 노트는 두 문단으로 들어가고, 노트 마스터가 프레젠테이션 목록에 올라갑니다.",
+   "layout": "본문",
+   "components": [
+    {
+     "id": "main.slide > section.card:nth-child(2)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > section.card:nth-child(2)::bg",
+      "main.slide > section.card:nth-child(2) > p.card-title:nth-child(1)::text",
+      "main.slide > section.card:nth-child(2) > p.wrap-text:nth-child(2)::text"
+     ]
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > section.card:nth-child(3)::bg",
+      "main.slide > section.card:nth-child(3) > p.card-title:nth-child(1)::text",
+      "main.slide > section.card:nth-child(3) > ul.insights:nth-child(2)::text"
+     ]
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > footer.slide-footer:nth-child(4)::border-top",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > p.footer-brand:nth-child(2)::text",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.footer-text:nth-child(1)::text",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.page-num:nth-child(2)::text",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-a:nth-child(1)::bg",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-b:nth-child(2)::bg"
+     ]
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1)",
+     "name": "브랜드 마크",
+     "hint": true,
+     "members": [
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-a:nth-child(1)::bg",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-b:nth-child(2)::bg"
+     ]
+    }
+   ]
+  },
+  {
+   "index": 3,
+   "name": "03-image-rounded",
+   "source": "../../slides/03-image-rounded.html",
+   "referencePng": "html/03-image-rounded.png",
+   "referencePng2x": "html/03-image-rounded@2x.png",
+   "background": {
+    "type": "solid",
+    "color": "F4F6FA",
+    "alpha": 1
+   },
+   "elements": [
+    {
+     "id": "main.slide > header.slide-header:nth-child(1) > p.eyebrow:nth-child(1)::text",
+     "kind": "text",
+     "box": {
+      "x": 80,
+      "y": 56,
+      "w": 1120,
+      "h": 20
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 20,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "03 그림",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 600,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 14,
+         "color": "0E7C66",
+         "alpha": 1,
+         "letterSpacingPx": 0.84,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 57,
+       "bottom": 75,
+       "baseline": 71,
+       "text": "03 그림",
+       "paragraph": 0,
+       "left": 80,
+       "right": 133.328125,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 80,
+      "y": 56,
+      "w": 1120,
+      "h": 20
+     }
+    },
+    {
+     "id": "main.slide > header.slide-header:nth-child(1) > h1.slide-title:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 80,
+      "y": 84,
+      "w": 1120,
+      "h": 56
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 56,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "둥근 모서리 그림과 SVG 아이콘",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 800,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 40,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": -0.8,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 85,
+       "bottom": 139,
+       "baseline": 129,
+       "text": "둥근 모서리 그림과 SVG 아이콘",
+       "paragraph": 0,
+       "left": 80,
+       "right": 638.734375,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 80,
+      "y": 84,
+      "w": 1120,
+      "h": 56
+     },
+     "placeholder": "title"
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 184,
+      "w": 544,
+      "h": 420
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "roundRect",
+     "radiusPx": 20,
+     "fill": {
+      "type": "solid",
+      "color": "FFFFFF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": {
+      "offsetXPx": 0,
+      "offsetYPx": 8,
+      "blurPx": 24,
+      "spreadPx": 0,
+      "color": "111A2E",
+      "alpha": 0.07
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > img.figure:nth-child(1)::image",
+     "kind": "image",
+     "box": {
+      "x": 112,
+      "y": 216,
+      "w": 480,
+      "h": 320
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "src": "assets/03-image-rounded-img1.png",
+     "svg": null,
+     "alt": "청록색에서 파란색으로 바뀌는 추상 그림 (합성 이미지)"
+    },
+    {
+     "id": "main.slide > section.card:nth-child(2) > p.caption:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 112,
+      "y": 552,
+      "w": 480,
+      "h": 20
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 20,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "둥근 모서리는 투명 PNG에 그려 넣습니다",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 14,
+         "color": "667085",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 553,
+       "bottom": 571,
+       "baseline": 567,
+       "text": "둥근 모서리는 투명 PNG에 그려 넣습니다",
+       "paragraph": 0,
+       "left": 112,
+       "right": 374.6875,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 112,
+      "y": 552,
+      "w": 480,
+      "h": 20
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 656,
+      "y": 184,
+      "w": 544,
+      "h": 204
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "roundRect",
+     "radiusPx": 20,
+     "fill": {
+      "type": "solid",
+      "color": "FFFFFF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": {
+      "offsetXPx": 0,
+      "offsetYPx": 8,
+      "blurPx": 24,
+      "spreadPx": 0,
+      "color": "111A2E",
+      "alpha": 0.07
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 688,
+      "y": 216,
+      "w": 48,
+      "h": 48
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "ellipse",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "E6F4F0",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": null
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1) > svg:nth-child(1)::image",
+     "kind": "image",
+     "box": {
+      "x": 700,
+      "y": 228,
+      "w": 24,
+      "h": 24
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "src": "assets/03-image-rounded-img2.png",
+     "svg": "assets/03-image-rounded-img2.svg",
+     "alt": ""
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > p.card-title:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 688,
+      "y": 280,
+      "w": 480,
+      "h": 28
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 28,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "SVG 아이콘",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 18,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 282,
+       "bottom": 306,
+       "baseline": 301,
+       "text": "SVG 아이콘",
+       "paragraph": 0,
+       "left": 688,
+       "right": 782.953125,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 688,
+      "y": 280,
+      "w": 480,
+      "h": 28
+     }
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > p.caption:nth-child(3)::text",
+     "kind": "text",
+     "box": {
+      "x": 688,
+      "y": 316,
+      "w": 480,
+      "h": 40
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": true,
+     "nowrap": false,
+     "shrinkWrap": false,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 20,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "단순한 아이콘은 원본 SVG와",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 14,
+         "color": "667085",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        },
+        {
+         "break": true
+        },
+        {
+         "text": "PNG 대체 이미지로 함께 들어갑니다",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 14,
+         "color": "667085",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 317,
+       "bottom": 335,
+       "baseline": 331,
+       "text": "단순한 아이콘은 원본 SVG와",
+       "paragraph": 0,
+       "left": 688,
+       "right": 868.75,
+       "hardBreak": true
+      },
+      {
+       "top": 337,
+       "bottom": 355,
+       "baseline": 351,
+       "text": "PNG 대체 이미지로 함께 들어갑니다",
+       "paragraph": 0,
+       "left": 688,
+       "right": 917.8125,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 688,
+      "y": 316,
+      "w": 480,
+      "h": 40
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4)::border-top",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 664,
+      "w": 1120,
+      "h": 1
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "rect",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "E3E8EF",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": null
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > p.footer-brand:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 117,
+      "y": 680,
+      "w": 68.359375,
+      "h": 16
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": true,
+     "paragraphs": [
+      {
+       "align": "l",
+       "lineHeightPx": 16,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "기능 점검 덱",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 12,
+         "color": "4A5568",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 680,
+       "bottom": 696,
+       "baseline": 693,
+       "text": "기능 점검 덱",
+       "paragraph": 0,
+       "left": 117,
+       "right": 185.359375,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 117,
+      "y": 680,
+      "w": 68.359375,
+      "h": 16
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.footer-text:nth-child(1)::text",
+     "kind": "text",
+     "box": {
+      "x": 1063.703125,
+      "y": 680,
+      "w": 104.296875,
+      "h": 16
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": true,
+     "paragraphs": [
+      {
+       "align": "r",
+       "lineHeightPx": 16,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "셀프 테스트용 예시",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 400,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 12,
+         "color": "667085",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 680,
+       "bottom": 696,
+       "baseline": 693,
+       "text": "셀프 테스트용 예시",
+       "paragraph": 0,
+       "left": 1063.703125,
+       "right": 1168,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 1063.703125,
+      "y": 680,
+      "w": 104.296875,
+      "h": 16
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.page-num:nth-child(2)::text",
+     "kind": "text",
+     "box": {
+      "x": 1184,
+      "y": 680,
+      "w": 16,
+      "h": 16
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "anchor": "top",
+     "wrap": false,
+     "nowrap": false,
+     "shrinkWrap": true,
+     "paragraphs": [
+      {
+       "align": "r",
+       "lineHeightPx": 16,
+       "spaceBeforePx": 0,
+       "spaceAfterPx": 0,
+       "marginLeftPx": 0,
+       "indentPx": 0,
+       "bullet": null,
+       "runs": [
+        {
+         "text": "3",
+         "fontFamily": "PoC Malgun Substitute",
+         "fontWeight": 700,
+         "italic": false,
+         "underline": false,
+         "strike": false,
+         "sizePx": 12,
+         "color": "111A2E",
+         "alpha": 1,
+         "letterSpacingPx": 0,
+         "baseline": "normal",
+         "field": "slidenum"
+        }
+       ]
+      }
+     ],
+     "lines": [
+      {
+       "top": 680,
+       "bottom": 696,
+       "baseline": 693,
+       "text": "3",
+       "paragraph": 0,
+       "left": 1193.046875,
+       "right": 1200,
+       "hardBreak": false
+      }
+     ],
+     "contentBox": {
+      "x": 1184,
+      "y": 680,
+      "w": 16,
+      "h": 16
+     }
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-a:nth-child(1)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 80,
+      "y": 681,
+      "w": 14,
+      "h": 14
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "ellipse",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "0E7C66",
+      "alpha": 1
+     },
+     "line": null,
+     "shadow": null
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-b:nth-child(2)::bg",
+     "kind": "shape",
+     "box": {
+      "x": 87,
+      "y": 681,
+      "w": 14,
+      "h": 14
+     },
+     "rotationDeg": 0,
+     "opacity": 1,
+     "geometry": "ellipse",
+     "radiusPx": 0,
+     "fill": {
+      "type": "solid",
+      "color": "FF8A3D",
+      "alpha": 0.85
+     },
+     "line": null,
+     "shadow": null
+    }
+   ],
+   "notes": null,
+   "layout": "본문",
+   "components": [
+    {
+     "id": "main.slide > section.card:nth-child(2)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > section.card:nth-child(2)::bg",
+      "main.slide > section.card:nth-child(2) > img.figure:nth-child(1)::image",
+      "main.slide > section.card:nth-child(2) > p.caption:nth-child(2)::text"
+     ]
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > section.card:nth-child(3)::bg",
+      "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1)::bg",
+      "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1) > svg:nth-child(1)::image",
+      "main.slide > section.card:nth-child(3) > p.card-title:nth-child(2)::text",
+      "main.slide > section.card:nth-child(3) > p.caption:nth-child(3)::text"
+     ]
+    },
+    {
+     "id": "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1)::bg",
+      "main.slide > section.card:nth-child(3) > div.icon-badge:nth-child(1) > svg:nth-child(1)::image"
+     ]
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4)",
+     "name": null,
+     "hint": false,
+     "members": [
+      "main.slide > footer.slide-footer:nth-child(4)::border-top",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > p.footer-brand:nth-child(2)::text",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.footer-text:nth-child(1)::text",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-right:nth-child(2) > p.page-num:nth-child(2)::text",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-a:nth-child(1)::bg",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-b:nth-child(2)::bg"
+     ]
+    },
+    {
+     "id": "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1)",
+     "name": "브랜드 마크",
+     "hint": true,
+     "members": [
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-a:nth-child(1)::bg",
+      "main.slide > footer.slide-footer:nth-child(4) > div.footer-left:nth-child(1) > div.mark:nth-child(1) > div.mark-b:nth-child(2)::bg"
+     ]
+    }
+   ]
+  }
+ ],
+ "lint": [
+  {
+   "slide": 1,
+   "severity": "warn",
+   "rule": "font-weight",
+   "message": "font-weight 600 is not a fonts.json face weight (400/700): 1 text element(s); the builder resolves the nearest face",
+   "path": "main.slide > section.card:nth-child(2) > p.eyebrow:nth-child(2)"
+  },
+  {
+   "slide": 1,
+   "severity": "warn",
+   "rule": "font-weight",
+   "message": "font-weight 800 is not a fonts.json face weight (400/700): 1 text element(s); the builder resolves the nearest face",
+   "path": "main.slide > section.card:nth-child(2) > h1.cover-title:nth-child(3)"
+  },
+  {
+   "slide": 2,
+   "severity": "warn",
+   "rule": "font-weight",
+   "message": "font-weight 600 is not a fonts.json face weight (400/700): 1 text element(s); the builder resolves the nearest face",
+   "path": "main.slide > header.slide-header:nth-child(1) > p.eyebrow:nth-child(1)"
+  },
+  {
+   "slide": 2,
+   "severity": "warn",
+   "rule": "font-weight",
+   "message": "font-weight 800 is not a fonts.json face weight (400/700): 1 text element(s); the builder resolves the nearest face",
+   "path": "main.slide > header.slide-header:nth-child(1) > h1.slide-title:nth-child(2)"
+  },
+  {
+   "slide": 3,
+   "severity": "warn",
+   "rule": "image",
+   "message": "rounded <img>: the corner clip is baked into the PNG",
+   "path": "main.slide > section.card:nth-child(2) > img.figure:nth-child(1)"
+  },
+  {
+   "slide": 3,
+   "severity": "warn",
+   "rule": "font-weight",
+   "message": "font-weight 600 is not a fonts.json face weight (400/700): 1 text element(s); the builder resolves the nearest face",
+   "path": "main.slide > header.slide-header:nth-child(1) > p.eyebrow:nth-child(1)"
+  },
+  {
+   "slide": 3,
+   "severity": "warn",
+   "rule": "font-weight",
+   "message": "font-weight 800 is not a fonts.json face weight (400/700): 1 text element(s); the builder resolves the nearest face",
+   "path": "main.slide > header.slide-header:nth-child(1) > h1.slide-title:nth-child(2)"
+  }
+ ]
+}

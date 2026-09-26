@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>03 문의처 · 2026년 신입사원 온보딩 가이드</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<style>
+  /* Directory: what to do (the order to ask in) on a dark card, where to go (a text table) beside it. The title is
+     the action the reader takes — reference content states what to know or do, not a topic such as "문의처". The
+     table is .data-table--text (every column left-aligned) at the width it needs: 240 + 160 + 96 + 208 = 704 px. */
+  .steps { position: absolute; left: var(--margin-x); top: var(--content-top); width: 392px; height: 440px;
+           padding: var(--sp-4); border-radius: var(--radius-card); background: var(--c-brand-900);
+           display: flex; flex-direction: column; }
+  .steps-label { font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 600; letter-spacing: var(--tracking-label);
+                 color: rgba(255, 255, 255, 0.64); }
+  .step { margin-top: var(--sp-3); display: flex; align-items: flex-start; gap: var(--sp-2); }
+  .step-num { flex: none; width: 32px; height: 32px; border-radius: 50%; background: rgba(255, 255, 255, 0.12);
+              display: flex; align-items: center; justify-content: center; }
+  .step-num p { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 700; color: var(--c-white); }
+  .step.is-first .step-num { background: var(--c-white); }
+  .step.is-first .step-num p { color: var(--c-brand-900); }
+  .step-body { flex: 1; min-width: 0; }
+  .step-when { font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 600; letter-spacing: var(--tracking-label);
+               color: rgba(255, 255, 255, 0.60); }
+  .step-name { margin-top: 2px; font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-white); }
+  .step-line { font-size: var(--fs-caption); line-height: var(--lh-caption); color: rgba(255, 255, 255, 0.72); }
+  .urgent { margin-top: auto; padding: 14px var(--sp-2); border-radius: var(--radius-box); background: rgba(255, 255, 255, 0.08);
+            display: flex; align-items: center; gap: 12px; }
+  .urgent-text { font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--c-white); }
+
+  .dir { position: absolute; left: 496px; top: var(--content-top); width: 704px; }
+  .dir col.c-topic { width: 240px; }
+  .dir col.c-team  { width: 160px; }
+  .dir col.c-ext   { width: 96px; }
+  .dir col.c-chat  { width: 208px; }
+  .dir th { padding: 14px 16px; }
+  .dir td { padding: 16px 16px; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); }
+  .dir td.is-ext { font-weight: 700; color: var(--c-ink-900); }
+  .dir td.is-chat { color: var(--c-brand-700); }
+  .dir-note { position: absolute; left: 496px; top: 592px; width: 704px; }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">03</span> 문의처</p>
+    <div class="title-row">
+      <h1 class="slide-title">막히면 버디, 그다음 담당 부서에 물어보세요</h1>
+      <p class="pill pill--outline period">평일 09:00~18:00 응답</p>
+    </div>
+  </header>
+
+  <aside class="steps">
+    <p class="steps-label">문의 순서</p>
+    <div class="step is-first">
+      <div class="step-num"><p>1</p></div>
+      <div class="step-body"><p class="step-when">가장 먼저</p><p class="step-name">내 버디</p><p class="step-line">첫 3개월 동안 곁에서 돕는 같은 팀 선배</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num"><p>2</p></div>
+      <div class="step-body"><p class="step-when">버디도 모를 때</p><p class="step-name">People팀 온보딩 담당</p><p class="step-line">내선 1201 · 메신저 #onboarding</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num"><p>3</p></div>
+      <div class="step-body"><p class="step-when">주제가 분명할 때</p><p class="step-name">담당 부서에 바로</p><p class="step-line">오른쪽 표의 내선이나 메신저 채널로</p></div>
+    </div>
+    <div class="urgent">
+      <p class="pill pill--down-on-dark">긴급</p>
+      <p class="urgent-text">보안 사고는 즉시 내선 1519로 신고</p>
+    </div>
+  </aside>
+
+  <table class="data-table data-table--text dir">
+    <colgroup>
+      <col class="c-topic"><col class="c-team"><col class="c-ext"><col class="c-chat">
+    </colgroup>
+    <thead>
+      <tr><th>문의 내용</th><th>담당</th><th>내선</th><th>메신저 채널</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>급여·연말정산</td><td>People팀</td><td class="is-ext">1203</td><td class="is-chat">#ask-people</td></tr>
+      <tr><td>휴가·복리후생</td><td>People팀</td><td class="is-ext">1204</td><td class="is-chat">#ask-people</td></tr>
+      <tr><td>노트북·계정</td><td>IT지원팀</td><td class="is-ext">1500</td><td class="is-chat">#it-help</td></tr>
+      <tr><td>경비·법인카드</td><td>재무팀</td><td class="is-ext">1302</td><td class="is-chat">#ask-finance</td></tr>
+      <tr><td>계약·법률 검토</td><td>법무팀</td><td class="is-ext">1401</td><td class="is-chat">#ask-legal</td></tr>
+      <tr><td>보안 사고 신고</td><td>보안기술팀</td><td class="is-ext">1519</td><td class="is-chat">#security</td></tr>
+    </tbody>
+  </table>
+  <p class="footnote dir-note">내선은 사내 전화 4자리 · 메신저 채널은 사내 메신저에서 이름으로 검색</p>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 신입사원 온보딩 가이드</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 정보</p>
+      <p class="page-num" data-field="slidenum">3</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+연락처와 채널 이름은 예시입니다. 실제 자료로 만들 때는 사내 전화번호부와 메신저 채널 목록에서 확인해 바꿔 주세요.
+</template>
+</body>
+</html>

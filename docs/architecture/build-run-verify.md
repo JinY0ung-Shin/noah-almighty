@@ -1,7 +1,8 @@
 # Build, run, verify
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
-> Dev servers, the verification gate, Docker/TLS/CA, and release mechanics.
+> Dev servers, the verification gate, Docker/TLS/CA, release mechanics, and the deck converter's dev
+> setup, opt-in suites and Docker smoke.
 
 - `npm run dev` — `concurrently` runs `dev:server` (tsx watch, port 48787) + `dev:client`
   (vite, port 5173, proxies `/api`,`/users`,`/fonts` → 48787).
@@ -73,3 +74,43 @@
   server with a blocking `spawnSync` per Bash call — originally hit this trap as a `FROM rust`
   `cargo install` builder stage.) Test one RUN step without a full
   build: `docker run --rm node:22-bookworm-slim bash -c '<step>'`.
+
+## Deck converter
+The pptx skill's HTML→PPTX converter (mechanics: [`pptx-converter.md`](pptx-converter.md)) needs a
+Chromium and a Python with the pinned set. The image has both; a dev box borrows Playwright's cached
+Chromium and a venv.
+- **Dev venv** (Python 3.11 = the image's): `uv venv ~/.venvs/noah-pptx --python 3.11 && uv pip install
+  --python ~/.venvs/noah-pptx/bin/python -r default-skills/skills/pptx/converter/requirements.txt`.
+- **Dev `.env`** (the server's boot probe and the agent shell both read it):
+  `NOAH_PPTX_PYTHON=/home/<you>/.venvs/noah-pptx/bin/python` — ABSOLUTE, `.env` values are not
+  `~`-expanded — and `NOAH_PPTX_DEV=1`, which lets the resolver fall back to Playwright's cached Chromium
+  (`~/.cache/ms-playwright/chromium-<rev>`, the one the visual suite installs; if it is missing:
+  `node node_modules/playwright-core/cli.js install chromium`). Never set `NOAH_PPTX_DEV` on a deployment.
+  Check with `node default-skills/skills/pptx/converter/tools/deck.mjs probe --json` → `"converter": true`,
+  then boot `npm run dev:server` once and read its `deck toolchain probe` log line.
+- **Opt-in e2e suites** (they SKIP without the opt-in, so a green `npm test` says nothing about
+  conversion): `NOAH_PPTX_E2E=1 NOAH_PPTX_DEV=1 NOAH_PPTX_PYTHON=~/.venvs/noah-pptx/bin/python
+  npx vitest run tests/deck-converter.test.ts tests/deck-contract.test.ts` — expect no skips. Also
+  `bash default-skills/skills/pptx/scripts/deck.sh selftest --fail-on-drift` (both decks, both profiles),
+  and `git status` must show no `__pycache__` or `.build` under `default-skills/`.
+- **Baseline image = a FRESH build of `main`,** never an old local tag:
+  `git worktree add /tmp/noah-main main && docker build -t noah-almighty:baseline-main /tmp/noah-main`,
+  then `git worktree remove /tmp/noah-main`. Compare sizes with `docker image inspect -f '{{.Size}}' <img>`
+  (expect ≈ +0.21 GB compressed content / +0.54 GB uncompressed for the converter).
+- **Docker smoke:** `docker build -t noah-almighty:deck-verify .` (the log must show
+  `deck converter selftest: PASS`; `--progress=plain` prints it), then
+  `scripts/deck-docker-smoke.sh --image noah-almighty:deck-verify --baseline-image noah-almighty:baseline-main
+  --require-validator` (add `--validator-dll <dir>/Validator.dll` to reuse a built validator, `--keep <dir>`
+  to keep the decks and logs). It runs every conversion under `--network none --cap-drop ALL
+  --security-opt no-new-privileges:true -u node --init`; its steps (a)–(j) are listed in the script header.
+  Without `--validator-dll` it builds `scripts/openxml-validator/` with `mcr.microsoft.com/dotnet/sdk:8.0`
+  (needs NuGet; build recipe in that directory's README) and SKIPs the validation with a warning when it
+  cannot — `--require-validator` turns that into a FAIL. Run the smoke whenever the converter or the
+  Dockerfile changed.
+- **Legacy variant:** `docker build --build-arg DECK_CONVERTER=0 -t noah-almighty:deck-legacy .` must
+  build; `docker run --rm noah-almighty:deck-legacy bash /app/default-skills/skills/pptx/scripts/deck.sh
+  probe --json` → `"converter": false`, exit 4, and `missing` names "the image was built without the
+  converter (DECK_CONVERTER=0)"; the boot log's probe line shows mode `legacy`.
+- **One Dockerfile fragment** (the apt or pip layer, the fontconfig registration) can be tried without a
+  full build in a throwaway container, as above; the self-test fragment needs the whole app tree, so test it
+  through a real build.
