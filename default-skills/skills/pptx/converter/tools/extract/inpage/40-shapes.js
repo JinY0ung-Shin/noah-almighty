@@ -451,6 +451,23 @@ function chartContrastLint(el, spec, ctx) {
   });
 }
 
+/**
+ * A value the value axis cannot show (AUTHORING §8.10): PowerPoint clips the bar or point at the axis bound while
+ * its data label still reads the true number, so the chart silently misstates its own data. Only an explicit
+ * valueAxis.min/max can be exceeded — a derived scale always covers the data. A warning, like chart-contrast: the
+ * chart converts either way, and an outlier may be clipped on purpose. dataMin/dataMax are what lib/chart.js
+ * actually drew (stack sums when stacked); pie and doughnut publish none, having no value axis.
+ */
+function chartRangeLint(el, r, ctx) {
+  const slack = (bound) => 1e-9 * Math.max(1, Math.abs(bound));
+  const what = r.stacked ? 'stack total' : 'value';
+  const say = (side, drawn, bound, fix) => ctx.lint('warn', 'chart-range',
+    `the ${side} ${what} drawn, ${drawn}, is ${side === 'largest' ? 'above' : 'below'} valueAxis.${side === 'largest' ? 'max' : 'min'} ${bound}`
+    + ` — PowerPoint clips it at the axis while its data label still reads the true number: ${fix} (AUTHORING §8.10)`, el);
+  if (typeof r.dataMax === 'number' && typeof r.valueMax === 'number' && r.dataMax > r.valueMax + slack(r.valueMax)) say('largest', r.dataMax, r.valueMax, 'raise the maximum');
+  if (typeof r.dataMin === 'number' && typeof r.valueMin === 'number' && r.dataMin < r.valueMin - slack(r.valueMin)) say('lowest', r.dataMin, r.valueMin, 'lower the minimum');
+}
+
 function chartRecord(el, ctx) {
   let spec = null;
   try {
@@ -482,6 +499,7 @@ function chartRecord(el, ctx) {
         majorUnit: r.majorUnit ?? null,
       };
       if (!p) ctx.lint('error', 'chart-resolved', 'data-resolved has no plot rectangle', el);
+      chartRangeLint(el, r, ctx);
     } catch (e) {
       ctx.lint('error', 'chart-resolved', `data-resolved is not valid JSON: ${e.message}`, el);
     }

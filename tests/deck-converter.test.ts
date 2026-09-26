@@ -93,11 +93,12 @@ function findNamed(dir: string, names: Set<string>, out: string[] = []): string[
 
 /**
  * Pure helpers of the in-page extractor, evaluated in Node: tools/extract/inpage/*.js share one function scope in the
- * slide page and touch no DOM on load (00-util.js), so 00-util.js + 20-text.js evaluate as they are.
+ * slide page and touch no DOM on load (00-util.js), so 00-util.js + 20-text.js evaluate as they are. `files` adds
+ * further parts of that scope (40-shapes.js declares functions only, so it evaluates without a DOM too).
  */
-function inpage<T>(names: string[]): T {
+function inpage<T>(names: string[], files: string[] = ["00-util.js", "20-text.js"]): T {
   const dir = path.join(KIT, "tools", "extract", "inpage");
-  const src = ["00-util.js", "20-text.js"].map((f) => fs.readFileSync(path.join(dir, f), "utf8")).join("\n");
+  const src = files.map((f) => fs.readFileSync(path.join(dir, f), "utf8")).join("\n");
   return new Function(`${src}\nreturn { ${names.join(", ")} };`)() as T;
 }
 
@@ -454,6 +455,36 @@ describe("deck converter CLI (toolchain-free)", () => {
     // a slide title: 40 px (-0.02em) across the 1120 px column; a 48 px closing title gets its own count
     expect(titleWrapMessage("title", 2, 40, -0.8, 1120)).toBe("the slide title wraps onto 2 lines without <br> in this profile — its 1120 px box holds about 28 Hangul syllables per 40 px line in the malgun profile (the wider one; a space takes about a third of a syllable): shorten it or, where the layout leaves room, break it on purpose with <br> (AUTHORING §4.3)");
     expect(titleWrapMessage("title", 3, 48, -0.96, 700)).toContain("its 700 px box holds about 14 Hangul syllables per 48 px line in the malgun profile");
+  });
+
+  it("chart-range: a drawn value outside an explicit value axis warns (stack totals when stacked), a covered one never does", () => {
+    type Res = { valueMin: number | null; valueMax: number | null; dataMin: number | null; dataMax: number | null; stacked?: boolean };
+    const { chartRangeLint } = inpage<{ chartRangeLint: (el: null, r: Res, ctx: { lint: (s: string, rule: string, m: string) => void }) => void }>(
+      ["chartRangeLint"],
+      ["00-util.js", "20-text.js", "40-shapes.js"],
+    );
+    const warn = (r: Res): string[] => {
+      const out: string[] = [];
+      chartRangeLint(null, r, { lint: (severity, rule, message) => out.push(`${severity} ${rule}: ${message}`) });
+      return out;
+    };
+    // the clipped bar keeps its true data label, so the chart misstates its own data — the message says so
+    expect(warn({ valueMin: 0, valueMax: 150, dataMin: 80, dataMax: 900, stacked: false })).toEqual([
+      "warn chart-range: the largest value drawn, 900, is above valueAxis.max 150 — PowerPoint clips it at the axis"
+      + " while its data label still reads the true number: raise the maximum (AUTHORING §8.10)",
+    ]);
+    // stacked: the bound applies to the stack total, and the message names it (each value alone is under the max)
+    expect(warn({ valueMin: 0, valueMax: 50, dataMin: 0, dataMax: 80, stacked: true })[0]).toContain("the largest stack total drawn, 80, is above valueAxis.max 50");
+    expect(warn({ valueMin: 0, valueMax: 50, dataMin: -40, dataMax: 10, stacked: false })[0]).toContain("the lowest value drawn, -40, is below valueAxis.min 0 — PowerPoint clips it");
+    expect(warn({ valueMin: -10, valueMax: 50, dataMin: -40, dataMax: 900, stacked: false })).toHaveLength(2);
+    // no warning: exactly on the bound, inside it, a derived scale (null bounds), or pie/doughnut (no value axis)
+    expect(warn({ valueMin: 0, valueMax: 50, dataMin: 0, dataMax: 50, stacked: false })).toEqual([]);
+    expect(warn({ valueMin: 0, valueMax: 100, dataMin: 0, dataMax: 80, stacked: true })).toEqual([]);
+    expect(warn({ valueMin: null, valueMax: null, dataMin: 10, dataMax: 9999, stacked: false })).toEqual([]);
+    expect(warn({ valueMin: null, valueMax: null, dataMin: null, dataMax: null })).toEqual([]);
+    // documented for the agent wherever the lint vocabulary is listed
+    expect(fs.readFileSync(path.join(SKILL, "reference", "AUTHORING.md"), "utf8")).toContain("`chart-range`");
+    expect(fs.readFileSync(path.join(KIT, "tools", "extract", "README.md"), "utf8")).toContain("`chart-range`");
   });
 
   it("locks: held names refuse a second holder, a SIGKILLed holder frees its slot, the slot wait times out", async () => {
@@ -1206,6 +1237,29 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     const items = JSON.parse(r.stdout).lint.items as { rule: string; message: string }[];
     expect(items.find((l) => l.rule === "image-too-large")?.message).toBe("assets/bomb.png is 12000x12000 px (144.0 MP); a picture may have at most 40.0 MP — downscale it (the slide shows at most 2560 px of it)");
     expect(r.stderr).toMatch(/LINT ERROR slide 1 \(01-a\) image-too-large: assets\/bomb\.png is 12000x12000 px/);
+  }, 300_000);
+
+  it("chart-range e2e: a value the axis cannot show warns on that slide only, and never fails the build", () => {
+    const root = tmp("chart-range-e2e");
+    const slide = (spec: string) =>
+      SLIDE(
+        '<p class="card-title" style="position:absolute;left:80px;top:80px">분기별 값</p>'
+          + `<div class="chart" style="position:absolute;left:80px;top:160px;width:1000px;height:400px" data-chart='${spec}'></div>`,
+      ).replace("</body>", '<script src="../lib/chart.js"></script>\n</body>');
+    const bars = (values: string, max: number) =>
+      `{"type":"column","grouping":"clustered","categories":["1Q","2Q","3Q"],"series":[{"name":"A","values":[${values}],"color":"2A52D9"}],`
+      + `"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd"},"valueAxis":{"visible":false,"min":0,"max":${max}},"legend":{"position":"none"}}`;
+    const d = makeDeck(root, "cr", {
+      "01-over.html": slide(bars("80,120,900", 150)), // 900 is drawn clipped at 150 but still labelled 900
+      "02-ok.html": slide(bars("80,120,140", 150)),
+    });
+    const r = deck(["check", d, "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.out).toBe(0); // a warning, like chart-contrast: the chart converts either way
+    const items = JSON.parse(r.stdout).lint.items as { slide: number; severity: string; rule: string; message: string }[];
+    const range = items.filter((l) => l.rule === "chart-range");
+    expect(range.map((l) => [l.slide, l.severity])).toEqual([[1, "warn"]]);
+    expect(range[0].message).toContain("the largest value drawn, 900, is above valueAxis.max 150");
+    expect(r.stderr).toMatch(/LINT WARN slide 1 \(01-over\) chart-range/);
   }, 300_000);
 
   it("no host name resolves in the browser: the converter's --host-resolver-rules parses (Playwright's quoted copy does not)", () => {

@@ -24,8 +24,11 @@
  * measured with scratch/chart-builder/run.sh (compare.py). Never tuned to a known LibreOffice-only artefact
  * (bottom-legend unit bug, ignored holeSize, corner-anchored inside-end pie labels, "low" label offset).
  *
- * Publishes on each chart element data-resolved='{"plot":{x,y,w,h},"valueMin","valueMax","majorUnit"}' (plot in
- * CSS px relative to the element's border box; square for pie/doughnut, whose scale fields are null) and sets
+ * Publishes on each chart element
+ * data-resolved='{"plot":{x,y,w,h},"valueMin","valueMax","majorUnit","dataMin","dataMax","stacked"}' (plot in
+ * CSS px relative to the element's border box; square for pie/doughnut, whose scale and data fields are null;
+ * dataMin/dataMax = the extremes actually drawn, stack sums when stacked — the extractor's chart-range lint
+ * compares them with the axis, and copies only the scale into the IR) and sets
  * document.documentElement.dataset.chartsReady = "1" once every chart is drawn. Plain ES2020, no dependencies.
  * API: window.NoahChart = { renderAll, renderChart, resolveScale, formatNumber, MODEL, ready }.
  */
@@ -538,9 +541,15 @@
     else drawColumnOrLine(ctx);
     if (legend) drawLegend(ctx, legend);
 
+    // dataMin/dataMax = the extremes actually drawn (stack sums when stacked), so the extractor can report a value
+    // the value axis cannot show (chart-range): a clipped bar still carries its true data label. Pie/doughnut have
+    // no value axis, so they have no range to exceed. Not part of the IR — the extractor copies only the scale.
+    var ex = o.pie || !o.scale ? null : seriesExtremes(o);
     var resolved = { plot: { x: r3(P.x), y: r3(P.y), w: r3(P.w), h: r3(P.h) },
                      valueMin: o.scale ? o.scale.valueMin : null, valueMax: o.scale ? o.scale.valueMax : null,
-                     majorUnit: o.scale ? o.scale.majorUnit : null };
+                     majorUnit: o.scale ? o.scale.majorUnit : null,
+                     dataMin: ex ? ex.lo : null, dataMax: ex ? ex.hi : null,
+                     stacked: !!o.stacked };
     el.setAttribute('data-resolved', JSON.stringify(resolved));
     return resolved;
   }

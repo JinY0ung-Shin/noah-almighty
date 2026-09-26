@@ -464,7 +464,8 @@ content, multiple box-shadows (warn), inset box-shadow (warn), text overflow (sc
 anything outside the slide bounds, a slide-number field that does not show the slide's number (`field`), bare text
 beside element children (`mixed-content`), a soft-wrapped slide title (`title-wrap`), a weight outside the kit's
 400/600/700/800 (`font-weight`). Warn: `font-weight` for a kit weight the profile lacks (malgun 600/800, expected;
-also counts table-cell runs and chart label/axis weights), `chart-contrast`, `placeholder`, `theme-color`.
+also counts table-cell runs and chart label/axis weights), `chart-contrast`, `chart-range` (a drawn value — the
+stack total when stacked — outside an explicit `valueAxis.min/max`), `placeholder`, `theme-color`.
 
 ## v2 decisions — binding for every lane (from docs/research/*.md)
 

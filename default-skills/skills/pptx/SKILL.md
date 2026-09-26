@@ -108,16 +108,21 @@ are what keep every object native and editable. The essentials:
 ## 5. Check
 
 ```
-bash ${CLAUDE_SKILL_DIR}/scripts/deck.sh check <deck>
+bash ${CLAUDE_SKILL_DIR}/scripts/deck.sh check <deck> --profile both
 ```
+
+**Check a Korean deck with `--profile both`** — not only the profile you will build. Hangul is up to 20 % wider in
+`malgun` (§10), so a cramped table cell, an overflowing box or a line that breaks mid-word usually shows up in
+`malgun` ALONE: the default `embedded`-only check reports the same HTML as 0 errors, 0 warnings and you ship the
+defect. `--profile both` renders both and fails on an error in either. Only for an all-Latin deck, or a re-check
+of one slide you just edited (`--only 03-table …`), is a single profile enough.
 
 Run it in the FOREGROUND with the Bash tool's `timeout: 600000` — never with `run_in_background` — and never pipe
 it (`| grep`, `| tail`): its exit code is the verdict, and a pipe reports the last command's instead. Every run ends
-inside its own 540 s budget. It renders every slide in the `embedded` profile (`--profile malgun` for a 맑은 고딕
-deck, `--profile both` to also report text that wraps differently between the profiles; `--only 03-table …`
-limits the slides) and prints lint errors with slide, element and rule, then each soft-wrapped text with where it
-breaks. Fix every error and re-run until it exits 0; the `NOTE malgun weights` line needs no action. Copy the
-`Next:` command as printed: it keeps your `--profile`.
+inside its own 540 s budget (both profiles included). It prints lint errors with slide, element and rule, then each
+soft-wrapped text with where it breaks, the blocks that wrap differently between the profiles, and table cells with
+too little slack. Fix every error and re-run until it exits 0; the `NOTE malgun weights` line needs no action. Copy
+the `Next:` command as printed: it keeps your `--profile`.
 
 - With vision ("Image input (vision): supported" in describe_system — or, without describe_system, when a Read of
   the overview succeeds): Read `<deck>/.build/check/<profile>/overview-1.png` first (12 slides per sheet), then the

@@ -135,7 +135,8 @@ mixed with non-inline children; every glyph drawn by the profile's own font file
 `<svg>` with explicit `width`/`height`; table cells hold text (§8.9).
 
 Warnings worth knowing: `soft-wrap` (a two-line text whose break cuts a word, §5.3), `chart-contrast` (a series
-colour under 3:1 on its background, §8.10), `fallback-font`, `not-embedded-glyph`, `line-height-normal`, `text`
+colour under 3:1 on its background, §8.10), `chart-range` (a value outside the value axis: PowerPoint clips the bar
+while its label keeps the true number, §8.10), `fallback-font`, `not-embedded-glyph`, `line-height-normal`, `text`
 (justify, italic without an italic face, mixed sizes in a wrapping paragraph …), `geometric-marker` (use the
 `"• "` marker), `list-item-blocks` (§5.4), `group-opacity` (§6), `inline-background` (§5.2), `image`,
 `placeholder`, `theme-color`. The malgun profile's `font-weight` notes for 600/800 are expected: the check folds
@@ -458,7 +459,9 @@ its slice colours as `pointColors["0"]` and never a label position (its labels s
 use `dataLabels.show: false` and put the values into the HTML legend (§8.15).
 Chart rules: the element has explicit width/height and **nothing inside it** (it is atomic; `lib/chart.js` draws
 the preview); colours are `RRGGBB` without `#`; give explicit `valueAxis.min/max` (PowerPoint must not auto-scale
-what the HTML shows; leave headroom when users will edit values upward — values above the maximum are clipped);
+what the HTML shows; leave headroom when users will edit values upward — a value outside the axis is drawn clipped
+AT the bound while its data label still reads the true number, so the chart misstates its own data: the
+`chart-range` warning reports it, with the stack total when the chart is stacked);
 `pointColors` = series index → a **full** per-point colour list (here: the forecast bar in a lighter tint); every
 series / point colour ≥ **3:1** on the card (WCAG non-text contrast: prior year `--c-series-prev` #8A94A6 3.06:1,
 forecast `--c-series-fcst` #6F8FF0 3.06:1, current year brand-600 6.35:1; the accent as a goal series or bar on white
@@ -640,9 +643,10 @@ handles what as a `.data-table--text` of topic, team, extension and channel at t
 
 ## 10. Self-check with `deck.sh check` (required before you build)
 
-Run `deck.sh check <deck>` exactly as SKILL.md §5 shows it — in the foreground, Bash `timeout: 600000`. It
-renders every slide (the `embedded` profile unless you pass `--profile malgun` or `--profile both`; `--only
-03-table …` limits the slides) with the same Chromium, fonts and sandbox the build uses, and writes:
+Run `deck.sh check <deck> --profile both` exactly as SKILL.md §5 shows it — in the foreground, Bash
+`timeout: 600000`. It renders every slide (`--profile both` renders `embedded` AND `malgun` and fails on an error
+in either; a single profile only for an all-Latin deck or an `--only` re-check) with the same Chromium, fonts and
+sandbox the build uses, and writes:
 
 - `<deck>/.build/check/<profile>/html/NN-name.png` — 1280×720 renders, what PowerPoint will show;
 - `<deck>/.build/check/<profile>/overview-N.png` — contact sheets, 12 slides each (3 × 4 tiles, numbered);
@@ -655,8 +659,9 @@ renders** when you have vision — the lint cannot judge balance, legibility or 
 its own renders to `<deck>/.build/<profile>/html/` and `overview-N.png` (`.build/check/` keeps the last check's).
 
 Checklist:
-1. 0 errors (in the profile you will build — both, if you will build both); warnings understood; the
-   `NOTE malgun weights` line needs no action.
+1. 0 errors **in both profiles** for a Korean deck (a cramped cell or an overflow usually appears in `malgun`
+   alone, so an `embedded`-only pass proves little); warnings understood; the `NOTE malgun weights` line needs no
+   action.
 2. Soft wraps only where intended (the check prints each one with " / " at its breaks); no unintended wrap
    differences between the profiles.
 3. No glyph drawn by a fallback font (`fallback-font`, `missing-glyph`).

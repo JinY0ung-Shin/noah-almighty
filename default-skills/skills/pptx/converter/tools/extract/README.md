@@ -173,7 +173,8 @@ the cell) is a lint error (`table-content`, `transform`, `text-overflow`) — no
 
 **Charts** — `[data-chart]` is atomic (its SVG preview is not walked): `spec` = the parsed attribute verbatim,
 `resolved` = `data-resolved` with `plot` converted to slide px (`plotPx`), `valueMin`, `valueMax`, `majorUnit`.
-Errors: invalid JSON/spec, missing `data-resolved`, rotation.
+`data-resolved` also carries `dataMin`/`dataMax`/`stacked` (the extremes lib/chart.js actually drew) for the
+`chart-range` lint; they stay out of the IR. Errors: invalid JSON/spec, missing `data-resolved`, rotation.
 
 **Images** — `<img>` and outer `<svg>` are atomic; `box` = content box; `alt` = `alt` / `aria-label` / `<title>`.
 PNG: isolated 4× render (`<img>`: same `object-fit`/`object-position`, rounded clip baked in; `<svg>`: the `svg`
@@ -250,7 +251,9 @@ reproduces the AUTHORING §4.2 table), a taller box, or a wider box.
 warn: `multiple-box-shadows`, `inset-box-shadow`, `shadow-spread`, `shadow-translucent`, `group-opacity`,
 `font-weight` (a kit weight the profile has no face for — 600/800 in malgun, expected: `deck.mjs` folds them into one
 NOTE line; counts text elements, table-cell runs and chart label/axis weights), `chart-contrast` (a series or point
-colour under 3:1 against the chart's composited background), `field`, `placeholder`, `theme-color`,
+colour under 3:1 against the chart's composited background), `chart-range` (a drawn value outside the value axis —
+the stack total when stacked; only an explicit `valueAxis.min/max` can be exceeded, a derived scale always covers
+the data), `field`, `placeholder`, `theme-color`,
 `line-height-normal`, `fallback-font`,
 `non-profile-font`, `not-embedded-glyph`, `inline-background`, `inline-spacing`, `positioned-inline`,
 `text-feature` (tabular nums, wavy/coloured decorations, word-spacing, …), `text` (justify, rtl, italic without an
