@@ -70,7 +70,9 @@ import {
   summarizePersonalAgentState,
 } from "./ownerState.js";
 import {
+  buildCanUseToolSafetyNet,
   buildPreToolUseHook,
+  createHookApprovalLedger,
   TASK_ORCHESTRATION_TOOLS,
 } from "./preToolUseHook.js";
 import { buildPostToolUseHook } from "./postToolUseHook.js";
@@ -1580,6 +1582,7 @@ export async function buildAgentRunPlan(
       Object.keys(shellSecretEnv).length > 0 || lifted.secretFiles.length > 0
         ? injectableSecretEnv
         : browserSecretEnv;
+    const hookApprovals = createHookApprovalLedger();
     options.hooks = {
       PreToolUse: [
         {
@@ -1611,6 +1614,7 @@ export async function buildAgentRunPlan(
                     memoryRoot: personalAgentScope.root,
                   }
                 : false,
+              hookApprovals,
             ),
           ],
           // CLI-side budget for this hook, in SECONDS. The CLI aborts an SDK
@@ -1631,6 +1635,12 @@ export async function buildAgentRunPlan(
           }
         : {}),
     };
+    // A confirmer, not a second gate: its presence makes the SDK pass
+    // `--permission-prompt-tool stdio`, without which the CLI hides
+    // AskUserQuestion / EnterPlanMode / ExitPlanMode from this non-interactive
+    // session. It confirms only an ExitPlanMode the hook above allowed and
+    // denies every other CLI-side ask (see buildCanUseToolSafetyNet).
+    options.canUseTool = buildCanUseToolSafetyNet(hookApprovals);
   }
 
   return {

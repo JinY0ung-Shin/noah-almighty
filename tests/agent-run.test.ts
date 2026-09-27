@@ -389,6 +389,11 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     const hooks = options.hooks as { PreToolUse?: unknown[] } | undefined;
     expect(Array.isArray(hooks?.PreToolUse)).toBe(true);
     expect(hooks?.PreToolUse).toHaveLength(1);
+    // …plus the canUseTool confirmer: the SDK's permission-prompt route, without
+    // which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It must not be
+    // combined with permissionPromptToolName (the SDK throws on both).
+    expect(typeof options.canUseTool).toBe("function");
+    expect(options.permissionPromptToolName).toBeUndefined();
     // All tool groups on (default) for a plain owner with no repo/groups/ssh/canvas.
     const serverNames = Object.keys(options.mcpServers as Record<string, unknown>);
     expect(serverNames).toEqual(
@@ -868,6 +873,9 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(response.text).toBe("direct answer");
     // Snapshot (1500) replaces the cumulative result input (10000); output preserved.
     expect(response.usage).toEqual({ inputTokens: 1500, outputTokens: 50, contextWindow: 200000 });
+    // No hook without an events sink, so no canUseTool confirmer either.
+    expect(sdkMock.calls[0].options.hooks).toBeUndefined();
+    expect(sdkMock.calls[0].options.canUseTool).toBeUndefined();
   });
 
   it("self-heals a missing resume session by re-running without resume and injecting stored history", async () => {

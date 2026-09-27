@@ -44,8 +44,21 @@
   **Gated on the sink:** with no `onTextFold` (headless routines, `POST /api/chat`) the runners fold
   nothing and keep the legacy full join — the `AgentEvents` no-sink contract. Attachment anchors are
   therefore TAIL-relative on both sides (`currentTextAnchor` slices from the fold index).
-- **Tool permissions go through one gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
-  `canUseTool`/`onUserDialog` are unused (don't fire headlessly). Auto-approve applies on the
+- **Tool permissions go through one gate:** the `PreToolUse` hook (`buildPreToolUseHook`). `onUserDialog`
+  is unused. **`canUseTool` is wired as a CONFIRMER only (`buildCanUseToolSafetyNet` + the run's
+  `HookApprovalLedger`).** Measured 2026-09-27 on CLIs 2.1.185–2.1.283:
+  - Without ANY permission-prompt route (the SDK adds `--permission-prompt-tool stdio` only when
+    `canUseTool` is set), CLIs from 2.1.220 on (2.1.185 still offered them; no changelog entry) hide
+    AskUserQuestion, EnterPlanMode and ExitPlanMode from a non-interactive session. So the question modal
+    and the plan review were DEAD from v1.1.0 (SDK 0.3.220) until this confirmer existed, and the avatar
+    fell back to canvas controls to ask things.
+  - The CLI calls `canUseTool` only when its OWN policy still asks after the hook allowed:
+    - ExitPlanMode always asks; unconfirmed, the model stays stuck in plan mode. The confirmer allows
+      exactly the `tool_use_id` the hook allowed, once, recorded at the hook's single `trace()` exit.
+    - CLI safety checks such as a Write to `.claude/settings.json` also ask. Approving one would really
+      write the file, so the confirmer denies them, which is the pre-route outcome.
+  - AskUserQuestion never gets there: the hook answers it with deny+reason. Ordinary Bash/Write and
+    EnterPlanMode never ask. Auto-approve applies on the
   `!headless && elevated && autoApprove` path — **`elevated` = owner OR trusted user**, not owner-only;
   headless routines and plain colleague chats stay read-only. But `isAutoAllowed` auto-allows EVERY
   `mcp__*` tool at the hook BEFORE that check, so any in-process MCP server MUST self-gate in its handlers.

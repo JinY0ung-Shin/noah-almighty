@@ -186,10 +186,14 @@ export function isRetryableModelError(error: unknown): boolean {
 /**
  * Run the Claude Agent SDK against the avatar's plugin roots.
  *
- * Permission model — enforced by a PreToolUse hook, NOT canUseTool/onUserDialog.
- * (Empirically, the SDK's interactive control callbacks `canUseTool`/`onUserDialog`
- * do NOT fire in this headless `query()` setup — verified against v0.3.169 — but
- * PreToolUse hooks DO fire and can block asynchronously, so the hook is our gate.)
+ * Permission model — enforced by a PreToolUse hook; `canUseTool` only CONFIRMS.
+ * PreToolUse hooks fire for every tool call and can block asynchronously, so the
+ * hook is our gate (`onUserDialog` stays unused). `canUseTool` is wired as
+ * `buildCanUseToolSafetyNet` because its presence is the SDK's permission-prompt
+ * route. Without one, the CLI (since 2.1.186–2.1.220) hides AskUserQuestion /
+ * EnterPlanMode / ExitPlanMode from this non-interactive session. The CLI calls
+ * it only when its own policy still asks after the hook allowed. It confirms the
+ * ExitPlanMode the hook allowed and denies the rest, e.g. protected-path writes.
  * The bundled CLI bounds every SDK callback hook with a per-hook abort (10 min
  * default; CLIs before 2.1.218 then misreport the abort to the model as a USER
  * REJECTION), so the PreToolUse matcher pins `timeout` ABOVE the run registry's

@@ -125,9 +125,84 @@ const hookDeny = (reason: string): HookOutput => ({
 });
 
 /**
+ * Tools whose own permission check still ASKS after this hook allowed them:
+ * leaving plan mode is an approval built into ExitPlanMode, so the CLI routes
+ * it to the SDK's `canUseTool` even on a hook `allow` (measured on the bundled
+ * CLI 2.1.283 — unconfirmed, the model stays stuck in plan mode).
+ */
+const HOOK_CONFIRMED_TOOLS: ReadonlySet<string> = new Set(["ExitPlanMode"]);
+
+/**
+ * One run's record of the hook's allows that `canUseTool` may be asked to
+ * confirm. Only HOOK_CONFIRMED_TOOLS are recorded; a confirmation consumes it.
+ */
+export interface HookApprovalLedger {
+  record(toolName: string, toolUseId: string, updatedInput?: Record<string, unknown>): void;
+  take(toolName: string, toolUseId: string): { updatedInput?: Record<string, unknown> } | null;
+}
+
+export function createHookApprovalLedger(): HookApprovalLedger {
+  const allowed = new Map<string, Record<string, unknown> | undefined>();
+  return {
+    record(toolName, toolUseId, updatedInput) {
+      if (toolUseId && HOOK_CONFIRMED_TOOLS.has(toolName)) {
+        allowed.set(toolUseId, updatedInput);
+      }
+    },
+    take(toolName, toolUseId) {
+      if (!HOOK_CONFIRMED_TOOLS.has(toolName) || !allowed.has(toolUseId)) {
+        return null;
+      }
+      const updatedInput = allowed.get(toolUseId);
+      allowed.delete(toolUseId);
+      return { updatedInput };
+    },
+  };
+}
+
+type CanUseToolResult =
+  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | { behavior: "deny"; message: string };
+
+/**
+ * The SDK `canUseTool` callback — a CONFIRMER, never a second gate. Its main
+ * job is to EXIST: with it the SDK passes `--permission-prompt-tool stdio`.
+ * Without that route the CLI (since somewhere in 2.1.186–2.1.220) hides
+ * AskUserQuestion, EnterPlanMode and ExitPlanMode from a non-interactive
+ * session. The hook above still decides every call. The CLI lands here only
+ * when its OWN policy still asks after the hook allowed. It confirms exactly
+ * the ExitPlanMode call the hook allowed and denies everything else, which is
+ * how those asks ended before this route existed. One example is the CLI's
+ * safety check on a write to `.claude/settings.json`; approving that here would
+ * bypass the CLI's own guard.
+ */
+export function buildCanUseToolSafetyNet(approvals: HookApprovalLedger) {
+  return async (
+    toolName: string,
+    input: Record<string, unknown>,
+    options: { toolUseID?: string; agentID?: string; decisionReason?: string },
+  ): Promise<CanUseToolResult> => {
+    const agentId = options.agentID || MAIN_AGENT_ID;
+    const approved = approvals.take(toolName, asString(options.toolUseID));
+    if (approved) {
+      agentLogger.info({ toolName, agentId }, "canUseTool confirmed a hook-allowed call");
+      return { behavior: "allow", updatedInput: approved.updatedInput ?? input };
+    }
+    const reason = asString(options.decisionReason);
+    agentLogger.info({ toolName, agentId, reason }, "canUseTool ask denied (no approval route)");
+    return {
+      behavior: "deny",
+      message:
+        `This call needs an interactive approval that this session cannot grant${reason ? ` (${reason})` : ""}, so it was not run. ` +
+        "Do not retry it the same way; if it is essential, tell the user what you need instead.",
+    };
+  };
+}
+
+/**
  * The single tool gate. Fires before every tool call (main thread + subagents),
  * can block, and can await the user. See the runClaudeAgent doc comment for why
- * this replaces canUseTool/onUserDialog.
+ * this is the gate and `canUseTool` only confirms (buildCanUseToolSafetyNet).
  */
 /**
  * Git subcommands that change branches/destructively mutate the tree or touch the
@@ -221,6 +296,9 @@ export function buildPreToolUseHook(
   // bot's own memory folder — ONE parameter carries the run kind, so the two
   // bot behaviors can never disagree about whether this is a bot run.
   personalAgentRun: boolean | PersonalAgentWriteScope = false,
+  // The run's ledger shared with buildCanUseToolSafetyNet: every allow passes
+  // through `trace()` below, which records the ones the CLI may still ask about.
+  approvals?: HookApprovalLedger,
 ) {
   const personalAgentRunning = Boolean(personalAgentRun);
   const botWriteScope =
@@ -248,6 +326,9 @@ export function buildPreToolUseHook(
           { trace: "tool", toolName, toolUseId, agentId, decision: out.hookSpecificOutput.permissionDecision },
           "trace: PreToolUse hook decision",
         );
+      }
+      if (out.hookSpecificOutput.permissionDecision === "allow") {
+        approvals?.record(toolName, toolUseId, out.hookSpecificOutput.updatedInput);
       }
       return out;
     };

@@ -168,7 +168,10 @@ These are the invariants the project is built around. New work should reinforce 
   names + sites and branch on whether the bridge is connected. Mechanics →
   `docs/architecture/browser-bridge/actions.md`, `secrets-ssh.md`.
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
-  `canUseTool`/`onUserDialog` don't fire headlessly. The `mcp__`-prefix auto-allow fires BEFORE the owner
+  `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
+  route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode the
+  hook already allowed and denies every other CLI-side ask (e.g. protected-path writes), so it grants nothing
+  the hook didn't. `onUserDialog` stays unused. The `mcp__`-prefix auto-allow fires BEFORE the owner
   check, so every in-process MCP server MUST self-gate in its handlers.
 - **New decks are HTML converted SHELL-side, bounded by the converter itself; share_file's exact previews are
   HASH-BOUND.** The bundled `pptx` skill renders agent-authored slide HTML in a network-blocked, CSP-locked

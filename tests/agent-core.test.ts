@@ -79,6 +79,10 @@ import {
   redactSecretValues,
 } from "../src/server/agent/postToolUseHook.js";
 import {
+  buildCanUseToolSafetyNet,
+  createHookApprovalLedger,
+} from "../src/server/agent/preToolUseHook.js";
+import {
   GIT_CREDENTIAL_ENV_NAMES,
   SSH_MCP_SECRET_ENV_NAMES,
   isShellExposableSecret,
@@ -5000,6 +5004,93 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
       "n",
     );
     expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+  });
+});
+
+describe("canUseTool safety net (confirmer, never a second gate)", () => {
+  const READONLY = ["Read", "Glob", "Grep"];
+  // An elevated auto-approve owner — the chat configuration, where the hook
+  // allows ExitPlanMode and Bash/Write outright.
+  const ownerHook = (approvals: ReturnType<typeof createHookApprovalLedger>) =>
+    buildPreToolUseHook(
+      {},
+      true,
+      READONLY,
+      false,
+      false,
+      true,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      true,
+      false,
+      approvals,
+    );
+
+  it("confirms exactly the ExitPlanMode call the hook allowed, once", async () => {
+    const approvals = createHookApprovalLedger();
+    const canUseTool = buildCanUseToolSafetyNet(approvals);
+    const hook = ownerHook(approvals);
+    const input = { plan: "1. 구현" };
+    const out = await hook({ tool_name: "ExitPlanMode", tool_input: input, tool_use_id: "plan-1" }, "plan-1");
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+
+    expect(await canUseTool("ExitPlanMode", input, { toolUseID: "plan-other" })).toMatchObject({ behavior: "deny" });
+    expect(await canUseTool("ExitPlanMode", input, { toolUseID: "plan-1" })).toEqual({
+      behavior: "allow",
+      updatedInput: input,
+    });
+    // Single-use: a replayed ask for the same call is not re-confirmed.
+    expect(await canUseTool("ExitPlanMode", input, { toolUseID: "plan-1" })).toMatchObject({ behavior: "deny" });
+  });
+
+  it("denies a CLI safety-check ask even when the hook allowed the call", async () => {
+    const approvals = createHookApprovalLedger();
+    const canUseTool = buildCanUseToolSafetyNet(approvals);
+    const hook = ownerHook(approvals);
+    const input = { file_path: "/w/.claude/settings.json", content: "{}" };
+    const out = await hook({ tool_name: "Write", tool_input: input, tool_use_id: "w-1" }, "w-1");
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+
+    const result = await canUseTool("Write", input, {
+      toolUseID: "w-1",
+      decisionReason: "Claude requested permissions to write to /w/.claude/settings.json",
+    });
+    expect(result.behavior).toBe("deny");
+    expect(result.behavior === "deny" && result.message).toContain("/w/.claude/settings.json");
+  });
+
+  it("has nothing to confirm for a rejected plan or an answered question", async () => {
+    const approvals = createHookApprovalLedger();
+    const canUseTool = buildCanUseToolSafetyNet(approvals);
+    const hook = buildPreToolUseHook(
+      {
+        onPlanReview: async () => ({ behavior: "rejected", feedback: "다시" }),
+        onQuestion: async () => ({ behavior: "completed", result: { answers: { "색은?": "파랑" } } }),
+      },
+      true,
+      READONLY,
+      false,
+      false,
+      false,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      true,
+      false,
+      approvals,
+    );
+    const plan = await hook({ tool_name: "ExitPlanMode", tool_input: { plan: "계획" }, tool_use_id: "p" }, "p");
+    expect(plan.hookSpecificOutput.permissionDecision).toBe("deny");
+    const question = await hook(
+      { tool_name: "AskUserQuestion", tool_input: { questions: [] }, tool_use_id: "q" },
+      "q",
+    );
+    expect(question.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(await canUseTool("ExitPlanMode", {}, { toolUseID: "p" })).toMatchObject({ behavior: "deny" });
+    expect(await canUseTool("AskUserQuestion", {}, { toolUseID: "q" })).toMatchObject({ behavior: "deny" });
   });
 });
 
