@@ -58,8 +58,15 @@
     - CLI safety checks such as a Write to `.claude/settings.json` also ask. Approving one would really
       write the file, so the confirmer denies them, which is the pre-route outcome.
   - AskUserQuestion never gets there: the hook answers it with deny+reason. Ordinary Bash/Write and
-    EnterPlanMode never ask. Auto-approve applies on the
-  `!headless && elevated && autoApprove` path — **`elevated` = owner OR trusted user**, not owner-only;
+    EnterPlanMode never ask.
+  - SDK 0.3.283+ prints a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` process warning on EVERY run for this
+    `canUseTool` + bare-`allowedTools` setup. It recommends a PreToolUse hook, which is already the
+    gate, and its tool list is not even accurate: the ExitPlanMode and protected-path asks above still
+    arrive. `processWarnings.ts` drops exactly that code at server start, and every other warning
+    still prints.
+
+  Auto-approve applies on the `!headless && elevated && autoApprove` path — **`elevated` = owner OR
+  trusted user**, not owner-only;
   headless routines and plain colleague chats stay read-only. But `isAutoAllowed` auto-allows EVERY
   `mcp__*` tool at the hook BEFORE that check, so any in-process MCP server MUST self-gate in its handlers.
 - **The CLI bounds SDK callback hooks with a per-hook abort (10 min default, `hh=600000` in the CLI;

@@ -9,12 +9,16 @@ import { startRoutineScheduler } from "./scheduler.js";
 import { startBotTaskDispatcher } from "./botTaskRunner.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
+import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
 import {
   deckToolchainLogFields,
   probeDeckRendering,
   probeDeckToolchain,
 } from "./deckRender.js";
 
+// Before any agent run: drop the SDK's per-run canUseTool-shadowed advisory
+// (our PreToolUse hook is the gate it recommends). Other warnings still print.
+filterAdvisoryProcessWarnings();
 const services = createServices();
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
