@@ -310,6 +310,19 @@
   font-size: var(--t-2xs);
   line-height: 1;
 }
+/* A sub-agent running in the background: its spawn returned at once, so the
+   card (not the turn) is where the user sees it is still at work. Outlined
+   like .task-badge so it reads as a qualifier of the solid 에이전트 badge. */
+.agent-bg-badge {
+  flex: none;
+  border: 1px solid var(--accent-soft-strong);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  padding: 0 var(--s-1-5);
+  font-size: var(--t-2xs);
+  font-weight: 700;
+}
 .agent-label {
   font-weight: 600;
   /* min-width:0 so the automatic content-based flex minimum doesn't keep an

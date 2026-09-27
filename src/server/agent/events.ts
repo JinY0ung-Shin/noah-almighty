@@ -195,6 +195,12 @@ export interface AgentSpawnEvent {
   description?: string;
   /** The parent agent that spawned it (MAIN_AGENT_ID for top-level spawns). */
   parentId: string;
+  /**
+   * The agent now runs in the BACKGROUND (its spawn returned only a launch
+   * receipt, or the CLI backgrounded it mid-run). Re-emitted for an agent that
+   * already started; the card stays running until its task ends it.
+   */
+  background?: boolean;
 }
 
 /**

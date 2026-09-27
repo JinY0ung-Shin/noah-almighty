@@ -41,6 +41,7 @@
   import { formatFileSize, formatUsageLabel, renderMarkdown, renderMarkdownCached, timeLabel } from "../lib/format";
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
+  import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import type { AgentActivity, AvatarSummary, BotTask, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
   import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
@@ -1273,11 +1274,23 @@
     if (agentCount) parts.push(`에이전트 ${agentCount}개`);
     return parts.length ? `${parts.join(" · ")} ${suffix}` : emptyLabel;
   }
-  function activitySummary(item: ChatPane): string {
-    const toolCount = item.liveTools.filter((t) => t.kind === "tool").length;
-    const taskCount = item.liveTasks.length;
-    const agentCount = item.liveAgents.filter((a) => !a.isMain).length;
+  function activitySummary(rows: SegmentRows): string {
+    const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
+    const taskCount = rows.tasks.length;
+    const agentCount = rows.agents.filter((a) => !a.isMain).length;
     return activityCountLabel(toolCount, taskCount, agentCount, "진행 중", "작업 중…");
+  }
+  // A finished turn's live rows during the background phase (its background
+  // agents may still be at work): "진행 중" while anything runs, else "사용함".
+  function segmentActivityLabel(rows: SegmentRows): string {
+    const running =
+      rows.agents.some((a) => !a.isMain && a.status === "running") ||
+      rows.tools.some((t) => t.status === "running") ||
+      rows.tasks.some((t) => t.status === "running");
+    const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
+    const taskCount = rows.tasks.length + rows.tools.filter((t) => t.kind === "task").length;
+    const agentCount = rows.agents.filter((a) => !a.isMain).length;
+    return activityCountLabel(toolCount, taskCount, agentCount, running ? "진행 중" : "사용함", "작업 내역");
   }
   // One-line description list for the background-phase note ("빌드 실행, 리포 조사").
   function bgTaskSummary(item: ChatPane): string {
@@ -1291,7 +1304,12 @@
   // runs stay visible after the response finishes (collapsed by default).
   function completedActivity(message: StoredMessage) {
     const activity = message.response?.activity;
-    return activity && (activity.tools.length || activity.tasks?.length) ? activity : null;
+    // A sealed background segment can hold only an agent card (a background
+    // agent that ran no tool yet): that is still worth showing.
+    return activity &&
+      (activity.tools.length || activity.tasks?.length || activity.agents.some((a) => !a.isMain))
+      ? activity
+      : null;
   }
   function completedActivityLabel(activity: AgentActivity): string {
     const toolCount = activity.tools.filter((t) => t.kind === "tool").length;
@@ -1500,6 +1518,25 @@
                       </div>
                     {/if}
                   </details>
+                {:else}
+                  {@const segRows = messageSegmentRows(item, message.id)}
+                  <!-- Background phase: THIS bubble's live rows (its background agents
+                       may still be running) render under it, not in the trailing live
+                       bubble, until bg_end seals them onto this message. -->
+                  {#if segRows}
+                    {@const segMemChip = memoryChip(segRows.tools)}
+                    {@const segCmpChip = compactChip(segRows.tools)}
+                    <details class="activity-live" open>
+                      <summary>
+                        <span class="activity-summary-text">{segmentActivityLabel(segRows)}</span>
+                        {#if segMemChip}<span class="activity-memory-chip" title={segMemChip.title}><span aria-hidden="true">🧠</span>{segMemChip.label}</span>{/if}
+                        {#if segCmpChip}<span class="activity-memory-chip" title={segCmpChip.title}><span aria-hidden="true">{segCmpChip.icon}</span>{segCmpChip.label}</span>{/if}
+                      </summary>
+                      <div class="agent-activity">
+                        <ActivityTree agentId="main" agents={segRows.agents} tools={segRows.tools} tasks={segRows.tasks} />
+                      </div>
+                    </details>
+                  {/if}
                 {/if}
               {:else}
                 {#if visibleAttachments(message.attachments).length}
@@ -1618,18 +1655,23 @@
                    the bubble's edge instead, which is exactly what autoscroll
                    already follows. -->
               {#if item.liveAgents.length}
-                {@const liveMemChip = memoryChip(item.liveTools)}
-                {@const liveCmpChip = compactChip(item.liveTools)}
-                <details class="activity-live" open>
-                  <summary>
-                    <span class="activity-summary-text">{activitySummary(item)}</span>
-                    {#if liveMemChip}<span class="activity-memory-chip" title={liveMemChip.title}><span aria-hidden="true">🧠</span>{liveMemChip.label}</span>{/if}
-                    {#if liveCmpChip}<span class="activity-memory-chip" title={liveCmpChip.title}><span aria-hidden="true">{liveCmpChip.icon}</span>{liveCmpChip.label}</span>{/if}
-                  </summary>
-                  <div class="agent-activity">
-                    <ActivityTree agentId="main" agents={item.liveAgents} tools={item.liveTools} tasks={item.liveTasks} />
-                  </div>
-                </details>
+                {@const liveRows = liveSegmentRows(item)}
+                <!-- The in-flight turn's rows only: in the background phase the
+                     finished bubbles above show their own (lib/activitySegments). -->
+                {#if liveRows}
+                  {@const liveMemChip = memoryChip(liveRows.tools)}
+                  {@const liveCmpChip = compactChip(liveRows.tools)}
+                  <details class="activity-live" open>
+                    <summary>
+                      <span class="activity-summary-text">{activitySummary(liveRows)}</span>
+                      {#if liveMemChip}<span class="activity-memory-chip" title={liveMemChip.title}><span aria-hidden="true">🧠</span>{liveMemChip.label}</span>{/if}
+                      {#if liveCmpChip}<span class="activity-memory-chip" title={liveCmpChip.title}><span aria-hidden="true">{liveCmpChip.icon}</span>{liveCmpChip.label}</span>{/if}
+                    </summary>
+                    <div class="agent-activity">
+                      <ActivityTree agentId="main" agents={liveRows.agents} tools={liveRows.tools} tasks={liveRows.tasks} />
+                    </div>
+                  </details>
+                {/if}
               {/if}
               {#if item.backgroundPhase}
                 <!-- The visible turn is finalized (bubble above), but SDK background

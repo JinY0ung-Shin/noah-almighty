@@ -52,18 +52,22 @@ export const TASK_ORCHESTRATION_TOOLS: ReadonlySet<string> = new Set([
 const AUTO_ALLOWED_META_TOOLS: ReadonlySet<string> = new Set(["Skill", ...SDK_INTERNAL_HIDDEN_TOOLS]);
 
 /**
- * Subagent spawns (Task/Agent) are forced to the FOREGROUND. A background
- * subagent's tool calls run outside this gate entirely: the CLI (2.1.198+
- * backgrounds subagents by default; verified on the bundled 2.1.222) consults
- * neither SDK-callback hooks nor canUseTool nor even `allowedTools` for them,
- * and auto-denies every permission-needing call with user-refusal wording
- * ("The user doesn't want to take this action right now"), which the model
- * relays as the user having rejected the tool. Upstream treats the subagent
- * hook gap as known/unplanned (claude-code #34692, #27661), so we rewrite the
- * spawn input instead. Bash keeps `run_in_background`: a running shell makes
- * no further tool calls, so backgrounding it never bypasses the gate.
- * Re-verify on SDK bumps — drop the rewrite once background subagents inherit
- * the parent session's permission wiring.
+ * Subagent spawns (Task/Agent) are forced to the FOREGROUND — including a spawn
+ * that OMITS `run_in_background`, because the CLI's default for an omitted flag
+ * is background (every flagless spawn in the transcripts ran async, 2.1.222
+ * through 2.1.283). The rewrite dates from 2.1.222, where a background
+ * subagent's tool calls ran outside this gate entirely (no SDK-callback hooks,
+ * no canUseTool, not even `allowedTools`) and every permission-needing call was
+ * auto-denied with user-refusal wording (claude-code #34692, #27661). The
+ * bundled 2.1.283 closed that gap — this hook fires for a background subagent's
+ * calls with its `agent_id`, and a deny is honored (measured) — but the rewrite
+ * stays: a foreground spawn keeps the turn open and steerable, answers in the
+ * same bubble, and matches what the prompt promises, while the parked asks (a
+ * question or permission raised after the visible turn ended) are still
+ * unverified for background subagents. Agents that run in the background anyway
+ * (a SendMessage resume, teammates, remote agents) are rendered from their task
+ * events in sdkMessageHandlers. Bash keeps `run_in_background`: a running shell
+ * makes no further tool calls, so backgrounding it never bypasses the gate.
  */
 const SUBAGENT_SPAWN_TOOLS: ReadonlySet<string> = new Set(SDK_SUBAGENT_TOOLS);
 
@@ -88,6 +92,24 @@ function formatQuestionAnswer(result: unknown): string {
   return lines.length
     ? `The user answered the question(s) as follows:\n${lines.join("\n")}`
     : "The user provided an answer.";
+}
+
+/**
+ * The dialog's answers in the shape AskUserQuestion's own input carries them
+ * (`answers`: question text → answer, multi-select comma-joined, which is what
+ * the question modal submits). Null when the payload holds no usable answer.
+ */
+function questionAnswers(result: unknown): Record<string, string> | null {
+  if (!isRecord(result) || !isRecord(result.answers)) {
+    return null;
+  }
+  const entries = Object.entries(result.answers)
+    .map(([question, value]): [string, string] => [
+      question,
+      Array.isArray(value) ? value.map(String).join(", ") : asString(value) || (value == null ? "" : String(value)),
+    ])
+    .filter(([question, value]) => question && value);
+  return entries.length ? Object.fromEntries(entries) : null;
 }
 
 /** Shallow copy with long string fields capped, so we never ship huge inputs to the client. */
@@ -125,12 +147,15 @@ const hookDeny = (reason: string): HookOutput => ({
 });
 
 /**
- * Tools whose own permission check still ASKS after this hook allowed them:
+ * Tools whose own permission check may still ASK after this hook allowed them:
  * leaving plan mode is an approval built into ExitPlanMode, so the CLI routes
  * it to the SDK's `canUseTool` even on a hook `allow` (measured on the bundled
  * CLI 2.1.283 — unconfirmed, the model stays stuck in plan mode).
+ * AskUserQuestion rides along defensively: 2.1.283 runs a hook-allowed call
+ * that already carries its `answers` without asking (measured), but a CLI that
+ * does ask must get the hook's answers back rather than a deny.
  */
-const HOOK_CONFIRMED_TOOLS: ReadonlySet<string> = new Set(["ExitPlanMode"]);
+const HOOK_CONFIRMED_TOOLS: ReadonlySet<string> = new Set(["ExitPlanMode", "AskUserQuestion"]);
 
 /**
  * One run's record of the hook's allows that `canUseTool` may be asked to
@@ -171,8 +196,8 @@ type CanUseToolResult =
  * AskUserQuestion, EnterPlanMode and ExitPlanMode from a non-interactive
  * session. The hook above still decides every call. The CLI lands here only
  * when its OWN policy still asks after the hook allowed. It confirms exactly
- * the ExitPlanMode call the hook allowed and denies everything else, which is
- * how those asks ended before this route existed. One example is the CLI's
+ * the ExitPlanMode / AskUserQuestion call the hook allowed and denies everything
+ * else, which is how those asks ended before this route existed. One example is the CLI's
  * safety check on a write to `.claude/settings.json`; approving that here would
  * bypass the CLI's own guard.
  */
@@ -333,9 +358,13 @@ export function buildPreToolUseHook(
       return out;
     };
 
-    // AskUserQuestion: surface the question, await the answer, inject it back.
-    // (onUserDialog never fires headlessly, so we answer via a deny+reason that
-    // the model reads as the user's response.)
+    // AskUserQuestion: surface the question, await the answer, and hand it back
+    // by ALLOWING the call with the collected `answers` in updatedInput — the
+    // tool then returns them as its own ordinary result ("Your questions have
+    // been answered: …", measured on the bundled CLI 2.1.283). onUserDialog never
+    // fires headlessly. The older carrier, a deny whose reason held the answer,
+    // reached the model as a "PreToolUse:AskUserQuestion hook error" (is_error),
+    // so it survives only for a payload without usable answers.
     if (toolName === "AskUserQuestion") {
       // Personal-bot conversations answer questions at the TURN BOUNDARY, never
       // through a modal: a delegated turn may have been dispatched from the
@@ -364,11 +393,11 @@ export function buildPreToolUseHook(
       }
       const questions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
       const answer = await events.onQuestion({ dialogKind: "AskUserQuestion", payload: { questions }, toolUseId });
-      return trace(
-        answer.behavior === "completed"
-          ? hookDeny(formatQuestionAnswer(answer.result))
-          : hookDeny("The user did not answer the question (cancelled). Proceed without an answer."),
-      );
+      if (answer.behavior !== "completed") {
+        return trace(hookDeny("The user did not answer the question (cancelled). Proceed without an answer."));
+      }
+      const answers = questionAnswers(answer.result);
+      return trace(answers ? hookAllow({ ...toolInput, answers }) : hookDeny(formatQuestionAnswer(answer.result)));
     }
 
     // ExitPlanMode: the avatar finished planning and proposed a plan. For a PRESENT
@@ -402,9 +431,9 @@ export function buildPreToolUseHook(
     }
 
     let updatedToolInput: Record<string, unknown> | undefined;
-    // Force subagent spawns foreground — see SUBAGENT_SPAWN_TOOLS for why a
-    // background subagent would escape this gate and read as a user rejection.
-    if (SUBAGENT_SPAWN_TOOLS.has(toolName) && toolInput.run_in_background === true) {
+    // Force subagent spawns foreground — see SUBAGENT_SPAWN_TOOLS. An OMITTED
+    // flag counts too: the CLI's own default for a flagless spawn is background.
+    if (SUBAGENT_SPAWN_TOOLS.has(toolName) && toolInput.run_in_background !== false) {
       updatedToolInput = { ...toolInput, run_in_background: false };
       toolInput = updatedToolInput;
       agentLogger.info({ toolName, agentId }, "background subagent spawn forced foreground");

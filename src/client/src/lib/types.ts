@@ -176,6 +176,16 @@ export interface ChatPane {
   backgroundTasks?: BackgroundTaskChip[];
   /** Persisted message id of the finalized turn, so the final activity snapshot lands on it at bg_end/cancel. */
   backgroundMessageId?: string | null;
+  /**
+   * The activity segment new rows are stamped with: 0 for the visible turn,
+   * k for the k-th background wake-up turn (see lib/activitySegments.ts).
+   */
+  liveSegment?: number;
+  /**
+   * Persisted message id per segment, in order: [finalized turn, wake-up 1, …].
+   * The in-flight segment has no entry until its bg_message lands.
+   */
+  segmentMessageIds?: string[];
   groupKnowledgeOff: string[];
   /** Installed skills for this pane's avatar, lazily fetched the first time the slash menu opens (#slash-skills). Drives skill entries in the "/" menu. */
   skills?: import("../../../server/types.js").SkillInfo[];
@@ -250,6 +260,10 @@ export interface LiveAgentNode {
   label: string;
   status: "running" | "done" | "failed";
   isMain: boolean;
+  /** The sub-agent runs (or ran) in the background; its card says so. */
+  background?: boolean;
+  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
+  segment?: number;
 }
 
 /** A tool/blocked/memory/compact row in the activity tree, owned by an agent. */
@@ -260,6 +274,8 @@ export interface LiveToolRow {
   label: string;
   detail?: string;
   status: "running" | "done" | "failed" | "blocked";
+  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
+  segment?: number;
 }
 
 /** A non-subagent SDK task row in the activity tree. */
@@ -269,6 +285,8 @@ export interface LiveTaskRow {
   label: string;
   detail?: string;
   status: "running" | "done" | "failed";
+  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
+  segment?: number;
 }
 
 export interface LivePluginChip {

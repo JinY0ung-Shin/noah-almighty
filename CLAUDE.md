@@ -169,9 +169,10 @@ These are the invariants the project is built around. New work should reinforce 
   `docs/architecture/browser-bridge/actions.md`, `secrets-ssh.md`.
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
-  route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode the
-  hook already allowed and denies every other CLI-side ask (e.g. protected-path writes), so it grants nothing
-  the hook didn't. `onUserDialog` stays unused. The `mcp__`-prefix auto-allow fires BEFORE the owner
+  route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode or
+  AskUserQuestion call the hook already allowed (a question's answers ride the hook's `updatedInput`, so the tool
+  returns them as its own result) and denies every other CLI-side ask (e.g. protected-path writes), so it grants
+  nothing the hook didn't. `onUserDialog` stays unused. The `mcp__`-prefix auto-allow fires BEFORE the owner
   check, so every in-process MCP server MUST self-gate in its handlers.
 - **New decks are HTML converted SHELL-side, bounded by the converter itself; share_file's exact previews are
   HASH-BOUND.** The bundled `pptx` skill renders agent-authored slide HTML in a network-blocked, CSP-locked

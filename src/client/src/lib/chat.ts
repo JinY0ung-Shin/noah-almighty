@@ -24,6 +24,13 @@ import {
   SDK_TOOL_LABELS,
 } from "../../../shared/sdkToolPresentation";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../../../shared/mcpToolGroups";
+import {
+  hasRows,
+  rowSegment,
+  segmentRows,
+  segmentSealTargets,
+  type SegmentRows,
+} from "./activitySegments";
 import type {
   AgentActivity,
   AgentResponse,
@@ -1404,18 +1411,31 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       if (data?.agentId) {
         markTextBreak(paneId);
         // Named (agent-teams) teammates lead with their addressable identity.
-        const label =
-          [data.name ? `@${data.name}` : "", data.subagentType, data.description]
-            .filter(Boolean)
-            .join(" · ") || "하위 작업";
+        // A re-emit for a known agent (it went to the background) may carry no
+        // naming field at all, and must not rename its card to the placeholder.
+        const named = [data.name ? `@${data.name}` : "", data.subagentType, data.description]
+          .filter(Boolean)
+          .join(" · ");
+        const background = data.background === true;
         ensureAgent(
           paneId,
           data.agentId,
           data.parentId || "main",
-          label,
+          named || undefined,
           "running",
+          background,
         );
-        setStatus(paneId, `에이전트 작업 중: ${label}`, true);
+        const label =
+          named ||
+          readState()
+            .chatPanes.find((p) => p.id === paneId)
+            ?.liveAgents.find((a) => a.id === data.agentId)?.label ||
+          "하위 작업";
+        setStatus(
+          paneId,
+          background ? `백그라운드에서 에이전트 실행 중: ${label}` : `에이전트 작업 중: ${label}`,
+          true,
+        );
       }
       return;
     case "agent_end":
@@ -1801,6 +1821,7 @@ function handleBlocked(paneId: string, data: any): void {
       label: humanTool(data.toolName),
       detail: reason,
       status: "blocked",
+      segment: rowSegment(pane, data.agentId || "main"),
     });
   });
 }
@@ -1824,6 +1845,7 @@ function handleMemory(paneId: string, data: any): void {
       label,
       detail,
       status: "done",
+      segment: rowSegment(pane, "main"),
     });
   });
 }
@@ -1855,6 +1877,7 @@ function handleCompact(paneId: string, data: any): void {
       label: failed ? "맥락 정리에 실패했습니다" : "대화 맥락이 요약되었습니다",
       detail: detail || undefined,
       status: failed ? "failed" : "done",
+      segment: rowSegment(pane, "main"),
     });
   });
 }
@@ -1887,6 +1910,7 @@ function ensureAgent(
   parentId = "main",
   label?: string,
   status?: "running" | "done" | "failed",
+  background = false,
 ): void {
   updatePane(paneId, (pane) => {
     if (!pane.liveAgents.some((a) => a.id === "main")) {
@@ -1903,6 +1927,7 @@ function ensureAgent(
     if (existing) {
       if (label) existing.label = label;
       if (status) existing.status = status;
+      if (background) existing.background = true;
       return;
     }
     pane.liveAgents.push({
@@ -1911,10 +1936,15 @@ function ensureAgent(
       label: label || "하위 작업",
       status: status || "running",
       isMain: false,
+      // A nested agent belongs to its parent's turn, like the parent's own rows.
+      segment: rowSegment(pane, parentId || "main"),
+      ...(background ? { background: true } : {}),
     });
   });
 }
 
+// Rows are stamped with their segment once, at creation: a later update (a
+// background shell settling during a wake-up turn) keeps the turn it started in.
 function upsertTool(paneId: string, row: LiveToolRow): void {
   updatePane(paneId, (pane) => {
     const existing = pane.liveTools.find((t) => t.id === row.id);
@@ -1924,7 +1954,7 @@ function upsertTool(paneId: string, row: LiveToolRow): void {
       existing.status = row.status;
       existing.kind = row.kind;
     } else {
-      pane.liveTools.push(row);
+      pane.liveTools.push({ ...row, segment: rowSegment(pane, row.agentId) });
     }
   });
 }
@@ -1941,7 +1971,7 @@ function upsertTask(paneId: string, row: LiveTaskRow): void {
       existing.status = row.status;
       existing.agentId = row.agentId;
     } else {
-      pane.liveTasks.push(row);
+      pane.liveTasks.push({ ...row, segment: rowSegment(pane, row.agentId) });
     }
   });
 }
@@ -1992,6 +2022,8 @@ function resetLive(pane: ChatPane): void {
   pane.backgroundPhase = false;
   pane.backgroundTasks = [];
   pane.backgroundMessageId = null;
+  pane.liveSegment = 0;
+  pane.segmentMessageIds = [];
   // Pending steers belong to the LIVE turn: a reattach replays every `steer`
   // frame, so the list is rebuilt from the log rather than carried across.
   pane.steers = [];
@@ -2010,17 +2042,31 @@ function snapshotActivity(
   terminal: "done" | "failed" = "done",
 ): AgentActivity | undefined {
   if (!pane.liveTools.length && !pane.liveTasks.length) return undefined;
+  return sealRows(
+    { agents: pane.liveAgents, tools: pane.liveTools, tasks: pane.liveTasks },
+    terminal,
+  );
+}
+
+/** A persisted copy of a live row: the segment stamp is live-only bookkeeping. */
+function unstamped<T extends { segment?: number }>(row: T): T {
+  const copy = { ...row };
+  delete copy.segment;
+  return copy;
+}
+
+function sealRows(rows: SegmentRows, terminal: "done" | "failed"): AgentActivity {
   return {
-    agents: pane.liveAgents.map((a) => ({
-      ...a,
+    agents: rows.agents.map((a) => ({
+      ...unstamped(a),
       status: a.status === "running" ? terminal : a.status,
     })),
-    tools: pane.liveTools.map((t) => ({
-      ...t,
+    tools: rows.tools.map((t) => ({
+      ...unstamped(t),
       status: t.status === "running" ? terminal : t.status,
     })),
-    tasks: pane.liveTasks.map((t) => ({
-      ...t,
+    tasks: rows.tasks.map((t) => ({
+      ...unstamped(t),
       status: t.status === "running" ? terminal : t.status,
     })),
   };
@@ -2210,6 +2256,13 @@ function finalizeBackgroundTurn(paneId: string, data: any): void {
       pane.usage = message.response?.usage ?? pane.usage;
     }
     pane.backgroundMessageId = message?.id || null;
+    // The finalized turn is segment 0: rows created from here on belong to the
+    // first wake-up turn, unless a segment-0 agent owns them. Only on ENTERING
+    // the phase — a reattach replays this frame after a resetLive, never twice.
+    if (!pane.backgroundPhase) {
+      pane.segmentMessageIds = [message?.id || ""];
+      pane.liveSegment = 1;
+    }
     pane.backgroundPhase = true;
     if (Array.isArray(data?.tasks)) pane.backgroundTasks = data.tasks;
     // Clear only the text-ish live state (it moved into the pushed message);
@@ -2237,6 +2290,17 @@ function finalizeBackgroundTurn(paneId: string, data: any): void {
 function appendBackgroundMessage(paneId: string, message: StoredMessage): void {
   let appended = false;
   updatePane(paneId, (pane) => {
+    // This wake-up turn's rows now have a bubble of their own; later rows start
+    // the next segment. Before the dedupe below: a reattach replays the frame
+    // onto a transcript that already holds the message, and the segment still
+    // has to close.
+    const ids = pane.segmentMessageIds ?? [];
+    if (pane.backgroundPhase && message.id && !ids.includes(message.id)) {
+      const segment = pane.liveSegment ?? ids.length;
+      ids[segment] = message.id;
+      pane.segmentMessageIds = ids;
+      pane.liveSegment = segment + 1;
+    }
     if (message.id && pane.messages.some((m) => m.id === message.id)) return;
     pane.messages.push(message);
     pane.usage = message.response?.usage ?? pane.usage;
@@ -2262,26 +2326,27 @@ function appendBackgroundMessage(paneId: string, message: StoredMessage): void {
 }
 
 // The background phase ended — naturally (bg_end → terminal "done") or by a
-// kill (cancelled/error → "failed"). Seal the live tree onto the finalized
-// turn's message with that terminal status, persist the snapshot, and drop the
-// live rows. A kill keeps the streamed text tail: the caller's finalizePane /
-// finalizeError persists it as the terminal bubble right after this.
+// kill (cancelled/error → "failed"). Seal the live tree with that terminal
+// status, persist the snapshots, and drop the live rows. Each bubble gets ITS
+// OWN rows (lib/activitySegments.ts): the finalized turn keeps its work,
+// background agents' late calls included, and every wake-up turn keeps the
+// tools it ran — they used to all land on the finalized turn. A kill keeps the
+// streamed text tail: the caller's finalizePane / finalizeError persists it as
+// the terminal bubble right after this.
 function finalizeBackgroundPhase(
   paneId: string,
   terminal: "done" | "failed",
 ): void {
-  let patchId: string | null = null;
-  let patchActivity: AgentActivity | undefined;
+  const patches: { id: string; activity: AgentActivity }[] = [];
   updatePane(paneId, (pane) => {
     if (!pane.backgroundPhase) return;
-    const activity = snapshotActivity(pane, terminal);
-    if (activity && pane.backgroundMessageId) {
-      const target = pane.messages.find(
-        (m) => m.id === pane.backgroundMessageId,
-      );
+    for (const [id, segments] of segmentSealTargets(pane)) {
+      const rows = segmentRows(pane, segments);
+      if (!hasRows(rows)) continue;
+      const activity = sealRows(rows, terminal);
+      const target = pane.messages.find((m) => m.id === id);
       if (target?.response) target.response.activity = activity;
-      patchId = pane.backgroundMessageId;
-      patchActivity = activity;
+      patches.push({ id, activity });
     }
     pane.backgroundPhase = false;
     pane.backgroundTasks = [];
@@ -2292,12 +2357,12 @@ function finalizeBackgroundPhase(
     pane.livePlugins = [];
     if (terminal === "done") clearLive(pane);
   });
-  if (patchId && patchActivity) {
+  for (const patch of patches) {
     // Best effort, like finalizeDone: display already works without it — this
-    // only adds reload durability for the sealed tree.
-    api(`/api/messages/${encodeURIComponent(patchId)}/activity`, {
+    // only adds reload durability for the sealed trees.
+    api(`/api/messages/${encodeURIComponent(patch.id)}/activity`, {
       method: "PUT",
-      body: JSON.stringify({ activity: patchActivity }),
+      body: JSON.stringify({ activity: patch.activity }),
     }).catch(() => {});
   }
 }

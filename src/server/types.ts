@@ -1319,6 +1319,8 @@ export interface AgentActivity {
     label: string;
     status: "running" | "done" | "failed";
     isMain: boolean;
+    /** The sub-agent ran in the BACKGROUND (a launch receipt, not its answer, came back to the spawn). */
+    background?: boolean;
   }[];
   tools: {
     id: string;

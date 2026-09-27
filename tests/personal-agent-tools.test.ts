@@ -1146,8 +1146,12 @@ describe("AskUserQuestion in a personal-bot conversation", () => {
     }));
     const answered = await ask({ personalAgentRun: false }, { onQuestion });
     expect(onQuestion).toHaveBeenCalledTimes(1);
-    expect(answered.hookSpecificOutput.permissionDecisionReason).toContain("main");
-    expect(answered.hookSpecificOutput.permissionDecisionReason).not.toContain("report_task");
+    // The answer rides the tool's own input, so the tool returns it as its result.
+    expect(answered.hookSpecificOutput).toMatchObject({
+      permissionDecision: "allow",
+      updatedInput: { answers: { "어느 브랜치?": "main" } },
+    });
+    expect(JSON.stringify(answered.hookSpecificOutput)).not.toContain("report_task");
 
     // …and a headless non-bot run keeps its own wording.
     const headless = await ask({ personalAgentRun: false, headless: true });

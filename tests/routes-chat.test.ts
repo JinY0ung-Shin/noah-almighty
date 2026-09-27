@@ -386,8 +386,8 @@ describe("activity-snapshot persistence (PUT /api/messages/:id/activity)", () =>
     const activity = {
       agents: [
         { id: "a1", parentId: "", label: "메인", status: "running", isMain: true }, // running → done
-        { id: "a2", parentId: "a1", label: "sub", status: "failed", isMain: false },
-        { id: "a3", parentId: "a1", label: "sub2", status: "weird" }, // unknown → done
+        { id: "a2", parentId: "a1", label: "sub", status: "failed", isMain: false, background: true },
+        { id: "a3", parentId: "a1", label: "sub2", status: "weird", background: "yes" }, // unknown → done; non-true flag dropped
         ...Array.from({ length: 70 }, (_, i) => ({ id: `x${i}`, parentId: "a1", label: "x", status: "done" })),
       ],
       tools: [
@@ -411,6 +411,10 @@ describe("activity-snapshot persistence (PUT /api/messages/:id/activity)", () =>
     expect(stored.agents).toHaveLength(60); // capped from 73
     expect(stored.agents[0].status).toBe("done"); // running normalized on persist
     expect(stored.agents[1].status).toBe("failed");
+    // The 백그라운드 badge survives a reload; anything but `true` is not a flag.
+    expect(stored.agents[1].background).toBe(true);
+    expect(stored.agents[2]).not.toHaveProperty("background");
+    expect(stored.agents[0]).not.toHaveProperty("background");
     expect(stored.agents[2].status).toBe("done"); // unknown normalized
     // The legacy `kind:"task"` tool row is filtered out of tools and merged into tasks.
     expect(stored.tools.map((t) => t.id).sort()).toEqual(["t1", "t2", "t4", "t5", "t6"]);

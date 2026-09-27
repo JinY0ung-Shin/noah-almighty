@@ -50,12 +50,13 @@
     class={`agent-node ${node.isMain ? "is-main" : "sub"}`}
     data-status={node.status}
     role={node.isMain ? undefined : "listitem"}
-    aria-label={node.isMain ? undefined : rowLabel("에이전트", node.label, node.status)}
+    aria-label={node.isMain ? undefined : rowLabel(node.background ? "백그라운드 에이전트" : "에이전트", node.label, node.status)}
   >
     {#if !node.isMain}
       <div class="agent-head">
         <span class="agent-spinner"></span>
         <span class="agent-badge">에이전트</span>
+        {#if node.background}<span class="agent-bg-badge">백그라운드</span>{/if}
         <span class="agent-label">{node.label}</span>
       </div>
     {/if}

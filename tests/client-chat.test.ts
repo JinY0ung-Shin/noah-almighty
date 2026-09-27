@@ -31,6 +31,7 @@ import {
   attachActiveRun,
 } from "../src/client/src/lib/chat.js";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
+import { liveSegmentRows, messageSegmentRows } from "../src/client/src/lib/activitySegments.js";
 import { resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { DRAWIO_MEDIA_TYPE } from "../src/client/src/lib/drawioViewer.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
@@ -2033,6 +2034,97 @@ describe("background phase", () => {
     expect(p.messages.at(-1)).toMatchObject({ content: "모델이 응답하지 못했습니다." });
     expect(p.messages.at(-1)!.response).toMatchObject({ summary: "오류" });
     expect(get(toasts).some((t) => t.message.includes("모델이 응답하지 못했습니다."))).toBe(true);
+  });
+
+  // One live tree, several bubbles: the finished turn keeps its own work (its
+  // background agent's late calls included) and the wake-up turn keeps the tool
+  // it ran. Everything used to seal onto the finished turn.
+  const WAKE_ONE = { ...BG_MESSAGE, id: "wake-1", content: "결과 보고", response: { ...BG_MESSAGE.response, text: "결과 보고" } };
+  const SPLIT_FRAMES: Array<[string, unknown]> = [
+    ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
+    // The spawn came back as a launch receipt: same card, now flagged, label kept.
+    ["agent", { agentId: "ag1", parentId: "main", background: true }],
+    ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
+    ["tool_end", { toolUseId: "t1", ok: true }],
+    ["done", { background: true, message: BG_MESSAGE }],
+    ["tool", { toolUseId: "ag1-read", name: "Read", agentId: "ag1", input: { file_path: "a.md" } }],
+    ["agent_end", { agentId: "ag1", ok: true }],
+    ["tool", { toolUseId: "w1", name: "Grep", input: { pattern: "needle" } }],
+    ["tool_end", { toolUseId: "w1", ok: true }],
+    ["bg_message", { message: WAKE_ONE }],
+  ];
+
+  it("splits the live rows per bubble while the background phase runs", async () => {
+    const id = seedPane();
+    await driveEvents(id, structuredClone(SPLIT_FRAMES));
+    const p = pane(id);
+    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
+      label: "general-purpose · 조사",
+      background: true,
+      status: "done",
+    });
+    expect(messageSegmentRows(p, "bg-msg-1")!.tools.map((t) => t.id)).toEqual(["t1", "ag1-read"]);
+    expect(messageSegmentRows(p, "bg-msg-1")!.agents.map((a) => a.id)).toEqual(["main", "ag1"]);
+    expect(messageSegmentRows(p, "wake-1")!.tools.map((t) => t.id)).toEqual(["w1"]);
+    expect(messageSegmentRows(p, "wake-1")!.agents.map((a) => a.id)).toEqual(["main"]);
+    // No wake-up turn in flight: the trailing live bubble has no tree of its own.
+    expect(liveSegmentRows(p)).toBeNull();
+  });
+
+  it("bg_end seals each bubble's own rows and never persists the segment stamps", async () => {
+    const id = seedPane();
+    const { calls } = await driveEvents(id, [...structuredClone(SPLIT_FRAMES), ["bg_end", {}]]);
+    const p = pane(id);
+    const turn = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
+    expect(turn.tools.map((t: any) => t.id)).toEqual(["t1", "ag1-read"]);
+    expect(turn.agents.find((a: any) => a.id === "ag1")).toMatchObject({ background: true, status: "done" });
+    const wake = (p.messages.find((m) => m.id === "wake-1")!.response as any).activity;
+    expect(wake.tools.map((t: any) => t.id)).toEqual(["w1"]);
+    const puts = calls.filter((c) => c.url.includes("/activity"));
+    expect(puts.map((c) => c.url)).toEqual(["/api/messages/bg-msg-1/activity", "/api/messages/wake-1/activity"]);
+    expect(JSON.stringify(puts.map((c) => body(c.init)))).not.toContain("segment");
+    expect(p).toMatchObject({ backgroundPhase: false, liveTools: [], liveAgents: [] });
+  });
+
+  it("a reattach replays the same split onto the already-loaded transcript", async () => {
+    const id = seedPane();
+    await driveEvents(id, structuredClone(SPLIT_FRAMES));
+    // Reattach: resetLive, then the whole log again — both bubbles are already
+    // in the transcript, so every message frame dedupes but its segment closes.
+    await driveEvents(id, structuredClone(SPLIT_FRAMES));
+    const p = pane(id);
+    expect(p.messages.filter((m) => m.id === "wake-1")).toHaveLength(1);
+    expect(p.segmentMessageIds).toEqual(["bg-msg-1", "wake-1"]);
+    expect(messageSegmentRows(p, "wake-1")!.tools.map((t) => t.id)).toEqual(["w1"]);
+  });
+
+  it("a kill mid-wake-up seals the in-flight turn's rows onto the newest bubble", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
+      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
+      ["tool", { toolUseId: "w1", name: "Bash", input: { command: "sleep 60" } }],
+      ["bg_message", { message: structuredClone(WAKE_ONE) }],
+      // The second wake-up turn is still running when the user stops the run.
+      ["tool", { toolUseId: "w2", name: "Bash", input: { command: "sleep 90" } }],
+      ["cancelled", {}],
+    ]);
+    const p = pane(id);
+    const turn = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
+    expect(turn.tools.map((t: any) => t.id)).toEqual(["t1"]);
+    const wake = (p.messages.find((m) => m.id === "wake-1")!.response as any).activity;
+    expect(wake.tools.map((t: any) => [t.id, t.status])).toEqual([
+      ["w1", "failed"],
+      ["w2", "failed"],
+    ]);
+  });
+
+  it("a visible turn keeps the whole live tree in the live bubble", async () => {
+    const id = seedPane();
+    await driveEvents(id, [["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }]]);
+    const p = pane(id);
+    expect(liveSegmentRows(p)!.tools.map((t) => t.id)).toEqual(["t1"]);
+    expect(messageSegmentRows(p, "anything")).toBeNull();
   });
 });
 

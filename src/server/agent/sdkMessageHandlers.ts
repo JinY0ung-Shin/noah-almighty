@@ -311,6 +311,11 @@ function emitTaskUpdate(
       }
       events.onAgentEnd?.({ agentId: record.uiId, ok: taskOk(update.status || "") });
     } else {
+      if (update.isBackgrounded === true) {
+        // Backgrounded mid-run: same card, now flagged. parentId only places a
+        // card the client has not seen, which this one always has.
+        events.onAgentStart?.({ agentId: record.uiId, parentId: MAIN_AGENT_ID, background: true });
+      }
       // A mapped Korean tool label outranks the SDK's summary/description, which
       // it writes in English; an unmapped name still gets humanized rather than
       // shown as a raw id.
@@ -457,6 +462,22 @@ export function handleAssistantMessage(
   return textParts.filter(Boolean).join("\n");
 }
 
+/**
+ * A subagent spawn's structured result when the CLI launched the agent in the
+ * BACKGROUND (`AgentOutput` in sdk-tools.d.ts: status "async_launched", or
+ * "remote_launched" for a remote agent), with the id its task events carry.
+ */
+function backgroundLaunch(toolUseResult: unknown): { agentId: string } | null {
+  if (!isRecord(toolUseResult)) {
+    return null;
+  }
+  const status = asString(toolUseResult.status);
+  if (status !== "async_launched" && status !== "remote_launched" && toolUseResult.isAsync !== true) {
+    return null;
+  }
+  return { agentId: asString(toolUseResult.agentId) || asString(toolUseResult.taskId) };
+}
+
 /** Process a full `user` message: emit tool/agent ends from tool_result blocks. */
 export function handleUserMessage(
   message: Record<string, unknown>,
@@ -468,6 +489,10 @@ export function handleUserMessage(
   if (!Array.isArray(content)) {
     return;
   }
+  // The structured result describes the message's tool_result, so it is only
+  // attributable when there is exactly one.
+  const toolResults = content.filter((block) => isRecord(block) && block.type === "tool_result");
+  const toolUseResult = toolResults.length === 1 ? message.tool_use_result : undefined;
   for (const block of content) {
     if (!isRecord(block) || block.type !== "tool_result") {
       continue;
@@ -478,6 +503,21 @@ export function handleUserMessage(
     }
     const ok = block.is_error !== true;
     if (state.spawnedAgentIds.has(toolUseId)) {
+      // A BACKGROUND spawn's tool_result is only the launch receipt: the agent
+      // keeps working and its task_notification ends the card. Ending it here
+      // painted a still-running agent as done.
+      const launch = ok ? backgroundLaunch(toolUseResult) : null;
+      if (launch) {
+        if (launch.agentId && !state.tasks.has(launch.agentId)) {
+          state.tasks.set(launch.agentId, { uiId: toolUseId, kind: "agent" });
+        }
+        events.onAgentStart?.({
+          agentId: toolUseId,
+          parentId: asString(message.parent_tool_use_id) || MAIN_AGENT_ID,
+          background: true,
+        });
+        continue;
+      }
       events.onAgentEnd?.({ agentId: toolUseId, ok });
     } else {
       events.onToolEnd?.({ toolUseId, ok });

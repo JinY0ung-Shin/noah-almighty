@@ -476,6 +476,25 @@ describe("ActivityTree", () => {
     expect(tool.querySelector(".tool-arg")!.textContent).toBe("ls -la");
   });
 
+  it("marks a background sub-agent on its card and in its accessible name", () => {
+    const bgAgents: LiveAgentNode[] = [
+      agents[0],
+      { ...agents[1], background: true },
+      { id: "sub2", parentId: "main", label: "요약 담당", status: "done", isMain: false },
+    ];
+    const { container } = render(ActivityTree, {
+      props: { agentId: "main", agents: bgAgents, tools, tasks },
+    });
+
+    const bg = screen.getByText("조사 담당").closest(".agent-node")!;
+    expect(bg.querySelector(".agent-bg-badge")?.textContent).toBe("백그라운드");
+    expect(bg.getAttribute("aria-label")).toBe("백그라운드 에이전트 · 조사 담당 · 진행 중");
+    // A foreground agent carries no such badge.
+    const fg = screen.getByText("요약 담당").closest(".agent-node")!;
+    expect(fg.querySelector(".agent-bg-badge")).toBeNull();
+    expect(container.querySelectorAll(".agent-bg-badge")).toHaveLength(1);
+  });
+
   it("omits the task-name span for an unnamed task (the 태스크 badge carries it)", () => {
     const { container } = render(ActivityTree, {
       props: { agentId: "main", agents, tools, tasks },

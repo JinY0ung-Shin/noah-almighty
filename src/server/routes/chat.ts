@@ -176,6 +176,7 @@ function sanitizeActivity(raw: unknown): AgentResponse["activity"] | null {
           | "done"
           | "failed",
         isMain: node.isMain === true,
+        ...(node.background === true ? { background: true } : {}),
       };
     });
   const rawTools = (Array.isArray(obj.tools) ? obj.tools : []).slice(0, 300);

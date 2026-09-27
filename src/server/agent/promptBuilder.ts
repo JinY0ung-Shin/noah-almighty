@@ -771,15 +771,16 @@ export function buildSystemPromptAppend(
   // session alive past the visible reply while background tasks run, and this
   // host delivers wake-up turns as NEW chat messages. Without this note the
   // model either promises follow-ups it assumes are impossible, or hands quick
-  // work to the background and silently locks the conversation. Subagents are
-  // Bash-excluded here BY DESIGN: background subagents bypass the PreToolUse
-  // permission gate (their tool calls get auto-denied as a user refusal), so
-  // the hook force-rewrites Task/Agent spawns to the foreground.
+  // work to the background and silently locks the conversation. Subagent spawns
+  // are Bash-excluded here BY DESIGN: the hook force-rewrites every Task/Agent
+  // spawn to the foreground, flag omitted or not (see SUBAGENT_SPAWN_TOOLS in
+  // preToolUseHook.ts for why).
   lines.push(
     "Background execution (`run_in_background` on Bash): background commands keep running after your visible reply ends — the session stays alive, you are woken when a task settles, and your follow-up reply reaches the user as a NEW chat message (the user sees a live background-task indicator meanwhile). " +
       "Caveats: the user CANNOT send a new message in this conversation until the background work finishes (their only alternative is cancelling, which kills the tasks), and a server restart also kills pending background work. " +
       "Therefore run quick work in the foreground, reserve `run_in_background` for genuinely long commands, and when you do hand work to the background, tell the user what is running and roughly how long it should take. " +
-      "Subagents (Task/Agent) ALWAYS run in the foreground in this host — a `run_in_background` request on a subagent spawn is downgraded, so never promise the user that a subagent is working in the background.",
+      "Subagent spawns (Task/Agent) ALWAYS run in the foreground in this host — `run_in_background` is forced off whether you pass it or omit it, so the spawn returns the subagent's answer; never promise the user that a spawned subagent is working in the background. " +
+      "(Continuing a finished subagent with SendMessage does run it in the background: its reply arrives later as a task notification, and the user sees it running in the chat's activity tree.)",
   );
   const disabledToolGroupsBlock = disabledMcpToolGroupsSection(request);
   if (disabledToolGroupsBlock) {

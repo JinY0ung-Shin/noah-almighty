@@ -57,8 +57,14 @@
       exactly the `tool_use_id` the hook allowed, once, recorded at the hook's single `trace()` exit.
     - CLI safety checks such as a Write to `.claude/settings.json` also ask. Approving one would really
       write the file, so the confirmer denies them, which is the pre-route outcome.
-  - AskUserQuestion never gets there: the hook answers it with deny+reason. Ordinary Bash/Write and
-    EnterPlanMode never ask.
+  - AskUserQuestion does not ask either: the hook ALLOWS it with the modal's answers in
+    `updatedInput.answers` (question → answer, multi-select comma-joined), and the tool returns them
+    as its own ordinary result ("Your questions have been answered: …"). Measured on 2.1.283: a call
+    that already carries `answers` runs without consulting `canUseTool`; it is in the confirmer's set
+    anyway, so a CLI that does ask gets the same answers back. The earlier carrier, a deny whose reason
+    held the answer, reached the model as `PreToolUse:AskUserQuestion hook error` with `is_error` set;
+    it survives only for a payload without usable answers (and a skipped question is still a deny).
+    Ordinary Bash/Write and EnterPlanMode never ask.
   - SDK 0.3.283+ prints a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` process warning on EVERY run for this
     `canUseTool` + bare-`allowedTools` setup. It recommends a PreToolUse hook, which is already the
     gate, and its tool list is not even accurate: the ExitPlanMode and protected-path asks above still
@@ -78,7 +84,9 @@
   with NO answer (TTL/stop), `onPermission` returns `{behavior:"deny", unanswered:true}` and the hook
   words the deny as "went unanswered — not a refusal" (+ an `onBlocked` notice), never as a user refusal.
 - **Background SUBAGENTS bypass the permission gate entirely — the hook forces every Task/Agent spawn
-  foreground** (`run_in_background:true` rewritten to `false` via `updatedInput`).
+  foreground** (`run_in_background` rewritten to `false` via `updatedInput` when it is `true` OR
+  OMITTED: the CLI's default for an omitted flag is background, and the original `=== true` check let
+  every flagless spawn run async from 2.1.222 through 2.1.283 — found 2026-09-27 in the transcripts).
   Verified on the bundled CLI 2.1.222 (subagents background-by-default since ~2.1.198): a background
   subagent's tool calls consult NEITHER SDK-callback hooks NOR `canUseTool` NOR even bare `allowedTools`
   entries, and every permission-needing call is auto-denied with user-refusal wording ("The user doesn't
@@ -89,9 +97,14 @@
   SDK bump and drop the rewrite once bg subagents inherit the session's permission wiring.
   **Re-checked 2026-09-27 on the bundled CLI 2.1.283 (SDK 0.3.283):** the gap looks CLOSED upstream,
   though no changelog entry says so. In a direct SDK spike WITHOUT the rewrite, an allow-all PreToolUse
-  hook received the background subagent's own Bash call (`agent_id` set), and the call ran. In-app,
-  the rewrite still forces spawns foreground and works. The rewrite STAYS until a follow-up also
-  verifies deny and parked-prompt answers for background subagents, then removes it deliberately.
+  hook received the background subagent's own Bash call (`agent_id` set), and the call ran. A second
+  spike verified DENY: a hook deny on a background subagent's Bash reached it as `PreToolUse:Bash hook
+  error`. The rewrite STAYS until parked-prompt answers (a question or permission raised after the
+  visible turn ended) are verified for background subagents too, then goes deliberately. Agents that
+  run in the background regardless (a SendMessage resume, teammates, remote agents) render correctly:
+  the spawn's `async_launched`/`remote_launched` tool_result (`tool_use_result.status`) is only a
+  LAUNCH RECEIPT, so `handleUserMessage` re-emits `agent{background:true}` (a 백그라운드 badge on the
+  card) instead of ending it, and the agent's `task_notification` ends the card.
   (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is the blunt alternative — strips `run_in_background` from
   tool schemas entirely, but kills Bash background tasks too.)
 - **Background phase (`run_in_background` tasks outliving the visible reply).** A `query()` is NOT one
@@ -119,9 +132,15 @@
   paths persist only the tail past the last boundary, and the client seals still-running activity rows
   as **failed** (not "done") via `snapshotActivity(pane, terminal)` before the stopped bubble. Client
   keeps `streaming=true` through the phase (stop button = the kill switch), renders the `bg-task-note`
-  chip from `pane.backgroundTasks`, keeps the live tree mounted until `bg_end`, then re-PUTs the sealed
-  snapshot onto the first message (`backgroundMessageId`). Replay-safety: every message push dedupes by
-  id (a reattach replays the whole event log). Known v1 limits (deliberate): a new `POST
+  chip from `pane.backgroundTasks`, and keeps ONE live tree until `bg_end` — but renders and seals it
+  PER BUBBLE (`lib/activitySegments.ts`). Every row is stamped at creation with its segment (0 = the
+  visible turn, k = the k-th wake-up turn; a sub-agent's rows inherit the agent's segment, so a
+  background agent's late calls stay with the turn that spawned it), `pane.segmentMessageIds[k]` is the
+  bubble segment k became, each finished bubble shows its own rows live, and `bg_end` PUTs one snapshot
+  per bubble. Wake-up turns' tools used to seal onto the first message (`backgroundMessageId`) while
+  their own bubbles showed none. A kill folds the in-flight segment into the newest bubble.
+  Replay-safety: every message push dedupes by id (a reattach replays the whole event log), and the
+  segment bookkeeping runs BEFORE that dedupe so a replay closes the same segments. Known v1 limits (deliberate): a new `POST
   /api/chat/stream` still 409s during the phase — but the composer no longer strands the viewer there,
   it delivers the text as a MID-TURN message (next bullet) whose answer arrives as a `bg_message`
   wake-up turn — and a server restart kills pending background work; both are stated in the standing

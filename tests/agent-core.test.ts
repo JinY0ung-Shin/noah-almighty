@@ -81,6 +81,7 @@ import {
 import {
   buildCanUseToolSafetyNet,
   createHookApprovalLedger,
+  type HookApprovalLedger,
 } from "../src/server/agent/preToolUseHook.js";
 import {
   GIT_CREDENTIAL_ENV_NAMES,
@@ -2131,6 +2132,127 @@ describe("sdk message handlers", () => {
       toolUseId: "read-1",
       ok: true,
     });
+  });
+
+  // Measured order on the bundled CLI 2.1.283 for a background spawn: task_started
+  // (local_agent) → the spawn's tool_result, which is only a launch receipt →
+  // the agent's own calls → task_notification. Ending the card on the receipt
+  // painted a still-running agent as done.
+  it("keeps a background-launched subagent running until its task notification", () => {
+    const sink = events();
+    const state = createLoopState();
+    handleAssistantMessage(
+      { message: { content: [{ type: "tool_use", id: "spawn-1", name: "Agent", input: { description: "조사" } }] } },
+      sink,
+      state,
+    );
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "a-77", task_type: "local_agent", tool_use_id: "spawn-1", description: "조사" },
+      sink,
+      state,
+    );
+    handleUserMessage(
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "spawn-1", content: "Async agent launched successfully." }] },
+        tool_use_result: { isAsync: true, status: "async_launched", agentId: "a-77", description: "조사" },
+      },
+      sink,
+      state,
+    );
+    expect(sink.onAgentEnd).not.toHaveBeenCalled();
+    expect(sink.onAgentStart).toHaveBeenLastCalledWith({ agentId: "spawn-1", parentId: "main", background: true });
+
+    handleSystemEvent(
+      { type: "system", subtype: "task_notification", task_id: "a-77", tool_use_id: "spawn-1", status: "completed" },
+      sink,
+      state,
+    );
+    expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "spawn-1", ok: true });
+  });
+
+  it("maps a launch receipt that beat its task_started, and still ends a foreground spawn on its result", () => {
+    const sink = events();
+    const state = createLoopState();
+    handleAssistantMessage(
+      {
+        message: {
+          content: [
+            { type: "tool_use", id: "spawn-bg", name: "Task", input: { prompt: "bg" } },
+            { type: "tool_use", id: "spawn-fg", name: "Task", input: { prompt: "fg" } },
+          ],
+        },
+      },
+      sink,
+      state,
+    );
+    // No task_started seen yet: the receipt itself registers the agent id, so
+    // the later notification still finds the card.
+    handleUserMessage(
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "spawn-bg", content: "launched" }] },
+        tool_use_result: { status: "async_launched", agentId: "a-9" },
+      },
+      sink,
+      state,
+    );
+    handleSystemEvent({ type: "system", subtype: "task_notification", task_id: "a-9", status: "failed" }, sink, state);
+    expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "spawn-bg", ok: false });
+    expect(sink.onTaskEnd).not.toHaveBeenCalled();
+
+    handleUserMessage(
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "spawn-fg", content: "done" }] },
+        tool_use_result: { status: "completed", content: [] },
+      },
+      sink,
+      state,
+    );
+    expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "spawn-fg", ok: true });
+  });
+
+  it("does not read one structured result across several tool_results", () => {
+    const sink = events();
+    const state = createLoopState();
+    handleAssistantMessage(
+      { message: { content: [{ type: "tool_use", id: "s-1", name: "Agent", input: {} }, { type: "tool_use", id: "r-1", name: "Read", input: {} }] } },
+      sink,
+      state,
+    );
+    handleUserMessage(
+      {
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "s-1", content: "x" },
+            { type: "tool_result", tool_use_id: "r-1", content: "y" },
+          ],
+        },
+        tool_use_result: { status: "async_launched", agentId: "a-1" },
+      },
+      sink,
+      state,
+    );
+    expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "s-1", ok: true });
+  });
+
+  it("flags an agent the CLI backgrounded mid-run", () => {
+    const sink = events();
+    const state = createLoopState();
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "a-5", task_type: "local_agent", tool_use_id: "spawn-5", description: "긴 작업" },
+      sink,
+      state,
+    );
+    handleSystemEvent(
+      { type: "system", subtype: "task_updated", task_id: "a-5", patch: { is_backgrounded: true } },
+      sink,
+      state,
+    );
+    expect(sink.onAgentStart).toHaveBeenLastCalledWith({ agentId: "spawn-5", parentId: "main", background: true });
+    expect(sink.onAgentEnd).not.toHaveBeenCalled();
   });
 
   it("emits task progress and terminal task state from task tools", () => {
@@ -4616,9 +4738,9 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
     expect(prompted).toBe(false); // auto-approve must short-circuit the prompt
   });
 
-  // Background subagents bypass the hook entirely (CLI 2.1.198+: no hooks, no
-  // canUseTool, no allowedTools — auto-denied as a user refusal), so the gate
-  // must downgrade every spawn to the foreground where it verifiably applies.
+  // Every spawn runs in the foreground (see SUBAGENT_SPAWN_TOOLS): on 2.1.222 a
+  // background subagent's calls skipped the hook entirely, and the parked asks
+  // are still unverified for one on 2.1.283.
   it("forces a background subagent spawn to the foreground", async () => {
     const hook = buildPreToolUseHook({}, true, READONLY, false, false, true);
     for (const toolName of ["Task", "Agent"]) {
@@ -4645,7 +4767,7 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
     }
   });
 
-  it("applies the foreground downgrade for read-only viewers too, and leaves foreground spawns untouched", async () => {
+  it("applies the foreground downgrade for read-only viewers too, flag omitted included, and leaves an explicit foreground spawn untouched", async () => {
     // Colleague (non-elevated): their subagents' inner calls rely on the hook
     // firing to be denied read-only, so the downgrade must apply here as well.
     const hook = buildPreToolUseHook({}, false, READONLY, false, false, false);
@@ -4663,9 +4785,14 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
     expect(explicit.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(explicit.hookSpecificOutput.updatedInput).toBeUndefined();
 
+    // The CLI's default for an OMITTED flag is background (every flagless spawn
+    // in the 2.1.222–2.1.283 transcripts ran async), so it is pinned explicitly.
     const omitted = await spawn({ prompt: "quick check" });
     expect(omitted.hookSpecificOutput.permissionDecision).toBe("allow");
-    expect(omitted.hookSpecificOutput.updatedInput).toBeUndefined();
+    expect(omitted.hookSpecificOutput.updatedInput).toEqual({
+      prompt: "quick check",
+      run_in_background: false,
+    });
   });
 
   it("still prompts an elevated viewer when auto-approve is off", async () => {
@@ -5061,14 +5188,9 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
     expect(result.behavior === "deny" && result.message).toContain("/w/.claude/settings.json");
   });
 
-  it("has nothing to confirm for a rejected plan or an answered question", async () => {
-    const approvals = createHookApprovalLedger();
-    const canUseTool = buildCanUseToolSafetyNet(approvals);
-    const hook = buildPreToolUseHook(
-      {
-        onPlanReview: async () => ({ behavior: "rejected", feedback: "다시" }),
-        onQuestion: async () => ({ behavior: "completed", result: { answers: { "색은?": "파랑" } } }),
-      },
+  const questionHook = (approvals: HookApprovalLedger, onQuestion: AgentEvents["onQuestion"]) =>
+    buildPreToolUseHook(
+      { onPlanReview: async () => ({ behavior: "rejected", feedback: "다시" }), onQuestion },
       true,
       READONLY,
       false,
@@ -5082,15 +5204,71 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
       false,
       approvals,
     );
+  const QUESTIONS = [{ question: "색은?", header: "색", options: [{ label: "빨강" }, { label: "파랑" }], multiSelect: false }];
+
+  it("has nothing to confirm for a rejected plan or a cancelled question", async () => {
+    const approvals = createHookApprovalLedger();
+    const canUseTool = buildCanUseToolSafetyNet(approvals);
+    const hook = questionHook(approvals, async () => ({ behavior: "cancelled" }));
     const plan = await hook({ tool_name: "ExitPlanMode", tool_input: { plan: "계획" }, tool_use_id: "p" }, "p");
     expect(plan.hookSpecificOutput.permissionDecision).toBe("deny");
     const question = await hook(
-      { tool_name: "AskUserQuestion", tool_input: { questions: [] }, tool_use_id: "q" },
+      { tool_name: "AskUserQuestion", tool_input: { questions: QUESTIONS }, tool_use_id: "q" },
       "q",
     );
-    expect(question.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(question.hookSpecificOutput).toMatchObject({
+      permissionDecision: "deny",
+      permissionDecisionReason: expect.stringContaining("did not answer"),
+    });
     expect(await canUseTool("ExitPlanMode", {}, { toolUseID: "p" })).toMatchObject({ behavior: "deny" });
     expect(await canUseTool("AskUserQuestion", {}, { toolUseID: "q" })).toMatchObject({ behavior: "deny" });
+  });
+
+  // The answer rides the tool's OWN input, so the tool returns it as an ordinary
+  // result. The old carrier, a deny whose reason held the answer, reached the
+  // model as "PreToolUse:AskUserQuestion hook error" with is_error set.
+  it("hands an answered question back as the tool's own answers, confirmable once", async () => {
+    const approvals = createHookApprovalLedger();
+    const canUseTool = buildCanUseToolSafetyNet(approvals);
+    const hook = questionHook(approvals, async () => ({
+      behavior: "completed",
+      result: { questions: QUESTIONS, answers: { "색은?": "파랑" } },
+    }));
+    const question = await hook(
+      { tool_name: "AskUserQuestion", tool_input: { questions: QUESTIONS }, tool_use_id: "q" },
+      "q",
+    );
+    const answered = { questions: QUESTIONS, answers: { "색은?": "파랑" } };
+    expect(question.hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: answered,
+    });
+    // A CLI that still asks after the allow gets the same answers, once.
+    expect(await canUseTool("AskUserQuestion", { questions: QUESTIONS }, { toolUseID: "q" })).toEqual({
+      behavior: "allow",
+      updatedInput: answered,
+    });
+    expect(await canUseTool("AskUserQuestion", { questions: QUESTIONS }, { toolUseID: "q" })).toMatchObject({
+      behavior: "deny",
+    });
+  });
+
+  it("joins multi-select answers and falls back to the deny carrier without usable answers", async () => {
+    const approvals = createHookApprovalLedger();
+    const multi = questionHook(approvals, async () => ({
+      behavior: "completed",
+      result: { answers: { "언어는?": ["TS", "Go"], "빈 답": "" } },
+    }));
+    const out = await multi({ tool_name: "AskUserQuestion", tool_input: { questions: QUESTIONS }, tool_use_id: "m" }, "m");
+    expect(out.hookSpecificOutput.updatedInput).toEqual({ questions: QUESTIONS, answers: { "언어는?": "TS, Go" } });
+
+    const empty = questionHook(approvals, async () => ({ behavior: "completed", result: { answers: {} } }));
+    const none = await empty({ tool_name: "AskUserQuestion", tool_input: { questions: QUESTIONS }, tool_use_id: "e" }, "e");
+    expect(none.hookSpecificOutput).toMatchObject({
+      permissionDecision: "deny",
+      permissionDecisionReason: "The user provided an answer.",
+    });
   });
 });
 

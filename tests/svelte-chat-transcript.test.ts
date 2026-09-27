@@ -241,6 +241,51 @@ describe("ChatView transcript", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* background phase: each bubble shows its own live rows               */
+/* ------------------------------------------------------------------ */
+
+describe("ChatView transcript · background phase", () => {
+  it("renders the finished turn's and each wake-up turn's rows under their own bubbles", () => {
+    const turn = { ...assistantMessage(), id: "bg-msg-1", response: { kind: "text", runtime: "claude", text: ANSWER } };
+    const wake = { ...assistantMessage(), id: "wake-1", content: "결과 보고", response: { kind: "text", runtime: "claude", text: "결과 보고" } };
+    const live = pane([turn, wake] as unknown as StoredMessage[]);
+    Object.assign(live, {
+      streaming: true,
+      backgroundPhase: true,
+      backgroundMessageId: "bg-msg-1",
+      backgroundTasks: [{ taskId: "a-77", taskType: "local_agent", description: "조사" }],
+      segmentMessageIds: ["bg-msg-1", "wake-1"],
+      liveSegment: 2,
+      liveAgents: [
+        { id: "main", parentId: "", label: "", status: "running", isMain: true },
+        { id: "ag1", parentId: "main", label: "general-purpose · 조사", status: "running", isMain: false, background: true, segment: 0 },
+      ],
+      liveTools: [
+        { id: "t1", agentId: "main", kind: "tool", label: "명령 실행", detail: "ls", status: "done", segment: 0 },
+        { id: "ag1-read", agentId: "ag1", kind: "tool", label: "파일 읽기", detail: "a.md", status: "running", segment: 0 },
+        { id: "w1", agentId: "main", kind: "tool", label: "내용 검색", detail: "needle", status: "done", segment: 1 },
+      ],
+    });
+    replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const bubbles = [...container.querySelectorAll(".message.assistant .bubble")];
+    // [finished turn, wake-up turn, trailing live bubble]
+    expect(bubbles).toHaveLength(3);
+    const turnCard = bubbles[0].querySelector(":scope > details.activity-live")!;
+    expect(turnCard.querySelector(".activity-summary-text")?.textContent).toBe("도구 2개 · 에이전트 1개 진행 중");
+    expect(turnCard.querySelector(".agent-bg-badge")?.textContent).toBe("백그라운드");
+    expect([...turnCard.querySelectorAll(".tool-row .tool-arg")].map((n) => n.textContent)).toEqual(["ls", "a.md"]);
+    const wakeCard = bubbles[1].querySelector(":scope > details.activity-live")!;
+    expect(wakeCard.querySelector(".activity-summary-text")?.textContent).toBe("도구 1개 사용함");
+    expect([...wakeCard.querySelectorAll(".tool-row .tool-arg")].map((n) => n.textContent)).toEqual(["needle"]);
+    // Nothing is in flight: the trailing bubble shows the background note, not a copy of the tree.
+    expect(bubbles[2].querySelector("details.activity-live")).toBeNull();
+    expect(bubbles[2].querySelector(".bg-task-note")?.textContent).toContain("백그라운드 작업 1개 진행 중 · 조사");
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* mid-turn messages ("steers")                                        */
 /* ------------------------------------------------------------------ */
 
