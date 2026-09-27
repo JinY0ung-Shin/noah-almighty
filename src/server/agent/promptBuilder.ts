@@ -780,7 +780,8 @@ export function buildSystemPromptAppend(
       "Caveats: the user CANNOT send a new message in this conversation until the background work finishes (their only alternative is cancelling, which kills the tasks), and a server restart also kills pending background work. " +
       "Therefore run quick work in the foreground, reserve `run_in_background` for genuinely long commands, and when you do hand work to the background, tell the user what is running and roughly how long it should take. " +
       "Subagent spawns (Task/Agent) ALWAYS run in the foreground in this host — `run_in_background` is forced off whether you pass it or omit it, so the spawn returns the subagent's answer; never promise the user that a spawned subagent is working in the background. " +
-      "(Continuing a finished subagent with SendMessage does run it in the background: its reply arrives later as a task notification, and the user sees it running in the chat's activity tree.)",
+      "(Continuing a finished subagent with SendMessage does run it in the background: its reply arrives later as a task notification, and the user sees it running in the chat's activity tree. " +
+      "That works only within the turn that spawned it — in a later turn the subagent is gone, so spawn a new one instead of promising to continue the old one.)",
   );
   const disabledToolGroupsBlock = disabledMcpToolGroupsSection(request);
   if (disabledToolGroupsBlock) {
