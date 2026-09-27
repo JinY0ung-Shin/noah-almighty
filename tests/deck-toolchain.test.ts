@@ -742,9 +742,107 @@ describe("pptx skill names, modes and authoring status", () => {
       selftest: "pass",
       converterMissing: [],
       pythonPptx: false,
+      pythonPptxCommand: null,
       libreOffice: false,
       definitive: true,
     });
+  });
+});
+
+describe("legacy probe — which interpreter carries python-pptx", () => {
+  /**
+   * A bin dir first on PATH with fake soffice/pdftoppm/python3, plus an
+   * interpreter OUTSIDE PATH for NOAH_PPTX_PYTHON. Every script appends its own
+   * name to one log, so a test can assert what was (and was not) spawned.
+   */
+  function fakeToolchain(opts: { python3: boolean; venv: boolean }) {
+    const root = path.join(tempDir(), `legacy-${Math.random().toString(36).slice(2)}`);
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    const log = path.join(root, "spawned.log");
+    const write = (file: string, ok: boolean) => {
+      fs.writeFileSync(file, `#!/bin/sh\necho '${path.basename(file)}' >> '${log}'\nexit ${ok ? 0 : 1}\n`);
+      fs.chmodSync(file, 0o755);
+      return file;
+    };
+    write(path.join(bin, "soffice"), true);
+    write(path.join(bin, "pdftoppm"), true);
+    write(path.join(bin, "python3"), opts.python3);
+    const venvPython = write(path.join(root, "venv-python"), opts.venv);
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+    return {
+      venvPython,
+      spawned: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : []),
+    };
+  }
+
+  /**
+   * Drop the pinned legacy half, run the REAL probe (the only caller of the
+   * un-injectable spawnSync in `commandWorks`), then read it back through the
+   * hermetic toolchain state, which mirrors the legacy memo without spawning.
+   */
+  function probeLegacy(): DeckToolchainState {
+    __setDeckRenderingForTests(null);
+    probeDeckRendering();
+    __setDeckToolchainForTests(null);
+    return probeDeckToolchain(pluginsDir().config);
+  }
+
+  it("falls back to NOAH_PPTX_PYTHON when python3 cannot import pptx", () => {
+    const fake = fakeToolchain({ python3: false, venv: true });
+    vi.stubEnv("NOAH_PPTX_PYTHON", fake.venvPython);
+    expect(probeLegacy()).toMatchObject({
+      pythonPptx: true,
+      pythonPptxCommand: fake.venvPython,
+      libreOffice: true,
+    });
+    expect(fake.spawned()).toEqual(["soffice", "pdftoppm", "python3", "venv-python"]);
+    // The whole legacy toolchain is available again — the bug this fixes made it false.
+    expect(probeDeckRendering()).toBe(true);
+    expect(logs.entries.at(-1)).toMatchObject({
+      msg: "deck rendering probe",
+      payload: { pythonPptx: true, pythonPptxCommand: fake.venvPython, available: true },
+    });
+  });
+
+  it("prefers python3 and never spawns the fallback when it works", () => {
+    const fake = fakeToolchain({ python3: true, venv: true });
+    vi.stubEnv("NOAH_PPTX_PYTHON", fake.venvPython);
+    expect(probeLegacy()).toMatchObject({ pythonPptx: true, pythonPptxCommand: "python3" });
+    expect(fake.spawned()).not.toContain("venv-python");
+  });
+
+  it("reports no interpreter at all when neither imports the library", () => {
+    const fake = fakeToolchain({ python3: false, venv: false });
+    vi.stubEnv("NOAH_PPTX_PYTHON", fake.venvPython);
+    const state = probeLegacy();
+    expect(state.pythonPptx).toBe(false);
+    expect(state.pythonPptxCommand).toBeUndefined();
+    expect(probeDeckRendering()).toBe(false);
+    // Still honest about the halves that DO work: previews need no python at all.
+    expect(probeDocumentPreviews()).toBe(true);
+  });
+
+  it("an empty, blank or plain-python3 NOAH_PPTX_PYTHON adds no second spawn", () => {
+    for (const configured of ["", "   ", "python3"]) {
+      const fake = fakeToolchain({ python3: false, venv: true });
+      vi.stubEnv("NOAH_PPTX_PYTHON", configured);
+      const state = probeLegacy();
+      expect(state.pythonPptx, JSON.stringify(configured)).toBe(false);
+      expect(fake.spawned(), JSON.stringify(configured)).toEqual(["soffice", "pdftoppm", "python3"]);
+    }
+  });
+
+  it("the test hook keeps the interpreter and the library consistent", () => {
+    __setDeckRenderingForTests(true);
+    expect(probeDeckToolchain(pluginsDir().config)).toMatchObject({ pythonPptxCommand: "python3" });
+    __setDeckToolchainForTests(null);
+    __setDeckRenderingForTests({ soffice: true, pdftoppm: true, pythonPptx: true, pythonPptxCommand: "/venv/py" });
+    expect(probeDeckToolchain(pluginsDir().config)).toMatchObject({ pythonPptxCommand: "/venv/py" });
+    __setDeckToolchainForTests(null);
+    // A name without the library is not a state the probe can produce: it is dropped.
+    __setDeckRenderingForTests({ soffice: true, pythonPptx: false, pythonPptxCommand: "/venv/py" });
+    expect(probeDeckToolchain(pluginsDir().config).pythonPptxCommand).toBeUndefined();
   });
 });
 

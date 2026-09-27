@@ -53,6 +53,14 @@ export interface LegacyDeckProbe {
   soffice: boolean;
   pdftoppm: boolean;
   pythonPptx: boolean;
+  /**
+   * The interpreter that imported python-pptx — `python3`, or the converter's
+   * `NOAH_PPTX_PYTHON` when only that one carries the library. Undefined when
+   * neither does (`pythonPptx: false`). Reported all the way to the avatar: on a
+   * host where plain `python3` cannot import it, saying "available" without
+   * naming the interpreter would trade an honest refusal for a shell error.
+   */
+  pythonPptxCommand?: string;
 }
 
 let legacyCached: LegacyDeckProbe | null = null;
@@ -63,6 +71,21 @@ function commandWorks(command: string, args: string[]): boolean {
     timeout: PROBE_TIMEOUT_MS,
   });
   return !result.error && result.status === 0;
+}
+
+/**
+ * The interpreters to try for `import pptx`, in order. The image's own
+ * `python3` comes first, so a deployment that installs the library system-wide
+ * reports exactly what it always did. `NOAH_PPTX_PYTHON` — the operator-set
+ * interpreter the converter already resolves the same way
+ * (`converter/tools/extract/chromium.mjs`) — is the fallback: on a native
+ * checkout the library lives in that venv alone, and probing only `python3`
+ * told the avatar the skill's in-place editing path was unavailable while it
+ * was in fact one command away.
+ */
+function pythonPptxCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
+  const configured = env.NOAH_PPTX_PYTHON?.trim();
+  return configured && configured !== "python3" ? ["python3", configured] : ["python3"];
 }
 
 function legacyDeckProbe(): LegacyDeckProbe {
@@ -76,13 +99,17 @@ function legacyDeckProbe(): LegacyDeckProbe {
     "--version",
   ]);
   const pdftoppm = commandWorks("pdftoppm", ["-v"]);
-  const pythonPptx = commandWorks("python3", ["-c", "import pptx"]);
-  legacyCached = { soffice, pdftoppm, pythonPptx };
+  const pythonPptxCommand = pythonPptxCandidates().find((command) =>
+    commandWorks(command, ["-c", "import pptx"]),
+  );
+  const pythonPptx = pythonPptxCommand !== undefined;
+  legacyCached = { soffice, pdftoppm, pythonPptx, pythonPptxCommand };
   deckLogger.info(
     {
       soffice,
       pdftoppm,
       pythonPptx,
+      pythonPptxCommand: pythonPptxCommand ?? null,
       available: soffice && pdftoppm && pythonPptx,
       previews: soffice && pdftoppm,
     },
@@ -106,19 +133,23 @@ export function probeDocumentPreviews(): boolean {
 /**
  * Test hook: override or clear (null) the memoized probe result. A boolean pins
  * all three commands; an object pins each one (unlisted commands are false).
+ * The interpreter follows the library: pinning `pythonPptx` without naming one
+ * means the ordinary `python3`, and pinning it false clears the name — the two
+ * can never contradict each other the way a raw object literal could.
  */
 export function __setDeckRenderingForTests(value: boolean | Partial<LegacyDeckProbe> | null): void {
   if (value === null) {
     legacyCached = null;
-  } else if (typeof value === "boolean") {
-    legacyCached = { soffice: value, pdftoppm: value, pythonPptx: value };
-  } else {
-    legacyCached = {
-      soffice: value.soffice ?? false,
-      pdftoppm: value.pdftoppm ?? false,
-      pythonPptx: value.pythonPptx ?? false,
-    };
+    return;
   }
+  const pinned = typeof value === "boolean" ? { soffice: value, pdftoppm: value, pythonPptx: value } : value;
+  const pythonPptx = pinned.pythonPptx ?? false;
+  legacyCached = {
+    soffice: pinned.soffice ?? false,
+    pdftoppm: pinned.pdftoppm ?? false,
+    pythonPptx,
+    pythonPptxCommand: pythonPptx ? (pinned.pythonPptxCommand ?? "python3") : undefined,
+  };
 }
 
 // ---- HTML→PPTX converter probe ---------------------------------------------
@@ -144,8 +175,10 @@ export interface DeckConverterLimits {
  * surface formats (and gates) them itself.
  */
 export interface DeckToolchainState {
-  /** Legacy probe: `python3 -c "import pptx"`. */
+  /** Legacy probe: some interpreter ran `-c "import pptx"`. */
   pythonPptx: boolean;
+  /** Which one did (`LegacyDeckProbe.pythonPptxCommand`); undefined when none. */
+  pythonPptxCommand?: string;
   /** Legacy probe: `soffice` AND `pdftoppm`. */
   libreOffice: boolean;
   /** `deck.mjs probe` reported `converter: true`. */
@@ -509,12 +542,17 @@ function probeConverterAsync(script: string, spawnImpl: typeof nodeSpawn): Promi
 
 interface LegacyHalf {
   pythonPptx: boolean;
+  pythonPptxCommand?: string;
   libreOffice: boolean;
 }
 
 function legacyHalf(): LegacyHalf {
   const probe = legacyDeckProbe();
-  return { pythonPptx: probe.pythonPptx, libreOffice: probe.soffice && probe.pdftoppm };
+  return {
+    pythonPptx: probe.pythonPptx,
+    pythonPptxCommand: probe.pythonPptxCommand,
+    libreOffice: probe.soffice && probe.pdftoppm,
+  };
 }
 
 function freezeState(state: DeckToolchainState): DeckToolchainState {
@@ -557,6 +595,7 @@ export function deckToolchainLogFields(state: DeckToolchainState) {
     selftest: state.selftest,
     converterMissing: state.converterMissing,
     pythonPptx: state.pythonPptx,
+    pythonPptxCommand: state.pythonPptxCommand ?? null,
     libreOffice: state.libreOffice,
     definitive: state.definitive,
   };
@@ -592,7 +631,11 @@ function scheduleReprobe(
   const generation = memoGeneration;
   memo.attemptedAt = startedAt;
   const script = deckConverterScript(config.defaultPluginsDir);
-  const legacy = { pythonPptx: memo.state.pythonPptx, libreOffice: memo.state.libreOffice };
+  const legacy: LegacyHalf = {
+    pythonPptx: memo.state.pythonPptx,
+    pythonPptxCommand: memo.state.pythonPptxCommand,
+    libreOffice: memo.state.libreOffice,
+  };
   const pptxSkillNames = [...memo.state.pptxSkillNames];
   void probeConverterAsync(script, deps?.spawn ?? nodeSpawn)
     .then((outcome) => {
@@ -667,6 +710,7 @@ function notProbedState(config: Pick<AppConfig, "defaultPluginsDir">): DeckToolc
   const legacy = legacyCached;
   return freezeState({
     pythonPptx: legacy?.pythonPptx ?? false,
+    pythonPptxCommand: legacy?.pythonPptxCommand,
     libreOffice: legacy ? legacy.soffice && legacy.pdftoppm : false,
     converter: false,
     profiles: [],

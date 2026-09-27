@@ -1,8 +1,9 @@
 # python-pptx: existing decks, user templates and the legacy path
 
 Paths here are relative to the pptx skill's base directory (SKILL.md §9 shows the commands with the absolute
-path). `python3` with `python-pptx` 1.0.2 is installed system-wide: write a script and run it with Bash. Never
-`pip install` anything.
+path). `python-pptx` 1.0.2 is installed system-wide: write a script and run it with Bash under `python3` —
+unless describe_system's deck line names a DIFFERENT interpreter, in which case that one is the only one that
+can import the library, so run every script here with it. Never `pip install` anything.
 
 Use this path to:
 - **edit an existing .pptx in place** — a file the user attached, one from a repository or an SSH download;

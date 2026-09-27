@@ -190,7 +190,7 @@ python-pptx: the next build discards the change, and a changed file loses its ex
 
 To edit an existing .pptx in place, or to build on the user's own template/master, follow
 `${CLAUDE_SKILL_DIR}/reference/python-pptx.md` (python-pptx is installed system-wide in the server image;
-describe_system says when `python3` cannot import it). The same file covers NEW
+describe_system names the interpreter to run it with, and says when it is not importable at all). The same file covers NEW
 decks when describe_system reports `converter: NOT INSTALLED`. For a self-check render,
 `bash ${CLAUDE_SKILL_DIR}/scripts/render_deck.sh <file.pptx> <out-dir>` writes one PNG per slide. Deliver with
 `mcp__file_output__share_file` as in §7; such files get approximate LibreOffice previews.

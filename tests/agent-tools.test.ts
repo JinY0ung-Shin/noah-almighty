@@ -2500,16 +2500,18 @@ describe("system tools (avatar system management)", () => {
     expect(noLo).toContain("(no LibreOffice in this image, so those get no previews).");
     expect(noLo).not.toContain("LibreOffice previews those approximately");
 
-    // python3 cannot import python-pptx (the probe's own fact): the in-place editing path is reported as missing
-    // instead of promised, and the converter path is unaffected.
+    // No interpreter imports python-pptx (the probe's own fact): the in-place editing path is reported as
+    // missing instead of promised, and the converter path is unaffected.
     const noPy = deckLineOf(
       await describeAs(s, { deckToolchain: deckState({ pythonPptx: false }), fileOutputEnabled: true }),
     );
     expect(noPy).toContain("converter: INSTALLED");
     expect(noPy).toContain(
-      "python-pptx is NOT importable by python3 in this deployment, so an EXISTING .pptx or a user template cannot be edited in place here",
+      "python-pptx is NOT importable in this deployment, so an EXISTING .pptx or a user template cannot be edited in place here",
     );
     expect(noPy).not.toContain("python-pptx remains");
+    // …and a false pythonPptx can never drag an interpreter name along with it.
+    expect(noPy).not.toContain("NOT `python3`");
 
     // Unknown versions / a lone profile / an odd budget are stated as such.
     const sparse = deckLineOf(
@@ -2605,6 +2607,43 @@ describe("system tools (avatar system management)", () => {
       }),
     );
     expect(wins).toContain("toolchain available (python-pptx + LibreOffice + pdftoppm) — converter: NOT INSTALLED");
+  });
+
+  it("describe_system names the interpreter when python-pptx lives outside python3", async () => {
+    const s = setup("st-deck-interpreter");
+    const VENV = "/home/dev/.venvs/noah-pptx/bin/python3";
+    const NOTE = ` — run those scripts with \`${VENV}\`, NOT \`python3\`, which cannot import the library here`;
+
+    // Converter mode: python-pptx is only the in-place editing path, so the note rides that clause.
+    const converter = deckLineOf(
+      await describeAs(s, { deckToolchain: deckState({ pythonPptxCommand: VENV }), fileOutputEnabled: true }),
+    );
+    expect(converter).toContain(`user template (LibreOffice previews those approximately)${NOTE}.`);
+
+    // Legacy mode: python-pptx is the whole authoring path, so the note ends the tail.
+    const legacy = deckLineOf(
+      await describeAs(s, { deckToolchain: legacyDeckState({ pythonPptxCommand: VENV }), fileOutputEnabled: true }),
+    );
+    expect(legacy).toContain(`(slide previews render automatically)${NOTE}`);
+
+    // The ordinary deployment spends no words on it — the line is the one asserted verbatim above.
+    for (const pythonPptxCommand of ["python3", undefined]) {
+      const plain = deckLineOf(
+        await describeAs(s, { deckToolchain: deckState({ pythonPptxCommand }), fileOutputEnabled: true }),
+      );
+      expect(plain, String(pythonPptxCommand)).not.toContain("NOT `python3`");
+      expect(plain, String(pythonPptxCommand)).toContain("user template (LibreOffice previews those approximately).");
+    }
+
+    // A tail that replaces the allowed guidance says nothing about interpreters: nothing runs here.
+    const readOnly = deckLineOf(
+      await describeAs(s, {
+        deckToolchain: deckState({ pythonPptxCommand: VENV }),
+        fileOutputEnabled: true,
+        deckAuthoring: "read-only",
+      }),
+    );
+    expect(readOnly).not.toContain(VENV);
   });
 
   it("describe_system reports UNAVAILABLE with the NOT INSTALLED marker and no tail", async () => {

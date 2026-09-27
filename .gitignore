@@ -3,6 +3,10 @@ dist/
 data/
 .omx/
 .env
+# Local copies of the secret file. `.env` matches that name ONLY, so a backup
+# like .env.bak-20260927 shows up as untracked and can be committed by accident.
+.env.bak*
+.env.local
 .DS_Store
 npm-debug.log*
 test-results/

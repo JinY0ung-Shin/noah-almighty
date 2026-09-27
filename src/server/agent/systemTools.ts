@@ -332,6 +332,21 @@ function deckMissingFacts(t: DeckToolchainState | undefined): string {
 }
 
 /**
+ * How to invoke python-pptx when the ordinary `python3` is not the interpreter
+ * that carries it (a deployment that keeps it in `NOAH_PPTX_PYTHON`'s venv).
+ * The plain case stays silent so the common line is unchanged: only a host the
+ * avatar would otherwise get wrong spends words here, because writing the
+ * script correctly and running it with the one interpreter that cannot import
+ * the library fails exactly as if the library were missing.
+ */
+function deckPythonInterpreter(t: DeckToolchainState | undefined): string {
+  const command = t?.pythonPptxCommand;
+  return command && command !== "python3"
+    ? ` — run those scripts with \`${command}\`, NOT \`python3\`, which cannot import the library here`
+    : "";
+}
+
+/**
  * The describe_system "Document deck generation (PPTX)" line, shared by the
  * owner, group-agent and non-owner branches so they can never disagree. A HEAD
  * names the deployment's deck mode — the explicit `converter: INSTALLED` /
@@ -374,13 +389,13 @@ export function deckCapabilityLine(
           ? "; preview/download need an interactive chat turn"
           : mode === "converter"
             ? " — use the `pptx` skill: author slides as HTML, run its deck.sh check/build in the foreground, then `mcp__file_output__share_file` the built .pptx IN PLACE (the card shows the converter's exact slide renders). " +
-              // The same probe fact the legacy mode keys on: python3 here cannot
-              // import python-pptx, so the skill's in-place editing path is not
+              // The same probe fact the legacy mode keys on: no interpreter here
+              // imports python-pptx, so the skill's in-place editing path is not
               // available and the avatar must not promise it.
               (toolchain?.pythonPptx === false
-                ? "python-pptx is NOT importable by python3 in this deployment, so an EXISTING .pptx or a user template cannot be edited in place here — say so if asked (new decks are unaffected)."
-                : `python-pptx remains for editing an EXISTING .pptx or a user template (${toolchain?.libreOffice ? "LibreOffice previews those approximately" : "no LibreOffice in this image, so those get no previews"}).`)
-            : " — use the `pptx` skill (python-pptx), then `mcp__file_output__share_file` for the download (slide previews render automatically)";
+                ? "python-pptx is NOT importable in this deployment, so an EXISTING .pptx or a user template cannot be edited in place here — say so if asked (new decks are unaffected)."
+                : `python-pptx remains for editing an EXISTING .pptx or a user template (${toolchain?.libreOffice ? "LibreOffice previews those approximately" : "no LibreOffice in this image, so those get no previews"})${deckPythonInterpreter(toolchain)}.`)
+            : ` — use the \`pptx\` skill (python-pptx), then \`mcp__file_output__share_file\` for the download (slide previews render automatically)${deckPythonInterpreter(toolchain)}`;
   return `${DECK_LINE_PREFIX}${head}${tail}`;
 }
 
