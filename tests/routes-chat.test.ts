@@ -386,8 +386,10 @@ describe("activity-snapshot persistence (PUT /api/messages/:id/activity)", () =>
     const activity = {
       agents: [
         { id: "a1", parentId: "", label: "메인", status: "running", isMain: true }, // running → done
-        { id: "a2", parentId: "a1", label: "sub", status: "failed", isMain: false, background: true },
-        { id: "a3", parentId: "a1", label: "sub2", status: "weird", background: "yes" }, // unknown → done; non-true flag dropped
+        { id: "a2", parentId: "a1", label: "sub", name: " probe ", status: "failed", isMain: false, background: true },
+        { id: "a3", parentId: "a1", label: "sub2", name: 7, status: "weird", background: "yes" }, // unknown → done; non-true flag and non-string name dropped
+        { id: "a4", parentId: "a1", label: "sub3", name: "   ", status: "done" }, // whitespace-only name dropped
+        { id: "a5", parentId: "a1", label: "sub4", name: "n".repeat(100), status: "done" }, // name capped
         ...Array.from({ length: 70 }, (_, i) => ({ id: `x${i}`, parentId: "a1", label: "x", status: "done" })),
       ],
       tools: [
@@ -408,13 +410,19 @@ describe("activity-snapshot persistence (PUT /api/messages/:id/activity)", () =>
     await owner.put(`/api/messages/${messageId}/activity`).send({ activity }).expect(200).expect({ ok: true });
 
     const stored = store.listMessages(ownerId, "conv-act").find((m) => m.id === messageId)!.response!.activity!;
-    expect(stored.agents).toHaveLength(60); // capped from 73
+    expect(stored.agents).toHaveLength(60); // capped from 75
     expect(stored.agents[0].status).toBe("done"); // running normalized on persist
     expect(stored.agents[1].status).toBe("failed");
     // The 백그라운드 badge survives a reload; anything but `true` is not a flag.
     expect(stored.agents[1].background).toBe(true);
     expect(stored.agents[2]).not.toHaveProperty("background");
     expect(stored.agents[0]).not.toHaveProperty("background");
+    // A teammate's @name survives a reload as its own (trimmed) field.
+    expect(stored.agents[1].name).toBe("probe");
+    expect(stored.agents[2]).not.toHaveProperty("name");
+    expect(stored.agents[0]).not.toHaveProperty("name");
+    expect(stored.agents[3]).not.toHaveProperty("name");
+    expect(stored.agents[4].name).toHaveLength(80);
     expect(stored.agents[2].status).toBe("done"); // unknown normalized
     // The legacy `kind:"task"` tool row is filtered out of tools and merged into tasks.
     expect(stored.tools.map((t) => t.id).sort()).toEqual(["t1", "t2", "t4", "t5", "t6"]);

@@ -163,9 +163,14 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   renders as a visible tool row ("팀원 메시지 전송", detail = `recipient · summary|content` via the
   `summarizeToolInput` special case; CLI input keys are recipient/content/summary). Teammate lifecycles
   surface through the existing subagent/task event paths (`SUBAGENT_TOOLS`, `task_started` system
-  events); the teammate's addressable identity rides on `AgentSpawnEvent.name` (from `input.name` /
-  `teammate_name`) and the client prefixes the agent node label with `@<name>`. The persisted activity
-  snapshot needs no schema change — it stores the rendered label.
+  events); the teammate's addressable identity rides on `AgentSpawnEvent.name` (from the spawn's
+  `input.name` — `task_started` never carries one; `teammate_name` exists only on hook inputs) and the
+  client keeps it as the card's OWN field (`LiveAgentNode.name`, rendered `@<name>` ahead of the label
+  via `agentTitle` in `lib/agentCards.ts`). It used to be folded into the label, and the `task_started`
+  behind EVERY spawn re-announces the card with no name — and with the `subagent_type` a spawn omitted,
+  defaulted to `general-purpose` — so the name was overwritten within milliseconds. The persisted
+  snapshot carries `name` as well (whitelisted in `sanitizeActivity`); older snapshots keep it inside
+  `label`. Parallel agents fold their tool lists — see `client.md` (Behavior gotchas).
 - **Headless caveat:** `teammateMode` ('auto'|'tmux'|'iterm2'|'in-process') comes from settings files,
   which Noah never loads (`settingSources: []`) — runs rely on 'auto' resolving to in-process in a
   TTY-less server. Verified only at the unit level; watch the first live runs on the deploy server.

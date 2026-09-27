@@ -291,8 +291,19 @@
   font-size: var(--t-xs);
   color: var(--text-soft);
   min-width: 0;
+  /* Too narrow for one line (a phone, a long @name, both badges): whatever no
+     longer fits wraps onto the next line instead of being squeezed or clipped.
+     The label's small flex-basis decides that, so a merely long label still
+     truncates on one line wherever the bubble is wide. */
+  flex-wrap: wrap;
+  row-gap: var(--s-1);
 }
+/* flex:none + nowrap like its sibling badges: .bubble's inherited
+   overflow-wrap:anywhere otherwise let a squeezed head break 에이전트 into
+   one syllable per line. */
 .agent-badge {
+  flex: none;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: var(--s-1);
@@ -327,12 +338,74 @@
   font-weight: 600;
   /* min-width:0 so the automatic content-based flex minimum doesn't keep an
      unbreakable subagent label at full width inside .agent-head (which has no
-     overflow of its own). */
-  flex: 0 1 auto;
+     overflow of its own). The 6em basis is the room it claims before the head
+     wraps; it then grows into whatever the line has left. */
+  flex: 1 1 6em;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* A named (agent-teams) teammate's addressable identity, ahead of the label.
+   It keeps its natural width up to the cap, so a long label truncates first
+   and parallel cards stay tellable apart. */
+.agent-name {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+/* Several agents share one tree (ActivityTree `fold`): each card's header
+   becomes a disclosure button over that card's own rows, and a folded card
+   shows only its latest call, so parallel agents no longer stack every call
+   into one long scroll. The reset strips the global button chrome so it lays
+   out like the static .agent-head it replaces — except that under a coarse
+   pointer it keeps the global 44px minimum height, a tap target on purpose. */
+.agent-toggle {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  line-height: inherit;
+  text-align: left;
+}
+/* The global press scale would shrink the whole full-width header. */
+.agent-toggle:active:not(:disabled) {
+  transform: none;
+}
+.agent-toggle:hover .agent-label,
+.agent-toggle:hover .agent-count,
+.agent-toggle:hover .agent-chevron {
+  color: var(--text);
+}
+.agent-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1-5);
+  flex: none;
+  margin-left: auto;
+}
+.agent-count {
+  color: var(--muted);
+  font-size: var(--t-2xs);
+  white-space: nowrap;
+}
+.agent-chevron {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--t-2xs);
+  transition: transform 0.15s var(--ease-out);
+}
+.agent-chevron::before {
+  content: "▸";
+}
+.agent-toggle[aria-expanded="true"] .agent-chevron {
+  transform: rotate(90deg);
 }
 
 .agent-tools {

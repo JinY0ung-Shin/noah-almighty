@@ -2134,7 +2134,8 @@ describe("background phase", () => {
     ]);
     const p = pane(id);
     expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      label: "@probe · general-purpose · 조사",
+      name: "probe",
+      label: "general-purpose · 조사",
       background: true,
       status: "running",
     });
@@ -2143,6 +2144,39 @@ describe("background phase", () => {
       expect.objectContaining({ id: "sh1", agentId: "ag1", status: "done" }),
     ]);
     expect(liveSegmentRows(p)).toBeNull();
+  });
+
+  it("keeps a teammate's @name when task_started re-announces the card with the type the spawn omitted", async () => {
+    const id = seedPane();
+    const statuses = trackStatus(id);
+    await driveEvents(id, [
+      // A flagless-type spawn: the Agent input named the teammate but omitted
+      // subagent_type, and the task_started right behind it carries the type
+      // the CLI defaulted to — and no name. Before the split this re-announce
+      // overwrote "@tester · 테스트 실행" with "general-purpose · 테스트 실행".
+      ["agent", { agentId: "ag1", parentId: "main", name: "tester", description: "테스트 실행" }],
+      ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "테스트 실행" }],
+      ["agent", { agentId: "ag2", parentId: "main", name: "reviewer", subagentType: "Explore", description: "코드 리뷰" }],
+      ["agent", { agentId: "ag2", parentId: "main", subagentType: "Explore", description: "코드 리뷰" }],
+      // Reversed arrival: the nameless re-announce lands first.
+      ["agent", { agentId: "ag3", parentId: "main", subagentType: "general-purpose", description: "문서 조사" }],
+      ["agent", { agentId: "ag3", parentId: "main", name: "researcher", description: "문서 조사" }],
+    ]);
+    const p = pane(id);
+    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
+      name: "tester",
+      label: "general-purpose · 테스트 실행",
+    });
+    expect(p.liveAgents.find((a) => a.id === "ag2")).toMatchObject({
+      name: "reviewer",
+      label: "Explore · 코드 리뷰",
+    });
+    expect(p.liveAgents.find((a) => a.id === "ag3")).toMatchObject({
+      name: "researcher",
+      label: "general-purpose · 문서 조사",
+    });
+    // The status line names the teammate too, even on the nameless re-announce.
+    expect(statuses()).toContain("에이전트 작업 중: @tester · general-purpose · 테스트 실행");
   });
 
   it("a visible turn keeps the whole live tree in the live bubble", async () => {
@@ -2984,7 +3018,8 @@ describe("activity failures and terminal frames", () => {
     ]);
     expect(p.liveAgents.filter((a) => a.id === "mate")).toHaveLength(1);
     expect(p.liveAgents.find((a) => a.id === "mate")).toMatchObject({
-      label: "@reviewer · code-review · 2차",
+      name: "reviewer",
+      label: "code-review · 2차",
       status: "failed",
       parentId: "main",
     });

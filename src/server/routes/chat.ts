@@ -167,10 +167,12 @@ function sanitizeActivity(raw: unknown): AgentResponse["activity"] | null {
     .map((a) => {
       const node = a as Record<string, unknown>;
       const status = cap(node.status, 16);
+      const name = cap(node.name, 80).trim();
       return {
         id: cap(node.id, 80),
         parentId: cap(node.parentId, 80),
         label: cap(node.label, 300),
+        ...(name ? { name } : {}),
         status: (status === "done" || status === "failed" ? status : "done") as
           | "running"
           | "done"

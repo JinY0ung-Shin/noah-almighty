@@ -648,19 +648,41 @@ describe("autoscroll.createStickController", () => {
     expect(el.scrollTop).toBe(1000); // keep the summary where the reader opened it
   });
 
+  it("opening a collapsed disclosure button (a folded agent card) detaches like a summary", () => {
+    const store = makeStore(undefined);
+    const ctrl = createStickController(store);
+    const { el, g } = makeNode({ scrollHeight: 1000, clientHeight: 600 });
+    const toggle = document.createElement("button");
+    toggle.setAttribute("aria-expanded", "false");
+    const label = document.createElement("span");
+    label.textContent = "@tester";
+    toggle.append(label);
+    el.append(toggle);
+    ctrl.attach(el);
+
+    label.click();
+    expect(store.isStuck()).toBe(false);
+    g.scrollHeight = 1600; // the card's rows unfolded
+    roInstances[0].cb();
+    expect(el.scrollTop).toBe(1000);
+  });
+
   it("does not detach for ordinary transcript clicks or when closing a disclosure", () => {
     const store = makeStore(undefined);
     const ctrl = createStickController(store);
     const { el } = makeNode({ scrollHeight: 1000, clientHeight: 600 });
     const ordinary = document.createElement("button");
+    const openToggle = document.createElement("button");
+    openToggle.setAttribute("aria-expanded", "true");
     const details = document.createElement("details");
     const summary = document.createElement("summary");
     details.open = true;
     details.append(summary, document.createElement("div"));
-    el.append(ordinary, details);
+    el.append(ordinary, openToggle, details);
     ctrl.attach(el);
 
     ordinary.click();
+    openToggle.click();
     summary.click();
     expect(details.open).toBe(false);
     expect(store.setStuck).not.toHaveBeenCalled();

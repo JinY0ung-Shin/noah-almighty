@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { agentTitle } from "./agentCards";
 import { confirmAction } from "./confirm";
 import { loadConversations, loadMessages } from "./loaders";
 import { syncHash } from "./nav";
@@ -1410,10 +1411,17 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "agent":
       if (data?.agentId) {
         markTextBreak(paneId);
-        // Named (agent-teams) teammates lead with their addressable identity.
-        // A re-emit for a known agent (it went to the background) may carry no
+        // A named (agent-teams) teammate's addressable identity rides its OWN
+        // field: the task_started behind every spawn re-announces the card with
+        // no name — and with the subagent type a spawn may have omitted — so a
+        // name folded into the label was overwritten within milliseconds. A
+        // re-emit for a known agent (it went to the background) may carry no
         // naming field at all, and must not rename its card to the placeholder.
-        const named = [data.name ? `@${data.name}` : "", data.subagentType, data.description]
+        const name =
+          typeof data.name === "string" && data.name.trim()
+            ? data.name.trim()
+            : undefined;
+        const described = [data.subagentType, data.description]
           .filter(Boolean)
           .join(" · ");
         const background = data.background === true;
@@ -1421,16 +1429,15 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
           paneId,
           data.agentId,
           data.parentId || "main",
-          named || undefined,
+          described || undefined,
           "running",
           background,
+          name,
         );
-        const label =
-          named ||
-          readState()
-            .chatPanes.find((p) => p.id === paneId)
-            ?.liveAgents.find((a) => a.id === data.agentId)?.label ||
-          "하위 작업";
+        const node = readState()
+          .chatPanes.find((p) => p.id === paneId)
+          ?.liveAgents.find((a) => a.id === data.agentId);
+        const label = (node && agentTitle(node)) || "하위 작업";
         setStatus(
           paneId,
           background ? `백그라운드에서 에이전트 실행 중: ${label}` : `에이전트 작업 중: ${label}`,
@@ -1911,6 +1918,7 @@ function ensureAgent(
   label?: string,
   status?: "running" | "done" | "failed",
   background = false,
+  name?: string,
 ): void {
   updatePane(paneId, (pane) => {
     if (!pane.liveAgents.some((a) => a.id === "main")) {
@@ -1925,10 +1933,17 @@ function ensureAgent(
     if (agentId === "main") return;
     const existing = pane.liveAgents.find((a) => a.id === agentId);
     if (existing) {
-      // A resumed agent's task_started re-announces the card without the
-      // spawn's @name ("general-purpose · 조사" under "@probe · general-purpose
-      // · 조사"): the fuller label wins.
-      if (label && !existing.label.endsWith(` · ${label}`)) existing.label = label;
+      // The fuller label wins: a re-announce that drops a part the card
+      // already shows ("조사" or "general-purpose" under "general-purpose ·
+      // 조사") keeps the card's, while one that adds a part (the subagent type
+      // a spawn omitted) takes over.
+      const covered =
+        existing.label === label ||
+        existing.label.endsWith(` · ${label}`) ||
+        existing.label.startsWith(`${label} · `);
+      if (label && !covered) existing.label = label;
+      // A name, once known, is never cleared: re-announces carry none.
+      if (name) existing.name = name;
       if (status) existing.status = status;
       if (background) existing.background = true;
       return;
@@ -1941,6 +1956,7 @@ function ensureAgent(
       isMain: false,
       // A nested agent belongs to its parent's turn, like the parent's own rows.
       segment: rowSegment(pane, parentId || "main"),
+      ...(name ? { name } : {}),
       ...(background ? { background: true } : {}),
     });
   });

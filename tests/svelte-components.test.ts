@@ -15,6 +15,7 @@ import Toasts from "../src/client/src/components/Toasts.svelte";
 import Toggle from "../src/client/src/components/Toggle.svelte";
 import WhatsNewModal from "../src/client/src/components/WhatsNewModal.svelte";
 import RoutinesView from "../src/client/src/views/RoutinesView.svelte";
+import { openAgentCards } from "../src/client/src/lib/agentCards.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { readState, replaceState, toasts } from "../src/client/src/lib/state.js";
 import type {
@@ -555,6 +556,165 @@ describe("ActivityTree", () => {
     const failed = screen.getByText("맥락 정리에 실패했습니다").closest(".tool-row")!;
     expect(failed.getAttribute("data-status")).toBe("failed");
     expect(failed.querySelector(".tool-arg")!.textContent).toBe("429 rate limit");
+  });
+
+  describe("several agents side by side", () => {
+    const team: LiveAgentNode[] = [
+      { id: "main", parentId: "", label: "", status: "running", isMain: true },
+      { id: "a1", parentId: "main", name: "tester", label: "general-purpose · 테스트 실행", status: "running", isMain: false },
+      { id: "a2", parentId: "main", label: "Explore · 문서 조사", status: "done", isMain: false },
+      { id: "a3", parentId: "main", label: "general-purpose · 막 시작함", status: "running", isMain: false },
+    ];
+    const teamTools: LiveToolRow[] = [
+      { id: "t1", agentId: "a1", kind: "tool", label: "파일 읽기", detail: "package.json", status: "done" },
+      { id: "t2", agentId: "a1", kind: "tool", label: "명령 실행", detail: "npm ci", status: "done" },
+      { id: "t3", agentId: "a1", kind: "tool", label: "명령 실행", detail: "npm test", status: "running" },
+      { id: "t4", agentId: "a2", kind: "tool", label: "검색", detail: "TODO · src", status: "done" },
+      { id: "t5", agentId: "main", kind: "tool", label: "파일 쓰기", detail: "notes.md", status: "done" },
+    ];
+    const teamTasks: LiveTaskRow[] = [
+      { id: "k1", agentId: "a1", label: "긴 셸", status: "running" },
+    ];
+    const card = (text: string) => screen.getByText(text).closest(".agent-node")!;
+    const args = (el: Element) =>
+      [...el.querySelectorAll(".tool-row .tool-arg")].map((r) => r.textContent);
+
+    beforeEach(() => openAgentCards.set(new Set()));
+
+    it("folds each card to its latest call behind a closed disclosure that counts what it hides", () => {
+      render(ActivityTree, {
+        props: { agentId: "main", agents: team, tools: teamTools, tasks: teamTasks },
+      });
+
+      const tester = card("@tester");
+      const toggle = tester.querySelector("button.agent-toggle")!;
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle.querySelector(".agent-count")!.textContent).toBe("도구 3개 · 태스크 1개");
+      expect(args(tester)).toEqual(["npm test"]);
+      expect(tester.querySelector(".task-row")).toBeNull();
+      // The teammate's name leads its accessible name as well as its card.
+      expect(tester.getAttribute("aria-label")).toBe("에이전트 · @tester · general-purpose · 테스트 실행 · 진행 중");
+      expect(args(card("Explore · 문서 조사"))).toEqual(["TODO · src"]);
+      // The main agent's own rows are never folded.
+      expect(screen.getByText("notes.md")).toBeTruthy();
+      // A just-spawned agent has nothing to fold, so it gets no disclosure.
+      expect(card("general-purpose · 막 시작함").querySelector("button")).toBeNull();
+    });
+
+    it("opens only the clicked card, and keeps it open when the same ids render afresh", async () => {
+      const props = { agentId: "main", agents: team, tools: teamTools, tasks: teamTasks };
+      const { unmount } = render(ActivityTree, { props });
+
+      await fireEvent.click(screen.getByRole("button", { name: /@tester/ }));
+      expect(card("@tester").querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
+      expect(args(card("@tester"))).toEqual(["package.json", "npm ci", "npm test"]);
+      expect(card("@tester").querySelector(".task-row")).toBeTruthy();
+      expect(card("Explore · 문서 조사").querySelector("button")!.getAttribute("aria-expanded")).toBe("false");
+
+      // A live bubble finalizing into its stored message renders a new tree
+      // over the same agent ids: the card the viewer opened stays open.
+      unmount();
+      render(ActivityTree, { props });
+      expect(args(card("@tester"))).toEqual(["package.json", "npm ci", "npm test"]);
+
+      await fireEvent.click(screen.getByRole("button", { name: /@tester/ }));
+      expect(args(card("@tester"))).toEqual(["npm test"]);
+    });
+
+    it("folds a nested agent's rows but keeps the nested card itself in view", () => {
+      const nested: LiveAgentNode[] = [
+        team[0],
+        { id: "w1", parentId: "main", label: "워크플로 실행: spec", status: "running", isMain: false },
+        { id: "w1a", parentId: "w1", label: "general-purpose · 초안", status: "running", isMain: false },
+      ];
+      const nestedTools: LiveToolRow[] = [
+        { id: "n1", agentId: "w1a", kind: "tool", label: "파일 읽기", detail: "spec.md", status: "done" },
+        { id: "n2", agentId: "w1a", kind: "tool", label: "파일 쓰기", detail: "draft.md", status: "running" },
+      ];
+      render(ActivityTree, { props: { agentId: "main", agents: nested, tools: nestedTools, tasks: [] } });
+
+      const child = card("general-purpose · 초안");
+      expect(card("워크플로 실행: spec").contains(child)).toBe(true);
+      expect(child.querySelector("button")!.getAttribute("aria-expanded")).toBe("false");
+      expect(args(child)).toEqual(["draft.md"]);
+    });
+
+    it("keeps a lone sub-agent's rows in view with no disclosure", () => {
+      render(ActivityTree, {
+        props: { agentId: "main", agents: [team[0], team[1]], tools: teamTools, tasks: teamTasks },
+      });
+
+      const tester = card("@tester");
+      expect(tester.querySelector("button")).toBeNull();
+      expect(args(tester)).toEqual(["package.json", "npm ci", "npm test"]);
+      expect(tester.querySelector(".task-row")).toBeTruthy();
+    });
+
+    it("folds as the second agent arrives, and a folded card follows its live rows", async () => {
+      const { rerender } = render(ActivityTree, {
+        props: { agentId: "main", agents: [team[0], team[1]], tools: teamTools, tasks: [] },
+      });
+      expect(args(card("@tester"))).toEqual(["package.json", "npm ci", "npm test"]);
+
+      await rerender({ agents: [team[0], team[1], team[2]] });
+      expect(args(card("@tester"))).toEqual(["npm test"]);
+
+      // A new call replaces the latest row and bumps the count; a status flip
+      // on the latest row shows through the fold.
+      await rerender({
+        tools: [
+          ...teamTools.map((t) => (t.id === "t3" ? { ...t, status: "done" as const } : t)),
+          { id: "t6", agentId: "a1", kind: "tool", label: "파일 쓰기", detail: "report.md", status: "running" },
+        ],
+      });
+      expect(args(card("@tester"))).toEqual(["report.md"]);
+      expect(card("@tester").querySelector(".agent-count")!.textContent).toBe("도구 4개");
+      await rerender({
+        tools: [
+          ...teamTools,
+          { id: "t6", agentId: "a1", kind: "tool", label: "파일 쓰기", detail: "report.md", status: "failed" },
+        ],
+      });
+      expect(card("@tester").querySelector(".tool-row")!.getAttribute("data-status")).toBe("failed");
+    });
+
+    it("names the disclosure with the run status and the hidden count, never the decorative badge", () => {
+      render(ActivityTree, {
+        props: { agentId: "main", agents: team, tools: teamTools, tasks: teamTasks },
+      });
+
+      expect(card("@tester").querySelector("button")!.getAttribute("aria-label")).toBe(
+        "에이전트 · @tester · general-purpose · 테스트 실행 · 진행 중 · 도구 3개 · 태스크 1개",
+      );
+    });
+
+    it("folds a tasks-only card to its latest task", () => {
+      const shells: LiveTaskRow[] = [
+        { id: "s1", agentId: "a2", label: "빌드", status: "done" },
+        { id: "s2", agentId: "a2", label: "e2e", detail: "npm run e2e", status: "running" },
+      ];
+      render(ActivityTree, {
+        props: { agentId: "main", agents: team, tools: teamTools.filter((t) => t.agentId !== "a2"), tasks: shells },
+      });
+
+      const explore = card("Explore · 문서 조사");
+      expect(explore.querySelector(".agent-count")!.textContent).toBe("태스크 2개");
+      expect([...explore.querySelectorAll(".task-row .task-name")].map((r) => r.textContent)).toEqual(["e2e"]);
+      expect(explore.querySelector(".tool-row")).toBeNull();
+    });
+
+    it("renders a snapshot stored before the split (name inside the label) as its label", () => {
+      const legacy: LiveAgentNode[] = [
+        team[0],
+        { id: "old", parentId: "main", label: "@probe · general-purpose · 조사", status: "done", isMain: false },
+      ];
+      const { container } = render(ActivityTree, {
+        props: { agentId: "main", agents: legacy, tools: [], tasks: [] },
+      });
+
+      expect(screen.getByText("@probe · general-purpose · 조사")).toBeTruthy();
+      expect(container.querySelector(".agent-name")).toBeNull();
+    });
   });
 });
 

@@ -258,6 +258,11 @@ export interface LiveAgentNode {
   id: string;
   parentId: string;
   label: string;
+  /**
+   * Addressable teammate name (agent-teams `Agent` spawn with `name:`), kept
+   * apart from `label` so a nameless re-announce can never drop it. Persisted.
+   */
+  name?: string;
   status: "running" | "done" | "failed";
   isMain: boolean;
   /** The sub-agent runs (or ran) in the background; its card says so. */

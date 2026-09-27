@@ -146,9 +146,17 @@ export function createStickController(store: StickStore): StickController {
   // before the summary's default click action toggles the element so the
   // observer preserves the reader's current position. Keyboard activation of a
   // <summary> dispatches the same click event, so it follows this path too.
+  // A collapsed disclosure BUTTON (a folded agent card's header) is the same
+  // gesture: its handler flips aria-expanded, but the DOM update lands in a
+  // microtask, so the attribute still reads "false" while the click bubbles here.
   function onClick(event: MouseEvent) {
     if (event.defaultPrevented) return;
     const target = event.target instanceof Element ? event.target : null;
+    const opener = target?.closest('button[aria-expanded="false"]');
+    if (opener && node?.contains(opener)) {
+      detach();
+      return;
+    }
     const summary = target?.closest("summary");
     if (!summary || !node?.contains(summary)) return;
     const details = summary.parentElement;

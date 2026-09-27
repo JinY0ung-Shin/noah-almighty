@@ -1317,6 +1317,8 @@ export interface AgentActivity {
     id: string;
     parentId: string;
     label: string;
+    /** Addressable teammate name (agent-teams spawn with `name:`); older snapshots fold it into `label`. */
+    name?: string;
     status: "running" | "done" | "failed";
     isMain: boolean;
     /** The sub-agent ran in the BACKGROUND (a launch receipt, not its answer, came back to the spawn). */

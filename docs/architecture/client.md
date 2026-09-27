@@ -190,6 +190,12 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   replayed event log, so **every handler has to be re-appliable**: messages dedupe by id, and a bounded
   `settledSteers` set keeps a replayed `dropped` from pushing its text into the composer twice and the
   POST's own 200 from re-adding a pending bubble the stream already resolved.
+- **The activity snapshot is WHITELISTED server-side.** The client seals the live tree and PUTs it to
+  `/api/messages/:id/activity`, and `sanitizeActivity` (`routes/chat.ts`) rebuilds every agent/tool/task
+  row from an explicit field list. A field added to `LiveAgentNode`/`LiveToolRow`/`LiveTaskRow` but not
+  there works live and silently vanishes on reload — add it to `AgentActivity` (`server/types.ts`) and the
+  sanitizer together, with a round-trip assertion in `tests/routes-chat.test.ts` (`background` and
+  `name` are the worked examples).
 - **Admin presence badge: the client poll interval bounds the server window from BELOW.**
   `users.last_seen_at` is stamped by EVERY authenticated request, and `startKnowledgeWatch`
   (`lib/loaders.ts`) is what keeps it warm for an idle-but-open tab — it polls once a minute and ONLY while
@@ -246,6 +252,20 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   own left-rail view (`views/GroupsView.svelte`, 2026-08): my-groups cards + the system-admin group
   management that used to be the admin view's 그룹 tab; legacy `#/settings/groups`·`#/admin/groups`
   hashes normalize to `#/groups` in `lib/nav.ts` `routeFromHash`.
+- **Agent cards fold only when SEVERAL agents share one tree.** `ActivityTree` decides at the root (≥2
+  sub-agents among the rows it renders — per bubble in the background phase) and nested trees inherit
+  the decision. Each sub-agent card that has rows then gets a disclosure header (`@name`, label,
+  `도구 N개 · 태스크 M개`, chevron) and shows only its latest tool row (its latest task row when it has no
+  tools). A lone agent, a card with no rows yet and the main agent's own rows never fold. Open state is
+  the module store `openAgentCards` (`lib/agentCards.ts`), keyed by agent id so the card the viewer
+  opened stays open while the live bubble finalizes into the stored message; it is session-only on
+  purpose. The header is a real `<button>` that strips the global button chrome (and the press scale),
+  so it keeps the coarse-pointer 44 px min-height — on touch a card's head grows once when its first row
+  arrives. Both the button and the static head WRAP instead of clipping when a line is too narrow:
+  whatever no longer fits (the label, the count + chevron, or both) moves down, and the label's
+  `flex-basis: 6em` is what keeps a merely long label truncating on one line wherever the bubble is
+  wide. The 에이전트 badge is `flex:none`+`nowrap` because `.bubble`'s inherited `overflow-wrap:anywhere`
+  otherwise broke it into one syllable per line on phones.
 - **Admin external avatars are independently lazy-loaded.** `AdminExternalAgentsPanel.svelte` stays
   mounted with an `active` prop so its API cannot blank the existing admin overview and unsaved editor
   state is not coupled to tab switches. Its modal uses explicit `keep|set|clear` API-key intent and

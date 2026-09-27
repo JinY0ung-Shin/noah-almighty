@@ -872,12 +872,12 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
       // echoes have no workflow in flight, so they fall back to MAIN_AGENT_ID
       // exactly as before).
       const parentId = isWorkflowContainer ? MAIN_AGENT_ID : state.activeWorkflowAgentId || MAIN_AGENT_ID;
+      // No `name`: task_started never carries a teammate's (`teammate_name`
+      // exists only on hook inputs). The card keeps the one its spawn's
+      // tool_use announced.
       events.onAgentStart?.({
         agentId: uiId,
         parentId,
-        // Background teammate spawns announce via task_started; carry the
-        // teammate name when the event provides it.
-        name: asString(message.teammate_name) || undefined,
         subagentType: asString(message.subagent_type) || undefined,
         description:
           (isWorkflowContainer ? `워크플로 실행: ${workflowName}` : undefined) ||
