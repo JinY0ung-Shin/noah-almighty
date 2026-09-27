@@ -1925,7 +1925,10 @@ function ensureAgent(
     if (agentId === "main") return;
     const existing = pane.liveAgents.find((a) => a.id === agentId);
     if (existing) {
-      if (label) existing.label = label;
+      // A resumed agent's task_started re-announces the card without the
+      // spawn's @name ("general-purpose · 조사" under "@probe · general-purpose
+      // · 조사"): the fuller label wins.
+      if (label && !existing.label.endsWith(` · ${label}`)) existing.label = label;
       if (status) existing.status = status;
       if (background) existing.background = true;
       return;

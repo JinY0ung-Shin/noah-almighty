@@ -141,6 +141,8 @@ type TaskKind = "task" | "agent";
 interface TaskRecord {
   uiId: string;
   kind: TaskKind;
+  /** The sub-agent whose tool call started this task, so its row nests under that agent's card. */
+  agentId?: string;
 }
 
 /**
@@ -169,6 +171,14 @@ export interface LoopState {
    */
   backgroundTasks: Map<string, BackgroundTaskSummary>;
   /**
+   * tool_use id → the sub-agent that issued it (sub-agent calls only). A task
+   * the CLI starts for such a call (a long or backgrounded shell) nests under
+   * that agent's card instead of the root.
+   */
+  toolAgentIds: Map<string, string>;
+  /** Agent cards already flagged as running in the background this run. */
+  backgroundAgentIds: Set<string>;
+  /**
    * uiId of the most recently started, still-running Workflow (ultracode)
    * container task, if any — so a subagent the workflow spawns nests under it
    * in the activity tree (agentId chain) instead of flattening to main. Last
@@ -184,8 +194,31 @@ export function createLoopState(): LoopState {
     tasks: new Map(),
     hiddenTasks: new Set(),
     backgroundTasks: new Map(),
+    toolAgentIds: new Map(),
+    backgroundAgentIds: new Set(),
     activeWorkflowAgentId: undefined,
   };
+}
+
+/**
+ * Flag an agent card as running in the BACKGROUND, once per card per run.
+ * Three signals land here: the spawn's launch receipt, a mid-run backgrounding
+ * (task_updated is_backgrounded), and the agent's id in the live background-task
+ * set. The last is the only one a SendMessage resume produces, which since
+ * spawns are forced foreground is the usual way an agent runs in the background.
+ */
+function flagBackgroundAgent(
+  events: AgentEvents,
+  state: LoopState,
+  uiId: string,
+  parentId: string = MAIN_AGENT_ID,
+): void {
+  if (state.backgroundAgentIds.has(uiId)) {
+    return;
+  }
+  state.backgroundAgentIds.add(uiId);
+  // parentId only places a card the client has not seen yet.
+  events.onAgentStart?.({ agentId: uiId, parentId, background: true });
 }
 
 /** Mutable fold bookkeeping for one attempt's chunk accumulators. */
@@ -312,9 +345,8 @@ function emitTaskUpdate(
       events.onAgentEnd?.({ agentId: record.uiId, ok: taskOk(update.status || "") });
     } else {
       if (update.isBackgrounded === true) {
-        // Backgrounded mid-run: same card, now flagged. parentId only places a
-        // card the client has not seen, which this one always has.
-        events.onAgentStart?.({ agentId: record.uiId, parentId: MAIN_AGENT_ID, background: true });
+        // Backgrounded mid-run: same card, now flagged.
+        flagBackgroundAgent(events, state, record.uiId);
       }
       // A mapped Korean tool label outranks the SDK's summary/description, which
       // it writes in English; an unmapped name still gets humanized rather than
@@ -330,11 +362,14 @@ function emitTaskUpdate(
     }
     return;
   }
+  // Every frame of a sub-agent's task names its owner: the client re-homes a
+  // row to whatever agent each frame carries, root when none.
+  const owner = record.agentId ? { agentId: record.agentId } : {};
   if (statusIsTerminal(update.status || "")) {
-    events.onTaskEnd?.({ taskId: record.uiId, ok: taskOk(update.status || ""), status: update.status, summary: update.summary || update.error });
+    events.onTaskEnd?.({ taskId: record.uiId, ok: taskOk(update.status || ""), status: update.status, summary: update.summary || update.error, ...owner });
     return;
   }
-  events.onTaskUpdate?.({ taskId: record.uiId, ...update });
+  events.onTaskUpdate?.({ taskId: record.uiId, ...update, ...owner });
 }
 
 function handleTaskToolUse(
@@ -433,6 +468,9 @@ export function handleAssistantMessage(
       if (!toolUseId || !name) {
         continue;
       }
+      if (!isMain) {
+        state.toolAgentIds.set(toolUseId, agentId);
+      }
       if (handleTaskToolUse(name, toolUseId, input, events, state)) {
         continue;
       }
@@ -511,11 +549,7 @@ export function handleUserMessage(
         if (launch.agentId && !state.tasks.has(launch.agentId)) {
           state.tasks.set(launch.agentId, { uiId: toolUseId, kind: "agent" });
         }
-        events.onAgentStart?.({
-          agentId: toolUseId,
-          parentId: asString(message.parent_tool_use_id) || MAIN_AGENT_ID,
-          background: true,
-        });
+        flagBackgroundAgent(events, state, toolUseId, asString(message.parent_tool_use_id) || MAIN_AGENT_ID);
         continue;
       }
       events.onAgentEnd?.({ agentId: toolUseId, ok });
@@ -821,7 +855,11 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
       Boolean(asString(message.subagent_type))
         ? "agent"
         : existing?.kind || "task";
-    const record = { uiId, kind: taskKind };
+    // A plain task started for a sub-agent's own tool call (a shell it ran
+    // long or in the background) belongs under that agent's card.
+    const ownerAgentId =
+      taskKind === "task" ? existing?.agentId || (toolUseId ? state.toolAgentIds.get(toolUseId) : undefined) : undefined;
+    const record: TaskRecord = { uiId, kind: taskKind, ...(ownerAgentId ? { agentId: ownerAgentId } : {}) };
     state.tasks.set(taskId, record);
     if (toolUseId) {
       state.tasks.set(toolUseId, record);
@@ -850,6 +888,10 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
       if (isWorkflowContainer) {
         state.activeWorkflowAgentId = uiId;
       }
+      // The live background set can name the agent before its task_started.
+      if (state.backgroundTasks.has(taskId)) {
+        flagBackgroundAgent(events, state, uiId, parentId);
+      }
     } else {
       events.onTaskStart?.({
         taskId: uiId,
@@ -859,6 +901,7 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
         workflowName: asString(message.workflow_name) || undefined,
         description: asString(message.description) || undefined,
         prompt: asString(message.prompt) || undefined,
+        ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
       });
     }
     return true;
@@ -920,6 +963,12 @@ export function handleSystemEvent(message: Record<string, unknown>, events: Agen
         taskType: asString(entry.task_type) || undefined,
         description: asString(entry.description) || undefined,
       });
+      // An agent in the live set is running in the background by definition;
+      // one not seen yet is flagged when its task_started lands.
+      const record = state.tasks.get(taskId);
+      if (record?.kind === "agent") {
+        flagBackgroundAgent(events, state, record.uiId);
+      }
     }
     events.onBackgroundTasks?.({ tasks: [...state.backgroundTasks.values()] });
     return;

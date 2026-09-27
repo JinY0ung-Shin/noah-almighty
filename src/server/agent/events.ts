@@ -173,6 +173,8 @@ export interface TaskEvent {
   workflowName?: string;
   description?: string;
   prompt?: string;
+  /** The sub-agent whose tool call started the task (absent = the main agent's). */
+  agentId?: string;
 }
 
 /** Progress or state update for a previously created SDK task. */
@@ -184,6 +186,8 @@ export interface TaskUpdateEvent {
   lastToolName?: string;
   error?: string;
   isBackgrounded?: boolean;
+  /** Same owner as the task's TaskEvent; repeated on every frame. */
+  agentId?: string;
 }
 
 /** A subagent was spawned via the Task/Agent tool. `agentId` === its tool_use id. */
@@ -613,7 +617,7 @@ export interface AgentEvents {
   /** A non-subagent SDK task changed progress/state. */
   onTaskUpdate?: (event: TaskUpdateEvent) => void;
   /** A non-subagent SDK task finished. */
-  onTaskEnd?: (event: { taskId: string; ok: boolean; status?: string; summary?: string }) => void;
+  onTaskEnd?: (event: { taskId: string; ok: boolean; status?: string; summary?: string; agentId?: string }) => void;
   /** A subagent was spawned. */
   onAgentStart?: (event: AgentSpawnEvent) => void;
   /** A subagent finished. */

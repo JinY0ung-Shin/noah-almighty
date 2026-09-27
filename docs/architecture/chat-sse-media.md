@@ -103,8 +103,18 @@
   visible turn ended) are verified for background subagents too, then goes deliberately. Agents that
   run in the background regardless (a SendMessage resume, teammates, remote agents) render correctly:
   the spawn's `async_launched`/`remote_launched` tool_result (`tool_use_result.status`) is only a
-  LAUNCH RECEIPT, so `handleUserMessage` re-emits `agent{background:true}` (a 백그라운드 badge on the
-  card) instead of ending it, and the agent's `task_notification` ends the card.
+  LAUNCH RECEIPT, so `handleUserMessage` does not end the card on it, and the agent's
+  `task_notification` does. A card gets its 백그라운드 badge (`agent{background:true}`, once per card
+  per run via `flagBackgroundAgent`) from any of three signals: that receipt, a mid-run
+  `task_updated{is_backgrounded}`, or the agent's task id in the live `background_tasks_changed` set.
+  The last is the only one a SendMessage resume sends, and since spawns are forced foreground it is the
+  usual way an agent runs in the background (measured 2.1.283: the resume re-announces the SAME task
+  id, so the existing card reactivates, and the agent's own messages keep the original spawn's
+  `parent_tool_use_id`). A resume works only inside the run that spawned the agent: in a later run the
+  CLI knows neither the name (`success:false`) nor the id (no task starts). A task the CLI starts for
+  a sub-agent's own tool call (a shell past ~3 s, or backgrounded) nests under that agent's card: the
+  handler maps tool_use id → issuing agent (`LoopState.toolAgentIds`), and every task frame carries
+  that `agentId`. Such rows used to render at the root, away from the agent that ran them.
   (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is the blunt alternative — strips `run_in_background` from
   tool schemas entirely, but kills Bash background tasks too.)
 - **Background phase (`run_in_background` tasks outliving the visible reply).** A `query()` is NOT one

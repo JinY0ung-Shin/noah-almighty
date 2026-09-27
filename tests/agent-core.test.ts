@@ -2238,6 +2238,107 @@ describe("sdk message handlers", () => {
     expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "s-1", ok: true });
   });
 
+  // A SendMessage resume sends no launch receipt: the agent's id showing up in
+  // the live background set (measured on 2.1.283) is the one signal there is.
+  it("flags an agent found in the live background set, once, in either event order", () => {
+    const sink = events();
+    const state = createLoopState();
+    // Resume in the same run: the card exists, then the background set names it.
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "a-1", task_type: "local_agent", tool_use_id: "spawn-1", description: "조사" },
+      sink,
+      state,
+    );
+    const bgSet = (ids: string[]) => ({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: ids.map((task_id) => ({ task_id, task_type: "local_agent", description: "조사" })),
+    });
+    handleSystemEvent(bgSet(["a-1"]), sink, state);
+    handleSystemEvent(bgSet(["a-1", "b-2"]), sink, state);
+    const flagged = () => sink.onAgentStart.mock.calls.filter(([e]) => e.background === true).map(([e]) => e.agentId);
+    expect(flagged()).toEqual(["spawn-1"]);
+
+    // The set can also name an agent before its task_started lands.
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "b-2", task_type: "local_agent", tool_use_id: "spawn-2", description: "요약" },
+      sink,
+      state,
+    );
+    expect(flagged()).toEqual(["spawn-1", "spawn-2"]);
+    // A plain background shell is not an agent card.
+    handleSystemEvent({ type: "system", subtype: "task_started", task_id: "sh-1", task_type: "local_bash", tool_use_id: "bash-1" }, sink, state);
+    handleSystemEvent(bgSet(["a-1", "b-2", "sh-1"]), sink, state);
+    expect(flagged()).toEqual(["spawn-1", "spawn-2"]);
+  });
+
+  it("does not flag the same agent twice across receipt and background-set signals", () => {
+    const sink = events();
+    const state = createLoopState();
+    handleAssistantMessage({ message: { content: [{ type: "tool_use", id: "spawn-9", name: "Agent", input: {} }] } }, sink, state);
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "a-9", task_type: "local_agent", tool_use_id: "spawn-9" },
+      sink,
+      state,
+    );
+    handleUserMessage(
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "spawn-9", content: "launched" }] },
+        tool_use_result: { status: "async_launched", agentId: "a-9" },
+      },
+      sink,
+      state,
+    );
+    handleSystemEvent(
+      { type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a-9", task_type: "local_agent" }] },
+      sink,
+      state,
+    );
+    expect(sink.onAgentStart.mock.calls.filter(([e]) => e.background === true)).toHaveLength(1);
+  });
+
+  // Measured on 2.1.283: a sub-agent's shell that runs past ~3 s (or in the
+  // background) gets its own local_bash task, which used to render at the ROOT,
+  // away from the agent that ran it.
+  it("nests a task started for a sub-agent's tool call under that agent, on every frame", () => {
+    const sink = events();
+    const state = createLoopState();
+    handleAssistantMessage(
+      {
+        parent_tool_use_id: "spawn-1",
+        message: { content: [{ type: "tool_use", id: "bash-sub", name: "Bash", input: { command: "sleep 40" } }] },
+      },
+      sink,
+      state,
+    );
+    handleAssistantMessage(
+      { message: { content: [{ type: "tool_use", id: "bash-main", name: "Bash", input: { command: "sleep 9" } }] } },
+      sink,
+      state,
+    );
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "sh-sub", task_type: "local_bash", tool_use_id: "bash-sub", description: "긴 셸" },
+      sink,
+      state,
+    );
+    handleSystemEvent(
+      { type: "system", subtype: "task_started", task_id: "sh-main", task_type: "local_bash", tool_use_id: "bash-main" },
+      sink,
+      state,
+    );
+    expect(sink.onTaskStart).toHaveBeenCalledWith(expect.objectContaining({ taskId: "bash-sub", agentId: "spawn-1" }));
+    const mainStart = sink.onTaskStart.mock.calls.find(([e]) => e.taskId === "bash-main")![0];
+    expect(mainStart).not.toHaveProperty("agentId");
+
+    handleSystemEvent({ type: "system", subtype: "task_progress", task_id: "sh-sub", description: "진행" }, sink, state);
+    handleSystemEvent({ type: "system", subtype: "task_notification", task_id: "sh-sub", status: "completed" }, sink, state);
+    expect(sink.onTaskUpdate).toHaveBeenCalledWith(expect.objectContaining({ taskId: "bash-sub", agentId: "spawn-1" }));
+    expect(sink.onTaskEnd).toHaveBeenCalledWith(expect.objectContaining({ taskId: "bash-sub", ok: true, agentId: "spawn-1" }));
+    handleSystemEvent({ type: "system", subtype: "task_notification", task_id: "sh-main", status: "completed" }, sink, state);
+    expect(sink.onTaskEnd.mock.calls.find(([e]) => e.taskId === "bash-main")![0]).not.toHaveProperty("agentId");
+  });
+
   it("flags an agent the CLI backgrounded mid-run", () => {
     const sink = events();
     const state = createLoopState();

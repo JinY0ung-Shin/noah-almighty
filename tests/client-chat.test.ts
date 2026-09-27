@@ -2119,6 +2119,32 @@ describe("background phase", () => {
     ]);
   });
 
+  it("keeps a resumed agent's @name and nests its background shell under its own bubble", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      ["agent", { agentId: "ag1", parentId: "main", name: "probe", subagentType: "general-purpose", description: "조사" }],
+      ["agent_end", { agentId: "ag1", ok: true }],
+      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
+      // SendMessage resume: task_started re-announces the card without the name,
+      // then the background set flags it.
+      ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
+      ["agent", { agentId: "ag1", parentId: "main", background: true }],
+      ["task", { taskId: "sh1", agentId: "ag1", taskType: "local_bash", description: "긴 셸" }],
+      ["task_end", { taskId: "sh1", agentId: "ag1", ok: true }],
+    ]);
+    const p = pane(id);
+    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
+      label: "@probe · general-purpose · 조사",
+      background: true,
+      status: "running",
+    });
+    // The shell is the resumed agent's, so it sits under the finished bubble with it.
+    expect(messageSegmentRows(p, "bg-msg-1")!.tasks).toEqual([
+      expect.objectContaining({ id: "sh1", agentId: "ag1", status: "done" }),
+    ]);
+    expect(liveSegmentRows(p)).toBeNull();
+  });
+
   it("a visible turn keeps the whole live tree in the live bubble", async () => {
     const id = seedPane();
     await driveEvents(id, [["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }]]);
