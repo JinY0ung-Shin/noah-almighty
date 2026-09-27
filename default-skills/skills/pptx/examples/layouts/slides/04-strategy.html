@@ -5,6 +5,7 @@
 <title>04 전략 체계 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Strategy framework ("house"): the goal as the roof (dark band), the three strategies as pillars (a target
      metric from → to, then the actions), and the shared foundation as the base band. Every pillar has the same
@@ -28,6 +29,7 @@
   .metric { margin-top: var(--sp-2); padding: 12px var(--sp-2); border-radius: 12px; background: var(--c-brand-50); }
   .metric-label { font-size: 13px; line-height: 20px; font-weight: 600; color: var(--c-ink-600); }
   .metric-row { display: flex; align-items: center; gap: var(--sp-1); }
+  .metric-row svg { color: var(--c-ink-500); }                     /* the arrow icon (currentColor) */
   .metric-from { font-size: 18px; line-height: 28px; font-weight: 600; color: var(--c-ink-500); }
   .metric-to { font-size: 28px; line-height: 40px; font-weight: 800; letter-spacing: var(--tracking-tight); color: var(--c-brand-600);
                white-space: nowrap; }
@@ -60,14 +62,14 @@
   <section class="pillars">
     <article class="card pillar">
       <div class="pillar-head">
-        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
         <div><p class="pillar-kicker">전략 1</p><p class="pillar-name">채널 통합</p></div>
       </div>
       <div class="metric">
         <p class="metric-label">재문의율</p>
         <div class="metric-row">
           <p class="metric-from">23%</p>
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#667085" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
           <p class="metric-to">12%</p>
         </div>
       </div>
@@ -80,14 +82,14 @@
 
     <article class="card pillar">
       <div class="pillar-head">
-        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
+        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
         <div><p class="pillar-kicker">전략 2</p><p class="pillar-name">셀프 서비스</p></div>
       </div>
       <div class="metric">
         <p class="metric-label">셀프 해결률</p>
         <div class="metric-row">
           <p class="metric-from">12%</p>
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#667085" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
           <p class="metric-to">40%</p>
         </div>
       </div>
@@ -100,14 +102,14 @@
 
     <article class="card pillar">
       <div class="pillar-head">
-        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+        <div class="icon-badge icon-badge--sm"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
         <div><p class="pillar-kicker">전략 3</p><p class="pillar-name">상담 지능화</p></div>
       </div>
       <div class="metric">
         <p class="metric-label">건당 후처리 시간</p>
         <div class="metric-row">
           <p class="metric-from">90초</p>
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#667085" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
           <p class="metric-to">30초</p>
         </div>
       </div>

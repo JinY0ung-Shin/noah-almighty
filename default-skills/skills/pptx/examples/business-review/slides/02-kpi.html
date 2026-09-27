@@ -5,6 +5,7 @@
 <title>02 핵심 지표 · 2026년 3분기 사업 실적 보고</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   .kpi-grid { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w);
               display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3); }
@@ -24,15 +25,14 @@
   .kpi-bar-fill.is-current { background: var(--c-series-curr); }
 
   /* the title's two claims (매출, 영업이익) lead: dark cards, as the navy panel / table head elsewhere in the deck */
-  .kpi--hero { background: var(--c-brand-900); }
   .kpi--hero .stat-label { color: rgba(255, 255, 255, 0.64); }
   .kpi--hero .stat-value { color: var(--c-white); }
   .kpi--hero .stat-unit { color: rgba(255, 255, 255, 0.72); }
   .kpi--hero .kpi-bar-label { color: rgba(255, 255, 255, 0.60); }
-  .kpi--hero .kpi-bar-fill { background: rgba(255, 255, 255, 0.28); }
+  .kpi--hero .kpi-bar-fill { background: rgba(255, 255, 255, 0.40); }
   .kpi--hero .kpi-bar-fill.is-current { background: var(--c-white); }
   .kpi--hero .kpi-foot { border-top-color: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.64); }
-  .icon-badge--glass { background: rgba(255, 255, 255, 0.10); }
+  .icon-badge--glass { background: rgba(255, 255, 255, 0.10); color: var(--c-white); }
 
   .summary { position: absolute; left: var(--margin-x); top: 496px; width: var(--content-w); }
 </style>
@@ -48,10 +48,10 @@
   </header>
 
   <section class="kpi-grid">
-    <article class="card kpi kpi--hero">
+    <article class="card card--emphasis kpi kpi--hero">
       <div class="kpi-top">
         <div class="icon-badge icon-badge--sm icon-badge--glass">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><path d="M7 16v-4"/><path d="M12 16V6"/><path d="M17 16V9"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><path d="M7 16v-4"/><path d="M12 16V6"/><path d="M17 16V9"/></svg>
         </div>
         <p class="pill pill--up-on-dark">▲ 12.4%</p>
       </div>
@@ -64,10 +64,10 @@
       <p class="caption kpi-foot">전년 동기 1,142억 원</p>
     </article>
 
-    <article class="card kpi kpi--hero">
+    <article class="card card--emphasis kpi kpi--hero">
       <div class="kpi-top">
         <div class="icon-badge icon-badge--sm icon-badge--glass">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5l6-6 4 4 7.5-7.5"/><path d="M14.5 7h6v6"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5l6-6 4 4 7.5-7.5"/><path d="M14.5 7h6v6"/></svg>
         </div>
         <p class="pill pill--up-on-dark">▲ 21.6%</p>
       </div>
@@ -83,7 +83,7 @@
     <article class="card kpi">
       <div class="kpi-top">
         <div class="icon-badge icon-badge--sm">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/></svg>
         </div>
         <p class="pill pill--up">▲ 8.9%</p>
       </div>
@@ -99,7 +99,7 @@
     <article class="card kpi">
       <div class="kpi-top">
         <div class="icon-badge icon-badge--sm">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5A8 8 0 1 1 10.5 4.5"/><path d="M14 3v7h7a7 7 0 0 0-7-7z"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5A8 8 0 1 1 10.5 4.5"/><path d="M14 3v7h7a7 7 0 0 0-7-7z"/></svg>
         </div>
         <p class="pill pill--down">▼ 0.8%p</p>
       </div>
@@ -115,7 +115,7 @@
 
   <section class="summary">
     <div class="icon-badge icon-badge--sm icon-badge--white">
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2v.2h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2v.2h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>
     </div>
     <p class="summary-text"><strong>종합 평가</strong>  클라우드 구독 매출 확대로 매출과 영업이익이 모두 두 자릿수 성장했습니다.<br>다만 시장 점유율이 0.8%p 하락해 4분기에는 중견기업 대상 영업을 강화할 계획입니다.</p>
   </section>

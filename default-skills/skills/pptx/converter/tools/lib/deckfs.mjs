@@ -179,6 +179,146 @@ export function deckInputBytes(deckReal) {
   return total;
 }
 
+// ------------------------------------------------------------------------------------------------ theme link
+// elements whose content never becomes linked elements: raw text / RCDATA, a template's inert fragment, and noscript
+// (the slide pages run with scripting on)
+const INERT_TAGS = new Set(['script', 'style', 'template', 'textarea', 'title', 'noscript', 'xmp', 'iframe', 'noembed', 'noframes']);
+const ENTITIES = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', sol: '/', period: '.', hyphen: '-', lowbar: '_' };
+const isSpace = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\f' || c === '\r';
+
+function decodeRefs(v) {
+  return v.replace(/&(?:#(\d+)|#[xX]([0-9A-Fa-f]+)|([A-Za-z]+));?/g, (m, dec, hex, name) => {
+    if (dec || hex) {
+      const cp = dec ? Number(dec) : parseInt(hex, 16);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    }
+    return Object.prototype.hasOwnProperty.call(ENTITIES, name.toLowerCase()) ? ENTITIES[name.toLowerCase()] : m;
+  });
+}
+
+/**
+ * The stylesheets a slide's HTML applies, in document order: the trimmed `href` of every <link> whose rel has the
+ * token `stylesheet` (not `alternate`), that is not `disabled`, is CSS (no `type`, or text/css) and applies to the
+ * screen (no `media`, or all / screen). A static scan in the manner of the HTML tokenizer — no browser, and
+ * linear in the file (a regex scan could retry an unterminated quote at every `<`, and this runs on deck.mjs's event
+ * loop): comments are skipped, and so is the content of the elements whose content never becomes a linked element
+ * (INERT_TAGS); an unclosed comment, tag, quote or inert element runs to the end of the file, as in the parser.
+ * Attribute names are case-insensitive, the first of a duplicated attribute wins, values may be unquoted and carry
+ * character references.
+ */
+export function linkedStylesheets(html) {
+  const s = String(html);
+  const n = s.length;
+  const out = [];
+  let i = 0;
+  while (i < n) {
+    const lt = s.indexOf('<', i);
+    if (lt < 0) break;
+    if (s.startsWith('<!--', lt)) {
+      const end = s.indexOf('-->', lt + 4);
+      if (end < 0) break;
+      i = end + 3;
+      continue;
+    }
+    const nm = /^[A-Za-z][^\s/>]*/.exec(s.slice(lt + 1, lt + 65));
+    if (!nm) { // an end tag, <!doctype>, a stray "<"
+      i = lt + 1;
+      continue;
+    }
+    const tag = nm[0].toLowerCase();
+    const attrs = new Map();
+    let j = lt + 1 + nm[0].length;
+    let closed = false;
+    while (j < n) {
+      if (s[j] === '>') {
+        closed = true;
+        j++;
+        break;
+      }
+      if (isSpace(s[j]) || s[j] === '/') {
+        j++;
+        continue;
+      }
+      let k = j + 1; // a name may start with "=" (the tokenizer keeps it)
+      while (k < n && !isSpace(s[k]) && s[k] !== '/' && s[k] !== '>' && s[k] !== '=') k++;
+      const name = s.slice(j, k).toLowerCase();
+      while (k < n && isSpace(s[k])) k++;
+      let value = '';
+      if (s[k] === '=') {
+        k++;
+        while (k < n && isSpace(s[k])) k++;
+        if (s[k] === '"' || s[k] === "'") {
+          const e = s.indexOf(s[k], k + 1);
+          if (e < 0) {
+            k = n;
+            break;
+          }
+          value = s.slice(k + 1, e);
+          k = e + 1;
+        } else {
+          const e0 = k;
+          while (k < n && !isSpace(s[k]) && s[k] !== '>') k++;
+          value = s.slice(e0, k);
+        }
+      }
+      if (!attrs.has(name)) attrs.set(name, decodeRefs(value));
+      j = k;
+    }
+    if (!closed) break;
+    i = j;
+    if (INERT_TAGS.has(tag)) {
+      const close = new RegExp(`</${tag}(?=[\\s/>])`, 'gi');
+      close.lastIndex = i;
+      const c = close.exec(s);
+      const gt = c ? s.indexOf('>', c.index) : -1;
+      if (gt < 0) break;
+      i = gt + 1;
+      continue;
+    }
+    if (tag !== 'link') continue;
+    const rel = (attrs.get('rel') || '').toLowerCase().split(/[\t\n\f\r ]+/);
+    const type = attrs.has('type') ? attrs.get('type').trim().toLowerCase() : 'text/css';
+    const media = attrs.has('media') ? attrs.get('media').trim().toLowerCase() : '';
+    if (!rel.includes('stylesheet') || rel.includes('alternate') || attrs.has('disabled')) continue;
+    if (type !== 'text/css' || !['', 'all', 'screen'].includes(media)) continue;
+    out.push((attrs.get('href') || '').trim());
+  }
+  return out;
+}
+
+export const THEME_LINK_MISSING = 'this slide does not link ../deck.css, so it shows the kit\'s default theme, not the deck\'s: add <link rel="stylesheet" href="../deck.css"> after the ../theme/fonts.css link';
+export const THEME_LINK_ORDER = 'this slide links ../deck.css before ../theme/base.css, so the kit\'s default theme overrides the deck\'s: link ../deck.css last, after ../theme/base.css and ../theme/fonts.css';
+
+/**
+ * `theme-link` (warn) for the given slides of a deck that has a deck.css: a slide that does not link ../deck.css
+ * renders the kit's default theme (classic) inside, say, a midnight deck, and one that links it BEFORE
+ * ../theme/base.css has the deck's tokens overridden by base.css's own `:root` — both silently. Read from the slide
+ * files (linkedStylesheets): the page cannot know whether deck.css exists without requesting it, and a failed
+ * request is itself an error. -> lint items {slide, profile: null, severity, rule, message, path: null}; report and
+ * exit status only, never written into the IR (like the layout lint).
+ */
+export function themeLinkLint(deckReal, slides) {
+  try {
+    if (!fs.statSync(path.join(deckReal, 'deck.css')).isFile()) return [];
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const s of slides) {
+    let hrefs;
+    try {
+      hrefs = linkedStylesheets(fs.readFileSync(s.file, 'utf8'));
+    } catch {
+      continue;
+    }
+    // the last application of each sheet decides which one wins (both use :root)
+    const deck = hrefs.lastIndexOf('../deck.css');
+    const message = deck < 0 ? THEME_LINK_MISSING : hrefs.lastIndexOf('../theme/base.css') > deck ? THEME_LINK_ORDER : null;
+    if (message) out.push({ slide: s.index, profile: null, severity: 'warn', rule: 'theme-link', message, path: null });
+  }
+  return out;
+}
+
 /**
  * Pre-checks before any browser starts (authoring, exit 1): names, count, per-slide size, input size.
  * -> {slides, problems: [{rule, message, path}]}

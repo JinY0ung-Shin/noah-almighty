@@ -9,7 +9,8 @@
 #   (b) deck.sh probe --json reports converter: true
 #   (c) deck.sh selftest --fail-on-drift (golden drift is FATAL here, unlike the image build's
 #       default)
-#   (d) a copy of every examples/<deck>/ builds in both profiles with --strict
+#   (d) a copy of every examples/<deck>/ builds in both profiles with --strict, and every other theme
+#       (themes/*.css over deck.css) restyles two of them — embedded profile, --strict
 #   (e) two concurrent checks of one deck: exactly one exits 5 "already running"
 #   (f) SIGKILL deck.mjs mid-build: no Chromium/Python left after 10 s, the re-run is not
 #       refused (kernel-released lock) and no converter run dir is left in /tmp (startup sweep)
@@ -272,6 +273,31 @@ for ex in ${EXAMPLES[@]+"${EXAMPLES[@]}"}; do
     else
       record "d/$ex/$profile" FAIL "exit $rc: $(jget "$OUT/build-$ex-$profile.json" 'j.failure && (j.failure.class + ": " + j.failure.message)')"
       tail_of "$LOGS/build-$ex-$profile.log"
+    fi
+  done
+done
+# every other theme over two examples (their charts, table, timeline and dark slides between them): the themes
+# restyle through tokens only, so each must still build clean — and step (g) validates these decks too
+mapfile -t THEMES < <(docker exec "$C_SMOKE" sh -c \
+  'for f in "$1"/themes/*.css; do [ -f "$f" ] && basename "$f" .css; done; true' sh "$SKILL")
+if [ "${#THEMES[@]}" -eq 0 ]; then
+  record d/themes FAIL "no $SKILL/themes/*.css in the image"
+fi
+for theme in ${THEMES[@]+"${THEMES[@]}"}; do
+  [ "$theme" = classic ] && continue   # the examples above ship classic as their deck.css
+  for ex in business-review layouts; do
+    tw="/tmp/w/theme-$theme-$ex"
+    docker exec "$C_SMOKE" sh -c 'cp -r "$1" "$2" && cp "$3" "$2/deck.css"' sh \
+      "$SKILL/examples/$ex" "$tw" "$SKILL/themes/$theme.css"
+    tmo 700 docker exec "$C_SMOKE" bash "$DECK_SH" build "$tw" --profile embedded --strict --json \
+      >"$OUT/build-theme-$theme-$ex.json" 2>"$LOGS/build-theme-$theme-$ex.log"
+    rc=$?
+    ok="$(jget "$OUT/build-theme-$theme-$ex.json" 'j.ok')"
+    if [ "$rc" -eq 0 ] && [ "$ok" = "true" ]; then
+      record "d/theme/$theme/$ex" PASS "$(jget "$OUT/build-theme-$theme-$ex.json" 'j.slideCount') slides, $(jget "$OUT/build-theme-$theme-$ex.json" 'j.timingsMs && (j.timingsMs.total/1000).toFixed(1)') s"
+    else
+      record "d/theme/$theme/$ex" FAIL "exit $rc: $(jget "$OUT/build-theme-$theme-$ex.json" 'j.failure && (j.failure.class + ": " + j.failure.message)')"
+      tail_of "$LOGS/build-theme-$theme-$ex.log"
     fi
   done
 done

@@ -5,7 +5,9 @@
  *      for the conversion — removing one silently breaks HTML/PPTX parity. The why: the skill's
  *      reference/AUTHORING.md §3 (maintainers: converter/docs/CONTRACT.md "v2 decisions").
  *   2. DESIGN TOKENS + SHARED COMPONENTS (sections 0, 2, 3): the visual language every slide uses
- *      (reference/AUTHORING.md §8–§9). Never edit it for one deck: override tokens in <deck>/deck.css.
+ *      (reference/AUTHORING.md §8–§9). Never edit it for one deck: override tokens in <deck>/deck.css. The
+ *      skill's themes/*.css are complete token sets for that file (the defaults below ARE themes/classic.css);
+ *      components and slides colour everything through tokens, so a theme restyles a deck without touching it.
  *
  * Slides link exactly two stylesheets: ../theme/base.css and ../theme/fonts.css (the extractor serves the
  * active profile's theme/fonts-<profile>.css under that name; it defines --font-sans). Slide-specific
@@ -41,6 +43,7 @@
   --c-accent-700: #C2410C;   /* accent as small text (4.8:1 on the slide background), a mark on ink-50 */
   --c-accent-600: #EC6A24;   /* accent as a data mark on white (3.16:1, WCAG 1.4.11 non-text contrast) */
   --c-accent-500: #FF8A3D;   /* accent on dark surfaces (6.9:1 on brand-900) and decoration */
+  --c-accent-300: #FFB27D;   /* light accent: the top stop of an accent gradient (the cover's key bar) */
   --c-accent-100: #FFEADB;
 
   /* Neutrals — cool slate. */
@@ -63,10 +66,25 @@
   --c-down-600: #C8322D;
   --c-down-50:  #FDEBEA;
 
-  /* Chart series (ChartSpec needs literal RRGGBB — keep these in sync with the data-chart JSON). */
-  --c-series-prev: #8A94A6;   /* previous year: 3.06:1 on white (WCAG 1.4.11 non-text contrast >= 3:1) */
-  --c-series-curr: #2A52D9;   /* current year = brand-600 (6.35:1) */
+  /* Data colours: chart series (a data-chart colour is "var(--c-series-curr)" or a literal RRGGBB), drawn bars,
+     legend swatches. Each needs >= 3:1 on the surface it is drawn on (WCAG 1.4.11 non-text contrast). */
+  --c-series-prev: #8A94A6;   /* previous year / the alternative: 3.06:1 on white */
+  --c-series-curr: var(--c-brand-600);   /* current year = brand-600 (6.35:1) */
   --c-series-fcst: #6F8FF0;   /* forecast point: lighter brand blue, 3.06:1 on white */
+  --c-series-strong: var(--c-brand-900); /* the darkest data colour: the first of three categories (a mix) */
+
+  /* Roles — surfaces and on-colours a theme remaps beyond the palette (a dark theme inverts them). */
+  --c-surface: var(--c-white);           /* cards, tables, chips, white swatches: what content sits on */
+  --c-on-fill: var(--c-white);           /* text on a mid-tone fill: brand-600 and ink-500 timeline bars */
+  --card-border: none;                   /* outlined themes: "1px solid <line>"; .card--emphasis hides it */
+  --c-mark-b: rgba(255, 138, 61, 0.85);  /* the brand mark's second circle (accent-500 at 85 %) */
+  --c-accent-soft: rgba(255, 138, 61, 0.40);  /* a translucent accent line on the page (a go-live marker) */
+  /* The dark cover / closing: a 135deg gradient, and the translucent decoration drawn on it. */
+  --c-cover-from: var(--c-brand-950);
+  --c-cover-to: #1B3796;
+  --c-cover-halo: rgba(74, 110, 242, 0.20);   /* brand-500 at 20 % */
+  --c-cover-orbit: rgba(163, 182, 250, 0.80); /* brand-300 at 80 % */
+  --c-cover-fcst: rgba(111, 143, 240, 0.55);  /* series-fcst at 55 %: a forecast drawn on the cover */
 
   /* Type scale — every line-height is an explicit px value on the 4/8 px grid AND at least the tallest
      profile's glyph content area (malgun substitute: ascent+descent = 1.33 em), so no text box ever reports
@@ -298,7 +316,7 @@ main.slide {
   border-radius: 50%;
 }
 .mark-a { left: 0;    background: var(--c-brand-600); }
-.mark-b { left: 10px; background: rgba(255, 138, 61, 0.85); }
+.mark-b { left: 10px; background: var(--c-mark-b); }
 .mark--sm { width: 21px; height: 14px; }
 .mark--sm .mark-a,
 .mark--sm .mark-b { width: 14px; height: 14px; }
@@ -308,20 +326,32 @@ main.slide {
 /* 3. Components                                                                                     */
 /* ------------------------------------------------------------------------------------------------ */
 
-/* Card — white, uniform radius, ONE soft outer shadow (spread 0), opaque fill. */
+/* Card — the surface colour, uniform radius, ONE soft outer shadow (spread 0), opaque fill; outlined themes add
+   a 1 px --card-border, declared at zero specificity (:where) so any slide rule that borders a card still wins. An
+   emphasis card (hero KPI, dark summary, the recommended option) is .card.card--emphasis: the dark emphasis surface,
+   with the outline kept (same box size as its neighbours) but transparent. */
 .card {
-  background: var(--c-white);
+  background: var(--c-surface);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
 }
+:where(.card) {
+  border: var(--card-border);
+}
+.card--emphasis {
+  background: var(--c-brand-900);
+  border-color: transparent;
+}
 
-/* Icon badge — tinted circle holding one inline <svg> (explicit width/height, one stroke colour). */
+/* Icon badge — tinted circle holding one inline <svg> (explicit width/height, stroke="currentColor": the icon
+   takes the badge's `color`, so a theme recolours it; the converter bakes the colour into the picture). */
 .icon-badge {
   flex: none;
   width: 48px;
   height: 48px;
   border-radius: 50%;
   background: var(--c-brand-50);
+  color: var(--c-brand-600);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -331,7 +361,7 @@ main.slide {
   height: 40px;
 }
 .icon-badge--white {
-  background: var(--c-white);
+  background: var(--c-surface);
 }
 
 /* Pill — a standalone block (never inline inside a paragraph): a roundRect shape + one text run. */
@@ -349,11 +379,11 @@ main.slide {
 .pill--down   { background: var(--c-down-50);  color: var(--c-down-600); }
 .pill--brand  { background: var(--c-brand-50); color: var(--c-brand-700); }   /* on white surfaces only */
 /* Context chip on the ink-50 page background (header period chips): a brand-50 tint would vanish there (1.02:1),
-   so the chip is white with a brand-200 outline; the 1 px border replaces 1 px of padding (same 28 px chip). */
+   so the chip is the surface colour with a brand-200 outline; the 1 px border replaces 1 px of padding (28 px). */
 .pill--outline {
   padding: 3px 11px;
   border: 1px solid var(--c-brand-200);
-  background: var(--c-white);
+  background: var(--c-surface);
   color: var(--c-brand-700);
 }
 .pill--glass  { background: rgba(255, 255, 255, 0.12); color: var(--c-white); }
@@ -415,7 +445,7 @@ main.slide {
 /* Data table — collapsed borders, text-only cells, right-aligned numbers (the first column left). */
 .data-table {
   width: var(--content-w);
-  background: var(--c-white);
+  background: var(--c-surface);
   box-shadow: var(--shadow-sheet);
 }
 .data-table th {

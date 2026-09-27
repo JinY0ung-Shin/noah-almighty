@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
-  KIT, GENERATOR, MAX_PPTX_BYTES, OUT_NAME_RE, limitsFromEnv, precheckDeck, relPosix,
+  KIT, GENERATOR, MAX_PPTX_BYTES, OUT_NAME_RE, limitsFromEnv, precheckDeck, relPosix, themeLinkLint,
 } from './deckfs.mjs';
 import { acquireSlot, defaultNamespace, lockDeck } from './locks.mjs';
 import { Children, makeRunDir, runBase, sweepStaleRunDirs } from './proc.mjs';
@@ -652,7 +652,8 @@ export async function runCheck(run, printer, { deck, profiles, only, slotHeld = 
     report.slideCount = st.slides.length;
     timings.lockWait = st.lockWaitMs;
     const irs = {};
-    const lint = [];
+    // theme-link comes from the slide files, not the IR (report and exit status only, like the layout lint below)
+    const lint = themeLinkLint(deck.real, names.length ? st.slides.filter((s) => names.includes(s.name)) : st.slides);
     const renders = {};
     const overview = {};
     let extractMs = 0;
@@ -774,8 +775,9 @@ export async function runBuild(run, printer, { deck, profile, out, author, stric
     timings.extract = ex.ms;
     const softWraps = softWrapsOf(ex.ir, profile);
     const textOverlaps = textOverlapsOf(ex.ir, profile);
-    // the build is the full check of its profile: the layout lint (text overlaps …) blocks it exactly as in `check`
-    const lint = [...lintOf(ex.ir, profile), ...layoutLintOf(ex.ir, profile, { overlaps: textOverlaps, softWraps })];
+    // the build is the full check of its profile: the layout lint (text overlaps …) blocks it exactly as in `check`,
+    // and the theme-link warnings of the slide files come first, as there
+    const lint = [...themeLinkLint(deck.real, st.slides), ...lintOf(ex.ir, profile), ...layoutLintOf(ex.ir, profile, { overlaps: textOverlaps, softWraps })];
     const lintErrors = lint.filter((l) => l.severity === 'error');
     const elements = (ex.ir.slides || []).reduce((n, s) => n + (s.elements || []).length, 0);
     const renderList = rendersOf(st, buildDir, ex.ir);

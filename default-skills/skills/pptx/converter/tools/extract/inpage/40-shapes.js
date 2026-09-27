@@ -189,7 +189,9 @@ function slideBackground(ctx) {
 // ------------------------------------------------------------------------------------------ images
 // SVG presentation properties (SVG 2 §6.6 / "presentation attributes"). The serializer compares their computed values
 // in the page with the values the same markup gets STANDALONE (no page CSS) and writes only the differences back as
-// presentation attributes — so an author-compliant icon keeps its original markup byte for byte (+ xmlns/size).
+// presentation attributes — so an author-compliant icon keeps its original markup byte for byte (+ xmlns/size). The
+// one exception: a paint an element authors as currentColor is always written as the colour it resolves to, and one it
+// inherits from such an author is never reported as a page resolution (svgCurrentColorPaint).
 const SVG_PAINT_PROPS = new Set(['fill', 'stroke', 'stop-color', 'flood-color', 'lighting-color']);
 const SVG_LENGTH_PROPS = new Set(['stroke-width', 'stroke-dashoffset', 'font-size', 'letter-spacing', 'word-spacing', 'baseline-shift']);
 const SVG_PRES_PROPS = ['display', 'visibility', 'opacity', 'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width',
@@ -242,6 +244,33 @@ function svgAttrValue(prop, v, liveStyle, problems) {
   return { v };
 }
 
+// the paints an SVG element inherits from its parent (stop-color, flood-color and lighting-color are not inherited)
+const SVG_INHERITED_PAINTS = new Set(['fill', 'stroke']);
+
+/**
+ * The colour paint `p` of the live SVG element L resolves to when the markup AUTHORS it as currentColor and page CSS
+ * left it so (the computed paint is still L's own `color`) — the sanctioned way to colour an icon: from its
+ * container's CSS `color`, which a theme sets. The author is the NEAREST element that writes `p` (inline style, else
+ * the presentation attribute): L itself or, for an inherited paint, an ancestor up to and including the outer <svg>
+ * (`stroke="currentColor"` on the root colours every path); `inherit` defers to the parent. -> {color: L's computed
+ * `color`, own: L itself is the author}, or null: another authored value, or page CSS overriding the paint (an
+ * ordinary resolution).
+ */
+function svgCurrentColorPaint(L, p, ls) {
+  let author = null;
+  for (let e = L; e instanceof SVGElement; e = e.parentElement) {
+    const v = ((e.style && e.style.getPropertyValue(p)) || e.getAttribute(p) || '').trim();
+    if (v && !/^inherit$/i.test(v)) {
+      author = { e, v };
+      break;
+    }
+    if ((!v && !SVG_INHERITED_PAINTS.has(p)) || (e instanceof SVGSVGElement && !e.ownerSVGElement)) break;
+  }
+  if (!author || !/^currentcolor$/i.test(author.v)) return null;
+  const lv = ls.getPropertyValue(p).trim();
+  return lv === ls.color || /^currentcolor$/i.test(lv) ? { color: ls.color, own: author.e === L } : null;
+}
+
 /** Ids referenced by an element (href / xlink:href / url(#id) in attributes and style). */
 function svgRefs(el) {
   const ids = [];
@@ -257,8 +286,9 @@ function svgRefs(el) {
  * Self-contained markup of an inline <svg>: the ORIGINAL markup plus (a) xmlns, explicit width/height of the content
  * box and the viewBox, (b) copies of elements it references outside itself (<use href>, url(#…) paint servers,
  * recursively) in a <defs>, (c) presentation attributes for every property whose computed value in the page differs
- * from the standalone value (page CSS, currentColor, inherited colour…), written in hex / unitless form.
- * Returns {markup, resolved: [property names that had to be resolved]}.
+ * from the standalone value (page CSS, inherited colour…), and for every paint authored as currentColor, written in
+ * hex / unitless form. Returns {markup, resolved: [property names page CSS / inheritance changed — currentColor
+ * paints are not listed: they are the sanctioned way to colour an icon]}.
  */
 function serializeSvg(svg, w, h, problems) {
   const doc = svg.ownerDocument;
@@ -315,13 +345,22 @@ function serializeSvg(svg, w, h, problems) {
       if (!T || !L) return;
       const ls = getComputedStyle(L);
       if (ls.filter && ls.filter !== 'none' && i > 0) problems.add('SVG content uses filter (PowerPoint SVG rendering may differ; the PNG fallback is exact)');
+      // the *-opacity a translucent paint of this element wrote (its live opacity × the colour's alpha): comparing it
+      // again would write the live opacity back over it and drop the alpha
+      const folded = new Set();
       for (const p of SVG_PRES_PROPS) {
         if (i === 0 && SVG_ROOT_SKIP.has(p)) continue;
         if (isCopied[i] && !SVG_NON_INHERITED.has(p)) continue;
         if (!hasText && SVG_TEXT_ONLY.has(p)) continue;
-        const lv = ls.getPropertyValue(p);
+        if (folded.has(p)) continue;
+        // currentColor authored on this element is written even where it equals the standalone value (black): no
+        // currentColor may survive into the markup (pictures.py ships such an SVG as PNG only, and the isolated raster
+        // would draw it black). One inherited from an authoring ancestor is written only where it still differs (a
+        // translucent colour, a child with a `color` of its own) — and neither is ever listed as a page resolution
+        const cur = SVG_PAINT_PROPS.has(p) ? svgCurrentColorPaint(L, p, ls) : null;
+        const lv = cur ? cur.color : ls.getPropertyValue(p);
         const tv = getComputedStyle(T).getPropertyValue(p); // re-read: attributes set on ancestors propagate
-        if (lv === tv || !lv) continue;
+        if (!(cur && cur.own) && (lv === tv || !lv)) continue;
         const a = SVG_CSS_ONLY.has(p) ? { v: lv } : svgAttrValue(p, lv, ls, problems);
         for (const E of [O, T]) {
           if (SVG_CSS_ONLY.has(p)) { E.style.setProperty(p, a.v); continue; }
@@ -330,7 +369,8 @@ function serializeSvg(svg, w, h, problems) {
           E.setAttribute(p, a.v);
           if (a.extra) { E.style.removeProperty(a.extra[0]); E.setAttribute(a.extra[0], a.extra[1]); }
         }
-        resolved.add(p);
+        if (a.extra) folded.add(a.extra[0]);
+        if (!cur) resolved.add(p);
       }
     });
   } finally {
@@ -357,7 +397,7 @@ function imageRecord(el, ctx) {
     const ser = serializeSvg(el, cb.w, cb.h, problems);
     job.markup = ser.markup;
     job.baseUrl = document.baseURI;
-    if (ser.resolved.length) problems.add(`SVG presentation properties set by page CSS / inheritance were resolved into the markup: ${ser.resolved.join(', ')} (author the icon self-contained)`);
+    if (ser.resolved.length) problems.add(`SVG presentation properties set by page CSS / inheritance were resolved into the markup: ${ser.resolved.join(', ')} (author the icon self-contained: literal colours, or stroke/fill="currentColor" coloured by the container's CSS color)`);
   } else {
     rec.alt = el.getAttribute('alt') || '';
     const src = el.currentSrc || el.src || '';
@@ -392,6 +432,91 @@ function imageRecord(el, ctx) {
 }
 
 // ------------------------------------------------------------------------------------------ charts
+// ChartSpec colour fields: each is 'RRGGBB' or a theme token "var(--name)" — a CSS custom property of the chart
+// element (inherited from :root / deck.css) that chartRecord resolves to 'RRGGBB', so the IR spec — and with it the
+// builder and the gates — only ever carries hex. The keys tools/pptxlib/chart.py and check_fidelity.py read (the
+// value-axis labels take categoryAxis.labelColor: they have no key of their own); `[]` = every item of an array,
+// `{}` = every value of an object. lib/chart.js resolves the same list for its preview (COLOR_FIELDS): keep in sync.
+const CHART_COLOR_FIELDS = ['series[].color', 'pointColors{}[]', 'dataLabels.color', 'valueAxis.gridlines.color',
+  'categoryAxis.labelColor', 'categoryAxis.lineColor', 'legend.color'];
+
+/** "var(--name)" (whitespace allowed, no fallback) → '--name'; null for anything else (hex, var(--x, #fff), …). */
+function chartTokenRef(v) {
+  const m = typeof v === 'string' ? v.match(/^\s*var\(\s*(--[A-Za-z0-9_-]+)\s*\)\s*$/) : null;
+  return m ? m[1] : null;
+}
+
+/**
+ * The colour fields present in a parsed ChartSpec, in CHART_COLOR_FIELDS order: [{path, get(), set(v)}], `path` as
+ * the author reads it (`series[1].color`, `pointColors["1"][0]`, `legend.color`). Needs no DOM.
+ */
+function chartColorFields(spec) {
+  const out = [];
+  const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  const walk = (node, steps, at) => {
+    const [step, ...rest] = steps;
+    const keys = step === '[]' ? (Array.isArray(node) ? node.map((_, i) => i) : [])
+      : step === '{}' ? (isObj(node) ? Object.keys(node) : [])
+      : isObj(node) && Object.prototype.hasOwnProperty.call(node, step) ? [step] : [];
+    for (const k of keys) {
+      const p = step === '[]' ? `${at}[${k}]` : step === '{}' ? `${at}[${JSON.stringify(k)}]` : at ? `${at}.${k}` : k;
+      if (rest.length) walk(node[k], rest, p);
+      else out.push({ path: p, get: () => node[k], set: (v) => { node[k] = v; } });
+    }
+  };
+  for (const f of CHART_COLOR_FIELDS) walk(spec, f.match(/\[\]|\{\}|[^.[\]{}]+/g), '');
+  return out;
+}
+
+/**
+ * Resolve the theme tokens of a parsed ChartSpec IN PLACE: a colour field holding "var(--name)" becomes the hex
+ * lookup(name) = {value, hex} reports (value: the computed custom property, '' when undefined; hex: 'RRGGBB' when
+ * that is an opaque colour, else null). Every other value — hex included — is left exactly as it is. Returns one
+ * chart-spec message per field that does not resolve (the field keeps its text; the error blocks the build). No DOM.
+ */
+function resolveChartTokens(spec, lookup) {
+  const problems = [];
+  for (const f of chartColorFields(spec)) {
+    const v = f.get();
+    if (typeof v !== 'string' || !/^\s*var\(/i.test(v)) continue;
+    const name = chartTokenRef(v);
+    if (!name) {
+      problems.push(`${f.path}: ${v.trim()} is not a colour token — write exactly var(--token-name), without a fallback, or a literal RRGGBB`);
+      continue;
+    }
+    const r = lookup(name);
+    if (!r.value) problems.push(`${f.path}: var(${name}) is not defined for this chart — define it in deck.css or use a theme token`);
+    else if (!r.hex) problems.push(`${f.path}: var(${name}) must resolve to an opaque colour (got ${r.value})`);
+    else f.set(r.hex);
+  }
+  return problems;
+}
+
+/**
+ * Custom property `name` of a chart element → {value: the computed token ('' when undefined), hex: 'RRGGBB' when it
+ * is an opaque CSS colour, else null}. Resolved IN THE PAGE, exactly as lib/chart.js draws it: a probe child of the
+ * chart takes the token as its `color` (a value that is no colour is rejected by the style parser), and its computed
+ * colour is read — so currentcolor is the chart's own `color`, and light-dark() / color-mix() resolve where they are
+ * used (the token text alone is context-free: a canvas cannot resolve them and would read them as opaque black). The
+ * probe is removed at once: the chart element is atomic, never walked, and the page is left as it was.
+ */
+function chartTokenColor(el, name) {
+  const value = cs(el).getPropertyValue(name).trim();
+  if (!value) return { value, hex: null };
+  const probe = document.createElement('span');
+  probe.style.color = value;
+  if (!probe.style.color) return { value, hex: null };
+  probe.style.display = 'none';
+  let c = null;
+  el.appendChild(probe);
+  try {
+    c = parseColor(getComputedStyle(probe).color);
+  } finally {
+    probe.remove();
+  }
+  return { value, hex: c && c.alpha >= 1 ? c.color : null };
+}
+
 /** WCAG 2 relative luminance of 'RRGGBB'. */
 function luminance(hex) {
   const c = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
@@ -429,8 +554,9 @@ function chartBackdrop(el) {
 
 /**
  * Chart series and point colours need ≥ 3:1 against the chart's background (WCAG 1.4.11 non-text contrast,
- * AUTHORING §8.10): the accent-500 #FF8A3D the kit uses for shapes is only 2.35:1 on white (accent-600 EC6A24:
- * 3.16:1). A warning — the chart converts either way.
+ * AUTHORING §8.10): the accent-500 the kit uses for shapes can fall below it on the surface (classic: #FF8A3D is
+ * 2.35:1 on white) — every theme's --c-accent-600 is the accent's data-mark shade that holds it. A warning — the
+ * chart converts either way; the message names the token, never a hex that is right in one theme only.
  */
 function chartContrastLint(el, spec, ctx) {
   const bg = chartBackdrop(el);
@@ -441,7 +567,7 @@ function chartContrastLint(el, spec, ctx) {
     if (!/^[0-9A-F]{6}$/.test(c) || seen.has(c)) return;
     seen.add(c);
     const r = contrastRatio(c, bg);
-    if (r < 3 - 1e-9) ctx.lint('warn', 'chart-contrast', `${what} colour ${c} is ${Math.floor(r * 100) / 100}:1 against the chart's background ${bg} — series and points need ≥ 3:1 (AUTHORING §8.10; the accent on white is EC6A24, --c-accent-600)`, el);
+    if (r < 3 - 1e-9) ctx.lint('warn', 'chart-contrast', `${what} colour ${c} is ${Math.floor(r * 100) / 100}:1 against the chart's background ${bg} — series and points need ≥ 3:1 (AUTHORING §8.10; for the accent use var(--c-accent-600), its data-mark shade on the surface)`, el);
   };
   spec.series.forEach((s, i) => {
     const name = s && s.name !== undefined ? `series "${s.name}"` : `series ${i + 1}`;
@@ -484,6 +610,8 @@ function chartRecord(el, ctx) {
     if (!Array.isArray(spec.series) || !spec.series.length) bad.push('series');
   }
   if (bad.length) ctx.lint('error', 'chart-spec', `invalid ChartSpec (${bad.join(', ')})`, el);
+  // theme tokens → 'RRGGBB' before anything reads a colour (chart-contrast below judges the resolved ones)
+  for (const p of resolveChartTokens(spec, (name) => chartTokenColor(el, name))) ctx.lint('error', 'chart-spec', p, el);
   const box = rectOf(el);
   let resolved = null;
   const raw = el.getAttribute('data-resolved');

@@ -12,7 +12,7 @@ folder inside the skill directory is refused.
 ## Layout
 
 ```
-VERSION                  1.0.0 — generator "noah-pptx-converter/<VERSION>" in every preview manifest
+VERSION                  1.1.0 — generator "noah-pptx-converter/<VERSION>" in every preview manifest
 requirements.txt         the pinned Python set (the image installs it through the pip mirror)
 docs/CONTRACT.md         the maintainers' contract (roots, isolation, runs, gates, previews, self-test, IR)
 fonts/                   vendored OFL fonts + licenses + fonts.json (GENERATED) — see fonts/README.md

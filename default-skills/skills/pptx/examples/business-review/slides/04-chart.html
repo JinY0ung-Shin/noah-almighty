@@ -5,6 +5,7 @@
 <title>04 분기별 매출 추이 · 2026년 3분기 사업 실적 보고</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   .chart-card { position: absolute; left: var(--margin-x); top: var(--content-top); width: 672px; height: 440px;
                 padding: var(--sp-4); }
@@ -45,12 +46,12 @@
         <p class="card-sub">단위: 억 원 · 4분기는 전망치</p>
       </div>
       <div class="legend" data-group="범례">
-        <div class="legend-item"><div class="swatch" style="background:#8A94A6"></div><p class="legend-label">2025년</p></div>
-        <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">2026년</p></div>
-        <div class="legend-item"><div class="swatch" style="background:#6F8FF0"></div><p class="legend-label">4Q 전망</p></div>
+        <div class="legend-item"><div class="swatch" style="background: var(--c-series-prev)"></div><p class="legend-label">2025년</p></div>
+        <div class="legend-item"><div class="swatch" style="background: var(--c-series-curr)"></div><p class="legend-label">2026년</p></div>
+        <div class="legend-item"><div class="swatch" style="background: var(--c-series-fcst)"></div><p class="legend-label">4Q 전망</p></div>
       </div>
     </div>
-    <div class="chart" data-chart='{"type":"column","grouping":"clustered","categories":["1Q","2Q","3Q","4Q"],"series":[{"name":"2025년","values":[1012,1087,1142,1236],"color":"8A94A6"},{"name":"2026년","values":[1148,1209,1284,1410],"color":"2A52D9"}],"pointColors":{"1":["2A52D9","2A52D9","2A52D9","6F8FF0"]},"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"344056","sizePx":13,"cssWeight":600},"valueAxis":{"visible":false,"min":0,"max":1600,"numberFormat":"#,##0"},"categoryAxis":{"visible":true,"labelColor":"667085","sizePx":14,"lineColor":"C9D0DB"},"legend":{"position":"none"},"gapWidth":90,"overlap":-8,"fontCssWeight":400}'></div>
+    <div class="chart" data-chart='{"type":"column","grouping":"clustered","categories":["1Q","2Q","3Q","4Q"],"series":[{"name":"2025년","values":[1012,1087,1142,1236],"color":"var(--c-series-prev)"},{"name":"2026년","values":[1148,1209,1284,1410],"color":"var(--c-series-curr)"}],"pointColors":{"1":["var(--c-series-curr)","var(--c-series-curr)","var(--c-series-curr)","var(--c-series-fcst)"]},"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"var(--c-ink-700)","sizePx":13,"cssWeight":600},"valueAxis":{"visible":false,"min":0,"max":1600,"numberFormat":"#,##0"},"categoryAxis":{"visible":true,"labelColor":"var(--c-ink-500)","sizePx":14,"lineColor":"var(--c-ink-300)"},"legend":{"position":"none"},"gapWidth":90,"overlap":-8,"fontCssWeight":400}'></div>
   </section>
 
   <aside class="panel">

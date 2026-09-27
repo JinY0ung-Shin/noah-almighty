@@ -317,7 +317,7 @@ describe("deck converter CLI (toolchain-free)", () => {
   it("probe --json follows the probe contract; a missing Chromium is a fact, never an install command", () => {
     const r = deck(["probe", "--json"]);
     const p = JSON.parse(r.stdout);
-    expect(p).toMatchObject({ format: "noah-deck-probe", version: 1, converterVersion: "1.0.0" });
+    expect(p).toMatchObject({ format: "noah-deck-probe", version: 1, converterVersion: "1.1.0" });
     expect(typeof p.converter).toBe("boolean");
     expect(r.code).toBe(p.converter ? 0 : 4);
     for (const k of ["chromium", "playwrightCore", "python", "fonts", "profiles", "limits", "selftest", "missing"]) expect(p).toHaveProperty(k);
@@ -485,6 +485,153 @@ describe("deck converter CLI (toolchain-free)", () => {
     // documented for the agent wherever the lint vocabulary is listed
     expect(fs.readFileSync(path.join(SKILL, "reference", "AUTHORING.md"), "utf8")).toContain("`chart-range`");
     expect(fs.readFileSync(path.join(KIT, "tools", "extract", "README.md"), "utf8")).toContain("`chart-range`");
+  });
+
+  type ChartField = { path: string; get: () => unknown; set: (v: unknown) => void };
+  type ChartToken = { value: string; hex: string | null };
+  const chartTokens = () => inpage<{
+    CHART_COLOR_FIELDS: string[];
+    chartTokenRef: (v: unknown) => string | null;
+    chartColorFields: (spec: unknown) => ChartField[];
+    resolveChartTokens: (spec: unknown, lookup: (name: string) => ChartToken) => string[];
+  }>(["CHART_COLOR_FIELDS", "chartTokenRef", "chartColorFields", "resolveChartTokens"], ["00-util.js", "20-text.js", "40-shapes.js"]);
+
+  it("chart theme tokens: var(--name) without a fallback; the walker covers every colour field chart.py reads, exactly as lib/chart.js does", () => {
+    const H = chartTokens();
+    expect(H.chartTokenRef("var(--c-series-curr)")).toBe("--c-series-curr");
+    expect(H.chartTokenRef("  var( --c-ink_500 )  ")).toBe("--c-ink_500");
+    for (const v of ["var(--c-x, #FFFFFF)", "var(c-x)", "var(--c-x) var(--c-y)", "VAR(--c-x)", "2A52D9", "#2A52D9", "", null, 42]) {
+      expect(H.chartTokenRef(v), String(v)).toBeNull();
+    }
+    // every colour field, in list order, under the path its error names (the value axis labels use labelColor)
+    const full = () => ({
+      type: "column", categories: ["1Q", "2Q"],
+      series: [{ name: "A", values: [1, 2], color: "col:s0" }, { name: "B", values: [3, 4], color: "col:s1" }],
+      pointColors: { "0": ["col:p00", "col:p01"], "1": ["col:p10"] },
+      dataLabels: { show: true, numberFormat: "#,##0", color: "col:dl" },
+      valueAxis: { visible: false, gridlines: { color: "col:grid", widthPx: 1 } },
+      categoryAxis: { visible: true, labelColor: "col:label", lineColor: "col:line" },
+      legend: { position: "top", color: "col:legend" },
+    });
+    const fields = H.chartColorFields(full());
+    expect(fields.map((f) => [f.path, f.get()])).toEqual([
+      ["series[0].color", "col:s0"], ["series[1].color", "col:s1"],
+      ['pointColors["0"][0]', "col:p00"], ['pointColors["0"][1]', "col:p01"], ['pointColors["1"][0]', "col:p10"],
+      ["dataLabels.color", "col:dl"], ["valueAxis.gridlines.color", "col:grid"],
+      ["categoryAxis.labelColor", "col:label"], ["categoryAxis.lineColor", "col:line"], ["legend.color", "col:legend"],
+    ]);
+    expect(JSON.stringify(full()).match(/col:/g)).toHaveLength(fields.length); // ...and nothing else
+    // absent or mistyped branches are skipped, never thrown on
+    expect(H.chartColorFields({ series: "x", pointColors: ["y"], valueAxis: { gridlines: true }, legend: null })).toEqual([]);
+    expect(H.chartColorFields(null)).toEqual([]);
+
+    // lib/chart.js resolves the same fields for the in-page preview: the same list, walked the same way
+    type Holder = Record<string | number, unknown>;
+    const mod = { exports: {} as { COLOR_FIELDS: string[]; colorFields: (spec: unknown, visit: (holder: Holder, key: string | number) => void) => void; tokenRef: (v: unknown) => string | null } };
+    new Function("module", fs.readFileSync(path.join(KIT, "lib", "chart.js"), "utf8"))(mod);
+    const C = mod.exports;
+    expect(C.COLOR_FIELDS).toEqual(H.CHART_COLOR_FIELDS);
+    const a = full();
+    const b = full();
+    for (const f of H.chartColorFields(a)) f.set(`seen:${f.get()}`);
+    C.colorFields(b, (holder, key) => { holder[key] = `seen:${holder[key]}`; });
+    expect(b).toEqual(a);
+    for (const v of ["var(--c-x)", " var( --c-x ) ", "var(--c-x, #fff)", "VAR(--c-x)", "2A52D9", null]) expect(C.tokenRef(v), String(v)).toBe(H.chartTokenRef(v));
+  });
+
+  it("chart theme tokens: resolved in place to RRGGBB; each field that does not resolve is one chart-spec message; a hex spec is untouched", () => {
+    const H = chartTokens();
+    const spec = {
+      type: "column", categories: ["1Q", "2Q"],
+      series: [{ name: "A", values: [1, 2], color: "var(--c-series-curr)" }, { name: "B", values: [3, 4], color: "8A94A6" }],
+      pointColors: { "0": [" var( --c-series-fcst ) ", "#6F8FF0"] },
+      dataLabels: { show: true, color: "var(--c-seris-curr)" },
+      valueAxis: { gridlines: { color: "var(--c-cover-fcst)", widthPx: 1 } },
+      categoryAxis: { labelColor: "var(--c-ink-500, #667085)", lineColor: "var(--c-ink-300)" },
+      legend: { position: "top", color: "var(--c-gap)" },
+    };
+    const TOKENS: Record<string, ChartToken> = {
+      "--c-series-curr": { value: "#123456", hex: "123456" },
+      "--c-series-fcst": { value: "#6f8ff0", hex: "6F8FF0" },
+      "--c-ink-300": { value: "#C9D0DB", hex: "C9D0DB" },
+      "--c-cover-fcst": { value: "rgba(111, 143, 240, 0.55)", hex: null },
+      "--c-gap": { value: "12px", hex: null },
+    };
+    const asked: string[] = [];
+    const problems = H.resolveChartTokens(spec, (name) => {
+      asked.push(name);
+      return TOKENS[name] ?? { value: "", hex: null };
+    });
+    expect(spec.series.map((s) => s.color)).toEqual(["123456", "8A94A6"]);
+    expect(spec.pointColors["0"]).toEqual(["6F8FF0", "#6F8FF0"]);
+    expect(spec.categoryAxis.lineColor).toBe("C9D0DB");
+    // a field that does not resolve keeps its text (the error blocks the build)
+    expect([spec.dataLabels.color, spec.valueAxis.gridlines.color, spec.categoryAxis.labelColor, spec.legend.color])
+      .toEqual(["var(--c-seris-curr)", "var(--c-cover-fcst)", "var(--c-ink-500, #667085)", "var(--c-gap)"]);
+    expect(problems).toEqual([
+      "dataLabels.color: var(--c-seris-curr) is not defined for this chart — define it in deck.css or use a theme token",
+      "valueAxis.gridlines.color: var(--c-cover-fcst) must resolve to an opaque colour (got rgba(111, 143, 240, 0.55))",
+      "categoryAxis.labelColor: var(--c-ink-500, #667085) is not a colour token — write exactly var(--token-name), without a fallback, or a literal RRGGBB",
+      "legend.color: var(--c-gap) must resolve to an opaque colour (got 12px)",
+    ]);
+    expect(asked).toEqual(["--c-series-curr", "--c-series-fcst", "--c-seris-curr", "--c-cover-fcst", "--c-ink-300", "--c-gap"]);
+    // a spec without references — the frozen self-test deck's chart — is untouched byte for byte, and never looked up
+    const golden = JSON.parse(fs.readFileSync(path.join(KIT, "selftest", "golden", "deck.embedded.ir.json"), "utf8"));
+    const chart = golden.slides.flatMap((s: { elements: { kind: string }[] }) => s.elements).find((e: { kind: string }) => e.kind === "chart");
+    const before = JSON.stringify(chart.spec);
+    expect(H.resolveChartTokens(chart.spec, () => { throw new Error("looked up"); })).toEqual([]);
+    expect(JSON.stringify(chart.spec)).toBe(before);
+  });
+
+  it("theme-link: a slide of a deck with deck.css that does not apply ../deck.css after ../theme/base.css warns (a static scan of its links)", async () => {
+    const D = await import(pathToFileURL(path.join(KIT, "tools", "lib", "deckfs.mjs")).href);
+    const link = (href: string, extra = "") => `<link rel="stylesheet" href="${href}"${extra}>`;
+    const kit = link("../theme/base.css") + link("../theme/fonts.css");
+    // what the HTML parser applies: rel tokens and attribute names case-insensitive, unquoted values, entities
+    expect(D.linkedStylesheets(`${kit}<LINK REL="StyleSheet" HREF=../deck.css>`)).toEqual(["../theme/base.css", "../theme/fonts.css", "../deck.css"]);
+    expect(D.linkedStylesheets(`<link href=' ../deck.css ' rel="preload stylesheet"/>`)).toEqual(["../deck.css"]);
+    expect(D.linkedStylesheets(`<link rel="stylesheet" href="..&#47;deck&period;css">`)).toEqual(["../deck.css"]);
+    expect(D.linkedStylesheets(`<link rel="stylesheet" href="../deck.css" href="../x.css" media="screen" type="text/css">`)).toEqual(["../deck.css"]);
+    // ...and what it never applies: comments, inert content, alternate / disabled / print / non-CSS links
+    for (const html of [
+      `<!-- ${link("../deck.css")} -->`, `<template id="notes">${link("../deck.css")}</template>`,
+      `<script type="text/x-notes">${link("../deck.css")}</script>`, `<noscript>${link("../deck.css")}</noscript>`,
+      `<textarea>${link("../deck.css")}</textarea>`, `<title>${link("../deck.css")}</title>`,
+      link("../deck.css", ' rel="alternate stylesheet"').replace('rel="stylesheet" ', ""), link("../deck.css", " disabled"),
+      link("../deck.css", ' media="print"'), link("../deck.css", ' type="text/less"'), `<link rel="preload" href="../deck.css">`,
+      `<!-- unclosed ${link("../deck.css")}`, `<p title="unclosed ${link("../deck.css")}`, `<div data-x='${link("../deck.css")}'></div>`,
+    ]) {
+      expect(D.linkedStylesheets(html), html).toEqual([]);
+    }
+    expect(D.linkedStylesheets(`<script>if (a<b) x = "</p>";</script >${link("../deck.css")}`)).toEqual(["../deck.css"]);
+    // linear in the input: a pathological slide cannot stall deck.mjs's event loop (a regex scan would be quadratic)
+    const t0 = Date.now();
+    expect(D.linkedStylesheets(`<a "${"<b x ".repeat(200_000)}`)).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+
+    const root = tmp("themelink");
+    const head = (links: string) => SLIDE("<p>x</p>").replace('<link rel="stylesheet" href="../theme/base.css">\n<link rel="stylesheet" href="../theme/fonts.css">', links);
+    const d = makeDeck(root, "tl", {
+      "01-ok.html": head(kit + link("../deck.css")),
+      "02-missing.html": head(kit),
+      "03-first.html": head(link("../deck.css") + kit),
+      "04-twice.html": head(link("../deck.css") + kit + link("../deck.css")),
+      "05-commented.html": head(`${kit}<!-- ${link("../deck.css")} -->`),
+    });
+    const slides = D.listSlides(d).slides;
+    expect(D.themeLinkLint(d, slides)).toEqual([]); // no deck.css: every slide shows the kit's theme by design
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { --c-brand-600: #0F766E; }\n");
+    const lint = D.themeLinkLint(d, slides);
+    expect(lint.map((l: { slide: number; message: string }) => [l.slide, l.message])).toEqual([
+      [2, "this slide does not link ../deck.css, so it shows the kit's default theme, not the deck's: add <link rel=\"stylesheet\" href=\"../deck.css\"> after the ../theme/fonts.css link"],
+      [3, "this slide links ../deck.css before ../theme/base.css, so the kit's default theme overrides the deck's: link ../deck.css last, after ../theme/base.css and ../theme/fonts.css"],
+      [5, D.THEME_LINK_MISSING],
+    ]);
+    for (const l of lint) expect(l).toMatchObject({ profile: null, severity: "warn", rule: "theme-link", path: null });
+    expect(D.themeLinkLint(d, slides.filter((s: { name: string }) => s.name === "01-ok"))).toEqual([]); // --only
+    // documented wherever the lint vocabulary is listed
+    expect(fs.readFileSync(path.join(KIT, "docs", "CONTRACT.md"), "utf8")).toContain("`theme-link`");
+    expect(fs.readFileSync(path.join(KIT, "tools", "extract", "README.md"), "utf8")).toContain("`theme-link`");
   });
 
   it("locks: held names refuse a second holder, a SIGKILLed holder frees its slot, the slot wait times out", async () => {
@@ -736,7 +883,7 @@ describe("deck converter CLI (toolchain-free)", () => {
       }
     }
     expect(bad).toEqual([]);
-    expect(fs.readFileSync(path.join(KIT, "VERSION"), "utf8").trim()).toBe("1.0.0");
+    expect(fs.readFileSync(path.join(KIT, "VERSION"), "utf8").trim()).toBe("1.1.0");
     expect(fs.readFileSync(path.join(KIT, "requirements.txt"), "utf8").trim().split("\n")).toEqual([
       "python-pptx==1.0.2", "lxml==6.1.3", "Pillow==12.3.0", "XlsxWriter==3.2.9", "typing_extensions==4.16.0",
       "fonttools==4.66.0", "defusedxml==0.7.1", "openpyxl==3.1.5", "et_xmlfile==2.0.0",
@@ -855,7 +1002,7 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
       }
     }
     expect(r.stderr).toMatch(/deck converter selftest: PASS \(Chromium [\d.]+; deck 4\+4 slides, features 3\+3 slides; golden match\)/);
-    expect(JSON.parse(fs.readFileSync(rec, "utf8"))).toMatchObject({ format: "noah-deck-selftest-record", version: 1, status: "pass", converterVersion: "1.0.0", differences: 0 });
+    expect(JSON.parse(fs.readFileSync(rec, "utf8"))).toMatchObject({ format: "noah-deck-selftest-record", version: 1, status: "pass", converterVersion: "1.1.0", differences: 0 });
   }, 600_000);
 
   it("check renders, lints and reports (never a deliverable); --only keeps slide numbers", () => {
@@ -1063,7 +1210,7 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     // the sidecar (I5): manifest written last, bound to the exact bytes
     const pdir = path.join(d, "fx.preview");
     const m = JSON.parse(fs.readFileSync(path.join(pdir, "manifest.json"), "utf8"));
-    expect(m).toMatchObject({ format: "noah-deck-preview", version: 1, generator: "noah-pptx-converter/1.0.0", pptx: "fx.pptx", profile: "embedded", slideCount: 3 });
+    expect(m).toMatchObject({ format: "noah-deck-preview", version: 1, generator: "noah-pptx-converter/1.1.0", pptx: "fx.pptx", profile: "embedded", slideCount: 3 });
     expect(m.pptxSha256).toBe(sha256(bytes));
     expect(m.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
     expect(m.slides.map((s: { index: number }) => s.index)).toEqual([1, 2, 3]);
@@ -1260,6 +1407,283 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     expect(range.map((l) => [l.slide, l.severity])).toEqual([[1, "warn"]]);
     expect(range[0].message).toContain("the largest value drawn, 900, is above valueAxis.max 150");
     expect(r.stderr).toMatch(/LINT WARN slide 1 \(01-over\) chart-range/);
+  }, 300_000);
+
+  /** A slide with one [data-chart] element (inside `wrap`, which gets the chart as {chart}), deck.css and chart.js. */
+  const chartSlide = (title: string, spec: object, wrap = "{chart}", chartStyle = "position:absolute;left:80px;top:160px;width:1000px;height:400px") =>
+    SLIDE(
+      `<p class="card-title" style="position:absolute;left:80px;top:80px">${title}</p>`
+        + wrap.replace("{chart}", () => `<div class="chart" style="${chartStyle}" data-chart='${JSON.stringify(spec)}'></div>`),
+      '<link rel="stylesheet" href="../deck.css">',
+    ).replace("</body>", '<script src="../lib/chart.js"></script>\n</body>');
+
+  it("theme tokens e2e: chart colours named as CSS custom properties resolve against the chart (deck.css wins) into the IR, the chart XML and the preview", () => {
+    const root = tmp("chart-tokens");
+    const ink500 = /--c-ink-500:\s*#([0-9A-Fa-f]{6})\b/.exec(fs.readFileSync(path.join(KIT, "theme", "base.css"), "utf8"))?.[1].toUpperCase();
+    expect(ink500, "theme/base.css defines --c-ink-500 as a literal hex").toMatch(/^[0-9A-F]{6}$/);
+    const spec = {
+      type: "column", grouping: "clustered", categories: ["1Q", "2Q", "3Q"],
+      series: [
+        { name: "2025년", values: [80, 120, 140], color: "var(--t-prev)" },
+        { name: "2026년", values: [90, 130, 150], color: "var(--c-series-curr)" },
+      ],
+      pointColors: { "1": ["var(--c-series-curr)", "var(--c-series-curr)", "var(--t-card)"] },
+      dataLabels: { show: true, numberFormat: "#,##0", position: "outEnd", color: "var(--t-text)", sizePx: 13, cssWeight: 600 },
+      valueAxis: { visible: false, min: 0, max: 200, gridlines: { color: "var(--t-grid)", widthPx: 1 } },
+      categoryAxis: { visible: true, labelColor: "var(--c-ink-500)", sizePx: 14, lineColor: "var(--t-axis)" },
+      legend: { position: "top", color: "var(--t-text)", sizePx: 13 },
+    };
+    // --t-card is set on the card, not :root: a token resolves against the chart element's computed style
+    const d = makeDeck(root, "tk", {
+      "01-chart.html": chartSlide("분기별 매출", spec,
+        '<section class="card" style="position:absolute;left:80px;top:150px;width:1000px;height:460px;padding:24px;box-sizing:border-box;--t-card:#6F8FF0">{chart}</section>',
+        "width:952px;height:412px"),
+    });
+    // the deck's theme overrides a base.css token (--c-series-curr) and adds its own; --c-ink-500 stays base.css's
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { --c-series-curr: #123456; --t-prev: #8A94A6; --t-text: #3F4A5C; --t-grid: #E3E8EF; --t-axis: #C9D0DB; }\n");
+    const r = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).lint.items.filter((l: { rule: string }) => l.rule.startsWith("chart-"))).toEqual([]);
+    const ir = JSON.parse(fs.readFileSync(path.join(d, ".build", "embedded", "ir.json"), "utf8"));
+    const chart = ir.slides[0].elements.find((e: { kind: string }) => e.kind === "chart");
+    expect(chart.spec).toMatchObject({
+      series: [{ color: "8A94A6" }, { color: "123456" }],
+      pointColors: { "1": ["123456", "123456", "6F8FF0"] },
+      dataLabels: { color: "3F4A5C" },
+      valueAxis: { gridlines: { color: "E3E8EF" } },
+      categoryAxis: { labelColor: ink500, lineColor: "C9D0DB" },
+      legend: { color: "3F4A5C" },
+    });
+    expect(JSON.stringify(chart.spec)).not.toContain("var(");
+    // the native chart carries the resolved colours (the strict build's fidelity gate compared them with the IR)
+    const z = readZip(fs.readFileSync(path.join(d, "tk.pptx")));
+    const xml = [...z.keys()].filter((n) => /^ppt\/charts\/chart\d+\.xml$/.test(n)).map((n) => z.get(n)!.toString("utf8")).join("\n");
+    for (const c of ["8A94A6", "123456", "6F8FF0", "3F4A5C", "E3E8EF", ink500!, "C9D0DB"]) expect(xml, c).toContain(`<a:srgbClr val="${c}"`);
+    // the preview (lib/chart.js) drew the bars of the reference render in the deck's colours, never the palette's
+    const count = [
+      "import json, sys", "from PIL import Image",
+      "have = {c: n for n, c in Image.open(sys.argv[1]).convert('RGB').getcolors(1 << 24)}",
+      "print(json.dumps({h: have.get(tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)), 0) for h in sys.argv[2:]}))",
+    ].join("\n");
+    const png = path.join(d, ".build", "embedded", "html", "01-chart.png");
+    const px = spawnSync(process.env.NOAH_PPTX_PYTHON || "python3", ["-c", count, png, "123456", "6F8FF0", "8A94A6", "4472C4", "ED7D31"],
+      { encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+    expect(px.status, px.stderr).toBe(0);
+    const n = JSON.parse(px.stdout);
+    for (const c of ["123456", "6F8FF0", "8A94A6"]) expect(n[c], c).toBeGreaterThan(5000);
+    expect(n["4472C4"] + n["ED7D31"]).toBe(0);
+  }, 300_000);
+
+  it("theme tokens e2e: a token that does not resolve is a chart-spec error naming the field; check exits 1", () => {
+    const root = tmp("chart-tokens-bad");
+    const d = makeDeck(root, "bad", {
+      "01-bad.html": chartSlide("분기별 값", {
+        type: "column", categories: ["1Q", "2Q"],
+        series: [{ name: "A", values: [80, 120], color: "var(--c-does-not-exist)" }],
+        dataLabels: { show: true, color: "var(--c-ink-500, #667085)" },
+        categoryAxis: { visible: true, labelColor: "var(--t-soft)" },
+        legend: { position: "none" },
+      }),
+    });
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { --t-soft: rgba(1, 2, 3, 0.5); }\n");
+    const r = deck(["check", d, "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.out).toBe(1);
+    const items = (JSON.parse(r.stdout).lint.items as { severity: string; rule: string; message: string }[]).filter((l) => l.rule === "chart-spec");
+    expect(items.map((l) => [l.severity, l.message]).sort()).toEqual([
+      ["error", "categoryAxis.labelColor: var(--t-soft) must resolve to an opaque colour (got rgba(1, 2, 3, 0.5))"],
+      ["error", "dataLabels.color: var(--c-ink-500, #667085) is not a colour token — write exactly var(--token-name), without a fallback, or a literal RRGGBB"],
+      ["error", "series[0].color: var(--c-does-not-exist) is not defined for this chart — define it in deck.css or use a theme token"],
+    ]);
+    expect(r.stderr).toMatch(/LINT ERROR slide 1 \(01-bad\) chart-spec .*: series\[0\]\.color: var\(--c-does-not-exist\) is not defined for this chart/);
+  }, 300_000);
+
+  it("currentColor icons e2e: the container's CSS color is baked into the SVG without an image warning, and each icon ships as a native svgBlip", () => {
+    const root = tmp("icons");
+    const icon = (id: string, attrs: string, pathAttrs = "") =>
+      `<svg id="${id}" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ${attrs}><path ${pathAttrs}d="M20 6 9 17l-5-5"/></svg>`;
+    const at = (x: number, style: string) => `position:absolute;left:${x}px;top:200px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;${style}`;
+    const d = makeDeck(root, "ic", {
+      "01-icons.html": SLIDE(
+        '<p class="card-title" style="position:absolute;left:80px;top:80px">아이콘</p>'
+          + `<div style="${at(80, "color:#C2410C")}">${icon("ic-accent", 'fill="none" stroke="currentColor" stroke-width="2"')}</div>`
+          // black equals the standalone value: still written (a bare currentColor would ship as PNG only)
+          + `<div style="${at(160, "color:#000000")}">${icon("ic-black", 'fill="currentColor"')}</div>`
+          // translucent, authored on the path: the alpha lands in stroke-opacity
+          + `<div style="${at(240, "color:rgba(255, 255, 255, 0.6);background:#1B2A4A;border-radius:50%")}">${icon("ic-soft", 'fill="none" stroke-width="2"', 'stroke="currentColor" ')}</div>`
+          // translucent, authored ONCE on the root and inherited by the path: the path differs from the rewritten
+          // root (its alpha), so it is written too — and still never named as a page resolution
+          + `<div style="${at(320, "color:rgba(255, 255, 255, 0.6);background:#1B2A4A;border-radius:50%")}">${icon("ic-root", 'fill="none" stroke="currentColor" stroke-width="2"')}</div>`,
+      ),
+    });
+    const r = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).lint.items.filter((l: { rule: string }) => l.rule === "image")).toEqual([]);
+    const ir = JSON.parse(fs.readFileSync(path.join(d, ".build", "embedded", "ir.json"), "utf8"));
+    const svgOf = (id: string): string => {
+      const e = ir.slides[0].elements.find((x: { id: string }) => x.id === `#${id}::image`);
+      expect(e?.svg, id).toMatch(/^assets\/01-icons-img\d+\.svg$/);
+      return fs.readFileSync(path.join(d, ".build", "embedded", e.svg), "utf8");
+    };
+    const [accent, black, soft, rooted] = ["ic-accent", "ic-black", "ic-soft", "ic-root"].map(svgOf);
+    for (const s of [accent, black, soft, rooted]) expect(s).not.toMatch(/currentcolor/i);
+    expect(accent).toContain('stroke="#C2410C"');
+    expect(accent).toContain('<path d="M20 6 9 17l-5-5"/>'); // an opaque inherited paint: nothing to write on the path
+    expect(black).toContain('fill="#000000"');
+    expect(soft).toMatch(/<path stroke="#FFFFFF" [^>]*stroke-opacity="0\.6"/);
+    expect(rooted).toMatch(/^<svg [^>]*stroke="#FFFFFF"[^>]*stroke-opacity="0\.6"/);
+    expect(rooted).toMatch(/<path d="M20 6 9 17l-5-5" stroke="#FFFFFF" stroke-opacity="0\.6"\/>/);
+    const slide = readZip(fs.readFileSync(path.join(d, "ic.pptx"))).get("ppt/slides/slide1.xml")!.toString("utf8");
+    expect(slide.match(/<asvg:svgBlip /g)).toHaveLength(4);
+  }, 300_000);
+
+  /** {colour: count} of exact RRGGBB pixels in a PNG (Pillow). */
+  const pixelCounts = (png: string, colors: string[]): Record<string, number> => {
+    const count = [
+      "import json, sys", "from PIL import Image",
+      "have = {c: n for n, c in Image.open(sys.argv[1]).convert('RGB').getcolors(1 << 24)}",
+      "print(json.dumps({h: have.get(tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)), 0) for h in sys.argv[2:]}))",
+    ].join("\n");
+    const px = spawnSync(process.env.NOAH_PPTX_PYTHON || "python3", ["-c", count, png, ...colors],
+      { encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+    expect(px.status, px.stderr).toBe(0);
+    return JSON.parse(px.stdout);
+  };
+
+  it("theme tokens e2e: a token that needs the page — light-dark(), color-mix() with currentcolor — gives the IR exactly the colour the preview drew", () => {
+    const root = tmp("chart-tokens-ctx");
+    const spec = {
+      type: "column", grouping: "clustered", categories: ["1Q", "2Q", "3Q"],
+      series: [
+        { name: "2025년", values: [80, 120, 140], color: "var(--t-ld)" },
+        { name: "2026년", values: [90, 130, 150], color: "var(--t-mix)" },
+      ],
+      dataLabels: { show: false },
+      valueAxis: { visible: false, min: 0, max: 200 },
+      categoryAxis: { visible: true, labelColor: "3F4A5C", sizePx: 14, lineColor: "C9D0DB" },
+      legend: { position: "none" },
+    };
+    // currentcolor inside the mix is the CHART's colour: only a probe in the page knows it
+    const d = makeDeck(root, "tc", {
+      "01-chart.html": chartSlide("분기별 값", spec, "{chart}", "position:absolute;left:80px;top:160px;width:1000px;height:400px;color:#2A52D9"),
+    });
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { --t-ld: light-dark(#D94A2A, #2AD94A); --t-mix: color-mix(in srgb, currentcolor 70%, #000000); }\n");
+    const r = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).lint.items.filter((l: { rule: string }) => l.rule === "chart-spec")).toEqual([]);
+    const ir = JSON.parse(fs.readFileSync(path.join(d, ".build", "embedded", "ir.json"), "utf8"));
+    const [ld, mix] = ir.slides[0].elements.find((e: { kind: string }) => e.kind === "chart").spec.series.map((s: { color: string }) => s.color);
+    // the page's colour scheme is light; a context-free canvas read both values as opaque black
+    expect(ld).toBe("D94A2A");
+    expect(mix).toMatch(/^[0-9A-F]{6}$/);
+    expect(mix).not.toBe("000000");
+    // lib/chart.js drew the bars of the reference render in exactly the IR's colours, and the native chart has them
+    const n = pixelCounts(path.join(d, ".build", "embedded", "html", "01-chart.png"), [ld, mix]);
+    for (const c of [ld, mix]) expect(n[c], c).toBeGreaterThan(5000);
+    const z = readZip(fs.readFileSync(path.join(d, "tc.pptx")));
+    const xml = [...z.keys()].filter((k) => /^ppt\/charts\/chart\d+\.xml$/.test(k)).map((k) => z.get(k)!.toString("utf8")).join("\n");
+    for (const c of [ld, mix]) expect(xml, c).toContain(`<a:srgbClr val="${c}"`);
+  }, 300_000);
+
+  it("theme-link e2e: a slide of a deck with deck.css that does not link it, or links it before base.css, warns in check and build and fails neither", () => {
+    const root = tmp("theme-link");
+    const body = (t: string) => `<p class="card-title" style="position:absolute;left:80px;top:80px">${t}</p>`;
+    const deckLink = '<link rel="stylesheet" href="../deck.css">';
+    const d = makeDeck(root, "tl", {
+      "01-ok.html": SLIDE(body("연결됨"), deckLink),
+      "02-missing.html": SLIDE(body("연결 안 됨")),
+      "03-first.html": SLIDE(body("순서 틀림")).replace('<link rel="stylesheet" href="../theme/base.css">', `${deckLink}\n<link rel="stylesheet" href="../theme/base.css">`),
+    });
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { --c-brand-600: #0F766E; }\n");
+    const themeLink = (stdout: string) => (JSON.parse(stdout).lint.items as { slide: number; profile: string | null; severity: string; rule: string; message: string }[])
+      .filter((l) => l.rule === "theme-link").map((l) => [l.slide, l.profile, l.severity, l.message]);
+    const want = [
+      [2, null, "warn", "this slide does not link ../deck.css, so it shows the kit's default theme, not the deck's: add <link rel=\"stylesheet\" href=\"../deck.css\"> after the ../theme/fonts.css link"],
+      [3, null, "warn", "this slide links ../deck.css before ../theme/base.css, so the kit's default theme overrides the deck's: link ../deck.css last, after ../theme/base.css and ../theme/fonts.css"],
+    ];
+    const c = deck(["check", d, "--profile", "both", "--json"], {}, { timeout: 300_000 });
+    expect(c.code, c.stderr).toBe(0);
+    expect(themeLink(c.stdout)).toEqual(want); // once per slide, not per profile
+    expect(c.stderr).toContain("LINT WARN slide 2 (02-missing) theme-link: this slide does not link ../deck.css");
+    const only = deck(["check", d, "--only", "01-ok", "--json"], {}, { timeout: 300_000 });
+    expect(only.code, only.stderr).toBe(0);
+    expect(themeLink(only.stdout)).toEqual([]);
+    const b = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(b.code, b.stderr).toBe(0);
+    expect(themeLink(b.stdout)).toEqual(want);
+  }, 300_000);
+
+  it("theme-color e2e: --pptx-dk1 lighter than --pptx-lt1 warns — the slots are semantic", () => {
+    const root = tmp("theme-color");
+    const d = makeDeck(root, "tcol", {
+      "01-a.html": SLIDE('<p class="card-title" style="position:absolute;left:80px;top:80px">슬롯</p>', '<link rel="stylesheet" href="../deck.css">'),
+    });
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { --pptx-dk1: #F2F5FA; --pptx-lt1: #0A0E1A; }\n");
+    const r = deck(["check", d, "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    const items = (JSON.parse(r.stdout).lint.items as { slide: number; severity: string; rule: string; message: string }[]).filter((l) => l.rule === "theme-color");
+    expect(items.map((l) => [l.slide, l.severity, l.message])).toEqual([[1, "warn",
+      "--pptx-dk1 (#F2F5FA) is lighter than --pptx-lt1 (#0A0E1A): the slots are semantic — dk1 is the dark text/background colour and lt1 the light one, whatever the page colour (PowerPoint gives a dark slide's text lt1) — swap them in deck.css"]]);
+    // the kit's own slots are semantic
+    fs.writeFileSync(path.join(d, "deck.css"), ":root { }\n");
+    const ok = deck(["check", d, "--json"], {}, { timeout: 300_000 });
+    expect((JSON.parse(ok.stdout).lint.items as { rule: string }[]).filter((l) => l.rule === "theme-color")).toEqual([]);
+  }, 300_000);
+
+  it("dark colour map e2e: dark slides and layouts map text to lt1, a light slide on a dark layout keeps the identity map, a fill's default text is the more legible theme colour", () => {
+    const root = tmp("clrmap");
+    const at = (x: number, y: number, w: number, h: number, style: string) => `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;${style}`;
+    const slideOn = (layout: string, bg: string, body: string) =>
+      SLIDE(body).replace('<main class="slide" data-layout="본문">', `<main class="slide" data-layout="${layout}" style="background:${bg}">`);
+    const text = (t: string, color: string) => `<p class="card-title" style="position:absolute;left:80px;top:80px;color:${color}">${t}</p>`;
+    // #mark is identical on every 표지 slide: lifted into that layout from the LIGHT first slide, so its default text
+    // is chosen again on the layout's (dark) map
+    const mark = `<div id="mark" style="${at(1040, 600, 160, 48, "background:#FFFFFF")}"></div>`;
+    const d = makeDeck(root, "cmap", {
+      "01-cover.html": slideOn("표지", "#FFFFFF", text("밝은 표지", "#111A2E") + mark),
+      "02-dark.html": slideOn("표지", "#0A0E1A", text("어두운 슬라이드", "#FFFFFF") + mark
+        + `<div id="chip" style="${at(80, 200, 200, 120, "background:#FFFFFF")}"></div><div id="navy" style="${at(400, 200, 200, 120, "background:#1A2759")}"></div>`),
+      "03-dark.html": slideOn("표지", "#0A0E1A", text("두 번째 어두운 슬라이드", "#FFFFFF") + mark),
+      "04-light.html": slideOn("본문", "#FFFFFF", text("밝은 본문", "#111A2E")
+        + `<div id="navy2" style="${at(80, 200, 200, 120, "background:#1A2759")}"></div><div id="white2" style="${at(400, 200, 200, 120, "background:#FFFFFF;border:1px solid #C9D0DB")}"></div>`),
+    });
+    const r = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).fidelity.status).toBe("pass"); // clrmap + default-text, both drift: --strict blocks them
+    const buildDir = path.join(d, ".build", "embedded");
+    const { dk1, lt1 } = JSON.parse(fs.readFileSync(path.join(buildDir, "ir.json"), "utf8")).theme.colors;
+    expect([dk1, lt1]).toEqual([expect.stringMatching(/^[0-9A-F]{6}$/), "FFFFFF"]);
+    const z = readZip(fs.readFileSync(path.join(d, "cmap.pptx")));
+    const xml = (part: string) => z.get(part)!.toString("utf8");
+    const MAP = (bg1: string, tx1: string, bg2: string, tx2: string) => `<p:clrMapOvr><a:overrideClrMapping bg1="${bg1}" tx1="${tx1}" bg2="${bg2}" tx2="${tx2}" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>`;
+    const [DARK, LIGHT, INHERIT] = [MAP("dk1", "lt1", "dk2", "lt2"), MAP("lt1", "dk1", "lt2", "dk2"), "<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>"];
+    const mapOf = (part: string) => /<p:clrMapOvr>.*?<\/p:clrMapOvr>/.exec(xml(part))?.[0];
+    expect([1, 2, 3, 4].map((n) => mapOf(`ppt/slides/slide${n}.xml`))).toEqual([LIGHT, DARK, DARK, INHERIT]);
+    const layouts = [...z.keys()].filter((k) => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(k));
+    const layoutNamed = (name: string) => layouts.find((k) => xml(k).includes(`<p:cSld name="${name}">`))!;
+    expect(mapOf(layoutNamed("표지"))).toBe(DARK);
+    expect(mapOf(layoutNamed("본문"))).toBe(INHERIT);
+    // the default run colour of each fill shape, found through the object map
+    const map = JSON.parse(fs.readFileSync(path.join(buildDir, "deck.map.json"), "utf8"));
+    const defaultText = (ir: string): string | null => {
+      const part = map.parts.find((p: { objects: { ir: string }[] }) => p.objects.some((o) => o.ir === ir));
+      const id = part.objects.find((o: { ir: string }) => o.ir === ir).shapeId;
+      const sp = [...xml(part.part).matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map((m) => m[0]).find((b) => b.includes(`<p:cNvPr id="${id}" `))!;
+      expect(sp, ir).toBeTruthy();
+      return /<a:lstStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="([0-9A-F]{6})"\/>/.exec(sp)?.[1] ?? (sp.includes("<a:lstStyle/>") ? null : "unexpected");
+    };
+    expect(map.parts.find((p: { objects: { ir: string }[] }) => p.objects.some((o) => o.ir === "#mark::bg")).kind).toBe("layout");
+    expect(Object.fromEntries(["#mark::bg", "#chip::bg", "#navy::bg", "#navy2::bg", "#white2::bg"].map((id) => [id, defaultText(id)]))).toEqual({
+      "#mark::bg": dk1, // white on the dark 표지 layout: its map gives lt1, so the dark colour is written
+      "#chip::bg": dk1, // white on a dark slide: likewise
+      "#navy::bg": null, // navy on a dark slide: tx1 = lt1 already
+      "#navy2::bg": lt1, // navy on a light slide: white, as before
+      "#white2::bg": null, // white on a light slide: tx1 = dk1 already
+    });
+    // the office-rules gate checked every override (CLR-01)
+    const logs = path.join(d, ".build", "logs");
+    const office = JSON.parse(fs.readFileSync(path.join(logs, fs.readdirSync(logs).sort().at(-1)!, "gates", "office-rules.json"), "utf8"))[0];
+    expect(office.summary.checks_run["CLR-01"]).toBeGreaterThanOrEqual(6);
+    expect(office.findings.filter((f: { check: string }) => f.check === "CLR-01")).toEqual([]);
   }, 300_000);
 
   it("no host name resolves in the browser: the converter's --host-resolver-rules parses (Playwright's quoted copy does not)", () => {

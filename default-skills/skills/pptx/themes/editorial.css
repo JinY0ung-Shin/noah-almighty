@@ -1,0 +1,78 @@
+/* themes/editorial.css — Editorial: a warm ivory page, espresso ink and a terracotta primary with a mustard accent;
+ * outlined cards on a paper-like surface, small corners, no shadows. Warm and human, like a magazine spread.
+ * Fits: culture and people, brand stories, workshops and retrospectives.
+ *
+ * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
+ * Every theme defines the same tokens; slides and the kit's components colour everything through them.
+ * For a brand theme, copy the closest theme and change its values, then re-check the contrast pairs
+ * (reference/AUTHORING.md §9). */
+:root {
+  /* Brand: 600 = primary (text, marks, bars), 700 = text on a brand tint, 900 = the dark emphasis surface,
+     950 = the darkest (the section divider's gradient end), 50/100 = tints, 200/300 = outlines. */
+  --c-brand-950: #221109;
+  --c-brand-900: #3A1D12;
+  --c-brand-800: #5C2A18;
+  --c-brand-700: #8A3719;
+  --c-brand-600: #AE4C24;
+  --c-brand-500: #CB6A3D;
+  --c-brand-400: #DE9068;
+  --c-brand-300: #EBB597;
+  --c-brand-200: #F1D2C0;
+  --c-brand-100: #F7E3D6;
+  --c-brand-50:  #FBEFE6;
+
+  /* Accent: one focal element per slide. 700 small text / a mark on the page, 600 a data mark on the surface,
+     500 on the dark emphasis surface, 300 the light end of an accent gradient, 100 a tinted cell. */
+  --c-accent-700: #855C00;
+  --c-accent-600: #B07E00;
+  --c-accent-500: #E4A82B;
+  --c-accent-300: #F2CB70;
+  --c-accent-100: #FAEBC6;
+
+  /* Neutrals: 900 titles and big numbers, 700 body, 600 secondary, 500 captions (>= 4.5:1), 400 decoration,
+     300 axis and connector lines, 200 borders, 100 dividers, 50 the content page. */
+  --c-ink-900: #231A14;
+  --c-ink-800: #342820;
+  --c-ink-700: #4A3D33;
+  --c-ink-600: #5D5045;
+  --c-ink-500: #75665A;
+  --c-ink-400: #A89886;
+  --c-ink-300: #CFC2B0;
+  --c-ink-200: #E3D8C7;
+  --c-ink-100: #EDE4D6;
+  --c-ink-50:  #F6F1E8;
+
+  /* Deltas: green = favourable, red = unfavourable (text colour on its own 50 tint). */
+  --c-up-600:   #2E7443;
+  --c-up-50:    #E5F0E3;
+  --c-down-600: #B0281F;
+  --c-down-50:  #F9E5E0;
+
+  /* Data: prior period / alternative, current, forecast, the darkest category (>= 3:1 on the surface). */
+  --c-series-prev:   #948576;
+  --c-series-curr:   var(--c-brand-600);
+  --c-series-fcst:   #D37269;
+  --c-series-strong: var(--c-brand-900);
+
+  /* Surfaces and on-colours. */
+  --c-surface: #FFFCF6;
+  --c-on-fill: var(--c-white);
+  --card-border: 1px solid var(--c-ink-200);
+  --c-mark-b: rgba(228, 168, 43, 0.90);
+  --c-accent-soft: rgba(228, 168, 43, 0.50);
+
+  /* Cover and closing: the gradient and the translucent decoration drawn on it. */
+  --c-cover-from:  var(--c-brand-950);
+  --c-cover-to:    #4E2A1A;
+  --c-cover-halo:  rgba(228, 168, 43, 0.12);
+  --c-cover-orbit: rgba(242, 203, 112, 0.80);
+  --c-cover-fcst:  rgba(222, 144, 104, 0.55);
+
+  /* Shape. */
+  --radius-card: 10px;
+  --radius-box:  8px;
+  --radius-sm:   3px;
+  --radius-pill: 999px;
+  --shadow-card:  none;
+  --shadow-sheet: none;
+}

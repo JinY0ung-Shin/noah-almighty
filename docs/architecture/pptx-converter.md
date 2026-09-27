@@ -49,14 +49,15 @@
   The skill around it: `SKILL.md`, `scripts/deck.sh` (exports `PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1`,
   then `exec node …/converter/tools/deck.mjs "$@"`; always invoked as `bash …/deck.sh`, so the exec bit does not
   matter), `scripts/render_deck.sh`, `reference/{AUTHORING,EDITING,python-pptx}.md`,
-  `examples/{business-review,layouts,handbook}/`.
+  `examples/{business-review,layouts,handbook}/` (each with the `classic` theme as its `deck.css`), and
+  `themes/{classic,mono,editorial,midnight,forest,violet}.css` (see "Themes" below).
 - **Deck root** = a folder in the agent's workspace — the conversation scratch workspace (cwd), or, when a
   repository is open, the scratch workspace listed as an additional working directory unless the user wants the
   deck committed. Both are `share_file` roots.
   ```
   <deck>/                  ASCII name ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ (the Korean title goes in share_file `name`)
     slides/NN-name.html    NN = 01…60, order = numeric prefix; a bad or duplicate NN is an error
-    deck.css               optional, linked as ../deck.css (palette/brand overrides)
+    deck.css               the theme: a copy of one of the skill's themes/*.css, linked as ../deck.css
     assets/                optional, ../assets/<file> (≤ 20 MB each)
     .build/                converter scratch, safe to delete; carries .gitignore = "*"
       check/<profile>/…, check/report.json, <profile>/{ir.json, html/, assets/, overview-N.png, report.json, …}
@@ -72,6 +73,47 @@
 - **Hygiene.** The `.gitignore` files make a deck built inside an open repository stage only `slides/`,
   `deck.css`, `assets/` and optionally the `.pptx`; `build` regenerates the previews. A deck folder inside the
   skill directory is refused (exit 2, "copy the example first").
+
+## Themes
+- **Why.** Every deck came out in the one look of the examples (royal blue, navy, amber — 92–97 % of the colours of
+  seven agent-built decks on unrelated topics were the base palette): the agent copies an example and never edited its
+  colours, most of which were literal hex. A theme is now a planned choice (SKILL.md §2–§3: pick by topic, audience
+  and tone; the user's words and brand colours win; `classic` is for formal business reporting, not a fallback), and
+  switching it is one `cp` over `deck.css`.
+- **Mechanism: tokens all the way down.** `theme/base.css` declares the palette (brand 950…50, accent 700/600/500/
+  300/100, ink 900…50, deltas, four data colours) plus role tokens (`--c-surface`, `--c-on-fill`, `--card-border`,
+  `--c-mark-b`, `--c-accent-soft`, the cover gradient and its decoration) and shape tokens (radii, shadows) with the
+  `classic` values; its components and every example slide colour everything through them — `var(--c-…)` in CSS,
+  `"var(--c-…)"` in `data-chart` colours (resolved by the extractor and `lib/chart.js`, CONTRACT.md ChartSpec), and
+  `stroke="currentColor"` icons (the serializer bakes the container's colour into the picture). An emphasis card is
+  `.card.card--emphasis`; the card outline is declared as `:where(.card) { border: var(--card-border) }` (zero
+  specificity), so a slide rule that borders a card still wins. The type scale, spacing and grid are deliberately NOT
+  themed: they carry the fit guarantees (malgun widths, line boxes), so a theme cannot introduce an overflow the
+  examples do not already pass.
+- **The token refactor is value-preserving.** base.css's computed values are unchanged, so the frozen self-test decks
+  (which link base.css) keep a bit-identical IR — `selftest --fail-on-drift` is the proof. The dark emphasis surface,
+  the cover, the section divider and the closing stay dark in every theme, so white overlays written on them work
+  everywhere; `midnight` inverts the other roles (light ink scale, dark surface and tints, a dark `--c-on-fill`) but
+  keeps the PowerPoint slots SEMANTIC (dk1 = its near-black page, lt1 = its light ink): the builder gives every dark
+  layout and slide PowerPoint's inverted colour map (bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2), so a text box a user inserts
+  there is light, a table's text dark on its light cells, and an empty fill shape carries whichever of dk1/lt1 reads
+  on it (`shapes.py` `legible_text_slot`). The same map lands on classic's dark cover, divider and closing.
+- **One audit, two users: `scripts/theme-check.mjs`** (skill-side, node, no deps, read-only). The agent runs it on a
+  custom `deck.css` (brand colours; SKILL §3, AUTHORING §9): the WCAG pairs the kit and the examples draw — text
+  4.5:1, marks 3:1, including the translucent-white stacks on the dark surfaces (glass rows/boxes/pills, 56/64/72 %
+  text, 40 % marks) — the data colours that share a chart (CIE76 ΔE ≥ 20), semantic PowerPoint slots (dk1/dk2 darker
+  than lt1/lt2), and hue families (a brand- or accent-hued token > 45° off its anchor = `WARN hue leftover?`, the
+  classic-blue cover left in a red brand deck). Exit 0/1/2 = ok/failed/unreadable. The tests import the same module,
+  so the shipped themes pass exactly what the agent is told to pass.
+- **Guards** (`tests/pptx-skill.test.ts`): each theme is one `:root` block of tokens base.css declares, sets the same
+  token set as `classic`, and `classic` sets every themable base.css token (= the base.css defaults), so no theme
+  inherits a classic value by omission; every theme passes `theme-check.mjs` with no failure AND no warning; the
+  example charts' tokens resolve to opaque colours in every theme; the example slides carry no literal colour (no hex,
+  named colour or `hsl()`-style value in any colour-bearing declaration — only `rgba(255, 255, 255, a)` overlays),
+  their icons are `currentColor`, they link `../deck.css` and ship `deck.css` = `themes/classic.css`; the theme table
+  in SKILL.md carries each theme file's own `Fits:` line. Every example × theme × profile builds with `--strict`
+  (checked by hand when a theme or example changes; the Docker smoke builds every theme over two examples and
+  validates them with the Open XML SDK).
 
 ## CLI
 The block between the markers is generated from `node default-skills/skills/pptx/converter/tools/deck.mjs --help`
@@ -164,7 +206,10 @@ environment (all optional):
   wrapped-title pairs), `soft-wrap` warnings (a two-line text cut inside a word), and the listed soft wraps (with
   " / " at each break) and `tableCells` (< 30 % free width). The malgun profile's expected `font-weight` notes are folded into one `NOTE` line
   (`isExpectedLint`; `lint.expected` in the report) — a wall of them once buried real warnings and made an agent pipe
-  the output through `grep`, hiding the exit code.
+  the output through `grep`, hiding the exit code. Beside them, from the slide FILES (`deckfs.mjs` `linkedStylesheets`,
+  a linear scan of the applied `<link rel=stylesheet>`s; `pipeline.mjs` `themeLinkLint`, check and build, report
+  only): `theme-link` warnings when `<deck>/deck.css` exists and a slide does not link it (it would show the kit's
+  default theme) or links it before `../theme/base.css` (whose `:root` would then win).
 - **Font audit ≠ toolchain health.** `inpage/60-fonts.js` counts only drawn characters (a collapsed space loads no
   face); an unrequested or still-loading toolkit face is `internal` (retry, then the log), a toolkit font FILE that
   fails to load is `toolchain` — a run-time one: the run's toolchain check had found every file (`browser.mjs`
@@ -231,7 +276,8 @@ environment (all optional):
 ## Gates and the policy
 - Gates run as parallel child processes (`python3 KIT/tools/...`) with statuses
   `pass|warn|fail|crash|skip|timeout` (and `cancelled`, which makes the whole run `cancelled`, never a verdict):
-  `office-rules` (Office-only rules the SDK does not model),
+  `office-rules` (Office-only rules the SDK does not model — incl. `CLR-01`: a `p:clrMapOvr` directly after `p:cSld`
+  with one child, an override with all twelve valid attributes; MST-04 also validates the master map's values),
   `shape-table-lint`, `chart-verify` (chart parts against the ECMA-376 XSDs + the workbook), `chart-lint`,
   `embed-verify` and `indep-check` (embedded profile only), `font-coverage`, `inspect` (editability), then
   `fidelity` (every IR element against its written object through the map).
@@ -239,7 +285,8 @@ environment (all optional):
   office-rules FAIL, shape-table-lint, chart-verify, chart-lint errors, embed-verify, indep-check ERROR,
   font-coverage, inspect ERROR, fidelity problems meaning a missing, unmapped or hidden object (the blocking check
   names are listed in KIT `docs/CONTRACT.md`), and a deck over 30 MB.
-- **Drift WARNS** (reported, the deliverable is still written): other fidelity problems, office-rules WARN,
+- **Drift WARNS** (reported, the deliverable is still written): other fidelity problems (incl. `clrmap`: each slide's
+  and layout's colour map against its background, and `default-text` on both maps), office-rules WARN,
   builder warnings. `--strict` makes exactly that drift block too. The warnings of `chart-lint`, `indep-check`,
   `font-coverage` and `inspect` (e.g. the documented EOT-charset note on every embedded deck, the large-picture
   note on a photo slide) and extractor lint warnings (e.g. malgun's expected `font-weight` notes, folded into one
@@ -491,14 +538,17 @@ environment (all optional):
 - `--update-golden` rewrites the goldens with the running Chromium; it refuses a read-only KIT, and is run only
   after a PowerPoint spot-check. The maintainer procedure is README
   [`#deck-converter-golden-drift`](../../README.md#deck-converter-golden-drift).
-- **Versioning:** `KIT/VERSION` (`1.0.0`) feeds `generator` = `noah-pptx-converter/<VERSION>`; bump it whenever
+- **Versioning:** `KIT/VERSION` (`1.1.0`: chart colour tokens resolved in page context, sanctioned `currentColor`
+  icons, translucent SVG paint keeping its alpha, dark colour maps + legible default text in the PPTX, `theme-link` /
+  `theme-color` warnings — CONTRACT.md "Version" lists what each changes; a deck using none keeps the 1.0.0 IR)
+  feeds `generator` = `noah-pptx-converter/<VERSION>`; bump it whenever
   the output changes, and regenerate the goldens only after a PowerPoint spot-check.
 
 ## Tests and the smoke
 | file | covers |
 |---|---|
-| `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget |
-| `tests/pptx-skill.test.ts` | SKILL.md / reference prose pins, frontmatter, markers, `${CLAUDE_SKILL_DIR}` confinement, example lint |
+| `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map |
+| `tests/pptx-skill.test.ts` | SKILL.md / reference prose pins, frontmatter, markers, `${CLAUDE_SKILL_DIR}` confinement, example lint (theme tokens only, `deck.css` linked), the themes (token completeness, `classic` = base.css, the contrast pairs) |
 | `tests/deck-preview.test.ts` (+ `routes-chat`, `chat-files`, `chat-images`) | the sidecar loader's edge cases, the `share_file` branches and texts |
 | `tests/deck-toolchain.test.ts` (+ `agent-core`, `agent-tools`, `system-manual`) | the probe (injected spawn/clock), memo + async retry, env allowlist, modes, authoring status; prompt/describe_system/manual branches and size caps |
 | `tests/deck-packaging.test.ts` | the static Dockerfile / compose / fontconfig / npm + Python pins / `.env.example` / ignore-file / README-anchor / smoke contract |
@@ -510,7 +560,7 @@ environment (all optional):
 - **`scripts/deck-docker-smoke.sh`** drives a built image the way production runs it (`--network none --cap-drop
   ALL --security-opt no-new-privileges:true -u node --init`): (a) `/tmp` hygiene + the record says `pass`,
   (b) probe → converter true, (c) `selftest --fail-on-drift`, (d) every `examples/*` deck × both profiles with
-  `--strict`, (e) two concurrent checks → exactly one exit 5 "already running", (f) SIGKILL `deck.mjs` mid-build →
+  `--strict`, and every other theme over `business-review` and `layouts` (embedded, `--strict`), (e) two concurrent checks → exactly one exit 5 "already running", (f) SIGKILL `deck.mjs` mid-build →
   no Chromium/Python after 10 s, the re-run is not refused and leaves `/tmp` clean, (g) the Open XML SDK 3.3.0
   validator (Microsoft365, dev/CI-only source in `scripts/openxml-validator/`) over every produced deck — 0
   errors, (h) server boot (`/api/bootstrap` 200 + the probe log line), (i) with `--baseline-image`, an upgrade

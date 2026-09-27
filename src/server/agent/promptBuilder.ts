@@ -495,7 +495,7 @@ function deckSection(request: AgentRequest): string | null {
   if (request.deckConverterEnabled) {
     return (
       "**PowerPoint decks**: for a presentation/PPT/slide deck use the `pptx` skill. " +
-      "NEW decks: write each slide as HTML/CSS with the skill's component kit, check the renders, then build with the skill's ONE converter command — the .pptx gets native, editable text, shapes, tables and charts (Pretendard embedded by default; a 맑은 고딕 build on request). " +
+      "NEW decks: pick the skill's theme that fits the topic and audience (not the default by habit), write each slide as HTML/CSS with its component kit, check the renders, then build with the skill's ONE converter command — the .pptx gets native, editable text, shapes, tables and charts (Pretendard embedded by default; a 맑은 고딕 build on request). " +
       "Deliver the built file IN PLACE with `mcp__file_output__share_file` (a `name` in the user's language): its side panel shows the converter's exact slide renders, so never rasterize or publish slides to deliver. " +
       "To change a converted deck, edit its HTML and rebuild; never patch the .pptx. " +
       "python-pptx is only for an EXISTING .pptx or a user template. " +

@@ -2,9 +2,11 @@
 // converter workflow and the describe_system markers rely on, the ${CLAUDE_SKILL_DIR} confinement (the CLI
 // substitutes it only in the SKILL.md body), the language split, and a static lint of the example slides.
 // The converter itself (converter/, scripts/deck.sh) is covered by tests/deck-converter.test.ts.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listSkillsInRoots } from "../src/server/plugins.js";
 
@@ -37,6 +39,18 @@ function filesUnder(rel: string): string[] {
 const hangul = (s: string) => (s.match(/[가-힣]/g) ?? []).length;
 const latin = (s: string) => (s.match(/[A-Za-z]/g) ?? []).length;
 const hangulShare = (s: string) => hangul(s) / Math.max(1, hangul(s) + latin(s));
+
+// The custom properties a stylesheet declares in its `:root` blocks (comments stripped), in declaration order.
+function cssTokens(css: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const block of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/:root\s*\{([^}]*)\}/g)) {
+    for (const m of block[1].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/gi)) out.set(m[1], m[2].trim());
+  }
+  return out;
+}
+const BASE_CSS = fs.readFileSync(path.join(SKILL, "converter", "theme", "base.css"), "utf8");
+const BASE_TOKENS = cssTokens(BASE_CSS);
+const THEMES = ["classic", "editorial", "forest", "midnight", "mono", "violet"];
 
 const skillMd = read("SKILL.md");
 const { frontmatter, body } = splitFrontmatter(skillMd);
@@ -146,6 +160,24 @@ describe("pptx SKILL.md body", () => {
     expect(skillMd).not.toContain("/home/");
   });
 
+  it("makes the theme a planned choice, not a default (themes/, SKILL.md §3)", () => {
+    expect(flat).toContain("Pick the deck's theme with the plan (§3)");
+    expect(flat).toContain("never the default by habit");
+    expect(flat).toContain("cp ${CLAUDE_SKILL_DIR}/themes/<theme>.css ./q3-review/deck.css");
+    expect(flat).toContain("`classic` is for formal business reporting, not a fallback");
+    expect(flat).toContain("Never reconstruct a company's brand colours from memory");
+    expect(flat).toContain("the theme you chose and one or two others that would suit this deck");
+    expect(flat).toContain("To switch the theme, copy another theme over `deck.css` and rebuild");
+    // one table row per shipped theme, whose "fits" cell is the theme file's own Fits: line (one source of truth for
+    // the choice: an agent reading either sees the same scope)
+    for (const theme of THEMES) {
+      const row = new RegExp(`^\\| \`${theme}\` \\| [^|]+ \\| ([^|]+) \\|$`, "m").exec(body);
+      expect(row, theme).not.toBeNull();
+      const fits = /^ \* Fits: (.*)\.$/m.exec(read(`themes/${theme}.css`))?.[1];
+      expect(row?.[1], theme).toBe(fits);
+    }
+  });
+
   it("points every ${CLAUDE_SKILL_DIR} path at a file or directory of the skill", () => {
     const refs = [...body.matchAll(/\$\{CLAUDE_SKILL_DIR\}\/([A-Za-z0-9._\-/]+)/g)].map((m) =>
       m[1].replace(/[./]+$/, ""),
@@ -187,9 +219,8 @@ describe("pptx reference/ and examples/", () => {
       expect(authoring, rule).toContain(`\`${rule}\``);
     }
     // the kit components the rules point at exist in base.css
-    const baseCss = fs.readFileSync(path.join(SKILL, "converter", "theme", "base.css"), "utf8");
-    for (const cls of [".pill--down-on-dark", ".data-table--text", ".pill--up-on-dark"]) {
-      expect(baseCss, cls).toContain(cls);
+    for (const cls of [".pill--down-on-dark", ".data-table--text", ".pill--up-on-dark", ".card--emphasis"]) {
+      expect(BASE_CSS, cls).toContain(cls);
       expect(authoring, cls).toContain(cls.slice(1));
     }
     for (const limit of ["60", "540 s", "150 s", "2 MB", "2,500", "20 MB", "100 MB", "30 MB", "512 MB", "2560 px"]) {
@@ -254,6 +285,123 @@ describe("pptx reference/ and examples/", () => {
   });
 });
 
+describe("pptx themes (themes/*.css: complete token sets for <deck>/deck.css)", () => {
+  const themeCss = (name: string) => read(`themes/${name}.css`);
+  const resolve = (vars: Map<string, string>, v: string, depth = 0): string => {
+    if (depth > 20) throw new Error(`var() loop at ${v}`);
+    return v.replace(/var\(\s*(--[a-z0-9-]+)\s*\)/gi, (_, n: string) => {
+      const next = vars.get(n);
+      if (next === undefined) throw new Error(`undefined ${n}`);
+      return resolve(vars, next, depth + 1);
+    });
+  };
+  const themeVars = (name: string) => new Map([...BASE_TOKENS, ...cssTokens(themeCss(name))]);
+
+  it("ships the six themes", () => {
+    expect(filesUnder("themes")).toEqual(THEMES.map((t) => `themes/${t}.css`));
+  });
+
+  for (const name of THEMES) {
+    it(`${name}: one :root block of token declarations, only tokens base.css defines, nothing remote`, () => {
+      const css = themeCss(name).replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      expect(css).toMatch(/^:root\s*\{[^{}]*\}$/);
+      for (const line of css.slice(css.indexOf("{") + 1, css.lastIndexOf("}")).split(";")) {
+        if (line.trim()) expect(line.trim(), name).toMatch(/^--[a-z0-9-]+\s*:\s*[^:]+$/);
+      }
+      expect(css).not.toMatch(/@import|url\(|https?:|\/\//i);
+      const unknown = [...cssTokens(css).keys()].filter((k) => !BASE_TOKENS.has(k));
+      expect(unknown, name).toEqual([]);
+      // every value resolves (no dangling var())
+      const vars = themeVars(name);
+      for (const k of cssTokens(css).keys()) expect(() => resolve(vars, vars.get(k) ?? ""), `${name} ${k}`).not.toThrow();
+    });
+
+    it(`${name}: sets every theme token (the same set as classic; PowerPoint slots optional)`, () => {
+      const own = [...cssTokens(themeCss(name)).keys()].filter((k) => !k.startsWith("--pptx-"));
+      expect(own).toEqual([...cssTokens(themeCss("classic")).keys()]);
+    });
+  }
+
+  it("classic IS the base.css defaults, token for token", () => {
+    const base = new Map(BASE_TOKENS);
+    const classic = themeVars("classic");
+    for (const k of cssTokens(themeCss("classic")).keys()) {
+      expect(resolve(classic, classic.get(k) ?? "").toUpperCase(), k).toBe(resolve(base, base.get(k) ?? "").toUpperCase());
+    }
+  });
+
+  // The contrast pairs, data-colour distinctness, semantic PowerPoint slots and hue families live in ONE place: the
+  // skill's own scripts/theme-check.mjs, which the agent runs on a custom deck.css (AUTHORING §9). Every shipped theme
+  // must pass it without a failure or a warning.
+  const themeCheck = import(pathToFileURL(path.join(SKILL, "scripts", "theme-check.mjs")).href);
+  for (const name of THEMES) {
+    it(`${name}: passes scripts/theme-check.mjs (contrast, distinct data colours, semantic slots, one hue per family)`, async () => {
+      const { auditTheme } = await themeCheck;
+      const r = auditTheme(BASE_CSS, themeCss(name));
+      expect(r.failures, name).toEqual([]);
+      expect(r.warnings, name).toEqual([]);
+    });
+  }
+
+  it("theme-check.mjs flags what it claims to, from the CLI the agent runs", async () => {
+    const cli = path.join(SKILL, "scripts", "theme-check.mjs");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "noah-theme-check-"));
+    try {
+      const run = (arg: string) => spawnSync(process.execPath, [cli, arg], { encoding: "utf8" });
+      expect(run(path.join(SKILL, "themes", "midnight.css")).status).toBe(0);
+      // a deck folder is read as <deck>/deck.css; low-contrast captions fail with the pair named
+      fs.writeFileSync(path.join(dir, "deck.css"), themeCss("classic").replace("--c-ink-500: #667085;", "--c-ink-500: #A0A8B8;"));
+      const bad = run(dir);
+      expect(bad.status).toBe(1);
+      expect(bad.stdout).toContain("FAIL text on the page: --c-ink-500 on --c-ink-50");
+      // a brand colour pasted into a copy of classic: every blue left behind is a hue warning, not a failure
+      fs.writeFileSync(path.join(dir, "deck.css"), themeCss("classic").replace("--c-brand-600: #2A52D9;", "--c-brand-600: #C8102E;"));
+      const brand = run(dir);
+      expect(brand.status).toBe(0);
+      for (const t of ["--c-cover-to", "--c-cover-fcst", "--c-series-fcst", "--c-brand-900"]) expect(brand.stdout).toContain(`WARN hue leftover? ${t} `);
+      // non-semantic PowerPoint slots (the dark colour lighter than the light one)
+      fs.writeFileSync(path.join(dir, "deck.css"), `${themeCss("classic")}\n:root { --pptx-dk1: #FFFFFF; --pptx-lt1: #111A2E; }`);
+      expect(run(dir).stdout).toContain("PowerPoint slots must be semantic");
+      expect(run(path.join(dir, "missing.css")).status).toBe(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("every token a theme can change is set by classic (so no theme silently inherits a classic value)", () => {
+    const themable = [...BASE_TOKENS.keys()].filter(
+      (k) => (/^--c-/.test(k) && k !== "--c-white") || /^--(radius|shadow|card)-/.test(k),
+    );
+    expect([...cssTokens(themeCss("classic")).keys()].sort()).toEqual(themable.sort());
+  });
+
+  it("the example charts' tokens resolve to an opaque colour in every theme (the converter's chart-spec rule)", async () => {
+    const { resolveToken, parseColour } = await themeCheck;
+    const used = new Set<string>();
+    for (const rel of filesUnder("examples").filter((f) => f.endsWith(".html"))) {
+      for (const m of read(rel).matchAll(/data-chart='([^']*)'/g)) {
+        for (const t of m[1].matchAll(/var\((--[a-z0-9-]+)\)/g)) used.add(t[1]);
+      }
+    }
+    expect(used.size).toBeGreaterThan(4);
+    for (const name of THEMES) {
+      const vars = themeVars(name);
+      for (const t of used) expect(parseColour(resolveToken(vars, t))[3], `${name} ${t}`).toBe(1);
+    }
+  });
+
+  it("AUTHORING §9 and the examples README name the themes", () => {
+    const authoring = prose(read("reference/AUTHORING.md"));
+    for (const theme of THEMES) expect(authoring, theme).toContain(`\`${theme}\``);
+    expect(authoring).toContain("## 9. Design system: tokens and themes");
+    expect(authoring).toContain('class="card card--emphasis');
+    expect(prose(read("examples/README.md"))).toContain("ship the `classic` theme as their `deck.css`");
+    // base.css says the same
+    expect(BASE_CSS).toContain(".card--emphasis");
+    expect(BASE_CSS).toContain("the defaults below ARE themes/classic.css");
+  });
+});
+
 describe("pptx example decks (static lint of the slide HTML)", () => {
   const decks = fs
     .readdirSync(path.join(SKILL, "examples"), { withFileTypes: true })
@@ -294,13 +442,12 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
             expect(link, link).toMatch(/^<link rel="stylesheet" href="[^"]+">$/);
             expect(allowedCss.has(/href="([^"]+)"/.exec(link)?.[1] ?? ""), link).toBe(true);
           }
-          expect(links.map((l) => /href="([^"]+)"/.exec(l)?.[1]).slice(0, 2)).toEqual([
+          // the deck's theme is its deck.css: every example slide links it last
+          expect(links.map((l) => /href="([^"]+)"/.exec(l)?.[1])).toEqual([
             "../theme/base.css",
             "../theme/fonts.css",
+            "../deck.css",
           ]);
-          if (html.includes('href="../deck.css"')) {
-            expect(fs.existsSync(path.join(deckDir, "deck.css"))).toBe(true);
-          }
 
           const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
           for (const script of scripts) {
@@ -319,6 +466,28 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
           expect(Buffer.byteLength(html)).toBeLessThan(2 * 1024 * 1024);
         });
 
+        it(`${name}: colours come from the theme tokens (no literal hex; currentColor icons)`, () => {
+          // white overlays (rgba(255, 255, 255, a)) on the dark emphasis surfaces are the one literal colour
+          expect(html.match(/#[0-9A-Fa-f]{3,8}\b/g) ?? []).toEqual([]);
+          const rgba = [...html.matchAll(/rgba?\(([^)]*)\)/g)].map((m) => m[1].replace(/\s+/g, ""));
+          for (const args of rgba) expect(args, name).toMatch(/^255,255,255,0?\.\d+$/);
+          for (const m of html.matchAll(/<svg\b[^>]*>/g)) {
+            expect(m[0], name).toContain('stroke="currentColor"');
+            expect(m[0], name).toContain('fill="none"');
+          }
+          for (const m of html.matchAll(/var\((--[a-z0-9-]+)\)/g)) expect(BASE_TOKENS.has(m[1]), `${name}: ${m[1]}`).toBe(true);
+          // no other way to write a colour either: named colours, hsl()/hwb()/lab()/oklch()/color() in any colour-bearing
+          // declaration (slide <style>, inline style=""); keywords that carry no colour are fine
+          const css = [...html.matchAll(/<style>([\s\S]*?)<\/style>|style="([^"]*)"/g)].map((m) => m[1] ?? m[2]).join(";");
+          const colourProps = /^(color|background(-color)?|border(-(top|right|bottom|left))?(-color)?|box-shadow|outline(-color)?|fill|stroke)$/;
+          for (const decl of css.replace(/\/\*[\s\S]*?\*\//g, "").split(/[;{}]/)) {
+            const m = /^\s*([a-z-]+)\s*:\s*(.+?)\s*$/.exec(decl);
+            if (!m || !colourProps.test(m[1])) continue;
+            const rest = m[2].replace(/var\(--[a-z0-9-]+\)|rgba\(255, 255, 255, 0?\.\d+\)|linear-gradient|\d+(\.\d+)?(px|deg|%)?/g, "");
+            expect(rest, `${name}: ${m[1]}: ${m[2]}`).not.toMatch(/\b(?!(solid|none|transparent|currentColor|inherit|dashed|dotted)\b)[a-z]{3,}\b|\b(hsla?|hwb|lab|lch|oklab|oklch|color)\(/i);
+          }
+        });
+
         it(`${name}: page number = slide position, stable footer id, marked sample data`, () => {
           const fields = [...html.matchAll(/data-field="slidenum">([^<]*)</g)].map((m) => m[1]);
           for (const value of fields) expect(value).toBe(String(i + 1));
@@ -328,6 +497,10 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
           }
           expect(html).toContain("샘플 데이터");
         });
+      });
+
+      it("ships the classic theme as its deck.css", () => {
+        expect(fs.readFileSync(path.join(deckDir, "deck.css"), "utf8")).toBe(read("themes/classic.css"));
       });
 
       it("repeats one identical footer on every content slide (the builder lifts it into the layout)", () => {
@@ -351,8 +524,17 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
             const colours = [
               ...spec.series.map((x: { color?: string }) => x.color),
               ...Object.values((spec.pointColors ?? {}) as Record<string, string[]>).flat(),
+              spec.dataLabels?.color,
+              spec.valueAxis?.gridlines?.color,
+              spec.categoryAxis?.labelColor,
+              spec.categoryAxis?.lineColor,
+              spec.legend?.color,
             ].filter(Boolean);
-            for (const c of colours) expect(c, name).toMatch(/^[0-9A-F]{6}$/);
+            // theme tokens (the converter resolves them), so a theme recolours the chart
+            for (const c of colours) {
+              expect(c, name).toMatch(/^var\(--c-[a-z0-9-]+\)$/);
+              expect(BASE_TOKENS.has(/--c-[a-z0-9-]+/.exec(c)?.[0] ?? ""), `${name}: ${c}`).toBe(true);
+            }
             const pos = spec.dataLabels?.position;
             if (spec.type === "doughnut") expect(pos, name).toBeUndefined();
             if (spec.grouping === "stacked") expect(pos, name).not.toBe("outEnd");

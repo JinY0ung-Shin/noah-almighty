@@ -5,6 +5,7 @@
 <title>06 추진 일정 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Timeline: a month grid (208 px label column + 12 months x 76 px = 1120 px), one row per workstream, and the
      milestones on a rail below. Every coordinate is relative to .gantt (x 80, y 184); a bar spanning months a..b
@@ -26,7 +27,7 @@
   .grid-line { top: 53px; width: 1px; height: 280px; background: var(--c-ink-200); }
 
   /* the go-live line: the key milestone's month centre, behind the bars (painted first), down to the rail */
-  .golive { left: 853px; top: 53px; width: 2px; height: 306px; background: rgba(255, 138, 61, 0.40); }
+  .golive { left: 853px; top: 53px; width: 2px; height: 306px; background: var(--c-accent-soft); }
   .track { left: 0; width: 1120px; height: 56px; border-bottom: 1px solid var(--c-ink-100); }
   .track-name { position: absolute; left: 0; top: 6px; width: 192px; font-size: var(--fs-body-sm);
                 line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-ink-900); }
@@ -35,7 +36,7 @@
   .bar { position: absolute; top: 12px; height: 32px; padding: 6px 16px; border-radius: 16px;
          background: var(--c-brand-600); }
   .bar--shared { background: var(--c-ink-500); }
-  .bar-label { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 600; color: var(--c-white);
+  .bar-label { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 600; color: var(--c-on-fill);
                white-space: nowrap; }
 
   .rail-name { left: 0; top: 356px; width: 192px; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm);
@@ -64,8 +65,8 @@
 
   <section class="gantt">
     <div class="kinds" data-group="범례">
-      <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">전략 과제</p></div>
-      <div class="legend-item"><div class="swatch" style="background:#667085"></div><p class="legend-label">공통 과제</p></div>
+      <div class="legend-item"><div class="swatch" style="background: var(--c-brand-600)"></div><p class="legend-label">전략 과제</p></div>
+      <div class="legend-item"><div class="swatch" style="background: var(--c-ink-500)"></div><p class="legend-label">공통 과제</p></div>
     </div>
     <p class="quarter" style="left: 208px">1분기</p>
     <p class="quarter" style="left: 436px">2분기</p>

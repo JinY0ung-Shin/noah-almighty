@@ -56,8 +56,10 @@ question (exit 0 = converter installed, exit 4 = not; it starts no browser; its 
   reply list the sample figures to replace and offer to rebuild with the real ones.
 - Confirm the outline first only when the request is large or ambiguous AND the chat is interactive; otherwise
   decide and build — a finished draft is easier to correct than a list of questions.
+- Pick the deck's theme with the plan (§3): a look that fits the topic, the audience and the tone — never the
+  default by habit.
 
-## 3. Deck folder
+## 3. Deck folder and theme
 
 One folder per deck with an ASCII name (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, e.g. `q3-review`). The title in
 the user's language goes into `share_file`'s `name`, never into the folder name.
@@ -65,7 +67,7 @@ the user's language goes into `share_file`'s `name`, never into the folder name.
 ```
 q3-review/
   slides/01-cover.html, 02-kpi.html …   NN-name.html, NN = 01…60, unique; numeric order = slide order
-  deck.css                              optional: palette/brand token overrides, linked as ../deck.css
+  deck.css                              the theme: a copy of one of the skill's themes (linked as ../deck.css)
   assets/                               optional: images, referenced as ../assets/<file>
   .build/                               converter scratch: renders, reports, logs (safe to delete)
   q3-review.pptx, q3-review.preview/    written by build (-malgun suffix for the malgun profile)
@@ -82,15 +84,44 @@ q3-review/
   as needed), then delete, renumber and edit slides — rewriting a slide's content is usually one Write of the whole
   file, not many small edits. Never build inside `${CLAUDE_SKILL_DIR}` — it is read-only and the converter refuses
   it.
+- Then give the deck its theme: `cp ${CLAUDE_SKILL_DIR}/themes/<theme>.css ./q3-review/deck.css` (the examples ship
+  `classic`). Every slide links `../deck.css`, and every colour, surface, radius and shadow in the kit and the
+  examples comes from its tokens, so the copy restyles the whole deck — covers, cards, tables, charts and icons.
+
+| theme | look | fits |
+|---|---|---|
+| `classic` | royal blue, navy emphasis, one amber accent; soft white cards on a cool grey page | business results, plans and budgets, formal reports to management |
+| `mono` | black and greys on white, one signal-red accent; hairline cards, 4 px corners, square tags | strategy summaries, research and analysis, design reviews, executive one-pagers |
+| `editorial` | warm ivory page, espresso and terracotta, mustard accent; outlined paper cards | culture and people, brand stories, workshops and retrospectives |
+| `midnight` | dark page and cards, electric blue, cyan accent | technology, engineering, AI and product demos, conference talks |
+| `forest` | deep green with mint tints, sunflower accent | ESG and sustainability, public sector, healthcare, safety, training and education |
+| `violet` | vivid violet, plum emphasis, coral-pink accent; large corners | marketing and campaigns, events and launches, creative proposals |
+
+- Choose by the topic, the audience and the tone of the request; `classic` is for formal business reporting, not a
+  fallback. The user's own words win: a named theme or look ("어둡게", "심플하게", "따뜻한 느낌"), or brand colours.
+- Brand colours the user gives, or a look no theme has (a dark deck that is not about technology): copy the closest
+  theme and replace its brand and accent values in `deck.css` — the main colour becomes the brand ramp, a second
+  colour the accent, and every token that carries the old hue follows (AUTHORING §9 lists them). Then run
+  `node ${CLAUDE_SKILL_DIR}/scripts/theme-check.mjs ./q3-review`: fix every FAIL (contrast, data colours too alike),
+  replace every `hue leftover?` WARN. Never reconstruct a company's brand colours from memory — use the ones the
+  user states, or a theme.
+- The cover and the closing are the slides people remember: keep the theme, but re-compose the example's decorative
+  motif around the topic (its bars stand for real figures; a deck without such figures gets a motif of its own —
+  circles, a ring, a band of shapes, a photo from the user).
 
 ## 4. Author
 
 Read `${CLAUDE_SKILL_DIR}/reference/AUTHORING.md` once per conversation, before writing the first slide: its rules
 are what keep every object native and editable. The essentials:
 
-- Skeleton: one `<main class="slide">` (1280×720); link exactly `../theme/base.css` and `../theme/fonts.css`
-  (plus `../deck.css` when the deck has one); the only script is `../lib/chart.js`, on chart slides.
+- Skeleton: one `<main class="slide">` (1280×720); link exactly `../theme/base.css`, `../theme/fonts.css` and
+  `../deck.css` (the theme — a slide without it shows the default look); the only script is `../lib/chart.js`, on
+  chart slides.
 - Type: inherit `var(--font-sans)`; weights 400/600/700/800 only; explicit px line-heights ≥ 1.33 × font size.
+- Colour through the theme's tokens: `var(--c-…)` in CSS and in inline `style` attributes, `"var(--c-series-curr)"`
+  for a `data-chart` colour, `stroke="currentColor"` on an icon (it takes its container's CSS `color`); on a box that
+  must follow the theme, `var(--c-surface)`, never `var(--c-white)`. A literal colour stays behind when the theme
+  changes — only for something that must not follow it (a logo's own colour).
 - Text lives in leaf text blocks; line breaks are `<br>`; size boxes for text up to ~20 % wider (the 맑은 고딕
   profile) and keep ≥ 2 % free room.
 - Only CSS with a PowerPoint equivalent (no filter, blend modes, clip-path, mask, radial/conic gradients,
@@ -171,20 +202,21 @@ Only after `build` exited 0:
   bound to those exact bytes, and the card's side panel then shows the converter's exact slide renders. Never
   rasterize or publish slide images yourself to deliver.
 - Limits: 3 files per turn, 30 MB per file (the build already refuses a deck over 30 MB).
-- Tell the user, in their language: the file is ready, with one line per slide; every text box, shape, table and
-  chart is editable in PowerPoint (charts keep their data: right-click → Edit Data, "데이터 편집"); Pretendard
-  travels inside the file, so desktop PowerPoint shows it even where it is not installed; PowerPoint for the web
-  and Teams/SharePoint previews may show a similar font instead. For a malgun build: the chat preview uses a
-  look-alike font; the file names 맑은 고딕 and embeds nothing, so PowerPoint on Windows — and PowerPoint for the web
-  or Teams/SharePoint previews opened on a Windows PC — show the real 맑은 고딕, and a PC without it shows a similar
-  Korean font.
+- Tell the user, in their language: the file is ready, with one line per slide; the theme you chose and one or two
+  others that would suit this deck (a rebuild away); every text box, shape, table and chart is editable in PowerPoint
+  (charts keep their data: right-click → Edit Data, "데이터 편집"); Pretendard travels inside the file, so desktop
+  PowerPoint shows it even where it is not installed; PowerPoint for the web and Teams/SharePoint previews may show a
+  similar font instead. For a malgun build: the chat preview uses a look-alike font; the file names 맑은 고딕 and embeds
+  nothing, so PowerPoint on Windows — and PowerPoint for the web or Teams/SharePoint previews opened on a Windows PC —
+  show the real 맑은 고딕, and a PC without it shows a similar Korean font.
 - When the user will edit the deck, pass on what matters from `${CLAUDE_SKILL_DIR}/reference/EDITING.md` (longer
   text shrinks to fit, fixed chart axes, the footer lives in the slide layout, …).
 
 ## 8. Changes
 
-Edit the slide HTML, `build` again and share the new file the same way. Never patch a converted .pptx with
-python-pptx: the next build discards the change, and a changed file loses its exact previews.
+Edit the slide HTML, `build` again and share the new file the same way. To switch the theme, copy another theme
+over `deck.css` and rebuild — nothing else changes. Never patch a converted .pptx with python-pptx: the next build
+discards the change, and a changed file loses its exact previews.
 
 ## 9. Existing decks and templates
 
@@ -206,10 +238,12 @@ decks when describe_system reports `converter: NOT INSTALLED`. For a self-check 
 
 ## 11. Review with the user (interactive only)
 
-To iterate on the design before delivery: publish the 1280×720 renders from `<deck>/.build/check/<profile>/html/`
-with `mcp__file_output__show_file` + `hidden: true` and embed the returned URLs in ONE `mcp__canvas__show` markdown
-artifact (`![Slide 1](<url>)` …); after a revision, re-show it with the SAME `canvasId`. Without the canvas tool,
-show a few key slides inline with `show_file`. The final deck is still delivered with `share_file` (§7).
+To iterate on the design before delivery: publish the 1280×720 renders from `<deck>/.build/check/<profile>/html/` with
+`mcp__file_output__show_file` + `hidden: true` and embed the returned URLs in ONE `mcp__canvas__show` markdown
+artifact (`![Slide 1](<url>)` …); after a revision, re-show it with the SAME `canvasId`. When the user wants to pick
+the look, check two or three fitting themes on the same slides (one copy of the deck folder per theme, `--only
+01-cover 02-…`) and show them side by side. Without the canvas tool, show a few key slides inline with `show_file`.
+The final deck is still delivered with `share_file` (§7).
 
 ## 12. When something fails
 

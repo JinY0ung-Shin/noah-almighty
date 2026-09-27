@@ -1,0 +1,78 @@
+/* themes/violet.css — Violet: a vivid violet primary with a deep plum emphasis surface and a coral-pink accent on
+ * a lavender page; white cards with a violet-tinted shadow and generous 24 px corners. Energetic and bold.
+ * Fits: marketing and campaigns, events and launches, creative proposals.
+ *
+ * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
+ * Every theme defines the same tokens; slides and the kit's components colour everything through them.
+ * For a brand theme, copy the closest theme and change its values, then re-check the contrast pairs
+ * (reference/AUTHORING.md §9). */
+:root {
+  /* Brand: 600 = primary (text, marks, bars), 700 = text on a brand tint, 900 = the dark emphasis surface,
+     950 = the darkest (the section divider's gradient end), 50/100 = tints, 200/300 = outlines. */
+  --c-brand-950: #170935;
+  --c-brand-900: #2A1260;
+  --c-brand-800: #3D1C8A;
+  --c-brand-700: #5728C2;
+  --c-brand-600: #6A38E0;
+  --c-brand-500: #8459F0;
+  --c-brand-400: #A283F5;
+  --c-brand-300: #C2AEF9;
+  --c-brand-200: #DCD0FC;
+  --c-brand-100: #ECE5FE;
+  --c-brand-50:  #F5F1FF;
+
+  /* Accent: one focal element per slide. 700 small text / a mark on the page, 600 a data mark on the surface,
+     500 on the dark emphasis surface, 300 the light end of an accent gradient, 100 a tinted cell. */
+  --c-accent-700: #BE1858;
+  --c-accent-600: #E0457B;
+  --c-accent-500: #FF6B9A;
+  --c-accent-300: #FFA9C4;
+  --c-accent-100: #FFE3EC;
+
+  /* Neutrals: 900 titles and big numbers, 700 body, 600 secondary, 500 captions (>= 4.5:1), 400 decoration,
+     300 axis and connector lines, 200 borders, 100 dividers, 50 the content page. */
+  --c-ink-900: #171429;
+  --c-ink-800: #25213B;
+  --c-ink-700: #3A3552;
+  --c-ink-600: #4F4A68;
+  --c-ink-500: #686383;
+  --c-ink-400: #A09CB5;
+  --c-ink-300: #CCC8DB;
+  --c-ink-200: #E3E0EE;
+  --c-ink-100: #EDEBF5;
+  --c-ink-50:  #F7F5FD;
+
+  /* Deltas: green = favourable, red = unfavourable (text colour on its own 50 tint). */
+  --c-up-600:   #0B7A47;
+  --c-up-50:    #E3F5EA;
+  --c-down-600: #C8322D;
+  --c-down-50:  #FDEBEA;
+
+  /* Data: prior period / alternative, current, forecast, the darkest category (>= 3:1 on the surface). */
+  --c-series-prev:   #8B86A4;
+  --c-series-curr:   var(--c-brand-600);
+  --c-series-fcst:   #9571F5;
+  --c-series-strong: var(--c-brand-900);
+
+  /* Surfaces and on-colours. */
+  --c-surface: var(--c-white);
+  --c-on-fill: var(--c-white);
+  --card-border: none;
+  --c-mark-b: rgba(255, 107, 154, 0.90);
+  --c-accent-soft: rgba(255, 107, 154, 0.45);
+
+  /* Cover and closing: the gradient and the translucent decoration drawn on it. */
+  --c-cover-from:  var(--c-brand-950);
+  --c-cover-to:    #3F1A96;
+  --c-cover-halo:  rgba(255, 107, 154, 0.16);
+  --c-cover-orbit: rgba(220, 208, 252, 0.80);
+  --c-cover-fcst:  rgba(162, 131, 245, 0.55);
+
+  /* Shape. */
+  --radius-card: 24px;
+  --radius-box:  18px;
+  --radius-sm:   6px;
+  --radius-pill: 999px;
+  --shadow-card:  0 10px 28px rgba(42, 18, 96, 0.10);
+  --shadow-sheet: 0 6px 20px rgba(42, 18, 96, 0.08);
+}

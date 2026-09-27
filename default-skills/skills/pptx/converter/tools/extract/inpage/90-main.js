@@ -62,6 +62,8 @@ function notesOf() {
 /**
  * PowerPoint theme colours (a:clrScheme) from the CSS custom properties --pptx-<slot> on :root (theme/base.css maps
  * them to the design tokens). Only slots that resolve to an opaque colour are returned; null when none is set.
+ * The slots are SEMANTIC: dk1 is the dark text / background colour and lt1 the light one, whatever the theme's page —
+ * the builder maps a dark slide's text to lt1 (its colour map), so swapped slots put dark text on it (theme-color).
  */
 function themeColorsOf() {
   const slots = ['dk1', 'lt1', 'dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'];
@@ -73,6 +75,9 @@ function themeColorsOf() {
     const c = parseColor(v);
     if (c && c.alpha >= 1) colors[k] = c.color;
     else lint('warn', 'theme-color', `--pptx-${k}: ${v} is not an opaque colour (ignored)`, ROOT);
+  }
+  if (colors.dk1 && colors.lt1 && luminance(colors.dk1) > luminance(colors.lt1)) {
+    lint('warn', 'theme-color', `--pptx-dk1 (#${colors.dk1}) is lighter than --pptx-lt1 (#${colors.lt1}): the slots are semantic — dk1 is the dark text/background colour and lt1 the light one, whatever the page colour (PowerPoint gives a dark slide's text lt1) — swap them in deck.css`, ROOT);
   }
   return Object.keys(colors).length ? { colors } : null;
 }

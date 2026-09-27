@@ -1,0 +1,88 @@
+/* themes/midnight.css — Midnight: a dark theme — near-black page and cards, light text, an electric-blue primary
+ * and a cyan accent; outlined cards without shadows. Every role is inverted: ink-900 is the LIGHTEST text,
+ * ink-50 the darkest page, brand-50/100 dark tints, brand-700 and accent-700 light text shades, and
+ * --c-on-fill is dark (text on the bright brand bars).
+ * Fits: technology, engineering, AI and product demos, conference talks.
+ *
+ * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
+ * Every theme defines the same tokens; slides and the kit's components colour everything through them.
+ * For a brand theme, copy the closest theme and change its values, then re-check the contrast pairs
+ * (reference/AUTHORING.md §9). */
+:root {
+  /* Brand: 600 = primary (text, marks, bars), 700 = text on a brand tint, 900 = the dark emphasis surface,
+     950 = the darkest (the section divider's gradient end), 50/100 = tints, 200/300 = outlines. */
+  --c-brand-950: #04060D;
+  --c-brand-900: #1A2759;
+  --c-brand-800: #223373;
+  --c-brand-700: #AFC0FF;
+  --c-brand-600: #7690FF;
+  --c-brand-500: #5872F0;
+  --c-brand-400: #4058C4;
+  --c-brand-300: #3C4F99;
+  --c-brand-200: #34467F;
+  --c-brand-100: #1C2750;
+  --c-brand-50:  #16203F;
+
+  /* Accent: one focal element per slide. 700 small text / a mark on the page, 600 a data mark on the surface,
+     500 on the dark emphasis surface, 300 the light end of an accent gradient, 100 a tinted cell. */
+  --c-accent-700: #67E8F9;
+  --c-accent-600: #22D3EE;
+  --c-accent-500: #22D3EE;
+  --c-accent-300: #A5F3FC;
+  --c-accent-100: #0E3440;
+
+  /* Neutrals: 900 titles and big numbers, 700 body, 600 secondary, 500 captions (>= 4.5:1), 400 decoration,
+     300 axis and connector lines, 200 borders, 100 dividers, 50 the content page. */
+  --c-ink-900: #F2F5FA;
+  --c-ink-800: #E1E6EF;
+  --c-ink-700: #C5CDDA;
+  --c-ink-600: #A9B3C3;
+  --c-ink-500: #8C97AA;
+  --c-ink-400: #5B667A;
+  --c-ink-300: #3B4559;
+  --c-ink-200: #29324A;
+  --c-ink-100: #1D2438;
+  --c-ink-50:  #0A0E1A;
+
+  /* Deltas: green = favourable, red = unfavourable (text colour on its own 50 tint). */
+  --c-up-600:   #4ADE80;
+  --c-up-50:    #10301F;
+  --c-down-600: #FF8E8E;
+  --c-down-50:  #3A1719;
+
+  /* Data: prior period / alternative, current, forecast, the darkest category (>= 3:1 on the surface). */
+  --c-series-prev:   #6B778C;
+  --c-series-curr:   var(--c-brand-600);
+  --c-series-fcst:   #3F67A6;
+  --c-series-strong: #C9D4FF;
+
+  /* Surfaces and on-colours. */
+  --c-surface: #111827;
+  --c-on-fill: #0A0E1A;
+  --card-border: 1px solid var(--c-ink-200);
+  --c-mark-b: rgba(34, 211, 238, 0.85);
+  --c-accent-soft: rgba(34, 211, 238, 0.45);
+
+  /* Cover and closing: the gradient and the translucent decoration drawn on it. */
+  --c-cover-from:  var(--c-brand-950);
+  --c-cover-to:    #1A2759;
+  --c-cover-halo:  rgba(118, 144, 255, 0.16);
+  --c-cover-orbit: rgba(34, 211, 238, 0.85);
+  --c-cover-fcst:  rgba(118, 144, 255, 0.45);
+
+  /* Shape. */
+  --radius-card: 16px;
+  --radius-box:  12px;
+  --radius-sm:   4px;
+  --radius-pill: 999px;
+  --shadow-card:  none;
+  --shadow-sheet: none;
+
+  /* PowerPoint theme slots stay semantic in a dark deck — dk1/dk2 the dark colours, lt1/lt2 the light ones — and the
+     converter gives every dark slide PowerPoint's dark colour map (text = lt1 on background = dk1), so a text box a
+     user inserts is light and a table's text dark on its light cells. base.css maps dk1 to ink-900, which is LIGHT
+     here: re-point the pair. */
+  --pptx-dk1: var(--c-ink-50);
+  --pptx-lt1: var(--c-ink-900);
+  --pptx-lt2: var(--c-ink-700);
+}

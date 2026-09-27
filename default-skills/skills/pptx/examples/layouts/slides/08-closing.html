@@ -5,11 +5,12 @@
 <title>08 요청 사항 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Closing: the ask, not a "thank you". Its own dark layout (data-layout="맺음"): the request as the title, what
      exactly is to be approved on the right (numbered, one fact each), and the next three dates on a rail. */
   main.slide.closing {
-    background: linear-gradient(135deg, #0A1433 0%, #1B3796 100%);
+    background: linear-gradient(135deg, var(--c-cover-from) 0%, var(--c-cover-to) 100%);
     color: var(--c-white);
   }
 
@@ -32,7 +33,7 @@
   .ask-num { flex: none; width: 32px; font-size: 22px; line-height: 32px; font-weight: 800; color: var(--c-white); }
   .ask-body { flex: 1; min-width: 0; }
   .ask-label { font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 600; letter-spacing: var(--tracking-label);
-               color: rgba(255, 255, 255, 0.60); }
+               color: rgba(255, 255, 255, 0.72); }
   .ask-text { margin-top: 2px; font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-white); }
 
   /* next steps: three dates on one rail (fixed 384 px pitch, identical in both profiles), the first one lit */

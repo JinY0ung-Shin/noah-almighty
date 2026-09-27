@@ -8,6 +8,8 @@
   profile's regular typeface, theme colours = the IR's ``theme.colors``; its 11 stock layouts, English master prompts,
   theme name and printer settings removed or replaced at the end, J2-02); custom slide layouts per slide family
   (pptxlib/layouts.py: background, repeated chrome, title prompt placeholder; the master gets the main background);
+  a dark layout or slide carries the inverted colour map (text a user types there defaults to lt1), and a fill
+  shape's default text colour is the more legible theme text colour on its fill where that map would not give it;
   one slide per IR slide on its layout; elements in paint order (shape / text / image / table / chart; a table's
   own background shape is absorbed into the table); the slide title as a title placeholder; components grouped
   (pptxlib/structure.py); speaker notes; readable object names; document properties + thumbnail
@@ -66,6 +68,7 @@ class BuildContext:
         self.chart_ctx = ChartContext(prof, log)
         self.namer = core.Namer()
         self.slide_index = 0
+        self.text = shapes.text_defaults(None)         # the current slide's colour map + theme text colours
         self.stats: dict[str, int] = {}
 
     @staticmethod
@@ -199,7 +202,8 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
     slides_ir = [s for s in ir.get("slides") or [] if isinstance(s, dict)]
     deck_title = next((t for t in (_title_of(s) for s in slides_ir) if t), "")
     ctx = BuildContext(prof, log, ir_dir)
-    n_theme = core.set_theme_colors(prs, (ir.get("theme") or {}).get("colors"), name=deck_title or None)
+    theme_colors = (ir.get("theme") or {}).get("colors")
+    n_theme = core.set_theme_colors(prs, theme_colors, name=deck_title or None)
     if n_theme:
         ctx.stat("theme:colors", n_theme)
     handlers = {"shape": shapes.add_shape, "text": text.add_text, "image": pictures.add_image,
@@ -211,6 +215,11 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
     for pl in plans:
         pl.layout = layouts.create_layout(prs, pl.name)
         shapes.set_background(pl.layout, pl.background, log.warn)
+        # a dark layout maps text to lt1, so a slide made from it (New Slide) types light text (layouts.py)
+        pl.dark = layouts.is_dark_background(pl.background)
+        core.set_clr_map_ovr(pl.layout._element, core.DARK_CLR_MAP if pl.dark else None)
+        if pl.dark:
+            ctx.stat("clrmap:dark-layout")
         pl.namer = core.Namer()
         for i in pl.slides:
             plan_of[i] = pl
@@ -231,13 +240,22 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
         slide = prs.slides.add_slide(pl.layout)
         for ph in list(slide.placeholders):          # the layout's prompt placeholders are cloned: not ours
             ph._element.getparent().remove(ph._element)
+        dark = layouts.is_dark_background(s.get("background"))
         if not layouts.same_background(s.get("background"), pl.background):
             shapes.set_background(slide, s.get("background"), log.warn)
-        elif layouts.is_dark_background(s.get("background")):
+        elif dark:
             shapes.set_background(slide, s.get("background"), log.warn)   # light text depends on it (EDIT-05)
             ctx.stat("background:pinned-dark")
         else:
             ctx.stat("background:inherited")
+        # the slide's own colour map: a dark slide carries the inverted map itself (like its pinned p:bg, whatever its
+        # layout says), so a text box a user inserts on it defaults to lt1; a light slide on a DARK layout carries the
+        # identity map explicitly, because masterClrMapping resolves through the layout (PowerPoint applies a layout's
+        # override to the slides on it); any other slide inherits
+        core.set_clr_map_ovr(slide._element, core.DARK_CLR_MAP if dark else core.LIGHT_CLR_MAP if pl.dark else None)
+        if dark:
+            ctx.stat("clrmap:dark-slide")
+        ctx.text = shapes.text_defaults(theme_colors, "lt1" if dark else "dk1")
         tree = slide.shapes._spTree
         skip = set() if first_of_family else pl.chrome_set
         elements = [e for e in s.get("elements") or [] if isinstance(e, dict)]
@@ -277,6 +295,11 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
                     done.add(ph_type)
             if pl.chrome:
                 recs = layouts.lift_chrome(pl, recs, log)
+                # lifted chrome is shown on the LAYOUT's colour map: choose its default text colour there
+                lay_text = shapes.text_defaults(theme_colors, "lt1" if pl.dark else "dk1")
+                for r in pl.records:
+                    if r.kind == "shape":
+                        shapes.set_default_text(r.node, lay_text)
         comps = split_comps + [c for c in s.get("components") or [] if isinstance(c, dict)]
         n_groups = structure.group_components(tree, recs, comps, ctx.namer, log, f"slide {ctx.slide_index}")
         if n_groups:

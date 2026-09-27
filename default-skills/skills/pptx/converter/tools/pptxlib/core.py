@@ -217,6 +217,35 @@ def set_theme_colors(prs, colors: dict | None, name: str | None = None) -> int:
     return n
 
 
+# ---------------------------------------------------------------------------------------------- colour maps
+# What the mapped theme colours (bg1, tx1, bg2, tx2 — what PowerPoint's default text, New Slide backgrounds, inserted
+# shapes and tables use) stand for, in the attribute order PowerPoint writes. The theme slots are SEMANTIC (dk1 = the
+# dark text / background colour, lt1 = the light one: the extractor warns `theme-color` otherwise), so a dark slide
+# inverts the map and its default text is light. The master keeps the identity map (python-pptx's own).
+CLR_MAP_KEYS = ("bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+                "hlink", "folHlink")
+LIGHT_CLR_MAP = {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2", **{k: k for k in CLR_MAP_KEYS[4:]}}
+DARK_CLR_MAP = {"bg1": "dk1", "tx1": "lt1", "bg2": "dk2", "tx2": "lt2", **{k: k for k in CLR_MAP_KEYS[4:]}}
+
+
+def set_clr_map_ovr(root, mapping: dict | None) -> None:
+    """A slide's or layout's colour map (``p:clrMapOvr``, the element right after ``p:cSld``): ``a:masterClrMapping``
+    for None (inherit: a slide resolves it through its layout, a layout through the master), else an
+    ``a:overrideClrMapping`` carrying all twelve attributes of `mapping` (every one is required, CT_ColorMapping)."""
+    ovr = root.find(qn("p:clrMapOvr"))
+    if ovr is None:
+        ovr = el("p:clrMapOvr")
+        root.find(qn("p:cSld")).addnext(ovr)
+    for c in list(ovr):
+        ovr.remove(c)
+    if mapping is None:
+        sub(ovr, "a:masterClrMapping")
+        return
+    o = sub(ovr, "a:overrideClrMapping")
+    for k in CLR_MAP_KEYS:
+        o.set(k, mapping[k])
+
+
 def set_theme_name(prs, name: str) -> None:
     """Theme name (``a:theme@name``, shown as the deck's theme in PowerPoint and docProps) and its font scheme's
     name = the deck's name instead of the template's "Office Theme" / "Office" (judge J2-02)."""

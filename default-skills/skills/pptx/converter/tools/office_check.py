@@ -118,6 +118,10 @@ BUILTIN_TABLE_STYLES = {                 # well-known built-in GUIDs used by gen
     "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}": "Medium Style 2 - Accent 1",
 }
 PT = 12700
+CLR_MAP_ATTRS = ("bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink",
+                 "folHlink")                  # CT_ColorMapping: every attribute use="required"
+CLR_SCHEME_INDEX = {"dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+                    "hlink", "folHlink"}        # ST_ColorSchemeIndex
 EXT_URI_SVG = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
 EXT_URI_DECORATIVE = "{C183D7F6-B498-43B3-948B-1728B52AA6E4}"
 
@@ -772,10 +776,12 @@ class Checker:
                 self.add("MST-05", "FAIL", lay, f"layout does not relate back to its master {mpart}", "E1 §13.3.9")
         self.ok("MST-03"); self.ok("MST-05")
         cm = t.find(q("p:clrMap"))
-        need = {"bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
-                "hlink", "folHlink"}
-        if cm is None or not need <= set(cm.attrib):
+        if cm is None or not set(CLR_MAP_ATTRS) <= set(cm.attrib):
             self.add("MST-04", "FAIL", mpart, "clrMap missing or incomplete", "E1 §19.3.1.6")
+        elif any(cm.get(k) not in CLR_SCHEME_INDEX for k in CLR_MAP_ATTRS):
+            self.add("MST-04", "FAIL", mpart, "clrMap maps " + ", ".join(f"{k}={cm.get(k)!r}" for k in CLR_MAP_ATTRS
+                     if cm.get(k) not in CLR_SCHEME_INDEX) + " (not a theme colour slot)",
+                     "E1 §19.3.1.6: ST_ColorSchemeIndex")
         if not self.rel_targets(pkg, mpart, RT + "theme"):
             self.add("MST-04", "FAIL", mpart, "slide master without a theme", "E1 §13.3.10")
         if t.find(q("p:txStyles")) is None:
@@ -783,8 +789,31 @@ class Checker:
         self.ok("MST-04")
         return listed, phs
 
+    def check_clr_map_ovr(self, part, t):
+        """CLR-01: the colour map override of a slide / layout (optional) sits right after p:cSld and holds exactly one
+        a:masterClrMapping or a:overrideClrMapping; an override carries all twelve CT_ColorMapping attributes, each a
+        theme colour slot. A dark slide's map (bg1=dk1 tx1=lt1 ...) is what makes text typed on it light, and an
+        incomplete one breaks the schema (a repair prompt)."""
+        ovr = t.find(q("p:clrMapOvr"))
+        if ovr is not None:
+            prev = next((c for c in ovr.itersiblings(preceding=True) if isinstance(c.tag, str)), None)
+            if prev is None or prev.tag != q("p:cSld"):
+                self.add("CLR-01", "FAIL", part, f"p:clrMapOvr follows {ln(prev) if prev is not None else 'nothing'}, "
+                         "not p:cSld", "E1 §19.3.1.38 / §19.3.1.39 (CT_Slide / CT_SlideLayout sequence)")
+            kids = [c for c in ovr if isinstance(c.tag, str)]
+            if len(kids) != 1 or ln(kids[0]) not in ("masterClrMapping", "overrideClrMapping"):
+                self.add("CLR-01", "FAIL", part, f"p:clrMapOvr children {[ln(c) for c in kids]}",
+                         "E1 §19.3.1.7 (one masterClrMapping or overrideClrMapping)")
+            elif ln(kids[0]) == "overrideClrMapping":
+                bad = [f"{k}={kids[0].get(k)!r}" for k in CLR_MAP_ATTRS if kids[0].get(k) not in CLR_SCHEME_INDEX]
+                if bad:
+                    self.add("CLR-01", "FAIL", part, f"overrideClrMapping {', '.join(bad)} (every attribute is "
+                             "required and must name a theme colour slot)", "E1 §19.3.1.7: CT_ColorMapping")
+        self.ok("CLR-01")
+
     def check_layout(self, pkg, lpart, master_phs):
         t = pkg.xml[lpart]
+        self.check_clr_map_ovr(lpart, t)
         phs = self.placeholders(t)
         self.check_ph_unique(lpart, phs, "slide layout")
         name = t.find(q("p:cSld")).get("name")
@@ -803,6 +832,7 @@ class Checker:
 
     def check_slide(self, pkg, spart, layouts_info, slide_no):
         t = pkg.xml[spart]
+        self.check_clr_map_ovr(spart, t)
         lrels = self.rel_targets(pkg, spart, RT + "slideLayout")
         if len(lrels) != 1:
             self.add("SLD-01", "FAIL", spart, f"{len(lrels)} slideLayout relationships", "E1 §13.3.8")

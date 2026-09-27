@@ -1,15 +1,18 @@
 # Example decks
 
-Three example decks, each a complete deck folder (`slides/NN-name.html`). Paths here are relative to the pptx
-skill's base directory; SKILL.md §3 shows the copy command with the absolute path. All three use the same brand,
-tokens and footer, so slides from any of them can be mixed in one deck. Every slide builds with
-`deck.sh build --strict` in both font profiles (`--strict` is a maintainer check; decks do not need it).
+Three example decks, each a complete deck folder (`slides/NN-name.html` + `deck.css`). Paths here are relative to the
+pptx skill's base directory; SKILL.md §3 shows the copy command with the absolute path. All three ship the `classic`
+theme as their `deck.css` and use the same footer, so slides from any of them can be mixed in one deck — and every
+colour, surface and radius in them is a theme token, so copying another `themes/<theme>.css` over the deck's
+`deck.css` restyles all of it (SKILL.md §3). Every slide builds with `deck.sh build --strict` in both font profiles
+and every theme (`--strict` is a maintainer check; decks do not need it).
 
 ## Using an example
 
 1. **Copy the whole folder out of the skill directory** under a new ASCII name, e.g.
-   `cp -r <this directory>/business-review ./q3-review`. Never build inside the skill directory: it is read-only,
-   and the converter refuses a deck folder there. To mix slides from several decks, copy one deck, then copy the
+   `cp -r <this directory>/business-review ./q3-review`, then copy the theme you chose over its `deck.css`
+   (`cp <skill directory>/themes/midnight.css ./q3-review/deck.css`). Never build inside the skill directory: it is
+   read-only, and the converter refuses a deck folder there. To mix slides from several decks, copy one deck, then copy the
    other decks' slide files into its `slides/` and give them the same footer (the deck name differs): the builder
    moves only the footer objects that are identical on every content slide into the slide layout, so a differing
    deck name would stay behind on each slide and be missing from slides added in PowerPoint (AUTHORING §8.2).
@@ -25,8 +28,10 @@ tokens and footer, so slides from any of them can be mixed in one deck. Every sl
    figure that appears on several slides identical everywhere. When the user's company, department, presenter or
    date is unknown, never invent one: remove the footer's `.footer-brand` and the cover's wordmark (the two-circle
    mark may stay), and fill the cover's meta row only with facts from the request (or remove the row).
-4. **Keep what makes the slides convert**: the stylesheet links, `data-layout`, `data-group`,
-   `data-placeholder`, `data-field`, the footer's `id="footer"` and the header/footer markup. Copy slide-specific
+4. **Keep what makes the slides convert and restyle**: the three stylesheet links (`../deck.css` included), the
+   theme tokens instead of literal colours (`var(--c-…)`, `"var(--c-series-curr)"` in chart specs,
+   `stroke="currentColor"` icons), `data-layout`, `data-group`, `data-placeholder`, `data-field`, the footer's
+   `id="footer"` and the header/footer markup. Copy slide-specific
    CSS from the example's inline `<style>`; the shared components live in `converter/theme/base.css` (never edit
    it — override tokens in `<deck>/deck.css`, AUTHORING §9). Drawn bars, timeline bars and dots are sized by hand
    from the numbers they show: recompute their `width`/`left` when the numbers change (the formulas are in each

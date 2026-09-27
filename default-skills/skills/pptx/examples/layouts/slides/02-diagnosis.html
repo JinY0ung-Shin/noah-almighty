@@ -5,10 +5,11 @@
 <title>02 현황 진단 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Diagnosis: the evidence for the headline in the subtitle, then two native charts — the trend (line) and the
-     mix (doughnut) — each with a one-line finding under a divider. One colour code on both charts: phone = navy
-     (brand-900), digital channels = brand blues. */
+     mix (doughnut) — each with a one-line finding under a divider. One colour code on both charts: phone = the darkest data colour
+     (--c-series-strong), digital channels = the lighter brand shades. */
   .trend { position: absolute; left: var(--margin-x); top: 200px; width: 656px; height: 424px; padding: var(--sp-4);
            display: flex; flex-direction: column; }
   .trend .chart { margin-top: var(--sp-2); width: 592px; height: 248px; }
@@ -47,11 +48,11 @@
         <p class="card-sub">단위: 만 건</p>
       </div>
       <div class="legend" data-group="범례">
-        <div class="legend-item"><div class="swatch" style="background:#0F1D4A"></div><p class="legend-label">전화</p></div>
-        <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">채팅·메신저</p></div>
+        <div class="legend-item"><div class="swatch" style="background: var(--c-series-strong)"></div><p class="legend-label">전화</p></div>
+        <div class="legend-item"><div class="swatch" style="background: var(--c-series-curr)"></div><p class="legend-label">채팅·메신저</p></div>
       </div>
     </div>
-    <div class="chart" data-chart='{"type":"line","categories":["2023년","2024년","2025년","2026년"],"series":[{"name":"전화","values":[38,46,60,78],"color":"0F1D4A"},{"name":"채팅·메신저","values":[10,17,26,37],"color":"2A52D9"}],"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"344056","sizePx":13,"cssWeight":600},"valueAxis":{"visible":false,"min":0,"max":90},"categoryAxis":{"visible":true,"labelColor":"667085","sizePx":14,"lineColor":"C9D0DB"},"legend":{"position":"none"},"fontCssWeight":400}'></div>
+    <div class="chart" data-chart='{"type":"line","categories":["2023년","2024년","2025년","2026년"],"series":[{"name":"전화","values":[38,46,60,78],"color":"var(--c-series-strong)"},{"name":"채팅·메신저","values":[10,17,26,37],"color":"var(--c-series-curr)"}],"dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"var(--c-ink-700)","sizePx":13,"cssWeight":600},"valueAxis":{"visible":false,"min":0,"max":90},"categoryAxis":{"visible":true,"labelColor":"var(--c-ink-500)","sizePx":14,"lineColor":"var(--c-ink-300)"},"legend":{"position":"none"},"fontCssWeight":400}'></div>
     <p class="caption finding"><strong>비대면 문의가 3.7배로 가장 빠르게 증가</strong>, 전화 문의도 2배 넘게 증가</p>
   </section>
 
@@ -60,13 +61,13 @@
     <p class="card-sub">2026년 · 전체 115만 건</p>
     <div class="mix-body">
       <div class="donut-wrap">
-        <div class="chart" data-chart='{"type":"doughnut","categories":["전화","채팅","메신저"],"series":[{"name":"2026년 비중","values":[68,21,11]}],"pointColors":{"0":["0F1D4A","2A52D9","6F8FF0"]},"dataLabels":{"show":false},"holeSize":64,"legend":{"position":"none"},"fontCssWeight":400}'></div>
+        <div class="chart" data-chart='{"type":"doughnut","categories":["전화","채팅","메신저"],"series":[{"name":"2026년 비중","values":[68,21,11]}],"pointColors":{"0":["var(--c-series-strong)","var(--c-series-curr)","var(--c-series-fcst)"]},"dataLabels":{"show":false},"holeSize":64,"legend":{"position":"none"},"fontCssWeight":400}'></div>
         <div class="donut-center"><p class="donut-value">68%</p><p class="donut-label">전화</p></div>
       </div>
       <div class="shares" data-group="범례">
-        <div class="share"><div class="swatch" style="background:#0F1D4A"></div><p class="share-label">전화</p><p class="share-value">68%</p></div>
-        <div class="share"><div class="swatch" style="background:#2A52D9"></div><p class="share-label">채팅</p><p class="share-value">21%</p></div>
-        <div class="share"><div class="swatch" style="background:#6F8FF0"></div><p class="share-label">메신저</p><p class="share-value">11%</p></div>
+        <div class="share"><div class="swatch" style="background: var(--c-series-strong)"></div><p class="share-label">전화</p><p class="share-value">68%</p></div>
+        <div class="share"><div class="swatch" style="background: var(--c-series-curr)"></div><p class="share-label">채팅</p><p class="share-value">21%</p></div>
+        <div class="share"><div class="swatch" style="background: var(--c-series-fcst)"></div><p class="share-label">메신저</p><p class="share-value">11%</p></div>
       </div>
     </div>
     <p class="caption finding">전화 비중은 3년 새 79%에서 68%로 낮아졌지만<br><strong>여전히 문의 3건 중 2건이 전화</strong></p>

@@ -38,10 +38,12 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   more of that work back to the avatar over time.
 - **PowerPoint decks**: the avatar designs new decks as HTML/CSS slides and converts them into a
   `.pptx` whose text boxes, shapes, tables and charts are native, editable PowerPoint objects
-  (charts keep their data for *데이터 편집*). Pretendard is embedded in the file by default; a
-  맑은 고딕 build is available on request. The deck arrives as a download card whose side panel
-  shows the converter's exact slide renders. Existing decks and user templates are edited in place
-  with python-pptx and previewed approximately by LibreOffice. Mechanics:
+  (charts keep their data for *데이터 편집*). The avatar picks one of six themes (classic, mono,
+  editorial, midnight, forest, violet) to fit the topic and audience, or follows the user's
+  style and brand colours; switching the theme is one rebuild. Pretendard is embedded in the
+  file by default; a 맑은 고딕 build is available on request. The deck arrives as a download
+  card whose side panel shows the converter's exact slide renders. Existing decks and user
+  templates are edited in place with python-pptx and previewed approximately by LibreOffice. Mechanics:
   [`docs/architecture/pptx-converter.md`](docs/architecture/pptx-converter.md).
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,
   e.g. Confluence attachments) and hand them over as download cards; the chat renders them as

@@ -5,11 +5,12 @@
 <title>01 목차 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Agenda: the report's argument on the left (a dark overview card: why, and the one goal in numbers), the four
      sections on the right as rows that each promise their headline figure. */
   .overview { position: absolute; left: var(--margin-x); top: var(--content-top); width: 392px; height: 440px;
-              padding: var(--sp-4); display: flex; flex-direction: column; background: var(--c-brand-900); }
+              padding: var(--sp-4); display: flex; flex-direction: column; }
   .overview-label { font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 600;
                     letter-spacing: var(--tracking-label); color: rgba(255, 255, 255, 0.64); }
   /* soft-wraps ON PURPOSE (fixed 328 px column, no <br>): 16/24 is exactly 125 % in PowerPoint, so any number of
@@ -25,7 +26,7 @@
   .goal-bar { display: flex; align-items: center; gap: 12px; }
   .goal-bar-label { flex: none; width: 28px; font-size: var(--fs-micro); line-height: var(--lh-micro); color: rgba(255, 255, 255, 0.64); }
   .goal-bar-track { flex: 1; height: 8px; }
-  .goal-bar-fill { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.28); }
+  .goal-bar-fill { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.40); }
   .goal-bar-fill.is-target { background: var(--c-accent-500); }          /* the slide's one accent: the goal */
   .goal-bar-value { flex: none; width: 64px; text-align: right; font-size: var(--fs-micro); line-height: var(--lh-micro);
                     font-weight: 700; color: var(--c-white); }
@@ -54,7 +55,7 @@
     <h1 class="slide-title">응대 시간을 절반으로 줄이는 네 단계 계획</h1>
   </header>
 
-  <section class="card overview">
+  <section class="card card--emphasis overview">
     <p class="overview-label">보고 개요</p>
     <p class="lead">고객 문의는 3년 새 2.4배로 늘었지만 응대는 여전히 전화에 의존합니다. 채널 통합과 셀프 서비스 확대로 평균 응대 시간을 절반으로 줄이겠습니다.</p>
     <div class="goal">

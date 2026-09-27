@@ -17,6 +17,10 @@ slide layouts, so a slide the user inserts in PowerPoint inherits the design and
   ``a:lstStyle``, ``wrap="square"``, the slide title's box) — a new slide gets a title in the deck's style at the
   deck's position, wrapping where the existing titles wrap; a ``subTitle`` likewise.
 * The master's background becomes the largest family's background.
+* **Colour map**: a layout whose background is dark (``is_dark_background``) carries the inverted colour map
+  (``p:clrMapOvr/a:overrideClrMapping`` bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2), so text a user types on a slide made from it
+  defaults to the light theme text colour; light layouts inherit the master's identity map. The builder gives each
+  slide its own map the same way (build_pptx.py).
 * **Template residue** (judge J2-02, ``prune_template``): python-pptx's 11 stock layouts ("Title Slide" …, English,
   no footer) are removed once every slide sits on its family layout, so PowerPoint's New Slide / Layout gallery shows
   only the deck's own layouts; the master's English prompts become PowerPoint's Korean ones; the theme and its font
@@ -53,6 +57,7 @@ class LayoutPlan:
     layout: object = None         # python-pptx SlideLayout
     records: list = field(default_factory=list)
     namer: object = None
+    dark: bool = False            # its background is dark: the layout carries the inverted colour map (text = lt1)
 
     @property
     def chrome_set(self) -> set:

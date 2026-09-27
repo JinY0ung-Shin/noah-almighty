@@ -105,6 +105,17 @@ Errors:
 Promoted from the PoC's warnings to errors: `blocked-request`, `missing-glyph`. Speaker notes: `<template
 id="notes">` (recommended), `aside.notes`, `[data-notes]` or `<script type="text/x-notes">`, as the PoC's `notesOf()`.
 
+Warning: `theme-link` — the deck has a `deck.css`, and a checked slide does not apply it over the kit: it does not
+link `../deck.css` (`this slide does not link ../deck.css, so it shows the kit's default theme, not the deck's: add
+<link rel="stylesheet" href="../deck.css"> after the ../theme/fonts.css link`), or it links it before
+`../theme/base.css`, whose own `:root` then wins (`this slide links ../deck.css before ../theme/base.css, so the kit's
+default theme overrides the deck's: link ../deck.css last, after ../theme/base.css and ../theme/fonts.css`). Either
+slide renders the kit's defaults (classic) inside, say, a midnight deck, silently. `tools/lib/deckfs.mjs`
+(`themeLinkLint`) reads it from the slide files — a linear, tokenizer-style scan of the `<link>` elements the HTML
+parser would apply (comments and inert content skipped): the page cannot learn whether `deck.css` exists without
+requesting it, and a failed request is an error of its own. Like the layout lint it lands in the report and the
+printed lint only (`profile: null`), never in the IR.
+
 ## Runs (`tools/deck.mjs`, via `scripts/deck.sh`)
 
 Commands `check | build | probe | selftest` (`deck.sh --help`). Exit codes: 0 ok · 1 authoring · 2 usage ·
@@ -186,7 +197,7 @@ class `internal` (exit 4); a gate killed at its deadline is class `timeout` (exi
 ## Preview sidecar (`<stem>.preview/manifest.json`)
 
 ```json
-{"format": "noah-deck-preview", "version": 1, "generator": "noah-pptx-converter/1.0.0", "pptx": "q3-review.pptx",
+{"format": "noah-deck-preview", "version": 1, "generator": "noah-pptx-converter/1.1.0", "pptx": "q3-review.pptx",
  "pptxSha256": "<64 lowercase hex of the .pptx bytes>", "profile": "embedded", "createdAt": "2026-09-26T03:00:00Z",
  "slideCount": 6,
  "slides": [{"index": 1, "file": "slide-01.png", "mediaType": "image/png", "sha256": "<hex64>", "width": 1920,
@@ -245,8 +256,22 @@ rounded PNG → transparent PNG, an inline SVG icon → native svgBlip) into the
 
 ## Version
 
-`VERSION` (1.0.0); `generator` = `noah-pptx-converter/<VERSION>`. Bump it whenever the output changes; regenerate the
-goldens only after a PowerPoint spot-check.
+`VERSION` (1.1.0); `generator` = `noah-pptx-converter/<VERSION>`. Bump it whenever the output or the input contract
+changes; regenerate the goldens only after a PowerPoint spot-check. 1.1.0 changes what these decks produce:
+- ChartSpec colour fields accept theme tokens (`var(--name)`, resolved in page context) — a deck using them;
+- `currentColor` icon paint, authored on an element or inherited from the element that authors it, is written into
+  the SVG markup as its hex without an `image` warning — a deck with such icons (its SVG/PNG assets and its lint);
+- a translucent SVG paint that page CSS or inheritance resolves keeps its alpha: the matching `*-opacity` it writes
+  (live `*-opacity` × the colour's alpha) is no longer compared again and overwritten with the live `*-opacity`,
+  which dropped the alpha — a deck whose page CSS or inherited colour gives an SVG a translucent `fill` / `stroke` /
+  `stop-color` / `flood-color` gets a different SVG asset and PNG raster (now as translucent as the HTML) and an
+  `image` warning that no longer lists the `*-opacity`;
+- dark layouts and slides carry the inverted colour map, and a fill shape's default text colour follows its slide's
+  map ("Structure", (h)) — the PPTX of a deck with a dark slide or layout, not its IR;
+- new warnings: `theme-link` (report only) and `theme-color` for `--pptx-dk1` lighter than `--pptx-lt1`.
+The IR of a deck using none of these — no chart token, no `currentColor`, no translucent SVG paint from the page, no
+swapped theme slot — is unchanged: the 1.0.0 goldens still match (in the PPTX, the self-test `deck`'s dark cover
+and its layout gain the inverted colour map).
 
 ---------------------------------------------------------------------------------------------------------------
 
@@ -403,6 +428,21 @@ slide origin, border-box, before rotation), `rotationDeg` (0 unless a `rotate()`
 background, or as JPEG q90 for an opaque JPEG photo with object-fit fill/cover and no radius (raster policy);
 `svg` keeps the original markup of an inline SVG (for an optional native-SVG picture with PNG fallback).
 
+The `svg` markup (and the isolated PNG render, made from it) is the original plus what the page changed: a
+presentation property whose computed value in the page differs from the same markup rendered standalone (a twin
+under `all: initial`) is written back as a hex / unitless attribute and named in an `image` warn — page CSS or
+inheritance set it. The exception is `currentColor`: a paint (`fill`, `stroke`, `stop-color`, `flood-color`,
+`lighting-color`) whose AUTHOR writes `currentColor` and that still resolves to the element's own `color` is the
+sanctioned way to colour an icon from its container's CSS `color` (what a theme sets). The author is the NEAREST
+element that writes the property (inline style, else the presentation attribute): the element itself or — for the
+inherited `fill` / `stroke` — an ancestor up to and including the outer `<svg>` (`inherit` defers to the parent), so
+`<svg stroke="currentColor">` colours every path. On the element that authors it the paint is ALWAYS written as the
+live hex, even where that equals the standalone value (black), so no `currentColor` reaches the markup
+(`pptxlib/pictures.py` ships such an SVG as PNG only); a descendant inheriting it is written only where its value
+still differs (a translucent colour, a `color` of its own). A translucent colour's alpha is folded into the matching
+`*-opacity` (live `*-opacity` × alpha), and none of this is ever warned. Page CSS overriding that paint is an ordinary
+resolution (warned). Content copied into `<defs>` (a `<use>`d symbol) compares only its non-inherited properties.
+
 ### `kind: "table"`
 
 `{"columnsPx":[…],"rowsPx":[…],"cells":[[Cell…]…]}` with `Cell` = `{"covered":true}` for a cell hidden by
@@ -414,8 +454,8 @@ absorbs an opaque, square, line-less one INTO the table: cell fills + the table'
 
 ### `kind: "chart"`
 
-`{"spec": ChartSpec}` — taken verbatim from the element's `data-chart` JSON attribute; the element is atomic
-(its in-page SVG preview is NOT walked).
+`{"spec": ChartSpec}` — taken verbatim from the element's `data-chart` JSON attribute except for its theme tokens
+(below, resolved to `RRGGBB`); the element is atomic (its in-page SVG preview is NOT walked).
 
 ```json
 {
@@ -438,6 +478,27 @@ absorbs an opaque, square, line-less one INTO the table: cell fills + the table'
 Every key except `type`, `categories`, `series` is optional. `lib/chart.js` renders the same spec as an
 in-page SVG so the HTML reference looks like the native chart, using the geometry rules in
 `docs/research/chart-mapping.md` (band/bar-width formulas, pie start angle, default 3 px line + 7 px markers).
+
+**Colour fields and theme tokens** (1.1.0). The colour fields are exactly the keys `tools/pptxlib/chart.py` and
+`check_fidelity.py` read: `series[i].color`, `pointColors["k"][j]`, `dataLabels.color`, `valueAxis.gridlines.color`,
+`categoryAxis.labelColor` (the category AND the value axis labels — the value axis has no colour key of its own),
+`categoryAxis.lineColor`, `legend.color` (`CHART_COLOR_FIELDS` in `40-shapes.js`, mirrored by `COLOR_FIELDS` in
+`lib/chart.js`). Each takes `RRGGBB` or a token reference `var(--name)` — exactly
+`^\s*var\(\s*(--[A-Za-z0-9_-]+)\s*\)\s*$`, no fallback. The extractor resolves a reference against the chart
+element's computed custom properties (`:root` of `theme/base.css`, `deck.css`, or any ancestor), right after the spec
+validation and before the chart lints (`chart-contrast` judges the resolved colour), and writes the uppercase
+`RRGGBB` (no `#`) into the IR spec: the builder, the fidelity gate and the goldens only ever see hex. Any other value
+is copied untouched (a spec without references gives a byte-identical IR). The colour is resolved IN THE PAGE, the
+same way `lib/chart.js` resolves it for the preview: a temporary probe child of the chart element takes the token's
+value as its `color`, and its computed colour is read (sRGB, other spaces through a canvas pixel), then the probe is
+removed — so a `currentcolor` token is the chart element's own `color`, and `light-dark()` / `color-mix()` resolve
+where they are used (the token text alone is context-free: a canvas reads such a value as opaque black, while the
+preview drew the real colour). `lib/chart.js` draws a reference that does not resolve in its default colour.
+**Errors** (`chart-spec`, one per field, the message starting with its path, e.g. `series[1].color:
+var(--c-seris-curr) is not defined for this chart — define it in deck.css or use a theme token`): a value starting
+with `var(` that is not exactly a reference (`var(--x, #fff)`); a token that is empty / undefined for the chart
+element; a token that is not an opaque colour (the style parser rejects it as a `color`, or alpha < 1: `must resolve
+to an opaque colour (got <value>)`). The field keeps its text; the error blocks the build.
 
 `lib/chart.js` publishes what it resolved on each chart element as
 `data-resolved='{"plot":{"x","y","w","h"},"valueMin":n,"valueMax":n,"majorUnit":n}'` (plot rect in CSS px
@@ -463,9 +524,12 @@ text-shadow, transforms other than rotate/translate, non-uniform border-radius, 
 content, multiple box-shadows (warn), inset box-shadow (warn), text overflow (scroll size > client size),
 anything outside the slide bounds, a slide-number field that does not show the slide's number (`field`), bare text
 beside element children (`mixed-content`), a soft-wrapped slide title (`title-wrap`), a weight outside the kit's
-400/600/700/800 (`font-weight`). Warn: `font-weight` for a kit weight the profile lacks (malgun 600/800, expected;
+400/600/700/800 (`font-weight`), an invalid ChartSpec or a chart colour token that does not resolve to an opaque colour
+(`chart-spec`). Warn: `font-weight` for a kit weight the profile lacks (malgun 600/800, expected;
 also counts table-cell runs and chart label/axis weights), `chart-contrast`, `chart-range` (a drawn value — the
-stack total when stacked — outside an explicit `valueAxis.min/max`), `placeholder`, `theme-color`.
+stack total when stacked — outside an explicit `valueAxis.min/max`), `placeholder`, `theme-color` (a `--pptx-*` slot
+that is not an opaque colour, a later slide's slots differing from the first's, or `--pptx-dk1` lighter than
+`--pptx-lt1`: the slots are semantic, v2 structure (h)).
 
 ## v2 decisions — binding for every lane (from docs/research/*.md)
 
@@ -545,14 +609,29 @@ stack total when stacked — outside an explicit `valueAxis.min/max`), `placehol
   legend labels, footer notes and page numbers keep `wrap="none"`. **(g)** Readable object
   names; the IR id of every object in `<deck>.map.json`; a picture with empty alt = `descr=""` + Office's decorative
   flag, and so is every fill/border shape (it carries no text) and every group whose members are all decorative (fixer
-  round 3, EDIT-08); a dark opaque fill shape carries a white default run colour (`a:lstStyle` lvl1pPr defRPr), so text
-  typed into it is legible (EDIT-12); a chart frame's `descr` = its kind, categories,
+  round 3, EDIT-08); an opaque fill shape carries the legible default run colour its colour map does not already give
+  (`a:lstStyle` lvl1pPr defRPr, (h)), so text typed into it is legible (EDIT-12); a chart frame's `descr` = its kind, categories,
   series values and value range in Korean; a first row of header cells = `tblPr@firstRow` (fixer round 2). The
   template's 11 stock layouts, English master prompts (now `lang="ko-KR"` too), the master's stock date / footer /
   slide-number placeholders (fixer round 3: the footer is layout artwork, and ticking "Footers" in Slide Master view
   would have copied them over it), the 4:3 view guides (now the 16:9 centre, pos 3840 / 2160), "Office Theme" name and
   printer settings are removed/replaced
   (fixer round 2, J2-02): New Slide offers only the deck's own layouts. **(h)** Theme colours from `theme.colors`; docProps (title, author, dates, slide titles, thumbnail).
+  **Colour maps** (1.1.0): the theme slots are SEMANTIC — dk1 = the dark text / background colour, lt1 = the light one,
+  whatever a theme's page (the extractor warns `theme-color` when dk1 is lighter). The master keeps the identity map
+  (bg1=lt1 tx1=dk1 bg2=lt2 tx2=dk2). A layout whose background is dark (`layouts.is_dark_background`, the rule of the
+  pinned `p:bg` in (a)) carries `p:clrMapOvr/a:overrideClrMapping` bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2 (accents, hlink,
+  folHlink unchanged), and so does every dark slide ITSELF, like its pinned background; a light slide on a dark layout
+  carries the identity map explicitly, because a slide's `a:masterClrMapping` resolves through its layout (PowerPoint
+  applies a layout's override to the slides that inherit it); every other slide and layout keeps `a:masterClrMapping`.
+  So a text box a user inserts on a dark slide, or on a New Slide from a dark layout, defaults to lt1 — and in classic
+  the cover, section and closing slides get light default text too. The EDIT-12 default run colour (g) is the more
+  legible of the theme's dk1 / lt1 on the shape's opaque fill (the higher WCAG contrast on every stop; a tie keeps
+  tx1; 111A2E / FFFFFF when the IR has no slot), written ONLY where the part's map gives tx1 the other slot: a navy
+  card on a light slide gets lt1 (white, as before), a white chip on a dark slide dk1, a navy card there nothing;
+  chrome lifted into a layout is re-evaluated on the layout's map. Gates: office-rules `CLR-01` (the override's place
+  and all twelve attributes) and MST-04 (the master map's values); fidelity `clrmap` (each slide's and layout's map
+  vs its background) and `default-text` (both maps) — drift.
 - Every output deck must pass the converter's gates ("Gates and policy" above). The Microsoft Open XML SDK
   3.3.0 validator (Microsoft365; any error = repair-prompt risk) is dev/CI-only (`scripts/openxml-validator/` in the
   repository, run by the Docker smoke), not part of the image.

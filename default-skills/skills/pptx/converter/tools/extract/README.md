@@ -171,7 +171,10 @@ A table background/shadow is the preceding `::bg` shape. Anything a cell's parag
 inline-blocks, positioned/floated boxes, boxes with their own paint, transforms on table parts, content wider than
 the cell) is a lint error (`table-content`, `transform`, `text-overflow`) — nothing is dropped silently.
 
-**Charts** — `[data-chart]` is atomic (its SVG preview is not walked): `spec` = the parsed attribute verbatim,
+**Charts** — `[data-chart]` is atomic (its SVG preview is not walked): `spec` = the parsed attribute with its theme
+tokens (`var(--name)` colour fields, `CHART_COLOR_FIELDS`) resolved to `RRGGBB` (`chart-spec` error when one does not)
+in the page, as lib/chart.js draws them — a temporary probe child of the chart takes the token as its `color`, so
+`currentcolor`, `light-dark()` and `color-mix()` resolve where they are used (`chartTokenColor`),
 `resolved` = `data-resolved` with `plot` converted to slide px (`plotPx`), `valueMin`, `valueMax`, `majorUnit`.
 `data-resolved` also carries `dataMin`/`dataMax`/`stacked` (the extremes lib/chart.js actually drew) for the
 `chart-range` lint; they stay out of the IR. Errors: invalid JSON/spec, missing `data-resolved`, rotation.
@@ -182,8 +185,12 @@ markup). `svg` (inline SVG only, and `<img src="*.svg">` copied): the **original
 `width`/`height`, `viewBox`, copies of referenced elements outside it (`<use href>`, `url(#…)` paint servers) in a
 `<defs>`, and — only where the page changed something — presentation attributes: each property's computed value in
 the page is compared with the value the same markup gets standalone (a twin in a shadow root with `all: initial`),
-differences are written as hex / unitless attributes (`image` warn lists them). Author-compliant icons come out byte
-for byte as written. Raster fidelity is tested against the in-page pixels (`test_images.mjs`, mean |Δ| ≤ 0.31/255).
+differences are written as hex / unitless attributes (`image` warn lists them), and a paint authored as
+`currentColor` is always written as its live hex (not warned: the sanctioned way to colour an icon from its
+container's CSS `color`). The author is the nearest element that writes the paint — the element itself or, for the
+inherited `fill` / `stroke`, an ancestor up to the outer `<svg>` — so a path inheriting the root's
+`stroke="currentColor"` is written only where it still differs (a translucent colour) and never warned either
+(`svgCurrentColorPaint`). Author-compliant icons come out byte for byte as written, apart from that colour. Raster fidelity is tested against the in-page pixels (`test_images.mjs`, mean |Δ| ≤ 0.31/255).
 
 **Structure hints** (docs/AUTHORING.md §12; the builder turns them into PowerPoint structure):
 - `placeholder` on a text element: `data-placeholder` (`title|ctrTitle|subTitle`, `none` = opt out), else `title`
@@ -196,7 +203,8 @@ for byte as written. Raster fidelity is tested against the in-page pixels (`test
   included, from real DOM ancestry — an `#id` step restarts a path, so paths alone cannot tell ancestry).
 - `slides[].layout` = `data-layout` of `main.slide`; top-level `theme.colors` = opaque `--pptx-<slot>` custom
   properties of `:root` (dk1 lt1 dk2 lt2 accent1–6 hlink folHlink), from the first slide (`theme-color` warn when a
-  later slide differs or a value is not an opaque colour).
+  later slide differs, a value is not an opaque colour, or `--pptx-dk1` is lighter than `--pptx-lt1` — the slots are
+  semantic: the builder gives a dark slide's text lt1).
 
 **Opacity** = product of the element's and all ancestors' `opacity`; fully transparent objects are not emitted.
 **Rotation**: the accumulated 2D matrix of every `transform`/`rotate`/`translate`/`scale` on the element and its
@@ -232,8 +240,10 @@ Noah additions (errors): `script` (any `<script>` but `src="../lib/chart.js"` or
 2,500 elements under `main.slide`; the slide is then not extracted), `asset-too-large` (a served file over 20 MB),
 `image-too-large` (a picture over 40 MP, a slide's pictures over 100 MP, an unreadable picture size, or such a base64
 `data:` image in a deck HTML/CSS/SVG);
-`deck.mjs` adds the pre-checks `slide-name`, `slide-count`, `slide-too-large`, `deck-too-large`. Promoted from the
-PoC's warnings to errors: `blocked-request`, `missing-glyph`.
+`deck.mjs` adds the pre-checks `slide-name`, `slide-count`, `slide-too-large`, `deck-too-large`, and the warning
+`theme-link` (a slide of a deck with a `deck.css` that does not link `../deck.css`, or links it before
+`../theme/base.css`: it renders the kit's default theme; read from the slide files by `tools/lib/deckfs.mjs`, report
+only — never in the IR). Promoted from the PoC's warnings to errors: `blocked-request`, `missing-glyph`.
 
 error: `filter`, `backdrop-filter`, `mix-blend-mode`, `clip-path`, `mask`, `gradient-kind` (radial/conic),
 `background-image-url`, `background-image`, `background-clip-text`, `border-image`, `text-shadow`, `transform`

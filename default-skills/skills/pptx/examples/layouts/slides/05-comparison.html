@@ -5,6 +5,7 @@
 <title>05 구축 방식 비교 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Comparison: the verdict is the title, its evidence the subtitle; two option cards with the SAME rows in the
      same order. Each card leads with its 3-year total and a cost bar on ONE scale (38억 원 = the full track), so
@@ -38,7 +39,6 @@
   .fact-value { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--c-ink-900); white-space: nowrap; }
 
   /* the recommended option: the dark card (as the deck's other emphasis surfaces), white chip, green advantages */
-  .option--pick { background: var(--c-brand-900); }
   .option--pick .option-name,
   .option--pick .total-value,
   .option--pick .fact-value { color: var(--c-white); }
@@ -50,7 +50,7 @@
   .option--pick .seg-init { background: var(--c-white); }
   .option--pick .seg-run { background: rgba(255, 255, 255, 0.40); }
   .option--pick .fact { border-top-color: rgba(255, 255, 255, 0.14); }
-  .pill--light { background: var(--c-white); color: var(--c-brand-700); }   /* a chip on the dark card */
+  .pill--light { background: var(--c-white); color: var(--c-brand-900); }   /* a chip on the dark card */
 </style>
 </head>
 <body>
@@ -75,8 +75,8 @@
         <div class="total-head">
           <p class="total-label">3년 총비용</p>
           <div class="legend" data-group="범례">
-            <div class="legend-item"><div class="swatch" style="background:#2A52D9"></div><p class="legend-label">초기 투자</p></div>
-            <div class="legend-item"><div class="swatch" style="background:#8A94A6"></div><p class="legend-label">운영비 3년</p></div>
+            <div class="legend-item"><div class="swatch" style="background: var(--c-brand-600)"></div><p class="legend-label">초기 투자</p></div>
+            <div class="legend-item"><div class="swatch" style="background: var(--c-series-prev)"></div><p class="legend-label">운영비 3년</p></div>
           </div>
         </div>
         <div class="total-row">
@@ -94,7 +94,7 @@
       </div>
     </article>
 
-    <article class="card option option--pick">
+    <article class="card card--emphasis option option--pick">
       <div class="option-head">
         <h2 class="option-name">B안 · 클라우드 전환</h2>
         <p class="pill pill--light">권고안</p>
@@ -104,8 +104,8 @@
         <div class="total-head">
           <p class="total-label">3년 총비용</p>
           <div class="legend" data-group="범례">
-            <div class="legend-item"><div class="swatch" style="background:#FFFFFF"></div><p class="legend-label">초기 투자</p></div>
-            <div class="legend-item"><div class="swatch" style="background:rgba(255, 255, 255, 0.40)"></div><p class="legend-label">운영비 3년</p></div>
+            <div class="legend-item"><div class="swatch" style="background: var(--c-white)"></div><p class="legend-label">초기 투자</p></div>
+            <div class="legend-item"><div class="swatch" style="background: rgba(255, 255, 255, 0.40)"></div><p class="legend-label">운영비 3년</p></div>
           </div>
         </div>
         <div class="total-row">

@@ -57,6 +57,9 @@ as in English PowerPoint with the Korean PowerPoint names in parentheses.
 - Page numbers are real slide-number fields: they renumber when slides move.
 - New Slide (새 슬라이드) offers only the deck's own layouts; one gives the background, footer, page number and a
   title in the deck's style, but no body placeholder — add text boxes.
+- Text you add follows the slide: a new text box on a dark slide (the cover, a section divider, the closing, every
+  slide of a dark theme) starts light, on a light slide dark; text typed into an empty card or chip starts in the
+  colour that reads on it.
 - Home > Reset (홈 > 원래대로) puts a title back into the layout's title position and style.
 - Copying slides into another presentation: Keep Source Formatting (원본 서식 유지) keeps everything. With the
   destination theme, content slides take the other deck's background and lose this deck's footer; a dark slide

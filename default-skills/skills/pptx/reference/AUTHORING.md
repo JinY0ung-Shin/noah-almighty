@@ -49,7 +49,7 @@ the closest slide.
 <title>NN 슬라이드 이름 · 덱 제목</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
-<link rel="stylesheet" href="../deck.css">   <!-- only when the deck has a deck.css (§9) -->
+<link rel="stylesheet" href="../deck.css">   <!-- the deck's theme (§9): every deck has one -->
 <style>
   /* slide-specific composition only; reuse the base.css tokens and components */
 </style>
@@ -69,7 +69,7 @@ A second paragraph.
 
 | rule | why |
 |---|---|
-| Link **exactly** `../theme/base.css` and `../theme/fonts.css` (+ `../deck.css` when the deck has one); no other `<link>`, no `@import`, no `<base>`, no `<meta http-equiv="refresh">`, no web-font CDN, no remote URLs | The converter serves only the kit and your deck folder and **blocks every other request** (lints `stylesheet`, `remote-url`, `blocked-request`, `base-url`, `navigation`). `theme/fonts.css` does not exist on disk: the converter serves the active profile's font CSS under that name, which is how one HTML file renders with two font profiles. Opening a slide straight from disk therefore shows the wrong fonts — look at the `deck.sh check` renders instead. A link to a `../deck.css` that does not exist is a `missing-file` error. |
+| Link **exactly** `../theme/base.css`, `../theme/fonts.css` and `../deck.css` (the deck's theme, a copy of one of the skill's `themes/`); no other `<link>`, no `@import`, no `<base>`, no `<meta http-equiv="refresh">`, no web-font CDN, no remote URLs | The converter serves only the kit and your deck folder and **blocks every other request** (lints `stylesheet`, `remote-url`, `blocked-request`, `base-url`, `navigation`). `theme/fonts.css` does not exist on disk: the converter serves the active profile's font CSS under that name, which is how one HTML file renders with two font profiles. Opening a slide straight from disk therefore shows the wrong fonts — look at the `deck.sh check` renders instead. A link to a `../deck.css` that does not exist is a `missing-file` error. |
 | One `<main class="slide">` (1280×720 CSS px at the page origin); nothing visible outside it | 1 CSS px = 9525 EMU: the slide *is* the PowerPoint slide. `base.css` sizes it; do not resize it. |
 | `<html lang="ko">`, `<meta charset="utf-8">` | Korean line-breaking and correct decoding. |
 | Scripts: only `<script src="../lib/chart.js"></script>`; no inline `<script>`, no `on*=` handler, no `javascript:` URL | The converter reads a static DOM, and its Content-Security-Policy runs only the chart renderer, which draws an in-page preview of the native chart (lints `script`, `csp-violation`). |
@@ -139,8 +139,10 @@ colour under 3:1 on its background, §8.10), `chart-range` (a value outside the 
 while its label keeps the true number, §8.10), `fallback-font`, `not-embedded-glyph`, `line-height-normal`, `text`
 (justify, italic without an italic face, mixed sizes in a wrapping paragraph …), `geometric-marker` (use the
 `"• "` marker), `list-item-blocks` (§5.4), `group-opacity` (§6), `inline-background` (§5.2), `image`,
-`placeholder`, `theme-color`. The malgun profile's `font-weight` notes for 600/800 are expected: the check folds
-them into one `NOTE malgun weights` line (§4.1).
+`placeholder`, `theme-link` (a slide that does not link `../deck.css`, or links it before `../theme/base.css`: it
+shows the kit's default theme, not the deck's — §1), `theme-color` (a `--pptx-*` slot that is not an opaque colour,
+or `--pptx-dk1` lighter than `--pptx-lt1`: the slots are semantic, §9). The malgun profile's `font-weight` notes
+for 600/800 are expected: the check folds them into one `NOTE malgun weights` line (§4.1).
 
 ## 3. Rendering rules in `converter/theme/base.css` — never override them
 
@@ -311,11 +313,11 @@ not a convertible list (`list-item-blocks`): use plain rows (`div`s) for structu
 | rectangle / rounded rectangle | `background` + **one** uniform `border-radius` in px | → rectangle / rounded rectangle; the radius is clamped at min(w,h)/2 exactly like CSS (`999px` = pill). |
 | circle / ellipse | `border-radius: 50%` (square box for a circle) | → ellipse. These three are the only geometries: no chevrons, arrows or triangles. |
 | borders | **integer px** widths, `solid` (dashed/dotted map but their phase differs) | Chromium snaps border widths to whole px (1.5 → 1, 2.5 → 2), so the render would not be what you wrote. A one-sided border (divider) becomes a thin filled rectangle. |
-| colour | hex or `rgba()`; alpha maps to shape/text transparency | Keep text colours opaque unless the translucency is intentional (white 64 % on a dark panel is fine). |
-| gradient | `linear-gradient(<angle>, c1 0%, c2 100%)` — two opaque stops preferred | Maps to a linear gradient fill. Transparent stops are unproven in PowerPoint. |
+| colour | a theme token, `var(--c-…)` (§9); `rgba(255, 255, 255, a)` for white overlays on the dark emphasis surfaces; alpha maps to shape/text transparency | A literal hex stays behind when the theme changes. Keep text colours opaque unless the translucency is intentional (white 64 % on a dark panel is fine). |
+| gradient | `linear-gradient(<angle>, var(--c-cover-from) 0%, var(--c-cover-to) 100%)` — two opaque stops preferred | Maps to a linear gradient fill (the converter reads the computed colours, so tokens work). Transparent stops are unproven in PowerPoint. |
 | shadow | one outer `box-shadow: 0 8px 24px rgba(…, .07)` with spread 0, on an **opaque** box | Maps to PowerPoint's outer shadow. Keep shadows soft and subtle: PowerPoint's blur differs slightly from CSS. |
 | rotation | `transform: rotate(…)` only (no tables/charts) | Tables and chart frames cannot rotate in Office. |
-| icons | inline `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2A52D9" …>` | Becomes a picture (a 4× PNG plus the native SVG). The SVG must be self-contained: **literal** colours (no `currentColor`, no `var()`, no classes), one colour, no `<text>`. |
+| icons | inline `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" …>` inside an element whose CSS `color` is a token (`.icon-badge` is brand-600; a glass badge or a dark slide is white) | Becomes a picture (a 4× PNG plus the native SVG); the converter bakes the container's colour into it, so the theme recolours every icon. Otherwise self-contained: `currentColor` or a literal colour in the markup (no `var()`, no classes, no page CSS setting `stroke`/`fill` — a warning), one colour, no `<text>`, and no `<use>`/`<symbol>` (content drawn through `<use>` keeps `currentColor`, ships as a PNG and draws black). |
 | photos / raster art | `<img src="../assets/<file>" alt="…">` with an explicit CSS size | Becomes a picture, rendered at up to 4× its CSS size and at most 2560 px on its longest side. A JPEG source that fills its box (`object-fit: fill` or `cover`, no `border-radius`, opacity 1) stays JPEG; anything else becomes PNG. Use JPEG photos at a sensible size: the built .pptx must stay ≤ 30 MB. An empty `alt` marks the picture decorative; give meaningful pictures an `alt`. |
 
 ## 8. Component patterns (all in `converter/theme/base.css` or in the examples' `<style>`)
@@ -334,14 +336,14 @@ business-review example shows 8.1–8.13, the layouts example 8.14–8.21.
   <p class="slide-sub">…the evidence for the headline, one line…</p>             <!-- optional -->
 </header>
 ```
-The title and the chip share `.title-row` (flex, `align-items: flex-end`, 24 px gap; the title `flex: 1`): the
-title's box ends before the chip, so a longer title wraps there instead of running under the chip — in the HTML
-and in PowerPoint, whose title placeholder gets the same width. With a `.slide-sub` the header ends at y 168:
-start the content 32 px below it (business-review slide 3: table at y 200) — the header must not press into the
-content. The title states the takeaway (a headline), the label names the topic; when the headline rests on one
-figure, put that evidence in `.slide-sub` (16/24, ink-600, key numbers `<strong>`) — not in the small context chip.
-The `<h1>` becomes the slide's **title placeholder** (§12). The context chip on the ink-50 page is `.pill--outline`
-(white + 1 px brand-200 outline): a brand-50 tint chip is invisible there (1.02:1). **No accent bar under the
+The title and the chip share `.title-row` (flex, `align-items: flex-end`, 24 px gap; the title `flex: 1`): the title's
+box ends before the chip, so a longer title wraps there instead of running under the chip — in the HTML and in
+PowerPoint, whose title placeholder gets the same width. With a `.slide-sub` the header ends at y 168: start the
+content 32 px below it (business-review slide 3: table at y 200) — the header must not press into the content. The
+title states the takeaway (a headline), the label names the topic; when the headline rests on one figure, put that
+evidence in `.slide-sub` (16/24, ink-600, key numbers `<strong>`) — not in the small context chip. The `<h1>` becomes
+the slide's **title placeholder** (§12). The context chip on the ink-50 page is `.pill--outline` (the surface colour +
+1 px brand-200 outline): a brand-50 tint chip is invisible there (1.02:1 in `classic`). **No accent bar under the
 title** (an AI-slide cliché; the label + whitespace carry the hierarchy).
 
 **8.2 Footer** — brand mark (two circles), deck name, sample-data note, page number; a 1 px rule on top.
@@ -363,21 +365,23 @@ title), not into the footer. The builder then moves the whole footer into the sl
 in PowerPoint gets it too — keep `id="footer"`: it gives the footer the same identity on every slide, however many
 sections precede it.
 
-**8.3 Card** — `.card`: white, radius 20, one soft shadow. No coloured side stripe (cliché), no border + shadow +
+**8.3 Card** — `.card`: the surface colour (`--c-surface`), `--radius-card`, `--shadow-card` and the theme's
+`--card-border` (1 px in the outlined themes, `none` in the others); `class="card card--emphasis"` for the dark
+emphasis card. No coloured side stripe (cliché), no border + shadow +
 tint stacks.
 
 **8.4 KPI card** — icon badge + delta pill on top, label, big number with a smaller unit run, a prior-vs-current
-micro-visual, divider + caption pinned to the bottom (`margin-top: auto` in a flex column). Height fixed (288 px)
-and verified in both profiles. The KPIs the slide title claims lead (`.kpi--hero`: brand-900 card, white text, the
-`--up-on-dark` pill — `--down-on-dark` for an unfavourable change —, a glass icon badge); the micro-visual is two
-bars on one scale (the larger value = the full track), built from rect shapes only (`data-group` makes them one
-PowerPoint group) — it fills the band between the number and the divider with data instead of whitespace. Drawn
-bars do not follow an edited number: name their group with the values they encode and that they are resized by
-hand (the `data-group` value is the Selection Pane name).
+micro-visual, divider + caption pinned to the bottom (`margin-top: auto` in a flex column). Height fixed (288 px) and
+verified in both profiles. The KPIs the slide title claims lead (`.card--emphasis` + `.kpi--hero`: the brand-900
+emphasis card, white text, the `--up-on-dark` pill — `--down-on-dark` for an unfavourable change —, a glass icon
+badge); the micro-visual is two bars on one scale (the larger value = the full track), built from rect shapes only
+(`data-group` makes them one PowerPoint group) — it fills the band between the number and the divider with data
+instead of whitespace. Drawn bars do not follow an edited number: name their group with the values they encode and
+that they are resized by hand (the `data-group` value is the Selection Pane name).
 ```html
-<article class="card kpi kpi--hero">
+<article class="card card--emphasis kpi kpi--hero">
   <div class="kpi-top">
-    <div class="icon-badge icon-badge--sm icon-badge--glass"><svg … width="20" height="20" stroke="#FFFFFF" …>…</svg></div>
+    <div class="icon-badge icon-badge--sm icon-badge--glass"><svg … width="20" height="20" stroke="currentColor" …>…</svg></div>
     <p class="pill pill--up-on-dark">▲ 12.4%</p>
   </div>
   <p class="stat-label">매출액</p>
@@ -393,20 +397,22 @@ hand (the `data-group` value is the Selection Pane name).
 **8.5 Pill** — `.pill` + `.pill--up | --down | --brand | --outline | --glass | --up-on-dark | --down-on-dark`: a
 block with padding, `border-radius: 999px`, 13/20 px bold text, `white-space: nowrap`. Up = green on green tint,
 down = red on red tint, `--up-on-dark` / `--down-on-dark` the same pair on dark surfaces, `--brand` (brand-50 tint)
-only on white surfaces, `--outline` (white + brand-200 border) on the ink-50 page. **Pick the pill by
+only on the surface, `--outline` (the surface colour + a brand-200 border) on the ink-50 page. **Pick the pill by
 favourability, not direction**: the colour says good or bad, the ▲/▼ says up or down — a churn, cost or complaint
 increase is `▲ 0.9%p` in `pill--down` (`pill--down-on-dark` on a dark card), a cost cut `▼ 12%` in `pill--up`.
 It becomes a rounded rectangle + a one-line text box, grouped (§12); never place it inline inside a sentence
 (§5.2).
 
 **8.6 Icon badge** — `.icon-badge` 48 px (`--sm` 40 px) circle in the brand tint, one inline SVG centred by flex.
-Icons: 24 px grid, 2 px round strokes, one brand colour.
+Icons: 24 px grid, 2 px round strokes, `stroke="currentColor"`: the badge's `color` (brand-600) draws them; a glass
+badge on a dark card sets `color: var(--c-white)`.
 
 **8.7 Stat** — `.stat-label` (16/24, 600, grey) / `.stat-value` (44/60, 800, tight tracking) with `.stat-unit`
 (20 px, 700, `line-height: 1`) / `.caption` (14/20). Numbers: Korean style `1,284억 원` (unit attached, no space
 before 억).
 
-**8.8 Summary box** — `.summary`: brand-50 tint, radius 16, flex row with a small white icon badge and one
+**8.8 Summary box** — `.summary`: brand-50 tint, radius 16, flex row with a small `.icon-badge--white` (the surface
+colour) and one
 `.summary-text` paragraph: a bold lead-in run (`<strong>종합 평가</strong>`) then one or two sentences, one sentence
 per line via `<br>` so both profiles break identically.
 
@@ -417,9 +423,9 @@ per line via `<br>` so both profiles break identically.
 - body: `td` 17/24 px, `border-bottom: 1px` rules; current-period column 600 + dark, prior-period muted;
 - coloured deltas as **runs**: `<td><span class="up">+27.4%</span></td>`, `<span class="down">–4.7%</span>`;
 - highlight row: `tr.is-highlight td { background }`; total row: `tr.is-total` bold with `border-top: 2px`;
-- a table-level white background + soft shadow on the `<table>` itself: the builder writes the background INTO the
-  table (every cell without its own fill gets it) and the shadow as the table's own shadow, so inserted rows and a
-  moved or resized table keep both; **no radius** and an opaque, single-colour background (anything else stays a
+- a table-level background (`--c-surface`) + soft shadow on the `<table>` itself: the builder writes the background
+  INTO the table (every cell without its own fill gets it) and the shadow as the table's own shadow, so inserted rows
+  and a moved or resized table keep both; **no radius** and an opaque, single-colour background (anything else stays a
   separate shape behind the table, which cannot follow it); text-only cells (`table-content` otherwise); every cell
   one line with ≥ 30 % horizontal slack (a cell that wraps in PowerPoint grows its row);
 - units and definitions in a `.footnote` below (13/20 px);
@@ -435,46 +441,49 @@ per line via `<br>` so both profiles break identically.
 legend** on the right) and the chart element:
 ```html
 <div class="legend" data-group="범례">
-  <div class="legend-item"><div class="swatch" style="background:#8A94A6"></div><p class="legend-label">2025년</p></div>
+  <div class="legend-item"><div class="swatch" style="background: var(--c-series-prev)"></div><p class="legend-label">2025년</p></div>
   …
 </div>
 <div class="chart" data-chart='{"type":"column","grouping":"clustered","categories":["1Q","2Q","3Q","4Q"],
-  "series":[{"name":"2025년","values":[1012,1087,1142,1236],"color":"8A94A6"},
-            {"name":"2026년","values":[1148,1209,1284,1410],"color":"2A52D9"}],
-  "pointColors":{"1":["2A52D9","2A52D9","2A52D9","6F8FF0"]},
-  "dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"344056","sizePx":13,"cssWeight":600},
+  "series":[{"name":"2025년","values":[1012,1087,1142,1236],"color":"var(--c-series-prev)"},
+            {"name":"2026년","values":[1148,1209,1284,1410],"color":"var(--c-series-curr)"}],
+  "pointColors":{"1":["var(--c-series-curr)","var(--c-series-curr)","var(--c-series-curr)","var(--c-series-fcst)"]},
+  "dataLabels":{"show":true,"numberFormat":"#,##0","position":"outEnd","color":"var(--c-ink-700)","sizePx":13,"cssWeight":600},
   "valueAxis":{"visible":false,"min":0,"max":1600},
-  "categoryAxis":{"visible":true,"labelColor":"667085","sizePx":14,"lineColor":"C9D0DB"},
+  "categoryAxis":{"visible":true,"labelColor":"var(--c-ink-500)","sizePx":14,"lineColor":"var(--c-ink-300)"},
   "legend":{"position":"none"},"gapWidth":90,"overlap":-8,"fontCssWeight":400}'></div>
 …
 <script src="../lib/chart.js"></script>
 ```
 Chart spec: `type` `column|bar|line|pie|doughnut`, `grouping` `clustered|stacked`, `categories`, `series` (`name`,
-`values` — `null` for a gap —, `color`); optional `pointColors`, `dataLabels`, `valueAxis` (`visible`, `min`,
-`max`, `numberFormat`, `gridlines`), `categoryAxis`, `legend`, `gapWidth`, `overlap`, `holeSize`,
-`fontCssWeight`. The chart becomes a native chart with an embedded workbook (PowerPoint's Edit Data works).
-One `dataLabels` block styles the labels of every series (format, colour, size, position). A `line` chart draws
-3 px lines with round markers, and `outEnd` puts each label above its point. A `doughnut` takes `holeSize` (%),
-its slice colours as `pointColors["0"]` and never a label position (its labels sit on the ring); for small slices
-use `dataLabels.show: false` and put the values into the HTML legend (§8.15).
-Chart rules: the element has explicit width/height and **nothing inside it** (it is atomic; `lib/chart.js` draws
-the preview); colours are `RRGGBB` without `#`; give explicit `valueAxis.min/max` (PowerPoint must not auto-scale
-what the HTML shows; leave headroom when users will edit values upward — a value outside the axis is drawn clipped
-AT the bound while its data label still reads the true number, so the chart misstates its own data: the
-`chart-range` warning reports it, with the stack total when the chart is stacked);
-`pointColors` = series index → a **full** per-point colour list (here: the forecast bar in a lighter tint); every
-series / point colour ≥ **3:1** on the card (WCAG non-text contrast: prior year `--c-series-prev` #8A94A6 3.06:1,
-forecast `--c-series-fcst` #6F8FF0 3.06:1, current year brand-600 6.35:1; the accent as a goal series or bar on white
-is `EC6A24` = `--c-accent-600`, 3.16:1 — the accent-500 `FF8A3D` is only 2.35:1 there), checked by the
-`chart-contrast` warning; give the forecast ONE encoding across
-the deck; only legal label positions (clustered `outEnd/inEnd/ctr/inBase`, stacked no `outEnd`, doughnut none —
-an illegal position makes PowerPoint refuse the file); `legend.position: "none"` + an **HTML legend**, because
-PowerPoint positions chart legends internally (drift risk) while an HTML legend converts to exact shapes and text —
-give it `data-group` so it is one object, grouped with the chart inside the card's group (§12). Keep category
-labels short (they must not wrap). A `bar` chart lists `categories` top-down in the given order (the builder
-reverses PowerPoint's bottom-up axis). `numberFormat` is an Excel format code, rendered identically by the preview
-and PowerPoint: `#,##0` (1,284), `0.0` (8.4), `0%` / `0.0%` with fractions as values (0.084 → 8.4%), or a quoted
-literal suffix with the figures as given (`0.0"%"` → 8.4%, `0.0"%p"`, `#,##0"억"`).
+`values` — `null` for a gap —, `color`); optional `pointColors`, `dataLabels`, `valueAxis` (`visible`, `min`, `max`,
+`numberFormat`, `gridlines`), `categoryAxis`, `legend`, `gapWidth`, `overlap`, `holeSize`, `fontCssWeight`. The chart
+becomes a native chart with an embedded workbook (PowerPoint's Edit Data works). One `dataLabels` block styles the
+labels of every series (format, colour, size, position). A `line` chart draws 3 px lines with round markers, and
+`outEnd` puts each label above its point. A `doughnut` takes `holeSize` (%), its slice colours as `pointColors["0"]`
+and never a label position (its labels sit on the ring); for small slices use `dataLabels.show: false` and put the
+values into the HTML legend (§8.15). Chart rules: the element has explicit width/height and **nothing inside it** (it
+is atomic; `lib/chart.js` draws the preview); a colour is a theme token `"var(--c-series-curr)"` (no fallback value —
+the converter resolves it against the slide's tokens — any opaque CSS colour value — and writes the colour; an
+undefined or translucent token is a `chart-spec` error, so the translucent `--c-cover-halo`, `--c-cover-orbit`,
+`--c-cover-fcst`, `--c-accent-soft` and `--c-mark-b` are not chart colours) or a literal `RRGGBB` without `#` for a
+one-off; `categoryAxis.labelColor` colours the value-axis labels too (they have no key of their own); give explicit
+`valueAxis.min/max` (PowerPoint must not auto-scale what the HTML shows; leave headroom when users will edit values
+upward — a value outside the axis is drawn clipped AT the bound while its data label still reads the true number, so
+the chart misstates its own data: the `chart-range` warning reports it, with the stack total when the chart is
+stacked); `pointColors` = series index → a **full** per-point colour list (here: the forecast bar in a lighter tint);
+every series / point colour ≥ **3:1** on the card (WCAG non-text contrast; in `classic`: prior year `--c-series-prev`
+#8A94A6 3.06:1, forecast `--c-series-fcst` #6F8FF0 3.06:1, current year `--c-series-curr` 6.35:1; the accent as a goal
+series or bar on the surface is `--c-accent-600`, 3.16:1 — `--c-accent-500` is only 2.35:1 there; every theme keeps
+these pairs), checked by the `chart-contrast` warning; give the forecast ONE encoding across the deck; only legal
+label positions (clustered `outEnd/inEnd/ctr/inBase`, stacked no `outEnd`, doughnut none — an illegal position makes
+PowerPoint refuse the file); `legend.position: "none"` + an **HTML legend**, because PowerPoint positions chart
+legends internally (drift risk) while an HTML legend converts to exact shapes and text — give it `data-group` so it is
+one object, grouped with the chart inside the card's group (§12). Keep category labels short (they must not wrap). A
+`bar` chart lists `categories` top-down in the given order (the builder reverses PowerPoint's bottom-up axis).
+`numberFormat` is an Excel format code, rendered identically by the preview and PowerPoint: `#,##0` (1,284), `0.0`
+(8.4), `0%` / `0.0%` with fractions as values (0.084 → 8.4%), or a quoted literal suffix with the figures as given
+(`0.0"%"` → 8.4%, `0.0"%p"`, `#,##0"억"`).
 
 **8.11 Insight list** — a `<ul class="insights">` whose items are *headline + detail*, two hard lines of one size:
 `<li><strong>분기 최대 매출 경신</strong><br><span class="insight-detail">3분기 1,284억 원, 전년 대비 12.4%
@@ -486,9 +495,11 @@ rule and the insight list in white / white-66 % pinned to the bottom (`margin-to
 has no empty band under its last line. Translucent text is fine; the panel itself is opaque so its shapes and text
 stay exact.
 
-**8.13 Cover composition** — a 2-stop `linear-gradient(135deg, …)` slide background (`data-layout="표지"`); on the
-right a decorative group (`data-group="장식"`) made only of shapes: a translucent halo circle, a 1 px ring, two
-small "orbit" dots on the ring, four pill-shaped bars standing on a baseline rule — all fully inside the slide. A
+**8.13 Cover composition** — a 2-stop `linear-gradient(135deg, var(--c-cover-from) 0%, var(--c-cover-to) 100%)` slide
+background (`data-layout="표지"`); on the right a decorative group (`data-group="장식"`) made only of shapes in the
+theme's cover tokens: a translucent halo circle (`--c-cover-halo`), a 1 px ring, two small "orbit" dots on the ring
+(`--c-cover-orbit`), four pill-shaped bars standing on a baseline rule (the key one an accent gradient, the forecast
+`--c-cover-fcst`) — all fully inside the slide. A
 motif that looks like data IS data: the bar heights are the quarters on one scale from zero, never a freehand rise
 that exaggerates the growth. On the left: brand mark + wordmark (`data-group="브랜드"`), a glass pill label with
 information the title and meta row do not already give (`대외비`), the 60/80 px title with a `<br>`
@@ -498,7 +509,7 @@ The title and subtitle boxes (520 / 536 px) end ≥ 16 px before the ring at x 6
 into the motif wraps instead — a `title-wrap` error: about 8 Hangul syllables fit per 60 px line in `malgun`;
 shorten the line or re-split it with `<br>`. On the cover the title is also the file's document title (§12).
 
-**8.14 Agenda** (`examples/layouts/slides/01-agenda.html`) — the sections as white rows on the right
+**8.14 Agenda** (`examples/layouts/slides/01-agenda.html`) — the sections as surface-coloured rows on the right
 (`.agenda-item`: a `.card` with radius 16, 98 px tall, 16 px apart; the number 28/40·800 brand-600, the title
 20/28·700 over a one-line description 16/24, and a `.pill--brand` chip with the section's headline figure — a
 promise the section keeps); rows, not `<ol>`/`<li>` (§5.4). On the left a dark summary card (brand-900, 392 × 440,
@@ -507,14 +518,14 @@ a flex column): a label, a lead paragraph that soft-wraps on purpose (16/24, §5
 bar in the accent) and the ask in a translucent box (`rgba(255, 255, 255, .08)`). Pinning the goal to the bottom
 gives the wider profile's extra lead line its room without leaving a dead zone in either profile.
 
-**8.15 Trend and mix** (`02-diagnosis.html`) — two native charts in two cards, with ONE colour code (phone = navy
-`0F1D4A` on both, the digital channels = brand blues): a `line` chart (two series, `dataLabels.position: "outEnd"`,
-a hidden value axis with explicit `min`/`max` that leaves headroom for the top label) and a `doughnut` (one
-series, `pointColors["0"]` for the slices, `holeSize: 64`, `dataLabels.show: false`) beside an HTML legend whose
-rows carry the values (`data-group="범례"`). The centre label ("68%" over "전화") is a text element positioned over
-the hole as a SIBLING of the chart element — text inside the chart element is not converted (`chart-content`). The
-evidence for the title is the `.slide-sub` (content from y 200, §8.1), and each card ends with a one-line finding
-under a 1 px divider (`margin-top: auto`), a two-line one with a `<br>`.
+**8.15 Trend and mix** (`02-diagnosis.html`) — two native charts in two cards, with ONE colour code (phone =
+`var(--c-series-strong)` on both, the digital channels = `--c-series-curr` / `--c-series-fcst`): a `line` chart (two
+series, `dataLabels.position: "outEnd"`, a hidden value axis with explicit `min`/`max` that leaves headroom for the
+top label) and a `doughnut` (one series, `pointColors["0"]` for the slices, `holeSize: 64`, `dataLabels.show: false`)
+beside an HTML legend whose rows carry the values (`data-group="범례"`). The centre label ("68%" over "전화") is a text
+element positioned over the hole as a SIBLING of the chart element — text inside the chart element is not converted
+(`chart-content`). The evidence for the title is the `.slide-sub` (content from y 200, §8.1), and each card ends with
+a one-line finding under a 1 px divider (`margin-top: auto`), a two-line one with a `<br>`.
 
 **8.16 Section divider** (`03-section.html`) — its own `data-layout="간지"` with a dark two-stop gradient (the
 builder also keeps a copy of a dark background on the slide itself, so its white text stays readable on another
@@ -542,19 +553,20 @@ a 1 px rule above each) run to the card's padding. The speaker notes hold the as
 
 **8.19 Timeline** (`06-timeline.html`) — a month grid (208 px label column + 12 × 76 px): a quarter header and a
 month row, one 56 px track per workstream (name 16/24·700, owner and the strategy it serves 13/20), a pill-shaped
-bar per task (32 px, `border-radius: 16px`, white 14/20·600 label) coloured by the KIND of work (brand = a
-strategy's own work, `--c-ink-500` = the shared work that enables it, named in a small legend), a go-live line at
-the key milestone's month (2 px, the accent at 40 % alpha, painted before the tracks so the bars cover it), and a
+bar per task (32 px, `border-radius: 16px`, a 14/20·600 label in `--c-on-fill`: white on a light theme, dark on
+`midnight`'s bright bars) coloured by the KIND of work (brand = a strategy's own work, `--c-ink-500` = the shared work
+that enables it, named in a small legend), a go-live line at the key milestone's month (2 px, `--c-accent-soft`,
+painted before the tracks so the bars cover it), and a
 milestone rail (a 2 px line; dots in a fixed 18 px slot so every label row aligns; the key milestone in the accent
 as `--c-accent-700`, the shade a mark on the ink-50 page needs). A bar spanning months a…b sits at
 `left = 208 + (a − 1) × 76 + 4` with `width = (b − a + 1) × 76 − 8`; month m's centre is `208 + (m − 1) × 76 + 38`.
 Bars and dots are drawn shapes that do not follow an edited date: their `data-group` names state the dates and say
 so.
 
-**8.20 KPI targets** (`07-effects.html`) — a scorecard: one white card of KPI rows (88 px, a 1 px rule between
+**8.20 KPI targets** (`07-effects.html`) — a scorecard: one card of KPI rows (88 px, a 1 px rule between
 rows): the KPI's name 18/28·700 over a one-line definition 13/20, two bars on the ROW's own scale (the larger value
 = 440 px; current in `--c-series-prev`, the target in brand-600, the headline goal in the accent as everywhere in
-the deck — `--c-accent-600` on the white card) with each value right after its bar, and the change as a green pill
+the deck — `--c-accent-600` on the card) with each value right after its bar, and the change as a green pill
 in words ("50% 단축", "+28%p") —
 green = favourable, whichever direction the metric moves. A `.summary` box below shows the arithmetic of the
 yearly effect.
@@ -571,51 +583,94 @@ Connector lines are 2 px rectangles (`--c-ink-300`) in ONE `data-group` painted 
 there are no connector shapes that follow a moved box, so the group name says to move them by hand. Mark the one
 unit or team the reader deals with (a `pill--brand` chip), not every box.
 
-**8.23 Week grid** (`02-first-week.html`) — a schedule as ONE native table: `.data-table--text`, a time column and
-one column per day, one session per cell. The kind of session is the cell fill (brand-50 = company-wide, white =
-the team's own, accent-100 = the one key meeting), named in a legend of outlined swatches below the table; the
-mandatory sessions in bold, explained in the footnote. Keep each session to a few words so every cell stays on one
+**8.23 Week grid** (`02-first-week.html`) — a schedule as ONE native table: `.data-table--text`, a time column and one
+column per day, one session per cell. The kind of session is the cell fill (brand-50 = company-wide, the surface
+colour = the team's own, accent-100 = the one key meeting), named in a legend of outlined swatches below the table;
+the mandatory sessions in bold, explained in the footnote. Keep each session to a few words so every cell stays on one
 line (§8.9); merged cells are possible but a single-cell grid is easier to edit.
 
 **8.24 Directory** (`03-contacts.html`) — the action as the title ("막히면 버디, 그다음 담당 부서에 물어보세요"), the
 order to ask in as numbered steps on a dark card (the first one lit, an urgent note pinned to the bottom), and who
 handles what as a `.data-table--text` of topic, team, extension and channel at the width it needs.
 
-## 9. Design system (tokens in `converter/theme/base.css`)
+## 9. Design system: tokens and themes
 
-- **Colour**: one brand (royal blue `--c-brand-600 #2A52D9`, dark surfaces `--c-brand-900 #0F1D4A`, tints 50–300),
-  one accent (amber-coral `--c-accent-500 #FF8A3D` for shapes on dark surfaces and for decoration,
-  `--c-accent-600 #EC6A24` for a data mark on white — a chart series, a goal bar (3.16:1; 500 is 2.35:1 there) —,
-  `--c-accent-700 #C2410C` when it is small text or a mark on the ink-50 page; **one focal use per slide**: the
-  cover's current-quarter bar, the section number, the key milestone), cool
-  neutrals `--c-ink-50 … 900`, semantic deltas `--c-up-600/50` and `--c-down-600/50`, chart series tokens (keep them
-  in sync with the literal `RRGGBB` in `data-chart`).
-- **Contrast**: every text ≥ **4.5:1** against what it sits on (WCAG AA for small text — slides are projected): up
-  pill 4.8:1, down pill 4.6:1, captions/footer `--c-ink-500` 4.6–5.0:1, section number 4.8:1. `--c-ink-400` is for
-  decoration only (2.4:1). Translucent white text on the dark surfaces: keep alpha ≥ 0.56. White text needs at
-  least brand-600 behind it (brand-400/500 are too light for small white text).
+The look of a deck is its **theme**: `<deck>/deck.css`, a copy of one of the skill's `themes/*.css` (`classic`,
+`mono`, `editorial`, `midnight`, `forest`, `violet`; SKILL.md §3 says which fits what). A theme is one `:root` block
+that sets every token below; `converter/theme/base.css` holds the same tokens with the `classic` values plus the
+components that use them. Slides colour everything through the tokens — `var(--c-…)` in CSS and inline styles,
+`"var(--c-…)"` in `data-chart` colours, `stroke="currentColor"` icons — so copying another theme over `deck.css`
+restyles a finished deck without touching a slide. A literal hex in a slide is the one thing a theme cannot reach.
+
+- **Palette tokens** (each theme sets all of them):
+  - brand `--c-brand-950 … 50`: **600** = the primary (eyebrow text, numbers in the brand colour, marks, bars),
+    **700** = text on a brand tint, **900** = the dark **emphasis surface** (hero KPIs, the dark panel and summary
+    card, the recommended option, the roof band, the table head, the org chart's top box), **950** = its darkest
+    shade (the section divider's gradient end), **50/100** = tints (summary box, icon badge, highlighted row,
+    metric box), **200/300** = outlines (the context chip, swatch borders);
+  - accent `--c-accent-700/600/500/300/100`: **one focal use per slide** (the goal, the key date, the cover's key
+    bar); 700 as small text or a mark on the page, 600 as a data mark on the surface (a goal bar or series), 500 on
+    the dark emphasis surface and for decoration, 300 the light end of an accent gradient, 100 a tinted cell;
+  - neutrals `--c-ink-900 … 50`: 900 titles and big numbers, 700 body, 600 secondary, 500 captions and labels,
+    400 decoration only, 300 axis and connector lines, 200 borders, 100 dividers and row rules, **50 the page**;
+  - deltas `--c-up-600/50`, `--c-down-600/50` (text on its own tint);
+  - data `--c-series-prev` (the prior period, the alternative), `--c-series-curr` (current), `--c-series-fcst`
+    (forecast), `--c-series-strong` (the darkest data colour — the first of three categories).
+- **`--c-white` is literal white in every theme** — only for text, overlays and chips ON the dark emphasis surfaces (a
+  white chip or step circle on a navy card). A box or text that must follow the theme uses `--c-surface` and the ink
+  scale: `var(--c-white)` as a card fill is a white box in `midnight`, with light text on it.
+- **Role tokens**: `--c-surface` (cards, tables, chips, a white swatch — `midnight`'s is dark), `--c-on-fill` (text on
+  a brand-600 or ink-500 bar), `--card-border` (`none`, or the 1 px outline of the outlined themes), `--c-mark-b` (the
+  brand mark's second circle), `--c-accent-soft` (a translucent accent line on the page), and the cover's
+  `--c-cover-from`/`--c-cover-to` gradient with its decoration `--c-cover-halo`, `--c-cover-orbit`, `--c-cover-fcst`.
+- **Shape tokens**: `--radius-card`, `--radius-box`, `--radius-sm`, `--radius-pill`, `--shadow-card`, `--shadow-sheet`
+  (`none` in the outlined themes). The type scale, spacing and grid are NOT themed: they carry the fit guarantees of
+  §4, identical in every theme.
+- **The dark emphasis surface stays dark in every theme**, and so do the cover, the section divider and the closing:
+  the white text and `rgba(255, 255, 255, a)` overlays written on them work in all six themes. An emphasis card is
+  `class="card card--emphasis …"` (the brand-900 fill, the theme's card outline made transparent).
+- **`midnight` inverts the roles**: ink-900 is the lightest text and ink-50 the darkest page, brand-50/100 are dark
+  tints, brand-700 and accent-700 are light text shades, `--c-on-fill` is dark. Written through tokens, a slide
+  needs no change; a literal `#FFFFFF` card or a `#111A2E` text would break there.
+- **Contrast** (checked for every theme by the skill's tests; keep it when you change a value): text ≥ **4.5:1**
+  against what it sits on (WCAG AA for small text — slides are projected): ink-900/700/600/500, brand-600 and
+  accent-700 on the page; ink-900…500, brand-600/700 and the deltas on the surface; brand-700 and ink-900…500 on
+  brand-50; brand-700 and ink-800 on brand-100; each delta on its tint; ink-900 on accent-100; white, white 56 % and
+  accent-500 on brand-900, brand-950, `--c-cover-from` and the gradient's middle; white and white 60 % on
+  `--c-cover-to`; `--c-on-fill` on brand-600 and ink-500; brand-900 on white. Marks ≥ **3:1**: the four series,
+  accent-600 and brand-600 on the surface; brand-600, accent-700 and ink-500 on the page; accent-500 and white 40 % on
+  brand-900. The four series also differ from each other by ΔE ≥ 20 (a chart must tell them apart). `--c-ink-400` is
+  decoration only. Translucent white on the dark surfaces: text ≥ 56 % on the surface itself, ≥ 64 % inside a
+  translucent box (≥ 72 % in a box on the cover gradient's light end); a mark (a prior-period bar) ≥ 40 %.
+  `scripts/theme-check.mjs` checks all of this for a theme file or a deck (see Brand colours).
 - **Type**: display 60/80·800, title 40/56·800, stat 44/60·800, hero stat 48/64·800, lead 22/32·400, card title
   18/28·700, body 18/28·400, dense 16/24, section label 14/20·600 tracked, caption 14/20·400, footer 12/16.
 - **Space**: 8 px grid (`--sp-1 … --sp-10`), 80 px margins, 24 px gutters between cards, 24–32 px card padding.
-- **Shape**: radius 20 (cards), 16 (boxes), 4 (swatches), 999 (pills); `--shadow-card 0 8px 24px /7 %`.
 - **PowerPoint theme**: `--pptx-dk1 … --pptx-folHlink` on `:root` map the tokens to the deck's theme colours (dk1
   ink-900, lt1 white, dk2 brand-900, lt2 ink-50, accent1 brand-600, accent2 accent-500, accent3 up-600, accent4
   down-600, accent5 brand-300, accent6 series-prev) — what a user's newly inserted shapes, tables and charts get in
-  PowerPoint. The converted objects carry literal colours, so a theme recolour in PowerPoint (Design > Variants >
-  Colors) leaves the existing slides unchanged.
-- **Re-branding with `deck.css`**: to give a deck other colours, override the tokens in `<deck>/deck.css` (linked
-  after `base.css` and `fonts.css` on every slide) instead of editing each slide:
-  ```css
-  :root {
-    --c-brand-900: #123B2E; --c-brand-700: #1B5E45; --c-brand-600: #1F7A5A;
-    --c-brand-200: #BFE3D3; --c-brand-50: #EEF8F3;
-  }
-  ```
-  The `--pptx-*` theme slots reference the tokens, so the deck theme follows. Literal colours do not: inline SVG
-  `stroke`/`fill`, `data-chart` colours, `style="background:#…"` swatches and hand-written gradients (the cover's
-  `#0A1433 → #1B3796`) must be changed by hand — search the slides for the old hex values. Re-check the contrast
-  rules with the new colours. `deck.css` may also add deck-wide component rules; it is linked like `base.css`, so
-  every rule in §2–§7 applies to it.
+  PowerPoint. The slots are SEMANTIC in every theme — dk1/dk2 the dark colours, lt1/lt2 the light ones (`midnight`
+  re-points dk1 to its page and lt1/lt2 to its light inks; a dk1 lighter than lt1 is a `theme-color` warning) — and
+  the converter gives every dark slide and layout PowerPoint's inverted colour map (text = lt1 on background = dk1): a
+  text box a user inserts there starts light, one on a light slide dark, a table's text is dark on its light cells,
+  and an empty filled shape starts with whichever of the two reads on its fill. The converted objects carry literal
+  colours, so a theme recolour in PowerPoint (Design > Variants > Colors) leaves the existing slides unchanged.
+- **Brand colours**: copy the closest theme to `deck.css` (a light one, or `midnight` for a dark deck) and replace
+  values, never roles. The brand's MAIN colour becomes brand-600 — darken it until white text on it and it as text on
+  the page both reach 4.5:1 — and the ramp around it: 700 one step darker (text on the tints), 900/950 a very dark
+  shade of the same hue (the emphasis surface and the cover, which must stay dark), 50/100 near-white tints, 200/300
+  soft outlines. Every other token that carries the old theme's hue follows: `--c-cover-to` (a dark mid-shade),
+  `--c-cover-halo` and `--c-cover-fcst` (translucent brand shades), `--c-cover-orbit`, `--c-series-fcst` (a lighter
+  shade that still makes 3:1 on the surface) — `--c-cover-from` and `--c-series-curr` follow the ramp by themselves. A
+  SECOND colour becomes the accent ramp (500 on dark, 600 as a mark, 700 as small text), unless it is a near-black or
+  grey: that stays the ink scale or the emphasis surface; `--c-mark-b` and `--c-accent-soft` (translucent accent)
+  follow the accent. A third colour is data only (`--c-series-strong`) or left out. From `midnight` the brand-600 rule
+  turns around: light enough as text on the dark page, with the dark `--c-on-fill` on it. Then run `node
+  scripts/theme-check.mjs <deck>` (the script in the skill's base directory — SKILL.md §3 shows the command with its
+  absolute path): it prints every contrast pair below its minimum and every data-colour pair too alike as FAIL (exit
+  1), and every token still in another hue as `WARN hue leftover?` — fix each FAIL, and replace each leftover unless
+  you meant it. `deck.sh check` measures only chart colours (`chart-contrast`). `deck.css` may also add deck-wide
+  component rules; it is linked like `base.css`, so every rule in §2–§7 applies to it.
 - **Compose each slide around ONE visual that proves its title**: the title states the claim, the `.slide-sub`
   its evidence (when one figure carries it), and the dominant object shows it — a native chart, bars on one
   scale, a cost bar, a timeline, a big number. The reader should get the point from the visual before reading a
@@ -626,8 +681,8 @@ handles what as a `.data-table--text` of topic, team, extension and channel at t
   alternative / shared work; brand-900 = the emphasis surface (hero KPIs, the recommended option, a summary card,
   the goal band); the accent = the goal or the key date, once per slide; green = favourable and red = unfavourable,
   whichever way the number moves (a churn rise is ▲ in red, a cost cut ▼ in green — §8.5); ▲/▼ only for
-  increase/decrease. A category keeps its colour on every chart (the layouts deck: phone = navy on the line chart
-  and on the doughnut).
+  increase/decrease. A category keeps its colour on every chart (the layouts deck: phone = `--c-series-strong` on
+  the line chart and on the doughnut).
 - **Tie the slides into one argument**: the agenda's chips promise each section's headline figure, a section
   divider previews its section, the closing asks for the decision; a figure that recurs is identical everywhere
   (§10, checklist 5).
@@ -710,7 +765,7 @@ from `<template id="notes">`.
 ```
 <deck>/                          ASCII name: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ (e.g. q3-review)
   slides/NN-name.html            required; NN = 01…60, unique; slide order = numeric order
-  deck.css                       optional; linked as ../deck.css (token overrides for the whole deck, §9)
+  deck.css                       the theme: a copy of one of the skill's themes/*.css, linked as ../deck.css (§9)
   assets/                        optional; files referenced as ../assets/<file>
   .build/                        converter-owned scratch (carries a .gitignore); safe to delete
     check/<profile>/…            check renders, contact sheets, IR; check/report.json

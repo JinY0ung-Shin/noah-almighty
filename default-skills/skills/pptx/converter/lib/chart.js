@@ -16,7 +16,10 @@
  *   - text: var(--font-sans), weights/sizes/colours from the spec, PowerPoint's line box (1.2 × size) with the
  *     baseline seat 1.2·A/(A+D)·size (usWin metrics, text-mapping.md §2.1; A/D measured from the loaded font);
  *   - legend: Office entry order (clustered horizontal bars list the last series first; stacked columns/lines
- *     reverse a right legend), square keys 0.45 × the face's line box, auto-positioned against the FRAME.
+ *     reverse a right legend), square keys 0.45 × the face's line box, auto-positioned against the FRAME;
+ *   - colours: a ChartSpec colour field (COLOR_FIELDS) is 'RRGGBB' or a theme token "var(--name)", resolved
+ *     against the chart element's computed custom properties before anything is drawn — exactly like the extractor,
+ *     which writes the resolved hex into the IR and lints a token that does not resolve (drawn here in the default).
  * Label/legend offsets that PowerPoint computes internally (not in the file) are the MODEL constants below: where
  * PowerPoint evidence exists they follow it (label-box insets PowerPoint writes; office2pdf's fits to native
  * PowerPoint 16.112 exports for the legend key, key gap and right-legend clearance; ONLYOFFICE's Office-emulating
@@ -30,7 +33,7 @@
  * dataMin/dataMax = the extremes actually drawn, stack sums when stacked — the extractor's chart-range lint
  * compares them with the axis, and copies only the scale into the IR) and sets
  * document.documentElement.dataset.chartsReady = "1" once every chart is drawn. Plain ES2020, no dependencies.
- * API: window.NoahChart = { renderAll, renderChart, resolveScale, formatNumber, MODEL, ready }.
+ * API: window.NoahChart = { renderAll, renderChart, resolveScale, formatNumber, colorFields, tokenRef, MODEL, ready }.
  */
 (function () {
   'use strict';
@@ -47,6 +50,12 @@
   var LINE_WIDTH_PX = 3;          // a:ln w=28575
   var MARKER_PT = 5;              // c:marker/c:size = round(7 px × 0.75)
   var MARKER_LINE_PX = 1;         // marker outline a:ln w=9525
+  // ---- colour fields shared with CHART_COLOR_FIELDS in tools/extract/inpage/40-shapes.js (keep in sync) -------
+  // Each is 'RRGGBB' or a theme token "var(--name)"; the keys chart.py reads (the value-axis labels take
+  // categoryAxis.labelColor); `[]` = every item of an array, `{}` = every value of an object.
+  var COLOR_FIELDS = ['series[].color', 'pointColors{}[]', 'dataLabels.color', 'valueAxis.gridlines.color',
+                      'categoryAxis.labelColor', 'categoryAxis.lineColor', 'legend.color'];
+  var TOKEN_REF = /^\s*var\(\s*(--[A-Za-z0-9_-]+)\s*\)\s*$/;  // no fallback: var(--x, #fff) is not a token
 
   // ---- layout model (offsets PowerPoint positions internally) ---------------------------------------------
   var MODEL = {
@@ -98,6 +107,74 @@
   }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
   function r3(v) { return Math.round(v * 1000) / 1000; }
+
+  // ------------------------------------------------------------------------------------------ theme tokens
+  /** visit(holder, key) for every COLOR_FIELDS field present in spec, in list order (no DOM). */
+  function colorFields(spec, visit) {
+    COLOR_FIELDS.forEach(function (f) {
+      var steps = f.match(/\[\]|\{\}|[^.[\]{}]+/g);
+      (function walk(node, k) {
+        if (node === null || typeof node !== 'object') return;
+        var s = steps[k], keys;
+        if (s === '[]') keys = Array.isArray(node) ? node.map(function (_, i) { return i; }) : [];
+        else if (Array.isArray(node)) keys = [];
+        else if (s === '{}') keys = Object.keys(node);
+        else keys = Object.prototype.hasOwnProperty.call(node, s) ? [s] : [];
+        keys.forEach(function (key) { if (k === steps.length - 1) visit(node, key); else walk(node[key], k + 1); });
+      })(spec, 0);
+    });
+  }
+  /** "var(--name)" → '--name'; null for anything else. */
+  function tokenRef(v) { var m = typeof v === 'string' ? TOKEN_REF.exec(v) : null; return m ? m[1] : null; }
+  var colorCtx = null;
+  /** A CSS colour → 'RRGGBB'; null when empty, not a colour, or translucent. A probe inside the chart element
+   *  computes it (currentcolor = the chart's own colour, as in the extractor): sRGB colours come back as
+   *  rgb()/rgba(), any other space (oklch(), lab(), color(…)) through a 1×1 canvas pixel like the extractor's. */
+  function cssHex(el, value) {
+    if (!value) return null;
+    var probe = document.createElement('span');
+    probe.style.color = value;
+    if (!probe.style.color) return null;
+    probe.style.display = 'none';
+    el.appendChild(probe);
+    var c = getComputedStyle(probe).color, rgb, a = 1;
+    el.removeChild(probe);
+    var m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.]+)(%?)\s*)?\)$/.exec(c);
+    if (m) {
+      rgb = [Number(m[1]), Number(m[2]), Number(m[3])];
+      if (m[4] !== undefined) a = Number(m[4]) / (m[5] ? 100 : 1);
+    } else {
+      try {
+        if (!colorCtx) {
+          var cv = document.createElement('canvas');
+          cv.width = cv.height = 1;
+          colorCtx = cv.getContext('2d', { willReadFrequently: true });
+        }
+        colorCtx.clearRect(0, 0, 1, 1);
+        colorCtx.fillStyle = 'rgba(0, 0, 0, 0)';
+        colorCtx.fillStyle = c;
+        colorCtx.fillRect(0, 0, 1, 1);
+        var d = colorCtx.getImageData(0, 0, 1, 1).data;
+        rgb = [d[0], d[1], d[2]];
+        a = d[3] / 255;
+      } catch (e) { return null; }
+    }
+    if (!(a >= 1)) return null;
+    return rgb.map(function (v) { var h = Math.round(clamp(v, 0, 255)).toString(16); return h.length < 2 ? '0' + h : h; })
+      .join('').toUpperCase();
+  }
+  /** Resolve the theme tokens of spec IN PLACE against its chart element. A token that does not resolve keeps its
+   *  text, so hex() draws the default colour (the extractor reports it as a chart-spec error). */
+  function resolveTokens(el, spec) {
+    var cs = null;
+    colorFields(spec, function (holder, key) {
+      var name = tokenRef(holder[key]);
+      if (!name) return;
+      cs = cs || getComputedStyle(el);
+      var h = cssHex(el, cs.getPropertyValue(name).trim());
+      if (h) holder[key] = h;
+    });
+  }
 
   // ------------------------------------------------------------------------------------ Excel number format
   function splitSections(fmt) {
@@ -428,6 +505,7 @@
   /** Everything that does not need layout: normalised options, scale, formatted strings (for font loading). */
   function prepare(el) {
     var spec = parseSpec(el);
+    resolveTokens(el, spec);
     var t = spec.type, pie = (t === 'pie' || t === 'doughnut');
     var dl = spec.dataLabels || {}, va = spec.valueAxis || {}, ca = spec.categoryAxis || {}, lg = spec.legend || {};
     var cats = spec.categories.map(function (c) { return c === null || c === undefined ? '' : String(c); });
@@ -1001,7 +1079,8 @@
   }
 
   var api = { version: '2026-09-26', renderAll: renderAll, renderChart: renderChart, resolveScale: resolveScale, formatNumber: formatNumber,
-              resolveDlPos: resolveDlPos, MODEL: MODEL, PALETTE: PALETTE };
+              resolveDlPos: resolveDlPos, colorFields: colorFields, tokenRef: tokenRef, COLOR_FIELDS: COLOR_FIELDS,
+              MODEL: MODEL, PALETTE: PALETTE };
   if (typeof window !== 'undefined') window.NoahChart = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document !== 'undefined' && typeof window !== 'undefined' && !window.NOAH_CHART_MANUAL) {

@@ -11,12 +11,15 @@ docs/research/shape-table-mapping.md §0 checklist:
 5. outer shadow: ``blurRad = emu(blur)``, ``dist = emu(hypot)``, ``dir = atan2 + rotation``, ``rotWithShape="0"``,
    no sx/sy (spread cannot be represented);
 6. split rule: translucent border or gradient+border -> fill shape + line shape;
-7. every shape is marked decorative (``descr=""`` + Office's decorative flag: it carries no text).
+7. every shape is marked decorative (``descr=""`` + Office's decorative flag: it carries no text);
+8. an opaque fill's empty text body defaults to the more legible theme text colour (dk1 / lt1) wherever its slide's
+   colour map does not already give it (``set_default_text``, EDIT-12).
 IR ``opacity`` multiplies every alpha the element emits.
 """
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import qn
@@ -254,8 +257,7 @@ def add_shape(slide, e: dict, ctx, split_policy: str = "auto"):
         # a fill/border shape carries no text: Office's decorative flag, so the Accessibility Checker does not ask
         # for alt text and screen readers skip it (judge J2-03; text boxes, pictures and charts carry their text)
         mark_decorative(shp._element.nvSpPr.cNvPr)
-        if is_dark_fill(fill_, op):
-            light_default_text(shp._element)
+        set_default_text(shp._element, getattr(ctx, "text", None) or text_defaults(None))
         out.append(shp)
 
     i = bw / 2.0
@@ -274,37 +276,77 @@ def add_shape(slide, e: dict, ctx, split_policy: str = "auto"):
     return out
 
 
-DARK_FILL_MAX_LUMINANCE = 0.2
+# ---------------------------------------------------------------------------------------------- default text
+FALLBACK_TEXT_COLORS = {"dk1": "111A2E", "lt1": "FFFFFF"}    # a theme without the slots: the kit's ink-900 / white
 
 
-def is_dark_fill(fill, opacity: float = 1.0) -> bool:
-    """An opaque solid / gradient fill whose every stop is darker than DARK_FILL_MAX_LUMINANCE (a navy card, the
-    panel): text typed into it would be the master's dark default colour (tx1) on a dark surface."""
-    if not isinstance(fill, dict):
-        return False
-    if fill.get("type") == "solid":
-        stops = [(fill.get("color"), num(fill.get("alpha"), 1.0))]
-    elif fill.get("type") == "linear":
-        stops = [(s.get("color"), num(s.get("alpha"), 1.0)) for s in fill.get("stops") or [] if isinstance(s, dict)]
-    else:
-        return False
-    if not stops or any(a * opacity < 0.99 for _, a in stops):
-        return False
-    return max(rel_luminance(norm_color(c)) for c, _ in stops) < DARK_FILL_MAX_LUMINANCE
+@dataclass(frozen=True)
+class TextDefaults:
+    """What text typed into a shape of one slide or layout would be: `colors` = the theme's dk1 / lt1 ('RRGGBB'), `tx1`
+    = the slot that part's colour map gives the default text colour — "dk1" on a light-mapped part, "lt1" on a
+    dark-mapped one (core.DARK_CLR_MAP)."""
+    colors: dict
+    tx1: str = "dk1"
 
 
-def light_default_text(sp) -> None:
-    """White default run colour (a:lstStyle lvl1pPr defRPr) in a dark fill shape's empty text body: a user who selects
-    the card / panel and starts typing gets legible text (fixer round 3, EDIT-12). The shape shows no text, so nothing
-    renders differently."""
+def text_defaults(theme_colors: dict | None, tx1: str = "dk1") -> TextDefaults:
+    colors = dict(FALLBACK_TEXT_COLORS)
+    for slot in colors:
+        v = (theme_colors or {}).get(slot)
+        if isinstance(v, str) and len(v) == 6:
+            colors[slot] = norm_color(v)
+    return TextDefaults(colors, tx1)
+
+
+def _contrast(a: str, b: str) -> float:
+    """WCAG 2 contrast ratio of two opaque colours."""
+    x, y = sorted((rel_luminance(a), rel_luminance(b)), reverse=True)
+    return (x + 0.05) / (y + 0.05)
+
+
+def fill_stops(sp) -> list | None:
+    """[(RRGGBB, alpha)] of the written spPr fill (solid: one; linear gradient: every stop), None for no fill."""
+    spPr = sp.find(qn("p:spPr"))
+    f = next((c for c in spPr if c.tag in (qn("a:solidFill"), qn("a:gradFill"))), None) if spPr is not None else None
+    if f is None:
+        return None
+    out = []
+    for c in f.iter(qn("a:srgbClr")):
+        a = c.find(qn("a:alpha"))
+        out.append((norm_color(c.get("val")), int(a.get("val")) / 100000.0 if a is not None else 1.0))
+    return out or None
+
+
+def legible_text_slot(stops, td: TextDefaults) -> str | None:
+    """The theme text slot ("dk1" | "lt1") with the higher WCAG contrast on EVERY stop of an opaque fill (a tie keeps
+    the part's own tx1); None for no fill or a translucent one — text typed there sits on whatever is behind it."""
+    if not stops or any(a < 0.99 for _, a in stops):
+        return None
+    worst = {slot: min(_contrast(td.colors[slot], c) for c, _ in stops) for slot in ("dk1", "lt1")}
+    other = "lt1" if td.tx1 == "dk1" else "dk1"
+    return other if worst[other] > worst.get(td.tx1, 0.0) + 1e-9 else td.tx1
+
+
+def set_default_text(sp, td: TextDefaults) -> None:
+    """The default run colour (a:lstStyle lvl1pPr defRPr) of a fill shape's empty text body: a user who selects the
+    card / chip and starts typing gets legible text (fixer round 3, EDIT-12, generalised to both colour maps). It is
+    the more legible of the theme's dk1 and lt1 on the opaque fill (legible_text_slot), written ONLY where the part's
+    colour map would give tx1 = the other slot: on a light-mapped slide a navy card gets lt1 (white), on a dark-mapped
+    one a white chip gets dk1, and a navy card there needs nothing (tx1 = lt1 already). The shape shows no text, so
+    nothing renders differently. Re-run on a shape moved into a layout, whose map may differ (the list is rewritten)."""
     tx = sp.find(qn("p:txBody"))
     lst = tx.find(qn("a:lstStyle")) if tx is not None else None
     if lst is None:
         return
+    for c in list(lst):
+        lst.remove(c)
+    slot = legible_text_slot(fill_stops(sp), td)
+    if slot is None or slot == td.tx1:
+        return
     lvl = sub(lst, "a:lvl1pPr")
     d = sub(lvl, "a:defRPr")
     sf = sub(d, "a:solidFill")
-    sub(sf, "a:srgbClr", val="FFFFFF")
+    sub(sf, "a:srgbClr", val=td.colors[slot])
 
 
 # ---------------------------------------------------------------------------------------------- background

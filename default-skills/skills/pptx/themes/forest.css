@@ -1,0 +1,78 @@
+/* themes/forest.css — Forest: a deep green primary with mint tints and a sunflower accent on a soft green-grey
+ * page; white cards with a soft shadow, 20 px radius. Calm, trustworthy, public-minded.
+ * Fits: ESG and sustainability, public sector, healthcare, safety, training and education.
+ *
+ * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
+ * Every theme defines the same tokens; slides and the kit's components colour everything through them.
+ * For a brand theme, copy the closest theme and change its values, then re-check the contrast pairs
+ * (reference/AUTHORING.md §9). */
+:root {
+  /* Brand: 600 = primary (text, marks, bars), 700 = text on a brand tint, 900 = the dark emphasis surface,
+     950 = the darkest (the section divider's gradient end), 50/100 = tints, 200/300 = outlines. */
+  --c-brand-950: #05241A;
+  --c-brand-900: #0A3326;
+  --c-brand-800: #135640;
+  --c-brand-700: #15654A;
+  --c-brand-600: #1A7A57;
+  --c-brand-500: #2C9A6E;
+  --c-brand-400: #5BB890;
+  --c-brand-300: #93D1B4;
+  --c-brand-200: #C1E5D3;
+  --c-brand-100: #DDF1E6;
+  --c-brand-50:  #EEF8F2;
+
+  /* Accent: one focal element per slide. 700 small text / a mark on the page, 600 a data mark on the surface,
+     500 on the dark emphasis surface, 300 the light end of an accent gradient, 100 a tinted cell. */
+  --c-accent-700: #8F5300;
+  --c-accent-600: #C47400;
+  --c-accent-500: #F5A623;
+  --c-accent-300: #FAC96A;
+  --c-accent-100: #FDF0D0;
+
+  /* Neutrals: 900 titles and big numbers, 700 body, 600 secondary, 500 captions (>= 4.5:1), 400 decoration,
+     300 axis and connector lines, 200 borders, 100 dividers, 50 the content page. */
+  --c-ink-900: #10201A;
+  --c-ink-800: #1C2E26;
+  --c-ink-700: #32443B;
+  --c-ink-600: #46574E;
+  --c-ink-500: #5E6F66;
+  --c-ink-400: #96A59C;
+  --c-ink-300: #C5D0C9;
+  --c-ink-200: #DCE5DF;
+  --c-ink-100: #E9EFEB;
+  --c-ink-50:  #F2F6F3;
+
+  /* Deltas: green = favourable, red = unfavourable (text colour on its own 50 tint). */
+  --c-up-600:   #0B7A47;
+  --c-up-50:    #E3F5EA;
+  --c-down-600: #C8322D;
+  --c-down-50:  #FDEBEA;
+
+  /* Data: prior period / alternative, current, forecast, the darkest category (>= 3:1 on the surface). */
+  --c-series-prev:   #83928A;
+  --c-series-curr:   var(--c-brand-600);
+  --c-series-fcst:   #29A35E;
+  --c-series-strong: var(--c-brand-900);
+
+  /* Surfaces and on-colours. */
+  --c-surface: var(--c-white);
+  --c-on-fill: var(--c-white);
+  --card-border: none;
+  --c-mark-b: rgba(245, 166, 35, 0.88);
+  --c-accent-soft: rgba(245, 166, 35, 0.45);
+
+  /* Cover and closing: the gradient and the translucent decoration drawn on it. */
+  --c-cover-from:  var(--c-brand-950);
+  --c-cover-to:    #0F4A37;
+  --c-cover-halo:  rgba(91, 184, 144, 0.20);
+  --c-cover-orbit: rgba(193, 229, 211, 0.80);
+  --c-cover-fcst:  rgba(91, 184, 144, 0.55);
+
+  /* Shape. */
+  --radius-card: 20px;
+  --radius-box:  16px;
+  --radius-sm:   4px;
+  --radius-pill: 999px;
+  --shadow-card:  0 8px 24px rgba(12, 42, 30, 0.08);
+  --shadow-sheet: 0 6px 20px rgba(12, 42, 30, 0.07);
+}

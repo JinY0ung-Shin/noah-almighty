@@ -66,6 +66,12 @@ the dash of every line / border; paragraph ``rtl`` / ``fontAlgn`` / line-breakin
 their runs; hidden slides (``show``, app.xml); a dark background pinned on its slide; decorative groups; light default
 text in dark fills; no overlay picture in the deck; an object without ``a:xfrm`` is reported, not a crash.
 
+Dark decks (converter 1.1.0): the colour map (``clrmap``) of every slide and custom layout follows its background — a
+dark one carries its own inverted map (bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2), any other resolves to the identity map (a
+slide's masterClrMapping through its layout, a layout's through the master); and ``default-text`` holds on both maps:
+text typed into an opaque fill shape defaults (its own lstStyle defRPr, else the mapped tx1) to the more legible of
+the theme's dk1 / lt1 on that fill.
+
 Exit status: 0 PASS, 1 FAIL, 2 usage / missing input.
 """
 from __future__ import annotations
@@ -224,6 +230,68 @@ def fill_is_dark(fill, opacity: float = 1.0, need_opaque: bool = True) -> bool:
     if not stops or any(len(c) != 6 for c, _ in stops) or (need_opaque and any(a * opacity < 0.99 for _, a in stops)):
         return False
     return max(luminance(c, 1.0 if need_opaque else a) for c, a in stops) < DARK_LUMINANCE
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG 2 contrast ratio of two opaque colours."""
+    x, y = sorted((luminance(a), luminance(b)), reverse=True)
+    return (x + 0.05) / (y + 0.05)
+
+
+# ---------------------------------------------------------------------------------------------- colour maps
+CLR_MAP_KEYS = ("bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+                "hlink", "folHlink")
+IDENTITY_CLR_MAP = {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2", **{k: k for k in CLR_MAP_KEYS[4:]}}
+INVERTED_CLR_MAP = {"bg1": "dk1", "tx1": "lt1", "bg2": "dk2", "tx2": "lt2", **{k: k for k in CLR_MAP_KEYS[4:]}}
+
+
+def own_clr_map(deck, part) -> dict | None:
+    """A slide's / layout's own ``p:clrMapOvr/a:overrideClrMapping`` ({attr: slot}), None for masterClrMapping; a
+    master's ``p:clrMap``."""
+    root = deck.xml(part)
+    m = root.find(P + "clrMap") if part.startswith("ppt/slideMasters/") else \
+        root.find(f"{P}clrMapOvr/{A}overrideClrMapping")
+    return {k: m.get(k) for k in CLR_MAP_KEYS} if m is not None else None
+
+
+def clr_map_of(deck, part) -> dict:
+    """The colour map in effect on a slide, layout or master part: its own override, else — masterClrMapping — its
+    layout's (a slide) or its master's (a layout): PowerPoint applies a layout's override to the slides that inherit."""
+    p, seen = part, set()
+    while p and p in deck.names and p not in seen:
+        seen.add(p)
+        m = own_clr_map(deck, p)
+        if m is not None:
+            return m
+        p = deck.related(p, "/slideLayout") if p.startswith("ppt/slides/") else deck.related(p, "/slideMaster")
+    return dict(IDENTITY_CLR_MAP)
+
+
+def theme_colors(deck) -> dict:
+    """{slot: 'RRGGBB'} of the first slide master's theme (an srgbClr's val, a sysClr's lastClr)."""
+    mst = sorted(n for n in deck.names if n.startswith("ppt/slideMasters/slideMaster") and n.endswith(".xml"))
+    th = deck.related(mst[0], "/theme") if mst else None
+    cs = deck.xml(th).find(f"{A}themeElements/{A}clrScheme") if th in deck.names else None
+    out = {}
+    for c in (cs if cs is not None else []):
+        k = next(iter(c), None)
+        v = (k.get("val") if ln(k) == "srgbClr" else k.get("lastClr") if ln(k) == "sysClr" else None) if k is not None \
+            else None
+        if v:
+            out[ln(c)] = v.upper()
+    return out
+
+
+def xml_fill_dark(f) -> bool:
+    """fill_is_dark for a written background fill (solidFill / gradFill of srgbClr), alpha composited over white."""
+    if f is None or ln(f) not in ("solidFill", "gradFill"):
+        return False
+    stops = []
+    for c in f.iter(A + "srgbClr"):
+        a = c.find(A + "alpha")
+        stops.append((c.get("val", "").upper(), int(a.get("val")) / 100000.0 if a is not None else 1.0))
+    return bool(stops) and all(len(c) == 6 for c, _ in stops) and \
+        max(luminance(c, a) for c, a in stops) < DARK_LUMINANCE
 
 
 def rot_equal(a, b) -> bool:
@@ -852,7 +920,30 @@ def check_shadow(prob, where, eid, eff_parent, shadow, op, rot, label):
                 f"{want} dir {want_dir} {shadow.get('color')}@{num(shadow.get('alpha'), 1) * op:.3f}")
 
 
-def check_shape(prob, where, e, nodes_by_role, tol):
+def check_default_text(prob, where, eid, node, fill, op, role, text) -> None:
+    """Text typed into a fill shape is legible (EDIT-12, on either colour map): on an opaque fill its default run
+    colour — the shape's own lstStyle defRPr, else the tx1 its part's colour map gives — is the theme text colour
+    (dk1 / lt1) with the higher WCAG contrast on every stop (either on a tie). `text` = (theme colours, colour map)."""
+    colors, cmap = text
+    if not isinstance(fill, dict) or not colors.get("dk1") or not colors.get("lt1"):
+        return
+    stops = [(fill.get("color"), num(fill.get("alpha"), 1.0))] if fill.get("type") == "solid" else \
+        [(q.get("color"), num(q.get("alpha"), 1.0)) for q in fill.get("stops") or [] if isinstance(q, dict)] \
+        if fill.get("type") == "linear" else []
+    stops = [(str(c or "").lstrip("#").upper(), a * op) for c, a in stops]
+    if not stops or any(len(c) != 6 or a < 0.99 for c, a in stops):
+        return                                      # no fill, or a translucent one: nothing to be legible against
+    worst = {s: min(contrast(colors[s], c) for c, _ in stops) for s in ("dk1", "lt1")}
+    want = {colors[s] for s, v in worst.items() if v >= max(worst.values()) - 1e-9}
+    d = node.find(f"{P}txBody/{A}lstStyle/{A}lvl1pPr/{A}defRPr")
+    ca = color_alpha(d.find(A + "solidFill")) if d is not None else None
+    got = ca[0].upper() if ca is not None else colors.get(cmap.get("tx1"))
+    prob.expect(got in want, *where, eid, "default-text",
+                f"{role}: text typed into this fill would be {got} ({'lstStyle defRPr' if ca is not None else 'tx1 = ' + str(cmap.get('tx1'))}), "
+                f"not the more legible theme text colour (dk1 {colors['dk1']} {worst['dk1']:.2f}:1, lt1 {colors['lt1']} {worst['lt1']:.2f}:1)")
+
+
+def check_shape(prob, where, e, nodes_by_role, tol, text=None):
     eid = e.get("id")
     op = num(e.get("opacity"), 1.0)
     rot = num(e.get("rotationDeg"))
@@ -880,11 +971,8 @@ def check_shape(prob, where, e, nodes_by_role, tol):
         check_fill(prob, where, eid, sppr, fill, op, role)
         check_line(prob, where, eid, sppr, line, op, role)
         check_shadow(prob, where, eid, sppr, shadow, op, rot, role)
-        if fill_is_dark(fill, op):                  # text typed into it must be legible (EDIT-12)
-            d = node.find(f"{P}txBody/{A}lstStyle/{A}lvl1pPr/{A}defRPr")
-            ca = color_alpha(d.find(A + "solidFill")) if d is not None else None
-            prob.expect(ca is not None and luminance(ca[0]) > 0.5, *where, eid, "default-text",
-                        f"{role}: dark fill without a light default text colour (lstStyle defRPr {ca})")
+        if text is not None:                        # text typed into it must be legible (EDIT-12)
+            check_default_text(prob, where, eid, node, fill, op, role, text)
         cnv = cnv_of(node)
         dec = cnv.find(f".//{{{NS['adec']}}}decorative") if cnv is not None else None
         prob.expect(cnv is not None and ((cnv.get("descr") or "").strip() or (dec is not None and dec.get("val") == "1")),
@@ -1517,6 +1605,38 @@ def check_background(prob, deck, where, s, slide_part):
                     f"the slide: {why}")
 
 
+def check_clr_map(prob, deck, where, s, slide_part) -> None:
+    """The colour map text a user types on the slide gets: a dark slide carries the inverted map itself (tx1 = lt1,
+    bg1 = dk1 — like its pinned background, whatever its layout says), any other slide resolves to the identity map
+    (tx1 = dk1; its masterClrMapping resolves through the layout, so on a dark layout it needs its own identity map)."""
+    if fill_is_dark(s.get("background"), need_opaque=False):
+        own = own_clr_map(deck, slide_part)
+        prob.expect(own == INVERTED_CLR_MAP, *where, None, "clrmap", f"dark slide: colour map "
+                    f"{own or 'masterClrMapping'} is not its own inverted map (bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2): text a "
+                    "user types on it would default to the dark text colour")
+    else:
+        eff = clr_map_of(deck, slide_part)
+        prob.expect(eff == IDENTITY_CLR_MAP, *where, None, "clrmap", f"light slide: the colour map in effect {eff} is "
+                    "not the identity map (bg1=lt1 tx1=dk1): text a user types on it would default to the light colour")
+
+
+def check_layout_clr_map(prob, deck, part) -> None:
+    """A layout's colour map follows its (effective) background like a slide's: dark -> its own inverted map, so a
+    slide made from it (New Slide) types light text; light -> the identity map in effect."""
+    bg = deck.xml(part).find(f"{P}cSld/{P}bg/{P}bgPr")
+    if bg is None:
+        mst = deck.related(part, "/slideMaster")
+        bg = deck.xml(mst).find(f"{P}cSld/{P}bg/{P}bgPr") if mst in deck.names else None
+    if bg is not None and xml_fill_dark(fill_of(bg)):
+        own = own_clr_map(deck, part)
+        prob.expect(own == INVERTED_CLR_MAP, None, part, None, "clrmap", f"dark layout: colour map "
+                    f"{own or 'masterClrMapping'} is not its own inverted map (bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2)")
+    else:
+        eff = clr_map_of(deck, part)
+        prob.expect(eff == IDENTITY_CLR_MAP, None, part, None, "clrmap", f"light layout: the colour map in effect {eff} "
+                    "is not the identity map (bg1=lt1 tx1=dk1)")
+
+
 # ---------------------------------------------------------------------------------------------- paint order
 def ir_extent(e: dict) -> tuple[float, float, float, float]:
     """Painted extent (px) of an IR element: its box, text lines, shadow; +1 px (the lift rule's own measure)."""
@@ -1638,7 +1758,7 @@ def check_element(prob, tm, deck, where, q0, e, kind, nodes, objs, node_of, elem
     if kind == "shape":
         if "table-bg" in nodes:
             return                                  # checked with its table (cell fills + tblPr shadow)
-        check_shape(prob, where, e, nodes, tol)
+        check_shape(prob, where, e, nodes, tol, (theme_colors(deck), clr_map_of(deck, q0["part"])))
     elif kind == "text":
         n = nodes.get("main")
         if n is not None:
@@ -1869,6 +1989,9 @@ def structure(args) -> dict:
         prob.add(None, None, None, "geometry", str(exc))
     check_theme(prob, deck, ir, tm)
     check_template_residue(prob, deck)
+    for part, q in parts.items():
+        if q.get("kind") == "layout" and part in deck.names:
+            check_layout_clr_map(prob, deck, part)
     slides = sorted((s for s in ir.get("slides") or [] if isinstance(s, dict)), key=lambda s: s.get("index", 0))
     for s in slides:
         sno = s.get("index")
@@ -1877,6 +2000,7 @@ def structure(args) -> dict:
             continue
         lp = parts.get(sp.get("layoutPart"))
         check_background(prob, deck, (sno, sp["part"]), s, sp["part"])
+        check_clr_map(prob, deck, (sno, sp["part"]), s, sp["part"])
         show = deck.xml(sp["part"]).get("show", "1")
         prob.expect(show not in ("0", "false"), sno, sp["part"], None, "hidden",
                     f"p:sld show={show}: the slide is skipped in the slide show (VR-05)")

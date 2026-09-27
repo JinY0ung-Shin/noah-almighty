@@ -5,12 +5,13 @@
 <title>03 간지 · 2027년 고객 경험 혁신 계획</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   /* Section divider: its own layout (data-layout="간지") with a dark background — the builder gives it a layout of
      its own and keeps a copy of the dark background on the slide, so its white text stays readable on any
      template. It previews what the section argues (the three strategies) instead of decorating empty space. */
   main.slide.section {
-    background: linear-gradient(160deg, #0F1D4A 0%, #0A1433 100%);
+    background: linear-gradient(160deg, var(--c-brand-900) 0%, var(--c-brand-950) 100%);
     color: var(--c-white);
   }
 
@@ -67,15 +68,15 @@
 
   <section class="preview" data-group="이 장의 내용">
     <div class="item">
-      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
       <div class="item-body"><p class="item-kicker">전략 1</p><p class="item-title">채널 통합</p><p class="item-desc">전화·채팅·메신저를 하나의 상담 화면으로</p></div>
     </div>
     <div class="item">
-      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
+      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
       <div class="item-body"><p class="item-kicker">전략 2</p><p class="item-title">셀프 서비스</p><p class="item-desc">단순 문의는 챗봇과 FAQ로 고객이 직접 해결</p></div>
     </div>
     <div class="item">
-      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+      <div class="item-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
       <div class="item-body"><p class="item-kicker">전략 3</p><p class="item-title">상담 지능화</p><p class="item-desc">AI 요약·답변 추천으로 후처리 시간 단축</p></div>
     </div>
   </section>

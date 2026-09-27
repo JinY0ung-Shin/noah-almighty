@@ -5,9 +5,10 @@
 <title>01 표지 · 2026년 3분기 사업 실적 보고</title>
 <link rel="stylesheet" href="../theme/base.css">
 <link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
 <style>
   main.slide.cover {
-    background: linear-gradient(135deg, #0A1433 0%, #1B3796 100%);
+    background: linear-gradient(135deg, var(--c-cover-from) 0%, var(--c-cover-to) 100%);
     color: var(--c-white);
   }
 
@@ -17,17 +18,17 @@
   .ring  { left: 616px; top: 40px; width: 640px; height: 640px; border-radius: 50%;
            border: 1px solid rgba(255, 255, 255, 0.10); }
   .halo  { left: 676px; top: 100px; width: 520px; height: 520px; border-radius: 50%;
-           background: rgba(74, 110, 242, 0.20); }
+           background: var(--c-cover-halo); }
   .bar   { width: 72px; border-radius: 36px; }
   /* 2026 quarterly revenue from zero on one scale (1,148 / 1,209 / 1,284 / 1,410 억 원 -> 368 px = 1,410):
      the motif never exaggerates the growth; 3Q = the reported quarter (accent), 4Q = the forecast, drawn as the
      chart draws it: a lighter brand-blue fill (one forecast encoding across the deck) */
   .bar-1 { left: 756px;  top: 276px; height: 300px; background: rgba(255, 255, 255, 0.12); }
   .bar-2 { left: 852px;  top: 260px; height: 316px; background: rgba(255, 255, 255, 0.18); }
-  .bar-3 { left: 948px;  top: 241px; height: 335px; background: linear-gradient(180deg, #FFB27D 0%, #FF7A3D 100%); }
-  .bar-4 { left: 1044px; top: 208px; height: 368px; background: rgba(111, 143, 240, 0.55); }
+  .bar-3 { left: 948px;  top: 241px; height: 335px; background: linear-gradient(180deg, var(--c-accent-300) 0%, var(--c-accent-500) 100%); }
+  .bar-4 { left: 1044px; top: 208px; height: 368px; background: var(--c-cover-fcst); }
   .orbit-a { left: 1171px; top: 144px; width: 20px; height: 20px; border-radius: 50%; background: rgba(255, 255, 255, 0.90); }
-  .orbit-b { left: 629px;  top: 245px; width: 12px; height: 12px; border-radius: 50%; background: rgba(163, 182, 250, 0.80); }
+  .orbit-b { left: 629px;  top: 245px; width: 12px; height: 12px; border-radius: 50%; background: var(--c-cover-orbit); }
   .baseline { left: 732px; top: 576px; width: 408px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.16); }
 
   /* ---- text column ---- */
