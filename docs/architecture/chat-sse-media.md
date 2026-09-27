@@ -67,6 +67,11 @@
   `run_in_background` (a running shell makes no further tool calls, and timeout auto-backgrounding is
   Bash-only), so the background phase below still exists — it is just Bash-fed now. Re-verify on every
   SDK bump and drop the rewrite once bg subagents inherit the session's permission wiring.
+  **Re-checked 2026-09-27 on the bundled CLI 2.1.283 (SDK 0.3.283):** the gap looks CLOSED upstream,
+  though no changelog entry says so. In a direct SDK spike WITHOUT the rewrite, an allow-all PreToolUse
+  hook received the background subagent's own Bash call (`agent_id` set), and the call ran. In-app,
+  the rewrite still forces spawns foreground and works. The rewrite STAYS until a follow-up also
+  verifies deny and parked-prompt answers for background subagents, then removes it deliberately.
   (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is the blunt alternative — strips `run_in_background` from
   tool schemas entirely, but kills Bash background tasks too.)
 - **Background phase (`run_in_background` tasks outliving the visible reply).** A `query()` is NOT one
@@ -108,7 +113,9 @@
   attached its park becomes a LOOP: each accepted message is yielded as another
   `{type:"user", uuid, message}`, the SDK's `Query.streamInput` writes it to the CLI's stdin at once,
   and the CLI folds it into the running turn after the next `tool_result`. Verified by a live spike on
-  the SDK-BUNDLED CLI 2.1.251 (the SDK spawns its own binary, never the machine's `claude`):
+  the SDK-BUNDLED CLI 2.1.251 (the SDK spawns its own binary, never the machine's `claude`), and
+  re-verified in-app on 2.1.283 on 2026-09-27 (queued → delivered after the Bash `tool_result` →
+  completed, folded into the same turn):
   (1) `command_lifecycle {command_uuid, state: queued|started|completed|cancelled}` keyed by OUR uuid is
   the ONLY delivery signal — a folded steer is never echoed back as a stream `user` message, `started`
   is the moment the text reached the model, and `result.queued_turn_count` LIES (0 with a steer still

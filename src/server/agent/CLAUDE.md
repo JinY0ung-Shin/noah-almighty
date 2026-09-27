@@ -50,5 +50,7 @@ Durable principles for this layer:
 - **Prompt assembly is split:** `buildSystemPromptAppend` holds app/tool/self-state standing guidance and is
   appended to the SDK's default Claude Code system prompt; `buildUserPrompt` holds stored history fallback and
   the current user/task instruction. Compatibility `buildPrompt` returns both for older tests/importers.
+  The preset MUST carry `snapshot: false`: the CLI default (2.1.267+) records the first turn's system prompt
+  and replays it on every resume, so the per-turn append — the live self-state — would silently freeze.
 - **`agent-core.test.ts` checks the prompt with `toContain`/`not.toContain` substrings**, not byte-for-byte
   — adding a section is safe; changing an existing string (or its per-viewer presence) breaks a test.

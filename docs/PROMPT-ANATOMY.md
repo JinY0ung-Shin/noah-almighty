@@ -19,6 +19,7 @@ options.systemPrompt = {
   type: "preset", preset: "claude_code",
   append: buildSystemPromptAppend(promptRequest),
   excludeDynamicSections: true,   // drops the preset's cwd / memory / git-status sections
+  snapshot: false,                // render fresh every request (CLI 2.1.267+ replays the first turn's prompt otherwise)
 };
 ```
 

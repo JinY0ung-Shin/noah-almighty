@@ -409,6 +409,12 @@ export async function runClaudeAgent(
       // cwd/memory/git-status sections out of the system layer. The app supplies
       // its own workspace/tool-state guidance in the appended system prompt.
       excludeDynamicSections: true,
+      // Render the prompt FRESH on every request. Since CLI 2.1.267 the default
+      // records a session's first system prompt (tool descriptions included) and
+      // replays it on every resume, ignoring a later `append` until compaction.
+      // Every turn resumes with a freshly built append — the avatar's live
+      // self-state — so a recorded prompt would freeze it at the first turn.
+      snapshot: false,
     };
   };
   setSystemPrompt();

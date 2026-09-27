@@ -12,7 +12,11 @@ moved symbols so importers keep their paths:
 - `promptBuilder.ts` — `buildSystemPromptAppend` + `buildUserPrompt` + compatibility `buildPrompt` +
   `compactConversationHistory`/`conversationHistoryBlock` + `GIT_MCP_ONLY_GUIDANCE`.
   `claudeAgent.ts` uses the SDK's default Claude Code system prompt via `systemPrompt: { type: "preset",
-  preset: "claude_code", append, excludeDynamicSections: true }`; app/permission/self-state guidance goes
+  preset: "claude_code", append, excludeDynamicSections: true, snapshot: false }`. **`snapshot: false` is
+  load-bearing:** since CLI 2.1.267 the default RECORDS a session's first system prompt (tool descriptions
+  included) and replays it on every resume, ignoring a later `append` until compaction. Every turn resumes
+  with a freshly built append, so a recorded prompt would freeze the avatar's self-state at turn one
+  (live-verified on CLI 2.1.283: a resumed turn answered from the FIRST turn's append without it). App/permission/self-state guidance goes
   in the append, while stored history + the current user/task instruction stay in the user prompt. **`agent-core.test.ts`
   checks the prompt with `toContain`/`not.toContain` substrings, NOT byte-for-byte** — ADDING a section is
   safe; only changing an EXISTING string (or its presence per viewer class) breaks a test.
@@ -184,7 +188,9 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   practice: a workflow-spawned agent's read-only work (Read/Grep/WebFetch/…) succeeds and shows normally;
   any Bash/Write/Edit/etc. it attempts silently fails as if the user refused. Owner-accepted tradeoff
   (2026-08-30) — re-verify on SDK bumps and drop this caveat once background subagents inherit the
-  parent's permission wiring (same note as `SUBAGENT_SPAWN_TOOLS`).
+  parent's permission wiring (same note as `SUBAGENT_SPAWN_TOOLS`). 2026-09-27, CLI 2.1.283: a
+  background SUBAGENT's tool call now reaches the PreToolUse hook (direct spike — see
+  `chat-sse-media.md`); Workflow `agent()` calls were NOT re-tested, so this caveat stands until they are.
 - **Activity-tree nesting:** a workflow's own container `task_started` (system event, `workflow_name` set —
   a more robust signal than its exact `task_type` literal, which is `local_workflow` today) renders as an
   AGENT node, not a task row — only an agent can be a `parentId` target in the client's `liveAgents` tree,

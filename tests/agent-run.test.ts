@@ -376,10 +376,13 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
       (options.env as Record<string, string | undefined>)
         .CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
     ).toBe("1");
+    // `snapshot: false` keeps the per-turn append live on resumed sessions; the
+    // CLI's default would replay the first turn's recorded prompt instead.
     expect(options.systemPrompt).toMatchObject({
       type: "preset",
       preset: "claude_code",
       excludeDynamicSections: true,
+      snapshot: false,
     });
     expect(typeof (options.systemPrompt as { append?: unknown }).append).toBe("string");
     // Events present → the PreToolUse hook is registered (the real permission gate).
