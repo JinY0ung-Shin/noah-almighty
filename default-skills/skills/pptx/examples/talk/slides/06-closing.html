@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>06 요청 · 셀프 서비스 시범 운영</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Closing (발표형): ask the audience for ONE thing, not "thank you". Its own dark layout (data-layout="맺음") on
+     the cover gradient: the ask as a 72/96 two-line title (4/3 × 72: 0.1 px per line off in PowerPoint), where to
+     send it in one lead line, and the next three dates on a rail (fixed 384 px pitch, the audience's deadline lit).
+     The opener's moon comes back top right (its orbit dot moved on), so the talk ends where it began; the title
+     box ends at x 880, before the motif (x 960), so a longer line wraps (a title-wrap error) instead of running
+     into it. */
+  main.slide.closing {
+    background: linear-gradient(135deg, var(--c-cover-from) 0%, var(--c-cover-to) 100%);
+    color: var(--c-white);
+  }
+
+  .deco { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  .deco > div { position: absolute; border-radius: 50%; }
+  .ring  { left: 960px; top: 24px; width: 240px; height: 240px; border: 1px solid rgba(255, 255, 255, 0.12); }
+  .halo  { left: 996px; top: 60px; width: 168px; height: 168px; background: var(--c-cover-halo); }
+  .moon  { left: 1044px; top: 108px; width: 72px; height: 72px; background: rgba(255, 255, 255, 0.90); }
+  .orbit { left: 1158px; top: 52px; width: 14px; height: 14px; background: var(--c-cover-orbit); }
+
+  .brand { position: absolute; left: var(--margin-x); top: 64px; display: flex; align-items: center; gap: 8px; }
+  .brand .mark-a { background: var(--c-white); }
+  .wordmark { font-size: 18px; line-height: 24px; font-weight: 800; letter-spacing: -0.01em; color: var(--c-white); }
+
+  .kicker { position: absolute; left: var(--margin-x); top: 184px; font-size: 18px; line-height: 28px; font-weight: 700;
+            letter-spacing: var(--tracking-label); color: var(--c-accent-500); }
+  .closing-title { position: absolute; left: var(--margin-x); top: 224px; width: 800px;
+                   font-size: 72px; line-height: 96px; font-weight: 800;
+                   letter-spacing: var(--tracking-display); color: var(--c-white); }
+  .closing-lead { position: absolute; left: var(--margin-x); top: 440px; width: 800px;
+                  font-size: var(--fs-lead); line-height: var(--lh-lead); color: rgba(255, 255, 255, 0.76); }
+  .closing-lead strong { color: var(--c-white); }
+
+  /* next steps: three dates on one rail, dot to dot (fixed 384 px pitch, identical in both profiles); dates 18/28
+     and names at the lead size, the 발표형 floor */
+  .next { position: absolute; left: var(--margin-x); top: 536px; width: var(--content-w); height: 88px; }
+  .next > * { position: absolute; }
+  .next-rail { left: 9px; top: 8px; width: 768px; height: 2px; background: rgba(255, 255, 255, 0.20); }
+  .step { top: 0; width: 352px; }
+  .step-dot { width: 18px; height: 18px; border-radius: 50%; background: rgba(255, 255, 255, 0.36); }
+  .step.is-now .step-dot { background: var(--c-white); }
+  .step-date { margin-top: 12px; font-size: 18px; line-height: 28px; font-weight: 700;
+               color: rgba(255, 255, 255, 0.72); }
+  .step.is-now .step-date { color: var(--c-white); }
+  .step-name { font-size: var(--fs-lead); line-height: var(--lh-lead); font-weight: 600; color: var(--c-white); }
+
+  .closing-note { position: absolute; left: var(--margin-x); top: 680px; font-size: var(--fs-micro);
+                  line-height: var(--lh-micro); color: rgba(255, 255, 255, 0.60); }
+  .closing-page { position: absolute; left: 1168px; top: 680px; width: 32px; text-align: right;
+                  font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 700;
+                  color: rgba(255, 255, 255, 0.60); }
+</style>
+</head>
+<body>
+<main class="slide closing" data-layout="맺음">
+  <div class="deco" data-group="장식 — 달">
+    <div class="ring"></div>
+    <div class="halo"></div>
+    <div class="moon"></div>
+    <div class="orbit"></div>
+  </div>
+
+  <div class="brand" data-group="브랜드">
+    <div class="mark" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+    <p class="wordmark">예시테크</p>
+  </div>
+
+  <p class="kicker">요청 사항</p>
+  <h1 class="closing-title">팀마다 반복 질문<br>20개를 보내 주십시오</h1>
+  <p class="closing-lead">보내실 곳 · 사내 메신저 <strong>#self-service</strong></p>
+
+  <div class="next" data-group="다음 단계 — 11월 28일 · 12월 15일 · 2027년 1월 (날짜 변경 시 직접 수정)">
+    <div class="next-rail"></div>
+    <div class="step is-now" style="left: 0"><div class="step-dot"></div><p class="step-date">11월 28일</p><p class="step-name">질문 접수 마감</p></div>
+    <div class="step" style="left: 384px"><div class="step-dot"></div><p class="step-date">12월 15일</p><p class="step-name">챗봇·FAQ 반영</p></div>
+    <div class="step" style="left: 768px"><div class="step-dot"></div><p class="step-date">2027년 1월</p><p class="step-name">전 채널 확대</p></div>
+  </div>
+
+  <p class="closing-note">샘플 데이터 · 본 자료의 기업명과 수치는 모두 가상으로 구성한 예시입니다</p>
+  <p class="closing-page" data-field="slidenum">6</p>
+</main>
+<template id="notes">
+마지막으로 한 가지를 부탁드립니다. 각 팀에서 가장 자주 받는 질문 20개를 보내 주십시오.
+11월 28일까지 사내 메신저 셀프 서비스 채널로 받겠습니다.
+보내 주신 질문은 12월 15일까지 챗봇과 FAQ에 반영하고, 내년 1월에는 전 채널로 넓힙니다.
+답이 있는 질문은 더는 기다리게 하지 않겠습니다. 감사합니다. (약 1분)
+</template>
+</body>
+</html>

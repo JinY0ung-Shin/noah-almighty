@@ -56,6 +56,9 @@ const RULE_SECTIONS = {
   'text-overflow': '§4.2–§4.3', 'title-wrap': '§4.3/§8.13', 'text-overlap': '§4.2–§4.3', 'soft-wrap': '§5.3',
   'font-weight': '§4.1', 'font-family': '§4.1', 'missing-glyph': '§4.5', 'mixed-content': '§5.1', 'table-content': '§8.9',
   field: '§8.2', 'chart-spec': '§8.10', 'chart-resolved': '§8.10', 'chart-contrast': '§8.10', 'out-of-bounds': '§6',
+  // photo slots (data-placeholder="pic", converter 1.2.0): the §7 photo-slot row
+  'placeholder-prompt': '§7', 'placeholder-content': '§7', 'placeholder-geometry': '§7', 'rotated-placeholder': '§7',
+  'placeholder-size': '§7', 'placeholder-layout': '§7',
 };
 
 function ruleSections(rules) {

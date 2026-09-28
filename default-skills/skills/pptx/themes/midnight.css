@@ -3,6 +3,8 @@
  * ink-50 the darkest page, brand-50/100 dark tints, brand-700 and accent-700 light text shades, and
  * --c-on-fill is dark (text on the bright brand bars).
  * Fits: technology, engineering, AI and product demos, conference talks.
+ * Feel: modern, technical and high-contrast, made for a big screen in a dim room.
+ * Avoid: decks that will be printed, and conservative audiences who expect a light corporate look.
  *
  * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
  * Every theme defines the same tokens; slides and the kit's components colour everything through them.

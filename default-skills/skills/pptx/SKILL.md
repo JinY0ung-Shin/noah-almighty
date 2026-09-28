@@ -30,6 +30,8 @@ question (exit 0 = converter installed, exit 4 = not; it starts no browser; its 
 - When the system prompt says no one is watching (a scheduled routine, a delegated bot task), never ask questions:
   make sensible choices (the default font profile included), build and deliver. Otherwise follow the system
   prompt's rule for the turn.
+- `converter: INSTALLED` and a NEW deck in an interactive chat: §2's one scoping question comes next, before you
+  read AUTHORING (§4).
 
 ## 1. Pick the path
 
@@ -47,17 +49,51 @@ question (exit 0 = converter installed, exit 4 = not; it starts no browser; its 
 - Typically 4–10 slides; the hard limit is 60 slides per build (describe_system's deck line shows the limit in
   force; split a larger deck into several builds). A requested slide count includes the cover: when it equals the
   number of topics the user listed, give each topic its slide and put the deck title on the first one instead of
-  adding a cover (when interactive and unclear, ask). Eyebrow numbers follow the user's order of topics.
+  adding a cover. Eyebrow numbers follow the user's order of topics.
 - Never invent figures: use the user's data, exactly as given. When they want a template or give no data, use
   clearly marked sample data — a visible note on the slides like the examples' footer — and say so in your reply.
   When they give only SOME of the figures the deck needs: mark every figure you add where it appears (a caption or
   footnote such as "예시 수치"), make the footer note name the user's figures (identical on every content slide),
   keep slide titles on the user's figures or qualitative — never a title that rests on a sample figure — and in the
   reply list the sample figures to replace and offer to rebuild with the real ones.
-- Confirm the outline first only when the request is large or ambiguous AND the chat is interactive; otherwise
-  decide and build — a finished draft is easier to correct than a list of questions.
+- Decide and build — a finished draft is easier to correct than a list of questions. The one exception is the
+  scoping question below, and it also carries the outline check: for a large or ambiguous request, write the
+  outline in your chat text right before that call and let a one-line `이 구성으로 진행할까요?` replace one of its
+  questions — never a separate question first.
 - Pick the deck's theme with the plan (§3): a look that fits the topic, the audience and the tone — never the
   default by habit.
+
+**One scoping question** (HTML path, NEW deck, interactive chat). Right after §0 reported `converter: INSTALLED`
+and before you read AUTHORING, ONE `AskUserQuestion` call settles what the request leaves open:
+
+- At most once per conversation: never for an edit, a rebuild or a theme switch of a deck from this conversation,
+  and a later deck in the same conversation reuses the earlier answers. Ask only the questions still open (the
+  user named a theme, brand colours, a length or the use → drop that question); skip the call when nothing is open
+  or the user said to decide ("알아서").
+- Never where nobody can answer it now: a scheduled routine or automated task, a personal-bot conversation (the
+  hook denies the dialog there) or a delegated task, and a turn whose system prompt says
+  `This turn was submitted by an **EXTERNAL SYSTEM**` (the external task API: the dialog is not blocked there and
+  would park the task until someone answers it). Group-agent and teammate chats are interactive: ask there too.
+- Up to 3 questions in that one call, every label and description in the user's language. The FIRST option of
+  every question is the one you recommend, marked in the user's language at the end of its label (`(추천)`), not
+  with the English `(Recommended)` the tool's own guidance suggests. The dialog needs an answer to every question,
+  so each first option must be one you would build with. Never add an "Other" option: the dialog adds `직접 입력`
+  itself (brand colours, another theme, any other wish).
+  1. header `테마`, question `어떤 느낌으로 만들까요?`: the three themes that fit best (§3), labelled by name in the
+     user's script (`포레스트 (추천)`), each described in ≤ ~40 characters by its look and Feel line
+     (`짙은 초록·민트, 차분하고 신뢰감 있는 느낌`).
+  2. header `분량`, question `몇 장 정도로 만들까요?`: e.g. `짧게 — 표지 포함 5장 내외` / `보통 — 8~10장` /
+     `길게 — 12장 이상` (a requested count includes the cover).
+  3. header `용도`, question `어디에 쓰실 자료인가요?`: `보고서형 — 읽는 문서` / `발표형 — 화면에 띄워 발표`.
+     보고서형: the kit's standard sizes, full sentences, tables welcome. 발표형: ≤ ~40 words per slide in total
+     (footer included), the headline at display size (60/80; an opening statement 84/112, a quote or the closing
+     ask 72/96) in ≤ 2 hard lines, supporting text at lead sizes (22/32 to 28/40) and labels at 18/28, the one
+     figure that carries the slide as a single big line (72 to 280 px), the details moved into the speaker notes
+     (§4) while a headline figure keeps its scope on the slide; the `talk` example deck
+     (`${CLAUDE_SKILL_DIR}/examples/talk/`, AUTHORING §8.25) shows the patterns.
+- An answer that needs values ("직접 입력: 우리 회사 색") → build with the closest theme now and ask for the values
+  in your reply. Skipped, cancelled or unanswered → build with the defaults: the theme by topic (§3), 보고서형
+  unless the user said 발표, 발표용 or 투사, typically 4–10 slides.
 
 ## 3. Deck folder and theme
 
@@ -78,12 +114,14 @@ q3-review/
   user wants the deck committed (`.build/` and the preview folder carry their own `.gitignore`).
 - Start from the closest example. `${CLAUDE_SKILL_DIR}/examples/README.md` maps each kind of content (agenda,
   KPI dashboard, trend and mix charts, table, section divider, strategy framework, comparison, roadmap, targets,
-  closing, org chart, week schedule, directory) to an example slide: `business-review` is a 4-slide results report,
-  `layouts` an 8-slide plan from agenda to decision, `handbook` 3 reference slides (org chart, first-week schedule,
-  contacts). `cp -r ${CLAUDE_SKILL_DIR}/examples/business-review ./q3-review` (add slide files from the other decks
-  as needed), then delete, renumber and edit slides — rewriting a slide's content is usually one Write of the whole
-  file, not many small edits. Never build inside `${CLAUDE_SKILL_DIR}` — it is read-only and the converter refuses
-  it.
+  closing, org chart, week schedule, directory, team with photos, and for a talk: statement, big number, quote,
+  photo, before/after) to an example slide: `business-review` is a 4-slide results report, `layouts` an 8-slide
+  plan from agenda to decision, `handbook` 4 reference slides (org chart, first-week schedule, contacts, team with
+  photo slots), `talk` a 6-slide talk to present (발표형: statement, big number, quote, photo, before/after,
+  closing). `cp -r ${CLAUDE_SKILL_DIR}/examples/business-review ./q3-review` (a 발표형 deck starts from `talk`; add
+  slide files from the other decks as needed), then delete, renumber and edit slides — rewriting a slide's content
+  is usually one Write of the whole file, not many small edits. Never build inside `${CLAUDE_SKILL_DIR}` — it is
+  read-only and the converter refuses it.
 - Then give the deck its theme: `cp ${CLAUDE_SKILL_DIR}/themes/<theme>.css ./q3-review/deck.css` (the examples ship
   `classic`). Every slide links `../deck.css`, and every colour, surface, radius and shadow in the kit and the
   examples comes from its tokens, so the copy restyles the whole deck — covers, cards, tables, charts and icons.
@@ -97,14 +135,37 @@ q3-review/
 | `forest` | deep green with mint tints, sunflower accent | ESG and sustainability, public sector, healthcare, safety, training and education |
 | `violet` | vivid violet, plum emphasis, coral-pink accent; large corners | marketing and campaigns, events and launches, creative proposals |
 
+How each theme feels, and where it misleads (the same lines head each theme file):
+
+- `classic` — Feel: formal, dependable and orderly, the familiar look of a management report; Avoid: culture,
+  people and creative topics or festive events, where the corporate blue reads cold and generic
+- `mono` — Feel: quiet, precise and analytical, with type and numbers carrying every slide; Avoid: celebrations,
+  onboarding and people stories, where the stark black and red read severe
+- `editorial` — Feel: warm, human and crafted, like a magazine spread; Avoid: financial results, technical
+  deep-dives and compliance reports, where the warm paper look reads casual
+- `midnight` — Feel: modern, technical and high-contrast, made for a big screen in a dim room; Avoid: decks that
+  will be printed, and conservative audiences who expect a light corporate look
+- `forest` — Feel: calm, trustworthy and caring, steady rather than salesy; Avoid: sales pitches, product launches
+  and tech demos, where the calm green feels slow
+- `violet` — Feel: energetic, bold and playful, made to stand out; Avoid: financial reporting, compliance, safety
+  and sensitive news, where the vivid colours read frivolous
+
 - Choose by the topic, the audience and the tone of the request; `classic` is for formal business reporting, not a
   fallback. The user's own words win: a named theme or look ("어둡게", "심플하게", "따뜻한 느낌"), or brand colours.
-- Brand colours the user gives, or a look no theme has (a dark deck that is not about technology): copy the closest
-  theme and replace its brand and accent values in `deck.css` — the main colour becomes the brand ramp, a second
-  colour the accent, and every token that carries the old hue follows (AUTHORING §9 lists them). Then run
-  `node ${CLAUDE_SKILL_DIR}/scripts/theme-check.mjs ./q3-review`: fix every FAIL (contrast, data colours too alike),
-  replace every `hue leftover?` WARN. Never reconstruct a company's brand colours from memory — use the ones the
-  user states, or a theme.
+- Brand colours the user gives: derive the theme from them rather than editing values — `node
+  ${CLAUDE_SKILL_DIR}/scripts/theme-check.mjs --derive '#0055AA' --accent '#FFB800' > ./q3-review/deck.css.new && mv
+  ./q3-review/deck.css.new ./q3-review/deck.css`. The main colour is the brand; `--accent` is the second colour (leave
+  it out to keep the base theme's accent); add `--base midnight` for a dark deck; quote every colour (a bare `#`
+  starts a shell comment). For a new deck in the colours of a PowerPoint file the user attached (a template or an
+  old deck), `--from-pptx <file.pptx>` in place of `--derive '…'` takes that file's theme colours — building ON its
+  own masters and layouts is the python-pptx path (§1). It builds on `classic` (or `midnight`), keeps its neutrals,
+  surfaces and shapes, prints a complete deck.css only when that passes the theme check (exit 1: nothing passed —
+  try another accent or the other base; exit 2: a bad colour or file), and reports where each colour went: tell the
+  user when their exact colour had to change (a light brand colour is darkened to stay legible on a light page). A
+  look no theme has (a dark deck that is not about technology): copy the closest theme, replace its values in
+  `deck.css` (AUTHORING §9 lists what follows), then run `node ${CLAUDE_SKILL_DIR}/scripts/theme-check.mjs
+  ./q3-review`: fix every FAIL (contrast, data colours too alike), replace every `hue leftover?` WARN. Never
+  reconstruct a company's brand colours from memory — use the ones the user states, or a theme.
 - The cover and the closing are the slides people remember: keep the theme, but re-compose the example's decorative
   motif around the topic (its bars stand for real figures; a deck without such figures gets a motif of its own —
   circles, a ring, a band of shapes, a photo from the user).
@@ -128,11 +189,20 @@ are what keep every object native and editable. The essentials:
   background images, text-shadow, pseudo-element content, scale/skew); real `<table>`s with text-only cells;
   charts as `[data-chart]` JSON; characters both fonts have (no emoji, no Hanja in body text).
 - Structure hints: `data-layout`, `data-placeholder`, `data-group`, `data-field="slidenum"` (the text is the slide's
-  position — renumber after reordering), and `id="footer"` on the shared footer.
-- Speaker notes: `<template id="notes">` after `</main>`, one line per paragraph.
+  position — renumber after reordering), and `id="footer"` on the shared footer. A photo the user adds later is a
+  photo slot: `data-placeholder="pic"` + a one-line `data-prompt` in the user's language on a sized, square-cornered
+  box (`.photo-slot`), on a slide with its own `data-layout` — PowerPoint's empty picture placeholder; everything
+  inside it is an HTML-only hint, so captions go next to it (AUTHORING §7).
+- Speaker notes: `<template id="notes">` after `</main>`, one line per paragraph — the talk track, what the presenter
+  SAYS: an opener that moves on from the previous slide's bridge (never repeats it), the key point in spoken
+  sentences (not the slide text pasted), the exact figures to cite as the slide shows them, a bridge to the next
+  slide, optionally a timing cue in parentheses at the end of the last line (`(약 1분)`); 2–5 short lines. Plain
+  text only: the template is parsed as HTML, so markup and anything in `<…>` vanish. A script or 대본 the user asks
+  for goes into the notes, never into a separate .md file.
 - Design (AUTHORING §9): build each slide around ONE visual that proves its title (a chart, bars on one scale, a
   timeline, a big number), keep one colour for one meaning across the deck, leave no dead zones inside cards, and
-  vary the composition between neighbouring slides while the header, footer and grid stay fixed.
+  vary the composition between neighbouring slides while the header, footer and grid stay fixed. A 발표형 deck (§2)
+  keeps to AUTHORING §8.25: few words at display sizes, the rest in the speaker notes.
 - Limits: 60 slides per build, 2 MB per slide file, 2,500 elements per slide, 20 MB per asset, 40 megapixels per
   picture (100 per slide), 100 MB of deck inputs, 540 s per run (AUTHORING "Limits").
 
@@ -181,7 +251,7 @@ profile) plus its preview folder and prints the exact share command.
 
 | exit | meaning | what to do |
 |---|---|---|
-| 0 | built (warnings possible) | deliver (§7) |
+| 0 | built (warnings possible) | deliver (§7); a photo-slot warning first — `placeholder-layout` (New Slide would bring empty slots) or a fidelity `[placeholder]` line (PowerPoint shows another slide's prompt): fix it (AUTHORING §7) and rebuild |
 | 1 | authoring: lint errors, bad slide names, over a limit | fix the HTML (or split the deck) and re-run |
 | 2 | usage: unknown command/flag, bad folder name, deck inside the skill dir, bad `--out`, a `--only` slide the deck does not have | fix the command |
 | 3 | conversion: a gate rejected the deck — no new file was written | simplify the named construct and rebuild; if it persists, tell the user the converter cannot build that layout |
@@ -202,21 +272,30 @@ Only after `build` exited 0:
   bound to those exact bytes, and the card's side panel then shows the converter's exact slide renders. Never
   rasterize or publish slide images yourself to deliver.
 - Limits: 3 files per turn, 30 MB per file (the build already refuses a deck over 30 MB).
+- A link other people can open: only when the user explicitly asks for one (a plain 공유해 줘 about the deck is the
+  `share_file` above). Call `mcp__file_output__create_share_link` after delivering the deck when describe_system's
+  `Share links` line says this run has it; otherwise point them to the `공유 링크` button next to the file card
+  (a group-agent thread cannot be link-shared at all: say so).
+  With a link, say that whoever opens it can also download the .pptx, speaker notes included.
 - Tell the user, in their language: the file is ready, with one line per slide; the theme you chose and one or two
   others that would suit this deck (a rebuild away); every text box, shape, table and chart is editable in PowerPoint
-  (charts keep their data: right-click → Edit Data, "데이터 편집"); Pretendard travels inside the file, so desktop
-  PowerPoint shows it even where it is not installed; PowerPoint for the web and Teams/SharePoint previews may show a
-  similar font instead. For a malgun build: the chat preview uses a look-alike font; the file names 맑은 고딕 and embeds
-  nothing, so PowerPoint on Windows — and PowerPoint for the web or Teams/SharePoint previews opened on a Windows PC —
-  show the real 맑은 고딕, and a PC without it shows a similar Korean font.
+  (charts keep their data: right-click → Edit Data, "데이터 편집"); each slide's speaker notes hold its talk track and
+  are part of the .pptx, so whoever gets the file (a download, a forwarded copy, a share link) can read them;
+  Pretendard travels inside the file, so desktop PowerPoint shows it even where it is not installed; PowerPoint for
+  the web and Teams/SharePoint previews may show a similar font instead. For a malgun build: the chat preview uses a
+  look-alike font; the file names 맑은 고딕 and embeds nothing, so PowerPoint on Windows — and PowerPoint for the web
+  or Teams/SharePoint previews opened on a Windows PC — show the real 맑은 고딕, and a PC without it shows a similar
+  Korean font.
 - When the user will edit the deck, pass on what matters from `${CLAUDE_SKILL_DIR}/reference/EDITING.md` (longer
-  text shrinks to fit, fixed chart axes, the footer lives in the slide layout, …).
+  text shrinks to fit, fixed chart axes, the footer lives in the slide layout (on the slide itself when the slide is
+  alone on its layout), an empty photo slot takes a photo from its icon, …).
 
 ## 8. Changes
 
-Edit the slide HTML, `build` again and share the new file the same way. To switch the theme, copy another theme
-over `deck.css` and rebuild — nothing else changes. Never patch a converted .pptx with python-pptx: the next build
-discards the change, and a changed file loses its exact previews.
+Edit the slide HTML, `build` again and share the new file the same way (in an interactive chat, that is the next
+review round, §11). To switch the theme, copy another theme over `deck.css` and rebuild — nothing else changes.
+Never patch a converted .pptx with python-pptx: the next build discards the change, and a changed file loses its
+exact previews.
 
 ## 9. Existing decks and templates
 
@@ -238,12 +317,44 @@ decks when describe_system reports `converter: NOT INSTALLED`. For a self-check 
 
 ## 11. Review with the user (interactive only)
 
-To iterate on the design before delivery: publish the 1280×720 renders from `<deck>/.build/check/<profile>/html/` with
-`mcp__file_output__show_file` + `hidden: true` and embed the returned URLs in ONE `mcp__canvas__show` markdown
-artifact (`![Slide 1](<url>)` …); after a revision, re-show it with the SAME `canvasId`. When the user wants to pick
-the look, check two or three fitting themes on the same slides (one copy of the deck folder per theme, `--only
-01-cover 02-…`) and show them side by side. Without the canvas tool, show a few key slides inline with `show_file`.
-The final deck is still delivered with `share_file` (§7).
+In an interactive chat, every build that exits 0 is delivered AND opens a review round: the user writes notes per
+slide on ONE canvas, and you apply all of them with one rebuild. Not in the runs §2 excludes (routines and
+automated tasks, personal-bot conversations and delegated tasks, EXTERNAL SYSTEM turns): there, deliver (§7) and
+finish. Each round, in this order:
+
+1. `deck.sh build` exits 0 → `share_file` the new .pptx IN PLACE (§7). The user always has the latest file; never
+   hold it back until they say they are done. A share link opens the card it was made for, and each round's file
+   is a new card: if this conversation already made a link, say in the round's reply that it still shows the
+   earlier version. Make a new one (`create_share_link` after this round's `share_file`) only if the user asks,
+   and then suggest revoking the old one in 내 아바타 → 권한·연결 → 공유 링크.
+2. Publish renders with `mcp__file_output__show_file` + `hidden: true` from `<deck>/.build/<profile>/html/`, the
+   build's own (not `.build/check/`, which is stale after a build). Round 1: every slide. Later rounds: only the
+   slides whose HTML changed, plus every slide after a theme, footer or numbering change; reuse the other URLs
+   (show_file copies the bytes, so they keep showing their render). One turn publishes at most 30 hidden images,
+   in every round: when a round needs more than 30 renders (round 1 of a deck over 30 slides; a later round after
+   a theme, footer or numbering change on such a deck, or with more than 30 changed slides), publish the
+   `overview-N.png` sheets from `<deck>/.build/<profile>/` instead.
+3. `mcp__canvas__show` (markdown; from round 2 on, pass the `canvasId` the first call returned) with `wait: false`
+   as the LAST tool call of the turn: its form stays locked until the turn ends. Before each image a heading, and
+   Korean alt text: `### 3번 슬라이드 – 매출 추이`, then `![3번 슬라이드 – 매출 추이](<url>)` (an overview sheet's
+   heading names its slide range). Controls, all `type: "text"` with `required: false`: up to 11 slides → one per
+   slide, its label identical to that slide's heading (the form sits below all the images), placeholder
+   `수정 요청`, plus one overall note (`전체 의견`); 12 or more → ONE `multiline` control for all slides
+   (`슬라이드별 수정 요청`), one request per line as `번호: 요청` (placeholder `예) 3: 제목을 더 짧게`), plus the
+   overall note — a canvas holds at most 12 controls. Ids carry the round: `r1-s03`, `r1-all` (`r1-list` for the
+   multiline box), next round `r2-…` — the panel keeps what was typed under a re-used id.
+4. End the turn with your reply: in round 1 the §7 message; in a later round the notes you applied, the ones you
+   skipped and why, and a question about any unclear note (never guess). Close with one line: fill in the notes
+   and submit; submitting empty, or simply stopping, ends the review — the delivered file is already the latest.
+
+The notes arrive as the next user message, `On the canvas "…" (id: …), The user responded on the canvas:` and one
+`- <id>: <value>` line per control (empty = no note). Apply ALL of them, then ONE rebuild (when they change a lot of
+Korean text, `check --profile both` first — §5, §6) and the next round. An all-empty submission ends the review:
+say so in one line, no rebuild. A message with an older round's ids is a resend of notes already applied: do not
+apply them again. Without the canvas tool (a group-agent chat, or the owner has not enabled the experimental
+`canvas` feature), list the slides in your reply and invite `번호: 요청` lines in the chat. To let the user pick the
+look, check two or three fitting themes on the same slides (one copy of the deck folder per theme, `--only
+01-cover 02-…`) and show those renders, from each copy's `.build/check/<profile>/html/`, side by side on the canvas.
 
 ## 12. When something fails
 

@@ -1,6 +1,8 @@
 /* themes/mono.css — Mono: black and greys on a white page with one signal-red accent; hairline-outlined
  * cards without shadows, 4 px corners, square tags. Quiet, typographic, the numbers carry the slide.
  * Fits: strategy summaries, research and analysis, design reviews, executive one-pagers.
+ * Feel: quiet, precise and analytical, with type and numbers carrying every slide.
+ * Avoid: celebrations, onboarding and people stories, where the stark black and red read severe.
  *
  * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
  * Every theme defines the same tokens; slides and the kit's components colour everything through them.

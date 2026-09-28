@@ -10,9 +10,11 @@
   (pptxlib/layouts.py: background, repeated chrome, title prompt placeholder; the master gets the main background);
   a dark layout or slide carries the inverted colour map (text a user types there defaults to lt1), and a fill
   shape's default text colour is the more legible theme text colour on its fill where that map would not give it;
-  one slide per IR slide on its layout; elements in paint order (shape / text / image / table / chart; a table's
-  own background shape is absorbed into the table); the slide title as a title placeholder; components grouped
-  (pptxlib/structure.py); speaker notes; readable object names; document properties + thumbnail
+  one slide per IR slide on its layout; elements in paint order (shape / text / image / table / chart / placeholder;
+  a table's own background shape is absorbed into the table); the slide title as a title placeholder; a photo slot as
+  an empty picture placeholder, idx 13 + its IR slot (document order), its prompt coloured for the slot's own frame,
+  with the union of its family's slots in the layout (pptxlib/placeholders.py);
+  components grouped (pptxlib/structure.py); speaker notes; readable object names; document properties + thumbnail
   (pptxlib/docprops.py); ``<out stem>.map.json`` = every object's p:cNvPr id -> IR id (the fidelity gate's link);
 * charts: ``from pptxlib.chart import add_chart`` (chart lane) called as ``add_chart(slide, el, ctx)`` with
   ``ctx.profile`` (fonts.json profile dict), ``ctx.resolve_face(css_weight) -> {"typeface", "bold"}``,
@@ -41,7 +43,7 @@ if str(TOOLS) not in sys.path:
 
 from pptx.oxml.ns import qn  # noqa: E402
 
-from pptxlib import core, docprops, fonts, layouts, pictures, shapes, structure, table, text  # noqa: E402
+from pptxlib import core, docprops, fonts, layouts, pictures, placeholders, shapes, structure, table, text  # noqa: E402
 import pdeathsig  # noqa: E402  (tools/pdeathsig.py)
 
 KIT = core.KIT
@@ -207,7 +209,7 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
     if n_theme:
         ctx.stat("theme:colors", n_theme)
     handlers = {"shape": shapes.add_shape, "text": text.add_text, "image": pictures.add_image,
-                "table": table.add_table, "chart": add_chart_element}
+                "table": table.add_table, "chart": add_chart_element, "placeholder": placeholders.add_pic_placeholder}
 
     # ---- slide layouts: one per slide family (background, chrome, title prompt)
     plans = layouts.plan_layouts(slides_ir)
@@ -261,6 +263,8 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
         elements = [e for e in s.get("elements") or [] if isinstance(e, dict)]
         recs, split_comps, ph_recs = [], [], []
         k = 0
+        slots_used = set()                               # IR slots of this slide's photo slots (idx 13 + slot)
+        own_fill = {}                                    # DOM path -> the node with that element's topmost own fill
         while k < len(elements):
             e = elements[k]
             k += 1
@@ -279,12 +283,32 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
                     recs.append(structure.Rec(nxt.get("id"), "table", "main", n))
                     recs.append(structure.Rec(e.get("id"), "shape", "table-bg", n))
                 continue
-            nodes = _emit(slide, e, ctx, h)
+            kw, extra = {}, {}
+            if kind == "placeholder":                    # IR slot k (document order): idx 13+k (placeholders.py)
+                slot = e.get("slot")
+                if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0 or slot in slots_used:
+                    free = next(i for i in range(len(slots_used) + 1) if i not in slots_used)
+                    log.warn(f"slide {ctx.slide_index}: photo slot {e.get('id')!r} has IR slot {slot!r}, not a new "
+                             f"ordinal >= 0 — written as slot {free}")
+                    slot = free
+                slots_used.add(slot)
+                kw["idx"] = placeholders.PIC_IDX0 + slot
+                extra = {"ph": "pic", "idx": kw["idx"]}
+            nodes = _emit(slide, e, ctx, h, **kw)
+            if kind == "shape" and nodes and placeholders.own_fill_path(e.get("id")) is not None:
+                own_fill[placeholders.own_fill_path(e.get("id"))] = nodes[0]   # the fill (a split shape: fill first)
             roles = ["fill", "border"] if kind == "shape" and len(nodes) == 2 else ["main"] * len(nodes)
             for n, role in zip(nodes, roles):
-                recs.append(structure.Rec(e.get("id"), kind, role, n))
+                recs.append(structure.Rec(e.get("id"), kind, role, n, extra=dict(extra)))
                 if kind == "text" and e.get("placeholder"):
                     ph_recs.append((e["placeholder"], n))
+                if kind == "placeholder":                # the layout's slot for this idx: its first slide's
+                    pl.pic_slots.setdefault(kw["idx"], (n, e))
+                    # its prompt colour once the layout exists: against the slot's own frame, on this slide or
+                    # lifted into the layout as chrome, and this slide's colour map (placeholders.colour_slide_prompts)
+                    path = placeholders.slot_path(e)
+                    frame = own_fill[path] if path in own_fill else layouts.lifted_fill(pl, path)
+                    pl.slot_prompts.append((n, kw["idx"], frame, ctx.text))
             if len(nodes) > 1:                           # one CSS box written as several shapes: one group
                 split_comps.append({"id": e.get("id"), "name": ctx.name_for(e), "members": [e.get("id")]})
         if first_of_family:
@@ -318,6 +342,12 @@ def build(ir: dict, profile_name: str, out_path: Path, *, ir_dir: Path, log: cor
 
     for pl in plans:
         ltree = layouts.layout_tree(pl.layout)
+        if pl.pic_slots:                                 # every slide exists now: the union of the family's slots
+            lay_text = shapes.text_defaults(theme_colors, "lt1" if pl.dark else "dk1")
+            ctx.stat("layout:pic-placeholder", layouts.add_pic_prompt_placeholders(pl, prof.regular.typeface, lay_text))
+            n = placeholders.colour_slide_prompts(pl.slot_prompts, pl.pic_colours)
+            if n:
+                ctx.stat("placeholder:pic-prompt-colour", n)
         if pl.chrome:
             first = slides_ir[pl.slides[0]]
             comps = [c for c in first.get("components") or [] if isinstance(c, dict)]

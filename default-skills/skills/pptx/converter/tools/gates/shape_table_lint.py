@@ -9,7 +9,10 @@ scratch/shape-table/stlib.py it uses, ``NO_STYLE_NO_GRID``); the rules are uncha
 Checks slides AND slide layouts (the builder writes repeated chrome into custom layouts): unique p:cNvPr ids in
 1..2^31-1, 6-hex srgbClr, no p:style on shapes, spPr / a:ln / tcPr child order, explicit fill / line / join /
 effectLst, outerShdw sx/sy, alphaModFix < 100 %, blip extLst last, table style "No Style, No Grid" without banding
-flags, tc counts = gridCol, cell anchors Office accepts, empty cell paragraphs with endParaRPr@sz.
+flags, tc counts = gridCol, cell anchors Office accepts, empty cell paragraphs with endParaRPr@sz. A SLIDE placeholder
+meets the shape rules too: the builder writes a photo slot's picture placeholder with an explicit spPr (rect, noFill,
+a:ln noFill, an empty effectLst), where PowerPoint itself would write an empty one; a p:sp without p:spPr is a
+problem, never a crash.
 Exit 0 = no problem, 1 = problems, 2 = unreadable input.
 """
 import argparse
@@ -75,6 +78,9 @@ def lint(path):
             if sp.find(P + "style") is not None:
                 problems.append(f"{n}: p:sp '{name}' keeps p:style (theme line/fill/shadow leak; LibreOffice ignores an empty effectLst)")
             spPr = sp.find(P + "spPr")
+            if spPr is None:
+                problems.append(f"{n}: p:sp '{name}' has no p:spPr")
+                continue
             ok, bad = in_order(spPr, SPPR_ORDER)
             if not ok:
                 problems.append(f"{n}: spPr order violated at {bad} in '{name}'")

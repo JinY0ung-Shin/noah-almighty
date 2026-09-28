@@ -40,6 +40,32 @@ const hangul = (s: string) => (s.match(/[가-힣]/g) ?? []).length;
 const latin = (s: string) => (s.match(/[A-Za-z]/g) ?? []).length;
 const hangulShare = (s: string) => hangul(s) / Math.max(1, hangul(s) + latin(s));
 
+// The declarations of the rule an example slide's <style> writes for `selector` (the selector starting a line,
+// comments stripped), whitespace collapsed; "" when there is none.
+function cssRule(rel: string, selector: string): string {
+  const style = (/<style>([\s\S]*?)<\/style>/.exec(read(rel))?.[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return prose(new RegExp(`^[ \\t]*${escaped}[ \\t]*\\{([^}]*)\\}`, "m").exec(style)?.[1] ?? "");
+}
+
+// The longest run of characters two lines share, spaces ignored: a restated sentence shares a long one.
+function longestSharedRun(a: string, b: string): number {
+  const x = a.replace(/\s+/g, "");
+  const y = b.replace(/\s+/g, "");
+  const row = new Array<number>(y.length + 1).fill(0);
+  let best = 0;
+  for (let i = 1; i <= x.length; i++) {
+    let diagonal = 0;
+    for (let j = 1; j <= y.length; j++) {
+      const above = row[j];
+      row[j] = x[i - 1] === y[j - 1] ? diagonal + 1 : 0;
+      best = Math.max(best, row[j]);
+      diagonal = above;
+    }
+  }
+  return best;
+}
+
 // The custom properties a stylesheet declares in its `:root` blocks (comments stripped), in declaration order.
 function cssTokens(css: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -147,9 +173,12 @@ describe("pptx SKILL.md body", () => {
     const known = new Set([
       "profile", "only", "json", "out", "author", "strict", "keep", "fail-on-drift", "record", "update-golden", "help",
     ]);
+    // plus the flags of scripts/theme-check.mjs, which §3 runs to derive a theme from brand colours (its usage names them)
+    const themeCheckFlags = ["derive", "accent", "base", "from-pptx"];
+    for (const f of themeCheckFlags) expect(read("scripts/theme-check.mjs"), f).toContain(`--${f} `);
     const flags = [...body.matchAll(/(?<![\w(-])--([a-z][a-z0-9-]*)/g)].map((m) => m[1]);
     expect(flags.length).toBeGreaterThan(0);
-    expect(flags.filter((f) => !known.has(f))).toEqual([]);
+    expect(flags.filter((f) => !known.has(f) && !themeCheckFlags.includes(f))).toEqual([]);
   });
 
   it("names the base directory once and never uses a placeholder or a host path", () => {
@@ -166,6 +195,11 @@ describe("pptx SKILL.md body", () => {
     expect(flat).toContain("cp ${CLAUDE_SKILL_DIR}/themes/<theme>.css ./q3-review/deck.css");
     expect(flat).toContain("`classic` is for formal business reporting, not a fallback");
     expect(flat).toContain("Never reconstruct a company's brand colours from memory");
+    // brand colours are DERIVED, and a failed derive (nothing on stdout) never truncates the deck's theme
+    expect(flat).toContain("> ./q3-review/deck.css.new && mv ./q3-review/deck.css.new ./q3-review/deck.css");
+    expect(flat).toContain("quote every colour (a bare `#` starts a shell comment)");
+    // a template's colours for a NEW deck; building on the template itself stays the python-pptx path
+    expect(flat).toContain("building ON its own masters and layouts is the python-pptx path (§1)");
     expect(flat).toContain("the theme you chose and one or two others that would suit this deck");
     expect(flat).toContain("To switch the theme, copy another theme over `deck.css` and rebuild");
     // one table row per shipped theme, whose "fits" cell is the theme file's own Fits: line (one source of truth for
@@ -176,6 +210,113 @@ describe("pptx SKILL.md body", () => {
       const fits = /^ \* Fits: (.*)\.$/m.exec(read(`themes/${theme}.css`))?.[1];
       expect(row?.[1], theme).toBe(fits);
     }
+  });
+
+  it("lists each theme's Feel and Avoid lines under the table, verbatim from the theme file", () => {
+    for (const theme of THEMES) {
+      const css = read(`themes/${theme}.css`);
+      // single header lines right after Fits:, each ending in a period
+      expect(css, theme).toMatch(/^ \* Fits: [^\n]+\.\n \* Feel: [^\n]+\.\n \* Avoid: [^\n]+\.\n/m);
+      const feel = /^ \* Feel: (.*)\.$/m.exec(css)?.[1];
+      const avoid = /^ \* Avoid: (.*)\.$/m.exec(css)?.[1];
+      // the scoping question's theme options paraphrase these, so the SKILL shows the file's own words
+      expect(flat, theme).toContain(`\`${theme}\` — Feel: ${feel}; Avoid: ${avoid}`);
+    }
+  });
+
+  it("asks at most ONE scoping question, and only where someone can answer it now", () => {
+    for (const pin of [
+      "ONE `AskUserQuestion` call",
+      "At most once per conversation",
+      "`테마`",
+      "`어떤 느낌으로 만들까요?`",
+      "`분량`",
+      "`몇 장 정도로 만들까요?`",
+      "`용도`",
+      "`어디에 쓰실 자료인가요?`",
+      "`보고서형 — 읽는 문서`",
+      "`발표형 — 화면에 띄워 발표`",
+      // the recommended option is marked in the user's language, not with the CLI's English suffix
+      "(`(추천)`)",
+      "`이 구성으로 진행할까요?`",
+      "Decide and build — a finished draft is easier to correct than a list of questions",
+    ]) {
+      expect(flat, pin).toContain(pin);
+    }
+    // §2's two older asks (an unclear slide count, the outline check) are folded into that one call
+    expect(flat).not.toContain("when interactive and unclear, ask");
+    expect(flat).not.toContain("Confirm the outline first");
+    // The hook DENIES the dialog in bot and headless runs, but an external-task-API turn PARKS it, so the skill keys
+    // that exclusion on the provenance marker the prompt carries for those turns — quoted verbatim, and still there.
+    const marker = "This turn was submitted by an **EXTERNAL SYSTEM**";
+    expect(flat).toContain(`\`${marker}\``);
+    expect(fs.readFileSync(path.join(REPO, "src", "server", "agent", "promptBuilder.ts"), "utf8")).toContain(marker);
+  });
+
+  it("reviews in rounds of per-slide notes that always deliver the latest file first", () => {
+    const review = prose(body.slice(body.indexOf("## 11. Review with the user"), body.indexOf("## 12.")));
+    for (const pin of [
+      // the file is delivered every round, never held back for a "done"
+      "`deck.sh build` exits 0 → `share_file` the new .pptx IN PLACE (§7)",
+      // renders from the build's own folder: .build/check is stale after a build
+      "from `<deck>/.build/<profile>/html/`",
+      "at most 30 hidden images",
+      // the cap binds EVERY round (a theme change on a 31–60-slide deck re-publishes every slide), not only round 1
+      "One turn publishes at most 30 hidden images, in every round",
+      "publish the `overview-N.png` sheets from `<deck>/.build/<profile>/` instead",
+      // every round's file is a NEW card, and a share link keeps opening the card it was made for
+      "A share link opens the card it was made for, and each round's file is a new card",
+      "say in the round's reply that it still shows the earlier version",
+      "only if the user asks, and then suggest revoking the old one",
+      // a non-blocking canvas as the turn's last call: its form unlocks only when the turn ends
+      "with `wait: false` as the LAST tool call of the turn",
+      "`required: false`",
+      "`### 3번 슬라이드 – 매출 추이`",
+      "`번호: 요청`",
+      "`예) 3: 제목을 더 짧게`",
+      // round-scoped control ids: the panel keeps the values of a re-used id
+      "`r1-s03`, `r1-all`",
+      "A message with an older round's ids is a resend of notes already applied",
+      "Apply ALL of them, then ONE rebuild",
+      "submitting empty, or simply stopping, ends the review",
+    ]) {
+      expect(review, pin).toContain(pin);
+    }
+  });
+
+  it("makes speaker notes the talk track, in the SKILL and in AUTHORING", () => {
+    expect(flat).toContain("the talk track, what the presenter SAYS");
+    expect(flat).toContain("never into a separate .md file");
+    // whoever gets the .pptx gets its notes: the delivery message says so
+    expect(flat).toContain("each slide's speaker notes hold its talk track and are part of the .pptx");
+    // the opener moves on (never restates the previous bridge); ONE timing-cue form, the one every example uses
+    expect(flat).toContain("an opener that moves on from the previous slide's bridge (never repeats it)");
+    expect(flat).toContain("a timing cue in parentheses at the end of the last line (`(약 1분)`)");
+    const authoring = prose(read("reference/AUTHORING.md"));
+    expect(authoring).toContain("Speaker notes in `<template id=\"notes\">`: the talk track");
+    expect(authoring).toContain("never the slide text pasted");
+    expect(authoring).toContain("the template is parsed as HTML, so markup and anything in `<…>` vanish");
+    expect(authoring).toContain("an opener that moves on from the previous slide's bridge");
+    expect(authoring).toContain("a timing cue in parentheses at the end of the last line (`(약 1분)`");
+    expect(authoring).not.toContain("The speaker notes hold the assumptions behind the numbers");
+  });
+
+  it("makes a share link only on an explicit ask, through the tool and describe_system line the server really has", () => {
+    const deliver = prose(body.slice(body.indexOf("## 7. Deliver"), body.indexOf("## 8.")));
+    for (const pin of [
+      "only when the user explicitly asks for one (a plain 공유해 줘 about the deck is the `share_file` above)",
+      "Call `mcp__file_output__create_share_link` after delivering the deck when describe_system's `Share links` line says this run has it",
+      "otherwise point them to the `공유 링크` button next to the file card",
+      "whoever opens it can also download the .pptx, speaker notes included",
+    ]) {
+      expect(deliver, pin).toContain(pin);
+    }
+    // the names the SKILL relies on are the ones the server exposes (tool name, describe_system line, settings path)
+    const agentSrc = (file: string) => fs.readFileSync(path.join(REPO, "src", "server", "agent", file), "utf8");
+    expect(agentSrc("fileOutputTools.ts")).toContain('"mcp__file_output__create_share_link"');
+    expect(agentSrc("systemTools.ts")).toContain('"- Share links (mcp__file_output__create_share_link): "');
+    expect(agentSrc("systemTools.ts")).toContain('"내 아바타 → 권한·연결 → 공유 링크"');
+    expect(flat).toContain("내 아바타 → 권한·연결 → 공유 링크");
   });
 
   it("points every ${CLAUDE_SKILL_DIR} path at a file or directory of the skill", () => {
@@ -215,6 +356,10 @@ describe("pptx reference/ and examples/", () => {
       "image-too-large", "slide-name", "slide-count", "slide-too-large", "deck-too-large", "blocked-request", "missing-glyph",
       // the check's own layout and structure rules (tools/lib/pipeline.mjs layoutLintOf, inpage 20-text/50-paint)
       "mixed-content", "title-wrap", "text-overlap", "soft-wrap", "chart-contrast", "font-weight",
+      // photo slots (converter 1.2.0: inpage 45-placeholder.js; placeholder-layout from lib/pipeline.mjs layoutLintOf):
+      // report.mjs points each of them at AUTHORING §7
+      "placeholder-prompt", "placeholder-content", "placeholder-geometry", "rotated-placeholder", "placeholder-size",
+      "placeholder-layout",
     ]) {
       expect(authoring, rule).toContain(`\`${rule}\``);
     }
@@ -250,7 +395,10 @@ describe("pptx reference/ and examples/", () => {
   it("EDITING and python-pptx cover what users and the legacy path need", () => {
     const editing = prose(read("reference/EDITING.md"));
     for (const pin of ["2411", "Shrink text on overflow", "합계", "Reset", "Slide Master", "본문", "Replace Fonts",
-      "Design > Fonts", "Teams", "Embed fonts in the file"]) {
+      "Design > Fonts", "Teams", "Embed fonts in the file",
+      // a slide alone on its layout (a photo slide) keeps its footer ON the slide: the builder lifts only from ≥ 2
+      "The exception is a slide that is the only one on its layout",
+      "A layout made from a single slide (a team slide with photo slots) brings no footer or page number"]) {
       expect(editing, pin).toContain(pin);
     }
     const legacy = prose(read("reference/python-pptx.md"));
@@ -282,6 +430,54 @@ describe("pptx reference/ and examples/", () => {
     expect(named.size).toBeGreaterThan(8);
     const missing = [...named].filter((rel) => !fs.existsSync(path.join(SKILL, rel)));
     expect(missing).toEqual([]);
+  });
+
+  it("documents photo slots where the agent and the user meet them, and the examples' slots hold only their hint", () => {
+    // converter 1.2.0: data-placeholder="pic" = PowerPoint's EMPTY picture placeholder; every child is an HTML-only hint
+    expect(prose(body)).toContain("A photo the user adds later is a photo slot: `data-placeholder=\"pic\"`");
+    expect(prose(body)).toContain("everything inside it is an HTML-only hint, so captions go next to it (AUTHORING §7)");
+    const authoring = prose(read("reference/AUTHORING.md"));
+    expect(authoring).toContain("EVERY child of the slot is an HTML-only hint dropped from the .pptx");
+    expect(authoring).toContain("| `data-placeholder=\"pic\"` + `data-prompt=\"…\"` | a sized box — a photo slot (§7) |");
+    // slots pair across a layout's slides by DOCUMENT order (converter: IR `slot`, idx = 13 + slot), a layout that mixes
+    // photo and non-photo slides is warned about, a sliver of a slot is an error, and the hint pair is audited (§9)
+    expect(authoring).toContain("share each slot's prompt by DOCUMENT order — the 1st slot in the markup, the 2nd …");
+    expect(authoring).toContain("a layout shared with slides that have no slot would hand every New Slide empty slots too (`placeholder-layout`)");
+    expect(authoring).toContain("(each at least 24 px, else `placeholder-size`)");
+    expect(authoring).toContain("`--c-ink-600` on the slot's `--c-ink-100` fill");
+    expect(authoring).toContain("ink-600 on ink-100 (the photo-slot hint, §7)");
+    expect(authoring).toContain("A photo slide alone on its layout keeps its footer and page number on the slide itself");
+    // the README's per-person prompts meet the shared-layout rule: a second team slide gets its own layout
+    expect(prose(read("examples/README.md"))).toContain("give it its own `data-layout` (e.g. `함께할 사람 2`), or put one generic prompt");
+    // the SKILL puts photo slides on their own layout and has a photo-slot warning fixed before delivery
+    expect(prose(body)).toContain("(`.photo-slot`), on a slide with its own `data-layout`");
+    expect(prose(body)).toContain("a photo-slot warning first — `placeholder-layout`");
+    expect(prose(read("reference/EDITING.md"))).toContain("Click the icon to insert a photo");
+    for (const cls of [".photo-slot", ".photo-slot-hint"]) expect(BASE_CSS, cls).toContain(`${cls} {`);
+    let slots = 0;
+    for (const rel of exampleFiles.filter((f) => f.endsWith(".html"))) {
+      const html = read(rel);
+      for (const m of html.matchAll(/<div\b([^>]*\bdata-placeholder="pic"[^>]*)>([\s\S]*?)<\/div>/g)) {
+        slots++;
+        const prompt = /\bdata-prompt="([^"]*)"/.exec(m[1])?.[1] ?? "";
+        // the placeholder-prompt rule: one line of at most 80 characters
+        expect(prompt.trim(), rel).not.toBe("");
+        expect(prompt, rel).not.toMatch(/[\r\n]/);
+        expect([...prompt].length, rel).toBeLessThanOrEqual(80);
+        expect(m[1], rel).toMatch(/\bclass="photo-slot"/);
+        // nothing but the hint inside (no nested box, no caption): its only text repeats the prompt
+        expect(m[2], rel).not.toMatch(/<div\b|<img\b|<table\b|data-chart=/);
+        expect(m[2].replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(), rel).toBe(prompt);
+      }
+    }
+    expect(slots).toBeGreaterThan(1);
+    // the team slide ties its text to the slot: one 224 px column centred in the card (the role pill ends on the
+    // photo's right edge), the note pinned to the bottom — no empty band beside the photo or under the note
+    const team = (selector: string) => cssRule("examples/handbook/slides/04-team.html", selector);
+    expect(team(".person")).toContain("align-items: center");
+    expect(team(".person .photo-slot")).toContain("width: 224px; height: 224px");
+    for (const selector of [".person-head", ".person-role", ".person-note"]) expect(team(selector), selector).toContain("width: 224px");
+    expect(team(".person-note")).toContain("margin-top: auto");
   });
 });
 
@@ -395,6 +591,8 @@ describe("pptx themes (themes/*.css: complete token sets for <deck>/deck.css)", 
     for (const theme of THEMES) expect(authoring, theme).toContain(`\`${theme}\``);
     expect(authoring).toContain("## 9. Design system: tokens and themes");
     expect(authoring).toContain('class="card card--emphasis');
+    // §9 Brand colours: the same derive-then-replace pattern as SKILL.md §3
+    expect(authoring).toContain("> <deck>/deck.css.new && mv <deck>/deck.css.new <deck>/deck.css");
     expect(prose(read("examples/README.md"))).toContain("ship the `classic` theme as their `deck.css`");
     // base.css says the same
     expect(BASE_CSS).toContain(".card--emphasis");
@@ -409,8 +607,8 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
     .map((d) => d.name)
     .sort();
 
-  it("ships business-review, handbook and layouts", () => {
-    expect(decks).toEqual(["business-review", "handbook", "layouts"]);
+  it("ships business-review, handbook, layouts and talk", () => {
+    expect(decks).toEqual(["business-review", "handbook", "layouts", "talk"]);
   });
 
   for (const deck of decks) {
@@ -553,11 +751,119 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
           if (at >= 0) expect(at).toBeGreaterThan(html.indexOf("</main>"));
         }
       });
+
+      it("writes speaker notes as a short plain-text talk track (2–5 flush-left lines, no markup)", () => {
+        for (const name of slides) {
+          const html = fs.readFileSync(path.join(deckDir, "slides", name), "utf8");
+          const notes = /<template id="notes">([\s\S]*?)<\/template>/.exec(html)?.[1];
+          if (notes === undefined) continue;
+          const lines = notes.split("\n").filter((line) => line.trim());
+          expect(lines.length, name).toBeGreaterThanOrEqual(2);
+          expect(lines.length, name).toBeLessThanOrEqual(5);
+          // leading spaces reach the notes paragraph, and the template is parsed as HTML: a tag would vanish
+          for (const line of lines) expect(line, name).toMatch(/^\S/);
+          expect(notes, name).not.toMatch(/<[A-Za-z/!?]/);
+        }
+      });
+
+      it("writes a timing cue only as '(약 N분)' at the end of the last notes line (one form across the examples)", () => {
+        for (const name of slides) {
+          const html = fs.readFileSync(path.join(deckDir, "slides", name), "utf8");
+          const notes = /<template id="notes">([\s\S]*?)<\/template>/.exec(html)?.[1];
+          if (notes === undefined) continue;
+          const lines = notes.split("\n").filter((line) => line.trim());
+          // a parenthesised cue anywhere, or a bare cue on a line of its own (which reads like a line to say aloud)
+          const cues = [...notes.matchAll(/\(약 ?\d+ ?(?:분|초)\)|^약 ?\d+ ?(?:분|초)$/gm)];
+          expect(cues.length, name).toBeLessThanOrEqual(1);
+          if (cues.length) expect(lines[lines.length - 1], name).toMatch(/\S \(약 \d+(?:분|초)\)$/);
+        }
+      });
+
+      it("opens a slide's notes without restating the bridge the previous slide's notes ended on", () => {
+        const notesOf = (name: string) =>
+          /<template id="notes">([\s\S]*?)<\/template>/
+            .exec(fs.readFileSync(path.join(deckDir, "slides", name), "utf8"))?.[1]
+            ?.split("\n")
+            .filter((line) => line.trim());
+        for (let i = 1; i < slides.length; i++) {
+          const before = notesOf(slides[i - 1]);
+          const after = notesOf(slides[i]);
+          if (!before?.length || !after?.length) continue;
+          // a verbatim restatement shares a long run ("첫 3개월 동안 곁에서 도와줄 세 사람을" was 16); sentence endings
+          // ("습니다.") share a few characters, which is fine
+          expect(longestSharedRun(before[before.length - 1], after[0]), `${slides[i - 1]} → ${slides[i]}`).toBeLessThan(10);
+        }
+      });
     });
   }
 
   it("the layouts deck demonstrates speaker notes", () => {
     const html = read("examples/layouts/slides/05-comparison.html");
     expect(html).toContain('<template id="notes">');
+  });
+
+  it("the talk deck is 발표형: at most ~40 words on each slide, every slide with a talk track", () => {
+    const dir = path.join(SKILL, "examples", "talk", "slides");
+    for (const name of fs.readdirSync(dir)) {
+      const html = fs.readFileSync(path.join(dir, name), "utf8");
+      const main = /<main[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
+      const words = main
+        .replace(/<svg[\s\S]*?<\/svg>/g, " ")
+        .replace(/<\/?(?:span|strong|b)\b[^>]*>/g, "") // inline runs do not break a word ("14<span>시간</span>")
+        .replace(/<[^>]+>/g, " ")
+        .split(/\s+/)
+        .filter((w) => w && !["·", "—", "–"].includes(w));
+      expect(words.length, name).toBeLessThanOrEqual(40);
+      expect(html, name).toContain('<template id="notes">');
+    }
+  });
+
+  it("the 발표형 sizes SKILL.md §2, AUTHORING §8.25 and the README quote are the ones the talk deck uses", () => {
+    expect(prose(body)).toContain("the headline at display size (60/80; an opening statement 84/112, a quote or the closing ask 72/96)");
+    expect(prose(body)).toContain("supporting text at lead sizes (22/32 to 28/40)");
+    const authoring = prose(read("reference/AUTHORING.md"));
+    expect(authoring).toContain("**8.25 Talk slides (발표형)**");
+    expect(authoring).toContain("(60/80; the opening statement 84/112, a quote or the closing ask 72/96)");
+    expect(prose(read("examples/README.md"))).toContain("(60/80, the statement 84/112, the quote and the closing 72/96)");
+    const px = (rel: string, size: number, lh: number) =>
+      expect(read(`examples/talk/slides/${rel}`), rel).toContain(`font-size: ${size}px; line-height: ${lh}px`);
+    px("01-statement.html", 84, 112);
+    px("02-big-number.html", 280, 376);
+    px("03-quote.html", 72, 96);
+    px("05-versus.html", 120, 160);
+    px("06-closing.html", 72, 96);
+    // labels 18/28 and supporting text at lead sizes — the opener's meta row and the closing's date rail included
+    expect(authoring).toContain("labels at 18/28, a meta row's labels and a rail's dates included");
+    expect(prose(body)).toContain("supporting text at lead sizes (22/32 to 28/40) and labels at 18/28");
+    const talk = (rel: string, selector: string) => cssRule(`examples/talk/slides/${rel}`, selector);
+    expect(talk("01-statement.html", ".meta-label")).toContain("font-size: 18px; line-height: 28px");
+    expect(talk("01-statement.html", ".meta-value")).toContain("font-size: var(--fs-lead); line-height: var(--lh-lead)");
+    expect(talk("06-closing.html", ".step-date")).toContain("font-size: 18px; line-height: 28px");
+    expect(talk("06-closing.html", ".step-name")).toContain("font-size: var(--fs-lead); line-height: var(--lh-lead)");
+    // ...and the floor itself, on every talk slide: each font size resolves to ≥ 18 px, except the micro chrome (the
+    // sample-data note and the page number, 12/16) — so no supporting text slips under it unnoticed
+    const sizePx = (value: string) => {
+      const token = /^var\((--fs-[a-z0-9-]+)\)$/.exec(value)?.[1];
+      return Number(/^(\d+(?:\.\d+)?)px$/.exec(token ? (BASE_TOKENS.get(token) ?? "") : value)?.[1] ?? Number.NaN);
+    };
+    let sized = 0;
+    for (const name of fs.readdirSync(path.join(SKILL, "examples", "talk", "slides"))) {
+      const style = (/<style>([\s\S]*?)<\/style>/.exec(read(`examples/talk/slides/${name}`))?.[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const m of style.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        const selector = m[1].trim();
+        const size = /(?:^|;)\s*font-size:\s*([^;]+?)\s*(?:;|$)/.exec(m[2])?.[1];
+        if (!size) continue;
+        sized++;
+        if (/-(?:note|page)$/.test(selector)) expect(sizePx(size), `${name} ${selector}`).toBe(12);
+        else expect(sizePx(size), `${name} ${selector}: ${size}`).toBeGreaterThanOrEqual(18);
+      }
+    }
+    expect(sized).toBeGreaterThan(20);
+    // the big number meets the lead's last baseline in BOTH profiles: one flex row aligned on the last baselines
+    expect(talk("02-big-number.html", ".bignum")).toContain("display: flex; align-items: last baseline");
+    expect(authoring).toContain("one flex row with `align-items: last baseline`");
+    // a headline figure keeps its scope on the slide: a reader without the speaker never sees the notes
+    expect(authoring).toContain("What a headline figure counts stays on the slide");
+    expect(prose(body)).toContain("while a headline figure keeps its scope on the slide");
   });
 });

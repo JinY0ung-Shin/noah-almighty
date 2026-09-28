@@ -175,7 +175,7 @@ Gates run as parallel Python children on the candidate, each `pass | warn | fail
 | gate | tool | fail = |
 |---|---|---|
 | `office-rules` | `tools/office_check.py --json` | any FAIL ([MS-OI29500] / ECMA repair triggers); WARN = drift |
-| `shape-table-lint` | `tools/gates/shape_table_lint.py` | any problem (p:style, spPr/ln/tcPr order, fills, joins, ids, table style) |
+| `shape-table-lint` | `tools/gates/shape_table_lint.py` | any problem (p:style, spPr/ln/tcPr order, fills, joins, ids, table style; slide placeholders included — a photo slot's spPr is explicit) |
 | `chart-verify` | `tools/gates/chart_verify.py` | chart XSD, python-pptx reopen, embedded workbook vs caches |
 | `chart-lint` | `tools/gates/chart_lint.py` | any error (illegal dLblPos, holeSize, …); warnings informational |
 | `embed-verify` | `tools/embed_fonts.py --verify` | EOT headers, payload, slot styles, every face byte-identical (embedded only) |
@@ -197,7 +197,7 @@ class `internal` (exit 4); a gate killed at its deadline is class `timeout` (exi
 ## Preview sidecar (`<stem>.preview/manifest.json`)
 
 ```json
-{"format": "noah-deck-preview", "version": 1, "generator": "noah-pptx-converter/1.1.0", "pptx": "q3-review.pptx",
+{"format": "noah-deck-preview", "version": 1, "generator": "noah-pptx-converter/1.2.0", "pptx": "q3-review.pptx",
  "pptxSha256": "<64 lowercase hex of the .pptx bytes>", "profile": "embedded", "createdAt": "2026-09-26T03:00:00Z",
  "slideCount": 6,
  "slides": [{"index": 1, "file": "slide-01.png", "mediaType": "image/png", "sha256": "<hex64>", "width": 1920,
@@ -256,8 +256,23 @@ rounded PNG → transparent PNG, an inline SVG icon → native svgBlip) into the
 
 ## Version
 
-`VERSION` (1.1.0); `generator` = `noah-pptx-converter/<VERSION>`. Bump it whenever the output or the input contract
-changes; regenerate the goldens only after a PowerPoint spot-check. 1.1.0 changes what these decks produce:
+`VERSION` (1.2.0); `generator` = `noah-pptx-converter/<VERSION>`. Bump it whenever the output or the input contract
+changes; regenerate the goldens only after a PowerPoint spot-check.
+
+1.2.0 adds **photo slots** — PowerPoint's EMPTY picture placeholder, which the user fills by clicking its icon (the
+photo takes the slot's box, cropped to it): a new input value `data-placeholder="pic"` with `data-prompt` on a box,
+the IR `kind: "placeholder"` (below) with its `slot` — the slot's ordinal among the slide's slots in DOCUMENT order —,
+a slide picture placeholder `idx` 13 + `slot` and the union of its family's slots in the layout, the prompt coloured
+for the slot's own frame ("Structure" (c)), the fidelity checks of both (`object`, `placeholder`, `layout-prompt`),
+the lints `placeholder-prompt`, `placeholder-size`, `placeholder-content`, `rotated-placeholder` (errors),
+`placeholder-geometry` (warn) and the check's `placeholder-layout` (warn, derived from the IR: never in it), CSS lints
+that skip a slot's HTML-only hint, the kit's class-scoped `.photo-slot` component (`theme/base.css`, existing tokens
+only; its hint in `--c-ink-600` on `--c-ink-100`, ≥ 4.5:1 in every shipped theme) and a shape-table-lint that reports
+a `p:sp` without `p:spPr` instead of crashing. A deck without the attribute gets the same IR, lint and PPTX as with
+1.1.0: the goldens still match (every change switches on only where a slot is — the paint walk's stacking-context
+guard included).
+
+1.1.0 changes what these decks produce:
 - ChartSpec colour fields accept theme tokens (`var(--name)`, resolved in page context) — a deck using them;
 - `currentColor` icon paint, authored on an element or inherited from the element that authors it, is written into
   the SVG markup as its hex without an `image` warning — a deck with such icons (its SVG/PNG assets and its lint);
@@ -508,6 +523,36 @@ flag when any `[data-chart]` exists and copies it into the IR chart element as
 `"resolved": {"plotPx": {x, y, w, h} (slide coordinates), "valueMin", "valueMax", "majorUnit"}` — the builder
 passes these to the native chart (`manualLayout`, explicit `c:min/c:max/c:majorUnit`) so both match.
 
+### `kind: "placeholder"` (1.2.0)
+
+`{"placeholder": "pic", "prompt": "<data-prompt> | null", "slot": 0}` — a **photo slot**: `data-placeholder="pic"` on
+an element that lays out as a box of its own (a block container or a flex/grid container: never `main.slide`, a
+picture, table, chart or other replaced element, inline text, `display: contents` or a table part). `box` = its BORDER
+box (where PowerPoint places an inserted photo, covering the frame). It is ATOMIC like a picture — isLeaf, painted at
+its step-5 position, and atomic even when it is a stacking context (its positioned children never become layers): its
+own paint (fill, dashed border) is the ordinary `shape` emitted before it (`<path>::bg`, the slot's frame), and its
+children are an HTML-only hint (an icon and a line of text) that never reaches the IR — so the CSS lints skip them
+(`filter`, `text-shadow`, `overflow-clip` … on a hint would name something PowerPoint never gets; the slot itself is
+linted like any element, and its own overflow clip is not checked: its corners are `placeholder-geometry`'s).
+`prompt` = `data-prompt` with whitespace runs collapsed and trimmed (null when absent or empty); the glyph check covers
+it (`missing-glyph`, `not-embedded-glyph`), since it reaches PowerPoint as the layout prompt. `slot` = the slot's
+ordinal (0, 1, …) among the photo slots the slide emitted, in DOCUMENT order — not paint order: z-index, a transform
+or absolute vs in-flow positioning reorder the paint, never the numbering, so the slides of one layout pair their
+slots by their order in the markup (the builder's `idx` 13 + `slot`). Lints (all only where the attribute is):
+**errors** `placeholder-prompt` (`data-prompt` missing, empty, on several lines or over 80 characters),
+`placeholder-size` (a border box under 24 px on either side, named with its measured size — a slot without a height
+of its own collapses to its border; evaluated after the prompt, and the slot is still emitted, keeping its place in
+the numbering), `placeholder-content` (an `<img>`, `<table>`, chart or another `data-placeholder` inside a slot —
+reported once on the outer slot —, or the attribute on `main.slide`, on a replaced element / table / chart, on an
+element without a box of its own, or inside a table, chart or picture), `rotated-placeholder` (|rotationDeg| > 1e-6,
+raised in `place()` like `rotated-table`); **warn** `placeholder-geometry` (a non-zero `border-radius`: the picture
+placeholder is a rectangle). The existing `placeholder` warn (an unknown text role) keeps the three text roles; its
+message names `pic` as the photo slot's value. The check adds **warn** `placeholder-layout` from the IR (`lib/pipeline.mjs`
+`layoutLintOf`, never written into it): a layout family — slides sharing a `data-layout`, else a background, grouped as
+the builder groups them — whose photo slides share it with slides that have no slot; the family's layout carries the
+union of its slots, so every New Slide made from it in PowerPoint would bring empty photo slots (one entry per family,
+`profile` null; remedy: the photo slide(s) get their own `data-layout`).
+
 ### Structure hints (fixer round 1)
 
 - `slides[].components`: every element with its own paint that holds other objects (a card, a pill, an icon badge,
@@ -525,7 +570,10 @@ content, multiple box-shadows (warn), inset box-shadow (warn), text overflow (sc
 anything outside the slide bounds, a slide-number field that does not show the slide's number (`field`), bare text
 beside element children (`mixed-content`), a soft-wrapped slide title (`title-wrap`), a weight outside the kit's
 400/600/700/800 (`font-weight`), an invalid ChartSpec or a chart colour token that does not resolve to an opaque colour
-(`chart-spec`). Warn: `font-weight` for a kit weight the profile lacks (malgun 600/800, expected;
+(`chart-spec`), a photo slot's `placeholder-prompt`, `placeholder-size`, `placeholder-content` and
+`rotated-placeholder` (1.2.0, `kind: "placeholder"` above). Warn: `placeholder-geometry` (a rounded photo slot), the
+check's `placeholder-layout` (photo slides sharing a layout with slides that have no slot; from the IR, never in it),
+`font-weight` for a kit weight the profile lacks (malgun 600/800, expected;
 also counts table-cell runs and chart label/axis weights), `chart-contrast`, `chart-range` (a drawn value — the
 stack total when stacked — outside an explicit `valueAxis.min/max`), `placeholder`, `theme-color` (a `--pptx-*` slot
 that is not an opaque colour, a later slide's slots differing from the first's, or `--pptx-dk1` lighter than
@@ -597,7 +645,34 @@ that is not an opaque colour, a later slide's slots differing from the first's, 
   with every property explicit (`spcBef`/`spcAft` too); its layout gets a prompt placeholder in the same style.
   `p:ph@idx` as PowerPoint's own layouts write it — `title` / `ctrTitle` none (0), `subTitle` `idx="1"` — unique on
   every slide and layout, so each slide placeholder links to the layout prompt of its own type ([MS-OI29500] 2.1.1127;
-  fixer round 3, VO-01 / VR-01).
+  fixer round 3, VO-01 / VR-01). **Photo slots** (1.2.0, `pptxlib/placeholders.py`): the slot with IR `slot` k (its
+  ordinal in DOCUMENT order) is a `p:sp` with `a:spLocks noGrp="1"` and `p:ph type="pic" idx=13+k` (clear of 0, 1 and
+  the stock dt / ftr / sldNum 10-12), its spPr explicit (xfrm = the border box, prstGeom rect, noFill, `a:ln` noFill, an
+  empty effectLst: shape-table-lint's rules; it paints nothing — the frame is the shape before it), no hasCustomPrompt
+  and no prompt text (PowerPoint copies neither to a slide), named `그림 개체 틀: <prompt>`. Each layout gets, once
+  every slide exists, ONE fresh `p:sp` per idx its family's slides use (the union, so every slide slot links to a
+  layout placeholder with its idx — office-rules PH-01 / SLD-02): cNvPr id = the layout's largest + 1 (never a lifted
+  chrome object's), box and prompt from the first slide in deck order with that idx, `hasCustomPrompt="1"` when there
+  is a prompt, and a txBody whose lstStyle lvl1pPr is marL 0, indent 0, centred, `buNone`, 14 pt in the profile's
+  regular typeface (without it a prompt inherits the master body style: 32 pt with bullets) around the prompt run
+  (`lang="ko-KR"`); it is recorded like the title prompt (`Rec(None, "placeholder", "layout-placeholder", extra={"ph":
+  "pic", "idx": N})`). Slides of one layout share each slot's prompt by document order (a different `data-prompt` in
+  the same position on a later slide is fidelity drift: give such slides their own `data-layout`; the check's
+  `placeholder-layout` warns when some slides of a family have no slot at all). A New Slide from the layout brings the
+  empty slots; PowerPoint's Reset puts a moved slot back at the layout's box (like titles). **Prompt colour**: the
+  prompt sits on the slot's frame (its own topmost `::bg` fill), not on the background its part's colour map is chosen
+  for. The layout prompt keeps tx1 on the layout's map — a New Slide shows it on the layout background — unless the
+  frame was lifted into the layout as chrome: then its lstStyle defRPr gets the more legible theme text colour (dk1 /
+  lt1, as for text typed into a fill shape, (h)) on that frame where tx1 is not it. Once the layouts exist, a slide
+  slot whose slide would show another colour than the more legible one on its opaque frame — its layout placeholder's
+  explicit colour, else tx1 on the slide's map (a dark slide with the kit's light frame, a light slide with a dark
+  photo well) — gets a colour-only txBody: an empty bodyPr, an lstStyle lvl1pPr defRPr solidFill srgbClr, one empty
+  paragraph (no run, no hasCustomPrompt); a slot without an opaque frame keeps the default. Fidelity: a slot object
+  that is not a picture placeholder is `object` (blocking); its idx (13 + `slot`), lock, box / rotation, frame, a
+  txBody other than the colour-only one, the prompt PowerPoint shows and that prompt's colour on the frame are
+  `placeholder`, the layout placeholder vs its source slot (type / idx, box, hasCustomPrompt, prompt; its colour legible
+  on a lifted frame, else no colour of its own) `layout-prompt` — both drift; the paint order checks a slide slot like
+  any object (only layout prompt placeholders, role `layout-placeholder`, are skipped).
   **(d)** A table's own opaque, square background shape is absorbed into the table: cells without a fill get its
   colour, its shadow becomes `a:tblPr/a:effectLst` (a table cannot be grouped in PowerPoint). **(e)** Components
   become `p:grpSp` (identity child transform) when contiguous in paint order; never tables or placeholders; a split

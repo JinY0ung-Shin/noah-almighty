@@ -12,7 +12,7 @@ folder inside the skill directory is refused.
 ## Layout
 
 ```
-VERSION                  1.1.0 — generator "noah-pptx-converter/<VERSION>" in every preview manifest
+VERSION                  1.2.0 — generator "noah-pptx-converter/<VERSION>" in every preview manifest
 requirements.txt         the pinned Python set (the image installs it through the pip mirror)
 docs/CONTRACT.md         the maintainers' contract (roots, isolation, runs, gates, previews, self-test, IR)
 fonts/                   vendored OFL fonts + licenses + fonts.json (GENERATED) — see fonts/README.md
@@ -83,5 +83,6 @@ matches what was verified.
 
 `VERSION` is the converter's output version (`generator` in manifests, `converterVersion` in probe and record).
 Bump it whenever the output changes (extractor measurement, builder XML, fonts, component kit), together with the
-goldens. A PoC-equivalence reference: the frozen `selftest/deck` IR is numerically identical to the PoC's IR, and its
+goldens — or, for a change that only adds input a frozen deck does not use, with a CONTRACT "Version" note saying the
+goldens still match (1.2.0: photo slots, `data-placeholder="pic"`). A PoC-equivalence reference: the frozen `selftest/deck` IR is numerically identical to the PoC's IR, and its
 decks are part-for-part identical to the PoC's except `docProps/core.xml` and the embedded chart workbook.

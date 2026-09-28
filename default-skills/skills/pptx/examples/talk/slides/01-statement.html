@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>01 선언 · 셀프 서비스 시범 운영</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Statement (발표형 opener): the talk's one claim IS the first slide — a display statement over the cover
+     gradient, the event as the kicker, who/when/where on a meta row. It is the deck's title (ctrTitle), so the
+     file's Title property reads the claim. Two hard lines at 84/112: 112 px = 4/3 × 84, which PowerPoint stores as
+     111 % (0.11 px per line off, well inside the 0.25 px the check allows); the 1040 px box holds at most 12
+     Hangul syllables per line in malgun (a space costs about a third of one). */
+  main.slide.statement {
+    background: linear-gradient(135deg, var(--c-cover-from) 0%, var(--c-cover-to) 100%);
+    color: var(--c-white);
+  }
+
+  /* ---- a motif of its own: a moon (ring, halo, disc and one orbit dot). It ends at y 264, above the statement's
+     box (y 272), so no line of the 1040 px box can reach it: a longer claim wraps (a title-wrap error) or pushes
+     into the meta row (a text-overlap error) — both reported — instead of silently running into the motif ---- */
+  .deco { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  .deco > div { position: absolute; border-radius: 50%; }
+  .ring  { left: 960px; top: 24px; width: 240px; height: 240px; border: 1px solid rgba(255, 255, 255, 0.12); }
+  .halo  { left: 996px; top: 60px; width: 168px; height: 168px; background: var(--c-cover-halo); }
+  .moon  { left: 1044px; top: 108px; width: 72px; height: 72px; background: rgba(255, 255, 255, 0.90); }
+  .orbit { left: 988px; top: 222px; width: 14px; height: 14px; background: var(--c-cover-orbit); }
+
+  .brand { position: absolute; left: var(--margin-x); top: 64px; display: flex; align-items: center; gap: 8px; }
+  .brand .mark-a { background: var(--c-white); }
+  .wordmark { font-size: 18px; line-height: 24px; font-weight: 800; letter-spacing: -0.01em; color: var(--c-white); }
+
+  /* the accent kicker sits in the gradient's first half (accent-500 text is checked there, not on its light end) */
+  .kicker { position: absolute; left: var(--margin-x); top: 232px; font-size: 18px; line-height: 28px; font-weight: 700;
+            letter-spacing: var(--tracking-label); color: var(--c-accent-500); }
+  .statement-title { position: absolute; left: var(--margin-x); top: 272px; width: 1040px;
+                     font-size: 84px; line-height: 112px; font-weight: 800;
+                     letter-spacing: var(--tracking-display); color: var(--c-white); }
+
+  /* who / when / where over a 1 px rule: fixed 208 px columns, the same pitch in both profiles; labels 18/28 and
+     values at the lead size, the 발표형 floor for text an audience reads from the back of the room */
+  .meta { position: absolute; left: var(--margin-x); top: 544px; width: 624px; padding-top: 24px;
+          border-top: 1px solid rgba(255, 255, 255, 0.16);
+          display: grid; grid-template-columns: repeat(3, 208px); }
+  .meta-label { font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: 0.04em;
+                color: rgba(255, 255, 255, 0.64); }
+  .meta-value { margin-top: 4px; font-size: var(--fs-lead); line-height: var(--lh-lead); font-weight: 700; color: var(--c-white); }
+
+  .statement-note { position: absolute; left: var(--margin-x); top: 680px; font-size: var(--fs-micro);
+                    line-height: var(--lh-micro); color: rgba(255, 255, 255, 0.60); }
+</style>
+</head>
+<body>
+<main class="slide statement" data-layout="표지">
+  <div class="deco" data-group="장식 — 달">
+    <div class="ring"></div>
+    <div class="halo"></div>
+    <div class="moon"></div>
+    <div class="orbit"></div>
+  </div>
+
+  <div class="brand" data-group="브랜드">
+    <div class="mark" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+    <p class="wordmark">예시테크</p>
+  </div>
+
+  <p class="kicker">고객 경험 콘퍼런스 2026</p>
+  <h1 class="statement-title" data-placeholder="ctrTitle">답이 있는 질문은<br>기다리게 하지 않습니다</h1>
+
+  <div class="meta">
+    <div class="meta-item"><p class="meta-label">발표</p><p class="meta-value">고객경험팀</p></div>
+    <div class="meta-item"><p class="meta-label">일시</p><p class="meta-value">2026년 11월 5일</p></div>
+    <div class="meta-item"><p class="meta-label">장소</p><p class="meta-value">본사 3층 대강당</p></div>
+  </div>
+
+  <p class="statement-note">샘플 데이터 · 본 자료의 기업명과 수치는 모두 가상으로 구성한 예시입니다</p>
+</main>
+<template id="notes">
+안녕하십니까, 고객경험팀입니다. 오늘은 셀프 서비스 시범 운영 석 달의 결과를 말씀드리겠습니다.
+드리고 싶은 말씀은 하나입니다. 답이 이미 있는 질문이라면 고객을 기다리게 할 이유가 없습니다.
+먼저 우리 고객센터에 어떤 질문이 들어오는지부터 보시겠습니다. (약 30초)
+</template>
+</body>
+</html>

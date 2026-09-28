@@ -1,11 +1,13 @@
 # Example decks
 
-Three example decks, each a complete deck folder (`slides/NN-name.html` + `deck.css`). Paths here are relative to the
-pptx skill's base directory; SKILL.md §3 shows the copy command with the absolute path. All three ship the `classic`
-theme as their `deck.css` and use the same footer, so slides from any of them can be mixed in one deck — and every
-colour, surface and radius in them is a theme token, so copying another `themes/<theme>.css` over the deck's
-`deck.css` restyles all of it (SKILL.md §3). Every slide builds with `deck.sh build --strict` in both font profiles
-and every theme (`--strict` is a maintainer check; decks do not need it).
+Four example decks, each a complete deck folder (`slides/NN-name.html` + `deck.css`, plus `assets/` for the talk
+deck's photo). Paths here are relative to the pptx skill's base directory; SKILL.md §3 shows the copy command with the
+absolute path. All four ship the `classic` theme as their `deck.css` and use the same footer, so slides from any of
+them can be mixed in one deck — and every colour, surface and radius in them is a theme token, so copying another
+`themes/<theme>.css` over the deck's `deck.css` restyles all of it (SKILL.md §3). Three are documents to read
+(보고서형: the kit's standard sizes, full sentences, tables); `talk` is a deck to present (발표형: few words at display
+sizes, the details in the speaker notes). Every slide builds with `deck.sh build --strict` in both font profiles and
+every theme (`--strict` is a maintainer check; decks do not need it).
 
 ## Using an example
 
@@ -18,16 +20,23 @@ and every theme (`--strict` is a maintainer check; decks do not need it).
    deck name would stay behind on each slide and be missing from slides added in PowerPoint (AUTHORING §8.2).
 2. **Keep only the slides you need**, then renumber: the `NN-` file prefixes run 01, 02, … in slide order, and
    every page-number field (each element with `data-field="slidenum"`: the footer's `.page-num`, and the
-   bottom-right number of the section divider and the closing) shows the slide's new position (the check fails
-   with `field` otherwise).
-3. **Replace all sample content.** The company (예시테크), people, dates, every figure, insight bullet, team name
-   and contact are fictional. Once the slides carry the user's real data, remove the sample-data notes (the
+   bottom-right number of the section divider, the closing and the talk deck's photo slide) shows the slide's new
+   position (the check fails with `field` otherwise).
+3. **Replace all sample content.** The company (예시테크), people, dates, every figure, insight bullet, quote, team
+   name and contact are fictional. Once the slides carry the user's real data, remove the sample-data notes (the
    footer's "샘플 데이터 · 가상 기업의 예시 수치" (handbook: "… 예시 정보") and the bottom note of the dark slides:
-   cover, section divider, closing); keep them only when you deliver a template with placeholder figures, and when only some figures are
-   the user's, mark the rest (SKILL.md §2). Never leave an example figure or claim in a real deck, and keep every
-   figure that appears on several slides identical everywhere. When the user's company, department, presenter or
-   date is unknown, never invent one: remove the footer's `.footer-brand` and the cover's wordmark (the two-circle
-   mark may stay), and fill the cover's meta row only with facts from the request (or remove the row).
+   cover, statement, section divider, photo panel, closing); keep them only when you deliver a template with
+   placeholder figures, and when only some figures are the user's, mark the rest (SKILL.md §2). Never leave an
+   example figure or claim in a real deck, and keep every figure that appears on several slides identical
+   everywhere. When the user's company, department, presenter or date is unknown, never invent one: remove the
+   footer's `.footer-brand` and the cover's wordmark (the two-circle mark may stay), and fill the cover's meta row
+   only with facts from the request (or remove the row). A quote is someone's actual words: use one the user gives,
+   never write one yourself. The talk deck's photo is a synthetic placeholder: use a photo the user provides (into
+   the deck's `assets/`), or pick another slide. The handbook team slide's photo slots stay empty in the .pptx for
+   the user to fill: rewrite each `data-prompt` (and the hint that repeats it) to say whose photo goes there. A
+   second team slide on the same `data-layout` would show THESE prompts in its slots, because the slides of one
+   layout share each slot's prompt by document order (AUTHORING §7): give it its own `data-layout` (e.g.
+   `함께할 사람 2`), or put one generic prompt (`팀원 사진을 넣으세요`) on both slides.
 4. **Keep what makes the slides convert and restyle**: the three stylesheet links (`../deck.css` included), the
    theme tokens instead of literal colours (`var(--c-…)`, `"var(--c-series-curr)"` in chart specs,
    `stroke="currentColor"` icons), `data-layout`, `data-group`, `data-placeholder`, `data-field`, the footer's
@@ -57,6 +66,13 @@ and every theme (`--strict` is a maintainer check; decks do not need it).
 | org chart: units as a tree of boxes with connector lines | `handbook/slides/01-org.html` |
 | schedule / week grid: sessions by day and time (a native text table) | `handbook/slides/02-first-week.html` |
 | directory / contacts: the order to ask in + who handles what | `handbook/slides/03-contacts.html` |
+| team / people with photos the user adds later: empty photo slots | `handbook/slides/04-team.html` |
+| talk (발표형) opener: the talk's one claim as a display statement, the event and who/when/where | `talk/slides/01-statement.html` |
+| talk: one big number that proves the headline, with one sentence on what it counts | `talk/slides/02-big-number.html` |
+| talk: one voice — a quote the user gave you, with its source | `talk/slides/03-quote.html` |
+| talk: a photo that carries the mood, the message and two figures on a panel beside it | `talk/slides/04-image-led.html` |
+| talk: before vs after — two halves with the same rows, one figure each | `talk/slides/05-versus.html` |
+| talk closing: the one thing you ask the audience for, and the next dates | `talk/slides/06-closing.html` |
 
 ## `business-review/` — 2026년 3분기 사업 실적 보고 (4 slides)
 
@@ -75,20 +91,42 @@ and every theme (`--strict` is a maintainer check; decks do not need it).
 | `02-diagnosis.html` | two native charts with one colour code: a line chart (two series, labels above the points) and a doughnut with a centre label and an HTML legend with values; a subtitle with the evidence and a finding under each chart | §8.15, §8.10 |
 | `03-section.html` | section divider on its own layout (`data-layout="간지"`): a big section number, the title, a preview of the section's three strategies (icon rows), and the progress through the deck's sections | §8.16 |
 | `04-strategy.html` | strategy framework ("house"): the goal as a dark roof band, three pillars with the same rows (a target metric from → to with an icon arrow, three actions), the shared foundation as a base band | §8.17 |
-| `05-comparison.html` | two options with the same rows; each leads with its 3-year total and a cost bar on one scale, the recommended one as the dark card with advantage pills; the evidence in the subtitle; speaker notes in `<template id="notes">` | §8.18, §1 |
+| `05-comparison.html` | two options with the same rows; each leads with its 3-year total and a cost bar on one scale, the recommended one as the dark card with advantage pills; the evidence in the subtitle; speaker notes as a talk track in `<template id="notes">` | §8.18, §1 |
 | `06-timeline.html` | a month-grid roadmap: quarter and month headers, one bar per workstream coloured by kind of work (with a legend), a go-live line and a milestone rail with one key milestone | §8.19 |
 | `07-effects.html` | a KPI scorecard: current vs target as paired bars per row, the change as a pill in words, the goal in the accent colour, and a summary box with the yearly effect | §8.20 |
 | `08-closing.html` | closing on its own layout (`data-layout="맺음"`): the decision as the title, the three items to approve, and the next steps on a rail | §8.21 |
 
-## `handbook/` — 2026년 신입사원 온보딩 가이드 (3 slides: reference content)
+## `handbook/` — 2026년 신입사원 온보딩 가이드 (4 slides: reference content)
 
 | slide | what it shows | AUTHORING |
 |---|---|---|
 | `01-org.html` | org chart: the CEO box and a staff office on top, four division cards on one pitch with their teams and headcounts (each total = the sum of its teams), connector lines as 2 px rectangles painted first, the onboarding owner marked with a pill | §8.22 |
 | `02-first-week.html` | a week grid as ONE native table (`.data-table--text`, every column left-aligned): time rows × weekday columns, the kind of session as the cell fill with a legend, the mandatory sessions in bold, the evidence for the title in the subtitle | §8.23, §8.9 |
-| `03-contacts.html` | directory: the order to ask in on a dark card (numbered steps, an urgent note with `pill--down-on-dark`) next to a text table of topic, team, extension and chat channel at the width it needs; speaker notes | §8.24 |
+| `03-contacts.html` | directory: the order to ask in on a dark card (numbered steps, an urgent note with `pill--down-on-dark`) next to a text table of topic, team, extension and chat channel at the width it needs; speaker notes as a talk track | §8.24 |
+| `04-team.html` | people on their own layout (`data-layout="함께할 사람"`): three cards, each led by a SQUARE photo slot (`.photo-slot` + `data-placeholder="pic"` + `data-prompt`: an EMPTY PowerPoint picture placeholder the user fills by clicking its icon), with the name and a role pill, the role line and a two-line note BELOW the slot, on the slot's own 224 px column (everything inside a slot is an HTML-only hint); speaker notes as a talk track | §7, §12 |
 
 The titles state what the reader should know or do — reference content has no finding to report.
 
+## `talk/` — 셀프 서비스 시범 운영 (6 slides: a talk, 발표형)
+
+A deck to present, not to read: at most about 40 words per slide (footer included), the headline at display size in
+one or two hard lines (60/80, the statement 84/112, the quote and the closing 72/96), supporting text at lead sizes
+(22/32 to 28/40) and labels at 18/28, figures as big as the slide allows, and everything the speaker says beyond
+that in the speaker notes — each slide's `<template id="notes">` is its talk track (what to say, the exact figures
+to cite, the transition to the next slide, a timing cue in parentheses at the end).
+
+| slide | what it shows | AUTHORING |
+|---|---|---|
+| `01-statement.html` | opener on the cover gradient (`data-layout="표지"`): an accent kicker with the event, the talk's claim as a two-line 84/112 statement (`ctrTitle`), who/when/where on a meta row, a moon motif of shapes | §8.25, §8.13 |
+| `02-big-number.html` | a two-line display headline, the proof as a 280 px figure in the brand colour (optically aligned with the headline), and beside it a bar of the same share over one lead sentence on what the figure counts, its last line on the figure's baseline (one flex row, `align-items: last baseline`) | §8.25, §8.7 |
+| `03-quote.html` | one voice, centred: a quote mark drawn as a filled `currentColor` SVG, the quote as the slide's 72/96 title, its source under a short rule; the survey figures behind it in the notes | §8.25, §7 |
+| `04-image-led.html` | a photo filling the left half (`object-fit: cover`, `object-position` for the crop) on its own layout (`data-layout="사진"`), and EVERY text on the dark panel beside it — headline, lead, two figures, the sample-data note and the page number | §8.25, §7, §12 |
+| `05-versus.html` | before vs after: two cards with the same rows (who answers, then the one figure that changed, pinned to the bottom), the after card dark, a connector circle cut into both cards on the seam; the headline names whose wait the figures count | §8.25, §8.18 |
+| `06-closing.html` | closing on its own layout (`data-layout="맺음"`): the one ask as a 72/96 title, where to send it, the next three dates on a rail, the opener's moon again | §8.25, §8.21 |
+
+`talk/assets/photo.jpg` is synthetic, not a photograph: a byte copy of the converter self-test's
+`converter/selftest/features/assets/photo.jpg`, drawn by `converter/selftest/tools/make_assets.py` (no third-party
+imagery, so it can ship).
+
 The layouts and handbook decks have no cover of their own: put `business-review/slides/01-cover.html` (re-titled)
-in front of them when a deck needs one.
+in front of them when a deck needs one. The talk deck opens with its statement slide instead.

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>04 함께할 사람 · 2026년 신입사원 온보딩 가이드</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* People: one card per person, each with a SQUARE photo slot (.photo-slot + data-placeholder="pic") the user fills
+     in PowerPoint by clicking its icon — the photo takes the slot's 224 px box, cropped to it. Everything inside a
+     slot is an HTML-only hint, so the name, role and note sit below it, outside the slot. The slide has its own
+     data-layout: a New Slide from it brings three empty photo slots, and slides on other layouts never do.
+     Three cards on the 1120 px column: (1120 - 2 * 32) / 3 = 352 px each; inside 288 px (286 in outlined themes).
+     The slot and the text share ONE 224 px column, centred in the card, so the role pill ends on the photo's right
+     edge; the note is pinned to the bottom (margin-top: auto), so the card has no empty band under it. A note line
+     must fit 224 px in malgun, where each Hangul syllable is 16 px wide (a space about a third of that). */
+  .people { position: absolute; left: var(--margin-x); top: var(--content-top); width: var(--content-w); height: 440px;
+            display: flex; gap: var(--sp-4); }
+  .person { flex: 1 1 0; min-width: 0; padding: var(--sp-4); display: flex; flex-direction: column; align-items: center; }
+  .person .photo-slot { flex: none; width: 224px; height: 224px; }
+  .person-head { width: 224px; margin-top: var(--sp-3); display: flex; align-items: center; justify-content: space-between; gap: var(--sp-1); }
+  .person-name { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-ink-900); }
+  .person-role { width: 224px; margin-top: 2px; font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--c-ink-500); }
+  .person-note { width: 224px; margin-top: auto; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: var(--c-ink-700); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="함께할 사람">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">04</span> 함께할 사람</p>
+    <div class="title-row">
+      <h1 class="slide-title">첫 3개월은 세 사람이 곁에서 돕습니다</h1>
+      <p class="pill pill--outline period">입사 첫 주에 모두 인사</p>
+    </div>
+  </header>
+
+  <section class="people">
+    <article class="card person">
+      <div class="photo-slot" data-placeholder="pic" data-prompt="버디 사진을 넣으세요">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+        <p class="photo-slot-hint">버디 사진을 넣으세요</p>
+      </div>
+      <div class="person-head"><p class="person-name">김민지 선임</p><p class="pill pill--brand">버디</p></div>
+      <p class="person-role">같은 팀 선배 · 매주 30분 면담</p>
+      <p class="person-note">업무 도구와 일하는 방식을<br>가장 먼저 알려 줍니다.</p>
+    </article>
+    <article class="card person">
+      <div class="photo-slot" data-placeholder="pic" data-prompt="팀장 사진을 넣으세요">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+        <p class="photo-slot-hint">팀장 사진을 넣으세요</p>
+      </div>
+      <div class="person-head"><p class="person-name">박준호 팀장</p><p class="pill pill--brand">목표 설정</p></div>
+      <p class="person-role">첫 주 1:1 · 매달 점검</p>
+      <p class="person-note">3개월 목표를 함께 정하고<br>한 달마다 진행을 살핍니다.</p>
+    </article>
+    <article class="card person">
+      <div class="photo-slot" data-placeholder="pic" data-prompt="온보딩 담당자 사진을 넣으세요">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+        <p class="photo-slot-hint">온보딩 담당자 사진을 넣으세요</p>
+      </div>
+      <div class="person-head"><p class="person-name">이서연 매니저</p><p class="pill pill--brand">People팀</p></div>
+      <p class="person-role">온보딩 담당 · 내선 1201</p>
+      <p class="person-note">입사 서류, 필수 교육,<br>장비 지급 일정을 챙깁니다.</p>
+    </article>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 신입사원 온보딩 가이드</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 정보</p>
+      <p class="page-num" data-field="slidenum">4</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+가장 먼저 찾을 사람은 같은 팀 선배인 버디입니다. 매주 한 번, 30분씩 만납니다.
+업무 목표는 첫 주에 팀장과 함께 정하고, 한 달마다 1:1로 점검합니다.
+입사 서류와 교육 일정은 People팀 이서연 매니저에게, 내선 1201로 문의하시면 됩니다. (약 1분)
+</template>
+</body>
+</html>

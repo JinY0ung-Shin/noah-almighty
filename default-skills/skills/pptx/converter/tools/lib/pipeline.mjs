@@ -460,16 +460,56 @@ const clip = (t, n = 40) => {
   return c.length > n ? `${c.slice(0, n - 1)}…` : c;
 };
 
+/** JSON with every object's keys sorted — Python's json.dumps(v, sort_keys=True) up to spacing: equal values, equal keys. */
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+  return JSON.stringify(v === undefined ? null : v);
+}
+
 /**
- * Lint the check derives from the IR's measured lines (report and exit status only — never written into the IR,
- * so the self-test goldens are unaffected):
+ * Layout families whose slides mix photo slots with none: the builder groups slides into PowerPoint layouts by
+ * data-layout, else by background (pptxlib/layouts.py plan_layouts — mirrored here), and writes the UNION of a
+ * family's photo slots into its layout (every slide slot must link to a layout placeholder with its idx) — so when
+ * some slides of the family have no slot, a New Slide made from that layout in PowerPoint brings empty photo slots
+ * those slides never showed. -> [{layout (data-layout | null), photo: [{index, name}], plain: [{index, name}]}]
+ */
+export function photoLayoutsOf(ir) {
+  const families = new Map();
+  for (const s of ir.slides || []) {
+    const key = s.layout || `bg:${canonicalJson(s.background ?? null)}`;
+    if (!families.has(key)) families.set(key, { layout: s.layout || null, slides: [] });
+    families.get(key).slides.push(s);
+  }
+  const out = [];
+  const ref = (s) => ({ index: s.index, name: s.name || null });
+  for (const f of families.values()) {
+    const photo = f.slides.filter((s) => (s.elements || []).some((e) => e.kind === 'placeholder'));
+    const plain = f.slides.filter((s) => !photo.includes(s));
+    if (photo.length && plain.length) out.push({ layout: f.layout, photo: photo.map(ref), plain: plain.map(ref) });
+  }
+  return out;
+}
+
+function slideList(refs) {
+  const one = (r) => `${r.index}${r.name ? ` (${r.name})` : ''}`;
+  return refs.length === 1 ? `slide ${one(refs[0])}` : `slides ${refs.slice(0, -1).map(one).join(', ')} and ${one(refs[refs.length - 1])}`;
+}
+
+/**
+ * Lint the check derives from the IR's measured lines and slide structure (report and exit status only — never
+ * written into the IR, so the self-test goldens are unaffected):
  *   text-overlap (error)  the line boxes (glyph content areas, textOverlapsOf) of two elements' text intersect — a
  *                         title that wrapped into the content, a malgun line that grew into its neighbour; PowerPoint
  *                         places the lines as the render does. The message names the spacing rule that applies;
  *   soft-wrap (warn)      a two-line text whose only break cuts a word ("전략기획 / 실"): a label or caption that
- *                         almost fits. Longer paragraphs wrap inside words by design and are only listed.
+ *                         almost fits. Longer paragraphs wrap inside words by design and are only listed;
+ *   placeholder-layout (warn)  a layout family whose photo slides share it with slides that have no photo slot
+ *                         (photoLayoutsOf); the message names those slides and the remedy — the photo slide(s) get
+ *                         their own data-layout. It does not depend on the profile: one entry per family (profile
+ *                         null), and `photoLayouts: false` leaves it out (the second profile of a check).
  */
-export function layoutLintOf(ir, profile, { overlaps = textOverlapsOf(ir, profile), softWraps = softWrapsOf(ir, profile) } = {}) {
+export function layoutLintOf(ir, profile, { overlaps = textOverlapsOf(ir, profile), softWraps = softWrapsOf(ir, profile), photoLayouts = true } = {}) {
   const out = [];
   for (const o of overlaps) {
     // what was measured: the lines' full font boxes, not the ink (textOverlapsOf) — so a render can look clear
@@ -490,6 +530,14 @@ export function layoutLintOf(ir, profile, { overlaps = textOverlapsOf(ir, profil
     out.push({
       slide: w.slide, profile, severity: 'warn', rule: 'soft-wrap', path: w.id,
       message: `wraps inside the word "${bw.word}" ("${bw.left}" / "${bw.right}") in the ${profile} profile — widen its box, use a smaller size, or put a <br> at a phrase boundary; if you shorten it, keep every figure and fact it states`,
+    });
+  }
+  for (const f of photoLayouts ? photoLayoutsOf(ir) : []) {
+    const many = f.photo.length > 1;
+    const layout = f.layout ? `the layout "${f.layout}"` : 'the layout the slides without a data-layout share by background';
+    out.push({
+      slide: f.photo[0].index, profile: null, severity: 'warn', rule: 'placeholder-layout', path: null,
+      message: `${slideList(f.photo)} ${many ? 'put' : 'puts'} photo slots into ${layout}, which ${slideList(f.plain)} also ${f.plain.length > 1 ? 'use' : 'uses'}: PowerPoint copies a layout's picture placeholders onto every New Slide made from it, so a new slide from ${f.layout ? `"${f.layout}"` : 'that layout'} would come with empty photo slots — give the photo ${many ? 'slides their' : 'slide its'} own data-layout`,
     });
   }
   return out;
@@ -676,7 +724,8 @@ export async function runCheck(run, printer, { deck, profiles, only, slotHeld = 
     const textOverlaps = profiles.flatMap((p) => textOverlapsOf(irs[p], p));
     const tableCells = profiles.flatMap((p) => tableCellsOf(irs[p], p));
     for (const p of profiles) {
-      lint.push(...layoutLintOf(irs[p], p, { overlaps: textOverlaps.filter((o) => o.profile === p), softWraps: softWraps.filter((w) => w.profile === p) }));
+      // the layout families are the same in both profiles: placeholder-layout once, from the first
+      lint.push(...layoutLintOf(irs[p], p, { overlaps: textOverlaps.filter((o) => o.profile === p), softWraps: softWraps.filter((w) => w.profile === p), photoLayouts: p === profiles[0] }));
     }
     const errors = lint.filter((l) => l.severity === 'error');
     const counted = (irs[profiles[0]].slides || []).length;

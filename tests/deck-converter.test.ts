@@ -317,7 +317,7 @@ describe("deck converter CLI (toolchain-free)", () => {
   it("probe --json follows the probe contract; a missing Chromium is a fact, never an install command", () => {
     const r = deck(["probe", "--json"]);
     const p = JSON.parse(r.stdout);
-    expect(p).toMatchObject({ format: "noah-deck-probe", version: 1, converterVersion: "1.1.0" });
+    expect(p).toMatchObject({ format: "noah-deck-probe", version: 1, converterVersion: "1.2.0" });
     expect(typeof p.converter).toBe("boolean");
     expect(r.code).toBe(p.converter ? 0 : 4);
     for (const k of ["chromium", "playwrightCore", "python", "fonts", "profiles", "limits", "selftest", "missing"]) expect(p).toHaveProperty(k);
@@ -485,6 +485,137 @@ describe("deck converter CLI (toolchain-free)", () => {
     // documented for the agent wherever the lint vocabulary is listed
     expect(fs.readFileSync(path.join(SKILL, "reference", "AUTHORING.md"), "utf8")).toContain("`chart-range`");
     expect(fs.readFileSync(path.join(KIT, "tools", "extract", "README.md"), "utf8")).toContain("`chart-range`");
+  });
+
+  it("photo slots: the data-prompt rule and the IR prompt; the four lints are documented, raised with their severities and point the Next: line at AUTHORING §7", async () => {
+    const S = inpage<{ PIC_PROMPT_MAX: number; picPromptProblem: (raw: string | null) => string | null; picPromptText: (raw: string | null) => string | null }>(
+      ["PIC_PROMPT_MAX", "picPromptProblem", "picPromptText"],
+      ["00-util.js", "45-placeholder.js"],
+    );
+    expect(S.PIC_PROMPT_MAX).toBe(80);
+    // valid: one line of at most 80 characters (code points, so 80 emoji pass); the IR collapses whitespace runs
+    for (const ok of ["제품 사진을 넣으세요", "  앞뒤 공백  ", "가".repeat(80), "📷".repeat(80)]) expect(S.picPromptProblem(ok), ok).toBeNull();
+    expect(S.picPromptText("  팀원   사진을\t넣으세요 ")).toBe("팀원 사진을 넣으세요");
+    expect(S.picPromptText(null)).toBeNull();
+    expect(S.picPromptText("   ")).toBeNull();
+    // placeholder-prompt: missing, empty, on several lines, too long — each message says what to write
+    const how = 'one line of at most 80 characters, e.g. data-prompt="제품 사진을 넣으세요"';
+    expect(S.picPromptProblem(null)).toBe(`the photo slot has no data-prompt: add the Korean prompt PowerPoint shows in the empty placeholder (${how})`);
+    expect(S.picPromptProblem(" \t")).toBe(`the photo slot's data-prompt is empty: write the Korean prompt PowerPoint shows in the empty placeholder (${how})`);
+    for (const sep of ["\n", "\r\n", " "]) expect(S.picPromptProblem(`첫 줄${sep}둘째 줄`)).toMatch(/^the photo slot's data-prompt spans several lines: PowerPoint shows the prompt as one line/);
+    expect(S.picPromptProblem("가".repeat(81))).toMatch(/^the photo slot's data-prompt has 81 characters, more than 80: /);
+    // the source raises exactly these names, with these severities (rotation where every element is placed)
+    const src = (f: string) => fs.readFileSync(path.join(KIT, "tools", "extract", "inpage", f), "utf8");
+    for (const [f, call] of [
+      ["45-placeholder.js", "ctx.lint('error', 'placeholder-prompt'"], ["45-placeholder.js", "ctx.lint('warn', 'placeholder-geometry'"],
+      ["45-placeholder.js", "lint('error', 'placeholder-content'"], ["50-paint.js", "lint('error', 'rotated-placeholder'"],
+    ]) expect(src(f), call).toContain(call);
+    // the text roles stay three (the extractor and the builder): "pic" is named only in the placeholder warn's message
+    expect(src("20-text.js")).toContain("const PLACEHOLDER_TYPES = new Set(['title', 'ctrTitle', 'subTitle']);");
+    expect(src("20-text.js")).toContain('"pic" marks a photo slot');
+    expect(fs.readFileSync(path.join(KIT, "tools", "pptxlib", "text.py"), "utf8")).toContain('PLACEHOLDER_TYPES = ("title", "ctrTitle", "subTitle")');
+    // the builder and the gate share no code: both pin the idx scheme 13 + k
+    for (const f of ["tools/pptxlib/placeholders.py", "tools/check_fidelity.py"]) expect(fs.readFileSync(path.join(KIT, f), "utf8"), f).toMatch(/^PIC_IDX0 = 13\b/m);
+    // the Next: line points at the photo-slot row; the contract and the extractor docs list every rule
+    const rules = ["placeholder-prompt", "placeholder-content", "placeholder-geometry", "rotated-placeholder"];
+    const R = await import(pathToFileURL(path.join(KIT, "tools", "lib", "report.mjs")).href);
+    expect(R.NEXT.authoring("/w/q3", { rules })).toContain("; placeholder-prompt: §7, placeholder-content: §7, placeholder-geometry: §7, rotated-placeholder: §7)");
+    const contract = fs.readFileSync(path.join(KIT, "docs", "CONTRACT.md"), "utf8");
+    const extractDocs = fs.readFileSync(path.join(KIT, "tools", "extract", "README.md"), "utf8");
+    for (const rule of rules) {
+      expect(contract, rule).toContain(`\`${rule}\``);
+      expect(extractDocs, rule).toContain(`\`${rule}\``);
+    }
+    expect(contract).toContain('### `kind: "placeholder"` (1.2.0)');
+    // the kit's slot component colours only through existing tokens (no new --c-* a theme would have to set)
+    const css = fs.readFileSync(path.join(KIT, "theme", "base.css"), "utf8");
+    const slotCss = css.slice(css.indexOf(".photo-slot {"));
+    expect(slotCss).toMatch(/^\.photo-slot \{[^}]*border: 2px dashed var\(--c-ink-300\);/);
+    for (const m of slotCss.matchAll(/var\((--[a-z0-9-]+)\)/g)) expect(css.slice(0, css.indexOf(".photo-slot {")), m[1]).toContain(`${m[1]}:`);
+  });
+
+  it("photo slots: a degenerate slot is a placeholder-size error, photo slides sharing a layout with slot-less slides warn (grouped as the builder groups them), slots number in document order, the hint is ink-600", async () => {
+    const S = inpage<{ PIC_MIN_SIDE: number; picSizeProblem: (w: number, h: number) => string | null }>(["PIC_MIN_SIDE", "picSizeProblem"], ["00-util.js", "45-placeholder.js"]);
+    expect(S.PIC_MIN_SIDE).toBe(24);
+    for (const [w, h] of [[240, 240], [24, 24], [1280, 24]]) expect(S.picSizeProblem(w, h), `${w}x${h}`).toBeNull();
+    // the kit's dashed frame around a slot without a height: 240×4 — named with its measured size and the fix
+    expect(S.picSizeProblem(240, 4)).toBe('the photo slot is 240×4 px, too small for a photo (each side needs at least 24 px): give the slot an explicit width and height, e.g. style="width:240px;height:240px"');
+    expect(S.picSizeProblem(0, 200)).toMatch(/^the photo slot is 0×200 px, too small/);
+    expect(S.picSizeProblem(23.994, 100.126)).toMatch(/^the photo slot is 23\.99×100\.13 px, too small/);
+    // the extractor raises it as an error after the prompt check, never a silent drop; the CSS lints skip a slot's hint
+    const src = (f: string) => fs.readFileSync(path.join(KIT, "tools", "extract", "inpage", f), "utf8");
+    const rec = src("45-placeholder.js");
+    expect(rec).toContain("ctx.lint('error', 'placeholder-size'");
+    expect(rec.indexOf("ctx.lint('error', 'placeholder-prompt'")).toBeLessThan(rec.indexOf("ctx.lint('error', 'placeholder-size'"));
+    expect(rec).not.toMatch(/box\.w <= 0 \|\| box\.h <= 0\) return null/);
+    expect(src("50-paint.js")).toContain("if (el !== ROOT && inPicSlot(el)) continue;");
+    expect(src("50-paint.js")).toContain("out.slot = null;");
+    expect(src("90-main.js")).toContain("numberPicSlots(OUT.elements);");
+
+    // placeholder-layout: families keyed like pptxlib/layouts.py plan_layouts — data-layout, else the background
+    const P = await import(pathToFileURL(path.join(KIT, "tools", "lib", "pipeline.mjs")).href);
+    const slot = { kind: "placeholder", placeholder: "pic", prompt: "사진", slot: 0 };
+    const text = { kind: "text", paragraphs: [], lines: [] };
+    const white = { type: "solid", color: "FFFFFF", alpha: 1 };
+    const ir = {
+      slides: [
+        { index: 1, name: "01-cover", layout: "표지", background: white, elements: [text] },
+        { index: 2, name: "02-team", layout: "본문", background: white, elements: [text, slot] },
+        { index: 3, name: "03-kpi", layout: "본문", background: white, elements: [text] },
+        { index: 4, name: "04-table", layout: "본문", background: white, elements: [text] },
+        // no data-layout: one family per background — the same fill with its keys in another order is the same family
+        { index: 5, name: "05-a", layout: null, background: { type: "solid", color: "F4F6FA", alpha: 1 }, elements: [slot, { ...slot, slot: 1 }] },
+        { index: 6, name: "06-b", layout: null, background: { alpha: 1, color: "F4F6FA", type: "solid" }, elements: [text] },
+        { index: 7, name: "07-c", layout: null, background: { type: "solid", color: "0F1D4A", alpha: 1 }, elements: [text] },
+        // every slide of the family has slots (1 and 2): nothing to warn about
+        { index: 8, name: "08-one", layout: "사진", background: white, elements: [slot] },
+        { index: 9, name: "09-two", layout: "사진", background: white, elements: [slot, { ...slot, slot: 1 }] },
+      ],
+    };
+    expect(P.photoLayoutsOf(ir)).toEqual([
+      { layout: "본문", photo: [{ index: 2, name: "02-team" }], plain: [{ index: 3, name: "03-kpi" }, { index: 4, name: "04-table" }] },
+      { layout: null, photo: [{ index: 5, name: "05-a" }], plain: [{ index: 6, name: "06-b" }] },
+    ]);
+    const warns = P.layoutLintOf(ir, "embedded").filter((l: { rule: string }) => l.rule === "placeholder-layout");
+    expect(warns).toEqual([
+      {
+        slide: 2, profile: null, severity: "warn", rule: "placeholder-layout", path: null,
+        message: 'slide 2 (02-team) puts photo slots into the layout "본문", which slides 3 (03-kpi) and 4 (04-table) also use: PowerPoint copies a layout\'s picture placeholders onto every New Slide made from it, so a new slide from "본문" would come with empty photo slots — give the photo slide its own data-layout',
+      },
+      {
+        slide: 5, profile: null, severity: "warn", rule: "placeholder-layout", path: null,
+        message: "slide 5 (05-a) puts photo slots into the layout the slides without a data-layout share by background, which slide 6 (06-b) also uses: PowerPoint copies a layout's picture placeholders onto every New Slide made from it, so a new slide from that layout would come with empty photo slots — give the photo slide its own data-layout",
+      },
+    ]);
+    // several photo slides: plural; a check of two profiles reports it once (the second passes photoLayouts: false)
+    const two = { slides: [{ index: 1, name: "a", layout: "본문", elements: [slot] }, { index: 2, name: "b", layout: "본문", elements: [slot] }, { index: 3, name: "c", layout: "본문", elements: [] }] };
+    expect(P.layoutLintOf(two, "malgun").find((l: { rule: string }) => l.rule === "placeholder-layout").message)
+      .toMatch(/^slides 1 \(a\) and 2 \(b\) put photo slots into the layout "본문", which slide 3 \(c\) also uses: .* give the photo slides their own data-layout$/);
+    expect(P.layoutLintOf(two, "malgun", { photoLayouts: false }).filter((l: { rule: string }) => l.rule === "placeholder-layout")).toEqual([]);
+    expect(fs.readFileSync(path.join(KIT, "tools", "lib", "pipeline.mjs"), "utf8")).toContain("photoLayouts: p === profiles[0]");
+
+    // both rules point the Next: line at the §7 photo-slot row and are documented wherever the lint vocabulary is
+    const R = await import(pathToFileURL(path.join(KIT, "tools", "lib", "report.mjs")).href);
+    expect(R.NEXT.authoring("/w/q3", { rules: ["placeholder-size", "placeholder-layout"] })).toContain("; placeholder-size: §7, placeholder-layout: §7)");
+    const contract = fs.readFileSync(path.join(KIT, "docs", "CONTRACT.md"), "utf8");
+    const extractDocs = fs.readFileSync(path.join(KIT, "tools", "extract", "README.md"), "utf8");
+    for (const rule of ["placeholder-size", "placeholder-layout"]) {
+      expect(contract, rule).toContain(`\`${rule}\``);
+      expect(extractDocs, rule).toContain(`\`${rule}\``);
+    }
+    // the IR's slot: documented with its field order and in the 1.2.0 note; builder and gate read it (13 + slot)
+    expect(contract).toContain('`{"placeholder": "pic", "prompt": "<data-prompt> | null", "slot": 0}`');
+    expect(contract).toMatch(/1\.2\.0 adds \*\*photo slots\*\*[\s\S]*?with its `slot` — the slot's ordinal among the slide's slots in DOCUMENT order/);
+    expect(fs.readFileSync(path.join(KIT, "tools", "build_pptx.py"), "utf8")).toContain('kw["idx"] = placeholders.PIC_IDX0 + slot');
+    expect(fs.readFileSync(path.join(KIT, "tools", "check_fidelity.py"), "utf8")).toContain("want_idx = str(PIC_IDX0 + slot) if ok_slot else None");
+
+    // the hint the renders show is text on the slot's ink-100 fill: ink-600 (≥ 4.5:1 in every shipped theme)
+    const css = fs.readFileSync(path.join(KIT, "theme", "base.css"), "utf8");
+    for (const sel of [".photo-slot {", ".photo-slot-hint {"]) {
+      const block = css.slice(css.indexOf(sel), css.indexOf("}", css.indexOf(sel)));
+      expect(block, sel).toContain("color: var(--c-ink-600);");
+      expect(block, sel).not.toContain("--c-ink-500");
+    }
   });
 
   type ChartField = { path: string; get: () => unknown; set: (v: unknown) => void };
@@ -883,7 +1014,7 @@ describe("deck converter CLI (toolchain-free)", () => {
       }
     }
     expect(bad).toEqual([]);
-    expect(fs.readFileSync(path.join(KIT, "VERSION"), "utf8").trim()).toBe("1.1.0");
+    expect(fs.readFileSync(path.join(KIT, "VERSION"), "utf8").trim()).toBe("1.2.0");
     expect(fs.readFileSync(path.join(KIT, "requirements.txt"), "utf8").trim().split("\n")).toEqual([
       "python-pptx==1.0.2", "lxml==6.1.3", "Pillow==12.3.0", "XlsxWriter==3.2.9", "typing_extensions==4.16.0",
       "fonttools==4.66.0", "defusedxml==0.7.1", "openpyxl==3.1.5", "et_xmlfile==2.0.0",
@@ -1002,7 +1133,7 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
       }
     }
     expect(r.stderr).toMatch(/deck converter selftest: PASS \(Chromium [\d.]+; deck 4\+4 slides, features 3\+3 slides; golden match\)/);
-    expect(JSON.parse(fs.readFileSync(rec, "utf8"))).toMatchObject({ format: "noah-deck-selftest-record", version: 1, status: "pass", converterVersion: "1.1.0", differences: 0 });
+    expect(JSON.parse(fs.readFileSync(rec, "utf8"))).toMatchObject({ format: "noah-deck-selftest-record", version: 1, status: "pass", converterVersion: "1.2.0", differences: 0 });
   }, 600_000);
 
   it("check renders, lints and reports (never a deliverable); --only keeps slide numbers", () => {
@@ -1210,7 +1341,7 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     // the sidecar (I5): manifest written last, bound to the exact bytes
     const pdir = path.join(d, "fx.preview");
     const m = JSON.parse(fs.readFileSync(path.join(pdir, "manifest.json"), "utf8"));
-    expect(m).toMatchObject({ format: "noah-deck-preview", version: 1, generator: "noah-pptx-converter/1.1.0", pptx: "fx.pptx", profile: "embedded", slideCount: 3 });
+    expect(m).toMatchObject({ format: "noah-deck-preview", version: 1, generator: "noah-pptx-converter/1.2.0", pptx: "fx.pptx", profile: "embedded", slideCount: 3 });
     expect(m.pptxSha256).toBe(sha256(bytes));
     expect(m.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
     expect(m.slides.map((s: { index: number }) => s.index)).toEqual([1, 2, 3]);
@@ -1684,6 +1815,359 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     const office = JSON.parse(fs.readFileSync(path.join(logs, fs.readdirSync(logs).sort().at(-1)!, "gates", "office-rules.json"), "utf8"))[0];
     expect(office.summary.checks_run["CLR-01"]).toBeGreaterThanOrEqual(6);
     expect(office.findings.filter((f: { check: string }) => f.check === "CLR-01")).toEqual([]);
+  }, 300_000);
+
+  const SLOT_ICON = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg>';
+  const slot = (id: string, style: string, prompt: string | null, inner = `${SLOT_ICON}<p class="photo-slot-hint">힌트: ${prompt ?? ""}</p>`) =>
+    `<div class="photo-slot" id="${id}" data-placeholder="pic"${prompt === null ? "" : ` data-prompt="${prompt}"`} style="${style}">${inner}</div>`;
+
+  it("photo slots e2e: a family of two slides with a lifted footer, one and two slots → picture placeholders idx 13 / 14 and their union in the layout (fresh ids, prompts); --strict, no builder warning; the gate catches a slot that is not one", () => {
+    const root = tmp("slots");
+    const at = (x: number) => `position:absolute;left:${x}px;top:184px;width:240px;height:240px`;
+    const title = (t: string) => `<header class="slide-header"><h1 class="slide-title">${t}</h1></header>`;
+    const footer = (n: number) => `<footer class="slide-footer" id="footer"><div class="footer-left"><p class="footer-brand">예시테크</p></div><div class="footer-right"><p class="footer-text">샘플 데이터</p><p class="page-num" data-field="slidenum">${n}</p></div></footer>`;
+    // idx 14 is first used on the SECOND slide, whose ids collide with the chrome lifted from the first: the layout's
+    // placeholders must take fresh ids (a builder warning would fail --strict)
+    const d = makeDeck(root, "slots", {
+      "01-one.html": SLIDE(title("사진 한 장") + slot("lead", at(80), "팀장 사진을 넣으세요") + footer(1)),
+      "02-two.html": SLIDE(title("사진 두 장") + slot("lead2", at(80), "팀장 사진을 넣으세요") + slot("buddy", at(400), "버디 사진을 넣으세요") + footer(2)),
+    });
+    const r = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.build).toMatchObject({ warnings: 0, skipped: 0 });
+    expect(rep.fidelity.status).toBe("pass");
+    const buildDir = path.join(d, ".build", "embedded");
+    // the IR: one atomic element per slot (border box, prompt); the HTML-only hint never reaches it
+    type El = { id: string; kind: string; prompt?: string | null; slot?: number; paragraphs?: unknown };
+    const ir = JSON.parse(fs.readFileSync(path.join(buildDir, "ir.json"), "utf8"));
+    const slotsOf = (i: number) => (ir.slides[i].elements as El[]).filter((e) => e.kind === "placeholder");
+    expect(slotsOf(0)).toEqual([{ id: "#lead::placeholder", kind: "placeholder", box: { x: 80, y: 184, w: 240, h: 240 }, rotationDeg: 0, opacity: 1, placeholder: "pic", prompt: "팀장 사진을 넣으세요", slot: 0 }]);
+    expect(slotsOf(1).map((e) => [e.id, e.prompt, e.slot])).toEqual([["#lead2::placeholder", "팀장 사진을 넣으세요", 0], ["#buddy::placeholder", "버디 사진을 넣으세요", 1]]);
+    expect(JSON.stringify(ir.slides.map((s: { elements: El[] }) => s.elements.filter((e) => e.kind === "text")))).not.toContain("힌트");
+    expect(ir.lint.filter((l: { rule: string }) => /placeholder/.test(l.rule))).toEqual([]);
+
+    const pptx = path.join(d, "slots.pptx");
+    const z = readZip(fs.readFileSync(pptx));
+    const xml = (part: string) => z.get(part)!.toString("utf8");
+    const picSps = (part: string) => [...xml(part).matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map((m) => m[0]).filter((b) => b.includes('<p:ph type="pic"'));
+    // the slides: an empty picture placeholder with an explicit spPr (xfrm = the border box, painting nothing), no txBody
+    const s1 = picSps("ppt/slides/slide1.xml");
+    expect(s1).toHaveLength(1);
+    expect(s1[0]).toMatch(new RegExp('^<p:sp><p:nvSpPr><p:cNvPr id="\\d+" name="그림 개체 틀: 팀장 사진을 넣으세요"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+      + '<p:nvPr><p:ph type="pic" idx="13"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="762000" y="1752600"/><a:ext cx="2286000" cy="2286000"/></a:xfrm>'
+      + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln><a:effectLst/></p:spPr></p:sp>$'));
+    expect(picSps("ppt/slides/slide2.xml").map((b) => /idx="(\d+)"/.exec(b)![1])).toEqual(["13", "14"]);
+    expect(xml("ppt/slides/slide2.xml")).not.toContain("힌트");
+    // the layout: the union (13 from slide 1, 14 first used on slide 2), unique ids, the prompts, beside the lifted footer
+    const map = JSON.parse(fs.readFileSync(path.join(buildDir, "deck.map.json"), "utf8"));
+    type Obj = { shapeId: number; ir: string | null; kind: string; role: string; ph?: string; idx?: number };
+    const slideObjs = (n: number): Obj[] => map.parts.find((p: { kind: string; slide?: number }) => p.kind === "slide" && p.slide === n).objects;
+    expect(slideObjs(2).filter((o) => o.kind === "placeholder").map((o) => [o.ir, o.role, o.ph, o.idx])).toEqual([
+      ["#lead2::placeholder", "main", "pic", 13], ["#buddy::placeholder", "main", "pic", 14]]);
+    const lay = map.parts.find((p: { kind: string; name?: string }) => p.kind === "layout" && p.name === "본문");
+    const ids = [...xml(lay.part).matchAll(/<p:cNvPr id="(\d+)"/g)].map((m) => m[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    const lpics = picSps(lay.part);
+    expect(lpics.map((b) => [/idx="(\d+)"/.exec(b)![1], /hasCustomPrompt="1"/.test(b), /<a:t>([^<]*)<\/a:t>/.exec(b)?.[1]])).toEqual([
+      ["13", true, "팀장 사진을 넣으세요"], ["14", true, "버디 사진을 넣으세요"]]);
+    for (const b of lpics) {
+      expect(b).toContain('<a:lstStyle><a:lvl1pPr marL="0" indent="0" algn="ctr"><a:buNone/><a:defRPr sz="1400">');
+      expect(b).toContain('<a:r><a:rPr lang="ko-KR" altLang="en-US"/>');
+    }
+    expect((lay.objects as Obj[]).filter((o) => o.role === "layout-placeholder").map((o) => [o.ph, o.idx ?? null, o.ir])).toEqual([
+      ["title", null, null], ["pic", 13, null], ["pic", 14, null]]);
+    expect((lay.objects as Obj[]).some((o) => o.ir === "#footer::border-top")).toBe(true);
+    // office-rules: every idx unique and linked to a layout placeholder of its type (PH-01 / SLD-02 / SLD-03 ran)
+    const logs = path.join(d, ".build", "logs");
+    const office = JSON.parse(fs.readFileSync(path.join(logs, fs.readdirSync(logs).sort().at(-1)!, "gates", "office-rules.json"), "utf8"))[0];
+    for (const c of ["PH-01", "SLD-02", "SLD-03"]) {
+      expect(office.summary.checks_run[c], c).toBeGreaterThan(0);
+      expect(office.findings.filter((f: { check: string }) => f.check === c), c).toEqual([]);
+    }
+    // schema: the slide, layout and master parts validate against ECMA-376 PresentationML (the vendored pml.xsd). The
+    // Open XML SDK validator (a repair-prompt proxy) cannot run on a dev box without .NET: where one is built
+    // (NOAH_OPENXML_VALIDATOR_DLL + dotnet) it runs here too; the deck Docker smoke always runs it
+    const py = process.env.NOAH_PPTX_PYTHON || "python3";
+    const xsd = spawnSync(py, ["-c", [
+      "import re, sys, zipfile", "from lxml import etree",
+      "schema = etree.XMLSchema(etree.parse(sys.argv[1])); z = zipfile.ZipFile(sys.argv[2]); bad = []",
+      "for n in sorted(z.namelist()):",
+      "    if re.match(r'ppt/(slides/slide|slideLayouts/slideLayout|slideMasters/slideMaster)\\d+\\.xml$', n) and not schema.validate(etree.fromstring(z.read(n))):",
+      "        bad.append(f'{n}: {schema.error_log.last_error}')",
+      "print('\\n'.join(bad)); sys.exit(1 if bad else 0)",
+    ].join("\n"), path.join(KIT, "tools", "gates", "xsd", "pml.xsd"), pptx], { encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+    expect(xsd.status, `${xsd.stdout}${xsd.stderr}`).toBe(0);
+    const dll = process.env.NOAH_OPENXML_VALIDATOR_DLL;
+    if (dll && spawnSync("dotnet", ["--version"]).status === 0) {
+      const v = spawnSync("dotnet", [dll, pptx], { encoding: "utf8" });
+      expect(v.status, v.stdout).toBe(0);
+      expect(v.stdout).toContain(": 0 error(s)");
+    }
+
+    // the gate: a slot written as an ordinary shape is `object` (blocking); a wrong idx is `placeholder` drift (and an
+    // unlinked placeholder); a later slide whose data-prompt differs from the layout's shows the wrong prompt (drift)
+    const irMut = path.join(buildDir, "ir-mut.json");
+    const irJson = JSON.parse(fs.readFileSync(path.join(buildDir, "ir.json"), "utf8"));
+    irJson.slides[1].elements.find((e: El) => e.id === "#lead2::placeholder").prompt = "팀원 사진을 넣으세요";
+    fs.writeFileSync(irMut, JSON.stringify(irJson));
+    const neg = spawnSync(py, ["-c", [
+      "import json, subprocess, sys, zipfile",
+      "kit, src, ir, ir_mut, mp = sys.argv[1:6]",
+      "def mutated(tag, part, old, new):",
+      "    dst = f'{src}.{tag}.pptx'; zin = zipfile.ZipFile(src); zout = zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED)",
+      "    for i in zin.infolist():",
+      "        b = zin.read(i.filename)",
+      "        if i.filename == part:",
+      "            assert old in b, (part, old); b = b.replace(old, new, 1)",
+      "        zout.writestr(i, b)",
+      "    zout.close(); return dst",
+      "def problems(pptx, irp):",
+      "    out = pptx + '.json'",
+      "    subprocess.run([sys.executable, '-B', f'{kit}/tools/check_fidelity.py', 'structure', pptx, '--ir', irp, '--profile', 'embedded', '--map', mp, '--json', out], capture_output=True)",
+      "    return sorted({(p['check'], p['ir'] or '') for p in json.load(open(out))['problems']})",
+      "print(json.dumps({",
+      "    'shape': problems(mutated('shape', 'ppt/slides/slide1.xml', b'<p:nvPr><p:ph type=\"pic\" idx=\"13\"/></p:nvPr>', b'<p:nvPr/>'), ir),",
+      "    'idx': problems(mutated('idx', 'ppt/slides/slide2.xml', b'idx=\"14\"', b'idx=\"15\"'), ir),",
+      "    'prompt': problems(src, ir_mut),",
+      "}))",
+    ].join("\n"), KIT, pptx, path.join(buildDir, "ir.json"), irMut, path.join(buildDir, "deck.map.json")], { encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+    expect(neg.status, neg.stderr).toBe(0);
+    expect(JSON.parse(neg.stdout)).toEqual({
+      shape: [["object", "#lead::placeholder"]],
+      idx: [["placeholder", "#buddy::placeholder"], ["placeholder-link", ""]],
+      prompt: [["placeholder", "#lead2::placeholder"]],
+    });
+  }, 300_000);
+
+  it("photo slot prompts e2e: the prompt is coloured for the slot's own frame — on the slide, and in the layout only where that frame is lifted chrome; slots pair in document order; photo slides sharing a layout with slot-less ones warn; --strict", () => {
+    const root = tmp("slot-colour");
+    const at = (x: number, y: number, w: number, h: number, extra = "") => `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;${extra}`;
+    const on = (layout: string, bg: string | null, body: string) =>
+      SLIDE(body).replace('<main class="slide" data-layout="본문">', `<main class="slide" data-layout="${layout}"${bg ? ` style="background:${bg}"` : ""}>`);
+    const h1 = (t: string, color: string, x = 80, w = 1120) => `<h1 style="position:absolute;left:${x}px;top:56px;width:${w}px;margin:0;font-size:40px;line-height:56px;font-weight:800;color:${color}">${t}</h1>`;
+    const DARK = "#0F1D4A"; // the kit's brand-900
+    const well = at(720, 200, 400, 400);
+    const row = (a: string, b: string) => `<section style="margin:220px 0 0 80px;display:flex;gap:32px;width:600px">${a}${b}</section>`;
+    const d = makeDeck(root, "sc", {
+      // a dark slide of its own layout with the kit's light frame: the slide colours its prompt, the layout keeps tx1
+      "01-dark.html": on("어두운 사진", DARK, slot("site", at(0, 0, 640, 720), "현장 사진을 넣으세요") + h1("어두운 슬라이드", "#FFFFFF", 720, 480)),
+      // a dark family whose #well is identical on every slide: its frame is lifted into the layout, whose prompt then
+      // carries the colour; on slide 4 another slot (#dim, a dark well) comes first in the markup and takes idx 13
+      "02-lift-a.html": on("어두운 세 장", DARK, h1("하나", "#FFFFFF") + slot("well", well, "현장 사진을 넣으세요")),
+      "03-lift-b.html": on("어두운 세 장", DARK, h1("둘", "#FFFFFF") + slot("well", well, "현장 사진을 넣으세요")),
+      "04-lift-c.html": on("어두운 세 장", DARK, h1("셋", "#FFFFFF") + slot("dim", at(80, 200, 400, 400, "background:#2A52D9"), "현장 사진을 넣으세요")
+        + slot("well", well, "현장 사진을 넣으세요")),
+      // a light slide with a dark photo well; the same layout without any slot (placeholder-layout)
+      "05-dark-well.html": on("본문", null, h1("밝은 슬라이드", "#111A2E") + slot("dwell", at(80, 200, 400, 400, `background:${DARK}`), "매장 사진을 넣으세요")),
+      "06-plain.html": on("본문", null, h1("사진 없는 본문", "#111A2E") + '<p class="card-title" style="position:absolute;left:80px;top:200px">본문 한 줄</p>'),
+      // paint order 2, 3, 1 (an absolutely positioned slot first in the markup, then an in-flow flex row) vs 1, 2, 3
+      "07-mix-a.html": on("세 칸", null, h1("섞인 배치", "#111A2E") + slot("m1", at(900, 220, 240, 200), "첫째 사진을 넣으세요")
+        + row(slot("m2", "flex:none;width:240px;height:200px", "둘째 사진을 넣으세요"), slot("m3", "flex:none;width:240px;height:200px", "셋째 사진을 넣으세요"))),
+      "08-mix-b.html": on("세 칸", null, h1("모두 절대 배치", "#111A2E") + slot("n1", at(80, 220, 240, 200), "첫째 사진을 넣으세요")
+        + slot("n2", at(400, 220, 240, 200), "둘째 사진을 넣으세요") + slot("n3", at(720, 220, 240, 200), "셋째 사진을 넣으세요")),
+    });
+    const r = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.build).toMatchObject({ warnings: 0, skipped: 0 });
+    expect(rep.fidelity.status).toBe("pass"); // the prompt colour on each frame is a `placeholder` / `layout-prompt` check
+    // placeholder-layout: once, on the photo slide, naming the slide without a slot (a warning: --strict still builds)
+    type Lint = { slide: number; profile: string | null; severity: string; rule: string; path: string | null; message: string };
+    const fam = (rep.lint.items as Lint[]).filter((l) => l.rule === "placeholder-layout");
+    expect(fam.map((l) => [l.slide, l.profile, l.severity, l.path])).toEqual([[5, null, "warn", null]]);
+    expect(fam[0].message).toContain('slide 5 (05-dark-well) puts photo slots into the layout "본문", which slide 6 (06-plain) also uses');
+    const buildDir = path.join(d, ".build", "embedded");
+    const ir = JSON.parse(fs.readFileSync(path.join(buildDir, "ir.json"), "utf8"));
+    type El = { id: string; kind: string; slot?: number; fill?: { color: string } | null };
+    const els = (n: number) => ir.slides[n - 1].elements as El[];
+    // the IR lists slots in paint order, numbered in document order: slide 7 paints 2, 3, 1
+    const slotsOf = (n: number) => els(n).filter((e) => e.kind === "placeholder").map((e) => [e.id, e.slot]);
+    expect(slotsOf(7)).toEqual([["#m2::placeholder", 1], ["#m3::placeholder", 2], ["#m1::placeholder", 0]]);
+    expect(slotsOf(8)).toEqual([["#n1::placeholder", 0], ["#n2::placeholder", 1], ["#n3::placeholder", 2]]);
+    expect(slotsOf(4)).toEqual([["#dim::placeholder", 0], ["#well::placeholder", 1]]);
+
+    // the prompt colour PowerPoint resolves: the slide's own lstStyle, else its layout placeholder's, else tx1 on the
+    // slide's colour map (its own override, else its layout's, else the master's identity map)
+    const { dk1, lt1 } = ir.theme.colors as Record<string, string>;
+    expect([dk1, lt1]).toEqual(["111A2E", "FFFFFF"]);
+    const z = readZip(fs.readFileSync(path.join(d, "sc.pptx")));
+    const xml = (part: string) => z.get(part)!.toString("utf8");
+    const map = JSON.parse(fs.readFileSync(path.join(buildDir, "deck.map.json"), "utf8"));
+    const layoutPart = (name: string): string => map.parts.find((p: { kind: string; name?: string }) => p.kind === "layout" && p.name === name).part;
+    const layoutOf = (n: number) => `ppt/slideLayouts/${/Target="\.\.\/slideLayouts\/(slideLayout\d+\.xml)"/.exec(xml(`ppt/slides/_rels/slide${n}.xml.rels`))![1]}`;
+    const picSp = (part: string, idx: number) => [...xml(part).matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map((m) => m[0]).find((b) => b.includes(`<p:ph type="pic" idx="${idx}"`));
+    const own = (sp: string | undefined) => (sp && /<a:lstStyle><a:lvl1pPr[^>]*>(?:<a:buNone\/>)?<a:defRPr[^>]*><a:solidFill><a:srgbClr val="([0-9A-F]{6})"\/>/.exec(sp)?.[1]) || null;
+    const tx1 = (part: string) => /<a:overrideClrMapping [^>]*\btx1="(\w+)"/.exec(xml(part))?.[1] ?? null;
+    const theme: Record<string, string> = { dk1, lt1 };
+    const shown = (n: number, idx: number) => {
+      const s = `ppt/slides/slide${n}.xml`;
+      const lay = layoutOf(n);
+      return { own: own(picSp(s, idx)), layout: own(picSp(lay, idx)), resolved: own(picSp(s, idx)) ?? own(picSp(lay, idx)) ?? theme[tx1(s) ?? tx1(lay) ?? "dk1"] };
+    };
+    expect(shown(1, 13)).toEqual({ own: dk1, layout: null, resolved: dk1 }); // dark slide, light frame: was lt1 (1.14:1)
+    expect(shown(2, 13)).toEqual({ own: null, layout: dk1, resolved: dk1 }); // the lifted frame's colour, from the layout
+    expect(shown(3, 13)).toEqual({ own: null, layout: dk1, resolved: dk1 });
+    expect(shown(4, 13)).toEqual({ own: lt1, layout: dk1, resolved: lt1 }); // #dim's dark well overrides the layout's
+    expect(shown(4, 14)).toEqual({ own: null, layout: dk1, resolved: dk1 });
+    expect(shown(5, 13)).toEqual({ own: lt1, layout: null, resolved: lt1 }); // a light slide's dark photo well
+    for (const [n, idx] of [[7, 13], [7, 14], [7, 15], [8, 13], [8, 14], [8, 15]]) expect(shown(n, idx), `slide ${n} idx ${idx}`).toEqual({ own: null, layout: null, resolved: dk1 });
+    // every prompt ≥ 4.5:1 on its slot's own frame (the IR's ::bg shape of the slot)
+    const lum = (h: string) => {
+      const c = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    };
+    const contrast = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    for (const [n, idx, sid] of [[1, 13, "site"], [2, 13, "well"], [3, 13, "well"], [4, 13, "dim"], [4, 14, "well"], [5, 13, "dwell"], [7, 13, "m1"], [8, 14, "n2"]] as [number, number, string][]) {
+      const frame = els(n).find((e) => e.id === `#${sid}::bg`)!.fill!.color;
+      expect(contrast(shown(n, idx).resolved, frame), `slide ${n} #${sid} on ${frame}`).toBeGreaterThanOrEqual(4.5);
+    }
+    // the slide's colour-only txBody: after spPr, no run, no hasCustomPrompt
+    expect(picSp("ppt/slides/slide1.xml", 13)).toMatch(new RegExp('<p:ph type="pic" idx="13"/></p:nvPr></p:nvSpPr><p:spPr>.*</p:spPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="111A2E"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p><a:endParaRPr lang="ko-KR" altLang="en-US"/></a:p></p:txBody></p:sp>$'));
+    // layouts: a New Slide shows the prompt on the layout's own background (tx1 on its map) unless the frame was lifted
+    const dark1 = layoutPart("어두운 사진");
+    expect(own(picSp(dark1, 13))).toBeNull();
+    expect(tx1(dark1)).toBe("lt1");
+    expect(contrast(lt1, "0F1D4A")).toBeGreaterThan(4.5);
+    const dark3 = layoutPart("어두운 세 장");
+    expect(map.parts.find((p: { part: string }) => p.part === dark3).objects.filter((o: { ir: string | null }) => o.ir === "#well::bg").map((o: { role: string }) => o.role).sort()).toEqual(["border", "fill"]);
+    for (const idx of [13, 14]) expect(picSp(dark3, idx), `idx ${idx}`).toContain('<a:defRPr sz="1400"><a:solidFill><a:srgbClr val="111A2E"/></a:solidFill><a:latin typeface=');
+    for (const name of ["본문", "세 칸"]) expect(picSp(layoutPart(name), 13), name).not.toContain("<a:solidFill>");
+    // schema: the slide, layout and master parts validate against ECMA-376 PresentationML (the vendored pml.xsd)
+    const py = process.env.NOAH_PPTX_PYTHON || "python3";
+    const pptx = path.join(d, "sc.pptx");
+    const xsd = spawnSync(py, ["-c", [
+      "import re, sys, zipfile", "from lxml import etree",
+      "schema = etree.XMLSchema(etree.parse(sys.argv[1])); z = zipfile.ZipFile(sys.argv[2]); bad = []",
+      "for n in sorted(z.namelist()):",
+      "    if re.match(r'ppt/(slides/slide|slideLayouts/slideLayout|slideMasters/slideMaster)\\d+\\.xml$', n) and not schema.validate(etree.fromstring(z.read(n))):",
+      "        bad.append(f'{n}: {schema.error_log.last_error}')",
+      "print('\\n'.join(bad)); sys.exit(1 if bad else 0)",
+    ].join("\n"), path.join(KIT, "tools", "gates", "xsd", "pml.xsd"), pptx], { encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+    expect(xsd.status, `${xsd.stdout}${xsd.stderr}`).toBe(0);
+
+    // the gate: the dark slide without its colour (white on the light frame again), a prompt run in a slide slot, a
+    // colour in a layout whose slot frame was not lifted — each drift
+    const TXB = '<p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="111A2E"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p><a:endParaRPr lang="ko-KR" altLang="en-US"/></a:p></p:txBody>';
+    const neg = spawnSync(py, ["-c", [
+      "import json, subprocess, sys, zipfile",
+      "kit, src, ir, mp, lay, txb = sys.argv[1:7]",
+      "def mutated(tag, part, old, new):",
+      "    dst = f'{src}.{tag}.pptx'; zin = zipfile.ZipFile(src); zout = zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED)",
+      "    for i in zin.infolist():",
+      "        b = zin.read(i.filename)",
+      "        if i.filename == part:",
+      "            assert old in b, (part, old); b = b.replace(old, new, 1)",
+      "        zout.writestr(i, b)",
+      "    zout.close(); return dst",
+      "def problems(pptx):",
+      "    out = pptx + '.json'",
+      "    subprocess.run([sys.executable, '-B', f'{kit}/tools/check_fidelity.py', 'structure', pptx, '--ir', ir, '--profile', 'embedded', '--map', mp, '--json', out], capture_output=True)",
+      "    return sorted({(p['check'], p['ir'] or '') for p in json.load(open(out))['problems']})",
+      "t = txb.encode()",
+      "print(json.dumps({",
+      "    'uncoloured': problems(mutated('uncoloured', 'ppt/slides/slide1.xml', t, b'')),",
+      "    'run': problems(mutated('run', 'ppt/slides/slide1.xml', t, t.replace(b'<a:p><a:endParaRPr', b'<a:p><a:r><a:rPr lang=\"ko-KR\"/><a:t>x</a:t></a:r><a:endParaRPr'))),",
+      "    'layout': problems(mutated('layout', lay, b'<a:defRPr sz=\"1400\"><a:latin', b'<a:defRPr sz=\"1400\"><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:latin')),",
+      "}))",
+    ].join("\n"), KIT, pptx, path.join(buildDir, "ir.json"), path.join(buildDir, "deck.map.json"), layoutPart("본문"), TXB], { encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+    expect(neg.status, neg.stderr).toBe(0);
+    expect(JSON.parse(neg.stdout)).toEqual({
+      uncoloured: [["placeholder", "#site::placeholder"]],
+      run: [["placeholder", "#site::placeholder"]],
+      layout: [["layout-prompt", ""]],
+    });
+  }, 300_000);
+
+  it("photo slot lints e2e: data-prompt, content, placement and rotation are errors, a rounded slot warns, each on its own element; a slot that is a stacking context stays one object", () => {
+    const root = tmp("slot-lint");
+    const at = (x: number, y: number, extra = "") => `position:absolute;left:${x}px;top:${y}px;width:160px;height:160px;${extra}`;
+    const d = makeDeck(root, "sl", {
+      "01-prompt.html": SLIDE([
+        slot("none", at(40, 40), null), slot("lines", at(240, 40), "첫 줄\n둘째 줄"),
+        slot("long", at(440, 40), "가".repeat(81)), slot("max", at(640, 40), "나".repeat(80)),
+      ].join("\n")),
+      "02-content.html": SLIDE([
+        slot("round", at(40, 40, "border-radius:16px"), "둥근 칸"),
+        slot("rot", at(240, 40, "transform:rotate(5deg)"), "회전한 칸"),
+        slot("withimg", at(440, 40), "사진이 든 칸", '<img src="../assets/photo.jpg" alt="" style="width:40px;height:40px">'),
+        `<img id="onimg" data-placeholder="pic" data-prompt="그림 위" src="../assets/photo.jpg" alt="" style="${at(640, 40)}">`,
+        '<p class="card-title" style="position:absolute;left:40px;top:300px">글 <span id="onspan" data-placeholder="pic">인라인</span> 끝</p>',
+        '<table id="tbl" style="position:absolute;left:40px;top:400px"><tr><td><div id="intable" data-placeholder="pic" data-prompt="표 안">칸</div></td></tr></table>',
+        slot("outer", at(840, 40), "바깥 칸", '<div id="inner" data-placeholder="pic" data-prompt="안쪽 칸" style="width:40px;height:40px"></div>'),
+        slot("zslot", at(1040, 40, "z-index:2"), "쌓임 맥락", '<p style="position:absolute;left:8px;top:8px">위치 잡은 힌트</p>'),
+      ].join("\n")),
+      "03-root.html": SLIDE('<p class="card-title" style="position:absolute;left:80px;top:80px">루트</p>')
+        .replace('<main class="slide" data-layout="본문">', '<main class="slide" data-layout="본문" data-placeholder="pic">'),
+      // placeholder-size: the kit's dashed frame around a slot without a height (its hint positioned) is 240×4; without a
+      // border 240×0; no width 0×200; a 20 px slot without a prompt is reported for both, the prompt first
+      "04-size.html": SLIDE([
+        slot("autoh", "position:absolute;left:40px;top:40px;width:240px;height:auto", "높이 자동 칸", '<p class="photo-slot-hint" style="position:absolute;left:0;top:0;width:240px">힌트</p>'),
+        slot("zeroh", "position:absolute;left:320px;top:40px;width:240px;height:auto;border:0;background:none", "테두리 없는 칸", '<p class="photo-slot-hint" style="position:absolute;left:0;top:0;width:240px">힌트</p>'),
+        slot("zerow", "position:absolute;left:600px;top:40px;width:0;height:200px;border:0;padding:0", "폭 없는 칸", '<p class="photo-slot-hint" style="position:absolute;left:0;top:0;width:200px">힌트</p>'),
+        slot("tiny", "position:absolute;left:900px;top:40px;width:20px;height:20px;border:0", null, ""),
+      ].join("\n")),
+      // a slot's hint is HTML-only: CSS PowerPoint cannot reproduce is no lint there (it never reaches the .pptx)
+      "05-hint.html": SLIDE([
+        slot("shadow", at(40, 40), "그림자 힌트", '<p class="photo-slot-hint" id="shadowhint" style="text-shadow:0 1px 2px rgba(0,0,0,0.4)">그림자 힌트</p>'),
+        slot("filt", at(240, 40), "필터 힌트", `${SLOT_ICON.replace("<svg ", '<svg id="filtericon" style="filter:blur(0.5px)" ')}<p class="photo-slot-hint" id="filterhint" style="filter:blur(0.5px)">필터 힌트</p>`),
+        slot("clip", at(440, 40, "overflow:hidden"), "잘린 힌트", '<p class="photo-slot-hint" id="cliphint" style="width:400px;white-space:nowrap">잘린 힌트가 칸 밖으로 넘칩니다 아주 길게</p>'),
+        // a clipping card around a slot: the slot fits, only its (dropped) hint overflows — no lint either
+        `<div id="clipcard" style="position:absolute;left:640px;top:40px;width:200px;height:200px;overflow:hidden">${slot("inclip", "width:160px;height:160px", "카드 안 칸", '<p class="photo-slot-hint" id="cliphint2" style="width:400px;white-space:nowrap">카드 밖으로 넘치는 힌트입니다 아주 길게</p>')}</div>`,
+        // the slot itself is still linted like any element: its frame is a shape PowerPoint draws
+        slot("filtslot", at(880, 40, "filter:blur(1px)"), "필터 칸"),
+      ].join("\n")),
+    });
+    fs.mkdirSync(path.join(d, "assets"));
+    fs.copyFileSync(path.join(KIT, "selftest", "features", "assets", "photo.jpg"), path.join(d, "assets", "photo.jpg"));
+    const r = deck(["check", d, "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(1);
+    type Lint = { slide: number; severity: string; rule: string; path: string | null; message: string };
+    const all = JSON.parse(r.stdout).lint.items as Lint[];
+    const items = all.filter((l) => /placeholder/.test(l.rule));
+    const got = items.map((l) => [l.slide, l.severity, l.rule, l.path]).sort((a, b) => String(a).localeCompare(String(b)));
+    expect(got).toEqual([
+      [1, "error", "placeholder-prompt", "#lines"], [1, "error", "placeholder-prompt", "#long"], [1, "error", "placeholder-prompt", "#none"],
+      [1, "warn", "placeholder-layout", null],
+      [2, "error", "placeholder-content", "#intable"], [2, "error", "placeholder-content", "#onimg"], [2, "error", "placeholder-content", "#onspan"],
+      [2, "error", "placeholder-content", "#outer"], [2, "error", "placeholder-content", "#withimg"],
+      [2, "error", "rotated-placeholder", "#rot"], [2, "warn", "placeholder-geometry", "#round"],
+      [3, "error", "placeholder-content", "main.slide"],
+      [4, "error", "placeholder-prompt", "#tiny"],
+      [4, "error", "placeholder-size", "#autoh"], [4, "error", "placeholder-size", "#tiny"], [4, "error", "placeholder-size", "#zeroh"], [4, "error", "placeholder-size", "#zerow"],
+    ].sort((a, b) => String(a).localeCompare(String(b))));
+    const size = (p: string) => items.find((l) => l.path === p && l.rule === "placeholder-size")!.message;
+    expect([size("#autoh"), size("#zeroh"), size("#zerow"), size("#tiny")].map((m) => /is (\S+) px, too small/.exec(m)![1])).toEqual(["240×4", "240×0", "0×200", "20×20"]);
+    expect(size("#autoh")).toContain("give the slot an explicit width and height");
+    expect(items.findIndex((l) => l.path === "#tiny" && l.rule === "placeholder-prompt")).toBeLessThan(items.findIndex((l) => l.path === "#tiny" && l.rule === "placeholder-size"));
+    // the slide without a slot shares 본문 with the photo slides
+    expect(items.find((l) => l.rule === "placeholder-layout")!.message).toContain('put photo slots into the layout "본문", which slide 3 (03-root) also uses');
+    // nothing on a hint: no text-shadow / filter errors, no overflow-clip warning — but the slot itself keeps its lints
+    expect(all.filter((l) => /shadowhint|filterhint|filtericon|cliphint/.test(String(l.path)))).toEqual([]);
+    expect(all.filter((l) => ["text-shadow", "filter", "overflow-clip"].includes(l.rule)).map((l) => [l.slide, l.severity, l.rule, l.path])).toEqual([[5, "error", "filter", "#filtslot"]]);
+    const msg = (p: string) => items.find((l) => l.path === p)!.message;
+    expect(msg("#withimg")).toBe("the photo slot holds an <img>: everything inside a slot is an HTML-only hint the converter drops (PowerPoint gets an EMPTY picture placeholder) — keep only an icon and a <p> hint inside, and put captions, pictures and other content next to the slot");
+    expect(msg("#outer")).toContain("the photo slot holds another photo slot");
+    expect(msg("#onspan")).toContain("data-placeholder=\"pic\" on an element with display: inline: a photo slot needs a box of its own");
+    expect(msg("#intable")).toContain("data-placeholder=\"pic\" inside a <table> is never converted");
+    expect(msg("#round")).toContain("(border-radius: 16px)");
+    expect(r.stderr).toContain("placeholder-prompt: §7");
+    // the IR: an invalid prompt is null, a rotated slot keeps its rotation (the error blocks the build), and a slot that is a
+    // stacking context is its frame + the slot — its positioned hint never becomes an object
+    const ir = JSON.parse(fs.readFileSync(path.join(d, ".build", "check", "embedded", "ir.json"), "utf8"));
+    const els = (i: number) => ir.slides[i].elements as { id: string; kind: string; prompt?: string | null; rotationDeg: number }[];
+    expect(els(0).filter((e) => e.kind === "placeholder").map((e) => [e.id, e.prompt === null ? null : e.prompt!.length])).toEqual([
+      ["#none::placeholder", null], ["#lines::placeholder", 8], ["#long::placeholder", 81], ["#max::placeholder", 80]]);
+    expect(els(1).find((e) => e.id === "#rot::placeholder")!.rotationDeg).toBe(5);
+    expect(els(1).filter((e) => e.id.startsWith("#zslot")).map((e) => e.id)).toEqual(["#zslot::bg", "#zslot::placeholder"]);
+    expect(JSON.stringify(els(1))).not.toContain("위치 잡은 힌트");
+    // misplaced attributes convert as they otherwise would: the picture stays a picture, the span stays text
+    expect(els(1).find((e) => e.id === "#onimg::image")).toBeTruthy();
+    expect(JSON.stringify(els(1).filter((e) => e.kind === "text"))).toContain("인라인");
+    // a degenerate slot is still emitted with its measured box (the error blocks the build), numbered in document order
+    const sized = (els(3) as unknown as { id: string; kind: string; box: { w: number; h: number }; slot: number }[]).filter((e) => e.kind === "placeholder");
+    expect(sized.map((e) => [e.id, e.box.w, e.box.h, e.slot])).toEqual([
+      ["#autoh::placeholder", 240, 4, 0], ["#zeroh::placeholder", 240, 0, 1], ["#zerow::placeholder", 0, 200, 2], ["#tiny::placeholder", 20, 20, 3]]);
   }, 300_000);
 
   it("no host name resolves in the browser: the converter's --host-resolver-rules parses (Playwright's quoted copy does not)", () => {

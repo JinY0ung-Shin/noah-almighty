@@ -126,7 +126,9 @@ function extractImpl(opts) {
     const rb = parseColor(cs(root).backgroundColor);
     CTX.rootOpaque = !!(rb && rb.alpha >= 1) || (cs(root).backgroundImage && cs(root).backgroundImage !== 'none');
     lintStyles();
+    lintPicPlaceholders();
     paintStackingContext(root);
+    numberPicSlots(OUT.elements); // photo slots: IR `slot` in document order (the builder's idx 13 + slot)
     notes = notesOf();
     // table-cell runs and chart text resolve to faces too (extractText only sees text elements)
     const useWeight = (w, path) => {

@@ -53,10 +53,19 @@ as in English PowerPoint with the Korean PowerPoint names in parentheses.
 - The footer (rule, brand mark, deck name, note, page number) is part of the slide layout (e.g. 본문), not of
   each slide: edit it in View > Slide Master (보기 > 슬라이드 마스터). Insert > Header & Footer
   (삽입 > 머리글/바닥글) does not control it. To hide it on one slide: Format Background > Hide background
-  graphics (배경 서식 > 배경 그래픽 숨기기).
+  graphics (배경 서식 > 배경 그래픽 숨기기). The exception is a slide that is the only one on its layout (a team
+  slide with photo slots, a photo slide): its footer and page number sit on the slide itself, so Slide Master
+  edits of 본문 and Hide background graphics do not reach them — edit them on that slide.
 - Page numbers are real slide-number fields: they renumber when slides move.
 - New Slide (새 슬라이드) offers only the deck's own layouts; one gives the background, footer, page number and a
-  title in the deck's style, but no body placeholder — add text boxes.
+  title in the deck's style — and, on a layout with photo slots, its empty photo slots — but no body placeholder —
+  add text boxes. A layout made from a single slide (a team slide with photo slots) brings no footer or page
+  number: copy them from that slide.
+- Photo slots (사진 칸): an empty picture placeholder shows its prompt (e.g. 팀원 사진을 넣으세요) and PowerPoint's
+  picture icon in Normal view, and nothing in the slide show; the dashed frame around it is a separate shape and
+  stays (delete it if the photo should stand alone). Click the icon to insert a photo: it fills the slot, cropped to
+  the slot's box, and Picture Format > Crop (그림 서식 > 자르기) changes which part shows. Home > Reset (홈 >
+  원래대로) puts a moved slot back where its layout has it.
 - Text you add follows the slide: a new text box on a dark slide (the cover, a section divider, the closing, every
   slide of a dark theme) starts light, on a light slide dark; text typed into an empty card or chip starts in the
   colour that reads on it.

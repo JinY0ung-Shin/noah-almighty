@@ -556,3 +556,26 @@ main.slide {
 .insights li + li {
   margin-top: var(--sp-2);
 }
+
+/* Photo slot — an EMPTY PowerPoint picture placeholder the user fills by clicking its icon (the photo takes the slot's
+   box, cropped to it): <div class="photo-slot" data-placeholder="pic" data-prompt="팀원 사진을 넣으세요"> with a width
+   and a height. Its fill and dashed border are an ordinary shape (visible in the slide show); everything inside is an
+   HTML-only hint the converter drops (an icon + .photo-slot-hint repeating the prompt), so captions go next to the
+   slot. Square corners: PowerPoint's picture placeholder is a rectangle. The hint is what the renders (chat previews,
+   share links) show, so it is text at ≥ 4.5:1: ink-600 on the ink-100 fill (theme-check audits the pair). */
+.photo-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  background: var(--c-ink-100);
+  border: 2px dashed var(--c-ink-300);
+  color: var(--c-ink-600);
+}
+.photo-slot-hint {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--c-ink-600);
+  text-align: center;
+}

@@ -10,8 +10,9 @@
   them: tables and placeholders (the component is then left ungrouped and reported with ``info``). A split shape
   (one CSS box written as a fill shape + a border shape) is always grouped. Groups use an identity child transform
   (``chOff = off``, ``chExt = ext`` = the members' bounding box), so no child moves.
-* **Names** (J1-09): short, readable Selection Pane names (``"stat-value: 1,284억 원"``, ``"card 그룹"``) instead of
-  the DOM paths; the DOM path of every object is kept in the map file.
+* **Names** (J1-09): short, readable Selection Pane names (``"stat-value: 1,284억 원"``, ``"card 그룹"``, a photo slot
+  ``"그림 개체 틀: 제품 사진을 넣으세요"``) instead of the DOM paths; the DOM path of every object is kept in the map
+  file.
 * **Map**: ``<deck stem>.map.json`` lists, per slide and layout part, every object's ``p:cNvPr@id`` with its IR id and
   role — the link the fidelity gate (tools/check_fidelity.py) uses to compare each IR element with its PPTX object.
 """
@@ -218,6 +219,9 @@ def object_name(e: dict, role: str = "main") -> str:
         return {"fill": f"{base} (채우기)", "border": f"{base} (테두리)"}.get(role, base)
     if kind == "image":
         return f"{lab} 그림"
+    if kind == "placeholder":                       # a photo slot: PowerPoint's own Korean name, with its prompt
+        p = excerpt(str(e.get("prompt") or ""))
+        return f"그림 개체 틀: {p}" if p else "그림 개체 틀"
     if kind == "table":
         cells = e.get("cells") or []
         head = []

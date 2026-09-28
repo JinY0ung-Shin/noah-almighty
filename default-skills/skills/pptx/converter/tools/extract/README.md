@@ -91,7 +91,7 @@ node tools/extract.mjs --deck <dir> --profile <embedded|malgun> [--out <dir>] [-
 
 Deterministic: two runs give an identical IR and byte-identical PNGs (tested). Ids are DOM paths (`#id` when unique,
 else `parent > tag.class:nth-child(n)`) + a kind suffix (`::bg`, `::border-left`, `::bg2`, `::text`, `::text2`,
-`::inline-bg1`, `::table`, `::chart`, `::image`).
+`::inline-bg1`, `::table`, `::chart`, `::image`, `::placeholder`).
 
 ## Emission rules
 
@@ -192,6 +192,23 @@ inherited `fill` / `stroke`, an ancestor up to the outer `<svg>` — so a path i
 `stroke="currentColor"` is written only where it still differs (a translucent colour) and never warned either
 (`svgCurrentColorPaint`). Author-compliant icons come out byte for byte as written, apart from that colour. Raster fidelity is tested against the in-page pixels (`test_images.mjs`, mean |Δ| ≤ 0.31/255).
 
+**Photo slots** (`inpage/45-placeholder.js`, converter 1.2.0) — `data-placeholder="pic"` on an element that lays out
+as a box of its own (block or flex/grid container; `isPicPlaceholder`) is atomic like a picture (`isLeaf`; a slot that
+is a stacking context is painted own paint + leaf, so its positioned children never become layers — that guard runs
+only for slots, every other IR is unchanged): `kind: "placeholder"`, `placeholder: "pic"`, `prompt` = `data-prompt`
+(whitespace collapsed, null when absent/empty), `slot` = its ordinal among the slide's emitted slots in DOCUMENT order
+(`numberPicSlots`, after the paint walk: z-index, transforms and positioning never renumber a slot, so the slides of one
+layout pair their slots by their order in the markup — the builder's idx 13 + `slot`), `box` = border box. Its own
+paint is the ordinary `::bg` shape before it; its children (an icon, a hint line) never reach the IR, and the CSS lints
+skip them (`inPicSlot` in `lintStyles`, like SVG internals and chart descendants; a slot's own overflow clip is not
+checked either). Lints: `placeholder-prompt` (missing / empty / multi-line / > 80 characters), then
+`placeholder-size` (a border box under 24 px on either side, with the measured size — the slot is still emitted) and
+`placeholder-geometry` (warn: a rounded slot) when the slot is emitted, `rotated-placeholder` in `place()`, and
+`placeholder-content` from one pass over every `[data-placeholder="pic"]` (`lintPicPlaceholders`: an `<img>` / table /
+chart / another placeholder inside a slot, the attribute on `main.slide`, a replaced element, a table, a chart, inline
+text, `display: contents` or a table part, or inside a table / chart / picture). The prompt joins the glyph check
+(`extract.mjs` `textsOf`).
+
 **Structure hints** (docs/AUTHORING.md §12; the builder turns them into PowerPoint structure):
 - `placeholder` on a text element: `data-placeholder` (`title|ctrTitle|subTitle`, `none` = opt out), else `title`
   for the slide's first `<h1>` in paint order; a second title is a plain text box (`placeholder` warn).
@@ -253,7 +270,8 @@ error: `filter`, `backdrop-filter`, `mix-blend-mode`, `clip-path`, `mask`, `grad
 its glyph lines — outside 1280×720), `font-family` (not the profile family), `rotated-table`, `rotated-chart`,
 `chart-spec`, `chart-resolved`, `table-content`, `unsupported-element` (canvas, video, iframe, form controls…),
 `external-image`, `image-load`, `missing-file`, `multi-column`, `writing-mode`, `zoom`, `slide-size`, `field`
-(a slide-number field whose text is not the slide's number), `mixed-content` (bare text beside element children —
+(a slide-number field whose text is not the slide's number), `placeholder-prompt`, `placeholder-size`,
+`placeholder-content`, `rotated-placeholder` (photo slots, above), `mixed-content` (bare text beside element children —
 an anonymous box, `::textN` in the IR), `title-wrap` (a `title`/`ctrTitle` placeholder that soft-wraps),
 `font-weight` (a weight no profile has a face for: anything but the fonts.json union 400/600/700/800 —
 `opts.kitWeights`). `text-overflow` messages name the fix: the line-height the glyphs need (glyph height − 1, which
@@ -263,7 +281,7 @@ warn: `multiple-box-shadows`, `inset-box-shadow`, `shadow-spread`, `shadow-trans
 NOTE line; counts text elements, table-cell runs and chart label/axis weights), `chart-contrast` (a series or point
 colour under 3:1 against the chart's composited background), `chart-range` (a drawn value outside the value axis —
 the stack total when stacked; only an explicit `valueAxis.min/max` can be exceeded, a derived scale always covers
-the data), `field`, `placeholder`, `theme-color`,
+the data), `field`, `placeholder`, `placeholder-geometry` (a rounded photo slot), `theme-color`,
 `line-height-normal`, `fallback-font`,
 `non-profile-font`, `not-embedded-glyph`, `inline-background`, `inline-spacing`, `positioned-inline`,
 `text-feature` (tabular nums, wavy/coloured decorations, word-spacing, …), `text` (justify, rtl, italic without an
@@ -279,8 +297,10 @@ Every entry has `slide`, `severity`, `rule`, `message`, `path` (the element's DO
 it derives from the IR's measured lines (never written into the IR, so the goldens are unaffected): `text-overlap`
 (error: the line boxes of two text elements — each line's glyph content area, the font's full ascent-to-descent
 height, not the ink — intersect by > 1 px on both axes; the message names the spacing rule for the pair's
-arrangement: side by side, stacked, or a wrapped title) and `soft-wrap` (warn: a two-line text whose break cuts a
-word). `title-wrap` messages count the Hangul syllables the title's own box holds per line in malgun (1 em each, plus
+arrangement: side by side, stacked, or a wrapped title), `soft-wrap` (warn: a two-line text whose break cuts a
+word) and `placeholder-layout` (warn: a layout family — `data-layout`, else background, grouped as the builder groups
+slides — whose photo slides share it with slides that have no photo slot, so a New Slide from that layout would bring
+empty slots; once per family, `profile` null). `title-wrap` messages count the Hangul syllables the title's own box holds per line in malgun (1 em each, plus
 the letter-spacing) and point a cover title (`ctrTitle`) at AUTHORING §8.13, a slide title at §4.3; `font-family`
 messages name the malgun profile's family by what it is — a metric-matched stand-in for 맑은 고딕 (`cmap.mjs`
 `familyLabels`), never "the profile font" by its internal name.
@@ -300,4 +320,5 @@ converter: retry, then the log), any other face the deck's (`browser.mjs` `fontL
 (cmap coverage) · `extract/inpage/00-util.js` (colours, gradients, shadows, radii, matrices) · `05-document.js` (Noah's
 document lints) · `10-style.js` (box classification, flow
 items, stacking contexts) · `20-text.js` · `30-table.js` · `40-shapes.js` (shapes, images, SVG, charts) ·
-`50-paint.js` (paint order, transforms, placement, CSS lint) · `60-fonts.js` · `90-main.js` (`window.__pptx`).
+`45-placeholder.js` (photo slots) · `50-paint.js` (paint order, transforms, placement, CSS lint) · `60-fonts.js` ·
+`90-main.js` (`window.__pptx`).

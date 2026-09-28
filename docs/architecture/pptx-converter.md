@@ -48,9 +48,10 @@
   ```
   The skill around it: `SKILL.md`, `scripts/deck.sh` (exports `PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1`,
   then `exec node …/converter/tools/deck.mjs "$@"`; always invoked as `bash …/deck.sh`, so the exec bit does not
-  matter), `scripts/render_deck.sh`, `reference/{AUTHORING,EDITING,python-pptx}.md`,
-  `examples/{business-review,layouts,handbook}/` (each with the `classic` theme as its `deck.css`), and
-  `themes/{classic,mono,editorial,midnight,forest,violet}.css` (see "Themes" below).
+  matter), `scripts/render_deck.sh`, `scripts/theme-check.mjs` (theme audit + derive, see "Themes"),
+  `reference/{AUTHORING,EDITING,python-pptx}.md`, `examples/{business-review,layouts,handbook,talk}/` (each with
+  the `classic` theme as its `deck.css`; `talk` also carries `assets/photo.jpg`, a copy of the self-test's
+  synthetic photo), and `themes/{classic,mono,editorial,midnight,forest,violet}.css` (see "Themes" below).
 - **Deck root** = a folder in the agent's workspace — the conversation scratch workspace (cwd), or, when a
   repository is open, the scratch workspace listed as an additional working directory unless the user wants the
   deck committed. Both are `share_file` roots.
@@ -79,7 +80,10 @@
   seven agent-built decks on unrelated topics were the base palette): the agent copies an example and never edited its
   colours, most of which were literal hex. A theme is now a planned choice (SKILL.md §2–§3: pick by topic, audience
   and tone; the user's words and brand colours win; `classic` is for formal business reporting, not a fallback), and
-  switching it is one `cp` over `deck.css`.
+  switching it is one `cp` over `deck.css`. Each theme file's header carries single-line `Fits:`, `Feel:` and
+  `Avoid:` lines — where it fits, how it feels, where it misleads — which SKILL §3 repeats verbatim; in an
+  interactive chat the ONE scoping `AskUserQuestion` (SKILL §2, below) offers the three best-fitting themes, the
+  recommended one first and marked `(추천)`, each described from its `Feel:` line.
 - **Mechanism: tokens all the way down.** `theme/base.css` declares the palette (brand 950…50, accent 700/600/500/
   300/100, ink 900…50, deltas, four data colours) plus role tokens (`--c-surface`, `--c-on-fill`, `--card-border`,
   `--c-mark-b`, `--c-accent-soft`, the cover gradient and its decoration) and shape tokens (radii, shadows) with the
@@ -101,19 +105,100 @@
 - **One audit, two users: `scripts/theme-check.mjs`** (skill-side, node, no deps, read-only). The agent runs it on a
   custom `deck.css` (brand colours; SKILL §3, AUTHORING §9): the WCAG pairs the kit and the examples draw — text
   4.5:1, marks 3:1, including the translucent-white stacks on the dark surfaces (glass rows/boxes/pills, 56/64/72 %
-  text, 40 % marks) — the data colours that share a chart (CIE76 ΔE ≥ 20), semantic PowerPoint slots (dk1/dk2 darker
-  than lt1/lt2), and hue families (a brand- or accent-hued token > 45° off its anchor = `WARN hue leftover?`, the
-  classic-blue cover left in a red brand deck). Exit 0/1/2 = ok/failed/unreadable. The tests import the same module,
-  so the shipped themes pass exactly what the agent is told to pass.
+  text, 40 % marks) and the photo-slot hint (ink-600 on ink-100, HTML-only but in every render) — the data colours
+  that share a chart (CIE76 ΔE ≥ 20), semantic PowerPoint slots (dk1/dk2 darker than lt1/lt2), and hue families (a
+  brand- or accent-hued token > 45° off its anchor = `WARN hue leftover?`, the classic-blue cover left in a red brand
+  deck). Exit 0/1/2 = ok/failed/unreadable. The tests import the same module, so the shipped themes pass exactly what
+  the agent is told to pass.
+- **Derived themes: `theme-check.mjs --derive <brand> [--accent <colour>] [--base classic|midnight]`, `--from-pptx
+  <template>`** (SKILL §3, AUTHORING §9 Brand colours). The base keeps its neutrals, deltas, surfaces and shapes;
+  every brand- or accent-hued token takes the anchor's HSL hue and saturation at the WCAG luminance of the token it
+  replaces (bisection on HSL lightness), so the base's contrast margins carry over. The brand colour stays verbatim
+  as brand-600 when no contrast pair it is part of fails: every plan (series in the brand's hue, then stepped) is
+  tried with it before any plan with the matched colour, so a dark brand keeps its exact value with stepped series,
+  and in the rare case none passes with it the report names the check that forced the change; without `--accent`
+  the base accent turns to the brand's
+  complement when within 45° of it; a colour equal to the base's own keeps the base's ramp (classic's colours derive
+  classic back); data series a grey or dull brand — or an exact dark one — cannot separate step in lightness (mono's
+  L* on classic, the mirror on midnight); the report's 'stays exact as the brand on --base <other>' tip is printed
+  only after deriving on that base confirms it. A bounded repair (≤ 40 rounds, re-audited each round: a dark surface ×0.93, a ΔE pair apart
+  ×1.04/×0.96) fixes the rest. The CSS goes to stdout ONLY on exit 0 (1 = still failing, 2 = bad input), so the
+  SKILL's `> deck.css.new && mv` never truncates a theme; the report goes to stderr. `--from-pptx` reads the first
+  slide master's theme through the package relationships (`ppt/theme/theme1.xml` otherwise) with a dependency-free,
+  positioned zip reader: central-directory sizes cross-checked with each local header (bit-3 entries accepted), each
+  inflate capped at the declared size and CRC-checked, entry/directory/total bounds, a part refused before
+  inflating above 1 MiB (relationships, presentation.xml) or 2 MiB (the theme), zip64 and encryption refused, stray
+  bytes after the end-of-central-directory record accepted (as other zip readers do); every XML scan is linear (a
+  tag's scan stops at the next '<', closing tags found with indexOf, only the relationships taken are resolved), so
+  a crafted part cannot hold a CPU. It is for a NEW HTML deck in a template's colours; building on the template's own masters stays the
+  python-pptx path. `tests/theme-derive.test.ts` sweeps brands over both bases at 0 FAIL / 0 WARN and pins the CLI
+  contract, the template reader and the zip refusals.
 - **Guards** (`tests/pptx-skill.test.ts`): each theme is one `:root` block of tokens base.css declares, sets the same
   token set as `classic`, and `classic` sets every themable base.css token (= the base.css defaults), so no theme
   inherits a classic value by omission; every theme passes `theme-check.mjs` with no failure AND no warning; the
   example charts' tokens resolve to opaque colours in every theme; the example slides carry no literal colour (no hex,
   named colour or `hsl()`-style value in any colour-bearing declaration — only `rgba(255, 255, 255, a)` overlays),
   their icons are `currentColor`, they link `../deck.css` and ship `deck.css` = `themes/classic.css`; the theme table
-  in SKILL.md carries each theme file's own `Fits:` line. Every example × theme × profile builds with `--strict`
-  (checked by hand when a theme or example changes; the Docker smoke builds every theme over two examples and
-  validates them with the Open XML SDK).
+  in SKILL.md carries each theme file's own `Fits:` line, and the single-line `Feel:`/`Avoid:` header lines that
+  follow it appear verbatim under the table (`` `<theme>` — Feel: …; Avoid: … ``, pinned against the flattened
+  SKILL); the SKILL may name `theme-check.mjs`'s own flags only as its usage prints them. Derived themes have their
+  own suite, `tests/theme-derive.test.ts`. Every example × theme × profile builds with `--strict` (4 decks × 6
+  themes × 2 profiles, checked by hand when a theme, an example or the converter changes; the Docker smoke builds
+  every theme over three examples — `business-review`, `layouts`, `talk` — and validates them with the Open XML
+  SDK).
+
+## The skill around the converter (SKILL.md, examples)
+Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in place; none of it is server code.
+- **Example decks: 보고서형 and 발표형.** `business-review` (4 slides), `layouts` (8) and `handbook` (4) are documents
+  to read at the kit's standard sizes; `talk` (6) is a deck to present: ≤ ~40 words per slide (footer included), the
+  headline at display size in ≤ 2 hard lines (60/80; the opening statement 84/112, a quote or the closing ask 72/96 —
+  literal px, since the type tokens stop at 60/80, at line-height 4/3 × size), supporting text at 22/32–28/40 and
+  labels at 18/28 (meta rows and date rails included), the one figure that carries the slide as a single `nowrap`
+  line (up to 280/376), and the details in the speaker notes — while a headline figure keeps its scope on the slide,
+  since a reader without the speaker sees no notes. The big number aligns the lead's last baseline with the
+  figure's in one `align-items: last baseline` flex row (fixed tops matched in embedded only: malgun seats the
+  280 px line's baseline 19 px lower). Its photo slide (`data-layout="사진"`) keeps every text, the sample-data note
+  and page number included, on a token panel beside the photo: the slides allow no dark scrim, and a picture across
+  the footer band would keep a shared layout from lifting the footer. SKILL §2's 발표형 answer, AUTHORING §8.25 and
+  the examples README quote the deck's sizes; a test checks them against the slides' CSS, next to a ≤ 40-word
+  density pin and a floor (every talk-slide font size ≥ 18 px except the 12/16 note and page-number chrome).
+- **Photo slots** (converter 1.2.0, see Versioning): `handbook/slides/04-team.html` shows three square slots on the
+  slide's own layout, the name, pill and note on the slot's own 224 px column. Everything inside a slot is an
+  HTML-only hint (an icon + the prompt, `--c-ink-600` on the slot's `--c-ink-100`: a `theme-check.mjs` pair, since
+  the hint is what the renders — chat previews, the review canvas, a share link's viewer — show), so names and
+  captions sit outside it; a static test checks that the examples' slots hold nothing but a hint repeating their
+  `data-prompt`. The slides of one layout share each slot's prompt by document order, a layout that mixes photo and
+  non-photo slides is a `placeholder-layout` warning, and a photo slide alone on its layout keeps its footer on the
+  slide (lifting needs ≥ 2 slides): AUTHORING §7 and EDITING say so, and SKILL §6 has the agent fix a photo-slot
+  warning before delivering.
+- **One scoping question (SKILL §0–§2).** Right after describe_system reports `converter: INSTALLED` and before
+  AUTHORING, a NEW deck in an interactive chat gets at most ONE `AskUserQuestion` per conversation, asking only what
+  is still open: 테마 (the three best-fitting themes, the recommended one first with `(추천)`), 분량, 용도 (보고서형 /
+  발표형). An outline for a large request goes into the chat text right before it, with a one-line confirm replacing
+  one of the questions. Never where nobody can answer now (routines, bot conversations, delegated tasks), nor on an
+  external-task-API turn, where the hook does NOT deny the dialog and it would park the task — so the skill keys that
+  exclusion on the prompt's verbatim `This turn was submitted by an **EXTERNAL SYSTEM**` marker (a test asserts it is
+  still in `promptBuilder.ts`: reword both together). Skill-only, no prompt change.
+- **Review rounds (SKILL §11).** Every build that exits 0 is delivered first (`share_file` IN PLACE); then its
+  renders are published `hidden` from `.build/<profile>/html/` (never `.build/check/`, stale after a build) — at most
+  30 per turn in EVERY round, so a round that needs more (round 1 of a deck over 30 slides, a theme, footer or
+  numbering change on one) publishes the `overview-N.png` sheets instead — and a `wait: false` canvas is the turn's
+  LAST tool call, because its form stays locked while the turn streams. Each round's file is a new card and a share
+  link opens the card it was made for, so the round's reply says when an earlier link still shows the earlier version
+  (a new link only when the user asks). Controls: `required: false` text fields — one per slide up to 11, else one
+  multiline `번호: 요청` box (the 12-control cap) — plus an overall note, with ids that carry the round (`r1-s03`,
+  `r1-all`), because the panel keeps what was typed under a re-used id. The submission arrives as the next user turn:
+  all notes → ONE rebuild → the next round; a message with an older round's ids is a resend. Two share-link changes
+  carry it: `share_file`'s stamped previews no longer count toward the 30 hidden images per turn (`routes/chat.ts`
+  counts only unstamped ones), and the client clears an open file preview when a canvas with controls arrives
+  (`lib/chat.ts`).
+- **Speaker notes are the talk track** (SKILL §4/§7, AUTHORING §1): an opener that moves on from the previous slide's
+  bridge (never restates it), the key point as spoken, the exact figures to cite, a bridge to the next slide,
+  optionally a timing cue in parentheses at the end of the last line (`(약 1분)`, one form across every example); 2–5
+  plain-text lines (the template is parsed as HTML, so `<…>` vanishes); a requested script goes into the notes, never
+  into a separate file. The notes ship inside the .pptx, so everyone who gets the file (a download, a forwarded copy,
+  a share link) can read them; a per-deck test pins the examples' notes to that shape, the cue's form included, with
+  a tripwire against an opener that restates the previous slide's bridge.
 
 ## CLI
 The block between the markers is generated from `node default-skills/skills/pptx/converter/tools/deck.mjs --help`
@@ -392,7 +477,8 @@ environment (all optional):
   media type and sha256 for a file that resolves inside the preview dir, within a 32 MiB total. All-or-nothing;
   a rejection detail is a fixed English template that never echoes manifest content.
 - `loaded` → all renders are saved through `saveHiddenChatImage(…, card.id)` (hidden, `parentId` = the download
-  card, the SAME per-turn hidden budget as LibreOffice previews) with the Korean alt text `슬라이드 N – <title>`
+  card, bounded per card by `MAX_PREVIEW_PAGES` and, like LibreOffice previews, never spending `show_file`'s
+  per-turn hidden budget — `routes/chat.ts` counts only unstamped hidden images) with the Korean alt text `슬라이드 N – <title>`
   (controls and bidi marks stripped, ≤ 200 code points), then pushed and emitted in slide order, and LibreOffice
   is skipped; if a save fails midway, the saved ones are deleted and the card falls back to LibreOffice.
   `none`/`stale`/`invalid` → LibreOffice as before. Agent-made images never go through `savePreviewImages`, the
@@ -538,17 +624,26 @@ environment (all optional):
 - `--update-golden` rewrites the goldens with the running Chromium; it refuses a read-only KIT, and is run only
   after a PowerPoint spot-check. The maintainer procedure is README
   [`#deck-converter-golden-drift`](../../README.md#deck-converter-golden-drift).
-- **Versioning:** `KIT/VERSION` (`1.1.0`: chart colour tokens resolved in page context, sanctioned `currentColor`
-  icons, translucent SVG paint keeping its alpha, dark colour maps + legible default text in the PPTX, `theme-link` /
-  `theme-color` warnings — CONTRACT.md "Version" lists what each changes; a deck using none keeps the 1.0.0 IR)
-  feeds `generator` = `noah-pptx-converter/<VERSION>`; bump it whenever
-  the output changes, and regenerate the goldens only after a PowerPoint spot-check.
+- **Versioning:** `KIT/VERSION` (`1.2.0`: photo slots — `data-placeholder="pic"` + `data-prompt` become
+  PowerPoint's empty picture placeholder: IR `kind: "placeholder"` with `slot` (the slot's DOCUMENT-order ordinal
+  among its slide's slots, so stacking or positioning never cross-links prompts), slide `p:ph type="pic"
+  idx=13+slot`, the union of a family's slots in its layout, a slide placeholder that colours its prompt for the
+  slot's own opaque frame when the other theme text colour reads better there than the one the slide would show,
+  fidelity `object` / `placeholder` /
+  `layout-prompt`, lints `placeholder-prompt` / `placeholder-content` / `placeholder-size` / `rotated-placeholder` /
+  `placeholder-geometry` / `placeholder-layout` (warn), the slot's HTML-only hint children exempt from the CSS lints,
+  the kit's `.photo-slot`; a deck without the attribute keeps the 1.1.0 IR and PPTX. `1.1.0`: chart colour tokens resolved in page context, sanctioned
+  `currentColor` icons, translucent SVG paint keeping its alpha, dark colour maps + legible default text in the
+  PPTX, `theme-link` / `theme-color` warnings — CONTRACT.md "Version" lists what each changes; a deck using none
+  keeps the 1.0.0 IR) feeds `generator` = `noah-pptx-converter/<VERSION>`; bump it whenever the output changes, and
+  regenerate the goldens only after a PowerPoint spot-check.
 
 ## Tests and the smoke
 | file | covers |
 |---|---|
-| `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map |
-| `tests/pptx-skill.test.ts` | SKILL.md / reference prose pins, frontmatter, markers, `${CLAUDE_SKILL_DIR}` confinement, example lint (theme tokens only, `deck.css` linked), the themes (token completeness, `classic` = base.css, the contrast pairs) |
+| `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner, the photo-slot prompt rule and its rule docs/Next: sections (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map, photo slots (a two-slide family with a lifted footer: idx 13/14 on the slides, the layout's union with fresh ids and prompts, office-rules PH-01/SLD-02/SLD-03, the slide/layout parts against pml.xsd — plus the Open XML SDK validator when `NOAH_OPENXML_VALIDATOR_DLL` and `dotnet` exist —, the fidelity gate's `object` / `placeholder` negative controls; the prompt colour on a dark slide, on a dark photo well and, for a frame lifted into its layout, in the layout; document-order slots under mixed positioning; `placeholder-layout`; the gate's colour negative controls — an uncoloured prompt, a prompt run in a slide slot, a layout colour without a lifted frame) and the slot lints (`placeholder-size`, `placeholder-layout` and the hint children the CSS lints skip, the slot itself still linted) |
+| `tests/pptx-skill.test.ts` | SKILL.md / reference prose pins, frontmatter, markers, `${CLAUDE_SKILL_DIR}` confinement, the SKILL's flags (deck.sh's, plus `theme-check.mjs`'s as its usage prints them), example lint (theme tokens only, `deck.css` linked, talk-track notes of 2–5 plain lines), the themes (token completeness, `classic` = base.css, the contrast pairs, `Fits:`/`Feel:`/`Avoid:` verbatim in the SKILL), the scoping question (incl. the EXTERNAL SYSTEM marker still in `promptBuilder.ts`), the review rounds (incl. the per-card share-link note and the every-round image cap), the talk deck's density, display sizes and 18 px floor, the notes' timing-cue form, photo-slot docs (incl. `placeholder-size` / `placeholder-layout` and document order) and the examples' slots |
+| `tests/theme-derive.test.ts` | `theme-check.mjs --derive` / `--from-pptx`: a brand sweep over both bases at 0 FAIL / 0 WARN, the ≥ 45° brand/accent hue gap, exact vs matched brand-600 (the exact colour over hue-matched series for dark brands, the fell-back note naming its check), other-base tips only when verified, grey and dull brands' stepped series, the structure (one `:root`, classic's token order, midnight's slots), the CLI contract (exit codes, empty stdout on failure, `#`-less / RGB / `--flag=value` forms), the read-only `mini.pptx` fixture and synthetic templates (trailing bytes after the zip directory), hostile XML read in linear time (< 1 s at the part caps) with the caps' refusals, and the zip refusals |
 | `tests/deck-preview.test.ts` (+ `routes-chat`, `chat-files`, `chat-images`) | the sidecar loader's edge cases, the `share_file` branches and texts |
 | `tests/deck-toolchain.test.ts` (+ `agent-core`, `agent-tools`, `system-manual`) | the probe (injected spawn/clock), memo + async retry, env allowlist, modes, authoring status; prompt/describe_system/manual branches and size caps |
 | `tests/deck-packaging.test.ts` | the static Dockerfile / compose / fontconfig / npm + Python pins / `.env.example` / ignore-file / README-anchor / smoke contract |
@@ -560,7 +655,7 @@ environment (all optional):
 - **`scripts/deck-docker-smoke.sh`** drives a built image the way production runs it (`--network none --cap-drop
   ALL --security-opt no-new-privileges:true -u node --init`): (a) `/tmp` hygiene + the record says `pass`,
   (b) probe → converter true, (c) `selftest --fail-on-drift`, (d) every `examples/*` deck × both profiles with
-  `--strict`, and every other theme over `business-review` and `layouts` (embedded, `--strict`), (e) two concurrent checks → exactly one exit 5 "already running", (f) SIGKILL `deck.mjs` mid-build →
+  `--strict`, and every other theme over `business-review`, `layouts` and `talk` (embedded, `--strict`), (e) two concurrent checks → exactly one exit 5 "already running", (f) SIGKILL `deck.mjs` mid-build →
   no Chromium/Python after 10 s, the re-run is not refused and leaves `/tmp` clean, (g) the Open XML SDK 3.3.0
   validator (Microsoft365, dev/CI-only source in `scripts/openxml-validator/`) over every produced deck — 0
   errors, (h) server boot (`/api/bootstrap` 200 + the probe log line), (i) with `--baseline-image`, an upgrade
@@ -572,6 +667,11 @@ environment (all optional):
   Office's rules and the Open XML SDK, not PowerPoint. Editing behavior users should know (shrink on overflow,
   table rows next to 합계, the fixed chart axis, footer in the 본문 layout, Design > Fonts) is in
   `default-skills/skills/pptx/reference/EDITING.md`.
+- Photo slots (1.2.0) are verified structurally — python-pptx `insert_picture` fills and crops them, office-rules,
+  pml.xsd, the fidelity gate, LibreOffice opens the deck — but not yet in Windows PowerPoint: prompt + icon in Normal
+  view (incl. the prompt colour a slide placeholder sets for its own frame on a dark slide), insert and crop, Reset,
+  invisibility in the slide show, no repair prompt. Spot-check before relying on it.
+  The HTML render and previews show the author's hint, not PowerPoint's prompt.
 - LibreOffice previews (edited decks, docx/xlsx/pdf) stay approximate; malgun previews use the stand-in font,
   and the result note says so.
 - ≤ 60 slides per build (split bigger decks); no background (`run_in_background`) conversions; no converter

@@ -40,12 +40,13 @@ function isFlexGridItem(el) {
   return !!p && isFlexGrid(p);
 }
 
-// Leaf kinds are atomic in the IR: their subtree is never walked for painting.
+// Leaf kinds are atomic in the IR: their subtree is never walked for painting. A photo slot (isPicPlaceholder,
+// 45-placeholder.js) is one too: PowerPoint gets an empty picture placeholder, its children are an HTML-only hint.
 function isChart(el) { return el.nodeType === 1 && el.hasAttribute('data-chart'); }
 function isImage(el) { return el.localName === 'img' || isOuterSvg(el); }
 function isTable(el) { return el.localName === 'table'; }
 function isUnsupported(el) { return UNSUPPORTED_TAGS.has(el.localName); }
-function isLeaf(el) { return isChart(el) || isImage(el) || isTable(el) || isUnsupported(el); }
+function isLeaf(el) { return isChart(el) || isImage(el) || isTable(el) || isUnsupported(el) || isPicPlaceholder(el); }
 
 function isReplaced(el) { return REPLACED_TAGS.has(el.localName) || isOuterSvg(el); }
 

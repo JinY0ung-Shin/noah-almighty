@@ -12,9 +12,11 @@ inside slide HTML (`../theme/base.css`) are URLs the converter serves, not files
 Reference implementation: `examples/business-review/slides/01-cover.html` … `04-chart.html` (cover, KPI cards,
 table, chart), `examples/layouts/slides/01-agenda.html` … `08-closing.html` (agenda, trend and mix charts, section
 divider, strategy framework, comparison, timeline, KPI targets, closing — one complete plan),
-`examples/handbook/slides/01-org.html` … `03-contacts.html` (org chart, week schedule, directory — reference
-content) and the tokens and components in `converter/theme/base.css`. `examples/README.md` maps kinds of content to
-the closest slide.
+`examples/handbook/slides/01-org.html` … `04-team.html` (org chart, week schedule, directory, team photos in empty
+photo slots — reference content), `examples/talk/slides/01-statement.html` … `06-closing.html` (statement opener,
+big number, quote, photo split, before/after, closing — a talk to present: few words at display sizes, §8.25) and
+the tokens and components in `converter/theme/base.css`. `examples/README.md` maps kinds of content to the closest
+slide.
 
 ---------------------------------------------------------------------------------------------------------------
 
@@ -27,7 +29,8 @@ the closest slide.
 - The converter renders the slide in Chromium at 1280×720, **walks the DOM** and turns every element into a
   PowerPoint object: an element with a background/border/shadow becomes a **shape**; the nearest element whose
   children are only inline text becomes a **text box** (one per block); `<table>` becomes a **table**; inline
-  `<svg>`/`<img>` become **pictures**; `[data-chart]` becomes a **native chart**. It copies measured positions,
+  `<svg>`/`<img>` become **pictures**; `[data-chart]` becomes a **native chart**; a photo slot
+  (`data-placeholder="pic"`, §7) becomes an empty **picture placeholder**. It copies measured positions,
   fonts, colours and — crucially — **where each line broke**.
 - Two font profiles are built from the same HTML: `embedded` (Pretendard, embedded into the .pptx; the default)
   and `malgun` (the .pptx names 맑은 고딕; the HTML is measured with a metric-matched free stand-in). The **same
@@ -59,9 +62,9 @@ the closest slide.
   …everything visible…   <!-- a picture: <img src="../assets/team.jpg" alt="…" style="width: 480px; height: 320px"> -->
 </main>
 <template id="notes">
-One line per notes paragraph, written flush left.
-A second paragraph.
-</template>                                  <!-- optional speaker notes -->
+The talk track: an opener, the key point as spoken, the figures to cite.
+One line per paragraph, flush left; the last one bridges to the next slide.
+</template>                                  <!-- speaker notes: what the presenter says -->
 <script src="../lib/chart.js"></script>      <!-- only on a slide with a [data-chart] element -->
 </body>
 </html>
@@ -75,7 +78,7 @@ A second paragraph.
 | Scripts: only `<script src="../lib/chart.js"></script>`; no inline `<script>`, no `on*=` handler, no `javascript:` URL | The converter reads a static DOM, and its Content-Security-Policy runs only the chart renderer, which draws an in-page preview of the native chart (lints `script`, `csp-violation`). |
 | Slide CSS in one inline `<style>`; inline `style=""` attributes are fine | Computed styles are what counts, not where they are written. |
 | Pictures and other files from `../assets/` | Relative URLs into the deck folder are served; each file ≤ 20 MB (`asset-too-large`), each picture ≤ 40 megapixels and one slide's pictures ≤ 100 megapixels together (`image-too-large`). |
-| Speaker notes in `<template id="notes">` | Its text becomes the slide's notes: each line one paragraph (leading spaces are kept, so write lines flush left), an empty line an empty paragraph. A template never renders. The converter also reads `[data-notes]`, `aside.notes` and `<script type="text/x-notes">`; use the template. |
+| Speaker notes in `<template id="notes">`: the talk track | Its text becomes the slide's notes, which the presenter reads while showing the slide — so write what they SAY, in the deck's language: an opener that moves on from the previous slide's bridge (restating it makes the presenter say the same thing twice around the click), the key point in spoken sentences (never the slide text pasted), the exact figures to cite as the slide shows them, a bridge to the next slide, optionally a timing cue in parentheses at the end of the last line (`(약 1분)`, the form every example uses: parentheses mark it as a stage direction, not a line to read aloud); 2–5 short lines. A script (대본) the user asks for goes here, never into a separate file. The notes travel inside the .pptx: whoever gets the file can read them. Plain text only: the template is parsed as HTML, so markup and anything in `<…>` vanish. Each line is one paragraph (leading spaces are kept, so write lines flush left), an empty line an empty paragraph. A template never renders. The converter also reads `[data-notes]`, `aside.notes` and `<script type="text/x-notes">`; use the template. |
 
 ## 2. Lint rules — errors are not convertible
 
@@ -102,6 +105,11 @@ fail `check` and `build` (exit 1); warnings are reported — understand each one
 | `font-weight` | error | A weight outside 400/600/700/800 (500, 900, `bolder` on 800): no profile has a face for it (§4.1). |
 | `out-of-bounds`: anything outside the 1280×720 slide | error | Nothing may bleed off the edge (no half-visible decorative circles); PowerPoint would show it on the pasteboard. |
 | `field` | error | A slide-number field that does not show the slide's position (§8.2). |
+| `placeholder-prompt` | error | A photo slot (`data-placeholder="pic"`, §7) needs `data-prompt`: ONE line of at most 80 characters in the user's language — PowerPoint shows it in the empty slot. Missing, empty, multi-line or longer fails. |
+| `placeholder-content` | error | `data-placeholder="pic"` where no photo slot can be (on `main.slide`, an `<img>`/`<svg>`, a table or chart, inline text, inside a table/chart/picture), or an `<img>`, table, chart or another `data-placeholder` INSIDE a slot: everything inside a slot is an HTML-only hint the converter drops (§7). |
+| `placeholder-size` | error | A photo slot less than 24 px wide or tall — usually one without an explicit height (`height: auto` around an absolutely positioned hint leaves only its border, a box a few px tall, or nothing). The message names the measured size: give the slot an explicit width and height (§7). |
+| `rotated-placeholder` | error | A rotated photo slot: the converter writes only unrotated picture placeholders. |
+| `placeholder-layout` | warn | A layout (the slides sharing a `data-layout`, else a background) that gets photo slots while some of its slides have none: the layout receives every slot of its slides, so each New Slide from it — the deck's main content layout, say — would bring empty photo slots. The message names the photo slides and the slides without a slot; give the photo slide(s) their own `data-layout` (§7). |
 
 **Sandbox and size rules:**
 
@@ -139,7 +147,9 @@ colour under 3:1 on its background, §8.10), `chart-range` (a value outside the 
 while its label keeps the true number, §8.10), `fallback-font`, `not-embedded-glyph`, `line-height-normal`, `text`
 (justify, italic without an italic face, mixed sizes in a wrapping paragraph …), `geometric-marker` (use the
 `"• "` marker), `list-item-blocks` (§5.4), `group-opacity` (§6), `inline-background` (§5.2), `image`,
-`placeholder`, `theme-link` (a slide that does not link `../deck.css`, or links it before `../theme/base.css`: it
+`placeholder`, `placeholder-geometry` (a rounded photo slot: PowerPoint's picture placeholder is a rectangle, so the
+inserted photo shows square corners over the rounded frame — keep slots square-cornered, §7), `theme-link` (a
+slide that does not link `../deck.css`, or links it before `../theme/base.css`: it
 shows the kit's default theme, not the deck's — §1), `theme-color` (a `--pptx-*` slot that is not an opaque colour,
 or `--pptx-dk1` lighter than `--pptx-lt1`: the slots are semantic, §9). The malgun profile's `font-weight` notes
 for 600/800 are expected: the check folds them into one `NOTE malgun weights` line (§4.1).
@@ -196,9 +206,13 @@ to at least 58px"): widening or enlarging the box does not fix it.
 percent of its 1.2 × font-size line, so each further line of a paragraph lands (whole percent × 1.2 × size −
 line-height) px off Chromium's, and the error adds up; the conversion check allows 0.25 px per baseline. Per pair:
 16/24 = exactly 125 % (any number of lines); 14/20 −0.008 px per line; 13/20 −0.03; 22/32 −0.056 (≤ 5 lines);
-18/28 and 20/28 +0.08 (≤ 4 lines); 17/26 −0.09 (≤ 3 lines); 40/56 +0.16 (≤ 2 lines). A longer paragraph (or list
-item) is reported as fidelity drift: still delivered, with its last lines fractionally off, while `--strict`
-builds fail. For running text of 5+ lines use 16/24 (the layouts example's lead paragraph does).
+18/28 and 20/28 +0.08 (≤ 4 lines); 17/26 −0.09 (≤ 3 lines); 40/56 +0.16 (≤ 2 lines). Display sizes (talk slides,
+§8.25) at line-height = 4/3 × size, which PowerPoint stores as 111 %: 60/80 −0.08 (≤ 4 lines), 72/96 −0.1 and
+84/112 −0.11 (≤ 3 lines), 96/128 −0.13 (≤ 2 lines); or exactly 125 % at line-height = 1.5 × size with the size a
+multiple of 8 (64/96, 80/120). Above the table's 72 px the minimum line-height is ceil(1.33 × size) on the 4 px grid
+(120 → 160, 280 → 376). A longer paragraph (or list item) is reported as fidelity drift: still delivered, with its
+last lines fractionally off, while `--strict` builds fail. For running text of 5+ lines use 16/24 (the layouts
+example's lead paragraph does).
 
 ### 4.3 Width: design for the wider profile
 Measured on the business-review example (104 single-line texts): `malgun` width / `embedded` width = mean
@@ -318,12 +332,14 @@ not a convertible list (`list-item-blocks`): use plain rows (`div`s) for structu
 | shadow | one outer `box-shadow: 0 8px 24px rgba(…, .07)` with spread 0, on an **opaque** box | Maps to PowerPoint's outer shadow. Keep shadows soft and subtle: PowerPoint's blur differs slightly from CSS. |
 | rotation | `transform: rotate(…)` only (no tables/charts) | Tables and chart frames cannot rotate in Office. |
 | icons | inline `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" …>` inside an element whose CSS `color` is a token (`.icon-badge` is brand-600; a glass badge or a dark slide is white) | Becomes a picture (a 4× PNG plus the native SVG); the converter bakes the container's colour into it, so the theme recolours every icon. Otherwise self-contained: `currentColor` or a literal colour in the markup (no `var()`, no classes, no page CSS setting `stroke`/`fill` — a warning), one colour, no `<text>`, and no `<use>`/`<symbol>` (content drawn through `<use>` keeps `currentColor`, ships as a PNG and draws black). |
-| photos / raster art | `<img src="../assets/<file>" alt="…">` with an explicit CSS size | Becomes a picture, rendered at up to 4× its CSS size and at most 2560 px on its longest side. A JPEG source that fills its box (`object-fit: fill` or `cover`, no `border-radius`, opacity 1) stays JPEG; anything else becomes PNG. Use JPEG photos at a sensible size: the built .pptx must stay ≤ 30 MB. An empty `alt` marks the picture decorative; give meaningful pictures an `alt`. |
+| photos / raster art | `<img src="../assets/<file>" alt="…">` with an explicit CSS size | Becomes a picture, rendered at up to 4× its CSS size and at most 2560 px on its longest side. A JPEG source that fills its box (`object-fit: fill` or `cover`, no `border-radius`, opacity 1) stays JPEG; anything else becomes PNG. Use JPEG photos at a sensible size: the built .pptx must stay ≤ 30 MB. An empty `alt` marks the picture decorative; give meaningful pictures an `alt`. `object-position` picks the crop: the converter renders the picture with the same `object-fit`/`object-position`, so PowerPoint shows the same crop (`examples/talk/slides/04-image-led.html`). |
+| photo slot — a photo the user adds later (team members, a product, a venue) | `<div class="photo-slot" data-placeholder="pic" data-prompt="팀원 사진을 넣으세요">` with an explicit width and height (each at least 24 px, else `placeholder-size`) and square corners, holding only a hint: an inline `<svg>` icon (`stroke="currentColor"`, `fill="none"`) and `<p class="photo-slot-hint">` repeating the prompt (`examples/handbook/slides/04-team.html`). The kit draws the icon and the hint in `--c-ink-600` on the slot's `--c-ink-100` fill, a pair every theme keeps at 4.5:1 (§9) — do not lighten it | Becomes PowerPoint's EMPTY picture placeholder: the user clicks its icon and the photo fills the slot, cropped to its box; the prompt shows in Normal view only. The slot's own fill and dashed border stay a shape (visible in the slide show). EVERY child of the slot is an HTML-only hint dropped from the .pptx — put names, captions and any other text or picture NEXT TO the slot; the hint shows only in the renders (the chat previews, the review canvas, a share link's viewer), which is why its contrast still counts. `data-prompt`: one line, at most 80 characters, in the user's language. Give photo slides their own `data-layout`: the layout receives every slot of its slides (New Slide from it brings them, empty), so a layout shared with slides that have no slot would hand every New Slide empty slots too (`placeholder-layout`). The slides of one layout share each slot's prompt by DOCUMENT order — the 1st slot in the markup, the 2nd …, however each is positioned or stacked: give them the same prompts in the same order, or give each slide its own `data-layout`. A photo slide alone on its layout keeps its footer and page number on the slide itself (lifting needs ≥ 2 slides, §12); two photo slides sharing one layout with identical prompts get the footer lifted into it. |
 
 ## 8. Component patterns (all in `converter/theme/base.css` or in the examples' `<style>`)
 
 Each is built only from convertible parts: shapes (boxes), leaf text blocks, pictures, a table, a chart. The
-business-review example shows 8.1–8.13, the layouts example 8.14–8.21.
+business-review example shows 8.1–8.13, the layouts example 8.14–8.21, the handbook 8.22–8.24 (its team slide: the
+photo slot, §7) and the talk deck 8.25.
 
 **8.1 Slide header** — section label + action title (+ optional context chip on the right).
 ```html
@@ -549,7 +565,8 @@ rounded only at its outer ends would be a `border-radius` error — with a small
 recommended option is the dark card (a white chip, white / white-40 % segments) and states its advantages next to
 the figures as green pills in plain words ("8억 원 절감", "5개월 단축") — no arrow, because ▲/▼ mean
 increase/decrease elsewhere in the deck. The fact rows (label 16/24 ink-500 left, value 20/28·700 `nowrap` right,
-a 1 px rule above each) run to the card's padding. The speaker notes hold the assumptions behind the numbers.
+a 1 px rule above each) run to the card's padding. The speaker notes are its talk track (§1): the verdict, the
+figures to cite from the cards, the condition attached to the recommendation and a bridge to the timeline.
 
 **8.19 Timeline** (`06-timeline.html`) — a month grid (208 px label column + 12 × 76 px): a quarter header and a
 month row, one 56 px track per workstream (name 16/24·700, owner and the strategy it serves 13/20), a pill-shaped
@@ -591,7 +608,34 @@ line (§8.9); merged cells are possible but a single-cell grid is easier to edit
 
 **8.24 Directory** (`03-contacts.html`) — the action as the title ("막히면 버디, 그다음 담당 부서에 물어보세요"), the
 order to ask in as numbered steps on a dark card (the first one lit, an urgent note pinned to the bottom), and who
-handles what as a `.data-table--text` of topic, team, extension and channel at the width it needs.
+handles what as a `.data-table--text` of topic, team, extension and channel at the width it needs. Its speaker notes
+walk the audience through the order to ask in and say the urgent extension aloud (§1).
+
+**8.25 Talk slides (발표형)** (`examples/talk/slides/01-statement.html` … `06-closing.html`) — a deck to present, not to
+read: at most about 40 words per slide, footer included; the headline at display size in one or two hard lines
+(60/80; the opening statement 84/112, a quote or the closing ask 72/96); supporting text at lead sizes (22/32 up to
+28/40) and labels at 18/28, a meta row's labels and a rail's dates included; the figure that carries the slide as big
+as the slide allows; everything else the presenter says — the period, the method, a second metric — in the speaker
+notes, the talk track (§1). What a headline figure counts stays on the slide (whose wait, which inquiries — the
+versus headline's "저녁·주말"), since whoever reads the slides without the speaker never sees the notes. Sizes above
+60 px are literal px in the slide's `<style>` (the type tokens stop at 60/80), with the line-heights of §4.2. A big
+figure is ONE `nowrap` line (280/376, 120/160) with a smaller unit run at `line-height: 1`; at 120 px and up a
+digit's side bearing shows, so its box starts that far to the left (12 px at 280, 6 px at 120) and its first stroke
+lines up with the text above. The six: the **statement** opens the deck on the cover gradient (`data-layout="표지"`,
+`ctrTitle`) — an accent kicker with the event, the talk's claim in two lines, who/when/where on a meta row, and a
+motif of shapes that ends above the title's box, so a longer claim wraps or runs into the meta row (both reported)
+instead of into the motif; the **big number** — the two-line headline, the figure at 280 px in brand-600, and beside
+it a bar of the same share over ONE lead sentence whose last baseline sits on the figure's (the figure and that
+column in one flex row with `align-items: last baseline`, so the baselines meet in both profiles — fixed positions
+meet in one only: malgun seats the figure's baseline 19 px lower); the **quote** — centred, the quote as the slide's
+title, the quote mark a filled `currentColor` SVG, the source under a short rule (a quote is someone's actual words:
+use one the user gives, never write one); the **photo split** on its own `data-layout` — the photo fills one half
+edge to edge (`object-fit: cover`, `object-position` for the crop, §7) and EVERY text, the sample-data note and the
+page number included, sits on the other half's token surface: a photo gives text no contrast guarantee and the slides
+allow no dark scrim (and a picture across the footer band would keep a shared layout from taking the footer, §12);
+the **versus** — two cards with the same rows, the one figure that changed pinned to the bottom, the after card dark,
+a connector circle on the seam ringed in the page colour; the **closing** — the one ask as the title, where to send
+it, the next dates on a rail, the opener's motif again.
 
 ## 9. Design system: tokens and themes
 
@@ -635,14 +679,15 @@ restyles a finished deck without touching a slide. A literal hex in a slide is t
 - **Contrast** (checked for every theme by the skill's tests; keep it when you change a value): text ≥ **4.5:1**
   against what it sits on (WCAG AA for small text — slides are projected): ink-900/700/600/500, brand-600 and
   accent-700 on the page; ink-900…500, brand-600/700 and the deltas on the surface; brand-700 and ink-900…500 on
-  brand-50; brand-700 and ink-800 on brand-100; each delta on its tint; ink-900 on accent-100; white, white 56 % and
-  accent-500 on brand-900, brand-950, `--c-cover-from` and the gradient's middle; white and white 60 % on
-  `--c-cover-to`; `--c-on-fill` on brand-600 and ink-500; brand-900 on white. Marks ≥ **3:1**: the four series,
-  accent-600 and brand-600 on the surface; brand-600, accent-700 and ink-500 on the page; accent-500 and white 40 % on
-  brand-900. The four series also differ from each other by ΔE ≥ 20 (a chart must tell them apart). `--c-ink-400` is
-  decoration only. Translucent white on the dark surfaces: text ≥ 56 % on the surface itself, ≥ 64 % inside a
-  translucent box (≥ 72 % in a box on the cover gradient's light end); a mark (a prior-period bar) ≥ 40 %.
-  `scripts/theme-check.mjs` checks all of this for a theme file or a deck (see Brand colours).
+  brand-50; brand-700 and ink-800 on brand-100; each delta on its tint; ink-900 on accent-100; ink-600 on ink-100
+  (the photo-slot hint, §7); white, white 56 % and accent-500 on brand-900, brand-950, `--c-cover-from` and the
+  gradient's middle; white and white 60 % on `--c-cover-to`; `--c-on-fill` on brand-600 and ink-500; brand-900 on
+  white. Marks ≥ **3:1**: the four series, accent-600 and brand-600 on the surface; brand-600, accent-700 and ink-500
+  on the page; accent-500 and white 40 % on brand-900. The four series also differ from each other by ΔE ≥ 20 (a
+  chart must tell them apart). `--c-ink-400` is decoration only. Translucent white on the dark surfaces: text ≥ 56 %
+  on the surface itself, ≥ 64 % inside a translucent box (≥ 72 % in a box on the cover gradient's light end); a mark
+  (a prior-period bar) ≥ 40 %. `scripts/theme-check.mjs` checks all of this for a theme file or a deck (see Brand
+  colours).
 - **Type**: display 60/80·800, title 40/56·800, stat 44/60·800, hero stat 48/64·800, lead 22/32·400, card title
   18/28·700, body 18/28·400, dense 16/24, section label 14/20·600 tracked, caption 14/20·400, footer 12/16.
 - **Space**: 8 px grid (`--sp-1 … --sp-10`), 80 px margins, 24 px gutters between cards, 24–32 px card padding.
@@ -655,22 +700,44 @@ restyles a finished deck without touching a slide. A literal hex in a slide is t
   text box a user inserts there starts light, one on a light slide dark, a table's text is dark on its light cells,
   and an empty filled shape starts with whichever of the two reads on its fill. The converted objects carry literal
   colours, so a theme recolour in PowerPoint (Design > Variants > Colors) leaves the existing slides unchanged.
-- **Brand colours**: copy the closest theme to `deck.css` (a light one, or `midnight` for a dark deck) and replace
-  values, never roles. The brand's MAIN colour becomes brand-600 — darken it until white text on it and it as text on
-  the page both reach 4.5:1 — and the ramp around it: 700 one step darker (text on the tints), 900/950 a very dark
-  shade of the same hue (the emphasis surface and the cover, which must stay dark), 50/100 near-white tints, 200/300
-  soft outlines. Every other token that carries the old theme's hue follows: `--c-cover-to` (a dark mid-shade),
-  `--c-cover-halo` and `--c-cover-fcst` (translucent brand shades), `--c-cover-orbit`, `--c-series-fcst` (a lighter
-  shade that still makes 3:1 on the surface) — `--c-cover-from` and `--c-series-curr` follow the ramp by themselves. A
-  SECOND colour becomes the accent ramp (500 on dark, 600 as a mark, 700 as small text), unless it is a near-black or
-  grey: that stays the ink scale or the emphasis surface; `--c-mark-b` and `--c-accent-soft` (translucent accent)
-  follow the accent. A third colour is data only (`--c-series-strong`) or left out. From `midnight` the brand-600 rule
-  turns around: light enough as text on the dark page, with the dark `--c-on-fill` on it. Then run `node
-  scripts/theme-check.mjs <deck>` (the script in the skill's base directory — SKILL.md §3 shows the command with its
-  absolute path): it prints every contrast pair below its minimum and every data-colour pair too alike as FAIL (exit
-  1), and every token still in another hue as `WARN hue leftover?` — fix each FAIL, and replace each leftover unless
-  you meant it. `deck.sh check` measures only chart colours (`chart-contrast`). `deck.css` may also add deck-wide
-  component rules; it is linked like `base.css`, so every rule in §2–§7 applies to it.
+- **Brand colours**: derive the theme from them — `node scripts/theme-check.mjs --derive '#0055AA' [--accent
+  '#FFB800'] [--base midnight] > <deck>/deck.css.new && mv <deck>/deck.css.new <deck>/deck.css` (the script in the
+  skill's base directory — SKILL.md §3 shows the command with its absolute path). Colours are `RRGGBB` or `RGB`, with
+  or without `#`; quote them, since a bare `#` starts a shell comment. `--from-pptx <file.pptx>` in place of
+  `--derive` takes the theme colours of a template or deck the user attached, for a new deck in its look (building
+  on the template's own masters is SKILL.md's python-pptx path): accent1 is the brand (a grey accent1 stays a grey
+  brand), accent2 the accent unless it is grey or within 45° of the brand — then the first of accent3–6 and dk2
+  that is neither (`--accent` still overrides it). The derive starts from `classic`, or `midnight` for a dark deck, and keeps its
+  neutrals, deltas, surfaces, radii and shadows. Every token in the brand's hue (the brand ramp, the brand-hued data
+  series, the cover's gradient and decoration) and in the accent's (the accent ramp, `--c-mark-b`, `--c-accent-soft`,
+  `midnight`'s cyan cover orbit) takes that colour's hue and saturation at the luminance of the token it replaces, so
+  the base's contrasts carry over. The brand colour itself becomes brand-600 verbatim when every pair it is part of
+  passes (text on the page and the tints, the bar labels on it); otherwise brand-600 is its hue at the base's
+  brand-600 lightness (a bright yellow turns olive on `classic`; on `--base midnight` it stays exact). Without
+  `--accent` the base's accent stays, unless its hue is within 45° of the brand's: then it turns to the brand's
+  complement. A grey brand — or one whose hue cannot keep the data series apart (a dull one next to the grey
+  `--c-series-prev`, or a dark one kept verbatim next to the near-black strong series) — gets the four series as
+  lightness steps: the exact colour wins over hue-matched series. What still fails the audit is repaired against it
+  (a dark surface darker, two data colours apart), and the file is printed ONLY when it passes: exit 0 = the CSS on
+  stdout and a report on stderr saying where each colour went (tell the user when their exact colour had to change;
+  the report names the other base only when deriving there keeps the colour exact); exit 1 = still failing, nothing
+  printed (try another accent or the other base); exit 2 = a bad colour, flag or file. A derived `deck.css`
+  names its command in its header: to change it, derive again rather than editing values. By hand (a look no theme
+  has, or one value to adjust): copy the closest theme to `deck.css` and replace values, never roles. The brand's MAIN
+  colour becomes brand-600 — darken it until white text on it and it as text on the page both reach 4.5:1 — and the
+  ramp around it: 700 one step darker (text on the tints), 900/950 a very dark shade of the same hue (the emphasis
+  surface and the cover, which must stay dark), 50/100 near-white tints, 200/300 soft outlines. Every other token that
+  carries the old theme's hue follows: `--c-cover-to` (a dark mid-shade), `--c-cover-halo` and `--c-cover-fcst`
+  (translucent brand shades), `--c-cover-orbit`, `--c-series-fcst` (a lighter shade that still makes 3:1 on the
+  surface) — `--c-cover-from` and `--c-series-curr` follow the ramp by themselves. A SECOND colour becomes the accent
+  ramp (500 on dark, 600 as a mark, 700 as small text), unless it is a near-black or grey: that stays the ink scale or
+  the emphasis surface; `--c-mark-b` and `--c-accent-soft` (translucent accent) follow the accent. A third colour is
+  data only (`--c-series-strong`) or left out. From `midnight` the brand-600 rule turns around: light enough as text
+  on the dark page, with the dark `--c-on-fill` on it. Then run `node scripts/theme-check.mjs <deck>` (after any hand
+  edit of a derived theme too): it prints every contrast pair below its minimum and every data-colour pair too alike
+  as FAIL (exit 1), and every token still in another hue as `WARN hue leftover?` — fix each FAIL, and replace each
+  leftover unless you meant it. `deck.sh check` measures only chart colours (`chart-contrast`). `deck.css` may also
+  add deck-wide component rules; it is linked like `base.css`, so every rule in §2–§7 applies to it.
 - **Compose each slide around ONE visual that proves its title**: the title states the claim, the `.slide-sub`
   its evidence (when one figure carries it), and the dominant object shows it — a native chart, bars on one
   scale, a cost bar, a timeline, a big number. The reader should get the point from the visual before reading a
@@ -741,15 +808,16 @@ approximation.
 
 ## 12. PowerPoint structure hints (what makes the deck editable like a hand-built one)
 
-The builder turns the HTML into PowerPoint *structure*, not just positioned objects. Four attributes steer it;
-everything else is derived.
+The builder turns the HTML into PowerPoint *structure*, not just positioned objects. Four attributes steer it (a
+photo slot adds `data-prompt`); everything else is derived.
 
 | hint | where | effect in PowerPoint |
 |---|---|---|
-| `data-layout="본문"` | `main.slide` | slides with the same value share one **slide layout** named so (else: one per background). It carries the background; objects identical on every slide of the layout (footer rule, brand mark, deck name, page number) are written once INTO the layout — a slide the user inserts gets them. Needs ≥ 2 slides; nothing earlier-painted may overlap a lifted object (the builder checks). "Identical" includes the element's DOM path, so give the footer `id="footer"` (§8.2) |
+| `data-layout="본문"` | `main.slide` | slides with the same value share one **slide layout** named so (else: one per background). It carries the background; objects identical on every slide of the layout (footer rule, brand mark, deck name, page number) are written once INTO the layout — a slide the user inserts gets them. Needs ≥ 2 slides: a slide alone on its layout (a photo slide, a divider) keeps them on the slide itself, and a New Slide from its layout brings none; nothing earlier-painted may overlap a lifted object (the builder checks). "Identical" includes the element's DOM path, so give the footer `id="footer"` (§8.2) |
 | `data-group="범례"` | any container | its objects become **one group** named so. Boxes with their own paint that hold other objects (cards, pills, icon badges, a caption with its divider, the footer) are grouped automatically; use the attribute for paint-less containers (a legend, a brand mark, a decoration set). Only objects contiguous in paint order are grouped; tables and placeholders never (PowerPoint cannot group them) |
 | `data-field="slidenum"` | the page-number element (or an inline span) | a **slide-number field**: PowerPoint shows each slide's number, also after reordering. The text must be the slide's position without padding (`2`) |
 | `data-placeholder="title \| ctrTitle \| subTitle \| none"` | a text element | that **placeholder** (Outline view, the accessibility checker and slide-link pickers read the title). Default: the slide's first `<h1>` is its `title`; the cover uses `ctrTitle`. The layout gets a prompt placeholder in the same style, so a new slide's title looks like the deck's |
+| `data-placeholder="pic"` + `data-prompt="…"` | a sized box — a photo slot (§7) | an empty **picture placeholder** (`그림 개체 틀: <prompt>` in the Selection Pane) the user fills from its icon; its layout gets the same empty slot with the prompt. Never grouped (PowerPoint cannot group placeholders) |
 
 Also automatic: readable object names in the Selection Pane (`stat-value: 1,284억 원`, `card 그룹`; the DOM path
 of every object is in `.build/<profile>/deck.map.json`), an empty `alt` on an `<img>`/`<svg>` = marked decorative
@@ -758,7 +826,7 @@ containers wrap inside their box when edited while `nowrap` numbers and shrink-t
 colours from the tokens (§9), document title/author/thumbnail (the file's Title property — SharePoint and Teams
 file cards, search — is the first slide's title text, so let slide 1's title be the deck's name rather than a
 greeting; the author is `--author`), only the deck's own layouts in PowerPoint's New Slide gallery, speaker notes
-from `<template id="notes">`.
+(the talk track, §1) from `<template id="notes">`.
 
 ## 13. Deck folder
 

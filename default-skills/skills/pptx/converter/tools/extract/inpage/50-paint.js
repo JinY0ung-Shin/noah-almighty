@@ -9,7 +9,8 @@
 //   "Atomically" / positioned z:auto = painted as if a stacking context, but positioned descendants and real
 //   stacking contexts inside it belong to the parent stacking context.
 // IR simplifications: a table (cell fills + text) is ONE item placed at its step-3 position; a text block is one
-// item at its step-5 position; inline elements never become layers (their text is a run of the paragraph).
+// item at its step-5 position; a photo slot (45-placeholder.js) is one item like a picture, atomic even when it is a
+// stacking context; inline elements never become layers (their text is a run of the paragraph).
 
 let TREC = new Map();    // element → transform values captured before neutralisation
 let AABB = new Map();    // element → rendered (transformed) border-box AABB before neutralisation
@@ -144,6 +145,12 @@ function place(rec, srcEl, suffix) {
         valueMin: rec.resolved.valueMin, valueMax: rec.resolved.valueMax, majorUnit: rec.resolved.majorUnit,
       } : null;
       break;
+    case 'placeholder':
+      if (Math.abs(rot) > 1e-6) lint('error', 'rotated-placeholder', 'a photo slot cannot be rotated: the converter writes only unrotated picture placeholders — remove the rotate() transform from the slot and its ancestors', srcEl);
+      out.placeholder = rec.placeholder;
+      out.prompt = rec.prompt;
+      out.slot = null; // its ordinal in document order, once the slide is painted (45-placeholder.js numberPicSlots)
+      break;
     default:
       break;
   }
@@ -226,6 +233,13 @@ function byZ(a, b) {
 }
 
 function paintStackingContext(S) {
+  if (isPicPlaceholder(S)) {
+    // a photo slot is atomic even as a stacking context (z-index, opacity, transform): its positioned hint children
+    // are never layers of their own. Only for slots, so every other IR stays as it was
+    paintOwn(S);
+    paintLeaf(S);
+    return;
+  }
   paintOwn(S);
   const layers = collectLayers(S);
   const neg = layers.filter((l) => l.sc && l.z < 0).sort(byZ);
@@ -334,6 +348,9 @@ function paintLeaf(el) {
     }
   } else if (isUnsupported(el)) {
     lint('error', 'unsupported-element', `<${el.localName}> is not converted`, el);
+  } else if (isPicPlaceholder(el)) {
+    const rec = picPlaceholderRecord(el, CTX);
+    if (rec) push(rec, el, '::placeholder');
   }
 }
 
@@ -426,6 +443,9 @@ function lintStyles() {
   for (const el of all) {
     if (el !== ROOT && el.closest('svg') && !isOuterSvg(el)) continue;
     if (el.closest('[data-chart]') && !isChart(el)) continue;
+    // a photo slot's hint (45-placeholder.js) is HTML-only: dropped from the .pptx, so nothing PowerPoint must
+    // reproduce — the slot itself is linted like any element
+    if (el !== ROOT && inPicSlot(el)) continue;
     if (isNone(el)) continue;
     const s = cs(el);
     if (s.filter !== 'none') lint('error', 'filter', `filter: ${s.filter}`, el);
@@ -478,13 +498,14 @@ function lintStyles() {
       const hs = px(s.paddingLeft) + px(s.paddingRight) + px(s.marginLeft) + px(s.marginRight) + px(s.borderLeftWidth) + px(s.borderRightWidth);
       if (Math.abs(hs) > 0.01) lint('warn', 'inline-spacing', 'horizontal padding/margin/border on inline text shifts the following text (PowerPoint runs have none)', el);
     }
-    if (el !== ROOT && (s.overflowX !== 'visible' || s.overflowY !== 'visible')) {
-      // descendants whose border box leaves this clip are cut in Chromium, not in PowerPoint
+    if (el !== ROOT && (s.overflowX !== 'visible' || s.overflowY !== 'visible') && !isPicPlaceholder(el)) {
+      // descendants whose border box leaves this clip are cut in Chromium, not in PowerPoint (a photo slot's own
+      // descendants are its dropped hint, and its corners are placeholder-geometry's)
       const pb = paddingBoxOf(el);
       const rad = usedRadii(el, rectOf(el));
       const bw = borderWidths(el);
       for (const d of el.querySelectorAll('*')) {
-        if (isNone(d) || (d.closest('svg') && !isOuterSvg(d)) || isInlineContent(d)) continue;
+        if (isNone(d) || (d.closest('svg') && !isOuterSvg(d)) || isInlineContent(d) || inPicSlot(d)) continue;
         const b = rectOf(d);
         if (b.w <= 0 || b.h <= 0) continue;
         if (b.x < pb.x - 0.5 || b.y < pb.y - 0.5 || b.x + b.w > pb.x + pb.w + 0.5 || b.y + b.h > pb.y + pb.h + 0.5) {

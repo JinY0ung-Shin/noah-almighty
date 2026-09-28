@@ -1,6 +1,8 @@
 /* themes/editorial.css — Editorial: a warm ivory page, espresso ink and a terracotta primary with a mustard accent;
  * outlined cards on a paper-like surface, small corners, no shadows. Warm and human, like a magazine spread.
  * Fits: culture and people, brand stories, workshops and retrospectives.
+ * Feel: warm, human and crafted, like a magazine spread.
+ * Avoid: financial results, technical deep-dives and compliance reports, where the warm paper look reads casual.
  *
  * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
  * Every theme defines the same tokens; slides and the kit's components colour everything through them.

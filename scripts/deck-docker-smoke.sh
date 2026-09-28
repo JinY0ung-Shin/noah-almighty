@@ -10,7 +10,8 @@
 #   (c) deck.sh selftest --fail-on-drift (golden drift is FATAL here, unlike the image build's
 #       default)
 #   (d) a copy of every examples/<deck>/ builds in both profiles with --strict, and every other theme
-#       (themes/*.css over deck.css) restyles two of them — embedded profile, --strict
+#       (themes/*.css over deck.css) restyles three of them (business-review, layouts, talk) — embedded
+#       profile, --strict
 #   (e) two concurrent checks of one deck: exactly one exits 5 "already running"
 #   (f) SIGKILL deck.mjs mid-build: no Chromium/Python left after 10 s, the re-run is not
 #       refused (kernel-released lock) and no converter run dir is left in /tmp (startup sweep)
@@ -276,8 +277,9 @@ for ex in ${EXAMPLES[@]+"${EXAMPLES[@]}"}; do
     fi
   done
 done
-# every other theme over two examples (their charts, table, timeline and dark slides between them): the themes
-# restyle through tokens only, so each must still build clean — and step (g) validates these decks too
+# every other theme over three examples (their charts, table, timeline and dark slides between them, and the talk
+# deck's display type, photo and split panel): the themes restyle through tokens only, so each must still build
+# clean — and step (g) validates these decks too
 mapfile -t THEMES < <(docker exec "$C_SMOKE" sh -c \
   'for f in "$1"/themes/*.css; do [ -f "$f" ] && basename "$f" .css; done; true' sh "$SKILL")
 if [ "${#THEMES[@]}" -eq 0 ]; then
@@ -285,7 +287,7 @@ if [ "${#THEMES[@]}" -eq 0 ]; then
 fi
 for theme in ${THEMES[@]+"${THEMES[@]}"}; do
   [ "$theme" = classic ] && continue   # the examples above ship classic as their deck.css
-  for ex in business-review layouts; do
+  for ex in business-review layouts talk; do
     tw="/tmp/w/theme-$theme-$ex"
     docker exec "$C_SMOKE" sh -c 'cp -r "$1" "$2" && cp "$3" "$2/deck.css"' sh \
       "$SKILL/examples/$ex" "$tw" "$SKILL/themes/$theme.css"

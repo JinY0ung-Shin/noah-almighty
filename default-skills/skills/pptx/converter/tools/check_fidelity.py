@@ -49,6 +49,13 @@ layout must be in the map. Per kind (geometry tolerance ``--tol`` px, default 0.
   value axis min / max / majorUnit / gridlines / label visibility, category axis line and label size / colour /
   typeface, plot area ``manualLayout`` (inner, edge) = resolved.plotPx (1e-4), legend presence / position, no title,
   alt text (``descr``) present;
+* photo slot (converter 1.2.0): PowerPoint's empty picture placeholder — a ``p:sp`` with ``p:ph type="pic"`` (else
+  ``object``, blocking), idx 13 + its IR ``slot`` (document order), ``spLocks noGrp``, the IR box (the border box) and
+  rotation, a frame that paints nothing, no hasCustomPrompt and no txBody but the builder's colour-only one, the
+  prompt PowerPoint shows there (its layout placeholder's) = the IR prompt, and that prompt's colour = the more
+  legible theme text colour on the slot's own opaque frame (``placeholder``, drift); every layout picture placeholder
+  = the first slide slot with its idx (type / idx, box, hasCustomPrompt, prompt), its prompt colour legible on the
+  slot's frame where that frame was lifted into the layout, else the layout's tx1 (``layout-prompt``);
 * paint order (J2-10): the slide's objects, groups descended, in IR paint order (a split shape or a table with its
   absorbed background counts once); layout chrome (painted before every slide object) only where no lower-indexed
   slide object overlaps it;
@@ -80,6 +87,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -119,6 +127,7 @@ EDGE_TOL = 0.05             # px: a cell's anchored text edge vs Chromium's line
 AUTOFIT = ("noAutofit", "normAutofit", "spAutoFit")
 AUTOFIT_SLACK_REL = 0.05    # normAutofit boxes: text area >= 1.05 x PowerPoint's text height (CONTRACT v2, round 3)
 PLACEHOLDER_IDX = {"title": None, "ctrTitle": None, "subTitle": "1"}   # what PowerPoint's own layouts write
+PIC_IDX0 = 13               # the photo slot with IR slot k (document order) is p:ph type="pic" idx=13+k (placeholders.py)
 
 
 # ============================================================================================== helpers
@@ -1667,7 +1676,8 @@ def paint_sequence(deck, q, idx):
     lo/hi = the smallest/largest IR paint index the object stands for (a table with its absorbed background: two)."""
     irs_of = {}
     for o in q.get("objects") or []:
-        if o.get("kind") in ("group", "placeholder", "overlay") or not o.get("ir"):
+        # a layout's prompt placeholders (title, photo slots) have no IR source; a slide's photo slot keeps its z-order
+        if o.get("kind") in ("group", "overlay") or o.get("role") == "layout-placeholder" or not o.get("ir"):
             continue
         irs_of.setdefault(o.get("shapeId"), set()).add(o["ir"])
     tree = deck.xml(q["part"]).find(f"{P}cSld/{P}spTree")
@@ -1781,6 +1791,10 @@ def check_element(prob, tm, deck, where, q0, e, kind, nodes, objs, node_of, elem
         if n is not None:
             check_frame(prob, where, e, n, tol, "chart")
             check_chart(prob, tm, deck, q0["part"], where, e, n)
+    elif kind == "placeholder":
+        n = nodes.get("main")
+        if n is not None:
+            check_pic_placeholder(prob, deck, q0["part"], where, e, n, elements, tol)
 
 
 # ---------------------------------------------------------------------------------------------- template state
@@ -1798,12 +1812,13 @@ def _canon(el, drop=()) -> str:
     return etree.tostring(c, method="c14n").decode()
 
 
-def check_layout_prompts(prob, deck, parts) -> None:
+def check_layout_prompts(prob, deck, parts, ir=None) -> None:
     """What PowerPoint gives a NEW slide / Home > Reset (fixer round 3, VR-06): every layout prompt placeholder equals
     the slide placeholder it was made from (the family's first slide with that type) — same type / idx, position and
     width (height >= the slide's), bodyPr (wrap square, normAutofit without a stored shrink), paragraph style (algn,
     indents, line breaking, lnSpc / spcBef / spcAft) and run style (size, bold, colour, typefaces, spacing) as
-    lstStyle lvl1pPr / defRPr — and shows PowerPoint's Korean custom prompt."""
+    lstStyle lvl1pPr / defRPr — and shows PowerPoint's Korean custom prompt. A picture placeholder (a photo slot,
+    1.2.0) is matched by type AND idx and checked against the IR prompt instead (check_pic_layout_prompt)."""
     for lpart, q in parts.items():
         if q.get("kind") != "layout" or lpart not in deck.names:
             continue
@@ -1813,6 +1828,9 @@ def check_layout_prompts(prob, deck, parts) -> None:
             if o.get("kind") != "placeholder":
                 continue
             t = o.get("ph")
+            if t == "pic":
+                check_pic_layout_prompt(prob, deck, parts, lpart, q, o, ir)
+                continue
             lsp = next((sp for sp in lroot.iter(P + "sp") if cnv_of(sp) is not None
                         and cnv_of(sp).get("id") == str(o.get("shapeId"))), None)
             src = None
@@ -1868,6 +1886,247 @@ def check_layout_prompts(prob, deck, parts) -> None:
             if prompt != LAYOUT_PROMPTS.get(t):
                 bad.append(f"prompt {prompt!r}")
             prob.expect(not bad, None, lpart, None, "layout-prompt", f"layout prompt {t!r}: {bad[:3]}")
+
+
+def ph_prompt(sp) -> str:
+    """The prompt text a placeholder's txBody carries ("" without one)."""
+    tx = sp.find(P + "txBody") if sp is not None else None
+    return "".join(t.text or "" for t in tx.iter(A + "t")).strip() if tx is not None else ""
+
+
+def pic_ph(sp):
+    """The p:ph of a picture placeholder p:sp, else None."""
+    ph = sp.find(f"{P}nvSpPr/{P}nvPr/{P}ph") if sp is not None and sp.tag == P + "sp" else None
+    return ph if ph is not None and ph.get("type") == "pic" else None
+
+
+OWN_FILL_ID = re.compile(r"^(.*)::bg\d*$")     # an element's own fill shapes: '<path>::bg', '<path>::bg2' …
+
+
+def own_fill_path(ir_id) -> str | None:
+    """The DOM path of the element whose own fill shape this IR id is ('<path>::bg', '<path>::bgN'), else None."""
+    m = OWN_FILL_ID.match(str(ir_id or ""))
+    return m.group(1) if m else None
+
+
+def slot_path(e) -> str | None:
+    """The DOM path of a photo slot (IR id '<path>::placeholder'), else None."""
+    sid = str(e.get("id") or "")
+    return sid[: -len("::placeholder")] if sid.endswith("::placeholder") else None
+
+
+def slot_frame(e, elements):
+    """The IR shape that paints a photo slot's own topmost fill — its frame: the slot's '<path>::bg' / '<path>::bgN'
+    shapes (painted before it; the last one is on top) — or None."""
+    path = slot_path(e)
+    hit = None
+    for x in elements:
+        if path is not None and x.get("kind") == "shape" and own_fill_path(x.get("id")) == path:
+            hit = x
+    return hit
+
+
+def legible_colours(shape, colors):
+    """({RRGGBB}, {slot: worst contrast}) — the theme text colour(s) (dk1 / lt1) with the higher WCAG contrast on every
+    stop of an IR shape's opaque fill (both on a tie), as check_default_text chooses them — or None: no shape, no fill
+    or a translucent one (text over it sits on whatever is behind)."""
+    fill = shape.get("fill") if shape is not None else None
+    if not isinstance(fill, dict) or not colors.get("dk1") or not colors.get("lt1"):
+        return None
+    op = num(shape.get("opacity"), 1.0)
+    stops = [(fill.get("color"), num(fill.get("alpha"), 1.0))] if fill.get("type") == "solid" else \
+        [(q.get("color"), num(q.get("alpha"), 1.0)) for q in fill.get("stops") or [] if isinstance(q, dict)] \
+        if fill.get("type") == "linear" else []
+    stops = [(str(c or "").lstrip("#").upper(), a * op) for c, a in stops]
+    if not stops or any(len(c) != 6 or a < 0.99 for c, a in stops):
+        return None
+    worst = {s: min(contrast(colors[s], c) for c, _ in stops) for s in ("dk1", "lt1")}
+    return {colors[s] for s, v in worst.items() if v >= max(worst.values()) - 1e-9}, worst
+
+
+def prompt_fill(sp):
+    """The explicit prompt colour ('RRGGBB') a placeholder's lstStyle lvl1pPr defRPr sets (an srgbClr solidFill), else
+    None — the prompt then inherits (layout placeholder, then the master's body style: tx1)."""
+    d = sp.find(f"{P}txBody/{A}lstStyle/{A}lvl1pPr/{A}defRPr") if sp is not None else None
+    ca = color_alpha(d.find(A + "solidFill")) if d is not None else None
+    return ca[0].upper() if ca is not None else None
+
+
+def colour_only_txbody(sp) -> bool:
+    """A slide picture placeholder's txBody is absent or exactly the builder's colour-only one: an empty bodyPr, an
+    lstStyle holding a single attribute-free lvl1pPr > defRPr > solidFill > srgbClr (6 hex digits), and ONE paragraph
+    holding nothing but an empty end mark — no run, field or break, so no prompt text of its own."""
+    tx = sp.find(P + "txBody")
+    if tx is None:
+        return True
+    kids = [c for c in tx if isinstance(c.tag, str)]
+    if [ln(c) for c in kids] != ["bodyPr", "lstStyle", "p"] or len(kids[0]) or kids[0].attrib:
+        return False
+    el = kids[1]
+    for want in ("lvl1pPr", "defRPr", "solidFill", "srgbClr"):
+        sub = [c for c in el if isinstance(c.tag, str)]
+        if len(sub) != 1 or ln(sub[0]) != want or (want != "srgbClr" and sub[0].attrib):
+            return False
+        el = sub[0]
+    val = el.get("val") or ""
+    if len(el) or set(el.attrib) != {"val"} or len(val) != 6 or any(ch not in "0123456789ABCDEFabcdef" for ch in val):
+        return False
+    marks = [c for c in kids[2] if isinstance(c.tag, str)]
+    return [ln(c) for c in marks] == ["endParaRPr"] and len(marks[0]) == 0
+
+
+def check_pic_placeholder(prob, deck, part, where, e, node, elements, tol) -> None:
+    """A photo slot (IR ``kind: "placeholder"``, converter 1.2.0) vs its slide object: PowerPoint's EMPTY picture
+    placeholder. Not one at all is ``object`` (blocking: the user could not insert a photo); the rest is
+    ``placeholder`` (drift): idx = 13 + its IR ``slot`` (its ordinal among the slide's slots in document order),
+    spLocks noGrp, the IR box (the border box) and rotation, an explicit frame that paints nothing (prstGeom rect,
+    noFill, a:ln noFill, empty effectLst), no hasCustomPrompt and no txBody but the builder's colour-only one
+    (PowerPoint copies neither prompt text nor the flag to a slide), the prompt PowerPoint shows on this slide — its
+    layout's picture placeholder with the same idx — equal to the IR prompt (slides of one layout share it), and that
+    prompt's colour — the slide's own lstStyle colour, else its layout placeholder's, else tx1 on the slide's colour
+    map (the master body style) — the more legible theme text colour on the slot's own opaque frame (``elements``: the
+    slide's IR, whose ``::bg`` shapes of the slot are that frame); a slot without an opaque frame carries no colour."""
+    eid = e.get("id")
+    ph = pic_ph(node)
+    got = ln(node) + (f" with p:ph type={node.find(f'{P}nvSpPr/{P}nvPr/{P}ph').get('type', 'obj')!r}"
+                      if node.tag == P + "sp" and node.find(f"{P}nvSpPr/{P}nvPr/{P}ph") is not None else "")
+    if not prob.expect(ph is not None, *where, eid, "object",
+                       f"the photo slot is a {got}, not a picture placeholder (p:sp + p:ph type=\"pic\"): the user "
+                       "cannot insert a photo into it"):
+        return
+    slot = e.get("slot")
+    ok_slot = isinstance(slot, int) and not isinstance(slot, bool) and slot >= 0
+    want_idx = str(PIC_IDX0 + slot) if ok_slot else None
+    prob.expect(ok_slot and ph.get("idx") == want_idx, *where, eid, "placeholder",
+                f"picture placeholder idx {ph.get('idx')!r} != {want_idx!r} (13 + the IR slot {slot!r}: its order among "
+                "the slide's photo slots in the markup)")
+    lk = node.find(f"{P}nvSpPr/{P}cNvSpPr/{A}spLocks")
+    prob.expect(lk is not None and truthy(lk.get("noGrp")), *where, eid, "placeholder",
+                "picture placeholder without spLocks noGrp (PowerPoint writes it on every placeholder)")
+    prob.expect(ph.get("hasCustomPrompt") is None and colour_only_txbody(node), *where, eid, "placeholder",
+                "a slide picture placeholder carries hasCustomPrompt or a txBody other than the prompt colour (an empty "
+                "bodyPr, an lstStyle lvl1pPr defRPr solidFill srgbClr, one empty paragraph): PowerPoint copies neither "
+                "prompt text nor the flag to a slide — the prompt is the layout's")
+    x, y, w, h, rot = box_of(node)
+    b = e.get("box") or {}
+    prob.expect(max(abs(x - num(b.get("x"))), abs(y - num(b.get("y"))), abs(w - num(b.get("w"))),
+                    abs(h - num(b.get("h")))) <= tol, *where, eid, "placeholder",
+                f"picture placeholder ({x:.3f},{y:.3f} {w:.3f}x{h:.3f}) != the slot's border box {b}")
+    prob.expect(rot_equal(rot, num(e.get("rotationDeg"))), *where, eid, "placeholder",
+                f"picture placeholder rot {rot} != {e.get('rotationDeg')}")
+    sppr = node.find(P + "spPr")
+    f = fill_of(sppr) if sppr is not None else None
+    lnel = sppr.find(A + "ln") if sppr is not None else None
+    eff = sppr.find(A + "effectLst") if sppr is not None else None
+    g = sppr.find(A + "prstGeom") if sppr is not None else None
+    prob.expect(f is not None and ln(f) == "noFill" and lnel is not None and lnel.find(A + "noFill") is not None
+                and eff is not None and len(eff) == 0 and g is not None and g.get("prst") == "rect", *where, eid,
+                "placeholder", "the picture placeholder's frame is not an explicit one that paints nothing (prstGeom "
+                "rect, noFill, a:ln noFill, an empty effectLst): the slot's frame is the shape painted before it")
+    lay = deck.related(part, "/slideLayout")
+    lsp = None
+    if lay in deck.names:
+        lsp = next((sp for sp in deck.xml(lay).iter(P + "sp") if pic_ph(sp) is not None
+                    and pic_ph(sp).get("idx") == ph.get("idx")), None)
+    want = " ".join(str(e.get("prompt") or "").split())
+    if lsp is not None:                                   # a missing one: placeholder-link (check_placeholders)
+        shown = ph_prompt(lsp)
+        nth = f"slot {slot + 1}" if ok_slot else "this slot"
+        prob.expect(shown == want, *where, eid, "placeholder",
+                    f"PowerPoint shows the layout's prompt {shown!r} in this slot, not its data-prompt {want!r} — give "
+                    "this slide its own data-layout, or order its photo slots and data-prompts like the layout's first "
+                    "slide: the slides of one data-layout share each slot's prompt by document order (the Nth photo "
+                    f"slot in a slide's markup shows the prompt of the Nth slot of the first slide that has one; this is "
+                    f"{nth})")
+    # the prompt's colour on the slot's own frame (a dark slide with the kit's light frame: never the slide's tx1)
+    colors = theme_colors(deck)
+    frame = slot_frame(e, elements)
+    leg = legible_colours(frame, colors)
+    own = prompt_fill(node)
+    if leg is None:
+        prob.expect(own is None, *where, eid, "placeholder",
+                    f"the picture placeholder sets the prompt colour {own} although the slot has no opaque frame of its "
+                    "own (its prompt keeps the default text colour)")
+    else:
+        cmap = clr_map_of(deck, part)
+        inherited = prompt_fill(lsp)
+        shown_c = own or inherited or colors.get(cmap.get("tx1"))
+        how = "its own lstStyle" if own else "its layout placeholder's lstStyle" if inherited else \
+            f"tx1 = {cmap.get('tx1')} on the slide's colour map"
+        good, worst = leg
+        prob.expect(shown_c in good, *where, eid, "placeholder",
+                    f"PowerPoint shows this slot's prompt in {shown_c} ({how}) on the slot's frame {frame.get('id')!r}, "
+                    f"not the more legible theme text colour (dk1 {colors['dk1']} {worst['dk1']:.2f}:1, lt1 "
+                    f"{colors['lt1']} {worst['lt1']:.2f}:1)")
+
+
+def check_pic_layout_prompt(prob, deck, parts, lpart, q, o, ir) -> None:
+    """A layout picture placeholder (the union of the family's photo slots, converter 1.2.0) equals the slot it was
+    made from — the first slide of the family in deck order with its idx: type / idx, box and rotation,
+    hasCustomPrompt iff that slot has a prompt, and the prompt = that slot's IR prompt. Its colour: a New Slide shows
+    the prompt on the layout's own background (tx1 on the layout's colour map: no colour of its own) unless the slot's
+    frame was lifted into the layout as chrome — then the prompt colour it shows (its own, else tx1) is the more
+    legible theme text colour on that frame. No other text-style checks: PowerPoint draws its own insert-picture icon,
+    and the prompt's style is the builder's fixed one."""
+    idx = o.get("idx")
+    lroot = deck.xml(lpart)
+    lsp = next((sp for sp in lroot.iter(P + "sp") if cnv_of(sp) is not None
+                and cnv_of(sp).get("id") == str(o.get("shapeId"))), None)
+    elements = {(s.get("index"), e.get("id")): e for s in ((ir or {}).get("slides") or []) if isinstance(s, dict)
+                for e in s.get("elements") or [] if isinstance(e, dict)}
+    src = src_e = src_sno = None
+    for sno in q.get("slides") or []:
+        sq = next((x for x in parts.values() if x.get("kind") == "slide" and x.get("slide") == sno), None)
+        if sq is None or sq["part"] not in deck.names:
+            continue
+        so = next((x for x in sq.get("objects") or [] if x.get("kind") == "placeholder" and x.get("ph") == "pic"
+                   and x.get("idx") == idx), None)
+        if so is None:
+            continue
+        src = next((sp for sp in deck.xml(sq["part"]).iter(P + "sp") if cnv_of(sp) is not None
+                    and cnv_of(sp).get("id") == str(so.get("shapeId"))), None)
+        src_e = elements.get((sno, so.get("ir")))
+        src_sno = sno
+        break
+    if not prob.expect(lsp is not None and src is not None and src_e is not None, None, lpart, None, "layout-prompt",
+                       f"layout picture placeholder idx {idx!r}: the placeholder, its source slide slot or its IR "
+                       "element was not found"):
+        return
+    bad = []
+    lph = pic_ph(lsp)
+    if lph is None or lph.get("idx") != str(idx):
+        bad.append(f"not a picture placeholder with idx {idx!r}")
+    want = " ".join(str(src_e.get("prompt") or "").split())
+    if (lph is not None and truthy(lph.get("hasCustomPrompt"))) != bool(want):
+        bad.append(f"hasCustomPrompt={lph.get('hasCustomPrompt') if lph is not None else None!r} for the prompt {want!r}")
+    lx, ly, lw, lh, lr = box_of(lsp)
+    sx, sy, sw, sh, sr = box_of(src)
+    if max(abs(lx - sx), abs(ly - sy), abs(lw - sw), abs(lh - sh)) > 1e-6 or lr != sr:
+        bad.append(f"box ({lx:.2f},{ly:.2f} {lw:.2f}x{lh:.2f}) != slide slot ({sx:.2f},{sy:.2f} {sw:.2f}x{sh:.2f})")
+    if ph_prompt(lsp) != want:
+        bad.append(f"prompt {ph_prompt(lsp)!r} != the slot's data-prompt {want!r}")
+    # the colour: the source slot's frame lifted into this layout (its ::bg shapes among the layout's records)?
+    path = slot_path(src_e)
+    lifted = path is not None and any(x.get("kind") == "shape" and own_fill_path(x.get("ir")) == path
+                                      for x in q.get("objects") or [])
+    own = prompt_fill(lsp)
+    if not lifted:
+        if own is not None:
+            bad.append(f"prompt colour {own} without the slot's frame in the layout (a New Slide shows the prompt on "
+                       "the layout's background, where its tx1 is the legible one)")
+    else:
+        colors = theme_colors(deck)
+        slide_els = [x for (sno, _), x in elements.items() if sno == src_sno]
+        frame = slot_frame(src_e, slide_els)
+        leg = legible_colours(frame, colors)
+        cmap = clr_map_of(deck, lpart)
+        shown_c = own or colors.get(cmap.get("tx1"))
+        if leg is None and own is not None:
+            bad.append(f"prompt colour {own} although the slot's lifted frame is not opaque")
+        elif leg is not None and shown_c not in leg[0]:
+            bad.append(f"prompt colour {shown_c} ({'lstStyle' if own else 'tx1 = ' + str(cmap.get('tx1'))}) on the "
+                       f"lifted frame {frame.get('id')!r} is not the more legible theme text colour {sorted(leg[0])}")
+    prob.expect(not bad, None, lpart, None, "layout-prompt", f"layout picture placeholder idx {idx!r}: {bad[:3]}")
 
 
 def check_template_residue(prob, deck) -> None:
@@ -1984,7 +2243,7 @@ def structure(args) -> dict:
                     prob.add(q.get("slide"), part, None, "geometry", str(exc))
     check_placeholders(prob, deck, parts)
     try:
-        check_layout_prompts(prob, deck, parts)
+        check_layout_prompts(prob, deck, parts, ir)
     except NoGeometry as exc:
         prob.add(None, None, None, "geometry", str(exc))
     check_theme(prob, deck, ir, tm)

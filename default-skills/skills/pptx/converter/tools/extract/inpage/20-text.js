@@ -735,14 +735,14 @@ function flexAnchor(itemEl, flexParent, isOnlyItem) {
   return null;
 }
 
-/** Boxes the builder emits as FIXED PowerPoint objects: anything with its own paint, images, charts, tables. */
+/** Boxes the builder emits as FIXED PowerPoint objects: anything with its own paint, images, charts, tables, photo slots. */
 function fixedObjects() {
   if (!FIXED_OBJECTS) {
     FIXED_OBJECTS = [];
     for (const el of ROOT.querySelectorAll('*')) {
       if (el.closest('svg') && !isOuterSvg(el)) continue;
       if (isNone(el) || isContents(el)) continue;
-      if (isImage(el) || isChart(el) || isTable(el) || hasOwnPaint(el)) FIXED_OBJECTS.push(el);
+      if (isImage(el) || isChart(el) || isTable(el) || isPicPlaceholder(el) || hasOwnPaint(el)) FIXED_OBJECTS.push(el);
     }
   }
   return FIXED_OBJECTS;
@@ -986,7 +986,7 @@ function extractText(spec, ctx) {
   if (phAttr !== null) {
     const v = phAttr.trim();
     if (PLACEHOLDER_TYPES.has(v)) placeholder = v;
-    else if (v !== 'none') ctx.lint('warn', 'placeholder', `data-placeholder="${phAttr}" is not one of ${[...PLACEHOLDER_TYPES].join(', ')}, none`);
+    else if (v !== 'none') ctx.lint('warn', 'placeholder', `data-placeholder="${phAttr}" is not one of ${[...PLACEHOLDER_TYPES].join(', ')}, none (the text roles; "pic" marks a photo slot, a sized box — never a text element)`);
   } else if (host.localName === 'h1' && kind === 'block' && !ctx.titleSeen) {
     placeholder = 'title';
   }

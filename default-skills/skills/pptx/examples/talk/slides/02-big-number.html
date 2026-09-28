@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>02 큰 숫자 · 셀프 서비스 시범 운영</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Big number (발표형): ONE figure carries the slide. The headline states the takeaway at display size (60/80, two
+     hard lines), the figure proves it at 280 px in the brand colour, and one lead sentence beside it says what it
+     counts, over a bar of the same share; the period and the method are in the speaker notes. Sizes above 60 px are
+     literal px (the type tokens stop at the 60/80 display size). The figure is one nowrap line, so its line spacing
+     never adds up; its line box is 376 px (>= 1.33 × 280, the malgun content area). At this size a digit's side
+     bearing is ~15 px, so the box starts at x 68 and the "5" lines up with the headline's first stroke. */
+  .slide-header .eyebrow { font-size: 18px; line-height: 28px; }
+  .talk-title { margin-top: 16px; font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 800;
+                letter-spacing: var(--tracking-display); color: var(--c-ink-900); }
+
+  /* the figure and the right column share ONE flex row aligned on their last baselines, so the lead's last line
+     sits on the figure's baseline in BOTH profiles (the browser measures each profile's own baselines, and the
+     builder carries the positions it measured; fixed tops would match in one profile only — malgun seats a 376 px
+     line's baseline 19 px lower). margin-left: auto keeps the column on the deck's centre line (x 656, like the
+     right card of 05-versus) */
+  .bignum { position: absolute; left: 68px; top: 268px; width: 1132px; display: flex; align-items: last baseline; }
+  .figure { font-size: 280px; line-height: 376px; font-weight: 800;
+            letter-spacing: var(--tracking-display); color: var(--c-brand-600); white-space: nowrap; }
+  .figure-unit { font-size: 140px; line-height: 1; letter-spacing: 0; }
+
+  .share { margin-left: auto; width: 544px; }
+  .share-track { height: 16px; border-radius: 8px; background: var(--c-ink-200); }
+  .share-fill { width: 52%; height: 16px; border-radius: 8px; background: var(--c-brand-600); }
+  .lead { margin-top: 28px; font-size: 28px; line-height: 40px; color: var(--c-ink-700); }
+  .lead strong { color: var(--c-ink-900); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">01</span> 반복 문의</p>
+    <h1 class="talk-title">둘 중 하나는<br>이미 답이 있는 질문입니다</h1>
+  </header>
+
+  <div class="bignum">
+    <p class="figure">52<span class="figure-unit">%</span></p>
+
+    <section class="share">
+      <div class="share-track" data-group="비율 막대 — 52% (수치 수정 시 길이 직접 조정)"><div class="share-fill"></div></div>
+      <p class="lead">상담 128만 건 중 <strong>67만 건</strong>이<br>FAQ에 이미 답이 있던 질문입니다</p>
+    </section>
+  </div>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">셀프 서비스 시범 운영</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">2</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+지난 1년, 정확히는 작년 10월부터 올해 9월까지 전화와 채팅으로 들어온 상담을 모두 분류해 봤습니다.
+128만 건 가운데 67만 건, 52%는 FAQ에 이미 답이 적혀 있는 질문이었습니다.
+고객은 답을 찾지 못해서 전화를 겁니다. 이 숫자가 상담사에게는 어떤 하루가 되는지 들어 보시겠습니다. (약 1분)
+</template>
+</body>
+</html>

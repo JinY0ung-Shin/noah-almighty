@@ -16,6 +16,13 @@ slide layouts, so a slide the user inserts in PowerPoint inherits the design and
   a prompt placeholder (``hasCustomPrompt``, text "제목을 입력하세요", the slide title's font/size/colour/spacing as
   ``a:lstStyle``, ``wrap="square"``, the slide title's box) — a new slide gets a title in the deck's style at the
   deck's position, wrapping where the existing titles wrap; a ``subTitle`` likewise.
+* **Photo slots** (converter 1.2.0, pptxlib/placeholders.py): every picture-placeholder idx the family's slides use
+  gets ONE fresh layout placeholder (the union: a slide's slot k in document order, idx 13+k, links to the layout
+  placeholder with that idx), box and prompt from the first slide in deck order with it, a fresh cNvPr id (the
+  layout's largest + 1: never an id of the chrome lifted from the first slide), placed once every slide exists — so a
+  New Slide from the layout brings empty photo slots. Slides of one layout share each slot's prompt. Its prompt keeps
+  the layout's tx1 unless the slot's frame was lifted here as chrome (``lifted_fill``): then it takes the colour that
+  frame needs on the layout's colour map.
 * The master's background becomes the largest family's background.
 * **Colour map**: a layout whose background is dark (``is_dark_background``) carries the inverted colour map
   (``p:clrMapOvr/a:overrideClrMapping`` bg1=dk1 tx1=lt1 bg2=dk2 tx2=lt2), so text a user types on a slide made from it
@@ -40,7 +47,7 @@ from pptx.opc.packuri import PackURI
 from pptx.oxml.ns import qn
 from pptx.parts.slide import SlideLayoutPart
 
-from . import core, structure
+from . import core, placeholders, structure
 from . import text as text_mod
 
 PROMPT ={"title": "제목을 입력하세요", "ctrTitle": "제목을 입력하세요", "subTitle": "부제목을 입력하세요"}
@@ -58,6 +65,9 @@ class LayoutPlan:
     records: list = field(default_factory=list)
     namer: object = None
     dark: bool = False            # its background is dark: the layout carries the inverted colour map (text = lt1)
+    pic_slots: dict = field(default_factory=dict)   # photo slot idx -> (slide p:sp, IR element): its first slide
+    slot_prompts: list = field(default_factory=list)  # every slide slot: (p:sp, idx, frame node | None, TextDefaults)
+    pic_colours: dict = field(default_factory=dict)   # idx -> the layout prompt's explicit colour (None: tx1)
 
     @property
     def chrome_set(self) -> set:
@@ -344,6 +354,48 @@ def add_prompt_placeholder(plan: LayoutPlan, node, ph_type: str, namer) -> None:
     grp_tail = tree.find(qn("p:grpSpPr"))
     grp_tail.addnext(ph_node)                             # placeholders first, as PowerPoint writes layouts
     plan.records.append(structure.Rec(None, "placeholder", "layout-placeholder", ph_node, extra={"ph": ph_type}))
+
+
+def lifted_fill(plan: LayoutPlan, path: str | None):
+    """The node carrying the topmost OWN fill of the element at DOM ``path`` among the chrome lifted into the family's
+    layout (a photo slot's frame identical on every slide of the family: placeholders.own_fill_path), else None.
+    Lifted records keep the first slide's paint order, so the last match is the topmost."""
+    hit = None
+    if path is not None:
+        for r in plan.records:
+            if r.kind == "shape" and r.role in ("fill", "main") and placeholders.own_fill_path(r.ir_id) == path:
+                hit = r.node
+    return hit
+
+
+def add_pic_prompt_placeholders(plan: LayoutPlan, typeface: str | None, lay_text=None) -> int:
+    """The family's photo slots as layout picture placeholders (``plan.pic_slots``: the union of the idx its slides
+    use, each with its first slide's p:sp and IR element): fresh p:sp (placeholders.layout_slot_sp) with the layout's
+    next cNvPr id, named via the layout's namer, inserted in idx order after the layout's leading placeholders
+    ("placeholders first", as PowerPoint writes layouts) and recorded as ``layout-placeholder`` like the title prompt
+    (IR id None: the paint order, missing and layout-chrome checks ignore it). Run once every slide of the family
+    exists (a layout placeholder added earlier would be cloned onto the later slides). ``lay_text`` = the layout's
+    TextDefaults (its colour map): a slot whose frame was lifted into the layout gets the prompt colour that frame
+    needs there (placeholders.layout_colour); every other prompt keeps the layout's tx1. Each idx's explicit colour
+    (or None) is kept in ``plan.pic_colours`` — what the family's slides inherit. Returns the number added."""
+    tree = layout_tree(plan.layout)
+    anchor = tree.find(qn("p:grpSpPr"))
+    for c in anchor.itersiblings():
+        if not structure.is_placeholder(c):
+            break
+        anchor = c
+    n = 0
+    for idx in sorted(plan.pic_slots):
+        node, e = plan.pic_slots[idx]
+        frame = lifted_fill(plan, placeholders.slot_path(e)) if lay_text is not None else None
+        plan.pic_colours[idx] = placeholders.layout_colour(frame, lay_text) if frame is not None else None
+        sp = placeholders.layout_slot_sp(structure.next_shape_id(tree), plan.namer(structure.object_name(e)), idx,
+                                         node, e.get("prompt"), typeface, plan.pic_colours[idx])
+        anchor.addnext(sp)
+        anchor = sp
+        plan.records.append(structure.Rec(None, "placeholder", "layout-placeholder", sp, extra={"ph": "pic", "idx": idx}))
+        n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------------------------- template residue

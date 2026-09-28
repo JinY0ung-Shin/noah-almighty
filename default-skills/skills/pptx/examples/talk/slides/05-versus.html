@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>05 전후 비교 · 셀프 서비스 시범 운영</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Versus (발표형): before and after as two halves with the SAME rows — who answers (name + one line), then the
+     one figure that changed, pinned to the bottom (margin-top: auto), so the eye compares 14 with 1 on one line.
+     The after half is the dark emphasis card; the before figure is muted (ink-600), the after figure white. A
+     connector circle sits on the seam, ringed in the page colour so it cuts into both cards; its arrow is an inline
+     currentColor SVG in --c-on-fill (white on the light themes, dark on midnight's bright brand fill). The
+     figures are 120/160 nowrap lines; the second metric of the pilot is in the speaker notes. The headline names
+     whose wait the figures count (저녁·주말 inquiries): whoever reads the slides without the speaker (the slide
+     renders, a share link's viewer) never sees the notes, so a headline figure keeps its scope on the slide. */
+  .slide-header .eyebrow { font-size: 18px; line-height: 28px; }
+  .talk-title { margin-top: 16px; font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 800;
+                letter-spacing: var(--tracking-display); color: var(--c-ink-900); }
+
+  .sides { position: absolute; left: var(--margin-x); top: 212px; width: var(--content-w);
+           display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-4); }
+  .side { height: 412px; padding: 40px 48px; display: flex; flex-direction: column; }
+  .side-name { font-size: 28px; line-height: 40px; font-weight: 800; letter-spacing: var(--tracking-tight); color: var(--c-ink-900); }
+  .side-desc { margin-top: 4px; font-size: var(--fs-lead); line-height: var(--lh-lead); color: var(--c-ink-600); }
+  .side-figure { margin-top: auto; }
+  .side-label { font-size: 18px; line-height: 28px; font-weight: 600; color: var(--c-ink-500); }
+  /* margin-left -6px: a 120 px digit's side bearing, so the figure's first stroke lines up with the name above */
+  .side-value { margin-left: -6px; font-size: 120px; line-height: 160px; font-weight: 800; letter-spacing: var(--tracking-display);
+                color: var(--c-ink-600); white-space: nowrap; }
+  .side-unit { font-size: 48px; line-height: 1; font-weight: 700; letter-spacing: 0; }
+
+  .side--after .side-name,
+  .side--after .side-value { color: var(--c-white); }
+  .side--after .side-desc { color: rgba(255, 255, 255, 0.72); }
+  .side--after .side-label { color: rgba(255, 255, 255, 0.64); }
+
+  .seam { position: absolute; left: 600px; top: 464px; width: 80px; height: 80px; border-radius: 50%;
+          border: 8px solid var(--c-ink-50); background: var(--c-brand-600); color: var(--c-on-fill);
+          display: flex; align-items: center; justify-content: center; }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">04</span> 시범 운영 결과</p>
+    <h1 class="talk-title">저녁·주말 첫 답변, 14시간에서 1분으로</h1>
+  </header>
+
+  <section class="sides">
+    <article class="card side">
+      <h2 class="side-name">도입 전</h2>
+      <p class="side-desc">평일 9~18시 상담사 응대</p>
+      <div class="side-figure">
+        <p class="side-label">첫 답변까지 평균</p>
+        <p class="side-value">14<span class="side-unit">시간</span></p>
+      </div>
+    </article>
+    <article class="card card--emphasis side side--after">
+      <h2 class="side-name">시범 운영</h2>
+      <p class="side-desc">챗봇·FAQ가 24시간 응대</p>
+      <div class="side-figure">
+        <p class="side-label">첫 답변까지 평균</p>
+        <p class="side-value">1<span class="side-unit">분</span></p>
+      </div>
+    </article>
+  </section>
+
+  <div class="seam">
+    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-label="도입 전에서 시범 운영으로"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+  </div>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">셀프 서비스 시범 운영</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">5</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+결과부터 보시겠습니다. 상담 시간 밖 문의의 첫 답변은 평균 14시간에서 1분으로 줄었습니다.
+상담사 연결 없이 끝난 문의도 12%에서 47%로 늘었습니다. 줄어든 시간만큼 상담사는 어려운 상담에 집중했습니다.
+이제 이 방식을 전사로 넓히려 합니다. (약 1분)
+</template>
+</body>
+</html>

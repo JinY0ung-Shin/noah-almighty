@@ -1,6 +1,8 @@
 /* themes/classic.css — Classic blue: royal blue with a navy emphasis surface and one amber-coral accent on a cool
  * grey page; white cards with a soft shadow, 20 px radius. The kit's default look (= the base.css defaults).
  * Fits: business results, plans and budgets, formal reports to management.
+ * Feel: formal, dependable and orderly, the familiar look of a management report.
+ * Avoid: culture, people and creative topics or festive events, where the corporate blue reads cold and generic.
  *
  * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
  * Every theme defines the same tokens; slides and the kit's components colour everything through them.

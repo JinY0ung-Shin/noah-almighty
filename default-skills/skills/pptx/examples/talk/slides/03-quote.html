@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>03 인용 · 셀프 서비스 시범 운영</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Quote (발표형): one voice, large and centred — the quote is the slide's h1 (its title placeholder: two hard
+     lines, 72/96 = 4/3 × 72, 0.1 px per line off in PowerPoint), the quote mark an inline SVG picture (a filled
+     currentColor path, coloured by its container), the source one lead line under a short rule. Say who said it and
+     where it comes from; the survey figures behind it are in the speaker notes, not on the slide. */
+  .slide-header .eyebrow { font-size: 18px; line-height: 28px; }
+
+  .quote-mark { position: absolute; left: 598px; top: 168px; color: var(--c-brand-600); }
+  .quote { position: absolute; left: var(--margin-x); top: 272px; width: var(--content-w); text-align: center;
+           font-size: 72px; line-height: 96px; font-weight: 800; letter-spacing: var(--tracking-display);
+           color: var(--c-ink-900); }
+  .source-rule { position: absolute; left: 616px; top: 504px; width: 48px; height: 2px; border-radius: 1px;
+                 background: var(--c-ink-300); }
+  .source { position: absolute; left: var(--margin-x); top: 528px; width: var(--content-w); text-align: center;
+            font-size: var(--fs-lead); line-height: var(--lh-lead); color: var(--c-ink-600); }
+  .source strong { color: var(--c-ink-900); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">02</span> 현장의 목소리</p>
+  </header>
+
+  <div class="quote-mark">
+    <svg xmlns="http://www.w3.org/2000/svg" width="84" height="66" viewBox="0 0 56 44" fill="none" stroke="currentColor" aria-label="인용 부호"><path d="M0 44V26C0 12 7 4 19 0l3 6c-8 3-12 8-12 14h12v24z" fill="currentColor" stroke="none"/><path d="M32 44V26c0-14 7-22 19-26l3 6c-8 3-12 8-12 14h12v24z" fill="currentColor" stroke="none"/></svg>
+  </div>
+  <h1 class="quote">같은 질문에 답하느라<br>어려운 상담이 밀립니다</h1>
+  <div class="source-rule"></div>
+  <p class="source"><strong>고객센터 상담사</strong> · 2026년 사내 설문 응답</p>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">셀프 서비스 시범 운영</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치</p>
+      <p class="page-num" data-field="slidenum">3</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+올해 8월 사내 설문에서 한 상담사가 남긴 답입니다.
+응답한 상담사 214명 가운데 78%가 반복 문의를 가장 큰 부담으로 꼽았습니다.
+같은 질문에 답하는 동안, 정말 사람이 필요한 고객이 기다립니다.
+그렇다면 이런 질문은 언제 들어올까요? (약 40초)
+</template>
+</body>
+</html>

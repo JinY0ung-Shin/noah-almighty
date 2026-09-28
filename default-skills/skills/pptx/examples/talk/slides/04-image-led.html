@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>04 사진 · 셀프 서비스 시범 운영</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Image-led (발표형): the photo carries the mood, the panel the message. The photo fills the left half edge to
+     edge (a JPEG with object-fit: cover stays a JPEG; object-position picks the crop, so the moon sits right of
+     centre); EVERY text — headline, lead, figures, the sample-data note and the page number — sits on the panel,
+     the slide's own brand-900 background, never on the photo: a photo gives text no contrast guarantee, and the
+     slides allow no dark scrim. Its own data-layout: a picture across the footer band would keep the 본문
+     layout from taking the footer. */
+  main.slide.photo-split { background: var(--c-brand-900); color: var(--c-white); }
+
+  .photo { position: absolute; left: 0; top: 0; width: 640px; height: 720px; object-fit: cover; object-position: 80% 50%; }
+
+  /* the panel's column: x 720-1200, the header on the same lines as the light slides' (eyebrow y 56, title y 100) */
+  .panel-head { position: absolute; left: 720px; top: var(--header-top); width: 480px; }
+  .panel-eyebrow { font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: var(--tracking-label);
+                   color: rgba(255, 255, 255, 0.72); }
+  .panel-eyebrow .eyebrow-num { color: var(--c-accent-500); }
+  .panel-title { margin-top: 16px; font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 800;
+                 letter-spacing: var(--tracking-display); color: var(--c-white); }
+  .panel-lead { margin-top: 32px; font-size: var(--fs-lead); line-height: var(--lh-lead); color: rgba(255, 255, 255, 0.76); }
+
+  /* two figures over a translucent rule, on fixed 240 px columns; the one that makes the point in the accent */
+  .facts { position: absolute; left: 720px; top: 448px; width: 480px; padding-top: 24px;
+           border-top: 1px solid rgba(255, 255, 255, 0.14); display: grid; grid-template-columns: repeat(2, 240px); }
+  .fact-value { font-size: 72px; line-height: 96px; font-weight: 800; letter-spacing: var(--tracking-tight);
+                color: var(--c-white); white-space: nowrap; }
+  .fact-value.is-key { color: var(--c-accent-500); }
+  .fact-unit { font-size: 28px; line-height: 1; font-weight: 700; letter-spacing: 0; }
+  .fact-label { font-size: 18px; line-height: 28px; color: rgba(255, 255, 255, 0.64); }
+
+  .panel-note { position: absolute; left: 720px; top: 680px; font-size: var(--fs-micro); line-height: var(--lh-micro);
+                color: rgba(255, 255, 255, 0.60); }
+  .panel-page { position: absolute; left: 1168px; top: 680px; width: 32px; text-align: right;
+                font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 700; color: rgba(255, 255, 255, 0.60); }
+</style>
+</head>
+<body>
+<main class="slide photo-split" data-layout="사진">
+  <img class="photo" src="../assets/photo.jpg" alt="해 질 녘 언덕 위로 달이 뜬 풍경 (합성 이미지)">
+
+  <header class="panel-head">
+    <p class="panel-eyebrow"><span class="eyebrow-num">03</span> 상담 시간 밖</p>
+    <h1 class="panel-title">상담이 끝나도<br>질문은 옵니다</h1>
+    <p class="panel-lead">저녁과 주말에 들어온 문의는<br>다음 근무일 아침까지 기다립니다</p>
+  </header>
+
+  <section class="facts">
+    <div class="fact"><p class="fact-value is-key">31<span class="fact-unit">%</span></p><p class="fact-label">상담 시간 밖 문의</p></div>
+    <div class="fact"><p class="fact-value">14<span class="fact-unit">시간</span></p><p class="fact-label">첫 답변까지 평균</p></div>
+  </section>
+
+  <p class="panel-note">샘플 데이터 · 본 자료의 기업명과 수치는 모두 가상으로 구성한 예시입니다</p>
+  <p class="panel-page" data-field="slidenum">4</p>
+</main>
+<template id="notes">
+상담 창구는 평일 아침 9시에 열고 저녁 6시에 닫습니다. 그런데 문의의 31%는 그 밖의 시간에 들어옵니다.
+이 고객들은 첫 답변을 받기까지 평균 14시간을 기다렸습니다.
+그래서 석 달 동안 채팅 문의는 챗봇과 FAQ가 먼저 받도록 바꿔 봤습니다. (약 1분)
+</template>
+</body>
+</html>

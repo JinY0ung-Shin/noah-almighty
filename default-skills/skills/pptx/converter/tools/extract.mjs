@@ -107,12 +107,13 @@ function parseArgs(argv) {
   return a;
 }
 
-/** All text an IR element will carry into PowerPoint (runs, bullet glyphs, table cells, chart labels). */
+/** All text an IR element will carry into PowerPoint (runs, bullet glyphs, table cells, chart labels, slot prompts). */
 function textsOf(e) {
   const fromParas = (ps) => ps.flatMap((p) => [...p.runs.filter((r) => !r.break).map((r) => r.text), p.bullet && p.bullet.type === 'char' ? p.bullet.char : '']);
   if (e.kind === 'text') return fromParas(e.paragraphs);
   if (e.kind === 'table') return e.cells.flat().filter((c) => !c.covered).flatMap((c) => fromParas(c.paragraphs));
   if (e.kind === 'chart' && e.spec) return [...(e.spec.categories || []).map(String), ...(e.spec.series || []).map((x) => String(x.name ?? ''))];
+  if (e.kind === 'placeholder') return e.prompt ? [e.prompt] : []; // the layout prompt PowerPoint shows in a photo slot
   return [];
 }
 
