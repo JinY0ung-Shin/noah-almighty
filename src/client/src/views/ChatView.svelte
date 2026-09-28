@@ -7,6 +7,7 @@
   import FilePreviewPanel from "../components/FilePreviewPanel.svelte";
   import Icon from "../components/Icon.svelte";
   import PromptModal from "../components/PromptModal.svelte";
+  import ShareLinkDialog from "../components/ShareLinkDialog.svelte";
   import { activePane, appState, newId, notify, readState, updateState } from "../lib/state";
   import {
     PLUGIN_STATUS_LABELS,
@@ -54,6 +55,7 @@
     type McpToolGroupId,
   } from "../../../shared/mcpToolGroups";
   import { TOUR_SCENARIOS, type TourScenario } from "../../../shared/tourScenarios";
+  import { isPptxCard } from "../../../shared/shareLinks";
 
   let splitAvatarId = "";
   let splitAddBusy = false;
@@ -828,6 +830,25 @@
     return att.name ? `${base}?name=${encodeURIComponent(att.name)}` : base;
   }
 
+  // 공유 링크 beside a deck card: PPTX decks only, never in a group agent's
+  // thread (member threads are private; the group shares through its second
+  // brain). Reads only its arguments, so the template stays reactive.
+  function canShareCard(item: ChatPane, att: MessageAttachment): boolean {
+    return isPptxCard(att) && !item.avatar.groupAgent && !item.avatar.id.startsWith("group:");
+  }
+
+  // The card whose share-link dialog is open; null = closed. The dialog
+  // portals itself, so one instance serves every pane (split view included —
+  // there the card click downloads, and this is the only way to a link). The
+  // file-preview panel's 공유 링크 opens THIS instance too (its onShare): the
+  // panel unmounts whenever a canvas asking for input takes the side slot, and
+  // a dialog rendered inside it would vanish with it, mid-create included.
+  let shareTarget: { conversationId: string; attachment: MessageAttachment } | null = null;
+
+  function openShareDialog(item: ChatPane, att: MessageAttachment): void {
+    shareTarget = { conversationId: item.conversationId, attachment: att };
+  }
+
   // File-card click: open the right-side preview panel (slides + download
   // button). Split view has no side-panel slot, so it keeps the direct
   // download instead.
@@ -1374,17 +1395,40 @@
 
 <svelte:window on:keydown={onGlobalKeydown} />
 
+{#snippet fileCard(item: ChatPane, att: MessageAttachment, source: MessageAttachment[] | undefined)}
+  <button class="msg-file-card" type="button" on:click={() => openFilePreview(item, att, source)}>
+    <span class="msg-file-icon" aria-hidden="true"><Icon name="file" /></span>
+    <span class="msg-file-meta">
+      <span class="msg-file-name">{att.name || "파일"}</span>
+      <span class="msg-file-info">{att.size ? `${formatFileSize(att.size)} · ` : ""}열기</span>
+    </span>
+  </button>
+{/snippet}
+
 {#snippet attachmentCards(item: ChatPane, atts: MessageAttachment[], source: MessageAttachment[] | undefined)}
   <div class="msg-images">
     {#each atts as att (att.id)}
       {#if att.kind === "file"}
-        <button class="msg-file-card" type="button" on:click={() => openFilePreview(item, att, source)}>
-          <span class="msg-file-icon" aria-hidden="true"><Icon name="file" /></span>
-          <span class="msg-file-meta">
-            <span class="msg-file-name">{att.name || "파일"}</span>
-            <span class="msg-file-info">{att.size ? `${formatFileSize(att.size)} · ` : ""}열기</span>
-          </span>
-        </button>
+        <!-- A LIVE card has no persisted message the server could find yet, so
+             the link control appears once the turn is stored. -->
+        {#if source !== item.liveAttachments && canShareCard(item, att)}
+          <!-- One flex item: the card is itself a <button>, so the control is
+               a sibling, and the wrapper keeps the pair together on a wrap. -->
+          <div class="msg-file-share">
+            {@render fileCard(item, att, source)}
+            <button
+              class="msg-act"
+              type="button"
+              title="공유 링크"
+              aria-label={`공유 링크: ${att.name || "파일"}`}
+              on:click={() => openShareDialog(item, att)}
+            >
+              <Icon name="link" />
+            </button>
+          </div>
+        {:else}
+          {@render fileCard(item, att, source)}
+        {/if}
       {:else}
         <figure class="msg-image-item">
           <a class="msg-image-link" href={`/api/conversations/${encodeURIComponent(item.conversationId)}/images/${encodeURIComponent(att.id)}`} target="_blank" rel="noopener noreferrer">
@@ -2160,7 +2204,7 @@
          without it a canvas created while split is invisible until the user is
          back to one pane. -->
     {#if pane.filePreview}
-      <FilePreviewPanel {pane} />
+      <FilePreviewPanel {pane} onShare={(att) => openShareDialog(pane, att)} />
     {:else if pane.canvases?.length}
       <CanvasPanel {pane} />
     {/if}
@@ -2189,14 +2233,31 @@
       <PromptModal paneId={pane.id} />
     </section>
     {#if pane.filePreview}
-      <FilePreviewPanel {pane} />
+      <FilePreviewPanel {pane} onShare={(att) => openShareDialog(pane, att)} />
     {:else if pane.canvases?.length}
       <CanvasPanel {pane} />
     {/if}
   </div>
 {/if}
 
+{#if shareTarget}
+  <ShareLinkDialog
+    conversationId={shareTarget.conversationId}
+    attachment={shareTarget.attachment}
+    on:close={() => (shareTarget = null)}
+  />
+{/if}
+
 <style>
+  /* A deck card and its 공유 링크 control, kept together as ONE item of the
+     attachment strip. */
+  .msg-file-share {
+    display: flex;
+    align-items: center;
+    gap: var(--s-1);
+    min-width: 0;
+    max-width: 100%;
+  }
   /* Plan-mode plan card (ExitPlanMode). A distinct, collapsible card inside the
      assistant bubble that surfaces the proposed plan — shown live while the turn
      streams and persisted on the finished message (response.plan). */

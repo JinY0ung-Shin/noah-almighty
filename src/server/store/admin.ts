@@ -413,6 +413,9 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         this.db.prepare("DELETE FROM direct_messages WHERE sender_id = ? OR recipient_id = ?").run(id, id);
         this.db.prepare("DELETE FROM avatar_tasks WHERE owner_user_id = ?").run(id);
         this.db.prepare("DELETE FROM avatar_api_keys WHERE owner_user_id = ?").run(id);
+        // PPT share links this user CREATED, whatever thread they point into
+        // (the conversation sweep below covers the threads themselves).
+        this.db.prepare("DELETE FROM share_links WHERE owner_user_id = ?").run(id);
         // Delete conversations owned by or targeting this user (+ their messages).
         const convRows = this.db
           .prepare(
@@ -422,6 +425,9 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         const delMsgs = this.db.prepare("DELETE FROM messages WHERE conversation_id = ?");
         for (const c of convRows) {
           this.deleteCanvasArtifactsForConversation(c.id);
+          // Both directions: this user's own threads AND other people's
+          // threads with this user's avatar (a colleague's links die with it).
+          this.deleteShareLinksForConversation(c.id);
           delMsgs.run(c.id);
         }
         this.db

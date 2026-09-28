@@ -147,6 +147,18 @@ export function apiError(res: Response, status: number, message: string): void {
 }
 
 /**
+ * `Content-Disposition` for a DOWNLOAD (never inline) with a possibly
+ * non-ASCII name: a quoted ASCII `filename` fallback plus the RFC 5987
+ * `filename*`. Shared by the owner's generated-file route and the share-link
+ * download so the two can't drift. `fallback` stands in when the name has no
+ * printable ASCII at all.
+ */
+export function attachmentContentDisposition(downloadName: string, fallback: string): string {
+  const asciiFallback = downloadName.replace(/[^ -~]+/g, "_").replace(/"/g, "'") || fallback;
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`;
+}
+
+/**
  * The "what this avatar can actually do" block shared by `/api/me/intro/generate`
  * and `/api/me/hashtags/generate` — both ground the model in the avatar's skills,
  * connected plugins, and (optionally) reference persona. Agent-facing English.

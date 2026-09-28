@@ -49,6 +49,14 @@ export interface ClientState {
   /** Bot selected in 봇 오피스 (`personal_agents.id`); "" = none picked yet. */
   botsAgentId: string;
   /**
+   * Token of the share link the share view shows (`#/share/<token>`); "" when
+   * none. It lives here, not only in the hash, because currentRoute() rebuilds
+   * the hash from state on every syncHash — without it the link would be lost.
+   */
+  shareToken: string;
+  /** File name of the deck the share view shows, for the tab title; "" until it loads. */
+  shareTitle: string;
+  /**
    * Delegated bot tasks across ALL of the owner's bots, newest first. Fed by
    * 봇 오피스's poll AND by the run stream's `task` frames, so the roster's
    * status dots stay right even while the owner is reading another bot's thread.
@@ -120,6 +128,8 @@ export const appState = writable<ClientState>({
   adminTab: "overview",
   brainSource: "personal",
   botsAgentId: "",
+  shareToken: "",
+  shareTitle: "",
   botTasks: [],
   botTaskUnseen: { total: 0, agents: {} },
   avatars: [],
@@ -271,6 +281,10 @@ export function setDocumentTitle(): void {
     skills: "스킬 배우기",
     settings: "내 아바타",
     admin: "관리자",
+    // From state, not set by the view: this subscriber rewrites the title on
+    // EVERY store emission (the knowledge poll included), so a title the view
+    // wrote to document.title directly would be gone within a minute.
+    share: state.shareTitle || "공유된 PPT",
   };
   document.title = `${titles[state.view] || "Noah Almighty"} · Noah Almighty`;
 }

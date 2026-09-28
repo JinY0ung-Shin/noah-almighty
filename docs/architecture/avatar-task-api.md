@@ -176,7 +176,10 @@ commits). What the flag changes:
 - **`mcp__personal_agent__create_agent` is NOT registered** on an API run: `!request.externalTaskApi`
   joins `!request.headless` in runPlan's `personalAgentCreateActive`. That gate also governs
   `PERSONAL_AGENT_OWNER_TOOL_NAMES`, so **`delegate_to_bot` goes with it** — an outside instruction
-  may not stand up a chat contact or hand work to one unattended.
+  may not stand up a chat contact or hand work to one unattended. **`create_share_link` is withheld the
+  same way** (`!request.externalTaskApi` in runPlan's `shareLinkToolActive`, and the chat route never
+  supplies `onShareLink` when `ctx.externalTaskId` is set): a bearer link to a deck is made only when the
+  owner asks in a chat they are having ([`share-links.md`](share-links.md)).
 - **The owner identity sentence branches too**: an API turn is told the conversation belongs to the
   owner but nobody is typing in it right now, instead of "the person you are talking to".
 - **Browser caveat on both surfaces**: `browserActive` cannot tell an API turn from an interactive one

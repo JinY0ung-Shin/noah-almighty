@@ -1,5 +1,6 @@
 <script lang="ts">
   import SettingsAvatarApiKeys from "./SettingsAvatarApiKeys.svelte";
+  import SettingsShareLinks from "./SettingsShareLinks.svelte";
   import Icon from "./Icon.svelte";
   import BrowserBridgeGuideModal from "./BrowserBridgeGuideModal.svelte";
   import RevealableInput from "./RevealableInput.svelte";
@@ -753,6 +754,7 @@
 </script>
 
 <SettingsAvatarApiKeys active={active && Boolean(user)} />
+<SettingsShareLinks active={active && Boolean(user)} />
 
 {#if active && user}
   <section class="settings-card">

@@ -35,6 +35,8 @@ import type {
   BrowserStorageEntry,
   BrowserTab,
   DeckSidecarFact,
+  ShareLinkRequest,
+  ShareLinkResult,
 } from "../agent/events.js";
 import {
   formatSubmission,
@@ -72,6 +74,20 @@ import { visionForModel } from "../modelVisionPolicy.js";
 import { isPreviewableExtension, renderDocumentPreviews } from "../deckRender.js";
 import { loadConverterPreviews } from "../deckPreview.js";
 import {
+  createOrReuseShareLink,
+  otherActiveShareLinks,
+  pickShareLinkCard,
+  resolveShareableDeck,
+  SHARE_LINK_CAP_ERROR,
+  SHARE_LINK_UNAVAILABLE_ERROR,
+  SHARE_LINK_UNSHOWABLE_ERROR,
+  SHARE_LINK_UNWATCHED_ERROR,
+} from "../shareLinks.js";
+import {
+  DEFAULT_SHARE_LINK_EXPIRY_DAYS,
+  isShareLinkExpiryDays,
+} from "../../shared/shareLinks.js";
+import {
   deleteChatFileAttachments,
   deleteConversationFiles,
   publishBrowserScreenshot,
@@ -83,6 +99,7 @@ import {
   SHAREABLE_EXTENSIONS,
   MAX_CHAT_FILE_BYTES,
   sanitizeDownloadName,
+  withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
 import {
@@ -139,6 +156,7 @@ import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { workspaceDirFor } from "../workspace.js";
 import {
   apiError,
+  attachmentContentDisposition,
   isSafePathId,
   requestOrigin,
   resolveAvatarSkillSources,
@@ -943,6 +961,25 @@ export async function executeChatTurn(
     !externalAgent &&
     !groupAgentHit &&
     (viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id));
+  /**
+   * `onShareLink` (the avatar's create_share_link) is supplied ONLY on an
+   * interactive turn of the owner's OWN avatar: never a bot turn (queued and
+   * routine bot turns look interactive at the request level), a group-agent
+   * member thread (shared only via the group second brain), a colleague's
+   * thread, an external avatar, a turn an external system submitted through
+   * the task API, or any unattended (deadlined) run. A link is a bearer URL
+   * every signed-in user can open, so the owner must be the one asking —
+   * runPlan's registration gate is the second lock, the callback's own
+   * re-check the third.
+   */
+  const shareLinkTurn =
+    viewerIsOwner &&
+    ownerUserId === avatar.id &&
+    !groupAgentHit &&
+    !personalAgentHit &&
+    !externalAgent &&
+    !ctx.externalTaskId &&
+    ctx.unattendedDeadlineMs === undefined;
   let activeRepoCwd: string | null = null;
   let activeRepoName: string | null = null;
   let releaseActiveRepoLock: (() => void) | null = null;
@@ -1003,6 +1040,11 @@ export async function executeChatTurn(
       if (last?.role === "assistant") {
         deleteChatImageAttachments(config, conversationId, last.attachments);
         deleteChatFileAttachments(config, conversationId, last.attachments);
+        // The replaced turn's decks are gone from disk — so are their links.
+        store.deleteShareLinksForFiles(
+          conversationId,
+          (last.attachments ?? []).filter((att) => att.kind === "file").map((att) => att.id),
+        );
       }
     }
     const imageTurn =
@@ -1187,6 +1229,12 @@ export async function executeChatTurn(
     // attachments was already persisted, so wake-up and cancel/error paths
     // only carry their own tail.
     let turnFinalized = false;
+    // The owner is PRESENT in the background phase while a message they typed
+    // drives the segment: set when a steer is DELIVERED after the visible turn
+    // was finalized, cleared at every later result boundary, never set by a
+    // pure wake-up turn (a task settled). onShareLink keys on it — a bearer
+    // link is made only for an owner who is there to receive it.
+    let ownerSteeredSinceBoundary = false;
     let persistedTextOffset = 0;
     let persistedThinkingOffset = 0;
     let persistedAttachmentsOffset = 0;
@@ -1261,6 +1309,7 @@ export async function executeChatTurn(
         emitRunEvent(runId, "steer", { steer: publicSteer(record) });
         return;
       }
+      if (turnFinalized) ownerSteeredSinceBoundary = true;
       // The conversation may have been deleted mid-run; skip the insert (the FK
       // would reject it) and report the frame without a message, exactly like
       // the other persist sites here. The channel SWALLOWS a listener throw, so
@@ -1904,6 +1953,9 @@ export async function executeChatTurn(
             }
             // Wake-up turn finished → its own assistant message. Skip pure
             // bookkeeping boundaries (no text, no new attachments).
+            // Whatever drove that segment is over: the next one is the owner's
+            // only once another message of theirs is delivered.
+            ownerSteeredSinceBoundary = false;
             const text = segment.text.trim();
             const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
             const attachmentsTail = shownAttachments.slice(persistedAttachmentsOffset);
@@ -2513,12 +2565,16 @@ export async function executeChatTurn(
           onFile: async (requestData) => {
             // Separate per-turn caps: visible images guard the bubble from
             // spam; hidden publishes (canvas slide embeds) only cost disk,
-            // so a whole deck fits in one turn.
+            // so a whole deck fits in one turn. Only UNSTAMPED hidden images
+            // spend the hidden budget: share_file's slide renders (and a
+            // screenshot card's copy) carry their card's `parentId` and are
+            // bounded per card already, so delivering a deck must not eat
+            // the review canvas's renders in the same turn.
             const visibleImages = shownAttachments.filter(
               (a) => a.kind === "image" && !a.hidden,
             ).length;
             const hiddenImages = shownAttachments.filter(
-              (a) => a.kind === "image" && a.hidden,
+              (a) => a.kind === "image" && a.hidden && !a.parentId,
             ).length;
             if (requestData.hidden && hiddenImages >= MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE) {
               return {
@@ -2715,6 +2771,97 @@ export async function executeChatTurn(
               ...(deckSidecar ? { deckSidecar } : {}),
             };
           },
+          // create_share_link: a login-required link to one PPTX card, made
+          // (or reused) for the owner who asked for it in THIS turn. Absent =
+          // runPlan never registers the tool (see shareLinkTurn above).
+          ...(shareLinkTurn
+            ? {
+                onShareLink: async (requestData: ShareLinkRequest): Promise<ShareLinkResult> => {
+                  // shareLinkTurn is fixed for the run; re-asserted anyway so
+                  // a refactor that wires this unconditionally fails closed.
+                  if (!shareLinkTurn) {
+                    return { ok: false, error: SHARE_LINK_UNAVAILABLE_ERROR };
+                  }
+                  if (store.conversationOwner(conversationId) !== ownerUserId) {
+                    return {
+                      ok: false,
+                      error: "The conversation no longer exists, so no share link can be created.",
+                    };
+                  }
+                  // Background / wake-up segment: the visible turn already
+                  // ended and the owner may have closed the tab — unless a
+                  // message they typed in this phase drives the segment.
+                  if (turnFinalized && !ownerSteeredSinceBoundary) {
+                    return { ok: false, error: SHARE_LINK_UNWATCHED_ERROR };
+                  }
+                  const expiresInDays = requestData.expiresInDays ?? DEFAULT_SHARE_LINK_EXPIRY_DAYS;
+                  if (!isShareLinkExpiryDays(expiresInDays)) {
+                    return { ok: false, error: "expiresInDays must be 1, 7 or 30." };
+                  }
+                  // This turn's cards first (they persist only at a turn
+                  // boundary), then the persisted messages, newest first.
+                  const picked = pickShareLinkCard(
+                    [shownAttachments, ...store.listMessageAttachments(ownerUserId, conversationId)],
+                    requestData.attachmentId,
+                  );
+                  if ("error" in picked) {
+                    return { ok: false, error: picked.error };
+                  }
+                  if (!resolveShareableDeck(config, conversationId, picked.card.id)) {
+                    return {
+                      ok: false,
+                      error: `The file behind "${picked.card.name ?? picked.card.id}" is no longer available; deliver the deck again with share_file, then create the link.`,
+                    };
+                  }
+                  const outcome = createOrReuseShareLink(
+                    { config, store },
+                    {
+                      ownerUserId,
+                      conversationId,
+                      card: picked.card,
+                      attachments: picked.attachments,
+                      expiresInDays,
+                      origin: ctx.appOrigin ?? null,
+                    },
+                  );
+                  if (outcome.kind === "cap") {
+                    return { ok: false, error: SHARE_LINK_CAP_ERROR };
+                  }
+                  if (outcome.kind === "unavailable") {
+                    return { ok: false, error: SHARE_LINK_UNAVAILABLE_ERROR };
+                  }
+                  const { link } = outcome;
+                  if (!link.url) {
+                    return { ok: false, error: SHARE_LINK_UNSHOWABLE_ERROR };
+                  }
+                  const created = outcome.kind === "created";
+                  if (created) {
+                    audit({
+                      action: "share_link_create",
+                      detail: `link ${link.id} "${link.fileName}" ${expiresInDays}d via avatar`,
+                    });
+                  }
+                  logger.info(
+                    { conversationId, linkId: link.id, created },
+                    "share link via avatar",
+                  );
+                  // A link never follows a rebuild (every share_file is a new
+                  // card), so the conversation's OTHER unexpired links keep
+                  // serving the files they were made for — named on every ok
+                  // result, created or reused, so the avatar can tell the user.
+                  const otherActiveLinks = otherActiveShareLinks(store, ownerUserId, conversationId, picked.card.id);
+                  return {
+                    ok: true,
+                    url: link.url,
+                    expiresAt: link.expiresAt,
+                    created,
+                    fileName: link.fileName,
+                    slideCount: link.slideCount,
+                    ...(otherActiveLinks.length > 0 ? { otherActiveLinks } : {}),
+                  };
+                },
+              }
+            : {}),
         },
         abortController,
       );
@@ -3442,7 +3589,9 @@ export function createChatRouter({
   // Serve a generated chat file (agent-shared document) as a DOWNLOAD. Same
   // owner-scoped gate as the image route; `Content-Disposition: attachment`
   // (never inline) so a shared document can't render in-origin. The optional
-  // `name` query only picks the save-dialog filename (owner-supplied, sanitized).
+  // `name` query only picks the save-dialog filename (owner-supplied, sanitized)
+  // and always ends in the stored file's REAL extension — a crafted link's
+  // `?name=x.html` must not make the owner save agent-written bytes as HTML.
   router.get(
     "/api/conversations/:conversationId/files/:fileId",
     requireAuth(store),
@@ -3460,12 +3609,11 @@ export function createChatRouter({
       const requestedName = sanitizeDownloadName(
         typeof req.query.name === "string" ? req.query.name : undefined,
       );
-      const downloadName = requestedName ?? `file.${resolved.ext}`;
-      const asciiFallback = downloadName.replace(/[^ -~]+/g, "_").replace(/"/g, "'") || `file.${resolved.ext}`;
+      const downloadName = withDownloadExtension(requestedName ?? "file", resolved.ext);
       res.type(resolved.mediaType);
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
+        attachmentContentDisposition(downloadName, `file.${resolved.ext}`),
       );
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cache-Control", "private, max-age=31536000, immutable");

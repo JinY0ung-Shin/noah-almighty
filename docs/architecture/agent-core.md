@@ -209,9 +209,31 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
 ## Adding / changing an MCP tool server
 - **One template per `*Tools.ts`:** `buildXTools` (handler-level owner/elevated guards) + `buildXServer`
   + a `SERVER_NAME`/`TOOL_NAMES` const pair.
-- **A new tool means updating BOTH `mcpServers` AND `allowedTools` in `claudeAgent.ts`** — two hand-synced
-  lists. Add to one but not the other and the model either sees a tool it can't call or can call a tool it
-  can't see. (Making this data-driven is deferred, T3.5.)
+- **A new tool means updating BOTH `mcpServers` AND `allowedTools` in `runPlan.ts`** (`buildAgentRunPlan`;
+  both lists moved there with the run-plan split) — two hand-synced lists. Add to one but not the other and
+  the model either sees a tool it can't call or can call a tool it can't see. (Making this data-driven is
+  deferred, T3.5.) A conditionally built tool on an EXISTING server (`create_repo`, `create_share_link`)
+  gets its own `allowedTools` entry keyed on the SAME boolean as its build.
+- **`create_share_link` gate (`mcp__file_output__create_share_link`).** It lives on the `file_output` server
+  but registers only when runPlan's `shareLinkToolActive` holds: `fileOutputActive && events.onShareLink &&
+  ownerToolAccess && !groupAgentRun && !personalAgentRun && !consultationRun && !request.headless &&
+  !request.externalTaskApi`, computed right after `fileOutputActive`, before `buildSystemServer`. That one
+  boolean drives the tool build (`shareLinkEnabled`/`createShareLink`/`signupOpen` on
+  `FileOutputToolsContext`), its own `allowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately
+  NOT in `FILE_OUTPUT_TOOL_NAMES`), `SystemToolsContext.shareLinksEnabled` and `AgentRequest.shareLinksEnabled`
+  (stamped in `runClaudeAgent`). The chat route supplies `onShareLink` only on interactive own-avatar owner
+  turns and re-checks per call (once the visible turn is finalized it refuses unless the owner steered the
+  current segment — a pure wake-up turn still refuses); the handler refuses without the callback. Prompt: one
+  short tool line when enabled (the flag-maximal config in `tests/system-manual.test.ts` is budgeted under
+  18,000 characters; always-on and data-driven owner sections are not budgeted, so the cap is a tripwire, not a
+  bound on real owner prompts), else — on any run with file output — the 공유 링크-button redirect (group-agent
+  runs: no button, their threads cannot be link-shared). describe_system mirrors it with an owner line
+  (available + facts + live sign-up caveat, or not available + why), a group-agent line and a non-owner line.
+  The one-link rule is per delivered CARD on all three agent surfaces (tool description, describe_system, the
+  `files-canvas` manual topic) — the store's key: a rebuild re-delivered with share_file is a NEW card, so an
+  earlier link keeps serving the earlier file — and the result names the conversation's other active links
+  (`ShareLinkResult.otherActiveLinks`: names + KST expiry, never their URLs) so the avatar tells the user.
+  Mechanics → [`share-links.md`](share-links.md).
 - **Guard convention differs per file BY DESIGN:** groupRepo/system/sshIdentity/knowledge-write gate on
   `ctx.viewerIsOwner` (= `ownerToolAccess` = owner chat OR owner routine); `repoTools` (personal knowledge
   repo) splits READ (`list_files`/`read_file`, gated on `ctx.elevated` = owner OR trusted same-group

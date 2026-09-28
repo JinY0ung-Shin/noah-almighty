@@ -85,6 +85,22 @@ These are the invariants the project is built around. New work should reinforce 
   update heals them. The
   `mcp__skill_exchange__*` tools are owner-only end
   to end. Mechanics → `docs/architecture/avatar-collab.md`.
+- **A PPT share link is a human-initiated EXPORT of ONE deck card — never reach, trust or conversation access.**
+  Login-required (any signed-in, non-suspended user holding it), expiring (1/7/30 d, fixed at creation),
+  revocable, PPTX-only: the .pptx card plus the renders STAMPED with its id (`shareSlideAttachments` — strict
+  `parentId`, the ONLY selector links use; unstamped hidden images never leave the thread). Deliberately NOT
+  group-bounded, yet it never touches `isTrustedFor`, visibility or tool access, and group-agent member threads
+  cannot be link-shared (phase 1). Only the SHA-256 of a per-row-salted HMAC token is stored; the token rides the
+  URL FRAGMENT and a POST body (never a path), bytes flow through short-lived tickets MACed over the viewer AND
+  that salt (a leaked SESSION_SECRET plus a logged link id mints neither), the served name always ends in .pptx, and
+  every recipient call re-runs the full validity — every invalid state is ONE 404, never a 401 (the client logs a
+  signed-in user out on any 401). The avatar mints one (`mcp__file_output__create_share_link`) only on an explicit
+  user request in an interactive own-avatar chat, behind three locks: the chat route supplies `onShareLink` only on
+  those turns, runPlan's `shareLinkToolActive` registers the tool (gated on BOTH `headless` and `externalTaskApi`,
+  never bots/group agents/consultations), and the callback re-checks per call; both metacognition surfaces read
+  `shareLinksEnabled` and send every other run to the card's 공유 링크 button. **A new conversation-deleting path
+  cascades `deleteShareLinksForConversation` next to the canvas cascade.** Mechanics →
+  `docs/architecture/share-links.md`.
 - **A personal API key IS the owner, and an API-submitted turn is MACHINE-authored.** The external
   task API (`POST /api/v1/avatar/tasks`, Bearer `noah_…` key, SHA-256 hash stored, ≤10 per user,
   issued under 권한·연결) runs the owner's MAIN avatar as a FULL owner run through `executeChatTurn` —

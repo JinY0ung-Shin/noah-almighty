@@ -113,4 +113,19 @@ describe("panelSlides", () => {
     const legacy = slide("old");
     expect(panelSlides([card, legacy], card)).toEqual([legacy]);
   });
+
+  // The pre-share-links rule took stamped AND unstamped hidden images together.
+  // The deck-review loop (SKILL §11) publishes its canvas renders as unstamped
+  // hidden images in the SAME turn as the deck, so the old rule showed every
+  // slide twice. Unstamped images count only when the card has no stamped ones.
+  it("never mixes unstamped canvas renders into a card that has stamped slides", () => {
+    const deck = att("deck");
+    const stamped = [slide("d1", "deck"), slide("d2", "deck")];
+    const canvasRenders = [slide("r1"), slide("r2")];
+    expect(panelSlides([deck, ...stamped, ...canvasRenders], deck)).toEqual(stamped);
+    // A second card in that message with no stamped slides of its own still
+    // falls back to the legacy unstamped set.
+    const other = att("other");
+    expect(panelSlides([deck, ...stamped, other, ...canvasRenders], other)).toEqual(canvasRenders);
+  });
 });

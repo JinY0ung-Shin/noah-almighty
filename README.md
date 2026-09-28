@@ -45,6 +45,14 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   card whose side panel shows the converter's exact slide renders. Existing decks and user
   templates are edited in place with python-pptx and previewed approximately by LibreOffice. Mechanics:
   [`docs/architecture/pptx-converter.md`](docs/architecture/pptx-converter.md).
+- **PPT share links (공유 링크)**: the owner of a conversation can turn a generated deck's download card
+  into a login-required link — with **공유 링크** next to the card, or by asking their own avatar for a
+  link in a chat with it. Anyone signed in to Noah who has the link can page through the slide renders,
+  present them full screen and download the `.pptx` (speaker notes included) until the link expires:
+  1, 7 (default) or 30 days, fixed at creation. Links are revocable any time under **내 아바타 → 권한·연결
+  → 공유 링크**; group-agent conversations cannot be link-shared. A link exports one file — it grants no
+  access to the conversation or the avatar. Mechanics:
+  [`docs/architecture/share-links.md`](docs/architecture/share-links.md).
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,
   e.g. Confluence attachments) and hand them over as download cards; the chat renders them as
   interactive diagrams (zoom/pan/pages) in the file side panel, fully offline via a vendored

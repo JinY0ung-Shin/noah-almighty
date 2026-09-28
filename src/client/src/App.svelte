@@ -40,6 +40,7 @@
     skills: () => import("./views/SkillsView.svelte"),
     settings: () => import("./views/SettingsView.svelte"),
     admin: () => import("./views/AdminView.svelte"),
+    share: () => import("./views/ShareView.svelte"),
   };
   const viewCache = new Map<ViewName, any>();
   const viewLabels: Record<ViewName, string> = {
@@ -53,6 +54,7 @@
     skills: "스킬 배우기",
     settings: "내 아바타",
     admin: "관리자",
+    share: "공유된 PPT",
   };
 
   async function loadView(view: ViewName): Promise<void> {
@@ -95,6 +97,13 @@
     }
   }
 
+  // A share link is often a colleague's FIRST contact with Noah. The welcome
+  // and what's-new modals would open over the deck they were sent (and the
+  // welcome's 시작하기 routes to 탐색), so while the app STARTS on the share view
+  // both are held back. Nothing is marked seen server-side, so they surface on
+  // the first move to another view (or the next load).
+  let introDeferred = false;
+
   // Full post-login initialization: restore route, load the inbox (badges +
   // pending requests), start the knowledge/notification watcher, and show
   // first-run onboarding. Shared by boot() and post-login (Shell remount).
@@ -103,6 +112,14 @@
     if (!location.hash) syncHash(true);
     void loadInboxData();
     startKnowledgeWatch();
+    if (readState().view === "share") {
+      introDeferred = true;
+      return;
+    }
+    showIntro(user);
+  }
+
+  function showIntro(user: User) {
     // First-run welcome shows only while the account has never been onboarded
     // (server-persisted onboardedAt). Set once on signup, so a returning login
     // — even on a new browser — never re-fires it.
@@ -136,6 +153,7 @@
 
   function handleSessionExpired() {
     stopKnowledgeWatch();
+    introDeferred = false;
     updateState((state) => {
       state.user = null;
       state.currentAvatar = null;
@@ -152,7 +170,11 @@
     showOnboarding = false;
     showWhatsNew = false;
     notify("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
-    history.replaceState(null, "", location.pathname);
+    // Deep links are dropped so the next login starts clean — except a share
+    // link: any signed-in user may open it, and keeping it lets the login
+    // screen say why it appeared and the deck reopen right after.
+    const keep = location.hash.startsWith("#/share/") ? location.hash : "";
+    history.replaceState(null, "", `${location.pathname}${keep}`);
   }
 
   // When a user logs in from the auth screen (AuthView sets state.user), run the
@@ -162,7 +184,14 @@
     initializedFor = $appState.user.id;
     enterApp($appState.user);
   }
-  $: if (!$appState.user) initializedFor = null;
+  $: if (!$appState.user) {
+    initializedFor = null;
+    introDeferred = false;
+  }
+  $: if (introDeferred && $appState.user && $appState.view !== "share") {
+    introDeferred = false;
+    showIntro($appState.user);
+  }
 
   // 설정 → 시작 안내 re-opens the welcome modal on demand. One-shot flag, drained
   // here the way SettingsAccessTab drains browserGuideRequested — but with no view

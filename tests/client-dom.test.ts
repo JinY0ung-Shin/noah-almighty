@@ -356,7 +356,9 @@ describe("dom.copyText", () => {
     await expect(copyText("x")).resolves.toBeUndefined();
   });
 
-  it("clears the title on revert when the button had no original aria-label", async () => {
+  it("restores a button named only by its text EXACTLY: no leftover aria-label or title", async () => {
+    // e.g. the share dialog's 복사 before it got its own name: a leftover
+    // aria-label="복사됨" renamed the button for as long as it lived.
     vi.useFakeTimers();
     defineClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
     const btn = document.createElement("button"); // no aria-label / title
@@ -364,9 +366,87 @@ describe("dom.copyText", () => {
     document.body.append(btn);
 
     await copyText("x", btn);
+    expect(btn.getAttribute("aria-label")).toBe("복사됨");
     vi.advanceTimersByTime(1200);
-    expect(btn.title).toBe(""); // label was null → title reset to ""
+    expect(btn.hasAttribute("aria-label")).toBe(false);
+    expect(btn.hasAttribute("title")).toBe(false);
     expect(btn.innerHTML).toBe("COPY");
+
+    // The next copy saves the RESTORED state, not an earlier flash.
+    await copyText("x", btn);
+    vi.advanceTimersByTime(1200);
+    expect(btn.hasAttribute("aria-label")).toBe(false);
+    expect(btn.hasAttribute("title")).toBe(false);
+  });
+
+  it("keeps the button's own content and name through a second copy inside the flash window", async () => {
+    vi.useFakeTimers();
+    defineClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+    const btn = document.createElement("button");
+    btn.setAttribute("aria-label", "공유 링크 복사");
+    btn.innerHTML = "복사";
+    document.body.append(btn);
+
+    await copyText("x", btn);
+    vi.advanceTimersByTime(200);
+    // Second click while the check icon and "복사됨" are still showing.
+    await copyText("x", btn);
+    expect(btn.classList.contains("copied")).toBe(true);
+    // The window restarts from the second copy.
+    vi.advanceTimersByTime(1100);
+    expect(btn.classList.contains("copied")).toBe(true);
+    vi.advanceTimersByTime(100);
+    expect(btn.classList.contains("copied")).toBe(false);
+    expect(btn.innerHTML).toBe("복사"); // not the check icon, forever
+    expect(btn.getAttribute("aria-label")).toBe("공유 링크 복사");
+    expect(btn.hasAttribute("title")).toBe(false);
+  });
+
+  it("gives the button its name back after a failure flash", async () => {
+    vi.useFakeTimers();
+    defineClipboard({ writeText: vi.fn().mockRejectedValue(new Error("denied")) });
+    const named = document.createElement("button");
+    named.setAttribute("aria-label", "복사");
+    named.title = "복사";
+    named.innerHTML = "COPY";
+    const bare = document.createElement("button");
+    bare.innerHTML = "COPY";
+    document.body.append(named, bare);
+
+    await copyText("x", named);
+    await copyText("x", bare);
+    expect(named.classList.contains("copy-failed")).toBe(true);
+    expect(bare.getAttribute("title")).toBe("복사 실패");
+    expect(named.innerHTML).toBe("COPY"); // a failure never shows the check icon
+    vi.advanceTimersByTime(1200);
+    expect(named.classList.contains("copy-failed")).toBe(false);
+    expect(named.getAttribute("aria-label")).toBe("복사");
+    expect(named.getAttribute("title")).toBe("복사");
+    expect(bare.classList.contains("copy-failed")).toBe(false);
+    expect(bare.hasAttribute("aria-label")).toBe(false);
+    expect(bare.hasAttribute("title")).toBe(false);
+  });
+
+  it("takes the check icon back when a failure follows a success still on screen", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("denied"));
+    defineClipboard({ writeText });
+    const btn = document.createElement("button");
+    btn.setAttribute("aria-label", "복사");
+    btn.innerHTML = "COPY";
+    document.body.append(btn);
+
+    await copyText("x", btn);
+    expect(btn.innerHTML).toContain("<svg");
+    await copyText("x", btn);
+    expect(btn.classList.contains("copied")).toBe(false);
+    expect(btn.classList.contains("copy-failed")).toBe(true);
+    expect(btn.getAttribute("aria-label")).toBe("복사 실패");
+    expect(btn.innerHTML).toBe("COPY");
+    vi.advanceTimersByTime(1200);
+    expect(btn.classList.contains("copy-failed")).toBe(false);
+    expect(btn.getAttribute("aria-label")).toBe("복사");
+    expect(btn.hasAttribute("title")).toBe(false);
   });
 });
 

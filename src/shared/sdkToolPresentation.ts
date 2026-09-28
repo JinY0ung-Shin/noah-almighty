@@ -1,3 +1,5 @@
+import { DEFAULT_SHARE_LINK_EXPIRY_DAYS } from "./shareLinks.js";
+
 export const SDK_SUBAGENT_TOOLS = ["Task", "Agent"] as const;
 
 export const SDK_UI_HANDLED_TOOLS = ["AskUserQuestion"] as const;
@@ -198,6 +200,7 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__confluence__list_attachments: "Confluence 첨부 조회",
   mcp__confluence__list_spaces: "Confluence 스페이스 조회",
   mcp__confluence__search: "Confluence 검색",
+  mcp__file_output__create_share_link: "공유 링크 만들기",
   mcp__file_output__share_file: "파일 공유",
   mcp__file_output__show_file: "이미지 표시",
   mcp__knowledge__pending_requests: "대기 요청 확인",
@@ -222,4 +225,26 @@ export function sdkToolLabel(name: string | undefined): string | undefined {
   // so match the server non-greedily and take the tool segment.
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   return (mcp ? mcp[2] : name).replace(/_/g, " ");
+}
+
+/**
+ * The activity-row input summary (user-facing, Korean) for Noah tools whose
+ * generic summary — the first string argument — would mislead. Kept here next
+ * to the labels for the same reason: the server status line
+ * (`summarizeToolInput`) and the client activity row (`summarizeInput`) must
+ * agree about one tool. Undefined → the caller's generic summary applies.
+ *
+ * - `create_share_link`: its only string argument is an opaque attachment id,
+ *   while what the user should see is how long the link will live — "7일"
+ *   (the default when the model omits the expiry).
+ */
+export function mcpToolInputSummary(name: string | undefined, input: unknown): string | undefined {
+  if (name === "mcp__file_output__create_share_link") {
+    const days =
+      typeof input === "object" && input !== null
+        ? (input as Record<string, unknown>).expiresInDays
+        : undefined;
+    return `${typeof days === "number" && Number.isInteger(days) && days > 0 ? days : DEFAULT_SHARE_LINK_EXPIRY_DAYS}일`;
+  }
+  return undefined;
 }

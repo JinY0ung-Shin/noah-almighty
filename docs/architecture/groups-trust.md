@@ -91,7 +91,11 @@
   detail/skills/models/chat): independent of `avatar_sharing` (a knowledge-only group still reaches its
   agent), no sysadmin bypass, fail-closed 403/404 shapes; a member-visible DISABLED agent gets a
   dedicated 403. Each member's threads are PRIVATE (`owner_user_id` = viewer) — the team shares via the
-  SECOND BRAIN, never the conversation stream.
+  SECOND BRAIN, never the conversation stream. For the same reason **group-agent threads cannot be
+  link-shared** (PPT share links, phase 1): the share route 404s them, `shareableThread` fails any row
+  that points into one, the client shows no 공유 링크 control in a group-agent pane, and
+  `create_share_link` never registers on a group-agent run ([`share-links.md`](share-links.md)). A share
+  link is an export, never a trust source — it does not touch `isTrustedFor`.
 - **Run kind carries capability** (`AgentRequest.groupAgent {groupId, agentId, groupName, viewerRole,
   captureAllowed}`): `deriveAgentToolAccess` returns the pinned class (ownerToolAccess false, elevated
   built-ins, hex-ssh `colleague`); `claudeAgent` forces every personal-scoped family off

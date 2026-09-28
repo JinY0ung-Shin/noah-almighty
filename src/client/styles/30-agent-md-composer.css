@@ -27,6 +27,9 @@
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+  /* An <a> dressed as a button (the file-preview and share-viewer 다운로드)
+     must not keep the UA link underline — same look whatever the element. */
+  text-decoration: none;
 }
 .btn:disabled {
   opacity: var(--disabled-opacity);

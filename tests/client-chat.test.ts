@@ -305,6 +305,8 @@ describe("humanTool / summarizeInput / PLUGIN_STATUS_LABELS", () => {
     expect(humanTool(undefined)).toBe("도구");
     expect(humanTool("Bash")).toBe("명령 실행");
     expect(humanTool("mcp__knowledge__request_info")).toBe("정보 요청 기록");
+    // Korean, never the English fallback ("create share link").
+    expect(humanTool("mcp__file_output__create_share_link")).toBe("공유 링크 만들기");
     expect(humanTool("mcp__custom__do_a_thing")).toBe("do a thing");
     expect(humanTool("Raw_Name")).toBe("Raw Name");
   });
@@ -1565,6 +1567,20 @@ describe("stream events applied to a pane", () => {
     ]);
     expect(pane(id).liveTools).toHaveLength(1);
     expect(pane(id).liveTools[0]).toMatchObject({ label: "명령 실행", detail: "ls -la", status: "running" });
+  });
+
+  it("shows a share link's expiry, never its opaque attachment id", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      // The server's summary wins when present…
+      ["tool", { toolUseId: "s1", name: "mcp__file_output__create_share_link", inputSummary: "30일" }],
+      // …and a frame without one still falls back to the shared rule.
+      ["tool", { toolUseId: "s2", name: "mcp__file_output__create_share_link", input: { attachmentId: "3f2a-uuid" } }],
+    ]);
+    expect(pane(id).liveTools.map((t) => [t.label, t.detail])).toEqual([
+      ["공유 링크 만들기", "30일"],
+      ["공유 링크 만들기", "7일"],
+    ]);
   });
 
   it("a generic status label does not overwrite a sticky activity label", async () => {

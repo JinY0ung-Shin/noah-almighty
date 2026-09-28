@@ -713,6 +713,36 @@ export class StoreBase {
         PRIMARY KEY (group_id, owner_user_id, skill_name)
       );
       CREATE INDEX IF NOT EXISTS idx_shared_skill_group_blocks_skill ON shared_skill_group_blocks(owner_user_id, skill_name);
+      -- PPT SHARE LINKS: a login-required, expiring, revocable link to ONE
+      -- generated .pptx download card (see src/shared/shareLinks.ts). A LIVE
+      -- reference, never a byte snapshot: every recipient call re-validates the
+      -- row against the conversation, the owner and the file on disk
+      -- (src/server/shareLinks.ts). Only the token's SHA-256 is stored — the
+      -- token itself is an HMAC under SESSION_SECRET of the id AND token_salt
+      -- (16 random bytes per row, never logged, never on the wire; viewer
+      -- tickets are MACed over it too), so the owner's list recomputes it
+      -- instead of decrypting anything, and the secret plus a logged link id
+      -- cannot mint a token or a ticket. slide_ids_json is the card's stamped
+      -- renders at creation (<= 30; [] = download-only). No FKs
+      -- (conversations.avatar_user_id precedent); the cascades are manual
+      -- (every conversation delete, deleteUser, regenerate). A brand-new table:
+      -- CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
+      CREATE TABLE IF NOT EXISTS share_links (
+        id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        slide_ids_json TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        token_salt TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        view_count INTEGER NOT NULL DEFAULT 0,
+        last_viewed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_share_links_owner ON share_links(owner_user_id);
+      CREATE INDEX IF NOT EXISTS idx_share_links_conversation ON share_links(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_group_agents_group ON group_agents(group_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
       CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
@@ -1321,6 +1351,8 @@ export interface StoreBase {
     opts?: { isRoutine?: boolean; externalEndpoint?: string },
   ): void;
   deleteCanvasArtifactsForConversation(conversationId: string): void;
+  /** Sibling of the canvas cascade at EVERY conversation-deleting site (store/shareLinks.ts). */
+  deleteShareLinksForConversation(conversationId: string): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(

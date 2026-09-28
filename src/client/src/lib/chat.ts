@@ -23,6 +23,7 @@ import {
   MCP_TOOL_LABELS,
   SDK_HIDDEN_ACTIVITY_TOOLS,
   SDK_TOOL_LABELS,
+  mcpToolInputSummary,
 } from "../../../shared/sdkToolPresentation";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../../../shared/mcpToolGroups";
 import {
@@ -1459,8 +1460,14 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       markTextBreak(paneId);
       ensureAgent(paneId, data.agentId || "main");
       const label = humanTool(data.name);
+      // The server's inputSummary is the source (summarizeToolInput applies the
+      // shared per-tool rule first); the shared rule is repeated here so a frame
+      // without it still never shows an opaque id (create_share_link → "7일").
       const detail =
-        data.inputSummary || summarizeInput(data.input) || undefined;
+        data.inputSummary ||
+        mcpToolInputSummary(data.name, data.input) ||
+        summarizeInput(data.input) ||
+        undefined;
       upsertTool(paneId, {
         id: data.toolUseId,
         agentId: data.agentId || "main",
@@ -2657,6 +2664,11 @@ function handleCanvas(paneId: string, data: any): void {
     if (idx >= 0) pane.canvases[idx] = entry;
     else pane.canvases.push(entry);
     pane.activeCanvasId = entry.id;
+    // A canvas that ASKS for input must be seen. The file preview owns the side
+    // slot while it is open, so an owner who clicked the new deck card would
+    // never see the next review round's form (the deck-review loop would stall
+    // silently). Clicking the card reopens the preview.
+    if (controls?.length) pane.filePreview = null;
   });
   // A blocking canvas parks the run on the USER's answer — say so instead of
   // leaving the last "실행 중: …" tool label implying avatar work.

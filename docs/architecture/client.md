@@ -162,6 +162,57 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   `GET /api/avatars` (`listPublishedAvatars`) includes the viewer's OWN avatar plus public + group-teammate
   avatars.
 
+## Share hash view (`#/share/<token>`) and the deck-card link controls
+Mechanics of the links themselves → [`share-links.md`](share-links.md).
+- **The first view only a link opens** (`views/ShareView.svelte`; not in the rail). `state.shareToken` holds
+  the token and `currentRoute()` writes it back — load-bearing like the bots branch, because every
+  run-stream `open` frame re-runs `syncHash(true)` and the URL would otherwise collapse to `#/share`. The
+  view reads `$appState.shareToken` IN a reactive statement (the legacy-mode compile-time dependency trap),
+  so a second link opened while it is mounted refetches. The tab title comes from `state.shareTitle`, since
+  `setDocumentTitle` rewrites the title on every store emission.
+- **The state comes from the HTTP STATUS, via `openShareLink` (`lib/shareLinks.ts`)**: only a 404 is a dead
+  link; a timeout, 5xx or 429 is 다시 시도 (never tell a recipient a live link expired). `lib/api.ts` errors
+  carry `ApiError.status` for exactly this. A token failing `SHARE_TOKEN_RE` never reaches fetch.
+- **Payload strings are the deck author's** — rendered as text only (no `{@html}`/markdown), and only
+  normalized same-origin `/api/share/…` paths become an `<img>` or the download (`isShareAssetUrl`).
+- **Viewer tickets live `SHARE_TICKET_TTL_MINUTES` (30)**: a viewer open ≥ 25 minutes re-opens the link
+  with `refresh: true` before presenting, downloading or retrying a render (a refresh is not a counted view).
+- **`SlidePresenter`** requests element fullscreen; the same markup is its fixed-overlay fallback. Leaving
+  fullscreen by ANY route (`fullscreenchange` with `fullscreenElement` null) ends present mode, because Esc
+  in fullscreen never reaches the page. Initial focus is the stage (tabindex -1), never 닫기, so the first
+  Space/Enter turns the page.
+- **First visit**: AuthView shows `공유받은 PPT를 보려면 Noah에 로그인하세요.` whenever the hash is
+  `#/share/…` — tracked on `hashchange`, since a link pasted into a tab already on the login screen is a
+  same-document navigation (no reload, no remount), and `state.view` cannot drive it (boot leaves it at
+  `explore` until `enterApp`);
+  `enterApp` holds onboarding and what's-new while the app STARTS on the share view (nothing is marked seen,
+  so they surface on the first view change); `handleSessionExpired` keeps a `#/share/` hash — and only that
+  one — so the deck reopens right after the next login.
+- **`ShareLinkDialog` never calls `confirmAction` or `notify`.** ChatView owns the ONE instance — the chat
+  card's link button and the file-preview panel's 공유 링크 (`FilePreviewPanel`'s `onShare` callback) both
+  open it there, because the panel unmounts whenever a canvas asking for input clears `pane.filePreview`
+  and would take an open dialog with it, mid-create included. It is a portaled Modal (mounted inside the
+  chat view, a fixed overlay would sit in that view's stacking contexts), and a portaled modal inerts
+  everything else under `<body>` — App's ConfirmationDialog and Toasts included, so either call would
+  mount inert and hidden underneath. Revoke confirms inline; errors render in the card. jsdom ignores
+  `inert`, so `tests/svelte-share-link-dialog.test.ts` pins this by spy AND by import. The settings list
+  (`SettingsShareLinks`) is not a modal and uses `confirmAction` with explicit options.
+- **The dialog clears `busy` BEFORE the flush that mounts the next footer** (공유 해제 after a create,
+  공유 링크 만들기 after a revoke): a button inserted disabled starts at `--disabled-opacity` and fades in
+  over the global 160 ms button transition (공유 해제 read as unavailable right after a create), and
+  `focus()` on a still-disabled button is a no-op. `copyText`'s button flash (`lib/dom.ts`) saves the
+  button's content, `aria-label` and `title` once per 1.2 s window and restores them EXACTLY (an attribute
+  the button lacked is removed again), so a second click cannot make the check icon permanent and a
+  text-named button never keeps "복사됨" as its name; the dialog's 복사 is named `공유 링크 복사`.
+- **Link controls appear on PPTX cards only, never in a group-agent pane** (`avatar.groupAgent` or a
+  `group:` id), and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
+  the server could find; `FilePreviewPanel` disables its button with a title instead).
+- **`panelSlides` IS the shared `cardSlideAttachments`**: the card's stamped renders when there are any,
+  otherwise the legacy unstamped ones — never both (the deck-review loop publishes unstamped hidden canvas
+  renders in the same turn as the deck, and mixing them showed every slide twice).
+- **`handleCanvas` clears `pane.filePreview` when a canvas WITH controls arrives**, so a review form is
+  never hidden behind the file preview (clicking the card reopens it).
+
 ## Client ↔ server contracts mirrored by hand
 - No shared module across the TS/Svelte ↔ server boundary, so the client re-implements several server
   validators. Update these in lockstep:

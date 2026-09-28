@@ -6,6 +6,15 @@
 
   export let bootstrap: BootstrapInfo | null;
 
+  // Opened from a PPTX share link: say why a login screen appeared. The hash
+  // survives the login (syncHash is a no-op without a user), so the deck opens
+  // right after it. Tracked, not read once: a link pasted into a tab already on
+  // this screen is a same-document fragment navigation — no reload, no remount,
+  // only a hashchange. (Not state.view: boot leaves it at 'explore' until
+  // enterApp applies the route.)
+  let hash = typeof location !== "undefined" ? location.hash : "";
+  $: openedFromShareLink = hash.startsWith("#/share/");
+
   let mode: "login" | "signup" = bootstrap?.needsSetup ? "signup" : "login";
   let username = "";
   let displayName = "";
@@ -87,6 +96,8 @@
   }
 </script>
 
+<svelte:window on:hashchange={() => (hash = location.hash)} />
+
 <main class="auth-view">
   <section class="auth-panel">
     <img class="login-mark" src="/icon-192.png" alt="Noah Almighty" width="48" height="48" />
@@ -95,6 +106,9 @@
     {/if}
     <h1>{heading}</h1>
     <p>{description}</p>
+    {#if openedFromShareLink && !isSetup}
+      <p class="auth-share-hint" role="note">공유받은 PPT를 보려면 Noah에 로그인하세요.</p>
+    {/if}
 
     {#if error}
       <div class="error" role="alert">{error}</div>
@@ -171,3 +185,17 @@
     {/if}
   </section>
 </main>
+
+<style>
+  .auth-share-hint {
+    margin: calc(-1 * var(--s-2)) 0 var(--s-4);
+    padding: var(--s-2-5) var(--s-3);
+    border: 1px solid var(--info-line);
+    border-radius: var(--r-md);
+    background: var(--info-soft);
+    color: var(--text);
+    font-size: var(--t-sm);
+    font-weight: 600;
+    line-height: 1.5;
+  }
+</style>

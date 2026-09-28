@@ -94,6 +94,7 @@ import { computeSkillsOption, freshSkillDiscoveryCache } from "./skillDiscovery.
 import {
   buildFileOutputServer,
   FILE_OUTPUT_SERVER_NAME,
+  FILE_OUTPUT_SHARE_LINK_TOOL_NAME,
   FILE_OUTPUT_TOOL_NAMES,
 } from "./fileOutputTools.js";
 
@@ -771,6 +772,27 @@ export async function buildAgentRunPlan(
     scope: personalAgentScope,
   });
   const fileOutputActive = Boolean(request.cwd && events?.onFile);
+  // PPTX share links (create_share_link on the file_output server): a bearer
+  // URL that reaches OUTSIDE this conversation, so unlike show_file/share_file
+  // it needs a PERSON who asked for it in a chat with their OWN avatar. Every
+  // run kind that can execute with nobody watching — or on someone else's
+  // instructions — is excluded: bots (a bot turn may be a queued/routine one,
+  // indistinguishable here), group agents (member threads are private; sharing
+  // is the group second brain's job), consultations, routines and external-task
+  // API turns (not headless, so they need their own exclusion). The chat route
+  // supplies `onShareLink` only on those same interactive own-avatar turns and
+  // re-checks that per call. Computed HERE, before buildSystemServer, so
+  // describe_system reports the same boolean the tool, allowedTools and the
+  // prompt stamp all key on.
+  const shareLinkToolActive =
+    fileOutputActive &&
+    Boolean(events?.onShareLink) &&
+    ownerToolAccess &&
+    !groupAgentRun &&
+    !personalAgentRun &&
+    !consultationRun &&
+    !request.headless &&
+    !request.externalTaskApi;
   // Visual canvas (experimental `canvas` feature, #50): registered only when the
   // avatar OWNER enabled it AND this is an interactive turn with a canvas sink
   // (events.onCanvas). Gating on the owner's setting — not the viewer's — means
@@ -829,6 +851,9 @@ export async function buildAgentRunPlan(
     // never surfaced). Mirrors buildPrompt's activeRepoSection in describe_system.
     activeRepoName: request.activeRepoName,
     fileOutputEnabled: fileOutputActive,
+    // create_share_link registration (shareLinkToolActive above): describe_system
+    // states it as available, or names why not and points at the 공유 링크 button.
+    shareLinksEnabled: shareLinkToolActive,
     browserEnabled: browserActive,
     canvasEnabled: canvasActive,
     deckRenderingAvailable,
@@ -1157,6 +1182,20 @@ export async function buildAgentRunPlan(
         // share_file's description names the converter's in-place/exact-render
         // workflow only when the deployment actually has the converter.
         deckConverterInstalled: deckToolchain.converter,
+        // create_share_link is built from the SAME boolean as its allowedTools
+        // entry below, describe_system's ctx above and claudeAgent's prompt
+        // stamp, so the four can't drift. The handler still refuses without
+        // the host callback.
+        ...(shareLinkToolActive
+          ? {
+              shareLinkEnabled: true,
+              createShareLink: events!.onShareLink,
+              // Read live per call (an app_config value, cached per
+              // ciphertext): whether "anyone signed in" really means anyone
+              // who can reach Noah, for the result's audience caveat.
+              signupOpen: () => store.getSignupMode() === "open",
+            }
+          : {}),
       })
     : null;
 
@@ -1378,6 +1417,8 @@ export async function buildAgentRunPlan(
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),
       ...(fileOutputActive ? FILE_OUTPUT_TOOL_NAMES : []),
+      // Nested in the file_output server below; built only on this boolean.
+      ...(shareLinkToolActive ? [FILE_OUTPUT_SHARE_LINK_TOOL_NAME] : []),
       ...(sshActive ? SSH_TRUST_TOOL_NAMES : []),
       "Skill",
       "TodoWrite",
@@ -1672,6 +1713,7 @@ export async function buildAgentRunPlan(
     browserActive,
     canvasActive,
     fileOutputActive,
+    shareLinkToolActive,
     skillExchangeActive,
     deckRenderingAvailable,
     deckToolchain,

@@ -101,21 +101,66 @@ export function chatFilesDir(config: AppConfig, conversationId: string): string 
 export const SHAREABLE_EXTENSIONS = Object.keys(FILE_TYPES);
 
 /**
+ * The longest download name stored or served, in UTF-16 units — the same unit
+ * and number as share_file's `name` schema cap.
+ */
+export const MAX_DOWNLOAD_NAME_LENGTH = 200;
+
+/** A trailing extension worth keeping when a name is shortened: short, ASCII alphanumeric. */
+const KEPT_EXTENSION_RE = /\.[A-Za-z0-9]{1,10}$/;
+
+/**
+ * `text` cut to at most `max` UTF-16 units, trailing whitespace dropped. Never
+ * splits a surrogate pair: a lone surrogate makes `encodeURIComponent` — and so
+ * the download's Content-Disposition — throw.
+ */
+function cutDownloadName(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut.trimEnd();
+}
+
+/**
  * Strip anything filename-hostile from a user-facing download name: path
- * separators, control chars, leading dots (hidden files), overlong tails.
- * Falls back to `null` when nothing safe remains.
+ * separators, control and Unicode format characters (a bidi override such as
+ * U+202E makes "…raj.pptx" DISPLAY as if it ended in .pptx), line/paragraph
+ * separators, lone surrogates, leading dots (hidden files). An overlong name is
+ * shortened to {@link MAX_DOWNLOAD_NAME_LENGTH} while KEEPING its last
+ * extension — cutting the tail would drop exactly the extension a caller forced
+ * on ({@link withDownloadExtension}). Idempotent, so re-sanitizing a stored
+ * name changes nothing. Falls back to `null` when nothing safe remains.
  */
 export function sanitizeDownloadName(raw: string | undefined): string | null {
   if (!raw) return null;
   const cleaned = raw
     .replace(/[\\/:*?"<>|]+/g, " ")
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]+/g, "")
-    .trim()
-    .replace(/^\.+/, "")
-    .slice(0, 200)
+    .replace(/[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]+/gu, "")
+    // Format controls go (bidi overrides could disguise the extension), except the joiners Persian/Indic names
+    // and emoji sequences need (ZWNJ, ZWJ) and the emoji tag characters.
+    .replace(/(?![\u200c\u200d\u{e0020}-\u{e007f}])\p{Cf}/gu, "")
+    .replace(/^[\s.]+/, "")
     .trim();
-  return cleaned || null;
+  if (!cleaned) return null;
+  if (cleaned.length <= MAX_DOWNLOAD_NAME_LENGTH) return cleaned;
+  const ext = KEPT_EXTENSION_RE.exec(cleaned)?.[0] ?? "";
+  const stem = cutDownloadName(cleaned.slice(0, cleaned.length - ext.length), MAX_DOWNLOAD_NAME_LENGTH - ext.length);
+  return `${stem}${ext}`;
+}
+
+/**
+ * A sanitized `name` that ends in `.<ext>` (any case) within
+ * {@link MAX_DOWNLOAD_NAME_LENGTH}: kept as is when it already does, else the
+ * stem is shortened as far as needed and `.<ext>` appended. Whatever a name
+ * claims, the saved file carries the extension of the bytes actually served.
+ */
+export function withDownloadExtension(name: string, ext: string): string {
+  const suffix = `.${ext}`;
+  if (name.length <= MAX_DOWNLOAD_NAME_LENGTH && name.toLowerCase().endsWith(suffix.toLowerCase())) {
+    return name;
+  }
+  return `${cutDownloadName(name, MAX_DOWNLOAD_NAME_LENGTH - suffix.length).trim() || "file"}${suffix}`;
 }
 
 export type PublishWorkspaceFileResult =
@@ -223,7 +268,9 @@ export function publishWorkspaceFile(
       id,
       kind: "file",
       mediaType: fileType.mediaType,
-      name: name.toLowerCase().endsWith(`.${ext}`) ? name : `${name}.${ext}`,
+      // The real extension, inside the name cap: a 200-char name + ".pptx"
+      // would otherwise lose that extension to the next sanitize's cut.
+      name: withDownloadExtension(name, ext),
       size: buffer.length,
     },
     sourcePath: source,
@@ -266,7 +313,8 @@ export function publishBrowserScreenshot(
   }
   // Card label (user-facing → Korean): the page title is what tells several
   // captures in one turn apart.
-  const title = sanitizeDownloadName(pageTitle)?.slice(0, 80).trim();
+  const cleanTitle = sanitizeDownloadName(pageTitle);
+  const title = cleanTitle ? cutDownloadName(cleanTitle, 80) : undefined;
   const name = `${title ? `스크린샷 - ${title}` : "스크린샷"}.${ext}`;
   let slide: MessageAttachment;
   try {

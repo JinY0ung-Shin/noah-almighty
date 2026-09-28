@@ -1880,6 +1880,13 @@ describe("sdk message handlers", () => {
         content: "긴 본문…",
       }),
     ).toBe("reviewer · 리뷰 요청");
+    // create_share_link: the expiry, never the opaque attachment id (the
+    // shared mcpToolInputSummary the client falls back to as well).
+    expect(
+      summarizeToolInput("mcp__file_output__create_share_link", { attachmentId: "3f2a-uuid", expiresInDays: 30 }),
+    ).toBe("30일");
+    expect(summarizeToolInput("mcp__file_output__create_share_link", { attachmentId: "3f2a-uuid" })).toBe("7일");
+    expect(summarizeToolInput("mcp__file_output__create_share_link", {})).toBe("7일");
   });
 
   it("keeps SDK built-in tool presentation coverage in sync", () => {

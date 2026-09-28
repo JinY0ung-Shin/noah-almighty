@@ -112,6 +112,49 @@ export interface ShareFileRequest {
 }
 
 /**
+ * `create_share_link`: make (or reuse) a login-required share link for a PPTX
+ * card this conversation holds — one shared with share_file this turn or an
+ * earlier one. See `src/shared/shareLinks.ts` for the link contract.
+ */
+export interface ShareLinkRequest {
+  /**
+   * The card's attachment id (share_file's result names it). Omitted = the
+   * conversation's most recent PPTX card (this turn first); when that is
+   * ambiguous the result lists the decks by name and id.
+   */
+  attachmentId?: string;
+  /** One of SHARE_LINK_EXPIRY_DAYS; undefined = the default (7). */
+  expiresInDays?: number;
+}
+
+export type ShareLinkResult =
+  | {
+      ok: true;
+      /**
+       * Absolute when the run knew its origin (`appOrigin`), else the
+       * `/#/share/<token>` path (`shareLinkPath`).
+       */
+      url: string;
+      expiresAt: string;
+      /** False when an active link for this card already existed (it is returned as-is). */
+      created: boolean;
+      fileName: string;
+      slideCount: number;
+      /**
+       * The conversation's OTHER active links (other cards — typically earlier
+       * builds of the same deck), which keep serving the file they were made for.
+       * Newest first; names and expiry only, never their URLs. The chat route
+       * fills it on every ok result, created or reused. Empty/absent = none.
+       */
+      otherActiveLinks?: { fileName: string; expiresAt: string }[];
+    }
+  | {
+      ok: false;
+      /** English, model-facing: what went wrong and what to do instead. */
+      error: string;
+    };
+
+/**
  * share_file, pptx only: what became of the deck converter's preview sidecar
  * (`<stem>.preview/manifest.json` next to the shared file — `deckPreview.ts`).
  * FACTS, no prose: `fileOutputTools.ts` composes the model-facing notes.
@@ -685,6 +728,14 @@ export interface AgentEvents {
    * provides both or neither.
    */
   onShareFile?: (request: ShareFileRequest) => Promise<FileOutputResult>;
+  /**
+   * Make (or reuse) a share link for a PPTX card of this conversation. The chat
+   * route supplies it ONLY on an interactive turn of the owner's own avatar (never
+   * bot, group-agent, external-avatar, external-task-API or unattended turns) and
+   * re-checks that inside; `runPlan.ts` registers `create_share_link` only when it
+   * is present AND the run passes the same gate. Absent = the tool is not offered.
+   */
+  onShareLink?: (request: ShareLinkRequest) => Promise<ShareLinkResult>;
   /**
    * BLOCKING: drive the viewer's own browser through the extension bridge and
    * resolve with the outcome. Parks the run for seconds (not the interactive

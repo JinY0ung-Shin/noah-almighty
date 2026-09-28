@@ -12,7 +12,7 @@ function viewDenied(view: ViewName, state: ClientState): boolean {
   return ADMIN_ONLY_VIEWS.includes(view) && !state.user?.roles?.includes("admin");
 }
 
-const VIEW_ROUTES: ViewName[] = ["explore", "chat", "bots", "brain", "inbox", "routines", "groups", "skills", "settings", "admin"];
+const VIEW_ROUTES: ViewName[] = ["explore", "chat", "bots", "brain", "inbox", "routines", "groups", "skills", "settings", "admin", "share"];
 const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge", "agents"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",
@@ -63,6 +63,12 @@ export function currentRoute(): string {
   if (state.view === "bots") {
     return state.botsAgentId ? `#/bots/${encodeURIComponent(state.botsAgentId)}` : "#/bots";
   }
+  // Same trap as bots: the token IS the page. A syncHash from anywhere (a run
+  // stream's `open` frame, a conversation switch) must write it back, or the
+  // URL collapses to "#/share" and a reload or Back loses the link.
+  if (state.view === "share") {
+    return state.shareToken ? `#/share/${encodeURIComponent(state.shareToken)}` : "#/share";
+  }
   return `#/${state.view}`;
 }
 
@@ -85,6 +91,7 @@ export function goView(view: ViewName, arg?: string): void {
     if (view === "brain") state.brainSource = arg || "personal";
     // Empty arg = "no bot picked yet"; BotsView renders its roster and waits.
     if (view === "bots") state.botsAgentId = arg || "";
+    if (view === "share") state.shareToken = arg || "";
   });
   syncHash();
 }
@@ -103,6 +110,7 @@ export function applyInitialRoute(): void {
     if (view === "routines" && arg) state.routineConversationId = arg;
     if (view === "brain") state.brainSource = arg || "personal";
     if (view === "bots") state.botsAgentId = arg || "";
+    if (view === "share") state.shareToken = arg || "";
   });
   // Rewrite a legacy groups alias in place so it never enters history (Back
   // would otherwise bounce through #/settings/groups → same view).
@@ -131,6 +139,9 @@ export function installRouteListener(onChatRoute?: (conversationId: string) => v
       // state.botsAgentId itself, so back/forward inside the view is a pure
       // state change (mirrors how brainSource is handled).
       if (view === "bots") state.botsAgentId = arg || "";
+      // A second share link opened while the viewer is mounted: ShareView
+      // refetches on the token change itself (same pure-state pattern).
+      if (view === "share") state.shareToken = arg || "";
     });
     applyingRoute = false;
     if (view === "chat" && arg) onChatRoute?.(arg);

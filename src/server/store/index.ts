@@ -13,6 +13,7 @@ import { withGroupAgents } from "./groupAgents.js";
 import { withPersonalAgents } from "./personalAgents.js";
 import { withAvatarTasks } from "./avatarTasks.js";
 import { withBotTasks } from "./botTasks.js";
+import { withShareLinks } from "./shareLinks.js";
 
 // Re-export the non-Store public symbols identically to the pre-split module so
 // `../store` / `./store` imports keep resolving. Behavior-preserving: the only
@@ -39,7 +40,7 @@ export { AVATAR_TASK_RESTART_ERROR } from "./avatarTasks.js";
  * disjoint, so nothing shadows anything); it only feeds TS `this`-typing, which
  * the `declare`d cross-domain method signatures on StoreBase already cover.
  */
-const ComposedStore = withDirectMessages(withAvatarTasks(withBotTasks(
+const ComposedStore = withShareLinks(withDirectMessages(withAvatarTasks(withBotTasks(
   withPersonalAgents(
     withGroupAgents(
       withGroups(
@@ -53,7 +54,7 @@ const ComposedStore = withDirectMessages(withAvatarTasks(withBotTasks(
       ),
     ),
   ),
-)));
+))));
 
 export class Store extends ComposedStore {
   constructor(config: AppConfig) {

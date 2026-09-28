@@ -470,6 +470,51 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       }
     }
 
+    /**
+     * The attachment lists of a conversation's persisted messages, NEWEST
+     * message first (messages without attachments skipped; entries that are
+     * not attachment objects dropped). Owner-scoped: [] when `ownerId` does not
+     * own the conversation. Parses attachments_json only — never response_json.
+     */
+    listMessageAttachments(ownerId: string, conversationId: string): MessageAttachment[][] {
+      if (!this.ownsConversation(ownerId, conversationId)) {
+        return [];
+      }
+      const rows = this.db
+        .prepare(
+          "SELECT attachments_json FROM messages WHERE conversation_id = ? AND attachments_json IS NOT NULL ORDER BY rowid DESC",
+        )
+        .all(conversationId) as { attachments_json: string | null }[];
+      return rows.flatMap((row) => {
+        const parsed = (this.parseAttachmentsJson(row.attachments_json) ?? []).filter(
+          (att): att is MessageAttachment =>
+            Boolean(att) && typeof att === "object" && typeof att.id === "string" && typeof att.kind === "string",
+        );
+        return parsed.length ? [parsed] : [];
+      });
+    }
+
+    /**
+     * The persisted attachments of the ONE message that holds download card
+     * `fileId` — the card plus its siblings (the slide renders stamped with its
+     * id). EXACT match on a parsed `{id, kind:"file"}` entry, never SQL LIKE (`_`
+     * is a LIKE wildcard, and SAFE_ID admits it). Owner-scoped; null when the
+     * caller does not own the conversation or no persisted message carries the
+     * card (e.g. it is still live on a running turn).
+     */
+    findCardMessageAttachments(
+      ownerId: string,
+      conversationId: string,
+      fileId: string,
+    ): MessageAttachment[] | null {
+      for (const attachments of this.listMessageAttachments(ownerId, conversationId)) {
+        if (attachments.some((att) => att.id === fileId && att.kind === "file")) {
+          return attachments;
+        }
+      }
+      return null;
+    }
+
     listMessages(ownerId: string, conversationId: string): StoredMessage[] {
       if (!this.ownsConversation(ownerId, conversationId)) {
         return [];
@@ -861,6 +906,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       }
       const tx = this.db.transaction(() => {
         this.deleteCanvasArtifactsForConversation(id);
+        this.deleteShareLinksForConversation(id);
         this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
         // Delegated bot tasks are per-thread bookkeeping (내 봇 threads only) —
         // manual cascade, since bot_tasks has no FK onto conversations.
@@ -889,6 +935,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         const deleteConversation = this.db.prepare("DELETE FROM conversations WHERE id = ? AND owner_user_id = ? AND is_routine = 0");
         for (const conversationId of conversationIds) {
           this.deleteCanvasArtifactsForConversation(conversationId);
+          this.deleteShareLinksForConversation(conversationId);
           deleteMessages.run(conversationId);
           deleteTasks.run(conversationId);
           deleteAvatarTasks.run(conversationId);

@@ -196,7 +196,10 @@
   because the fold anchors moved (`partialText` is `assistantChunks.slice(textFold.chunkIndex)`), the
   reasoning and attachments because it slices at `persistedThinkingOffset`/`persistedAttachmentsOffset`
   (`persistedTextOffset` feeds only the cancel/error tails). Once the BACKGROUND phase has started, a
-  steer is simply another wake-up turn and its answer rides the existing `bg_message` path.
+  steer is simply another wake-up turn and its answer rides the existing `bg_message` path — and its
+  DELIVERY marks the owner present for that segment (`ownerSteeredSinceBoundary`, set only after
+  finalization, cleared at the next result boundary), which is what `create_share_link`'s background
+  refusal keys on.
   **Persistence happens at DELIVERY, never at accept:** the `delivered` listener
   writes the user row with `kind:"steer"` (`messages.kind`, `addColumnIfMissing`) and carries it back
   inside the frame as `steer.message`, so a message the model never saw never enters history.
@@ -258,13 +261,22 @@
   `dataDir/chat-files/<conversationId>/<id>.<ext>`, metadata on `messages.attachments_json` as
   `kind:"file"` (+`size`). Download route `GET /api/conversations/:id/files/:fileId` is owner-scoped and
   ALWAYS `Content-Disposition: attachment` (never inline; `?name=` only picks the sanitized save-dialog
-  name — the client card passes it). Sweeps: conversation bulk/single delete + regenerate mirror the
+  name — the client card passes it — and never its extension: `withDownloadExtension` forces the stored
+  file's own). Download names follow ONE rule (`chatFiles.ts`): `sanitizeDownloadName` strips control,
+  Unicode format (bidi overrides such as U+202E) and line-separator characters and lone surrogates, and
+  shortens an overlong name in its STEM, keeping the last extension; `publishWorkspaceFile` forces the real
+  extension INSIDE the 200-character cap, so no later re-sanitize can cut it off. **The one exception to owner-only reads is a PPT share link**: a
+  signed-in holder of a valid link reads ONE pptx card's bytes and its stamped renders through viewer-bound
+  tickets (`/api/share/t/…`, validity re-run per call) — [`share-links.md`](share-links.md). Sweeps: conversation bulk/single delete + regenerate mirror the
   image sweeps, and **user-delete (routes/admin.ts) snapshots the owner's conversation ids BEFORE
   `store.deleteUser`** to rm both chat-images and chat-files dirs (the rows are gone afterwards).
 - **`MessageAttachment.hidden`** = published for URL use only: `show_file` with `hidden:true` stores the
   image + returns its serving URL to the model (for canvas markdown embeds), but every ChatView render
   loop filters hidden entries. Per-turn caps: 6 visible images (unchanged), 30 hidden, 3 files —
-  enforced in the `onFile`/`onShareFile` handlers, counted per kind off `shownAttachments`.
+  enforced in the `onFile`/`onShareFile` handlers, counted per kind off `shownAttachments`. The hidden cap
+  counts only UNSTAMPED hidden images (`kind==="image" && hidden && !parentId`): share_file's stamped
+  previews (and a screenshot card's copy) are bounded per card already, so delivering a deck leaves the
+  review canvas its full 30 renders in the same turn.
 - **Deck (PPTX) pipeline — TWO preview sources, tried in a fixed order.** New decks come from the bundled
   `pptx` skill's HTML→PPTX converter, a foreground `deck.sh build` in the agent shell (CLI, budgets, locks,
   isolation, probe and Docker → [`pptx-converter.md`](pptx-converter.md)); existing decks and user templates
@@ -277,7 +289,7 @@
      realpath/roots/5 MB/magic containment as `readWorkspaceImage`, sharing its pure checks) with the declared
      media type and sha256: ≤ 30 attached (`MAX_PREVIEW_PAGES`), ≤ 32 MiB, all or nothing. Loaded slides go
      through `saveHiddenChatImage(…, card.id)` — hidden, `parentId` = the card, alt text
-     `슬라이드 N – <title>`, the same per-turn hidden budget as before — and LibreOffice is skipped. They are
+     `슬라이드 N – <title>`, never spending `show_file`'s per-turn hidden budget — and LibreOffice is skipped. They are
      all saved first, then pushed and emitted in slide order; if a save fails midway, the saved ones are
      deleted and the card falls back to LibreOffice.
   2. **LibreOffice otherwise** — no sidecar (`none`), `stale` (the .pptx changed after the build: a copy, a
@@ -317,9 +329,16 @@
   would double-process it); (5) the viewer lays out for the width it was created at — the panel repaints
   (debounced) on resize; (6) compressed `<diagram>` payloads render fine (the viewer inflates them), but
   the `drawio` skill tells the agent to AUTHOR uncompressed so later turns can edit the XML.
-- **Regenerate caveat:** replacing the last assistant turn deletes its attachments (images AND files),
-  so a canvas from the REPLACED turn loses its embedded slide images — accepted (regenerate means
-  "redo the turn"; the new run re-renders and re-shows).
+- **Regenerate caveat:** replacing the last assistant turn deletes its attachments (images AND files) and
+  the share links of its file cards, so a canvas from the REPLACED turn loses its embedded slide images —
+  accepted (regenerate means "redo the turn"; the new run re-renders and re-shows).
+- **`create_share_link` (the agent path):** on interactive own-avatar owner turns only, the chat route's
+  `onShareLink` makes or reuses a login-required share link for a PPTX card (this turn's `shownAttachments`
+  first, then persisted messages). Once the visible turn is finalized it refuses unless a steer the owner
+  typed was delivered since the last result boundary (a pure wake-up turn still refuses), and every ok
+  result names the conversation's other active links (`otherActiveLinks` — a link never follows a rebuild).
+  The tool text lives in `agent/fileOutputTools.ts`; gates, validity and the viewer in
+  [`share-links.md`](share-links.md).
 
 ## Visual canvas (`mcp__canvas__show`, experimental `canvas` feature)
 - CSP-SAFE port of Superpowers' visual companion: the avatar DECLARES content

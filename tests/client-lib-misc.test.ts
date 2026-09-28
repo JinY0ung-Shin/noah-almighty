@@ -541,6 +541,9 @@ describe("nav routing", () => {
     expect(routeFromHash()).toEqual({ view: null, arg: null });
     history.replaceState(null, "", "#/chat/%E2%9C%93");
     expect(routeFromHash()).toEqual({ view: "chat", arg: "✓" });
+    // A share link's viewer (#/share/<token>); the token pins live in client-share-links.
+    history.replaceState(null, "", "#/share/Ab3_-token");
+    expect(routeFromHash()).toEqual({ view: "share", arg: "Ab3_-token" });
     // malformed percent-encoding decodes to null rather than throwing
     history.replaceState(null, "", "#/chat/%E0%A4%A");
     expect(routeFromHash()).toEqual({ view: "chat", arg: null });

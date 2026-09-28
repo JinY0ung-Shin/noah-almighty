@@ -15,6 +15,20 @@ function localizeApiError(raw: string): string {
   return /[가-힣]/.test(raw) ? raw : `서버 오류가 발생했습니다. (상세: ${raw})`;
 }
 
+/**
+ * A non-OK response. The message stays the Korean sentence every caller already
+ * shows; `status` lets the few callers that must tell outcomes apart (the share
+ * viewer's dead-link vs. retry states) do so without string-matching it.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 let sessionExpiredHandler: (() => void) | null = null;
 
 export function setSessionExpiredHandler(handler: () => void): void {
@@ -41,15 +55,16 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
   }
   if (response.status === 401 && readState().user) {
     sessionExpiredHandler?.();
-    throw new Error("세션이 만료되었습니다. 다시 로그인해 주세요.");
+    throw new ApiError("세션이 만료되었습니다. 다시 로그인해 주세요.", 401);
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const raw = typeof body.error === "string" ? body.error.trim() : "";
-    throw new Error(
+    throw new ApiError(
       API_ERROR_KO[raw] ||
         localizeApiError(raw) ||
         `서버 오류가 발생했습니다. (코드 ${response.status}) 잠시 후 다시 시도해 주세요.`,
+      response.status,
     );
   }
   return body as T;

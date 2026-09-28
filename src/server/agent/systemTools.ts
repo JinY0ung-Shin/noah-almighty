@@ -33,6 +33,10 @@ import {
 import { webFetchProxyState } from "./webFetchTools.js";
 import { readSystemManual } from "./systemManual.js";
 import { PROMPT_TTL_MS } from "./runRegistry.js";
+import {
+  DEFAULT_SHARE_LINK_EXPIRY_DAYS,
+  SHARE_LINK_EXPIRY_DAYS,
+} from "../../shared/shareLinks.js";
 
 /**
  * Per-conversation context for avatar-system management tools. These tools let
@@ -87,6 +91,14 @@ export interface SystemToolsContext {
   /** Whether this interactive run can publish local raster images to the chat. */
   fileOutputEnabled?: boolean;
   /**
+   * Whether THIS run registered `mcp__file_output__create_share_link` (runPlan's
+   * `shareLinkToolActive`: an interactive turn of the owner's own avatar).
+   * Mirrors `AgentRequest.shareLinksEnabled` so the prompt and describe_system
+   * report the SAME capability — and, when it is off, the same 공유 링크-button
+   * redirect.
+   */
+  shareLinksEnabled?: boolean;
+  /**
    * Whether this run can drive the viewer's own browser through the extension
    * bridge. Owner-only and interactive-only; mirrors AgentRequest.browserEnabled
    * so prompt and describe_system report the SAME capability.
@@ -133,8 +145,9 @@ export interface SystemToolsContext {
    * personal task API (`POST /api/v1/avatar/tasks`) instead of the owner typing
    * it. Mirrors `AgentRequest.externalTaskApi` so prompt and describe_system
    * report the SAME provenance — capability is unchanged (a full owner run),
-   * except that bot creation/hand-off is withheld from an unattended outside
-   * instruction (runPlan's `personalAgentCreateActive`).
+   * except that bot creation/hand-off and share-link creation are withheld
+   * from an unattended outside instruction (runPlan's
+   * `personalAgentCreateActive` / `shareLinkToolActive`).
    */
   externalTaskApi?: boolean;
   /**
@@ -399,6 +412,77 @@ export function deckCapabilityLine(
   return `${DECK_LINE_PREFIX}${head}${tail}`;
 }
 
+const SHARE_LINK_LINE_PREFIX = "- Share links (mcp__file_output__create_share_link): ";
+/** Where the owner manages links — the same path the UI, the tool result and the manual name. */
+const SHARE_LINK_SETTINGS_PATH = "내 아바타 → 권한·연결 → 공유 링크";
+/** "1, 7 (default) or 30" — from the shared contract, so the line cannot drift from the route. */
+const SHARE_LINK_EXPIRY_PHRASE = SHARE_LINK_EXPIRY_DAYS.map((days) =>
+  days === DEFAULT_SHARE_LINK_EXPIRY_DAYS ? `${days} (default)` : String(days),
+)
+  .join(", ")
+  .replace(/, (?=[^,]*$)/, " or ");
+
+/**
+ * describe_system's share-link line for the OWNER block — the runtime mirror of
+ * the prompt's shareLinkSection, keyed on the same `shareLinksEnabled`. When
+ * available it carries the audience/expiry/revoke facts the prompt leaves to
+ * the tool description — the one-link rule scoped to a CARD, as the store keys
+ * it, since every re-delivered rebuild is a new card — plus the sign-up caveat
+ * read live. When not, it names
+ * WHY — by precedence external task > unattended > bot > no file output — and
+ * gives the same 공유 링크-button redirect the prompt does.
+ */
+function ownerShareLinkLine(store: Store, ctx: SystemToolsContext): string {
+  if (ctx.shareLinksEnabled) {
+    const signupOpen = store.getSignupMode() === "open";
+    return (
+      `${SHARE_LINK_LINE_PREFIX}AVAILABLE in this run — create one ONLY when the user explicitly asks for a link (a plain '공유해 줘' about a file means share_file). ` +
+      "A link opens ONE PPTX download card of this conversation — its slide renders plus the .pptx download, speaker notes included — for ANYONE signed in to Noah who has it, not only the owner's groups" +
+      (signupOpen
+        ? "; self-service sign-up is OPEN on this server, so that is anyone who can reach Noah"
+        : "") +
+      `. It expires after ${SHARE_LINK_EXPIRY_PHRASE} days, fixed at creation. ` +
+      "Each delivered deck card has at most one active link (asking again for that card returns it); a rebuilt deck re-delivered with share_file is a NEW card, and an earlier link keeps serving the earlier file until it expires or is revoked — say so when you link the new card. " +
+      `The owner revokes links any time in ${SHARE_LINK_SETTINGS_PATH} or with the 공유 링크 button next to the file card`
+    );
+  }
+  const reason = ctx.externalTaskApi
+    ? "an external system submitted this turn, and a link is made only when the owner asks in a chat they are having"
+    : ctx.headless
+      ? "this is an unattended run with nobody in the conversation"
+      : ctx.personalAgent
+        ? "personal bots (내 봇) never create share links, since a bot turn may run with nobody watching — only the owner's main avatar does, in a chat with them"
+        : !ctx.fileOutputEnabled
+          ? "files cannot be shared in this run (that needs an interactive chat turn)"
+          : "this chat turn did not offer it";
+  return (
+    `${SHARE_LINK_LINE_PREFIX}NOT available in this run — ${reason}. ` +
+    `If the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card (PPTX cards only; links are managed in ${SHARE_LINK_SETTINGS_PATH})`
+  );
+}
+
+/**
+ * The group-agent block's share-link line: member threads are private and the
+ * team shares through its second brain, so these threads cannot be link-shared
+ * at all — no tool, and no 공유 링크 button in the pane either.
+ */
+const GROUP_AGENT_SHARE_LINK_LINE =
+  "- Share links: UNAVAILABLE for group-agent conversations — mcp__file_output__create_share_link is not registered here and this pane's file cards have no 공유 링크 button; a member who wants others to see a deck can still download it from its card.";
+
+/**
+ * The non-owner branch's share-link line: the avatar cannot make a link for a
+ * colleague or teammate, but the person chatting owns THIS conversation, so the
+ * card button works for them (the route authorizes the conversation owner).
+ */
+function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
+  return (
+    `${SHARE_LINK_LINE_PREFIX}not available to you here — only the owner's own avatar creates links, in a chat the owner is having with it. ` +
+    (ctx.fileOutputEnabled
+      ? "The person you are talking to owns THIS conversation, so they can make one for a PPTX deck here with the 공유 링크 button next to its file card."
+      : "No file card can be shared from this run.")
+  );
+}
+
 /**
  * Build system-management tool definitions bound to a single conversation.
  * Management handlers enforce owner/scope checks themselves. read_manual is
@@ -521,6 +605,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
               // a group-agent run gets the elevated built-ins, so the SAME deck
               // line the owner block prints applies here.
               deckCapabilityLine(ctx),
+              GROUP_AGENT_SHARE_LINK_LINE,
               "- Group admins manage this agent in the 그룹 (Groups) view on the left rail.",
             ].join("\n"),
           );
@@ -561,7 +646,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // may build a deck through this avatar, a plain colleague may not,
           // and the deck line's tail says which this run is.
           return text(
-            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}`,
+            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}`,
           );
         }
         // Repo/token/secret/group/git-repo/open-request/model facts come from the
@@ -768,6 +853,8 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Image input (vision): ${ctx.visionEnabled === false ? "NOT supported by the currently selected model — Read on image/PDF files is blocked; user-attached images arrive as FILES in the conversation scratch workspace (paths listed in the user message), never as model-visible images; show images to the USER via mcp__file_output__show_file, extract PDF text via `pdftotext` (a different model tier may support images — the admin panel sets this per tier)" : "supported by the currently selected model"}`,
           deckCapabilityLine(ctx),
           `- Diagram files (.drawio): ${ctx.fileOutputEnabled ? "supported — author/edit uncompressed mxfile XML per the `drawio` skill and deliver with `mcp__file_output__share_file`; the file card's side panel renders the diagram interactively in the chat UI (client-side, no server toolchain)" : "viewer is built into the chat UI, but sharing files is unavailable in this run (needs an interactive chat turn)"}`,
+          // Mirrors buildSystemPromptAppend's shareLinkSection (same boolean).
+          ownerShareLinkLine(store, ctx),
           `- Internal Git token (GIT_TOKEN): ${state.gitTokenSet ? "set" : "not set"}`,
           `- Getting started: ${gettingStartedLine}`,
           `- Secret names: ${secretNames.length ? secretNames.map((name) => `\`${name}\``).join(", ") + " (custom secrets are injected as env into MCP servers from your own plugins/knowledge repo; git/SSH credentials go only to their dedicated tools)" : "(none)"}`,

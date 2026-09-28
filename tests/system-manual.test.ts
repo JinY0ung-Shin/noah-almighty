@@ -17,6 +17,17 @@ describe("official system manual", () => {
   });
 
   it("keeps procedures out of the prompt while retaining live scope and safety", () => {
+    // A TRIPWIRE against procedures creeping into the standing prompt — NOT a
+    // bound on real owner prompts. The config is maximal over the BOOLEAN
+    // feature flags only (midTurnMessages and shareLinksEnabled included: every
+    // interactive owner run with file output carries both) and sets no
+    // data-driven field. Real owner turns also carry sections this cap does not
+    // measure: the External task API line (avatarApiKeyCount is stamped even at
+    // 0 keys), the web-fetch proxy note, and the group, secret, Confluence and
+    // experimental-feature sections. A flag-maximal owner turn already measures
+    // about 19.1k characters (about 20.5k in one avatar-sharing group), so the
+    // margin under 18,000 is not real headroom: keep standing sections short
+    // and put procedures in the manual.
     const prompt = buildSystemPromptAppend({
       message: "hello",
       avatar: { id: "owner", displayName: "Owner", alias: "", persona: "" },
@@ -24,8 +35,11 @@ describe("official system manual", () => {
       browserEnabled: true, canvasEnabled: true, visionEnabled: false,
       fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true,
       personalAgentsEnabled: true, personalAgentNames: ["Research"],
+      midTurnMessages: true, shareLinksEnabled: true,
     });
     expect(prompt.length).toBeLessThan(18000);
+    expect(prompt).toContain("The user may send additional messages while you are working.");
+    expect(prompt).toContain("Share links: `create_share_link`, ONLY if the user asks for a link.");
     // The converter deck section (the longer of the two) is what this budgets.
     expect(prompt).toContain("edit its HTML and rebuild");
     expect(prompt).toContain("topic `browser-operations`");
@@ -74,6 +88,30 @@ describe("official system manual", () => {
     // The draw.io paragraph is unchanged.
     expect(page).toContain("For draw.io, author an uncompressed mxfile XML .drawio file and publish it.");
     expect(page.length).toBeLessThan(16000);
+  });
+
+  it("documents the share-link exception to conversation-scoped artifacts without claiming availability", () => {
+    const page = readSystemManual("files-canvas").text;
+    expect(page).toContain("Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card.");
+    expect(page).toContain("group-agent conversations cannot be link-shared");
+    expect(page).toContain("speaker notes included");
+    expect(page).toContain("1, 7 or 30 days, 7 by default, fixed at creation");
+    // One active link per delivered CARD: a rebuilt deck delivered again is a
+    // new card, and the earlier link keeps its earlier file (finding agent-1).
+    expect(page).toContain("Each delivered deck card has at most one active link, and a link keeps opening the file it was made for");
+    expect(page).toContain(
+      "a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked",
+    );
+    expect(page).not.toContain("a deck has at most one active link");
+    expect(page).toContain("It is a human-initiated export, like downloading the file and forwarding it");
+    expect(page).toContain("내 아바타 → 권한·연결 → 공유 링크");
+    // Availability stays a runtime fact, never a manual claim.
+    expect(page).toContain("Whether the avatar can create one in this run is a runtime fact reported by describe_system.");
+    expect(page).not.toContain("create_share_link");
+    // The sentences that followed the scoping rule are unchanged.
+    expect(page).toContain("Do not assume a local temporary file will become visible without publication.");
+    // The compact index every prompt embeds did not grow a topic.
+    expect(systemManualIndex(true)).not.toMatch(/share link/i);
   });
 
   it.each(["../../.env", "/etc/passwd", "https://example.com", "constructor", "toString", "external-task", "x".repeat(1000)])(

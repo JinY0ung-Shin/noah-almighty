@@ -597,6 +597,9 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(options.allowedTools as string[]).toContain("mcp__file_output__show_file");
     expect(options.allowedTools as string[]).toContain("mcp__file_output__share_file");
     expect(JSON.stringify(options.systemPrompt)).toContain("mcp__file_output__show_file");
+    // A file sink alone never brings create_share_link: that needs the host's
+    // onShareLink too (tests/agent-share-link.test.ts has the full matrix).
+    expect(options.allowedTools as string[]).not.toContain("mcp__file_output__create_share_link");
   });
 
   it("registers the group repo + group brain servers when the owner belongs to a group with a shared repo", async () => {

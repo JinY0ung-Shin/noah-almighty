@@ -46,6 +46,14 @@ export type {
   User,
 } from "../../../server/types.js";
 
+export type {
+  ShareLinkCreateResult,
+  ShareLinkExpiryDays,
+  ShareLinkSummary,
+  ShareViewPayload,
+  ShareViewSlide,
+} from "../../../shared/shareLinks";
+
 import type { CanvasArtifact, RoutineJob } from "../../../server/types.js";
 import type { McpToolGroupId } from "../../../shared/mcpToolGroups";
 
@@ -109,7 +117,9 @@ export type ViewName =
   | "groups"
   | "skills"
   | "settings"
-  | "admin";
+  | "admin"
+  /** A PPTX share link's viewer (`#/share/<token>`); not in the rail — only a link opens it. */
+  | "share";
 /** 내 봇 (`agents`) is admin-only — SettingsView hides the tab for everyone else. */
 export type SettingsTab = "profile" | "access" | "knowledge" | "agents";
 export type AdminTab =

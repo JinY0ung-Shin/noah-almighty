@@ -1502,10 +1502,10 @@ export interface AgentRequest {
    * True when this turn was submitted by an EXTERNAL SYSTEM through the owner's
    * personal task API (`ChatTurnContext.externalTaskId`), not typed by the
    * owner. Provenance for the prompt/describe_system and for the
-   * interactive-only gates (`create_agent` is registered only for turns a person
-   * is having with their own avatar): the run itself keeps the owner's full
-   * capability, and questions/permission prompts still park for an answer
-   * through the task API or the Noah UI.
+   * interactive-only gates (`create_agent` and `create_share_link` are
+   * registered only for turns a person is having with their own avatar): the
+   * run itself keeps the owner's full capability, and questions/permission
+   * prompts still park for an answer through the task API or the Noah UI.
    */
   externalTaskApi?: boolean;
   /**
@@ -1700,6 +1700,17 @@ export interface AgentRequest {
    * generated documents as download cards with `share_file`.
    */
   fileOutputEnabled?: boolean;
+  /**
+   * True only when THIS run registered `mcp__file_output__create_share_link`
+   * (runPlan's `shareLinkToolActive`): file output, the host's `onShareLink`,
+   * and an interactive turn of the owner's own avatar — never a bot,
+   * group-agent, consultation, headless or external-task-API run. Stamped by
+   * `runClaudeAgent` from that same boolean, and mirrored by describe_system
+   * (`SystemToolsContext.shareLinksEnabled`), so neither metacognition surface
+   * offers a tool the run lacks; a run that can deliver files but not make
+   * links gets the 공유 링크-button redirect instead.
+   */
+  shareLinksEnabled?: boolean;
   /**
    * The deployment image carries the LEGACY PPTX toolchain (LibreOffice +
    * pdftoppm + python-pptx) AND this turn can publish files AND its viewer may

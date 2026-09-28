@@ -2495,6 +2495,86 @@ describe("store addAvatarNotification keyed single-row return", () => {
 });
 
 
+describe("store share_links migration (PPT share links)", () => {
+  type WithDb = {
+    db: {
+      prepare(sql: string): { run(...p: unknown[]): unknown; all(...p: unknown[]): unknown };
+      exec(sql: string): void;
+    };
+  };
+  const dbOf = (store: unknown) => (store as unknown as WithDb).db;
+
+  it("creates the table and its indexes on an EXISTING deployment DB that predates it", () => {
+    // Deployment is a separate corporate box: the table must arrive through
+    // migrate() on a live DB, not only on a fresh install.
+    const dataDir = path.join(tempDir, "share-migration");
+    const open = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "sl" }).store;
+    const first = open();
+    const owner = first.createUser({ username: "slowner", displayName: "Owner", password: "password123" });
+    first.touchConversation(owner.id, "conv-1", owner.id, "hi");
+    // Reproduce the pre-feature shape.
+    dbOf(first).exec("DROP TABLE share_links");
+    first.close();
+
+    const second = open();
+    const columns = (dbOf(second).prepare("PRAGMA table_info(share_links)").all() as { name: string }[]).map((c) => c.name);
+    expect(columns).toEqual([
+      "id",
+      "owner_user_id",
+      "conversation_id",
+      "file_id",
+      "file_name",
+      "slide_ids_json",
+      "token_hash",
+      "token_salt",
+      "created_at",
+      "expires_at",
+      "view_count",
+      "last_viewed_at",
+    ]);
+    const indexes = (dbOf(second).prepare("PRAGMA index_list(share_links)").all() as { name: string }[]).map((i) => i.name);
+    expect(indexes).toEqual(expect.arrayContaining(["idx_share_links_owner", "idx_share_links_conversation"]));
+    // Existing data is untouched and the new table is usable at once.
+    expect(second.conversationOwner("conv-1")).toBe(owner.id);
+    expect(second.listShareLinks(owner.id)).toEqual([]);
+    const created = second.createShareLink({
+      id: "11111111-1111-4111-8111-111111111111",
+      ownerUserId: owner.id,
+      conversationId: "conv-1",
+      fileId: "file-1",
+      fileName: "deck.pptx",
+      slideIds: ["s1", "s2"],
+      tokenHash: "a".repeat(64),
+      tokenSalt: "s".repeat(22),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(created).toMatchObject({ status: "created", link: { slideIds: ["s1", "s2"], viewCount: 0, conversationTitle: "hi" } });
+    second.close();
+  });
+
+  it("reads a corrupt slide_ids_json as download-only instead of throwing", () => {
+    const { store } = createServices({ dataDir: path.join(tempDir, "share-corrupt"), agentRuntime: "local", sessionSecret: "sl" });
+    const owner = store.createUser({ username: "slcorrupt", displayName: "Owner", password: "password123" });
+    store.createShareLink({
+      id: "22222222-2222-4222-8222-222222222222",
+      ownerUserId: owner.id,
+      conversationId: "conv-x",
+      fileId: "file-x",
+      fileName: "deck.pptx",
+      slideIds: ["s1"],
+      tokenHash: "b".repeat(64),
+      tokenSalt: "s".repeat(22),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    dbOf(store).prepare("UPDATE share_links SET slide_ids_json = ?").run("{not json");
+    expect(store.listShareLinks(owner.id)[0].slideIds).toEqual([]);
+    dbOf(store).prepare("UPDATE share_links SET slide_ids_json = ?").run(JSON.stringify(["ok", 7, null]));
+    expect(store.getShareLink("22222222-2222-4222-8222-222222222222")!.slideIds).toEqual(["ok"]);
+  });
+});
+
 describe("store deleteUser canvas cascade (no orphans)", () => {
   // Reach the raw better-sqlite3 handle to assert no canvas rows survive, mirroring
   // the dbOf() pattern used by the canvas backfill tests above.

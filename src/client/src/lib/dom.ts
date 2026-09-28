@@ -87,30 +87,60 @@ export async function copyText(text: string, btn?: HTMLButtonElement | null): Pr
   }
 }
 
+// A copy flash borrows the button's content, accessible name and tooltip for
+// 1.2 s. The button's OWN state is saved once per flash window — a second copy
+// inside the window must not save the flash itself (the check icon, "복사됨")
+// as the state to return to — and restored EXACTLY: an attribute the button
+// never had is removed again, not left as "복사됨" (a button named by its
+// text alone would keep that name for good) or as an empty tooltip.
+interface CopyFlash {
+  html: string;
+  label: string | null;
+  title: string | null;
+  timer: number;
+}
+const copyFlashes = new WeakMap<HTMLButtonElement, CopyFlash>();
+
 function flashCopied(btn?: HTMLButtonElement | null): void {
-  if (!btn) return;
-  const original = btn.innerHTML;
-  const label = btn.getAttribute("aria-label");
-  window.clearTimeout((btn as any)._copyTimer);
-  btn.classList.remove("copy-failed");
-  btn.classList.add("copied");
-  btn.setAttribute("aria-label", "복사됨");
-  btn.title = "복사됨";
-  btn.innerHTML = CHECK_SVG;
-  (btn as any)._copyTimer = window.setTimeout(() => {
-    btn.classList.remove("copied");
-    btn.innerHTML = original;
-    if (label) btn.setAttribute("aria-label", label);
-    btn.title = label || "";
-  }, 1200);
+  flashCopy(btn, "copied", "복사됨");
 }
 
 function flashCopyFailed(btn?: HTMLButtonElement | null): void {
+  flashCopy(btn, "copy-failed", "복사 실패");
+}
+
+function flashCopy(btn: HTMLButtonElement | null | undefined, state: "copied" | "copy-failed", text: string): void {
   if (!btn) return;
-  btn.classList.add("copy-failed");
-  btn.setAttribute("aria-label", "복사 실패");
-  btn.title = "복사 실패";
-  window.setTimeout(() => btn.classList.remove("copy-failed"), 1200);
+  let saved = copyFlashes.get(btn);
+  if (saved) window.clearTimeout(saved.timer);
+  else {
+    saved = { html: btn.innerHTML, label: btn.getAttribute("aria-label"), title: btn.getAttribute("title"), timer: 0 };
+    copyFlashes.set(btn, saved);
+  }
+  btn.classList.remove("copied", "copy-failed");
+  btn.classList.add(state);
+  btn.setAttribute("aria-label", text);
+  btn.setAttribute("title", text);
+  // Success shows the check icon; a failure keeps the button's own content
+  // (and takes it back from a success still on screen).
+  const html = state === "copied" ? CHECK_SVG : saved.html;
+  if (btn.innerHTML !== html) btn.innerHTML = html;
+  saved.timer = window.setTimeout(() => endCopyFlash(btn), 1200);
+}
+
+function endCopyFlash(btn: HTMLButtonElement): void {
+  const saved = copyFlashes.get(btn);
+  if (!saved) return;
+  copyFlashes.delete(btn);
+  btn.classList.remove("copied", "copy-failed");
+  if (btn.innerHTML !== saved.html) btn.innerHTML = saved.html;
+  restoreAttribute(btn, "aria-label", saved.label);
+  restoreAttribute(btn, "title", saved.title);
+}
+
+function restoreAttribute(el: Element, name: string, value: string | null): void {
+  if (value === null) el.removeAttribute(name);
+  else el.setAttribute(name, value);
 }
 
 // Auto-grow a textarea with its content, capped at min(200px, 30% viewport) —

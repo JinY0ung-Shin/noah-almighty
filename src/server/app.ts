@@ -23,6 +23,7 @@ import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSttRouter } from "./routes/stt.js";
 import { createChatRouter, conversationHistoryForPrompt, expandChatSlashCommand } from "./routes/chat.js";
 import { createAdminRouter } from "./routes/admin.js";
+import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
 
@@ -201,6 +202,8 @@ export function createApp(services = createServices()) {
   app.use(createSkillShareRouter(deps));
   app.use(createSttRouter(deps));
   app.use(createChatRouter(deps));
+  // PPT share links: owner create/list/revoke + the signed-in recipient routes.
+  app.use(createShareLinksRouter(deps));
   app.use(createBrowserExtensionRouter(deps));
   app.use(createBrowserClipboardRouter({ store }));
   app.use(createAdminRouter(deps));
@@ -230,6 +233,12 @@ export function createApp(services = createServices()) {
   // Keep this last so errors from routers, the API boundary, static serving,
   // and the SPA fallback all receive the same scrubbed JSON response.
   app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // body-parser hangs the RAW request body on a parse error (`err.body`), and
+    // pino's err serializer prints every enumerable field — a malformed POST
+    // would put a share-link token (or a password) in the log verbatim.
+    if (err && typeof err === "object" && "body" in err) {
+      delete (err as Error & { body?: unknown }).body;
+    }
     logger.error({ err, method: req.method, path: req.path, userId: (req as AuthenticatedRequest).user?.id ?? null }, "unhandled error");
     res.status(500).json({ error: "Internal server error" });
   });

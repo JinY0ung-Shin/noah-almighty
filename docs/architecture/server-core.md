@@ -13,6 +13,10 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `avatarDir`, MIME/size/password consts, `AppServices`) live in `routes/_shared.ts`.
   **`createApp`/`createServices`/`expandChatSlashCommand`/`conversationHistoryForPrompt`/`AppServices`/
   `AgentResponse` are still imported from `app.ts`** (re-exported) — don't change those import paths.
+- **PPT share links** have their own router (`routes/shareLinks.ts`, `createShareLinksRouter`, mounted right
+  after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
+  cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY
+  `deleteCanvasArtifactsForConversation` call. Mechanics → [`share-links.md`](share-links.md).
 - Non-obvious route homes: git-token/secrets/ssh-key/git-identity/**knowledge gap-inbox**
   (`/api/me/knowledge/requests`)/**notifications** all live in `routes/knowledgeRepo.ts`;
   **discovery** (`/api/avatars*`) + **conversations** + the **chat SSE** endpoint live in

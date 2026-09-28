@@ -5,6 +5,7 @@
 // messages (claudeAgent's file-output wrappers) and client-side on live
 // arrivals (chat.ts "file" event), both as "text length so far".
 
+import { cardSlideAttachments } from "../../../shared/shareLinks";
 import type { MessageAttachment } from "./types";
 
 /** One render unit: a text slice, then the cards anchored at its end. */
@@ -25,17 +26,18 @@ export interface BubbleSegment {
  */
 /**
  * Hidden preview images belonging to a clicked file card (deck slide renders,
- * browser-screenshot copies) — what the file-preview panel shows. Slides
- * stamped with a parentId belong to ONE card; legacy slides (no parentId)
- * belong to whichever card is clicked — the pre-link behavior.
+ * browser-screenshot copies) — what the file-preview panel shows. The shared
+ * `cardSlideAttachments` rule: the renders stamped with THIS card's id when
+ * there are any, and only then the unstamped ones (messages from before
+ * `parentId` existed). Never both — the deck-review loop publishes unstamped
+ * hidden canvas renders in the same turn as the deck, and mixing them in showed
+ * every slide twice.
  */
 export function panelSlides(
   attachments: MessageAttachment[] | undefined,
   parent: MessageAttachment,
 ): MessageAttachment[] {
-  return (attachments ?? []).filter(
-    (att) => att.kind === "image" && att.hidden && (!att.parentId || att.parentId === parent.id),
-  );
+  return cardSlideAttachments(attachments, parent.id);
 }
 
 export function segmentAttachments(

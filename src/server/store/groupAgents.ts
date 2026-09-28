@@ -187,6 +187,7 @@ export function withGroupAgents<TBase extends Constructor<StoreBase>>(Base: TBas
         );
         for (const c of convRows) {
           this.deleteCanvasArtifactsForConversation(c.id);
+          this.deleteShareLinksForConversation(c.id);
           delMsgs.run(c.id);
         }
         this.db

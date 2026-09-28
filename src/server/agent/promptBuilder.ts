@@ -452,6 +452,29 @@ function fileOutputSection(request: AgentRequest): string | null {
 }
 
 /**
+ * Share links for share_file's PPTX cards, in one of two forms:
+ * - TOOL LINE (`request.shareLinksEnabled`, stamped from runPlan's
+ *   `shareLinkToolActive`): deliberately one short sentence — the trigger, the
+ *   audience and the security rules live in the tool description and its
+ *   result, and the maximal owner prompt has only ~70 characters left for this
+ *   (tests/system-manual.test.ts budgets it).
+ * - REDIRECT: every other run that can deliver files, so the avatar neither
+ *   denies the feature nor improvises one — the 공유 링크 button on the card,
+ *   except in group-agent threads, which cannot be link-shared at all.
+ * Mirrored by describe_system's share-link line (both read the same boolean).
+ */
+function shareLinkSection(request: AgentRequest): string | null {
+  if (request.shareLinksEnabled) {
+    return "Share links: `create_share_link`, ONLY if the user asks for a link.";
+  }
+  if (!request.fileOutputEnabled) return null;
+  if (request.groupAgent) {
+    return "Share links cannot be created for a group-agent conversation, and its file cards have no 공유 링크 button; the member can still download a deck from its card.";
+  }
+  return "Share links for a PPTX card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card.";
+}
+
+/**
  * Standing guidance for draw.io diagram work. Unlike decks there is no
  * per-deployment toolchain gate: the client renders shared .drawio files
  * itself, so this only needs the run to be able to publish files.
@@ -952,6 +975,10 @@ export function buildSystemPromptAppend(
   const fileOutputBlock = fileOutputSection(request);
   if (fileOutputBlock) {
     lines.push(fileOutputBlock);
+  }
+  const shareLinkBlock = shareLinkSection(request);
+  if (shareLinkBlock) {
+    lines.push(shareLinkBlock);
   }
   const deckBlock = deckSection(request);
   if (deckBlock) {

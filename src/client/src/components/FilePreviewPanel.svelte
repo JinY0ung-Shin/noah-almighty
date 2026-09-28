@@ -5,6 +5,7 @@
   import { copyText } from "../lib/dom";
   import { formatFileSize } from "../lib/format";
   import { getGraphViewer, isDrawioAttachment, loadGraphViewer } from "../lib/drawioViewer";
+  import { isPptxCard } from "../../../shared/shareLinks";
   import type { ChatPane, MessageAttachment } from "../lib/types";
 
   // Right-side preview for a shared file attachment (msg-file-card click;
@@ -16,9 +17,27 @@
   // Reuses the .canvas-panel frame classes + the same resize interaction so it
   // behaves exactly like the visual canvas in the same slot.
   export let pane: ChatPane;
+  /**
+   * 공유 링크 hands the card to ChatView, whose ONE dialog serves both entry
+   * points. The dialog must not live in this panel: a canvas that asks for
+   * input clears the preview (chat.ts handleCanvas), and the unmount would
+   * take an open dialog with it — mid-create too, leaving a new link whose
+   * URL is never shown.
+   */
+  export let onShare: (attachment: MessageAttachment) => void = () => {};
 
   $: preview = pane.filePreview ?? null;
   $: slides = preview?.slides ?? [];
+  // 공유 링크: PPTX decks only, and never from a group agent's thread (member
+  // threads are private; the group shares through its second brain).
+  $: shareable = Boolean(preview && isPptxCard(preview.attachment) && !pane.avatar.groupAgent && !pane.avatar.id.startsWith("group:"));
+  // A card still streaming has no persisted message the server can find yet.
+  $: previewId = preview?.attachment.id ?? "";
+  $: shareLive = Boolean(previewId && pane.streaming && (pane.liveAttachments ?? []).some((att) => att.id === previewId));
+
+  function share(): void {
+    if (preview) onShare(preview.attachment);
+  }
 
   const WIDTH_MIN = 300;
   const WIDTH_MAX = 1520;
@@ -235,6 +254,15 @@
             disabled={drawioStatus !== "ready"}
             on:click={(event) => copyText(drawioXml, event.currentTarget as HTMLButtonElement)}
           >복사</button>
+        {/if}
+        {#if shareable}
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            disabled={shareLive}
+            title={shareLive ? "응답이 끝난 뒤 만들 수 있습니다." : undefined}
+            on:click={share}
+          >공유 링크</button>
         {/if}
         <!-- draggable=false: a link styled as a button must not start a native
              link-drag when the pointer moves during the press. -->

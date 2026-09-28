@@ -12,6 +12,7 @@ import {
   SDK_TASK_UPDATE_TOOLS,
   SDK_TOOL_LABELS,
   SDK_UI_HANDLED_TOOLS,
+  mcpToolInputSummary,
   sdkToolLabel,
 } from "../../shared/sdkToolPresentation.js";
 
@@ -110,6 +111,10 @@ export function traceSdkMessage(message: Record<string, unknown>): void {
 
 /** One-line, human-readable summary of a tool's input for the activity UI. */
 export function summarizeToolInput(name: string, input: Record<string, unknown>): string {
+  // Tools whose first string argument is an opaque id (create_share_link) get
+  // their shared, user-facing summary — the SAME one the client falls back to.
+  const special = mcpToolInputSummary(name, input);
+  if (special !== undefined) return special;
   const path = asString(input.file_path) || asString(input.path) || asString(input.notebook_path);
   const cmd = asString(input.command);
   const pattern = asString(input.pattern);

@@ -3,14 +3,16 @@
 // "생각 과정" body and the "작업 내역" tree in the template cost a markdown parse
 // and an ActivityTree mount for EVERY message on load. Both now render on first
 // open. See lib/format.ts renderMarkdownCached for the matching per-token fix.
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatView from "../src/client/src/views/ChatView.svelte";
-import { replaceState } from "../src/client/src/lib/state.js";
+import { attachRun } from "../src/client/src/lib/chat.js";
+import { readState, replaceState } from "../src/client/src/lib/state.js";
 import type { ChatPane } from "../src/client/src/lib/types.js";
 import type { AvatarDetail, StoredMessage } from "../src/server/types.js";
+import { PPTX_MEDIA_TYPE } from "../src/shared/shareLinks.js";
 
 const THINKING = "먼저 요구사항을 정리한다";
 const ANSWER = "정리한 결과입니다";
@@ -329,5 +331,187 @@ describe("ChatView transcript · mid-turn messages", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector(".steer-badge")).toBeNull();
     expect(rows[1].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 공유 링크 beside a deck card                                         */
+/* ------------------------------------------------------------------ */
+
+describe("ChatView transcript · 공유 링크 beside a deck card", () => {
+  const deck = {
+    id: "deck-1",
+    kind: "file",
+    mediaType: PPTX_MEDIA_TYPE,
+    name: "분기 보고.pptx",
+    size: 4096,
+    anchor: 0,
+  };
+
+  function deckMessage(attachments: unknown[] = [deck]): StoredMessage {
+    return {
+      ...assistantMessage(),
+      id: "m-deck",
+      content: "PPT를 만들었습니다.",
+      attachments,
+      response: { kind: "text", runtime: "claude", summary: "완료", text: "PPT를 만들었습니다." },
+    } as unknown as StoredMessage;
+  }
+
+  it("puts the control BESIDE a stored PPTX card, as one flex item with it", () => {
+    replaceState({ avatars: [], chatPanes: [pane([deckMessage()])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    const share = screen.getByRole("button", { name: "공유 링크: 분기 보고.pptx" });
+    // Never nested in the card: the card is itself a <button>.
+    expect(share.closest(".msg-file-card")).toBeNull();
+    const pair = share.parentElement!;
+    expect(pair.className).toContain("msg-file-share");
+    expect(pair.querySelector(":scope > .msg-file-card")?.textContent).toContain("분기 보고.pptx");
+    expect(pair.parentElement?.className).toContain("msg-images");
+    expect(share.getAttribute("title")).toBe("공유 링크");
+    expect(container.querySelectorAll(".msg-file-share")).toHaveLength(1);
+  });
+
+  it("opens the card's dialog from the control", async () => {
+    replaceState({ avatars: [], chatPanes: [pane([deckMessage()])], activePaneId: "pane-1" });
+    render(ChatView);
+    await fireEvent.click(screen.getByRole("button", { name: "공유 링크: 분기 보고.pptx" }));
+    expect(await screen.findByRole("dialog", { name: "공유 링크" })).toBeTruthy();
+    const fetchMock = vi.mocked(fetch);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+        "/api/me/share-links?conversationId=conv-1&fileId=deck-1",
+      ),
+    );
+  });
+
+  it("keeps a dialog opened from the preview panel through a review canvas, then shows the new link", async () => {
+    // The deck-review loop: round 2 streams in this pane while the owner shares
+    // the STORED round-1 deck from the preview panel. The round ends with a
+    // canvas that asks for input, which clears the preview (handleCanvas) — a
+    // dialog rendered inside the panel went with it, mid-create included.
+    const token = "A".repeat(43);
+    const link = {
+      id: "link-1",
+      conversationId: "conv-1",
+      conversationTitle: "PPT 만들기",
+      fileId: "deck-1",
+      fileName: "분기 보고.pptx",
+      slideCount: 0,
+      createdAt: "2026-09-29T00:00:00.000Z",
+      expiresAt: "2026-10-06T00:00:00.000Z",
+      expired: false,
+      viewCount: 0,
+      lastViewedAt: null,
+      url: `/#/share/${token}`,
+    };
+    let sse: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let releaseCreate: () => void = () => {};
+    const createHeld = new Promise<void>((resolve) => (releaseCreate = resolve));
+    const posts: string[] = [];
+    const reply = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/chat/runs/run-2/events")) {
+          const body = new ReadableStream<Uint8Array>({ start: (controller) => void (sse = controller) });
+          return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+        }
+        if (url.startsWith("/api/me/share-links?")) return reply([]);
+        if (init?.method === "POST" && url.endsWith("/share-links")) {
+          posts.push(url);
+          await createHeld;
+          return reply({ link, created: true }, 201);
+        }
+        if (url.startsWith("/api/chat/runs?")) return reply({ run: null });
+        return reply({ avatars: [], conversations: [], messages: [], skills: [] });
+      }),
+    );
+    const frame = (event: string, data: unknown) =>
+      sse!.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    // A real pane (makePane) always carries these; the stream's handlers read them.
+    const streamingPane = Object.assign(pane([deckMessage()]), { canvases: [], filePreview: null });
+    replaceState({ avatars: [], chatPanes: [streamingPane], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    const run = attachRun("pane-1", "run-2");
+    try {
+      await waitFor(() => expect(sse).toBeTruthy());
+      await fireEvent.click(container.querySelector(".msg-file-card")!);
+      const panel = await waitFor(() => {
+        const el = container.querySelector<HTMLElement>(".file-preview-panel");
+        expect(el).toBeTruthy();
+        return el!;
+      });
+      await fireEvent.click(within(panel).getByRole("button", { name: "공유 링크" }));
+      const dialog = await screen.findByRole("dialog", { name: "공유 링크" });
+      await fireEvent.click(await within(dialog).findByRole("button", { name: "공유 링크 만들기" }));
+      await waitFor(() => expect(posts).toEqual(["/api/conversations/conv-1/files/deck-1/share-links"]));
+
+      frame("canvas", {
+        artifactId: "cv-r2",
+        title: "2라운드 리뷰",
+        content: "### 3번 슬라이드 – 매출 추이",
+        contentType: "markdown",
+        controls: [{ id: "r2-all", type: "text", label: "전체 수정 요청", required: false }],
+        interaction: "async",
+        runId: "run-2",
+      });
+      await waitFor(() => expect(readState().chatPanes[0].filePreview).toBeNull());
+      await tick();
+      expect(container.querySelector(".file-preview-panel")).toBeNull();
+      // The SAME dialog, still mid-create…
+      expect(screen.getByRole("dialog", { name: "공유 링크" })).toBe(dialog);
+      expect(within(dialog).getByRole("button", { name: "만드는 중…" })).toBeTruthy();
+      // …and it shows the link once the POST resolves.
+      releaseCreate();
+      const address = (await within(dialog).findByLabelText("링크 주소")) as HTMLInputElement;
+      expect(address.value).toBe(`${location.origin}/#/share/${token}`);
+    } finally {
+      releaseCreate();
+      readState().chatPanes[0]?.abortController?.abort();
+      sse?.close();
+      await run;
+    }
+  });
+
+  it("waits for the turn to be stored: no control on a LIVE card", () => {
+    const live = pane([]);
+    (live as unknown as Record<string, unknown>).streaming = true;
+    live.liveText = "PPT를 만드는 중";
+    live.liveAttachments = [deck] as never;
+    replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    expect(container.querySelector(".message.assistant .msg-file-card")?.textContent).toContain("분기 보고.pptx");
+    expect(screen.queryByRole("button", { name: /^공유 링크/ })).toBeNull();
+  });
+
+  it("leaves other file cards exactly as they were", () => {
+    const pdf = { id: "pdf-1", kind: "file", mediaType: "application/pdf", name: "보고.pdf", anchor: 0 };
+    replaceState({ avatars: [], chatPanes: [pane([deckMessage([pdf])])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    expect(container.querySelector(".msg-file-share")).toBeNull();
+    expect(container.querySelector(".msg-images > .msg-file-card")?.textContent).toContain("보고.pdf");
+  });
+
+  it("offers no control in a group agent's thread", () => {
+    const groupPane = pane([deckMessage()]);
+    groupPane.avatar = {
+      ...avatar,
+      id: "group:g1:a1",
+      isOwn: false,
+      groupAgent: { groupId: "g1", groupName: "팀" },
+    } as unknown as AvatarDetail;
+    replaceState({ avatars: [], chatPanes: [groupPane], activePaneId: "pane-1" });
+    render(ChatView);
+    expect(screen.queryByRole("button", { name: /^공유 링크/ })).toBeNull();
+  });
+
+  it("keeps the control in split view, where the card click downloads instead", () => {
+    const second = { ...pane([]), id: "pane-2", conversationId: "conv-2" } as ChatPane;
+    replaceState({ avatars: [], chatPanes: [pane([deckMessage()]), second], activePaneId: "pane-1" });
+    render(ChatView);
+    expect(screen.getByRole("button", { name: "공유 링크: 분기 보고.pptx" })).toBeTruthy();
   });
 });

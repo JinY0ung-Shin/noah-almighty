@@ -11,7 +11,9 @@ import {
   publishWorkspaceFile,
   resolveStoredFile,
   sanitizeDownloadName,
+  withDownloadExtension,
   MAX_CHAT_FILE_BYTES,
+  MAX_DOWNLOAD_NAME_LENGTH,
 } from "../src/server/chatFiles.js";
 import { resolveStoredImage } from "../src/server/chatImages.js";
 import { withTempDir } from "./helpers.js";
@@ -76,6 +78,32 @@ describe("chatFiles", () => {
       fs.writeFileSync(path.join(ws, "deck.pptx"), PPTX_BYTES);
       const result = publishWorkspaceFile(config(), "conv1", "deck.pptx", [ws], "주간 보고");
       expect("attachment" in result && result.attachment.name).toBe("주간 보고.pptx");
+    });
+
+    it("forces the real extension INSIDE the name cap, so no later cut can remove it", () => {
+      const ws = workspace();
+      fs.writeFileSync(path.join(ws, "deck.pptx"), PPTX_BYTES);
+      const nameFor = (requested: string) => {
+        const result = publishWorkspaceFile(config(), "conv-names", "deck.pptx", [ws], requested);
+        if (!("attachment" in result)) throw new Error(`publish failed: ${result.error}`);
+        return result.attachment.name!;
+      };
+      // share_file's schema allows 200 characters, so "<196>.jar" used to become a
+      // 205-char "<196>.jar.pptx" card that a 200-char re-sanitize cut back to ".jar".
+      for (const ext of ["jar", "pptm", "html"]) {
+        const requested = `Q3_report_${"x".repeat(189 - ext.length)}.${ext}`;
+        expect(requested).toHaveLength(MAX_DOWNLOAD_NAME_LENGTH);
+        const name = nameFor(requested);
+        expect(name).toHaveLength(MAX_DOWNLOAD_NAME_LENGTH);
+        expect(name).toMatch(/^Q3_report_x+\.pptx$/);
+        expect(sanitizeDownloadName(name)).toBe(name);
+      }
+      // A 196-char stem used to end ".ppt" after the cut.
+      expect(nameFor(`Q3_report_${"x".repeat(186)}`)).toBe(`Q3_report_${"x".repeat(185)}.pptx`);
+      // A bidi override never reaches the card label.
+      expect(nameFor(`invoice_${"x".repeat(183)}‮xtpp.jar`)).toBe(`invoice_${"x".repeat(183)}xtpp.pptx`);
+      // Short names keep what they asked for, extension appended.
+      expect(nameFor("Q3 review.jar")).toBe("Q3 review.jar.pptx");
     });
 
     it("rejects extensions outside the allowlist", () => {
@@ -241,6 +269,50 @@ describe("chatFiles", () => {
       expect(sanitizeDownloadName(undefined)).toBeNull();
       // No separator survives, whatever the input shape.
       expect(sanitizeDownloadName("..\\..\\evil.txt")).not.toMatch(/[\\/]/);
+    });
+
+    it("strips bidi and other format controls, C1 controls, line separators and lone surrogates", () => {
+      // U+202E would make "invoice\u202etpp.jar" DISPLAY as "invoiceraj.ppt\u2026".
+      expect(sanitizeDownloadName("invoice\u202etpp.jar.pptx")).toBe("invoicetpp.jar.pptx");
+      for (const control of ["\u200e", "\u200f", "\u202a", "\u202d", "\u2066", "\u2069", "\u200b", "\ufeff", "\u0085", "\u2028", "\u2029"]) {
+        expect(sanitizeDownloadName(`\ubcf4\uace0${control}\uc11c.pptx`)).toBe("\ubcf4\uace0\uc11c.pptx");
+      }
+      expect(sanitizeDownloadName("deck\ud83d.pptx")).toBe("deck.pptx");
+      expect(sanitizeDownloadName("\u202e")).toBeNull();
+      // The joiners stay: they shape Persian/Indic names and emoji sequences, and cannot move an extension.
+      expect(sanitizeDownloadName("\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.pptx")).toBe("\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.pptx");
+      expect(sanitizeDownloadName("\ud83d\udc69\u200d\ud83d\udcbb \ud300.pptx")).toBe("\ud83d\udc69\u200d\ud83d\udcbb \ud300.pptx");
+    });
+
+    it("shortens an overlong name in its stem, keeping the last extension and whole surrogate pairs", () => {
+      // What share_file stored for a 200-char "\u2026.jar" before its own cap: the
+      // old 200-char cut dropped exactly the forced ".pptx" and exposed ".jar".
+      expect(sanitizeDownloadName(`${"x".repeat(196)}.jar.pptx`)).toBe(`${"x".repeat(195)}.pptx`);
+      expect(sanitizeDownloadName("x".repeat(250))).toBe("x".repeat(200));
+      // An emoji straddling the cut is dropped whole \u2014 half a pair would make
+      // the download's encodeURIComponent throw.
+      expect(sanitizeDownloadName(`${"\uac00".repeat(199)}\ud83d\ude00`)).toBe("\uac00".repeat(199));
+      expect(sanitizeDownloadName(`${"\uac00".repeat(194)}\ud83d\ude00.pptx`)).toBe(`${"\uac00".repeat(194)}.pptx`);
+      // Idempotent: re-sanitizing a stored name changes nothing.
+      for (const raw of [`${"x".repeat(196)}.jar.pptx`, "x".repeat(250), `${"\uac00".repeat(199)}\ud83d\ude00`, "\uc8fc\uac04 \ubcf4\uace0.pptx"]) {
+        const once = sanitizeDownloadName(raw)!;
+        expect(once.length).toBeLessThanOrEqual(MAX_DOWNLOAD_NAME_LENGTH);
+        expect(sanitizeDownloadName(once)).toBe(once);
+        expect(() => encodeURIComponent(once)).not.toThrow();
+      }
+    });
+  });
+
+  describe("withDownloadExtension", () => {
+    it("always ends in the served extension within the cap, shortening the stem to fit", () => {
+      expect(withDownloadExtension("\uc8fc\uac04 \ubcf4\uace0.pptx", "pptx")).toBe("\uc8fc\uac04 \ubcf4\uace0.pptx");
+      expect(withDownloadExtension("Report.PPTX", "pptx")).toBe("Report.PPTX");
+      expect(withDownloadExtension("evil.jar", "pptx")).toBe("evil.jar.pptx");
+      // A 200-char name ending ".jar" loses stem characters \u2014 and its ".jar" \u2014 never the extension.
+      const long = `Q3_report_${"x".repeat(186)}.jar`;
+      expect(withDownloadExtension(long, "pptx")).toBe(`Q3_report_${"x".repeat(185)}.pptx`);
+      expect(withDownloadExtension(`${"x".repeat(196)}.jar.pptx`, "pptx")).toBe(`${"x".repeat(195)}.pptx`);
+      expect(withDownloadExtension("   ", "pdf")).toBe("file.pdf");
     });
   });
 });

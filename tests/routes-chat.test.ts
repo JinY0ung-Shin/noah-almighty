@@ -10,8 +10,14 @@ import type {
   AppConfig,
   ConversationSummary,
   ExternalAgentConfig,
+  MessageAttachment,
 } from "../src/server/types.js";
-import type { AgentEvents, BrowserResult, FileOutputResult } from "../src/server/agent/events.js";
+import type {
+  AgentEvents,
+  BrowserResult,
+  FileOutputResult,
+  ShareLinkResult,
+} from "../src/server/agent/events.js";
 import type { Store } from "../src/server/store.js";
 import { makeBareRemote, parseSse, signup, withTempDir } from "./helpers.js";
 import {
@@ -23,7 +29,20 @@ import {
 import { chatImagesDir, MAX_CHAT_IMAGES_PER_MESSAGE, resolveStoredImage } from "../src/server/chatImages.js";
 import { renderDocumentPreviews } from "../src/server/deckRender.js";
 import { getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
-import { formatDurationKo, MAX_STEER_LENGTH } from "../src/server/routes/chat.js";
+import {
+  executeChatTurn,
+  formatDurationKo,
+  MAX_STEER_LENGTH,
+  resolveChatTarget,
+} from "../src/server/routes/chat.js";
+import { personalAgentAvatarId } from "../src/server/personalAgents.js";
+import {
+  newShareTokenSalt,
+  SHARE_LINK_CAP_ERROR,
+  SHARE_LINK_UNSHOWABLE_ERROR,
+  SHARE_LINK_UNWATCHED_ERROR,
+} from "../src/server/shareLinks.js";
+import { PPTX_MEDIA_TYPE, type ShareViewPayload } from "../src/shared/shareLinks.js";
 
 // Shared control surface for the mocked agent layer. `impl`, when set, fully
 // drives a turn (fires the events callbacks the route wires); otherwise a default
@@ -1924,6 +1943,48 @@ describe("publishing images and documents mid-turn (onFile / onShareFile)", () =
     expect(assistant.attachments).toHaveLength(total);
   });
 
+  it("spends the hidden budget on UNSTAMPED publishes only, so a delivered deck leaves the review canvas its renders", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "hiddencap").expect(201)).body.user.id as string;
+    // share_file's own renders: a full preview set, every one stamped with the card id.
+    H.previewPages = Array.from({ length: MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE }, (_, i) => Buffer.from(`page-${i + 1}`));
+
+    let deck!: FileOutputResult;
+    const hidden: FileOutputResult[] = [];
+    let overflow!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, config, _store, events) => {
+      fs.writeFileSync(path.join(agentRequest.cwd!, "deck.pptx"), PPTX_BYTES);
+      fs.writeFileSync(path.join(agentRequest.cwd!, "render.png"), PNG_BYTES);
+      deck = await events.onShareFile!({ path: "deck.pptx" });
+      // The review canvas's renders in the same turn (item 1's loop).
+      for (let i = 0; i < MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE; i++) {
+        hidden.push(await events.onFile!({ path: "render.png", hidden: true }));
+      }
+      overflow = await events.onFile!({ path: "render.png", hidden: true });
+      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "리뷰" };
+    };
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-hiddencap", message: "덱 리뷰" })
+      .expect(200);
+
+    expect(deck).toMatchObject({ behavior: "shown", previews: MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE });
+    expect(hidden.every((r) => r.behavior === "shown")).toBe(true);
+    // The cap itself still holds for the unstamped publishes.
+    expect(overflow.behavior).toBe("error");
+    if (overflow.behavior !== "error") return;
+    expect(overflow.message).toContain(`already published ${MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE} hidden images`);
+    const assistant = store.listMessages(ownerId, "conv-hiddencap").find((m) => m.role === "assistant")!;
+    expect(assistant.attachments!.filter((a) => a.kind === "image" && a.hidden && a.parentId)).toHaveLength(
+      MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
+    );
+    expect(assistant.attachments!.filter((a) => a.kind === "image" && a.hidden && !a.parentId)).toHaveLength(
+      MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
+    );
+  });
+
   it("maps a show_file publish failure to model-facing guidance", async () => {
     const { app } = boot();
     const owner = request.agent(app);
@@ -3210,5 +3271,461 @@ describe("formatDurationKo", () => {
     expect(formatDurationKo(60 * 60_000)).toBe("1시간");
     expect(formatDurationKo(90 * 60_000)).toBe("1시간 30분");
     expect(formatDurationKo(300 * 60_000)).toBe("5시간");
+  });
+});
+
+describe("create_share_link host callback (onShareLink)", () => {
+  const ok = (result: ShareLinkResult) => {
+    if (!result.ok) throw new Error(`expected ok, got: ${result.error}`);
+    return result;
+  };
+  const errorOf = (result: ShareLinkResult) => (result.ok ? "OK" : result.error);
+  const tokenOf = (url: string) => /#\/share\/([A-Za-z0-9_-]{43})$/.exec(url)?.[1] ?? "";
+  /** A persisted pptx card in someone else's conversation (bytes on disk + the message). */
+  function seedForeignDeck(store: Store, config: AppConfig, ownerId: string, conversationId: string): string {
+    const id = crypto.randomUUID();
+    fs.mkdirSync(chatFilesDir(config, conversationId), { recursive: true });
+    fs.writeFileSync(path.join(chatFilesDir(config, conversationId), `${id}.pptx`), PPTX_BYTES);
+    store.touchConversation(ownerId, conversationId, ownerId, "남의 덱");
+    store.addMessage(conversationId, {
+      role: "assistant",
+      content: "덱",
+      attachments: [{ id, kind: "file", mediaType: PPTX_MEDIA_TYPE, name: "남의 덱.pptx", size: PPTX_BYTES.length }],
+    });
+    return id;
+  }
+
+  it("is supplied ONLY on an interactive turn of the owner's own avatar", async () => {
+    const { services, store, app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "shareowner").expect(201)).body.user.id as string; // first signup = admin
+    const colleague = request.agent(app);
+    const colleagueId = (await signup(colleague, "sharecolleague").expect(201)).body.user.id as string;
+    const group = store.createGroup({ name: "팀" });
+    store.addGroupMember(group.id, ownerId);
+    store.addGroupMember(group.id, colleagueId);
+    const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
+    const bot = store.createPersonalAgent(ownerId, { displayName: "봇" });
+
+    const supplied = new Map<string, boolean>();
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      supplied.set(agentRequest.conversationId!, typeof events.onShareLink === "function");
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "ok" };
+    };
+    const turn = (agent: ReturnType<typeof request.agent>, avatarId: string, conversationId: string) =>
+      agent.post("/api/chat/stream").send({ avatarId, conversationId, message: "안녕" }).expect(200);
+
+    await turn(owner, ownerId, "conv-own");
+    await turn(owner, personalAgentAvatarId(ownerId, bot.id), "conv-bot");
+    await turn(owner, `group:${group.id}:${groupAgent.id}`, "conv-group");
+    await turn(colleague, ownerId, "conv-colleague");
+
+    // Server-started turns of the owner's own avatar: an external-task-API turn
+    // and an unattended (deadlined) one.
+    const target = resolveChatTarget({
+      store,
+      externalAgents: [],
+      viewerGroupIds: new Set<string>(),
+      viewerUserId: ownerId,
+      avatarId: ownerId,
+      hasImages: false,
+      ownerOnlyCommand: false,
+    });
+    if (!target.ok) throw new Error("expected the owner's own avatar to resolve");
+    const direct = (conversationId: string, extra: { externalTaskId?: string; unattendedDeadlineMs?: number }) =>
+      executeChatTurn(
+        { config, store, observedModel: services.observedModel },
+        {
+          ownerUserId: ownerId,
+          ownerDisplayName: "shareowner",
+          target: target.target,
+          conversationId,
+          agentMessage: "작업",
+          displayMessage: "작업",
+          images: [],
+          regenerate: false,
+          audit: () => {},
+          ...extra,
+        },
+        { onRunOpen: () => true },
+      );
+    expect(await direct("conv-task", { externalTaskId: "task-1" })).toEqual({ ok: true });
+    expect(await direct("conv-unattended", { unattendedDeadlineMs: 60_000 })).toEqual({ ok: true });
+
+    expect(Object.fromEntries(supplied)).toEqual({
+      "conv-own": true,
+      "conv-bot": false,
+      "conv-group": false,
+      "conv-colleague": false,
+      "conv-task": false,
+      "conv-unattended": false,
+    });
+  });
+
+  it("links a deck shared earlier in the SAME turn with only its stamped renders, then reuses it", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "linkowner").expect(201)).body.user.id as string;
+    const viewer = request.agent(app);
+    await signup(viewer, "linkviewer").expect(201);
+    H.previewPages = [Buffer.from("page-1"), Buffer.from("page-2")];
+
+    let card!: MessageAttachment;
+    let first!: ShareLinkResult;
+    let second!: ShareLinkResult;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      const cwd = agentRequest.cwd!;
+      fs.writeFileSync(path.join(cwd, "deck.pptx"), PPTX_BYTES);
+      fs.writeFileSync(path.join(cwd, "review.png"), PNG_BYTES);
+      // A review render published hidden in the same turn: unstamped, so never a slide of the link.
+      await events.onFile!({ path: "review.png", hidden: true });
+      const shared = await events.onShareFile!({ path: "deck.pptx", name: "3분기 보고" });
+      if (shared.behavior !== "shown") throw new Error("share_file failed");
+      card = shared.attachment;
+      // Not persisted yet — the host callback still sees this turn's card.
+      expect(store.findCardMessageAttachments(ownerId, "conv-link", card.id)).toBeNull();
+      first = await events.onShareLink!({});
+      second = await events.onShareLink!({ attachmentId: card.id, expiresInDays: 30 });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "링크를 만들었습니다." };
+    };
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-link", message: "PPT 만들고 동료가 볼 링크도 줘" })
+      .expect(200);
+
+    const created = ok(first);
+    expect(created).toMatchObject({ created: true, fileName: "3분기 보고.pptx", slideCount: 2 });
+    // Absolute via the run's appOrigin; the token rides the fragment.
+    expect(created.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/#\/share\/[A-Za-z0-9_-]{43}$/);
+    expect(Date.parse(created.expiresAt) - Date.now()).toBeGreaterThan(6.9 * 24 * 60 * 60 * 1000);
+    // One active link per card: the second call returns it unchanged (the 30 days are ignored).
+    expect(ok(second)).toEqual({ ...created, created: false });
+
+    // The snapshot holds exactly the card's stamped renders.
+    const assistant = store.listMessages(ownerId, "conv-link").find((m) => m.role === "assistant")!;
+    const stamped = assistant.attachments!.filter((a) => a.kind === "image" && a.parentId === card.id).map((a) => a.id);
+    expect(stamped).toHaveLength(2);
+    const [row] = store.listShareLinks(ownerId);
+    expect(row.slideIds).toEqual(stamped);
+
+    // A colleague signed in to Noah opens it.
+    const opened = await viewer.post("/api/share/open").send({ token: tokenOf(created.url) }).expect(200);
+    const payload = opened.body as ShareViewPayload;
+    expect(payload.slides.map((s) => s.alt)).toEqual(["슬라이드 1", "슬라이드 2"]);
+    expect(payload.ownerUsername).toBe("linkowner");
+
+    const audits = store.listAudit(ownerId, true).filter((a) => a.action === "share_link_create");
+    expect(audits.map((a) => a.detail)).toEqual([`link ${row.id} "3분기 보고.pptx" 7d via avatar`]);
+  });
+
+  it("links a deck from an EARLIER turn, by id or as the most recent deck", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "prioruser").expect(201)).body.user.id as string;
+    H.previewPages = [Buffer.from("page-1")];
+
+    let cardId = "";
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      fs.writeFileSync(path.join(agentRequest.cwd!, "deck.pptx"), PPTX_BYTES);
+      const shared = await events.onShareFile!({ path: "deck.pptx", name: "지난 덱" });
+      if (shared.behavior === "shown") cardId = shared.attachment.id;
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "덱" };
+    };
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-prior", message: "덱" }).expect(200);
+
+    let byId!: ShareLinkResult;
+    let latest!: ShareLinkResult;
+    H.impl = async (_req, _pr, cfg, _store, events) => {
+      byId = await events.onShareLink!({ attachmentId: cardId, expiresInDays: 1 });
+      latest = await events.onShareLink!({});
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "링크" };
+    };
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-prior", message: "링크 줘" }).expect(200);
+
+    expect(ok(byId)).toMatchObject({ created: true, fileName: "지난 덱.pptx", slideCount: 1 });
+    expect(ok(latest)).toMatchObject({ created: false, url: ok(byId).url });
+    expect(store.listShareLinks(ownerId)).toHaveLength(1);
+  });
+
+  it("refuses non-PPTX cards, foreign ids, bad input, ambiguity and a conversation without a deck", async () => {
+    const { store, app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "refuseowner").expect(201)).body.user.id as string;
+    const otherId = (await signup(request.agent(app), "refuseother").expect(201)).body.user.id as string;
+    const foreignId = seedForeignDeck(store, config, otherId, "conv-foreign");
+
+    const results: Record<string, ShareLinkResult> = {};
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      const cwd = agentRequest.cwd!;
+      fs.writeFileSync(path.join(cwd, "report.pdf"), PDF_BYTES);
+      results.none = await events.onShareLink!({});
+      const pdf = await events.onShareFile!({ path: "report.pdf", name: "보고서" });
+      if (pdf.behavior !== "shown") throw new Error("share_file failed");
+      results.pdf = await events.onShareLink!({ attachmentId: pdf.attachment.id });
+      results.onlyPdf = await events.onShareLink!({});
+      results.foreign = await events.onShareLink!({ attachmentId: foreignId });
+      results.badId = await events.onShareLink!({ attachmentId: "../../etc/passwd" });
+      results.badExpiry = await events.onShareLink!({ expiresInDays: 3 });
+      fs.writeFileSync(path.join(cwd, "sales.pptx"), PPTX_BYTES);
+      fs.writeFileSync(path.join(cwd, "hr.pptx"), PPTX_BYTES);
+      await events.onShareFile!({ path: "sales.pptx", name: "영업" });
+      await events.onShareFile!({ path: "hr.pptx", name: "인사" });
+      results.ambiguous = await events.onShareLink!({});
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "거절" };
+    };
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-refuse", message: "링크" }).expect(200);
+
+    expect(errorOf(results.none)).toContain("no PPTX deck to share yet");
+    expect(errorOf(results.pdf)).toContain('only be created for PPTX decks, and "보고서.pdf" is not one');
+    expect(errorOf(results.onlyPdf)).toContain("no PPTX deck to share yet");
+    expect(errorOf(results.foreign)).toContain(`No file card with attachment id ${foreignId}`);
+    expect(errorOf(results.badId)).toContain("not a valid attachment id");
+    expect(errorOf(results.badExpiry)).toBe("expiresInDays must be 1, 7 or 30.");
+    expect(errorOf(results.ambiguous)).toContain("Several different decks");
+    expect(errorOf(results.ambiguous)).toContain('"영업.pptx"');
+    expect(errorOf(results.ambiguous)).toContain('"인사.pptx"');
+    // Nothing was created — for this owner or the foreign deck's.
+    expect(store.listShareLinks(ownerId)).toEqual([]);
+    expect(store.listShareLinks(otherId)).toEqual([]);
+    expect(store.listAudit(ownerId, true).filter((a) => a.action === "share_link_create")).toEqual([]);
+  });
+
+  it("refuses in a background segment no owner message started, and allows one the owner's delivered steer drives", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "bgshare").expect(201)).body.user.id as string;
+
+    const results: Record<string, ShareLinkResult> = {};
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      const deck = path.join(agentRequest.cwd!, "deck.pptx");
+      fs.writeFileSync(deck, PPTX_BYTES);
+      await events.onShareFile!({ path: "deck.pptx", name: "분기 보고" });
+      results.visible = await events.onShareLink!({});
+      // The first boundary with a live background task finalizes the visible turn.
+      events.onTurnResult?.({
+        text: "빌드를 백그라운드로 이어서 합니다.",
+        backgroundTasks: [{ taskId: "t1", taskType: "local_bash", description: "빌드" }],
+      });
+      // A pure wake-up segment (a task settled): nobody may be watching.
+      results.wakeUp = await events.onShareLink!({});
+      // The owner types during the background phase ("다시 빌드해서 링크 줘").
+      const steer = await events.steers!.next();
+      if (!steer) throw new Error("the steer channel closed before the owner's message arrived");
+      // Accepted but not yet handed to the model: still nobody's request.
+      results.queued = await events.onShareLink!({});
+      events.steers!.noteLifecycle(steer.id, "started");
+      // The segment the owner's message drives: rebuild, re-deliver, link.
+      fs.writeFileSync(deck, Buffer.concat([PPTX_BYTES, Buffer.from("rebuilt")]));
+      await events.onShareFile!({ path: "deck.pptx", name: "분기 보고" });
+      results.steered = await events.onShareLink!({});
+      // That segment ends; the next one is a wake-up again until another steer lands.
+      events.onTurnResult?.({ text: "새 링크를 만들었습니다.", backgroundTasks: [] });
+      results.afterBoundary = await events.onShareLink!({});
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "끝" };
+    };
+
+    const streamDone = fireStream(owner, {
+      avatarId: ownerId,
+      conversationId: "conv-bgshare",
+      message: "덱 만들고 빌드 돌려줘",
+    });
+    await waitUntil(async () => (await activeRun(owner, "conv-bgshare"))?.background === true, "background phase");
+    const run = (await activeRun(owner, "conv-bgshare"))!;
+    await owner.post(`/api/chat/runs/${run.runId}/message`).send({ message: "다시 빌드해서 링크 줘" }).expect(200);
+    await streamDone;
+
+    const visible = ok(results.visible);
+    expect(visible.created).toBe(true);
+    for (const refused of [results.wakeUp, results.queued, results.afterBoundary]) {
+      expect(refused).toEqual({ ok: false, error: SHARE_LINK_UNWATCHED_ERROR });
+    }
+    // The rebuilt deck is a NEW card: a new link, and the earlier one is named.
+    expect(ok(results.steered)).toMatchObject({
+      created: true,
+      fileName: "분기 보고.pptx",
+      otherActiveLinks: [{ fileName: "분기 보고.pptx", expiresAt: visible.expiresAt }],
+    });
+    expect(store.listShareLinks(ownerId)).toHaveLength(2);
+    // The steer that drove it is in the transcript (persisted on delivery).
+    expect(store.listMessages(ownerId, "conv-bgshare").filter((m) => m.kind === "steer").map((m) => m.content)).toEqual([
+      "다시 빌드해서 링크 줘",
+    ]);
+  }, LIVE);
+
+  it("keeps every card's link on its own file, and names the conversation's other active links on each result", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "rebuildowner").expect(201)).body.user.id as string;
+    const colleague = request.agent(app);
+    await signup(colleague, "rebuildcolleague").expect(201);
+    const v1 = PPTX_BYTES;
+    const v2 = Buffer.concat([PPTX_BYTES, Buffer.from("rebuilt")]);
+    const cards: string[] = [];
+
+    /** One chat turn: optionally rebuild + re-deliver the deck IN PLACE, then ask for the link. */
+    const turn = async (bytes: Buffer | null, message: string) => {
+      let result!: ShareLinkResult;
+      H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+        if (bytes) {
+          fs.writeFileSync(path.join(agentRequest.cwd!, "deck.pptx"), bytes);
+          const shared = await events.onShareFile!({ path: "deck.pptx", name: "분기 보고" });
+          if (shared.behavior !== "shown") throw new Error("share_file failed");
+          cards.push(shared.attachment.id);
+        }
+        result = await events.onShareLink!({});
+        return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "링크" };
+      };
+      await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-rebuild", message }).expect(200);
+      return ok(result);
+    };
+
+    // Round 1: build A and its link L1 — nothing else is active.
+    const first = await turn(v1, "PPT 만들고 팀장님 볼 링크도 줘");
+    expect(first.created).toBe(true);
+    expect(first.otherActiveLinks).toBeUndefined();
+    // Round 2: the deck is rebuilt and re-delivered — a NEW card — and linked again (L2).
+    const second = await turn(v2, "3번 슬라이드 고치고 링크 다시 줘");
+    expect(cards[1]).not.toBe(cards[0]);
+    expect(second).toMatchObject({ created: true, fileName: "분기 보고.pptx" });
+    expect(tokenOf(second.url)).not.toBe(tokenOf(first.url));
+    expect(second.otherActiveLinks).toEqual([{ fileName: "분기 보고.pptx", expiresAt: first.expiresAt }]);
+    // Round 3: asked again without a rebuild — L2 is REUSED, and L1 is still
+    // named. (Compared by token: each turn's absolute URL carries the ephemeral
+    // test server's port.)
+    const third = await turn(null, "링크 한 번만 더 줘");
+    expect(third.created).toBe(false);
+    expect(tokenOf(third.url)).toBe(tokenOf(second.url));
+    expect(third.otherActiveLinks).toEqual([{ fileName: "분기 보고.pptx", expiresAt: first.expiresAt }]);
+
+    // Both links are live, and each still serves the file it was made for.
+    expect(store.listShareLinks(ownerId)).toHaveLength(2);
+    const bytesVia = async (url: string) => {
+      const opened = await colleague.post("/api/share/open").send({ token: tokenOf(url) }).expect(200);
+      const res = await colleague
+        .get((opened.body as ShareViewPayload).downloadUrl)
+        .buffer(true)
+        .parse((stream, done) => {
+          const chunks: Buffer[] = [];
+          stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+          stream.on("end", () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      return res.body as Buffer;
+    };
+    expect((await bytesVia(first.url)).equals(v1)).toBe(true);
+    expect((await bytesVia(second.url)).equals(v2)).toBe(true);
+
+    // An EXPIRED earlier link is no longer named.
+    const l1 = store.listShareLinks(ownerId).find((link) => link.fileId === cards[0])!;
+    (store as unknown as { db: import("better-sqlite3").Database }).db
+      .prepare("UPDATE share_links SET expires_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 60_000).toISOString(), l1.id);
+    const fourth = await turn(null, "링크 다시");
+    expect(fourth.created).toBe(false);
+    expect(tokenOf(fourth.url)).toBe(tokenOf(second.url));
+    expect(fourth.otherActiveLinks).toBeUndefined();
+  });
+
+  it("names an earlier link the card button made when the avatar reuses the latest card's link", async () => {
+    // The owner linked build A (L1) and the rebuilt build B (L2) with the 공유 링크
+    // button, then asks the avatar for "the link": L2 is REUSED, and L1 — made
+    // outside any tool call — is still named, because it keeps serving build A.
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "buttonowner").expect(201)).body.user.id as string;
+    const cards: string[] = [];
+    const deliver = async (bytes: Buffer) => {
+      H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+        fs.writeFileSync(path.join(agentRequest.cwd!, "deck.pptx"), bytes);
+        const shared = await events.onShareFile!({ path: "deck.pptx", name: "분기 보고" });
+        if (shared.behavior !== "shown") throw new Error("share_file failed");
+        cards.push(shared.attachment.id);
+        return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "덱" };
+      };
+      await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-button", message: "PPT 만들어 줘" }).expect(200);
+    };
+    const viaButton = async (fileId: string) =>
+      (await owner.post(`/api/conversations/conv-button/files/${fileId}/share-links`).send({}).expect(201)).body
+        .link as { url: string; expiresAt: string };
+
+    await deliver(PPTX_BYTES);
+    const l1 = await viaButton(cards[0]);
+    await deliver(Buffer.concat([PPTX_BYTES, Buffer.from("rebuilt")]));
+    const l2 = await viaButton(cards[1]);
+    expect(cards[1]).not.toBe(cards[0]);
+
+    let result!: ShareLinkResult;
+    H.impl = async (_agentRequest, _pr, cfg, _store, events) => {
+      result = await events.onShareLink!({});
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "링크" };
+    };
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-button", message: "링크 줘" }).expect(200);
+
+    const reused = ok(result);
+    expect(reused.created).toBe(false);
+    expect(tokenOf(reused.url)).toBe(tokenOf(l2.url));
+    expect(reused.otherActiveLinks).toEqual([{ fileName: "분기 보고.pptx", expiresAt: l1.expiresAt }]);
+    expect(store.listShareLinks(ownerId)).toHaveLength(2);
+  });
+
+  it("maps an unshowable reuse, the cap, vanished bytes and a deleted conversation to model-facing errors", async () => {
+    const { store, app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "errowner").expect(201)).body.user.id as string;
+    const idOf = (result: FileOutputResult) => {
+      if (result.behavior !== "shown") throw new Error("share_file failed");
+      return result.attachment.id;
+    };
+    const rawLink = (fileId: string, tokenHash = crypto.randomBytes(32).toString("hex")) =>
+      store.createShareLink({
+        id: crypto.randomUUID(),
+        ownerUserId: ownerId,
+        conversationId: "conv-errs",
+        fileId,
+        fileName: `${fileId}.pptx`,
+        slideIds: [],
+        tokenHash,
+        tokenSalt: newShareTokenSalt(),
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      });
+
+    const results: Record<string, ShareLinkResult> = {};
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      const cwd = agentRequest.cwd!;
+      for (const name of ["a", "b", "c"]) fs.writeFileSync(path.join(cwd, `${name}.pptx`), PPTX_BYTES);
+      const a = idOf(await events.onShareFile!({ path: "a.pptx", name: "가" }));
+      const b = idOf(await events.onShareFile!({ path: "b.pptx", name: "나" }));
+      const c = idOf(await events.onShareFile!({ path: "c.pptx", name: "다" }));
+      // An active link for card a whose token no longer recomputes (SESSION_SECRET changed since).
+      rawLink(a, "0".repeat(64));
+      results.unshowable = await events.onShareLink!({ attachmentId: a });
+      // The bytes behind card b vanished.
+      fs.rmSync(path.join(chatFilesDir(config, "conv-errs"), `${b}.pptx`));
+      results.vanished = await events.onShareLink!({ attachmentId: b });
+      // The owner is at the cap (card a's link + 49 more).
+      for (let i = 1; i < 50; i++) rawLink(`filler-${i}`);
+      results.cap = await events.onShareLink!({ attachmentId: c });
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "오류" };
+    };
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-errs", message: "링크" }).expect(200);
+
+    expect(results.unshowable).toEqual({ ok: false, error: SHARE_LINK_UNSHOWABLE_ERROR });
+    expect(errorOf(results.vanished)).toContain('The file behind "나.pptx" is no longer available');
+    expect(results.cap).toEqual({ ok: false, error: SHARE_LINK_CAP_ERROR });
+    expect(store.listAudit(ownerId, true).filter((a) => a.action === "share_link_create")).toEqual([]);
+
+    // The conversation deleted while the avatar was still working.
+    H.impl = async (_req, _pr, cfg, _store, events) => {
+      expect(store.deleteConversation(ownerId, "conv-gone-link")).toBe(true);
+      results.gone = await events.onShareLink!({});
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "늦었다" };
+    };
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-gone-link", message: "링크" }).expect(200);
+    expect(results.gone).toEqual({
+      ok: false,
+      error: "The conversation no longer exists, so no share link can be created.",
+    });
   });
 });

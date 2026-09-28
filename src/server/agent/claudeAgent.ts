@@ -267,6 +267,7 @@ export async function runClaudeAgent(
     browserActive,
     canvasActive,
     fileOutputActive,
+    shareLinkToolActive,
     skillExchangeActive,
     deckRenderingAvailable,
     deckToolchain,
@@ -363,6 +364,11 @@ export async function runClaudeAgent(
     canvasEnabled: canvasActive,
     browserEnabled: browserActive,
     fileOutputEnabled: fileOutputActive,
+    // Share links: rides ONLY runs that registered create_share_link (the
+    // personalAgentsEnabled precedent), so the standing line never offers a
+    // tool the run lacks; any other run with file output hears the 공유 링크
+    // button redirect instead. Same boolean describe_system reports.
+    shareLinksEnabled: shareLinkToolActive,
     // Deck standing guidance (see deckGuidance above): the converter branch
     // wins in promptBuilder's deckSection when both flags are set.
     deckRenderingEnabled: deckGuidance.deckRenderingEnabled,
