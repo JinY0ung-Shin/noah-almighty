@@ -122,7 +122,9 @@ These are the invariants the project is built around. New work should reinforce 
   prompt generator writes it to the CLI's stdin and the CLI folds it in after the next `tool_result`.
   `command_lifecycle` is the ONLY delivery signal (`result.queued_turn_count` lies), and an UNDELIVERED
   steer at a result boundary ALWAYS becomes a follow-up turn — the run stays OPEN and the segment so far
-  persists as its own message (`turn_end`, not `done`). Persist at DELIVERY only, local SDK runs only
+  persists as its own message (`turn_end`, not `done`). A steer starting with `/` rides
+  `client_composed: true` — a raw stdin message IS a CLI slash command (a mid-run `/new` once ran
+  `/clear` and silently emptied the session). Persist at DELIVERY only, local SDK runs only
   (never external avatars / external-task-API turns), `midTurnMessages` on BOTH metacognition surfaces.
   Mechanics → `docs/architecture/chat-sse-media.md`.
 - **A rewind cuts HISTORY, never the world.** Editing an earlier message and 다시 생성 share ONE plan →

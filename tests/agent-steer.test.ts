@@ -323,6 +323,27 @@ describe("steerToSdkUserMessage", () => {
     expect(message).not.toHaveProperty("shouldQuery");
   });
 
+  it("marks ONLY slash-leading text client-composed, so the CLI never dispatches it as a command", () => {
+    const channel = new SteerChannel();
+    // Live-confirmed: without the flag "/new …" ran /clear and moved the run
+    // onto a fresh, empty session.
+    for (const text of ["/new 이 메시지는 명령이 아니라 그냥 글이야", "  /clear", "\n/compact"]) {
+      const record = channel.push(text)!;
+      expect(steerToSdkUserMessage(record)).toEqual({
+        type: "user",
+        parent_tool_use_id: null,
+        uuid: record.id,
+        client_composed: true,
+        message: { role: "user", content: [{ type: "text", text }] },
+      });
+    }
+    // Everything else keeps the verified shape exactly: the flag also skips
+    // @path expansion and the follow-up turn's attachment pass.
+    for (const text of ["그냥 글", "a/b 둘 다 보여줘", "경로는 /tmp 입니다"]) {
+      expect(steerToSdkUserMessage(channel.push(text)!)).not.toHaveProperty("client_composed");
+    }
+  });
+
   it("carries exactly one text block", () => {
     const channel = new SteerChannel();
     const record = channel.push("한 덩어리")!;

@@ -256,7 +256,12 @@
   has no way to cancel a queued message — so an undelivered steer at a boundary ALWAYS means a follow-up
   turn; (3) the wire shape is the verified DEFAULT one (`steerToSdkUserMessage`) — no `origin`,
   `priority` or `shouldQuery`, and `priority:"now"` stays unused BY DESIGN because it ABORTS the running
-  turn. **`SteerChannel`** (`agent/steerChannel.ts`) is the per-run queue + state machine between those
+  turn. The ONE exception is a steer whose text starts with `/`: it rides `client_composed: true`, the
+  SDK's per-message opt-out of CLI slash-command dispatch (and `@path` expansion). A plain stdin user
+  message IS dispatched: live on 2026-09-30, a mid-run `/new …` steer ran the CLI's `/clear`, the run
+  adopted the new EMPTY session and every later turn resumed nothing. The flag also skips the CLI's
+  turn-start attachment pass when such a steer becomes a follow-up turn, which is why it is not set on
+  every steer; a `/compact` steer is refused outright (400). **`SteerChannel`** (`agent/steerChannel.ts`) is the per-run queue + state machine between those
   halves (`queued` → `delivered` → `completed`, or → `dropped`): `push`/`next(until)`/`noteLifecycle`/
   `noteResultBoundary`/`hasUndelivered`/`close`/`onChange`, bounded by `MAX_UNDELIVERED_STEERS` (10). It
   rides `openRun` meta, `pushRunSteer(runId, userId, text)` is the only writer

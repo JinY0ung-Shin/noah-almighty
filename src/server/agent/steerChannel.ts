@@ -274,6 +274,16 @@ export class SteerChannel {
  * prompt generator writes it to the CLI's stdin immediately; the CLI queues it
  * and reports its lifecycle keyed by this `uuid`. The shape is the VERIFIED
  * default one — do NOT add `origin`, `priority` or `shouldQuery`.
+ *
+ * ONE exception: text starting with "/" (after leading whitespace) also carries
+ * `client_composed: true`. Without it the CLI's stream-json intake DISPATCHES
+ * the text as a slash command mid-run — live-confirmed on CLI 2.1.283: the
+ * steer "/new …" ran `/clear`, the run moved to a fresh EMPTY session, and every
+ * later turn resumed that. The flag delivers the text as written. It also skips
+ * `@path` expansion and, when the steer becomes a follow-up turn, the CLI's
+ * turn-start attachment pass (skill/tool listings, reminders; the pass between
+ * tool calls is unaffected) — which is why every other steer keeps the verified
+ * shape without it.
  */
 export function steerToSdkUserMessage(
   record: SteerRecord,
@@ -282,6 +292,7 @@ export function steerToSdkUserMessage(
     type: "user",
     parent_tool_use_id: null,
     uuid: record.id,
+    ...(record.text.trimStart().startsWith("/") ? { client_composed: true } : {}),
     message: {
       role: "user",
       content: [{ type: "text", text: record.text }],
