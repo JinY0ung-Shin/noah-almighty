@@ -770,6 +770,12 @@ describe("mcp__personal_agent__delegate_to_bot", () => {
       expect(task.delegatedByAgentId).toBeNull();
       expect(task.delegationDepth).toBe(1);
       expect(task.requestText).toBe("[아바타 위임] 릴리즈 노트 초안 잡아줘");
+      // Run later from the queue, so its bubble can never anchor a rewind.
+      expect(s.store.listMessages(s.owner.id, task.conversationId).at(-1)).toMatchObject({
+        role: "user",
+        content: "[아바타 위임] 릴리즈 노트 초안 잡아줘",
+        kind: "queued",
+      });
       expect(broker.pokes).toHaveLength(1);
     } finally {
       broker.dispose();

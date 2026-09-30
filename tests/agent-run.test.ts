@@ -1545,6 +1545,350 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
 });
 
 // ===========================================================================
+// Conversation rewind: resume points out, resumeSessionAt + fork in, and the
+// self-heal when the recorded point is no longer reachable.
+// ===========================================================================
+describe("rewind resume points + resumeSessionAt (SDK mocked)", () => {
+  /**
+   * The RETRY attempt's query handle, consuming its held-open prompt the way the
+   * SDK does. Records whether the steer channel is still OPEN when the retry
+   * starts, and whether the prompt generator stays PARKED after the prompt (it
+   * must: returning there closes the CLI's stdin — every mid-turn POST would
+   * 410 and a background task would die at the retry's first result) until
+   * the retry's OWN result releases it. Then streams `messages`.
+   */
+  function observedRetryHandle(
+    args: QueryArgs,
+    steers: SteerChannel,
+    messages: unknown[],
+    observed: Record<string, unknown>,
+  ): QueryHandle {
+    const settled = (next: Promise<IteratorResult<unknown>>, ms: number) =>
+      Promise.race([
+        next.then((r) => (r.done ? "returned" : "yielded")),
+        new Promise((resolve) => setTimeout(() => resolve("parked"), ms)),
+      ]);
+    async function* gen() {
+      observed.closedAtRetryStart = steers.closed;
+      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
+      const first = await prompt.next();
+      const content = (first.value as { message?: { content?: Array<{ type?: string; text?: string }> } })
+        .message?.content;
+      observed.promptText = content?.find((block) => block.type === "text")?.text ?? "";
+      const next = prompt.next();
+      observed.beforeOwnResult = await settled(next, 30);
+      for (const message of messages) {
+        yield message;
+      }
+      observed.afterOwnResult = await settled(next, 500);
+    }
+    return gen() as QueryHandle;
+  }
+
+  it("emits a resume point for every MAIN-chain assistant message, with the session that holds it", async () => {
+    const { config, store, baseRequest } = setup();
+    const onResumePoint = vi.fn();
+    const events = makeEvents({ onResumePoint });
+    sdkMock.impl = () =>
+      handleFrom([
+        initMsg("sess-r"),
+        // Stream events, tool results and results carry uuids too — none is a cut point.
+        { ...startMsg({ input_tokens: 10 }), uuid: "se-1", session_id: "sess-r" },
+        { ...assistantMsg([toolUseBlock("tu-1", "Bash", { command: "ls" })]), uuid: "a-1", session_id: "sess-r" },
+        { ...toolResultMsg("tu-1"), uuid: "u-1", session_id: "sess-r" },
+        // A subagent's assistant message lives in ITS sidechain, never the main chain.
+        { ...assistantMsg([textBlock("sub answer")]), parent_tool_use_id: "tu-1", uuid: "sub-1", session_id: "sess-r" },
+        // No session_id on the message → the attempt's init session.
+        { ...assistantMsg([textBlock("almost")]), uuid: "a-2" },
+        // The message's own session wins (a fork reports its NEW id there).
+        { ...assistantMsg([textBlock("done")]), uuid: "a-3", session_id: "sess-fork" },
+        // No uuid → nothing to resume at.
+        assistantMsg([textBlock("tail")]),
+        { ...successResult("done"), uuid: "res-1", session_id: "sess-r" },
+      ]);
+
+    await runAgentStream(baseRequest, [], config, store, events);
+
+    expect(onResumePoint.mock.calls.map(([point]) => point)).toEqual([
+      { sessionId: "sess-r", uuid: "a-1" },
+      { sessionId: "sess-r", uuid: "a-2" },
+      { sessionId: "sess-fork", uuid: "a-3" },
+    ]);
+  });
+
+  it("forks at the recorded entry only when BOTH the session and the entry are given", async () => {
+    const { config, store, baseRequest } = setup();
+    sdkMock.impl = () => handleFrom([initMsg("sess-new"), successResult("ok")]);
+
+    await runAgentStream(
+      { ...baseRequest, resumeSessionId: "sess-src", resumeSessionAt: "uuid-kept" },
+      [], config, store, makeEvents(),
+    );
+    await runAgentStream({ ...baseRequest, resumeSessionId: "sess-src" }, [], config, store, makeEvents());
+    await runAgentStream({ ...baseRequest, resumeSessionAt: "uuid-orphan" }, [], config, store, makeEvents());
+
+    const [rewind, plain, orphan] = sdkMock.calls.map((call) => call.options);
+    expect(rewind).toMatchObject({ resume: "sess-src", resumeSessionAt: "uuid-kept", forkSession: true });
+    // The one-turn guard would refuse a multi-turn rewind — never sent.
+    expect(rewind.resumeDropsTurn).toBeUndefined();
+    expect(plain.resume).toBe("sess-src");
+    expect(plain.resumeSessionAt).toBeUndefined();
+    expect(plain.forkSession).toBeUndefined();
+    // A cut point without a session to cut is meaningless — a plain fresh run.
+    expect(orphan.resume).toBeUndefined();
+    expect(orphan.resumeSessionAt).toBeUndefined();
+    expect(orphan.forkSession).toBeUndefined();
+  });
+
+  it("self-heals an unreachable rewind point: drops resume, cut and fork, and injects the kept history", async () => {
+    const { config, store, baseRequest } = setup();
+    const onResumePoint = vi.fn();
+    const onTurnResult = vi.fn();
+    const steers = new SteerChannel();
+    const events = makeEvents({ onResumePoint, onTurnResult, steers });
+    const observed: Record<string, unknown> = {};
+    const request: AgentRequest = {
+      ...baseRequest,
+      resumeSessionId: "sess-src",
+      resumeSessionAt: "uuid-compacted",
+      rewind: { kind: "edit", discardedMessages: 2 },
+      conversationHistory: [
+        { role: "user", content: "남긴 질문" },
+        { role: "assistant", content: "남긴 답변" },
+      ],
+    };
+    const uuidError = "No message found with message.uuid of: uuid-compacted";
+    let call = 0;
+    sdkMock.impl = (args) => {
+      call += 1;
+      if (call === 1) {
+        // Spike-verified shape (CLI 2.1.283): an error_during_execution result
+        // first, then the iterator throws the same text.
+        async function* gen() {
+          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [uuidError] };
+          throw new Error(`Claude Code returned an error result: ${uuidError}`);
+        }
+        return gen() as QueryHandle;
+      }
+      return observedRetryHandle(args, steers, [
+        initMsg("sess-fresh"),
+        { ...assistantMsg([textBlock("다시 시작한 답")]), uuid: "a-fresh" },
+        successResult("다시 시작한 답"),
+      ], observed);
+    };
+
+    const response = await runAgentStream(request, [], config, store, events);
+
+    expect(sdkMock.calls).toHaveLength(2);
+    expect(sdkMock.calls[0].options).toMatchObject({
+      resume: "sess-src",
+      resumeSessionAt: "uuid-compacted",
+      forkSession: true,
+    });
+    const retry = sdkMock.calls[1].options;
+    expect(retry.resume).toBeUndefined();
+    expect(retry.resumeSessionAt).toBeUndefined();
+    expect(retry.forkSession).toBeUndefined();
+    expect(observed.promptText).toContain("Earlier conversation history");
+    expect(observed.promptText).toContain("남긴 질문");
+    // Still a rewound turn — only the context source changed.
+    expect((retry.systemPrompt as { append: string }).append).toContain("Conversation rewind (this turn)");
+    expect(response.text).toBe("다시 시작한 답");
+    expect(response.resultError).toBeUndefined();
+    // The failed attempt emitted nothing; the fresh session is the one to record.
+    expect(onResumePoint.mock.calls.map(([point]) => point)).toEqual([
+      { sessionId: "sess-fresh", uuid: "a-fresh" },
+    ]);
+    // The failed attempt's error result was NOT a turn boundary: the retry
+    // started with the viewer's steer channel open and its input held…
+    expect(observed.closedAtRetryStart).toBe(false);
+    expect(observed.beforeOwnResult).toBe("parked");
+    // …released only by the retry's own result, the one boundary the host saw.
+    expect(observed.afterOwnResult).toBe("returned");
+    expect(onTurnResult).toHaveBeenCalledTimes(1);
+    expect(onTurnResult.mock.calls[0][0].errorSubtype).toBeUndefined();
+    expect(steers.closed).toBe(true);
+  });
+
+  it("keeps the steer channel and held input across a plain missing-session self-heal too", async () => {
+    const { config, store, baseRequest } = setup();
+    const onTurnResult = vi.fn();
+    const steers = new SteerChannel();
+    const events = makeEvents({ onTurnResult, steers });
+    const observed: Record<string, unknown> = {};
+    const missing = "No conversation found with session ID: sess-gone";
+    let call = 0;
+    sdkMock.impl = (args) => {
+      call += 1;
+      if (call === 1) {
+        async function* gen() {
+          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [missing] };
+          throw new Error(`Claude Code returned an error result: ${missing}`);
+        }
+        return gen() as QueryHandle;
+      }
+      return observedRetryHandle(args, steers, [initMsg("sess-fresh"), successResult("ok")], observed);
+    };
+
+    const response = await runAgentStream(
+      { ...baseRequest, resumeSessionId: "sess-gone" },
+      [], config, store, events,
+    );
+
+    expect(sdkMock.calls).toHaveLength(2);
+    expect(sdkMock.calls[1].options.resume).toBeUndefined();
+    expect(observed).toMatchObject({
+      closedAtRetryStart: false,
+      beforeOwnResult: "parked",
+      afterOwnResult: "returned",
+    });
+    expect(onTurnResult).toHaveBeenCalledTimes(1);
+    expect(response.text).toBe("ok");
+  });
+
+  it("re-forks from the same entry on an empty-turn retry (the throwaway attempt is discarded)", async () => {
+    const { config, store, baseRequest } = setup();
+    const steers = new SteerChannel();
+    const observed: Record<string, unknown> = {};
+    let call = 0;
+    sdkMock.impl = (args) => {
+      call += 1;
+      return call === 1
+        ? handleFrom([initMsg("sess-fork-1"), thinkingMsg("reasoning only"), successResult("")])
+        : observedRetryHandle(args, steers, [initMsg("sess-fork-2"), successResult("recovered")], observed);
+    };
+
+    const response = await runAgentStream(
+      { ...baseRequest, resumeSessionId: "sess-src", resumeSessionAt: "uuid-kept" },
+      [], config, store, makeEvents({ steers }),
+    );
+
+    expect(sdkMock.calls).toHaveLength(2);
+    for (const { options } of sdkMock.calls) {
+      expect(options).toMatchObject({ resume: "sess-src", resumeSessionAt: "uuid-kept", forkSession: true });
+    }
+    expect(response.text).toBe("recovered");
+    // The empty turn's boundary released stdin (so that attempt could end) but
+    // left the channel open for the retry's fresh generator to keep consuming.
+    expect(observed).toMatchObject({
+      closedAtRetryStart: false,
+      beforeOwnResult: "parked",
+      afterOwnResult: "returned",
+    });
+    expect(steers.closed).toBe(true);
+  });
+
+  it("re-sends a steer the dying first attempt already took, and the retry delivers it", async () => {
+    const { config, store, baseRequest } = setup();
+    const onTurnResult = vi.fn();
+    const steers = new SteerChannel();
+    const events = makeEvents({ onTurnResult, steers });
+    const uuidError = "No message found with message.uuid of: uuid-compacted";
+    // A box: a `let` assigned inside the mock would stay narrowed to null here.
+    const sent: { steer: ReturnType<SteerChannel["push"]> } = { steer: null };
+    const retryInput: Record<string, unknown>[] = [];
+    let call = 0;
+    sdkMock.impl = (args) => {
+      call += 1;
+      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
+      if (call === 1) {
+        async function* dying() {
+          await prompt.next(); // the SDK's input pump took the prompt…
+          sent.steer = steers.push("방금 보낸 추가 요청"); // …the viewer sent a steer at once…
+          await prompt.next(); // …and the pump wrote it into this CLI's stdin — which then died at boot.
+          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [uuidError] };
+          throw new Error(`Claude Code returned an error result: ${uuidError}`);
+        }
+        return dying() as QueryHandle;
+      }
+      async function* fresh() {
+        // Like the SDK pump, the fresh process receives the prompt AND the re-sent steer at boot.
+        retryInput.push((await prompt.next()).value ?? {});
+        retryInput.push((await prompt.next()).value ?? {});
+        const id = sent.steer!.id;
+        yield initMsg("sess-fresh");
+        yield lifecycleMsg(id, "started");
+        yield { ...assistantMsg([textBlock("추가 요청까지 반영했습니다")]), uuid: "a-fresh" };
+        yield lifecycleMsg(id, "completed");
+        yield successResult("추가 요청까지 반영했습니다");
+      }
+      return fresh() as QueryHandle;
+    };
+
+    const outcome = await Promise.race([
+      runAgentStream(
+        { ...baseRequest, resumeSessionId: "sess-src", resumeSessionAt: "uuid-compacted" },
+        [], config, store, events,
+      ).then(() => "ended"),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 2000)),
+    ]);
+
+    expect(outcome).toBe("ended");
+    expect(sdkMock.calls).toHaveLength(2);
+    // The SAME uuid the dying process swallowed — the fresh one never saw it.
+    expect(retryInput[1]).toMatchObject({ type: "user", uuid: sent.steer!.id });
+    expect(JSON.stringify(retryInput[1])).toContain("방금 보낸 추가 요청");
+    expect(sent.steer!.state).toBe("completed");
+    // One real boundary, nothing left pending — so the held input was released.
+    expect(onTurnResult).toHaveBeenCalledTimes(1);
+    expect(onTurnResult.mock.calls[0][0].steerPending).toBe(false);
+  });
+
+  it("treats a matching error result AFTER init as a real boundary, never a pseudo one", async () => {
+    const { config, store, baseRequest } = setup();
+    const onTurnResult = vi.fn();
+    const steers = new SteerChannel();
+    sdkMock.impl = () =>
+      handleFrom([
+        initMsg("sess-live"),
+        assistantMsg([textBlock("작업 중")]),
+        // This session really started, so its result is its boundary whatever the text says.
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          errors: ["No conversation found with session ID: sess-other"],
+        },
+      ]);
+
+    await runAgentStream(
+      { ...baseRequest, resumeSessionId: "sess-live" },
+      [], config, store, makeEvents({ onTurnResult, steers }),
+    );
+
+    expect(sdkMock.calls).toHaveLength(1);
+    expect(onTurnResult).toHaveBeenCalledTimes(1);
+    expect(onTurnResult.mock.calls[0][0].errorSubtype).toBe("error_during_execution");
+    expect(steers.closed).toBe(true);
+  });
+
+  it("still never re-runs an empty turn once a steer was accepted (the re-run would lose it)", async () => {
+    const { config, store, baseRequest } = setup();
+    const steers = new SteerChannel();
+    sdkMock.impl = (args) => {
+      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
+      async function* gen() {
+        await prompt.next();
+        const steer = steers.push("중간에 보낸 말")!;
+        await prompt.next();
+        yield initMsg("sess-1");
+        yield lifecycleMsg(steer.id, "started");
+        yield thinkingMsg("reasoning only");
+        yield lifecycleMsg(steer.id, "completed");
+        yield successResult("");
+      }
+      return gen() as QueryHandle;
+    };
+
+    const response = await runAgentStream(baseRequest, [], config, store, makeEvents({ steers }));
+
+    expect(sdkMock.calls).toHaveLength(1);
+    expect(response.text).toBe("Claude Agent SDK 응답이 비어 있습니다.");
+    expect(steers.closed).toBe(true);
+  });
+});
+
+// ===========================================================================
 // buildImageQueryPrompt (direct — the run loop never consumes it under the mock)
 // ===========================================================================
 describe("buildImageQueryPrompt", () => {

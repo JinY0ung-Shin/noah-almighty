@@ -5,12 +5,16 @@ import { get } from "svelte/store";
 import {
   addConversationToSplit,
   answerPrompt,
+  canRegenerate,
+  cancelRewindEdit,
   clearChatHistory,
   closeCanvas,
   closePane,
   dismissCanvas,
   fetchCanvasVersions,
   humanTool,
+  isRewindAnchor,
+  messageKey,
   newChat,
   openSeededChat,
   PLUGIN_STATUS_LABELS,
@@ -21,18 +25,21 @@ import {
   sendMessage,
   sendSteer,
   setActiveCanvas,
+  setRewindEditDraft,
   startChatWith,
   startNewChat,
+  startRewindEdit,
   stopPane,
   submitCanvas,
   submitCanvasEdit,
+  submitRewindEdit,
   summarizeInput,
   attachRun,
   attachActiveRun,
 } from "../src/client/src/lib/chat.js";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import { liveSegmentRows, messageSegmentRows } from "../src/client/src/lib/activitySegments.js";
-import { resolveConfirmation } from "../src/client/src/lib/confirm.js";
+import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { DRAWIO_MEDIA_TYPE } from "../src/client/src/lib/drawioViewer.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
 import type { ClientState } from "../src/client/src/lib/state.js";
@@ -3420,5 +3427,715 @@ describe("guards around the canvas panel and pane lifecycle", () => {
     regenerate(id);
     expect(fetchFn).not.toHaveBeenCalled();
     expect(pane(id).messages).toHaveLength(1);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 여기서부터 다시 (rewind) + 다시 생성                                   */
+/* ------------------------------------------------------------------ */
+
+function row(
+  id: string,
+  role: "user" | "assistant",
+  content: string,
+  extra: Record<string, unknown> = {},
+): any {
+  return { id, role, content, conversationId: "c", response: null, createdAt: `2026-09-30T00:00:0${id.length % 10}.000Z`, ...extra };
+}
+
+function doneFrame(id: string, text: string): [string, unknown] {
+  return [
+    "done",
+    { message: { id, role: "assistant", content: text, response: { kind: "text", runtime: "claude", text }, conversationId: "c", createdAt: "t" } },
+  ];
+}
+
+/** Resolve the confirmation the call below is about to raise. */
+async function confirmNext(answer: boolean): Promise<void> {
+  await flush();
+  resolveConfirmation(answer);
+}
+
+describe("여기서부터 다시 (rewind) + 다시 생성", () => {
+  it("regenerate re-runs the last turn opener and drops EVERY row after it — segments, steers, background reports", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [
+        row("u1", "user", "첫 질문"),
+        row("a1", "assistant", "첫 답"),
+        row("u2", "user", "둘째 질문"),
+        row("a2", "assistant", "중간 답 (turn_end)"),
+        row("s2", "user", "이것도요", { kind: "steer" }),
+        row("a3", "assistant", "후속 답"),
+        row("b1", "assistant", "백그라운드 보고"),
+      ],
+    });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([["open", { conversationId: "c", runId: "r1", userMessageId: "u2" }], doneFrame("n1", "새 답")]);
+      }
+      // The run-end re-read: what the server kept, plus the new answer.
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [row("u1", "user", "첫 질문"), row("a1", "assistant", "첫 답"), row("u2", "user", "둘째 질문"), row("n1", "assistant", "새 답")],
+          canvases: [],
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    regenerate(id);
+    // The optimistic cut happens at once: nothing after the opener survives.
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
+    await waitFor(() => !pane(id).streaming);
+    await flush();
+    expect(bodies[0]).toMatchObject({ regenerate: true, message: "둘째 질문" });
+    expect(bodies[0].rewindFromMessageId).toBeUndefined();
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "n1"]);
+  });
+
+  it("regenerate leaves the composer's draft and staged images for the next message", async () => {
+    const staged = { id: "img1", dataUrl: "data:image/png;base64,AA==", name: "a.png", mediaType: "image/png" };
+    const id = seedPane({
+      conversationId: "c",
+      draft: "다음에 보낼 말",
+      pendingImages: [staged] as any,
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
+    });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([["open", { conversationId: "c", runId: "r1" }], doneFrame("n1", "새 답")]);
+      }
+      if (url.startsWith("/api/messages"))
+        return jsonRes({ messages: [row("u1", "user", "질문"), row("n1", "assistant", "새 답")], canvases: [] });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    regenerate(id);
+    await waitFor(() => !pane(id).streaming);
+    await flush();
+    expect(bodies[0].images).toBeUndefined();
+    expect(pane(id).draft).toBe("다음에 보낼 말");
+    expect(pane(id).pendingImages).toEqual([staged]);
+  });
+
+  it("offers no 다시 생성 when the latest turn opener was queued behind another run", () => {
+    const queued = [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("q1", "user", "대기열 메시지", { kind: "queued" })];
+    expect(canRegenerate(queued)).toBe(false);
+    expect(canRegenerate([row("u1", "user", "질문"), row("a1", "assistant", "답")])).toBe(true);
+    // A trailing steer is not an opener: the opener before it decides.
+    expect(canRegenerate([row("u1", "user", "질문"), row("s1", "user", "중간", { kind: "steer" })])).toBe(true);
+    const id = seedPane({ messages: queued });
+    const fetchFn = noFetch();
+    regenerate(id);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).messages).toHaveLength(3);
+  });
+
+  it("opens the inline editor only on an ordinary user row of an idle pane", () => {
+    expect(isRewindAnchor(row("u", "user", "x"))).toBe(true);
+    expect(isRewindAnchor(row("s", "user", "x", { kind: "steer" }))).toBe(false);
+    expect(isRewindAnchor(row("q", "user", "x", { kind: "queued" }))).toBe(false);
+    expect(isRewindAnchor(row("a", "assistant", "x"))).toBe(false);
+
+    const id = seedPane({
+      messages: [row("u1", "user", "원래 질문"), row("s1", "user", "중간", { kind: "steer" }), row("q1", "user", "대기", { kind: "queued" })],
+    });
+    startRewindEdit(id, "s1");
+    startRewindEdit(id, "q1");
+    expect(pane(id).rewindEdit ?? null).toBeNull();
+    startRewindEdit(id, "u1");
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u1", draft: "원래 질문" });
+    setRewindEditDraft(id, "고친 질문");
+    expect(pane(id).rewindEdit?.draft).toBe("고친 질문");
+    cancelRewindEdit(id);
+    expect(pane(id).rewindEdit).toBeNull();
+
+    const busy = seedPane({ streaming: true, messages: [row("u9", "user", "질문")] });
+    startRewindEdit(busy, "u9");
+    expect(pane(busy).rewindEdit ?? null).toBeNull();
+  });
+
+  it("sends the edit as a rewind: cut from the edited row, its images carried, the composer untouched, the server id adopted", async () => {
+    const image = { id: "img-u1", kind: "image", mediaType: "image/png", name: "shot.png" };
+    const id = seedPane({
+      conversationId: "c",
+      draft: "작성 중인 다음 말",
+      messages: [
+        row("u1", "user", "원래 질문", { attachments: [image] }),
+        row("a1", "assistant", "원래 답"),
+        row("u2", "user", "둘째 질문"),
+        row("a2", "assistant", "둘째 답"),
+      ],
+    });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
+          ["delta", { text: "새 답" }],
+          doneFrame("srv-a", "새 답"),
+        ]);
+      }
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [row("srv-u", "user", "고친 질문", { attachments: [image] }), row("srv-a", "assistant", "새 답")],
+          canvases: [],
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    await sending;
+    await flush();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ message: "고친 질문", rewindFromMessageId: "u1", regenerate: false });
+    expect(bodies[0].images).toBeUndefined();
+    const rows = pane(id).messages;
+    expect(rows.map((m) => m.id)).toEqual(["srv-u", "srv-a"]);
+    expect(rows[0]).toMatchObject({ role: "user", content: "고친 질문", attachments: [image] });
+    expect(pane(id).draft).toBe("작성 중인 다음 말");
+    expect(pane(id).rewindEdit).toBeNull();
+  });
+
+  it("names how many later messages go, and sends nothing when the owner declines", async () => {
+    const id = seedPane({
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "둘째"), row("a2", "assistant", "둘째 답")],
+    });
+    const fetchFn = noFetch();
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const sending = submitRewindEdit(id);
+    await flush();
+    const asked = get(confirmation);
+    expect(asked?.title).toBe("여기서부터 다시");
+    // Both halves, plainly: the later messages go WITH their shared files and
+    // links; work done outside the chat stays.
+    expect(asked?.message).toContain("이후 메시지 3개와 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다");
+    expect(asked?.message).toContain("작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다");
+    expect(asked?.confirmLabel).toBe("다시 시작");
+    expect(asked?.tone).toBe("danger");
+    resolveConfirmation(false);
+    await sending;
+    expect(fetchFn).not.toHaveBeenCalled();
+    // The editor stays open with the text, the transcript is untouched.
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u1", draft: "고친 질문" });
+    expect(pane(id).messages).toHaveLength(4);
+  });
+
+  it("puts the transcript and the editor back when the server refuses the rewind, then re-reads the stale view", async () => {
+    const original = [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "둘째"), row("a2", "assistant", "둘째 답")];
+    const id = seedPane({ conversationId: "c", messages: original.map((m) => ({ ...m })) });
+    let releaseReread: () => void = () => {};
+    const reread = new Promise<void>((resolve) => (releaseReread = resolve));
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return jsonRes({ error: "대화 내용이 바뀌어 다시 시작하지 못했습니다. 새로고침한 뒤 다시 시도해 주세요." }, 409);
+      // The server moved on meanwhile (another tab answered once more).
+      if (url.startsWith("/api/messages"))
+        return reread.then(() =>
+          jsonRes({ messages: [...original, row("u3", "user", "다른 탭에서"), row("a3", "assistant", "다른 답")], canvases: [] }),
+        );
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u2");
+    setRewindEditDraft(id, "고친 둘째");
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    await sending;
+    // At once: the transcript as it was, the editor with its text.
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u2", draft: "고친 둘째" });
+    expect(pane(id).streaming).toBe(false);
+    expect(get(toasts).some((t) => t.message.includes("대화 내용이 바뀌어"))).toBe(true);
+    // Then the server's view — and the editor, whose row still exists, survives it.
+    releaseReread();
+    await waitFor(() => pane(id).messages.length === 6);
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2", "u3", "a3"]);
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u2", draft: "고친 둘째" });
+  });
+
+  it("re-reads the transcript when a rewind died in transport, and keeps the edited text if the server did rewind", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
+    });
+    useFetch((url) => {
+      if (url === "/api/chat/stream") throw new TypeError("Failed to fetch");
+      if (url.startsWith("/api/messages"))
+        return jsonRes({ messages: [row("srv-u", "user", "고친 질문")], canvases: [] });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    await sending;
+    await waitFor(() => pane(id).messages[0]?.id === "srv-u");
+    // The server's truth wins; the editor's anchor is gone, so the text moves to
+    // the (empty) composer instead of vanishing.
+    expect(pane(id).rewindEdit).toBeNull();
+    expect(pane(id).draft).toBe("고친 질문");
+  });
+
+  it("on open, clears what the dropped turns left behind: task cards, a preview of their file, their canvases", async () => {
+    const card = { id: "file-a1", kind: "file", mediaType: "application/pdf", name: "보고서.pdf" };
+    const id = seedPane({
+      conversationId: "c",
+      messages: [
+        row("u0", "user", "처음", { createdAt: "2026-09-30T00:00:01.000Z" }),
+        row("a0", "assistant", "처음 답", { createdAt: "2026-09-30T00:00:02.000Z" }),
+        row("u1", "user", "질문", { createdAt: "2026-09-30T00:00:03.000Z" }),
+        row("a1", "assistant", "답", { createdAt: "2026-09-30T00:00:09.000Z", attachments: [card] }),
+      ],
+      filePreview: { attachment: card as any, slides: [] },
+      canvases: [
+        { id: "c-old", title: "이전", content: "v1", contentType: "markdown", pending: false },
+        { id: "c-dropped", title: "버려진", content: "x", contentType: "markdown", pending: false },
+      ] as any,
+      activeCanvasId: "c-dropped",
+    });
+    updateState((s) => {
+      s.botTasks = [
+        { id: "t-keep", agentId: "bot", conversationId: "c", status: "done", createdAt: "2026-09-30T00:00:01.500Z" },
+        { id: "t-drop", agentId: "bot", conversationId: "c", status: "waiting_input", createdAt: "2026-09-30T00:00:04.000Z" },
+        { id: "t-other", agentId: "bot", conversationId: "other", status: "done", createdAt: "2026-09-30T00:00:05.000Z" },
+      ] as any;
+    });
+    let releaseCanvases: () => void = () => {};
+    const canvasesFetched = new Promise<void>((resolve) => (releaseCanvases = resolve));
+    let reads = 0;
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r-new", userMessageId: "srv-u" }],
+          ["canvas", { artifactId: "c-live", title: "새 캔버스", content: "live", contentType: "markdown", runId: "r-new" }],
+          doneFrame("srv-a", "새 답"),
+        ]);
+      if (url.startsWith("/api/messages")) {
+        // The refetch at `open` answers from the tables as they were BEFORE this
+        // run showed its canvas, and is held until that live canvas is applied:
+        // it must not drop it. The re-read at run end sees both.
+        const first = ++reads === 1;
+        const kept = { id: "c-old", title: "이전", content: "v1 복원", contentType: "markdown" };
+        const live = { id: "c-live", title: "새 캔버스", content: "live", contentType: "markdown" };
+        const messages = [row("u0", "user", "처음"), row("a0", "assistant", "처음 답"), row("srv-u", "user", "고친 질문"), row("srv-a", "assistant", "새 답")];
+        return first
+          ? canvasesFetched.then(() => jsonRes({ messages: [], canvases: [kept] }))
+          : jsonRes({ messages, canvases: [kept, live] });
+      }
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    await waitFor(() => pane(id).canvases.some((c) => c.id === "c-live"));
+    // Applied at `open`, before the canvas refetch lands.
+    expect(readState().botTasks.map((t) => t.id).sort()).toEqual(["t-keep", "t-other"]);
+    expect(pane(id).filePreview ?? null).toBeNull();
+    releaseCanvases();
+    // The `open` refetch merged: the dropped canvas is gone, the restored version
+    // is in, and this run's live canvas survived a response that predates it.
+    await waitFor(() => !pane(id).canvases.some((c) => c.id === "c-dropped"));
+    expect(pane(id).canvases.map((c) => [c.id, c.content])).toEqual([
+      ["c-old", "v1 복원"],
+      ["c-live", "live"],
+    ]);
+    expect(pane(id).activeCanvasId).toBe("c-live");
+    await sending;
+  });
+
+  it("adopts the persisted user row id from `open` for an ordinary send", async () => {
+    const id = seedPane({ conversationId: "c" });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([["open", { conversationId: "c", runId: "r1", userMessageId: "srv-1" }], doneFrame("srv-2", "답")]);
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await sendMessage(id, "안녕");
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["srv-1", "srv-2"]);
+    // The adopted id is a valid rewind anchor from here on.
+    startRewindEdit(id, "srv-1");
+    expect(pane(id).rewindEdit?.messageId).toBe("srv-1");
+  });
+
+  it("gives a stopped bubble the persisted row id carried by `cancelled`", async () => {
+    const id = seedPane({ conversationId: "c" });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
+          ["delta", { text: "쓰다 만" }],
+          ["cancelled", { message: { id: "srv-stop", role: "assistant", content: "쓰다 만", conversationId: "c", response: null, createdAt: "t" } }],
+        ]);
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await sendMessage(id, "질문");
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["srv-u", "srv-stop"]);
+  });
+
+  it("marks a send the busy bot queued (202) so it offers no rewind", async () => {
+    const id = seedPane({ conversationId: "c" });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return jsonRes({ queued: true, task: { id: "t1", agentId: "bot", conversationId: "c", status: "queued", createdAt: "t" } }, 202);
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await sendMessage(id, "이것도 해줘");
+    const [queuedRow] = pane(id).messages;
+    expect(queuedRow).toMatchObject({ role: "user", content: "이것도 해줘", kind: "queued" });
+    expect(isRewindAnchor(queuedRow)).toBe(false);
+  });
+});
+
+describe("여기서부터 다시: image-only rows, adoption and re-reads", () => {
+  const photo = { id: "img-1", kind: "image", mediaType: "image/png", name: "shot.png" };
+
+  it("re-runs an image-only turn with 다시 생성 — no text needed", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [row("u1", "user", "", { attachments: [photo] }), row("a1", "assistant", "사진 설명")],
+    });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([["open", { conversationId: "c", runId: "r1" }], doneFrame("n1", "새 설명")]);
+      }
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [], canvases: [] });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    expect(canRegenerate(pane(id).messages)).toBe(true);
+    regenerate(id);
+    await waitFor(() => bodies.length === 1);
+    expect(bodies[0]).toMatchObject({ regenerate: true, message: "" });
+  });
+
+  it("sends an edit of an image-only message with empty text; the images ride along", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [row("u1", "user", "", { attachments: [photo] }), row("a1", "assistant", "사진 설명")],
+    });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }], doneFrame("srv-a", "다시 본 설명")]);
+      }
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [row("srv-u", "user", "", { attachments: [photo] }), row("srv-a", "assistant", "다시 본 설명")],
+          canvases: [],
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u1", draft: "" });
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    await sending;
+    expect(bodies[0]).toMatchObject({ message: "", rewindFromMessageId: "u1" });
+    expect(pane(id).messages[0]).toMatchObject({ role: "user", content: "", attachments: [photo] });
+  });
+
+  it("still refuses an empty edit of a text-only message", async () => {
+    const id = seedPane({ messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")] });
+    const fetchFn = noFetch();
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "   ");
+    await submitRewindEdit(id);
+    expect(get(confirmation)).toBeNull();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a bubble's each-block key when it adopts the server id — at `open` and on `cancelled`", async () => {
+    const id = seedPane({ conversationId: "c" });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
+          ["delta", { text: "쓰다 만" }],
+          ["cancelled", { message: { id: "srv-stop", role: "assistant", content: "쓰다 만", conversationId: "c", response: null, createdAt: "t" } }],
+        ]);
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    const sending = sendMessage(id, "질문");
+    const optimisticKey = messageKey(pane(id).messages[0], 0);
+    await sending;
+    const [user, stopped] = pane(id).messages;
+    expect(user.id).toBe("srv-u");
+    expect(messageKey(user, 0)).toBe(optimisticKey);
+    expect(stopped.id).toBe("srv-stop");
+    expect(messageKey(stopped, 1)).not.toBe("srv-stop");
+  });
+
+  it("never adopts a regenerate's `open` id — a stale tab's server may have re-run another row — and re-reads when the run ends", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
+    });
+    const urls: string[] = [];
+    useFetch((url) => {
+      urls.push(url);
+      if (url === "/api/chat/stream")
+        return sseRes([["open", { conversationId: "c", runId: "r1", userMessageId: "srv-other" }], doneFrame("srv-a", "새 답")]);
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [row("u1", "user", "질문"), row("u0", "user", "다른 탭의 질문"), row("srv-a", "assistant", "새 답")],
+          canvases: [],
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    regenerate(id);
+    await waitFor(() => pane(id).messages.some((m) => m.id === "u0"));
+    // The anchor kept its own id; the pane now shows exactly the server's rows.
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "u0", "srv-a"]);
+    expect(urls.filter((u) => u.startsWith("/api/messages")).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("merges a run-end re-read into the pane: keys stay, and an activity snapshot the PUT has not stored yet survives", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
+    });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
+          ["tool", { toolUseId: "t1", name: "Read", agentId: "main", input: { file_path: "a.md" } }],
+          ["tool_end", { toolUseId: "t1", ok: true }],
+          doneFrame("srv-a", "새 답"),
+        ]);
+      // The re-read lands before the activity PUT: the stored row has no snapshot yet.
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [
+            row("srv-u", "user", "고친 질문"),
+            { ...row("srv-a", "assistant", "새 답"), response: { kind: "text", runtime: "claude", summary: "완료", text: "새 답" } },
+          ],
+          canvases: [],
+        });
+      if (url.includes("/activity")) return new Promise(() => {});
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    const optimisticKey = messageKey(pane(id).messages[0], 0);
+    await sending;
+    await waitFor(() => pane(id).messages[1]?.response?.summary === "완료");
+    const [user, answer] = pane(id).messages;
+    expect(messageKey(user, 0)).toBe(optimisticKey);
+    expect(answer.response?.activity?.tools?.length).toBeGreaterThan(0);
+  });
+});
+
+describe("여기서부터 다시: re-reads leave the pickers alone and never roll back newer state", () => {
+  function heldStream(frames: Array<[string, unknown]>, gate: Promise<void>, tail: Array<[string, unknown]>) {
+    const enc = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const f of frames) controller.enqueue(enc.encode(sseFrame(f)));
+        await gate;
+        for (const f of tail) controller.enqueue(enc.encode(sseFrame(f)));
+        controller.close();
+      },
+    });
+  }
+
+  it("keeps a model/effort/tool pick made WHILE a regenerate run streamed through the run-end re-read", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      modelTier: "opus",
+      effort: "high",
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "예전 답")],
+    });
+    let finish: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (finish = resolve));
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return {
+          ok: true,
+          status: 200,
+          body: heldStream([["open", { conversationId: "c", runId: "r1", userMessageId: "u1" }]], gate, [doneFrame("n1", "새 답")]),
+          json: async () => ({}),
+        };
+      // The server's selections are what the RUN was sent with.
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [row("u1", "user", "질문"), row("n1", "assistant", "새 답")],
+          canvases: [],
+          selectedModel: "opus",
+          selectedEffort: "high",
+          selectedMcpToolGroups: ["system"],
+          groupKnowledgeOff: ["g-server"],
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    regenerate(id);
+    await waitFor(() => pane(id).liveRunId === "r1");
+    // Picked mid-run: "다음 메시지부터 적용됩니다".
+    updateState((s) => {
+      const target = s.chatPanes.find((p) => p.id === id)!;
+      target.modelTier = "haiku";
+      target.effort = "low";
+      target.mcpToolGroups = ["system", "browser"] as any;
+      target.groupKnowledgeOff = ["g-mine"];
+    });
+    finish();
+    await waitFor(() => !pane(id).streaming);
+    await waitFor(() => pane(id).messages.some((m) => m.id === "n1"));
+    await flush();
+    // The transcript was re-read …
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "n1"]);
+    // … and every selection is still the viewer's.
+    expect(pane(id)).toMatchObject({ modelTier: "haiku", effort: "low", groupKnowledgeOff: ["g-mine"] });
+    expect(pane(id).mcpToolGroups).toEqual(["system", "browser"]);
+  });
+
+  it("keeps a pick made before an edit the server refused, through the refusal re-read", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      modelTier: "haiku",
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
+    });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return jsonRes({ error: "대화 내용이 바뀌어 다시 시작하지 못했습니다. 새로고침한 뒤 다시 시도해 주세요." }, 409);
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "다른 탭")],
+          canvases: [],
+          selectedModel: "opus",
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const sending = submitRewindEdit(id);
+    await confirmNext(true);
+    await sending;
+    await waitFor(() => pane(id).messages.length === 3);
+    expect(pane(id).modelTier).toBe("haiku");
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u1", draft: "고친 질문" });
+  });
+
+  it("keeps a stopped rewind's partial answer: a stopped run is not re-read", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      messages: [row("u1", "user", "질문"), row("a1", "assistant", "예전 답")],
+    });
+    const urls: string[] = [];
+    useFetch((url, init) => {
+      urls.push(url);
+      if (url === "/api/chat/stream") {
+        const signal = init.signal!;
+        const enc = new TextEncoder();
+        const streamBody = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(enc.encode(sseFrame(["open", { conversationId: "c", runId: "r2", userMessageId: "u1" }])));
+            controller.enqueue(enc.encode(sseFrame(["delta", { text: "부분 답변" }])));
+            signal.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+          },
+        });
+        return { ok: true, status: 200, body: streamBody, json: async () => ({}) };
+      }
+      if (url.includes("/cancel")) return jsonRes({ ok: true });
+      // Answered BEFORE the server has stored the stopped row (its run is unwinding).
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [row("u1", "user", "질문")], canvases: [] });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    regenerate(id);
+    await waitFor(() => pane(id).liveText.length > 0);
+    await stopPane(id);
+    await waitFor(() => !pane(id).streaming);
+    await flush();
+    await flush();
+    const rows = pane(id).messages;
+    expect(rows.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(rows[1]).toMatchObject({ content: "부분 답변" });
+    // Nothing re-read the transcript after the stop (the open-time canvas refetch
+    // is the only GET, and it touches canvases alone).
+    expect(urls.filter((u) => u.startsWith("/api/messages")).length).toBeLessThanOrEqual(1);
+  });
+
+  it("re-reads a rewind that another tab cancelled — the server stored its row before `cancelled`", async () => {
+    const id = seedPane({ conversationId: "c", messages: [row("u1", "user", "질문"), row("a1", "assistant", "예전 답")] });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r3", userMessageId: "u1" }],
+          ["delta", { text: "쓰다 만" }],
+          ["cancelled", { message: { id: "srv-stop", role: "assistant", content: "쓰다 만", conversationId: "c", response: null, createdAt: "t" } }],
+        ]);
+      if (url.startsWith("/api/messages"))
+        return jsonRes({ messages: [row("u1", "user", "질문"), row("srv-stop", "assistant", "쓰다 만 (서버)")], canvases: [] });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    regenerate(id);
+    await waitFor(() => pane(id).messages[1]?.content === "쓰다 만 (서버)");
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "srv-stop"]);
+  });
+
+  it("drops a re-read that resolves after a NEWER send instead of rolling the transcript back", async () => {
+    const id = seedPane({ conversationId: "c", messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")] });
+    let releaseStale: () => void = () => {};
+    const stale = new Promise<void>((resolve) => (releaseStale = resolve));
+    let streams = 0;
+    let reads = 0;
+    useFetch((url) => {
+      if (url === "/api/chat/stream") {
+        streams += 1;
+        // 1st: the edit is refused; 2nd: an ordinary send that goes through.
+        return streams === 1
+          ? jsonRes({ error: "대화 내용이 바뀌어 다시 시작하지 못했습니다. 새로고침한 뒤 다시 시도해 주세요." }, 409)
+          : sseRes([["open", { conversationId: "c", runId: "r9", userMessageId: "srv-new" }], doneFrame("srv-new-a", "새 답")]);
+      }
+      if (url.startsWith("/api/messages")) {
+        reads += 1;
+        // The refusal's re-read is held, and answers with what the server had
+        // BEFORE the newer send.
+        return stale.then(() => jsonRes({ messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")], canvases: [] }));
+      }
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    startRewindEdit(id, "u1");
+    setRewindEditDraft(id, "고친 질문");
+    const refused = submitRewindEdit(id);
+    await confirmNext(true);
+    await refused;
+    await waitFor(() => reads === 1);
+    // A newer send lands while that re-read is still out.
+    await sendMessage(id, "새 질문");
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "srv-new", "srv-new-a"]);
+    releaseStale();
+    await flush();
+    await flush();
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "srv-new", "srv-new-a"]);
   });
 });

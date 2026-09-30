@@ -8,6 +8,7 @@ import type {
   CanvasVersion,
   ConversationSummary,
   MessageAttachment,
+  SdkResumePoint,
   StoredMessage,
 } from "../types.js";
 import { type Constructor, type StoreBase, now, parseNameList } from "./internal.js";
@@ -56,6 +57,43 @@ interface CanvasVersionRow {
   interaction: string | null;
   editable: number;
   created_at: string | null;
+}
+
+/**
+ * What a rewind of one conversation touches (see planConversationRewind). A
+ * PLAN, computed before the turn's first await and applied only once the run
+ * is reserved, so a turn refused in between leaves the conversation untouched.
+ */
+export interface ConversationRewindPlan {
+  /** The USER row the rewind is anchored at. */
+  anchor: StoredMessage;
+  /** Rows strictly BEFORE the anchor, in order — the history the re-run keeps. */
+  keep: StoredMessage[];
+  /**
+   * Rows the rewind deletes: the anchor and everything after it (`"from"`, an
+   * edit — the anchor is replaced), or everything after it (`"after"`, a
+   * regenerate — the anchor is re-run in place).
+   */
+  drop: StoredMessage[];
+  /**
+   * Resume point of the row IMMEDIATELY before the anchor, when that row is an
+   * assistant row that recorded one — the kept history then ends exactly there
+   * in the SDK transcript. Null → the re-run rebuilds context from `keep`.
+   */
+  resumeAt: SdkResumePoint | null;
+  /**
+   * The anchor's created_at. Canvases and bot tasks created at or after it
+   * belong to the discarded turns — even on a regenerate, where the first
+   * dropped row (the answer) is persisted only at the END of the anchor's run,
+   * after everything that run created.
+   */
+  cutoffCreatedAt: string;
+}
+
+/** The title a conversation gets from its first user message (until renamed). */
+function autoConversationTitle(firstUserText: string): string {
+  const rawTitle = firstUserText.trim().replace(/\s+/g, " ");
+  return rawTitle.length > 0 ? rawTitle.slice(0, 40) : "새 대화";
 }
 
 export function withConversations<TBase extends Constructor<StoreBase>>(Base: TBase) {
@@ -263,8 +301,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           );
         return;
       }
-      const rawTitle = firstUserText.trim().replace(/\s+/g, " ");
-      const title = rawTitle.length > 0 ? rawTitle.slice(0, 40) : "새 대화";
+      const title = autoConversationTitle(firstUserText);
       this.db
         .prepare(
           `INSERT INTO conversations (id, owner_user_id, avatar_user_id, title, is_routine, external_endpoint, created_at, updated_at)
@@ -542,7 +579,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         // Spread CONDITIONALLY: an ordinary row keeps the exact shape it had
         // before the column existed (no `kind` key at all), so nothing that
         // compares stored messages has to learn about it.
-        ...(r.kind === "steer" ? { kind: "steer" as const } : {}),
+        ...(r.kind === "steer" || r.kind === "queued" ? { kind: r.kind } : {}),
         response: this.parseResponseJson(r.response_json),
         createdAt: r.created_at,
       }));
@@ -559,8 +596,16 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
          * `"steer"` for a USER row the viewer sent mid-turn (see
          * StoredMessage.kind). Only ever set at DELIVERY time — a mid-turn
          * message the model never received must not appear in history at all.
+         * `"queued"` for a USER row written while ANOTHER run is active on the
+         * thread (an enqueue) — it can never anchor a rewind.
          */
-        kind?: "steer";
+        kind?: "steer" | "queued";
+        /**
+         * Where this ASSISTANT row's segment ended in the local SDK transcript —
+         * what a later rewind onto the next user row resumes at. Server-only:
+         * written to its own columns, never part of the returned message.
+         */
+        resumePoint?: SdkResumePoint;
       },
     ): StoredMessage {
       const id = crypto.randomUUID();
@@ -568,8 +613,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const attachments = input.attachments?.length ? input.attachments : undefined;
       this.db
         .prepare(
-          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, sdk_session_id, sdk_uuid, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -579,6 +624,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           input.response ? JSON.stringify(input.response) : null,
           attachments ? JSON.stringify(attachments) : null,
           input.kind ?? null,
+          input.resumePoint?.sessionId ?? null,
+          input.resumePoint?.uuid ?? null,
           createdAt,
         );
       return {
@@ -591,6 +638,18 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         response: input.response ?? null,
         createdAt,
       };
+    }
+
+    /**
+     * Re-mark an ordinary USER row as `"queued"`: it was written, then its turn
+     * was refused because another run had just taken the thread — so it now
+     * sits BEFORE that run's answer in rowid order, and every row after it is
+     * not its own run's output. A steer or an already-marked row is left alone.
+     */
+    markMessageQueued(messageId: string): void {
+      this.db
+        .prepare("UPDATE messages SET kind = 'queued' WHERE id = ? AND role = 'user' AND kind IS NULL")
+        .run(messageId);
     }
 
     /**
@@ -946,21 +1005,173 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return ids;
     }
 
-    /** Remove the trailing assistant reply so a regenerate can replace it. */
-    dropLastAssistant(ownerId: string, conversationId: string): boolean {
+    // ---- Rewind / regenerate ----------------------------------------------
+
+    /**
+     * The row a regenerate re-runs: the conversation's LAST NON-STEER user
+     * message. A steer sits mid-turn (folded after a tool call, or heading a
+     * follow-up turn of the same run), so the run it belongs to started at the
+     * ordinary message before it — re-running from the steer would drop that
+     * message from the re-run's context. Owner-scoped; null when there is none.
+     */
+    findRegenerateAnchorId(ownerId: string, conversationId: string): string | null {
+      if (!this.ownsConversation(ownerId, conversationId)) {
+        return null;
+      }
+      const row = this.db
+        .prepare(
+          "SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' AND (kind IS NULL OR kind <> 'steer') ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(conversationId) as { id: string } | undefined;
+      return row?.id ?? null;
+    }
+
+    /**
+     * Plan a rewind anchored at one message (see ConversationRewindPlan).
+     * Read-only. Null when the conversation is not the owner's or the row is not
+     * in it; the caller validates what KIND of row the anchor is.
+     */
+    planConversationRewind(
+      ownerId: string,
+      conversationId: string,
+      anchorMessageId: string,
+      mode: "from" | "after",
+    ): ConversationRewindPlan | null {
+      const rows = this.listMessages(ownerId, conversationId);
+      const index = rows.findIndex((message) => message.id === anchorMessageId);
+      if (index < 0) {
+        return null;
+      }
+      const anchor = rows[index];
+      const before = index > 0 ? rows[index - 1] : undefined;
+      return {
+        anchor,
+        keep: rows.slice(0, index),
+        drop: mode === "from" ? rows.slice(index) : rows.slice(index + 1),
+        resumeAt: before?.role === "assistant" ? this.messageResumePoint(before.id) : null,
+        cutoffCreatedAt: anchor.createdAt,
+      };
+    }
+
+    /** The recorded SDK resume point of one row, or null when it has none. */
+    private messageResumePoint(messageId: string): SdkResumePoint | null {
+      const row = this.db
+        .prepare("SELECT sdk_session_id, sdk_uuid FROM messages WHERE id = ?")
+        .get(messageId) as { sdk_session_id: string | null; sdk_uuid: string | null } | undefined;
+      return row?.sdk_session_id && row.sdk_uuid
+        ? { sessionId: row.sdk_session_id, uuid: row.sdk_uuid }
+        : null;
+    }
+
+    /**
+     * Apply a rewind plan in ONE transaction: delete exactly the planned rows
+     * (by id, so a row appended after planning survives), the share links of
+     * their deck cards, the bot tasks the discarded turns opened (and park again
+     * the ones they resumed — see rewindBotTasks), and the canvas state they
+     * produced; then clear the conversation's SDK session, whose
+     * transcript still holds the discarded turns (the re-run records its fork's
+     * own id on success). The on-disk attachment bytes are the caller's sweep.
+     * False when the conversation is not the owner's.
+     */
+    applyConversationRewind(
+      ownerId: string,
+      conversationId: string,
+      plan: ConversationRewindPlan,
+    ): boolean {
       if (!this.ownsConversation(ownerId, conversationId)) {
         return false;
       }
-      const last = this.db
+      const tx = this.db.transaction(() => {
+        const deleteMessage = this.db.prepare(
+          "DELETE FROM messages WHERE id = ? AND conversation_id = ?",
+        );
+        for (const message of plan.drop) {
+          deleteMessage.run(message.id, conversationId);
+        }
+        this.deleteShareLinksForFiles(
+          conversationId,
+          plan.drop.flatMap((message) =>
+            (message.attachments ?? [])
+              .filter((att) => att.kind === "file")
+              .map((att) => att.id),
+          ),
+        );
+        this.rewindBotTasks(conversationId, plan.cutoffCreatedAt);
+        this.rewindCanvasArtifacts(conversationId, plan.cutoffCreatedAt);
+        this.db
+          .prepare(
+            "UPDATE conversations SET agent_session_id = NULL, updated_at = ? WHERE id = ? AND owner_user_id = ?",
+          )
+          .run(now(), conversationId, ownerId);
+      });
+      tx();
+      return true;
+    }
+
+    /**
+     * An edit-rewind replaced the conversation's FIRST message: move the
+     * automatic title over to the new one — but only while the title is still
+     * the one derived from the old message. A title the user renamed (or a
+     * routine's fixed one) is not auto-derived, so it stays.
+     */
+    retitleConversationFromFirstMessage(
+      ownerId: string,
+      conversationId: string,
+      previousFirstText: string,
+      nextFirstText: string,
+    ): void {
+      this.db
+        .prepare("UPDATE conversations SET title = ? WHERE id = ? AND owner_user_id = ? AND title = ?")
+        .run(
+          autoConversationTitle(nextFirstText),
+          conversationId,
+          ownerId,
+          autoConversationTitle(previousFirstText),
+        );
+    }
+
+    /**
+     * Put the conversation's canvases back to their state at `cutoff`: an
+     * artifact first shown at/after it is deleted, and an older one loses the
+     * versions made at/after it (its newest remaining version becomes current
+     * again). A rollback made after the cutoff is itself such a version, so it
+     * reverts too. An artifact whose pre-cutoff versions were all pruned is left
+     * as it is — there is nothing to restore. Runs inside the rewind transaction.
+     */
+    private rewindCanvasArtifacts(conversationId: string, cutoff: string): void {
+      this.db
         .prepare(
-          "SELECT id, role FROM messages WHERE conversation_id = ? ORDER BY rowid DESC LIMIT 1",
+          "DELETE FROM canvas_versions WHERE artifact_id IN (SELECT id FROM canvas_artifacts WHERE conversation_id = ? AND created_at >= ?)",
         )
-        .get(conversationId) as { id: string; role: string } | undefined;
-      if (last && last.role === "assistant") {
-        this.db.prepare("DELETE FROM messages WHERE id = ?").run(last.id);
-        return true;
+        .run(conversationId, cutoff);
+      this.db
+        .prepare("DELETE FROM canvas_artifacts WHERE conversation_id = ? AND created_at >= ?")
+        .run(conversationId, cutoff);
+      const touched = this.db
+        .prepare(
+          `SELECT DISTINCT a.id FROM canvas_artifacts a
+           JOIN canvas_versions v ON v.artifact_id = a.id
+           WHERE a.conversation_id = ? AND v.created_at >= ?`,
+        )
+        .all(conversationId, cutoff) as { id: string }[];
+      for (const { id } of touched) {
+        const kept = this.db
+          .prepare(
+            "SELECT * FROM canvas_versions WHERE artifact_id = ? AND (created_at IS NULL OR created_at < ?) ORDER BY version DESC LIMIT 1",
+          )
+          .get(id, cutoff) as CanvasVersionRow | undefined;
+        if (!kept) {
+          continue;
+        }
+        this.db
+          .prepare("DELETE FROM canvas_versions WHERE artifact_id = ? AND created_at >= ?")
+          .run(id, cutoff);
+        this.db
+          .prepare(
+            "UPDATE canvas_artifacts SET title = ?, content_type = ?, current_version = ?, updated_at = ? WHERE id = ?",
+          )
+          .run(kept.title, kept.content_type, kept.version, now(), id);
       }
-      return false;
     }
 
     // ---- Audit ------------------------------------------------------------

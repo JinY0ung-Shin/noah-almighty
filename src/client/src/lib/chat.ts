@@ -723,18 +723,373 @@ export async function clearChatHistory(): Promise<number> {
   return result.deleted || ids.size;
 }
 
+/* ---------- 여기서부터 다시 (rewind) + 다시 생성 ---------- */
+
+/**
+ * A user row that OPENED a turn. A steer did not — it reached the model in the
+ * MIDDLE of one (between tool calls, or as the head of a follow-up turn inside the
+ * same run), so there is no turn boundary in front of it to restart from.
+ */
+function isTurnOpener(message: StoredMessage | undefined): boolean {
+  return message?.role === "user" && message.kind !== "steer";
+}
+
+/**
+ * A row 여기서부터 다시 can go back to: a turn opener that was NOT queued behind
+ * another run. A `queued` row was stored while an earlier run was still active,
+ * so it sits BEFORE that run's answer — "it and everything after it" would take
+ * the earlier turn's answer with it. The server refuses both kinds; mirroring the
+ * rule keeps the UI from offering an action that could only come back refused.
+ */
+export function isRewindAnchor(message: StoredMessage | undefined): boolean {
+  return isTurnOpener(message) && message?.kind !== "queued";
+}
+
+/** The turn 다시 생성 re-runs: the LAST turn-opening user row (the server picks the same one). */
+function lastTurnOpenerIndex(messages: StoredMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isTurnOpener(messages[i])) return i;
+  }
+  return -1;
+}
+
+/** Whether 다시 생성 can re-run the latest turn — its opener exists and was not queued. */
+export function canRegenerate(messages: StoredMessage[]): boolean {
+  return isRewindAnchor(messages[lastTurnOpenerIndex(messages)]);
+}
+
+/**
+ * Whether a rewound row carries images of its own. Its text may then be empty — an
+ * image-only message is still a message (the server re-feeds those images), so
+ * neither 다시 생성 nor an edit needs text to go back to it.
+ */
+export function hasVisibleImages(message: StoredMessage | undefined): boolean {
+  return (message?.attachments ?? []).some((att) => att.kind === "image" && !att.hidden);
+}
+
+/**
+ * A row the CLIENT created (the optimistic user bubble, a stopped bubble) later
+ * takes the id the server stored it under. `clientKey` remembers the id it was
+ * born with, and the transcript is keyed on it: the adoption then updates the
+ * node in place, where re-keying would destroy it and replay its entry animation
+ * a beat after it appeared. Re-reads carry it over by id (`mergeLoadedMessages`).
+ */
+type KeyedMessage = StoredMessage & { clientKey?: string };
+
+/**
+ * A row's identity for UI state that must survive id adoption — the each-block key,
+ * which cards are open: the id it was born with when the client made it.
+ */
+export function stableMessageId(message: StoredMessage): string {
+  return (message as KeyedMessage).clientKey || message.id;
+}
+
+/** The transcript's each-block key for a row — stable across id adoption. */
+export function messageKey(message: StoredMessage, index: number): string {
+  return (
+    stableMessageId(message) || `${message.role}-${message.createdAt}-${index}`
+  );
+}
+
+/**
+ * Per pane: bumped by every send and every transcript re-read. A re-read applies
+ * its response only while nothing newer has happened since it started — an
+ * unordered response would roll a later change back: a new optimistic send, a
+ * newer re-read, or a stopped bubble the server had not stored yet when the GET
+ * was answered.
+ */
+const transcriptEpochs = new Map<string, number>();
+
+function nextTranscriptEpoch(paneId: string): number {
+  const epoch = (transcriptEpochs.get(paneId) ?? 0) + 1;
+  transcriptEpochs.set(paneId, epoch);
+  return epoch;
+}
+
+function isLatestTranscriptEpoch(paneId: string, epoch: number): boolean {
+  return (transcriptEpochs.get(paneId) ?? 0) === epoch;
+}
+
+function adoptServerId(row: StoredMessage, serverId: string): void {
+  const keyed = row as KeyedMessage;
+  if (!keyed.clientKey) keyed.clientKey = row.id;
+  row.id = serverId;
+}
+
+/**
+ * A re-read of the transcript, applied without disturbing what the pane already
+ * shows: rows keep their each-block key (matched by id, which adoption made the
+ * server's), and a row keeps the activity snapshot it rendered — `done` PUTs that
+ * snapshot fire-and-forget, so a re-read right after a turn can beat it there.
+ */
+function mergeLoadedMessages(
+  current: StoredMessage[],
+  loaded: StoredMessage[],
+): StoredMessage[] {
+  const byId = new Map(current.map((row) => [row.id, row as KeyedMessage]));
+  return loaded.map((row) => {
+    const mine = byId.get(row.id);
+    if (!mine) return row;
+    const merged: KeyedMessage = { ...row };
+    if (mine.clientKey) merged.clientKey = mine.clientKey;
+    if (row.response && !row.response.activity && mine.response?.activity)
+      merged.response = { ...row.response, activity: mine.response.activity };
+    return merged;
+  });
+}
+
+/** Open the inline editor on an earlier user message (여기서부터 다시). */
+export function startRewindEdit(paneId: string, messageId: string): void {
+  updatePane(paneId, (pane) => {
+    if (pane.streaming) return;
+    const message = pane.messages.find((m) => m.id === messageId);
+    if (!message || !isRewindAnchor(message)) return;
+    pane.rewindEdit = { messageId, draft: message.content || "" };
+  });
+}
+
+export function setRewindEditDraft(paneId: string, draft: string): void {
+  updatePane(paneId, (pane) => {
+    if (pane.rewindEdit) pane.rewindEdit.draft = draft;
+  });
+}
+
+export function cancelRewindEdit(paneId: string): void {
+  updatePane(paneId, (pane) => {
+    pane.rewindEdit = null;
+  });
+}
+
+/**
+ * Send the inline edit: after ONE confirmation the conversation goes back to the
+ * edited message — it and every row after it are replaced by the edited text and
+ * the new answer. The discarded messages' shared file cards go with them and
+ * their share links are revoked; everything else the discarded turns did stays
+ * as it is (workspace/repo files, commits, browser actions, created routines and
+ * bots). The dialog says both halves outright.
+ */
+export async function submitRewindEdit(paneId: string): Promise<void> {
+  const pane = readState().chatPanes.find((item) => item.id === paneId);
+  const edit = pane?.rewindEdit;
+  if (!pane || !edit || pane.streaming || !pane.avatar) return;
+  const index = pane.messages.findIndex((m) => m.id === edit.messageId);
+  if (index < 0 || !isRewindAnchor(pane.messages[index])) {
+    cancelRewindEdit(paneId);
+    notify("편집할 메시지를 찾을 수 없습니다.", "warn");
+    return;
+  }
+  if (!edit.draft.trim() && !hasVisibleImages(pane.messages[index])) return;
+  const later = pane.messages.length - index - 1;
+  // What goes and what stays, said plainly: the later messages AND their shared
+  // file cards and share links are deleted; work the turns did outside the chat
+  // (workspace/repo files, commits, browser actions, created routines and bots)
+  // is not undone.
+  const confirmed = await confirmAction(
+    later > 0
+      ? `이 메시지부터 다시 시작할까요?\n\n이후 메시지 ${later}개와 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. 작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.`
+      : "이 메시지부터 다시 시작할까요?\n\n작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.",
+    { title: "여기서부터 다시", confirmLabel: "다시 시작", tone: "danger" },
+  );
+  if (!confirmed) return;
+  // The dialog is asynchronous: the pane may have started streaming (a run
+  // reattached), closed the editor, or moved to another conversation meanwhile.
+  const current = readState().chatPanes.find((item) => item.id === paneId);
+  if (
+    !current ||
+    current.streaming ||
+    current.rewindEdit?.messageId !== edit.messageId
+  )
+    return;
+  await sendMessage(paneId, current.rewindEdit.draft, {
+    rewindFromMessageId: edit.messageId,
+  });
+}
+
+/**
+ * 다시 생성: re-run the LAST ordinary user turn. Every row after it goes — each
+ * answer segment, steer and background report of that turn, not just the final
+ * row (the server drops the same set, so a reload shows what the screen shows).
+ */
 export function regenerate(paneId: string): void {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
-  if (!pane || pane.streaming) return;
-  const lastUserIndex = [...pane.messages]
-    .map((m) => m.role)
-    .lastIndexOf("user");
-  if (lastUserIndex < 0) return;
-  const text = pane.messages[lastUserIndex].content;
-  updatePane(paneId, (target) => {
-    target.messages = target.messages.slice(0, lastUserIndex + 1);
+  if (!pane || pane.streaming || !canRegenerate(pane.messages)) return;
+  const anchorIndex = lastTurnOpenerIndex(pane.messages);
+  void sendMessage(paneId, pane.messages[anchorIndex].content, {
+    regenerate: true,
   });
-  void sendMessage(paneId, text, { regenerate: true });
+}
+
+/**
+ * Per pane, the optimistic USER bubble of the send in flight. The `open` frame
+ * names the row the server persisted (`userMessageId`), and adopting it is what
+ * lets a message sent in THIS session be edited and rewound at all — the server
+ * only knows its own ids. Consumed by the first `open`; a replayed one finds
+ * nothing and is a no-op. A regenerate never registers: its server picks the
+ * anchor itself, and a stale tab's server may re-run a DIFFERENT row, so the id
+ * is not ours to adopt — the re-read when that run ends settles it instead.
+ */
+const pendingUserMessageIds = new Map<string, string>();
+
+/** What a rewind/regenerate's `open` clears locally once the server has applied it. */
+interface RewindCleanup {
+  conversationId: string;
+  /** Attachments of the dropped rows (the file preview closes if it shows one). */
+  attachmentIds: Set<string>;
+  /** Delegated-task cards anchored at/after the anchor row (their rows are deleted server-side). */
+  botTaskIds: Set<string>;
+}
+const pendingRewindCleanups = new Map<string, RewindCleanup>();
+
+function adoptUserMessageId(
+  pane: ChatPane,
+  optimisticId: string | undefined,
+  serverId: unknown,
+): void {
+  if (!optimisticId || typeof serverId !== "string" || !serverId) return;
+  if (optimisticId === serverId) return;
+  if (pane.messages.some((m) => m.id === serverId)) return;
+  const row = pane.messages.find((m) => m.id === optimisticId);
+  if (row) adoptServerId(row, serverId);
+}
+
+/** Delegated-task cards the transcript shows at or after `anchorIndex`. */
+function botTaskIdsFromAnchor(pane: ChatPane, anchorIndex: number): Set<string> {
+  const tasks = readState().botTasks.filter(
+    (task) => task.conversationId === pane.conversationId,
+  );
+  const ids = new Set<string>();
+  if (!tasks.length) return ids;
+  for (const [index, bucket] of anchorBotTasksToMessages(tasks, pane.messages)) {
+    if (index >= anchorIndex) for (const task of bucket) ids.add(task.id);
+  }
+  return ids;
+}
+
+/**
+ * The server applied the rewind before opening the run (that is what `open`
+ * proves), so the side state of the dropped turns goes now: their task cards,
+ * a file preview showing one of their cards, and canvases they created or
+ * refined. Canvases carry no timestamps client-side, so they come back from the
+ * server — merged with anything THIS run has already shown live, which the
+ * fetch may not include yet.
+ */
+function applyRewindCleanup(
+  paneId: string,
+  cleanup: RewindCleanup,
+  runId: string | undefined,
+): void {
+  if (cleanup.botTaskIds.size) {
+    updateState((state) => {
+      state.botTasks = state.botTasks.filter(
+        (task) => !cleanup.botTaskIds.has(task.id),
+      );
+    });
+  }
+  updatePane(paneId, (pane) => {
+    if (
+      pane.filePreview &&
+      cleanup.attachmentIds.has(pane.filePreview.attachment.id)
+    )
+      pane.filePreview = null;
+  });
+  // Not a transcript re-read of its own (it bumps nothing), but a later one — the
+  // run-end re-read — supersedes it, so a late answer here is dropped.
+  const epoch = transcriptEpochs.get(paneId) ?? 0;
+  void (async () => {
+    try {
+      const loaded = await loadMessages(cleanup.conversationId);
+      if (!isLatestTranscriptEpoch(paneId, epoch)) return;
+      updatePane(paneId, (pane) => {
+        if (pane.conversationId !== cleanup.conversationId) return;
+        const live = pane.canvases.filter(
+          (canvas) => Boolean(runId) && canvas.runId === runId,
+        );
+        pane.canvases = [
+          ...paneCanvasesFromArtifacts(loaded.canvases).filter(
+            (canvas) => !live.some((item) => item.id === canvas.id),
+          ),
+          ...live,
+        ];
+        if (
+          pane.activeCanvasId &&
+          !pane.canvases.some((canvas) => canvas.id === pane.activeCanvasId)
+        )
+          pane.activeCanvasId = null;
+      });
+    } catch {
+      /* best effort — the next open of the conversation reloads them */
+    }
+  })();
+}
+
+/**
+ * A rewind/regenerate that never opened a run: put the transcript back at once
+ * (an edit also gets its editor back, text intact — the text only exists there),
+ * then re-read it. A refusal usually means this view is STALE — the server's
+ * conversation moved on (another tab, a queued turn), which is exactly what its
+ * "대화 내용이 바뀌어…" 409 says — and a transport failure may have reached the
+ * server after all. The editor survives the re-read while its row still exists;
+ * otherwise its text moves to the composer instead of vanishing. Transcript only:
+ * a model/effort/tool pick made before the refused edit stays picked.
+ */
+function restoreFailedRewind(
+  paneId: string,
+  conversationId: string,
+  snapshot: StoredMessage[],
+  editMessageId: string | undefined,
+  text: string,
+): void {
+  updatePane(paneId, (target) => {
+    if (target.conversationId !== conversationId) return;
+    target.messages = snapshot;
+    target.usage = lastUsage(snapshot);
+    if (editMessageId) target.rewindEdit = { messageId: editMessageId, draft: text };
+  });
+  const epoch = nextTranscriptEpoch(paneId);
+  void (async () => {
+    try {
+      const loaded = await loadMessages(conversationId);
+      if (!isLatestTranscriptEpoch(paneId, epoch)) return;
+      updatePane(paneId, (target) => {
+        if (target.conversationId !== conversationId || target.streaming) return;
+        applyLoadedTranscript(target, loaded);
+        if (
+          target.rewindEdit &&
+          !target.messages.some((m) => m.id === target.rewindEdit?.messageId)
+        ) {
+          const orphaned = target.rewindEdit.draft;
+          target.rewindEdit = null;
+          if (!target.draft.trim()) target.draft = orphaned;
+        }
+      });
+    } catch {
+      /* offline — the restored snapshot stands until the next load */
+    }
+  })();
+}
+
+/**
+ * A rewind/regenerate run ENDED (a terminal frame was read, so the server had
+ * stored every row of it): re-read the transcript so the pane shows the server's
+ * rows — its ids, and exactly the rows it kept, even when this view had drifted —
+ * merged so nothing on screen re-mounts or loses its activity card. Transcript
+ * only: a model/effort/tool pick made while the run streamed stays picked.
+ */
+async function refreshAfterRewind(
+  paneId: string,
+  conversationId: string,
+): Promise<void> {
+  const epoch = nextTranscriptEpoch(paneId);
+  try {
+    const loaded = await loadMessages(conversationId);
+    if (!isLatestTranscriptEpoch(paneId, epoch)) return;
+    updatePane(paneId, (target) => {
+      if (target.conversationId !== conversationId || target.streaming) return;
+      applyLoadedTranscript(target, loaded);
+    });
+  } catch {
+    /* best effort — the next open of the conversation reloads it */
+  }
 }
 
 export async function sendMessage(
@@ -742,6 +1097,13 @@ export async function sendMessage(
   rawMessage: string,
   opts: {
     regenerate?: boolean;
+    /**
+     * 여기서부터 다시: the SERVER id of the earlier ordinary user row this send
+     * replaces. That row and everything after it are dropped (server-side too),
+     * and `rawMessage` — the edited text — becomes the conversation's newest
+     * turn, carrying the row's images. The composer is left untouched.
+     */
+    rewindFromMessageId?: string;
     /**
      * A non-blocking canvas submission/edit (#50). Delivered as a normal turn: the
      * server formats the agent-facing message and persists a short Korean bubble.
@@ -763,10 +1125,26 @@ export async function sendMessage(
       ? "캔버스를 수정해 보냈습니다."
       : "캔버스 응답을 보냈습니다.";
   }
+  const rewindFromMessageId = opts.rewindFromMessageId || undefined;
+  // The ordinary user row a rewind or regenerate goes back to. A rewind REPLACES
+  // it (and everything after it) with the edited text; a regenerate keeps it and
+  // re-runs its turn, dropping every row after it.
+  const anchorIndex = rewindFromMessageId
+    ? pane.messages.findIndex((m) => m.id === rewindFromMessageId)
+    : opts.regenerate
+      ? lastTurnOpenerIndex(pane.messages)
+      : -1;
+  const rewinding = Boolean(rewindFromMessageId) || opts.regenerate === true;
+  const anchor = rewinding ? pane.messages[anchorIndex] : undefined;
+  if (rewinding && !isRewindAnchor(anchor)) return;
   // Snapshot staged images early so a text-empty, image-only turn can be sent.
-  // Regenerates carry no freshly staged images.
-  const pendingImages = opts.regenerate ? [] : [...(pane.pendingImages || [])];
-  if (!message && pendingImages.length === 0) return;
+  // Regenerates and rewinds carry no freshly staged images: they re-send a
+  // stored turn (its own images are re-read server-side), and whatever sits in
+  // the composer belongs to the NEXT message.
+  const pendingImages = rewinding ? [] : [...(pane.pendingImages || [])];
+  // An image-only row is still a message: going back to it needs no text.
+  const anchorImages = rewinding && hasVisibleImages(anchor);
+  if (!message && pendingImages.length === 0 && !anchorImages) return;
 
   const slash =
     message && !opts.canvasSubmission
@@ -774,13 +1152,20 @@ export async function sendMessage(
       : null;
   if (slash) {
     if (slash.command.action === "new") {
+      // An edit cannot turn into "start a new chat" — the editor stays open.
+      if (rewindFromMessageId) {
+        notify("편집한 메시지로는 새 대화를 시작할 수 없습니다.", "warn");
+        return;
+      }
       newChat(pane.id);
       return;
     }
     if (slash.command.requiresArgs && !slash.args) {
-      updatePane(pane.id, (target) => {
-        target.draft = `/${slash.command.name} `;
-      });
+      // The inline editor keeps its own text; only a composer send is reseeded.
+      if (!rewindFromMessageId)
+        updatePane(pane.id, (target) => {
+          target.draft = `/${slash.command.name} `;
+        });
       const argsLabel = slash.command.argsLabel || "내용";
       notify(
         `/${slash.command.name} 뒤에 ${argsLabel}${objectParticle(argsLabel)} 입력해 주세요.`,
@@ -791,24 +1176,29 @@ export async function sendMessage(
     // Send the literal "/command [args]"; the server swaps in the expanded
     // (agent-facing) prompt so the bubble + persisted turn stay the literal.
     message = `/${slash.command.name}${slash.args ? ` ${slash.args}` : ""}`;
-    if (!message && pendingImages.length === 0) return;
+    if (!message && pendingImages.length === 0 && !anchorImages) return;
   }
 
   // Staged images ride this turn and can be restored if the send fails before
-  // anything streamed.
+  // anything streamed. An edit carries the replaced row's images instead: the
+  // server keeps their bytes and re-feeds them, so the bubble shows them as-is.
   const userMessage: StoredMessage = {
     id: newId(),
     conversationId: pane.conversationId,
     role: "user",
     content: message,
-    attachments: pendingImages.length
-      ? pendingImages.map((img) => ({
-          id: img.id,
-          kind: "image" as const,
-          mediaType: img.mediaType,
-          name: img.name,
-        }))
-      : undefined,
+    attachments: rewindFromMessageId
+      ? anchor?.attachments?.length
+        ? anchor.attachments.map((att) => ({ ...att }))
+        : undefined
+      : pendingImages.length
+        ? pendingImages.map((img) => ({
+            id: img.id,
+            kind: "image" as const,
+            mediaType: img.mediaType,
+            name: img.name,
+          }))
+        : undefined,
     response: null,
     createdAt: new Date().toISOString(),
   };
@@ -816,21 +1206,60 @@ export async function sendMessage(
   // notification permission so answer-complete / input-needed alerts can fire later.
   void ensureNotificationPermission();
 
+  // A rewind/regenerate restores this exact list if the server never opens its
+  // run, and hands `open` what to clear once it does: the rows from the first
+  // dropped one on are going away server-side.
+  const snapshot = rewinding ? pane.messages.slice() : null;
+  if (rewinding) {
+    const carried = new Set((userMessage.attachments ?? []).map((att) => att.id));
+    const dropped = pane.messages.slice(
+      rewindFromMessageId ? anchorIndex : anchorIndex + 1,
+    );
+    pendingRewindCleanups.set(paneId, {
+      conversationId: pane.conversationId,
+      attachmentIds: new Set(
+        dropped
+          .flatMap((row) => (row.attachments ?? []).map((att) => att.id))
+          .filter((id) => !carried.has(id)),
+      ),
+      botTaskIds: botTaskIdsFromAnchor(pane, anchorIndex),
+    });
+  } else {
+    pendingRewindCleanups.delete(paneId);
+  }
+  if (opts.regenerate) pendingUserMessageIds.delete(paneId);
+  else pendingUserMessageIds.set(paneId, userMessage.id);
+  terminalMessageIds.delete(paneId);
+  // This send changes the transcript: a re-read already in flight must not land on top.
+  nextTranscriptEpoch(paneId);
+
   const controller = new AbortController();
   updatePane(pane.id, (target) => {
-    if (opts.regenerate) {
-      const last = target.messages[target.messages.length - 1];
-      if (last?.role === "assistant") target.messages.pop();
+    if (rewinding && anchor) {
+      const at = target.messages.findIndex((m) => m.id === anchor.id);
+      if (at >= 0) {
+        target.messages = rewindFromMessageId
+          ? [...target.messages.slice(0, at), userMessage]
+          : target.messages.slice(0, at + 1);
+      }
+      target.usage = lastUsage(target.messages);
+    } else {
+      target.messages.push(userMessage);
     }
-    if (userMessage && !opts.regenerate) target.messages.push(userMessage);
+    // Any open inline edit goes with a send: the transcript it points into moved on.
+    target.rewindEdit = null;
     // Hold the data URLs locally so the just-sent bubble renders images before
     // they're fetchable from the server, and clear the composer's staged images.
+    // A rewind/regenerate re-sends a stored turn, so the composer — whatever is
+    // typed or staged there belongs to the NEXT message — is left as it is.
     if (pendingImages.length) {
       target.localImages = { ...(target.localImages || {}) };
       for (const img of pendingImages) target.localImages[img.id] = img.dataUrl;
     }
-    target.pendingImages = [];
-    target.draft = "";
+    if (!rewinding) {
+      target.pendingImages = [];
+      target.draft = "";
+    }
     resetLive(target);
     // The previous turn's run id outlives its turn (resetLive keeps it for the
     // canvas/stop paths). Drop it here so this send's failure handling can tell
@@ -846,6 +1275,9 @@ export async function sendMessage(
     target.abortController = controller;
   });
 
+  // A terminal frame (done / bg_end / cancelled / error) was read for this send's
+  // run — the server persists each of those rows BEFORE it emits the frame.
+  let runEnded = false;
   try {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
@@ -857,6 +1289,7 @@ export async function sendMessage(
         message,
         conversationId: pane.conversationId,
         regenerate: opts.regenerate === true,
+        ...(rewindFromMessageId ? { rewindFromMessageId } : {}),
         multiSession: readState().chatPanes.length > 1,
         // External avatars run their own tool stack behind the gateway, so the
         // local-only composer settings (effort/knowledge/MCP groups) stay off
@@ -893,6 +1326,12 @@ export async function sendMessage(
     // already cleared; the `finally` below unsets streaming, so the pane simply
     // never enters a live turn — the task card carries the progress from here.
     if (response.status === 202) {
+      // The server stored the message as a QUEUED row (it sits before the busy
+      // run's answer), so the bubble mirrors that kind and offers no rewind.
+      updatePane(paneId, (target) => {
+        const row = target.messages.find((m) => m.id === userMessage.id);
+        if (row) row.kind = "queued";
+      });
       const queued = await response.json().catch(() => ({}));
       if (isBotTask(queued?.task)) upsertBotTask(queued.task);
       notify(
@@ -909,8 +1348,8 @@ export async function sendMessage(
     // way whether the server finished the run or the socket died, so only a
     // terminal frame ends the turn here — otherwise the run is still going and we
     // follow it through the reattach loop.
-    if (!(await readRunStream(paneId, response.body)))
-      await followSendDrop(paneId, controller);
+    if (await readRunStream(paneId, response.body)) runEnded = true;
+    else runEnded = (await followSendDrop(paneId, controller)) === "terminal";
   } catch (err) {
     const error = err as Error;
     if (error.name === "AbortError") {
@@ -919,10 +1358,21 @@ export async function sendMessage(
       // The turn's own connection failed, but the run had already opened and is
       // still in the server's registry — reconnect instead of ending the turn on
       // a transport failure (and never undo the user bubble: the server has it).
-      await followSendDrop(paneId, controller);
+      runEnded = (await followSendDrop(paneId, controller)) === "terminal";
     } else {
       const current = readState().chatPanes.find((item) => item.id === paneId);
-      if (!current?.liveText && userMessage) {
+      if (!current?.liveText && snapshot) {
+        // A rewind/regenerate that never opened its run: the transcript comes
+        // back as it was, an edit with its editor and text.
+        restoreFailedRewind(
+          paneId,
+          pane.conversationId,
+          snapshot,
+          rewindFromMessageId,
+          rawMessage,
+        );
+        notify(`메시지를 보내지 못했습니다: ${error.message}`);
+      } else if (!current?.liveText && userMessage) {
         // Nothing arrived for a normal send — undo it cleanly and restore the
         // draft + the staged images so the user can retry without re-attaching.
         updatePane(paneId, (target) => {
@@ -941,12 +1391,23 @@ export async function sendMessage(
       }
     }
   } finally {
+    // Consumed by `open`; a send that never got one must not leave them for a
+    // later run's frame to act on.
+    pendingUserMessageIds.delete(paneId);
+    pendingRewindCleanups.delete(paneId);
     dropRunPrompts(paneId);
     updatePane(paneId, (target) => {
       target.streaming = false;
       target.abortController = null;
       target.liveStatus = "";
     });
+    // A rewind/regenerate whose run really ENDED (a refusal re-reads on its own
+    // path): the server's rows are the truth now, whatever this view assumed. A
+    // stopped or dropped one is not re-read — the server stores a stopped row
+    // only once its run has unwound, after this GET would already be answered,
+    // and the merge would then wipe the stopped bubble the viewer is looking at.
+    if (snapshot && runEnded)
+      void refreshAfterRewind(paneId, pane.conversationId);
     void loadConversations();
   }
 }
@@ -1008,7 +1469,9 @@ export async function attachActiveRun(paneId: string): Promise<void> {
       return;
     }
     if (pane.messages[pane.messages.length - 1]?.role === "user") {
+      const epoch = nextTranscriptEpoch(paneId);
       const loaded = await loadMessages(pane.conversationId);
+      if (!isLatestTranscriptEpoch(paneId, epoch)) return;
       updatePane(paneId, (target) => {
         applyLoadedConversation(target, loaded);
       });
@@ -1199,8 +1662,10 @@ async function followRun(
 async function catchUpAfterRunGone(paneId: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
   if (!pane) return;
+  const epoch = nextTranscriptEpoch(paneId);
   try {
     const loaded = await loadMessages(pane.conversationId);
+    if (!isLatestTranscriptEpoch(paneId, epoch)) return;
     updatePane(paneId, (target) => {
       applyLoadedConversation(target, loaded);
     });
@@ -1248,17 +1713,18 @@ function waitBeforeRetry(
 async function followSendDrop(
   paneId: string,
   controller: AbortController,
-): Promise<void> {
+): Promise<StreamEnd | null> {
   const runId = paneRunId(paneId);
-  if (!runId) return;
+  if (!runId) return null;
   if (controller.signal.aborted) {
     finalizePane(paneId, "중지됨", true);
-    return;
+    return "aborted";
   }
   const end = await followRun(paneId, runId, controller, {
     connectedOnce: true,
   });
   if (end === "aborted") finalizePane(paneId, "중지됨", true);
+  return end;
 }
 
 /**
@@ -1381,14 +1847,23 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         }
       });
       return;
-    case "open":
+    case "open": {
+      // The first `open` of a send consumes that send's bookkeeping; a replayed
+      // one (reattach) finds none and changes nothing.
+      const optimisticId = pendingUserMessageIds.get(paneId);
+      pendingUserMessageIds.delete(paneId);
+      const cleanup = pendingRewindCleanups.get(paneId);
+      pendingRewindCleanups.delete(paneId);
       updatePane(paneId, (pane) => {
         if (data?.conversationId) pane.conversationId = data.conversationId;
         if (data?.runId) pane.liveRunId = data.runId;
         pane.liveStatus = "응답 준비 중…";
+        adoptUserMessageId(pane, optimisticId, data?.userMessageId);
       });
+      if (cleanup) applyRewindCleanup(paneId, cleanup, data?.runId);
       syncHash(true);
       return;
+    }
     case "status":
       // While parked on a blocking canvas the SDK's periodic tool_progress
       // ticks keep re-emitting "실행 중: 캔버스 표시" — but the run is waiting on
@@ -1689,6 +2164,7 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       const pane = readState().chatPanes.find((p) => p.id === paneId);
       if (pane?.backgroundPhase) finalizeBackgroundPhase(paneId, "failed");
       finalizePane(paneId, "중지됨", true);
+      adoptTerminalMessageId(paneId, data?.message);
       return;
     }
     case "error": {
@@ -2393,6 +2869,25 @@ function finalizeBackgroundPhase(
   }
 }
 
+/**
+ * Per pane, the client-minted id of the last stopped/error bubble. A `cancelled`
+ * frame carries the row the server persisted for that stop; adopting its id keeps
+ * the bubble addressable like every other stored message. Cleared by each send.
+ */
+const terminalMessageIds = new Map<string, string>();
+
+function adoptTerminalMessageId(paneId: string, persisted: unknown): void {
+  const clientId = terminalMessageIds.get(paneId);
+  terminalMessageIds.delete(paneId);
+  const serverId = (persisted as { id?: unknown } | null | undefined)?.id;
+  if (!clientId || typeof serverId !== "string" || !serverId) return;
+  updatePane(paneId, (pane) => {
+    if (pane.messages.some((m) => m.id === serverId)) return;
+    const row = pane.messages.find((m) => m.id === clientId);
+    if (row) adoptServerId(row, serverId);
+  });
+}
+
 // Build a client-side terminal (stop/error) assistant message: a text
 // AgentResponse carrying the snapshot activity + live plan, push it, then clear the
 // live state. Callers compute their own summary/text/content.
@@ -2409,8 +2904,10 @@ function pushTerminalMessage(
   attachActivity(response, snapshotActivity(pane));
   attachPlan(response, pane.livePlan);
   attachThinking(response, pane.liveThinking);
+  const id = newId();
+  terminalMessageIds.set(pane.id, id);
   pane.messages.push({
-    id: newId(),
+    id,
     conversationId: pane.conversationId,
     role: "assistant",
     content,
@@ -3065,21 +3562,34 @@ function updatePane(paneId: string, mutator: (pane: ChatPane) => void): void {
   });
 }
 
-// Apply a loadMessages() result onto a pane/draft target: messages, the
-// per-conversation picker selections (falling back to defaults), canvases, and the
-// usage snapshot. Shared by the four load sites (select / split / attachActiveRun /
-// attachRun-404) so they stay in lockstep.
+// The TRANSCRIPT half of a loadMessages() result: messages, canvases and the usage
+// snapshot — never the composer's selections. The messages MERGE into what the
+// pane shows (keys and activity snapshots carried by id), so a re-read of an open
+// pane re-mounts nothing. The rewind re-reads apply this half alone: the pickers
+// stay live while a run streams ("다음 메시지부터 적용됩니다"), and a pick made
+// mid-run or before a refused edit must not flip back.
+function applyLoadedTranscript(
+  target: ChatPane,
+  loaded: Awaited<ReturnType<typeof loadMessages>>,
+): void {
+  target.messages = mergeLoadedMessages(target.messages ?? [], loaded.messages ?? []);
+  target.canvases = paneCanvasesFromArtifacts(loaded.canvases);
+  target.usage = lastUsage(target.messages);
+}
+
+// Apply a loadMessages() result onto a pane/draft target: the transcript plus the
+// per-conversation picker selections (falling back to defaults). Shared by the four
+// full-load sites (select / split / attachActiveRun / attachRun-404) so they stay
+// in lockstep.
 function applyLoadedConversation(
   target: ChatPane,
   loaded: Awaited<ReturnType<typeof loadMessages>>,
 ): void {
-  target.messages = loaded.messages;
+  applyLoadedTranscript(target, loaded);
   target.groupKnowledgeOff = loaded.groupKnowledgeOff || [];
   target.modelTier = loaded.selectedModel || undefined;
   target.effort = loaded.selectedEffort || undefined;
   target.mcpToolGroups = loaded.selectedMcpToolGroups ?? [
     ...DEFAULT_MCP_TOOL_GROUPS,
   ];
-  target.canvases = paneCanvasesFromArtifacts(loaded.canvases);
-  target.usage = lastUsage(loaded.messages);
 }

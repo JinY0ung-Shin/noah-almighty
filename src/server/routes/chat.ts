@@ -23,12 +23,15 @@ import type {
   AgentImageFileInput,
   AgentImageInput,
   AgentResponse,
+  AgentRewindInfo,
   AppConfig,
   BotTask,
   ExternalAgentConfig,
   MessageAttachment,
+  SdkResumePoint,
   StoredMessage,
 } from "../types.js";
+import type { ConversationRewindPlan } from "../store/conversations.js";
 import type {
   AgentEvents,
   BrowserCookie,
@@ -154,6 +157,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { workspaceDirFor } from "../workspace.js";
+import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
   attachmentContentDisposition,
@@ -514,6 +518,97 @@ function activeRunMessage(background: boolean): string {
 }
 
 /**
+ * Resolve a rewind / regenerate request to its plan, or to the refusal that
+ * stops it (plain JSON — nothing has been written yet). An edit may anchor only
+ * at an ordinary user row: a steer sits mid-turn in the SDK transcript, so there
+ * is no clean point to resume before it.
+ */
+function planTurnRewind(
+  store: Store,
+  ownerUserId: string,
+  conversationId: string,
+  kind: AgentRewindInfo["kind"],
+  rewindFromMessageId: string | undefined,
+):
+  | { ok: true; plan: ConversationRewindPlan }
+  | { ok: false; refusal: ChatTurnRefusal } {
+  if (kind === "regenerate") {
+    const anchorId = store.findRegenerateAnchorId(ownerUserId, conversationId);
+    const plan = anchorId
+      ? store.planConversationRewind(ownerUserId, conversationId, anchorId, "after")
+      : null;
+    if (!plan) {
+      return { ok: false, refusal: { status: 400, message: "다시 생성할 메시지가 없습니다." } };
+    }
+    // A queued row sits before ANOTHER run's answer: the rows after it are not
+    // its own answer, so "re-run it" has nothing well-defined to replace.
+    if (plan.anchor.kind === "queued") {
+      return {
+        ok: false,
+        refusal: { status: 400, message: "대기열로 보낸 메시지에는 다시 생성을 쓸 수 없습니다." },
+      };
+    }
+    return { ok: true, plan };
+  }
+  const plan = rewindFromMessageId
+    ? store.planConversationRewind(ownerUserId, conversationId, rewindFromMessageId, "from")
+    : null;
+  if (!plan) {
+    return { ok: false, refusal: { status: 404, message: "메시지를 찾을 수 없습니다." } };
+  }
+  if (plan.anchor.role !== "user" || plan.anchor.kind === "steer") {
+    return {
+      ok: false,
+      refusal: { status: 400, message: "이 메시지에서는 다시 시작할 수 없습니다." },
+    };
+  }
+  if (plan.anchor.kind === "queued") {
+    return {
+      ok: false,
+      refusal: { status: 400, message: "대기열로 보낸 메시지부터는 다시 시작할 수 없습니다." },
+    };
+  }
+  return { ok: true, plan };
+}
+
+/**
+ * Work that may still write into this thread outside a live run — a rewind must
+ * not cut history out from under it. A queued bot task (or a requeued API task)
+ * already stored its user bubble and will not write it again, so dropping that
+ * row would leave its answer without a question. A plain routine runs headless,
+ * OUTSIDE the run registry, and appends its question+answer pair only when it
+ * finishes — mid-rewind that pair would land between the re-run's question and
+ * its answer. The live run itself is the active-run checks' job. Runs at plan
+ * time AND again right before the rewind is applied (synchronously, so nothing
+ * can slip in between).
+ */
+function rewindBusyRefusal(store: Store, conversationId: string): ChatTurnRefusal | null {
+  if (store.countQueuedBotTasks(conversationId) > 0) {
+    return {
+      status: 409,
+      message: "대기 중인 작업이 있어 지금은 다시 시작할 수 없습니다. 작업이 끝난 뒤 다시 시도해 주세요.",
+    };
+  }
+  if (store.countPendingAvatarTasksForConversation(conversationId) > 0) {
+    return { status: 409, message: "외부 작업이 진행 중이어서 지금은 다시 시작할 수 없습니다." };
+  }
+  if (store.routineJobIdsForConversation(conversationId).some(isRoutineRunning)) {
+    return { status: 409, message: "루틴이 실행 중이어서 지금은 다시 시작할 수 없습니다." };
+  }
+  return null;
+}
+
+/** Same rows in the same order — a rewind plan still matches the thread. */
+function sameMessageIds(a: StoredMessage[], b: StoredMessage[]): boolean {
+  return a.length === b.length && a.every((message, i) => message.id === b[i].id);
+}
+
+/** A user row's own (bubble) images — what a rewind or regenerate re-feeds. */
+function hasVisibleImages(message: StoredMessage): boolean {
+  return (message.attachments ?? []).some((att) => att.kind === "image" && !att.hidden);
+}
+
+/**
  * Both moved to `../personalAgents.js` so the 봇 간 위임 MCP tool can share them
  * without an `agent/` → `routes/chat.js` import (that direction is a cycle —
  * see botTaskDispatchBroker.ts). Re-exported here because this route has been
@@ -748,7 +843,19 @@ export interface ChatTurnContext {
   /** What the USER sees and what is persisted as the user turn. */
   displayMessage: string;
   images: DecodedChatImage[];
+  /**
+   * Re-run the conversation's LAST NON-STEER user message: every row after it
+   * is dropped and the run answers it again (`displayMessage`/`agentMessage`
+   * are re-derived from the stored row, not taken from the request).
+   */
   regenerate: boolean;
+  /**
+   * EDIT-rewind: the (server) id of an earlier ordinary user message. That row
+   * and everything after it are replaced by this turn's `displayMessage`,
+   * which keeps the row's image attachments. Mutually exclusive with
+   * `regenerate` and with fresh `images` (the HTTP prelude refuses both).
+   */
+  rewindFromMessageId?: string;
   requestedModel?: string | null;
   requestedEffort?: string | null;
   requestedMcpToolGroups?: McpToolGroupId[] | null;
@@ -802,9 +909,12 @@ export interface ChatTurnHooks {
   /**
    * Called between `openRun` and the agent stream, exactly where the SSE
    * handshake sits. Return false to abandon the turn (the run is closed for
-   * you); throwing is also safe.
+   * you); throwing is also safe. `info.userMessageId` is the persisted USER row
+   * this run answers (the new row of a send or an edit-rewind, the re-run row of
+   * a regenerate); absent when there is none (a queued task whose row was
+   * stored at enqueue).
    */
-  onRunOpen(runId: string): boolean;
+  onRunOpen(runId: string, info?: { userMessageId?: string }): boolean;
 }
 
 export type ChatTurnOutcome =
@@ -824,14 +934,10 @@ export async function executeChatTurn(
   hooks: ChatTurnHooks,
 ): Promise<ChatTurnOutcome> {
   const { config, store, observedModel } = deps;
-  const {
-    ownerUserId,
-    conversationId,
-    agentMessage,
-    displayMessage,
-    regenerate,
-    audit,
-  } = ctx;
+  const { ownerUserId, conversationId, regenerate, audit } = ctx;
+  // A regenerate re-derives both from the STORED row it re-runs (see the rewind
+  // plan below); every other turn keeps what the HTTP prelude derived.
+  let { agentMessage, displayMessage } = ctx;
   const {
     externalAgent,
     groupAgentHit,
@@ -947,6 +1053,55 @@ export async function executeChatTurn(
     };
   }
 
+  // Rewind (edit an earlier message) / regenerate (re-run the latest one):
+  // PLAN now, before the first await, and APPLY only once the run is reserved
+  // (just before openRun below) — a turn refused anywhere in between must leave
+  // the conversation exactly as it was.
+  const rewindKind: AgentRewindInfo["kind"] | null = ctx.rewindFromMessageId
+    ? "edit"
+    : regenerate
+      ? "regenerate"
+      : null;
+  let rewindPlan: ConversationRewindPlan | null = null;
+  if (rewindKind) {
+    const planned = planTurnRewind(
+      store,
+      ownerUserId,
+      conversationId,
+      rewindKind,
+      ctx.rewindFromMessageId,
+    );
+    if (!planned.ok) {
+      return { ok: false, refusal: planned.refusal };
+    }
+    rewindPlan = planned.plan;
+    const busy = rewindBusyRefusal(store, conversationId);
+    if (busy) {
+      return { ok: false, refusal: busy };
+    }
+    if (rewindKind === "regenerate") {
+      // Re-run what is STORED, not what the client sent: the row is the
+      // literal the user typed (a slash command re-expands exactly as it did),
+      // and a stale client picking a different row cannot swap the text in.
+      displayMessage = rewindPlan.anchor.content;
+      const expansion = expandChatSlashCommand(displayMessage);
+      agentMessage = expansion.error ? displayMessage : expansion.message;
+      // The same convenience guard resolveChatTarget runs on a typed command.
+      if (expansion.ownerOnly && ownerUserId !== avatar.id) {
+        return {
+          ok: false,
+          refusal: { status: 403, message: "이 명령은 내 아바타와의 대화에서만 사용할 수 있습니다." },
+        };
+      }
+    }
+    if (!displayMessage.trim() && !hasVisibleImages(rewindPlan.anchor)) {
+      return {
+        ok: false,
+        refusal: { status: 400, message: "메시지를 입력해 주세요." },
+      };
+    }
+  }
+
   // Working repository: the avatar opens one registered git repo (via
   // `mcp__git_repo__open_repo`) as the SDK cwd so it edits/tests with native
   // tools. The selection is held per conversation (repoWorkspace.ts) and read
@@ -1034,56 +1189,52 @@ export async function executeChatTurn(
   try {
     const runId = crypto.randomUUID();
     const chatStart = Date.now();
-    if (regenerate) {
-      const last = [...store.listMessages(ownerUserId, conversationId)].pop();
-      store.dropLastAssistant(ownerUserId, conversationId);
-      if (last?.role === "assistant") {
-        deleteChatImageAttachments(config, conversationId, last.attachments);
-        deleteChatFileAttachments(config, conversationId, last.attachments);
-        // The replaced turn's decks are gone from disk — so are their links.
-        store.deleteShareLinksForFiles(
-          conversationId,
-          (last.attachments ?? []).filter((att) => att.kind === "file").map((att) => att.id),
-        );
-      }
-    }
-    const imageTurn =
-      !regenerate && decodedImages.length > 0 && turnVisionEnabled;
+    // Image blocks reach the model THIS turn: fresh vision uploads, or the
+    // stored images a rewind/regenerate re-feeds from its anchor row.
+    const imageTurn = turnVisionEnabled &&
+      (rewindPlan ? hasVisibleImages(rewindPlan.anchor) : decodedImages.length > 0);
     // Resume the conversation's prior SDK session so the model keeps its context
-    // across turns. A regenerate re-runs the same turn and starts fresh to avoid
-    // duplicating history in the transcript. Image turns also start fresh: the SDK
-    // receives images through streaming input, and combining that with `resume`
-    // can drop the structured image blocks before they reach the model. File-mode
-    // turns (text-only model) never build a structured message — the prompt stays
-    // a plain string — so they keep the session resume.
-    const resumeSessionId =
-      externalAgent || regenerate || imageTurn
+    // across turns. Image turns start fresh: the SDK receives images through
+    // streaming input, and combining that with `resume` can drop the structured
+    // image blocks before they reach the model. File-mode turns (text-only model)
+    // never build a structured message — the prompt stays a plain string — so they
+    // keep the session resume.
+    //
+    // A rewind/regenerate never resumes the CURRENT session: its transcript still
+    // holds the turns being discarded. When the kept history ends at an assistant
+    // row that recorded where its segment ended, the run resumes THAT point
+    // (resume + resumeSessionAt, forked into a new session by runPlan) and keeps
+    // the exact context up to there — tool calls and results included. Without
+    // one (a legacy/cancelled/errored row, an external avatar, an image re-feed)
+    // it starts fresh from the kept text history below, as a regenerate used to.
+    const rewindResumeAt =
+      rewindPlan?.resumeAt && !externalAgent && !imageTurn
+        ? rewindPlan.resumeAt
+        : null;
+    const resumeSessionId = rewindPlan
+      ? rewindResumeAt?.sessionId
+      : externalAgent || imageTurn
         ? undefined
         : (store.getAgentSessionId(ownerUserId, conversationId) ??
           undefined);
+    const resumeSessionAt = rewindResumeAt?.uuid;
     // Carry prior context on every turn. It is INJECTED into the prompt only when
     // there's no SDK session to resume (buildPrompt guards on resumeSessionId) —
-    // a regenerate/image turn starts fresh and needs it, and a resume turn keeps
-    // it latent so claudeAgent can self-heal a stale/missing SDK transcript by
-    // re-running without `resume` (then this history is what rebuilds the context).
-    // A regenerate also persists its fresh session id, so without this every later
-    // turn would resume a context-less session.
-    // (chat-01 / lifecycle-02)
-    const priorMessages = store.listMessages(ownerUserId, conversationId);
-    const conversationHistory = conversationHistoryForPrompt(priorMessages);
-    // On regenerate the trailing history entry is the user turn being re-run,
-    // which is ALSO re-sent as `message` — drop it so it isn't duplicated.
-    if (
-      regenerate &&
-      conversationHistory.length > 0 &&
-      conversationHistory[conversationHistory.length - 1].role === "user"
-    ) {
-      conversationHistory.pop();
-    }
+    // a fresh (image/rewind) turn needs it, and a resume turn keeps it latent so
+    // claudeAgent can self-heal a stale/missing SDK transcript (or a rewind point
+    // it can no longer find) by re-running without `resume` (then this history
+    // is what rebuilds the context). A fresh turn also persists its new session
+    // id, so without this every later turn would resume a context-less session.
+    // (chat-01 / lifecycle-02) A rewind carries only the rows it KEEPS — never
+    // the ones it is about to delete, nor its anchor (re-sent as `message`).
+    const conversationHistory = conversationHistoryForPrompt(
+      rewindPlan
+        ? rewindPlan.keep
+        : store.listMessages(ownerUserId, conversationId),
+    );
     // Images fed to the model THIS turn. For a fresh send we save the uploads to
-    // disk + record them on the user message; on regenerate the client doesn't
-    // re-send images (it re-runs from a fresh SDK session), so re-read the prior
-    // user turn's stored attachments so the re-run still sees them.
+    // disk + record them on the user message; a rewind/regenerate brings no new
+    // uploads, so it re-reads its anchor row's stored attachments instead.
     let requestImages: AgentImageInput[] = [];
     // The same images in FILE mode (text-only model): staged copies in the
     // scratch workspace whose paths — never their bytes — reach the model.
@@ -1146,7 +1297,11 @@ export async function executeChatTurn(
         requestedMcpToolGroups,
       );
     }
-    if (!regenerate) {
+    // The persisted USER row this run answers, for the `open` frame — the client
+    // swaps its optimistic bubble's id for it, so a message sent in this very
+    // session can be rewound to without a reload.
+    let userMessageId: string | undefined;
+    if (!rewindPlan) {
       const saved = saveChatImages(config, conversationId, decodedImages);
       // The persisted attachments are the same either way — the bubble
       // renders identically; only the MODEL-facing shape differs.
@@ -1164,37 +1319,55 @@ export async function executeChatTurn(
       // user's message, and re-adding it would double the bubble. The
       // touchConversation above still ran, so the thread's updated_at moves.
       if (!ctx.skipUserMessagePersist) {
-        store.addMessage(conversationId, {
+        userMessageId = store.addMessage(conversationId, {
           role: "user",
           content: displayMessage,
           attachments: saved.attachments,
-        });
+        }).id;
       }
     } else {
-      const lastUser = [...priorMessages]
-        .reverse()
-        .find((m) => m.role === "user");
-      // On a text-only turn the attachments resurface as FILES by design (same
-      // staging path as a fresh send), never as image blocks the API would
+      // The anchor row's own images ride the re-run (an edit keeps them on its
+      // replacement row). On a text-only turn they resurface as FILES by design
+      // (same staging path as a fresh send), never as image blocks the API would
       // reject — so a regenerate under a swapped model still sees them.
       if (turnVisionEnabled) {
         requestImages = readChatImages(
           config,
           conversationId,
-          lastUser?.attachments,
+          rewindPlan.anchor.attachments,
         );
       } else {
         requestImageFiles = stageChatImageFilesFromAttachments(
           config,
           conversationId,
           workspaceDir,
-          lastUser?.attachments,
+          rewindPlan.anchor.attachments,
         );
+      }
+      // A regenerate re-runs its anchor in place. An edit's replacement row is
+      // written together with the rewind itself, right before openRun.
+      if (rewindKind === "regenerate") {
+        userMessageId = rewindPlan.anchor.id;
       }
     }
     // The SDK session id this run reports (init event); persisted on success so
     // the next turn can resume it.
     let runSessionId: string | null = null;
+    // The LATEST main-chain assistant entry of this run's transcript (local SDK
+    // runs only — see AgentEvents.onResumePoint). Stamped on every assistant row
+    // a success boundary persists, so a later rewind onto the next user row can
+    // resume exactly there. Reset with each new session (a self-heal or
+    // empty-turn retry): a point from the abandoned attempt must never be
+    // stamped onto a row the retry produced.
+    let runResumePoint: SdkResumePoint | null = null;
+    // The in-band error subtype of the LATEST result boundary (error_max_turns,
+    // …). A turn that ended on one can stop on a tool_use whose result never
+    // landed, so its last assistant entry is not a clean place to resume — the
+    // rows such a boundary persists get no point, and neither does the final
+    // `done` row when the run's last boundary carried one.
+    let lastTurnErrorSubtype: string | null = null;
+    const resumePointFor = (errorSubtype: string | null | undefined) =>
+      errorSubtype ? undefined : (runResumePoint ?? undefined);
     // Accumulate the main-agent text as it streams, so the cancel/error paths can
     // persist the partial the user already watched (not an empty "(중지됨)" stub).
     let streamedText = "";
@@ -1247,12 +1420,24 @@ export async function executeChatTurn(
     // card. Kept per-run rather than read back off `observedModel`, which is one
     // app-wide box every concurrent run overwrites.
     let observedRunModel: string | null = null;
+    // Persisted rows AFTER the anchor that the rewind deletes (an edit's anchor
+    // is replaced, not discarded) — what the avatar is told it lost.
+    const rewindDiscarded = rewindPlan
+      ? rewindPlan.drop.filter((message) => message.id !== rewindPlan?.anchor.id).length
+      : 0;
     logger.info(
       {
         userId: ownerUserId,
         avatarId: threadAvatarId,
         conversationId,
         regenerate,
+        ...(rewindPlan
+          ? {
+              rewind: rewindKind,
+              rewindDiscarded,
+              rewindResume: Boolean(rewindResumeAt),
+            }
+          : {}),
       },
       "chat stream started",
     );
@@ -1269,6 +1454,13 @@ export async function executeChatTurn(
     const racedRun = getActiveRunForConversation(ownerUserId, conversationId);
     if (racedRun) {
       releaseActiveRepoLock = null;
+      // The row this turn just wrote now sits BEFORE the winner's answer, so it
+      // must never anchor a rewind (every caller that retries it — the bot
+      // queue, a routine, the task API — leaves it where it is). A rewind's own
+      // row is not written yet, and a regenerate's anchor is not this turn's.
+      if (userMessageId && !rewindPlan) {
+        store.markMessageQueued(userMessageId);
+      }
       return {
         ok: false,
         refusal: {
@@ -1276,10 +1468,74 @@ export async function executeChatTurn(
           message: activeRunMessage(racedRun.background),
           reason: "active_run",
           // The turn body already wrote the user message above, so a caller
-          // that turns this into a queued task must NOT persist it again.
-          userMessagePersisted: true,
+          // that turns this into a queued task must NOT persist it again. A
+          // rewind has written nothing yet (it applies just below).
+          userMessagePersisted: !rewindPlan,
         },
       };
+    }
+
+    // Apply the rewind HERE and nowhere earlier: the run is reserved right
+    // below with no await in between, so nothing can write into the thread
+    // between this last check and the mutation, and every refusal above left
+    // the conversation untouched. Delete-by-id: a row appended after planning
+    // (a routine's report) survives.
+    if (rewindPlan) {
+      const busy = rewindBusyRefusal(store, conversationId);
+      if (busy) {
+        return { ok: false, refusal: busy };
+      }
+      // The plan was made before the repo-resolution await, and the history and
+      // resume point above were derived from it. A turn that ran to completion
+      // inside that window (another tab's send or rewind) changed the rows it
+      // was made from — applying it then would delete by stale ids and leave
+      // that turn's rows behind. Re-plan synchronously and refuse on ANY drift.
+      const fresh = store.planConversationRewind(
+        ownerUserId,
+        conversationId,
+        rewindPlan.anchor.id,
+        rewindKind === "edit" ? "from" : "after",
+      );
+      if (
+        !fresh ||
+        !sameMessageIds(fresh.keep, rewindPlan.keep) ||
+        !sameMessageIds(fresh.drop, rewindPlan.drop)
+      ) {
+        return {
+          ok: false,
+          refusal: {
+            status: 409,
+            message: "대화 내용이 바뀌어 다시 시작하지 못했습니다. 새로고침한 뒤 다시 시도해 주세요.",
+          },
+        };
+      }
+      store.applyConversationRewind(ownerUserId, conversationId, rewindPlan);
+      // An edit REPLACES its anchor: the new row keeps the anchor's images,
+      // so their bytes are exempt from the sweep below.
+      const carried = rewindKind === "edit" ? (rewindPlan.anchor.attachments ?? []) : [];
+      if (rewindKind === "edit") {
+        userMessageId = store.addMessage(conversationId, {
+          role: "user",
+          content: displayMessage,
+          attachments: carried,
+        }).id;
+        // The FIRST message was replaced: its auto-derived title would keep
+        // naming the discarded conversation in the sidebar.
+        if (rewindPlan.keep.length === 0) {
+          store.retitleConversationFromFirstMessage(
+            ownerUserId,
+            conversationId,
+            rewindPlan.anchor.content,
+            displayMessage,
+          );
+        }
+      }
+      const carriedIds = new Set(carried.map((att) => att.id));
+      for (const message of rewindPlan.drop) {
+        const swept = (message.attachments ?? []).filter((att) => !carriedIds.has(att.id));
+        deleteChatImageAttachments(config, conversationId, swept);
+        deleteChatFileAttachments(config, conversationId, swept);
+      }
     }
 
     const abortController = new AbortController();
@@ -1342,7 +1598,7 @@ export async function executeChatTurn(
       // The HTTP caller switches its response to SSE and attaches here; a
       // server-started turn just returns true (the registry journals every
       // event for a viewer who attaches later).
-      if (!hooks.onRunOpen(runId)) {
+      if (!hooks.onRunOpen(runId, { userMessageId })) {
         closeRun(runId);
         return { ok: true };
       }
@@ -1708,6 +1964,8 @@ export async function executeChatTurn(
           viewerPlatform: ctx.viewerPlatform,
           activeRepoName: activeRepoName ?? undefined,
           resumeSessionId,
+          // A rewind onto a recorded point: resume only up to it, forked.
+          ...(resumeSessionAt ? { resumeSessionAt } : {}),
           conversationHistory,
           images: requestImages.length ? requestImages : undefined,
           // Text-only turn: the model gets the staged file PATHS in the user
@@ -1770,6 +2028,11 @@ export async function executeChatTurn(
           // unchanged (still a full owner run) — the flag only reaches the
           // prompt, describe_system, and the interactive-only tool gates.
           ...(ctx.externalTaskId ? { externalTaskApi: true } : {}),
+          // META-COGNITION for a rewind/regenerate: the context ends at the
+          // rewind point, and nothing the discarded turns did was undone.
+          ...(rewindKind
+            ? { rewind: { kind: rewindKind, discardedMessages: rewindDiscarded } }
+            : {}),
         },
         pluginRoots,
         config,
@@ -1819,6 +2082,10 @@ export async function executeChatTurn(
           },
           onSessionId: (sessionId) => {
             runSessionId = sessionId;
+            runResumePoint = null;
+          },
+          onResumePoint: (point) => {
+            runResumePoint = point;
           },
           onPlugin: (event) => {
             emitRunEvent(runId, "plugin", {
@@ -1861,6 +2128,8 @@ export async function executeChatTurn(
           // while the SDK session keeps running underneath; every later
           // boundary is a wake-up turn delivered as a NEW assistant message.
           onTurnResult: (segment) => {
+            // Before any early return: the `done` row reads it after the run.
+            lastTurnErrorSubtype = segment.errorSubtype ?? null;
             if (!turnFinalized) {
               if (segment.backgroundTasks.length === 0) {
                 if (!segment.steerPending) {
@@ -1897,6 +2166,7 @@ export async function executeChatTurn(
                         content: segResponse.text,
                         response: segResponse,
                         attachments: attachmentsTail,
+                        resumePoint: resumePointFor(segment.errorSubtype),
                       })
                     : null;
                 emitRunEvent(runId, "turn_end", {
@@ -1938,6 +2208,7 @@ export async function executeChatTurn(
                       content: segResponse.text,
                       response: segResponse,
                       attachments: shownAttachments.slice(),
+                      resumePoint: resumePointFor(segment.errorSubtype),
                     })
                   : null;
               persistedTextOffset = streamedText.length;
@@ -1980,6 +2251,7 @@ export async function executeChatTurn(
                     content: segResponse.text,
                     response: segResponse,
                     attachments: attachmentsTail,
+                    resumePoint: resumePointFor(segment.errorSubtype),
                   })
                 : null;
             if (message) {
@@ -2927,6 +3199,9 @@ export async function executeChatTurn(
                 // by a `turn_end` segment must not be attached twice. Offset 0
                 // on an ordinary run, so this is the full array.
                 attachments: shownAttachments.slice(persistedAttachmentsOffset),
+                // Where this answer ended in the transcript — the point a later
+                // rewind onto the next user message resumes at.
+                resumePoint: resumePointFor(lastTurnErrorSubtype),
               })
             : null;
         emitRunEvent(runId, "done", { message: assistantMessage, response });
@@ -3680,9 +3955,37 @@ export function createChatRouter({
       }
       const decodedImages = decodedImagesResult.images;
 
+      // Rewind = edit an earlier message and continue from there. It rides the
+      // ordinary send (the edited text is `message`) and REPLACES that row and
+      // everything after it; the row keeps its own images, so a rewind brings
+      // no new uploads, and it is neither a regenerate nor a canvas turn.
+      const regenerate = req.body?.regenerate === true;
+      const rawRewindFrom = req.body?.rewindFromMessageId;
+      const rewindFromMessageId =
+        rawRewindFrom === undefined || rawRewindFrom === null
+          ? undefined
+          : safeString(rawRewindFrom);
+      if (rewindFromMessageId !== undefined) {
+        if (!isSafePathId(rewindFromMessageId) || regenerate || canvasSubmission) {
+          apiError(res, 400, "요청이 올바르지 않습니다.");
+          return;
+        }
+        if (decodedImages.length > 0) {
+          apiError(res, 400, "다시 시작할 때는 이미지를 새로 첨부할 수 없습니다.");
+          return;
+        }
+      }
+
       // Validate BEFORE switching to SSE so failures stay plain JSON. A turn with
       // image attachments but no text is allowed (the images are the message).
-      if (!displayMessage && decodedImages.length === 0) {
+      // A rewind/regenerate may carry only its anchor's images, which the turn
+      // itself checks (the anchor is resolved there).
+      if (
+        !displayMessage &&
+        decodedImages.length === 0 &&
+        rewindFromMessageId === undefined &&
+        !regenerate
+      ) {
         apiError(res, 400, "메시지를 입력해 주세요.");
         return;
       }
@@ -3802,9 +4105,10 @@ export function createChatRouter({
        * wrote the user turn.
        */
       const queueBotTurn = (refusal: ChatTurnRefusal): void => {
-        if (req.body?.regenerate === true) {
+        if (regenerate || rewindFromMessageId !== undefined) {
           // Re-running a turn against a busy bot has no queue semantics — the
-          // answer it would replace is still being written.
+          // answer it would replace is still being written. A rewind neither:
+          // it would cut history out from under the run that is writing it.
           apiError(res, refusal.status, refusal.message);
           return;
         }
@@ -3840,6 +4144,9 @@ export function createChatRouter({
           store.addMessage(conversationId, {
             role: "user",
             content: displayMessage,
+            // Written while the active run is still going — it lands BEFORE
+            // that run's answer, so it can never anchor a rewind.
+            kind: "queued",
           });
         }
         const task = store.createBotTask({
@@ -3871,7 +4178,8 @@ export function createChatRouter({
           agentMessage,
           displayMessage,
           images: decodedImages,
-          regenerate: req.body?.regenerate === true,
+          regenerate,
+          rewindFromMessageId,
           requestedModel,
           requestedEffort,
           requestedMcpToolGroups,
@@ -3889,7 +4197,7 @@ export function createChatRouter({
         {
           // The response becomes an SSE stream only once the run is reserved,
           // so every refusal above stays plain JSON.
-          onRunOpen: (runId) => {
+          onRunOpen: (runId, info) => {
             prepareSse(res);
             if (!attachRunClient(runId, req.user!.id, res)) {
               res.end();
@@ -3899,6 +4207,9 @@ export function createChatRouter({
               conversationId,
               avatarId: threadAvatarId,
               runId,
+              // The persisted row this run answers: the client adopts it as its
+              // optimistic bubble's id (a later rewind names rows by server id).
+              ...(info?.userMessageId ? { userMessageId: info.userMessageId } : {}),
             });
             return true;
           },

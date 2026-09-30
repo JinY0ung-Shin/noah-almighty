@@ -13,6 +13,43 @@ const DEFAULT_TASK_LIMIT = 100;
 const DEFAULT_CONVERSATION_TASK_LIMIT = 200;
 
 /**
+ * The parked state an owner ANSWER resumed a task from — one entry per
+ * waiting_input → running move, oldest first, in `bot_tasks.resume_log`. A
+ * rewind that discards the answering turn restores the task from it
+ * (rewindBotTasks). `at` is the store clock at the resume.
+ */
+interface BotTaskResumeSnapshot {
+  at: string;
+  pendingQuestion: string | null;
+  reportedOutcome: string | null;
+  resultSummary: string | null;
+  error: string | null;
+  model: string | null;
+  seenAt: string | null;
+}
+
+/** A task answered more often than this keeps only its newest resumes. */
+const MAX_RESUME_SNAPSHOTS = 100;
+
+/** Parse-tolerant read of `resume_log` (a bad value reads as no history). */
+function parseResumeLog(raw: string | null): BotTaskResumeSnapshot[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (entry): entry is BotTaskResumeSnapshot =>
+            Boolean(entry) && typeof entry === "object" && typeof (entry as { at?: unknown }).at === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * UNSEEN = a task that SETTLED into a state the owner has not looked at yet.
  * The single source of the badge predicate, shared by the count and the stamp
  * so the two can never disagree. 'queued'/'running' rows are deliberately NOT
@@ -324,18 +361,94 @@ export function withBotTasks<TBase extends Constructor<StoreBase>>(Base: TBase) 
      * is cleared with them: a resumed row is back in motion, and leaving the
      * stamp from the answered leg standing would let a crash between here and
      * the next finalize (the boot sweep fails it) land a settled row that the
-     * badge counts as already read.
+     * badge counts as already read. A resume from 'waiting_input' first appends
+     * the parked state it clears to `resume_log`, so a rewind that discards the
+     * answering turn can put the task back exactly there (rewindBotTasks).
      */
     markBotTaskRunning(taskId: string, runId: string): BotTask | null {
+      const row = this.botTaskRow(taskId);
+      if (!row || (row.status !== "queued" && row.status !== "waiting_input")) {
+        return null;
+      }
+      const timestamp = now();
+      const resumeLog =
+        row.status === "waiting_input"
+          ? JSON.stringify(
+              [
+                ...parseResumeLog(row.resume_log),
+                {
+                  at: timestamp,
+                  pendingQuestion: row.pending_question,
+                  reportedOutcome: row.reported_outcome,
+                  resultSummary: row.result_summary,
+                  error: row.error,
+                  model: row.model,
+                  seenAt: row.seen_at,
+                } satisfies BotTaskResumeSnapshot,
+              ].slice(-MAX_RESUME_SNAPSHOTS),
+            )
+          : row.resume_log;
+      // Guarded on the status just read (a synchronous read-then-write, so
+      // nothing can move the row in between): a double dispatch is still a
+      // null no-op, never a resurrection.
       const { changes } = this.db
         .prepare(
           `UPDATE bot_tasks
              SET status = 'running', run_id = ?, started_at = COALESCE(started_at, ?),
-                 pending_question = NULL, reported_outcome = NULL, seen_at = NULL
-           WHERE id = ? AND status IN ('queued', 'waiting_input')`,
+                 pending_question = NULL, reported_outcome = NULL, seen_at = NULL,
+                 resume_log = ?
+           WHERE id = ? AND status = ?`,
         )
-        .run(runId, now(), taskId);
+        .run(runId, timestamp, resumeLog, taskId, row.status);
       return this.botTaskIfChanged(taskId, changes);
+    }
+
+    /**
+     * The bot-task half of a rewind to `cutoff` (the anchor row's created_at),
+     * run inside the rewind transaction. Every turn from the cutoff on is
+     * discarded, so a task one of them OPENED is deleted (a leftover
+     * 'waiting_input' row would be resumed by the next turn), and a task one of
+     * them RESUMED — parked on a question before the cutoff, answered by a
+     * discarded turn — goes back to the parked state of its FIRST resume at or
+     * after the cutoff: that question pending again and the discarded legs'
+     * report, result and finish gone. The re-run then resumes it instead of
+     * opening a duplicate card. An owner cancel made after the cutoff is undone
+     * with the rest. A resume from before `resume_log` existed left no snapshot
+     * and is left as it is.
+     */
+    rewindBotTasks(conversationId: string, cutoff: string): void {
+      this.db
+        .prepare("DELETE FROM bot_tasks WHERE conversation_id = ? AND created_at >= ?")
+        .run(conversationId, cutoff);
+      const resumed = this.db
+        .prepare("SELECT * FROM bot_tasks WHERE conversation_id = ? AND resume_log IS NOT NULL")
+        .all(conversationId) as BotTaskRow[];
+      const restore = this.db.prepare(
+        `UPDATE bot_tasks
+           SET status = 'waiting_input', run_id = NULL, finished_at = NULL,
+               pending_question = ?, reported_outcome = ?, result_summary = ?,
+               error = ?, model = ?, seen_at = ?, resume_log = ?
+         WHERE id = ?`,
+      );
+      for (const row of resumed) {
+        const log = parseResumeLog(row.resume_log);
+        const first = log.findIndex((snapshot) => snapshot.at >= cutoff);
+        if (first < 0) {
+          continue;
+        }
+        const parked = log[first];
+        const kept = log.slice(0, first);
+        restore.run(
+          parked.pendingQuestion,
+          parked.reportedOutcome,
+          parked.resultSummary,
+          parked.error,
+          parked.model,
+          parked.seenAt,
+          kept.length ? JSON.stringify(kept) : null,
+          row.id,
+        );
+      }
     }
 
     /**

@@ -125,6 +125,15 @@ These are the invariants the project is built around. New work should reinforce 
   persists as its own message (`turn_end`, not `done`). Persist at DELIVERY only, local SDK runs only
   (never external avatars / external-task-API turns), `midTurnMessages` on BOTH metacognition surfaces.
   Mechanics → `docs/architecture/chat-sse-media.md`.
+- **A rewind cuts HISTORY, never the world.** Editing an earlier message and 다시 생성 share ONE plan →
+  apply path: `planConversationRewind` before the turn's first await, `applyConversationRewind` right
+  before `openRun` after a synchronous re-plan that refuses on any drift. Exact context comes from the
+  resume point each success boundary stamps on its assistant row (`resume` + `resumeSessionAt` +
+  `forkSession` — never rewrite a source transcript), the kept text history is the fallback. Side
+  effects are never undone and BOTH metacognition surfaces say so. A user row written while another run
+  is active is `kind: "queued"` and never an anchor. **A new message-deleting path cascades like
+  `applyConversationRewind`** (attachments minus carried ones, per-card share links, bot tasks and
+  canvases from the anchor time). Mechanics → `docs/architecture/chat-sse-media.md`.
 - **git remote work is MCP-only BY DESIGN.** The agent shell has NO git credentials (stripped from the
   subprocess env), so Bash `git push`/`gh` can never authenticate. Route every git-ish capability through
   an in-process MCP bridge (`mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*`) and keep the

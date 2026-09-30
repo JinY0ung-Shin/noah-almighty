@@ -1,4 +1,5 @@
 import type {
+  AgentRewindInfo,
   AppConfig,
   GroupAgentState,
   PersonalAgentState,
@@ -323,6 +324,38 @@ export function summarizePersonalAgentState(
     memoryRoot: personalAgentMemoryRoot(agent.memoryDir),
     adoptedSkills: agent.selectedSkills,
   };
+}
+
+/**
+ * Turn PROVENANCE of a rewind (`AgentRequest.rewind`): the viewer edited an
+ * earlier message or regenerated the latest answer. ONE text for both
+ * metacognition surfaces — buildSystemPromptAppend's per-turn line and
+ * describe_system's — so they cannot disagree about what the model can still
+ * see or about what was NOT undone. Each surface adds its own label.
+ */
+export function rewindTurnState(rewind: AgentRewindInfo): string {
+  const n = Math.max(0, Math.floor(rewind.discardedMessages));
+  const edit = rewind.kind === "edit";
+  const head = edit
+    ? "The user went back to an earlier point in this conversation and re-sent one of their messages, edited — the message you are answering now. " +
+      (n > 0
+        ? `The ${n === 1 ? "1 message" : `${n} messages`} after it ${n === 1 ? "was" : "were"} deleted, and your context ends at that point`
+        : "Your context ends at that point")
+    : n > 0
+      ? `The user discarded your previous answer to this message (${n === 1 ? "1 message" : `${n} messages`} deleted) and asked for a new one. Your context ends just before that answer`
+      : "The user asked you to answer this message again. Your context ends just before your earlier attempt";
+  // What the rewind itself removed: the discarded rows' chat attachments (the
+  // route sweeps their images and file cards and revokes those cards' share
+  // links). Everything outside the chat is exactly as those turns left it.
+  const aftermath = edit
+    ? "The discarded turns' chat attachments went with them — the files and images you showed or shared there were deleted, and those decks' share links revoked (links to decks in the kept messages still work). " +
+      "Nothing else they did was undone: workspace and repository files, commits and pushes, browser actions, and any routines, bots or shared skills they created remain as those turns left them."
+    : "The discarded attempt's chat attachments went with it — the files and images it showed or shared were deleted, and those decks' share links revoked (links to decks in earlier messages still work). " +
+      "Nothing else it did was undone: workspace and repository files, commits and pushes, browser actions, and any routines, bots or shared skills it created remain as it left them.";
+  return (
+    `${head}: you cannot see what was discarded, so if the user refers to it, say so instead of guessing. ` +
+    `${aftermath} Re-check that state before building on what you remember.`
+  );
 }
 
 /** Product-wide UI capability; never reads private DM content or presence into agent context. */

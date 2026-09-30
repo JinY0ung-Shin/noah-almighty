@@ -241,6 +241,20 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   replayed event log, so **every handler has to be re-appliable**: messages dedupe by id, and a bounded
   `settledSteers` set keeps a replayed `dropped` from pushing its text into the composer twice and the
   POST's own 200 from re-adding a pending bubble the stream already resolved.
+- **Rewind is an inline edit that sends through `sendMessage`, and it names rows by SERVER id.** 편집 on an
+  ordinary user row (never a steer or `kind:"queued"` row, never while streaming) opens `pane.rewindEdit`
+  in that bubble; 보내기 → `confirmAction` → `sendMessage(…, {rewindFromMessageId})`, which truncates
+  optimistically and puts everything back from a local snapshot on a refusal before `open`. The anchor
+  rules are hand-mirrored: the client's regenerate anchor (last NON-steer user row, hidden when it is
+  queued) must match `findRegenerateAnchorId`, and an edit anchor must be a row the server knows — so
+  `open.userMessageId` (and a `cancelled` frame's message) replaces the optimistic bubble's `newId()` —
+  but the transcript is keyed on `messageKey` (the row's birth id, kept in the client-only `clientKey`),
+  so the adoption updates the node in place instead of re-mounting it and replaying `bubble-in`.
+  `applyLoadedConversation` MERGES a re-read by id (server rows decide membership and order; a matched
+  row keeps its `clientKey` and an activity snapshot the server does not have yet). A regenerate never
+  adopts (a stale tab's server may re-run another row) — the run-end re-read settles its ids.
+  At `open` a rewind also drops the bot-task cards that render at/after the anchor, closes a file preview
+  of a dropped file and refetches canvases (keeping ones this run already showed) — once, replay-safe.
 - **The activity snapshot is WHITELISTED server-side.** The client seals the live tree and PUTs it to
   `/api/messages/:id/activity`, and `sanitizeActivity` (`routes/chat.ts`) rebuilds every agent/tool/task
   row from an explicit field list. A field added to `LiveAgentNode`/`LiveToolRow`/`LiveTaskRow` but not

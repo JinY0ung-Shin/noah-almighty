@@ -290,6 +290,7 @@ export interface BotTaskRow {
   routine_job_id: string | null;
   delegated_by_agent_id: string | null;
   delegation_depth: number | null;
+  resume_log: string | null;
 }
 
 export interface RoutineJobRow {
@@ -659,7 +660,8 @@ export class StoreBase {
         seen_at TEXT,
         routine_job_id TEXT,
         delegated_by_agent_id TEXT,
-        delegation_depth INTEGER DEFAULT 0
+        delegation_depth INTEGER DEFAULT 0,
+        resume_log TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_bot_tasks_owner ON bot_tasks(owner_user_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_bot_tasks_conversation ON bot_tasks(conversation_id, created_at ASC);
@@ -770,6 +772,14 @@ export class StoreBase {
     // the previous turn was still running (see StoredMessage.kind). NULL on
     // every ordinary row, so the mapper omits the field entirely for those.
     this.addColumnIfMissing("messages", "kind", "TEXT");
+    // Where an assistant row's segment ended in the LOCAL SDK transcript (the
+    // session id + last main-chain assistant uuid), so a later rewind can
+    // resume exactly there (SDK resume + resumeSessionAt, forked). NULL on user
+    // rows, external-avatar rows, cancel/error rows and every legacy row — a
+    // rewind onto one of those falls back to the stored text history.
+    // Server-only: never mapped onto StoredMessage.
+    this.addColumnIfMissing("messages", "sdk_session_id", "TEXT");
+    this.addColumnIfMissing("messages", "sdk_uuid", "TEXT");
     this.addColumnIfMissing("users", "auto_approve", "INTEGER DEFAULT 0");
     // Account suspension: blocks login and kills active sessions. Also the
     // "pending approval" state for signups created while signup mode = approval.
@@ -962,6 +972,10 @@ export class StoreBase {
     // 봇 간 위임 provenance + the hop cap's depth counter (see types.ts BotTask).
     this.addColumnIfMissing("bot_tasks", "delegated_by_agent_id", "TEXT");
     this.addColumnIfMissing("bot_tasks", "delegation_depth", "INTEGER DEFAULT 0");
+    // The parked state each owner ANSWER resumed this task from (JSON array,
+    // oldest first — see markBotTaskRunning): what a rewind that discards the
+    // answering turn restores. NULL until the first resume from waiting_input.
+    this.addColumnIfMissing("bot_tasks", "resume_log", "TEXT");
     // IMMUTABLE per-bot memory folder name under `agents/` in the OWNER's
     // knowledge repo (personalAgentMemoryRoot). Set at INSERT and never patched,
     // so renaming a bot never orphans the tree it already wrote to; pre-existing
@@ -1353,6 +1367,10 @@ export interface StoreBase {
   deleteCanvasArtifactsForConversation(conversationId: string): void;
   /** Sibling of the canvas cascade at EVERY conversation-deleting site (store/shareLinks.ts). */
   deleteShareLinksForConversation(conversationId: string): void;
+  /** The links of specific deck cards — the rewind/regenerate cascade (store/shareLinks.ts). */
+  deleteShareLinksForFiles(conversationId: string, fileIds: readonly string[]): void;
+  /** The bot-task half of a rewind (store/botTasks.ts). */
+  rewindBotTasks(conversationId: string, cutoff: string): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(

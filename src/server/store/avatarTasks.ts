@@ -74,6 +74,13 @@ export function withAvatarTasks<TBase extends Constructor<StoreBase>>(Base: TBas
         .run(conversationId, ownerId, conversationId, conversationId).changes > 0;
     }
 
+    /** Tasks still counting on this thread (queued or running) — a rewind must
+     *  not cut history out from under one: a requeued task already stored its
+     *  instruction bubble (`user_message_persisted`) and will not write it again. */
+    countPendingAvatarTasksForConversation(conversationId: string): number {
+      return this.count("SELECT COUNT(*) AS c FROM avatar_tasks WHERE conversation_id = ? AND status IN ('queued', 'running')", conversationId);
+    }
+
     getAvatarTask(ownerId: string, id: string): AvatarTask | null {
       return decode(this.db.prepare(`SELECT ${TASK_COLUMNS} FROM avatar_tasks WHERE owner_user_id = ? AND id = ?`).get(ownerId, id) as AvatarTask | undefined);
     }

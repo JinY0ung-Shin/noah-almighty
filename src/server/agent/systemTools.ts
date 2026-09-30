@@ -8,12 +8,13 @@ import {
   type ScheduleError,
 } from "../routineSchedule.js";
 import type { Store } from "../store.js";
-import type { AgentOwner, AppConfig, Plugin, RoutineJob, RoutineSchedulePatch } from "../types.js";
+import type { AgentOwner, AgentRewindInfo, AppConfig, Plugin, RoutineJob, RoutineSchedulePatch } from "../types.js";
 import { text } from "./mcpTools.js";
 import { DEFAULT_MODEL_TIER } from "../modelTiers.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 import {
   gettingStartedGaps,
+  rewindTurnState,
   summarizeGroupAgentState,
   summarizeOwnerState,
   summarizePersonalAgentState,
@@ -166,6 +167,13 @@ export interface SystemToolsContext {
    * read it as noise.
    */
   midTurnMessages?: boolean;
+  /**
+   * Set when this turn re-runs the conversation from an earlier point (the
+   * viewer edited an earlier message or regenerated the latest answer).
+   * Mirrors `AgentRequest.rewind` — runPlan applies the prompt line's own
+   * no-headless gate — so both surfaces report the same turn provenance.
+   */
+  rewind?: AgentRewindInfo;
   /**
    * Set ONLY for GROUP SHARED-AGENT runs: describe_system then reports the
    * group's self-state (summarizeGroupAgentState — the same facts the prompt
@@ -484,6 +492,18 @@ function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
 }
 
 /**
+ * describe_system's half of the prompt's per-turn rewind line: the SAME
+ * `rewindTurnState` text under the SAME label, printed in every viewer branch
+ * (a rewind happens in colleague and group-agent threads too). Empty on every
+ * other turn, where the prompt omits its line as well.
+ */
+function rewindLines(ctx: SystemToolsContext): string[] {
+  return ctx.rewind && !ctx.headless
+    ? [`- Conversation rewind (this turn): ${rewindTurnState(ctx.rewind)}`]
+    : [];
+}
+
+/**
  * Build system-management tool definitions bound to a single conversation.
  * Management handlers enforce owner/scope checks themselves. read_manual is
  * deliberately public/static; describe_system also provides a public overview
@@ -593,6 +613,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
               "Current GROUP SHARED-AGENT state:",
               `- Kind: shared agent '${ga.displayName}' of the group '${ga.groupName}' (a team resource, not a personal avatar; the group may have other shared agents)`,
               `- Enabled: ${ga.enabled ? "yes" : "no — disabled by a group admin"}`,
+              ...rewindLines(ctx),
               `- Capture policy: ${ga.captureScope === "members" ? "all group members may capture" : "group admins only"}; the member in this conversation (role: ${ga.viewerRole ?? "removed — no longer a group member"}) ${ga.captureAllowed ? "MAY capture (write + commit)" : "may NOT capture (recall/read only)"}`,
               `- Team second brain (shared knowledge repository): ${ga.knowledgeRepoConfigured ? `${ga.knowledgeRepo.repo}${ga.knowledgeRepo.branch ? ` @ ${ga.knowledgeRepo.branch}` : ""}${gaGroupKnowledgeOff ? " — but the group knowledge tool group is OFF for this conversation, so mcp__group_brain__* and mcp__group_repo__* are not registered this turn (no team-brain recall or capture until it is re-enabled)" : ""}` : `(none — ask a group admin to connect one in group settings)${gaGroupKnowledgeOff ? " — and the group knowledge tool group is OFF for this conversation" : ""}`}`,
               `- This member's internal Git token (GIT_TOKEN): ${ga.viewerGitTokenSet ? "set" : "not set — capture's commit/push will fail until they register one in Settings"}`,
@@ -645,8 +666,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // Deployment-level facts only (no owner state): a trusted teammate
           // may build a deck through this avatar, a plain colleague may not,
           // and the deck line's tail says which this run is.
+          const turnLines = rewindLines(ctx);
           return text(
-            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}`,
+            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}`,
           );
         }
         // Repo/token/secret/group/git-repo/open-request/model facts come from the
@@ -819,6 +841,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // avatar must not promise a viewer it can be interrupted when it
           // cannot (or ignore a message that arrives when it can).
           `- Mid-turn user messages: ${ctx.midTurnMessages ? "ENABLED — the person can send more messages while you work; each arrives as a user message between your tool calls (or starts the next turn if you had already finished). Read it when it appears and let the newest instruction win when it conflicts with an earlier one" : "not available in this run"}`,
+          ...rewindLines(ctx),
           `- runtime: ${ctx.config.agentRuntime}`,
           ...(webProxy.egressPolicy === "domain-proxy"
             ? ["- Server egress: bootstrap reports shared domain-proxy policy for all local avatars, server tools and shell commands; direct outbound connections and external DNS blocked. User-PC browser traffic is outside this boundary. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials."]

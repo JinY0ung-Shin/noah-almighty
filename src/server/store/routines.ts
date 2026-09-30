@@ -111,6 +111,18 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
       return rows.map((r) => this.toRoutineJob(r));
     }
 
+    /**
+     * Every routine that fires into one conversation (the thread id is the key;
+     * a routine's thread belongs to its owner). What a rewind of that thread asks
+     * the running-routine registry about.
+     */
+    routineJobIdsForConversation(conversationId: string): string[] {
+      const rows = this.db
+        .prepare("SELECT id FROM routine_jobs WHERE conversation_id = ?")
+        .all(conversationId) as { id: string }[];
+      return rows.map((row) => row.id);
+    }
+
     /** Enabled jobs whose next run is at or before `nowIso`. Used by the scheduler. */
     listDueRoutineJobs(nowIso: string): RoutineJob[] {
       // Skip jobs whose owner is suspended: a suspended account's avatar must not

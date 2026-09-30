@@ -648,6 +648,15 @@ export interface AgentEvents {
    * to resume the conversation's context on the next turn.
    */
   onSessionId?: (sessionId: string) => void;
+  /**
+   * A MAIN-chain assistant message (no `parent_tool_use_id`) landed in the local
+   * SDK transcript: `uuid` is an entry a later rewind can resume AT, inside
+   * `sessionId` (that message's own session — a fork reports its NEW id). Fires
+   * for every such message, so the host keeps the LATEST one and stamps it on
+   * each assistant row it persists (turn_end / background finalize / bg_message
+   * / done). Local SDK runs only: the external gateway never emits it.
+   */
+  onResumePoint?: (point: import("../types.js").SdkResumePoint) => void;
   /** Plugin install lifecycle. */
   onPlugin?: (event: PluginEvent) => void;
 

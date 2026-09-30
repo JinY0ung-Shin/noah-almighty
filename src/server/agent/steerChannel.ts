@@ -170,6 +170,33 @@ export class SteerChannel {
     }
   }
 
+  /**
+   * Re-queue, for a FRESH CLI process, every record a previous process was
+   * handed but never reported on — still `queued`, yet no longer in the unsent
+   * FIFO. The self-heal retry needs this: a steer the viewer sent within the
+   * first second was already yielded into the stdin of an attempt that then
+   * died at boot (a resume failure makes no model call), so the retry's fresh
+   * generator would never re-send it and its `result` would see a steer pending
+   * forever. Re-sending the SAME uuid is correct — the new process has never
+   * seen it; "a re-yielded uuid is ignored" holds only within one process.
+   *
+   * They go back AHEAD of anything still unsent, in acceptance order (a
+   * yielded record always predates every unsent one). Deliberately no wake():
+   * the only consumer that can be parked right now is the DYING attempt's
+   * generator, which must not grab them — its gate releases it, and the
+   * retry's generator takes them with its first next(). Returns the records.
+   */
+  requeueForFreshProcess(): SteerRecord[] {
+    if (this.isClosed) {
+      return [];
+    }
+    const requeued = this.all.filter(
+      (record) => record.state === "queued" && !this.unsent.includes(record),
+    );
+    this.unsent.unshift(...requeued);
+    return requeued;
+  }
+
   hasUndelivered(): boolean {
     return this.all.some((record) => record.state === "queued");
   }

@@ -234,6 +234,66 @@ describe("SteerChannel: result boundaries and close", () => {
   });
 });
 
+describe("SteerChannel: re-queue for a fresh CLI process (self-heal retry)", () => {
+  it("hands back every yielded-but-unreported record, ahead of the unsent ones, in acceptance order", async () => {
+    const channel = new SteerChannel();
+    const first = channel.push("첫째")!;
+    const second = channel.push("둘째")!;
+    // Both went into the dying process's stdin…
+    await expect(channel.next()).resolves.toBe(first);
+    await expect(channel.next()).resolves.toBe(second);
+    // …and a third was accepted after it died, still unsent.
+    const third = channel.push("셋째")!;
+    const seen = recorder(channel);
+
+    expect(channel.requeueForFreshProcess()).toEqual([first, second]);
+    // Same records (same uuids — the fresh process never saw them), no state change.
+    expect([first.state, second.state]).toEqual(["queued", "queued"]);
+    expect(seen).toEqual([]);
+    await expect(channel.next()).resolves.toBe(first);
+    await expect(channel.next()).resolves.toBe(second);
+    await expect(channel.next()).resolves.toBe(third);
+    // Nothing was duplicated into the FIFO: it is empty again.
+    await expect(channel.next(Promise.resolve())).resolves.toBeUndefined();
+  });
+
+  it("never re-sends a record the model got, one already dropped, or anything once closed", async () => {
+    const channel = new SteerChannel();
+    const delivered = channel.push("모델이 받음")!;
+    const cancelled = channel.push("CLI가 취소함")!;
+    await channel.next();
+    await channel.next();
+    channel.noteLifecycle(delivered.id, "started");
+    channel.noteLifecycle(cancelled.id, "cancelled");
+    expect(channel.requeueForFreshProcess()).toEqual([]);
+
+    const late = channel.push("닫히기 전")!;
+    await channel.next();
+    channel.close();
+    expect(late.state).toBe("dropped");
+    expect(channel.requeueForFreshProcess()).toEqual([]);
+    await expect(channel.next()).resolves.toBeUndefined();
+  });
+
+  it("does not wake a parked consumer — only the dying attempt's generator can be parked then", async () => {
+    const channel = new SteerChannel();
+    const record = channel.push("다시 보낼 메시지")!;
+    await channel.next();
+    let gateOpen!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      gateOpen = resolve;
+    });
+    const dying = channel.next(gate);
+
+    channel.requeueForFreshProcess();
+    // The dying generator's gate releases it with nothing…
+    gateOpen();
+    await expect(dying).resolves.toBeUndefined();
+    // …and the retry's generator takes the re-queued record first.
+    await expect(channel.next()).resolves.toBe(record);
+  });
+});
+
 describe("steerToSdkUserMessage", () => {
   it("builds the VERIFIED default SDK user-message shape, keyed by the record id", () => {
     const record: SteerRecord = {

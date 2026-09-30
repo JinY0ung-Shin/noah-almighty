@@ -405,7 +405,11 @@ function buildDelegateToBotTool(
       // The enqueue recipe queueBotTurn uses: persist the user turn, queue the
       // task, poke the dispatcher.
       store.touchConversation(owner.id, conversationId, targetAvatarId, message);
-      store.addMessage(conversationId, { role: "user", content: message });
+      // QUEUED, busy thread or not: the dispatcher runs it only after whatever
+      // holds the thread now — and an owner turn can start ahead of it — so
+      // rows after it need not be its own run's output, and it can never
+      // anchor a rewind (the chat route's queueBotTurn rule).
+      store.addMessage(conversationId, { role: "user", content: message, kind: "queued" });
       const task = store.createBotTask({
         ownerUserId: owner.id,
         agentId: target.id,

@@ -209,6 +209,13 @@ export interface ChatPane {
   steers?: PendingSteer[];
   /** A steer POST is in flight — guards a double submit from Enter + the button. */
   steerSending?: boolean;
+  /**
+   * 여기서부터 다시: an earlier USER message being edited in place, and the text
+   * so far. Sending it rewinds the conversation to that message — it and every
+   * row after it are replaced by the edited message and the new answer. Cleared
+   * by every send; a rewind the server refused (or never received) restores it.
+   */
+  rewindEdit?: { messageId: string; draft: string } | null;
   /** Images staged in the composer, not yet sent (data URLs for preview + upload). */
   pendingImages?: PendingImage[];
   /**

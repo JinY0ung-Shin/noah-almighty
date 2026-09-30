@@ -174,6 +174,7 @@ import { generateSshKeyPair } from "../src/server/sshIdentity.js";
 import { workspaceDirFor } from "../src/server/workspace.js";
 import type { DeckToolchainState } from "../src/server/deckRender.js";
 import { groupAgentAvatarId } from "../src/server/groupAgents.js";
+import { rewindTurnState } from "../src/server/agent/ownerState.js";
 import type { AgentRequest, AgentResponse, AppConfig, Plugin } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
@@ -2222,6 +2223,44 @@ describe("system tools (avatar system management)", () => {
     expect(on).toContain("between your tool calls");
     expect(on).toContain("let the newest instruction win");
     expect(on).not.toContain("Mid-turn user messages: not available");
+  });
+
+  it("describe_system mirrors the prompt's rewind line in every viewer branch", async () => {
+    const s = setup("st-rewind");
+    const rewind = { kind: "edit" as const, discardedMessages: 2 };
+    const describeSystem = async (ctx: SystemToolsContext) =>
+      (await callTool(buildSystemTools(s.store, ctx), "describe_system", {})).content[0].text ?? "";
+
+    expect(await describeSystem({ ...s.baseCtx, viewerIsOwner: true })).not.toContain("Conversation rewind");
+    // ONE source (rewindTurnState) under ONE label on both surfaces.
+    const owner = await describeSystem({ ...s.baseCtx, viewerIsOwner: true, rewind });
+    expect(owner).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
+    expect(owner).toContain("Nothing else they did was undone");
+    expect(owner).toContain("links to decks in the kept messages still work");
+
+    const colleague = await describeSystem({ ...s.baseCtx, viewerIsOwner: false, rewind });
+    expect(colleague).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
+    expect(colleague).toContain("Deployment capabilities for this run:");
+
+    const group = s.store.createGroup({ name: "팀" });
+    s.store.addGroupMember(group.id, s.owner.id, "member");
+    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
+    const avatarId = groupAgentAvatarId(group.id, agent.id);
+    const groupBody = await describeSystem({
+      avatarUserId: avatarId,
+      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
+      viewerIsOwner: false,
+      config: s.config,
+      groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
+      rewind,
+    });
+    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
+    expect(groupBody).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
+
+    // An unattended run never reports one — the prompt line's own gate.
+    expect(await describeSystem({ ...s.baseCtx, viewerIsOwner: true, headless: true, rewind })).not.toContain(
+      "Conversation rewind",
+    );
   });
 
   it("describe_system matches the prompt's headless branch on an unattended routine", async () => {

@@ -155,15 +155,21 @@ const EMPTY_TURN_RETRY_NUDGE =
  * Inspects an `Anthropic`-style numeric `status` first, then the message text.
  */
 /**
- * True when the SDK failed because a resumed session id has no transcript on
- * disk — e.g. the agent-sessions dir wasn't preserved across a redeploy, or the
- * transcript was cleaned up while the DB still holds the id. The CLI surfaces
- * this as "No conversation found with session ID …". We self-heal by re-running
- * the turn WITHOUT `resume`, rebuilding context from the stored history instead.
+ * True when the SDK failed because the resume TARGET is gone:
+ *  - a resumed session id with no transcript on disk — the agent-sessions dir
+ *    wasn't preserved across a redeploy, or the transcript was cleaned up while
+ *    the DB still holds the id ("No conversation found with session ID …");
+ *  - a rewind's `resumeSessionAt` entry the loaded chain no longer contains —
+ *    compaction summarized that point away ("No message found with
+ *    message.uuid of: …", thrown after an `error_during_execution` result).
+ * We self-heal by re-running the turn WITHOUT `resume`, rebuilding context
+ * from the stored history instead.
  */
 export function isMissingResumeSessionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /no conversation found with session/i.test(message);
+  return /no conversation found with session|no message found with message\.uuid/i.test(
+    message,
+  );
 }
 
 export function isRetryableModelError(error: unknown): boolean {
@@ -464,6 +470,10 @@ export async function runClaudeAgent(
   // previous segment ended in the chunk accumulators.
   let segmentAssistantStart = 0;
   let segmentDeltaStart = 0;
+  // The session THIS attempt runs in (its `init` event) — the fallback for a
+  // resume point whose assistant message carries no session_id of its own.
+  // Reset per attempt: a self-heal or empty-turn retry is a new session.
+  let attemptSessionId = "";
   // True once any result boundary passed with live background tasks. Blocks the
   // empty-turn retry: re-running the whole query after a background phase would
   // duplicate work the host already delivered as messages.
@@ -473,6 +483,45 @@ export async function runClaudeAgent(
   // feeds the CLI's `command_lifecycle` frames back so the host can report
   // delivery. Absent on headless/external runs.
   const steers = events?.steers;
+
+  // A result the attempt loop is about to RETRY is not a turn boundary — the
+  // boundary handling would close the steer channel and release the held input
+  // that the retry's fresh generator still needs (every mid-turn POST would
+  // then 410, and background work would die at the retry's first result).
+  //
+  // Resume-target failure: the CLI reports a missing session / an unreachable
+  // rewind point as an `error_during_execution` result whose `errors` carry the
+  // text, and only THEN throws — the throw is what the catch below self-heals.
+  // Same conditions as that catch, read off the in-band result — plus "no
+  // `init` yet this attempt": the failure comes at boot, before any init, so a
+  // result from a session that really started is never taken for one.
+  const resumeSelfHealDue = (message: Record<string, unknown>): boolean =>
+    !attemptSessionId &&
+    !resumeFallbackTried &&
+    Boolean(options.resume) &&
+    !abortController?.signal.aborted &&
+    Array.isArray(message.errors) &&
+    message.errors.some((entry) => isMissingResumeSessionError(entry));
+  // Empty-turn self-heal trigger, ONE definition for its two readers: the
+  // result boundary (which must keep the steer channel open for the retry it is
+  // about to cause) and the post-attempt retry decision. A `success` result
+  // that yielded NO text anywhere (no streamed/assistant text, no result
+  // string) and carried NO error subtype means the model ended on a
+  // thinking-only turn. A steer accepted this run blocks the retry: a re-run
+  // replays only the FIRST prompt, so the viewer's mid-turn message would be
+  // silently lost (the CLI already consumed its uuid and ignores a re-send) —
+  // the same reasoning as backgroundTurnSeen.
+  const emptyTurnRetryDue = (): boolean =>
+    !(
+      assistantChunks.join("").trim() ||
+      deltaChunks.join("").trim() ||
+      resultText.trim()
+    ) &&
+    !resultErrorSubtype &&
+    !emptyTurnRetryTried &&
+    !backgroundTurnSeen &&
+    !(steers && steers.records().length > 0) &&
+    !abortController?.signal.aborted;
 
   // Run the SDK query, walking the model fallback chain (single-element unless a
   // routine opted in). A retry re-runs from scratch on a fresh attempt, so it is
@@ -503,6 +552,7 @@ export async function runClaudeAgent(
       contextUsage = undefined;
       segmentAssistantStart = 0;
       segmentDeltaStart = 0;
+      attemptSessionId = "";
       // Build the prompt fresh each attempt: the generator paths are single-use,
       // so a retry needs a new one (the headless string path is reused as-is).
       // Streaming turns ALWAYS go through the held-open generator — an input that
@@ -561,6 +611,21 @@ export async function runClaudeAgent(
             foldPendingText(textFold, assistantChunks, deltaChunks, events, false);
           }
           const dispatched = dispatchSdkMessage(message, events, state);
+          if (message.type === "system" && message.subtype === "init") {
+            attemptSessionId = asString(message.session_id);
+          }
+          // Rewind anchor: every MAIN-chain assistant message is a transcript
+          // entry a later rewind can resume AT (SDK `resumeSessionAt`), so the
+          // host keeps the latest one per persisted row. Emitted here, not in
+          // the shared dispatcher, because only a LOCAL transcript can be
+          // resumed — the gateway runner must never produce one.
+          if (dispatched.kind === "assistant" && dispatched.mainAssistant) {
+            const uuid = asString(message.uuid);
+            const sessionId = asString(message.session_id) || attemptSessionId;
+            if (uuid && sessionId) {
+              events?.onResumePoint?.({ sessionId, uuid });
+            }
+          }
           if (dispatched.delta) {
             deltaChunks.push(dispatched.delta);
           }
@@ -602,7 +667,11 @@ export async function runClaudeAgent(
             }
           }
 
-          if (dispatched.kind === "result") {
+          // The in-band half of a resume-target failure: no boundary at all
+          // (no noteResultBoundary, no release/close, no onTurnResult — a
+          // steerPending there would make the host persist a bogus turn_end).
+          // Keep reading; the throw → self-heal follows.
+          if (dispatched.kind === "result" && !resumeSelfHealDue(message)) {
             // Anything still queued at a result boundary can no longer be folded
             // INTO the turn the viewer watched — the CLI will start it as its own
             // follow-up turn in the same session. Mark that before reading the
@@ -622,7 +691,13 @@ export async function runClaudeAgent(
               // the CLI is about to run it as a follow-up turn, and closing the
               // channel here would drop a message the viewer already sent.
               releaseHeldInput?.();
-              steers?.close();
+              // An empty turn about to be re-run still releases stdin (the CLI
+              // exits only once it closes, so this attempt could never end),
+              // but the channel stays OPEN: the retry's fresh generator keeps
+              // consuming it, and the outer finally closes it on every exit.
+              if (!emptyTurnRetryDue()) {
+                steers?.close();
+              }
             }
             if (events?.onTurnResult) {
               // Result boundary: hand the host this segment's text (chunks since
@@ -679,30 +754,12 @@ export async function runClaudeAgent(
         // Attempt finished (success or an in-band error result, e.g. max_turns) —
         // those are not transient model-server failures, so don't fall back.
         //
-        // Empty-turn self-heal: a `success` result that yielded NO text anywhere
-        // (no streamed/assistant text, no result string) and carried NO error
-        // subtype means the model ended on a thinking-only turn. Re-run the SAME
-        // model once with a nudge to emit a visible answer; mirrors the resume
-        // self-heal (re-run, don't consume a fallback step). Skip if aborted or
-        // already retried — then fall through to the empty-text fallback below.
-        const producedText = Boolean(
-          assistantChunks.join("").trim() ||
-            deltaChunks.join("").trim() ||
-            resultText.trim(),
-        );
-        // A steer accepted this run also blocks the retry: a re-run replays only
-        // the FIRST prompt, so the viewer's mid-turn message would be silently
-        // lost (the CLI already consumed its uuid and ignores a re-send). Same
-        // reasoning as backgroundTurnSeen above.
-        const steerAccepted = Boolean(steers && steers.records().length > 0);
-        if (
-          !producedText &&
-          !resultErrorSubtype &&
-          !emptyTurnRetryTried &&
-          !backgroundTurnSeen &&
-          !steerAccepted &&
-          !abortController?.signal.aborted
-        ) {
+        // Empty-turn self-heal (conditions: emptyTurnRetryDue above): re-run the
+        // SAME model once with a nudge to emit a visible answer; mirrors the
+        // resume self-heal (re-run, don't consume a fallback step). Skip if
+        // aborted or already retried — then fall through to the empty-text
+        // fallback below.
+        if (emptyTurnRetryDue()) {
           emptyTurnRetryTried = true;
           promptText = `${promptText}\n\n${EMPTY_TURN_RETRY_NUDGE}`;
           agentLogger.warn(
@@ -728,6 +785,8 @@ export async function runClaudeAgent(
         // resumeSessionId is unset) rebuilds the context. The viewer never sees the
         // error. On success the run reports a FRESH session id, which the chat route
         // persists in place of the dangling one — so the next turn resumes cleanly.
+        // A rewind's cut point and fork ride `resume` and go with it: the retry is
+        // a plain fresh session over the KEPT history the route passed in.
         if (
           !resumeFallbackTried &&
           options.resume &&
@@ -735,16 +794,28 @@ export async function runClaudeAgent(
           isMissingResumeSessionError(error)
         ) {
           resumeFallbackTried = true;
+          // A steer the dying attempt already yielded into its stdin never
+          // reached a model (the CLI died at boot); hand it to the retry's
+          // fresh process, which has never seen that uuid.
+          const resent = steers?.requeueForFreshProcess() ?? [];
+          const rewindTarget = asString(options.resumeSessionAt);
           delete options.resume;
+          delete options.resumeSessionAt;
+          delete options.forkSession;
           promptRequest.resumeSessionId = undefined;
+          promptRequest.resumeSessionAt = undefined;
           setSystemPrompt();
           promptText = buildUserPrompt(promptRequest);
           agentLogger.warn(
             {
               avatarId: request.avatar.id,
               conversationId: request.conversationId,
+              ...(rewindTarget ? { rewindTarget } : {}),
+              ...(resent.length > 0 ? { resentSteers: resent.length } : {}),
             },
-            "resume session missing; retrying with stored history",
+            rewindTarget
+              ? "rewind point unreachable; retrying with stored history"
+              : "resume session missing; retrying with stored history",
           );
           attempt -= 1; // re-run the SAME model (don't consume a fallback step)
           continue;

@@ -873,6 +873,9 @@ export async function buildAgentRunPlan(
     // so the viewer can send more messages WHILE it works. Mirrors
     // buildSystemPromptAppend's standing line and `AgentRequest.midTurnMessages`.
     midTurnMessages: Boolean(events?.steers),
+    // Rewind provenance: the SAME gate as the prompt's per-turn line (never on
+    // an unattended run), so the two surfaces report the same turn.
+    rewind: request.headless ? undefined : request.rewind,
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -1564,6 +1567,14 @@ export async function buildAgentRunPlan(
   // Resume the conversation's prior session so the model keeps its context.
   if (request.resumeSessionId) {
     options.resume = request.resumeSessionId;
+    // A REWIND resumes only up to the kept row's recorded transcript entry and
+    // FORKS, so the source transcript — still the resume point of every older
+    // row — is never rewritten. No `resumeDropsTurn`: its guard validates ONE
+    // dropped turn, and a rewind can drop many (steers and wake-ups included).
+    if (request.resumeSessionAt) {
+      options.resumeSessionAt = request.resumeSessionAt;
+      options.forkSession = true;
+    }
   }
   // Pin the model when configured (env or admin override); otherwise the SDK default.
   if (effectiveModel) {

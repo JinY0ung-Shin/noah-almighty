@@ -15,9 +15,69 @@
   `sdk.query()` is stateless: `runClaudeAgent` passes `resume: <sessionId>` and the `init` event's
   `session_id` is persisted to `conversations.agent_session_id` (`get/setAgentSessionId`). SDK transcripts
   live under `config.agentSessionsDir` (`dataDir/agent-sessions`, pinned via `CLAUDE_CONFIG_DIR` in the SDK
-  `env` option) so resume survives a restart. `greeting` (ephemeral) and `regenerate` (re-runs a turn)
-  start a fresh session. SDK `cleanupPeriodDays` (default 30) sweeps old transcripts — conversations idle
-  >30d resume as new.
+  `env` option) so resume survives a restart. `greeting` (ephemeral) starts a fresh session; a rewind or
+  regenerate resumes the KEPT history's recorded point instead (next bullet). SDK `cleanupPeriodDays`
+  (default 30) sweeps old transcripts — conversations idle >30d resume as new.
+- **Rewind ("여기서부터 다시") and regenerate share ONE plan → apply path, and cut HISTORY, never the
+  world.** Editing an earlier ordinary user message (`POST /api/chat/stream {rewindFromMessageId,
+  message}`) REPLACES that row and every row after it; 다시 생성 (`regenerate: true`) re-runs the LAST
+  NON-STEER user row in place — its STORED text, slash commands re-expanded — and drops every row after
+  it: all answer segments, steers and `bg_message` reports of that run. (The old `dropLastAssistant`
+  removed only the last row, so segments resurfaced on reload and the user text reached the model twice.)
+  - **Exact context via recorded resume points.** `claudeAgent.ts` fires `onResumePoint({sessionId,
+    uuid})` for every MAIN-chain assistant message (local loop only — the gateway never emits one). The
+    route keeps the latest per run (reset on every `onSessionId`, i.e. per attempt) and stamps it on the
+    assistant rows the four SUCCESS boundaries persist (`turn_end`, background finalize, `bg_message`,
+    `done`) as `messages.sdk_session_id`/`sdk_uuid` — server-only, never on `StoredMessage`. A boundary
+    whose result carried an in-band error (`error_max_turns`, …) stamps NOTHING (`resumePointFor`; the
+    `done` row reads the last boundary's subtype): its last assistant entry may be a tool_use with no
+    result. A rewind whose
+    kept history ends at such a row runs `resume` + `resumeSessionAt` + `forkSession: true` (runPlan): the
+    model keeps tool calls and results up to that point, and the source transcript is never rewritten (a
+    fork copies the chain with the SAME uuids into a NEW session, so every older row's point stays valid).
+  - **Fallbacks.** No point (legacy, cancelled, errored or external rows; a vision re-feed — image turns
+    start fresh as before) → a fresh session over the KEPT text history (`conversationHistoryForPrompt(
+    plan.keep)`). A point the CLI can no longer find (`No message found with message.uuid of: …` — a deep
+    pre-compaction target; one inside compaction's preserved tail still resolves) or a swept transcript
+    (`No conversation found …`) self-heals like a missing session: one retry without the three options,
+    history injected. `resumeDropsTurn` is never used — it validates ONE dropped turn. **A result the
+    attempt loop will RETRY is not a turn boundary** (`resumeSelfHealDue` / `emptyTurnRetryDue` in
+    `claudeAgent.ts`): the failed-resume error result skips the whole boundary, and an empty-turn
+    retry releases the held input but keeps the steer channel open — closing it there left the retry
+    with 410 on every mid-turn message and no background phase. Live-verified
+    2026-09-30 on CLI 2.1.283 (spike, then in-app: a value that existed only in turn 1's tool_result was
+    recalled after rewinding turn 2; a corrupted point degraded to the text history).
+  - **Plan early, apply late — the race rules are load-bearing.** `planTurnRewind` →
+    `planConversationRewind` runs BEFORE the turn's first await (the repo resolution), with the busy checks
+    (queued bot tasks, queued/running `avatar_tasks`, a running routine bound to the conversation —
+    `routineRunRegistry.ts`, re-exported by scheduler.ts; the active run is the existing checks' job); every
+    refusal before the apply leaves the thread untouched. The APPLY sits after the raced active-run re-check
+    and immediately before `openRun`, with no await between: busy checks again, a synchronous RE-PLAN that
+    refuses 409 on any drift in the kept or dropped ids (a turn that completed inside the await), then
+    `applyConversationRewind` in one transaction — delete exactly the planned rows; the share links of
+    dropped deck cards; `bot_tasks` created at/after the ANCHOR's created_at deleted (the anchor's run
+    opened them before its first answer row existed, and a leftover `waiting_input` one would be resumed),
+    and an older task a discarded turn RESUMED put back to its parked question from `bot_tasks.resume_log`
+    (`rewindBotTasks`; `markBotTaskRunning` snapshots the parked state before clearing it); canvases
+    rolled back to the anchor time; `agent_session_id = NULL` (crash safety — the fork's new id lands on
+    success). Then the edit's replacement row (carrying the anchor's image attachments) and the disk sweep
+    of the dropped rows' attachments minus the carried ids. Replacing the FIRST message moves an
+    auto-derived conversation title to the new text; a renamed title stays.
+  - **`kind: "queued"`** marks a user row written while ANOTHER run was active — `queueBotTurn`'s 202
+    row, a bot routine's enqueue, a bot hand-off, a plain routine's row written over a live run, and the
+    row a raced 409 refusal already wrote. It sits
+    BEFORE that run's answer in rowid order, so it can never anchor (400). Unmarked legacy rows are a known
+    gap.
+  - **Metacognition:** `AgentRequest.rewind {kind, discardedMessages}` → ONE text
+    (`ownerState.rewindTurnState`) in the prompt's per-turn line and in `describe_system`: the context ends
+    at the rewind point, and NOTHING the discarded turns did was undone (files, commits and pushes, browser
+    actions, created routines/bots/links). The client's confirm dialog tells the user the same.
+  - **`open` carries `userMessageId`** (the new row of a send or edit, the anchor of a regenerate) so the
+    client can name a row sent in this very session.
+  - Known v1 gaps: side effects are never undone (the discarded messages' own chat attachments and their
+    share links ARE deleted — the prompt text and the confirm dialog say both); a bot task resumed before
+    `resume_log` existed keeps its later status; a canvas submission that updated a version in place is not
+    rolled back.
 - **A streamed answer must survive completion/reload.** The live bubble shows every main-agent `delta`;
   on `done`/reload it's rebuilt from the PERSISTED `response.text`, NOT `live.text`. So `response.text`
   must be the streamed transcript (`partialText` in `claudeAgent.ts`, preferred over the SDK terminal
@@ -228,8 +288,8 @@
   an async-iterable ALWAYS (`buildHeldOpenQueryPrompt` — the background-phase keepalive above — which
   simply includes the image blocks when `request.images?.length`); headless image turns use the
   single-turn `buildImageQueryPrompt`, and headless text turns keep the plain string. `resume` works in
-  every mode.** Regenerate re-reads the
-  prior user turn's stored attachments from disk (`readChatImages`). `express.json` limit was bumped
+  every mode.** A rewind/regenerate re-reads its
+  ANCHOR row's stored attachments from disk (`readChatImages`). `express.json` limit was bumped
   3mb→40mb. Conversation delete sweeps the image dir (`deleteConversationImages`).
 - **Vision gating is PER-RUN, per-model-tier** (`modelVisionPolicy.ts`): effective vision =
   admin per-tier policy (`app_config` row `model_vision_policy`, admin panel "모델별 이미지 입력";
@@ -267,7 +327,7 @@
   shortens an overlong name in its STEM, keeping the last extension; `publishWorkspaceFile` forces the real
   extension INSIDE the 200-character cap, so no later re-sanitize can cut it off. **The one exception to owner-only reads is a PPT share link**: a
   signed-in holder of a valid link reads ONE pptx card's bytes and its stamped renders through viewer-bound
-  tickets (`/api/share/t/…`, validity re-run per call) — [`share-links.md`](share-links.md). Sweeps: conversation bulk/single delete + regenerate mirror the
+  tickets (`/api/share/t/…`, validity re-run per call) — [`share-links.md`](share-links.md). Sweeps: conversation bulk/single delete + rewind/regenerate mirror the
   image sweeps, and **user-delete (routes/admin.ts) snapshots the owner's conversation ids BEFORE
   `store.deleteUser`** to rm both chat-images and chat-files dirs (the rows are gone afterwards).
 - **`MessageAttachment.hidden`** = published for URL use only: `show_file` with `hidden:true` stores the
@@ -329,9 +389,9 @@
   would double-process it); (5) the viewer lays out for the width it was created at — the panel repaints
   (debounced) on resize; (6) compressed `<diagram>` payloads render fine (the viewer inflates them), but
   the `drawio` skill tells the agent to AUTHOR uncompressed so later turns can edit the XML.
-- **Regenerate caveat:** replacing the last assistant turn deletes its attachments (images AND files) and
-  the share links of its file cards, so a canvas from the REPLACED turn loses its embedded slide images —
-  accepted (regenerate means "redo the turn"; the new run re-renders and re-shows).
+- **Rewind/regenerate caveat:** the dropped rows' attachments (images AND files) and the share links of
+  their file cards are deleted, so a canvas that embedded their slide images loses them — accepted (the new
+  run re-renders and re-shows); the canvases themselves roll back to the anchor time.
 - **`create_share_link` (the agent path):** on interactive own-avatar owner turns only, the chat route's
   `onShareLink` makes or reuses a login-required share link for a PPTX card (this turn's `shownAttachments`
   first, then persisted messages). Once the visible turn is finalized it refuses unless a steer the owner

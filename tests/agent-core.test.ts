@@ -4127,6 +4127,74 @@ describe("buildPrompt", () => {
     );
   });
 
+  it("tells a rewound turn what it can no longer see and what was NOT undone", () => {
+    const edit = buildSystemPromptAppend(
+      req({ viewerIsOwner: true, rewind: { kind: "edit", discardedMessages: 3 } }),
+    );
+    expect(edit).toContain(
+      "Conversation rewind (this turn): The user went back to an earlier point in this conversation and re-sent one of their messages, edited",
+    );
+    expect(edit).toContain("The 3 messages after it were deleted, and your context ends at that point");
+    expect(edit).toContain("if the user refers to it, say so instead of guessing");
+    // Only the discarded messages' chat attachments went with them: their
+    // files/images were swept and those decks' links revoked, kept ones live.
+    expect(edit).toContain(
+      "the files and images you showed or shared there were deleted, and those decks' share links revoked (links to decks in the kept messages still work)",
+    );
+    // The world was not rewound — the part the avatar would otherwise get wrong.
+    expect(edit).toContain(
+      "Nothing else they did was undone: workspace and repository files, commits and pushes, browser actions, and any routines, bots or shared skills they created remain",
+    );
+    expect(edit).toContain("Re-check that state before building on what you remember.");
+
+    const single = buildSystemPromptAppend(
+      req({ viewerIsOwner: true, rewind: { kind: "edit", discardedMessages: 1 } }),
+    );
+    expect(single).toContain("The 1 message after it was deleted");
+
+    const regenerate = buildSystemPromptAppend(
+      req({ viewerIsOwner: true, rewind: { kind: "regenerate", discardedMessages: 2 } }),
+    );
+    expect(regenerate).toContain(
+      "The user discarded your previous answer to this message (2 messages deleted) and asked for a new one. Your context ends just before that answer",
+    );
+    expect(regenerate).toContain(
+      "the files and images it showed or shared were deleted, and those decks' share links revoked (links to decks in earlier messages still work)",
+    );
+    expect(regenerate).toContain("Nothing else it did was undone");
+    expect(regenerate).not.toContain("re-sent one of their messages");
+
+    // Nothing stored to discard (the answer never persisted): no count claim.
+    const bare = buildSystemPromptAppend(
+      req({ viewerIsOwner: true, rewind: { kind: "regenerate", discardedMessages: 0 } }),
+    );
+    expect(bare).toContain("The user asked you to answer this message again");
+    expect(bare).not.toContain("deleted)");
+  });
+
+  it("gives every viewer class the rewind line, and none without a rewind or on an unattended run", () => {
+    const rewind = { kind: "edit" as const, discardedMessages: 2 };
+    for (const over of [
+      { viewerIsOwner: true, rewind },
+      { viewerIsOwner: false, viewerName: "동료", rewind },
+      {
+        groupAgent: { groupId: "g", agentId: "a", groupName: "Team", viewerRole: "member" as const, captureAllowed: false },
+        rewind,
+      },
+    ]) {
+      expect(buildSystemPromptAppend(req(over))).toContain(
+        "Conversation rewind (this turn): The user went back to an earlier point",
+      );
+    }
+    for (const over of [
+      { viewerIsOwner: true },
+      { viewerIsOwner: false, viewerName: "동료" },
+      { viewerIsOwner: true, headless: true, allowHeadlessTools: true, rewind },
+    ]) {
+      expect(buildSystemPromptAppend(req(over))).not.toContain("Conversation rewind");
+    }
+  });
+
   it("keeps the owner's name on the external-task identity line", () => {
     const p = buildSystemPromptAppend(
       req({ viewerIsOwner: true, viewerName: "지영", externalTaskApi: true }),
@@ -5519,6 +5587,30 @@ describe("model fallback (routines)", () => {
       ),
     ).toBe(false);
     expect(isMissingResumeSessionError(new Error("Overloaded"))).toBe(false);
+  });
+
+  it("detects an unreachable rewind point as a missing resume target too", () => {
+    // Spike-verified CLI text (SDK 0.3.283 / CLI 2.1.283): the iterator throws
+    // this after an error_during_execution result whose errors[0] is the bare
+    // "No message found …" line.
+    expect(
+      isMissingResumeSessionError(
+        new Error(
+          "Claude Code returned an error result: No message found with message.uuid of: 386e604f-60b1-4f3e-8dd7-1bca7737c373",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isMissingResumeSessionError("no message found with message.uuid of: x"),
+    ).toBe(true);
+    // Same rule as a missing session: never a reason to change the model.
+    expect(
+      isRetryableModelError(
+        new Error("No message found with message.uuid of: x"),
+      ),
+    ).toBe(false);
+    // Unrelated "not found" text is not a resume-target failure.
+    expect(isMissingResumeSessionError(new Error("No message found"))).toBe(false);
   });
 });
 

@@ -275,6 +275,9 @@ describe("delegated bot tasks — chat route", () => {
       "bt-4",
     );
     expect(messages.filter((m) => m.content === "다음 것도 해줘")).toHaveLength(1);
+    // …marked `queued`: it lands BEFORE the running turn's answer, so it can
+    // never anchor a rewind (every row after it is not its own run's output).
+    expect(messages.find((m) => m.content === "다음 것도 해줘")!.kind).toBe("queued");
 
     releaseFirst();
     await streaming;
@@ -321,6 +324,14 @@ describe("delegated bot tasks — chat route", () => {
       .send({ avatarId, conversationId: "bt-5", message: "다시", regenerate: true })
       .expect(409);
     expect(regen.body.error).toContain("이미 이 대화의 응답을 생성 중입니다");
+    // A rewind neither: it would cut history out from under the running turn.
+    const running = store.listMessages(ownerId, "bt-5").find((m) => m.content === "긴 작업")!;
+    const rewind = await admin
+      .post("/api/chat/stream")
+      .send({ avatarId, conversationId: "bt-5", message: "고쳐서", rewindFromMessageId: running.id })
+      .expect(409);
+    expect(rewind.body.error).toContain("이미 이 대화의 응답을 생성 중입니다");
+    expect(store.countQueuedBotTasks("bt-5")).toBe(0);
 
     for (let i = 0; i < 20; i += 1) {
       store.createBotTask({

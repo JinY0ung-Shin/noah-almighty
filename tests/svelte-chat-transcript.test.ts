@@ -5,11 +5,12 @@
 // open. See lib/format.ts renderMarkdownCached for the matching per-token fix.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { tick } from "svelte";
+import { get } from "svelte/store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatView from "../src/client/src/views/ChatView.svelte";
 import { attachRun } from "../src/client/src/lib/chat.js";
-import { readState, replaceState } from "../src/client/src/lib/state.js";
+import { readState, replaceState, updateState } from "../src/client/src/lib/state.js";
 import type { ChatPane } from "../src/client/src/lib/types.js";
 import type { AvatarDetail, StoredMessage } from "../src/server/types.js";
 import { PPTX_MEDIA_TYPE } from "../src/shared/shareLinks.js";
@@ -331,6 +332,209 @@ describe("ChatView transcript · mid-turn messages", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector(".steer-badge")).toBeNull();
     expect(rows[1].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 여기서부터 다시: editing an earlier message in place                  */
+/* ------------------------------------------------------------------ */
+
+function userRow(id: string, content: string, kind?: "steer" | "queued"): StoredMessage {
+  return {
+    id,
+    conversationId: "conv-1",
+    role: "user",
+    content,
+    ...(kind ? { kind } : {}),
+    createdAt: "2026-07-26T01:00:00.000Z",
+    response: null,
+  } as unknown as StoredMessage;
+}
+
+function editButtons(container: HTMLElement): HTMLButtonElement[] {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>('.msg-actions button[aria-label="편집"]'));
+}
+
+describe("ChatView transcript · 여기서부터 다시", () => {
+  it("offers 편집 only on rows that opened their own turn — never a steer or a queued row", () => {
+    replaceState({
+      avatars: [],
+      chatPanes: [pane([userRow("u-plain", "평범한 질문"), userRow("u-steer", "중간에 끼어든 말", "steer"), userRow("u-queued", "대기열 메시지", "queued"), assistantMessage()])],
+      activePaneId: "pane-1",
+    });
+    const { container } = render(ChatView);
+    const rows = Array.from(container.querySelectorAll(".message.user"));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => Boolean(r.querySelector('button[aria-label="편집"]')))).toEqual([true, false, false]);
+    // A queued row still reads as an ordinary bubble: no steer badge.
+    expect(rows[2].querySelector(".steer-badge")).toBeNull();
+  });
+
+  it("offers no 편집 while the pane is streaming", () => {
+    const live = pane([userRow("u-1", "질문"), assistantMessage()]);
+    (live as unknown as Record<string, unknown>).streaming = true;
+    replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    expect(editButtons(container)).toHaveLength(0);
+  });
+
+  it("turns the bubble into an editor holding the message text, and 취소 turns it back", async () => {
+    replaceState({ avatars: [], chatPanes: [pane([userRow("u-1", "원래 질문"), assistantMessage()])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    await fireEvent.click(editButtons(container)[0]);
+    await tick();
+    const bubble = container.querySelector(".message.user .bubble")!;
+    expect(bubble.classList.contains("rewind-editing")).toBe(true);
+    const input = bubble.querySelector<HTMLTextAreaElement>("textarea.rewind-editor-input")!;
+    expect(input.value).toBe("원래 질문");
+    expect(bubble.querySelector(".rewind-editor-hint")?.textContent).toContain("이후 대화는 삭제됩니다");
+    // The composer is a different field: its draft is not touched by opening the editor.
+    expect(readState().chatPanes[0].draft).toBe("");
+    // The action row drops its own 편집 while the editor is open.
+    expect(editButtons(container)).toHaveLength(0);
+
+    await fireEvent.input(input, { target: { value: "" } });
+    await tick();
+    const send = within(bubble as HTMLElement).getByRole("button", { name: "보내기" });
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+
+    await fireEvent.click(within(bubble as HTMLElement).getByRole("button", { name: "취소" }));
+    await tick();
+    expect(readState().chatPanes[0].rewindEdit).toBeNull();
+    expect(container.querySelector("textarea.rewind-editor-input")).toBeNull();
+    expect(container.querySelector(".message.user .bubble")?.textContent).toContain("원래 질문");
+  });
+
+  it("asks before rewinding when Enter sends the edit, and Escape leaves the editor", async () => {
+    const { confirmation, resolveConfirmation } = await import("../src/client/src/lib/confirm.js");
+    replaceState({ avatars: [], chatPanes: [pane([userRow("u-1", "원래 질문"), assistantMessage()])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    await fireEvent.click(editButtons(container)[0]);
+    await tick();
+    const input = container.querySelector<HTMLTextAreaElement>("textarea.rewind-editor-input")!;
+    await fireEvent.input(input, { target: { value: "고친 질문" } });
+    await fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(get(confirmation)?.title).toBe("여기서부터 다시"));
+    expect(get(confirmation)?.message).toContain("이후 메시지 1개와 거기에 딸린 첨부 파일·공유 링크가 삭제되며");
+    resolveConfirmation(false);
+    await tick();
+    expect(readState().chatPanes[0].rewindEdit).toEqual({ messageId: "u-1", draft: "고친 질문" });
+
+    await fireEvent.keyDown(input, { key: "Escape", code: "Escape" });
+    await tick();
+    expect(readState().chatPanes[0].rewindEdit).toBeNull();
+  });
+
+  it("lets an image-only message go back with no text", async () => {
+    const photo = { id: "img-1", kind: "image", mediaType: "image/png", name: "shot.png" };
+    const imageOnly = { ...userRow("u-img", ""), attachments: [photo] } as unknown as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([imageOnly, assistantMessage()])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    await fireEvent.click(editButtons(container)[0]);
+    await tick();
+    const bubble = container.querySelector(".message.user .bubble") as HTMLElement;
+    expect(bubble.querySelector("img.msg-image")).not.toBeNull();
+    expect((within(bubble).getByRole("button", { name: "보내기" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the SAME bubble node when a sent message adopts the server's id — and through the run-end re-read", async () => {
+    const stream = (frames: Array<[string, unknown]>) => {
+      const enc = new TextEncoder();
+      const chunks = frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      let i = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]));
+          else controller.close();
+        },
+      });
+    };
+    const answer = { id: "srv-a", conversationId: "conv-1", role: "assistant", content: "새 답", createdAt: "2026-07-26T01:00:02.000Z", response: { kind: "text", runtime: "claude", summary: "완료", text: "새 답" } };
+    // The stream is held until the optimistic bubble has been captured, so the
+    // node compared below really predates `open` (and the id adoption).
+    let releaseStream: () => void = () => {};
+    const streamHeld = new Promise<void>((resolve) => (releaseStream = resolve));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url === "/api/chat/stream") {
+          await streamHeld;
+          return {
+            ok: true,
+            status: 200,
+            body: stream([
+              ["open", { conversationId: "conv-1", runId: "r1", userMessageId: "srv-u" }],
+              ["done", { message: answer }],
+            ]),
+            json: async () => ({}),
+          };
+        }
+        // The run-end re-read returns the server's rows (ids the pane adopted).
+        if (url.startsWith("/api/messages"))
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              messages: [{ ...userRow("srv-u", "고친 질문") }, { ...answer, response: { ...answer.response, summary: "재조회" } }],
+              canvases: [],
+            }),
+          };
+        return { ok: true, status: 200, json: async () => ({ avatars: [], conversations: [], messages: [], skills: [] }) };
+      }),
+    );
+    const { confirmation, resolveConfirmation } = await import("../src/client/src/lib/confirm.js");
+    const { startRewindEdit, setRewindEditDraft, submitRewindEdit } = await import("../src/client/src/lib/chat.js");
+    replaceState({ avatars: [], chatPanes: [pane([userRow("u-1", "원래 질문"), assistantMessage()])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    startRewindEdit("pane-1", "u-1");
+    setRewindEditDraft("pane-1", "고친 질문");
+    const sending = submitRewindEdit("pane-1");
+    await waitFor(() => expect(get(confirmation)).not.toBeNull());
+    resolveConfirmation(true);
+    // The optimistic bubble, before `open` hands over the server's id.
+    await waitFor(() => expect(container.querySelector(".message.user .bubble")?.textContent).toContain("고친 질문"));
+    const optimisticId = readState().chatPanes[0].messages[0].id;
+    expect(optimisticId).not.toBe("srv-u");
+    const before = container.querySelector(".message.user");
+    releaseStream();
+    await sending;
+    // Wait for the RE-READ itself (its copy is marked), not just the `done` frame.
+    await waitFor(() => expect(readState().chatPanes[0].messages[1]?.response?.summary).toBe("재조회"));
+    await tick();
+    expect(readState().chatPanes[0].messages[0].id).toBe("srv-u");
+    const after = container.querySelector(".message.user");
+    expect(after).toBe(before);
+    expect(before?.isConnected).toBe(true);
+  });
+
+  it("keeps an opened 생각 과정 card open when its bubble adopts the server's id", async () => {
+    const stopped = { ...assistantMessage(), id: "client-stop" } as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([userRow("u-1", "질문"), stopped])], activePaneId: "pane-1" });
+    const { container } = render(ChatView);
+    const card = container.querySelector<HTMLDetailsElement>(".thinking-card")!;
+    await clickSummary(card);
+    await waitFor(() => expect(container.querySelector(".thinking-card-body")).not.toBeNull());
+    // What adoption does to a client-made row: the id changes, the born-with id stays as its key.
+    updateState((state) => {
+      const row = state.chatPanes[0].messages[1] as StoredMessage & { clientKey?: string };
+      row.clientKey = row.id;
+      row.id = "srv-stop";
+    });
+    await tick();
+    expect(container.querySelector(".thinking-card")).toBe(card);
+    expect(container.querySelector(".thinking-card-body")?.textContent).toContain(THINKING);
+  });
+
+  it("hides 다시 생성 when the latest turn opener was queued behind another run", () => {
+    replaceState({ avatars: [], chatPanes: [pane([userRow("u-q", "대기열 메시지", "queued"), assistantMessage()])], activePaneId: "pane-1" });
+    const first = render(ChatView);
+    expect(first.container.querySelector('button[aria-label="다시 생성"]')).toBeNull();
+    first.unmount();
+
+    replaceState({ avatars: [], chatPanes: [pane([userRow("u-1", "질문"), assistantMessage()])], activePaneId: "pane-1" });
+    const second = render(ChatView);
+    expect(second.container.querySelector('button[aria-label="다시 생성"]')).not.toBeNull();
   });
 });
 

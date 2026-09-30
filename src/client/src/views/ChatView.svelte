@@ -15,15 +15,24 @@
     anchorBotTasksToMessages,
     attachActiveRun,
     cancelBotTask,
+    cancelRewindEdit,
+    canRegenerate,
     closePane,
+    hasVisibleImages,
+    isRewindAnchor,
+    messageKey,
     newChat,
     regenerate,
     respondPlanReview,
     selectConversation,
     sendMessage,
     sendSteer,
+    setRewindEditDraft,
+    stableMessageId,
     startChatWith,
+    startRewindEdit,
     stopPane,
+    submitRewindEdit,
   } from "../lib/chat";
   import { api } from "../lib/api";
   import {
@@ -551,8 +560,11 @@
     return window.matchMedia?.("(max-width: 860px)").matches ?? false;
   }
 
+  // Scoped to the composer box: the transcript can hold textareas of its own (the
+  // inline 여기서부터 다시 editor, a plan's 수정 요청 field), which come FIRST in the
+  // pane's DOM order.
   function blurComposer(paneId: string) {
-    const el = document.querySelector<HTMLTextAreaElement>(`[data-pane="${paneId}"] textarea`);
+    const el = document.querySelector<HTMLTextAreaElement>(`[data-pane="${paneId}"] .composer-box textarea`);
     el?.blur();
   }
 
@@ -1084,7 +1096,7 @@
 
   function focusComposer(paneId: string) {
     void tick().then(() => {
-      const el = document.querySelector<HTMLTextAreaElement>(`[data-pane="${paneId}"] textarea`);
+      const el = document.querySelector<HTMLTextAreaElement>(`[data-pane="${paneId}"] .composer-box textarea`);
       el?.focus();
       if (el) el.setSelectionRange(el.value.length, el.value.length);
     });
@@ -1122,11 +1134,41 @@
     void copyText(message.content || message.response?.text || "", event.currentTarget as HTMLButtonElement);
   }
 
-  function editMessage(item: ChatPane, message: StoredMessage) {
+  /* ---- 여기서부터 다시: edit an earlier user message in place ------------------
+     The bubble turns into its own small editor; sending it (after one confirm)
+     replaces that message and everything after it. The composer is not involved,
+     so a half-typed next message there survives the edit. */
+  function openRewindEdit(item: ChatPane, message: StoredMessage) {
     setActive(item.id);
-    setDraft(item.id, message.content || "");
-    focusComposer(item.id);
-    notify("메시지를 입력창에 불러왔습니다. 수정 후 보내기를 누르세요.", "info");
+    startRewindEdit(item.id, message.id);
+  }
+
+  function onRewindEditKeydown(event: KeyboardEvent, item: ChatPane) {
+    if (/^(Key|Digit|Numpad|Arrow|F\d)/.test(event.code || "")) physicalKeyboard = true;
+    // An IME composition owns Enter and Escape until it commits.
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelRewindEdit(item.id);
+      return;
+    }
+    // Same rule as the composer: Enter sends where a physical keyboard is in
+    // use; on touch it is a newline and the button sends.
+    if (!enterSends || event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    const edit = item.rewindEdit;
+    if (item.streaming || !edit) return;
+    if (!edit.draft.trim() && !hasVisibleImages(item.messages.find((m) => m.id === edit.messageId))) return;
+    void submitRewindEdit(item.id);
+  }
+
+  // The editor opens on a click: focus it with the caret at the end, the way the
+  // composer is focused. Deferred a tick so the value is in the node first.
+  function focusEditor(node: HTMLTextAreaElement) {
+    void tick().then(() => {
+      node.focus();
+      node.setSelectionRange(node.value.length, node.value.length);
+    });
   }
 
   function setActive(paneId: string) {
@@ -1375,14 +1417,16 @@
   }
 
   // Which collapsed "생각 과정" / "작업 내역" cards the user has opened, keyed by
-  // `${messageKey}:${card}`. <details> only HIDES its children, so a body left in
+  // `${stableMessageId}:${card}`. <details> only HIDES its children, so a body left in
   // the template still costs a full markdown parse (thinking) or an ActivityTree
   // mount (activity) for every message in the transcript, on a card almost nobody
   // opens. Rendering on first open keeps a long transcript's mount cost flat.
   // Trade-off: Chrome's find-in-page can no longer reach inside an unopened card.
   let expandedCards = new Set<string>();
+  // Keyed on the row's STABLE id (what the each block keys on too), so a card the
+  // viewer opened stays open when its bubble adopts the server's id.
   function cardKey(message: StoredMessage, card: "thinking" | "activity"): string {
-    return `${message.id || message.createdAt}:${card}`;
+    return `${stableMessageId(message) || message.createdAt}:${card}`;
   }
   function toggleCard(key: string, event: Event): void {
     const open = (event.currentTarget as HTMLDetailsElement).open;
@@ -1502,7 +1546,13 @@
 
         {@render botTaskCards(item, -1)}
 
-        {#each item.messages as message, index (message.id || `${message.role}-${message.createdAt}-${index}`)}
+        <!-- Keyed on messageKey, not the raw id: a bubble the client created keeps
+             its key when it adopts the server's id, so it is updated in place
+             instead of re-mounted (and re-animated) right after it appeared. -->
+        {#each item.messages as message, index (messageKey(message, index))}
+          <!-- Named in the markup (not read inside a helper) so legacy-mode
+               tracking re-renders the bubble the moment the editor opens/closes. -->
+          {@const editing = message.role === "user" && item.rewindEdit?.messageId === message.id}
           <div class={`message ${message.role}`}>
             <div class="msg-role">
               <span class="role-dot"></span>
@@ -1513,7 +1563,7 @@
               {#if message.role === "user" && message.kind === "steer"}<span class="tag steer-badge">응답 중 전달</span>{/if}
               {#if message.createdAt}<time class="msg-time" datetime={message.createdAt}>{timeLabel(message.createdAt)}</time>{/if}
             </div>
-            <div class={`bubble ${message.response?.summary === "오류" ? "errored" : ""}`}>
+            <div class={`bubble ${message.response?.summary === "오류" ? "errored" : ""}`} class:rewind-editing={editing}>
               {#if message.role === "assistant"}
                 {@const activity = completedActivity(message)}
                 {#if runtimeBadge(message)}
@@ -1595,14 +1645,38 @@
                     {/each}
                   </div>
                 {/if}
-                {#if message.content}{message.content}{/if}
+                {#if editing}
+                  <!-- The images above ride along unchanged; only the text is edited. -->
+                  <textarea
+                    class="rewind-editor-input"
+                    rows="2"
+                    value={item.rewindEdit?.draft ?? ""}
+                    aria-label="수정할 메시지"
+                    aria-describedby={paneDomId("rewind-hint", item.id)}
+                    use:autosize={item.rewindEdit?.draft ?? ""}
+                    use:focusEditor
+                    on:input={(event) => setRewindEditDraft(item.id, event.currentTarget.value)}
+                    on:keydown={(event) => onRewindEditKeydown(event, item)}
+                  ></textarea>
+                  <p id={paneDomId("rewind-hint", item.id)} class="rewind-editor-hint">보내면 이 메시지부터 다시 시작하고, 이후 대화는 삭제됩니다.</p>
+                  <div class="rewind-editor-actions">
+                    <button class="btn btn-ghost btn-sm" type="button" on:click={() => cancelRewindEdit(item.id)}>취소</button>
+                    <!-- An image-only message may go back with no text: its images are the message. -->
+                    <button class="btn btn-primary btn-sm" type="button" disabled={item.streaming || (!(item.rewindEdit?.draft ?? "").trim() && !hasVisibleImages(message))} on:click={() => void submitRewindEdit(item.id)}>보내기</button>
+                  </div>
+                {:else if message.content}{message.content}{/if}
               {/if}
             </div>
             <div class="msg-actions">
               <button class="msg-act" type="button" aria-label="복사" title="복사" on:click={(event) => copyMessage(message, event)}><Icon name="copy" /></button>
               {#if message.role === "user"}
-                <button class="msg-act" type="button" aria-label="편집" title="편집 후 다시 보내기" on:click={() => editMessage(item, message)}><Icon name="edit" /></button>
-              {:else if index === item.messages.length - 1 && !item.streaming}
+                <!-- 여기서부터 다시 starts only from a row that opened its own turn:
+                     never a steer (it landed mid-turn) or a queued row (it sits
+                     before an earlier run's answer), and never mid-stream. -->
+                {#if isRewindAnchor(message) && !item.streaming && !editing}
+                  <button class="msg-act" type="button" aria-label="편집" title="수정해서 여기서부터 다시 보내기" on:click={() => openRewindEdit(item, message)}><Icon name="edit" /></button>
+                {/if}
+              {:else if index === item.messages.length - 1 && !item.streaming && canRegenerate(item.messages)}
                 <button class="msg-act regen" type="button" aria-label="다시 생성" title="다시 생성" on:click={() => regenerate(item.id)}><Icon name="refresh" /></button>
               {/if}
             </div>
@@ -2257,6 +2331,46 @@
     gap: var(--s-1);
     min-width: 0;
     max-width: 100%;
+  }
+  /* 여기서부터 다시: an earlier user message edited in place. While editing, the
+     accent bubble turns into a neutral field — accent marks actions and state, not
+     a surface you type into — at the bubble's full allowed width, with the images
+     it carries still on top. Flex column: the bubble's `pre-wrap` would otherwise
+     render the template whitespace between the parts. */
+  .message.user .bubble.rewind-editing {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    background: var(--panel);
+    border-color: var(--line);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+    white-space: normal;
+  }
+  .rewind-editor-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: none;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--bg);
+    color: var(--text);
+    padding: var(--s-2) var(--s-2-5);
+    font: inherit;
+    font-size: var(--t-md);
+    line-height: 1.6;
+  }
+  .rewind-editor-hint {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--t-xs);
+    line-height: 1.3;
+  }
+  .rewind-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--s-2);
   }
   /* Plan-mode plan card (ExitPlanMode). A distinct, collapsible card inside the
      assistant bubble that surfaces the proposed plan — shown live while the turn

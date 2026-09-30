@@ -218,7 +218,7 @@ UNTOUCHED: a task row is bookkeeping over the same A-1 full-owner run.
   non-bot threads.
 - **Queue instead of 409:** a message to a busy BOT thread is persisted immediately, becomes a
   `queued` task (cap `MAX_QUEUED_BOT_TASKS` 20/thread → 429), and answers **202 `{queued, task}`**
-  (plain JSON, never SSE). Regenerate keeps the 409; images-while-busy 400 (a queued replay is
+  (plain JSON, never SSE). Regenerate and rewind keep the 409 (and the 202 row is `kind: "queued"`, never a rewind anchor); images-while-busy 400 (a queued replay is
   text-only). The enqueue pokes the dispatcher afterwards to close the settle race.
 - **Dispatcher** (`botTaskRunner.ts`, scheduler.ts's never-throw style): `maybeDispatchNextBotTask`
   DRAINS a thread's queue in a loop (the settle hook fires inside `executeChatTurn`'s finally while

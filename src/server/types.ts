@@ -1071,8 +1071,15 @@ export interface StoredMessage {
    * tool calls or as the head of the follow-up turn). Absent on ordinary rows.
    * Persisted in `messages.kind`; the client renders these with a small
    * "응답 중 전달" badge. Only ever set on `role: "user"` rows.
+   *
+   * `"queued"` marks a USER row persisted while ANOTHER run was still active on
+   * the conversation (a 내 봇 queued turn, or a turn refused by the raced
+   * active-run re-check after its row was written). Such a row sits BEFORE that
+   * earlier run's answer in rowid order, so "every row after it" is not its own
+   * run's output — a rewind/regenerate can never anchor on it. Renders as an
+   * ordinary user bubble.
    */
-  kind?: "steer";
+  kind?: "steer" | "queued";
   response: AgentResponse | null;
   createdAt: string;
 }
@@ -1100,6 +1107,29 @@ export interface AgentImageFileInput {
 export interface AgentConversationMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+/**
+ * Where a persisted assistant row's segment ended in the LOCAL SDK transcript —
+ * the point a later rewind resumes AT (SDK `resume` + `resumeSessionAt`).
+ * Server-only (`messages.sdk_session_id` / `sdk_uuid`); never sent to clients.
+ */
+export interface SdkResumePoint {
+  /** Session whose transcript holds `uuid` (the run's own session; a fork reports its NEW id). */
+  sessionId: string;
+  /** The last MAIN-chain assistant message uuid of that segment. */
+  uuid: string;
+}
+
+/**
+ * A turn that re-runs the conversation from an earlier point. `edit`: the viewer
+ * edited an earlier user message — it and every row after it were replaced.
+ * `regenerate`: the viewer discarded the answer(s) to the latest user message.
+ */
+export interface AgentRewindInfo {
+  kind: "edit" | "regenerate";
+  /** Persisted rows AFTER the anchor user message that were deleted (the anchor itself not counted). */
+  discardedMessages: number;
 }
 
 export interface AuditEvent {
@@ -1429,6 +1459,18 @@ export interface AgentRequest {
    */
   resumeSessionId?: string;
   /**
+   * With `resumeSessionId`: resume only up to AND including this transcript
+   * entry (the SDK message uuid a kept assistant row recorded — see
+   * `SdkResumePoint`), forking into a NEW session so the source transcript is
+   * never rewritten (runPlan sets SDK `resumeSessionAt` + `forkSession: true`).
+   * Set only by a rewind/regenerate turn whose kept history ends at an
+   * assistant row with a recorded resume point. A target the CLI can no longer
+   * find (compaction dropped it, the transcript was swept) self-heals exactly
+   * like a missing session: the run retries without `resume`, with
+   * `conversationHistory` injected.
+   */
+  resumeSessionAt?: string;
+  /**
    * Stored transcript fallback used only when no SDK session id is available.
    * Normal conversations continue through SDK `resume`; this keeps first-turn
    * cancellations or expired SDK transcripts from losing the visible context.
@@ -1508,6 +1550,15 @@ export interface AgentRequest {
    * prompts still park for an answer through the task API or the Noah UI.
    */
   externalTaskApi?: boolean;
+  /**
+   * This turn re-runs the conversation from an earlier point (the viewer
+   * edited an earlier message, or regenerated the latest answer). META-COGNITION
+   * only — surfaced in `buildSystemPromptAppend` and `describe_system`: the
+   * model's context ends at that point, but NOTHING the discarded turns did
+   * (workspace files, commits, browser actions, created routines/bots/links)
+   * was undone. Set by the chat route only; never on headless runs.
+   */
+  rewind?: AgentRewindInfo;
   /**
    * True when the viewer can send ADDITIONAL user messages while this turn is
    * still running (an interactive streaming chat with a live steer channel —

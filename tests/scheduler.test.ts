@@ -44,6 +44,7 @@ const { executeRoutineJob, isRoutineRunning, startRoutineScheduler } = await imp
   "../src/server/scheduler.js"
 );
 const { acquireActiveRepo, releaseActiveRepo } = await import("../src/server/activeRepoLock.js");
+const { closeRun, openRun } = await import("../src/server/agent/runRegistry.js");
 const { setWorkspaceRepo } = await import("../src/server/repoWorkspace.js");
 const { gitRepoClonePath } = await import("../src/server/gitRepos.js");
 
@@ -202,6 +203,46 @@ describe("routine failure handling", () => {
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toBe("ok");
     expect(services.store.listRoutineJobs(owner.id)[0].lastStatus).toBe("success");
+  });
+
+  it("writes its question row as queued when a chat turn holds the thread at write time", async () => {
+    const { services, owner, job } = boot("queued-row");
+    // The owner starts a turn in the routine's thread while the routine runs: the
+    // pair lands BEFORE that turn's answer, so its question must never anchor a
+    // rewind (StoredMessage.kind "queued").
+    H.impl = async (_req, _roots, _cfg, _store, events) => {
+      openRun("owner-turn", owner.id, { conversationId: job.conversationId });
+      events.onDelta?.("ok");
+      return { kind: "text", runtime: "local", summary: "mock", text: "ok" };
+    };
+    try {
+      await executeRoutineJob(services, job);
+    } finally {
+      closeRun("owner-turn");
+    }
+    // Same rule on the failure path's pair.
+    H.impl = async () => {
+      openRun("owner-turn-2", owner.id, { conversationId: job.conversationId });
+      throw new Error("boom");
+    };
+    try {
+      await executeRoutineJob(services, job);
+    } finally {
+      closeRun("owner-turn-2");
+    }
+    // A free thread at write time: an ordinary row.
+    H.impl = null;
+    await executeRoutineJob(services, job);
+
+    const rows = services.store.listMessages(owner.id, job.conversationId);
+    expect(rows.map((m) => [m.role, m.kind])).toEqual([
+      ["user", "queued"],
+      ["assistant", undefined],
+      ["user", "queued"],
+      ["assistant", undefined],
+      ["user", undefined],
+      ["assistant", undefined],
+    ]);
   });
 });
 

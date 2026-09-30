@@ -5,7 +5,7 @@ import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATIONS_PER_TURN,
 } from "../personalAgents.js";
-import { DIRECT_MESSAGE_STATE, gettingStartedGaps } from "./ownerState.js";
+import { DIRECT_MESSAGE_STATE, gettingStartedGaps, rewindTurnState } from "./ownerState.js";
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
@@ -971,6 +971,13 @@ export function buildSystemPromptAppend(
     lines.push(
       "The user may send additional messages while you are working. They arrive as ordinary user messages between your tool calls (or as the next turn if you have already finished). Read them as they arrive, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch.",
     );
+  }
+  // Turn PROVENANCE of a rewind (edit an earlier message / regenerate the
+  // latest answer), for every viewer class: the model's context was cut back
+  // to that point, but the world was not — the discarded turns' files, commits
+  // and actions are all still there. Same text describe_system reports.
+  if (request.rewind && !request.headless) {
+    lines.push(`Conversation rewind (this turn): ${rewindTurnState(request.rewind)}`);
   }
   const fileOutputBlock = fileOutputSection(request);
   if (fileOutputBlock) {

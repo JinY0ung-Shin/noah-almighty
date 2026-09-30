@@ -15,6 +15,13 @@ import {
 } from "./personalAgents.js";
 import { executeChatTurn, resolveChatTarget } from "./routes/chat.js";
 import { maybeDispatchNextBotTask } from "./botTaskRunner.js";
+import {
+  claimRoutineSlot,
+  isRoutineRunning,
+  releaseRoutineSlot,
+  runningRoutineCount,
+  runningRoutineCountForOwner,
+} from "./routineRunRegistry.js";
 
 const schedLogger = logger.child({ module: "scheduler" });
 
@@ -47,32 +54,22 @@ function routineFailureMessage(error: unknown): string {
 }
 
 /**
- * Jobs currently executing. Module-level on purpose: the scheduler tick and
- * the HTTP "run now" route must share ONE overlap guard, or the same job can
- * run twice concurrently.
+ * The user row a finished headless routine appends with its answer. The pair
+ * is written only at the END of the run, so when the owner is mid-turn in the
+ * same thread at that moment the row lands BEFORE that turn's answer — it is
+ * then `queued` (StoredMessage.kind): the rows after it are not its own run's
+ * output, so a rewind can never anchor on it.
  */
-const runningJobs = new Set<string>();
-/**
- * Routines in flight per owner — the per-owner cap's ledger, kept beside
- * `runningJobs` for the same reason: a "run now" occupies its owner's slot too.
- */
-const runningPerOwner = new Map<string, number>();
-
-function claimRoutineSlot(job: RoutineJob): void {
-  runningJobs.add(job.id);
-  runningPerOwner.set(job.avatarUserId, (runningPerOwner.get(job.avatarUserId) ?? 0) + 1);
+function routineUserRow(job: RoutineJob): { role: "user"; content: string; kind?: "queued" } {
+  return getActiveRunForConversation(job.avatarUserId, job.conversationId)
+    ? { role: "user", content: job.prompt, kind: "queued" }
+    : { role: "user", content: job.prompt };
 }
 
-function releaseRoutineSlot(job: RoutineJob): void {
-  runningJobs.delete(job.id);
-  const left = (runningPerOwner.get(job.avatarUserId) ?? 1) - 1;
-  if (left > 0) runningPerOwner.set(job.avatarUserId, left);
-  else runningPerOwner.delete(job.avatarUserId);
-}
-
-export function isRoutineRunning(jobId: string): boolean {
-  return runningJobs.has(jobId);
-}
+// The running-routine registry (the overlap guard and both caps' ledgers) lives
+// in a leaf module so readers outside the scheduler can consult it without an
+// import cycle; `isRoutineRunning` keeps its import path through this re-export.
+export { isRoutineRunning };
 
 /**
  * One firing's outcome. `skipped` means NOTHING ran and no outcome may be
@@ -151,6 +148,9 @@ async function runBotRoutineJobNow(
       store.addMessage(job.conversationId, {
         role: "user",
         content: job.prompt,
+        // The thread is busy: this row lands BEFORE the active run's answer,
+        // so it can never anchor a rewind (the chat route's queueBotTurn rule).
+        kind: "queued",
       });
     }
     store.createBotTask({
@@ -398,7 +398,7 @@ async function runRoutineJobNow(
     );
 
     store.touchConversation(avatar.id, job.conversationId, avatar.id, `[예약 작업] ${job.prompt}`, { isRoutine: true });
-    store.addMessage(job.conversationId, { role: "user", content: job.prompt });
+    store.addMessage(job.conversationId, routineUserRow(job));
     store.addMessage(job.conversationId, {
       role: "assistant",
       content: response.text || response.summary,
@@ -433,7 +433,7 @@ async function runRoutineJobNow(
         `[예약 작업] ${job.prompt}`,
         { isRoutine: true },
       );
-      store.addMessage(job.conversationId, { role: "user", content: job.prompt });
+      store.addMessage(job.conversationId, routineUserRow(job));
       store.addMessage(job.conversationId, { role: "assistant", content });
       store.pruneRoutineMessages(job.conversationId);
     } catch (persistError) {
@@ -469,7 +469,7 @@ export async function executeRoutineJob(
   services: AppServices,
   job: RoutineJob,
 ): Promise<RoutineRunResult> {
-  if (runningJobs.has(job.id)) {
+  if (isRoutineRunning(job.id)) {
     return { ok: false, skipped: true, error: "이미 실행 중인 예약 작업입니다." };
   }
   // A routine and an interactive chat share ONE conversation id (a routine's thread
@@ -553,11 +553,11 @@ export function startRoutineScheduler(
       return;
     }
     for (const job of due) {
-      if (runningJobs.size >= config.routineMaxConcurrentRuns) break;
+      if (runningRoutineCount() >= config.routineMaxConcurrentRuns) break;
       // Already firing from an earlier tick or "지금 실행"; that run records
       // the outcome.
-      if (runningJobs.has(job.id)) continue;
-      if ((runningPerOwner.get(job.avatarUserId) ?? 0) >= config.routineMaxConcurrentRunsPerUser) {
+      if (isRoutineRunning(job.id)) continue;
+      if (runningRoutineCountForOwner(job.avatarUserId) >= config.routineMaxConcurrentRunsPerUser) {
         continue;
       }
       // Never throws, and claims its slot before its first await, so the caps

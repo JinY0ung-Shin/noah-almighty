@@ -145,10 +145,10 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 - **Cascades are manual and sit next to EVERY `deleteCanvasArtifactsForConversation` call**
   (`deleteShareLinksForConversation`, declared on `StoreBase`): single and bulk conversation delete,
   `deleteUser` (its own threads AND other people's threads with its avatar), group-agent, bot and group
-  deletes. `deleteUser` also drops every row the user created (`owner_user_id`). Regenerate
-  (`routes/chat.ts`) drops the links of the replaced turn's file cards (`deleteShareLinksForFiles`) next to
-  the disk sweep. **A new conversation-deleting path must add the share-link cascade next to the canvas
-  one.** A routine thread's message prune (`pruneRoutineMessages`) keeps the files, so its links keep
+  deletes. `deleteUser` also drops every row the user created (`owner_user_id`). A rewind/regenerate
+  (`applyConversationRewind`) drops the links of the dropped rows' file cards (`deleteShareLinksForFiles`),
+  next to the route's disk sweep. **A new conversation-deleting path must add the share-link cascade next to
+  the canvas one — and a new message-truncating path the per-card one.** A routine thread's message prune (`pruneRoutineMessages`) keeps the files, so its links keep
   serving (with numbered alt text).
 - Expired rows older than `EXPIRED_SHARE_LINK_RETENTION_DAYS` (30) are pruned GLOBALLY in one statement,
   on every create and list — an inactive owner's rows cannot linger.
