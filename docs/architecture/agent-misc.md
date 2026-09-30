@@ -31,7 +31,7 @@
   server name, so it also reveals WHICH instance won a name collision (`hex-ssh` vs `plugin_<plugin>_hex-ssh`).
 
 ## Slash commands (server-expanded)
-- **ALL built-in slash commands are server-expanded** (`/learn`/`/summarize`/`/remember`/`/routine`/`/find`/`/tour`):
+- **ALL built-in slash commands but one are server-expanded** (`/learn`/`/summarize`/`/remember`/`/routine`/`/find`/`/tour`):
   `src/client/src/lib/slash.ts` carries only metadata (name/title/description/argsLabel/ownerOnly/
   requiresArgs) — no client-side `prompt`, no `serverExpand` flag. The client always sends the literal
   `/command [args]` (chat.ts `submit`); the SERVER `expandChatSlashCommand` (`routes/chat.ts`) swaps in the
@@ -44,6 +44,12 @@
   list + Korean card copy (the client renders the 체험 시나리오 cards from it), while the English walkthrough
   prompts live server-only in `src/server/tourScenarios.ts` — an unknown slug fails with a Korean error
   instead of expanding, and trailing text after the slug rides along as a focus hint like `/learn`'s.
+- **`/compact [what to keep]` is the ONE native command: it reaches the CLI VERBATIM.** A slash command only
+  runs when it IS the prompt, so `expandChatSlashCommand` returns `compact: {instructions}` instead of an
+  expansion, and `claudeAgent` sends exactly `/compact[ <instructions>]` with no `buildUserPrompt` wrapper,
+  history or images. Mechanics and gates → [`chat-sse-media.md`](chat-sse-media.md) (native `/compact`
+  bullet). Every other text, including a mid-turn message, must never start a CLI command: the steer route
+  refuses a `/compact` steer, and a wrapped prompt never starts with `/`.
 
 ## git remote work is MCP-only
 - The agent shell has no git credentials (stripped from the subprocess env), so Bash `git clone/push`/`gh`

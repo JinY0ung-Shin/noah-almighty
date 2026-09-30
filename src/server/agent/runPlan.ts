@@ -1567,11 +1567,17 @@ export async function buildAgentRunPlan(
   // Resume the conversation's prior session so the model keeps its context.
   if (request.resumeSessionId) {
     options.resume = request.resumeSessionId;
-    // A REWIND resumes only up to the kept row's recorded transcript entry and
-    // FORKS, so the source transcript — still the resume point of every older
-    // row — is never rewritten. No `resumeDropsTurn`: its guard validates ONE
-    // dropped turn, and a rewind can drop many (steers and wake-ups included).
-    if (request.resumeSessionAt) {
+    // A native /compact FORKS the whole session and compacts the fork, so the
+    // source transcript — and every older row's rewind point in it — stays
+    // uncompacted (spike-verified: S byte-identical afterwards). It never cuts:
+    // the fork summarizes the conversation exactly as it stands.
+    if (request.compact) {
+      options.forkSession = true;
+    } else if (request.resumeSessionAt) {
+      // A REWIND resumes only up to the kept row's recorded transcript entry and
+      // FORKS, so the source transcript — still the resume point of every older
+      // row — is never rewritten. No `resumeDropsTurn`: its guard validates ONE
+      // dropped turn, and a rewind can drop many (steers and wake-ups included).
       options.resumeSessionAt = request.resumeSessionAt;
       options.forkSession = true;
     }

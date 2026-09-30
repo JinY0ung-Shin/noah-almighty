@@ -74,6 +74,13 @@ describe("official system manual", () => {
     expect(index.text).not.toContain("curl -sS");
   });
 
+  it("documents native /compact and what the avatar can still see after it", () => {
+    const page = readSystemManual("chat").text;
+    expect(page).toContain("`/compact [what to keep]` summarizes the conversation so far to free context");
+    expect(page).toContain("the avatar sees only that summary (plus what the user asked to keep)");
+    expect(page).toContain("the earlier messages stay in the chat and can still be rewound to");
+  });
+
   it("documents the deck converter without claiming it is available", () => {
     const page = readSystemManual("files-canvas").text;
     expect(page).toContain("New PowerPoint decks are designed as HTML/CSS slides and converted by the pptx skill");

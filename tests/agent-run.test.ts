@@ -1889,6 +1889,195 @@ describe("rewind resume points + resumeSessionAt (SDK mocked)", () => {
 });
 
 // ===========================================================================
+// Native /compact: the CLI's own slash command, verbatim, against a fork.
+// Stream shape spike-verified (SDK 0.3.283 / CLI 2.1.283): init →
+// compact_boundary → user summary → user local-command-stdout → empty success.
+// ===========================================================================
+describe("native /compact (SDK mocked)", () => {
+  const compactBoundary = (uuid: string, pre = 18_049, post = 1_378) => ({
+    type: "system",
+    subtype: "compact_boundary",
+    uuid,
+    session_id: "sess-fork",
+    compact_metadata: { trigger: "manual", pre_tokens: pre, post_tokens: post },
+  });
+  const userText = (uuid: string, text: string, isReplay = false) => ({
+    type: "user",
+    parent_tool_use_id: null,
+    uuid,
+    session_id: "sess-fork",
+    isReplay,
+    message: { role: "user", content: text },
+  });
+  const compactStream = () => [
+    initMsg("sess-fork"),
+    compactBoundary("cb-1"),
+    userText("u-summary", "This session is being continued from a previous conversation…"),
+    userText("u-stdout", "<local-command-stdout>Compacted </local-command-stdout>", true),
+    successResult(""),
+  ];
+  /** The first (only) user-message envelope the held-open generator yields. */
+  async function firstPromptEnvelope(prompt: unknown) {
+    const first = await (prompt as AsyncGenerator<Record<string, unknown>>).next();
+    return first.value as Record<string, unknown> & {
+      message: { content: Array<{ type: string; text?: string }> };
+    };
+  }
+
+  it("sends the slash command VERBATIM as the only prompt — no wrapper, history or image blocks", async () => {
+    const { config, store, baseRequest } = setup();
+    sdkMock.impl = () => handleFrom(compactStream());
+    const request: AgentRequest = {
+      ...baseRequest,
+      message: "/compact 배포 결정은 남겨줘",
+      compact: { instructions: "  배포 결정은 남겨줘  " },
+      resumeSessionId: "sess-src",
+      conversationHistory: [
+        { role: "user", content: "이전 질문" },
+        { role: "assistant", content: "이전 답변" },
+      ],
+      images: [{ mediaType: "image/png", data: "aGk=" }],
+    };
+
+    await runAgentStream(request, [], config, store, makeEvents());
+    await runAgentStream({ ...request, compact: { instructions: "" } }, [], config, store, makeEvents());
+
+    const withArgs = await firstPromptEnvelope(sdkMock.calls[0].prompt);
+    expect(withArgs.message.content).toEqual([{ type: "text", text: "/compact 배포 결정은 남겨줘" }]);
+    const bare = await firstPromptEnvelope(sdkMock.calls[1].prompt);
+    expect(bare.message.content).toEqual([{ type: "text", text: "/compact" }]);
+    // The native command MUST dispatch, so its envelope never carries the
+    // client_composed flag that keeps a slash-leading steer literal.
+    expect(withArgs).not.toHaveProperty("client_composed");
+    expect(bare).not.toHaveProperty("client_composed");
+    // The system layer is untouched (setSystemPrompt still runs as usual).
+    expect((sdkMock.calls[0].options.systemPrompt as { append: string }).append).toContain(
+      "Official Noah usage manual",
+    );
+  });
+
+  it("forks the stored session and never cuts it, even if a rewind point rides along", async () => {
+    const { config, store, baseRequest } = setup();
+    sdkMock.impl = () => handleFrom(compactStream());
+
+    await runAgentStream(
+      {
+        ...baseRequest,
+        compact: { instructions: "" },
+        resumeSessionId: "sess-src",
+        resumeSessionAt: "uuid-should-not-be-used",
+      },
+      [], config, store, makeEvents(),
+    );
+
+    const { options } = sdkMock.calls[0];
+    expect(options).toMatchObject({ resume: "sess-src", forkSession: true });
+    expect(options.resumeSessionAt).toBeUndefined();
+  });
+
+  it("takes the empty result as the normal outcome: no empty-turn retry", async () => {
+    const { config, store, baseRequest } = setup();
+    const onThinkingReset = vi.fn();
+    sdkMock.impl = () => handleFrom(compactStream());
+
+    const response = await runAgentStream(
+      { ...baseRequest, compact: { instructions: "" }, resumeSessionId: "sess-src" },
+      [], config, store, makeEvents({ onThinkingReset }),
+    );
+
+    expect(sdkMock.calls).toHaveLength(1);
+    expect(onThinkingReset).not.toHaveBeenCalled();
+    // The host composes the Korean bubble from the compact event, not from this.
+    expect(response.resultError).toBeUndefined();
+  });
+
+  it("does not self-heal a missing session — /compact on a fresh session compacts nothing", async () => {
+    const { config, store, baseRequest } = setup();
+    const missing = "No conversation found with session ID: sess-gone";
+    sdkMock.impl = () => {
+      async function* gen() {
+        yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [missing] };
+        throw new Error(`Claude Code returned an error result: ${missing}`);
+      }
+      return gen() as QueryHandle;
+    };
+
+    await expect(
+      runAgentStream(
+        { ...baseRequest, compact: { instructions: "" }, resumeSessionId: "sess-gone" },
+        [], config, store, makeEvents(),
+      ),
+    ).rejects.toThrow(/no conversation found/i);
+    expect(sdkMock.calls).toHaveLength(1);
+  });
+
+  it("records the boundary and the user messages as resume points in compact mode only", async () => {
+    const { config, store, baseRequest } = setup();
+    const compactPoints = vi.fn();
+    sdkMock.impl = () => handleFrom(compactStream());
+    await runAgentStream(
+      { ...baseRequest, compact: { instructions: "" }, resumeSessionId: "sess-src" },
+      [], config, store, makeEvents({ onResumePoint: compactPoints }),
+    );
+    // Every streamed chain entry, in order — the host keeps the LAST one.
+    expect(compactPoints.mock.calls.map(([point]) => point)).toEqual([
+      { sessionId: "sess-fork", uuid: "cb-1" },
+      { sessionId: "sess-fork", uuid: "u-summary" },
+      { sessionId: "sess-fork", uuid: "u-stdout" },
+    ]);
+
+    // An ordinary run that happens to see the same shapes keeps the
+    // main-assistant rule: a user message or a boundary is never a cut point.
+    const normalPoints = vi.fn();
+    sdkMock.impl = () =>
+      handleFrom([
+        initMsg("sess-n"),
+        { ...compactBoundary("cb-auto"), session_id: "sess-n" },
+        { ...userText("u-auto", "summary"), session_id: "sess-n" },
+        { ...assistantMsg([textBlock("계속합니다")]), uuid: "a-1", session_id: "sess-n" },
+        successResult("계속합니다"),
+      ]);
+    await runAgentStream(baseRequest, [], config, store, makeEvents({ onResumePoint: normalPoints }));
+    expect(normalPoints.mock.calls.map(([point]) => point)).toEqual([
+      { sessionId: "sess-n", uuid: "a-1" },
+    ]);
+  });
+
+  it("reports the post-compaction occupancy as usage even when the result carries none", async () => {
+    const { config, store, baseRequest } = setup();
+    const getContextUsage = vi.fn(async () => ({ totalTokens: 14_671, maxTokens: 200_000 }));
+    sdkMock.impl = () => handleFrom(compactStream(), { getContextUsage });
+
+    const response = await runAgentStream(
+      { ...baseRequest, compact: { instructions: "" }, resumeSessionId: "sess-src" },
+      [], config, store, makeEvents(),
+    );
+
+    // Read after the boundary and after each streamed user message.
+    expect(getContextUsage).toHaveBeenCalledTimes(3);
+    expect(response.usage).toEqual({ inputTokens: 14_671, outputTokens: 0, contextWindow: 200_000 });
+  });
+
+  it("passes the boundary's post tokens through on the compact event", async () => {
+    const { config, store, baseRequest } = setup();
+    const onCompact = vi.fn();
+    sdkMock.impl = () => handleFrom(compactStream());
+
+    await runAgentStream(
+      { ...baseRequest, compact: { instructions: "" }, resumeSessionId: "sess-src" },
+      [], config, store, makeEvents({ onCompact }),
+    );
+
+    expect(onCompact).toHaveBeenCalledWith({
+      ok: true,
+      trigger: "manual",
+      preTokens: 18_049,
+      postTokens: 1_378,
+    });
+  });
+});
+
+// ===========================================================================
 // buildImageQueryPrompt (direct — the run loop never consumes it under the mock)
 // ===========================================================================
 describe("buildImageQueryPrompt", () => {

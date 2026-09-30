@@ -441,7 +441,16 @@ export async function runClaudeAgent(
   // prompts: a plain string, or — when the turn carries image attachments — a
   // single-message async-iterable (the only way to feed the model images). All
   // `options` (resume/hooks/mcpServers/model) work identically in every mode.
-  let promptText = buildUserPrompt(promptRequest);
+  //
+  // A native `/compact` turn sends the CLI's own slash command VERBATIM as the
+  // ONLY prompt text — wrapped by buildUserPrompt ("User message:\n…") it would
+  // reach the model as plain text and nothing would compact (spike-verified).
+  // No history and no image blocks: the resumed fork IS what gets summarized.
+  const compactInstructions = request.compact?.instructions.trim() ?? "";
+  let promptText = request.compact
+    ? `/compact${compactInstructions ? ` ${compactInstructions}` : ""}`
+    : buildUserPrompt(promptRequest);
+  const promptImages = request.compact ? [] : (request.images ?? []);
 
   // One-shot guard for the stale-resume self-heal below: if the SDK can't find
   // the session we asked it to resume, we drop `resume`, rebuild the prompt with
@@ -495,7 +504,9 @@ export async function runClaudeAgent(
   // Same conditions as that catch, read off the in-band result — plus "no
   // `init` yet this attempt": the failure comes at boot, before any init, so a
   // result from a session that really started is never taken for one.
+  // Never for a /compact run: it has no self-heal (see the catch).
   const resumeSelfHealDue = (message: Record<string, unknown>): boolean =>
+    !request.compact &&
     !attemptSessionId &&
     !resumeFallbackTried &&
     Boolean(options.resume) &&
@@ -510,8 +521,11 @@ export async function runClaudeAgent(
   // thinking-only turn. A steer accepted this run blocks the retry: a re-run
   // replays only the FIRST prompt, so the viewer's mid-turn message would be
   // silently lost (the CLI already consumed its uuid and ignores a re-send) —
-  // the same reasoning as backgroundTurnSeen.
+  // the same reasoning as backgroundTurnSeen. A /compact run never retries: an
+  // empty result with no text is its NORMAL outcome, and a re-run would
+  // compact the already-compacted fork again.
   const emptyTurnRetryDue = (): boolean =>
+    !request.compact &&
     !(
       assistantChunks.join("").trim() ||
       deltaChunks.join("").trim() ||
@@ -566,20 +580,35 @@ export async function runClaudeAgent(
       const queryPrompt = streaming
         ? buildHeldOpenQueryPrompt(
             promptText,
-            request.images ?? [],
+            promptImages,
             new Promise<void>((resolve) => {
               releaseHeldInput = resolve;
             }),
             steers,
           )
-        : request.images && request.images.length > 0
-          ? buildImageQueryPrompt(promptText, request.images)
+        : promptImages.length > 0
+          ? buildImageQueryPrompt(promptText, promptImages)
           : promptText;
 
       try {
         // Keep the Query handle (not just its iterator) so we can call the
         // getContextUsage() control method on it during the turn.
         const queryHandle = sdk.query({ prompt: queryPrompt, options });
+        // The PREFERRED occupancy source: the SDK's authoritative context usage,
+        // asked while the session is still live (the control channel answers
+        // until the result closes it) — keep the latest answer.
+        const captureContextUsage = async (): Promise<void> => {
+          try {
+            const cu = await queryHandle.getContextUsage?.();
+            const total = asNumber(cu?.totalTokens);
+            if (total > 0) {
+              contextUsage = { total, window: asNumber(cu?.maxTokens) };
+            }
+          } catch {
+            // Session closing or control unsupported on this backend — fall
+            // back to the contextTokens snapshot captured above.
+          }
+        };
         for await (const message of queryHandle) {
           if (!isRecord(message)) {
             continue;
@@ -619,12 +648,30 @@ export async function runClaudeAgent(
           // host keeps the latest one per persisted row. Emitted here, not in
           // the shared dispatcher, because only a LOCAL transcript can be
           // resumed — the gateway runner must never produce one.
-          if (dispatched.kind === "assistant" && dispatched.mainAssistant) {
+          //
+          // A native /compact run streams NO assistant message at all: its
+          // chain entries are the compact_boundary and the user messages after
+          // it (the summary, then the local-command-stdout — spike-verified as
+          // entries of the fork's transcript). In compact mode ONLY those are
+          // resume points too, the latest winning, and each is also where the
+          // post-compaction occupancy can be read for the context badge.
+          const compactChainEntry =
+            Boolean(request.compact) &&
+            !asString(message.parent_tool_use_id) &&
+            (message.type === "user" ||
+              (message.type === "system" && message.subtype === "compact_boundary"));
+          if (
+            (dispatched.kind === "assistant" && dispatched.mainAssistant) ||
+            compactChainEntry
+          ) {
             const uuid = asString(message.uuid);
             const sessionId = asString(message.session_id) || attemptSessionId;
             if (uuid && sessionId) {
               events?.onResumePoint?.({ sessionId, uuid });
             }
+          }
+          if (compactChainEntry && streaming) {
+            await captureContextUsage();
           }
           if (dispatched.delta) {
             deltaChunks.push(dispatched.delta);
@@ -654,16 +701,7 @@ export async function runClaudeAgent(
             // Streaming chat only (control methods need the live streaming
             // session); headless/non-streaming turns keep the scraped fallback.
             if (streaming && dispatched.mainAssistant) {
-              try {
-                const cu = await queryHandle.getContextUsage?.();
-                const total = asNumber(cu?.totalTokens);
-                if (total > 0) {
-                  contextUsage = { total, window: asNumber(cu?.maxTokens) };
-                }
-              } catch {
-                // Session closing or control unsupported on this backend — fall
-                // back to the contextTokens snapshot captured above.
-              }
+              await captureContextUsage();
             }
           }
 
@@ -787,7 +825,10 @@ export async function runClaudeAgent(
         // persists in place of the dangling one — so the next turn resumes cleanly.
         // A rewind's cut point and fork ride `resume` and go with it: the retry is
         // a plain fresh session over the KEPT history the route passed in.
+        // A /compact run is EXCLUDED: /compact on a fresh session compacts
+        // nothing, so a missing session must surface as the run's error.
         if (
+          !request.compact &&
           !resumeFallbackTried &&
           options.resume &&
           !abortController?.signal.aborted &&
@@ -890,6 +931,14 @@ export async function runClaudeAgent(
     } else {
       runUsage = finalizeTurnUsage(runUsage, contextTokens);
     }
+  } else if (request.compact && contextUsage) {
+    // A /compact result carries no usage of its own, yet the post-compaction
+    // occupancy is exactly what the context badge must show next.
+    runUsage = {
+      inputTokens: contextUsage.total,
+      outputTokens: 0,
+      ...(contextUsage.window ? { contextWindow: contextUsage.window } : {}),
+    };
   }
 
   // Final sweep: a backend that emits no text deltas never hit the in-loop fold

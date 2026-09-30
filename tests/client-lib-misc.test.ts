@@ -26,6 +26,7 @@ import {
 import {
   SLASH_COMMANDS,
   commandsForPane,
+  isCompactCommandText,
   filterSlashCommands,
   menuCommandsForPane,
   resolveTypedSlashCommand,
@@ -495,6 +496,38 @@ describe("slash commands", () => {
     });
   });
 
+  it("offers /compact on every local avatar pane — the owner's and a colleague's — but never on an external one", () => {
+    const compact = commandsForPane(otherPane).find((c) => c.name === "compact");
+    expect(compact).toMatchObject({
+      title: "대화 맥락 정리",
+      argsLabel: "남길 내용",
+      description: "지금까지의 대화를 요약해 컨텍스트를 줄입니다. 뒤에 적은 내용은 요약에 꼭 남길 것으로 전달됩니다.",
+    });
+    // Optional args: "/compact" alone is a complete command, sent as the literal.
+    expect(compact?.requiresArgs).toBeFalsy();
+    expect(compact?.ownerOnly).toBeFalsy();
+    expect(commandsForPane(ownPane).map((c) => c.name)).toContain("compact");
+    expect(resolveTypedSlashCommand(otherPane, "/compact  결정 사항은 남겨줘 ")).toMatchObject({
+      command: { name: "compact" },
+      args: "결정 사항은 남겨줘",
+    });
+    // The gateway behind an external avatar has no such command.
+    const externalPane = { avatar: { id: "external:gw", isOwn: false, runtime: "external" } } as any;
+    expect(commandsForPane(externalPane).map((c) => c.name)).not.toContain("compact");
+    expect(commandsForPane(externalPane).map((c) => c.name)).toContain("summarize");
+    expect(resolveTypedSlashCommand(externalPane, "/compact")).toBeNull();
+  });
+
+  it("recognizes the /compact text itself, with or without what to keep", () => {
+    expect(isCompactCommandText("/compact")).toBe(true);
+    expect(isCompactCommandText("  /compact 결정 사항은 남겨줘")).toBe(true);
+    expect(isCompactCommandText("/COMPACT")).toBe(true);
+    expect(isCompactCommandText("/compactify")).toBe(false);
+    expect(isCompactCommandText("compact")).toBe(false);
+    expect(isCompactCommandText("요약해줘 /compact")).toBe(false);
+    expect(isCompactCommandText(undefined)).toBe(false);
+  });
+
   it("resolves a typed slash command with trimmed args, rejecting //, unknown, and non-slash text", () => {
     expect(resolveTypedSlashCommand(ownPane, "/new")).toMatchObject({ command: { name: "new" }, args: "" });
     expect(resolveTypedSlashCommand(ownPane, "/remember   기억할 것  ")).toMatchObject({
@@ -524,8 +557,10 @@ describe("slash commands", () => {
 
   it("filterSlashCommands matches across name/title/description/source and returns all on empty query", () => {
     expect(filterSlashCommands(SLASH_COMMANDS, "")).toBe(SLASH_COMMANDS);
+    // "요약" is /summarize's title AND part of /compact's description.
     const byTitle = filterSlashCommands(SLASH_COMMANDS, "요약");
-    expect(byTitle.map((c) => c.name)).toEqual(["summarize"]);
+    expect(byTitle.map((c) => c.name)).toEqual(["summarize", "compact"]);
+    expect(filterSlashCommands(SLASH_COMMANDS, "맥락 정리").map((c) => c.name)).toEqual(["compact"]);
   });
 });
 

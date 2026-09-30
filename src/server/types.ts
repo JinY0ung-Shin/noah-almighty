@@ -1560,6 +1560,16 @@ export interface AgentRequest {
    */
   rewind?: AgentRewindInfo;
   /**
+   * This turn is the viewer's native `/compact [instructions]`: the CLI's own
+   * slash command is sent VERBATIM as the prompt (no buildUserPrompt wrapper,
+   * no history) against a FORK of the conversation's session (runPlan sets
+   * `forkSession: true`), so the source transcript — and every older row's
+   * rewind point in it — stays uncompacted. The CLI summarizes the history and
+   * answers with no assistant text; the chat route composes the Korean bubble
+   * from the compact event. Interactive local chat turns only.
+   */
+  compact?: { instructions: string };
+  /**
    * True when the viewer can send ADDITIONAL user messages while this turn is
    * still running (an interactive streaming chat with a live steer channel —
    * see `agent/steerChannel.ts`). Such a message reaches the model between

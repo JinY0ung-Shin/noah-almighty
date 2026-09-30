@@ -526,6 +526,17 @@ describe("ChatView transcript · 여기서부터 다시", () => {
     expect(container.querySelector(".thinking-card-body")?.textContent).toContain(THINKING);
   });
 
+  it("hides 다시 생성 on a /compact turn but keeps its row editable", () => {
+    replaceState({
+      avatars: [],
+      chatPanes: [pane([userRow("u-c", "/compact 결정 사항은 남겨줘"), assistantMessage()])],
+      activePaneId: "pane-1",
+    });
+    const { container } = render(ChatView);
+    expect(container.querySelector('button[aria-label="다시 생성"]')).toBeNull();
+    expect(editButtons(container)).toHaveLength(1);
+  });
+
   it("hides 다시 생성 when the latest turn opener was queued behind another run", () => {
     replaceState({ avatars: [], chatPanes: [pane([userRow("u-q", "대기열 메시지", "queued"), assistantMessage()])], activePaneId: "pane-1" });
     const first = render(ChatView);

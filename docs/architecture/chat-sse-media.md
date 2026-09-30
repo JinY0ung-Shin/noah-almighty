@@ -104,6 +104,29 @@
   **Gated on the sink:** with no `onTextFold` (headless routines, `POST /api/chat`) the runners fold
   nothing and keep the legacy full join — the `AgentEvents` no-sink contract. Attachment anchors are
   therefore TAIL-relative on both sides (`currentTextAnchor` slices from the fold index).
+- **Native `/compact` compacts a FORK, never the conversation's own transcript.** The literal
+  `/compact [what to keep]` is the whole SDK prompt (see [`agent-misc.md`](agent-misc.md) — the one native
+  slash command). The run resumes the stored session with `forkSession: true` (runPlan), so the source file
+  stays byte-identical and every older row's rewind point in it stays reachable: rewinding past a manual
+  compaction is still exact. Live-verified 2026-09-30 on CLI 2.1.283 — a tool-only value was recalled after
+  rewinding to before the compaction.
+  - **The stream:** `init` → `compact_boundary` (`compact_metadata {trigger:"manual", pre_tokens,
+    post_tokens}` → `CompactEvent.preTokens`/`postTokens`) → a `user` summary → a `user`
+    `<local-command-stdout>` → `result:success` with NO assistant text.
+  - **What the run does with it:** the chat route composes the Korean bubble from the compact event
+    (`대화 맥락을 요약해 정리했습니다 (약 A → B 토큰)…` / `맥락 정리에 실패했습니다…`). Compact mode emits resume
+    points for those chain entries (the last wins), because the run has no assistant message. Usage comes from
+    `getContextUsage` taken after them, so the badge drops.
+  - **Only a SUCCESSFUL compaction moves the conversation:** fork session id + resume point persisted, and
+    cancel/error paths keep the old session.
+  - **Gates:**
+    - no empty-turn retry and no self-heal (a fresh session has nothing to compact);
+    - no steer channel, and a `/compact` steer is refused (it would run mid-turn in the CLI);
+    - refused with no SDK session yet, for external avatars, with images, as an edit's new text, on
+      regenerate of a `/compact` row, and in a busy bot thread (never queued);
+    - bot threads skip the bot-task bookkeeping.
+  - **Rewind interplay:** an edit OF a `/compact` row into ordinary text is a normal rewind — its kept history
+    ends before the compaction, in the untouched source.
 - **Tool permissions go through one gate:** the `PreToolUse` hook (`buildPreToolUseHook`). `onUserDialog`
   is unused. **`canUseTool` is wired as a CONFIRMER only (`buildCanUseToolSafetyNet` + the run's
   `HookApprovalLedger`).** Measured 2026-09-27 on CLIs 2.1.185–2.1.283:

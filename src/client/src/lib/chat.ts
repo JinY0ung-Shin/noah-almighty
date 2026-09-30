@@ -16,7 +16,7 @@ import {
   type BridgeOperation,
   type BridgeReply,
 } from "./browserBridge";
-import { resolveTypedSlashCommand } from "./slash";
+import { isCompactCommandText, resolveTypedSlashCommand } from "./slash";
 import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
 import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
 import {
@@ -753,9 +753,14 @@ function lastTurnOpenerIndex(messages: StoredMessage[]): number {
   return -1;
 }
 
-/** Whether 다시 생성 can re-run the latest turn — its opener exists and was not queued. */
+/**
+ * Whether 다시 생성 can re-run the latest turn — its opener exists, was not queued,
+ * and is not a `/compact` (re-running a compaction is refused server-side; the
+ * row can still be EDITED into an ordinary message).
+ */
 export function canRegenerate(messages: StoredMessage[]): boolean {
-  return isRewindAnchor(messages[lastTurnOpenerIndex(messages)]);
+  const anchor = messages[lastTurnOpenerIndex(messages)];
+  return isRewindAnchor(anchor) && !isCompactCommandText(anchor?.content);
 }
 
 /**
@@ -1431,6 +1436,12 @@ export async function sendSteer(paneId: string, rawText: string): Promise<void> 
   if (pane.avatar?.runtime === "external") return;
   const message = rawText.trim();
   if (!message) return;
+  // /compact is a command of its own turn: mid-run it would reach the CLI's stdin
+  // and run inside the turn. Refused before the draft is touched, so it stays put.
+  if (isCompactCommandText(message)) {
+    notify("/compact는 응답이 끝난 뒤에 보내 주세요.", "warn");
+    return;
+  }
   const runId = pane.liveRunId;
   updatePane(paneId, (target) => {
     target.draft = "";
@@ -2350,12 +2361,21 @@ function handleCompact(paneId: string, data: any): void {
   const trigger =
     data?.trigger === "auto" ? "자동 요약" : data?.trigger === "manual" ? "수동 요약" : "";
   const preTokens = Number(data?.preTokens) || 0;
+  const postTokens = Number(data?.postTokens) || 0;
+  // Before → after when both sizes are known (a /compact reports both, and so
+  // does an automatic compaction on CLIs that send post_tokens).
+  const size =
+    preTokens > 0 && postTokens > 0
+      ? `이전 맥락 약 ${formatTokenCount(preTokens)}토큰 → ${formatTokenCount(postTokens)}토큰`
+      : preTokens > 0
+        ? `이전 맥락 약 ${formatTokenCount(preTokens)}토큰`
+        : postTokens > 0
+          ? `정리 후 약 ${formatTokenCount(postTokens)}토큰`
+          : "";
   // `error` is the SDK's English detail — a detail, never the row's label.
   const detail = failed
     ? String(data?.error || "").trim().slice(0, 400)
-    : [trigger, preTokens > 0 ? `이전 맥락 약 ${formatTokenCount(preTokens)}토큰` : ""]
-        .filter(Boolean)
-        .join(" · ");
+    : [trigger, size].filter(Boolean).join(" · ");
   markTextBreak(paneId);
   ensureAgent(paneId, "main");
   updatePane(paneId, (pane) => {

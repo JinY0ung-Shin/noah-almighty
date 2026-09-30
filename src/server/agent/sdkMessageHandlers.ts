@@ -1045,10 +1045,14 @@ export function handleSystemEvent(message: Record<string, unknown>, events: Agen
     const metadata = isRecord(message.compact_metadata) ? message.compact_metadata : undefined;
     const trigger = asString(metadata?.trigger);
     const preTokens = asNumber(metadata?.pre_tokens);
+    // What the summary left of the conversation — the other half of the
+    // "before → after" a native /compact reports (auto compactions carry it too).
+    const postTokens = asNumber(metadata?.post_tokens);
     events.onCompact?.({
       ok: true,
       trigger: trigger === "auto" || trigger === "manual" ? trigger : undefined,
       preTokens: preTokens > 0 ? preTokens : undefined,
+      postTokens: postTokens > 0 ? postTokens : undefined,
     });
     return;
   }

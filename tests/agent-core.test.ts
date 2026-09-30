@@ -2511,10 +2511,12 @@ describe("sdk message handlers", () => {
       state,
     );
 
+    // An AUTO compaction carries the "after" half too, not just a manual /compact.
     expect(sink.onCompact).toHaveBeenCalledWith({
       ok: true,
       trigger: "auto",
       preTokens: 152_000,
+      postTokens: 21_000,
     });
   });
 
@@ -2524,7 +2526,10 @@ describe("sdk message handlers", () => {
 
     handleSystemEvent({ subtype: "compact_boundary" }, sink, state);
     handleSystemEvent(
-      { subtype: "compact_boundary", compact_metadata: { trigger: "누구세요", pre_tokens: "많음" } },
+      {
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "누구세요", pre_tokens: "많음", post_tokens: 0 },
+      },
       sink,
       state,
     );
@@ -2533,11 +2538,14 @@ describe("sdk message handlers", () => {
       ok: true,
       trigger: undefined,
       preTokens: undefined,
+      postTokens: undefined,
     });
+    // A zero/garbage count is "unknown", never a claimed empty context.
     expect(sink.onCompact).toHaveBeenNthCalledWith(2, {
       ok: true,
       trigger: undefined,
       preTokens: undefined,
+      postTokens: undefined,
     });
   });
 

@@ -329,6 +329,8 @@ export interface CompactEvent {
   ok: boolean;
   trigger?: "auto" | "manual";
   preTokens?: number;
+  /** Conversation tokens left after the summary (`compact_metadata.post_tokens`). */
+  postTokens?: number;
   /** SDK English error detail (diagnostic; client shows it as detail, never the row label). */
   error?: string;
 }

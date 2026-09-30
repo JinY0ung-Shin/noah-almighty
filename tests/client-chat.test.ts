@@ -1686,6 +1686,17 @@ describe("stream events applied to a pane", () => {
     expect(pane(id).liveAgents.map((a) => a.id)).toEqual(["main"]);
   });
 
+  it("a compaction that reports its result size shows before → after", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      ["compact", { id: "cmp-a", ok: true, trigger: "manual", preTokens: 18_049, postTokens: 1_378 }],
+      ["compact", { id: "cmp-b", ok: true, trigger: "auto", postTokens: 920 }],
+    ]);
+    const rows = pane(id).liveTools;
+    expect(rows[0]).toMatchObject({ kind: "compact", detail: "수동 요약 · 이전 맥락 약 18.0K토큰 → 1.4K토큰", status: "done" });
+    expect(rows[1]).toMatchObject({ kind: "compact", detail: "자동 요약 · 정리 후 약 920토큰" });
+  });
+
   it("a failed compaction is a failed row carrying the SDK's English detail", async () => {
     const id = seedPane();
     await driveEvents(id, [
@@ -4137,5 +4148,68 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     await flush();
     await flush();
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "srv-new", "srv-new-a"]);
+  });
+});
+
+describe("/compact in the chat pane", () => {
+  it("sends /compact as its own turn — the literal, like every built-in", async () => {
+    const id = seedPane({ conversationId: "c", avatar: { id: "av1", alias: "노아", displayName: "Noah", isOwn: true } as any });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
+          ["compact", { id: "cmp", ok: true, trigger: "manual", preTokens: 18_049, postTokens: 1_378 }],
+          doneFrame("srv-a", "대화 맥락을 요약해 정리했습니다 (약 18.0K → 1.4K 토큰). 이후 대화는 요약본을 바탕으로 이어집니다."),
+        ]);
+      }
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await sendMessage(id, "/compact  결정 사항은 남겨줘");
+    expect(bodies[0].message).toBe("/compact 결정 사항은 남겨줘");
+    expect(pane(id).messages.map((m) => m.content)).toEqual([
+      "/compact 결정 사항은 남겨줘",
+      "대화 맥락을 요약해 정리했습니다 (약 18.0K → 1.4K 토큰). 이후 대화는 요약본을 바탕으로 이어집니다.",
+    ]);
+  });
+
+  it("never sends /compact as a mid-turn message: the text stays and a toast says when", async () => {
+    const id = seedPane({ streaming: true, liveRunId: "run-live", draft: "/compact 결정 사항은 남겨줘" });
+    const fetchFn = noFetch();
+    for (const text of ["/compact", "/compact 결정 사항은 남겨줘", "  /COMPACT  "]) {
+      await sendSteer(id, text);
+    }
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).draft).toBe("/compact 결정 사항은 남겨줘");
+    expect(pane(id).steerSending).toBeFalsy();
+    expect(get(toasts).some((t) => t.message === "/compact는 응답이 끝난 뒤에 보내 주세요.")).toBe(true);
+  });
+
+  it("still sends a steer that merely starts with the letters", async () => {
+    const id = seedPane({ streaming: true, liveRunId: "run-live" });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/runs/run-live/message") {
+        bodies.push(body(init));
+        return jsonRes({ steer: { id: "s1", text: "/compactify 로 이름 바꿔줘", state: "queued", createdAt: "t", followUp: false } });
+      }
+      return undefined;
+    });
+    await sendSteer(id, "/compactify 로 이름 바꿔줘");
+    expect(bodies).toEqual([{ message: "/compactify 로 이름 바꿔줘" }]);
+  });
+
+  it("offers no 다시 생성 for a /compact turn, but its row can still be edited", () => {
+    const messages = [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "/compact 결정 사항은 남겨줘"), row("a2", "assistant", "대화 맥락을 요약해 정리했습니다.")];
+    expect(canRegenerate(messages)).toBe(false);
+    expect(isRewindAnchor(messages[2])).toBe(true);
+    const id = seedPane({ messages });
+    const fetchFn = noFetch();
+    regenerate(id);
+    expect(fetchFn).not.toHaveBeenCalled();
+    startRewindEdit(id, "u2");
+    expect(pane(id).rewindEdit).toEqual({ messageId: "u2", draft: "/compact 결정 사항은 남겨줘" });
   });
 });
