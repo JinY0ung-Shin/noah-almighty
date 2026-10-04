@@ -209,6 +209,47 @@ chart / another placeholder inside a slot, the attribute on `main.slide`, a repl
 text, `display: contents` or a table part, or inside a table / chart / picture). The prompt joins the glyph check
 (`extract.mjs` `textsOf`).
 
+**Text on pictures** (`inpage/55-text-on-picture.js`, converter 1.3.0) — `textOnPictureLint` runs in `extractImpl`
+right after the paint walk, on the finished element list (paint order, boxes, fills, IR opacities, line boxes, before
+the `_src` links are dropped), so the lint lands in `ir.lint` in check and build alike. A picture is an `<img>` image
+(`_src.localName`) or a photo slot; an inline `<svg>` is not. For each text element after a picture, each line box
+(its glyph content area; an outside list marker's advance included) that crosses a picture by > 1 px on both axes is
+cut into pieces at the edges of the pictures and fill shapes painted before the text (`tpcWalk`: exact cuts at the
+edges of regions axis-aligned with the text, halving along curved — roundRect, ellipse — or slanted edges, the centre
+deciding a last-pixel cell; pieces under 1 px ignored). Each piece is judged by the box of every composite over it
+(`tpcEnclose`): its covering layers composited in sRGB over the slide background with every picture pure black (`lo`)
+and pure white (`hi`) — every channel of the composite rises with the picture's, so these bound every photo — each
+channel at its extreme over the piece, a gradient's at the piece's corners and the stops between (`tpcFillRange`),
+and `thr` = the most of the picture showing through anywhere in it; a photo slot composites at opacity 1 whatever its
+CSS opacity (the photo PowerPoint inserts has no alpha). The box is exact where nothing that shows varies and under a
+single-hue ramp straight over an opaque picture (its box only narrows as its alpha grows); a piece under any other
+gradient is cut into slabs of at most 1/64 of that gradient's shortest stop segment, along the axis where it varies
+most (`tpcSlabs`, at most 256), each judged by its own box — stricter than exact by at most what the layers change
+across one slab, never more lenient. Opaque text fails when its luminance lies between the box's two ends (1:1), else
+against the nearer one — exact. Translucent text (run alpha × element opacity) is blended over the composite first;
+`tpcWorstRatio` searches the whole box, each channel independently between `lo` and `hi`: luminance is a sum of
+per-channel terms, so the text's lead over the composite spans the sum of per-channel extremes (a range that can hold
+0 = 1:1) and the smallest ratio comes from Dinkelbach's iteration over per-channel minima on a 256-step grid; the
+grid's result is lowered by M·h²/8 (M = `TPC_LIN2` × the term's weights, h = the step) over the box's smallest
+denominator, so it is never above the true worst and at most about 0.03 % below it (checked against a 4096-step
+search). Runs of one colour are judged once per line, a repeated translucent search is memoised per element, and an
+element stops at its first 1:1 line. A piece whose picture shows through by < 0.5/255 (an opaque card) is not on the
+picture. The work is counted in deterministic units of about a microsecond (`TPC_ELEMENT_WORK` 2^19 per element,
+`TPC_SLIDE_WORK` 2^20 per slide, spent in paint order but never taking a text's first `TPC_ELEMENT_FLOOR` 2^10, so a
+caption after a busy part of the slide is still searched exactly); past either, `tpcWalk` no longer halves along
+curved or slanted edges (`maybe` = the regions covering part of a piece, which `tpcEnclose` counts as there and not
+there; twice past, it stops cutting altogether), `tpcSlabs` gives one slab, and translucent text takes
+`tpcBoundRatio` (the blended text over the box's corners) — each only ever stricter; the finding's `bounded` makes
+the message say `or better (a safe bound, not the exact value: …)` and what to simplify, and its `boundBy` which
+budget ran out: the text's own (too many shapes overlap it) or the slide's (the texts painted before it used it up).
+The worst point of the element below 4.5:1 (3:1 when every visible run is ≥ 24 px, or ≥ 18.66 px at weight ≥ 700) is
+one `text-on-picture` error on the text's DOM path; its message names the text, the picture, the ratio, the
+threshold, why (the line on the bare picture, or the share of the picture the layers between still let through, and a
+translucent text colour) and the fix (a scrim, an opaque card, or the text moved off the picture — AUTHORING §7).
+Text inside a photo slot never reaches the list (the slot is atomic); table cells and chart labels are not checked.
+Pure but for `textOnPictureLint` (`tpcFindings`, `tpcMessage`, `tpcWorstRatio`, `tpcBoundRatio`: evaluated in the
+tests); a slide without a picture is never examined.
+
 **Structure hints** (docs/AUTHORING.md §12; the builder turns them into PowerPoint structure):
 - `placeholder` on a text element: `data-placeholder` (`title|ctrTitle|subTitle`, `none` = opt out), else `title`
   for the slide's first `<h1>` in paint order; a second title is a plain text box (`placeholder` warn).
@@ -256,7 +297,8 @@ Noah additions (errors): `script` (any `<script>` but `src="../lib/chart.js"` or
 `url()`), `csp-violation` (every `securitypolicyviolation`, with the blocked URI and directive), `dom-size` (more than
 2,500 elements under `main.slide`; the slide is then not extracted), `asset-too-large` (a served file over 20 MB),
 `image-too-large` (a picture over 40 MP, a slide's pictures over 100 MP, an unreadable picture size, or such a base64
-`data:` image in a deck HTML/CSS/SVG);
+`data:` image in a deck HTML/CSS/SVG), `text-on-picture` (converter 1.3.0, "Text on pictures" below: a text element
+whose worst-case contrast over an `<img>` or a photo slot painted before it is under 4.5:1, 3:1 for large text);
 `deck.mjs` adds the pre-checks `slide-name`, `slide-count`, `slide-too-large`, `deck-too-large`, and the warning
 `theme-link` (a slide of a deck with a `deck.css` that does not link `../deck.css`, or links it before
 `../theme/base.css`: it renders the kit's default theme; read from the slide files by `tools/lib/deckfs.mjs`, report
@@ -320,5 +362,5 @@ converter: retry, then the log), any other face the deck's (`browser.mjs` `fontL
 (cmap coverage) · `extract/inpage/00-util.js` (colours, gradients, shadows, radii, matrices) · `05-document.js` (Noah's
 document lints) · `10-style.js` (box classification, flow
 items, stacking contexts) · `20-text.js` · `30-table.js` · `40-shapes.js` (shapes, images, SVG, charts) ·
-`45-placeholder.js` (photo slots) · `50-paint.js` (paint order, transforms, placement, CSS lint) · `60-fonts.js` ·
-`90-main.js` (`window.__pptx`).
+`45-placeholder.js` (photo slots) · `50-paint.js` (paint order, transforms, placement, CSS lint) ·
+`55-text-on-picture.js` (text over pictures) · `60-fonts.js` · `90-main.js` (`window.__pptx`).

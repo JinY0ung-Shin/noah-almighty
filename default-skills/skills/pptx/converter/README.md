@@ -12,7 +12,7 @@ folder inside the skill directory is refused.
 ## Layout
 
 ```
-VERSION                  1.2.0 — generator "noah-pptx-converter/<VERSION>" in every preview manifest
+VERSION                  1.3.0 — generator "noah-pptx-converter/<VERSION>" in every preview manifest
 requirements.txt         the pinned Python set (the image installs it through the pip mirror)
 docs/CONTRACT.md         the maintainers' contract (roots, isolation, runs, gates, previews, self-test, IR)
 fonts/                   vendored OFL fonts + licenses + fonts.json (GENERATED) — see fonts/README.md
@@ -31,7 +31,8 @@ tools/gates/             shape_table_lint.py, chart_verify.py, chart_lint.py, in
 tools/previews.py        1920x1080 previews + manifest (the attached 30 fitted into the server's 32 MiB), overview sheets
 tools/pdeathsig.py       Python children die with their parent
 selftest/deck/           the PoC's 4 slides (frozen), selftest/features/ (images, JPEG, deck.css, notes, soft wraps),
-                         selftest/golden/*.ir.json, selftest/tools/make_assets.py (asset provenance)
+                         selftest/golden/*.ir.json, selftest/tools/make_assets.py (asset provenance: the self-test's
+                         features assets, and with --visual the examples/visual deck's photo and screen captures)
 ```
 
 ## Commands
@@ -55,6 +56,12 @@ NOAH_PPTX_E2E=1 npx vitest run tests/deck-converter.test.ts          # + the too
 
 Never build a deck inside this directory: copy `selftest/deck` or an example into a scratch folder first. Every
 command leaves nothing here (`tests/deck-converter.test.ts` asserts an unchanged tree hash and no `__pycache__`).
+
+The in-page code runs inside each slide's 60 s evaluate window (`EVALUATE_TIMEOUT_MS`), so an in-page lint that
+searches must bound its own work: `text-on-picture` counts deterministic work units (2^19 per text element, 2^20 per
+slide, about a microsecond each; the slide's budget never takes a text's first 2^10, so a late caption is still
+searched exactly) and past them takes only cheaper bounds that are never more lenient, flagging the finding as a safe
+bound — even a slide at the DOM cap costs a few seconds, never a timeout (`docs/CONTRACT.md` "Noah lints").
 
 ## Updating fonts
 
@@ -83,6 +90,7 @@ matches what was verified.
 
 `VERSION` is the converter's output version (`generator` in manifests, `converterVersion` in probe and record).
 Bump it whenever the output changes (extractor measurement, builder XML, fonts, component kit), together with the
-goldens — or, for a change that only adds input a frozen deck does not use, with a CONTRACT "Version" note saying the
-goldens still match (1.2.0: photo slots, `data-placeholder="pic"`). A PoC-equivalence reference: the frozen `selftest/deck` IR is numerically identical to the PoC's IR, and its
+goldens — or, for a change that only adds input a frozen deck does not use or only rejects input it never had, with a
+CONTRACT "Version" note saying the goldens still match (1.2.0: photo slots, `data-placeholder="pic"`; 1.3.0: the
+`text-on-picture` error — text over an `<img>` or a photo slot needs a scrim, a card or another place). A PoC-equivalence reference: the frozen `selftest/deck` IR is numerically identical to the PoC's IR, and its
 decks are part-for-part identical to the PoC's except `docProps/core.xml` and the embedded chart workbook.

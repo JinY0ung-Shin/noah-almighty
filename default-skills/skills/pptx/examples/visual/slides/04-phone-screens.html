@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>04 모바일 화면 · 2026년 고객 포털 개편 결과 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Before / after phone screens: each phone is a bezel drawn from shapes — a rounded box in brand-950 (dark in every
+     theme) with a 1 px ink-300 edge, so it still shows on midnight's dark page, and a camera dot — around the capture
+     itself as its screen. The captures keep their pixels and their aspect: 750 x 1500 shown at 182 x 364 (0.5), inside
+     8 px of bezel: 182 + 2 x 8 + 2 x 1 = 200 x 382 px (y 200-582); the screen's 24 px corners follow the bezel's 32 px
+     (32 - 8). The labels go under the phones, never on the screens, and the figures that prove the title sit in the
+     card beside them: two bars per metric on the metric's own scale (the larger value = the full 360 px track), each
+     value after its bar — drawn bars, so their data-group names say they are resized by hand. */
+  .phone { position: absolute; top: 200px; width: 200px; height: 382px; padding: 8px; border-radius: 32px;
+           border: 1px solid var(--c-ink-300); background: var(--c-brand-950); }
+  .phone-a { left: var(--margin-x); }
+  .phone-b { left: 344px; }
+  .screen { display: block; width: 182px; height: 364px; border-radius: 24px; object-fit: contain; }
+  .camera { position: absolute; left: 94px; top: 18px; width: 10px; height: 10px; border-radius: 50%;
+            background: var(--c-brand-950); }
+  /* the step between the phones: a surface circle on the gap's centre, (280 + 344) / 2 = 312, and the phones' middle */
+  .step { position: absolute; left: 292px; top: 371px; width: 40px; height: 40px; border-radius: 50%;
+          background: var(--c-surface); border: 1px solid var(--c-ink-200); color: var(--c-brand-600);
+          display: flex; align-items: center; justify-content: center; }
+  .phone-label { position: absolute; top: 600px; width: 200px; text-align: center;
+                 font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 600; color: var(--c-ink-600); }
+  .phone-label.is-after { color: var(--c-brand-700); font-weight: 700; }
+  .label-a { left: var(--margin-x); }
+  .label-b { left: 344px; }
+
+  .results { position: absolute; left: 600px; top: 200px; width: 600px; height: 424px; padding: var(--sp-4);
+             display: flex; flex-direction: column; }
+  .metric { margin-top: var(--sp-4); }
+  .metric-head { display: flex; align-items: center; justify-content: space-between; }
+  .metric-name { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-ink-900); }
+  .bar-row { margin-top: 12px; display: flex; align-items: center; gap: var(--sp-2); }
+  .bar-label { flex: none; width: 40px; font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--c-ink-500); }
+  .bar-track { flex: none; width: 360px; height: 16px; }
+  .bar-fill { height: 16px; border-radius: 8px; background: var(--c-series-prev); }
+  .bar-fill.is-after { background: var(--c-brand-600); }
+  .bar-value { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-ink-900); white-space: nowrap; }
+  .results-foot { margin-top: auto; padding-top: var(--sp-2); border-top: 1px solid var(--c-ink-100); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">03</span> 모바일 신청</p>
+    <h1 class="slide-title">신청 단계를 5단계에서 2단계로 줄였습니다</h1>
+    <p class="slide-sub">9월 16일 개편 뒤 4주 동안, 신청을 끝까지 마친 고객이 <strong>58%에서 81%로</strong> 늘었습니다</p>
+  </header>
+
+  <div class="phone phone-a" data-group="휴대폰 화면 — 이전">
+    <img class="screen" src="../assets/capture-phone-before.png" alt="이전 신청 화면: 1/5 단계, 빈 입력칸 여섯 개 (합성 이미지)">
+    <div class="camera"></div>
+  </div>
+  <div class="step"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></div>
+  <div class="phone phone-b" data-group="휴대폰 화면 — 이후">
+    <img class="screen" src="../assets/capture-phone-after.png" alt="새 신청 화면: 1/2 단계, 로그인 정보로 미리 채운 신청서 (합성 이미지)">
+    <div class="camera"></div>
+  </div>
+  <p class="phone-label label-a">이전 · 5단계</p>
+  <p class="phone-label label-b is-after">이후 · 2단계</p>
+
+  <section class="card results">
+    <p class="card-title">개편 전후 4주 비교</p>
+    <p class="card-sub">8월 19일~9월 15일 대 9월 16일~10월 13일, 신청 화면을 연 고객 기준</p>
+    <div class="metric">
+      <div class="metric-head"><p class="metric-name">신청 완료율</p><p class="pill pill--up">+23%p</p></div>
+      <div class="bars" data-group="비교 막대 — 이전 58% · 이후 81% (수치 수정 시 길이 직접 조정)">
+        <div class="bar-row"><p class="bar-label">이전</p><div class="bar-track"><div class="bar-fill" style="width: 71.6%"></div></div><p class="bar-value">58%</p></div>
+        <div class="bar-row"><p class="bar-label">이후</p><div class="bar-track"><div class="bar-fill is-after" style="width: 100%"></div></div><p class="bar-value">81%</p></div>
+      </div>
+    </div>
+    <div class="metric">
+      <div class="metric-head"><p class="metric-name">평균 입력 시간</p><p class="pill pill--up">2분 40초 단축</p></div>
+      <div class="bars" data-group="비교 막대 — 이전 4분 10초 · 이후 1분 30초 (수치 수정 시 길이 직접 조정)">
+        <div class="bar-row"><p class="bar-label">이전</p><div class="bar-track"><div class="bar-fill" style="width: 100%"></div></div><p class="bar-value">4분 10초</p></div>
+        <div class="bar-row"><p class="bar-label">이후</p><div class="bar-track"><div class="bar-fill is-after" style="width: 36%"></div></div><p class="bar-value">1분 30초</p></div>
+      </div>
+    </div>
+    <p class="caption results-foot">완료율 = 신청을 끝낸 고객 ÷ 신청 화면을 연 고객</p>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 고객 포털 개편 결과 보고</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치와 합성 화면</p>
+      <p class="page-num" data-field="slidenum">4</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+왼쪽이 예전 신청 화면, 오른쪽이 새 화면입니다.
+예전에는 빈칸 여섯 개로 시작해 다섯 단계를 거쳤지만, 이제는 로그인 정보로 미리 채우고 두 단계면 끝납니다.
+9월 16일 개편 뒤 4주 동안 신청을 끝까지 마친 고객이 58%에서 81%로 늘었고, 입력 시간은 평균 4분 10초에서 1분 30초로 줄었습니다.
+마지막으로 다음 일정을 말씀드리겠습니다. (약 1분)
+</template>
+</body>
+</html>

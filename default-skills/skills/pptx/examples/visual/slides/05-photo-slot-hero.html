@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>05 사진 자리 맺음 · 2026년 고객 포털 개편 결과 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* A template for a photo the user adds later: a full-bleed PHOTO SLOT (PowerPoint's empty picture placeholder,
+     square corners, its own data-layout) with the scrim and the text as SIBLINGS painted after it — never inside it:
+     everything inside a slot is an HTML-only hint the .pptx drops (AUTHORING §7). The slot's hint sits in its upper
+     part (padding-top), clear of the scrim, so the renders show what goes there.
+     The scrim band covers y 408-720 across the slide, every text line with room to spare. The arithmetic is the one
+     text-on-picture checks, for ANY photo the slot will hold (its worst pixel under white text is pure white):
+     brand-950 at 0.72 over white is lightest in forest, whose brand-950 is the lightest of the six themes (the
+     composite's luminance 0.108): white text 6.63:1 (classic 7.31, mono 8.24, editorial 7.34, midnight 8.62, violet
+     7.71; 4.5:1 needs >= 0.61 there), and white 80 % text, blended over that first, 4.95:1 (>= 75 % passes in
+     forest at 4.57:1; 74 % gives 4.4995:1 and fails, 72 % 4.36:1). No text is fainter than 80 %; the accent marks
+     the key date's dot, never text. */
+  main.slide.slot-hero { background: var(--c-brand-950); color: var(--c-white); }
+  .slot-hero .photo-slot { position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+                           justify-content: flex-start; padding-top: 152px; }
+  .scrim { position: absolute; left: 0; top: 408px; width: 1280px; height: 312px; background: var(--c-brand-950); opacity: 0.72; }
+
+  .kicker { position: absolute; left: var(--margin-x); top: 448px; font-size: 18px; line-height: 28px; font-weight: 700;
+            letter-spacing: var(--tracking-label); color: rgba(255, 255, 255, 0.80); }
+  /* 680 px: about 11 Hangul syllables per 60 px line in malgun, ending 40 px before the date rail */
+  .closing-title { position: absolute; left: var(--margin-x); top: 484px; width: 680px;
+                   font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 800;
+                   letter-spacing: var(--tracking-display); color: var(--c-white); }
+
+  /* the next three dates on a vertical rail (x 800), the key one — the switch every centre prepares for — in the
+     accent; the line runs from the first dot's centre to the last one's (y 10 to 138 inside the rail) */
+  .rail { position: absolute; left: 800px; top: 448px; width: 400px; height: 176px; }
+  .rail-line { position: absolute; left: 5px; top: 10px; width: 2px; height: 128px; background: rgba(255, 255, 255, 0.24); }
+  .rail-step { position: absolute; left: 0; width: 400px; }
+  .rail-dot { position: absolute; left: 0; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--c-white); }
+  .rail-step.is-key .rail-dot { background: var(--c-accent-500); }
+  .rail-date { margin-left: 28px; font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 600;
+               letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.80); }
+  .rail-name { margin-left: 28px; margin-top: 2px; font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-white); }
+  .s1 { top: 0; }
+  .s2 { top: 64px; }
+  .s3 { top: 128px; }
+
+  .closing-note { position: absolute; left: var(--margin-x); top: 680px; font-size: var(--fs-micro); line-height: var(--lh-micro);
+                  color: rgba(255, 255, 255, 0.80); }
+  .closing-page { position: absolute; left: 1168px; top: 680px; width: 32px; text-align: right;
+                  font-size: var(--fs-micro); line-height: var(--lh-micro); font-weight: 700; color: rgba(255, 255, 255, 0.80); }
+</style>
+</head>
+<body>
+<main class="slide slot-hero" data-layout="사진 맺음">
+  <div class="photo-slot" data-placeholder="pic" data-prompt="상담 센터 현장 사진을 넣으세요 (가로 사진)">
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+    <p class="photo-slot-hint">상담 센터 현장 사진을 넣으세요 (가로 사진)</p>
+  </div>
+  <div class="scrim"></div>
+
+  <p class="kicker">다음 단계</p>
+  <h1 class="closing-title">11월부터 모든 센터에서<br>새 화면을 씁니다</h1>
+
+  <div class="rail" data-group="일정 — 10월 23일 교육 완료 · 11월 2일 전환 · 11월 27일 점검">
+    <div class="rail-line"></div>
+    <div class="rail-step s1"><div class="rail-dot"></div><p class="rail-date">10월 23일</p><p class="rail-name">센터별 교육 완료</p></div>
+    <div class="rail-step s2 is-key"><div class="rail-dot"></div><p class="rail-date">11월 2일</p><p class="rail-name">모든 센터 새 화면 전환</p></div>
+    <div class="rail-step s3"><div class="rail-dot"></div><p class="rail-date">11월 27일</p><p class="rail-name">첫 달 결과 점검</p></div>
+  </div>
+
+  <p class="closing-note">샘플 데이터 · 사진 자리와 기업명, 일정은 모두 가상으로 만든 예시입니다</p>
+  <p class="closing-page" data-field="slidenum">5</p>
+</main>
+<template id="notes">
+11월 2일 월요일부터 모든 상담 센터가 새 화면으로 일합니다.
+그 전에 10월 23일까지 센터별 교육을 마치고, 11월 27일에 첫 달 결과를 점검해 다시 보고드리겠습니다.
+센터에서 불편한 점이 보이면 고객경험팀으로 바로 알려 주십시오. (약 30초)
+</template>
+</body>
+</html>

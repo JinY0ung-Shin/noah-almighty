@@ -317,7 +317,7 @@ describe("deck converter CLI (toolchain-free)", () => {
   it("probe --json follows the probe contract; a missing Chromium is a fact, never an install command", () => {
     const r = deck(["probe", "--json"]);
     const p = JSON.parse(r.stdout);
-    expect(p).toMatchObject({ format: "noah-deck-probe", version: 1, converterVersion: "1.2.0" });
+    expect(p).toMatchObject({ format: "noah-deck-probe", version: 1, converterVersion: "1.3.0" });
     expect(typeof p.converter).toBe("boolean");
     expect(r.code).toBe(p.converter ? 0 : 4);
     for (const k of ["chromium", "playwrightCore", "python", "fonts", "profiles", "limits", "selftest", "missing"]) expect(p).toHaveProperty(k);
@@ -616,6 +616,425 @@ describe("deck converter CLI (toolchain-free)", () => {
       expect(block, sel).toContain("color: var(--c-ink-600);");
       expect(block, sel).not.toContain("--c-ink-500");
     }
+  });
+
+  it("text-on-picture: text over an <img> or a photo slot keeps 4.5:1 (3:1 large) against ANY photo, through the layers painted between them", async () => {
+    type El = Record<string, unknown>;
+    type Finding = { el: El; ratio: number; need: number; large: boolean; line: number; picture: El; above: El[]; through: number; textAlpha: number; partly: boolean; bounded: boolean; boundBy: "element" | "slide" | null };
+    const T = inpage<{
+      tpcFindings: (els: El[], bg: El | null) => Finding[]; tpcMessage: (f: Finding) => string; TPC_NEED: number; TPC_NEED_LARGE: number;
+      tpcWorstRatio: (t: number[], a: number, lo: number[], hi: number[]) => number;
+      tpcBoundRatio: (t: number[], a: number, lo: number[], hi: number[]) => number;
+    }>(
+      ["tpcFindings", "tpcMessage", "TPC_NEED", "TPC_NEED_LARGE", "tpcWorstRatio", "tpcBoundRatio"],
+      ["00-util.js", "55-text-on-picture.js"],
+    );
+    expect([T.TPC_NEED, T.TPC_NEED_LARGE]).toEqual([4.5, 3]);
+    // independent WCAG arithmetic: sRGB compositing over the worst picture pixel (pure white under a dark scrim)
+    const rgb = (h: string) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+    const lin = (v: number) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    const lum = (c: number[]) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+    const cr = (a: number[], b: number[]) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const over = (c: number[], a: number, k: number[]) => c.map((v, i) => v * a + k[i] * (1 - a));
+    const WHITE = [1, 1, 1], BLACK = [0, 0, 0];
+    const CLASSIC_950 = "0A1433", FOREST_950 = "05241A"; // --c-brand-950 of the classic and forest themes
+    const whiteOn = (hex: string, a: number) => cr(WHITE, over(rgb(hex), a, WHITE));
+
+    const solid = (color: string, alpha = 1) => ({ type: "solid", color, alpha });
+    const photo = (extra: El = {}): El => ({ id: "main.slide > img.photo:nth-child(1)::image", kind: "image", box: { x: 0, y: 0, w: 1280, h: 720 }, rotationDeg: 0, opacity: 1, src: null, svg: null, alt: "", _src: { localName: "img" }, ...extra });
+    const slot = (extra: El = {}): El => ({ id: "#hero::placeholder", kind: "placeholder", box: { x: 0, y: 0, w: 1280, h: 720 }, rotationDeg: 0, opacity: 1, placeholder: "pic", prompt: "배경 사진을 넣으세요", slot: 0, ...extra });
+    const shape = (id: string, b: [number, number, number, number], fill: El, opacity = 1, extra: El = {}): El => ({
+      id: `main.slide > div.${id}:nth-child(2)::bg`, kind: "shape", box: { x: b[0], y: b[1], w: b[2], h: b[3] }, rotationDeg: 0, opacity, geometry: "rect", radiusPx: 0, fill, line: null, shadow: null, ...extra,
+    });
+    const scrim = (opacity: number, color = CLASSIC_950, b: [number, number, number, number] = [0, 0, 1280, 720]) => shape("scrim", b, solid(color), opacity);
+    type TextOpts = { x?: number; y?: number; w?: number; size?: number; weight?: number; color?: string; alpha?: number; opacity?: number; runs?: El[]; lines?: El[] };
+    const text = (t: string, o: TextOpts = {}): El => {
+      const { x = 80, y = 300, w = 520, size = 16, weight = 400, color = "FFFFFF", alpha = 1, opacity = 1 } = o;
+      return {
+        id: "main.slide > h1.hero:nth-child(3)::text", kind: "text", box: { x, y, w, h: 40 }, rotationDeg: 0, opacity,
+        paragraphs: [{ runs: o.runs ?? [{ text: t, sizePx: size, fontWeight: weight, color, alpha }], bullet: null, indentPx: 0 }],
+        lines: o.lines ?? [{ top: y, bottom: y + 24, left: x, right: x + w, text: t, paragraph: 0, hardBreak: false }],
+      };
+    };
+    const find = (els: El[]) => T.tpcFindings(els, solid("F4F6FA"));
+    const one = (els: El[]) => {
+      const f = find(els);
+      expect(f).toHaveLength(1);
+      return f[0];
+    };
+    const FIX = "fix: a scrim under the text (a dark token box, e.g. var(--c-brand-950) at opacity ≥ 0.72, under white text; or a light one under dark text), an opaque card, or move the text off the picture (AUTHORING §7)";
+
+    // a dark scrim: 0.72 passes (the worst photo pixel is pure white: 7.31:1), 0.3 fails — named with ratio, share and fix
+    expect(whiteOn(CLASSIC_950, 0.72)).toBeGreaterThan(7.3);
+    expect(find([photo(), scrim(0.72), text("사진 위 제목")])).toEqual([]);
+    const thin = one([photo(), scrim(0.3), text("사진 위 제목")]);
+    expect(thin).toMatchObject({ need: 4.5, large: false, line: 0, partly: false });
+    expect(thin.ratio).toBeCloseTo(whiteOn(CLASSIC_950, 0.3), 6);
+    expect(thin.through).toBeCloseTo(0.7, 6);
+    expect(T.tpcMessage(thin)).toBe(`its text ("사진 위 제목") is painted on the picture main.slide > img.photo:nth-child(1) at a worst-case contrast of ${Math.floor(whiteOn(CLASSIC_950, 0.3) * 100) / 100}:1, below the 4.5:1 it needs (3:1 only when every run is ≥ 24 px, or ≥ 18.66 px at weight ≥ 700) — the layer between them (main.slide > div.scrim:nth-child(2)) still lets 70 % of the picture through at the weakest point. A photo can put any colour behind text, pure white and pure black included; ${FIX}`);
+    // no layer at all: 1:1 (any photo has a pixel of the text's own colour)
+    const bare = one([photo(), text("막 없는 제목")]);
+    expect(bare.ratio).toBe(1);
+    expect(T.tpcMessage(bare)).toContain("at a worst-case contrast of 1:1, below the 4.5:1 it needs (3:1 only when every run is ≥ 24 px, or ≥ 18.66 px at weight ≥ 700) — it lies on the bare picture, with no layer between them.");
+    // dark text over the same bare photo is just as illegible: a light scrim fixes it
+    expect(one([photo(), text("어두운 글자", { color: "111A2E" })]).ratio).toBe(1);
+    expect(find([photo(), shape("light", [0, 0, 1280, 720], solid("FFFFFF"), 0.8), text("어두운 글자", { color: "111A2E" })])).toEqual([]);
+    // the number the message names is the kit's standard: a brand-950 scrim at 0.72 holds white AND 80 % white text in
+    // every shipped theme (read from the theme files), where 0.64 fails 80 % white text in four of them
+    const themeDir = path.join(SKILL, "themes");
+    const brand950 = Object.fromEntries(fs.readdirSync(themeDir).filter((f) => f.endsWith(".css")).sort().map((f) => {
+      const m = /--c-brand-950:\s*#([0-9A-Fa-f]{6})\b/.exec(fs.readFileSync(path.join(themeDir, f), "utf8"));
+      return [f.replace(/\.css$/, ""), m![1].toUpperCase()];
+    }));
+    expect(Object.keys(brand950)).toEqual(["classic", "editorial", "forest", "midnight", "mono", "violet"]);
+    const fails = (a: number, alpha: number) => Object.entries(brand950).filter(([, hex]) => find([photo(), scrim(a, hex), text("막 위 글자", { alpha })]).length).map(([t]) => t);
+    expect([fails(0.72, 1), fails(0.72, 0.8)]).toEqual([[], []]);
+    expect(fails(0.64, 0.8)).toEqual(["classic", "editorial", "forest", "violet"]);
+    expect(T.tpcMessage(bare)).toContain("at opacity ≥ 0.72, under white text");
+
+    // a gradient scrim is judged at the weakest corner of the covered box: to the right, alpha 1 → 0 across the slide
+    const fade = shape("fade", [0, 0, 1280, 720], { type: "linear", angleDeg: 90, stops: [{ pos: 0, color: CLASSIC_950, alpha: 1 }, { pos: 1, color: "000000", alpha: 0 }] });
+    const g = one([photo(), fade, text("그라데이션 위 제목", { x: 80, w: 520 })]);
+    expect(g.ratio).toBeCloseTo(whiteOn(CLASSIC_950, 1 - 600 / 1280), 6); // x = 600: the line's right end
+    expect(g.ratio).toBeLessThan(whiteOn(CLASSIC_950, 1 - 340 / 1280)); // weaker than at its centre
+    expect(g.through).toBeCloseTo(600 / 1280, 6);
+    expect(find([photo(), fade, text("왼쪽 짧은 제목", { x: 80, w: 120 })])).toEqual([]); // x ≤ 200: alpha ≥ 0.84
+    // a stop inside the box is its extreme: an opaque band 0–40 % that fades out by 60 %, then a stop back to 0.5 at 100 %
+    const bandFade = shape("fade", [0, 0, 1280, 720], {
+      type: "linear", angleDeg: 90,
+      stops: [{ pos: 0, color: CLASSIC_950, alpha: 1 }, { pos: 0.4, color: CLASSIC_950, alpha: 1 }, { pos: 0.6, color: CLASSIC_950, alpha: 0 }, { pos: 1, color: CLASSIC_950, alpha: 0.5 }],
+    });
+    const mid = one([photo(), bandFade, text("가운데를 지나는 줄", { x: 700, w: 400 })]); // 700–1100 spans the transparent stop at 768
+    expect(mid.ratio).toBe(1);
+    expect(mid.through).toBeCloseTo(1, 6);
+    // a ramp between DIFFERENT colours can be darker inside than at either end (sRGB interpolation): 80 % red → green
+    // over a black pixel leaves black display text 2.82:1 about a quarter of the way, while both ends of the covered
+    // span pass 3:1 — the line is judged in slabs of 1/64 of the ramp, each by the box of everything in it: never
+    // above the true worst, and stricter by at most what the ramp changes across one slab
+    const hue = shape("hue", [0, 0, 1280, 720], { type: "linear", angleDeg: 90, stops: [{ pos: 0, color: "FF0000", alpha: 0.8 }, { pos: 1, color: "00FF00", alpha: 0.8 }] });
+    const onRamp = (t: number, backdrop: number[]) => cr(BLACK, over([1 - t, t, 0], 0.8, backdrop)); // black text at ramp position t
+    const span = (f: (t: number) => number, t0: number, t1: number) => Math.min(...Array.from({ length: 2001 }, (_, i) => f(t0 + ((t1 - t0) * i) / 2000)));
+    const [t0, t1] = [80 / 1280, 1200 / 1280];
+    expect(Math.min(onRamp(t0, BLACK), onRamp(t1, BLACK))).toBeGreaterThan(3); // the corners alone would pass
+    const dip = one([photo(), hue, text("색이 바뀌는 막", { x: 80, w: 1120, size: 56, weight: 800, color: "000000" })]);
+    expect(dip).toMatchObject({ need: 3, large: true, bounded: false });
+    const trueDip = span((t) => onRamp(t, BLACK), t0, t1);
+    expect(trueDip).toBeCloseTo(2.82, 2);
+    expect(dip.ratio).toBeLessThanOrEqual(trueDip + 1e-9);
+    expect(dip.ratio).toBeGreaterThan(trueDip * 0.97);
+    // … and one colour fading in over ANOTHER coloured layer dips too: red 0 → 100 % over a 60 % green layer. The line
+    // spans t 0.35–0.95, so its corners and centre (t 0.65) pass 3:1 and only the inside (t ≈ 0.5) fails
+    const green = shape("green", [0, 0, 1280, 720], solid("00FF00"), 0.6);
+    const redIn = shape("redin", [0, 0, 1280, 720], { type: "linear", angleDeg: 90, stops: [{ pos: 0, color: "FF0000", alpha: 0 }, { pos: 1, color: "FF0000", alpha: 1 }] });
+    const overGreen = (t: number) => cr(BLACK, over([1, 0, 0], t, over([0, 1, 0], 0.6, BLACK)));
+    expect(Math.min(overGreen(0.35), overGreen(0.65), overGreen(0.95))).toBeGreaterThan(3);
+    const dip2 = one([photo(), green, redIn, text("초록 위 빨강", { x: 448, w: 768, size: 56, weight: 800, color: "000000" })]);
+    const trueDip2 = span(overGreen, 0.35, 0.95);
+    expect(trueDip2).toBeLessThan(3);
+    expect(dip2.ratio).toBeLessThanOrEqual(trueDip2 + 1e-9);
+    expect(dip2.ratio).toBeGreaterThan(trueDip2 * 0.97);
+    // a single-hue ramp straight over an opaque picture stays exact as a whole (the fades above): what it lets through
+    // only narrows as its alpha grows, so the box over the line is the box where its alpha is lowest
+
+    // partial coverage: the uncovered part of a line box is the bare picture
+    const half = one([photo(), scrim(0.9, CLASSIC_950, [0, 0, 400, 720]), text("절반만 덮인 줄")]);
+    expect(half).toMatchObject({ ratio: 1, partly: true });
+    expect(T.tpcMessage(half)).toContain("— part of it lies outside the layers above the picture, on the bare picture.");
+    // two scrims side by side cover it together (the line is cut at their edges); a sub-pixel seam is layout rounding
+    expect(find([photo(), scrim(0.9, CLASSIC_950, [0, 0, 400, 720]), scrim(0.9, CLASSIC_950, [400, 0, 880, 720]), text("나란한 두 막")])).toEqual([]);
+    expect(find([photo(), scrim(0.9, CLASSIC_950, [0, 0, 400, 720]), scrim(0.9, CLASSIC_950, [400.6, 0, 879.4, 720]), text("틈 0.6 px")])).toEqual([]);
+    expect(one([photo(), scrim(0.9, CLASSIC_950, [0, 0, 400, 720]), scrim(0.9, CLASSIC_950, [404, 0, 876, 720]), text("틈 4 px")]).ratio).toBe(1);
+    // several lines: the line that leaves the band is named
+    const band = scrim(0.9, CLASSIC_950, [0, 0, 1280, 330]);
+    const two = text("", {
+      runs: [{ text: "첫째 줄둘째 줄", sizePx: 16, fontWeight: 400, color: "FFFFFF", alpha: 1 }],
+      lines: [
+        { top: 300, bottom: 324, left: 80, right: 600, text: "첫째 줄", paragraph: 0, hardBreak: false },
+        { top: 340, bottom: 364, left: 80, right: 600, text: "둘째 줄", paragraph: 0, hardBreak: false },
+      ],
+    });
+    const second = one([photo(), band, two]);
+    expect(second).toMatchObject({ line: 1, ratio: 1, partly: false });
+    expect(T.tpcMessage(second)).toContain('— line 2 ("둘째 줄") lies on the bare picture, with no layer between them.');
+
+    // an opaque card hides the photo: the text on it is not on the picture (the self-test's features/01-photo)
+    const card = shape("card", [80, 200, 560, 330], solid("FFFFFF"), 1, { geometry: "roundRect", radiusPx: 20 });
+    expect(find([photo(), card, text("카드 위 글자", { x: 120, y: 300, w: 480, color: "111A2E" })])).toEqual([]);
+    // … but a line box that pokes into the card's rounded corner shows the bare picture there
+    const corner = one([photo(), card, text("모서리까지", { x: 82, y: 202, w: 300, color: "111A2E" })]);
+    expect(corner).toMatchObject({ ratio: 1, partly: true });
+    // an opaque marker circle holding a digit (a callout on a capture) hides it; a wider label sticks out of the circle
+    const marker = shape("marker", [100, 100, 40, 40], solid("2A52D9"), 1, { geometry: "ellipse" });
+    const digit = (l: number, r: number) => text("1", { lines: [{ top: 108, bottom: 132, left: l, right: r, text: "1", paragraph: 0, hardBreak: false }], size: 18, weight: 700 });
+    expect(find([photo(), marker, digit(115, 125)])).toEqual([]);
+    expect(one([photo(), marker, digit(98, 142)]).partly).toBe(true);
+    // a rotated scrim covers what its rotated box covers: a diamond around the line passes, a line through its tip fails
+    const diamond = shape("diamond", [300, 200, 300, 300], solid(CLASSIC_950), 1, { rotationDeg: 45 });
+    expect(find([photo(), diamond, text("다이아몬드 안", { x: 380, y: 330, w: 140 })])).toEqual([]);
+    expect(one([photo(), diamond, text("다이아몬드 끝", { x: 520, y: 330, w: 200 })]).ratio).toBe(1);
+
+    // a photo slot is a picture: whatever photo the user inserts later
+    const onSlot = one([slot(), text("사진 칸 위 제목")]);
+    expect(onSlot.ratio).toBe(1);
+    expect(T.tpcMessage(onSlot)).toContain('is painted on the photo slot #hero (any photo the user inserts) at a worst-case contrast of 1:1');
+    expect(find([slot(), scrim(0.72), text("사진 칸 위 제목")])).toEqual([]);
+    // … inserted OPAQUE, whatever the slot's CSS opacity (PowerPoint's placeholder carries no alpha): on a dark slide a
+    // slot at 0.3 still puts a white photo pixel behind white text, while an <img> at 0.3 stays faded in PowerPoint too
+    const dark = solid(CLASSIC_950);
+    const faintSlot = T.tpcFindings([slot({ opacity: 0.3 }), text("흐린 사진 칸 위", { size: 16 })], dark);
+    expect(faintSlot.map((f) => [f.ratio, f.need, f.through])).toEqual([[1, 4.5, 1]]);
+    expect(T.tpcFindings([photo({ opacity: 0.3 }), text("흐린 사진 위", { size: 16 })], dark)).toEqual([]);
+    expect(find([slot({ opacity: 0.3 }), text("밝은 슬라이드의 흐린 칸 위", { size: 16 })])).toHaveLength(1);
+    // an inline <svg> is an icon, not a picture; the same box as an <img> is one
+    expect(find([photo({ _src: { localName: "svg" } }), text("아이콘 위 글자")])).toEqual([]);
+    expect(find([photo({ _src: { localName: "img" } }), text("그림 위 글자")])).toHaveLength(1);
+    // paint order: text painted BEFORE the picture is under it, not on it; text beside a picture or 1 px into it is not on it
+    expect(find([text("사진 아래 글자"), photo()])).toEqual([]);
+    expect(find([photo({ box: { x: 0, y: 0, w: 640, h: 720 } }), text("사진 옆 글자", { x: 720, w: 400 })])).toEqual([]);
+    expect(find([photo({ box: { x: 0, y: 0, w: 81, h: 720 } }), text("1 px 걸친 글자", { x: 80, w: 400 })])).toEqual([]);
+    // a text-only slide is never examined: nothing here fires because a slide HAS no picture
+    expect(find([text("글자만 있는 슬라이드", { color: "111A2E" })])).toEqual([]);
+    expect(T.tpcFindings([], null)).toEqual([]);
+
+    // large text needs 3:1: every run ≥ 24 px, or ≥ 18.66 px at weight ≥ 700 (a 0.5 scrim gives 3.46:1)
+    const r50 = whiteOn(CLASSIC_950, 0.5);
+    expect(r50).toBeGreaterThan(3);
+    expect(r50).toBeLessThan(4.5);
+    const at50 = (o: TextOpts) => find([photo(), scrim(0.5), text("글자 크기", o)]);
+    expect(at50({ size: 24 })).toEqual([]);
+    expect(at50({ size: 18.66, weight: 700 })).toEqual([]);
+    expect(at50({ size: 16 })).toMatchObject([{ need: 4.5, large: false }]);
+    expect(at50({ size: 18.66, weight: 600 })).toMatchObject([{ need: 4.5, large: false }]);
+    expect(at50({ size: 23, weight: 400 })).toMatchObject([{ need: 4.5, large: false }]);
+    expect(at50({ runs: [{ text: "큰 ", sizePx: 24, fontWeight: 800, color: "FFFFFF", alpha: 1 }, { text: "작은", sizePx: 16, fontWeight: 400, color: "FFFFFF", alpha: 1 }] }))
+      .toMatchObject([{ need: 4.5, large: false }]); // every run: one small run makes the whole text small
+    const bigThin = one([photo(), scrim(0.3), text("큰 제목", { size: 56, weight: 800 })]);
+    expect(bigThin).toMatchObject({ need: 3, large: true });
+    expect(T.tpcMessage(bigThin)).toContain(", below the 3:1 large text needs — ");
+
+    // translucent text is blended over the composite first: white 72 % on a forest brand-950 scrim at 0.72
+    const worstTranslucent = Math.min(...[BLACK, WHITE].map((base) => {
+      const C = over(rgb(FOREST_950), 0.72, base);
+      return cr(over(WHITE, 0.72, C), C);
+    }));
+    expect(worstTranslucent).toBeGreaterThan(4.3);
+    expect(worstTranslucent).toBeLessThan(4.5);
+    const tr = one([photo(), scrim(0.72, FOREST_950), text("반투명 글자", { alpha: 0.72 })]);
+    expect(tr.ratio).toBeCloseTo(worstTranslucent, 3);
+    expect(tr.textAlpha).toBeCloseTo(0.72, 6);
+    expect(T.tpcMessage(tr)).toContain("still lets 28 % of the picture through at the weakest point, and the text colour itself is translucent (alpha 0.72).");
+    expect(find([photo(), scrim(0.72, FOREST_950), text("불투명 글자")])).toEqual([]); // opaque white: 6.63:1
+    expect(find([photo(), scrim(0.72, FOREST_950), text("큰 반투명 글자", { alpha: 0.72, size: 28 })])).toEqual([]); // large: 3:1
+    // the element's own opacity (the IR product of its ancestors') fades its text the same way
+    expect(one([photo(), scrim(0.72, FOREST_950), text("흐린 요소", { opacity: 0.72 })]).ratio).toBeCloseTo(worstTranslucent, 3);
+    // translucent text is judged over the whole box of reachable composites (each channel on its own between lo and
+    // hi), not only along the grey diagonal — under a coloured layer the diagonal misses worse pixels, for grey and
+    // coloured text alike; a brute-force search of the box agrees with the per-channel search
+    const boxSearch = (tc: number[], a: number, lo: number[], hi: number[], n = 32) => {
+      let w = Infinity, lighter = false, darker = false;
+      for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) for (let k = 0; k <= n; k++) {
+        const C = [lo[0] + ((hi[0] - lo[0]) * i) / n, lo[1] + ((hi[1] - lo[1]) * j) / n, lo[2] + ((hi[2] - lo[2]) * k) / n];
+        const tp = over(tc, a, C);
+        if (lum(tp) > lum(C)) lighter = true; else if (lum(tp) < lum(C)) darker = true;
+        w = Math.min(w, cr(tp, C));
+      }
+      return lighter && darker ? 1 : w;
+    };
+    const diagonalSearch = (tc: number[], a: number, lo: number[], hi: number[], n = 64) =>
+      Math.min(...Array.from({ length: n + 1 }, (_, i) => { const C = lo.map((v, k) => v + ((hi[k] - v) * i) / n); return cr(over(tc, a, C), C); }));
+    const tinted = (c: number[], a: number) => [c.map((v) => v * a), c.map((v) => v * a + 1 - a)]; // [lo, hi] under a layer
+    for (const [tc, a, [lo, hi]] of [
+      [[0.767, 0.767, 0.767], 0.309, [[0.547, 0.031, 0.137], [0.762, 0.246, 0.351]]], // grey text, red-tinted composite
+      [[1, 1, 1], 0.333, tinted([0.792, 0.014, 0.693], 0.723)], // white text under a magenta layer
+      [[0.033, 0.879, 0.874], 0.54, [[0.745, 0.024, 0.019], [0.95, 0.228, 0.223]]], // cyan text, red composite
+    ] as [number[], number, number[][]][]) {
+      const exact = T.tpcWorstRatio(tc, a, lo, hi), brute = boxSearch(tc, a, lo, hi);
+      expect(exact).toBeLessThanOrEqual(brute + 1e-9);
+      expect(exact).toBeGreaterThan(brute - 0.01);
+      expect(exact).toBeLessThan(diagonalSearch(tc, a, lo, hi) - 0.05);
+    }
+    // opaque text stays exact, and a text colour between the two ends is 1:1 (translucent or not)
+    expect(T.tpcWorstRatio([1, 1, 1], 1, rgb(CLASSIC_950).map((v) => v * 0.72), over(rgb(CLASSIC_950), 0.72, WHITE))).toBeCloseTo(whiteOn(CLASSIC_950, 0.72), 9);
+    expect(T.tpcWorstRatio([0.5, 0.5, 0.5], 0.6, [0, 0, 0], [1, 1, 1])).toBe(1);
+    // the 256-step grid is lowered by a bound of what it can miss: never above a 4096-step search of the same box, and
+    // below it by at most about 0.03 %
+    const fineWorst = (tc: number[], a: number, lo: number[], hi: number[], n = 4096) => {
+      const W = [0.2126, 0.7152, 0.0722];
+      const grid = [0, 1, 2].map((k) => Array.from({ length: n + 1 }, (_, i) => {
+        const c = lo[k] + ((hi[k] - lo[k]) * i) / n;
+        return { c: W[k] * lin(c), t: W[k] * lin(a * tc[k] + (1 - a) * c) };
+      }));
+      const lighter = grid.reduce((s, g) => s + Math.min(...g.map((p) => p.t - p.c)), 0) > 0;
+      const num = (p: { c: number; t: number }) => (lighter ? p.t : p.c), den = (p: { c: number; t: number }) => (lighter ? p.c : p.t);
+      let lam = Infinity;
+      for (let next = (0.05 + grid.reduce((s, g) => s + num(g[0]), 0)) / (0.05 + grid.reduce((s, g) => s + den(g[0]), 0)); next < lam - 1e-13;) {
+        lam = next;
+        const pick = grid.map((g) => g.reduce((b, p) => (num(p) - lam * den(p) < num(b) - lam * den(b) ? p : b)));
+        next = (0.05 + pick.reduce((s, p) => s + num(p), 0)) / (0.05 + pick.reduce((s, p) => s + den(p), 0));
+      }
+      return lam;
+    };
+    for (const [tc, a, lo, hi] of [
+      [[1, 1, 1], 0.8, rgb(FOREST_950).map((v) => v * 0.72), over(rgb(FOREST_950), 0.72, WHITE)], // the kit's 80 % white on forest's scrim
+      [[1, 0.9, 0.6], 0.55, [0.31, 0.12, 0.05], [0.62, 0.4, 0.33]], // interior optimum: yellowish text over a warm box
+      [[0.05, 0.1, 0.3], 0.7, [0.55, 0.6, 0.62], [0.95, 0.97, 0.99]], // darker text over a light box
+      // optima between grid values: the bare 256-step grid reads above the 4096-step search here (by ~2·10⁻⁶)
+      [[0.389, 0.186, 0.444], 0.795, [0.075, 0.399, 0.509], [0.861, 0.757, 0.962]],
+      [[0.763, 0.42, 0.09], 0.636, [0.207, 0.559, 0.093], [0.932, 0.9, 0.576]],
+    ] as [number[], number, number[], number[]][]) {
+      const exact = T.tpcWorstRatio(tc, a, lo, hi), fine = fineWorst(tc, a, lo, hi);
+      expect(exact).toBeLessThanOrEqual(fine + 1e-12);
+      expect(exact).toBeGreaterThan(fine * (1 - 3e-4));
+    }
+    // the cheap bound used past the work limit is never above the search, and exact for opaque text
+    // mulberry32: its 32-bit state stays exact (an LCG multiplied in doubles loses bits past 2^53)
+    const rnd = ((a: number) => () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    })(20261003);
+    for (let i = 0; i < 200; i++) {
+      const lo = [rnd(), rnd(), rnd()].map((v) => v * 0.6), hi = lo.map((v) => v + rnd() * (1 - v));
+      const tc = [rnd(), rnd(), rnd()], a = i % 4 ? 0.3 + 0.7 * rnd() : 1;
+      const exact = T.tpcWorstRatio(tc, a, lo, hi), bound = T.tpcBoundRatio(tc, a, lo, hi);
+      expect(bound).toBeLessThanOrEqual(exact + 1e-9);
+      if (a === 1) expect(bound).toBeCloseTo(exact, 12);
+    }
+
+    // NEVER more lenient than the exact worst case: random layer stacks over a photo (solid, single-hue and two-hue
+    // ramps, across the slide), against an independent point model — 201 positions along the line, each with the
+    // photo's corners (opaque text) or a 6-step grid of photo colours (translucent text). A text the lint passes, the
+    // model passes; a text it fails, it fails at no more than the model's worst
+    type Fill = { type: string; color?: string; alpha?: number; angleDeg?: number; stops?: { pos: number; color: string; alpha: number }[] };
+    const fillAt = (f: Fill, t: number) => {
+      if (f.type === "solid") return { pm: rgb(f.color!).map((v) => v * (f.alpha ?? 1)), a: f.alpha ?? 1 };
+      const [s0, s1] = f.stops!;
+      const pm = rgb(s0.color).map((v, k) => v * s0.alpha + (rgb(s1.color)[k] * s1.alpha - v * s0.alpha) * t);
+      return { pm, a: s0.alpha + (s1.alpha - s0.alpha) * t };
+    };
+    const hex = (c: number[]) => c.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+    for (let i = 0; i < 40; i++) {
+      const dark = i % 2 === 0;
+      const tone = () => hex([rnd(), rnd(), rnd()].map((v) => (dark ? v * 0.3 : 0.7 + v * 0.3)));
+      const layers = Array.from({ length: 1 + (i % 2) }, (_, j) => {
+        const kind = (i + j) % 3, c0 = tone();
+        const f: Fill = kind === 0 ? solid(c0, 0.4 + 0.6 * rnd()) // kind 1: a single-hue ramp, kind 2: two hues
+          : { type: "linear", angleDeg: 90, stops: [{ pos: 0, color: c0, alpha: 0.3 + 0.7 * rnd() }, { pos: 1, color: kind === 1 ? c0 : tone(), alpha: 0.3 + 0.7 * rnd() }] };
+        return { f, o: 0.5 + 0.5 * rnd() };
+      });
+      const tc = dark ? "FFFFFF" : "111A2E", a = i % 3 ? 1 : 0.6 + 0.4 * rnd();
+      const els = [photo(), ...layers.map((L, j) => shape(`l${j}`, [0, 0, 1280, 720], L.f, L.o)), text("임의의 막", { x: 80, w: 1120, color: tc, alpha: a })];
+      const T0 = rgb(tc);
+      let model = Infinity;
+      for (let p = 0; p <= 200; p++) {
+        const t = (80 + (1120 * p) / 200) / 1280;
+        const at = (P: number[]) => layers.reduce((C, L) => { const { pm, a: fa } = fillAt(L.f, t); return C.map((c, k) => pm[k] * L.o + c * (1 - fa * L.o)); }, P);
+        const pixels = a === 1 ? [[0, 0, 0], [1, 1, 1]] : Array.from({ length: 216 }, (_, q) => [q % 6, Math.floor(q / 6) % 6, Math.floor(q / 36)].map((v) => v / 5));
+        let lighter = false, darker = false, w = Infinity;
+        for (const P of pixels) {
+          const C = at(P), tp = over(T0, a, C);
+          if (lum(tp) > lum(C)) lighter = true; else darker = true;
+          w = Math.min(w, cr(tp, C));
+        }
+        if (a === 1 && lighter && darker) w = 1; // the text's luminance lies between the photo's two ends
+        model = Math.min(model, w);
+      }
+      const f = find(els);
+      if (!f.length) expect(model, `scene ${i}`).toBeGreaterThanOrEqual(4.5 - 1e-9);
+      else expect(f[0].ratio, `scene ${i}`).toBeLessThanOrEqual(model + 1e-9);
+    }
+
+    // the work bound: past it, only bounds that are never more lenient — a piece cut no further, one box per piece,
+    // translucent text against the box's corners — and the message says so. A tiny budget forces it here: 80 % white
+    // text on forest's 0.72 scrim passes the exact search (4.95:1) but not the corner bound
+    const tpcTextOf = (el: El) => ((el.paragraphs as { runs: { text: string }[] }[])[0].runs[0].text);
+    const tpcSource = ["00-util.js", "55-text-on-picture.js"].map((f) => fs.readFileSync(path.join(KIT, "tools", "extract", "inpage", f), "utf8")).join("\n");
+    const tight = (...edits: [string | RegExp, string][]) => {
+      let src = tpcSource;
+      for (const [from, to] of edits) {
+        expect(src).toMatch(from);
+        src = src.replace(from, to);
+      }
+      return new Function(`${src}\nreturn { tpcFindings, tpcMessage };`)() as { tpcFindings: typeof T.tpcFindings; tpcMessage: typeof T.tpcMessage };
+    };
+    const scrimmed = [photo(), scrim(0.72, FOREST_950), text("막 위 반투명 글자", { alpha: 0.8 })];
+    expect(find(scrimmed)).toEqual([]);
+    const NO_ELEMENT_WORK: [string, string] = ["const TPC_ELEMENT_WORK = 2 ** 19;", "const TPC_ELEMENT_WORK = 0;"];
+    const perElement = tight(NO_ELEMENT_WORK);
+    const forced = perElement.tpcFindings(scrimmed, solid("F4F6FA"));
+    expect(forced).toMatchObject([{ bounded: true, boundBy: "element", need: 4.5 }]);
+    expect(forced[0].ratio).toBeLessThan(4.95);
+    expect(perElement.tpcMessage(forced[0])).toContain(":1 or better (a safe bound, not the exact value: too many shapes overlap this text to search exactly — merge or remove the translucent shapes under it, or give it one plain scrim, and the check measures it exactly), below the 4.5:1");
+    expect(perElement.tpcFindings(scrimmed, solid("F4F6FA"))).toEqual(forced); // deterministic: counted work, not time
+    // a text the exact search fails keeps failing, at no more than its exact ratio; opaque text stays exact on one box
+    const weak = [photo(), scrim(0.5, FOREST_950), text("약한 막 위 글자", { alpha: 0.8 })];
+    expect(perElement.tpcFindings(weak, solid("F4F6FA"))[0].ratio).toBeLessThanOrEqual(one(weak).ratio + 1e-9);
+    const opaqueOnScrim = [photo(), scrim(0.5), text("불투명 글자")];
+    expect(perElement.tpcFindings(opaqueOnScrim, solid("F4F6FA"))[0].ratio).toBeCloseTo(one(opaqueOnScrim).ratio, 12);
+    // … a ramp that would be cut into slabs is judged by one box (stricter), and the slide's budget caps all elements
+    const coarseDip = perElement.tpcFindings([photo(), hue, text("색이 바뀌는 막", { x: 80, w: 1120, size: 56, weight: 800, color: "000000" })], solid("F4F6FA"));
+    expect(coarseDip[0]).toMatchObject({ bounded: true });
+    expect(coarseDip[0].ratio).toBeLessThanOrEqual(dip.ratio + 1e-9);
+    // the slide's budget is spent in paint order, but each text keeps its first 2^10 units: a caption painted after
+    // texts that used the slide's budget up is still searched exactly. The innocent caption — AUTHORING §7's recipe,
+    // 80 % white on forest's brand-950 at 0.72, the photo and one scrim under it — passes even with no slide budget
+    // left at all, and after a first text that used all 60 units (a walk 3, a box 3, a translucent search 48)
+    const perSlide = tight(["const TPC_SLIDE_WORK = 2 ** 20;", "const TPC_SLIDE_WORK = 0;"]);
+    expect(perSlide.tpcFindings(scrimmed, solid("F4F6FA"))).toEqual([]);
+    const busySlide = tight(["const TPC_SLIDE_WORK = 2 ** 20;", "const TPC_SLIDE_WORK = 60;"]);
+    const caption = [photo(), scrim(0.72, FOREST_950), text("첫째 글자", { alpha: 0.8 }), text("사진 설명", { alpha: 0.8, y: 400 })];
+    expect(busySlide.tpcFindings(caption, solid("F4F6FA"))).toEqual([]);
+    // … searched exactly, not just passed: on a weaker scrim the same two captions fail at their exact ratios, unbounded
+    const weakCaption = [photo(), scrim(0.5, FOREST_950), text("첫째 글자", { alpha: 0.8 }), text("사진 설명", { alpha: 0.8, y: 400 })];
+    const exactRatios = find(weakCaption).map((f) => [f.ratio, false]);
+    expect(exactRatios).toHaveLength(2);
+    expect(busySlide.tpcFindings(weakCaption, solid("F4F6FA")).map((f) => [f.ratio, f.bounded])).toEqual(exactRatios);
+    // a text heavier than its floor (30 lines over a 0.74 → 0.72 ramp: a new box on every line, so no search repeats)
+    // after the first text used the slide's budget takes the corner bound past its floor (about 4.3:1 near 0.72,
+    // where the search reads 4.95:1), and the message says why
+    const ramp = shape("ramp", [0, 0, 1280, 720], { type: "linear", angleDeg: 180, stops: [{ pos: 0, color: FOREST_950, alpha: 0.74 }, { pos: 1, color: FOREST_950, alpha: 0.72 }] });
+    const tall = text("", {
+      runs: [{ text: "긴 본문", sizePx: 16, fontWeight: 400, color: "FFFFFF", alpha: 0.8 }],
+      lines: Array.from({ length: 30 }, (_, i) => ({ top: i * 24, bottom: i * 24 + 20, left: 80, right: 600, text: "긴 본문", paragraph: 0, hardBreak: false })),
+    });
+    const heavyAfter = [photo(), ramp, text("첫째 글자", { alpha: 0.8 }), tall];
+    expect(find(heavyAfter)).toEqual([]); // the exact search passes both
+    const late = busySlide.tpcFindings(heavyAfter, solid("F4F6FA"));
+    expect(late).toMatchObject([{ bounded: true, boundBy: "slide" }]);
+    expect(busySlide.tpcMessage(late[0])).toContain("or better (a safe bound, not the exact value: the texts painted before this one used up the slide's search budget — merge or remove the translucent shapes under the texts on this slide, or give them plain scrims, and the check measures this one exactly), below the 4.5:1");
+    // the slide's budget is one budget for all its texts: with 2,000 units the first 30-line text (about 1,620) is
+    // searched exactly, and the second gets only its floor before the bound
+    const twoTall = tight(["const TPC_SLIDE_WORK = 2 ** 20;", "const TPC_SLIDE_WORK = 2000;"]).tpcFindings([photo(), ramp, tall, { ...tall, id: "main.slide > p.second:nth-child(4)::text" }], solid("F4F6FA"));
+    expect(twoTall.map((f) => [f.el.id, f.boundBy])).toEqual([["main.slide > p.second:nth-child(4)::text", "slide"]]);
+    // past the bound a curved edge is followed no further: the circle may or may not cover any part of the piece it
+    // crosses (opaque text over a 0.6 scrim circle that the line pokes out of fails either way; only the exact walk
+    // knows it exactly) — while an axis-aligned edge still cuts, so a line running off the slide where the photo and
+    // its scrim both end is no 1:1
+    const coarseOnly = tight(NO_ELEMENT_WORK, [/spent\(\) \{ return [^}]*\}/, "spent() { return false; }"]);
+    const ring = shape("ring", [60, 260, 200, 200], solid(CLASSIC_950), 0.6, { geometry: "ellipse" });
+    const poke = [photo(), ring, text("원 밖으로", { x: 120, y: 330, w: 200 })];
+    expect(one(poke)).toMatchObject({ ratio: 1, bounded: false });
+    expect(coarseOnly.tpcFindings(poke, solid("F4F6FA"))).toMatchObject([{ ratio: 1, bounded: true }]);
+    const offSlide = [photo(), scrim(0.72), text("슬라이드 밖으로", { y: 710 })]; // line box 710–734, the slide ends at 720
+    expect(find(offSlide)).toEqual([]);
+    expect(coarseOnly.tpcFindings(offSlide, solid("F4F6FA"))).toEqual([]);
+    // … and twice past the bound the rest of a line is one piece: the photo and its scrim may each be absent there —
+    // never within a text's floor, whatever the slide has left
+    expect(perElement.tpcFindings(offSlide, solid("F4F6FA"))).toMatchObject([{ ratio: 1, bounded: true }]);
+    expect(perSlide.tpcFindings(offSlide, solid("F4F6FA"))).toEqual([]);
+
+    // the lint: the extractor raises it on the painted slide, as an error, and the Next: line points at AUTHORING §7
+    const src = (f: string) => fs.readFileSync(path.join(KIT, "tools", "extract", "inpage", f), "utf8");
+    expect(src("55-text-on-picture.js")).toContain("lint('error', 'text-on-picture', tpcMessage(f), f.el._src || f.el.id)");
+    expect(src("90-main.js")).toContain("textOnPictureLint(OUT.elements, OUT.background, { w: CTX.slideW, h: CTX.slideH });");
+    expect(src("90-main.js").indexOf("numberPicSlots(OUT.elements);")).toBeLessThan(src("90-main.js").indexOf("textOnPictureLint("));
+    const R = await import(pathToFileURL(path.join(KIT, "tools", "lib", "report.mjs")).href);
+    expect(R.NEXT.authoring("/w/q3", { rules: ["text-on-picture"] })).toContain("; text-on-picture: §7)");
+    for (const doc of [path.join(KIT, "docs", "CONTRACT.md"), path.join(KIT, "tools", "extract", "README.md")]) {
+      expect(fs.readFileSync(doc, "utf8"), doc).toContain("`text-on-picture`");
+    }
+    expect(fs.readFileSync(path.join(KIT, "docs", "CONTRACT.md"), "utf8")).toContain("1.3.0 narrows the input contract with ONE error lint, **`text-on-picture`**");
   });
 
   type ChartField = { path: string; get: () => unknown; set: (v: unknown) => void };
@@ -1014,7 +1433,7 @@ describe("deck converter CLI (toolchain-free)", () => {
       }
     }
     expect(bad).toEqual([]);
-    expect(fs.readFileSync(path.join(KIT, "VERSION"), "utf8").trim()).toBe("1.2.0");
+    expect(fs.readFileSync(path.join(KIT, "VERSION"), "utf8").trim()).toBe("1.3.0");
     expect(fs.readFileSync(path.join(KIT, "requirements.txt"), "utf8").trim().split("\n")).toEqual([
       "python-pptx==1.0.2", "lxml==6.1.3", "Pillow==12.3.0", "XlsxWriter==3.2.9", "typing_extensions==4.16.0",
       "fonttools==4.66.0", "defusedxml==0.7.1", "openpyxl==3.1.5", "et_xmlfile==2.0.0",
@@ -1133,7 +1552,7 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
       }
     }
     expect(r.stderr).toMatch(/deck converter selftest: PASS \(Chromium [\d.]+; deck 4\+4 slides, features 3\+3 slides; golden match\)/);
-    expect(JSON.parse(fs.readFileSync(rec, "utf8"))).toMatchObject({ format: "noah-deck-selftest-record", version: 1, status: "pass", converterVersion: "1.2.0", differences: 0 });
+    expect(JSON.parse(fs.readFileSync(rec, "utf8"))).toMatchObject({ format: "noah-deck-selftest-record", version: 1, status: "pass", converterVersion: "1.3.0", differences: 0 });
   }, 600_000);
 
   it("check renders, lints and reports (never a deliverable); --only keeps slide numbers", () => {
@@ -1341,7 +1760,7 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     // the sidecar (I5): manifest written last, bound to the exact bytes
     const pdir = path.join(d, "fx.preview");
     const m = JSON.parse(fs.readFileSync(path.join(pdir, "manifest.json"), "utf8"));
-    expect(m).toMatchObject({ format: "noah-deck-preview", version: 1, generator: "noah-pptx-converter/1.2.0", pptx: "fx.pptx", profile: "embedded", slideCount: 3 });
+    expect(m).toMatchObject({ format: "noah-deck-preview", version: 1, generator: "noah-pptx-converter/1.3.0", pptx: "fx.pptx", profile: "embedded", slideCount: 3 });
     expect(m.pptxSha256).toBe(sha256(bytes));
     expect(m.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
     expect(m.slides.map((s: { index: number }) => s.index)).toEqual([1, 2, 3]);
@@ -2168,6 +2587,63 @@ describe.skipIf(!E2E)("deck converter e2e (NOAH_PPTX_E2E=1)", () => {
     const sized = (els(3) as unknown as { id: string; kind: string; box: { w: number; h: number }; slot: number }[]).filter((e) => e.kind === "placeholder");
     expect(sized.map((e) => [e.id, e.box.w, e.box.h, e.slot])).toEqual([
       ["#autoh::placeholder", 240, 4, 0], ["#zeroh::placeholder", 240, 0, 1], ["#zerow::placeholder", 0, 200, 2], ["#tiny::placeholder", 20, 20, 3]]);
+  }, 300_000);
+
+  it("text-on-picture e2e: text over an <img> or a photo slot needs a layer that holds for ANY photo — in check and build, both profiles; the passing slides build with --strict", () => {
+    const root = tmp("on-picture");
+    const photo = '<img id="photo" src="../assets/photo.jpg" alt="합성 사진" style="position:absolute;left:0;top:0;width:1280px;height:720px;object-fit:cover">';
+    const scrim = (id: string, style: string) => `<div id="${id}" style="position:absolute;background:var(--c-brand-950);${style}"></div>`;
+    const h1 = (id: string, t: string, top = 200, color = "var(--c-white)") =>
+      `<h1 id="${id}" style="position:absolute;left:80px;top:${top}px;width:640px;margin:0;font-size:56px;line-height:76px;font-weight:800;color:${color}">${t}</h1>`;
+    const lead = (id: string, t: string) =>
+      `<p id="${id}" style="position:absolute;left:80px;top:320px;width:600px;margin:0;font-size:22px;line-height:32px;color:rgba(255, 255, 255, 0.8)">${t}</p>`;
+    const photoSlot = (id: string) => `<div class="photo-slot" id="${id}" data-placeholder="pic" data-prompt="배경 사진을 넣으세요" style="position:absolute;left:0;top:0;width:1280px;height:720px">${SLOT_ICON}<p class="photo-slot-hint">배경 사진을 넣으세요</p></div>`;
+    const on = (layout: string, body: string) => SLIDE(body).replace('<main class="slide" data-layout="본문">', `<main class="slide" data-layout="${layout}">`);
+    const d = makeDeck(root, "onpic", {
+      // a brand-950 scrim at 0.72 under white text (the lead 80 % white): legible over every photo
+      "01-scrim.html": on("사진 표지", photo + scrim("scrim", "left:0;top:0;width:760px;height:720px;opacity:0.72") + h1("t1", "사진 위 제목") + lead("l1", "막이 모든 사진에서 글자를 지킵니다")),
+      "02-bare.html": on("사진 표지 2", photo + h1("t2", "막 없는 제목")),
+      // 0.5: the display headline keeps the 3:1 large text needs, the 22 px lead misses 4.5:1
+      "03-thin.html": on("사진 표지 3", photo + scrim("thin", "left:0;top:0;width:760px;height:720px;opacity:0.5") + h1("t3", "큰 제목은 괜찮습니다") + lead("l3", "작은 본문은 부족합니다")),
+      // a photo slot: the band keeps the headline legible for whatever photo the user inserts; the slot's hint is exempt
+      "04-slot.html": on("사진 칸 표지", photoSlot("slot4") + scrim("band", "left:0;top:408px;width:1280px;height:312px;opacity:0.72") + h1("t4", "사진 칸 위 제목", 480)),
+      "05-slot-bare.html": on("사진 칸 표지 2", photoSlot("slot5") + h1("t5", "사진 칸 위 제목", 480)),
+      // an inline <svg> icon is no picture
+      "06-icon.html": on("아이콘", `<div style="position:absolute;left:80px;top:160px;width:400px;height:400px;color:var(--c-brand-600)">${SLOT_ICON.replace('width="32" height="32"', 'width="400" height="400"')}</div>`
+        + h1("t6", "아이콘 위 제목", 300, "var(--c-ink-900)")),
+    });
+    fs.mkdirSync(path.join(d, "assets"));
+    fs.copyFileSync(path.join(KIT, "selftest", "features", "assets", "photo.jpg"), path.join(d, "assets", "photo.jpg"));
+    type Lint = { slide: number; profile: string | null; severity: string; rule: string; path: string | null; message: string };
+    const onPicture = (items: Lint[]) => items.filter((l) => l.rule === "text-on-picture");
+    const r = deck(["check", d, "--profile", "both", "--json"], {}, { timeout: 300_000 });
+    expect(r.code, r.stderr).toBe(1);
+    const items = onPicture(JSON.parse(r.stdout).lint.items as Lint[]);
+    expect(items.map((l) => [l.slide, l.profile, l.severity, l.path]).sort((a, b) => String(a).localeCompare(String(b)))).toEqual([
+      [2, "embedded", "error", "#t2"], [2, "malgun", "error", "#t2"], [3, "embedded", "error", "#l3"], [3, "malgun", "error", "#l3"],
+      [5, "embedded", "error", "#t5"], [5, "malgun", "error", "#t5"],
+    ]);
+    const msg = (p: string) => items.find((l) => l.path === p && l.profile === "embedded")!.message;
+    expect(msg("#t2")).toBe('its text ("막 없는 제목") is painted on the picture #photo at a worst-case contrast of 1:1, below the 3:1 large text needs — it lies on the bare picture, with no layer between them. A photo can put any colour behind text, pure white and pure black included; fix: a scrim under the text (a dark token box, e.g. var(--c-brand-950) at opacity ≥ 0.72, under white text; or a light one under dark text), an opaque card, or move the text off the picture (AUTHORING §7)');
+    expect(msg("#l3")).toMatch(/^its text \("작은 본문은 부족합니다"\) is painted on the picture #photo at a worst-case contrast of [23]\.\d+:1, below the 4\.5:1 it needs \(3:1 only when every run is ≥ 24 px, or ≥ 18\.66 px at weight ≥ 700\) — the layer between them \(#thin\) still lets 50 % of the picture through at the weakest point, and the text colour itself is translucent \(alpha 0\.8\)\. /);
+    expect(msg("#t5")).toContain("is painted on the photo slot #slot5 (any photo the user inserts) at a worst-case contrast of 1:1");
+    expect(r.stderr).toContain("text-on-picture: §7");
+    // the lint lives in the IR's lint (the extractor's), the IR itself is what it was: pictures, the slot, the scrim shapes
+    const ir = JSON.parse(fs.readFileSync(path.join(d, ".build", "check", "embedded", "ir.json"), "utf8"));
+    expect(ir.lint.filter((l: Lint) => l.rule === "text-on-picture").map((l: Lint) => [l.slide, l.path])).toEqual([[2, "#t2"], [3, "#l3"], [5, "#t5"]]);
+    expect(ir.slides[0].elements.map((e: { id: string; kind: string }) => [e.id, e.kind])).toEqual([
+      ["#photo::image", "image"], ["#scrim::bg", "shape"], ["#t1::text", "text"], ["#l1::text", "text"]]);
+    // build runs the same check: it stops at the lint; without the failing slides the rest builds with --strict
+    const b = deck(["build", d, "--json"], {}, { timeout: 300_000 });
+    expect(b.code, b.stderr).toBe(1);
+    expect(onPicture(JSON.parse(b.stdout).lint.items as Lint[]).map((l) => [l.slide, l.path])).toEqual([[2, "#t2"], [3, "#l3"], [5, "#t5"]]);
+    for (const f of ["02-bare.html", "03-thin.html", "05-slot-bare.html"]) fs.rmSync(path.join(d, "slides", f));
+    const ok = deck(["build", d, "--strict", "--json"], {}, { timeout: 300_000 });
+    expect(ok.code, ok.stderr).toBe(0);
+    const rep = JSON.parse(ok.stdout);
+    expect(onPicture(rep.lint.items as Lint[])).toEqual([]);
+    expect(rep.build).toMatchObject({ warnings: 0, skipped: 0 });
+    expect(fs.existsSync(path.join(d, "onpic.pptx"))).toBe(true);
   }, 300_000);
 
   it("no host name resolves in the browser: the converter's --host-resolver-rules parses (Playwright's quoted copy does not)", () => {

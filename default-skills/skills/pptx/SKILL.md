@@ -46,6 +46,32 @@ question (exit 0 = converter installed, exit 4 = not; it starts no browser; its 
   double digits", not a topic such as "revenue"). For reference content (onboarding, an org chart, a schedule, a
   directory) the takeaway is what the reader should know or do — "ask your buddy first, then the owning team" —
   and the structure itself (the org tree, the week grid, the directory table) is the slide's one visual.
+- Give every slide its main visual AND its source before you write any HTML: what the slide shows to prove its
+  title, and the file or data it comes from. describe_system's `Images for documents and decks` line says which of
+  these this run has:
+  - the images attached to the conversation: each is also saved as a file in `attachments/` (the user's message
+    lists the paths);
+  - with browser control connected, the system or page the deck is about: an element capture —
+    `mcp__browser__screenshot` with the element's `uid` from a snapshot — whose copy is saved in `captures/` (the
+    result names the path);
+  - a diagram or picture on a Confluence page: `mcp__confluence__get_attachment` with `save_to_workspace: true`
+    saves it in `confluence/` (`mcp__confluence__extract_page_assets` lists a page's images and draw.io diagrams).
+    A draw.io diagram goes in as its PNG preview — the image attachment `extract_page_assets` matches to it (under
+    `matched.drawioAttachments`) — never the `.drawio` source: that is an mxfile, not an image, and an `<img>` of it fails
+    `image-load`;
+  - the user's figures: a native chart; a structure (steps, parts, an org): a diagram from the kit's shapes;
+  - or, deliberately, text: a statement, a quote, an agenda. Text is a legitimate visual — never add an image just
+    to have one.
+
+  Those folders are in the conversation scratch workspace. Copy the chosen file by the ABSOLUTE path its listing or
+  tool result gives — with a repository open the working directory is the clone (§3), where a relative path misses
+  them — into the deck's `assets/` under a short ASCII name (`cp <absolute path> <deck>/assets/site.jpg`), and
+  place it as `../assets/<file>`: the file itself, never a description or a redrawing of it. Images attached on
+  EARLIER turns are not listed again: `ls` the scratch workspace's `attachments/` (the
+  `Images for documents and decks` line names the workspace). Never present a drawn mock-up as a real screen, never
+  capture pages the deck is not about, and keep personal data and secrets off a capture: capture the element, not the
+  whole screen — when an element shows personal data, capture a narrower one that shows none (there is no masking
+  step).
 - Typically 4–10 slides; the hard limit is 60 slides per build (describe_system's deck line shows the limit in
   force; split a larger deck into several builds). A requested slide count includes the cover: when it equals the
   number of topics the user listed, give each topic its slide and put the deck title on the first one instead of
@@ -58,8 +84,8 @@ question (exit 0 = converter installed, exit 4 = not; it starts no browser; its 
   reply list the sample figures to replace and offer to rebuild with the real ones.
 - Decide and build — a finished draft is easier to correct than a list of questions. The one exception is the
   scoping question below, and it also carries the outline check: for a large or ambiguous request, write the
-  outline in your chat text right before that call and let a one-line `이 구성으로 진행할까요?` replace one of its
-  questions — never a separate question first.
+  outline in your chat text right before that call — one line per slide, naming its takeaway and its visual — and
+  let a one-line `이 구성으로 진행할까요?` replace one of its questions — never a separate question first.
 - Pick the deck's theme with the plan (§3): a look that fits the topic, the audience and the tone — never the
   default by habit.
 
@@ -114,14 +140,17 @@ q3-review/
   user wants the deck committed (`.build/` and the preview folder carry their own `.gitignore`).
 - Start from the closest example. `${CLAUDE_SKILL_DIR}/examples/README.md` maps each kind of content (agenda,
   KPI dashboard, trend and mix charts, table, section divider, strategy framework, comparison, roadmap, targets,
-  closing, org chart, week schedule, directory, team with photos, and for a talk: statement, big number, quote,
-  photo, before/after) to an example slide: `business-review` is a 4-slide results report, `layouts` an 8-slide
-  plan from agenda to decision, `handbook` 4 reference slides (org chart, first-week schedule, contacts, team with
-  photo slots), `talk` a 6-slide talk to present (발표형: statement, big number, quote, photo, before/after,
-  closing). `cp -r ${CLAUDE_SKILL_DIR}/examples/business-review ./q3-review` (a 발표형 deck starts from `talk`; add
-  slide files from the other decks as needed), then delete, renumber and edit slides — rewriting a slide's content
-  is usually one Write of the whole file, not many small edits. Never build inside `${CLAUDE_SKILL_DIR}` — it is
-  read-only and the converter refuses it.
+  closing, org chart, week schedule, directory, team with photos, pictures — a photo cover, a screen capture, callouts
+  on a capture, phone screens, a photo the user adds later — and for a talk: statement, big number, quote, photo,
+  before/after) to an example slide: `business-review` is a 4-slide results report, `layouts` an 8-slide plan from
+  agenda to decision, `handbook` 4 reference slides (org chart, first-week schedule, contacts, team with photo
+  slots), `visual` 5 slides built on pictures (a photo cover under a scrim, a screen capture in a browser frame,
+  numbered callouts on a capture, phone screens before/after, a full-bleed photo slot), `talk` a 6-slide talk to
+  present (발표형: statement, big number, quote, photo, before/after, closing).
+  `cp -r ${CLAUDE_SKILL_DIR}/examples/business-review ./q3-review` (a 발표형 deck starts from `talk`; add slide files
+  from the other decks as needed, `${CLAUDE_SKILL_DIR}/examples/visual/` for the slides that carry a picture), then
+  delete, renumber and edit slides — rewriting a slide's content is usually one Write of the whole file, not many
+  small edits. Never build inside `${CLAUDE_SKILL_DIR}` — it is read-only and the converter refuses it.
 - Then give the deck its theme: `cp ${CLAUDE_SKILL_DIR}/themes/<theme>.css ./q3-review/deck.css` (the examples ship
   `classic`). Every slide links `../deck.css`, and every colour, surface, radius and shadow in the kit and the
   examples comes from its tokens, so the copy restyles the whole deck — covers, cards, tables, charts and icons.
@@ -168,7 +197,7 @@ How each theme feels, and where it misleads (the same lines head each theme file
   reconstruct a company's brand colours from memory — use the ones the user states, or a theme.
 - The cover and the closing are the slides people remember: keep the theme, but re-compose the example's decorative
   motif around the topic (its bars stand for real figures; a deck without such figures gets a motif of its own —
-  circles, a ring, a band of shapes, a photo from the user).
+  circles, a ring, a band of shapes, a photo from the user under a scrim, as in the `visual` deck's cover).
 
 ## 4. Author
 
@@ -193,15 +222,21 @@ are what keep every object native and editable. The essentials:
   photo slot: `data-placeholder="pic"` + a one-line `data-prompt` in the user's language on a sized, square-cornered
   box (`.photo-slot`), on a slide with its own `data-layout` — PowerPoint's empty picture placeholder; everything
   inside it is an HTML-only hint, so captions go next to it (AUTHORING §7).
+- Pictures (AUTHORING §7): `<img src="../assets/<file>" alt="…">` with an explicit size. A screen capture keeps its
+  own aspect (`object-fit: contain` in a frame of that aspect, or `cover` + `object-position: top` for the top of a
+  UI) and is never shown larger than its pixels. Text over a photo or a photo slot sits on a scrim (a leaf
+  `var(--c-brand-950)` box at opacity 0.72 under white text), an opaque card, or beside the picture: the check's
+  `text-on-picture` rule fails text that a light or dark photo could swallow.
 - Speaker notes: `<template id="notes">` after `</main>`, one line per paragraph — the talk track, what the presenter
   SAYS: an opener that moves on from the previous slide's bridge (never repeats it), the key point in spoken
   sentences (not the slide text pasted), the exact figures to cite as the slide shows them, a bridge to the next
   slide, optionally a timing cue in parentheses at the end of the last line (`(약 1분)`); 2–5 short lines. Plain
   text only: the template is parsed as HTML, so markup and anything in `<…>` vanish. A script or 대본 the user asks
   for goes into the notes, never into a separate .md file.
-- Design (AUTHORING §9): build each slide around ONE visual that proves its title (a chart, bars on one scale, a
-  timeline, a big number), keep one colour for one meaning across the deck, leave no dead zones inside cards, and
-  vary the composition between neighbouring slides while the header, footer and grid stay fixed. A 발표형 deck (§2)
+- Design (AUTHORING §9): build each slide around ONE visual that proves its title (a photo or screen capture, a
+  chart, bars on one scale, a timeline, a diagram, a big number — or, for a statement or a quote, the words at
+  display size), keep one colour for one meaning across the deck, leave no dead zones inside cards, and vary the
+  composition between neighbouring slides while the header, footer and grid stay fixed. A 발표형 deck (§2)
   keeps to AUTHORING §8.25: few words at display sizes, the rest in the speaker notes.
 - Limits: 60 slides per build, 2 MB per slide file, 2,500 elements per slide, 20 MB per asset, 40 megapixels per
   picture (100 per slide), 100 MB of deck inputs, 540 s per run (AUTHORING "Limits").
@@ -277,8 +312,10 @@ Only after `build` exited 0:
   `Share links` line says this run has it; otherwise point them to the `공유 링크` button next to the file card
   (a group-agent thread cannot be link-shared at all: say so).
   With a link, say that whoever opens it can also download the .pptx, speaker notes included.
-- Tell the user, in their language: the file is ready, with one line per slide; the theme you chose and one or two
-  others that would suit this deck (a rebuild away); every text box, shape, table and chart is editable in PowerPoint
+- Tell the user, in their language: the file is ready, with one line per slide — naming the slides that show
+  their attached images or your captures (and what each capture shows), and what goes into each empty photo slot (its
+  prompt; they insert the photo in PowerPoint); the theme you chose and one or two others that would suit this deck (a
+  rebuild away); every text box, shape, table and chart is editable in PowerPoint
   (charts keep their data: right-click → Edit Data, "데이터 편집"); each slide's speaker notes hold its talk track and
   are part of the .pptx, so whoever gets the file (a download, a forwarded copy, a share link) can read them;
   Pretendard travels inside the file, so desktop PowerPoint shows it even where it is not installed; PowerPoint for
@@ -288,7 +325,8 @@ Only after `build` exited 0:
   Korean font.
 - When the user will edit the deck, pass on what matters from `${CLAUDE_SKILL_DIR}/reference/EDITING.md` (longer
   text shrinks to fit, fixed chart axes, the footer lives in the slide layout (on the slide itself when the slide is
-  alone on its layout), an empty photo slot takes a photo from its icon, …).
+  alone on its layout), an empty photo slot takes a photo from its icon, a photo or capture is swapped with Change
+  Picture and the scrim above it stays, …).
 
 ## 8. Changes
 

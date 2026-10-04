@@ -59,6 +59,8 @@ const RULE_SECTIONS = {
   // photo slots (data-placeholder="pic", converter 1.2.0): the §7 photo-slot row
   'placeholder-prompt': '§7', 'placeholder-content': '§7', 'placeholder-geometry': '§7', 'rotated-placeholder': '§7',
   'placeholder-size': '§7', 'placeholder-layout': '§7',
+  // text over a picture (converter 1.3.0): the §7 pictures rows — scrims, cards, text beside the photo
+  'text-on-picture': '§7',
 };
 
 function ruleSections(rules) {

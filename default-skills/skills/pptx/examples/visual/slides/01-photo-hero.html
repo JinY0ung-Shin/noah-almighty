@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>01 사진 표지 · 2026년 고객 포털 개편 결과 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Photo hero (a cover on its own data-layout): the photo fills the slide edge to edge (a JPEG with object-fit:
+     cover stays a JPEG) and every text sits on a SCRIM — one leaf box of the theme's darkest brand shade at a fixed
+     opacity, painted after the photo and before the text, covering every text line with room to spare (x 0-760; the
+     text ends at x 680). A photo gives text no contrast guarantee of its own; the scrim does, for this photo and for
+     any photo put in its place: the check's text-on-picture rule judges the worst pixel under each line, AUTHORING §7.
+     The arithmetic (sRGB compositing, like the browser): under white text the worst pixel is pure white, and
+     brand-950 at 0.72 over white is lightest in forest, whose brand-950 is the lightest of the six themes (the
+     composite's luminance 0.108): white text on it is 6.63:1 (classic 7.31, mono 8.24, editorial 7.34, midnight
+     8.62, violet 7.71); 4.5:1 needs >= 0.61 in forest. A translucent text is blended over that first: white 80 %
+     reads 4.95:1 in forest (>= 75 % passes at 4.57:1; 74 % gives 4.4995:1 and fails, 72 % 4.36:1), so no text here
+     is fainter than 80 %.
+     The accent is no text colour here (accent-500 reaches only 2.7-3.5:1 on this scrim in five themes). The scrim
+     stays a SIBLING of the text: an opacity on a container fades the text inside it too (PowerPoint applies alpha
+     per object). */
+  main.slide.photo-hero { background: var(--c-brand-950); color: var(--c-white); }
+
+  .photo { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; object-fit: cover; object-position: 50% 60%; }
+  .scrim { position: absolute; left: 0; top: 0; width: 760px; height: 720px; background: var(--c-brand-950); opacity: 0.72; }
+
+  .brand { position: absolute; left: var(--margin-x); top: 64px; display: flex; align-items: center; gap: 8px; }
+  .brand .mark-a { background: var(--c-white); }
+  .wordmark { font-size: 18px; line-height: 24px; font-weight: 800; letter-spacing: -0.01em; color: var(--c-white); }
+
+  .kicker { position: absolute; left: var(--margin-x); top: 216px; font-size: 18px; line-height: 28px; font-weight: 700;
+            letter-spacing: var(--tracking-label); color: rgba(255, 255, 255, 0.80); }
+  /* 600 px boxes: about 10 Hangul syllables per 60 px line in malgun; they end 80 px inside the scrim */
+  .hero-title { position: absolute; left: var(--margin-x); top: 256px; width: 600px;
+                font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 800;
+                letter-spacing: var(--tracking-display); color: var(--c-white); }
+  .hero-sub { position: absolute; left: var(--margin-x); top: 440px; width: 600px;
+              font-size: var(--fs-lead); line-height: var(--lh-lead); color: rgba(255, 255, 255, 0.80); }
+
+  /* who / when / for whom over a 1 px rule, on fixed 192 px columns (the same pitch in both profiles) */
+  .meta { position: absolute; left: var(--margin-x); top: 528px; width: 576px; padding-top: 24px;
+          border-top: 1px solid rgba(255, 255, 255, 0.24); display: grid; grid-template-columns: repeat(3, 192px); }
+  .meta-label { font-size: var(--fs-label); line-height: var(--lh-label); font-weight: 600; letter-spacing: 0.04em;
+                color: rgba(255, 255, 255, 0.80); }
+  .meta-value { margin-top: 4px; font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-white); }
+
+  .hero-note { position: absolute; left: var(--margin-x); top: 680px; font-size: var(--fs-micro); line-height: var(--lh-micro);
+               color: rgba(255, 255, 255, 0.80); }
+</style>
+</head>
+<body>
+<main class="slide photo-hero" data-layout="사진 표지">
+  <img class="photo" src="../assets/photo.jpg" alt="해 질 녘 언덕 너머로 해가 지는 풍경 (합성 이미지)">
+  <div class="scrim"></div>
+
+  <div class="brand" data-group="브랜드">
+    <div class="mark" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+    <p class="wordmark">예시테크</p>
+  </div>
+
+  <p class="kicker">2026년 하반기 고객 포털 개편</p>
+  <h1 class="hero-title" data-placeholder="ctrTitle">화면을 바꾸자<br>기다림이 줄었습니다</h1>
+  <p class="hero-sub" data-placeholder="subTitle">상담원 화면과 모바일 신청서를 새로 만든 석 달의 결과</p>
+
+  <div class="meta">
+    <div class="meta-item"><p class="meta-label">보고 부서</p><p class="meta-value">고객경험팀</p></div>
+    <div class="meta-item"><p class="meta-label">보고일</p><p class="meta-value">2026년 10월 14일</p></div>
+    <div class="meta-item"><p class="meta-label">보고 대상</p><p class="meta-value">경영위원회</p></div>
+  </div>
+
+  <p class="hero-note">샘플 데이터 · 사진과 화면, 기업명과 수치는 모두 가상으로 만든 예시입니다</p>
+</main>
+<template id="notes">
+안녕하십니까, 고객경험팀입니다. 지난 석 달 동안 상담원 화면과 모바일 신청서를 새로 만들었습니다.
+오늘은 무엇을 바꿨고 그래서 무엇이 달라졌는지, 실제 화면을 보면서 말씀드리겠습니다.
+먼저 상담원이 매일 아침 가장 먼저 여는 화면부터 보시겠습니다. (약 30초)
+</template>
+</body>
+</html>

@@ -13,10 +13,12 @@ Reference implementation: `examples/business-review/slides/01-cover.html` … `0
 table, chart), `examples/layouts/slides/01-agenda.html` … `08-closing.html` (agenda, trend and mix charts, section
 divider, strategy framework, comparison, timeline, KPI targets, closing — one complete plan),
 `examples/handbook/slides/01-org.html` … `04-team.html` (org chart, week schedule, directory, team photos in empty
-photo slots — reference content), `examples/talk/slides/01-statement.html` … `06-closing.html` (statement opener,
-big number, quote, photo split, before/after, closing — a talk to present: few words at display sizes, §8.25) and
-the tokens and components in `converter/theme/base.css`. `examples/README.md` maps kinds of content to the closest
-slide.
+photo slots — reference content), `examples/visual/slides/01-photo-hero.html` … `05-photo-slot-hero.html` (a photo
+cover under a scrim, a screen capture in a browser frame, numbered callouts on a capture, phone screens before and
+after, a full-bleed photo slot under a scrim — slides built on pictures, §7 and §8.26–§8.30),
+`examples/talk/slides/01-statement.html` … `06-closing.html` (statement opener, big number, quote, photo split,
+before/after, closing — a talk to present: few words at display sizes, §8.25) and the tokens and components in
+`converter/theme/base.css`. `examples/README.md` maps kinds of content to the closest slide.
 
 ---------------------------------------------------------------------------------------------------------------
 
@@ -101,6 +103,7 @@ fail `check` and `build` (exit 1); warnings are reported — understand each one
 | `text-overflow`: any element with `scrollWidth > clientWidth` or `scrollHeight > clientHeight` | error | Text that does not fit its box lands somewhere else in PowerPoint. **Includes the glyph content area** — see §4.2, the #1 trap; the message says which fix applies (the line-height the glyphs need, a taller box, or a wider box). |
 | `title-wrap` | error | A slide title (`title`/`ctrTitle` placeholder) that wraps without `<br>`: it pushes the header into the content (§4.3; the cover title §8.13). The message says how many Hangul syllables the title's box holds per line in `malgun`. |
 | `text-overlap` | error | The line boxes of two elements' text intersect — each line's full font height (ascent to descent, 1.33 em in `malgun`), not only the ink, so the render may still look clear; PowerPoint places the lines as the render does. The message names the rule for the pair: side by side → ≥ 16 px between a line's end and the next text (§4.3); stacked → each text in its own box at a line-height ≥ 1.33 × its size (§4.2); a wrapped title → its `title-wrap` fix. |
+| `text-on-picture` | error | Text painted over a picture — an `<img>`, or a photo slot, whose photo arrives later — must stay legible whatever the picture holds under it, pure white and pure black included. For each line of the text the check takes the WORST case: the layers painted between the picture and the text (solid fills and two-stop gradients, times each one's opacity) composited over a white and a black pixel, a translucent text blended over that first; below 4.5:1 (3:1 when every run is ≥ 24 px, or ≥ 18.66 px at weight ≥ 700) it fails, and a line only partly covered by a layer fails on its bare part (1:1). The fix: a scrim under the text, an opaque card, or the text moved off the picture (§7). Inline `<svg>` icons are not pictures here; a photo slot's own hint is exempt. |
 | `mixed-content` | error | Bare text beside element children (`<div class="row">매출 <p class="pill">…</p></div>` in a flex row): wrap the text in its own element (§5.1). |
 | `font-weight` | error | A weight outside 400/600/700/800 (500, 900, `bolder` on 800): no profile has a face for it (§4.1). |
 | `out-of-bounds`: anything outside the 1280×720 slide | error | Nothing may bleed off the edge (no half-visible decorative circles); PowerPoint would show it on the pasteboard. |
@@ -146,7 +149,8 @@ Warnings worth knowing: `soft-wrap` (a two-line text whose break cuts a word, §
 colour under 3:1 on its background, §8.10), `chart-range` (a value outside the value axis: PowerPoint clips the bar
 while its label keeps the true number, §8.10), `fallback-font`, `not-embedded-glyph`, `line-height-normal`, `text`
 (justify, italic without an italic face, mixed sizes in a wrapping paragraph …), `geometric-marker` (use the
-`"• "` marker), `list-item-blocks` (§5.4), `group-opacity` (§6), `inline-background` (§5.2), `image`,
+`"• "` marker), `list-item-blocks` (§5.4), `group-opacity` (§6), `inline-background` (§5.2), `image` (e.g. a
+rounded `<img>`, whose corner clip is baked into the PNG — expected for a phone screen, §8.29),
 `placeholder`, `placeholder-geometry` (a rounded photo slot: PowerPoint's picture placeholder is a rectangle, so the
 inserted photo shows square corners over the rounded frame — keep slots square-cornered, §7), `theme-link` (a
 slide that does not link `../deck.css`, or links it before `../theme/base.css`: it
@@ -318,7 +322,8 @@ not a convertible list (`list-item-blocks`): use plain rows (`div`s) for structu
   examples use 16 px).
 - Paint order = DOM order (first = back): put decorative shapes first in `<main>`.
 - `opacity` on a container is discouraged (CSS composites the group, PowerPoint applies alpha per object); put
-  the alpha into each colour (`rgba()`) instead.
+  the alpha into each colour (`rgba()`) instead. A LEAF box may carry it — a scrim in a theme token
+  (`var(--c-brand-950)` at `opacity: 0.72`, §7) is one object either way.
 
 ## 7. Shapes, colour, effects, pictures
 
@@ -332,14 +337,17 @@ not a convertible list (`list-item-blocks`): use plain rows (`div`s) for structu
 | shadow | one outer `box-shadow: 0 8px 24px rgba(…, .07)` with spread 0, on an **opaque** box | Maps to PowerPoint's outer shadow. Keep shadows soft and subtle: PowerPoint's blur differs slightly from CSS. |
 | rotation | `transform: rotate(…)` only (no tables/charts) | Tables and chart frames cannot rotate in Office. |
 | icons | inline `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" …>` inside an element whose CSS `color` is a token (`.icon-badge` is brand-600; a glass badge or a dark slide is white) | Becomes a picture (a 4× PNG plus the native SVG); the converter bakes the container's colour into it, so the theme recolours every icon. Otherwise self-contained: `currentColor` or a literal colour in the markup (no `var()`, no classes, no page CSS setting `stroke`/`fill` — a warning), one colour, no `<text>`, and no `<use>`/`<symbol>` (content drawn through `<use>` keeps `currentColor`, ships as a PNG and draws black). |
-| photos / raster art | `<img src="../assets/<file>" alt="…">` with an explicit CSS size | Becomes a picture, rendered at up to 4× its CSS size and at most 2560 px on its longest side. A JPEG source that fills its box (`object-fit: fill` or `cover`, no `border-radius`, opacity 1) stays JPEG; anything else becomes PNG. Use JPEG photos at a sensible size: the built .pptx must stay ≤ 30 MB. An empty `alt` marks the picture decorative; give meaningful pictures an `alt`. `object-position` picks the crop: the converter renders the picture with the same `object-fit`/`object-position`, so PowerPoint shows the same crop (`examples/talk/slides/04-image-led.html`). |
+| photos / raster art | `<img src="../assets/<file>" alt="…">` with an explicit CSS size | Becomes a picture, rendered at up to 4× its CSS size and at most 2560 px on its longest side. A JPEG source that fills its box (`object-fit: fill` or `cover`, no `border-radius`, opacity 1) stays JPEG; anything else becomes PNG. Use JPEG photos at a sensible size: the built .pptx must stay ≤ 30 MB. An empty `alt` marks the picture decorative; give meaningful pictures an `alt`. `object-position` picks the crop: the converter renders the picture with the same `object-fit`/`object-position`, so PowerPoint shows the same crop (`examples/talk/slides/04-image-led.html`). The picture is a FILE in `assets/` — the user's attached image, a capture, a Confluence diagram (SKILL.md §2) — never a redrawing of one. Text goes beside it, on an opaque card, or on a scrim (below). The picture is its whole box: a PNG's transparent area counts as picture too (`text-on-picture` judges text over it like text over the photo), so crop the image or move the text rather than writing into a transparent margin. |
+| screen capture — a web page, an app screen, a dashboard | `<img src="../assets/<file>" alt="…">` at the capture's OWN aspect: the whole capture with `object-fit: contain` in a frame of that aspect — a browser window drawn from shapes around it (`examples/visual/slides/02-capture-frame.html`), phone bezels (`04-phone-screens.html`) — or `object-fit: cover` + `object-position: top` to show the top of a UI (`03-capture-callouts.html`). Never show a capture larger than its own pixels (the `screenshot` result states its size; a 600 px element capture fills at most 600 CSS px). Numbered markers ON a capture are opaque circles holding their digit, the explanations go beside or under it, and a caption under it names the source (which system, when). | A capture is evidence: stretched, it distorts a screen people know; upscaled, it blurs. `contain` in a frame of its own aspect shows every pixel once, and the frame stays editable shapes around one picture. Capture only the element the slide is about (a snapshot `uid`), never a page the deck is not about, and keep personal data and secrets off it: when an element shows any, capture a narrower one that shows none — never place it unmasked, and there is no masking step (a crop on the slide still leaves the rest in `assets/`). A drawn mock-up never poses as a real screen. |
 | photo slot — a photo the user adds later (team members, a product, a venue) | `<div class="photo-slot" data-placeholder="pic" data-prompt="팀원 사진을 넣으세요">` with an explicit width and height (each at least 24 px, else `placeholder-size`) and square corners, holding only a hint: an inline `<svg>` icon (`stroke="currentColor"`, `fill="none"`) and `<p class="photo-slot-hint">` repeating the prompt (`examples/handbook/slides/04-team.html`). The kit draws the icon and the hint in `--c-ink-600` on the slot's `--c-ink-100` fill, a pair every theme keeps at 4.5:1 (§9) — do not lighten it | Becomes PowerPoint's EMPTY picture placeholder: the user clicks its icon and the photo fills the slot, cropped to its box; the prompt shows in Normal view only. The slot's own fill and dashed border stay a shape (visible in the slide show). EVERY child of the slot is an HTML-only hint dropped from the .pptx — put names, captions and any other text or picture NEXT TO the slot; the hint shows only in the renders (the chat previews, the review canvas, a share link's viewer), which is why its contrast still counts. `data-prompt`: one line, at most 80 characters, in the user's language. Give photo slides their own `data-layout`: the layout receives every slot of its slides (New Slide from it brings them, empty), so a layout shared with slides that have no slot would hand every New Slide empty slots too (`placeholder-layout`). The slides of one layout share each slot's prompt by DOCUMENT order — the 1st slot in the markup, the 2nd …, however each is positioned or stacked: give them the same prompts in the same order, or give each slide its own `data-layout`. A photo slide alone on its layout keeps its footer and page number on the slide itself (lifting needs ≥ 2 slides, §12); two photo slides sharing one layout with identical prompts get the footer lifted into it. |
+| scrim — text over a photo or a photo slot | ONE leaf box painted after the picture and before the text, covering every line of it with room to spare (the check measures each line's full font height): `<div class="scrim"></div>` with `background: var(--c-brand-950); opacity: 0.72` under white text — a panel beside the text column (`examples/visual/slides/01-photo-hero.html`) or a band across the slide (`05-photo-slot-hero.html`, over a photo slot). brand-950 is dark in every theme; at 0.72 white text keeps ≥ 6.6:1 over ANY photo in all six (the least that passes is about 0.61 in `forest`, whose brand-950 is the lightest; the check's message names ≥ 0.72, the kit standard, because it also carries 80 % white text in every theme — 0.64 fails that in `classic`, `editorial`, `forest` and `violet`), translucent white text on it needs ≥ 75 % (74 % fails in `forest` at 4.4995:1; the examples use 80 %), and the accent is no text colour there (accent-500 reaches only 2.7–3.5:1 on it in five themes). A light scrim (the surface colour) under dark text works the same way. Put the arithmetic in the slide's `<style>` comment. | A photo gives text no contrast of its own: a sky, a white wall or a dark suit can land under any line, and the next photo someone drops in changes it again. `text-on-picture` (§2) judges the worst pixel — pure white under white text — through every layer in between, so a scrim that passes keeps the text legible for any photo in that place. Keep the scrim a SIBLING of the text, never its container: an `opacity` on a container fades the text inside it too (PowerPoint applies alpha per object). Other ways out: an opaque card over the photo, or the text beside it (`examples/talk/slides/04-image-led.html`). |
 
 ## 8. Component patterns (all in `converter/theme/base.css` or in the examples' `<style>`)
 
 Each is built only from convertible parts: shapes (boxes), leaf text blocks, pictures, a table, a chart. The
 business-review example shows 8.1–8.13, the layouts example 8.14–8.21, the handbook 8.22–8.24 (its team slide: the
-photo slot, §7) and the talk deck 8.25.
+photo slot, §7), the talk deck 8.25 and the visual deck 8.26–8.30 (pictures: photos, screen captures, a photo slot,
+scrims — §7).
 
 **8.1 Slide header** — section label + action title (+ optional context chip on the right).
 ```html
@@ -631,11 +639,56 @@ meet in one only: malgun seats the figure's baseline 19 px lower); the **quote**
 title, the quote mark a filled `currentColor` SVG, the source under a short rule (a quote is someone's actual words:
 use one the user gives, never write one); the **photo split** on its own `data-layout` — the photo fills one half
 edge to edge (`object-fit: cover`, `object-position` for the crop, §7) and EVERY text, the sample-data note and the
-page number included, sits on the other half's token surface: a photo gives text no contrast guarantee and the slides
-allow no dark scrim (and a picture across the footer band would keep a shared layout from taking the footer, §12);
+page number included, sits on the other half's token surface: a photo gives text no contrast guarantee, and the split
+keeps the whole photo in view where text over it would need a scrim (§7, §8.26) — and a picture across the footer
+band would keep a shared layout from taking the footer (§12);
 the **versus** — two cards with the same rows, the one figure that changed pinned to the bottom, the after card dark,
 a connector circle on the seam ringed in the page colour; the **closing** — the one ask as the title, where to send
 it, the next dates on a rail, the opener's motif again.
+
+**8.26 Photo cover** (`examples/visual/slides/01-photo-hero.html`) — its own `data-layout="사진 표지"` on a brand-950
+background: the photo fills the slide (`object-fit: cover`, `object-position` for the crop; a JPEG stays a JPEG, §7),
+a scrim covers the text column (x 0–760: brand-950 at 0.72, §7, the arithmetic in the slide's `<style>` comment) and
+on it the brand, a kicker, the 60/80 title in two hard lines (`ctrTitle`; a 600 px box holds about 10 Hangul syllables
+per line in `malgun`), the subtitle (`subTitle`), a meta row on fixed 192 px columns and the sample-data note. Every
+text is white, the secondary ones at 80 % (the kit's choice, above §7's 75 % floor), never in the accent, which reaches only about 3:1 on the
+scrim. The text boxes end 80 px inside the scrim; the photo's subject (the sun) stays in the open part.
+
+**8.27 Capture in a browser frame** (`02-capture-frame.html`) — a capture of the system's main area — an element
+capture (`mcp__browser__screenshot` with the `uid` of the app's main container), never the whole screen — in a
+browser window drawn from shapes: one rounded box in `--c-ink-100` (the chrome) with a 1 px ink-200 outline, a top
+bar with three `--c-ink-300` dots and an address pill (`--c-surface`, the URL at 12/16), and the capture inset 8 px,
+so its square corners stay inside the window's `--radius-box` corners (up to 18 px) — 608 × 380 px for a 1600 × 1000
+capture, `object-fit: contain`. If that element shows personal data, capture a narrower one that shows none; never
+place it unmasked (there is no masking step). Its source is the caption under the window (which system, which day).
+Beside it, three numbered notes in the order the presenter walks the screen (a 32 px brand-600 circle with its digit
+in `--c-on-fill`, a name 18/28·700, one line 16/24), and a summary box pinned to the window's bottom edge.
+
+**8.28 Numbered callouts on a capture** (`03-capture-callouts.html`) — the part of the screen the slide is about,
+cropped from the top (`object-fit: cover` + `object-position: top`: 1118 × 224 px of a 1600 px capture show its top
+320 px, cut in the page gap under the KPI tiles rather than through an element) in a 1 px ink-200 frame; an opaque
+marker ON each control it names — a 36 px brand-600 circle with a 3 px surface-coloured ring and its digit in
+`--c-on-fill`, so no text reads against the capture (`text-on-picture`) — at the control's pixel position scaled into
+the slide (centre = the image's origin + scale × the source position, in the slide's comment); under it, the
+explanations in the same order as three cards (number and name, two lines, and a locator line pinned to the bottom
+that says where on the screen the marker sits). Recompute the markers whenever the capture or the crop changes.
+
+**8.29 Phone screens, before and after** (`04-phone-screens.html`) — two phones drawn from shapes: a bezel (a 32 px
+rounded box in brand-950, dark in every theme, with a 1 px ink-300 edge that shows on `midnight`'s dark page, 8 px
+around the screen) and a camera dot, with the capture itself as the screen (182 × 364 px for a 750 × 1500 capture, its
+24 px corners = 32 − 8: a rounded picture becomes a PNG with the clip baked in — the `image` note on the check); an
+arrow circle on the gap, one label under each phone (the after one in brand-700), never text on the screens; the
+figures that prove the title in a card beside them — each metric's two bars on its own scale with the value after
+each bar, and the change as a green pill in words (§8.20).
+
+**8.30 Photo slot under a scrim** (`05-photo-slot-hero.html`) — a template for a photo the user adds later: a
+full-bleed photo slot (`data-placeholder="pic"`, square corners, its own `data-layout="사진 맺음"`, its hint moved up
+with `padding-top` so the renders show it clear of the band) and, as SIBLINGS painted after it (never inside it,
+where everything is an HTML-only hint, §7), a scrim band across the bottom (y 408–720, brand-950 at 0.72) with the
+closing on it: a kicker, the ask as a 60/80 two-line title, the next dates on a vertical rail (the key date's dot in
+the accent: a mark, not text), the sample-data note and the page number. The check treats the slot as the picture it
+will hold, so the text stays legible for ANY photo the user inserts; alone on its layout, the slide keeps its page
+number on the slide (§12).
 
 ## 9. Design system: tokens and themes
 
@@ -739,10 +792,14 @@ restyles a finished deck without touching a slide. A literal hex in a slide is t
   leftover unless you meant it. `deck.sh check` measures only chart colours (`chart-contrast`). `deck.css` may also
   add deck-wide component rules; it is linked like `base.css`, so every rule in §2–§7 applies to it.
 - **Compose each slide around ONE visual that proves its title**: the title states the claim, the `.slide-sub`
-  its evidence (when one figure carries it), and the dominant object shows it — a native chart, bars on one
-  scale, a cost bar, a timeline, a big number. The reader should get the point from the visual before reading a
-  label. Reference content (an org chart, a schedule, a directory) has no finding: its title says what the reader
-  should know or do, and the structure itself is the visual (§8.22–§8.24).
+  its evidence (when one figure carries it), and the dominant object shows it — a photo or a screen capture of what
+  the deck is about, a native chart, bars on one scale, a cost bar, a timeline, a diagram from the kit's shapes, a
+  big number — or, for a statement, a quote or an agenda, the words themselves at display size: text is a legitimate
+  visual, and no slide gets an image just to have one. Settle each slide's visual AND its source before the HTML
+  (SKILL.md §2): the user's attached image, a capture of the system, a Confluence diagram — each placed as the file
+  itself (§7), never redrawn — or the user's figures as a chart. The reader should get the point from the visual
+  before reading a label. Reference content (an org chart, a schedule, a directory) has no finding: its title says
+  what the reader should know or do, and the structure itself is the visual (§8.22–§8.24).
 - **One colour, one meaning, across the deck**: brand-600 = ours / the current period / the recommended option / a
   strategy's own work; grey (`--c-series-prev` in data, `--c-ink-500` for bars) = the prior period / the
   alternative / shared work; brand-900 = the emphasis surface (hero KPIs, the recommended option, a summary card,
@@ -787,8 +844,8 @@ Checklist:
 2. Soft wraps only where intended (the check prints each one with " / " at its breaks); no unintended wrap
    differences between the profiles.
 3. No glyph drawn by a fallback font (`fallback-font`, `missing-glyph`).
-4. No text overlaps (`text-overlap` errors); nothing within 16 px of a collision in the wider (`malgun`) render —
-   text against shapes is not measured, so look.
+4. No text overlaps (`text-overlap` errors) and no `text-on-picture` error; nothing within 16 px of a collision in
+   the wider (`malgun`) render — text against shapes is not measured, so look.
 5. Every number consistent across slides (units sum to totals; the same figure means the same thing everywhere).
 6. Page numbers show each slide's position; sample data is visibly marked.
 

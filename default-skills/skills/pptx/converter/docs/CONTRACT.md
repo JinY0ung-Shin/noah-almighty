@@ -101,9 +101,63 @@ Errors:
 | `asset-too-large` | a served file over 20 MB |
 | `image-too-large` | a picture over 40 MP, one slide's distinct pictures over 100 MP together, a picture whose pixel size cannot be read, or a deck HTML/CSS/SVG embedding such a base64 `data:` image — refused before Chromium decodes it |
 | `slide-name`, `slide-count`, `slide-too-large`, `deck-too-large` | pre-checks before any browser starts (bad/duplicate `NN-name.html`; > 60 slides; a slide over 2 MB; inputs over 100 MB) |
+| `text-on-picture` (1.3.0) | a text element whose line boxes cross a PICTURE painted before it — an `<img>`, or a photo slot (`data-placeholder="pic"`, whose photo arrives later) — below 4.5:1 (3:1 when every run is ≥ 24 px, or ≥ 18.66 px at weight ≥ 700) WORST-CASE contrast over those line boxes: any photo can put any colour behind the text (below) |
 
 Promoted from the PoC's warnings to errors: `blocked-request`, `missing-glyph`. Speaker notes: `<template
 id="notes">` (recommended), `aside.notes`, `[data-notes]` or `<script type="text/x-notes">`, as the PoC's `notesOf()`.
+
+**`text-on-picture`** (`tools/extract/inpage/55-text-on-picture.js`, run in the page on the painted element list, so it
+is part of `ir.lint` in check and build, for each profile — `path` = the text element's DOM path). The picture's pixels
+are unknown (a photo slot has none yet, and `check` rasterises nothing), so the lint judges ANY photo, and the contrast
+it reports is never above the true worst case. Each line box (a line's glyph content area, the outside list marker
+included) is cut at the layers' edges and bisected along curved or slanted ones (roundRect and ellipse geometry and
+rotation are honoured; a last-pixel cell is decided by its centre) into pieces under a fixed set of layers, so a line
+box only partly under a layer is judged on its uncovered part too — the bare picture, 1:1. Over a piece, the layers
+painted between the picture and the text — shape fills, solid and linear-gradient, times each element's IR `opacity`
+(its own × every ancestor's: PowerPoint's per-object alpha) — are composited in sRGB like the browser over a pure-black
+and a pure-white picture: every composite channel rises with the picture's, so every photo's composite lies in the box
+between the two ends, and a gradient's extremes over the piece lie at its corners and the stops between. A photo slot
+counts as OPAQUE whatever its CSS opacity: PowerPoint inserts the user's photo into the placeholder without alpha. That
+box is exact where nothing that shows varies, and under a single-hue ramp (one colour fading in alpha) painted straight
+over an opaque picture, whose box only narrows as its alpha grows. Any other gradient — stops of different colours, or
+a ramp over anything but an opaque picture (another layer, a translucent `<img>`; the slide background's under a
+translucent `<img>`) — can be darker INSIDE the ramp (sRGB interpolation: over a black pixel an 80 % red → green ramp
+leaves black text 2.82:1 about a quarter of the way along, but 3.57:1 at its red end), so the piece is judged in slabs
+of at most 1/64 of that gradient's shortest stop segment there (at most 256 per piece), each by its own box: stricter
+than exact by at most what the layers change across one slab (that ramp reads 2.76:1). Opaque text is judged exactly
+against a box: 1:1 when its luminance lies between the box's two ends, else against the nearer one. A translucent text
+colour (run alpha × element opacity) is blended over the composite first; its worst composite is searched over the
+whole box — each channel on its own, since a photo's channels are independent and WCAG luminance is a sum of
+per-channel terms — by Dinkelbach's iteration over a 256-step grid per channel, and the grid's result is lowered by a
+bound of what the grid can miss (between two grid values a per-channel term dips by at most M·h²/8, M its largest
+second derivative): never above the true worst of that box, and at most about 0.03 % below it (a search along the grey
+diagonal alone can read over 10 % too kind under a coloured layer). Where the layers hide the picture completely (an
+opaque card: the self-test's `features/01-photo`) no picture pixel shows and the text is not on it. The search work is
+bounded — 2^19 units per text element and 2^20 per slide, deterministic (the same deck always gives the same findings),
+about a microsecond each; the slide's budget is spent in paint order but never takes a text's first 2^10 units, so a
+caption painted after a busy part of the slide is still searched exactly — and past either budget the rest is judged by
+bounds that are only ever stricter: a piece is no longer halved along curved or slanted edges (a layer covering part of
+it counts as maybe there; an axis-aligned edge still cuts, and twice past the bound the rest of a line is one piece),
+one box per piece, and translucent text against the box's corners. A finding they decide reads `… or better (a safe
+bound, not the exact value: too many shapes overlap this text to search exactly — merge or remove the translucent
+shapes under it, or give it one plain scrim, and the check measures it exactly)`, or, when the slide's budget ran out
+rather than the text's own, `… or better (a safe bound, not the exact value: the texts painted before this one used up
+the slide's search budget — merge or remove the translucent shapes under the texts on this slide, or give them plain
+scrims, and the check measures this one exactly)`. Measured per slide and profile: about 0.5 s for 30 lines of
+translucent text over 400 translucent circles under a hue-shifting scrim, about 1 s for 12 text boxes over 150 circles,
+about 2 s for 1,200 small texts over 66 rotated gradient ellipses, and a few seconds at the DOM cap (every line under
+1,200 rotated layers: about 4 s); the shipped examples check as fast as before.
+Tolerances: a line box must cross a picture by > 1 px on both axes, pieces under 1 px are ignored, and a picture
+showing through by < 0.5/255 is hidden. Not pictures: inline `<svg>` icons (and a chart's preview); never checked: the
+text inside a photo slot (its HTML-only hint never reaches the element list), table cells and chart labels (atomic
+objects), text painted before the picture. The message names the text, the picture, the worst ratio and its
+threshold, why (the line that lies on the bare picture, or the share of the picture the layers between still let
+through, a translucent text colour) and the fix: `a scrim under the text (a dark token box, e.g.
+var(--c-brand-950) at opacity ≥ 0.72, under white text; or a light one under dark text), an opaque card, or move the
+text off the picture (AUTHORING §7)`. 0.72 is the kit's standard: a brand-950 scrim at 0.72 keeps 4.5:1 for white and
+for 80 % white text in every shipped theme (forest, the tightest: 6.63 and 4.95:1), where 0.64 fails 80 % white text
+in four of them. The Next: line points at AUTHORING §7. A slide with no picture never gets it —
+and nothing checks that a slide HAS a picture: text-only slides are a legitimate choice.
 
 Warning: `theme-link` — the deck has a `deck.css`, and a checked slide does not apply it over the kit: it does not
 link `../deck.css` (`this slide does not link ../deck.css, so it shows the kit's default theme, not the deck's: add
@@ -197,7 +251,7 @@ class `internal` (exit 4); a gate killed at its deadline is class `timeout` (exi
 ## Preview sidecar (`<stem>.preview/manifest.json`)
 
 ```json
-{"format": "noah-deck-preview", "version": 1, "generator": "noah-pptx-converter/1.2.0", "pptx": "q3-review.pptx",
+{"format": "noah-deck-preview", "version": 1, "generator": "noah-pptx-converter/1.3.0", "pptx": "q3-review.pptx",
  "pptxSha256": "<64 lowercase hex of the .pptx bytes>", "profile": "embedded", "createdAt": "2026-09-26T03:00:00Z",
  "slideCount": 6,
  "slides": [{"index": 1, "file": "slide-01.png", "mediaType": "image/png", "sha256": "<hex64>", "width": 1920,
@@ -256,8 +310,14 @@ rounded PNG → transparent PNG, an inline SVG icon → native svgBlip) into the
 
 ## Version
 
-`VERSION` (1.2.0); `generator` = `noah-pptx-converter/<VERSION>`. Bump it whenever the output or the input contract
+`VERSION` (1.3.0); `generator` = `noah-pptx-converter/<VERSION>`. Bump it whenever the output or the input contract
 changes; regenerate the goldens only after a PowerPoint spot-check.
+
+1.3.0 narrows the input contract with ONE error lint, **`text-on-picture`** ("Noah lints" above): text painted over an
+`<img>` or a photo slot must keep 4.5:1 (3:1 large) against ANY photo, through the layers between them. Nothing else
+changes: no IR field, no builder or gate change, and the lint only speaks where text crosses a picture — every deck
+that passes it gets the same IR, lint and PPTX as with 1.2.0, so the goldens still match (the self-test's photo slide
+keeps its text on an opaque card).
 
 1.2.0 adds **photo slots** — PowerPoint's EMPTY picture placeholder, which the user fills by clicking its icon (the
 photo takes the slot's box, cropped to it): a new input value `data-placeholder="pic"` with `data-prompt` on a box,
@@ -571,7 +631,9 @@ anything outside the slide bounds, a slide-number field that does not show the s
 beside element children (`mixed-content`), a soft-wrapped slide title (`title-wrap`), a weight outside the kit's
 400/600/700/800 (`font-weight`), an invalid ChartSpec or a chart colour token that does not resolve to an opaque colour
 (`chart-spec`), a photo slot's `placeholder-prompt`, `placeholder-size`, `placeholder-content` and
-`rotated-placeholder` (1.2.0, `kind: "placeholder"` above). Warn: `placeholder-geometry` (a rounded photo slot), the
+`rotated-placeholder` (1.2.0, `kind: "placeholder"` above), text whose worst-case contrast over a picture painted before
+it (an `<img>` or a photo slot) is under 4.5:1, 3:1 for large text (`text-on-picture`, 1.3.0, "Noah lints" above).
+Warn: `placeholder-geometry` (a rounded photo slot), the
 check's `placeholder-layout` (photo slides sharing a layout with slides that have no slot; from the IR, never in it),
 `font-weight` for a kit weight the profile lacks (malgun 600/800, expected;
 also counts table-cell runs and chart label/axis weights), `chart-contrast`, `chart-range` (a drawn value — the

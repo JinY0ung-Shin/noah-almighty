@@ -48,6 +48,20 @@ as in English PowerPoint with the Korean PowerPoint names in parentheses.
   update both by hand after renaming a series or changing values. The plot area fills the chart frame, so turning
   on PowerPoint's own legend or axis titles overlaps the bars — shrink the plot area after doing so.
 
+## Pictures
+
+- **Swap a photo or a screen capture with Change Picture** (right-click > Change Picture / 그림 바꾸기): the new
+  picture takes the old one's place and size. A browser window or a phone drawn around a capture is a group of
+  shapes: change the picture inside it, and move the numbered markers on a capture when the new screen's controls
+  sit elsewhere. A phone screen's rounded corners are part of the old picture, so a replacement comes in square:
+  round it with Picture Format > Crop > Crop to Shape > Rounded Rectangle (그림 서식 > 자르기 > 도형에 맞춰 자르기 >
+  사각형: 둥근 모서리).
+- **Text over a photo sits on a scrim** — a separate dark shape, 28 % transparent, between the photo and the text
+  (Format Shape > Fill > Transparency / 도형 서식 > 채우기 > 투명도). Keep it when changing the photo: it is what
+  keeps the text legible on any photo. Making it more transparent lets a bright photo swallow the text.
+- A full-bleed photo slot under a dark band: click the slot's picture icon (above the band) to insert the photo; the
+  band and its text stay on top of it.
+
 ## Footer, page numbers, layouts
 
 - The footer (rule, brand mark, deck name, note, page number) is part of the slide layout (e.g. 본문), not of

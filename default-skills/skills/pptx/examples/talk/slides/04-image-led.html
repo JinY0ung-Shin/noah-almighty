@@ -10,9 +10,10 @@
   /* Image-led (발표형): the photo carries the mood, the panel the message. The photo fills the left half edge to
      edge (a JPEG with object-fit: cover stays a JPEG; object-position picks the crop, so the moon sits right of
      centre); EVERY text — headline, lead, figures, the sample-data note and the page number — sits on the panel,
-     the slide's own brand-900 background, never on the photo: a photo gives text no contrast guarantee, and the
-     slides allow no dark scrim. Its own data-layout: a picture across the footer band would keep the 본문
-     layout from taking the footer. */
+     the slide's own brand-900 background, never on the photo: a photo gives text no contrast guarantee, and this
+     split shows the whole photo where text over it would need a scrim (AUTHORING §7; the visual deck's photo
+     hero). Its own data-layout: a picture across the footer band would keep the 본문 layout from taking the
+     footer. */
   main.slide.photo-split { background: var(--c-brand-900); color: var(--c-white); }
 
   .photo { position: absolute; left: 0; top: 0; width: 640px; height: 720px; object-fit: cover; object-position: 80% 50%; }

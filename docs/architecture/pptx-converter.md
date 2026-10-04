@@ -49,9 +49,10 @@
   The skill around it: `SKILL.md`, `scripts/deck.sh` (exports `PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1`,
   then `exec node …/converter/tools/deck.mjs "$@"`; always invoked as `bash …/deck.sh`, so the exec bit does not
   matter), `scripts/render_deck.sh`, `scripts/theme-check.mjs` (theme audit + derive, see "Themes"),
-  `reference/{AUTHORING,EDITING,python-pptx}.md`, `examples/{business-review,layouts,handbook,talk}/` (each with
+  `reference/{AUTHORING,EDITING,python-pptx}.md`, `examples/{business-review,layouts,handbook,talk,visual}/` (each with
   the `classic` theme as its `deck.css`; `talk` also carries `assets/photo.jpg`, a copy of the self-test's
-  synthetic photo), and `themes/{classic,mono,editorial,midnight,forest,violet}.css` (see "Themes" below).
+  synthetic photo, and `visual` carries the same photo plus three synthetic captures from
+  `converter/selftest/tools/make_assets.py --visual`), and `themes/{classic,mono,editorial,midnight,forest,violet}.css` (see "Themes" below).
 - **Deck root** = a folder in the agent's workspace — the conversation scratch workspace (cwd), or, when a
   repository is open, the scratch workspace listed as an additional working directory unless the user wants the
   deck committed. Both are `share_file` roots.
@@ -142,9 +143,9 @@
   in SKILL.md carries each theme file's own `Fits:` line, and the single-line `Feel:`/`Avoid:` header lines that
   follow it appear verbatim under the table (`` `<theme>` — Feel: …; Avoid: … ``, pinned against the flattened
   SKILL); the SKILL may name `theme-check.mjs`'s own flags only as its usage prints them. Derived themes have their
-  own suite, `tests/theme-derive.test.ts`. Every example × theme × profile builds with `--strict` (4 decks × 6
+  own suite, `tests/theme-derive.test.ts`. Every example × theme × profile builds with `--strict` (5 decks × 6
   themes × 2 profiles, checked by hand when a theme, an example or the converter changes; the Docker smoke builds
-  every theme over three examples — `business-review`, `layouts`, `talk` — and validates them with the Open XML
+  every theme over four examples — `business-review`, `layouts`, `talk`, `visual` — and validates them with the Open XML
   SDK).
 
 ## The skill around the converter (SKILL.md, examples)
@@ -158,8 +159,9 @@ Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in p
   since a reader without the speaker sees no notes. The big number aligns the lead's last baseline with the
   figure's in one `align-items: last baseline` flex row (fixed tops matched in embedded only: malgun seats the
   280 px line's baseline 19 px lower). Its photo slide (`data-layout="사진"`) keeps every text, the sample-data note
-  and page number included, on a token panel beside the photo: the slides allow no dark scrim, and a picture across
-  the footer band would keep a shared layout from lifting the footer. SKILL §2's 발표형 answer, AUTHORING §8.25 and
+  and page number included, on a token panel beside the photo: the split keeps the whole photo in view where text over it would need a scrim
+  (AUTHORING §7, `text-on-picture`), and a picture across the footer band would keep a shared layout from lifting the
+  footer. SKILL §2's 발표형 answer, AUTHORING §8.25 and
   the examples README quote the deck's sizes; a test checks them against the slides' CSS, next to a ≤ 40-word
   density pin and a floor (every talk-slide font size ≥ 18 px except the 12/16 note and page-number chrome).
 - **Photo slots** (converter 1.2.0, see Versioning): `handbook/slides/04-team.html` shows three square slots on the
@@ -171,6 +173,20 @@ Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in p
   non-photo slides is a `placeholder-layout` warning, and a photo slide alone on its layout keeps its footer on the
   slide (lifting needs ≥ 2 slides): AUTHORING §7 and EDITING say so, and SKILL §6 has the agent fix a photo-slot
   warning before delivering.
+- **Decks that show (`examples/visual`, converter 1.3.0's `text-on-picture`).** SKILL §2 has the agent settle every
+  slide's main visual AND its source before any HTML, from what describe_system's `Images for documents and decks`
+  line says the run has: attached images (`attachments/`), an element capture of the system the deck is about
+  (`captures/`), a Confluence diagram (`get_attachment` `save_to_workspace: true` → `confluence/`), the user's
+  figures as a native chart, a structure as a kit-shape diagram — or deliberately text (a statement, a quote, an
+  agenda). Text stays a legitimate visual: by the user's decision (2026-09-30) nothing checks or warns that a slide has
+  no image. The file itself goes into `<deck>/assets/`, never a redrawing. `visual` (5 slides) shows the patterns: a
+  photo cover under a scrim, a capture in a browser frame drawn from shapes, opaque numbered markers on a capture,
+  phone bezels before/after, a full-bleed photo slot under a scrim band. Its assets are synthetic and deterministic
+  (`make_assets.py --visual`: the self-test photo byte-copied, a 1600×1000 dashboard and two 750×1500 phone screens
+  with Pretendard labels; ~300 KB). Text on a picture sits on ONE leaf scrim sibling (`var(--c-brand-950)` at 0.72):
+  worst case in forest (the lightest brand-950) 6.63:1 for white text and 4.95:1 for 80 % white; the floor is 0.61,
+  and 72 % white text would fail at 4.36:1. The slides' comments carry the arithmetic, AUTHORING §7 and §8.26–§8.30
+  the rules, and `tests/pptx-skill.test.ts` recomputes it against every theme's brand-950.
 - **One scoping question (SKILL §0–§2).** Right after describe_system reports `converter: INSTALLED` and before
   AUTHORING, a NEW deck in an interactive chat gets at most ONE `AskUserQuestion` per conversation, asking only what
   is still open: 테마 (the three best-fitting themes, the recommended one first with `(추천)`), 분량, 용도 (보고서형 /
@@ -295,6 +311,42 @@ environment (all optional):
   a linear scan of the applied `<link rel=stylesheet>`s; `pipeline.mjs` `themeLinkLint`, check and build, report
   only): `theme-link` warnings when `<deck>/deck.css` exists and a slide does not link it (it would show the kit's
   default theme) or links it before `../theme/base.css` (whose `:root` would then win).
+- **Text on pictures (`text-on-picture`, error, converter 1.3.0)** — `inpage/55-text-on-picture.js`, run in the page
+  right after the paint walk, so it lands in `ir.lint` in check AND build, per profile (no IR field added; the
+  self-test goldens are unchanged). Text whose line boxes cross an `<img>` or a photo slot painted before it must keep
+  4.5:1 (3:1 when every run is ≥ 24 px, or ≥ 18.66 px at ≥ 700) against ANY photo — the check has no pixels and a slot
+  has no photo yet, and the user may swap the photo in PowerPoint. The layers painted in between (shape fills, solid
+  or 2-stop linear gradients, times the per-object opacity PowerPoint applies) are composited in sRGB over pure black
+  and pure white, which bound every photo; a photo slot counts as opaque whatever its CSS opacity (PowerPoint inserts
+  the photo without alpha). Opaque text is exact (a text luminance between the two ends is 1:1); translucent text is
+  blended first and its worst composite searched over the whole box of reachable colours, channel by channel (a
+  grey-diagonal search alone can read over 10 % too kind under a coloured layer, in the 3–6:1 band where verdicts
+  flip). Line boxes are cut at layer edges (roundRect, ellipse and rotated shapes exactly) into pieces, so a line only
+  partly under a scrim is judged on its bare part, and each piece is judged by the box of every composite over it:
+  exact where nothing varies and under a single-hue ramp straight over an opaque picture; under any other gradient the
+  piece is cut into slabs of ≤ 1/64 of the shortest stop segment, each by its own box, so the lint never reads above
+  the true worst (80 % red → green: true 2.82:1 inside the ramp, the lint 2.76:1; 3.57:1 at its red end). The
+  translucent grid's result is lowered by a certified bound of what the grid can miss (never above a 4096-step search,
+  ≤ 0.03 % below). Work is bounded deterministically — 2^19 units per element and 2^20 per slide, about 1 µs each,
+  counted rather than timed, so a deck always gives the same findings. Each text keeps a floor of 2^10 units the slide
+  budget cannot take, so a light caption painted after heavy text is still measured exactly; a finding carries
+  `boundBy` (`element` or `slide`), and a slide-forced bound says "the texts painted before this one used up the
+  slide's search budget — merge or remove the translucent shapes under the texts on this slide, or give them plain
+  scrims". Past the bound only stricter bounds apply (curved edges are no longer followed, one box per piece, a corner
+  bound for translucent text), and the finding reads "…:1 or better (a safe bound, not the exact value: … merge or
+  remove the translucent shapes under it, or give it one plain scrim, and the check measures it exactly)". Cost
+  (`check`, extract per profile): a 3-slide pathological deck (30 translucent lines over 60 translucent circles under
+  hue scrims) takes 3.9 s against 3.2 s with the lint off; the pre-round lint took 20 s, round 1's 64 samples per
+  piece hit the 60 s extract cap, and a global k/64 pitch alone took 70 s. On one heavier slide (160 circles, ~38
+  lines) the final takes 2.2 s against 2.0 s with the lint off, the pre-round lint 24.7 s, and the k/64 pitch alone
+  exits 6. The example decks check as fast as before. An opaque layer hides the picture (the self-test's
+  `features/01-photo` card passes), inline `<svg>` icons are not pictures, a slot's HTML-only hints never reach the
+  element list, and table cells and chart labels are not checked. The message's fix wording is quoted in AUTHORING §7
+  (`report.mjs` points `Next:` at §7) and names the kit standard, a dark token scrim at opacity ≥ 0.72: it holds for
+  white AND 80 % white text in every theme, while 0.64 fails 80 % white in classic, editorial, forest and violet (80 %
+  white needs ≥ 0.69 in forest). Measured: white text on `--c-brand-950` at 0.72 gives 6.63:1 (forest) to 8.62:1
+  (midnight); translucent white text on that scrim needs ≥ 75 % (74 % gives 4.4995:1 in forest). **Nothing checks that
+  a slide HAS a picture** — the user rejected that (2026-09-30): a text-only slide stays a planned choice.
 - **Font audit ≠ toolchain health.** `inpage/60-fonts.js` counts only drawn characters (a collapsed space loads no
   face); an unrequested or still-loading toolkit face is `internal` (retry, then the log), a toolkit font FILE that
   fails to load is `toolchain` — a run-time one: the run's toolchain check had found every file (`browser.mjs`
@@ -624,7 +676,8 @@ environment (all optional):
 - `--update-golden` rewrites the goldens with the running Chromium; it refuses a read-only KIT, and is run only
   after a PowerPoint spot-check. The maintainer procedure is README
   [`#deck-converter-golden-drift`](../../README.md#deck-converter-golden-drift).
-- **Versioning:** `KIT/VERSION` (`1.2.0`: photo slots — `data-placeholder="pic"` + `data-prompt` become
+- **Versioning:** `KIT/VERSION` (`1.3.0`: the `text-on-picture` error — no IR, builder or gate change, goldens
+  still match; `1.2.0`: photo slots — `data-placeholder="pic"` + `data-prompt` become
   PowerPoint's empty picture placeholder: IR `kind: "placeholder"` with `slot` (the slot's DOCUMENT-order ordinal
   among its slide's slots, so stacking or positioning never cross-links prompts), slide `p:ph type="pic"
   idx=13+slot`, the union of a family's slots in its layout, a slide placeholder that colours its prompt for the
@@ -641,8 +694,8 @@ environment (all optional):
 ## Tests and the smoke
 | file | covers |
 |---|---|
-| `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner, the photo-slot prompt rule and its rule docs/Next: sections (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map, photo slots (a two-slide family with a lifted footer: idx 13/14 on the slides, the layout's union with fresh ids and prompts, office-rules PH-01/SLD-02/SLD-03, the slide/layout parts against pml.xsd — plus the Open XML SDK validator when `NOAH_OPENXML_VALIDATOR_DLL` and `dotnet` exist —, the fidelity gate's `object` / `placeholder` negative controls; the prompt colour on a dark slide, on a dark photo well and, for a frame lifted into its layout, in the layout; document-order slots under mixed positioning; `placeholder-layout`; the gate's colour negative controls — an uncoloured prompt, a prompt run in a slide slot, a layout colour without a lifted frame) and the slot lints (`placeholder-size`, `placeholder-layout` and the hint children the CSS lints skip, the slot itself still linted) |
-| `tests/pptx-skill.test.ts` | SKILL.md / reference prose pins, frontmatter, markers, `${CLAUDE_SKILL_DIR}` confinement, the SKILL's flags (deck.sh's, plus `theme-check.mjs`'s as its usage prints them), example lint (theme tokens only, `deck.css` linked, talk-track notes of 2–5 plain lines), the themes (token completeness, `classic` = base.css, the contrast pairs, `Fits:`/`Feel:`/`Avoid:` verbatim in the SKILL), the scoping question (incl. the EXTERNAL SYSTEM marker still in `promptBuilder.ts`), the review rounds (incl. the per-card share-link note and the every-round image cap), the talk deck's density, display sizes and 18 px floor, the notes' timing-cue form, photo-slot docs (incl. `placeholder-size` / `placeholder-layout` and document order) and the examples' slots |
+| `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner, the photo-slot prompt rule and its rule docs/Next: sections (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map, photo slots (a two-slide family with a lifted footer: idx 13/14 on the slides, the layout's union with fresh ids and prompts, office-rules PH-01/SLD-02/SLD-03, the slide/layout parts against pml.xsd — plus the Open XML SDK validator when `NOAH_OPENXML_VALIDATOR_DLL` and `dotnet` exist —, the fidelity gate's `object` / `placeholder` negative controls; the prompt colour on a dark slide, on a dark photo well and, for a frame lifted into its layout, in the layout; document-order slots under mixed positioning; `placeholder-layout`; the gate's colour negative controls — an uncoloured prompt, a prompt run in a slide slot, a layout colour without a lifted frame) and the slot lints (`placeholder-size`, `placeholder-layout` and the hint children the CSS lints skip, the slot itself still linted); `text-on-picture` (always-run unit cases over the pure worst-case math — scrim opacity, weakest gradient corner, partial coverage, opaque card, photo slot, svg icon, large-text threshold, translucent text, the 0.72 standard across the six themes' brand-950, a translucent photo slot, hue-shifting and over-a-layer ramps, the per-channel box search against brute force, the certified grid bound, slab strictness against an independent point model, the forced work-bound tiers and their message, the per-element floor (a light caption after a slide-exhausting text stays exact) and `boundBy` — plus an e2e check) |
+| `tests/pptx-skill.test.ts` | SKILL.md / reference prose pins, frontmatter, markers, `${CLAUDE_SKILL_DIR}` confinement, the SKILL's flags (deck.sh's, plus `theme-check.mjs`'s as its usage prints them), example lint (theme tokens only, `deck.css` linked, talk-track notes of 2–5 plain lines), the themes (token completeness, `classic` = base.css, the contrast pairs, `Fits:`/`Feel:`/`Avoid:` verbatim in the SKILL), the scoping question (incl. the EXTERNAL SYSTEM marker still in `promptBuilder.ts`), the review rounds (incl. the per-card share-link note and the every-round image cap), the talk deck's density, display sizes and 18 px floor, the notes' timing-cue form, photo-slot docs (incl. `placeholder-size` / `placeholder-layout` and document order) and the examples' slots; the SKILL §2 visual-source plan and the no-image-policing guard, the `visual` deck's scrim arithmetic per theme, captures at their own aspect and never upscaled, synthetic asset provenance |
 | `tests/theme-derive.test.ts` | `theme-check.mjs --derive` / `--from-pptx`: a brand sweep over both bases at 0 FAIL / 0 WARN, the ≥ 45° brand/accent hue gap, exact vs matched brand-600 (the exact colour over hue-matched series for dark brands, the fell-back note naming its check), other-base tips only when verified, grey and dull brands' stepped series, the structure (one `:root`, classic's token order, midnight's slots), the CLI contract (exit codes, empty stdout on failure, `#`-less / RGB / `--flag=value` forms), the read-only `mini.pptx` fixture and synthetic templates (trailing bytes after the zip directory), hostile XML read in linear time (< 1 s at the part caps) with the caps' refusals, and the zip refusals |
 | `tests/deck-preview.test.ts` (+ `routes-chat`, `chat-files`, `chat-images`) | the sidecar loader's edge cases, the `share_file` branches and texts |
 | `tests/deck-toolchain.test.ts` (+ `agent-core`, `agent-tools`, `system-manual`) | the probe (injected spawn/clock), memo + async retry, env allowlist, modes, authoring status; prompt/describe_system/manual branches and size caps |

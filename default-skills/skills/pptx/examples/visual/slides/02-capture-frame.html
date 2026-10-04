@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>02 화면 캡처 · 2026년 고객 포털 개편 결과 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* A capture of the system's main area — an element capture (mcp__browser__screenshot with the uid of the app's
+     main container), never the whole screen — in a browser window drawn from shapes: the window is one rounded box in
+     the chrome colour (ink-100), its top bar three dots and an address pill, the capture inset 8 px so its square
+     corners stay inside the window's rounded ones (any --radius-box up to 18 px). When the element shows personal
+     data, capture a narrower one that shows none: there is no masking step. The capture keeps its own pixels and
+     aspect: 608 x 380 px = 1600 x 1000 (1.6), object-fit: contain, never enlarged past its pixel size. Its source
+     goes under it; the three notes beside it name the parts of the screen the title talks about, numbered in the
+     order the presenter walks through them. Window: 608 + 2 x 8 + 2 x 1 = 626 px wide, 1 + 36 + 380 + 8 + 1 =
+     426 px tall (y 184-610). */
+  .browser { position: absolute; left: var(--margin-x); top: var(--content-top); width: 626px; padding: 0 8px 8px;
+             border: 1px solid var(--c-ink-200); border-radius: var(--radius-box); background: var(--c-ink-100);
+             box-shadow: var(--shadow-card); }
+  .browser-bar { height: 36px; display: flex; align-items: center; gap: var(--sp-2); padding: 0 4px; }
+  .dots { flex: none; display: flex; gap: 6px; }
+  .dots > div { width: 10px; height: 10px; border-radius: 50%; background: var(--c-ink-300); }
+  .address { flex: 1; min-width: 0; height: 22px; margin-right: 40px; border-radius: var(--radius-pill);
+             background: var(--c-surface); display: flex; align-items: center; justify-content: center; }
+  .address-text { font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-ink-500); }
+  .capture { display: block; width: 608px; height: 380px; object-fit: contain; }
+  .capture-source { position: absolute; left: var(--margin-x); top: 626px; width: 626px;
+                    font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--c-ink-500); }
+
+  /* the notes: x 752-1200, a number (the kit's step circle in brand-600), a name and one or two lines each; the
+     summary box pinned to the bottom of the window's height, so the column ends where the window ends */
+  .notes { position: absolute; left: 752px; top: var(--content-top); width: 448px; height: 426px;
+           display: flex; flex-direction: column; }
+  .note { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-3) 0;
+          border-top: 1px solid var(--c-ink-200); }
+  .note:first-child { padding-top: 0; border-top: 0; }
+  .num { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--c-brand-600);
+         display: flex; align-items: center; justify-content: center; }
+  .num p { font-size: var(--fs-caption); line-height: var(--lh-caption); font-weight: 700; color: var(--c-on-fill); }
+  .note-body { flex: 1; min-width: 0; }
+  .note-name { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-ink-900); }
+  .note-line { margin-top: 2px; font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: var(--c-ink-600); }
+  .notes .summary { margin-top: auto; }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">01</span> 새 상담 화면</p>
+    <div class="title-row">
+      <h1 class="slide-title">한 화면에서 오늘의 문의를 모두 봅니다</h1>
+      <p class="pill pill--outline period">상담원용 웹 화면</p>
+    </div>
+  </header>
+
+  <div class="browser" data-group="화면 캡처 — 브라우저 창">
+    <div class="browser-bar">
+      <div class="dots" data-group="창 단추"><div></div><div></div><div></div></div>
+      <div class="address"><p class="address-text">desk.example.com/dashboard</p></div>
+    </div>
+    <img class="capture" src="../assets/capture-web.png" alt="새 상담 포털 대시보드 화면: 지표 네 개, 시간대별 문의, 최근 문의 목록 (합성 이미지)">
+  </div>
+  <p class="capture-source">화면: 예시테크 상담 포털 대시보드, 2026년 10월 14일 (합성한 예시 화면)</p>
+
+  <section class="notes">
+    <div class="note">
+      <div class="num"><p>1</p></div>
+      <div class="note-body"><p class="note-name">위: 지표 네 개</p><p class="note-line">오늘 처리할 문의, 이달 첫 응답, 해결률, 대기</p></div>
+    </div>
+    <div class="note">
+      <div class="num"><p>2</p></div>
+      <div class="note-body"><p class="note-name">가운데: 시간대별 흐름</p><p class="note-line">지난주 평균과 겹쳐 붐비는 시간을 봅니다</p></div>
+    </div>
+    <div class="note">
+      <div class="num"><p>3</p></div>
+      <div class="note-body"><p class="note-name">아래: 최근 문의</p><p class="note-line">고객 이름은 가린 채로 보여 줍니다</p></div>
+    </div>
+    <div class="summary">
+      <p class="summary-text"><strong>메뉴 네 개를 한 화면으로</strong><br>예전에는 네 메뉴를 오가며 보던 정보입니다</p>
+    </div>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 고객 포털 개편 결과 보고</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치와 합성 화면</p>
+      <p class="page-num" data-field="slidenum">2</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+상담원이 출근해서 가장 먼저 여는 새 대시보드입니다.
+위에는 오늘 처리할 문의와 이달 평균 첫 응답 같은 지표 네 개, 가운데에는 시간대별 흐름, 아래에는 최근 문의가 있습니다.
+예전에는 메뉴 네 개를 오가며 보던 정보이고, 최근 문의의 고객 이름은 화면에서 가려서 보여 줍니다.
+이제 이 화면에서 상담원이 먼저 보는 세 곳을 짚어 보겠습니다. (약 1분)
+</template>
+</body>
+</html>

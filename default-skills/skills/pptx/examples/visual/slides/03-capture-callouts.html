@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>03 화면 설명 · 2026년 고객 포털 개편 결과 보고</title>
+<link rel="stylesheet" href="../theme/base.css">
+<link rel="stylesheet" href="../theme/fonts.css">
+<link rel="stylesheet" href="../deck.css">
+<style>
+  /* Numbered callouts ON a capture: the part of the screen the slide is about, cropped from the top (object-fit:
+     cover + object-position: top — a UI reads from its top), with an opaque numbered marker on each control and
+     the explanations in the same order below. A marker is a circle in brand-600 with a surface-coloured ring and
+     its digit in --c-on-fill (a theme-check pair, >= 4.5:1): the digit's line box sits inside the opaque fill, so
+     no text reads against the capture's own pixels (text-on-picture, AUTHORING §7).
+     Crop: the image is 1118 px wide inside a 1 px frame at (80, 200), a 1600 px capture at 1118 / 1600 = 0.699, so
+     its 224 px show the capture's top 320 px (top bar, channel tabs and the KPI tiles — cut in the page gap below
+     the tiles, above the chart cards, so no element is sliced). A marker's centre
+     = (81 + 0.699 x source x, 201 + 0.699 x source y): the end of the channel tabs (source 690 + 38, 118) -> (590,
+     284), the waiting-queue tile's corner (1540, 192) -> (1157, 335), the end of the search box (1352, 38) -> (1026,
+     228). Recompute them for another capture or crop. */
+  .shot-frame { position: absolute; left: var(--margin-x); top: 200px; width: 1120px; height: 226px;
+                border: 1px solid var(--c-ink-200); background: var(--c-surface); }
+  .shot { display: block; width: 1118px; height: 224px; object-fit: cover; object-position: top; }
+
+  .marker { position: absolute; width: 36px; height: 36px; border-radius: 50%; background: var(--c-brand-600);
+            border: 3px solid var(--c-surface); display: flex; align-items: center; justify-content: center; }
+  .marker p, .num p { font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); font-weight: 700; color: var(--c-on-fill); }
+  .m1 { left: 572px; top: 266px; }
+  .m2 { left: 1139px; top: 317px; }
+  .m3 { left: 1008px; top: 210px; }
+
+  /* the explanations: three cards on the 1120 px grid, (1120 - 2 x 32) / 3 = 352 px, y 450-624, 24 px under the
+     capture — each led by its number and name, the one-line locator pinned to the bottom (margin-top: auto), so no
+     card has an empty band: 174 - 2 x 20 = 134 px inside = 32 + 8 + 48 (head, gap, two lines) + 14 + 32 (locator) */
+  .callouts { position: absolute; left: var(--margin-x); top: 450px; width: var(--content-w); height: 174px;
+              display: grid; grid-template-columns: repeat(3, 352px); column-gap: var(--sp-4); }
+  .callout { padding: 20px var(--sp-3); display: flex; flex-direction: column; }
+  .callout-head { display: flex; align-items: center; gap: 12px; }
+  .num { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--c-brand-600);
+         display: flex; align-items: center; justify-content: center; }
+  .callout-name { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: 700; color: var(--c-ink-900); }
+  .callout-line { margin-top: var(--sp-1); font-size: var(--fs-body-sm); line-height: var(--lh-body-sm); color: var(--c-ink-600); }
+  .callout-where { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--c-ink-100);
+                   font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--c-ink-500); }
+</style>
+</head>
+<body>
+<main class="slide" data-layout="본문">
+  <header class="slide-header">
+    <p class="eyebrow"><span class="eyebrow-num">02</span> 화면 읽는 법</p>
+    <h1 class="slide-title">번호 세 곳만 보면 먼저 할 일이 정해집니다</h1>
+    <p class="slide-sub">상담 1팀 42명이 10월 첫 두 주 동안 쓴 결과, 첫 응답이 9월 평균 <strong>6분 50초에서 4분 12초로</strong> 줄었습니다</p>
+  </header>
+
+  <div class="shot-frame">
+    <img class="shot" src="../assets/capture-web.png" alt="대시보드 윗부분: 검색창, 채널 탭, 지표 네 개 (합성 이미지)">
+  </div>
+  <div class="marker m1"><p>1</p></div>
+  <div class="marker m2"><p>2</p></div>
+  <div class="marker m3"><p>3</p></div>
+
+  <section class="callouts">
+    <article class="card callout">
+      <div class="callout-head"><div class="num"><p>1</p></div><p class="callout-name">채널 탭</p></div>
+      <p class="callout-line">채팅·전화·이메일 문의를<br>탭 하나로 바꿔 봅니다</p>
+      <p class="callout-where">화면 위치: 탭 줄의 오른쪽 끝</p>
+    </article>
+    <article class="card callout">
+      <div class="callout-head"><div class="num"><p>2</p></div><p class="callout-name">응답 대기</p></div>
+      <p class="callout-line">10분 넘게 기다린 문의를<br>주황색 점으로 알립니다</p>
+      <p class="callout-where">화면 위치: 지표 넷째 칸</p>
+    </article>
+    <article class="card callout">
+      <div class="callout-head"><div class="num"><p>3</p></div><p class="callout-name">검색</p></div>
+      <p class="callout-line">고객 이름이나 문의 번호로<br>바로 찾습니다</p>
+      <p class="callout-where">화면 위치: 맨 위 검색창</p>
+    </article>
+  </section>
+
+  <footer class="slide-footer" id="footer">
+    <div class="footer-left">
+      <div class="mark mark--sm" data-group="브랜드 마크"><div class="mark-a"></div><div class="mark-b"></div></div>
+      <p class="footer-brand">예시테크</p>
+      <p class="footer-text">2026년 고객 포털 개편 결과 보고</p>
+    </div>
+    <div class="footer-right">
+      <p class="footer-text">샘플 데이터 · 가상 기업의 예시 수치와 합성 화면</p>
+      <p class="page-num" data-field="slidenum">3</p>
+    </div>
+  </footer>
+</main>
+<template id="notes">
+번호를 붙인 세 곳이 상담원이 하루에 가장 자주 쓰는 곳입니다.
+하나, 채널 탭으로 채팅과 전화, 이메일 문의를 바꿔 봅니다. 둘, 10분 넘게 기다린 문의는 주황색 점으로 알려 줍니다. 셋, 고객 이름이나 문의 번호로 바로 찾습니다.
+10월 첫 두 주 동안 첫 응답은 9월 평균 6분 50초에서 4분 12초로 줄었습니다.
+고객이 쓰는 모바일 신청 화면도 함께 바꿨습니다. (약 1분)
+</template>
+</body>
+</html>

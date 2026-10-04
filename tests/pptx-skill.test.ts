@@ -360,6 +360,8 @@ describe("pptx reference/ and examples/", () => {
       // report.mjs points each of them at AUTHORING §7
       "placeholder-prompt", "placeholder-content", "placeholder-geometry", "rotated-placeholder", "placeholder-size",
       "placeholder-layout",
+      // text over a picture or a photo slot, judged at its worst case (converter 1.3.0; report.mjs points it at §7)
+      "text-on-picture",
     ]) {
       expect(authoring, rule).toContain(`\`${rule}\``);
     }
@@ -398,7 +400,9 @@ describe("pptx reference/ and examples/", () => {
       "Design > Fonts", "Teams", "Embed fonts in the file",
       // a slide alone on its layout (a photo slide) keeps its footer ON the slide: the builder lifts only from ≥ 2
       "The exception is a slide that is the only one on its layout",
-      "A layout made from a single slide (a team slide with photo slots) brings no footer or page number"]) {
+      "A layout made from a single slide (a team slide with photo slots) brings no footer or page number",
+      // pictures: a swapped photo keeps the scrim that keeps its text legible
+      "Change Picture", "Text over a photo sits on a scrim"]) {
       expect(editing, pin).toContain(pin);
     }
     const legacy = prose(read("reference/python-pptx.md"));
@@ -607,8 +611,8 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
     .map((d) => d.name)
     .sort();
 
-  it("ships business-review, handbook, layouts and talk", () => {
-    expect(decks).toEqual(["business-review", "handbook", "layouts", "talk"]);
+  it("ships business-review, handbook, layouts, talk and visual", () => {
+    expect(decks).toEqual(["business-review", "handbook", "layouts", "talk", "visual"]);
   });
 
   for (const deck of decks) {
@@ -865,5 +869,213 @@ describe("pptx example decks (static lint of the slide HTML)", () => {
     // a headline figure keeps its scope on the slide: a reader without the speaker never sees the notes
     expect(authoring).toContain("What a headline figure counts stays on the slide");
     expect(prose(body)).toContain("while a headline figure keeps its scope on the slide");
+  });
+});
+
+// Decks that SHOW: every slide's visual AND its source are planned before the HTML, and a picture the avatar is shown
+// (an attachment, a browser capture, a Confluence diagram) is a FILE it places. Text stays a legitimate visual: the
+// user explicitly rejected any check or warning that fires because a slide has no image.
+describe("pptx pictures (SKILL §2 visual sources, AUTHORING §7 captures and scrims, examples/visual)", () => {
+  const flat = prose(body);
+  const authoring = prose(read("reference/AUTHORING.md"));
+  const readme = prose(read("examples/README.md"));
+  const VISUAL = "examples/visual";
+  const visualSlides = fs.readdirSync(path.join(SKILL, VISUAL, "slides")).sort();
+
+  it("plans each slide's visual and its source before any HTML, from the sources the run has", () => {
+    for (const pin of [
+      "Give every slide its main visual AND its source before you write any HTML",
+      "the user's figures: a native chart; a structure (steps, parts, an org): a diagram from the kit's shapes",
+      // a draw.io diagram is placed by its PNG preview: the mxfile source is no image (`image-load`)
+      "A draw.io diagram goes in as its PNG preview",
+      "never the `.drawio` source: that is an mxfile, not an image, and an `<img>` of it fails `image-load`",
+      // copy by the ABSOLUTE path (a deck in a repository clone is not in the scratch workspace); earlier turns' images
+      "Copy the chosen file by the ABSOLUTE path its listing or tool result gives",
+      "`cp <absolute path> <deck>/assets/site.jpg`",
+      "Images attached on EARLIER turns are not listed again: `ls` the scratch workspace's `attachments/`",
+      "the file itself, never a description or a redrawing of it",
+      "Never present a drawn mock-up as a real screen, never capture pages the deck is not about",
+      "capture the element, not the whole screen — when an element shows personal data, capture a narrower one that shows none (there is no masking step)",
+      // the outline for a large request names each slide's visual (the existing chat-outline mechanism)
+      "one line per slide, naming its takeaway and its visual",
+    ]) {
+      expect(flat, pin).toContain(pin);
+    }
+    // The names the SKILL keys on are the server's own, read from the SOURCES as text (no imports): the describe_system
+    // line that says which sources this run has, and the three scratch-workspace folders the server writes.
+    const serverSrc = (rel: string) => fs.readFileSync(path.join(REPO, "src", "server", rel), "utf8");
+    const label = /const IMAGE_SOURCES_LINE_PREFIX = "- ([^"]+): ";/.exec(serverSrc("agent/systemTools.ts"))?.[1];
+    expect(label).toBe("Images for documents and decks");
+    expect(flat).toContain(`describe_system's \`${label}\` line says which of these this run has`);
+    const subdir = (rel: string) => [...serverSrc(rel).matchAll(/workspaceSubdirForWrite\(\s*\w+,\s*"([^"]+)"\s*\)/g)].map((m) => m[1]);
+    const [attachments] = subdir("chatImages.ts");
+    const [captures] = subdir("chatFiles.ts");
+    const confluence = /const WORKSPACE_SAVE_DIR = "([^"]+)";/.exec(serverSrc("agent/confluenceTools.ts"))?.[1];
+    expect([attachments, captures, confluence]).toEqual(["attachments", "captures", "confluence"]);
+    expect(serverSrc("agent/confluenceTools.ts")).toMatch(/\bsave_to_workspace: z\b/);
+    expect(flat).toContain(`each is also saved as a file in \`${attachments}/\``);
+    expect(flat).toContain(`whose copy is saved in \`${captures}/\``);
+    expect(flat).toContain(`\`mcp__confluence__get_attachment\` with \`save_to_workspace: true\` saves it in \`${confluence}/\``);
+    expect(flat).toContain("`mcp__browser__screenshot` with the element's `uid` from a snapshot");
+    // the tools the SKILL names are the server's own (the Confluence save option is lane C's addition)
+    const agentSrc = (file: string) => fs.readFileSync(path.join(REPO, "src", "server", "agent", file), "utf8");
+    expect(agentSrc("browserTools.ts")).toContain('"mcp__browser__screenshot"');
+    expect(agentSrc("browserTools.ts")).toMatch(/"screenshot",[\s\S]{0,4000}\buid: z/);
+    for (const t of ["mcp__confluence__get_attachment", "mcp__confluence__extract_page_assets"]) {
+      expect(agentSrc("confluenceTools.ts"), t).toContain(`"${t}"`);
+      expect(flat, t).toContain(`\`${t}\``);
+    }
+  });
+
+  it("keeps text a legitimate visual and never polices image presence", () => {
+    expect(flat).toContain("Text is a legitimate visual — never add an image just to have one");
+    expect(authoring).toContain("text is a legitimate visual, and no slide gets an image just to have one");
+    expect(flat).toContain(
+      "a photo or screen capture, a chart, bars on one scale, a timeline, a diagram, a big number — or, for a statement or a quote, the words at display size",
+    );
+    // no rule, check or warning about a slide WITHOUT a picture — in the SKILL, the references or the README
+    for (const [name, text] of [["SKILL.md", flat], ["AUTHORING.md", authoring], ["README.md", readme],
+      ["EDITING.md", prose(read("reference/EDITING.md"))]] as const) {
+      expect(text, name).not.toMatch(/`(?:no|missing)-(?:image|picture|photo|visual)`|`(?:image|picture|photo|visual)-(?:missing|required)`|`text-only(?:-slide)?`/);
+      expect(text, name).not.toMatch(/(?:warn|error|lint|flag)[^.]{0,40}\b(?:slide|slides)\b[^.]{0,30}\b(?:without|with no|lacks?)\b[^.]{0,20}\b(?:image|picture|photo|visual)s?\b/i);
+    }
+  });
+
+  it("documents captures, scrims and the text-on-picture rule where the agent reads them", () => {
+    for (const pin of [
+      // the lint row (§2): the worst case under each line, and where the fix is
+      "| `text-on-picture` | error |",
+      "The fix: a scrim under the text, an opaque card, or the text moved off the picture (§7)",
+      // §7 captures: own aspect, never upscaled, markers opaque, source captioned
+      "at the capture's OWN aspect: the whole capture with `object-fit: contain`",
+      "`object-fit: cover` + `object-position: top` to show the top of a UI",
+      "Never show a capture larger than its own pixels",
+      "A drawn mock-up never poses as a real screen",
+      "capture a narrower one that shows none — never place it unmasked, and there is no masking step",
+      // a PNG's transparent area is picture too: the check judges the whole <img> box
+      "a PNG's transparent area counts as picture too",
+      // §7 scrims: a LEAF sibling in brand-950, the arithmetic's numbers (0.72 is the number the lint's message names)
+      "ONE leaf box painted after the picture and before the text",
+      "`background: var(--c-brand-950); opacity: 0.72` under white text",
+      "the check's message names ≥ 0.72, the kit standard, because it also carries 80 % white text in every theme",
+      "translucent white text on it needs ≥ 75 % (74 % fails in `forest` at 4.4995:1; the examples use 80 %)",
+      "Keep the scrim a SIBLING of the text, never its container",
+      // §8.27 models an element capture of the main area, never the whole screen; the checklist names the rule
+      "an element capture (`mcp__browser__screenshot` with the `uid` of the app's main container), never the whole screen",
+      "no `text-on-picture` error",
+      // §8.25's old "no dark scrim" became the scrim rule; §8.26–§8.30 describe the visual deck
+      "the split keeps the whole photo in view where text over it would need a scrim (§7, §8.26)",
+      "**8.26 Photo cover**", "**8.27 Capture in a browser frame**", "**8.28 Numbered callouts on a capture**",
+      "**8.29 Phone screens, before and after**", "**8.30 Photo slot under a scrim**",
+      "the visual deck 8.26–8.30",
+    ]) {
+      expect(authoring, pin).toContain(pin);
+    }
+    expect(authoring).not.toContain("allow no dark scrim");
+    // the SKILL's essentials name the rule and the scrim; the delivery message names the pictures and the slots
+    expect(flat).toContain("Text over a photo or a photo slot sits on a scrim");
+    expect(flat).toContain("`text-on-picture` rule");
+    expect(flat).toContain("naming the slides that show their attached images or your captures");
+    expect(flat).toContain("what goes into each empty photo slot");
+    // the examples README: the family, its assets' provenance, and no synthetic picture left in a real deck
+    expect(readme).toContain("## `visual/` — 2026년 고객 포털 개편 결과 보고 (5 slides: built on pictures)");
+    expect(readme).toContain("drawn by `converter/selftest/tools/make_assets.py --visual`");
+    expect(readme).toContain("Never keep a synthetic picture in a real deck, and never pass a drawn screen off as a capture");
+    expect(readme).not.toContain("use a photo the user provides (into the deck's `assets/`), or pick another slide");
+    // without a real picture: words, a chart or a diagram first; a photo slot only for what the user will photograph
+    expect(readme).toContain("Without a real picture, the slide's visual is the words themselves, a chart or a diagram");
+    expect(readme).toContain("only when the slide is about something the user will photograph (people, a venue, a product)");
+    expect(readme).toContain("there is no masking step, so capture a narrower element that shows none");
+  });
+
+  it("the visual deck's scrims keep every text at >= 4.5:1 over ANY picture, in every theme (the text-on-picture worst case)", async () => {
+    const { resolveToken, parseColour, contrast } = await import(pathToFileURL(path.join(SKILL, "scripts", "theme-check.mjs")).href);
+    const over = (fg: number[], a: number, bg: number[]) => [0, 1, 2].map((i) => fg[i] * a + bg[i] * (1 - a));
+    const WHITE = [255, 255, 255];
+    // white text at alpha `a` on a theme's brand-950 scrim at `opacity`, over its worst picture pixel (pure white or
+    // pure black); a translucent text is blended over the composite first
+    const worstOn = (theme: string, opacity: number, a: number) => {
+      const vars = new Map([...BASE_TOKENS, ...cssTokens(read(`themes/${theme}.css`))]);
+      const s = parseColour(resolveToken(vars, "--c-brand-950"));
+      return Math.min(...[WHITE, [0, 0, 0]].map((base) => {
+        const c = over(s, opacity, base);
+        return contrast(over(WHITE, a, c), c);
+      }));
+    };
+    const scrimSlides = visualSlides.filter((name) => read(`${VISUAL}/slides/${name}`).includes('class="scrim"'));
+    expect(scrimSlides).toEqual(["01-photo-hero.html", "05-photo-slot-hero.html"]);
+    for (const name of scrimSlides) {
+      const rel = `${VISUAL}/slides/${name}`;
+      const html = read(rel);
+      // a LEAF sibling painted after the picture (an <img> or the photo slot) and before every text
+      expect(html, name).toContain('<div class="scrim"></div>');
+      const picture = Math.max(html.indexOf("<img "), html.indexOf('data-placeholder="pic"'));
+      expect(picture, name).toBeGreaterThan(html.indexOf("<main"));
+      expect(html.indexOf('<div class="scrim"></div>'), name).toBeGreaterThan(picture);
+      const scrim = cssRule(rel, ".scrim");
+      expect(scrim, name).toContain("background: var(--c-brand-950)");
+      const opacity = Number(/opacity: ([\d.]+)/.exec(scrim)?.[1]);
+      expect(opacity, name).toBe(0.72);
+      // every text colour on the slide: white, or white at >= 80 % (§8.26: the secondary text, no fainter — AUTHORING
+      // §7's contrast floor on this scrim is 75 %, pinned below)
+      const style = (/<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "");
+      const colours = [...style.matchAll(/(?:^|[\s;{])color:\s*([^;}]+)/g)].map((m) => m[1].trim());
+      expect(colours.length, name).toBeGreaterThan(4);
+      const alphas = colours.map((c) => (c === "var(--c-white)" ? 1 : Number(/^rgba\(255, 255, 255, ([\d.]+)\)$/.exec(c)?.[1])));
+      for (const [k, a] of alphas.entries()) expect(a, `${name}: color ${colours[k]}`).toBeGreaterThanOrEqual(0.8);
+      // the arithmetic of the slide's comment, recomputed on each theme's own brand-950 (small-text threshold)
+      for (const theme of THEMES) {
+        for (const a of new Set(alphas)) {
+          expect(worstOn(theme, opacity, a), `${name} ${theme}: white ${a} on brand-950 at ${opacity}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+    // AUTHORING §7's numbers for the 0.72 scrim: translucent white text needs >= 75 % (74 % fails in forest), and the
+    // lint's message names 0.72 because 0.64 fails 80 % white text in exactly these four themes
+    for (const theme of THEMES) expect(worstOn(theme, 0.72, 0.75), `${theme}: white 75 %`).toBeGreaterThanOrEqual(4.5);
+    expect(worstOn("forest", 0.72, 0.74)).toBeLessThan(4.5);
+    expect(THEMES.filter((theme) => worstOn(theme, 0.64, 0.8) < 4.5)).toEqual(["classic", "editorial", "forest", "violet"]);
+  });
+
+  it("the visual deck shows each capture at its own aspect and never larger than its pixels", () => {
+    const pngSize = (rel: string) => {
+      const b = fs.readFileSync(path.join(SKILL, rel));
+      expect(b.subarray(1, 4).toString("latin1"), rel).toBe("PNG");
+      return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+    };
+    let captures = 0;
+    for (const name of visualSlides) {
+      const rel = `${VISUAL}/slides/${name}`;
+      for (const m of read(rel).matchAll(/<img class="([a-z-]+)" src="\.\.\/assets\/([a-z0-9-]+\.png)"/g)) {
+        captures++;
+        const { w: W, h: H } = pngSize(`${VISUAL}/assets/${m[2]}`);
+        const rule = cssRule(rel, `.${m[1]}`);
+        const w = Number(/(?:^|; )width: (\d+)px/.exec(rule)?.[1]);
+        const h = Number(/(?:^|; )height: (\d+)px/.exec(rule)?.[1]);
+        const fit = /object-fit: (contain|cover)/.exec(rule)?.[1];
+        expect(fit, `${name} .${m[1]}`).toBeDefined();
+        const scale = fit === "contain" ? Math.min(w / W, h / H) : Math.max(w / W, h / H);
+        expect(scale, `${name} .${m[1]}: ${w}x${h} of ${W}x${H}`).toBeLessThanOrEqual(1);
+        // contain: the frame has the capture's aspect, so no letterbox band shows
+        if (fit === "contain") expect(Math.abs(w / h - W / H) / (W / H), `${name} .${m[1]}`).toBeLessThan(0.01);
+        else expect(rule, `${name} .${m[1]}`).toContain("object-position: top");
+      }
+    }
+    expect(captures).toBe(4);
+  });
+
+  it("ships synthetic, deterministic, small assets (make_assets.py --visual; the photo is the self-test's own)", () => {
+    const assets = filesUnder(`${VISUAL}/assets`);
+    expect(assets.map((f) => path.basename(f))).toEqual(["capture-phone-after.png", "capture-phone-before.png", "capture-web.png", "photo.jpg"]);
+    const total = assets.reduce((n, f) => n + fs.statSync(path.join(SKILL, f)).size, 0);
+    expect(total).toBeLessThan(1.5 * 1024 * 1024);
+    const photo = fs.readFileSync(path.join(SKILL, "converter", "selftest", "features", "assets", "photo.jpg"));
+    expect(fs.readFileSync(path.join(SKILL, VISUAL, "assets", "photo.jpg")).equals(photo)).toBe(true);
+    expect(fs.readFileSync(path.join(SKILL, "examples", "talk", "assets", "photo.jpg")).equals(photo)).toBe(true);
+    const tool = read("converter/selftest/tools/make_assets.py");
+    for (const pin of ["--visual", "capture-web.png", "capture-phone-before.png", "capture-phone-after.png",
+      "layout_engine=ImageFont.Layout.BASIC", "Pretendard-"]) {
+      expect(tool, pin).toContain(pin);
+    }
   });
 });

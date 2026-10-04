@@ -1,0 +1,80 @@
+/* themes/classic.css — Classic blue: royal blue with a navy emphasis surface and one amber-coral accent on a cool
+ * grey page; white cards with a soft shadow, 20 px radius. The kit's default look (= the base.css defaults).
+ * Fits: business results, plans and budgets, formal reports to management.
+ * Feel: formal, dependable and orderly, the familiar look of a management report.
+ * Avoid: culture, people and creative topics or festive events, where the corporate blue reads cold and generic.
+ *
+ * Copy this file to <deck>/deck.css (every slide links ../deck.css after ../theme/base.css and ../theme/fonts.css).
+ * Every theme defines the same tokens; slides and the kit's components colour everything through them.
+ * For a brand theme, copy the closest theme and change its values, then re-check the contrast pairs
+ * (reference/AUTHORING.md §9). */
+:root {
+  /* Brand: 600 = primary (text, marks, bars), 700 = text on a brand tint, 900 = the dark emphasis surface,
+     950 = the darkest (the section divider's gradient end), 50/100 = tints, 200/300 = outlines. */
+  --c-brand-950: #0A1433;
+  --c-brand-900: #0F1D4A;
+  --c-brand-800: #162C72;
+  --c-brand-700: #1F3DA6;
+  --c-brand-600: #2A52D9;
+  --c-brand-500: #4A6EF2;
+  --c-brand-400: #7591F6;
+  --c-brand-300: #A3B6FA;
+  --c-brand-200: #CBD6FC;
+  --c-brand-100: #E4EAFE;
+  --c-brand-50:  #F1F4FF;
+
+  /* Accent: one focal element per slide. 700 small text / a mark on the page, 600 a data mark on the surface,
+     500 on the dark emphasis surface, 300 the light end of an accent gradient, 100 a tinted cell. */
+  --c-accent-700: #C2410C;
+  --c-accent-600: #EC6A24;
+  --c-accent-500: #FF8A3D;
+  --c-accent-300: #FFB27D;
+  --c-accent-100: #FFEADB;
+
+  /* Neutrals: 900 titles and big numbers, 700 body, 600 secondary, 500 captions (>= 4.5:1), 400 decoration,
+     300 axis and connector lines, 200 borders, 100 dividers, 50 the content page. */
+  --c-ink-900: #111A2E;
+  --c-ink-800: #1F2A40;
+  --c-ink-700: #344056;
+  --c-ink-600: #4A5568;
+  --c-ink-500: #667085;
+  --c-ink-400: #98A2B3;
+  --c-ink-300: #C9D0DB;
+  --c-ink-200: #E3E8EF;
+  --c-ink-100: #EDF0F5;
+  --c-ink-50:  #F4F6FA;
+
+  /* Deltas: green = favourable, red = unfavourable (text colour on its own 50 tint). */
+  --c-up-600:   #0B7A47;
+  --c-up-50:    #E3F5EA;
+  --c-down-600: #C8322D;
+  --c-down-50:  #FDEBEA;
+
+  /* Data: prior period / alternative, current, forecast, the darkest category (>= 3:1 on the surface). */
+  --c-series-prev:   #8A94A6;
+  --c-series-curr:   var(--c-brand-600);
+  --c-series-fcst:   #6F8FF0;
+  --c-series-strong: var(--c-brand-900);
+
+  /* Surfaces and on-colours. */
+  --c-surface: var(--c-white);
+  --c-on-fill: var(--c-white);
+  --card-border: none;
+  --c-mark-b: rgba(255, 138, 61, 0.85);
+  --c-accent-soft: rgba(255, 138, 61, 0.40);
+
+  /* Cover and closing: the gradient and the translucent decoration drawn on it. */
+  --c-cover-from:  var(--c-brand-950);
+  --c-cover-to:    #1B3796;
+  --c-cover-halo:  rgba(74, 110, 242, 0.20);
+  --c-cover-orbit: rgba(163, 182, 250, 0.80);
+  --c-cover-fcst:  rgba(111, 143, 240, 0.55);
+
+  /* Shape. */
+  --radius-card: 20px;
+  --radius-box:  16px;
+  --radius-sm:   4px;
+  --radius-pill: 999px;
+  --shadow-card:  0 8px 24px rgba(17, 26, 46, 0.07);
+  --shadow-sheet: 0 6px 20px rgba(17, 26, 46, 0.06);
+}

@@ -7,7 +7,8 @@
 //    SKILL.md quotes every one of them (plan I12);
 //  - the generated `--help` block in docs/architecture/pptx-converter.md equals `deck.mjs --help`;
 //  - opt-in e2e (NOAH_PPTX_E2E=1 and the probe reports the converter): a copy of an example deck is built and
-//    shared through the server loader.
+//    shared through the server loader, and a copy of examples/visual is checked in its worst-case theme (forest)
+//    with no lint error — its scrims keep every text on a picture legible.
 //
 // The fixture tests/fixtures/deck-preview/mini/ is REAL converter output (one malgun slide, so the .pptx carries
 // no embedded fonts and stays small). To regenerate it after a converter change that alters its output:
@@ -622,5 +623,25 @@ describe.skipIf(!E2E)("converter e2e through the server (NOAH_PPTX_E2E=1)", () =
     };
     walk(PLUGINS);
     expect(stray).toEqual([]);
+  }, 600_000);
+
+  it("checks a copy of examples/visual in forest, both profiles: 0 errors, so every text on a picture sits on its scrim", () => {
+    // forest's brand-950 is the lightest of the six themes, the worst case for the deck's 0.72 scrims: a text box
+    // moved off its scrim, a weaker scrim or a fainter text colour fails text-on-picture here first
+    const ws = tmp("e2e-visual");
+    fs.cpSync(path.join(SKILL, "examples", "visual"), path.join(ws, "visual"), { recursive: true });
+    fs.copyFileSync(path.join(SKILL, "themes", "forest.css"), path.join(ws, "visual", "deck.css"));
+    const run = spawnSync("bash", [DECK_SH, "check", "visual", "--profile", "both", "--json"], {
+      cwd: ws,
+      env: process.env,
+      encoding: "utf8",
+      timeout: 600_000,
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const report = JSON.parse(run.stdout);
+    expect(report).toMatchObject({ format: "noah-deck-run", command: "check", ok: true, slideCount: 5, profiles: ["embedded", "malgun"] });
+    const errors = (report.lint.items as { severity: string; rule: string; message: string }[]).filter((i) => i.severity === "error");
+    expect(errors).toEqual([]);
+    expect(report.lint.errors).toBe(0);
   }, 600_000);
 });

@@ -277,8 +277,9 @@ for ex in ${EXAMPLES[@]+"${EXAMPLES[@]}"}; do
     fi
   done
 done
-# every other theme over three examples (their charts, table, timeline and dark slides between them, and the talk
-# deck's display type, photo and split panel): the themes restyle through tokens only, so each must still build
+# every other theme over four examples (their charts, table, timeline and dark slides between them, the talk
+# deck's display type, photo and split panel, and the visual deck's scrims over a photo and a photo slot, whose
+# worst-case contrast rides each theme's brand-950): the themes restyle through tokens only, so each must still build
 # clean — and step (g) validates these decks too
 mapfile -t THEMES < <(docker exec "$C_SMOKE" sh -c \
   'for f in "$1"/themes/*.css; do [ -f "$f" ] && basename "$f" .css; done; true' sh "$SKILL")
@@ -287,7 +288,7 @@ if [ "${#THEMES[@]}" -eq 0 ]; then
 fi
 for theme in ${THEMES[@]+"${THEMES[@]}"}; do
   [ "$theme" = classic ] && continue   # the examples above ship classic as their deck.css
-  for ex in business-review layouts talk; do
+  for ex in business-review layouts talk visual; do
     tw="/tmp/w/theme-$theme-$ex"
     docker exec "$C_SMOKE" sh -c 'cp -r "$1" "$2" && cp "$3" "$2/deck.css"' sh \
       "$SKILL/examples/$ex" "$tw" "$SKILL/themes/$theme.css"

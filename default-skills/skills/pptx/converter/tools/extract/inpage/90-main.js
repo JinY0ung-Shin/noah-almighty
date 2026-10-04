@@ -129,6 +129,8 @@ function extractImpl(opts) {
     lintPicPlaceholders();
     paintStackingContext(root);
     numberPicSlots(OUT.elements); // photo slots: IR `slot` in document order (the builder's idx 13 + slot)
+    // text painted over a picture (an <img>, a photo slot): its worst-case contrast for ANY photo (55-text-on-picture.js)
+    textOnPictureLint(OUT.elements, OUT.background, { w: CTX.slideW, h: CTX.slideH });
     notes = notesOf();
     // table-cell runs and chart text resolve to faces too (extractText only sees text elements)
     const useWeight = (w, path) => {

@@ -134,9 +134,10 @@ These are the invariants the project is built around. New work should reinforce 
   `forkSession` — never rewrite a source transcript), the kept text history is the fallback. Side
   effects are never undone and BOTH metacognition surfaces say so. A user row written while another run
   is active is `kind: "queued"` and never an anchor. **A new message-deleting path cascades like
-  `applyConversationRewind`** (attachments minus carried ones, per-card share links, bot tasks and
-  canvases from the anchor time). Native `/compact` (the ONE slash command sent to the CLI verbatim)
-  compacts a FORK, so older rows' rewind points stay exact. Mechanics → `docs/architecture/chat-sse-media.md`.
+  `applyConversationRewind`** (attachments minus carried ones, their staged workspace copies included,
+  per-card share links, bot tasks and canvases from the anchor time). Native `/compact` (the ONE slash
+  command sent to the CLI verbatim) compacts a FORK, so older rows' rewind points stay exact. Mechanics →
+  `docs/architecture/chat-sse-media.md`.
 - **git remote work is MCP-only BY DESIGN.** The agent shell has NO git credentials (stripped from the
   subprocess env), so Bash `git push`/`gh` can never authenticate. Route every git-ish capability through
   an in-process MCP bridge (`mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*`) and keep the
@@ -213,6 +214,17 @@ These are the invariants the project is built around. New work should reinforce 
   read), else falls back to LibreOffice with a redirecting note. Toolchain state = ONE probe (`deckRender.ts` →
   the skill's `deck.mjs probe`), reported on BOTH metacognition surfaces with explicit `converter: INSTALLED` /
   `converter: NOT INSTALLED` markers the skill keys on. Mechanics → `docs/architecture/pptx-converter.md`.
+- **An image the avatar is SHOWN is also a FILE it can place.** Vision-turn attachments are staged into the
+  conversation scratch workspace (`attachments/`) exactly like text-only turns, every browser screenshot is also saved
+  there (`captures/`, written server-side in the relay — `savedPath` never crosses the extension wire), and
+  `mcp__confluence__get_attachment {save_to_workspace}` writes into `confluence/` — so a deck or document includes the
+  image instead of describing it. Both metacognition surfaces list which of these the run has (and say a read-only run
+  can read but not place them — `canWriteFiles`). These server-written copies die with what they mirror: **a new
+  conversation-deleting path calls `deleteConversationWorkspaceCopies`**, and a rewind's dropped attachments take their
+  staged copies along. The pptx skill settles each slide's visual AND its source first, and text stays a legitimate
+  choice: **never add a check that fires because a slide has no image** (user decision 2026-09-30). Text over a picture
+  must pass the converter's worst-case `text-on-picture` contrast, which holds for ANY photo, incl. one swapped in
+  later in PowerPoint.
 - **Knowledge repo = one per user, agent-managed** (the avatar edits its own repo via `mcp__repo__*`).
   **Second brain = a CONVENTION (`wiki/`+`raw/`) over that SAME repo, NOT a new store** — recall is
   read-only MCP search; capture writes through the repo-write tools + commit (uncommitted = not persisted).
