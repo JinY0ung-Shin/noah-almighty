@@ -62,6 +62,7 @@ import {
   decodeChatImages,
   deleteChatImageAttachments,
   deleteConversationImages,
+  deleteStagedAttachmentCopies,
   publishWorkspaceImage,
   readChatImages,
   resolveStoredImage,
@@ -97,8 +98,10 @@ import {
   publishBrowserScreenshot,
   publishWorkspaceFile,
   resolveStoredFile,
+  saveBrowserCapture,
   MAX_CHAT_FILES_PER_MESSAGE,
   MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
+  MAX_SAVED_CAPTURES_PER_TURN,
   MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
   SHAREABLE_EXTENSIONS,
   MAX_CHAT_FILE_BYTES,
@@ -157,7 +160,7 @@ import {
   CANCELLED,
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
-import { workspaceDirFor } from "../workspace.js";
+import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
@@ -1056,11 +1059,12 @@ export async function executeChatTurn(
     store.getModelVisionPolicy(),
     config.visionEnabled,
   );
-  // Text-only model for this turn: images are NOT rejected — they are staged
-  // as FILES in the conversation scratch workspace and the model receives only
-  // their paths (buildUserPrompt), never image content blocks (which would 400
-  // the whole turn at the API layer). External turns never reach here with
-  // images (rejected above).
+  // Text-only model for this turn ("file mode"): images are NOT rejected. As on
+  // every local image turn they are staged as FILES in the conversation scratch
+  // workspace (below), and here the model receives ONLY their paths
+  // (buildUserPrompt), never image content blocks (which would 400 the whole
+  // turn at the API layer). External turns never reach here with images
+  // (rejected above).
   const imageFileMode =
     decodedImages.length > 0 && !turnVisionEnabled && !externalAgent;
   if (externalAgent && existingAvatarId) {
@@ -1348,12 +1352,14 @@ export async function executeChatTurn(
     // disk + record them on the user message; a rewind/regenerate brings no new
     // uploads, so it re-reads its anchor row's stored attachments instead.
     let requestImages: AgentImageInput[] = [];
-    // The same images in FILE mode (text-only model): staged copies in the
-    // scratch workspace whose paths — never their bytes — reach the model.
+    // The same images as FILES: staged copies in the scratch workspace whose
+    // PATHS reach the model on every local turn — the only form a text-only
+    // model gets, and next to the image blocks on a vision model, so an image
+    // the avatar sees is also a file it can place into a deck or document.
     let requestImageFiles: AgentImageFileInput[] = [];
     // Per-conversation workspace: each chat session gets an isolated cwd, scoped
     // under the avatar so sessions cannot mix files by accident. Created here
-    // (before the message persist) because file mode stages attachments into it.
+    // (before the message persist) because the image staging writes into it.
     // External turns run no local workspace, so they don't get a directory.
     const workspaceDir = workspaceDirFor(
       config,
@@ -1416,15 +1422,19 @@ export async function executeChatTurn(
     if (!rewindPlan) {
       const saved = saveChatImages(config, conversationId, decodedImages);
       // The persisted attachments are the same either way — the bubble
-      // renders identically; only the MODEL-facing shape differs.
-      if (imageFileMode) {
+      // renders identically; only the MODEL-facing shape differs. Every local
+      // turn stages the uploads as workspace files; only a vision turn also
+      // gets them as image blocks. (An external turn carries no images and
+      // runs no workspace.)
+      if (!externalAgent) {
         requestImageFiles = stageChatImageFilesFromAttachments(
           config,
           conversationId,
           workspaceDir,
           saved.attachments,
         );
-      } else {
+      }
+      if (!imageFileMode) {
         requestImages = saved.images;
       }
       // A dispatched queued task skips this: the enqueue already stored the
@@ -1439,20 +1449,22 @@ export async function executeChatTurn(
       }
     } else {
       // The anchor row's own images ride the re-run (an edit keeps them on its
-      // replacement row). On a text-only turn they resurface as FILES by design
-      // (same staging path as a fresh send), never as image blocks the API would
-      // reject — so a regenerate under a swapped model still sees them.
-      if (turnVisionEnabled) {
-        requestImages = readChatImages(
-          config,
-          conversationId,
-          rewindPlan.anchor.attachments,
-        );
-      } else {
+      // replacement row), staged as FILES through the same path as a fresh
+      // send. On a text-only turn that is the only form they take, never image
+      // blocks the API would reject, so a regenerate under a swapped model
+      // still sees them. A vision turn gets the re-fed image blocks as well.
+      if (!externalAgent) {
         requestImageFiles = stageChatImageFilesFromAttachments(
           config,
           conversationId,
           workspaceDir,
+          rewindPlan.anchor.attachments,
+        );
+      }
+      if (turnVisionEnabled) {
+        requestImages = readChatImages(
+          config,
+          conversationId,
           rewindPlan.anchor.attachments,
         );
       }
@@ -1509,6 +1521,9 @@ export async function executeChatTurn(
     // Browser screenshots auto-shared as file cards this run — own budget,
     // separate from the share_file/show_file caps (see chatFiles.ts).
     let sharedScreenshotCount = 0;
+    // Browser screenshots saved as workspace FILES (`captures/`) this run — a
+    // budget of its own too, independent of the share cap above.
+    let savedCaptureCount = 0;
     // Documents the model shared via share_file this run. Counted on its own
     // rather than off `shownAttachments`, which also carries the screenshot
     // auto-share's kind:"file" cards — a browsing loop must not spend this cap.
@@ -1664,6 +1679,9 @@ export async function executeChatTurn(
         const swept = (message.attachments ?? []).filter((att) => !carriedIds.has(att.id));
         deleteChatImageAttachments(config, conversationId, swept);
         deleteChatFileAttachments(config, conversationId, swept);
+        // Their staged workspace copies go with them (captures and saved
+        // Confluence files are tool side effects of the dropped turns: they stay).
+        if (!externalAgent) deleteStagedAttachmentCopies(workspaceDir, swept);
       }
     }
 
@@ -2103,8 +2121,9 @@ export async function executeChatTurn(
           ...(resumeSessionAt ? { resumeSessionAt } : {}),
           conversationHistory,
           images: requestImages.length ? requestImages : undefined,
-          // Text-only turn: the model gets the staged file PATHS in the user
-          // prompt instead of image content blocks.
+          // Every local image turn: the staged file PATHS, listed in the user
+          // prompt — the only form on a text-only turn, next to the image
+          // blocks above on a vision one. Absent when nothing could be staged.
           imageFiles: requestImageFiles.length
             ? requestImageFiles
             : undefined,
@@ -2839,11 +2858,20 @@ export async function executeChatTurn(
             // self-knowledge honest about whether the user got a copy.
             let shareNote: string | undefined;
             let sharedAttachments: MessageAttachment[] | undefined;
+            // The workspace copy (`captures/`): the same bytes as a FILE the
+            // avatar can place into what it produces (a deck's assets/, a
+            // document). Independent of the share above — its own budget, and
+            // saved whether or not the user got a card. SERVER-INTERNAL like
+            // shareNote: browserTools.report renders the path (or why there is
+            // none) outside the untrusted wrapper; never on the extension wire.
+            let savedPath: string | undefined;
+            let saveSkipped: "limit" | "conversation_gone" | "not_an_image" | "save_failed" | undefined;
             if (
               requestData.op === "screenshot" &&
               typeof reply.imageBase64 === "string" &&
               reply.imageBase64
             ) {
+              const captureBytes = Buffer.from(reply.imageBase64, "base64");
               if (sharedScreenshotCount >= MAX_SHARED_SCREENSHOTS_PER_MESSAGE) {
                 shareNote = `This capture was NOT shared with the user — this turn already shared ${MAX_SHARED_SCREENSHOTS_PER_MESSAGE} screenshots. The user has not seen it; continue in the next turn if they need it.`;
               } else if (store.conversationOwner(conversationId) !== ownerUserId) {
@@ -2853,7 +2881,7 @@ export async function executeChatTurn(
                 const published = publishBrowserScreenshot(
                   config,
                   conversationId,
-                  Buffer.from(reply.imageBase64, "base64"),
+                  captureBytes,
                   typeof reply.title === "string" ? reply.title : undefined,
                 );
                 if ("error" in published) {
@@ -2870,11 +2898,32 @@ export async function executeChatTurn(
                     "This capture was also shared with the user as a file card in the chat (it opens in the preview panel), so they can already see it — no need to re-send or exhaustively re-describe it.";
                 }
               }
+              if (savedCaptureCount >= MAX_SAVED_CAPTURES_PER_TURN) {
+                saveSkipped = "limit";
+              } else if (store.conversationOwner(conversationId) !== ownerUserId) {
+                saveSkipped = "conversation_gone";
+              } else {
+                const saved = saveBrowserCapture(workspaceDir, captureBytes);
+                if ("error" in saved) {
+                  // The real reason: bytes that are no image vs a save that
+                  // failed (TOO_LARGE is unreachable behind the relay's own
+                  // base64 bound, but reads as a failed save if it ever is).
+                  saveSkipped =
+                    saved.error === "EMPTY" || saved.error === "UNSUPPORTED"
+                      ? "not_an_image"
+                      : "save_failed";
+                } else {
+                  savedCaptureCount += 1;
+                  savedPath = saved.path;
+                }
+              }
             }
             return {
               behavior: "ok",
               shareNote,
               sharedAttachments,
+              savedPath,
+              saveSkipped,
               // Every field below is UNTRUSTED extension input that rides into
               // the model turn, and this route is the PRIMARY size gate
               // (browserTools.report adds only a model-facing snapshot cap for
@@ -3964,6 +4013,9 @@ export function createChatRouter({
         deleteConversationImages(config, id);
         deleteConversationFiles(config, id);
       }
+      // …and the server-written copies in their scratch workspaces (staged
+      // attachments, capture/Confluence files), resolved across avatar trees.
+      deleteConversationWorkspaceCopies(config, deletedIds);
       res.json({
         ok: true,
         deleted: deletedIds.length,
@@ -3988,9 +4040,11 @@ export function createChatRouter({
         apiError(res, 404, "대화를 찾을 수 없습니다.");
         return;
       }
-      // Sweep the conversation's uploaded chat images + generated files (best effort).
+      // Sweep the conversation's uploaded chat images + generated files, and
+      // the server-written copies in its scratch workspace (best effort).
       deleteConversationImages(config, req.params.id);
       deleteConversationFiles(config, req.params.id);
+      deleteConversationWorkspaceCopies(config, [req.params.id]);
       res.json({ ok: true });
     },
   );

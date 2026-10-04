@@ -268,5 +268,68 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   and `describe_system` — the Confluence-style deployment-fact sync. The built-in WebFetch stays
   available (its own description tells the model to prefer an MCP web fetch tool); admins can still kill
   it via the builtin-tool policy toggle.
+- **Images for documents and decks: ONE describe_system line plus short standing text, on the same run
+  flags (2026-09-30).** Every image the avatar is shown can now be a FILE it places into a deck, document
+  or commit, all under the conversation scratch workspace: user attachments in `attachments/` (staged on
+  every local turn, see [`chat-sse-media.md`](chat-sse-media.md)), browser screenshots in `captures/`
+  ([`browser-bridge/contract.md`](browser-bridge/contract.md)), and Confluence attachments saved with
+  `save_to_workspace` in `confluence/` (next bullet). describe_system prints `- Images for documents and
+  decks: …` from ONE helper, `imageSourcesLine`, in the owner, group-agent and non-owner branches (the
+  `deckCapabilityLine` pattern). It names the absolute path when `SystemToolsContext.scratchWorkspaceDir`
+  is set. It lists attachments unless the run is `headless`, captures only when `browserEnabled` and vision
+  is on (at most 30 per RUN), and Confluence only when `confluenceSaveToWorkspace` holds, and it always
+  says `mcp__web__fetch` returns text only. It ends with what the run may DO with those files, from ONE
+  flag both surfaces read: `canWriteFiles` (`SystemToolsContext` and `AgentRequest`) = runPlan's
+  `elevatedToolAccess`, the class whose Write/Edit/Bash pass the PreToolUse hook. A run that can write is
+  told to copy the FILE into the deliverable. A read-only run (a plain colleague, a restricted headless
+  run) is told it can read the files but not place them here (the owner or a trusted teammate can, the
+  deck line's wording), so it is never steered toward writes its hook denies. The vision user-prompt tail
+  in `buildUserPrompt` branches on the same flag. Undefined (an unwired caller) resolves conservatively,
+  on both surfaces alike: only the owner's own run or a group-agent run counts as writable. The prompt
+  mirrors the same flags in three short places: `imageFilesSection` (vision on AND a deck flag — a
+  text-only run is shown no images, and `noVisionSection` already covers its files; the deck flags already
+  imply an author, so no read-only branch is needed there), the browser paragraph's screenshot sentence
+  (vision branch, "the scratch workspace's `captures/`", since an open working repo makes the clone the
+  cwd), and the Confluence paragraph, keyed on `AgentRequest.confluenceSaveToWorkspace`. `runClaudeAgent`
+  stamps both booleans from the same runPlan values describe_system's ctx got (the Confluence stamp is
+  pinned end to end in `tests/agent-share-link.test.ts`). `tests/system-manual.test.ts` budgets the
+  flag-maximal config in BOTH vision states under its 18,000 tripwire: vision OFF sits 4 characters under
+  it, vision ON (which carries `imageFilesSection` and the captures sentence) about 80 under. Confluence
+  (data-driven) is unmeasured. Keep them short.
+- **Confluence `get_attachment` `save_to_workspace` — a LOCAL write, never a Confluence mutation.** With
+  `save_to_workspace: true` the handler (after its unchanged `elevated` gate) writes the downloaded bytes
+  (any media type, under the existing `max_bytes` cap) to `<scratch>/confluence/<attachmentId>-<safeName>`
+  and adds the absolute `savedPath` to the JSON payload. The inline result is unchanged: an image block on
+  vision runs, and the text-only/non-inline notes gain one sentence pointing at `savedPath`.
+  `requestJson`/`requestBinary` are untouched, so the tools stay GET-only by construction. safeName = the
+  title's stem mapped to `[A-Za-z0-9._-]` (else `-`), `-` runs collapsed, `-`/`.` trimmed, ≤ 80 chars
+  including the lowercased original extension; an empty stem becomes `attachment` + (title extension |
+  media-type extension | `.bin`); the metadata id is sanitized the same way (≤ 64). Containment: the
+  workspace's realpath is the anchor; `confluence/` must be a plain folder (lstat, so a symlink or file
+  there is refused, never followed); files are created O_EXCL (`wx`, which never overwrites and never
+  writes through a planted symlink); an existing file with identical bytes (size first, then read
+  O_NOFOLLOW via `readRegularFileAsync`) is reused, else `-2` … `-100`, then
+  `-<KST YYYYMMDD-HHMMSS>-<6 hex>` names (the capture stamp), so a routine re-saving a changing attachment
+  into one workspace never runs out of names; a saved path must realpath to itself, or the file is
+  removed. Cheap checks run BEFORE the download (`checkSaveFolder`: the workspace exists, `confluence/` is
+  absent or a plain folder, and that folder, or before it exists the workspace, is writable) and refuse
+  with a hint to call again without `save_to_workspace`. They run again after the download for the race,
+  and a save that fails THERE costs only the copy: the normal inline result comes back plus a `saveError`
+  field, and the note never claims a save. A save that lands AFTER its conversation was deleted (a delete cannot stop
+  a download in flight, and its copy sweep already ran) is unlinked again and reported as `saveError`:
+  `ConfluenceToolsContext.isConversationLive` (runPlan: the conversation row still exists — ids are never reused) is
+  checked after the write. Target = `ConfluenceToolsContext.workspaceDir` = runPlan's pure
+  `conversationScratchDir(request)`. Every run with a conversation workspace (chat route `executeChatTurn`
+  for own-avatar, teammate, group-agent, bot and task-API turns; the owner-routine scheduler) passes
+  `cwd: activeRepoCwd ?? workspaceDir` + `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined` with
+  `activeRepoName` set alongside the clone, so an open working repo moves the scratch to
+  `additionalDirs[0]` (never the clone). No `conversationId` (profile generators, consultations) →
+  undefined → the option refuses before any request ("Saving attachments to the workspace is not
+  available in this run."). runPlan derives ONE boolean, `confluenceSaveToWorkspace` = Confluence group
+  registered && `elevatedToolAccess` && scratch dir && `confluenceCredentialsConfigured` (the tools' own
+  `credentials()` check over the decrypted vault, which is why `ownerSecrets` is now read before
+  `buildSystemServer`). It hands that boolean, with `scratchWorkspaceDir` and `canWriteFiles`, to
+  `SystemToolsContext`, and returns the two booleans (not the path, which only describe_system names) on
+  the plan for the prompt stamps (`AgentRequest.confluenceSaveToWorkspace`, `AgentRequest.canWriteFiles`).
 - **The `mcp__`-prefix auto-allow in the PreToolUse hook fires BEFORE the owner check**, so every tool
   MUST self-gate in its handler. Don't rely on the hook.

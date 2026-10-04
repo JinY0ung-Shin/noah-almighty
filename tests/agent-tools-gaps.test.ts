@@ -1,6 +1,7 @@
 // Coverage-gap tests for the in-process MCP tool servers under src/server/agent/.
 // Companion to agent-tools.test.ts: this file targets branches that file leaves
-// uncovered (Confluence request/attachment plumbing, brain/group-brain happy
+// uncovered (Confluence request/attachment plumbing, get_attachment's
+// save_to_workspace and the run plan that picks its target, brain/group-brain happy
 // paths over a real local clone, group-repo list/scaffold/commit/create_repo,
 // ssh-trust add/remove, and the shared mcpTools helpers). Everything is offline:
 // fetch is stubbed per test, git uses local bare remotes, addTrustedHost is
@@ -38,7 +39,7 @@ import {
   SSH_TRUST_SERVER_NAME,
 } from "../src/server/agent/sshTrustTools.js";
 import { text, decodeRepoFsError, decodeExecError } from "../src/server/agent/mcpTools.js";
-import type { AppConfig } from "../src/server/types.js";
+import type { AgentRequest, AppConfig } from "../src/server/types.js";
 import { gitInit, makeBareRemote, callTool } from "./helpers.js";
 
 // addTrustedHost fetches a live host key over an SSH handshake (paramiko); mock
@@ -49,6 +50,19 @@ vi.mock("../src/server/sshTrust.js", async (importActual) => {
   return { ...actual, addTrustedHost: vi.fn() };
 });
 import { addTrustedHost } from "../src/server/sshTrust.js";
+// The run-plan tests record the ctx buildAgentRunPlan hands the Confluence and
+// system servers. Both factories are wrapped in spies that still build the real
+// servers, so every other test here sees the real modules.
+vi.mock("../src/server/agent/confluenceTools.js", async (importActual) => {
+  const actual = await importActual<typeof import("../src/server/agent/confluenceTools.js")>();
+  return { ...actual, buildConfluenceServer: vi.fn(actual.buildConfluenceServer) };
+});
+vi.mock("../src/server/agent/systemTools.js", async (importActual) => {
+  const actual = await importActual<typeof import("../src/server/agent/systemTools.js")>();
+  return { ...actual, buildSystemServer: vi.fn(actual.buildSystemServer) };
+});
+import { buildSystemServer } from "../src/server/agent/systemTools.js";
+import { buildAgentRunPlan, conversationScratchDir } from "../src/server/agent/runPlan.js";
 
 let tempDir: string;
 
@@ -433,6 +447,499 @@ describe("confluence tools — request + attachment plumbing", () => {
     const server = buildConfluenceServer(ctx());
     expect(server).toBeTruthy();
     expect(CONFLUENCE_SERVER_NAME).toBe("confluence");
+  });
+
+  describe("get_attachment save_to_workspace", () => {
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    let workspace: string;
+    beforeEach(() => {
+      workspace = path.join(tempDir, "scratch");
+      fs.mkdirSync(workspace);
+    });
+    const savedDir = () => path.join(workspace, "confluence");
+
+    /**
+     * Serve ONE attachment: metadata at /content/<requestedId> (its `id` field
+     * may differ, for a hostile id), bytes at the download link. Returns every
+     * request's method, so a test can pin that the save stays GET-only.
+     */
+    function serve(
+      meta: { requestedId: string; id?: string; title?: string; mediaType?: string },
+      bytes: Uint8Array,
+    ): (string | undefined)[] {
+      const methods: (string | undefined)[] = [];
+      stubFetch((url, init) => {
+        methods.push(init.method);
+        if (url.pathname.endsWith(`/content/${meta.requestedId}`)) {
+          return json({
+            id: meta.id ?? meta.requestedId,
+            type: "attachment",
+            title: meta.title,
+            metadata: meta.mediaType ? { mediaType: meta.mediaType } : {},
+            _links: { download: "/download/attachments/7/file" },
+          });
+        }
+        return fakeBinary({ contentType: meta.mediaType ?? null, bytes });
+      });
+      return methods;
+    }
+
+    /** get_attachment with save_to_workspace on, against this test's workspace. */
+    function save(
+      args: Record<string, unknown>,
+      over: { visionEnabled?: boolean; workspaceDir?: string; elevated?: boolean } = {},
+    ) {
+      return callTool(
+        buildConfluenceTools({ ...ctx(), workspaceDir: workspace, ...over }),
+        "get_attachment",
+        { save_to_workspace: true, ...args },
+      );
+    }
+
+    const savedPathOf = (res: { content: { text?: string }[] }): string =>
+      JSON.parse(res.content[0].text ?? "{}").savedPath;
+
+    it("declares the option as an optional boolean and names it in the description", () => {
+      const getAttachment = buildConfluenceTools(ctx()).find((t) => t.name === "get_attachment")!;
+      expect(getAttachment.description).toContain("save_to_workspace");
+      expect(getAttachment.description).toContain("savedPath");
+      const shape = getAttachment.inputSchema as Record<string, { safeParse(v: unknown): { success: boolean } }>;
+      expect(shape.save_to_workspace.safeParse(undefined).success).toBe(true);
+      expect(shape.save_to_workspace.safeParse(true).success).toBe(true);
+      expect(shape.save_to_workspace.safeParse("yes").success).toBe(false);
+    });
+
+    it("saves an image under confluence/ and still returns the image block on a vision run", async () => {
+      const methods = serve({ requestedId: "att-1", title: "Architecture Diagram.PNG", mediaType: "image/png" }, PNG);
+      const res = await save({ attachment_id: "att-1" });
+      expect(res.isError).toBeFalsy();
+      const payload = JSON.parse(res.content[0].text ?? "{}");
+      const expected = path.join(savedDir(), "att-1-Architecture-Diagram.png");
+      expect(payload.savedPath).toBe(expected);
+      expect(path.isAbsolute(payload.savedPath)).toBe(true);
+      expect(fs.readFileSync(expected)).toEqual(Buffer.from(PNG));
+      // Unchanged inline behavior: the image block rides along with the save.
+      expect(payload.download.returnedAs).toBe("image");
+      expect(res.content[1]).toMatchObject({
+        type: "image",
+        mimeType: "image/png",
+        data: Buffer.from(PNG).toString("base64"),
+      });
+      // A LOCAL write: Confluence itself only ever saw the two GETs.
+      expect(methods).toHaveLength(2);
+      expect(methods.every((method) => method === undefined || method === "GET")).toBe(true);
+    });
+
+    it("undoes a save that lands after its conversation was deleted (the copy sweep already ran)", async () => {
+      // A delete cannot stop a download already in flight: when the save lands
+      // the conversation row is gone, so the copy is removed again.
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const gone = await callTool(
+        buildConfluenceTools({ ...ctx(), workspaceDir: workspace, isConversationLive: () => false }),
+        "get_attachment",
+        { save_to_workspace: true, attachment_id: "att-1" },
+      );
+      expect(gone.isError).toBeFalsy();
+      const payload = JSON.parse(gone.content[0].text ?? "{}");
+      expect(payload.savedPath).toBeUndefined();
+      expect(payload.saveError).toContain("deleted");
+      expect(fs.existsSync(path.join(savedDir(), "att-1-diagram.png"))).toBe(false);
+      // The read itself still answers: the image block rides along as before.
+      expect(gone.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
+
+      // Control: a live conversation keeps its copy.
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const live = await callTool(
+        buildConfluenceTools({ ...ctx(), workspaceDir: workspace, isConversationLive: () => true }),
+        "get_attachment",
+        { save_to_workspace: true, attachment_id: "att-1" },
+      );
+      expect(fs.existsSync(savedPathOf(live))).toBe(true);
+    });
+
+    it("saves any media type: a non-inline zip, a draw.io diagram, a text file found by name", async () => {
+      const zip = new Uint8Array([0x50, 0x4b, 3, 4]);
+      serve({ requestedId: "att-z", title: "archive.zip", mediaType: "application/zip" }, zip);
+      const zipPayload = JSON.parse((await save({ attachment_id: "att-z" })).content[0].text ?? "{}");
+      expect(zipPayload.savedPath).toBe(path.join(savedDir(), "att-z-archive.zip"));
+      expect(zipPayload.note).toContain("not returned inline");
+      expect(zipPayload.note).toContain("saved at savedPath");
+      expect(fs.readFileSync(zipPayload.savedPath)).toEqual(Buffer.from(zip));
+
+      const mxfile = "<mxfile><diagram/></mxfile>";
+      serve({ requestedId: "att-d", title: "flow.drawio", mediaType: "application/vnd.jgraph.mxfile" }, new TextEncoder().encode(mxfile));
+      const drawio = JSON.parse((await save({ attachment_id: "att-d" })).content[0].text ?? "{}");
+      expect(drawio.savedPath).toBe(path.join(savedDir(), "att-d-flow.drawio"));
+      expect(drawio.download.returnedAs).toBe("text");
+      expect(drawio.text).toBe(mxfile);
+      expect(fs.readFileSync(drawio.savedPath, "utf8")).toBe(mxfile);
+
+      // Resolved from the page listing: the saved name carries the LISTED id.
+      stubFetch((url) => {
+        if (url.pathname.includes("/child/attachment")) {
+          return json({
+            results: [{ id: "att-9", type: "attachment", title: "notes.txt", metadata: {}, _links: { download: "/download/attachments/7/notes.txt" } }],
+          });
+        }
+        return fakeBinary({ contentType: "application/octet-stream", bytes: new TextEncoder().encode("hello") });
+      });
+      const notes = JSON.parse((await save({ page_id: "7", filename: "notes.txt" })).content[0].text ?? "{}");
+      expect(notes.savedPath).toBe(path.join(savedDir(), "att-9-notes.txt"));
+      expect(notes.text).toBe("hello");
+    });
+
+    it("on a text-only run saves the image and says so, with no image block", async () => {
+      serve({ requestedId: "att-1", title: "chart.png", mediaType: "image/png" }, PNG);
+      const res = await save({ attachment_id: "att-1" }, { visionEnabled: false });
+      expect(res.isError).toBeFalsy();
+      expect(res.content).toHaveLength(1);
+      const payload = JSON.parse(res.content[0].text ?? "{}");
+      expect(payload.note).toContain("cannot accept image input");
+      expect(payload.note).toContain("saved at savedPath");
+      expect(fs.readFileSync(payload.savedPath)).toEqual(Buffer.from(PNG));
+    });
+
+    it("builds a safe single-segment name from any title and id", async () => {
+      const cases: { id: string; responseId?: string; title?: string; mediaType: string; expected: string }[] = [
+        // A Hangul-only stem → `attachment`, keeping the title's own extension.
+        { id: "att-k", title: "아키텍처 다이어그램.png", mediaType: "image/png", expected: "att-k-attachment.png" },
+        // Unsafe runs collapse to ONE `-`; the extension is lowercased.
+        { id: "att-m", title: "Q3 매출 차트 v2.PNG", mediaType: "image/png", expected: "att-m-Q3-v2.png" },
+        // Separators never survive, and leading dots are trimmed.
+        { id: "att-p", title: "../../etc/passwd", mediaType: "text/plain", expected: "att-p-etc-passwd" },
+        // A hostile id in the metadata is made safe the same way.
+        { id: "att-h", responseId: "../../evil", title: "x.png", mediaType: "image/png", expected: "evil-x.png" },
+        // No title at all → attachment.<ext from the media type>, else .bin.
+        { id: "att-e", mediaType: "image/jpeg", expected: "att-e-attachment.jpg" },
+        { id: "att-u", mediaType: "application/x-unknown", expected: "att-u-attachment.bin" },
+        // ≤ 80 chars with the extension, re-trimmed when the cut ends on `-`.
+        { id: "att-l", title: `${"A".repeat(200)}.png`, mediaType: "image/png", expected: `att-l-${"A".repeat(76)}.png` },
+        { id: "att-t", title: `${"a".repeat(75)} b.png`, mediaType: "image/png", expected: `att-t-${"a".repeat(75)}.png` },
+      ];
+      for (const c of cases) {
+        serve({ requestedId: c.id, id: c.responseId, title: c.title, mediaType: c.mediaType }, PNG);
+        const res = await save({ attachment_id: c.id }, { visionEnabled: false });
+        expect(res.isError, c.expected).toBeFalsy();
+        expect(savedPathOf(res), c.expected).toBe(path.join(savedDir(), c.expected));
+      }
+      // Every file landed directly inside confluence/ and nowhere else.
+      expect(fs.readdirSync(workspace)).toEqual(["confluence"]);
+      expect(fs.readdirSync(savedDir()).sort()).toEqual(cases.map((c) => c.expected).sort());
+    });
+
+    it("never overwrites a different file, and reuses one with identical bytes", async () => {
+      fs.mkdirSync(savedDir());
+      const taken = path.join(savedDir(), "att-1-diagram.png");
+      fs.writeFileSync(taken, "someone else's file");
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const first = savedPathOf(await save({ attachment_id: "att-1" }));
+      expect(first).toBe(path.join(savedDir(), "att-1-diagram-2.png"));
+      expect(fs.readFileSync(taken, "utf8")).toBe("someone else's file");
+
+      // The same bytes again → the same file, not another copy.
+      expect(savedPathOf(await save({ attachment_id: "att-1" }))).toBe(first);
+
+      // A changed attachment → the next free name.
+      const changed = new Uint8Array([...PNG, 9]);
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, changed);
+      const third = savedPathOf(await save({ attachment_id: "att-1" }));
+      expect(third).toBe(path.join(savedDir(), "att-1-diagram-3.png"));
+      expect(fs.readFileSync(third)).toEqual(Buffer.from(changed));
+      expect(fs.readdirSync(savedDir()).sort()).toEqual([
+        "att-1-diagram-2.png",
+        "att-1-diagram-3.png",
+        "att-1-diagram.png",
+      ]);
+    });
+
+    it("never follows a symlink — neither the confluence/ folder nor a planted file name", async () => {
+      const outside = path.join(tempDir, "outside");
+      fs.mkdirSync(outside);
+      const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+
+      // confluence/ → a folder outside the workspace: refused by the pre-check
+      // (no request sent), nothing lands there.
+      fs.symlinkSync(outside, savedDir());
+      const viaLink = await save({ attachment_id: "att-1" });
+      expect(viaLink.isError).toBe(true);
+      expect(viaLink.content[0].text).toContain("not a plain folder");
+      expect(viaLink.content[0].text).toContain("without save_to_workspace");
+      expect(fs.readdirSync(outside)).toEqual([]);
+
+      // A FILE named confluence is refused the same way.
+      fs.unlinkSync(savedDir());
+      fs.writeFileSync(savedDir(), "");
+      const viaFile = await save({ attachment_id: "att-1" });
+      expect(viaFile.isError).toBe(true);
+      expect(viaFile.content[0].text).toContain("not a plain folder");
+      expect(methods).toEqual([]);
+
+      // Symlinks planted at the name — one dangling, one to IDENTICAL bytes —
+      // are skipped: never written through, never reused.
+      fs.unlinkSync(savedDir());
+      fs.mkdirSync(savedDir());
+      const identical = path.join(outside, "same.png");
+      fs.writeFileSync(identical, PNG);
+      fs.symlinkSync(path.join(outside, "created-through-link.png"), path.join(savedDir(), "att-1-diagram.png"));
+      fs.symlinkSync(identical, path.join(savedDir(), "att-1-diagram-2.png"));
+      const planted = savedPathOf(await save({ attachment_id: "att-1" }));
+      expect(planted).toBe(path.join(savedDir(), "att-1-diagram-3.png"));
+      expect(fs.lstatSync(planted).isFile()).toBe(true);
+      expect(fs.readdirSync(outside)).toEqual(["same.png"]);
+    });
+
+    it("without a workspace, refuses before sending any request", async () => {
+      const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const res = await save({ attachment_id: "att-1" }, { workspaceDir: undefined });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("Saving attachments to the workspace is not available in this run.");
+      expect(methods).toEqual([]);
+    });
+
+    it("reports a workspace that no longer exists before the download, instead of recreating it", async () => {
+      const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const gone = path.join(tempDir, "deleted-conversation");
+      const res = await save({ attachment_id: "att-1" }, { workspaceDir: gone });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("no longer exists");
+      expect(methods).toEqual([]);
+      expect(fs.existsSync(gone)).toBe(false);
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      "a workspace it cannot write is refused before the download, creating nothing",
+      async () => {
+        const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+        fs.chmodSync(workspace, 0o555);
+        try {
+          const res = await save({ attachment_id: "att-1" });
+          expect(res.isError).toBe(true);
+          expect(res.content[0].text).toContain("not writable");
+          expect(res.content[0].text).toContain("without save_to_workspace");
+          expect(methods).toEqual([]);
+        } finally {
+          fs.chmodSync(workspace, 0o755);
+        }
+        expect(fs.existsSync(savedDir())).toBe(false);
+      },
+    );
+
+    it("past the numbered names falls back to a timestamped random name, still never overwriting", async () => {
+      // A daily routine re-saving a CHANGING attachment into one workspace
+      // eventually holds every numbered name.
+      fs.mkdirSync(savedDir());
+      const numbered = ["att-1-diagram.png", ...Array.from({ length: 99 }, (_, i) => `att-1-diagram-${i + 2}.png`)];
+      for (const name of numbered) fs.writeFileSync(path.join(savedDir(), name), `taken ${name}`);
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const fallback = await save({ attachment_id: "att-1" });
+      expect(fallback.isError).toBeFalsy();
+      const first = savedPathOf(fallback);
+      expect(path.dirname(first)).toBe(savedDir());
+      expect(path.basename(first)).toMatch(/^att-1-diagram-\d{8}-\d{6}-[0-9a-f]{6}\.png$/);
+      expect(fs.readFileSync(first)).toEqual(Buffer.from(PNG));
+      for (const name of numbered) {
+        expect(fs.readFileSync(path.join(savedDir(), name), "utf8")).toBe(`taken ${name}`);
+      }
+
+      // The next change lands on yet another fresh name.
+      const changed = new Uint8Array([...PNG, 7]);
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, changed);
+      const second = savedPathOf(await save({ attachment_id: "att-1" }));
+      expect(second).not.toBe(first);
+      expect(path.basename(second)).toMatch(/^att-1-diagram-\d{8}-\d{6}-[0-9a-f]{6}\.png$/);
+      expect(fs.readFileSync(second)).toEqual(Buffer.from(changed));
+      expect(fs.readdirSync(savedDir())).toHaveLength(numbered.length + 2);
+    });
+
+    it("a save that fails after the download keeps the inline result and reports saveError", async () => {
+      const outside = path.join(tempDir, "outside");
+      fs.mkdirSync(outside);
+      /** Serve `att-1`, swapping a link in at confluence/ WHILE its download is in flight. */
+      const serveRacing = (mediaType: string, bytes: Uint8Array) =>
+        stubFetch((url) => {
+          if (url.pathname.endsWith("/content/att-1")) {
+            return json({
+              id: "att-1",
+              type: "attachment",
+              title: mediaType === "image/png" ? "diagram.png" : "archive.zip",
+              metadata: { mediaType },
+              _links: { download: "/download/attachments/7/file" },
+            });
+          }
+          // The pre-check already passed; the agent's shell swaps the folder now.
+          fs.symlinkSync(outside, savedDir());
+          return fakeBinary({ contentType: mediaType, bytes });
+        });
+
+      serveRacing("image/png", PNG);
+      const image = await save({ attachment_id: "att-1" });
+      expect(image.isError).toBeFalsy();
+      const imagePayload = JSON.parse(image.content[0].text ?? "{}");
+      expect(imagePayload.saveError).toContain("not a plain folder");
+      expect(imagePayload.savedPath).toBeUndefined();
+      // Only the copy is lost: the image block still comes back.
+      expect(imagePayload.download.returnedAs).toBe("image");
+      expect(image.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
+
+      // A non-inline type keeps its note, which must not claim a saved file.
+      fs.unlinkSync(savedDir());
+      serveRacing("application/zip", new Uint8Array([0x50, 0x4b, 3, 4]));
+      const zipPayload = JSON.parse((await save({ attachment_id: "att-1" })).content[0].text ?? "{}");
+      expect(zipPayload.saveError).toContain("not a plain folder");
+      expect(zipPayload.note).toContain("not returned inline");
+      expect(zipPayload.note).not.toContain("saved at savedPath");
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+
+    it("writes nothing unless save_to_workspace is set", async () => {
+      serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const res = await callTool(buildConfluenceTools({ ...ctx(), workspaceDir: workspace }), "get_attachment", {
+        attachment_id: "att-1",
+      });
+      expect(res.isError).toBeFalsy();
+      expect(savedPathOf(res)).toBeUndefined();
+      expect(fs.readdirSync(workspace)).toEqual([]);
+    });
+
+    it("keeps the elevated gate first: a non-elevated viewer saves and sends nothing", async () => {
+      const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      for (const workspaceDir of [workspace, undefined]) {
+        const res = await save({ attachment_id: "att-1" }, { elevated: false, workspaceDir });
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).toContain("owner or trusted user");
+      }
+      expect(methods).toEqual([]);
+      expect(fs.readdirSync(workspace)).toEqual([]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runPlan.ts — which workspace the Confluence save targets, and the ONE
+// boolean both metacognition surfaces offer it on
+// ---------------------------------------------------------------------------
+
+describe("run plan — the Confluence save target", () => {
+  it("conversationScratchDir is the cwd, or the scratch additional dir behind an open repo", () => {
+    expect(conversationScratchDir({ conversationId: "c1", cwd: "/ws/c1" })).toBe("/ws/c1");
+    expect(
+      conversationScratchDir({
+        conversationId: "c1",
+        cwd: "/clones/repo",
+        additionalDirs: ["/ws/c1"],
+        activeRepoName: "repo",
+      }),
+    ).toBe("/ws/c1");
+    // No conversation (profile generators, consultations): no conversation workspace.
+    expect(conversationScratchDir({ cwd: "/ws/intro" })).toBeUndefined();
+    // An open repo without its scratch dir fails closed — never the clone.
+    expect(
+      conversationScratchDir({ conversationId: "c1", cwd: "/clones/repo", activeRepoName: "repo" }),
+    ).toBeUndefined();
+  });
+
+  function setup(dir: string, opts: { confluenceUrl?: string; pat?: boolean } = {}) {
+    const { store, config } = createServices({
+      dataDir: path.join(tempDir, dir),
+      agentRuntime: "local",
+      sessionSecret: "t",
+      confluenceUrl: opts.confluenceUrl,
+    });
+    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
+    if (opts.pat) store.setUserSecret(owner.id, "CONFLUENCE_PAT", "pat");
+    const scratch = path.join(tempDir, dir, "workspaces", "conv-1");
+    fs.mkdirSync(scratch, { recursive: true });
+    return { store, config, owner, scratch };
+  }
+
+  function request(s: ReturnType<typeof setup>, over: Partial<AgentRequest> = {}): AgentRequest {
+    return {
+      message: "hi",
+      avatar: { id: s.owner.id, displayName: "Owner", alias: "", persona: "" },
+      viewerUserId: s.owner.id,
+      viewerIsOwner: true,
+      conversationId: "conv-1",
+      cwd: s.scratch,
+      ...over,
+    };
+  }
+
+  async function plan(s: ReturnType<typeof setup>, req: AgentRequest) {
+    vi.mocked(buildConfluenceServer).mockClear();
+    vi.mocked(buildSystemServer).mockClear();
+    const result = await buildAgentRunPlan(req, [], s.config, s.store, undefined, undefined, () => 0);
+    return {
+      result,
+      confluenceCtx: vi.mocked(buildConfluenceServer).mock.calls[0][0],
+      // Read loosely: describe_system's ctx declares these in systemTools.ts.
+      systemCtx: vi.mocked(buildSystemServer).mock.calls[0][1] as unknown as {
+        scratchWorkspaceDir?: string;
+        confluenceSaveToWorkspace?: boolean;
+        canWriteFiles?: boolean;
+      },
+    };
+  }
+
+  it("hands the tools the conversation scratch workspace, never an open repo clone", async () => {
+    const s = setup("plan-target", { confluenceUrl: "https://confluence.internal", pat: true });
+    const plain = await plan(s, request(s));
+    expect(plain.confluenceCtx.workspaceDir).toBe(s.scratch);
+    expect(plain.systemCtx.scratchWorkspaceDir).toBe(s.scratch);
+    // The path rides describe_system's ctx only; the plan returns just the
+    // boolean runClaudeAgent stamps onto the prompt.
+    expect(Object.keys(plain.result)).not.toContain("scratchWorkspaceDir");
+    expect(plain.result.confluenceSaveToWorkspace).toBe(true);
+    expect(plain.systemCtx.confluenceSaveToWorkspace).toBe(true);
+    expect(plain.systemCtx.canWriteFiles).toBe(true);
+
+    const clone = path.join(tempDir, "plan-target", "clones", "repo");
+    fs.mkdirSync(clone, { recursive: true });
+    const withRepo = await plan(
+      s,
+      request(s, { cwd: clone, additionalDirs: [s.scratch], activeRepoName: "repo" }),
+    );
+    expect(withRepo.confluenceCtx.workspaceDir).toBe(s.scratch);
+    expect(withRepo.systemCtx.scratchWorkspaceDir).toBe(s.scratch);
+    expect(withRepo.result.confluenceSaveToWorkspace).toBe(true);
+  });
+
+  it("offers the save only where it can land: registered, elevated, a workspace, and credentials", async () => {
+    const s = setup("plan-offer", { confluenceUrl: "https://confluence.internal", pat: true });
+    const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
+    // A colleague is refused by the tools' own `elevated` gate — no offer.
+    const notElevated = await plan(s, request(s, { viewerUserId: colleague.id, viewerIsOwner: false }));
+    expect(notElevated.result.confluenceSaveToWorkspace).toBe(false);
+    expect(notElevated.confluenceCtx.elevated).toBe(false);
+    // The Confluence tool group is not registered this run.
+    const deselected = await plan(s, request(s, { mcpToolGroups: ["personal_knowledge"] }));
+    expect(deselected.result.confluenceSaveToWorkspace).toBe(false);
+    // No conversation workspace: the tools get none and refuse the option.
+    const noWorkspace = await plan(s, request(s, { conversationId: undefined }));
+    expect(noWorkspace.confluenceCtx.workspaceDir).toBeUndefined();
+    expect(noWorkspace.systemCtx.scratchWorkspaceDir).toBeUndefined();
+    expect(noWorkspace.result.confluenceSaveToWorkspace).toBe(false);
+    // Credentials: the tools' own check — URL and the owner's PAT.
+    const noPat = setup("plan-no-pat", { confluenceUrl: "https://confluence.internal" });
+    expect((await plan(noPat, request(noPat))).result.confluenceSaveToWorkspace).toBe(false);
+    const noUrl = setup("plan-no-url", { pat: true });
+    expect((await plan(noUrl, request(noUrl))).systemCtx.confluenceSaveToWorkspace).toBe(false);
+  });
+
+  it("canWriteFiles follows the elevated built-in gate, on describe_system's ctx and the plan alike", async () => {
+    const s = setup("plan-can-write");
+    const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
+    const cases: { label: string; over: Partial<AgentRequest>; expected: boolean }[] = [
+      { label: "owner chat", over: {}, expected: true },
+      { label: "read-only colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, expected: false },
+      // Profile generators: headless without the opt-in stay tool-restricted.
+      { label: "restricted headless", over: { headless: true, conversationId: undefined }, expected: false },
+      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, expected: true },
+    ];
+    for (const c of cases) {
+      const { result, systemCtx } = await plan(s, request(s, c.over));
+      expect(systemCtx.canWriteFiles, c.label).toBe(c.expected);
+      expect(result.canWriteFiles, c.label).toBe(c.expected);
+    }
   });
 });
 

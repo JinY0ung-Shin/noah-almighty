@@ -534,6 +534,29 @@ function deckSection(request: AgentRequest): string | null {
 }
 
 /**
+ * Standing guidance that an image the avatar is SHOWN is also a FILE it can
+ * place, next to the deck guidance it serves. The folders follow the SAME run
+ * flags describe_system's image-sources line reads (`browserEnabled`,
+ * `confluenceSaveToWorkspace`). Only on a vision run that may author a deck
+ * (either deck flag): a text-only run is shown no images (its attachments
+ * arrive as listed files, see noVisionSection), and a run that cannot build a
+ * deliverable has nothing to place them into.
+ */
+function imageFilesSection(request: AgentRequest): string | null {
+  if (request.visionEnabled === false) return null;
+  if (!request.deckConverterEnabled && !request.deckRenderingEnabled) return null;
+  const folders = [
+    "`attachments/` (the user's)",
+    ...(request.browserEnabled ? ["`captures/` (your screenshots)"] : []),
+    ...(request.confluenceSaveToWorkspace ? ["`confluence/` (saved attachments)"] : []),
+  ];
+  return (
+    `Images you are shown are also FILES in the scratch workspace — ${folders.join(", ")}: ` +
+    "to put one in a deck or document, place that file (e.g. in the deck's `assets/`) instead of describing or redrawing it."
+  );
+}
+
+/**
  * Working-repository guidance. When the cwd is a registered repo's clone (the
  * avatar opened it with `open_repo`), the avatar may edit/test locally with
  * NATIVE tools and use local git for inspection, staging, and commit.
@@ -840,6 +863,12 @@ export function buildSystemPromptAppend(
       lines.push(
         "The shared Confluence tools are enabled. Use the `mcp__confluence__*` tools for Confluence search / page retrieval / space lookup / attachment and image asset retrieval. " +
           "They are READ-ONLY: no `mcp__confluence__*` tool creates, edits, or deletes anything, and there is no shell or fetch workaround. " +
+          // The one LOCAL write: a downloaded attachment saved into this run's
+          // scratch workspace, so a diagram can go into a deck or document.
+          // Same run flag as describe_system's image-sources line.
+          (request.confluenceSaveToWorkspace
+            ? "`mcp__confluence__get_attachment` with `save_to_workspace: true` also saves the file to the scratch workspace's `confluence/` (its `savedPath`) for a deck or document. "
+            : "") +
           // Writing is still possible — through the user's OWN browser session,
           // where they can see and undo it. Offer that route only when the
           // bridge is actually live this run; promising it otherwise sends the
@@ -893,7 +922,7 @@ export function buildSystemPromptAppend(
         "Only tabs in the Noah tab group and tabs you open are reachable. Always `mcp__browser__snapshot` first, act, then verify the returned state; after navigation or document replacement take fresh uids. Use `read_text` for long text; actions accept small `maxChars`, while `wait_for` returns no page content. " +
         "Use `type`/`fill_form` to enter text; long editor content and images use `copy_text`/`copy_image` via the manual's staging flow. Never paste on anything but COPIED; verify the saved editor content after pasting. " +
         (request.visionEnabled !== false
-          ? "Screenshots are available and shared with the user. For a PIXEL position click, CHECK the landed-on element AND the mapping line the result reports; if the coordinate space is off, correct once, or use uid mode. "
+          ? "Screenshots are available, shared with the user and saved in the scratch workspace's `captures/`. For a PIXEL position click, CHECK the landed-on element AND the mapping line the result reports; if the coordinate space is off, correct once, or use uid mode. "
           : "Screenshots and pixel-mode clicks are unavailable. ") +
         "Targets inside a canvas/map can use click_at with `uid` and `xFraction`/`yFraction` without images; confirm the result. " +
         "read_cookies/read_storage expose LIVE CREDENTIALS from the current origin only. Read only when required for this task, with the user's per-site/session extension consent (storage also per type); do not retry a refusal or bypass consent. Never echo, write, commit, or forward those values. " +
@@ -990,6 +1019,10 @@ export function buildSystemPromptAppend(
   const deckBlock = deckSection(request);
   if (deckBlock) {
     lines.push(deckBlock);
+  }
+  const imageFilesBlock = imageFilesSection(request);
+  if (imageFilesBlock) {
+    lines.push(imageFilesBlock);
   }
   const drawioBlock = drawioSection(request);
   if (drawioBlock) {
@@ -1440,6 +1473,16 @@ export function buildSystemPromptAppend(
   return lines.join("\n\n");
 }
 
+/**
+ * Whether this run may write files: runPlan's `canWriteFiles`
+ * (elevatedToolAccess) when stamped, else only what the request proves — the
+ * owner's own run or a group-agent run. The same resolution as describe_system's
+ * image-sources line (`systemTools.ts`), so both surfaces agree.
+ */
+function canWriteFiles(request: AgentRequest): boolean {
+  return request.canWriteFiles ?? Boolean(request.viewerIsOwner || request.groupAgent);
+}
+
 export function buildUserPrompt(request: AgentRequest): string {
   const lines: string[] = [];
   // Stored history is the fallback for context the SDK session would otherwise
@@ -1455,18 +1498,36 @@ export function buildUserPrompt(request: AgentRequest): string {
     lines.push(historyBlock);
   }
   lines.push(`${request.headless ? "Task instruction" : "User message"}:\n${request.message}`);
-  // Text-only turn: the attachments exist as FILES in the scratch workspace, and
-  // this listing is the ONLY way the model learns about them (their bytes never
-  // enter the request).
+  // The attachments also exist as FILES in the scratch workspace. On a
+  // text-only turn this listing is the ONLY way the model learns about them
+  // (their bytes never enter the request). On a vision turn the same images
+  // ride as image blocks too, and the listing makes each one a file it can place.
   if (request.imageFiles?.length) {
     const listing = request.imageFiles
       .map((f) => `- ${f.path} (${f.mediaType}${f.name ? `, original name "${f.name}"` : ""})`)
       .join("\n");
+    const shownCount = request.images?.length ?? 0;
     lines.push(
-      "Attached image files: the user attached image file(s) to this message. " +
-        "The active model cannot view image content, so they are staged as FILES in the conversation scratch workspace instead of being shown to you:\n" +
-        listing +
-        "\nYou cannot see their pixels, and Read on them is blocked. Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with Bash, commit via the repo tools, or place one into a web page with mcp__browser__copy_image.",
+      shownCount > 0
+        ? "Attached image files: the image(s) attached to this message (shown to you) are ALSO saved as files in the conversation scratch workspace" +
+            // Both lists follow the attachment order; the claim holds only while
+            // neither skipped an unreadable file.
+            (shownCount === request.imageFiles.length ? ", in the same order" : "") +
+            ":\n" +
+            listing +
+            // Placing a file needs a run that may write files — the SAME flag
+            // (and fallback) describe_system's image-sources line reads.
+            (canWriteFiles(request)
+              ? "\nWhen the user wants an attached image IN something you produce (a deck's `assets/`, a document, a commit), place the FILE itself instead of describing or redrawing it."
+              : "\nThis conversation cannot write files, so you can read these files here but not place them into a deck, document or commit.")
+        : "Attached image files: the user attached image file(s) to this message. " +
+            "The active model cannot view image content, so they are staged as FILES in the conversation scratch workspace instead of being shown to you:\n" +
+            listing +
+            "\nYou cannot see their pixels, and Read on them is blocked. " +
+            // The same write flag as the vision tail: a read-only run can only show them.
+            (canWriteFiles(request)
+              ? "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with Bash, commit via the repo tools, or place one into a web page with mcp__browser__copy_image."
+              : "This conversation cannot write files: show one to the user with mcp__file_output__show_file if they need to see it."),
     );
   }
   return lines.join("\n\n");

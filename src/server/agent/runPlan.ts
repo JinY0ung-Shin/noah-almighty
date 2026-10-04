@@ -346,6 +346,27 @@ export function planMcpToolFamilies(
 }
 
 /**
+ * The run's CONVERSATION scratch workspace: where tools that hand the model a
+ * file of its own (get_attachment's `save_to_workspace`) write, and the path
+ * describe_system names. Every run kind that has one sets it the same way —
+ * the chat route's executeChatTurn (own-avatar, teammate, group-agent, bot and
+ * external-task-API turns) and the owner-routine scheduler both pass
+ * `cwd: activeRepoCwd ?? workspaceDir` with
+ * `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined`, and set
+ * `activeRepoName` together with that clone cwd. So an open working repo (#47)
+ * moved the scratch into `additionalDirs` — the clone is the cwd, never the
+ * scratch — and otherwise the scratch IS the cwd. A run with no conversation
+ * (profile generators, avatar consultations) has a per-feature cwd, not a
+ * conversation workspace: undefined. Pure and exported so the rule is pinned.
+ */
+export function conversationScratchDir(
+  request: Pick<AgentRequest, "conversationId" | "cwd" | "additionalDirs" | "activeRepoName">,
+): string | undefined {
+  if (!request.conversationId) return undefined;
+  return request.activeRepoName ? request.additionalDirs?.[0] : request.cwd;
+}
+
+/**
  * The ordered list of models to try for a run. Walks DOWN the tier order
  * (opus→sonnet→haiku) starting from the resolved model, so a transient failure
  * on the primary falls back to a lighter tier. A concrete (non-tier) primary —
@@ -411,6 +432,7 @@ export async function buildAgentRunPlan(
   } = await import("./systemTools.js");
   const {
     buildConfluenceServer,
+    confluenceCredentialsConfigured,
     CONFLUENCE_SERVER_NAME,
     CONFLUENCE_TOOL_NAMES,
   } = await import("./confluenceTools.js");
@@ -818,6 +840,37 @@ export async function buildAgentRunPlan(
     disabledSkills: toolSkillPolicy.disabledSkills,
     pptxSkillNames: deckToolchain.pptxSkillNames,
   });
+  // The avatar acts on its OWNER's behalf, so it uses the OWNER's secrets
+  // (avatar.id) regardless of who is chatting — a colleague talking to the
+  // owner's avatar still operates with the owner's credentials. The values are
+  // decrypted only here and handed to the MCP subprocess as env, so they never
+  // surface to the agent (Bash/`env` runs in a different process) nor to `toUser`.
+  // A group agent has NO owner and must never carry personal secrets — the
+  // empty object is explicit (the synthetic id would yield none anyway). Read
+  // ahead of describe_system's ctx, which reports what the Confluence PAT allows.
+  const ownerSecrets = groupAgentRun
+    ? {}
+    : store.getUserSecrets(request.avatar.id);
+  // The run's conversation scratch workspace (conversationScratchDir) — where
+  // get_attachment's save_to_workspace writes, and the path describe_system names.
+  const scratchWorkspaceDir = conversationScratchDir(request);
+  // save_to_workspace can LAND this run: the Confluence family is registered,
+  // the viewer passes the tools' own `elevated` gate, the run has a scratch
+  // workspace, and URL + owner PAT pass the tools' own credential check. ONE
+  // derivation for both metacognition surfaces: describe_system's ctx below,
+  // and the prompt through the returned plan.
+  const confluenceSaveToWorkspace =
+    confluenceToolsEnabled &&
+    elevatedToolAccess &&
+    Boolean(scratchWorkspaceDir) &&
+    confluenceCredentialsConfigured(config, ownerSecrets);
+  // Whether this run can write files at all: the elevated built-in class
+  // (Write/Edit/Bash) the PreToolUse hook gates — the same gate deckAuthoring
+  // uses. A read-only run is told the conversation's files exist and can be
+  // read, but cannot be placed into anything it produces. ONE flag for both
+  // metacognition surfaces: describe_system's ctx below, and the prompt
+  // through the returned plan.
+  const canWriteFiles = elevatedToolAccess;
   const systemServer = buildSystemServer(store, {
     avatarUserId: request.avatar.id,
     owner,
@@ -876,6 +929,12 @@ export async function buildAgentRunPlan(
     // Rewind provenance: the SAME gate as the prompt's per-turn line (never on
     // an unattended run), so the two surfaces report the same turn.
     rewind: request.headless ? undefined : request.rewind,
+    // Images for documents and decks: the scratch workspace path to name,
+    // whether get_attachment's save_to_workspace may be offered, and whether
+    // this run may place those files at all.
+    scratchWorkspaceDir,
+    confluenceSaveToWorkspace,
+    canWriteFiles,
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -1211,16 +1270,8 @@ export async function buildAgentRunPlan(
     config,
   });
 
-  // The avatar acts on its OWNER's behalf, so it uses the OWNER's secrets
-  // (avatar.id) regardless of who is chatting — a colleague talking to the
-  // owner's avatar still operates with the owner's credentials. The values are
-  // decrypted only here and handed to the MCP subprocess as env, so they never
-  // surface to the agent (Bash/`env` runs in a different process) nor to `toUser`.
-  // A group agent has NO owner and must never carry personal secrets — the
-  // empty object is explicit (the synthetic id would yield none anyway).
-  const ownerSecrets = groupAgentRun
-    ? {}
-    : store.getUserSecrets(request.avatar.id);
+  // `ownerSecrets` (the OWNER's decrypted vault) is read above, ahead of
+  // describe_system's ctx.
   const sshSecrets = sshMcpSecretEnv(ownerSecrets);
   // Secret handoff for app-registered EXTERNAL MCP subprocesses. The SDK
   // serializes `mcpServers` into the CLI's `--mcp-config` ARGV — readable via
@@ -1317,12 +1368,22 @@ export async function buildAgentRunPlan(
       "plugin mcp servers lifted",
     );
   }
+  const conversationIdForLiveness = request.conversationId;
   const confluenceServer = buildConfluenceServer({
     config,
     ownerSecrets,
     elevated: elevatedToolAccess,
     // Text-only model this run → attachment tools return notes, not image blocks.
     visionEnabled: runVisionEnabled,
+    // get_attachment's save_to_workspace target: the conversation scratch
+    // workspace, never an open repo clone (undefined → the option refuses).
+    workspaceDir: scratchWorkspaceDir,
+    // A save that lands after the conversation was deleted (its copy sweep
+    // already ran) is undone: conversation ids are never reused, so "the row
+    // still exists" is the whole liveness test.
+    isConversationLive: conversationIdForLiveness
+      ? () => store.conversationOwner(conversationIdForLiveness) !== null
+      : undefined,
   });
   // Generic web fetch (intranet + internet, proxy-aware). Registration follows
   // the tool-group picker; the HANDLER gates on `elevated` — the PreToolUse
@@ -1735,6 +1796,11 @@ export async function buildAgentRunPlan(
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
+    // For the prompt's matching standing guidance: the same booleans
+    // describe_system's ctx got above, stamped by runClaudeAgent. (The scratch
+    // path itself rides describe_system's ctx only.)
+    confluenceSaveToWorkspace,
+    canWriteFiles,
   };
 }
 

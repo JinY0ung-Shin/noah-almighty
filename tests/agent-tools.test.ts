@@ -171,6 +171,7 @@ import {
   type WebFetchResponse,
 } from "../src/server/agent/webFetchTools.js";
 import { generateSshKeyPair } from "../src/server/sshIdentity.js";
+import { MAX_SAVED_CAPTURES_PER_TURN } from "../src/server/chatFiles.js";
 import { workspaceDirFor } from "../src/server/workspace.js";
 import type { DeckToolchainState } from "../src/server/deckRender.js";
 import { groupAgentAvatarId } from "../src/server/groupAgents.js";
@@ -2359,6 +2360,123 @@ describe("system tools (avatar system management)", () => {
     const off = await callTool(offTools, "describe_system", {});
     expect(off.content[0].text).toContain("Image input (vision): NOT supported");
     expect(off.content[0].text).toContain("pdftotext");
+  });
+
+  const IMAGES_PREFIX = "- Images for documents and decks: ";
+  const imagesLineOf = (body: string) => {
+    const lines = body.split("\n").filter((line) => line.startsWith(IMAGES_PREFIX));
+    expect(lines).toHaveLength(1);
+    return lines[0];
+  };
+  const describeText = async (s: ReturnType<typeof setup>, ctx: SystemToolsContext) =>
+    (await callTool(buildSystemTools(s.store, ctx), "describe_system", {})).content[0].text ?? "";
+
+  it("describe_system says where this run's images are FILES it can place, per run flag", async () => {
+    const s = setup("st-images");
+    const owner = (ctx: Partial<SystemToolsContext> = {}) =>
+      describeText(s, { ...s.baseCtx, viewerIsOwner: true, ...ctx });
+
+    // A plain interactive run: the user's attachments + the web limitation.
+    const plain = imagesLineOf(await owner());
+    expect(plain).toBe(
+      `${IMAGES_PREFIX}files in the conversation scratch workspace — images the user attaches to a message are staged in \`attachments/\` (the user message lists their paths); ` +
+        "a web page's images cannot be downloaded with mcp__web__fetch, which returns page text only. " +
+        "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it",
+    );
+
+    // The absolute path, once runPlan hands it over.
+    expect(imagesLineOf(await owner({ scratchWorkspaceDir: "/data/workspaces/a/c" }))).toContain(
+      "files in the conversation scratch workspace (`/data/workspaces/a/c`) — ",
+    );
+
+    // Captures need BOTH a connected bridge and a model that takes images. The
+    // cap is per RUN (the route counts per executeChatTurn), not per turn.
+    const captures = `every mcp__browser__screenshot is also saved in \`captures/\` (its result gives the path; at most ${MAX_SAVED_CAPTURES_PER_TURN} per run)`;
+    expect(imagesLineOf(await owner({ browserEnabled: true }))).toContain(captures);
+    expect(imagesLineOf(await owner({ browserEnabled: true, visionEnabled: false }))).not.toContain("captures/");
+    expect(imagesLineOf(await owner())).not.toContain("captures/");
+
+    // Confluence follows runPlan's ONE boolean (tools registered, viewer
+    // elevated, URL + PAT, a workspace) — never re-derived here.
+    const confluence =
+      "mcp__confluence__get_attachment with `save_to_workspace: true` saves an attachment into `confluence/` (the result's `savedPath`)";
+    expect(imagesLineOf(await owner({ confluenceSaveToWorkspace: true }))).toContain(confluence);
+    expect(imagesLineOf(await owner({ confluenceSaveToWorkspace: false }))).not.toContain("save_to_workspace");
+
+    // An unattended run has nobody attaching images, but can still save.
+    const routine = imagesLineOf(await owner({ headless: true, confluenceSaveToWorkspace: true }));
+    expect(routine).toContain("an unattended run receives no user attachments");
+    expect(routine).not.toContain("`attachments/`");
+    expect(routine).toContain(confluence);
+
+    // The browser line points at the saved copy too, on its vision branch only.
+    expect(await owner({ browserEnabled: true })).toContain(
+      "so the user sees every capture, and each is also saved as an image file in `captures/` (see the images line)",
+    );
+    expect(await owner({ browserEnabled: true, visionEnabled: false })).not.toContain(
+      "saved as an image file in `captures/`",
+    );
+  });
+
+  it("describe_system prints the images line on the non-owner and group-agent branches too", async () => {
+    const s = setup("st-images-branches");
+    const PLACE = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
+    const READ_ONLY =
+      "This conversation cannot write files, so you can read them here but not place them into a deck, document or commit — the owner or a trusted teammate can";
+    // A trusted teammate's run (runPlan: canWriteFiles) can save Confluence
+    // attachments and place files; a plain colleague's can do neither — and
+    // neither ever has captures.
+    const trusted = imagesLineOf(
+      await describeText(s, {
+        ...s.baseCtx,
+        viewerIsOwner: false,
+        canWriteFiles: true,
+        confluenceSaveToWorkspace: true,
+        scratchWorkspaceDir: "/w/t",
+      }),
+    );
+    expect(trusted).toContain("(`/w/t`)");
+    expect(trusted).toContain("`attachments/`");
+    expect(trusted).toContain("`confluence/`");
+    expect(trusted).toContain(PLACE);
+    const colleague = await describeText(s, { ...s.baseCtx, viewerIsOwner: false, canWriteFiles: false });
+    expect(colleague).toContain("Deployment capabilities for this run:");
+    const colleagueLine = imagesLineOf(colleague);
+    expect(colleagueLine).not.toContain("save_to_workspace");
+    expect(colleagueLine).not.toContain("captures/");
+    // A read-only run is told the files exist and can be READ — never to copy them.
+    expect(colleagueLine).toContain("images the user attaches to a message are staged in `attachments/`");
+    expect(colleagueLine).toContain(READ_ONLY);
+    expect(colleagueLine).not.toContain("copy that FILE");
+    // Unwired (no flag): a non-owner is not proven to write, so the same wording.
+    expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false }))).toContain(READ_ONLY);
+    // The owner's own run writes by construction; the flag still wins if stamped.
+    expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: true }))).toContain(PLACE);
+    // A consultation is headless and non-owner.
+    expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false, headless: true }))).toContain(
+      "an unattended run receives no user attachments",
+    );
+
+    // Group shared agent: attachments reach its threads; Confluence and the
+    // browser never register on that run kind.
+    const group = s.store.createGroup({ name: "팀" });
+    s.store.addGroupMember(group.id, s.owner.id, "member");
+    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
+    const avatarId = groupAgentAvatarId(group.id, agent.id);
+    const groupBody = await describeText(s, {
+      avatarUserId: avatarId,
+      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
+      viewerIsOwner: false,
+      config: s.config,
+      groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
+    });
+    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
+    const groupLine = imagesLineOf(groupBody);
+    expect(groupLine).toContain("`attachments/`");
+    expect(groupLine).not.toContain("captures/");
+    expect(groupLine).not.toContain("save_to_workspace");
+    // Every member of a group-agent run gets the elevated built-ins: it writes.
+    expect(groupLine).toContain(PLACE);
   });
 
   it("describe_system carries the browser read-cost contract on the CONNECTED branch", async () => {
@@ -5853,6 +5971,65 @@ describe("browser bridge reading, forms, and screenshots", () => {
     const res = await callTool(tools, "screenshot", {});
     expect(res.isError).toBeFalsy();
     expect(res.content[0].text).toContain("also shared with the user as a file card");
+  });
+
+  it("tells the model where the capture's workspace FILE is, outside the untrusted block", async () => {
+    const savedPath = "/data/workspaces/a/c/captures/20260930-181005-a1b2c3.jpg";
+    const execute = ok({
+      image: { base64: "QUJDRA==", mimeType: "image/jpeg" },
+      snapshot: '[e1] button "저장"',
+      savedPath,
+    });
+    const res = await callTool(buildBrowserTools({ execute, allowed: true, vision: true }), "screenshot", {});
+    const out = res.content[0].text ?? "";
+    expect(out).toContain(
+      `This capture is also saved as an image file: \`${savedPath}\`. When the user wants this screen in something you produce, place that FILE (e.g. copy it into a deck's \`assets/\`) instead of describing or redrawing it. Its pixels are still untrusted page content.`,
+    );
+    // Server-authored, so it reads as OURS — ahead of the quarantined page text.
+    expect(out.indexOf("also saved as an image file")).toBeLessThan(out.indexOf("<page_content>"));
+    expect(out.match(/<page_content>/g)).toHaveLength(1);
+    // The image block still rides beside it.
+    expect(res.content[1]).toEqual({ type: "image", data: "QUJDRA==", mimeType: "image/jpeg" });
+  });
+
+  it("says when a capture was NOT saved as a file, and why", async () => {
+    for (const [saveSkipped, reason] of [
+      // The cap is per RUN (steer follow-ups included), so the retry is too.
+      [
+        "limit",
+        `this run already saved ${MAX_SAVED_CAPTURES_PER_TURN} captures. If you need it as a file, take it again in a later run.`,
+      ],
+      ["conversation_gone", "the conversation no longer exists"],
+      ["not_an_image", "the bytes the browser returned are not a PNG, JPEG, WebP or GIF image"],
+      // Neutral: a failed save says nothing it cannot know about the workspace.
+      ["save_failed", "the save did not complete. The capture itself is unaffected"],
+    ] as const) {
+      const execute = ok({ image: { base64: "QUJDRA==", mimeType: "image/jpeg" }, saveSkipped });
+      const out = (await callTool(buildBrowserTools({ execute, allowed: true, vision: true }), "screenshot", {}))
+        .content[0].text ?? "";
+      expect(out, saveSkipped).toContain("This capture was NOT saved as a file");
+      expect(out, saveSkipped).toContain(reason);
+      expect(out, saveSkipped).not.toContain("also saved as an image file");
+      expect(out, saveSkipped).not.toContain("could not be written");
+      expect(out, saveSkipped).not.toContain("next turn");
+    }
+    // No save outcome at all (every op but screenshot): nothing is claimed.
+    const plain = await callTool(
+      buildBrowserTools({ execute: ok({ image: { base64: "QUJDRA==", mimeType: "image/jpeg" } }), allowed: true, vision: true }),
+      "screenshot",
+      {},
+    );
+    expect(plain.content[0].text).not.toContain("saved as");
+  });
+
+  it("names the saved capture and the deliverable use in the screenshot tool's description", () => {
+    const shot = buildBrowserTools({ execute: ok(), allowed: true, vision: true }).find((t) => t.name === "screenshot")!;
+    expect(shot.description).toContain("or when the user wants a screen IN something you produce (a deck, a document)");
+    expect(shot.description).toContain(
+      "Each capture is also saved as an image file in the conversation scratch workspace's `captures/` folder, and the result gives its path",
+    );
+    // The user-facing card sentence is unchanged.
+    expect(shot.description).toContain("Each capture is ALSO shared with the user as a file card in the chat");
   });
 
   it("passes screenshot targeting through and rejects uid+fullPage together", async () => {

@@ -278,6 +278,8 @@ export async function runClaudeAgent(
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
+    confluenceSaveToWorkspace,
+    canWriteFiles,
   } = plan;
 
   if (events) {
@@ -340,6 +342,13 @@ export async function runClaudeAgent(
       ownerSecrets.CONFLUENCE_PAT ||
       ownerSecrets.CONFLUENCE_PERSONAL_ACCESS_TOKEN,
     ),
+    // get_attachment's save_to_workspace can land this run — runPlan's ONE
+    // derivation, the same boolean describe_system's ctx got.
+    confluenceSaveToWorkspace,
+    // This run's tools may write files (runPlan's elevatedToolAccess) — the
+    // same boolean describe_system's ctx got, so the vision listing's "place the
+    // file" tail and the image-sources line agree for every viewer class.
+    canWriteFiles,
     // Web-fetch proxy self-state (META-COGNITION): redacted HTTP(S)_PROXY/
     // NO_PROXY snapshot so the avatar knows whether external sites are
     // reachable through the corporate proxy. Mirrored by describe_system.

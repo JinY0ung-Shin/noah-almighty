@@ -27,8 +27,10 @@ describe("official system manual", () => {
     // experimental-feature sections. A flag-maximal owner turn already measures
     // about 19.1k characters (about 20.5k in one avatar-sharing group), so the
     // margin under 18,000 is not real headroom: keep standing sections short
-    // and put procedures in the manual.
-    const prompt = buildSystemPromptAppend({
+    // and put procedures in the manual. Vision is the one flag with TWO real
+    // states, so both are budgeted: OFF carries the no-vision notes, ON the
+    // image-file sentence and the saved-capture wording.
+    const flags = {
       message: "hello",
       avatar: { id: "owner", displayName: "Owner", alias: "", persona: "" },
       viewerIsOwner: true, knowledgeRepoConfigured: true, gitTokenSet: true,
@@ -36,8 +38,14 @@ describe("official system manual", () => {
       fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true,
       personalAgentsEnabled: true, personalAgentNames: ["Research"],
       midTurnMessages: true, shareLinksEnabled: true,
-    });
+    };
+    const prompt = buildSystemPromptAppend(flags);
     expect(prompt.length).toBeLessThan(18000);
+    const visionPrompt = buildSystemPromptAppend({ ...flags, visionEnabled: true });
+    expect(visionPrompt.length).toBeLessThan(18000);
+    expect(visionPrompt).toContain("Images you are shown are also FILES in the scratch workspace");
+    expect(visionPrompt).toContain("saved in the scratch workspace's `captures/`");
+    expect(visionPrompt).not.toContain("Screenshots and pixel-mode clicks are unavailable");
     expect(prompt).toContain("The user may send additional messages while you are working.");
     expect(prompt).toContain("Share links: `create_share_link`, ONLY if the user asks for a link.");
     // The converter deck section (the longer of the two) is what this budgets.

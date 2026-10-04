@@ -7,7 +7,7 @@ import type {
   ShareLinkRequest,
   ShareLinkResult,
 } from "../src/server/agent/events.js";
-import type { AgentRequest } from "../src/server/types.js";
+import type { AgentRequest, AppConfig } from "../src/server/types.js";
 import { callTool, withTempDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -122,13 +122,14 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
 }
 
 /** Fresh services + an ADMIN owner (the first user) with one bot and a group agent. */
-function setup(dir: string) {
+function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   const { config, store } = createServices({
     dataDir: path.join(tempDir, dir),
     agentRuntime: "claude",
     sessionSecret: "test",
     anthropicModel: undefined,
     anthropicApiKey: undefined,
+    ...configOverrides,
   });
   const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
   const bot = store.createPersonalAgent(owner.id, { displayName: "릴리즈 봇", alias: "릴봇" });
@@ -758,6 +759,53 @@ describe("describe_system share-link line", () => {
       expect(surface, name).not.toMatch(/a deck has at most one active link/i);
       expect(surface, name).not.toMatch(/asking again returns (it|the existing one)\b/);
     }
+  });
+});
+
+// ===========================================================================
+// Another plan boolean on the same path: runPlan → claudeAgent's prompt stamp
+// ===========================================================================
+describe("confluenceSaveToWorkspace prompt stamp", () => {
+  const SAVE_SENTENCE =
+    "`mcp__confluence__get_attachment` with `save_to_workspace: true` also saves the file to the scratch workspace's `confluence/`";
+  const appendOf = (i: number) => (sdkMock.calls[i].options.systemPrompt as { append: string }).append;
+
+  it("reaches options.systemPrompt.append from the plan, on exactly the runs where a save can land", async () => {
+    const s = setup("stamp-confluence", { confluenceUrl: "https://wiki.example.com" });
+    s.store.setUserSecret(s.owner.id, "CONFLUENCE_PAT", "pat-for-tests");
+    const runs: Array<{ label: string; request: AgentRequest; saves: boolean }> = [
+      { label: "the owner's own chat", request: s.baseRequest, saves: true },
+      {
+        label: "a trusted teammate (elevated built-ins)",
+        request: { ...s.baseRequest, viewerUserId: "teammate", viewerIsOwner: false, elevated: true },
+        saves: true,
+      },
+      {
+        label: "a plain colleague (read-only)",
+        request: { ...s.baseRequest, viewerUserId: "colleague", viewerIsOwner: false, elevated: false },
+        saves: false,
+      },
+      {
+        label: "a run without a conversation workspace",
+        request: { ...s.baseRequest, conversationId: undefined },
+        saves: false,
+      },
+    ];
+    for (const run of runs) {
+      await runAgentStream(run.request, [], s.config, s.store, makeEvents());
+    }
+    runs.forEach((run, i) => {
+      const append = appendOf(i);
+      // Every one of these runs carries the Confluence paragraph…
+      expect(append, run.label).toContain("The shared Confluence tools are enabled.");
+      // …and only the plan's boolean decides the save sentence inside it.
+      expect(append.includes(SAVE_SENTENCE), run.label).toBe(run.saves);
+    });
+
+    // Without the owner's PAT no save can authenticate, so none is offered.
+    const noPat = setup("stamp-confluence-nopat", { confluenceUrl: "https://wiki.example.com" });
+    await runAgentStream(noPat.baseRequest, [], noPat.config, noPat.store, makeEvents());
+    expect(appendOf(runs.length)).not.toContain(SAVE_SENTENCE);
   });
 });
 

@@ -5,7 +5,7 @@ import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js
 import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
 import { sanitizeName } from "../marketplace.js";
-import { workspaceDirFor } from "../workspace.js";
+import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
 import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
@@ -277,6 +277,11 @@ export function createAdminRouter(deps: RouterDeps): Router {
           deleteConversationImages(config, conversationId);
           deleteConversationFiles(config, conversationId);
         }
+        // The server-written copies (attachments/captures/confluence) in each
+        // deleted conversation's scratch workspace. This user's own avatar tree
+        // is already gone above, but their threads with OTHER avatars live
+        // under those avatars' trees — resolved by conversation id.
+        deleteConversationWorkspaceCopies(config, conversationIds);
       } catch (err) {
         logger.warn({ err, targetId: req.params.id }, "post-delete disk cleanup failed");
       }
@@ -533,6 +538,10 @@ export function createAdminRouter(deps: RouterDeps): Router {
           deleteConversationImages(config, conversationId);
           deleteConversationFiles(config, conversationId);
         }
+        // Same per-conversation cascade as every other delete path. The agents'
+        // workspace trees are removed whole by cleanupGroupDataDirs above; this
+        // keeps the server-written copies swept even if that ever narrows.
+        deleteConversationWorkspaceCopies(config, artifact.conversationIds);
       }
     } catch (err) {
       logger.warn({ err, groupId: req.params.id }, "post-delete disk cleanup failed");

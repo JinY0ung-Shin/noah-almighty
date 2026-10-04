@@ -1095,7 +1095,11 @@ export interface AgentImageInput {
   data: string;
 }
 
-/** A vision-off image attachment staged as a FILE in the run's scratch workspace (never fed to the model as content blocks — only its path is mentioned in the user prompt). */
+/**
+ * An image attachment staged as a FILE in the run's scratch workspace. Its path
+ * is listed in the user prompt. On a text-only turn it is never fed to the model
+ * as a content block; on a vision turn the same image also rides as one.
+ */
 export interface AgentImageFileInput {
   /** Absolute path of the staged copy inside the conversation scratch workspace. */
   path: string;
@@ -1681,6 +1685,27 @@ export interface AgentRequest {
   /** Whether the avatar owner has stored a Confluence PAT secret. */
   confluencePatConfigured?: boolean;
   /**
+   * Whether `mcp__confluence__get_attachment` can save an attachment into the
+   * conversation scratch workspace in THIS run (`save_to_workspace: true` →
+   * `confluence/`): the Confluence tools are registered, the viewer is elevated
+   * (the tools' own gate), CONFLUENCE_URL and the owner's PAT are configured,
+   * and the run has a scratch workspace. Stamped by `runClaudeAgent` from
+   * runPlan's value, the SAME boolean `SystemToolsContext.confluenceSaveToWorkspace`
+   * carries, so the prompt's Confluence line and describe_system offer the save
+   * option together. Undefined → the prompt does not mention it.
+   */
+  confluenceSaveToWorkspace?: boolean;
+  /**
+   * Whether THIS run's tools may write files (runPlan's `elevatedToolAccess`:
+   * Bash/Write/Edit pass the PreToolUse hook). Stamped by `runClaudeAgent` from
+   * the plan — the SAME value `SystemToolsContext.canWriteFiles` carries — so
+   * the user prompt's attached-images tail and describe_system's image-sources
+   * line agree on whether an image file can be placed into a deck, document or
+   * commit, or only read. Undefined → only what the request proves: the owner's
+   * own run or a group-agent run writes; anything else is treated as read-only.
+   */
+  canWriteFiles?: boolean;
+  /**
    * Redacted proxy env self-state for `mcp__web__fetch` guidance (set by
    * `runClaudeAgent` from the live env). Undefined means "unknown" for direct
    * unit calls — the prompt then omits the proxy detail sentence.
@@ -1879,11 +1904,16 @@ export interface AgentRequest {
    */
   images?: AgentImageInput[];
   /**
-   * Images attached to THIS turn's user message when the turn's model is
-   * TEXT-ONLY: staged as copies inside the conversation scratch workspace so the
-   * agent can act on them as files. `buildUserPrompt` lists their paths as plain
-   * text — the bytes never enter model input. Mutually exclusive with
-   * {@link AgentRequest.images}; unused for headless/external turns.
+   * Images attached to THIS turn's user message, staged as copies inside the
+   * conversation scratch workspace (`<workspace>/attachments/<id>.<ext>`) so the
+   * agent can act on them as FILES, e.g. place one into a deck's `assets/`, a
+   * document or a commit. Set on EVERY local turn that carries images, the fresh
+   * send and the rewind/regenerate re-feed alike. On a TEXT-ONLY turn it is the
+   * only form the model gets (the bytes never enter model input). On a VISION
+   * turn it rides ALONGSIDE {@link AgentRequest.images}: the same attachments in
+   * the same order, so an image the model sees is also a file it can place.
+   * `buildUserPrompt` lists the paths, worded per case. Unused for
+   * headless/external turns.
    */
   imageFiles?: AgentImageFileInput[];
   /**

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig, MessageAttachment } from "../src/server/types.js";
 import {
   chatFilesDir,
@@ -11,9 +11,12 @@ import {
   publishWorkspaceFile,
   resolveStoredFile,
   sanitizeDownloadName,
+  saveBrowserCapture,
   withDownloadExtension,
   MAX_CHAT_FILE_BYTES,
   MAX_DOWNLOAD_NAME_LENGTH,
+  MAX_SAVED_CAPTURES_PER_TURN,
+  MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
 } from "../src/server/chatFiles.js";
 import { resolveStoredImage } from "../src/server/chatImages.js";
 import { withTempDir } from "./helpers.js";
@@ -218,6 +221,112 @@ describe("chatFiles", () => {
       if (!("file" in result)) throw new Error("publish failed");
       deleteChatFileAttachments(config(), "conv-shot4", [result.file]);
       expect(resolveStoredFile(config(), "conv-shot4", result.file.id)).toBeNull();
+    });
+  });
+
+  describe("saveBrowserCapture", () => {
+    const JPEG_BYTES = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(32, 1)]);
+    const PNG_BYTES = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(16, 1),
+    ]);
+    // 09:10:05 UTC is 18:10:05 KST; 20:00 UTC is already the next KST day.
+    const AFTERNOON = Date.parse("2026-09-30T09:10:05.000Z");
+    const LATE_NIGHT = Date.parse("2026-09-30T20:00:00.000Z");
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("saves the bytes under captures/ named by the KST clock, a random suffix and the sniffed type", () => {
+      const ws = workspace("ws-cap");
+      const jpeg = saveBrowserCapture(ws, JPEG_BYTES, AFTERNOON);
+      expect("path" in jpeg).toBe(true);
+      if (!("path" in jpeg)) return;
+      expect(path.isAbsolute(jpeg.path)).toBe(true);
+      expect(path.dirname(jpeg.path)).toBe(path.join(ws, "captures"));
+      expect(path.basename(jpeg.path)).toMatch(/^20260930-181005-[0-9a-f]{6}\.jpg$/);
+      expect(fs.readFileSync(jpeg.path).equals(JPEG_BYTES)).toBe(true);
+
+      // The extension follows the BYTES, never a claimed type.
+      const png = saveBrowserCapture(ws, PNG_BYTES, LATE_NIGHT);
+      expect("path" in png && path.basename(png.path)).toMatch(/^20261001-050000-[0-9a-f]{6}\.png$/);
+    });
+
+    it("never overwrites an existing capture: a taken name draws a fresh suffix", () => {
+      const ws = workspace("ws-cap-taken");
+      fs.mkdirSync(path.join(ws, "captures"));
+      const taken = path.join(ws, "captures", "20260930-181005-aaaaaa.jpg");
+      fs.writeFileSync(taken, "earlier capture");
+      vi.spyOn(crypto, "randomBytes")
+        .mockReturnValueOnce(Buffer.from("aaaaaa", "hex") as never)
+        .mockReturnValueOnce(Buffer.from("bbbbbb", "hex") as never);
+
+      const result = saveBrowserCapture(ws, JPEG_BYTES, AFTERNOON);
+      expect(result).toEqual({ path: path.join(ws, "captures", "20260930-181005-bbbbbb.jpg") });
+      expect(fs.readFileSync(taken, "utf8")).toBe("earlier capture");
+    });
+
+    it("refuses empty, oversized, and non-image bytes without creating the folder", () => {
+      const ws = workspace("ws-cap-bad");
+      expect(saveBrowserCapture(ws, Buffer.alloc(0))).toEqual({ error: "EMPTY" });
+      expect(saveBrowserCapture(ws, Buffer.alloc(MAX_CHAT_FILE_BYTES + 1, 1))).toEqual({ error: "TOO_LARGE" });
+      expect(saveBrowserCapture(ws, Buffer.from("<html>not an image</html>"))).toEqual({ error: "UNSUPPORTED" });
+      expect(fs.existsSync(path.join(ws, "captures"))).toBe(false);
+    });
+
+    it("never writes through a captures/ the agent replaced with a link or a file", () => {
+      // The workspace is agent-writable, so the server must not follow what it
+      // finds there: a symlinked folder would redirect the write anywhere.
+      const outside = workspace("outside-target");
+      const linked = workspace("ws-cap-link");
+      fs.symlinkSync(outside, path.join(linked, "captures"));
+      expect(saveBrowserCapture(linked, JPEG_BYTES)).toEqual({ error: "WRITE_FAILED" });
+      expect(fs.readdirSync(outside)).toEqual([]);
+
+      const blocked = workspace("ws-cap-file");
+      fs.writeFileSync(path.join(blocked, "captures"), "not a folder");
+      expect(saveBrowserCapture(blocked, JPEG_BYTES)).toEqual({ error: "WRITE_FAILED" });
+      expect(fs.readFileSync(path.join(blocked, "captures"), "utf8")).toBe("not a folder");
+    });
+
+    it("recreates a workspace the agent deleted, like a fresh folder", () => {
+      const ws = path.join(dir(), "ws-cap-missing");
+      const result = saveBrowserCapture(ws, PNG_BYTES);
+      expect("path" in result && fs.readFileSync(result.path).equals(PNG_BYTES)).toBe(true);
+    });
+
+    it("removes a capture that landed outside captures/ after a link was swapped in mid-save", () => {
+      const ws = workspace("ws-cap-race");
+      const outside = workspace("outside-race");
+      const realWrite = fs.writeFileSync;
+      vi.spyOn(fs, "writeFileSync").mockImplementationOnce((file, data, options) => {
+        // The folder was real when checked; the agent swaps it for a link before the write.
+        fs.renameSync(path.join(ws, "captures"), path.join(ws, "captures-moved"));
+        fs.symlinkSync(outside, path.join(ws, "captures"));
+        realWrite(file, data, options);
+      });
+
+      expect(saveBrowserCapture(ws, JPEG_BYTES)).toEqual({ error: "WRITE_FAILED" });
+      // What the write put through the link is gone again.
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+
+    it("removes its partial file when the write fails part-way", () => {
+      const ws = workspace("ws-cap-partial");
+      const realWrite = fs.writeFileSync;
+      vi.spyOn(fs, "writeFileSync").mockImplementationOnce((file, _data, options) => {
+        realWrite(file, JPEG_BYTES.subarray(0, 4), options);
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      });
+
+      expect(saveBrowserCapture(ws, JPEG_BYTES)).toEqual({ error: "WRITE_FAILED" });
+      expect(fs.readdirSync(path.join(ws, "captures"))).toEqual([]);
+    });
+
+    it("keeps its own per-run cap above the share cap", () => {
+      expect(MAX_SAVED_CAPTURES_PER_TURN).toBe(30);
+      expect(MAX_SAVED_CAPTURES_PER_TURN).toBeGreaterThan(MAX_SHARED_SCREENSHOTS_PER_MESSAGE);
     });
   });
 

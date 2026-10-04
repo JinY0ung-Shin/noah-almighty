@@ -1,6 +1,11 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import path from "node:path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AppConfig } from "../types.js";
+import { readRegularFileAsync } from "../chatImages.js";
 import { asString } from "./agentUtils.js";
 import { text } from "./mcpTools.js";
 
@@ -35,6 +40,24 @@ export interface ConfluenceToolsContext {
    * `mcp__repo__read_file` and the personal second brain gate reads on `elevated`.
    */
   elevated: boolean;
+  /**
+   * The run's CONVERSATION scratch workspace (absolute — runPlan's
+   * `conversationScratchDir`). `get_attachment` with `save_to_workspace` writes
+   * the downloaded file under its `confluence/` folder, so a page's image or
+   * diagram becomes a file the run can place (a deck's `assets/`, a document, a
+   * commit). A LOCAL disk write: the Confluence side stays GET-only. Undefined →
+   * the run has no workspace and the option answers with an error.
+   */
+  workspaceDir?: string;
+  /**
+   * Whether the conversation this run saves for still exists. Checked AFTER a
+   * save lands: deleting a conversation sweeps its `confluence/` copies
+   * (`deleteConversationWorkspaceCopies`) but cannot stop a download already in
+   * flight, so a copy written after the sweep is removed again and reported as
+   * `saveError`. Undefined → no such check (unit tests, runs without a
+   * conversation — which have no workspace either).
+   */
+  isConversationLive?: () => boolean;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -47,6 +70,43 @@ const MAX_ATTACHMENT_TEXT_CHARS = 40_000;
 const READ_DENIED =
   "Confluence tools can only be used in avatar owner or trusted user conversations. They read the owner's Confluence using the owner's Personal Access Token, so a non-trusted colleague cannot use them.";
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+/** `get_attachment` save_to_workspace: the folder inside the conversation scratch workspace. */
+const WORKSPACE_SAVE_DIR = "confluence";
+/** Appended when a save is refused BEFORE the download, so no inline result exists yet. */
+const SAVE_INLINE_REDIRECT = "Call get_attachment again without save_to_workspace to read the attachment inline.";
+const WORKSPACE_SAVE_UNAVAILABLE = `Saving attachments to the workspace is not available in this run. ${SAVE_INLINE_REDIRECT}`;
+const WORKSPACE_SAVE_NOT_A_FOLDER = `${WORKSPACE_SAVE_DIR}/ in the conversation scratch workspace is not a plain folder (a symlink or a file there is never followed), so the attachment was not saved. Rename or remove it, then retry.`;
+const WORKSPACE_SAVE_GONE = "The conversation scratch workspace no longer exists, so the attachment was not saved.";
+const WORKSPACE_SAVE_NOT_WRITABLE = `The conversation scratch workspace or its ${WORKSPACE_SAVE_DIR}/ folder is not writable, so the attachment was not saved.`;
+/** Cap on a saved file's sanitized title (extension included). */
+const MAX_SAVED_NAME_CHARS = 80;
+/** Cap on the sanitized attachment id that prefixes a saved file's name. */
+const MAX_SAVED_ID_CHARS = 64;
+/** `-2` … `-N`: the numbered names a save tries before a timestamped one. */
+const MAX_NUMBERED_NAMES = 100;
+/** Timestamped random names tried once every numbered name is taken. */
+const MAX_FALLBACK_NAMES = 5;
+/** Extension for a saved attachment whose title leaves no usable name (else `bin`). */
+const MEDIA_TYPE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+  "application/vnd.jgraph.mxfile": "drawio",
+  "application/xml": "xml",
+  "text/xml": "xml",
+  "application/json": "json",
+  "application/pdf": "pdf",
+  "application/zip": "zip",
+  "text/csv": "csv",
+  "text/html": "html",
+  "text/markdown": "md",
+  "text/plain": "txt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+};
 const TEXT_ATTACHMENT_MEDIA_TYPES = new Set([
   "application/json",
   "application/xml",
@@ -198,7 +258,7 @@ function webUrl(baseUrl: string, links: JsonRecord): string | null {
   return webui ? resolveConfluenceLink(baseUrl, webui) : null;
 }
 
-function credentials(ctx: ConfluenceToolsContext):
+function credentials(ctx: Pick<ConfluenceToolsContext, "config" | "ownerSecrets">):
   | { ok: true; baseUrl: string; apiBase: string; pat: string }
   | { ok: false; message: string } {
   const baseUrl = ctx.config.confluenceUrl?.trim();
@@ -219,6 +279,19 @@ function credentials(ctx: ConfluenceToolsContext):
     };
   }
   return { ok: true, baseUrl: normalizedUrl, apiBase: apiBase(normalizedUrl), pat };
+}
+
+/**
+ * Whether these tools can authenticate for this owner: CONFLUENCE_URL set and
+ * well-formed, plus the owner's PAT — the exact check every request makes.
+ * runPlan folds it into `confluenceSaveToWorkspace`, so the metacognition
+ * surfaces offer `save_to_workspace` only on a run where a save can land.
+ */
+export function confluenceCredentialsConfigured(
+  config: AppConfig,
+  ownerSecrets: Record<string, string>,
+): boolean {
+  return credentials({ config, ownerSecrets }).ok;
 }
 
 /**
@@ -541,6 +614,192 @@ function matchesDrawioCandidate(summary: JsonRecord, candidates: string[]): bool
   return Boolean(titleStem && candidates.some((candidate) => assetStem(candidate) === titleStem));
 }
 
+/**
+ * Every char outside `[A-Za-z0-9._-]` → `-`, `-` runs collapsed, `-`/`.`
+ * trimmed off both ends, at most `maxChars` — re-trimmed after the cut, which
+ * can expose a trailing `-` or `.`. No path separator survives the mapping, so
+ * the result is always ONE plain path segment (or empty).
+ */
+function safeNamePart(value: string, maxChars: number): string {
+  const trimEnds = (part: string) => part.replace(/^[-.]+|[-.]+$/g, "");
+  const mapped = trimEnds(value.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-"));
+  return trimEnds(mapped.slice(0, maxChars));
+}
+
+/**
+ * A saved attachment's file name, `<attachmentId>-<safeName>`, split into stem
+ * + extension so a collision can insert `-2`, `-3`… before the extension.
+ * safeName = the title's stem made safe plus its original extension lowercased,
+ * at most 80 chars together. A stem that leaves nothing (a Korean-only title,
+ * say) becomes `attachment`, keeping the title's own extension, else one from
+ * the media type, else `bin`.
+ */
+function savedAttachmentName(
+  attachmentId: string,
+  title: string,
+  mediaType: string,
+): { stem: string; ext: string } {
+  const trimmed = title.trim();
+  const extMatch = /\.([A-Za-z0-9]{1,10})$/.exec(trimmed);
+  const titleExt = extMatch ? `.${extMatch[1].toLowerCase()}` : "";
+  const titleStem = safeNamePart(
+    extMatch ? trimmed.slice(0, extMatch.index) : trimmed,
+    MAX_SAVED_NAME_CHARS - titleExt.length,
+  );
+  // Only a title with neither a usable stem nor an extension borrows one.
+  const ext =
+    (titleStem || titleExt)
+      ? titleExt
+      : `.${MEDIA_TYPE_EXTENSIONS[normalizeMediaType(mediaType)] ?? "bin"}`;
+  const id = safeNamePart(attachmentId, MAX_SAVED_ID_CHARS) || "attachment";
+  return { stem: `${id}-${titleStem || "attachment"}`, ext };
+}
+
+function errnoCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException | undefined)?.code ?? "unknown error";
+}
+
+/**
+ * Create `target` EXCLUSIVELY and write `data` into it. `wx` is O_CREAT|O_EXCL:
+ * it never replaces an existing file and never follows a symlink planted at the
+ * name. A failed write removes the partial file this call created.
+ */
+async function writeNewFile(target: string, data: Buffer): Promise<"written" | "exists" | { code: string }> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.promises.open(target, "wx");
+  } catch (error) {
+    return errnoCode(error) === "EEXIST" ? "exists" : { code: errnoCode(error) };
+  }
+  try {
+    await handle.writeFile(data);
+    await handle.close();
+    return "written";
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.promises.unlink(target).catch(() => {});
+    return { code: errnoCode(error) };
+  }
+}
+
+/** True when `filePath` is a regular file — never read through a symlink — holding exactly `data`. */
+async function holdsSameBytes(filePath: string, data: Buffer): Promise<boolean> {
+  // A size mismatch (the usual case for a changed attachment) costs one lstat, not a read.
+  const stat = await fs.promises.lstat(filePath).catch(() => null);
+  if (!stat?.isFile() || stat.size !== data.length) return false;
+  const read = await readRegularFileAsync(filePath, data.length);
+  if ("buffer" in read) return read.buffer.equals(data);
+  // readRegularFileAsync refuses an empty file; an empty download matches one.
+  return read.error === "EMPTY" && data.length === 0;
+}
+
+/** "20260930-181005": the KST wall clock (UTC+9, no DST) — the stamp browser captures are named with. */
+function kstFileStamp(nowMs: number): string {
+  const iso = new Date(nowMs + 9 * 60 * 60 * 1000).toISOString();
+  return `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}${iso.slice(17, 19)}`;
+}
+
+/**
+ * The names a save tries, in order: `<stem><ext>`, `-2` … `-100`, then — once
+ * every numbered name holds other bytes (a daily routine re-saving a changing
+ * attachment into ONE workspace) — `-<KST stamp>-<6 hex>` names. Each is still
+ * created O_EXCL, so none can overwrite anything; the space never runs out.
+ */
+function* candidateNames(name: { stem: string; ext: string }, nowMs: number): Generator<string> {
+  yield `${name.stem}${name.ext}`;
+  for (let n = 2; n <= MAX_NUMBERED_NAMES; n += 1) yield `${name.stem}-${n}${name.ext}`;
+  const stamp = kstFileStamp(nowMs);
+  for (let i = 0; i < MAX_FALLBACK_NAMES; i += 1) {
+    yield `${name.stem}-${stamp}-${crypto.randomBytes(3).toString("hex")}${name.ext}`;
+  }
+}
+
+/**
+ * Where a save lands, checked without creating anything: the workspace exists
+ * (realpath'd — the containment anchor), `confluence/` is absent or a PLAIN
+ * folder (lstat: a symlink or a file there is refused, never followed), and the
+ * folder — or, before it exists, the workspace that will hold it — is writable.
+ * The cheap pre-check the handler runs BEFORE the download, and the first step
+ * of {@link saveToWorkspace} after it, when the agent's shell may have raced it.
+ */
+async function checkSaveFolder(
+  workspaceDir: string,
+): Promise<{ ok: true; dir: string; exists: boolean } | { ok: false; message: string }> {
+  let root: string;
+  try {
+    root = await fs.promises.realpath(workspaceDir);
+    if (!(await fs.promises.stat(root)).isDirectory()) return { ok: false, message: WORKSPACE_SAVE_GONE };
+  } catch {
+    return { ok: false, message: WORKSPACE_SAVE_GONE };
+  }
+  const dir = path.join(root, WORKSPACE_SAVE_DIR);
+  const dirStat = await fs.promises.lstat(dir).catch(() => null);
+  if (dirStat && !dirStat.isDirectory()) return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
+  try {
+    await fs.promises.access(dirStat ? dir : root, fs.constants.W_OK | fs.constants.X_OK);
+  } catch {
+    return { ok: false, message: WORKSPACE_SAVE_NOT_WRITABLE };
+  }
+  return { ok: true, dir, exists: Boolean(dirStat) };
+}
+
+/**
+ * Save a downloaded attachment as `<workspaceDir>/confluence/<name>`. A LOCAL
+ * write — nothing here talks to Confluence. Containment: {@link checkSaveFolder}
+ * runs again (the pre-download check can be stale by now); the name is one
+ * sanitized segment; and every path handed back is re-resolved, so a folder
+ * swapped for a symlink mid-save cannot land bytes outside the workspace. Never
+ * overwrites: an existing file with the SAME bytes is reused (a repeat save
+ * returns its path), anything else moves on to the next candidate name.
+ * `savedPath` is spelled under `workspaceDir` as given — the same prefix the
+ * run's cwd and describe_system use.
+ */
+async function saveToWorkspace(
+  workspaceDir: string,
+  name: { stem: string; ext: string },
+  data: Buffer,
+  nowMs: number = Date.now(),
+): Promise<{ ok: true; savedPath: string } | { ok: false; message: string }> {
+  const folder = await checkSaveFolder(workspaceDir);
+  if (!folder.ok) return folder;
+  const { dir } = folder;
+  if (!folder.exists) {
+    try {
+      await fs.promises.mkdir(dir);
+    } catch (error) {
+      if (errnoCode(error) !== "EEXIST") return { ok: false, message: WORKSPACE_SAVE_NOT_WRITABLE };
+    }
+    // lstat: a symlink reads as a symlink here, never as the folder it points at.
+    const dirStat = await fs.promises.lstat(dir).catch(() => null);
+    if (!dirStat?.isDirectory()) return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
+  }
+  for (const fileName of candidateNames(name, nowMs)) {
+    const target = path.join(dir, fileName);
+    const outcome = await writeNewFile(target, data);
+    if (outcome !== "written" && outcome !== "exists") {
+      return {
+        ok: false,
+        message: `Could not save the attachment to the conversation scratch workspace (${outcome.code}).`,
+      };
+    }
+    if (outcome === "exists" && !(await holdsSameBytes(target, data))) continue;
+    // Realpath containment of what is handed back: `dir` hangs off the
+    // realpath'd workspace and was a plain folder, so a clean save resolves to
+    // EXACTLY `target` — a strictly tighter test than "inside the workspace". Anything
+    // else means the folder was swapped mid-save: undo a file this call
+    // created (O_EXCL made it ours) and refuse.
+    const real = await fs.promises.realpath(target).catch(() => null);
+    if (real !== target) {
+      if (outcome === "written") await fs.promises.unlink(target).catch(() => {});
+      return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
+    }
+    return { ok: true, savedPath: path.join(path.resolve(workspaceDir), WORKSPACE_SAVE_DIR, fileName) };
+  }
+  // Unreachable in practice: it takes every numbered name AND five fresh
+  // random ones colliding.
+  return { ok: false, message: `No free file name was found in ${WORKSPACE_SAVE_DIR}/, so the attachment was not saved.` };
+}
+
 export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
   return [
     tool(
@@ -683,7 +942,9 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
     ),
     tool(
       "get_attachment",
-      "Download a Confluence attachment by attachment id, or by page id + filename. Supported image attachments are returned as MCP image blocks.",
+      "Download a Confluence attachment by attachment id, or by page id + filename. Supported image attachments are returned as MCP image blocks. " +
+        "Pass save_to_workspace: true to ALSO save the downloaded file (any type — image, draw.io, PDF, …) into the conversation scratch workspace under confluence/; the result's savedPath is its absolute path. " +
+        "Use it whenever the user wants that image or diagram IN something you produce (a deck's assets/, a document, a commit): place the saved file itself instead of describing or redrawing it.",
       {
         page_id: z.string().optional().describe("Confluence page id. Required when using filename."),
         attachment_id: z.string().optional().describe("Confluence attachment content id"),
@@ -702,9 +963,23 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
           .max(100_000)
           .optional()
           .describe(`Maximum text/XML characters to return for non-image text attachments, default ${MAX_ATTACHMENT_TEXT_CHARS}`),
+        save_to_workspace: z
+          .boolean()
+          .optional()
+          .describe(
+            `Also save the downloaded file, any media type, as ${WORKSPACE_SAVE_DIR}/<attachmentId>-<name> in the conversation scratch workspace and return its absolute savedPath (an existing different file is never overwritten; a save that fails after the download is reported as saveError next to the normal result). Default false.`,
+          ),
       },
       async (args) => {
         if (!ctx.elevated) return text(READ_DENIED, true);
+        // Cheap checks before any request: a run without a workspace, or whose
+        // save folder is already unusable, spends no download on a save that
+        // cannot land. saveToWorkspace repeats them after the download.
+        if (args.save_to_workspace) {
+          if (!ctx.workspaceDir) return text(WORKSPACE_SAVE_UNAVAILABLE, true);
+          const folder = await checkSaveFolder(ctx.workspaceDir);
+          if (!folder.ok) return text(`${folder.message} ${SAVE_INLINE_REDIRECT}`, true);
+        }
         const resolved = await resolveAttachment(ctx, args);
         if (!resolved.ok) return text(resolved.message, true);
 
@@ -736,6 +1011,32 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
             returnedAs: "metadata",
           },
         };
+        // The save rides alongside the inline result below, never instead of
+        // it: an image still comes back as an image block on a vision run, and
+        // a save that fails now (the folder changed during the download, a disk
+        // error) costs only the copy — it is reported as saveError.
+        if (args.save_to_workspace && ctx.workspaceDir) {
+          const saved = await saveToWorkspace(
+            ctx.workspaceDir,
+            savedAttachmentName(
+              asString(summary.id) || args.attachment_id?.trim() || "",
+              attachmentTitle(summary),
+              mediaType,
+            ),
+            bytes.data,
+          );
+          if (saved.ok && ctx.isConversationLive && !ctx.isConversationLive()) {
+            // The conversation was deleted while this save was in flight: its
+            // sweep already ran, so this copy would outlive the conversation.
+            await fs.promises.unlink(saved.savedPath).catch(() => {});
+            payload.saveError =
+              "The conversation was deleted while the attachment was being saved, so the saved copy was removed.";
+          } else if (saved.ok) payload.savedPath = saved.savedPath;
+          else payload.saveError = saved.message;
+        }
+        const savedNote = payload.savedPath
+          ? " The file itself is saved at savedPath, so you can still place or share it as a file."
+          : "";
         const content: Array<
           { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
         > = [];
@@ -749,7 +1050,8 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
         if (isSupportedImageMediaType(mediaType)) {
           // Text-only backend: an image block would 400 the whole turn.
           payload.note =
-            "This is an image attachment, but the active model cannot accept image input, so no image block was returned. Reference the Confluence page/attachment link for the user instead.";
+            "This is an image attachment, but the active model cannot accept image input, so no image block was returned. Reference the Confluence page/attachment link for the user instead." +
+            savedNote;
           content.push({ type: "text", text: JSON.stringify(payload, null, 2) });
           return { content };
         }
@@ -759,7 +1061,9 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
           payload.download = { bytes: bytes.bytes, returnedAs: "text" };
           payload.text = args.max_text_chars === 0 ? undefined : truncate(decoded, args.max_text_chars ?? MAX_ATTACHMENT_TEXT_CHARS);
         } else {
-          payload.note = "Attachment bytes were downloaded but not returned inline because this media type is not an inline image or text/XML attachment.";
+          payload.note =
+            "Attachment bytes were downloaded but not returned inline because this media type is not an inline image or text/XML attachment." +
+            savedNote;
         }
         return text(JSON.stringify(payload, null, 2));
       },

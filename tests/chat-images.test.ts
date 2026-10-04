@@ -12,6 +12,8 @@ import {
   MAX_CHAT_IMAGES_PER_MESSAGE,
   publishWorkspaceImage,
   deleteChatImageAttachments,
+  stageChatImageFilesFromAttachments,
+  deleteStagedAttachmentCopies,
 } from "../src/server/chatImages.js";
 import { withTempDir } from "./helpers.js";
 
@@ -231,6 +233,142 @@ describe("chatImages", () => {
     expect(publishWorkspaceImage(config(), "conv-safe", "../outside.png", [workspace])).toEqual({ error: "OUTSIDE_WORKSPACE" });
     expect(publishWorkspaceImage(config(), "conv-safe", "text.png", [workspace])).toEqual({ error: "UNSUPPORTED" });
     expect(publishWorkspaceImage(config(), "conv-safe", "huge.png", [workspace])).toEqual({ error: "TOO_LARGE" });
+  });
+
+  describe("stageChatImageFilesFromAttachments", () => {
+    const PNG = Buffer.from(PNG_B64, "base64");
+    const stored = (conversationId: string, ids: string[]) => {
+      const decoded = decodeChatImages(ids.map((id) => ({ id, name: `${id}.png`, data: PNG_URL })));
+      if (!("images" in decoded)) throw new Error("expected images");
+      return saveChatImages(config(), conversationId, decoded.images).attachments;
+    };
+
+    it("stages each visible image as <workspace>/attachments/<id>.<ext>, in attachment order", () => {
+      const attachments = stored("conv-stage", ["img-b", "img-a"]);
+      const workspace = path.join(dir(), "ws-stage");
+      const staged = stageChatImageFilesFromAttachments(config(), "conv-stage", workspace, [
+        ...attachments,
+        // Skipped: a preview slide, and an attachment whose bytes are gone.
+        { id: "img-a", kind: "image", mediaType: "image/png", hidden: true },
+        { id: "ghost", kind: "image", mediaType: "image/png" },
+      ]);
+      expect(staged).toEqual([
+        { path: path.join(workspace, "attachments", "img-b.png"), mediaType: "image/png", name: "img-b.png" },
+        { path: path.join(workspace, "attachments", "img-a.png"), mediaType: "image/png", name: "img-a.png" },
+      ]);
+      expect(fs.readFileSync(staged[0].path).equals(PNG)).toBe(true);
+      expect(stageChatImageFilesFromAttachments(config(), "conv-stage", workspace, [])).toEqual([]);
+    });
+
+    it("deleteStagedAttachmentCopies removes a rewind's dropped copies only, never following a link", () => {
+      const attachments = stored("conv-drop", ["img-drop", "img-keep"]);
+      const workspace = path.join(dir(), "ws-drop");
+      stageChatImageFilesFromAttachments(config(), "conv-drop", workspace, attachments);
+      const attDir = path.join(workspace, "attachments");
+      // The agent's own file in the folder, and a link carrying a dropped id's name.
+      fs.writeFileSync(path.join(attDir, "notes.txt"), "agent's own");
+      const outside = path.join(dir(), "drop-outside.png");
+      fs.writeFileSync(outside, "outside");
+      fs.symlinkSync(outside, path.join(attDir, "img-drop.jpg"));
+
+      deleteStagedAttachmentCopies(workspace, [attachments[0]]);
+
+      expect(fs.existsSync(path.join(attDir, "img-drop.png"))).toBe(false);
+      expect(() => fs.lstatSync(path.join(attDir, "img-drop.jpg"))).toThrow(); // the link itself is gone
+      expect(fs.readFileSync(outside, "utf8")).toBe("outside"); // its target is not
+      expect(fs.existsSync(path.join(attDir, "img-keep.png"))).toBe(true);
+      expect(fs.readFileSync(path.join(attDir, "notes.txt"), "utf8")).toBe("agent's own");
+
+      // A linked attachments/ folder is never entered.
+      const linkedWs = path.join(dir(), "ws-drop-linked");
+      const realDir = path.join(dir(), "drop-real");
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.writeFileSync(path.join(realDir, "img-keep.png"), "x");
+      fs.mkdirSync(linkedWs, { recursive: true });
+      fs.symlinkSync(realDir, path.join(linkedWs, "attachments"));
+      deleteStagedAttachmentCopies(linkedWs, [attachments[1]]);
+      expect(fs.existsSync(path.join(realDir, "img-keep.png"))).toBe(true);
+      expect(() => deleteStagedAttachmentCopies(path.join(dir(), "never"), attachments)).not.toThrow();
+    });
+
+    it("re-stages over a planted symlink without writing through it", () => {
+      // The workspace is agent-writable: a link planted at the copy's name must
+      // be replaced by the copy, never followed into the file it points at.
+      const attachments = stored("conv-restage", ["img-r"]);
+      const workspace = path.join(dir(), "ws-restage");
+      fs.mkdirSync(path.join(workspace, "attachments"), { recursive: true });
+      const victim = path.join(dir(), "victim.txt");
+      fs.writeFileSync(victim, "keep me");
+      const dest = path.join(workspace, "attachments", "img-r.png");
+      fs.symlinkSync(victim, dest);
+
+      const staged = stageChatImageFilesFromAttachments(config(), "conv-restage", workspace, attachments);
+      expect(staged.map((f) => f.path)).toEqual([dest]);
+      expect(fs.lstatSync(dest).isSymbolicLink()).toBe(false);
+      expect(fs.readFileSync(dest).equals(PNG)).toBe(true);
+      expect(fs.readFileSync(victim, "utf8")).toBe("keep me");
+    });
+
+    it("stages nothing into an attachments/ folder the agent replaced with a link", () => {
+      const attachments = stored("conv-linked", ["img-l"]);
+      const workspace = path.join(dir(), "ws-linked");
+      const elsewhere = path.join(dir(), "elsewhere");
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.mkdirSync(elsewhere, { recursive: true });
+      fs.symlinkSync(elsewhere, path.join(workspace, "attachments"));
+
+      expect(stageChatImageFilesFromAttachments(config(), "conv-linked", workspace, attachments)).toEqual([]);
+      expect(fs.readdirSync(elsewhere)).toEqual([]);
+    });
+
+    describe("when the copy itself goes wrong", () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+      const realCopy = fs.copyFileSync;
+
+      it("removes and leaves out a copy that landed outside attachments/ after a link was swapped in", () => {
+        const attachments = stored("conv-race", ["img-x"]);
+        const workspace = path.join(dir(), "ws-race");
+        const elsewhere = path.join(dir(), "elsewhere-race");
+        fs.mkdirSync(elsewhere, { recursive: true });
+        vi.spyOn(fs, "copyFileSync").mockImplementationOnce((src, dest, mode) => {
+          // The folder was real when checked; the agent swaps it for a link before the copy.
+          fs.renameSync(path.join(workspace, "attachments"), path.join(workspace, "attachments-moved"));
+          fs.symlinkSync(elsewhere, path.join(workspace, "attachments"));
+          realCopy(src, dest, mode);
+        });
+
+        expect(stageChatImageFilesFromAttachments(config(), "conv-race", workspace, attachments)).toEqual([]);
+        expect(fs.readdirSync(elsewhere)).toEqual([]);
+      });
+
+      it("removes a partial copy when the copy fails part-way, and stages the rest", () => {
+        const attachments = stored("conv-partial", ["img-p", "img-q"]);
+        const workspace = path.join(dir(), "ws-partial");
+        vi.spyOn(fs, "copyFileSync").mockImplementationOnce((_src, dest) => {
+          fs.writeFileSync(dest, PNG.subarray(0, 8));
+          throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+        });
+
+        const staged = stageChatImageFilesFromAttachments(config(), "conv-partial", workspace, attachments);
+        expect(staged.map((f) => path.basename(f.path))).toEqual(["img-q.png"]);
+        expect(fs.readdirSync(path.join(workspace, "attachments"))).toEqual(["img-q.png"]);
+      });
+
+      it("never removes a file that reappeared at the copy's name — it is not the server's", () => {
+        const attachments = stored("conv-raced-name", ["img-n"]);
+        const workspace = path.join(dir(), "ws-raced-name");
+        const dest = path.join(workspace, "attachments", "img-n.png");
+        vi.spyOn(fs, "copyFileSync").mockImplementationOnce((src, target, mode) => {
+          fs.writeFileSync(dest, "the agent's own file"); // between the unlink and the exclusive copy
+          realCopy(src, target, mode);
+        });
+
+        expect(stageChatImageFilesFromAttachments(config(), "conv-raced-name", workspace, attachments)).toEqual([]);
+        expect(fs.readFileSync(dest, "utf8")).toBe("the agent's own file");
+      });
+    });
   });
 });
 

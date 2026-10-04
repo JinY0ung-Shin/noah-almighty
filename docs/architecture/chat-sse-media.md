@@ -61,7 +61,9 @@
     (`rewindBotTasks`; `markBotTaskRunning` snapshots the parked state before clearing it); canvases
     rolled back to the anchor time; `agent_session_id = NULL` (crash safety — the fork's new id lands on
     success). Then the edit's replacement row (carrying the anchor's image attachments) and the disk sweep
-    of the dropped rows' attachments minus the carried ids. Replacing the FIRST message moves an
+    of the dropped rows' attachments minus the carried ids — their STAGED workspace copies included
+    (`deleteStagedAttachmentCopies`: `attachments/<id>.<ext>` only, never following a link; captures and saved
+    Confluence files are the dropped turns' tool side effects and stay). Replacing the FIRST message moves an
     auto-derived conversation title to the new text; a renamed title stays.
   - **`kind: "queued"`** marks a user row written while ANOTHER run was active — `queueBotTurn`'s 202
     row, a bot routine's enqueue, a bot hand-off, a plain routine's row written over a live run, and the
@@ -340,6 +342,42 @@
   MCP image blocks (per-run `ctx.visionEnabled`). Surfaced in the standing prompt (`noVisionSection`,
   which now points at the staged files) + describe_system. `show_file`/slide previews are unaffected
   (user-facing only).
+- **Every LOCAL image turn stages its images as workspace FILES, vision turns included (2026-09-30).**
+  A vision turn used to get image blocks only, so no image the avatar SAW could reach a deliverable
+  (the pptx skill's "use the user's photo" was impossible on exactly the turns that carry one). Now the
+  fresh send AND the rewind/regenerate re-feed run `stageChatImageFilesFromAttachments` on every
+  non-external turn: a vision turn carries BOTH `AgentRequest.images` (blocks, unchanged) and
+  `imageFiles` (the same attachments, same order), and `buildUserPrompt` words the listing per case. A
+  text-only turn keeps its "cannot view" text. A vision turn says the images shown are ALSO files, claims
+  "in the same order" only while both lists have the same length, and ends by run capability: a run that
+  can write files (`AgentRequest.canWriteFiles` = runPlan's `elevatedToolAccess`, the flag describe_system's
+  image-sources line reads, see [`agent-core.md`](agent-core.md)) is told to place the FILE (a deck's
+  `assets/`, a document, a commit) instead of describing or redrawing it; a read-only run, that it can read
+  the files but not place them in this conversation. A vision turn whose staging produced nothing keeps its
+  image blocks and gets no listing. `imageTurn` still keys on vision and images, so the extra files change
+  neither the fresh-session rule nor resume. Because the workspace is AGENT-WRITABLE, the staging refuses an
+  `attachments/` that is not a real directory (`workspaceSubdirForWrite`: a planted symlink or file there
+  stages nothing); each copy first unlinks whatever holds its name, then is created with `COPYFILE_EXCL`,
+  so a re-stage never writes through a link; and a finished copy must realpath to exactly
+  `realpath(workspace)/attachments/<name>` (`keepIfContained`, shared with the capture save) or it is
+  removed and left out of the listing. A copy that fails part-way (ENOSPC) is removed, while a file that
+  reappeared at the name (EEXIST) is the agent's and stays. Browser captures land beside them in
+  `captures/` ([`browser-bridge/contract.md`](browser-bridge/contract.md)), and Confluence saves in
+  `confluence/`. Both metacognition surfaces name the folders ([`agent-core.md`](agent-core.md)).
+- **Conversation delete removes the SERVER-WRITTEN workspace copies, and only those (2026-09-30).** Every
+  conversation-delete path (single and bulk delete in `routes/chat.ts`, the admin user and group cascades in
+  `routes/admin.ts`) calls `deleteConversationWorkspaceCopies` (`workspace.ts`) next to the chat-image/file
+  sweeps. It removes `attachments/`, `captures/` and `confluence/` (`SERVER_WORKSPACE_COPY_DIRS`) from the
+  deleted conversation's scratch workspace. A workspace lives under its THREAD's avatar
+  (`workspaces/<avatarSeg>/<conversationSeg>`), so a colleague's thread sits in the OTHER user's avatar tree,
+  and a deleted user's threads with other avatars outlive their own tree. The conversation segment derives
+  from the id alone, so the helper looks for each id under EVERY avatar folder, never only the deleter's
+  (one probe per folder for a single delete, one listing per folder for a bulk one). It never follows a
+  link: a symlinked avatar or workspace folder is skipped, and a link or file named like a copy folder is
+  unlinked, never recursed into. Best-effort, like `deleteConversationImages`. The rest of the workspace
+  (the agent's own work files) stays until its avatar's whole tree is removed (user, bot or group-agent
+  deletion). Sweeping it with the conversation is a separate decision for the user. A bot or group-agent
+  delete already removes that agent's whole tree.
 
 ## Generated-file delivery + PPTX deck pipeline (`share_file`, hidden publishes)
 - **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (there is deliberately NO

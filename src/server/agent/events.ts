@@ -592,6 +592,24 @@ export type BrowserResult =
        * the same text anchor the file-output wrappers stamp.
        */
       sharedAttachments?: import("../types.js").MessageAttachment[];
+      /**
+       * screenshot only, SERVER-INTERNAL (set by the chat route, never crosses
+       * the extension wire): the absolute path of the copy of this capture saved
+       * in the conversation scratch workspace's `captures/` folder, which the
+       * avatar can place into something it produces. browserTools.report prints
+       * it on a server-authored line OUTSIDE the untrusted wrapper. Absent when
+       * no copy was saved; `saveSkipped` then says why.
+       */
+      savedPath?: string;
+      /**
+       * screenshot only, SERVER-INTERNAL: why no workspace copy was saved —
+       * `limit` (MAX_SAVED_CAPTURES_PER_TURN reached this run),
+       * `conversation_gone` (deleted mid-run), `not_an_image` (the bridge's
+       * bytes are empty or no PNG/JPEG/WebP/GIF), `save_failed` (the write did
+       * not complete: no usable `captures/` folder, a failed or partial write,
+       * a file that did not stay inside `captures/`).
+       */
+      saveSkipped?: "limit" | "conversation_gone" | "not_an_image" | "save_failed";
       /** click_at: element found at the clicked point — UNTRUSTED page content. */
       landedOn?: string;
       /** read_text: one chunk of the page's readable text — UNTRUSTED page content. */

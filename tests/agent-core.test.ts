@@ -196,7 +196,11 @@ import {
   CONFLUENCE_TOOL_NAMES,
 } from "../src/server/agent/confluenceTools.js";
 import { generateSshKeyPair } from "../src/server/sshIdentity.js";
-import { workspaceDirFor } from "../src/server/workspace.js";
+import {
+  deleteConversationWorkspaceCopies,
+  SERVER_WORKSPACE_COPY_DIRS,
+  workspaceDirFor,
+} from "../src/server/workspace.js";
 import type { AgentRequest, AppConfig, Plugin } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
@@ -564,6 +568,129 @@ describe("workspace dirs", () => {
       expect(path.isAbsolute(rel)).toBe(false);
       expect(rel.startsWith("..")).toBe(false);
     }
+  });
+
+  describe("deleteConversationWorkspaceCopies", () => {
+    const setup = (name: string) =>
+      createServices({ dataDir: path.join(tempDir, name), agentRuntime: "local", sessionSecret: "t" }).config;
+    /** A workspace with every server-written folder filled plus the agent's own work. */
+    const seedWorkspace = (dir: string) => {
+      for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+        fs.mkdirSync(path.join(dir, sub, "nested"), { recursive: true });
+        fs.writeFileSync(path.join(dir, sub, "nested", "copy.png"), "x");
+      }
+      fs.mkdirSync(path.join(dir, "q3-review", "assets"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "q3-review", "assets", "photo.png"), "deck asset");
+      fs.writeFileSync(path.join(dir, "notes.md"), "agent's own file");
+    };
+
+    it("removes only the server-written folders, under whichever avatar tree the thread lives", () => {
+      const config = setup("wsc-avatars");
+      // The same conversation id resolves under ANY avatar: a colleague's
+      // thread lives under the OTHER user's avatar, not the deleter's own.
+      const colleagueThread = workspaceDirFor(config, "someone-elses-avatar", "conv-x");
+      const botThread = workspaceDirFor(config, "personal:owner:bot", "conv-x");
+      const untouched = workspaceDirFor(config, "someone-elses-avatar", "conv-other");
+      for (const dir of [colleagueThread, botThread, untouched]) seedWorkspace(dir);
+
+      deleteConversationWorkspaceCopies(config, ["conv-x"]);
+
+      for (const dir of [colleagueThread, botThread]) {
+        for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+          expect(fs.existsSync(path.join(dir, sub)), `${dir}/${sub}`).toBe(false);
+        }
+        // The agent's own work stays: that broader sweep is a separate decision.
+        expect(fs.readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("agent's own file");
+        expect(fs.existsSync(path.join(dir, "q3-review", "assets", "photo.png"))).toBe(true);
+      }
+      // Another conversation's copies are untouched.
+      expect(fs.existsSync(path.join(untouched, "captures", "nested", "copy.png"))).toBe(true);
+    });
+
+    it("sweeps a bulk delete's ids across avatar trees just the same, skipping linked workspaces", () => {
+      const config = setup("wsc-bulk");
+      const owned = workspaceDirFor(config, "deleter", "conv-a");
+      const colleague = workspaceDirFor(config, "someone-elses-avatar", "conv-b");
+      const kept = workspaceDirFor(config, "someone-elses-avatar", "conv-kept");
+      for (const dir of [owned, colleague, kept]) seedWorkspace(dir);
+      // A workspace folder planted as a link is skipped on this path too.
+      const realTarget = path.join(tempDir, "wsc-bulk-target");
+      fs.mkdirSync(path.join(realTarget, "captures"), { recursive: true });
+      fs.writeFileSync(path.join(realTarget, "captures", "kept.png"), "x");
+      fs.symlinkSync(realTarget, workspaceDirFor(config, "deleter", "conv-linked"));
+
+      deleteConversationWorkspaceCopies(config, ["conv-a", "conv-b", "conv-linked", "never-ran"]);
+
+      for (const dir of [owned, colleague]) {
+        for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+          expect(fs.existsSync(path.join(dir, sub)), `${dir}/${sub}`).toBe(false);
+        }
+        expect(fs.readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("agent's own file");
+      }
+      expect(fs.existsSync(path.join(kept, "captures", "nested", "copy.png"))).toBe(true);
+      expect(fs.existsSync(path.join(realTarget, "captures", "kept.png"))).toBe(true);
+    });
+
+    it("never follows a link: a planted symlink is unlinked, its target left intact", () => {
+      const config = setup("wsc-links");
+      const outside = path.join(tempDir, "wsc-links-outside");
+      fs.mkdirSync(outside, { recursive: true });
+      fs.writeFileSync(path.join(outside, "keep.txt"), "not the server's to delete");
+      const workspace = workspaceDirFor(config, "owner", "conv-link");
+      fs.mkdirSync(path.join(workspace, "attachments"), { recursive: true });
+      // A folder-named link, and a link INSIDE a real copy folder.
+      fs.symlinkSync(outside, path.join(workspace, "captures"));
+      fs.symlinkSync(outside, path.join(workspace, "attachments", "escape"));
+      fs.writeFileSync(path.join(workspace, "confluence"), "a file, not a folder");
+
+      deleteConversationWorkspaceCopies(config, ["conv-link"]);
+
+      expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("not the server's to delete");
+      for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+        expect(fs.existsSync(path.join(workspace, sub))).toBe(false);
+        expect(() => fs.lstatSync(path.join(workspace, sub))).toThrow();
+      }
+
+      // A workspace folder that is itself a link is skipped, not entered.
+      const linkedWorkspace = workspaceDirFor(config, "owner", "conv-linked-ws");
+      const realTarget = path.join(tempDir, "wsc-links-target");
+      fs.mkdirSync(path.join(realTarget, "captures"), { recursive: true });
+      fs.writeFileSync(path.join(realTarget, "captures", "kept.png"), "x");
+      fs.symlinkSync(realTarget, linkedWorkspace);
+      deleteConversationWorkspaceCopies(config, ["conv-linked-ws"]);
+      expect(fs.existsSync(path.join(realTarget, "captures", "kept.png"))).toBe(true);
+    });
+
+    it("skips an avatar folder planted as a link, for one id and for a bulk delete", () => {
+      const config = setup("wsc-avatar-link");
+      // workspaces/evil → a tree outside that happens to hold the conversation's segment.
+      const seg = (id: string) => path.basename(workspaceDirFor(config, "any", id));
+      const outside = path.join(tempDir, "wsc-avatar-link-outside");
+      for (const id of ["conv-one", "conv-two"]) {
+        fs.mkdirSync(path.join(outside, seg(id), "captures"), { recursive: true });
+        fs.writeFileSync(path.join(outside, seg(id), "captures", "keep.png"), "x");
+      }
+      // A real avatar tree too, so the workspaces root exists alongside the link.
+      seedWorkspace(workspaceDirFor(config, "real-avatar", "conv-one"));
+      fs.symlinkSync(outside, path.join(config.dataDir, "workspaces", "evil"));
+
+      // One id (the per-avatar probe branch) and two ids (the listing branch).
+      deleteConversationWorkspaceCopies(config, ["conv-one"]);
+      deleteConversationWorkspaceCopies(config, ["conv-one", "conv-two"]);
+
+      for (const id of ["conv-one", "conv-two"]) {
+        expect(fs.existsSync(path.join(outside, seg(id), "captures", "keep.png")), id).toBe(true);
+      }
+      // The real avatar tree's copies are still swept.
+      expect(fs.existsSync(path.join(workspaceDirFor(config, "real-avatar", "conv-one"), "captures"))).toBe(false);
+    });
+
+    it("is a no-op without ids, or before any workspace exists", () => {
+      const config = setup("wsc-empty");
+      expect(() => deleteConversationWorkspaceCopies(config, [])).not.toThrow();
+      expect(() => deleteConversationWorkspaceCopies(config, ["never-ran"])).not.toThrow();
+      expect(fs.existsSync(path.join(config.dataDir, "workspaces"))).toBe(false);
+    });
   });
 });
 
@@ -4302,8 +4429,137 @@ describe("buildPrompt", () => {
     expect(withFiles).toContain("Attached image files");
     expect(withFiles).toContain('- /x/attachments/a.png (image/png, original name "cat.png")');
     expect(withFiles).toContain("mcp__file_output__show_file");
+    // Today's text-only wording, never the vision one.
+    expect(withFiles).toContain("The active model cannot view image content");
+    expect(withFiles).not.toContain("are ALSO saved as files");
 
     expect(buildUserPrompt(req({ viewerIsOwner: true }))).not.toContain("Attached image files");
+  });
+
+  it("lists a vision turn's attachments as placeable files, in the order they are shown", () => {
+    // The images ride as blocks AND as staged files: the model sees them, and
+    // the listing is what lets it put one into a deck instead of describing it.
+    const imageFiles = [
+      { path: "/x/attachments/a.png", mediaType: "image/png" as const, name: "cat.png" },
+      { path: "/x/attachments/b.jpg", mediaType: "image/jpeg" as const },
+    ];
+    const images = [
+      { mediaType: "image/png" as const, data: "QQ==" },
+      { mediaType: "image/jpeg" as const, data: "Qg==" },
+    ];
+    const vision = buildUserPrompt(
+      req({ viewerIsOwner: true, message: "이 사진으로 표지 만들어줘", images, imageFiles }),
+    );
+    expect(vision).toContain(
+      "Attached image files: the image(s) attached to this message (shown to you) are ALSO saved as files in the conversation scratch workspace, in the same order:",
+    );
+    expect(vision).toContain('- /x/attachments/a.png (image/png, original name "cat.png")');
+    expect(vision).toContain("- /x/attachments/b.jpg (image/jpeg)");
+    expect(vision).toContain(
+      "When the user wants an attached image IN something you produce (a deck's `assets/`, a document, a commit), place the FILE itself instead of describing or redrawing it.",
+    );
+    // None of the text-only wording: this model DOES see the pixels.
+    expect(vision).not.toContain("cannot view image content");
+    expect(vision).not.toContain("Read on them is blocked");
+
+    // A file that could not be staged would make "same order" a lie, so the
+    // claim is dropped while the listing stays.
+    const partial = buildUserPrompt(req({ viewerIsOwner: true, images, imageFiles: imageFiles.slice(0, 1) }));
+    expect(partial).toContain("are ALSO saved as files in the conversation scratch workspace:\n- /x/attachments/a.png");
+    expect(partial).not.toContain("in the same order");
+    // Image blocks with nothing staged: no listing to speak of.
+    expect(buildUserPrompt(req({ viewerIsOwner: true, images }))).not.toContain("Attached image files");
+  });
+
+  it("tells only a run that can write files to place an attached image — the canWriteFiles flag", () => {
+    const imageFiles = [{ path: "/x/attachments/a.png", mediaType: "image/png" as const }];
+    const images = [{ mediaType: "image/png" as const, data: "QQ==" }];
+    const PLACE = "place the FILE itself instead of describing or redrawing it";
+    const READ_ONLY =
+      "This conversation cannot write files, so you can read these files here but not place them into a deck, document or commit.";
+    const tail = (over: Record<string, unknown>) => buildUserPrompt(req({ images, imageFiles, ...over }));
+
+    // runPlan's flag decides whenever it is stamped — even against the viewer class.
+    expect(tail({ viewerIsOwner: false, canWriteFiles: true })).toContain(PLACE);
+    expect(tail({ viewerIsOwner: true, canWriteFiles: false })).toContain(READ_ONLY);
+    // Unstamped: only what the request proves writes — the owner's own run or a
+    // group-agent run — so a colleague is never told to copy files.
+    expect(tail({ viewerIsOwner: true })).toContain(PLACE);
+    expect(
+      tail({
+        groupAgent: { groupId: "g", agentId: "a", groupName: "팀", viewerRole: "member", captureAllowed: false },
+      }),
+    ).toContain(PLACE);
+    const colleague = tail({ viewerIsOwner: false, viewerName: "동료" });
+    expect(colleague).toContain(READ_ONLY);
+    expect(colleague).not.toContain(PLACE);
+    // Either way the files are listed: a read-only run can still read them.
+    expect(colleague).toContain("- /x/attachments/a.png (image/png)");
+
+    // The text-only listing follows the same flag: a read-only run is never told
+    // to convert with Bash or commit what it cannot write.
+    const textOnly = (over: Record<string, unknown>) => buildUserPrompt(req({ imageFiles, ...over }));
+    expect(textOnly({ viewerIsOwner: true })).toContain("inspect or convert with Bash, commit via the repo tools");
+    const readOnlyText = textOnly({ viewerIsOwner: false, canWriteFiles: false });
+    expect(readOnlyText).toContain("This conversation cannot write files: show one to the user with mcp__file_output__show_file");
+    expect(readOnlyText).not.toContain("inspect or convert with Bash");
+    expect(readOnlyText).toContain("- /x/attachments/a.png (image/png)");
+  });
+
+  it("tells a vision deck run that the images it is shown are placeable files, per run flags", () => {
+    const deckRun = { viewerIsOwner: true, fileOutputEnabled: true, deckConverterEnabled: true };
+    const attachmentsOnly = buildPrompt(req(deckRun), 0);
+    expect(attachmentsOnly).toContain(
+      "Images you are shown are also FILES in the scratch workspace — `attachments/` (the user's): to put one in a deck or document, place that file (e.g. in the deck's `assets/`) instead of describing or redrawing it.",
+    );
+    // Each further folder appears only with the route that fills it.
+    expect(attachmentsOnly).not.toContain("`captures/` (your screenshots)");
+    expect(attachmentsOnly).not.toContain("`confluence/` (saved attachments)");
+    const all = buildPrompt(req({ ...deckRun, browserEnabled: true, confluenceSaveToWorkspace: true }), 0);
+    expect(all).toContain(
+      "`attachments/` (the user's), `captures/` (your screenshots), `confluence/` (saved attachments):",
+    );
+    // The legacy deck branch places images too (python-pptx add_picture).
+    expect(buildPrompt(req({ viewerIsOwner: true, fileOutputEnabled: true, deckRenderingEnabled: true }), 0)).toContain(
+      "Images you are shown are also FILES",
+    );
+
+    // A text-only run is shown no images (its attachments are listed files),
+    // and a run that cannot build a deck has nothing to place them into.
+    expect(buildPrompt(req({ ...deckRun, visionEnabled: false }), 0)).not.toContain("Images you are shown");
+    expect(buildPrompt(req({ viewerIsOwner: true, fileOutputEnabled: true }), 0)).not.toContain("Images you are shown");
+  });
+
+  it("adds the saved capture to the browser screenshot sentence, and only on a vision run", () => {
+    const withVision = buildPrompt(req({ browserEnabled: true }), 0);
+    // The SCRATCH workspace's captures/: with a working repo open the cwd is the
+    // clone, and a bare `captures/` would point the model at the wrong folder.
+    expect(withVision).toContain(
+      "Screenshots are available, shared with the user and saved in the scratch workspace's `captures/`.",
+    );
+    const noVision = buildPrompt(req({ browserEnabled: true, visionEnabled: false }), 0);
+    expect(noVision).toContain("Screenshots and pixel-mode clicks are unavailable.");
+    expect(noVision).not.toContain("`captures/`");
+  });
+
+  it("offers Confluence's save_to_workspace only on runs where the save can succeed", () => {
+    const confluence = {
+      mcpToolGroups: ["confluence"],
+      confluenceUrlConfigured: true,
+      confluencePatConfigured: true,
+    };
+    const saving = buildPrompt(req({ ...confluence, confluenceSaveToWorkspace: true }), 0);
+    expect(saving).toContain(
+      "`mcp__confluence__get_attachment` with `save_to_workspace: true` also saves the file to the scratch workspace's `confluence/` (its `savedPath`) for a deck or document.",
+    );
+    // Still READ-ONLY toward Confluence itself.
+    expect(saving).toContain("no `mcp__confluence__*` tool creates, edits, or deletes anything");
+    // Configured tools without the run flag (a plain colleague, no workspace): no offer.
+    expect(buildPrompt(req(confluence), 0)).not.toContain("save_to_workspace");
+    // The flag alone does not resurrect a Confluence section that is not there.
+    expect(buildPrompt(req({ confluenceSaveToWorkspace: true, mcpToolGroups: ["web"] }), 0)).not.toContain(
+      "save_to_workspace",
+    );
   });
 
   it("gives an owner-scheduled routine its self-state and the git-MCP-only rule", () => {

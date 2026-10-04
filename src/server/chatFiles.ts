@@ -9,6 +9,8 @@ import {
   isInside,
   safeConversationDir,
   saveHiddenChatImage,
+  keepIfContained,
+  workspaceSubdirForWrite,
 } from "./chatImages.js";
 
 /**
@@ -17,7 +19,10 @@ import {
  * (`chatImages.ts`): bytes on disk under `dataDir/chat-files/<conversationId>/`,
  * only {@link MessageAttachment} metadata (kind:"file") on the message row,
  * swept with the conversation. There is deliberately NO upload path — files
- * only flow OUT of the agent workspace (`publishWorkspaceFile`), never in.
+ * only flow OUT of the agent workspace into this store (`publishWorkspaceFile`),
+ * never in. The one write the other way is {@link saveBrowserCapture}: a
+ * screenshot's bytes land in the workspace's `captures/` folder (not in this
+ * store) so the avatar can place them into what it produces.
  * See `routes/chat.ts` for the share wiring + download endpoint.
  */
 
@@ -36,6 +41,17 @@ export const MAX_CHAT_FILES_PER_MESSAGE = 3;
  * card is skipped (the tool result says so).
  */
 export const MAX_SHARED_SCREENSHOTS_PER_MESSAGE = 12;
+/**
+ * Max browser screenshots SAVED as files into the conversation scratch
+ * workspace (`captures/`, {@link saveBrowserCapture}) per RUN: one chat run,
+ * including its steer follow-up turns and background wake-ups, like the share
+ * cap above. Its own budget, independent of that one. The workspace copy is
+ * what lets the avatar place a capture into a deck or document, so it outlasts
+ * the card budget, but a runaway capture loop still must not fill the disk.
+ * Past it the model still receives the image; the tool result says no file was
+ * saved.
+ */
+export const MAX_SAVED_CAPTURES_PER_TURN = 30;
 /**
  * Max HIDDEN image publishes per turn (slide previews embedded in a canvas).
  * Separate from the visible-image cap: hidden files never crowd the bubble,
@@ -327,6 +343,67 @@ export function publishBrowserScreenshot(
     file: { id, kind: "file", mediaType, name, size: buffer.length },
     slide,
   };
+}
+
+/** "20260930-181005": the KST wall clock (UTC+9, no DST) of `nowMs`, for capture file names. */
+function kstFileStamp(nowMs: number): string {
+  const iso = new Date(nowMs + 9 * 60 * 60 * 1000).toISOString();
+  return `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}${iso.slice(17, 19)}`;
+}
+
+export type SaveBrowserCaptureResult =
+  | { path: string }
+  | { error: "EMPTY" | "TOO_LARGE" | "UNSUPPORTED" | "WRITE_FAILED" };
+
+/**
+ * Save a browser screenshot (the SAME bytes the model receives) as a FILE in the
+ * conversation scratch workspace, `<workspaceDir>/captures/<YYYYMMDD-HHMMSS>-<6
+ * hex>.<ext>`: the KST wall clock plus a random suffix, and the extension from
+ * the sniffed bytes, exactly as {@link publishBrowserScreenshot} derives it.
+ * This is the copy the avatar can place into something it produces (e.g. a
+ * deck's `assets/`), independent of the user-facing card. The workspace is
+ * agent-writable, so the folder must be a real directory
+ * (`workspaceSubdirForWrite`), the file is created exclusively (`wx`), never
+ * through a link, and must still resolve inside the folder afterwards
+ * (`keepIfContained`, which removes it otherwise); a name collision draws a
+ * fresh suffix and a write that fails part-way removes its partial file.
+ * Returns the absolute path the model is told. The errors separate "not an
+ * image" (EMPTY/UNSUPPORTED) from a save that failed (TOO_LARGE, WRITE_FAILED)
+ * so the tool result can name the real reason.
+ */
+export function saveBrowserCapture(
+  workspaceDir: string,
+  buffer: Buffer,
+  nowMs: number = Date.now(),
+): SaveBrowserCaptureResult {
+  if (buffer.length === 0) return { error: "EMPTY" };
+  if (buffer.length > MAX_CHAT_FILE_BYTES) return { error: "TOO_LARGE" };
+  const mediaType = detectImageMediaType(buffer);
+  if (!mediaType) return { error: "UNSUPPORTED" };
+  const dir = workspaceSubdirForWrite(workspaceDir, "captures");
+  if (!dir) return { error: "WRITE_FAILED" };
+  const stamp = kstFileStamp(nowMs);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const file = path.join(dir, `${stamp}-${crypto.randomBytes(3).toString("hex")}.${MIME_EXT[mediaType]}`);
+    try {
+      fs.writeFileSync(file, buffer, { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue; // taken: draw another suffix
+      // The exclusive create makes any file at this name OURS, so a write that
+      // failed part-way (ENOSPC) must not leave a truncated capture behind.
+      try {
+        fs.rmSync(file, { force: true });
+      } catch {
+        // best effort
+      }
+      return { error: "WRITE_FAILED" };
+    }
+    // The folder was real when checked; a link swapped in since would have
+    // taken the write elsewhere, so the saved path must resolve to itself.
+    if (!keepIfContained(workspaceDir, "captures", file)) return { error: "WRITE_FAILED" };
+    return { path: file };
+  }
+  return { error: "WRITE_FAILED" };
 }
 
 /**

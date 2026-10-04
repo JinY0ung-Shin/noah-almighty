@@ -464,6 +464,45 @@ export function deleteChatImageAttachments(
 }
 
 /**
+ * Remove the STAGED copies (`<workspaceDir>/attachments/<id>.<ext>`, see
+ * {@link stageChatImageFilesFromAttachments}) of image attachments whose
+ * originals a rewind/regenerate just deleted — a server-written copy dies with
+ * what it mirrors, like the conversation-delete sweep. Only names this server
+ * writes are touched (`<SAFE_ID>.<ext>`); a symlinked `attachments/` folder is
+ * never entered, and an entry is unlinked, never followed. What the agent made
+ * from a copy (a deck's `assets/`) is its own work and stays. Best effort.
+ */
+export function deleteStagedAttachmentCopies(
+  workspaceDir: string,
+  attachments: MessageAttachment[] | undefined,
+): void {
+  if (!attachments?.length) return;
+  const ids = new Set(
+    attachments.filter((att) => att.kind === "image" && SAFE_ID.test(att.id)).map((att) => att.id),
+  );
+  if (ids.size === 0) return;
+  const dir = path.join(workspaceDir, "attachments");
+  let entries: string[];
+  try {
+    if (!fs.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return;
+    entries = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    const dot = name.lastIndexOf(".");
+    if (dot <= 0 || !ids.has(name.slice(0, dot)) || !EXT_MIME[name.slice(dot + 1).toLowerCase()]) continue;
+    const target = path.join(dir, name);
+    try {
+      const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+      if (stat && !stat.isDirectory()) fs.unlinkSync(target);
+    } catch {
+      // Best effort, like the other per-conversation sweeps.
+    }
+  }
+}
+
+/**
  * Read stored attachment files back into model-facing image blocks — used on
  * regenerate (a fresh SDK session that must re-feed the prior turn's images).
  * Silently skips any attachment whose file is missing.
@@ -504,13 +543,64 @@ export function readChatImages(
 }
 
 /**
+ * `<workspaceDir>/<name>` (absolute) made ready for a SERVER write, or null when
+ * it cannot be used safely. The scratch workspace is AGENT-WRITABLE, so the
+ * agent can put a symlink (or a plain file) where a server writer expects its
+ * folder: anything but a real directory there is refused, and callers create
+ * each file exclusively, so no server write ever lands through a link. Shared
+ * by the attachment staging below and the browser-capture copies
+ * (`chatFiles.ts`).
+ */
+export function workspaceSubdirForWrite(workspaceDir: string, name: string): string | null {
+  const dir = path.resolve(workspaceDir, name);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return fs.lstatSync(dir).isDirectory() ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Post-write containment for a file a server writer JUST created in
+ * `<workspaceDir>/<name>/` (after {@link workspaceSubdirForWrite} and an
+ * exclusive create): its realpath must be exactly
+ * `realpath(workspaceDir)/<name>/<basename>`. The folder was a real directory
+ * when checked, but the agent can swap a link in before the write lands, and
+ * the file would then sit wherever the link points. On any mismatch (or when
+ * the file cannot be resolved) the file just created is unlinked and false is
+ * returned, so the caller reports the save as skipped.
+ */
+export function keepIfContained(workspaceDir: string, name: string, file: string): boolean {
+  try {
+    if (fs.realpathSync(file) === path.join(fs.realpathSync(workspaceDir), name, path.basename(file))) {
+      return true;
+    }
+  } catch {
+    // Unresolvable: treated as outside.
+  }
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // Best effort: the caller reports the save as skipped either way.
+  }
+  return false;
+}
+
+/**
  * Stage stored image attachments as FILES the agent can reach: copy each one
  * from the conversation image store into `<workspaceDir>/attachments/<id>.<ext>`
- * and return the model-facing file descriptors (absolute paths). Used for
- * text-only-model turns where image bytes must never enter model input but the
- * agent should still be able to act on the files (show_file / Bash / repo
- * tools). Missing or unreadable files are skipped silently (mirrors
- * readChatImages); hidden attachments (preview slides) are ignored.
+ * and return the model-facing file descriptors (absolute paths). Runs on EVERY
+ * local turn that carries images. On a text-only turn the files are the only
+ * form the model gets (image bytes never enter model input). On a vision turn
+ * they ride alongside the image blocks, so an image the model sees is also a
+ * file it can place into a deck, a document or a commit. Missing or unreadable
+ * files are skipped silently (mirrors readChatImages); hidden attachments
+ * (preview slides) are ignored. A re-stage (regenerate, rewind) replaces the
+ * earlier copy by unlinking whatever holds the name and creating the copy
+ * exclusively, so the copy never follows a link the agent put there; a copy
+ * that fails part-way is removed, and one that did not land inside the
+ * workspace ({@link keepIfContained}) is removed and left out of the listing.
  */
 export function stageChatImageFilesFromAttachments(
   config: AppConfig,
@@ -519,23 +609,35 @@ export function stageChatImageFilesFromAttachments(
   attachments: MessageAttachment[] | undefined,
 ): AgentImageFileInput[] {
   if (!attachments?.length) return [];
-  const dir = path.join(workspaceDir, "attachments");
-  let dirReady = false;
+  let dir: string | null | undefined;
   const staged: AgentImageFileInput[] = [];
   for (const att of attachments) {
     if (att.kind !== "image" || att.hidden) continue;
     const resolved = resolveStoredImage(config, conversationId, att.id);
     if (!resolved) continue;
+    if (dir === undefined) dir = workspaceSubdirForWrite(workspaceDir, "attachments");
+    if (!dir) break; // no usable attachments/ folder: nothing can be staged
     const dest = path.join(dir, `${att.id}.${MIME_EXT[resolved.mediaType]}`);
     try {
-      if (!dirReady) {
-        fs.mkdirSync(dir, { recursive: true });
-        dirReady = true;
-      }
-      fs.copyFileSync(resolved.path, dest);
+      fs.rmSync(dest, { force: true });
     } catch {
+      continue; // e.g. a folder of that name: not ours to remove
+    }
+    try {
+      fs.copyFileSync(resolved.path, dest, fs.constants.COPYFILE_EXCL);
+    } catch (error) {
+      // EEXIST: something reappeared at the name since the unlink — not ours.
+      // Any other failure (ENOSPC mid-copy) may leave OUR partial file: remove it.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        try {
+          fs.rmSync(dest, { force: true });
+        } catch {
+          // best effort
+        }
+      }
       continue; // skip unreadable/uncopyable, like readChatImages
     }
+    if (!keepIfContained(workspaceDir, "attachments", dest)) continue;
     staged.push({ path: dest, mediaType: resolved.mediaType, name: att.name });
   }
   return staged;

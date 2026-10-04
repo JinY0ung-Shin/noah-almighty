@@ -24,6 +24,7 @@ import {
   chatFilesDir,
   MAX_CHAT_FILES_PER_MESSAGE,
   MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
+  MAX_SAVED_CAPTURES_PER_TURN,
   MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
 } from "../src/server/chatFiles.js";
 import { chatImagesDir, MAX_CHAT_IMAGES_PER_MESSAGE, resolveStoredImage } from "../src/server/chatImages.js";
@@ -139,8 +140,9 @@ vi.mock("../src/server/deckRender.js", async (importOriginal) => ({
 
 import { createApp, createServices } from "../src/server/app.js";
 import { acquireActiveRepo, releaseActiveRepo } from "../src/server/activeRepoLock.js";
+import { buildUserPrompt } from "../src/server/agent/promptBuilder.js";
 import { gitRepoClonePath } from "../src/server/gitRepos.js";
-import { workspaceDirFor } from "../src/server/workspace.js";
+import { SERVER_WORKSPACE_COPY_DIRS, workspaceDirFor } from "../src/server/workspace.js";
 
 let tempDir: string;
 const getTempDir = withTempDir("routes-chat", () => {
@@ -689,14 +691,99 @@ describe("chat-stream request validation", () => {
     expect(fs.readFileSync(staged)).toEqual(PNG_BYTES);
 
     // A vision tier (no explicit entry → inherits the on default) still feeds the
-    // model image content blocks, with no staged copy.
+    // model image content blocks — AND stages the same upload as a workspace
+    // file, so an image the avatar sees is also one it can place into a deck.
     await owner
       .post("/api/chat/stream")
       .send({ avatarId: ownerId, conversationId: "conv-tv2", message: "이미지", model: "opus", images: [PNG_DATA_URL] })
       .expect(200);
     expect(H.requests).toHaveLength(2);
-    expect(H.requests[1].images).toHaveLength(1);
-    expect(H.requests[1].imageFiles).toBeUndefined();
+    const vision = H.requests[1];
+    expect(vision.images).toHaveLength(1);
+    expect(vision.imageFiles).toHaveLength(1);
+    expect(vision.imageFiles![0].mediaType).toBe("image/png");
+    const visionCopy = vision.imageFiles![0].path;
+    expect(visionCopy.startsWith(path.join(workspaceDirFor(services.config, ownerId, "conv-tv2"), "attachments") + path.sep)).toBe(true);
+    expect(fs.readFileSync(visionCopy)).toEqual(PNG_BYTES);
+    // The same bytes the model sees as a block.
+    expect(Buffer.from(vision.images![0].data, "base64")).toEqual(PNG_BYTES);
+  });
+
+  it("stages the anchor's images as files on a vision re-feed too (regenerate and edit-rewind)", async () => {
+    const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+    services.store.setModelVisionPolicy({ sonnet: false });
+    const app = createApp(services);
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "refeed").expect(201)).body.user.id as string;
+    const attachmentsDir = (conversationId: string) =>
+      path.join(workspaceDirFor(services.config, ownerId, conversationId), "attachments");
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-rf", message: "사진", images: [{ name: "shot.png", data: PNG_DATA_URL }] })
+      .expect(200);
+    const userRow = services.store.listMessages(ownerId, "conv-rf").find((m) => m.role === "user")!;
+    const attachmentId = userRow.attachments![0].id;
+    const staged = path.join(attachmentsDir("conv-rf"), `${attachmentId}.png`);
+    // The agent may have moved the fresh copy away; a re-feed stages it again.
+    fs.rmSync(staged);
+
+    H.requests.length = 0;
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-rf", message: "", regenerate: true })
+      .expect(200);
+    const regen = H.requests[0];
+    expect(regen.images).toHaveLength(1);
+    expect(regen.imageFiles).toEqual([{ path: staged, mediaType: "image/png", name: "shot.png" }]);
+    expect(fs.readFileSync(staged)).toEqual(PNG_BYTES);
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-rf", message: "다시 봐줘", rewindFromMessageId: userRow.id })
+      .expect(200);
+    const edit = H.requests[1];
+    expect(edit.images).toHaveLength(1);
+    expect(edit.imageFiles).toEqual([{ path: staged, mediaType: "image/png", name: "shot.png" }]);
+
+    // A text-only tier re-feeds the SAME staged files and no image blocks.
+    const replacement = services.store.listMessages(ownerId, "conv-rf").find((m) => m.role === "user")!;
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-rf", message: "", regenerate: true, model: "sonnet" })
+      .expect(200);
+    const textOnly = H.requests[2];
+    expect(textOnly.images).toBeUndefined();
+    expect(textOnly.imageFiles).toEqual([
+      { path: path.join(attachmentsDir("conv-rf"), `${replacement.attachments![0].id}.png`), mediaType: "image/png", name: "shot.png" },
+    ]);
+  });
+
+  it("still shows a vision turn its images when nothing could be staged, and lists no files", async () => {
+    const { app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "stagefail").expect(201)).body.user.id as string;
+    // The agent left a FILE where the attachments/ folder goes, so the staging
+    // refuses to write there.
+    const workspace = workspaceDirFor(config, ownerId, "conv-sf");
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.writeFileSync(path.join(workspace, "attachments"), "에이전트 파일");
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-sf", message: "이 사진 봐줘", images: [PNG_DATA_URL] })
+      .expect(200);
+
+    // The model still SEES the image…
+    const r = H.requests[0];
+    expect(r.images).toHaveLength(1);
+    expect(Buffer.from(r.images![0].data, "base64")).toEqual(PNG_BYTES);
+    // …and is promised no file that does not exist.
+    expect(r.imageFiles).toBeUndefined();
+    const userPrompt = buildUserPrompt(r);
+    expect(userPrompt).toContain("이 사진 봐줘");
+    expect(userPrompt).not.toContain("Attached image files");
+    expect(fs.readFileSync(path.join(workspace, "attachments"), "utf8")).toBe("에이전트 파일");
   });
 
   it("serves 404 for a missing image on the owner's own conversation", async () => {
@@ -1220,6 +1307,163 @@ describe("cancellation + run registry", () => {
     expect(res.body.conversationIds).toContain("conv-del-all");
     await streamDone; // the aborted run unwinds and closes
   }, LIVE);
+});
+
+describe("conversation delete sweeps the server-written workspace copies", () => {
+  const OWN_WORK = "에이전트가 만든 작업 파일";
+  /** Every server-written folder filled, plus a file of the agent's own work. */
+  function seedCopies(workspace: string): void {
+    for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+      fs.mkdirSync(path.join(workspace, sub), { recursive: true });
+      fs.writeFileSync(path.join(workspace, sub, "seeded.png"), PNG_BYTES);
+    }
+    fs.writeFileSync(path.join(workspace, "notes.md"), OWN_WORK);
+  }
+  /** The copies are gone, and the agent's own work stays (a wider sweep is a separate decision). */
+  function expectCopiesSwept(workspace: string): void {
+    for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+      expect(fs.lstatSync(path.join(workspace, sub), { throwIfNoEntry: false }), sub).toBeUndefined();
+    }
+    expect(fs.readFileSync(path.join(workspace, "notes.md"), "utf8")).toBe(OWN_WORK);
+  }
+  function expectCopiesKept(workspace: string): void {
+    for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+      expect(fs.existsSync(path.join(workspace, sub, "seeded.png")), sub).toBe(true);
+    }
+  }
+  /** Two users in one avatar-sharing group, so each can reach the other's avatar. */
+  async function teammates(app: ReturnType<typeof createApp>, store: Store, prefix: string) {
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, `${prefix}-owner`).expect(201)).body.user.id as string;
+    const mate = request.agent(app);
+    const mateId = (await signup(mate, `${prefix}-mate`).expect(201)).body.user.id as string;
+    const group = store.createGroup({ name: `${prefix}-group` });
+    store.addGroupMember(group.id, ownerId);
+    store.addGroupMember(group.id, mateId);
+    return { owner, ownerId, mate, mateId };
+  }
+  const sendImage = (agent: ReturnType<typeof request.agent>, avatarId: string, conversationId: string) =>
+    agent
+      .post("/api/chat/stream")
+      .send({ avatarId, conversationId, message: "이 사진", images: [PNG_DATA_URL] })
+      .expect(200);
+
+  it("single delete removes the copies, keeps the agent's own files, and never follows a planted link", async () => {
+    const { app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "wsdel-one").expect(201)).body.user.id as string;
+    await sendImage(owner, ownerId, "conv-wsdel");
+    const workspace = workspaceDirFor(config, ownerId, "conv-wsdel");
+    // The turn itself staged the upload.
+    expect(fs.readdirSync(path.join(workspace, "attachments"))).toHaveLength(1);
+    fs.mkdirSync(path.join(workspace, "confluence"));
+    fs.writeFileSync(path.join(workspace, "confluence", "diagram.png"), PNG_BYTES);
+    fs.writeFileSync(path.join(workspace, "notes.md"), OWN_WORK);
+    // The agent can plant a link where a copy folder goes: the sweep unlinks
+    // it and never deletes what it points at.
+    const outside = path.join(tempDir, "wsdel-outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "keep.txt"), "워크스페이스 밖");
+    fs.symlinkSync(outside, path.join(workspace, "captures"));
+    const sibling = workspaceDirFor(config, ownerId, "conv-wsdel-sibling");
+    seedCopies(sibling);
+
+    await owner.delete("/api/conversations/conv-wsdel").expect(200).expect({ ok: true });
+
+    expectCopiesSwept(workspace);
+    expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("워크스페이스 밖");
+    // Another conversation of the same avatar keeps its copies.
+    expectCopiesKept(sibling);
+  });
+
+  it("a colleague's delete sweeps the thread's copies under the OTHER user's avatar tree", async () => {
+    const { app, config, store } = boot();
+    const { owner, ownerId, mate, mateId } = await teammates(app, store, "wsdel-col");
+    await sendImage(mate, ownerId, "conv-mate");
+    // The thread's workspace hangs off the AVATAR it talks to, not the deleter.
+    const workspace = workspaceDirFor(config, ownerId, "conv-mate");
+    expect(fs.readdirSync(path.join(workspace, "attachments"))).toHaveLength(1);
+    expect(fs.existsSync(workspaceDirFor(config, mateId, "conv-mate"))).toBe(false);
+    seedCopies(workspace);
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-owner-own", message: "안녕" })
+      .expect(200);
+    const ownerThread = workspaceDirFor(config, ownerId, "conv-owner-own");
+    seedCopies(ownerThread);
+
+    await mate.delete("/api/conversations/conv-mate").expect(200);
+
+    expectCopiesSwept(workspace);
+    // The avatar owner's own thread is not the colleague's to sweep.
+    expectCopiesKept(ownerThread);
+  });
+
+  it("bulk delete sweeps every deleted thread, own-avatar and colleague alike", async () => {
+    const { app, config, store } = boot();
+    const { owner, ownerId, mate, mateId } = await teammates(app, store, "wsdel-bulk");
+    await sendImage(mate, mateId, "conv-bulk-own");
+    await sendImage(mate, ownerId, "conv-bulk-mate");
+    const own = workspaceDirFor(config, mateId, "conv-bulk-own");
+    const colleague = workspaceDirFor(config, ownerId, "conv-bulk-mate");
+    seedCopies(own);
+    seedCopies(colleague);
+    await sendImage(owner, ownerId, "conv-bulk-owner");
+    const ownerThread = workspaceDirFor(config, ownerId, "conv-bulk-owner");
+    seedCopies(ownerThread);
+
+    const res = await mate.delete("/api/conversations").expect(200);
+    expect([...res.body.conversationIds].sort()).toEqual(["conv-bulk-mate", "conv-bulk-own"]);
+
+    expectCopiesSwept(own);
+    expectCopiesSwept(colleague);
+    expectCopiesKept(ownerThread);
+  });
+
+  it("an admin's user delete sweeps that user's threads living under OTHER avatars", async () => {
+    const { app, config, store } = boot();
+    const admin = request.agent(app);
+    await signup(admin, "wsdel-admin").expect(201); // the first account is the admin
+    const { owner, ownerId, mate, mateId } = await teammates(app, store, "wsdel-acct");
+    await sendImage(mate, ownerId, "conv-acct-mate");
+    const mateThread = workspaceDirFor(config, ownerId, "conv-acct-mate");
+    seedCopies(mateThread);
+    await sendImage(owner, ownerId, "conv-acct-owner");
+    const ownerThread = workspaceDirFor(config, ownerId, "conv-acct-owner");
+    seedCopies(ownerThread);
+
+    await admin.delete(`/api/admin/users/${mateId}`).expect(200);
+
+    // The deleted user's own avatar tree goes whole, as before; their thread
+    // under the OTHER avatar loses the server-written copies.
+    expect(fs.existsSync(path.dirname(workspaceDirFor(config, mateId, "x")))).toBe(false);
+    expectCopiesSwept(mateThread);
+    expectCopiesKept(ownerThread);
+  });
+
+  it("an admin's group delete leaves none of a group agent's thread copies", async () => {
+    const { app, config, store } = boot();
+    const admin = request.agent(app);
+    await signup(admin, "wsdel-gadmin").expect(201); // the first account is the admin
+    const member = request.agent(app);
+    const memberId = (await signup(member, "wsdel-gmember").expect(201)).body.user.id as string;
+    const group = store.createGroup({ name: "wsdel-team" });
+    store.addGroupMember(group.id, memberId);
+    const agent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
+    const avatarId = `group:${group.id}:${agent.id}`;
+    await sendImage(member, avatarId, "conv-ga-del");
+    const workspace = workspaceDirFor(config, avatarId, "conv-ga-del");
+    expect(fs.readdirSync(path.join(workspace, "attachments"))).toHaveLength(1);
+    seedCopies(workspace);
+
+    await admin.delete(`/api/admin/groups/${group.id}`).expect(200);
+
+    for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
+      expect(fs.existsSync(path.join(workspace, sub)), sub).toBe(false);
+    }
+    // The agent's whole tree goes with its group, as before.
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
 });
 
 describe("chat error handling", () => {
@@ -1753,7 +1997,7 @@ describe("browser-bridge relay (onBrowser)", () => {
   }, LIVE);
 
   it("auto-shares a screenshot as a file card plus hidden slide, and refuses an oversized capture", async () => {
-    const { store, app } = boot();
+    const { store, app, config: appConfig } = boot();
     const owner = request.agent(app);
     const signupRes = await signup(owner, "bridgeshot").expect(201);
     const ownerId = signupRes.body.user.id as string;
@@ -1792,18 +2036,106 @@ describe("browser-bridge relay (onBrowser)", () => {
     // shows what the user already saw live.
     const assistant = store.listMessages(ownerId, "conv-shot").find((m) => m.role === "assistant")!;
     expect(assistant.attachments?.map((a) => a.kind)).toEqual(["file", "image"]);
+    // The same bytes also land as a FILE in the conversation scratch workspace
+    // (captures/), which the avatar can place into a deck — server-internal,
+    // so nothing about it went out on the extension wire.
+    const captures = path.join(workspaceDirFor(appConfig, ownerId, "conv-shot"), "captures");
+    expect(first.savedPath).toBeDefined();
+    expect(path.dirname(first.savedPath!)).toBe(captures);
+    expect(path.basename(first.savedPath!)).toMatch(/^\d{8}-\d{6}-[0-9a-f]{6}\.jpg$/);
+    expect(fs.readFileSync(first.savedPath!)).toEqual(JPEG_BYTES);
+    expect(first.saveSkipped).toBeUndefined();
 
     // 2) Unpublishable bytes still answer the tool call — the note keeps the
-    //    model's self-knowledge honest about what the user actually got.
+    //    model's self-knowledge honest about what the user actually got, and no
+    //    workspace file is claimed either.
     const second = results[1];
     expect(second.behavior).toBe("ok");
     if (second.behavior !== "ok") return;
     expect(second.shareNote).toContain("could NOT be shared");
+    expect(second.savedPath).toBeUndefined();
+    // The REAL reason: those bytes are no image, not a workspace failure.
+    expect(second.saveSkipped).toBe("not_an_image");
 
     // 3) A runaway payload fails the ONE tool call rather than the turn.
     expect(results[2].behavior).toBe("error");
     if (results[2].behavior !== "error") return;
     expect(results[2].message).toContain("too large to relay");
+    // Only the one good capture was saved.
+    expect(fs.readdirSync(captures)).toEqual([path.basename(first.savedPath!)]);
+  }, LIVE);
+
+  it("saves captures on their own per-run budget, independent of the share cap", async () => {
+    const { app, config: appConfig } = boot();
+    const owner = request.agent(app);
+    const signupRes = await signup(owner, "bridgesave").expect(201);
+    const ownerId = signupRes.body.user.id as string;
+    const cookie = cookieOf(signupRes);
+
+    const results: BrowserResult[] = [];
+    H.impl = async (_req, _pr, config, _store, events) => {
+      for (let i = 0; i < MAX_SAVED_CAPTURES_PER_TURN + 1; i++) {
+        results.push(await events.onBrowser!({ op: "screenshot" }));
+      }
+      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "많이 캡처" };
+    };
+
+    await runWithBridge(
+      app,
+      cookie,
+      { avatarId: ownerId, conversationId: "conv-saves", message: "계속 캡처" },
+      () => ({ ok: true, imageBase64: PNG_BYTES.toString("base64") }),
+    );
+
+    const ok = results.flatMap((r) => (r.behavior === "ok" ? [r] : []));
+    expect(ok).toHaveLength(MAX_SAVED_CAPTURES_PER_TURN + 1);
+    // Past the SHARE cap the captures keep landing as files…
+    expect(MAX_SHARED_SCREENSHOTS_PER_MESSAGE).toBeLessThan(MAX_SAVED_CAPTURES_PER_TURN);
+    const pastShareCap = ok[MAX_SHARED_SCREENSHOTS_PER_MESSAGE];
+    expect(pastShareCap.shareNote).toContain("was NOT shared with the user");
+    expect(pastShareCap.savedPath).toMatch(/\.png$/);
+    // …until their own cap, which the model is told about.
+    const saved = ok.slice(0, MAX_SAVED_CAPTURES_PER_TURN).map((r) => r.savedPath);
+    expect(saved.every(Boolean)).toBe(true);
+    expect(new Set(saved).size).toBe(MAX_SAVED_CAPTURES_PER_TURN);
+    const last = ok[MAX_SAVED_CAPTURES_PER_TURN];
+    expect(last.savedPath).toBeUndefined();
+    expect(last.saveSkipped).toBe("limit");
+    // The capture itself still succeeds: the model gets the image either way.
+    expect(last.image?.base64).toBe(PNG_BYTES.toString("base64"));
+    const captures = path.join(workspaceDirFor(appConfig, ownerId, "conv-saves"), "captures");
+    expect(fs.readdirSync(captures)).toHaveLength(MAX_SAVED_CAPTURES_PER_TURN);
+  }, LIVE);
+
+  it("reports a save that could not land as save_failed, leaving what the agent put there alone", async () => {
+    const { app, config: appConfig } = boot();
+    const owner = request.agent(app);
+    const signupRes = await signup(owner, "bridgesavefail").expect(201);
+    const ownerId = signupRes.body.user.id as string;
+    // A FILE where the captures/ folder goes: the save refuses to write there.
+    const workspace = workspaceDirFor(appConfig, ownerId, "conv-savefail");
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.writeFileSync(path.join(workspace, "captures"), "에이전트 파일");
+
+    let capture!: BrowserResult;
+    H.impl = async (_req, _pr, config, _store, events) => {
+      capture = await events.onBrowser!({ op: "screenshot" });
+      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "캡처" };
+    };
+    await runWithBridge(
+      app,
+      cookieOf(signupRes),
+      { avatarId: ownerId, conversationId: "conv-savefail", message: "캡처" },
+      () => ({ ok: true, imageBase64: PNG_BYTES.toString("base64") }),
+    );
+
+    expect(capture.behavior).toBe("ok");
+    if (capture.behavior !== "ok") return;
+    // Real image bytes, so not "not_an_image": the SAVE failed, and only that.
+    expect(capture.saveSkipped).toBe("save_failed");
+    expect(capture.savedPath).toBeUndefined();
+    expect(capture.shareNote).toContain("also shared with the user as a file card");
+    expect(fs.readFileSync(path.join(workspace, "captures"), "utf8")).toBe("에이전트 파일");
   }, LIVE);
 
   it("whitelists the screenshot mime type and passes explicit dialog/read_text metadata through", async () => {
@@ -2183,7 +2515,7 @@ describe("publishing images and documents mid-turn (onFile / onShareFile)", () =
   });
 
   it("refuses to publish anything once the conversation is deleted mid-run", async () => {
-    const { store, app } = boot();
+    const { store, app, config: appConfig } = boot();
     const owner = request.agent(app);
     const signupRes = await signup(owner, "gonefile").expect(201);
     const ownerId = signupRes.body.user.id as string;
@@ -2218,11 +2550,15 @@ describe("publishing images and documents mid-turn (onFile / onShareFile)", () =
       behavior: "error",
       message: "The conversation no longer exists, so the file cannot be shared.",
     });
-    // The capture itself still succeeds — only the user-facing copy is skipped.
+    // The capture itself still succeeds — only the user-facing copy is skipped,
+    // and so is the workspace file: nothing is written for a deleted thread.
     expect(capture.behavior).toBe("ok");
     if (capture.behavior !== "ok") return;
     expect(capture.shareNote).toContain("the conversation no longer exists");
     expect(capture.sharedAttachments).toBeUndefined();
+    expect(capture.savedPath).toBeUndefined();
+    expect(capture.saveSkipped).toBe("conversation_gone");
+    expect(fs.existsSync(path.join(workspaceDirFor(appConfig, ownerId, "conv-gone"), "captures"))).toBe(false);
 
     // Nothing was persisted, and the turn still completes cleanly.
     const done = frames.find((f) => f.event === "done")!;
@@ -3236,6 +3572,42 @@ describe("working-repo resolution (opened repo becomes the run cwd)", () => {
     expect(acquireActiveRepo(clonePath, "later-conversation")).toBe(true);
     releaseActiveRepo(clonePath, "later-conversation");
   });
+
+  it("saves a browser capture into the scratch workspace, never the opened clone", async () => {
+    const { store, config, app } = boot();
+    const owner = request.agent(app);
+    const signupRes = await signup(owner, "repocapture").expect(201);
+    const ownerId = signupRes.body.user.id as string;
+    const remote = makeBareRemote(path.join(tempDir, "capture-remote.git"));
+    store.upsertGitRepo(ownerId, "caprepo", remote, null);
+    store.touchConversation(ownerId, "conv-repo-cap", ownerId, "seed");
+    store.setConversationWorkingRepo("conv-repo-cap", "caprepo");
+
+    let capture!: BrowserResult;
+    H.impl = async (_req, _pr, runConfig, _store, events) => {
+      capture = await events.onBrowser!({ op: "screenshot" });
+      return { kind: "text", runtime: runConfig.agentRuntime, summary: "s", text: "캡처" };
+    };
+    await runWithBridge(
+      app,
+      cookieOf(signupRes),
+      { avatarId: ownerId, conversationId: "conv-repo-cap", message: "화면 캡처" },
+      () => ({ ok: true, imageBase64: PNG_BYTES.toString("base64") }),
+    );
+
+    // The clone is the run's cwd and the scratch workspace its extra dir…
+    const clonePath = gitRepoClonePath(ownerId, "caprepo", config);
+    const scratch = workspaceDirFor(config, ownerId, "conv-repo-cap");
+    expect(H.requests[0].cwd).toBe(clonePath);
+    expect(H.requests[0].additionalDirs).toEqual([scratch]);
+    // …and the capture lands in the scratch workspace, where every prompt
+    // surface says `captures/` is, leaving the clone's tree untouched.
+    expect(capture.behavior).toBe("ok");
+    if (capture.behavior !== "ok") return;
+    expect(path.dirname(capture.savedPath!)).toBe(path.join(scratch, "captures"));
+    expect(fs.readFileSync(capture.savedPath!)).toEqual(PNG_BYTES);
+    expect(fs.existsSync(path.join(clonePath, "captures"))).toBe(false);
+  }, LIVE);
 
   it("502s before SSE when the opened repo cannot be cloned", async () => {
     const { store, config, app } = boot();

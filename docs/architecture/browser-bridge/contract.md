@@ -68,6 +68,35 @@
   (`MAX_SHARED_SCREENSHOTS_PER_MESSAGE`) so a browsing loop can't exhaust the share_file cap; past it
   (or on publish failure) the MODEL still gets the image — only the user-facing card is skipped, and the
   note says so. Best-effort BY DESIGN: publish failure never fails the tool call.
+- **Every screenshot is ALSO SAVED as a workspace file, so the avatar can place what it saw (2026-09-30).**
+  In the same onBrowser continuation `routes/chat.ts` calls `saveBrowserCapture` (`chatFiles.ts`) with the
+  SAME bytes: `<workspaceDir>/captures/<YYYYMMDD-HHMMSS>-<6 hex>.<ext>`, a KST wall clock plus a random
+  suffix, with the extension from the same byte sniffing `publishBrowserScreenshot` uses. `<workspaceDir>`
+  is the conversation SCRATCH workspace even while a working repo is open (the clone is the run's cwd
+  then, the scratch its additional dir), which is why the prompt says "the scratch workspace's
+  `captures/`". The folder must be a real directory (`workspaceSubdirForWrite`, since the workspace is
+  agent-writable), the file is created `wx`, so it never overwrites and never writes through a planted
+  link, and the written file must realpath to exactly `realpath(workspace)/captures/<name>`
+  (`keepIfContained`) or it is removed: a folder swapped for a link mid-save cannot leave bytes elsewhere (against a single swap: a link swapped in AND
+  back out inside the write window can still leave the bytes at its target — harmless while the agent shell runs as
+  the server's own uid, a wording limit to revisit if the shell is ever sandboxed).
+  A write that fails part-way (ENOSPC) removes its partial file. It has its own per-RUN budget (one
+  `executeChatTurn`, steer follow-ups and background wake-ups included; the constant keeps its name),
+  `MAX_SAVED_CAPTURES_PER_TURN` (30), independent of the share cap in both directions. It is skipped when
+  the conversation was deleted mid-run, and any other failure is reported, never fatal. The outcome rides
+  two more SERVER-INTERNAL `BrowserResult` fields, `savedPath` (absolute) or `saveSkipped`: `limit`,
+  `conversation_gone`, `not_an_image` (empty or unsniffable bytes), or `save_failed` (no usable
+  `captures/`, a failed or partial write, or a file that did not stay inside the folder). The
+  `save_failed` note says only that the save did not complete, never that the workspace is unwritable.
+  Like `shareNote`, they are set by the route and are not part of the wire contract, so the extension, the
+  client and `BROWSER_EXTENSION_MIN_COMPATIBLE` are untouched. `browserTools.report()` renders them as a
+  server-authored line OUTSIDE the untrusted wrapper: the path, that it can be placed into something the
+  avatar produces (a deck's `assets/`), and that its pixels are still untrusted page content; or that
+  nothing was saved, and why. The `screenshot` description, the `browser-operations` manual topic and
+  both metacognition surfaces (prompt browser paragraph, describe_system's browser + image-sources lines)
+  mention the saved copy on vision runs only, the only runs that can screenshot. Deleting the
+  conversation removes `captures/` with the other server-written copies
+  ([`../chat-sse-media.md`](../chat-sse-media.md)).
 - **`read_cookies` crosses the boundary deliberately, so it is gated twice and audited by name.** It
   returns the CURRENT tab origin's cookies — httpOnly session tokens included — as `BrowserResult.cookies`,
   which land in the model context and conversation history (a decision taken with eyes open). The read is
