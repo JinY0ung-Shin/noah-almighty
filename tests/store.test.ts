@@ -9,6 +9,7 @@ import { createServices, expandChatSlashCommand } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { applyCustomGithubCa } from "../src/server/tlsCa.js";
 import { loadDotEnv } from "../src/server/loadEnv.js";
+import { normalizeExperimentalFeatures } from "../src/server/experimentalFeatures.js";
 import {
   buildKnowledgeTools,
   KNOWLEDGE_SERVER_NAME,
@@ -1362,12 +1363,22 @@ describe("group trust & visibility", () => {
     const { store, ownerId } = makeStore("ef1");
     expect(store.getUserById(ownerId)?.experimentalFeatures).toEqual([]);
     expect(store.getExperimentalFeatures(ownerId)).toEqual([]);
-    // Unknown keys are dropped, known ones kept + deduped.
+    // A graduated key ("canvas") is unknown now, like a bogus one: both drop.
     const updated = store.updateProfile(ownerId, { experimentalFeatures: ["canvas", "canvas", "bogus"] });
-    expect(updated.experimentalFeatures).toEqual(["canvas"]);
-    expect(store.getExperimentalFeatures(ownerId)).toEqual(["canvas"]);
+    expect(updated.experimentalFeatures).toEqual([]);
+    expect(store.getExperimentalFeatures(ownerId)).toEqual([]);
     // Clearing works.
     expect(store.updateProfile(ownerId, { experimentalFeatures: [] }).experimentalFeatures).toEqual([]);
+  });
+
+  it("normalizes experimental features to known keys, deduped, in order", () => {
+    // The registry is empty since the canvas graduated, so pass the known keys.
+    expect(normalizeExperimentalFeatures([" beta ", "beta", "gone", "", 7, "next"], ["beta", "next"])).toEqual([
+      "beta",
+      "next",
+    ]);
+    expect(normalizeExperimentalFeatures({ beta: true }, ["beta"])).toEqual([]);
+    expect(normalizeExperimentalFeatures(["canvas"])).toEqual([]);
   });
 
   // ---- per-secret shell exposure ----

@@ -25,7 +25,7 @@
 
   type CanvasControl = NonNullable<PaneCanvas["controls"]>[number];
 
-  // Visual canvas side panel (experimental `canvas` feature, #50). Renders the
+  // Visual canvas side panel (#50). Renders the
   // avatar-shown artifact (markdown/svg/html/mermaid/vega — all sanitized, never
   // executing avatar JS) plus real form controls that post back through
   // /api/chat/respond (blocking) or /api/chat/stream (async). Resizable via the
@@ -542,7 +542,7 @@
 
     <div id={canvasBodyId} class="canvas-body scroll-thin">
       <div class="canvas-head">
-        <h3>캔버스 <span class="canvas-beta">실험</span></h3>
+        <h3>캔버스</h3>
         {#if canvases.length > 1}
           <div class="canvas-tabs" role="tablist" aria-label="캔버스 목록">
             {#each canvases as c (c.id)}

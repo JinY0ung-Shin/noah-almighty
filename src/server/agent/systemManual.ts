@@ -363,7 +363,7 @@ Artifacts are scoped to their conversation, with one exception: a share link for
 Do not assume a local temporary file will become visible without publication. If file output is unavailable in this run, explain that before promising a downloadable result.
 
 ## Canvas
-The experimental canvas feature and the conversation's canvas tool group must both be enabled, and the run must support interaction. It can display interactive charts, diagrams or a purpose-built review surface. Use question cards for simple choices instead of building a canvas. The user can reply through the canvas when its artifact defines input. Canvas availability is a runtime fact reported by describe_system.
+The conversation's canvas tool group must be enabled, and the run must support interaction. It can display interactive charts, diagrams or a purpose-built review surface. Use question cards for simple choices instead of building a canvas. The user can reply through the canvas when its artifact defines input. Canvas availability is a runtime fact reported by describe_system.
 
 ## Presentations and diagrams
 New PowerPoint decks are designed as HTML/CSS slides and converted by the pptx skill into a .pptx whose text boxes, shapes, tables and charts are native, editable PowerPoint objects (charts keep their data for Edit Data). The default profile embeds Pretendard, so desktop PowerPoint shows the designed font even where it is not installed; a 맑은 고딕 build is available on request — prefer it for Hanja-heavy decks or audiences who mostly view in PowerPoint for the web, Teams/SharePoint previews or other web viewers, which ignore embedded fonts and substitute a similar font. The download card's side panel shows the converter's exact slide renders; a deck edited after conversion, and any other PPTX/DOCX/XLSX/PDF, is previewed approximately by LibreOffice. Existing decks and user templates are edited in place with python-pptx. Whether the converter is installed, and its limits, are runtime facts reported by describe_system; do not install a substitute toolchain when it reports otherwise.
@@ -455,7 +455,7 @@ When clicks or reads fail for no visible reason, or the page seems frozen, call 
     id: "canvas-operations",
     title: "Canvas operation reference",
     summary: "Content formats, controls, blocking/editable mode and in-place updates.",
-    body: `**Visual canvas (experimental)**: you can show a visual artifact to the user in a side panel with \`mcp__canvas__show\` — pass \`title\`, \`content\`, and \`contentType\` (\`markdown\` | \`vega\` | \`mermaid\` | \`svg\` | \`html\`).
+    body: `**Visual canvas**: you can show a visual artifact to the user in a side panel with \`mcp__canvas__show\` — pass \`title\`, \`content\`, and \`contentType\` (\`markdown\` | \`vega\` | \`mermaid\` | \`svg\` | \`html\`).
 Use it to share charts, diagrams, mockups, layouts, or side-by-side option comparisons while you work them out WITH the user, not just to dump text the chat could already show.
 For DATA CHARTS prefer \`vega\`: pass a compact Vega-Lite JSON spec as \`content\` (inline the data, keep it small) — it renders a rich chart from a tiny spec and is far cheaper in tokens than hand-writing SVG.
 For flow/sequence/graph DIAGRAMS use \`mermaid\` (diagram source only).
@@ -470,7 +470,7 @@ With no controls and not editable, it just displays and returns immediately.
 To REFINE an artifact, call show again with the SAME \`canvasId\` (returned when you showed it) so it updates in place (keeping a version the user can roll back to) instead of stacking a new tab — don't re-emit a near-duplicate under a new id.
 Keep each artifact compact (oversized content is rejected).
 The client renders real, sanitized form controls — put NO scripts/JS in the content (it will be stripped).
-This is an experimental feature and its behavior may change.`,
+In a personal-bot conversation controls never block: the canvas returns at once and the owner's answer arrives as their next message.`,
   },
 ] as const;
 

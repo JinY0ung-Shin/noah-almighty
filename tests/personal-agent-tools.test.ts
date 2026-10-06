@@ -1548,6 +1548,25 @@ describe("describe_system for personal agents", () => {
     expect(body).toContain("0 of them are YOURS");
   });
 
+  it("says canvas controls never block in a bot conversation", async () => {
+    const s = setup("desc-canvas");
+    const ctx = {
+      avatarUserId: s.owner.id,
+      owner: { id: s.owner.id, username: "owner", displayName: "오너" },
+      viewerIsOwner: true,
+      config: s.config,
+      canvasEnabled: true,
+    };
+    const bot = buildSystemTools(s.store, { ...ctx, personalAgent: { agentId: s.agent.id, actingUserId: s.owner.id } });
+    const body = (await callTool(bot, "describe_system", {})).content[0].text;
+    expect(body).toContain("Visual canvas (mcp__canvas__show): available");
+    expect(body).toContain("in this personal-bot conversation its controls never block");
+    // The owner's own avatar may park on controls, so it hears no such caveat.
+    const own = (await callTool(buildSystemTools(s.store, ctx), "describe_system", {})).content[0].text;
+    expect(own).toContain("Visual canvas (mcp__canvas__show): available");
+    expect(own).not.toContain("controls never block");
+  });
+
   it("reports the memory namespace and the granted-skill roster in the bot block", async () => {
     const s = setup("desc-memory");
     const bot = () =>

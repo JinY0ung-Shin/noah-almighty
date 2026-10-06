@@ -815,16 +815,13 @@ export async function buildAgentRunPlan(
     !consultationRun &&
     !request.headless &&
     !request.externalTaskApi;
-  // Visual canvas (experimental `canvas` feature, #50): registered only when the
-  // avatar OWNER enabled it AND this is an interactive turn with a canvas sink
-  // (events.onCanvas). Gating on the owner's setting — not the viewer's — means
-  // colleagues chatting with that avatar also get canvases (the feature grants no
-  // elevation; the handler self-gates nothing because showing UI is harmless).
-  // Computed here, before buildSystemServer, so describe_system reports it.
-  const canvasActive =
-    canvasToolsEnabled &&
-    Boolean(events?.onCanvas) &&
-    ownerState.experimentalFeatures.includes("canvas");
+  // Visual canvas (#50; graduated from the experimental `canvas` flag): registered
+  // on every turn whose canvas tool group is on AND that has a canvas sink
+  // (events.onCanvas, the interactive chat route) — colleagues chatting with an
+  // avatar get canvases too (the feature grants no elevation; the handler
+  // self-gates nothing because showing UI is harmless). Computed here, before
+  // buildSystemServer, so describe_system reports it.
+  const canvasActive = canvasToolsEnabled && Boolean(events?.onCanvas);
   // Deployment-level PPTX toolchain probes — memoized per process (boot pays
   // the spawn cost): the legacy LibreOffice/pdftoppm/python-pptx half, and the
   // pptx skill's HTML→PPTX converter (`deck.mjs probe`), whose state rides into
@@ -1124,8 +1121,11 @@ export async function buildAgentRunPlan(
 
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
+  // A personal-bot run never PARKS on canvas controls, for the same reason the
+  // hook denies its AskUserQuestion: a delegated turn can run with nobody there,
+  // so the answer arrives as the owner's next message instead.
   const canvasServer = canvasActive
-    ? buildCanvasServer({ emitCanvas: events!.onCanvas! })
+    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, canPark: !personalAgentRun })
     : null;
   // The handler self-gates on `allowed` in addition to `browserActive`: the
   // `mcp__` auto-allow in the PreToolUse hook fires before any owner check, and

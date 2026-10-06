@@ -4,7 +4,9 @@
 > Experimental feature flags, remote SSH, server-expanded slash commands, MCP-only git, and testing repo tools offline.
 
 ## Experimental features
-- Per-user beta toggles (`canvas` is the first). Registry in `experimentalFeatures.ts`
+- Per-user beta toggles. `canvas` was the first and GRADUATED in 2026-10, so the registry is EMPTY and the
+  "실험 기능" card hides itself until the next experiment. Graduating = deleting the registry entry and its
+  `includes(key)` gate — the stored key then normalizes away on read, nothing to migrate. Registry in `experimentalFeatures.ts`
   (`{key,name,description}`; name/description KOREAN, shared with the client via `tsconfig.client.json`).
   Wired through the per-user-setting pattern: `users.experimental_features` JSON column →
   `toUser`/`getExperimentalFeatures` → `updateProfile` (normalizes to KNOWN keys) →

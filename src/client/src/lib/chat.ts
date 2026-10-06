@@ -2972,7 +2972,7 @@ function clearLive(pane: ChatPane): void {
   pane.streaming = false;
 }
 
-/* ---------- visual canvas (experimental, #50) ---------- */
+/* ---------- visual canvas (#50) ---------- */
 
 // A canvas artifact arrived over SSE: upsert by artifact id and bring it to the
 // front. `pending` (the run is parked, awaiting the user) is true ONLY for a

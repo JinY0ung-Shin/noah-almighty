@@ -2501,7 +2501,7 @@ export async function executeChatTurn(
             }
             return { behavior: "completed", result: reply?.result };
           },
-          // Visual canvas (experimental `canvas` feature, #50). Mirror the
+          // Visual canvas (#50). Mirror the
           // question wiring: emit the artifact over SSE, and when controls were
           // declared (awaitInput) park the run until the user submits via
           // /api/chat/respond. Always record the artifact so it persists.

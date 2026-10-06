@@ -834,14 +834,6 @@ body.col-resizing {
   align-items: center;
   gap: var(--s-2);
 }
-.canvas-beta {
-  font-size: var(--t-2xs);
-  padding: 1px var(--s-1-5);
-  border-radius: var(--r-pill);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
 .canvas-tabs {
   display: flex;
   flex-wrap: wrap;

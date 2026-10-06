@@ -308,3 +308,15 @@ describe("시크릿 카드: 브라우저 입력", () => {
     expect(screen.queryByText("브라우저 입력: ")).toBeNull();
   });
 });
+
+describe("실험 기능 카드", () => {
+  it("is hidden while no feature is in beta (the canvas graduated)", () => {
+    // Even a stale stored "canvas" key must not resurrect the card or its toggle.
+    replaceState({ user: { ...userWith([]), experimentalFeatures: ["canvas"] } });
+    stubFetch(() => json({ user: readState().user }));
+
+    render(SettingsAccessTab, { props: { active: true } });
+    expect(screen.queryByRole("heading", { name: "실험 기능" })).toBeNull();
+    expect(screen.queryByText("비주얼 캔버스")).toBeNull();
+  });
+});

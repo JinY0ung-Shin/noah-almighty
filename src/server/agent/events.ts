@@ -55,7 +55,7 @@ export interface QuestionRequest {
 export type QuestionAnswer = { behavior: "completed"; result: unknown } | { behavior: "cancelled" };
 
 /**
- * The avatar called `mcp__canvas__show` (experimental `canvas` feature, #50).
+ * The avatar called `mcp__canvas__show` (visual canvas, #50).
  * The host forwards the artifact to the client to render in a side panel. When
  * `awaitInput` is true (the avatar declared controls) the runner BLOCKS for the
  * user's submission via the same out-of-band `/api/chat/respond` path used by
@@ -741,7 +741,7 @@ export interface AgentEvents {
    */
   onQuestion?: (request: QuestionRequest) => Promise<QuestionAnswer>;
   /**
-   * The avatar showed a visual canvas (experimental `canvas` feature). Resolve
+   * The avatar showed a visual canvas (#50). Resolve
    * with the user's submission when controls were declared (`awaitInput`), or
    * immediately for display-only. If omitted, the canvas tool is not registered.
    */

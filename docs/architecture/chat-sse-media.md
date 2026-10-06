@@ -466,16 +466,20 @@
   The tool text lives in `agent/fileOutputTools.ts`; gates, validity and the viewer in
   [`share-links.md`](share-links.md).
 
-## Visual canvas (`mcp__canvas__show`, experimental `canvas` feature)
+## Visual canvas (`mcp__canvas__show`)
 - CSP-SAFE port of Superpowers' visual companion: the avatar DECLARES content
   (`markdown`/`vega`/`mermaid`/`svg`/`html`) + optional `controls` (buttons/text); the CLIENT renders
   sanitized content (DOMPurify; mermaid `securityLevel: strict`; **`vega` = a compact Vega-Lite spec
   compiled+rendered to an SVG STRING via the CSP-safe `vega-interpreter` AST evaluator — no `Function`
   ctor, so `script-src` needs no widening**; all lazy-loaded with a source-`<pre>` fallback) + real form
   controls — no avatar JS runs, CSP unchanged. `canvasTools.ts` (NOT self-gated — registration is the
-  boundary) registered in `claudeAgent.ts` ONLY when the avatar OWNER enabled `canvas` AND
-  `events.onCanvas` exists. Controls park the run via the SAME `awaitResponse`/`/api/chat/respond` path as
-  `onQuestion`; display-only returns immediately. **A parked (blocking) form must stay ENABLED while
+  boundary) is registered (runPlan's `canvasActive`) whenever the conversation's canvas tool group is on AND
+  `events.onCanvas` exists — always-on since 2026-10, when it graduated from the experimental `canvas` flag
+  (a stored `canvas` key just normalizes away). Controls park the run via the SAME
+  `awaitResponse`/`/api/chat/respond` path as `onQuestion`; display-only returns immediately. A PERSONAL-BOT
+  run never parks (`canPark: false` → every canvas acts as `wait:false`, the answer arriving as the owner's
+  next message), mirroring the hook's AskUserQuestion denial there; the prompt's canvas section and
+  describe_system both say so. **A parked (blocking) form must stay ENABLED while
   `pane.streaming` is true** — the answer posts to `/api/chat/respond` MID-run and the run resumes only on
   submit/skip, so `CanvasPanel` locks on `streaming` only for the new-turn paths (async submit, re-submit,
   content edit); locking the blocking form deadlocks the question (8aed88d regression). While parked the

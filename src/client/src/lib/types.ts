@@ -235,7 +235,7 @@ export interface ChatPane {
   effort?: string;
   /** MCP tool groups enabled for this conversation; defaults to every group. */
   mcpToolGroups?: McpToolGroupId[];
-  /** Visual-canvas artifacts shown in this conversation (experimental, #50). */
+  /** Visual-canvas artifacts shown in this conversation (#50). */
   canvases: PaneCanvas[];
   /**
    * File attachment opened in the right-side preview panel (slides = the same

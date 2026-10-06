@@ -4766,7 +4766,7 @@ describe("buildPrompt", () => {
     expect(on).toContain("trusted same-group teammates chatting with this avatar");
   });
 
-  // ---- experimental canvas feature (#50) ----
+  // ---- visual canvas (#50) ----
   it("injects canvas guidance only when canvasEnabled", () => {
     const off = buildPrompt(req({ viewerIsOwner: true }), 0);
     expect(off).not.toContain("mcp__canvas__show");
@@ -4779,6 +4779,7 @@ describe("buildPrompt", () => {
     );
     expect(on).toContain("mcp__canvas__show");
     expect(on).toContain("Visual canvas");
+    expect(on).not.toContain("Visual canvas (experimental)"); // graduated from the flag
     // Controls collect a decision anchored to the artifact; a plain question
     // goes to the SDK-native tool instead of opening a panel.
     expect(on).toContain("ANCHORED TO the artifact on screen");
@@ -4786,7 +4787,17 @@ describe("buildPrompt", () => {
     expect(on).toContain("NEVER open a canvas just to ask");
   });
 
-  it("gives a colleague the canvas guidance too when the feature is enabled", () => {
+  it("tells a personal-bot run that its canvas controls never block", () => {
+    const bot = buildPrompt(
+      req({ viewerIsOwner: true, canvasEnabled: true, personalAgent: { agentId: "a1", ownerUserId: "u1" } }),
+      0,
+    );
+    expect(bot).toContain("canvas controls never block");
+    expect(bot).toContain("arrives as their next message");
+    expect(buildPrompt(req({ viewerIsOwner: true, canvasEnabled: true }), 0)).not.toContain("canvas controls never block");
+  });
+
+  it("gives a colleague the canvas guidance too when the canvas is on", () => {
     const p = buildPrompt(
       req({ viewerIsOwner: false, viewerName: "김철수", canvasEnabled: true }),
       0,
@@ -5044,12 +5055,13 @@ describe("buildPrompt", () => {
   });
 
   it("lists enabled experimental features only for owner-driven turns", () => {
+    // A hypothetical beta key: the registry is empty since the canvas graduated.
     const owner = buildPrompt(
-      req({ viewerIsOwner: true, experimentalFeatures: ["canvas"] }),
+      req({ viewerIsOwner: true, experimentalFeatures: ["beta-thing"] }),
       0,
     );
     expect(owner).toContain("experimental");
-    expect(owner).toContain("`canvas`");
+    expect(owner).toContain("`beta-thing`");
   });
 
   // ---- working repository (opened via open_repo) ----

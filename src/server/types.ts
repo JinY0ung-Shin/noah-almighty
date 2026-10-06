@@ -1245,7 +1245,7 @@ export interface AgentUsage {
  * AVATAR only DECLARES these (it never emits executable JS — CSP-safe); the
  * client renders real form controls and posts the submitted value back through
  * the existing `/api/chat/respond` interactive-prompt path. Part of the
- * `canvas` experimental feature (#50).
+ * visual canvas (#50).
  */
 export interface CanvasControl {
   /**
@@ -1317,7 +1317,7 @@ export interface CanvasArtifact {
   /** The values the user submitted for `controls` (when they did). */
   submittedValues?: Record<string, unknown>;
   /**
-   * How this canvas collects input (experimental interaction model):
+   * How this canvas collects input:
    * - "blocking" → the run parks until the user submits (via /api/chat/respond)
    * - "async"    → the run completes; the user's later submission arrives as a NEW
    *   chat turn (via /api/chat/stream)
@@ -1749,8 +1749,8 @@ export interface AgentRequest {
     groups?: { name: string; content: string }[];
   };
   /**
-   * Whether the avatar owner enabled the experimental `canvas` feature AND this
-   * is an interactive (non-headless) turn where the canvas tool is registered.
+   * Whether this turn registered the canvas tool (its canvas tool group is on
+   * and it is an interactive turn with a canvas sink).
    * Drives standing prompt guidance telling the avatar it can show visual
    * canvases via `mcp__canvas__show` (#50). Set for ALL viewer classes of such a
    * turn — colleagues see canvases too; it grants no elevation.

@@ -86,6 +86,20 @@ vi.mock("../src/server/logger.js", async (importOriginal) => {
   };
 });
 
+// Every canvas server a run builds, with the context it was built from — so a
+// run kind's `canPark` is observable (a bot turn must never park on controls).
+const canvasBuilds = vi.hoisted(() => ({ contexts: [] as { canPark?: boolean }[] }));
+vi.mock("../src/server/agent/canvasTools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/server/agent/canvasTools.js")>();
+  return {
+    ...actual,
+    buildCanvasServer: (ctx: Parameters<typeof actual.buildCanvasServer>[0]) => {
+      canvasBuilds.contexts.push(ctx);
+      return actual.buildCanvasServer(ctx);
+    },
+  };
+});
+
 import { createServices } from "../src/server/app.js";
 import { CLAUDE_OAUTH_TOKEN_KEY } from "../src/server/store.js";
 import { runAgentStream } from "../src/server/agent/index.js";
@@ -565,20 +579,41 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(appendOf(1)).not.toContain("hard wall-clock budget");
   });
 
-  it("registers the brain + canvas servers when a repo is connected and canvas is enabled", async () => {
+  it("registers the brain + canvas servers when a repo is connected and a canvas sink exists", async () => {
     const { config, store, baseRequest, owner } = setup();
     store.setKnowledgeRepo(owner.id, "owner/kb", "main");
-    store.updateProfile(owner.id, { experimentalFeatures: ["canvas"] });
+    // No opt-in: the canvas graduated from the experimental flag.
     const events = makeEvents({ onCanvas: vi.fn(async () => ({ behavior: "shown" as const })) });
     sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
 
     await runAgentStream(baseRequest, [], config, store, events);
 
     const serverNames = Object.keys(sdkMock.calls[0].options.mcpServers as Record<string, unknown>);
-    // repoConfigured + elevated → second brain; canvas feature + onCanvas sink → canvas.
+    // repoConfigured + elevated → second brain; canvas tool group + onCanvas sink → canvas.
     expect(serverNames).toContain("brain");
     expect(serverNames).toContain("canvas");
     expect(serverNames).toContain("repo");
+  });
+
+  it("never lets canvas controls park a personal-bot run", async () => {
+    const { config, store, baseRequest, owner } = setup();
+    const bot = store.createPersonalAgent(owner.id, { displayName: "봇" });
+    const events = () => makeEvents({ onCanvas: vi.fn(async () => ({ behavior: "shown" as const })) });
+    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    canvasBuilds.contexts.length = 0;
+
+    await runAgentStream(baseRequest, [], config, store, events());
+    await runAgentStream(
+      { ...baseRequest, personalAgent: { agentId: bot.id, ownerUserId: owner.id } },
+      [],
+      config,
+      store,
+      events(),
+    );
+
+    // The owner's own chat may park on controls; a bot turn may have nobody watching
+    // (the same reason the hook denies its AskUserQuestion).
+    expect(canvasBuilds.contexts.map((ctx) => ctx.canPark)).toEqual([true, false]);
   });
 
   it("registers file_output only when an interactive file sink is present", async () => {

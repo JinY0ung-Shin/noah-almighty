@@ -423,19 +423,21 @@ function knowledgeMemorySection(request: AgentRequest): string | null {
 }
 
 /**
- * Standing canvas guidance (experimental `canvas` feature, #50). Injected on any
- * non-headless turn whose avatar owner enabled canvas — for ALL viewer classes,
- * since colleagues see canvases too (it grants no elevation). Returns null when
- * the feature is off for this turn.
+ * Standing canvas guidance (visual canvas, #50). Injected on any turn that
+ * registered the canvas — for ALL viewer classes, since colleagues see canvases
+ * too (it grants no elevation). Returns null when the canvas is off this turn.
  */
 function canvasSection(request: AgentRequest): string | null {
   if (!request.canvasEnabled || !mcpToolGroupEnabled(request, "canvas")) {
     return null;
   }
   return (
-    "**Visual canvas (experimental)** is available via `mcp__canvas__show`. BEFORE creating one, read `mcp__system__read_manual` topic `canvas-operations` for formats, controls and wait/edit behavior. " +
+    "**Visual canvas** is available via `mcp__canvas__show`. BEFORE creating one, read `mcp__system__read_manual` topic `canvas-operations` for formats, controls and wait/edit behavior. " +
     "Use it for charts, diagrams or reviews WITH the user: prefer vega for charts and mermaid for diagrams; no scripts/JS. Reuse the SAME canvasId to refine an artifact. " +
-    "Controls collect a decision ANCHORED TO the artifact on screen. For a plain question use AskUserQuestion — NEVER open a canvas just to ask the user something."
+    "Controls collect a decision ANCHORED TO the artifact on screen. For a plain question use AskUserQuestion — NEVER open a canvas just to ask the user something." +
+    (request.personalAgent
+      ? " In this personal-bot conversation canvas controls never block: the canvas returns at once and the owner's answer arrives as their next message."
+      : "")
   );
 }
 
@@ -986,8 +988,8 @@ export function buildSystemPromptAppend(
       );
     }
   }
-  // Standing canvas guidance for any non-headless turn where the owner enabled
-  // the experimental canvas feature (visible to all viewer classes).
+  // Standing canvas guidance for any turn that registered the canvas (visible to
+  // all viewer classes).
   const canvasBlock = canvasSection(request);
   if (canvasBlock) {
     lines.push(canvasBlock);

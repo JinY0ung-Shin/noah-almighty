@@ -3542,7 +3542,8 @@ describe("system tools (avatar system management)", () => {
     expect(body).toContain("Name: 노아");
     expect(body).toContain("Profile visibility: private (owner only)");
     expect(body).toContain("Shared (communal) account: yes");
-    expect(body).toContain("Experimental features: canvas");
+    // The canvas graduated: its stored key normalizes away instead of reporting beta.
+    expect(body).toContain("Experimental features: (none enabled)");
     expect(body).toContain("Working repository: acme/service (opened via open_repo");
     // Tool groups off ⇒ the tools that ride them must report themselves OFF.
     expect(body).toContain("Web fetch (mcp__web__fetch): OFF for this conversation");
@@ -4291,7 +4292,7 @@ describe("group repo tools (mcp__group_repo__*)", () => {
   });
 });
 
-describe("canvas tools (experimental, #50)", () => {
+describe("canvas tools (#50)", () => {
   it("exposes the documented server + tool names", () => {
     expect(CANVAS_SERVER_NAME).toBe("canvas");
     expect(CANVAS_TOOL_NAMES).toContain("mcp__canvas__show");
@@ -4310,6 +4311,28 @@ describe("canvas tools (experimental, #50)", () => {
     expect(captured!.awaitInput).toBe(false);
     expect(captured!.controls).toBeUndefined();
     expect(res.content[0].text).toContain("shown");
+  });
+
+  it("never parks when the run may not (a personal bot): controls act as wait:false", async () => {
+    let captured: CanvasRequest | null = null;
+    const tools = buildCanvasTools({
+      emitCanvas: async (req): Promise<CanvasResult> => {
+        captured = req;
+        return { behavior: "shown" };
+      },
+      canPark: false,
+    });
+    const res = await callTool(tools, "show", {
+      title: "고르기",
+      content: "A안 vs B안",
+      contentType: "markdown",
+      controls: [{ type: "buttons", id: "pick", options: [{ label: "A" }, { label: "B" }] }],
+    });
+    expect(res.isError).toBeFalsy();
+    expect(captured!.awaitInput).toBe(false);
+    expect(captured!.interaction).toBe("async");
+    expect(captured!.controls).toHaveLength(1); // the form still renders
+    expect(res.content[0].text).toContain("NOT blocking");
   });
 
   it("passes a vega (Vega-Lite) chart spec through to the canvas sink", async () => {

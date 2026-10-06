@@ -866,7 +866,8 @@
     />
   {/if}
 
-  <!-- 실험 기능 (#50) -->
+  <!-- 실험 기능 (#50) — hidden while no feature is in beta (the canvas graduated) -->
+  {#if EXPERIMENTAL_FEATURES.length}
   <section class="settings-card">
     <div class="panel-section-head">
       <div>
@@ -891,6 +892,7 @@
       {/each}
     </div>
   </section>
+  {/if}
 
   <!-- Git 자격증명 -->
   <section class="settings-card">

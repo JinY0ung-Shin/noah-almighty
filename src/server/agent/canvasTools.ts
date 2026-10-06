@@ -26,11 +26,17 @@ export const MAX_CANVAS_CONTROLS = 12;
  * Context for the canvas tool: a single callback that emits the artifact to the
  * client (over SSE) and resolves with the user's submission. The chat route owns
  * the SSE/`awaitResponse` plumbing; this tool just shapes the request/result.
- * Experimental `canvas` feature (#50) — the avatar NEVER ships executable JS;
- * the client renders sanitized content + real form controls (CSP-safe).
+ * Visual canvas (#50) — the avatar NEVER ships executable JS; the client renders
+ * sanitized content + real form controls (CSP-safe).
  */
 export interface CanvasToolsContext {
   emitCanvas: (request: CanvasRequest) => Promise<CanvasResult>;
+  /**
+   * Whether controls may PARK the run until the user answers. `false` on a
+   * personal-bot run, which may be a delegated turn with nobody watching: every
+   * canvas there behaves as `wait:false`, so the answer arrives as a new message.
+   */
+  canPark?: boolean;
 }
 
 const controlSchema = z.object({
@@ -84,8 +90,8 @@ export function formatSubmission(values: Record<string, unknown>): string {
 /**
  * Build the canvas tool. INTENTIONALLY NOT self-gated (unlike the owner-only MCP
  * servers): showing UI grants no elevation, the panel is read-only display + form
- * input, and the server only REGISTERS this server when the owner enabled the
- * `canvas` feature AND an interactive `events.onCanvas` sink exists (claudeAgent.ts)
+ * input, and the server only REGISTERS this server when the conversation's canvas
+ * tool group is on AND an interactive `events.onCanvas` sink exists (runPlan.ts)
  * — that registration gate is the boundary. Same posture as the deliberately
  * ungated avatarDirectory/sshTrust servers; don't add a viewer gate here.
  */
@@ -93,7 +99,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
   return [
     tool(
       "show",
-      "Show a visual canvas to the user in the chat side panel (experimental). Use it to share a diagram, mockup, layout, chart, or option comparison and refine it together — not to repeat text the chat could already render. " +
+      "Show a visual canvas to the user in the chat side panel. Use it to share a diagram, mockup, layout, chart, or option comparison and refine it together — not to repeat text the chat could already render. " +
         "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; PREFER this for any data chart over hand-drawn SVG, it is far cheaper in tokens — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), or 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open). " +
         "Never include scripts or executable JS in content; it is sanitized away. " +
         "To collect a decision ANCHORED TO the artifact on screen (choosing between the mockups shown, tuning a value against the chart, marking up the content), pass `controls`: 'buttons' (a few choices as cards, single or multiSelect), 'select' (a dropdown when there are many options), 'slider'/'number' (a numeric value, with min/max/step), 'date' (a calendar date), and/or 'text' inputs. Each control is required by default — set `required:false` to make it optional. " +
@@ -160,10 +166,10 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
             return text(`Control '${c.id}' has min (${c.min}) greater than max (${c.max}).`, true);
           }
         }
-        // BLOCKING only when controls exist AND wait isn't disabled. Async/editable
-        // canvases (wait:false) display and return immediately; the user's answer
-        // arrives later as a new chat turn.
-        const awaitInput = controls.length > 0 && (args.wait ?? true);
+        // BLOCKING only when controls exist, wait isn't disabled AND this run may
+        // park (never a personal-bot run). Async/editable canvases display and
+        // return immediately; the user's answer arrives later as a new chat turn.
+        const awaitInput = controls.length > 0 && (args.wait ?? true) && ctx.canPark !== false;
         const interaction: "blocking" | "async" | undefined =
           controls.length > 0 ? (awaitInput ? "blocking" : "async") : undefined;
         const editable = Boolean(args.editable);

@@ -54,7 +54,7 @@ describe("PATCH /api/me profile fields", () => {
         intro: "hi there",
         hashtags: ["#Alpha", "beta", "beta"],
         visibility: "private",
-        // "bogus" is not a registered experimental key and must be dropped.
+        // Neither is a registered experimental key ("canvas" graduated), so both drop.
         experimentalFeatures: ["canvas", "bogus"],
         sharedAccount: true,
       })
@@ -71,8 +71,8 @@ describe("PATCH /api/me profile fields", () => {
     expect(user.hashtags).toContain("beta");
     expect(user.hashtags.some((t: string) => t.startsWith("#"))).toBe(false);
     expect(new Set(user.hashtags).size).toBe(user.hashtags.length);
-    // experimental features validated against the registry.
-    expect(user.experimentalFeatures).toEqual(["canvas"]);
+    // experimental features validated against the (now empty) registry.
+    expect(user.experimentalFeatures).toEqual([]);
     expect(user.sharedAccount).toBe(true);
   });
 

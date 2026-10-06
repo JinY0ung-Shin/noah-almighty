@@ -9,6 +9,11 @@
  * it can be imported by BOTH the server and the Svelte client (it is listed in
  * `tsconfig.client.json` includes), mirroring `routineSchedule.ts` — the client
  * renders the settings card from the same registry, avoiding drift.
+ *
+ * GRADUATING a feature = deleting its entry and its key gate: the stored key then
+ * normalizes away on the next read, so nothing else has to migrate. The visual
+ * canvas (`canvas`) graduated to an always-on feature in 2026-10; the registry may
+ * be empty, and the settings card hides itself then.
  */
 export interface ExperimentalFeature {
   /** Stable key stored in `users.experimental_features` and checked in gating. */
@@ -19,14 +24,7 @@ export interface ExperimentalFeature {
   description: string;
 }
 
-export const EXPERIMENTAL_FEATURES: ExperimentalFeature[] = [
-  {
-    key: "canvas",
-    name: "비주얼 캔버스",
-    description:
-      "아바타가 다이어그램·목업·선택지 같은 시각 자료를 대화 오른쪽 패널에 띄우고, 버튼·입력으로 함께 다듬을 수 있어요.",
-  },
-];
+export const EXPERIMENTAL_FEATURES: ExperimentalFeature[] = [];
 
 /** All registered feature keys, for validation + membership checks. */
 export const EXPERIMENTAL_FEATURE_KEYS: string[] = EXPERIMENTAL_FEATURES.map((f) => f.key);
@@ -35,14 +33,18 @@ export const EXPERIMENTAL_FEATURE_KEYS: string[] = EXPERIMENTAL_FEATURES.map((f)
  * Normalize a raw experimental-features input (array from the PATCH body or a
  * parsed JSON column) to a deduped list of KNOWN keys. Unknown/removed keys are
  * dropped so a stale value can never enable a feature that no longer exists.
+ * `known` defaults to the registry; tests pass their own while it is empty.
  */
-export function normalizeExperimentalFeatures(input: unknown): string[] {
+export function normalizeExperimentalFeatures(
+  input: unknown,
+  known: readonly string[] = EXPERIMENTAL_FEATURE_KEYS,
+): string[] {
   const raw: string[] = Array.isArray(input) ? input.filter((s): s is string => typeof s === "string") : [];
   const out: string[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
     const key = item.trim();
-    if (!key || seen.has(key) || !EXPERIMENTAL_FEATURE_KEYS.includes(key)) {
+    if (!key || seen.has(key) || !known.includes(key)) {
       continue;
     }
     seen.add(key);
