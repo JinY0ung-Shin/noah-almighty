@@ -259,6 +259,10 @@
           startOnLoad: false,
           securityLevel: "strict",
           theme: resolvedTheme === "dark" ? "dark" : "default",
+          // Labels as SVG <text>: by default flowchart/class/state/ER/mindmap/kanban
+          // put them in <foreignObject> HTML, which the svg-profile sanitize below
+          // strips — every node rendered as an empty box.
+          htmlLabels: false,
         });
         const { svg } = await mermaid.render(`canvas-mmd-${canvas.id}-${token}`, canvas.content);
         if (token !== renderToken) return; // a newer render won

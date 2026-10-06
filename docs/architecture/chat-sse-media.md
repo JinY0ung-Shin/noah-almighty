@@ -512,6 +512,11 @@
   it. A shadow root rather than the html frame: the same containment for a drawing, while sizing, zoom and
   export stay as they were. Only markdown and the source `<pre>` fallback still parse into the app's DOM
   (`showRendered` keeps exactly one surface up; async renders swap only when they land).
+- **mermaid runs with `htmlLabels: false`** (labels as SVG `<text>`). Its default HTML labels ride
+  `<foreignObject>`, which the svg-profile sanitize strips, so flowchart/class/state/ER/mindmap/kanban drew every
+  node as an empty box; sequence/gantt/pie/timeline/journey/quadrant/xychart/gitGraph already used `<text>`. Use
+  the ROOT `htmlLabels` key — `flowchart.htmlLabels` is deprecated and loses to it. The visual spec renders all
+  six affected types and fails if a label goes missing (e.g. after a mermaid upgrade).
 - **A PARKED canvas survives a conversation switch ONLY through the run-event replay.** `record()` runs at
   resolve time, so a parked ask is NOT in the canvas tables yet; returning to the conversation rebuilds the
   form purely from the journal's `canvas` frame (`tests/routes-chat-canvas-park.test.ts` +

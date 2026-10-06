@@ -60,6 +60,17 @@ const BAR_VEGA = JSON.stringify({
   encoding: { x: { field: "k", type: "nominal" }, y: { field: "v", type: "quantitative" } },
 });
 
+// The diagram types that put their labels in <foreignObject> HTML by default — the
+// svg-profile sanitize strips it, and each drew empty boxes until `htmlLabels: false`.
+const LABELED_MERMAID: Array<[title: string, source: string, label: string]> = [
+  ["순서도", "flowchart LR\n  A[시작] --> B[끝]", "시작"],
+  ["클래스", "classDiagram\n  class 주문 {\n    +번호\n  }\n  주문 --> 고객", "주문"],
+  ["상태", "stateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료", "대기"],
+  ["ER", "erDiagram\n  고객 ||--o{ 주문 : 한다", "고객"],
+  ["마인드맵", "mindmap\n  root((중심))\n    가지하나", "가지하나"],
+  ["칸반", "kanban\n  todo[할일목록]\n    t1[작업하나]", "작업하나"],
+];
+
 type CanvasFixture = { id: string; title: string; content: string; contentType: string };
 
 // The LAST canvas opens active.
@@ -227,4 +238,18 @@ test("an svg canvas draws in its own shadow root: styled, contained, sized and e
   // 5. vega still draws its marks there.
   await page.getByRole("tab", { name: "막대" }).click();
   await expect(panel.locator(".canvas-svg .mark-rect path")).toHaveCount(2);
+});
+
+test("every labeled mermaid diagram keeps its labels through the sanitize", async ({ page }) => {
+  await mockApp(
+    page,
+    LABELED_MERMAID.map(([title, content], i) => ({ id: `cv-mmd-${i}`, title, content, contentType: "mermaid" })),
+  );
+  await page.goto(`${process.env.REPRO_BASE_URL || ""}/`);
+  await page.getByRole("button", { name: "대화 열기: 목업 대화" }).click();
+
+  for (const [title, , label] of LABELED_MERMAID) {
+    await page.getByRole("tab", { name: title, exact: true }).click();
+    await expect(page.locator(".canvas-panel .canvas-svg svg text", { hasText: label }).first()).toBeVisible();
+  }
 });
