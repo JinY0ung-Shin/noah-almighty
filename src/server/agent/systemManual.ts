@@ -460,6 +460,7 @@ Use it to share charts, diagrams, mockups, layouts, or side-by-side option compa
 For DATA CHARTS prefer \`vega\`: pass a compact Vega-Lite JSON spec as \`content\` (inline the data, keep it small) — it renders a rich chart from a tiny spec and is far cheaper in tokens than hand-writing SVG.
 For flow/sequence/graph DIAGRAMS use \`mermaid\` (diagram source only).
 Reserve \`svg\`/\`html\` for bespoke visuals the others can't express.
+\`html\` renders as its own sandboxed page: a \`<style>\` block (or a whole \`<!DOCTYPE html>\` document) styles only the canvas, scripts never run, and links don't open.
 To collect a decision ANCHORED TO the artifact on screen — choosing between the mockups you just showed, tuning a value against the chart, marking up the content — add \`controls\`: \`buttons\` (a few options as cards), \`select\` (a dropdown for many options), \`slider\`/\`number\` (a numeric value, with min/max/step), \`date\` (a calendar date), and/or \`text\` inputs.
 Each control is required by default; set \`required:false\` to make one optional.
 For a plain question or a simple choice that needs no visual artifact, use the built-in AskUserQuestion tool instead — NEVER open a canvas just to ask the user something.

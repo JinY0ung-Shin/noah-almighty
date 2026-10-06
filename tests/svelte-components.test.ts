@@ -962,4 +962,55 @@ describe("CanvasPanel", () => {
     expect(textarea.disabled).toBe(true); // submitCanvasEdit → sendMessage needs the turn to end
     expect((screen.getByRole("button", { name: /A/ }) as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it("an html canvas renders as its own sandboxed page, never into the app's DOM", () => {
+    const { container } = render(CanvasPanel, {
+      props: {
+        pane: canvasPane(
+          { streaming: false },
+          { title: "목업", content: "<style>body{display:none}</style><div class=\"card\">카드</div>", contentType: "html", controls: [] },
+        ),
+      },
+    });
+
+    const frame = container.querySelector("iframe.canvas-html-frame") as HTMLIFrameElement;
+    expect(frame).toBeTruthy();
+    expect(frame.getAttribute("sandbox")).toBe("allow-same-origin"); // never allow-scripts
+    expect(frame.getAttribute("title")).toBe("목업");
+    expect(frame.getAttribute("srcdoc")).toContain("<style>body{display:none}</style>");
+    // The page's CSS lives only in the frame's document: none of it reaches the app.
+    expect(container.querySelector("style")).toBeNull();
+    expect(container.querySelector(".card")).toBeNull();
+  });
+
+  it("an svg canvas draws in its own shadow root, and export still finds the drawing", async () => {
+    const drawing =
+      '<svg viewBox="0 0 10 10"><style>.shape{fill:red} .canvas-panel{display:none}</style>' +
+      '<rect class="shape" width="10" height="10"/></svg>';
+    const { container } = render(CanvasPanel, {
+      props: {
+        pane: canvasPane({ streaming: false }, { title: "도형", content: drawing, contentType: "svg", controls: [] }),
+      },
+    });
+
+    const host = container.querySelector(".canvas-content .canvas-svg") as HTMLElement;
+    expect(host.hasAttribute("data-fit")).toBe(true);
+    expect(host.shadowRoot?.querySelector("svg style")?.textContent).toContain(".canvas-panel{display:none}");
+    // The drawing and its <style> live only in the shadow root, never the app's DOM.
+    expect(container.querySelector(".shape")).toBeNull();
+    expect(container.querySelector("style")).toBeNull();
+
+    // SVG export serializes the shadow root's <svg>, its own <style> included.
+    const hrefs: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      hrefs.push(this.href);
+    });
+    try {
+      await fireEvent.click(screen.getByRole("button", { name: "SVG" }));
+    } finally {
+      click.mockRestore();
+    }
+    expect(hrefs).toHaveLength(1);
+    expect(atob(hrefs[0].split(",")[1])).toContain(".shape{fill:red}");
+  });
 });

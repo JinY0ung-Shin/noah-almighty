@@ -1008,6 +1008,16 @@ describe("format helpers", () => {
     expect(out).not.toContain("<script>");
   });
 
+  it("renderMarkdown never keeps a <style>, which would restyle the whole app", () => {
+    // After a paragraph the parser keeps it in <body>, so only FORBID_TAGS removes it.
+    const out = renderMarkdown("목업입니다\n\n<style>body{display:none}</style>\n\n<div style=\"color:red\">카드</div>");
+    expect(out).not.toContain("<style");
+    expect(out).not.toContain("display:none");
+    expect(out).toContain("목업입니다");
+    expect(out).toContain('style="color:red"'); // inline styles stay
+    expect(renderMarkdown("text <svg><style>text{fill:red}</style></svg>")).not.toContain("<style");
+  });
+
   it("renderMarkdownCached returns the same html and reuses it for repeated source text", () => {
     // The transcript re-evaluates every message's body on each SSE token, so the
     // cache is what keeps a long thread from re-parsing all of it per token.

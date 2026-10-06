@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import DOMPurify from "dompurify";
+  import CanvasHtmlFrame from "./CanvasHtmlFrame.svelte";
   import Icon from "./Icon.svelte";
+  import { canvasHtmlDocument } from "../lib/canvasHtml";
   import { renderMarkdown, timeLabel } from "../lib/format";
   import { openModalFocus, trapTab } from "../lib/modalBehavior";
   import { cssToken, theme } from "../lib/theme";
@@ -147,7 +149,20 @@
   }
 
   // ---- content rendering (CSP-safe: no avatar-authored JS ever runs) ----
+  // ONE surface shows the active canvas, and only markdown (or a source fallback)
+  // is parsed into the app's own DOM: a drawing (svg/vega/mermaid) goes into a
+  // shadow root (shadowSvg) and an `html` page into its own sandboxed document
+  // (CanvasHtmlFrame), so neither one's <style> can restyle the app.
   let renderedHtml = "";
+  let svgMarkup = "";
+  let htmlDoc = "";
+  // Async renders (vega/mermaid) call this when they land, so the previous surface
+  // stays up meanwhile instead of blinking out on every theme flip.
+  function showRendered(surface: { html?: string; svg?: string; doc?: string }): void {
+    renderedHtml = surface.html ?? "";
+    svgMarkup = surface.svg ?? "";
+    htmlDoc = surface.doc ?? "";
+  }
   let renderError = "";
   // Wrap a raw (English) vega/mermaid library message in a Korean sentence,
   // keeping the detail — a bare English message reads as a crash in the KO UI.
@@ -191,19 +206,19 @@
     const token = ++renderToken;
     renderError = "";
     if (!canvas) {
-      renderedHtml = "";
+      showRendered({});
       return;
     }
     if (canvas.contentType === "markdown") {
-      renderedHtml = renderMarkdown(canvas.content);
+      showRendered({ html: renderMarkdown(canvas.content) });
       return;
     }
     if (canvas.contentType === "svg") {
-      renderedHtml = DOMPurify.sanitize(canvas.content, { USE_PROFILES: { svg: true, svgFilters: true } });
+      showRendered({ svg: DOMPurify.sanitize(canvas.content, { USE_PROFILES: { svg: true, svgFilters: true } }) });
       return;
     }
     if (canvas.contentType === "html") {
-      renderedHtml = DOMPurify.sanitize(canvas.content);
+      showRendered({ doc: canvasHtmlDocument(canvas.content, resolvedTheme) });
       return;
     }
     if (canvas.contentType === "vega") {
@@ -226,14 +241,14 @@
         const svg = await view.toSVG();
         view.finalize();
         if (token !== renderToken) return; // a newer render won
-        renderedHtml = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+        showRendered({ svg: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } }) });
       } catch (err) {
         if (token !== renderToken) return;
         // Wrap the raw (English) library message in a Korean sentence, keeping the
         // detail — a bare English message reads as a crash in the Korean UI.
         renderError = vegaRenderError(err);
         const escaped = canvas.content.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] || c));
-        renderedHtml = DOMPurify.sanitize(`<pre>${escaped}</pre>`);
+        showRendered({ html: DOMPurify.sanitize(`<pre>${escaped}</pre>`) });
       }
       return;
     }
@@ -247,14 +262,31 @@
         });
         const { svg } = await mermaid.render(`canvas-mmd-${canvas.id}-${token}`, canvas.content);
         if (token !== renderToken) return; // a newer render won
-        renderedHtml = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+        showRendered({ svg: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } }) });
       } catch (err) {
         if (token !== renderToken) return;
         renderError = mermaidRenderError(err);
         const escaped = canvas.content.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] || c));
-        renderedHtml = DOMPurify.sanitize(`<pre>${escaped}</pre>`);
+        showRendered({ html: DOMPurify.sanitize(`<pre>${escaped}</pre>`) });
       }
     }
+  }
+
+  // A drawing's own <style> (an avatar's `<svg><style>`, mermaid's id-scoped sheet)
+  // applies inside this shadow root only — in the app's DOM it restyled the whole
+  // app — and its ids stay apart from the other copy's (panel vs fullscreen).
+  // `data-fit` is the panel's fit-to-width; fullscreen keeps the natural size. The
+  // root is open so export can read the <svg> (getSvgEl).
+  const SVG_HOST_SHEET =
+    "<style>:host { display: block; } :host([data-fit]) svg { max-width: 100%; height: auto; }</style>";
+  function shadowSvg(node: HTMLElement, markup: string) {
+    const root = node.attachShadow({ mode: "open" });
+    root.innerHTML = SVG_HOST_SHEET + markup;
+    return {
+      update(next: string) {
+        root.innerHTML = SVG_HOST_SHEET + next;
+      },
+    };
   }
 
   // ---- form controls ----
@@ -369,7 +401,9 @@
   const isImageType = (c: PaneCanvas): boolean =>
     c.contentType === "svg" || c.contentType === "vega" || c.contentType === "mermaid";
   function getSvgEl(): SVGSVGElement | null {
-    return (contentEl?.querySelector("svg") as SVGSVGElement | null) ?? null;
+    // The drawing sits in the panel host's shadow root (shadowSvg).
+    const host = contentEl?.querySelector(".canvas-svg");
+    return (host?.shadowRoot?.querySelector("svg") as SVGSVGElement | null) ?? null;
   }
   async function onCopy(event: MouseEvent): Promise<void> {
     if (!active) return;
@@ -581,7 +615,9 @@
             </div>
           {/if}
 
-          <div class="canvas-content md" bind:this={contentEl}>{@html renderedHtml}</div>
+          <div class="canvas-content md" bind:this={contentEl}>
+            {#if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={active.title} />{:else if svgMarkup}<div class="canvas-svg" data-fit use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
+          </div>
           {#if renderError}
             <p class="canvas-render-error" role="alert">렌더링 실패: {renderError}</p>
           {/if}
@@ -767,7 +803,9 @@
     </div>
     <button class="canvas-fs-backdrop" type="button" aria-label="닫기" on:click={() => (fullscreen = false)}></button>
     <div class="canvas-fs-stage">
-      <div class="canvas-fs-content md" style={`transform:scale(${zoom})`}>{@html renderedHtml}</div>
+      <div class="canvas-fs-content md" class:is-html={htmlDoc !== ""} style={`transform:scale(${zoom})`}>
+        {#if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={active.title} onWheel={onFsWheel} onKeydown={onFsKey} />{:else if svgMarkup}<div class="canvas-svg" use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
+      </div>
     </div>
   </div>
 {/if}

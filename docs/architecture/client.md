@@ -69,6 +69,11 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   `main`) on dynamically-rendered nodes; the activity-tree root uses `is-main`, not `main`
   (`.main { height: 100dvh }` once stretched the box). Svelte component `<style>` is scoped, but the
   carried-over global CSS and `{@html}` output are not.
+- **A `<style>` in `{@html}` output — HTML or inline-SVG — is a stylesheet for the WHOLE app**, so
+  `renderMarkdown` forbids it (`FORBID_TAGS`; inline `style=""` stays). DOMPurify's default only LOOKED like
+  it stripped one: it drops a `<style>` that LEADS the input (the parser hoists it into `<head>`, and only
+  `<body>` is returned) but keeps one after content. Canvas `html` pages get their own document and drawings
+  (`svg`/`vega`/`mermaid`) their own shadow root instead ([chat-sse-media.md](chat-sse-media.md) § Visual canvas).
 
 ## Svelte client pitfalls (svelte-check catches these)
 - `<svelte:window>` cannot live inside `{#if}`/blocks — must be top-level. A `use:action` taking a

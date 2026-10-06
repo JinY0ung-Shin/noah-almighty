@@ -29,7 +29,11 @@ export function avatarGradient(user: { id?: string; username?: string; displayNa
 
 export function renderMarkdown(text: string | null | undefined): string {
   const source = text || "";
-  const html = DOMPurify.sanitize(marked.parse(source) as string);
+  // A <style> (HTML or inline-SVG) in {@html} output styles the WHOLE app, so a
+  // message's `body { … }` would restyle every screen: markdown never keeps one.
+  // Inline style="" stays. Canvas pages and drawings get their own document or
+  // shadow root instead (CanvasPanel).
+  const html = DOMPurify.sanitize(marked.parse(source) as string, { FORBID_TAGS: ["style"] });
   if (source.trim() && !html.trim()) {
     const escaped = source.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] || c);
     return DOMPurify.sanitize(`<pre>${escaped}</pre>`);

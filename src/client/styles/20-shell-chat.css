@@ -993,6 +993,19 @@ body.col-resizing {
   max-width: 100%;
   height: auto;
 }
+/* An `html` artifact's own page (CanvasHtmlFrame). This height is the viewport a
+   page that fills its viewport keeps; fitCanvasFrame shrinks the frame to shorter
+   content and grows it for longer. */
+.canvas-html-frame {
+  display: block;
+  width: 100%;
+  height: 60vh;
+  border: 0;
+}
+/* The page would otherwise take the pointer away from a panel-width drag. */
+body.col-resizing .canvas-html-frame {
+  pointer-events: none;
+}
 .canvas-render-error {
   color: var(--danger);
   font-size: var(--t-xs);
@@ -1130,6 +1143,14 @@ body.col-resizing {
 }
 .canvas-fs-content svg {
   max-width: none;
+}
+/* Fullscreen gives an `html` page the whole stage as its viewport. */
+.canvas-fs-content.is-html {
+  width: 100%;
+  height: 100%;
+}
+.canvas-fs-content .canvas-html-frame {
+  height: 100%;
 }
 
 /* Middle region: holds the scrolling transcript + the scroll-to-bottom FAB. */

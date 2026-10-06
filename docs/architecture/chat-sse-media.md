@@ -487,6 +487,31 @@
   `show` takes an optional `canvasId`; reusing it UPDATES that artifact (client `handleCanvas` +
   `canvasesFromMessages` AND server `record()` all upsert by id, latest-wins). **Size-cap:** `canvasTools.ts`
   rejects over-`MAX_CANVAS_CONTENT_CHARS` content (it rides every `resume` turn's transcript).
+- **`html` is a PAGE in its own sandboxed document, never `{@html}`.** `CanvasHtmlFrame` renders
+  `canvasHtmlDocument` (`lib/canvasHtml.ts`: DOMPurify `WHOLE_DOCUMENT`, a theme base sheet first in `<head>`)
+  as `<iframe sandbox="allow-same-origin" srcdoc>` — NEVER `allow-scripts`; same-origin alone lets the panel
+  measure the page and load same-origin images, and the inherited CSP still blocks remote loads. Why: the
+  body-only default sanitize silently DROPPED every `<style>` ahead of the content (the parser hoists it into
+  `<head>`) while a later one restyled the WHOLE app. Three traps, each hit in Chromium
+  (`tests/visual/canvas-isolation.spec.ts` pins them): (1) nothing in the srcdoc may be FETCHED as a stylesheet —
+  a font-CSS `@import` hung behind a dead proxy and render-blocked the page blank — so the app's `@font-face`
+  rules are copied inline; (2) the page is hooked once PARSED (rAF poll for a new `about:srcdoc` document past
+  `loading`), not on `load`, which waits for every subresource; (3) no ResizeObserver on the page's own root —
+  observing another document's element tripped the observer's loop error — so the page refits on its own
+  `load`/`toggle`/`change` (capture) and `fonts` `loadingdone` events, and the observer watches only the
+  frame's width. `fitCanvasFrame`: the frame's CSS height (panel `60vh`, fullscreen the whole stage) is the
+  viewport a viewport-filling page keeps; a shorter page shrinks the frame, a longer one grows it, and growth
+  that only chases the viewport (`min-height: 100vh` + padding) stops. Fullscreen forwards the page's wheel
+  (zoom) and keydown (Escape) — events inside the frame never reach the app's DOM. Links inside don't open.
+- **A drawing (`svg`/`vega`/`mermaid`) renders in its own SHADOW ROOT, never `{@html}`.** An `<svg><style>` is
+  a stylesheet for the whole document, so in the app's DOM an avatar's drawing restyled the app (in Chromium a
+  `.canvas-panel {…}` rule inside an svg hid the panel). `shadowSvg` (CanvasPanel) keeps the drawing's own
+  sheet — mermaid's id-scoped one included — inside the drawing, gives each copy (panel/fullscreen) its own id
+  scope, and carries the two app rules that sized it (`:host([data-fit]) svg { max-width: 100%; height: auto }`
+  in the panel, natural size in fullscreen). The root is OPEN so export (`getSvgEl`) reads the `<svg>` out of
+  it. A shadow root rather than the html frame: the same containment for a drawing, while sizing, zoom and
+  export stay as they were. Only markdown and the source `<pre>` fallback still parse into the app's DOM
+  (`showRendered` keeps exactly one surface up; async renders swap only when they land).
 - **A PARKED canvas survives a conversation switch ONLY through the run-event replay.** `record()` runs at
   resolve time, so a parked ask is NOT in the canvas tables yet; returning to the conversation rebuilds the
   form purely from the journal's `canvas` frame (`tests/routes-chat-canvas-park.test.ts` +
