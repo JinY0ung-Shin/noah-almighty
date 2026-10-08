@@ -760,7 +760,7 @@ export interface AgentEvents {
   /**
    * Make (or reuse) a share link for a PPTX card of this conversation. The chat
    * route supplies it ONLY on an interactive turn of the owner's own avatar (never
-   * bot, group-agent, external-avatar, external-task-API or unattended turns) and
+   * group-agent, external-avatar, external-task-API or unattended turns) and
    * re-checks that inside; `runPlan.ts` registers `create_share_link` only when it
    * is present AND the run passes the same gate. Absent = the tool is not offered.
    */

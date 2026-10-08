@@ -45,22 +45,6 @@ These are the invariants the project is built around. New work should reinforce 
   (live group-admin gate, membership required even for sysadmins, audited as `group_agent_update`,
   applies to every member from the NEXT turn); its state rides `GroupAgentState.personaSet`/
   `selfConfigAllowed` into BOTH the prompt branch and `describe_system`.
-- **Personal agents (내 봇) = the owner's OWN bots, and a bot run IS a full owner run.** Several per
-  user (`personal_agents`, avatar id `personal:<ownerUserId>:<agentId>`), reachable by the owner
-  ALONE through `findChattablePersonalAgent` — phase 1 additionally gates the whole feature on the
-  live system-admin role (fail-closed, threads preserved). Capability diverges in IDENTITY plus one
-  scoped personal-knowledge LENS: each bot's memory is `agents/<dir>/` inside the OWNER's knowledge
-  repo and it loads ONLY the skills the owner granted (empty = none), both enforced at the MCP tool
-  layer by server-construction scoping — while `AgentRequest.personalAgent` still never touches the
-  access algebra, `request.avatar` stays the OWNER's row (the composite id keys only the
-  thread/workspace/client surfaces), and `request.groupAgent` must never be set for one (triple
-  kill-switch). The bot's persona reaches the prompt via the chat route's identity overlay; bots
-  self-configure via `mcp__personal_agent__update_profile` and the owner's main avatar creates them
-  conversationally via `mcp__personal_agent__create_agent` (interactive owner runs only — never
-  unattended). Routines DO fire AS a bot (`routine_jobs.personal_agent_id` → `runBotRoutineJobNow`,
-  landing as a delegated task on the owner's board) and the in-bot routine tools are SELF-scoped to
-  the schedules that fire as that bot; both metacognition surfaces say so. Mechanics →
-  `docs/architecture/personal-agents.md`.
 - **Skill sharing rides the avatar-discovery boundary — never wider.** A shared skill (metadata row in
   `shared_skills`; content stays in the owner's knowledge repo) is browsable/learnable EXACTLY where the
   owner's avatar is visible in 탐색 (`SHARING_TEAMMATES`; private/suspended owners drop out). Learning
@@ -97,7 +81,7 @@ These are the invariants the project is built around. New work should reinforce 
   signed-in user out on any 401). The avatar mints one (`mcp__file_output__create_share_link`) only on an explicit
   user request in an interactive own-avatar chat, behind three locks: the chat route supplies `onShareLink` only on
   those turns, runPlan's `shareLinkToolActive` registers the tool (gated on BOTH `headless` and `externalTaskApi`,
-  never bots/group agents/consultations), and the callback re-checks per call; both metacognition surfaces read
+  never group agents/consultations), and the callback re-checks per call; both metacognition surfaces read
   `shareLinksEnabled` and send every other run to the card's 공유 링크 button. **A new conversation-deleting path
   cascades `deleteShareLinksForConversation` next to the canvas cascade.** Mechanics →
   `docs/architecture/share-links.md`.
@@ -110,7 +94,7 @@ These are the invariants the project is built around. New work should reinforce 
   there. The `message` was NOT typed by the owner (incident bodies, log excerpts), so the run is
   provenance-stamped (`ChatTurnContext.externalTaskId` → `AgentRequest.externalTaskApi`): the prompt
   tells the avatar to treat the body as that system's data, `describe_system` reports the origin, and
-  interactive-only gates (`create_agent`) exclude it exactly like `headless` — **when you add an
+  interactive-only gates (`mcp__file_output__create_share_link`) exclude it exactly like `headless` — **when you add an
   interactive-only capability, gate it on BOTH `headless` and `externalTaskApi`.** Tasks are a SQLite
   queue (queued → running → succeeded/failed/cancelled; `waiting_input` is presentation-only) drained
   by a 1 s dispatcher (per-owner 1, process-wide 4, waits behind an active run on the same
@@ -135,7 +119,7 @@ These are the invariants the project is built around. New work should reinforce 
   effects are never undone and BOTH metacognition surfaces say so. A user row written while another run
   is active is `kind: "queued"` and never an anchor. **A new message-deleting path cascades like
   `applyConversationRewind`** (attachments minus carried ones, their staged workspace copies included,
-  per-card share links, bot tasks and canvases from the anchor time). Native `/compact` (the ONE slash
+  per-card share links and canvases from the anchor time). Native `/compact` (the ONE slash
   command sent to the CLI verbatim) compacts a FORK, so older rows' rewind points stay exact. Mechanics →
   `docs/architecture/chat-sse-media.md`.
 - **git remote work is MCP-only BY DESIGN.** The agent shell has NO git credentials (stripped from the

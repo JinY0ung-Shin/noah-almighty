@@ -170,8 +170,8 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 ## Share hash view (`#/share/<token>`) and the deck-card link controls
 Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **The first view only a link opens** (`views/ShareView.svelte`; not in the rail). `state.shareToken` holds
-  the token and `currentRoute()` writes it back — load-bearing like the bots branch, because every
-  run-stream `open` frame re-runs `syncHash(true)` and the URL would otherwise collapse to `#/share`. The
+  the token and `currentRoute()` writes it back — load-bearing, because every run-stream `open` frame
+  re-runs `syncHash(true)` and the URL would otherwise collapse to `#/share`. The
   view reads `$appState.shareToken` IN a reactive statement (the legacy-mode compile-time dependency trap),
   so a second link opened while it is mounted refetches. The tab title comes from `state.shareTitle`, since
   `setDocumentTitle` rewrites the title on every store emission.
@@ -258,8 +258,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `applyLoadedConversation` MERGES a re-read by id (server rows decide membership and order; a matched
   row keeps its `clientKey` and an activity snapshot the server does not have yet). A regenerate never
   adopts (a stale tab's server may re-run another row) — the run-end re-read settles its ids.
-  At `open` a rewind also drops the bot-task cards that render at/after the anchor, closes a file preview
-  of a dropped file and refetches canvases (keeping ones this run already showed) — once, replay-safe.
+  At `open` a rewind also closes a file preview of a dropped file and refetches canvases (keeping ones
+  this run already showed) — once, replay-safe.
 - **The activity snapshot is WHITELISTED server-side.** The client seals the live tree and PUTs it to
   `/api/messages/:id/activity`, and `sanitizeActivity` (`routes/chat.ts`) rebuilds every agent/tool/task
   row from an explicit field list. A field added to `LiveAgentNode`/`LiveToolRow`/`LiveTaskRow` but not

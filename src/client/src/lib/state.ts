@@ -10,7 +10,6 @@ import type {
   AvatarNotification,
   AvatarSummary,
   BootstrapInfo,
-  BotTask,
   ChatLayout,
   ChatPane,
   ConversationSummary,
@@ -24,18 +23,6 @@ import type {
   ViewName,
 } from "./types";
 
-/**
- * Unseen delegated-task counts, exactly as `GET /api/me/bot-tasks/unseen`
- * answers them: settled tasks (완료/실패/입력 대기) the owner has not looked at
- * yet, `total` across every bot plus a per-`personal_agents.id` breakdown. The
- * server has no named type for the shape, so this is its one client-side name —
- * `POST /api/me/bot-tasks/seen` answers the same object.
- */
-export interface BotTaskUnseen {
-  total: number;
-  agents: Record<string, number>;
-}
-
 export interface ClientState {
   booted: boolean;
   bootError: string;
@@ -46,8 +33,6 @@ export interface ClientState {
   adminTab: AdminTab;
   /** Active source on the brain (knowledge-graph) view: "personal" or "group:<id>". */
   brainSource: string;
-  /** Bot selected in 봇 오피스 (`personal_agents.id`); "" = none picked yet. */
-  botsAgentId: string;
   /**
    * Token of the share link the share view shows (`#/share/<token>`); "" when
    * none. It lives here, not only in the hash, because currentRoute() rebuilds
@@ -56,18 +41,6 @@ export interface ClientState {
   shareToken: string;
   /** File name of the deck the share view shows, for the tab title; "" until it loads. */
   shareTitle: string;
-  /**
-   * Delegated bot tasks across ALL of the owner's bots, newest first. Fed by
-   * 봇 오피스's poll AND by the run stream's `task` frames, so the roster's
-   * status dots stay right even while the owner is reading another bot's thread.
-   */
-  botTasks: BotTask[];
-  /**
-   * What the rail's 봇 오피스 badge counts. Replaced wholesale from the two
-   * bot-task endpoints (never merged) so a narrowed 읽음 stamp can still drop the
-   * badges it cleared, and left at zero for anyone the feature is closed to.
-   */
-  botTaskUnseen: BotTaskUnseen;
   avatars: AvatarSummary[];
   avatarsLoaded: boolean;
   avatarsLoading: boolean;
@@ -127,11 +100,8 @@ export const appState = writable<ClientState>({
   settingsTab: "profile",
   adminTab: "overview",
   brainSource: "personal",
-  botsAgentId: "",
   shareToken: "",
   shareTitle: "",
-  botTasks: [],
-  botTaskUnseen: { total: 0, agents: {} },
   avatars: [],
   avatarsLoaded: false,
   avatarsLoading: false,
@@ -273,7 +243,6 @@ export function setDocumentTitle(): void {
   const titles: Record<ViewName, string> = {
     explore: "탐색",
     chat: activePane()?.avatar.alias || activePane()?.avatar.displayName || "대화",
-    bots: "봇 오피스",
     brain: "지식 그래프",
     inbox: "알림",
   routines: "예약 작업",

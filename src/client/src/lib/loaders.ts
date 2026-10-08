@@ -1,7 +1,6 @@
 import { api, refreshMe } from "./api";
 import { goView } from "./nav";
 import { notify, readState, replaceState, updateState } from "./state";
-import type { BotTaskUnseen } from "./state";
 import type {
   AdminGroupSummary,
   AdminPresence,
@@ -27,8 +26,8 @@ export async function loadAvatars(force = false): Promise<AvatarSummary[]> {
   if (!shouldLoad) return [];
   try {
     const { avatars } = await api<{ avatars: AvatarSummary[] }>("/api/avatars");
-    // The rail's 내 봇 section reads this list on EVERY view, so a body without
-    // the key degrades to "no avatars" instead of breaking the whole shell.
+    // A body without the key degrades to "no avatars" instead of breaking every
+    // view that reads the list.
     const list = avatars ?? [];
     replaceState({ avatars: list, avatarsLoaded: true, avatarsLoading: false });
     return list;
@@ -166,53 +165,6 @@ export async function refreshAdminPresence(): Promise<void> {
   }
 }
 
-/**
- * 내 봇 is admin-gated in phase 1 and BOTH bot-task endpoints answer 403
- * otherwise, so a non-admin never asks at all — swallowing that 403 once a
- * minute would be a request nobody could ever act on.
- */
-function botTasksReachable(): boolean {
-  return Boolean(readState().user?.roles?.includes("admin"));
-}
-
-/** Defensive against a body that lost a key — the badge degrades to zero. */
-function toUnseen(body: BotTaskUnseen | undefined): BotTaskUnseen {
-  return { total: body?.total ?? 0, agents: body?.agents ?? {} };
-}
-
-/**
- * The 봇 오피스 rail badge: settled bot tasks the owner has not looked at yet.
- * Failures keep the last counts, like presence — a badge is best-effort, and a
- * toast about it would interrupt someone who never opened the board.
- */
-export async function refreshBotTaskUnseen(): Promise<void> {
-  if (!botTasksReachable()) return;
-  try {
-    replaceState({ botTaskUnseen: toUnseen(await api<BotTaskUnseen>("/api/me/bot-tasks/unseen")) });
-  } catch {
-    /* ignore */
-  }
-}
-
-/**
- * The owner looked at the board — at everything, or at ONE bot's lane when
- * `agentId` narrows it. The response carries the FRESH counts, so the badge is
- * REPLACED from it rather than decremented locally: a task that settles between
- * the stamp and the read stays counted instead of being silently cleared.
- */
-export async function markBotTasksSeen(agentId?: string): Promise<void> {
-  if (!botTasksReachable()) return;
-  try {
-    const body = await api<BotTaskUnseen>("/api/me/bot-tasks/seen", {
-      method: "POST",
-      body: JSON.stringify(agentId ? { agentId } : {}),
-    });
-    replaceState({ botTaskUnseen: toUnseen(body) });
-  } catch {
-    /* ignore */
-  }
-}
-
 // Poll while the tab is visible (cheap once/min) and refresh the moment the owner
 // returns to the tab, so a colleague's new question surfaces without a reload.
 // This same tick is what keeps `users.last_seen_at` warm for an idle-but-open
@@ -224,19 +176,15 @@ function onKnowledgeVisible(): void {
     void refreshKnowledgeStatus({ announce: true });
     void refreshNotificationStatus({ announce: true });
     void refreshAdminPresence();
-    void refreshBotTaskUnseen();
   }
 }
 export function startKnowledgeWatch(): void {
   stopKnowledgeWatch();
   knowledgeWatchTimer = window.setInterval(onKnowledgeVisible, 60000);
   document.addEventListener("visibilitychange", onKnowledgeVisible);
-  // Knowledge/notification counts arrive with loadInboxData at boot; presence and
-  // the bot-task badge have no such loader, so seed them here instead of leaving
-  // the badges blank for a minute. A bot that finished while the owner was away
-  // is exactly what the badge exists to announce on the next boot.
+  // Knowledge/notification counts arrive with loadInboxData at boot; presence has
+  // no such loader, so seed it here instead of leaving the badge blank for a minute.
   void refreshAdminPresence();
-  void refreshBotTaskUnseen();
 }
 export function stopKnowledgeWatch(): void {
   if (knowledgeWatchTimer != null) {
@@ -246,9 +194,8 @@ export function stopKnowledgeWatch(): void {
   document.removeEventListener("visibilitychange", onKnowledgeVisible);
   lastAnnouncedRequestCount = 0;
   lastAnnouncedNotificationCount = 0;
-  // Logout runs through here — don't leave another account's presence list or
-  // unseen badge in state for whoever logs in next.
-  replaceState({ adminPresence: null, botTaskUnseen: { total: 0, agents: {} } });
+  // Logout runs through here — don't leave another account's presence list in state.
+  replaceState({ adminPresence: null });
 }
 
 export async function loadRoutinesData(): Promise<void> {

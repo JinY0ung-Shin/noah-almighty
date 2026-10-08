@@ -70,7 +70,6 @@ import { closeRun, openRun } from "../src/server/agent/runRegistry.js";
 import { chatFilesDir } from "../src/server/chatFiles.js";
 import { chatImagesDir } from "../src/server/chatImages.js";
 import { newShareTokenSalt } from "../src/server/shareLinks.js";
-import { personalAgentAvatarId } from "../src/server/personalAgents.js";
 import { claimRoutineSlot, releaseRoutineSlot } from "../src/server/routineRunRegistry.js";
 import type { Store } from "../src/server/store.js";
 
@@ -235,7 +234,7 @@ describe("rewind — store", () => {
     expect(t.store.listMessages(ownerId, "c1")).toHaveLength(5);
   });
 
-  it("applies a rewind: exact rows, deck links, bot tasks and canvases from the anchor on, and the session", async () => {
+  it("applies a rewind: exact rows, deck links and canvases from the anchor on, and the session", async () => {
     const t = boot();
     const { id: ownerId } = await newOwner(t);
     const [u1, a1, u2] = seed(t.store, ownerId, "c2", [
@@ -248,20 +247,6 @@ describe("rewind — store", () => {
     const droppedLink = linkFor(t.store, ownerId, "c2", "f2");
     t.store.setAgentSessionId(ownerId, "c2", "sess-current");
     const db = dbOf(t.store);
-    const task = (title: string, minute: number) => {
-      const row = t.store.createBotTask({
-        ownerUserId: ownerId,
-        agentId: "bot",
-        conversationId: "c2",
-        title,
-        requestText: title,
-        status: "running",
-      });
-      db.prepare("UPDATE bot_tasks SET status = 'done', created_at = ? WHERE id = ?").run(at(minute), row.id);
-      return row.id;
-    };
-    const keptTask = task("이전 작업", 2);
-    const droppedTask = task("버려진 작업", 3);
     const canvas = (id: string, content: string) =>
       t.store.upsertCanvasArtifact(ownerId, "c2", { artifactId: id, title: id, content, contentType: "markdown" });
     const stamp = (id: string, version: number, minute: number) => {
@@ -289,8 +274,6 @@ describe("rewind — store", () => {
     expect(t.store.listMessages(ownerId, "c2").map((m) => m.id)).toEqual([u1.id, a1.id, late.id]);
     expect(linkExists(t.store, keptLink)).toBe(true);
     expect(linkExists(t.store, droppedLink)).toBe(false);
-    expect(t.store.getBotTask(keptTask)).not.toBeNull();
-    expect(t.store.getBotTask(droppedTask)).toBeNull();
     const canvases = t.store.listCanvasArtifacts(ownerId, "c2");
     expect(canvases.map((c) => c.id).sort()).toEqual(["pruned", "refined"]);
     const refined = canvases.find((c) => c.id === "refined")!;
@@ -463,7 +446,7 @@ describe("rewind — edit an earlier message", () => {
     expect((await send({ rewindFromMessageId: steer.id }).expect(400)).body.error).toBe("이 메시지에서는 다시 시작할 수 없습니다.");
     expect((await send({ rewindFromMessageId: a1.id }).expect(400)).body.error).toBe("이 메시지에서는 다시 시작할 수 없습니다.");
     expect((await send({ rewindFromMessageId: queued.id }).expect(400)).body.error).toBe(
-      "대기열로 보낸 메시지부터는 다시 시작할 수 없습니다.",
+      "다른 응답이 진행되는 중에 저장된 메시지부터는 다시 시작할 수 없습니다.",
     );
     expect((await send({ rewindFromMessageId: u1.id, regenerate: true }).expect(400)).body.error).toBe("요청이 올바르지 않습니다.");
     expect((await send({ rewindFromMessageId: "../etc" }).expect(400)).body.error).toBe("요청이 올바르지 않습니다.");
@@ -502,21 +485,6 @@ describe("rewind — edit an earlier message", () => {
     closeRun("live-run");
     untouched();
 
-    // A queued bot task already stored its bubble.
-    const queuedTask = t.store.createBotTask({
-      ownerUserId: owner.id,
-      agentId: "bot",
-      conversationId: "e5",
-      title: "대기",
-      requestText: "대기",
-      status: "queued",
-    });
-    expect((await rewind().expect(409)).body.error).toBe(
-      "대기 중인 작업이 있어 지금은 다시 시작할 수 없습니다. 작업이 끝난 뒤 다시 시도해 주세요.",
-    );
-    dbOf(t.store).prepare("DELETE FROM bot_tasks WHERE id = ?").run(queuedTask.id);
-    untouched();
-
     // A pending external-API task on this thread.
     const { key } = t.store.createAvatarApiKey(owner.id, "ci");
     const apiTask = t.store.acceptAvatarTask(owner.id, key.id, "외부 요청", "e5", null).task;
@@ -534,16 +502,9 @@ describe("rewind — edit an earlier message", () => {
     // Work queued during that await is caught by the re-check right before the
     // rewind applies.
     H.duringRepoResolve.push(() => {
-      t.store.createBotTask({
-        ownerUserId: owner.id,
-        agentId: "bot",
-        conversationId: "e5",
-        title: "경합",
-        requestText: "경합",
-        status: "queued",
-      });
+      t.store.acceptAvatarTask(owner.id, key.id, "경합", "e5", null);
     });
-    expect((await rewind().expect(409)).body.error).toContain("대기 중인 작업이 있어");
+    expect((await rewind().expect(409)).body.error).toBe("외부 작업이 진행 중이어서 지금은 다시 시작할 수 없습니다.");
     untouched();
     expect(H.requests).toHaveLength(0);
   });
@@ -633,16 +594,7 @@ describe("regenerate", () => {
       { role: "user", content: "응답 중 보낸 말", at: 6, kind: "steer" },
       { role: "assistant", content: "후속 답", at: 7, resumePoint: { sessionId: "sess-a", uuid: "uuid-a4" } },
     ]);
-    // The discarded run's own bot task and canvas predate its first answer row.
-    const task = t.store.createBotTask({
-      ownerUserId: owner.id,
-      agentId: "bot",
-      conversationId: "g1",
-      title: "작업",
-      requestText: "작업",
-      status: "running",
-    });
-    dbOf(t.store).prepare("UPDATE bot_tasks SET status = 'done', created_at = ? WHERE id = ?").run(at(3.5), task.id);
+    // The discarded run's own canvas predates its first answer row.
     t.store.upsertCanvasArtifact(owner.id, "g1", { artifactId: "cv", title: "cv", content: "x", contentType: "markdown" });
     dbOf(t.store).prepare("UPDATE canvas_artifacts SET created_at = ? WHERE id = 'cv'").run(at(3.5));
 
@@ -667,7 +619,6 @@ describe("regenerate", () => {
     const rows = t.store.listMessages(owner.id, "g1");
     expect(rows.map((m) => m.id).slice(0, 3)).toEqual([u1.id, a1.id, u2.id]);
     expect(rows.map((m) => m.content)).toEqual(["첫 질문", "첫 답", "둘째 질문", "[mock] 둘째 질문"]);
-    expect(t.store.getBotTask(task.id)).toBeNull();
     expect(t.store.listCanvasArtifacts(owner.id, "g1")).toEqual([]);
   });
 
@@ -681,7 +632,7 @@ describe("regenerate", () => {
     ]);
     const regen = (conversationId: string) =>
       owner.agent.post("/api/chat/stream").send({ avatarId: owner.id, conversationId, message: "x", regenerate: true });
-    expect((await regen("g2").expect(400)).body.error).toBe("대기열로 보낸 메시지에는 다시 생성을 쓸 수 없습니다.");
+    expect((await regen("g2").expect(400)).body.error).toBe("다른 응답이 진행되는 중에 저장된 메시지라 다시 생성할 수 없습니다.");
     expect((await regen("g-empty").expect(400)).body.error).toBe("다시 생성할 메시지가 없습니다.");
     expect(t.store.listMessages(owner.id, "g2")).toHaveLength(3);
   });
@@ -763,132 +714,6 @@ describe("resume points and queued rows", () => {
     closeRun("raced");
     const late = t.store.listMessages(owner.id, "r3").at(-1)!;
     expect(late).toMatchObject({ role: "user", content: "늦은 메시지", kind: "queued" });
-  });
-});
-
-function resumeLogOf(store: Store, taskId: string): { at: string; pendingQuestion: string | null; reportedOutcome: string | null }[] {
-  const row = dbOf(store).prepare("SELECT resume_log FROM bot_tasks WHERE id = ?").get(taskId) as { resume_log: string | null };
-  return row.resume_log ? JSON.parse(row.resume_log) : [];
-}
-
-describe("rewind — bot tasks a discarded turn resumed", () => {
-  it("puts a task back to the parked state of its first resume at/after the cutoff", async () => {
-    const t = boot();
-    const { id: ownerId } = await newOwner(t);
-    t.store.touchConversation(ownerId, "bt", ownerId, "봇 작업");
-    const leg = (minute: number, fn: () => void) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(at(minute)));
-      try {
-        fn();
-      } finally {
-        vi.useRealTimers();
-      }
-    };
-    let taskId = "";
-    leg(1, () => {
-      taskId = t.store.createBotTask({
-        ownerUserId: ownerId,
-        agentId: "bot",
-        conversationId: "bt",
-        title: "정리",
-        requestText: "정리",
-        status: "running",
-        runId: "run-1",
-      }).id;
-      t.store.setBotTaskReport(taskId, { outcome: "need_input", summary: "첫 질문?" });
-      t.store.finishBotTask(taskId, { status: "waiting_input", model: "m1" });
-    });
-    // The owner answers (resume #1 at minute 10), the bot asks again.
-    leg(10, () => {
-      t.store.markBotTaskRunning(taskId, "run-2");
-      t.store.setBotTaskReport(taskId, { outcome: "need_input", summary: "둘째 질문?" });
-      t.store.finishBotTask(taskId, { status: "waiting_input", model: "m2" });
-    });
-    // Answered again (resume #2 at minute 20), and finished.
-    leg(20, () => {
-      t.store.markBotTaskRunning(taskId, "run-3");
-      t.store.setBotTaskReport(taskId, { outcome: "done", summary: "끝났습니다" });
-      t.store.finishBotTask(taskId, { status: "done", model: "m3" });
-    });
-    expect(resumeLogOf(t.store, taskId).map((s) => s.pendingQuestion)).toEqual(["첫 질문?", "둘째 질문?"]);
-    const snapshot = dbOf(t.store).prepare("SELECT * FROM bot_tasks WHERE id = ?").get(taskId) as Record<string, unknown>;
-    const reset = () =>
-      dbOf(t.store)
-        .prepare("UPDATE bot_tasks SET status = ?, finished_at = ?, pending_question = ?, reported_outcome = ?, result_summary = ?, model = ?, seen_at = ?, resume_log = ? WHERE id = ?")
-        .run(snapshot.status, snapshot.finished_at, snapshot.pending_question, snapshot.reported_outcome, snapshot.result_summary, snapshot.model, snapshot.seen_at, snapshot.resume_log, taskId);
-
-    // Cutoff after the last resume: nothing a discarded turn did → untouched.
-    t.store.rewindBotTasks("bt", at(25));
-    expect(t.store.getBotTask(taskId)).toMatchObject({ status: "done", resultSummary: "끝났습니다" });
-
-    // Cutoff between the resumes: back to the SECOND question, first leg kept.
-    t.store.rewindBotTasks("bt", at(15));
-    expect(t.store.getBotTask(taskId)).toMatchObject({
-      status: "waiting_input",
-      pendingQuestion: "둘째 질문?",
-      reportedOutcome: "need_input",
-      resultSummary: null,
-      finishedAt: null,
-      runId: null,
-      model: "m2",
-    });
-    expect(resumeLogOf(t.store, taskId).map((s) => s.pendingQuestion)).toEqual(["첫 질문?"]);
-
-    // Cutoff before both: back to the FIRST question.
-    reset();
-    t.store.rewindBotTasks("bt", at(5));
-    expect(t.store.getBotTask(taskId)).toMatchObject({ status: "waiting_input", pendingQuestion: "첫 질문?", model: "m1" });
-    expect(resumeLogOf(t.store, taskId)).toEqual([]);
-  });
-
-  async function botThread(t: Booted) {
-    const owner = await newOwner(t);
-    const agent = t.store.createPersonalAgent(owner.id, { displayName: "리서치 봇" });
-    const avatarId = personalAgentAvatarId(owner.id, agent.id);
-    const send = (body: object) =>
-      owner.agent.post("/api/chat/stream").send({ avatarId, conversationId: "bot-thread", ...body }).expect(200);
-    // Turn 1: the bot parks on a question.
-    H.script.push((req, _events, store) => {
-      store.setBotTaskReport(req.personalAgent!.taskId!, { outcome: "need_input", summary: "어느 쪽으로 할까요?" });
-    });
-    await send({ message: "보고서 정리해줘" });
-    // Turn 2: the owner answers; that turn resumes the parked task and finishes it.
-    await send({ message: "A안으로" });
-    const [task] = t.store.listBotTasksForConversation("bot-thread");
-    expect(task.status).toBe("done");
-    const answer = t.store.listMessages(owner.id, "bot-thread").find((m) => m.content === "A안으로")!;
-    return { owner, send, task, answer };
-  }
-
-  it("re-parks the task an edited answer had resumed, so the re-run resumes it instead of opening a duplicate", async () => {
-    const t = boot();
-    const { send, task, answer } = await botThread(t);
-
-    await send({ message: "B안으로", rewindFromMessageId: answer.id });
-
-    const tasks = t.store.listBotTasksForConversation("bot-thread");
-    expect(tasks.map((row) => row.id)).toEqual([task.id]);
-    // The re-run resumed the ORIGINAL card…
-    expect(H.requests[2].personalAgent?.taskId).toBe(task.id);
-    expect(tasks[0].status).toBe("done");
-    // …from its restored parked state: the one resume left on the log is the
-    // re-run's, taken from the question pending again.
-    expect(resumeLogOf(t.store, task.id)).toMatchObject([
-      { pendingQuestion: "어느 쪽으로 할까요?", reportedOutcome: "need_input" },
-    ]);
-  });
-
-  it("does the same for a regenerate of that answer", async () => {
-    const t = boot();
-    const { send, task } = await botThread(t);
-
-    await send({ message: "x", regenerate: true });
-
-    expect(t.store.listBotTasksForConversation("bot-thread").map((row) => row.id)).toEqual([task.id]);
-    expect(H.requests[2].personalAgent?.taskId).toBe(task.id);
-    expect(H.requests[2].message).toBe("A안으로");
-    expect(resumeLogOf(t.store, task.id)).toHaveLength(1);
   });
 });
 

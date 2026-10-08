@@ -246,7 +246,7 @@ describe("pptx SKILL.md body", () => {
     // §2's two older asks (an unclear slide count, the outline check) are folded into that one call
     expect(flat).not.toContain("when interactive and unclear, ask");
     expect(flat).not.toContain("Confirm the outline first");
-    // The hook DENIES the dialog in bot and headless runs, but an external-task-API turn PARKS it, so the skill keys
+    // The hook DENIES the dialog in headless runs, but an external-task-API turn PARKS it, so the skill keys
     // that exclusion on the provenance marker the prompt carries for those turns — quoted verbatim, and still there.
     const marker = "This turn was submitted by an **EXTERNAL SYSTEM**";
     expect(flat).toContain(`\`${marker}\``);

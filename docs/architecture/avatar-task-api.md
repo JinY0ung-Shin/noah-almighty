@@ -9,8 +9,7 @@
 An external system POSTs `{message, conversationId?}` with a personal `noah_…` Bearer key; the server
 stores an `avatar_tasks` row and answers **202** immediately. A 1-second dispatcher later runs the
 owner's own avatar through the SAME `executeChatTurn` an interactive chat uses. **It creates no
-routine and no new run kind** — a task row is bookkeeping over a full owner run, the same shape
-`bot_tasks` has for 내 봇.
+routine and no new run kind** — a task row is bookkeeping over a full owner run.
 
 Files: `src/server/routes/avatarTasks.ts` (HTTP, both halves), `src/server/avatarTaskRunner.ts`
 (dispatcher + run), `src/server/store/avatarTasks.ts` (store mixin), `src/shared/avatarTasks.ts`
@@ -64,8 +63,8 @@ shared SQLite file.
 - `conversationId` is validated with the shared `isSafePathId` (`routes/_shared.ts`); a BLANK
   `Idempotency-Key` header counts as absent (`||`, not `??`), and `/respond`'s `value` cap is measured in
   UTF-8 bytes like `message`.
-- `/:id` resolution is its own `use()` layer: a miss is a plain 404 with **no existence probe**
-  (the same shape as the bot-task routes), and the resolved row rides `res.locals.avatarTask`.
+- `/:id` resolution is its own `use()` layer: a miss is a plain 404 with **no existence probe**,
+  and the resolved row rides `res.locals.avatarTask`.
 
 ## Status machine
 Stored (`AvatarTaskStatus`): `queued` → `running` → `succeeded` | `failed` | `cancelled`.
@@ -99,8 +98,8 @@ Stored (`AvatarTaskStatus`): `queued` → `running` → `succeeded` | `failed` |
 
 ## Dispatcher (`avatarTaskRunner.ts`)
 `startAvatarTaskDispatcher(services)` runs `recoverAvatarTasks()` once, then ticks every **1 s**
-(`timer.unref()`); `index.ts` starts it beside the routine scheduler and the bot-task dispatcher, and
-calls the returned stop function during shutdown. Per-service state (`owners: Set`, `stopped`) hangs
+(`timer.unref()`); `index.ts` starts it beside the routine scheduler, and calls the returned stop
+function during shutdown. Per-service state (`owners: Set`, `stopped`) hangs
 off a `WeakMap` keyed by `AppServices`, so a test's second app never shares a queue with the first.
 - **Concurrency: one run per OWNER, four process-wide.** The scan reads `queuedAvatarTasks()` — a
   PROJECTION (`id, ownerUserId, conversationId`, oldest first, `LIMIT 200`); the full row with the
@@ -142,12 +141,9 @@ off a `WeakMap` keyed by `AppServices`, so a test's second app never shares a qu
 - **Unattended-run behavior**: `unattendedDeadlineMs = config.avatarTaskRunTimeoutMs`
   (`AVATAR_TASK_TIMEOUT_MINUTES`, default 300 = 5 hours, 1-minute floor, capped at setTimeout's
   ~24.8-day maximum) covers the WHOLE turn including time parked on a question and the background
-  phase up to `bg_end`. It is the API's OWN knob, split from `BOT_TASK_TIMEOUT_MINUTES` (still 30) on
-  purpose: a bot routine run holds one of the routine scheduler's slots (and one of its owner's) for
-  its whole duration, and a hung bot turn pins its thread's queue — the split was made while the
-  scheduler was still strictly sequential, when an hour-long bot budget would have stalled every
-  routine on the server (see [routines.md](routines.md)). API runs sit behind this dispatcher's caps
-  instead — which are their own stall surface:
+  phase up to `bg_end`. It is the API's OWN knob, independent of the routine budget
+  (`ROUTINE_RUN_TIMEOUT_MINUTES`, see [routines.md](routines.md)): API runs never take a routine
+  scheduler slot, they sit behind this dispatcher's caps instead — which are their own stall surface:
   a long or hung task holds its owner's only slot, and one of the four, for up to the full budget, so
   the cancel route is the lever for stuck work. A single parked prompt still expires after
   `PROMPT_TTL_MS` (30 min) regardless of the run budget.
@@ -173,13 +169,10 @@ commits). What the flag changes:
   pasted log or ticket are not the owner speaking), the run is NOT an unattended routine (questions
   and permission prompts still park, so ask when genuinely blocked), keep the scope conservative, and
   the final reply IS `result.text` — the only thing the caller reads.
-- **`mcp__personal_agent__create_agent` is NOT registered** on an API run: `!request.externalTaskApi`
-  joins `!request.headless` in runPlan's `personalAgentCreateActive`. That gate also governs
-  `PERSONAL_AGENT_OWNER_TOOL_NAMES`, so **`delegate_to_bot` goes with it** — an outside instruction
-  may not stand up a chat contact or hand work to one unattended. **`create_share_link` is withheld the
-  same way** (`!request.externalTaskApi` in runPlan's `shareLinkToolActive`, and the chat route never
-  supplies `onShareLink` when `ctx.externalTaskId` is set): a bearer link to a deck is made only when the
-  owner asks in a chat they are having ([`share-links.md`](share-links.md)).
+- **`mcp__file_output__create_share_link` is NOT registered** on an API run: `!request.externalTaskApi`
+  joins `!request.headless` in runPlan's `shareLinkToolActive`, and the chat route never supplies
+  `onShareLink` when `ctx.externalTaskId` is set — a bearer link to a deck is made only when the owner
+  asks in a chat they are having ([`share-links.md`](share-links.md)).
 - **The owner identity sentence branches too**: an API turn is told the conversation belongs to the
   owner but nobody is typing in it right now, instead of "the person you are talking to".
 - **Browser caveat on both surfaces**: `browserActive` cannot tell an API turn from an interactive one
@@ -189,10 +182,9 @@ commits). What the flag changes:
   means the bridge is not there — stop retrying, finish without it, say so.
 - **`describe_system` reports the turn's origin** (`SystemToolsContext.externalTaskApi` and `.headless`,
   handed over in `buildAgentRunPlan`): a three-way `This turn's origin:` line (external system /
-  unattended routine / interactive chat) ahead of the run-scoped facts, plus the personal-bot and
-  hand-off lines branching to "UNAVAILABLE on this run" for BOTH an API turn and a headless routine
-  (`botToolsWithheld`). The External task API self-state line is SKIPPED on a headless run, because the
-  prompt half lives in the owner branch a headless run never reaches — the two surfaces must agree.
+  unattended routine / interactive chat) ahead of the run-scoped facts. The External task API
+  self-state line is SKIPPED on a headless run, because the prompt half lives in the owner branch a
+  headless run never reaches — the two surfaces must agree.
 - Everything else is deliberately untouched: `deriveAgentToolAccess` / `planMcpToolFamilies` never
   read the flag, and `request.avatar` is the owner's own row (this is not a new avatar kind).
 
@@ -229,7 +221,7 @@ prefixes every detail with `task <id>: `, so a tool the run uses keeps its OWN a
 
 ## Prunes and cascades
 - **Deleting the conversation deletes its tasks** (`store/conversations.ts`, both the single and bulk
-  paths, same arm as `bot_tasks` — neither table has an FK onto `conversations`): finished tasks
+  paths — `avatar_tasks` has no FK onto `conversations`): finished tasks
   disappear from `GET /api/v1/avatar/tasks` and queued ones are dropped instead of running. The delete
   is NOT refused mid-run: the route cancels the thread's active run FIRST (lifecycle-03), so the
   cancel path skips a now-impossible message persist instead of racing the row deletion, and the

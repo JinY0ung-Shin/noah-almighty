@@ -139,7 +139,6 @@ import {
 } from "../src/server/agent/confluenceTools.js";
 import { generateSshKeyPair } from "../src/server/sshIdentity.js";
 import { workspaceDirFor } from "../src/server/workspace.js";
-import { personalAgentAvatarId } from "../src/server/personalAgents.js";
 import type { AgentImageInput, AppConfig, Plugin } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
@@ -1045,70 +1044,6 @@ describe("routine jobs", () => {
     expect(conv!.routineId).toBe(job.id);
   });
 
-  it("binds a 봇 루틴 to the bot: composite thread, owner row, personalAgentId", () => {
-    const { store, ownerId } = makeStore("rj-bot-bind");
-    const bot = store.createPersonalAgent(ownerId, { displayName: "리서치 봇" });
-    const job = store.createRoutineJob(ownerId, {
-      name: "주간 리서치",
-      prompt: "이번 주 이슈 정리",
-      minuteOfDay: 540,
-      personalAgentId: bot.id,
-    });
-
-    expect(job.personalAgentId).toBe(bot.id);
-    // avatar_user_id stays the OWNER's uuid — that is what keeps the scheduler's
-    // suspended-owner JOIN and deleteUser's sweep working for bot routines too.
-    expect(job.avatarUserId).toBe(ownerId);
-    // ...while the THREAD belongs to the bot, so its history lands in 봇 오피스.
-    expect(store.getConversationAvatarId(ownerId, job.conversationId)).toBe(
-      personalAgentAvatarId(ownerId, bot.id),
-    );
-    const conv = store
-      .listConversations(ownerId, undefined, "routine")
-      .find((c) => c.id === job.conversationId);
-    expect(conv).toMatchObject({ isRoutine: true, routineId: job.id });
-    expect(conv!.title).toBe("[예약 작업] 주간 리서치");
-
-    // A legacy routine is unchanged: NULL binding, owner-bound thread.
-    const legacy = store.createRoutineJob(ownerId, { prompt: "p", minuteOfDay: 0 });
-    expect(legacy.personalAgentId).toBeNull();
-    expect(store.getConversationAvatarId(ownerId, legacy.conversationId)).toBe(ownerId);
-  });
-
-  it("listRoutineJobs filters tri-state: all / one bot / main avatar only", () => {
-    const { store, ownerId } = makeStore("rj-bot-filter");
-    const bot = store.createPersonalAgent(ownerId, { displayName: "봇 A" });
-    const other = store.createPersonalAgent(ownerId, { displayName: "봇 B" });
-    const mine = store.createRoutineJob(ownerId, { prompt: "내 것", minuteOfDay: 0 });
-    const botJob = store.createRoutineJob(ownerId, {
-      prompt: "봇 것",
-      minuteOfDay: 0,
-      personalAgentId: bot.id,
-    });
-    const otherJob = store.createRoutineJob(ownerId, {
-      prompt: "다른 봇 것",
-      minuteOfDay: 0,
-      personalAgentId: other.id,
-    });
-
-    // No filter = everything, which is what the routines route and RoutinesView
-    // keep seeing.
-    expect(store.listRoutineJobs(ownerId).map((r) => r.id).sort()).toEqual(
-      [mine.id, botJob.id, otherJob.id].sort(),
-    );
-    expect(
-      store.listRoutineJobs(ownerId, { personalAgentId: bot.id }).map((r) => r.id),
-    ).toEqual([botJob.id]);
-    // An explicit null is the OWN-avatar filter, not "no filter".
-    expect(
-      store.listRoutineJobs(ownerId, { personalAgentId: null }).map((r) => r.id),
-    ).toEqual([mine.id]);
-    // An undefined value reads as "no filter", same as omitting the bag.
-    expect(
-      store.listRoutineJobs(ownerId, { personalAgentId: undefined }),
-    ).toHaveLength(3);
-  });
-
   it("executeRoutineJob runs the job, records the outcome, and blocks overlap", async () => {
     const services = createServices({
       dataDir: path.join(tempDir, "rj-exec"),
@@ -1161,7 +1096,6 @@ describe("routine jobs", () => {
       lastError: null,
       completedAt: null,
       createdAt: new Date().toISOString(),
-      personalAgentId: null,
     } as const;
 
     const result = await executeRoutineJob(services, job);

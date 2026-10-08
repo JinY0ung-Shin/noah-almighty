@@ -19,7 +19,6 @@ import { openAgentCards } from "../src/client/src/lib/agentCards.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { readState, replaceState, toasts } from "../src/client/src/lib/state.js";
 import type {
-  AvatarSummary,
   GroupSharedSkill,
   LiveAgentNode,
   LiveTaskRow,
@@ -153,7 +152,6 @@ describe("RoutineModal", () => {
       lastError: null,
       completedAt: "2000-01-01T00:00:00.000Z",
       createdAt: "1999-12-01T00:00:00.000Z",
-      personalAgentId: null,
     };
     render(RoutineModal, { props: { routine } });
 
@@ -170,77 +168,6 @@ describe("RoutineModal", () => {
 /* ------------------------------------------------------------------ */
 
 describe("RoutinesView", () => {
-  /** An enabled daily routine; every field the view reads is overridable. */
-  function routineOf(over: Partial<RoutineJob> = {}): RoutineJob {
-    return {
-      id: "routine-1",
-      avatarUserId: "owner-1",
-      conversationId: "conv-1",
-      name: "매일 점검",
-      prompt: "작업 실행",
-      scheduleKind: "daily",
-      minuteOfDay: 9 * 60,
-      time: "09:00",
-      daysOfWeek: null,
-      intervalMinutes: null,
-      runDate: null,
-      enabled: true,
-      nextRunAt: "2026-07-14T00:00:00.000Z",
-      lastRunAt: null,
-      lastStatus: null,
-      lastError: null,
-      completedAt: null,
-      createdAt: "2026-07-01T00:00:00.000Z",
-      personalAgentId: null,
-      ...over,
-    };
-  }
-
-  /** The shape the server tags onto the owner's own bots in GET /api/avatars. */
-  function botOf(agentId: string, displayName: string): AvatarSummary {
-    return {
-      id: `personal:owner-1:${agentId}`,
-      username: `personal-agent-${agentId}`,
-      displayName,
-      alias: "",
-      bio: "",
-      hashtags: [],
-      hasImage: false,
-      pluginCount: 0,
-      visibility: "group",
-      updatedAt: null,
-      runtime: "native",
-      personalAgent: { agentId, defaultModel: null },
-    };
-  }
-
-  /** Answers the view's boot requests; anything unnamed gets an empty list. */
-  function stubRoutineFetch(routines: RoutineJob[], avatars: AvatarSummary[]): void {
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const path = String(input);
-      const body = path.startsWith("/api/me/routines")
-        ? { routines }
-        : path.startsWith("/api/avatars")
-          ? { avatars }
-          : { conversations: [] };
-      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-    }));
-    replaceState({
-      routines: [],
-      routineConversations: [],
-      routineConversationId: "",
-      routineMessages: [],
-      routineSearch: "",
-      routineTypeFilter: "all",
-      routineFilter: "all",
-      // The view loads the roster itself, so the chip's name must survive a cold
-      // start — seeding it here would hide a missing loadAvatars() call.
-      avatars: [],
-      avatarsLoaded: false,
-      avatarsLoading: false,
-    });
-  }
-
   it("groups routines into 예정 / 일시 정지 / collapsed 지난 실행 without a type filter", async () => {
     const base: Omit<RoutineJob, "id" | "conversationId" | "name" | "scheduleKind" | "runDate" | "enabled" | "nextRunAt" | "lastRunAt" | "lastStatus" | "completedAt"> = {
       avatarUserId: "owner-1",
@@ -251,7 +178,6 @@ describe("RoutinesView", () => {
       intervalMinutes: null,
       lastError: null,
       createdAt: "2026-07-01T00:00:00.000Z",
-      personalAgentId: null,
     };
     const routines: RoutineJob[] = [
       {
@@ -345,55 +271,6 @@ describe("RoutinesView", () => {
     await waitFor(() => expect(screen.queryByText("매일 점검")).toBeNull());
     expect(groupHeads()).toEqual(["지난 실행 1"]);
     expect(screen.getByText("백업 확인")).toBeTruthy();
-  });
-
-  it("names the owning bot on a 봇 루틴 and leaves the main avatar's own routines bare", async () => {
-    stubRoutineFetch(
-      [
-        routineOf({ id: "bot-routine", conversationId: "conv-bot", name: "봇 아침 브리핑", personalAgentId: "bot-1" }),
-        routineOf({ id: "own-routine", conversationId: "conv-own", name: "내 아침 브리핑" }),
-      ],
-      [botOf("bot-1", "리뷰 봇"), botOf("bot-2", "문서 봇")],
-    );
-
-    render(RoutinesView);
-    await screen.findByText("봇 아침 브리핑");
-
-    // The roster is fetched by the view itself, so the name lands a tick after
-    // the rows do — what matters is where it settles.
-    await waitFor(() =>
-      expect(
-        [...document.querySelectorAll(".routine-row")].map((row) => [
-          row.querySelector(".routine-row-name")?.textContent?.trim(),
-          row.querySelector(".routine-row-bot")?.textContent?.trim() ?? null,
-        ]),
-      ).toEqual([
-        ["봇 아침 브리핑", "리뷰 봇"],
-        ["내 아침 브리핑", null],
-      ]),
-    );
-    expect(document.querySelector(".routine-row-bot")?.getAttribute("title")).toBe("봇이 대신 실행하는 예약 작업");
-
-    // The chip sits INSIDE the row button, whose aria-label wins over its
-    // contents — so the bot has to be spelled into that name or it is never
-    // announced at all.
-    expect(screen.getByRole("button", { name: "예약 작업 결과 보기: 봇 아침 브리핑 (리뷰 봇)" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "예약 작업 결과 보기: 내 아침 브리핑" })).toBeTruthy();
-  });
-
-  it("still marks a 봇 루틴 when the roster is unavailable, falling back to a bare 봇", async () => {
-    stubRoutineFetch(
-      [routineOf({ id: "bot-routine", conversationId: "conv-bot", name: "봇 아침 브리핑", personalAgentId: "bot-1" })],
-      [],
-    );
-
-    render(RoutinesView);
-    await screen.findByText("봇 아침 브리핑");
-
-    // "누가 실행하는가"가 "어느 봇인가"보다 먼저다 — 이름을 못 찾았다고 칩을
-    // 통째로 숨기면 사용자는 자기 아바타 루틴으로 오해한다.
-    await waitFor(() => expect(document.querySelector(".routine-row-bot")?.textContent?.trim()).toBe("봇"));
-    expect(screen.getByRole("button", { name: "예약 작업 결과 보기: 봇 아침 브리핑 (봇)" })).toBeTruthy();
   });
 });
 

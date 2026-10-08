@@ -10,10 +10,9 @@ import { withConversations } from "./conversations.js";
 import { withAdmin } from "./admin.js";
 import { withGroups } from "./groups.js";
 import { withGroupAgents } from "./groupAgents.js";
-import { withPersonalAgents } from "./personalAgents.js";
 import { withAvatarTasks } from "./avatarTasks.js";
-import { withBotTasks } from "./botTasks.js";
 import { withShareLinks } from "./shareLinks.js";
+import { withRetiredPersonalAgents } from "./retiredPersonalAgents.js";
 
 // Re-export the non-Store public symbols identically to the pre-split module so
 // `../store` / `./store` imports keep resolving. Behavior-preserving: the only
@@ -26,7 +25,6 @@ export {
   SIGNUP_MODE_KEY,
   MODEL_OVERRIDE_KEY,
 } from "./internal.js";
-export { MAX_PERSONAL_AGENTS } from "./personalAgents.js";
 export { AVATAR_TASK_RESTART_ERROR } from "./avatarTasks.js";
 
 /**
@@ -40,15 +38,13 @@ export { AVATAR_TASK_RESTART_ERROR } from "./avatarTasks.js";
  * disjoint, so nothing shadows anything); it only feeds TS `this`-typing, which
  * the `declare`d cross-domain method signatures on StoreBase already cover.
  */
-const ComposedStore = withShareLinks(withDirectMessages(withAvatarTasks(withBotTasks(
-  withPersonalAgents(
-    withGroupAgents(
-      withGroups(
-        withAdmin(
-          withConversations(
-            withAvatars(
-              withRoutines(withKnowledgeRepo(withSecrets(withUsers(StoreBase)))),
-            ),
+const ComposedStore = withRetiredPersonalAgents(withShareLinks(withDirectMessages(withAvatarTasks(
+  withGroupAgents(
+    withGroups(
+      withAdmin(
+        withConversations(
+          withAvatars(
+            withRoutines(withKnowledgeRepo(withSecrets(withUsers(StoreBase)))),
           ),
         ),
       ),

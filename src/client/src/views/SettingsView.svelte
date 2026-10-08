@@ -4,33 +4,24 @@
   import SettingsProfileTab from "../components/SettingsProfileTab.svelte";
   import SettingsAccessTab from "../components/SettingsAccessTab.svelte";
   import SettingsKnowledgeTab from "../components/SettingsKnowledgeTab.svelte";
-  import SettingsPersonalAgentsCard from "../components/SettingsPersonalAgentsCard.svelte";
   import { loadSettingsData } from "../lib/loaders";
   import { appState, updateState } from "../lib/state";
 
   // 그룹 moved to its own left-rail view (GroupsView) — #/settings/groups
   // redirects there (lib/nav.ts).
-  const ALL_TABS = [
-    { id: "profile", label: "프로필", icon: "user", adminOnly: false },
-    { id: "access", label: "권한·연결", icon: "shield", adminOnly: false },
-    { id: "knowledge", label: "지식·플러그인", icon: "book", adminOnly: false },
-    // 내 봇 is a phase-1 admin-only feature, gated on the same role check the
-    // rail uses for its 관리자 entry.
-    { id: "agents", label: "내 봇", icon: "sparkles", adminOnly: true },
+  const tabs = [
+    { id: "profile", label: "프로필", icon: "user" },
+    { id: "access", label: "권한·연결", icon: "shield" },
+    { id: "knowledge", label: "지식·플러그인", icon: "book" },
   ] as const;
-  type SettingsTabId = (typeof ALL_TABS)[number]["id"];
+  type SettingsTabId = (typeof tabs)[number]["id"];
 
   let loading = true;
   let loadBusy = false;
   let error = "";
 
   $: user = $appState.user;
-  $: isAdmin = Boolean(user?.roles?.includes("admin"));
-  $: tabs = ALL_TABS.filter((tab) => !tab.adminOnly || isAdmin);
   $: settingsTab = $appState.settingsTab;
-  // A hash pointing at a tab this account can't see (bookmark, revoked role)
-  // would otherwise leave every tab unselected and the panel blank.
-  $: if (user && !tabs.some((tab) => tab.id === settingsTab)) setSettingsTab("profile");
 
   onMount(load);
 
@@ -119,9 +110,6 @@
       <SettingsProfileTab active={settingsTab === "profile"} />
       <SettingsAccessTab active={settingsTab === "access"} />
       <SettingsKnowledgeTab active={settingsTab === "knowledge"} />
-      {#if isAdmin}
-        <SettingsPersonalAgentsCard active={settingsTab === "agents"} />
-      {/if}
     </div>
   {/if}
 </div>

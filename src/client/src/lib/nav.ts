@@ -4,16 +4,15 @@ import type { ClientState } from "./state";
 import type { AdminTab, SettingsTab, ViewName } from "./types";
 
 // Views a non-admin may not open at all, so a typed/bookmarked hash lands on
-// 탐색 instead of an empty screen. 봇 오피스 is admin-gated for phase 1 exactly
-// like the 내 봇 feature it renders (see the personal-agents notes).
-const ADMIN_ONLY_VIEWS: ViewName[] = ["bots", "admin"];
+// 탐색 instead of an empty screen.
+const ADMIN_ONLY_VIEWS: ViewName[] = ["admin"];
 
 function viewDenied(view: ViewName, state: ClientState): boolean {
   return ADMIN_ONLY_VIEWS.includes(view) && !state.user?.roles?.includes("admin");
 }
 
-const VIEW_ROUTES: ViewName[] = ["explore", "chat", "bots", "brain", "inbox", "routines", "groups", "skills", "settings", "admin", "share"];
-const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge", "agents"];
+const VIEW_ROUTES: ViewName[] = ["explore", "chat", "brain", "inbox", "routines", "groups", "skills", "settings", "admin", "share"];
+const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",
   "users",
@@ -57,15 +56,9 @@ export function currentRoute(): string {
       ? `#/brain/${encodeURIComponent(state.brainSource)}`
       : "#/brain";
   }
-  // 봇 오피스 keeps the selected bot in the URL. This branch is load-bearing:
-  // every send re-runs syncHash(true) from the run stream's `open` frame, and
-  // without it the bare "#/bots" would silently drop the agent id mid-chat.
-  if (state.view === "bots") {
-    return state.botsAgentId ? `#/bots/${encodeURIComponent(state.botsAgentId)}` : "#/bots";
-  }
-  // Same trap as bots: the token IS the page. A syncHash from anywhere (a run
-  // stream's `open` frame, a conversation switch) must write it back, or the
-  // URL collapses to "#/share" and a reload or Back loses the link.
+  // The token IS the page. A syncHash from anywhere (a run stream's `open`
+  // frame, a conversation switch) must write it back, or the URL collapses to
+  // "#/share" and a reload or Back loses the link.
   if (state.view === "share") {
     return state.shareToken ? `#/share/${encodeURIComponent(state.shareToken)}` : "#/share";
   }
@@ -89,8 +82,6 @@ export function goView(view: ViewName, arg?: string): void {
     if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
     if (view === "routines" && arg) state.routineConversationId = arg;
     if (view === "brain") state.brainSource = arg || "personal";
-    // Empty arg = "no bot picked yet"; BotsView renders its roster and waits.
-    if (view === "bots") state.botsAgentId = arg || "";
     if (view === "share") state.shareToken = arg || "";
   });
   syncHash();
@@ -109,7 +100,6 @@ export function applyInitialRoute(): void {
     if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
     if (view === "routines" && arg) state.routineConversationId = arg;
     if (view === "brain") state.brainSource = arg || "personal";
-    if (view === "bots") state.botsAgentId = arg || "";
     if (view === "share") state.shareToken = arg || "";
   });
   // Rewrite a legacy groups alias in place so it never enters history (Back
@@ -135,10 +125,6 @@ export function installRouteListener(onChatRoute?: (conversationId: string) => v
       if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
       if (view === "routines" && arg) state.routineConversationId = arg;
       if (view === "brain") state.brainSource = arg || "personal";
-      // No route callback for bots on purpose: BotsView reacts to
-      // state.botsAgentId itself, so back/forward inside the view is a pure
-      // state change (mirrors how brainSource is handled).
-      if (view === "bots") state.botsAgentId = arg || "";
       // A second share link opened while the viewer is mounted: ShareView
       // refetches on the token change itself (same pure-state pattern).
       if (view === "share") state.shareToken = arg || "";

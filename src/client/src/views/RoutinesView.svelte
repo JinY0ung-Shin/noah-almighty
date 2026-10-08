@@ -28,7 +28,7 @@
     renderMarkdown,
     routineTitle,
   } from "../lib/format";
-  import { loadAvatars, loadRoutineMessages, loadRoutinesData } from "../lib/loaders";
+  import { loadRoutineMessages, loadRoutinesData } from "../lib/loaders";
   import { prefersReducedMotion } from "../lib/motion";
   import { openSeededChat, selectConversation } from "../lib/chat";
   import { appState, notify, readState, replaceState, updateState } from "../lib/state";
@@ -174,24 +174,12 @@
 
   onMount(() => {
     void load();
-    // 봇 루틴 칩의 이름만 여기서 온다 — 실패해도 예약 작업 화면 자체는 멀쩡해야
-    // 하므로 삼키고, 칩은 "봇" 폴백으로 남는다. loadAvatars는 멱등이라 다른
-    // 화면이 이미 불러왔으면 요청 자체가 나가지 않는다.
-    void loadAvatars().catch(() => {});
   });
 
   // Never strand the drag cursor/user-select lock if the view unmounts mid-resize.
   onDestroy(() => document.body.classList.remove("col-resizing"));
 
   $: routines = $appState.routines;
-  // 봇 루틴(personalAgentId)이 어느 봇 것인지. 최상위 `$:`로 만들어 마크업이 맵을
-  // 직접 읽게 한다 — 레거시 모드에서 템플릿이 호출한 헬퍼 안에서만 읽은 상태는
-  // 추적되지 않아 아바타가 뒤늦게 도착해도 이름이 굳는다.
-  $: botNames = new Map<string, string>(
-    $appState.avatars
-      .filter((avatar) => Boolean(avatar.personalAgent))
-      .map((avatar) => [avatar.personalAgent?.agentId ?? "", avatar.alias || avatar.displayName]),
-  );
   $: filterId = (FILTER_DEFS.some((f) => f.id === $appState.routineFilter) ? $appState.routineFilter : "all") as FilterId;
   $: activeFilter = FILTER_DEFS.find((f) => f.id === filterId) ?? FILTER_DEFS[0];
   $: query = $appState.routineSearch.trim().toLowerCase();
@@ -204,7 +192,6 @@
           formatRoutineSchedule(r),
           r.enabled ? "사용 중" : "일시 정지",
           r.lastStatus === "error" ? "실패" : "완료",
-          botLabel(r, botNames),
         ]
           .join(" ")
           .toLowerCase();
@@ -269,7 +256,6 @@
 
   $: selectedConv = $appState.routineConversations.find((c) => c.id === $appState.routineConversationId) || null;
   $: selectedRoutine = selectedConv ? routines.find((r) => r.conversationId === selectedConv.id) || null : null;
-  $: selectedBot = selectedRoutine ? botLabel(selectedRoutine, botNames) : "";
   $: currentPrompt = (selectedRoutine?.prompt || "").trim();
   $: promptOneLine = currentPrompt.replace(/\s+/g, " ").trim();
   $: runs = groupRoutineRuns($appState.routineMessages);
@@ -483,20 +469,11 @@
     }
   }
 
-  // 봇 루틴이면 그 봇의 이름, 아니면 빈 문자열. 아바타 목록이 아직 안 왔을 때는
-  // 칩을 숨기지 않고 "봇"으로 떨어뜨린다 — 이 루틴을 실행하는 주체가 내 아바타가
-  // 아니라는 사실 자체가 이름보다 먼저 읽혀야 한다. 인자만 읽으므로 템플릿에서
-  // 호출해도 값이 굳지 않는다(호출부가 botNames를 이름으로 적는다).
-  function botLabel(routine: RoutineJob, names: Map<string, string>): string {
-    if (!routine.personalAgentId) return "";
-    return names.get(routine.personalAgentId) || "봇";
-  }
-
   // One row's derived display state, kept in one place so the markup stays flat.
   // `sched` + `tail` are split so the recurrence can stay bold while the whole
   // line remains ONE non-wrapping text run that truncates instead of breaking
   // mid-value.
-  function rowView(routine: RoutineJob, at: Date, names: Map<string, string>) {
+  function rowView(routine: RoutineJob, at: Date) {
     const completed = Boolean(routine.completedAt);
     const errored = routine.lastStatus === "error";
     const nextAt = !completed && routine.enabled ? routine.nextRunAt : null;
@@ -521,7 +498,6 @@
       completed,
       errored,
       title: routineTitle(routine),
-      bot: botLabel(routine, names),
       sched: once ? "한 번" : schedule,
       // Carried WITH its separator: Svelte collapses literal whitespace sitting
       // between a tag and an {#if}, which silently ate the space before the "·".
@@ -625,19 +601,18 @@
                     </summary>
                     <div class="routine-group-items">
                       {#each group.routines as routine (routine.id)}
-                        {@const v = rowView(routine, now, botNames)}
+                        {@const v = rowView(routine, now)}
                         {@const active = $appState.routineConversationId === routine.conversationId}
                         <div class="routine-row is-done" class:active aria-current={active ? "true" : undefined}>
                           <button
                             class="routine-row-main"
                             type="button"
-                            aria-label={`예약 작업 결과 보기: ${v.title}${v.bot ? ` (${v.bot})` : ""}`}
+                            aria-label={`예약 작업 결과 보기: ${v.title}`}
                             disabled={Boolean(resultBusyId)}
                             on:click={() => selectResult(routine)}>
                             <span class="routine-row-title">
                               <span class="routine-row-name">{v.title}</span>
                               <span class="tag">1회</span>
-                              {#if v.bot}<span class="tag accent routine-row-bot" title="봇이 대신 실행하는 예약 작업"><span>{v.bot}</span></span>{/if}
                             </span>
                             <span class="routine-row-when">
                               <span class="routine-row-when-text" title={v.sched + v.tail}><span class="routine-row-sched">{v.sched}</span>{v.tail}</span>
@@ -669,7 +644,7 @@
                     </div>
                     <div class="routine-group-items">
                       {#each group.routines as routine (routine.id)}
-                        {@const v = rowView(routine, now, botNames)}
+                        {@const v = rowView(routine, now)}
                         {@const active = $appState.routineConversationId === routine.conversationId}
                         {@const busy = busyRoutineId === routine.id || resultBusyId === routine.id}
                         <div
@@ -683,7 +658,7 @@
                           <button
                             class="routine-row-main"
                             type="button"
-                            aria-label={`${active ? "선택된 예약 작업 결과" : "예약 작업 결과 보기"}: ${v.title}${v.bot ? ` (${v.bot})` : ""}`}
+                            aria-label={active ? `선택된 예약 작업 결과: ${v.title}` : `예약 작업 결과 보기: ${v.title}`}
                             aria-describedby={`${routineDomId(routine, "meta")}${v.errored && routine.lastError ? ` ${routineDomId(routine, "error")}` : ""} ${routineActionStatusId}`}
                             disabled={busyRoutineId === routine.id || Boolean(resultBusyId)}
                             on:click={() => selectResult(routine)}
@@ -691,7 +666,6 @@
                             <span class="routine-row-title">
                               <span class="routine-row-name">{v.title}</span>
                               {#if routine.scheduleKind === "once"}<span class="tag">1회</span>{/if}
-                              {#if v.bot}<span class="tag accent routine-row-bot" title="봇이 대신 실행하는 예약 작업"><span>{v.bot}</span></span>{/if}
                             </span>
                             <span class="routine-row-when" id={routineDomId(routine, "meta")}>
                               <span class="routine-row-when-text" title={v.sched + v.tail}><span class="routine-row-sched">{v.sched}</span>{v.tail}</span>
@@ -775,10 +749,7 @@
         {#if selectedConv}
           <div class="routine-result-head">
             <div class="routine-result-id">
-              <div class="routine-result-title">
-                <h2>{selectedRoutine ? routineTitle(selectedRoutine) : selectedConv.title}</h2>
-                {#if selectedBot}<span class="tag accent" title="봇이 대신 실행하는 예약 작업">{selectedBot}</span>{/if}
-              </div>
+              <h2>{selectedRoutine ? routineTitle(selectedRoutine) : selectedConv.title}</h2>
               <p class="muted">
                 {#if selectedRoutine}
                   {formatRoutineSchedule(selectedRoutine).replace(" (KST)", "")}
@@ -903,26 +874,3 @@
     on:deleted={onModalDeleted}
     on:runNow={(event) => runFromButton(event.detail.routine)} />
 {/if}
-
-<style>
-  /* 봇 루틴 칩만 이 화면 전용이라 여기 둔다 — 나머지 예약 작업 레이아웃은
-     50-platform-views.css가 계속 소유한다. */
-  .routine-result-title {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    min-width: 0;
-  }
-  /* 봇 이름은 사용자가 지은 것이라 길 수 있다. 280px까지 좁아지는 목록 열에서
-     제목을 밀어내지 않도록 `.hashtag-chip`과 같은 방식으로 칩 안에서 자른다. */
-  .routine-row-bot {
-    flex: 0 1 auto;
-    min-width: 0;
-  }
-  .routine-row-bot > span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-</style>

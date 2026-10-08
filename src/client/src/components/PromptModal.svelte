@@ -14,15 +14,8 @@
   // explore/inbox/settings) so they never queue invisibly.
   export let paneId: string | null = null;
 
-  // Views that render chat panes — and therefore each pane's OWN scoped
-  // instance of this modal. 봇 오피스 mounts ChatView inside its thread column,
-  // so without "bots" here the root fallback would treat a visible pane as
-  // hidden and stack a SECOND copy of the same prompt on top of it.
-  const PANE_HOSTING_VIEWS = new Set<string>(["chat", "bots"]);
-
-  $: visiblePaneIds = PANE_HOSTING_VIEWS.has($appState.view)
-    ? new Set($appState.chatPanes.map((p) => p.id))
-    : new Set<string>();
+  $: visiblePaneIds =
+    $appState.view === "chat" ? new Set($appState.chatPanes.map((p) => p.id)) : new Set<string>();
   $: request = paneId
     ? ($appState.promptQueue.find((p) => p.paneId === paneId) ?? null)
     : ($appState.promptQueue.find((p) => !visiblePaneIds.has(p.paneId)) ?? null);

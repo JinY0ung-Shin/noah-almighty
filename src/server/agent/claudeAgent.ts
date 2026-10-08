@@ -258,8 +258,6 @@ export async function runClaudeAgent(
     ownerGroups,
     ownerSecrets,
     groupAgentState,
-    personalAgentState,
-    personalAgentCreateActive,
     effectiveModel,
     modelChain,
     runVisionEnabled,
@@ -380,7 +378,7 @@ export async function runClaudeAgent(
     browserEnabled: browserActive,
     fileOutputEnabled: fileOutputActive,
     // Share links: rides ONLY runs that registered create_share_link (the
-    // personalAgentsEnabled precedent), so the standing line never offers a
+    // skillExchangeActive precedent), so the standing line never offers a
     // tool the run lacks; any other run with file output hears the 공유 링크
     // button redirect instead. Same boolean describe_system reports.
     shareLinksEnabled: shareLinkToolActive,
@@ -401,10 +399,6 @@ export async function runClaudeAgent(
     // Group-agent self-state for the prompt branch (same facts as
     // describe_system's group ctx — the GroupAgentState invariant).
     groupAgentState,
-    // Personal-agent (내 봇) self-state: the bot identity the prompt speaks AS,
-    // carrying the same facts describe_system's bot block reports. Null on every
-    // non-bot run, which is also what the prompt's identity swap keys off.
-    personalAgentState,
     // External task API self-state, owner (non-group-agent) runs only: the live
     // key count, plus the CONFIGURED per-run budget — config, not store, so an
     // operator's AVATAR_TASK_TIMEOUT_MINUTES is what the avatar states, never
@@ -412,13 +406,6 @@ export async function runClaudeAgent(
     // its provenance paragraph; describe_system reads the same config value.
     avatarApiKeyCount: request.viewerIsOwner && !request.groupAgent ? ownerState.avatarApiKeyCount : undefined,
     avatarTaskRunTimeoutMs: request.viewerIsOwner && !request.groupAgent ? config.avatarTaskRunTimeoutMs : undefined,
-    // Bot-creation self-state, rides ONLY runs that registered create_agent
-    // (the skillExchangeActive precedent) so the standing guidance and the tool
-    // can't diverge. The roster is the owner's ENABLED bots.
-    personalAgentsEnabled: personalAgentCreateActive,
-    personalAgentNames: personalAgentCreateActive
-      ? ownerState.personalAgentNames
-      : [],
     // Mid-turn messages (steers) — META-COGNITION only, no capability change:
     // this run has a live steer channel, so the viewer can keep typing while it
     // works. Same boolean describe_system reports (runPlan's system ctx).

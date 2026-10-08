@@ -55,6 +55,33 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   schedule field, touch `routineSchedule.ts` + `RoutineJobRow` + this decode together.
 - **`deleteUser` does cascade-delete MANUALLY** (no `ON DELETE CASCADE` despite `foreign_keys=ON`). A
   new user-scoped table needs a matching `DELETE` added there or it orphans rows past "permanent deletion."
+- **The retired personal-bot feature is purged at boot, outside `migrate()`, until ONE clean pass.**
+  `retirePersonalAgents` (`src/server/retirePersonalAgents.ts` + the `store/retiredPersonalAgents.ts` mixin,
+  called from `index.ts` right after `createServices()` — before `createApp`, `listen` and the routine
+  scheduler, which would otherwise run a bot-bound routine as the owner) clears what an existing deployment
+  still holds: every `personal:`-bound conversation (messages, canvases, share links, task rows,
+  notifications) and any other row keyed by a bot avatar id, bot-bound `routine_jobs` rows, then `DROP`s
+  `bot_tasks` and `personal_agents`. Disk first: bot avatar images, workspace trees and bot-workspace SDK
+  project dirs are found by NAME prefix (`avatars/personal:*`, `workspaces/personal-*`, both spellings of the
+  workspaces root), never through row fields; files only the rows can name (each bot thread's chat media, and
+  its SDK session artifacts under `agentSessionsDir`, matched by session id because a work-repo thread shares
+  its project dir with the owner's runs) are swept while the rows exist. A removal blocked by a read-only
+  folder is retried once after making the target and every REAL folder below it owner-writable; links are
+  never chmodded or followed. Whatever row-keyed item fails is kept PENDING (`retired:personal_agents:pending`
+  in `app_config`: exact-shape paths relative to the current roots plus session ids whose folders could not
+  be listed — validated entry by entry and with every ancestor folder lstat-checked before anything is
+  removed), written in the purge's own transaction, which throws (a failed purge fails the boot loudly) and
+  runs on EVERY pass that finds rows, sweep failures or not. A pass with ZERO failures clears the pending row
+  and stamps the `retired:personal_agents` marker in one transaction (read by EXISTENCE, so a SESSION_SECRET
+  rotation can't un-mark it; a fresh install is stamped silently on its first boot); until then every boot
+  retries and warns with the paths it could not remove. A boot returns at once only when the marker exists,
+  no pending row is stored and neither retired TABLE exists — an older release booted after the stamp
+  re-creates both, so finding one retires again in the same boot (its purge drops the marker in the same
+  transaction; a clean finish stamps it again). That re-run deletes everything under the `personal:` /
+  `personal-` names, so those prefixes, the two table names and `routine_jobs.personal_agent_id` stay
+  reserved FOREVER. It never touches the `agents/<dir>/` folders the bots left in users' knowledge repos (the
+  users' own git content); the unused `routine_jobs.personal_agent_id` column stays on old DBs, like other
+  retired columns.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

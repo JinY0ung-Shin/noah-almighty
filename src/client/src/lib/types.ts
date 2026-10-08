@@ -15,8 +15,6 @@ export type {
   AvatarNotification,
   AvatarSummary,
   AvatarVisibility,
-  BotTask,
-  BotTaskStatus,
   CanvasArtifact,
   CanvasContentType,
   CanvasControl,
@@ -32,7 +30,6 @@ export type {
   KnowledgeNote,
   KnowledgeRequest,
   MessageAttachment,
-  PersonalAgent,
   Plugin,
   RepoPluginContents,
   RoutineJob,
@@ -110,7 +107,6 @@ export interface PendingSteer {
 export type ViewName =
   | "explore"
   | "chat"
-  | "bots"
   | "brain"
   | "inbox"
   | "routines"
@@ -120,8 +116,7 @@ export type ViewName =
   | "admin"
   /** A PPTX share link's viewer (`#/share/<token>`); not in the rail — only a link opens it. */
   | "share";
-/** 내 봇 (`agents`) is admin-only — SettingsView hides the tab for everyone else. */
-export type SettingsTab = "profile" | "access" | "knowledge" | "agents";
+export type SettingsTab = "profile" | "access" | "knowledge";
 export type AdminTab =
   | "overview"
   | "users"

@@ -36,7 +36,6 @@ describe("official system manual", () => {
       viewerIsOwner: true, knowledgeRepoConfigured: true, gitTokenSet: true,
       browserEnabled: true, canvasEnabled: true, visionEnabled: false,
       fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true,
-      personalAgentsEnabled: true, personalAgentNames: ["Research"],
       midTurnMessages: true, shareLinksEnabled: true,
     };
     const prompt = buildSystemPromptAppend(flags);

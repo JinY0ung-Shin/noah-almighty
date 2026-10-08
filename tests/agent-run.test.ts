@@ -86,20 +86,6 @@ vi.mock("../src/server/logger.js", async (importOriginal) => {
   };
 });
 
-// Every canvas server a run builds, with the context it was built from — so a
-// run kind's `canPark` is observable (a bot turn must never park on controls).
-const canvasBuilds = vi.hoisted(() => ({ contexts: [] as { canPark?: boolean }[] }));
-vi.mock("../src/server/agent/canvasTools.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/server/agent/canvasTools.js")>();
-  return {
-    ...actual,
-    buildCanvasServer: (ctx: Parameters<typeof actual.buildCanvasServer>[0]) => {
-      canvasBuilds.contexts.push(ctx);
-      return actual.buildCanvasServer(ctx);
-    },
-  };
-});
-
 import { createServices } from "../src/server/app.js";
 import { CLAUDE_OAUTH_TOKEN_KEY } from "../src/server/store.js";
 import { runAgentStream } from "../src/server/agent/index.js";
@@ -500,33 +486,20 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     const { options } = sdkMock.calls[0];
     expect(options.model).toBe("sonnet");
     expect(options.effort).toBe("high");
-    // Only the `system` group enabled → only the system server registers from
-    // the tool-group families. `personal_agent` rides alongside it: like the
-    // group agent's self-config server it belongs to no family, and this owner
-    // is an admin on an interactive run, so create_agent is available.
-    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual([
-      "system",
-      "personal_agent",
-    ]);
+    // Only the `system` group enabled → only the system server is registered.
+    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual(["system"]);
   });
 
-  it("withholds bot creation/hand-off from a turn the external task API submitted", async () => {
+  it("keeps a turn the external task API submitted a full owner run", async () => {
     const { config, store, baseRequest } = setup();
     sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
 
-    // Control: the same owner run, typed in the chat, registers both tools.
+    // Control: the same owner run, typed in the chat.
     await runAgentStream(baseRequest, [], config, store, makeEvents());
     const interactive = sdkMock.calls[0].options;
-    expect(interactive.allowedTools as string[]).toContain(
-      "mcp__personal_agent__create_agent",
-    );
-    expect(interactive.allowedTools as string[]).toContain(
-      "mcp__personal_agent__delegate_to_bot",
-    );
 
-    // An external system's instruction is still a FULL owner run, but standing
-    // up (or handing work to) a bot is a decision the owner makes in
-    // conversation — the same exclusion an unattended routine already gets.
+    // An external system's instruction is still a FULL owner run: provenance
+    // changes what the prompt says, never which owner servers register.
     await runAgentStream(
       { ...baseRequest, externalTaskApi: true },
       [],
@@ -535,28 +508,14 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
       makeEvents(),
     );
     const external = sdkMock.calls[1].options;
-    expect(external.allowedTools as string[]).not.toContain(
-      "mcp__personal_agent__create_agent",
-    );
-    expect(external.allowedTools as string[]).not.toContain(
-      "mcp__personal_agent__delegate_to_bot",
-    );
     const externalServers = Object.keys(
       external.mcpServers as Record<string, unknown>,
     );
-    expect(externalServers).not.toContain("personal_agent");
-    // Owner capability is otherwise untouched — this is not a downgrade.
     expect(externalServers).toContain("system");
     expect(externalServers).toContain("repo");
 
-    // Both metacognition halves follow the tool: the prompt states the
-    // provenance and drops the create trigger it can no longer act on.
-    const externalPrompt = JSON.stringify(external.systemPrompt);
-    expect(externalPrompt).toContain("EXTERNAL SYSTEM");
-    expect(externalPrompt).not.toContain("mcp__personal_agent__create_agent");
-    expect(JSON.stringify(interactive.systemPrompt)).toContain(
-      "mcp__personal_agent__create_agent",
-    );
+    // The prompt states the provenance on that run alone.
+    expect(JSON.stringify(external.systemPrompt)).toContain("EXTERNAL SYSTEM");
     expect(JSON.stringify(interactive.systemPrompt)).not.toContain(
       "EXTERNAL SYSTEM",
     );
@@ -593,27 +552,6 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(serverNames).toContain("brain");
     expect(serverNames).toContain("canvas");
     expect(serverNames).toContain("repo");
-  });
-
-  it("never lets canvas controls park a personal-bot run", async () => {
-    const { config, store, baseRequest, owner } = setup();
-    const bot = store.createPersonalAgent(owner.id, { displayName: "봇" });
-    const events = () => makeEvents({ onCanvas: vi.fn(async () => ({ behavior: "shown" as const })) });
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-    canvasBuilds.contexts.length = 0;
-
-    await runAgentStream(baseRequest, [], config, store, events());
-    await runAgentStream(
-      { ...baseRequest, personalAgent: { agentId: bot.id, ownerUserId: owner.id } },
-      [],
-      config,
-      store,
-      events(),
-    );
-
-    // The owner's own chat may park on controls; a bot turn may have nobody watching
-    // (the same reason the hook denies its AskUserQuestion).
-    expect(canvasBuilds.contexts.map((ctx) => ctx.canPark)).toEqual([true, false]);
   });
 
   it("registers file_output only when an interactive file sink is present", async () => {

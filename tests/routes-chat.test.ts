@@ -36,7 +36,6 @@ import {
   MAX_STEER_LENGTH,
   resolveChatTarget,
 } from "../src/server/routes/chat.js";
-import { personalAgentAvatarId } from "../src/server/personalAgents.js";
 import {
   newShareTokenSalt,
   SHARE_LINK_CAP_ERROR,
@@ -607,6 +606,24 @@ describe("chat-stream request validation", () => {
       .send({ avatarId: ownerId, conversationId: "c", message: "hi", mcpToolGroups: "confluence" })
       .expect(400);
     expect(H.requests).toHaveLength(0);
+  });
+
+  it("refuses an avatar id from a retired namespace before writing anything", async () => {
+    // No avatar kind answers to this namespace any more, so a stale client still
+    // naming one must get the generic refusal BEFORE a conversation row, message
+    // or run exists — never a half-created thread nobody can open.
+    const { app, store } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "retiredns").expect(201)).body.user.id as string;
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: `personal:${ownerId}:${crypto.randomUUID()}`, conversationId: "conv-retired", message: "안녕" })
+      .expect(403);
+    expect(res.body.error).toBe("이 아바타와 대화할 수 없습니다.");
+    expect(H.requests).toHaveLength(0);
+    expect(store.conversationOwner("conv-retired")).toBeNull();
+    expect(store.listMessages(ownerId, "conv-retired")).toEqual([]);
+    expect(getActiveRunForConversation(ownerId, "conv-retired")).toBeNull();
   });
 
   it("409s a supplied conversation id owned by another user", async () => {
@@ -3670,14 +3687,13 @@ describe("create_share_link host callback (onShareLink)", () => {
   it("is supplied ONLY on an interactive turn of the owner's own avatar", async () => {
     const { services, store, app, config } = boot();
     const owner = request.agent(app);
-    const ownerId = (await signup(owner, "shareowner").expect(201)).body.user.id as string; // first signup = admin
+    const ownerId = (await signup(owner, "shareowner").expect(201)).body.user.id as string;
     const colleague = request.agent(app);
     const colleagueId = (await signup(colleague, "sharecolleague").expect(201)).body.user.id as string;
     const group = store.createGroup({ name: "팀" });
     store.addGroupMember(group.id, ownerId);
     store.addGroupMember(group.id, colleagueId);
     const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-    const bot = store.createPersonalAgent(ownerId, { displayName: "봇" });
 
     const supplied = new Map<string, boolean>();
     H.impl = async (agentRequest, _pr, cfg, _store, events) => {
@@ -3688,7 +3704,6 @@ describe("create_share_link host callback (onShareLink)", () => {
       agent.post("/api/chat/stream").send({ avatarId, conversationId, message: "안녕" }).expect(200);
 
     await turn(owner, ownerId, "conv-own");
-    await turn(owner, personalAgentAvatarId(ownerId, bot.id), "conv-bot");
     await turn(owner, `group:${group.id}:${groupAgent.id}`, "conv-group");
     await turn(colleague, ownerId, "conv-colleague");
 
@@ -3726,7 +3741,6 @@ describe("create_share_link host callback (onShareLink)", () => {
 
     expect(Object.fromEntries(supplied)).toEqual({
       "conv-own": true,
-      "conv-bot": false,
       "conv-group": false,
       "conv-colleague": false,
       "conv-task": false,

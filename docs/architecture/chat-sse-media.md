@@ -49,37 +49,30 @@
     recalled after rewinding turn 2; a corrupted point degraded to the text history).
   - **Plan early, apply late — the race rules are load-bearing.** `planTurnRewind` →
     `planConversationRewind` runs BEFORE the turn's first await (the repo resolution), with the busy checks
-    (queued bot tasks, queued/running `avatar_tasks`, a running routine bound to the conversation —
+    (queued/running `avatar_tasks`, a running routine bound to the conversation —
     `routineRunRegistry.ts`, re-exported by scheduler.ts; the active run is the existing checks' job); every
     refusal before the apply leaves the thread untouched. The APPLY sits after the raced active-run re-check
     and immediately before `openRun`, with no await between: busy checks again, a synchronous RE-PLAN that
     refuses 409 on any drift in the kept or dropped ids (a turn that completed inside the await), then
     `applyConversationRewind` in one transaction — delete exactly the planned rows; the share links of
-    dropped deck cards; `bot_tasks` created at/after the ANCHOR's created_at deleted (the anchor's run
-    opened them before its first answer row existed, and a leftover `waiting_input` one would be resumed),
-    and an older task a discarded turn RESUMED put back to its parked question from `bot_tasks.resume_log`
-    (`rewindBotTasks`; `markBotTaskRunning` snapshots the parked state before clearing it); canvases
-    rolled back to the anchor time; `agent_session_id = NULL` (crash safety — the fork's new id lands on
-    success). Then the edit's replacement row (carrying the anchor's image attachments) and the disk sweep
-    of the dropped rows' attachments minus the carried ids — their STAGED workspace copies included
-    (`deleteStagedAttachmentCopies`: `attachments/<id>.<ext>` only, never following a link; captures and saved
-    Confluence files are the dropped turns' tool side effects and stay). Replacing the FIRST message moves an
-    auto-derived conversation title to the new text; a renamed title stays.
-  - **`kind: "queued"`** marks a user row written while ANOTHER run was active — `queueBotTurn`'s 202
-    row, a bot routine's enqueue, a bot hand-off, a plain routine's row written over a live run, and the
-    row a raced 409 refusal already wrote. It sits
-    BEFORE that run's answer in rowid order, so it can never anchor (400). Unmarked legacy rows are a known
-    gap.
+    dropped deck cards; canvases rolled back to the anchor time; `agent_session_id = NULL` (crash safety —
+    the fork's new id lands on success). Then the edit's replacement row (carrying the anchor's image
+    attachments) and the disk sweep of the dropped rows' attachments minus the carried ids — their STAGED
+    workspace copies included (`deleteStagedAttachmentCopies`: `attachments/<id>.<ext>` only, never following
+    a link; captures and saved Confluence files are the dropped turns' tool side effects and stay). Replacing
+    the FIRST message moves an auto-derived conversation title to the new text; a renamed title stays.
+  - **`kind: "queued"`** marks a user row written while ANOTHER run was active — a routine's row written
+    over a live run, and the row a raced 409 refusal already wrote. It sits BEFORE that run's answer in
+    rowid order, so it can never anchor (400). Unmarked legacy rows are a known gap.
   - **Metacognition:** `AgentRequest.rewind {kind, discardedMessages}` → ONE text
     (`ownerState.rewindTurnState`) in the prompt's per-turn line and in `describe_system`: the context ends
     at the rewind point, and NOTHING the discarded turns did was undone (files, commits and pushes, browser
-    actions, created routines/bots/links). The client's confirm dialog tells the user the same.
+    actions, created routines/links). The client's confirm dialog tells the user the same.
   - **`open` carries `userMessageId`** (the new row of a send or edit, the anchor of a regenerate) so the
     client can name a row sent in this very session.
   - Known v1 gaps: side effects are never undone (the discarded messages' own chat attachments and their
-    share links ARE deleted — the prompt text and the confirm dialog say both); a bot task resumed before
-    `resume_log` existed keeps its later status; a canvas submission that updated a version in place is not
-    rolled back.
+    share links ARE deleted — the prompt text and the confirm dialog say both); a canvas submission that
+    updated a version in place is not rolled back.
 - **A streamed answer must survive completion/reload.** The live bubble shows every main-agent `delta`;
   on `done`/reload it's rebuilt from the PERSISTED `response.text`, NOT `live.text`. So `response.text`
   must be the streamed transcript (`partialText` in `claudeAgent.ts`, preferred over the SDK terminal
@@ -124,9 +117,8 @@
   - **Gates:**
     - no empty-turn retry and no self-heal (a fresh session has nothing to compact);
     - no steer channel, and a `/compact` steer is refused (it would run mid-turn in the CLI);
-    - refused with no SDK session yet, for external avatars, with images, as an edit's new text, on
-      regenerate of a `/compact` row, and in a busy bot thread (never queued);
-    - bot threads skip the bot-task bookkeeping.
+    - refused with no SDK session yet, for external avatars, with images, as an edit's new text, and on
+      regenerate of a `/compact` row.
   - **Rewind interplay:** an edit OF a `/compact` row into ordinary text is a normal rewind — its kept history
     ends before the compaction, in the untouched source.
 - **Tool permissions go through one gate:** the `PreToolUse` hook (`buildPreToolUseHook`). `onUserDialog`
@@ -375,9 +367,9 @@
   (one probe per folder for a single delete, one listing per folder for a bulk one). It never follows a
   link: a symlinked avatar or workspace folder is skipped, and a link or file named like a copy folder is
   unlinked, never recursed into. Best-effort, like `deleteConversationImages`. The rest of the workspace
-  (the agent's own work files) stays until its avatar's whole tree is removed (user, bot or group-agent
-  deletion). Sweeping it with the conversation is a separate decision for the user. A bot or group-agent
-  delete already removes that agent's whole tree.
+  (the agent's own work files) stays until its avatar's whole tree is removed (user or group-agent
+  deletion). Sweeping it with the conversation is a separate decision for the user. A group-agent delete
+  already removes that agent's whole tree.
 
 ## Generated-file delivery + PPTX deck pipeline (`share_file`, hidden publishes)
 - **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (there is deliberately NO
@@ -476,16 +468,14 @@
   boundary) is registered (runPlan's `canvasActive`) whenever the conversation's canvas tool group is on AND
   `events.onCanvas` exists — always-on since 2026-10, when it graduated from the experimental `canvas` flag
   (a stored `canvas` key just normalizes away). Controls park the run via the SAME
-  `awaitResponse`/`/api/chat/respond` path as `onQuestion`; display-only returns immediately. A PERSONAL-BOT
-  run never parks (`canPark: false` → every canvas acts as `wait:false`, the answer arriving as the owner's
-  next message), mirroring the hook's AskUserQuestion denial there; the prompt's canvas section and
-  describe_system both say so. **A parked (blocking) form must stay ENABLED while
-  `pane.streaming` is true** — the answer posts to `/api/chat/respond` MID-run and the run resumes only on
-  submit/skip, so `CanvasPanel` locks on `streaming` only for the new-turn paths (async submit, re-submit,
-  content edit); locking the blocking form deadlocks the question (8aed88d regression). While parked the
-  frame handler pins the status line to `캔버스 응답을 기다리는 중…`, suppressing the periodic `tool_progress`
-  status ticks (`실행 중: 캔버스 표시`) until the park resolves; the curated MCP tool labels live in
-  `shared/sdkToolPresentation.ts` (`MCP_TOOL_LABELS`) so server status line and client activity rows agree.
+  `awaitResponse`/`/api/chat/respond` path as `onQuestion`; display-only returns immediately. **A parked
+  (blocking) form must stay ENABLED while `pane.streaming` is true** — the answer posts to
+  `/api/chat/respond` MID-run and the run resumes only on submit/skip, so `CanvasPanel` locks on
+  `streaming` only for the new-turn paths (async submit, re-submit, content edit); locking the blocking
+  form deadlocks the question (8aed88d regression). While parked the frame handler pins the status line
+  to `캔버스 응답을 기다리는 중…`, suppressing the periodic `tool_progress` status ticks (`실행 중: 캔버스 표시`)
+  until the park resolves; the curated MCP tool labels live in `shared/sdkToolPresentation.ts`
+  (`MCP_TOOL_LABELS`) so server status line and client activity rows agree.
   Artifacts persist on `AgentResponse.canvases` and rebuild
   on reload (`canvasesFromMessages`); live via SSE `canvas` event → `CanvasPanel.svelte`. **Refine-in-place:**
   `show` takes an optional `canvasId`; reusing it UPDATES that artifact (client `handleCanvas` +

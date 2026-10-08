@@ -681,16 +681,11 @@ notes inline as \`[[Note Title]]\` — these links connect the knowledge graph. 
  * Stage all changes, commit with the user's identity, and push to the remote
  * branch. Returns false (no commit) when the tree is clean. Throws on git
  * failure (auth, conflicts) so the route can surface the detail.
- *
- * `opts.pathspec` narrows the staging to one repo subtree — a personal agent
- * commits its own memory folder and must not sweep in whatever else the owner
- * left uncommitted in the shared clone.
  */
 export async function commitAndPush(
   ctx: KnowledgeRepoContext,
   message: string,
   identity: { name: string; email: string },
-  opts: { pathspec?: string } = {},
 ): Promise<boolean> {
   const repoRoot = knowledgeClonePath(ctx.userId, ctx.config);
   // Serialize the add/commit/push against any concurrent ensureClone or other
@@ -707,7 +702,6 @@ export async function commitAndPush(
       identity,
       log: { userId: ctx.userId, repo: ctx.repo },
       pushedMessage: "knowledge repo pushed",
-      pathspec: opts.pathspec,
     }),
   );
 }

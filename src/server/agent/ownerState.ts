@@ -2,14 +2,11 @@ import type {
   AgentRewindInfo,
   AppConfig,
   GroupAgentState,
-  PersonalAgentState,
   UserGroupMembership,
 } from "../types.js";
 import { groupAgentCaptureAllowed } from "../groupAgents.js";
-import { personalAgentMemoryRoot } from "../personalAgents.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
-import { MAX_PERSONAL_AGENTS } from "../store.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -82,20 +79,6 @@ export interface OwnerState {
    * to the owner's personal knowledge repo (see repoTools.ts `writeAccess`).
    */
   sharedAccount: boolean;
-  /**
-   * Whether personal agents (내 봇) are available to this owner AT ALL — the
-   * phase-1 feature gate is the system-admin role, re-read live. Both consumers
-   * gate their bot roster line / standing create_agent guidance on this, and
-   * runPlan gates the `create_agent` registration on the same fact, so the
-   * avatar never offers a bot it cannot create.
-   */
-  personalAgentsEnabled: boolean;
-  /** Bots the owner holds against the cap (a DISABLED bot still holds a slot). */
-  personalAgentCount: number;
-  /** Display names of the owner's ENABLED bots (the ones actually chattable). */
-  personalAgentNames: string[];
-  /** The per-owner bot cap, so neither consumer re-imports the constant. */
-  personalAgentMax: number;
 }
 
 /**
@@ -139,19 +122,6 @@ export function summarizeOwnerState(
     get sharedSkillLearnTotal() {
       return store.countSkillLearnsForOwner(avatarUserId);
     },
-    // Personal agents (내 봇): the availability flag is read eagerly (runPlan
-    // gates the create_agent registration on it), the roster lazily — only the
-    // reporting surfaces read the counts.
-    personalAgentsEnabled: store.isAdmin(avatarUserId),
-    get personalAgentCount() {
-      return store.countPersonalAgents(avatarUserId);
-    },
-    get personalAgentNames() {
-      return store
-        .listPersonalAgents(avatarUserId)
-        .map((agent) => agent.displayName);
-    },
-    personalAgentMax: MAX_PERSONAL_AGENTS,
     anthropicModel: config.anthropicModel,
     modelOverride: store.getModelOverride(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),
@@ -217,10 +187,6 @@ export function emptyOwnerState(store: Store, config: AppConfig): OwnerState {
     modelOverride: store.getModelOverride(),
     experimentalFeatures: [],
     sharedAccount: false,
-    personalAgentsEnabled: false,
-    personalAgentCount: 0,
-    personalAgentNames: [],
-    personalAgentMax: MAX_PERSONAL_AGENTS,
   };
 }
 
@@ -272,61 +238,6 @@ export function summarizeGroupAgentState(
 }
 
 /**
- * Read a personal agent's (내 봇) current self-state — the PersonalAgentState
- * analogue of the two summarizers above, with the same both-consumers
- * invariant: it feeds the prompt's bot identity branch AND describe_system's
- * personal block. Model/owner-capability facts are NOT duplicated here: a bot
- * run is a FULL OWNER run, so those come from `summarizeOwnerState` as usual.
- *
- * Null when the bot row is gone OR the acting user is not its owner — the two
- * cases in which nothing about the bot may be reported at all. The live
- * `enabled` / `ownerIsAdmin` flags carry the revocations that CAN be reported
- * (each consumer renders them as UNAVAILABLE), mirroring the group agent's
- * mid-turn disable / membership-loss handling.
- *
- * `conversationId` is optional because the backlog is a per-THREAD fact: a
- * caller that has no thread in hand reports 0 rather than a count from some
- * other conversation.
- */
-export function summarizePersonalAgentState(
-  store: Store,
-  agentId: string,
-  actingUserId: string,
-  conversationId?: string,
-): PersonalAgentState | null {
-  const agent = store.getPersonalAgentById(agentId);
-  if (!agent || agent.ownerUserId !== actingUserId) {
-    return null;
-  }
-  return {
-    agentId: agent.id,
-    ownerUserId: agent.ownerUserId,
-    displayName: agent.displayName,
-    alias: agent.alias,
-    personaSet: Boolean(agent.persona.trim()),
-    enabled: agent.enabled,
-    // FAIL CLOSED on a demoted owner: the phase-1 feature gate is the admin
-    // role, and the reach gate (findChattablePersonalAgent) already refuses the
-    // NEXT turn — the state report must not claim more than that.
-    ownerIsAdmin: store.isAdmin(agent.ownerUserId),
-    agentCount: store.countPersonalAgents(agent.ownerUserId),
-    maxAgents: MAX_PERSONAL_AGENTS,
-    // Delegated requests still waiting BEHIND this turn in this thread. The
-    // queue drains server-side; both consumers report it as standing awareness
-    // only, never as something the bot may dispatch itself.
-    queuedTaskCount: conversationId
-      ? store.countQueuedBotTasks(conversationId)
-      : 0,
-    // The bot's memory namespace + granted skills, from this SAME row read:
-    // runPlan parameterizes the scoped repo/brain servers and the skill filter
-    // from these, so neither metacognition surface can describe a scope the
-    // tools do not actually have.
-    memoryRoot: personalAgentMemoryRoot(agent.memoryDir),
-    adoptedSkills: agent.selectedSkills,
-  };
-}
-
-/**
  * Turn PROVENANCE of a rewind (`AgentRequest.rewind`): the viewer edited an
  * earlier message or regenerated the latest answer. ONE text for both
  * metacognition surfaces — buildSystemPromptAppend's per-turn line and
@@ -349,9 +260,9 @@ export function rewindTurnState(rewind: AgentRewindInfo): string {
   // links). Everything outside the chat is exactly as those turns left it.
   const aftermath = edit
     ? "The discarded turns' chat attachments went with them — the files and images you showed or shared there were deleted, and those decks' share links revoked (links to decks in the kept messages still work). " +
-      "Nothing else they did was undone: workspace and repository files, commits and pushes, browser actions, and any routines, bots or shared skills they created remain as those turns left them."
+      "Nothing else they did was undone: workspace and repository files, commits and pushes, browser actions, and any routines or shared skills they created remain as those turns left them."
     : "The discarded attempt's chat attachments went with it — the files and images it showed or shared were deleted, and those decks' share links revoked (links to decks in earlier messages still work). " +
-      "Nothing else it did was undone: workspace and repository files, commits and pushes, browser actions, and any routines, bots or shared skills it created remain as it left them.";
+      "Nothing else it did was undone: workspace and repository files, commits and pushes, browser actions, and any routines or shared skills it created remain as it left them.";
   return (
     `${head}: you cannot see what was discarded, so if the user refers to it, say so instead of guessing. ` +
     `${aftermath} Re-check that state before building on what you remember.`

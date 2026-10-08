@@ -2,7 +2,6 @@
   import { afterUpdate, onDestroy, onMount, tick } from "svelte";
   import ActivityTree from "../components/ActivityTree.svelte";
   import AvatarImage from "../components/AvatarImage.svelte";
-  import BotTaskCard from "../components/BotTaskCard.svelte";
   import CanvasPanel from "../components/CanvasPanel.svelte";
   import FilePreviewPanel from "../components/FilePreviewPanel.svelte";
   import Icon from "../components/Icon.svelte";
@@ -12,9 +11,7 @@
   import {
     PLUGIN_STATUS_LABELS,
     addConversationToSplit,
-    anchorBotTasksToMessages,
     attachActiveRun,
-    cancelBotTask,
     cancelRewindEdit,
     canRegenerate,
     closePane,
@@ -53,7 +50,7 @@
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
   import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
-  import type { AgentActivity, AvatarSummary, BotTask, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
+  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
   import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
   import {
@@ -291,46 +288,6 @@
   $: tourScenarios = TOUR_SCENARIOS.filter(
     (scenario) => !scenario.needsBrowser || !adminBlockedMcpToolGroupSet.has("browser"),
   );
-
-  /* ---- 봇 오피스: 스레드 안에 놓이는 위임 작업 카드 --------------------------
-     내 봇에게 맡긴 일은 그 일을 시킨 turn 옆에 있어야 읽힌다. 그래서 카드는
-     별도 보드가 아니라 트랜스크립트 안에, 자기보다 앞선 마지막 사용자 메시지
-     바로 뒤에 놓인다(그보다 오래된 작업은 -1 = 첫 말풍선 위).
-
-     이 스니펫은 스트리밍 토큰마다 다시 도는 자리라, 마크업은 미리 만든 맵을
-     '조회만' 한다({#each} 안에서 필터 금지). 봇 오피스가 아니면 derivation이
-     첫 줄에서 같은 빈 맵을 돌려주므로 일반 대화에는 DOM 차이가 0이다. */
-  const NO_INLINE_BOT_TASKS: Map<string, Map<number, BotTask[]>> = new Map();
-  const NO_BOT_TASKS: BotTask[] = [];
-  let cancellingBotTaskId = "";
-
-  $: inlineBotTasks = anchorBotTasksByPane($appState.view, $appState.chatPanes, $appState.botTasks);
-
-  function anchorBotTasksByPane(
-    view: string,
-    list: ChatPane[],
-    tasks: BotTask[],
-  ): Map<string, Map<number, BotTask[]>> {
-    if (view !== "bots" || !tasks.length) return NO_INLINE_BOT_TASKS;
-    const byPane = new Map<string, Map<number, BotTask[]>>();
-    for (const item of list) {
-      const agentId = item.avatar.personalAgent?.agentId;
-      if (!agentId) continue;
-      const mine = tasks.filter((task) => task.agentId === agentId);
-      if (mine.length) byPane.set(item.id, anchorBotTasksToMessages(mine, item.messages));
-    }
-    return byPane;
-  }
-
-  async function cancelInlineBotTask(task: BotTask): Promise<void> {
-    if (cancellingBotTaskId) return;
-    cancellingBotTaskId = task.id;
-    try {
-      await cancelBotTask(task);
-    } finally {
-      cancellingBotTaskId = "";
-    }
-  }
 
   // Browser-bridge compatibility badge for the composer hint row: compares the
   // INSTALLED extension build against the server bundle AND the server's
@@ -1485,20 +1442,6 @@
   </div>
 {/snippet}
 
-{#snippet botTaskCards(item: ChatPane, anchor: number)}
-  {#each inlineBotTasks.get(item.id)?.get(anchor) ?? NO_BOT_TASKS as task (task.id)}
-    <!-- compact: the card is an annotation between message bubbles, not a
-         competing surface, and its density must not depend on whichever view
-         happens to mount this transcript. -->
-    <BotTaskCard
-      {task}
-      busy={cancellingBotTaskId === task.id}
-      compact
-      onCancel={cancelInlineBotTask}
-    />
-  {/each}
-{/snippet}
-
 {#snippet transcript(item: ChatPane)}
   <div class="chat-body">
     <div
@@ -1543,8 +1486,6 @@
             {/if}
           </div>
         {/if}
-
-        {@render botTaskCards(item, -1)}
 
         <!-- Keyed on messageKey, not the raw id: a bubble the client created keeps
              its key when it adopts the server's id, so it is updated in place
@@ -1681,7 +1622,6 @@
               {/if}
             </div>
           </div>
-          {@render botTaskCards(item, index)}
         {/each}
 
         {#if item.streaming}

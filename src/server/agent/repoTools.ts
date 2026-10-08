@@ -7,7 +7,6 @@ import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig } from "../types.js";
 import { normalizeGithubHost, scrubGitError } from "../marketplace.js";
 import { decodeExecError, text } from "./mcpTools.js";
-import { normalizeScopedPath } from "./brainSearch.js";
 import {
   commitAndPush,
   commitIdentityFor,
@@ -101,17 +100,6 @@ export interface RepoToolsContext {
    * headless runs have no viewer to notify.
    */
   onMemory?: (event: { action: "add" | "update"; path: string }) => void;
-  /**
-   * Set only on a personal-agent (bot) run: the bot's OWN memory folder inside the
-   * owner's knowledge repo (`root` is repo-relative, no trailing slash). Every
-   * path-taking op is then confined to `root`/`root/**` — the bot writes and reads
-   * its own `wiki/`+`raw/` and nothing else in the owner's repo — `commit` stages
-   * only that subtree, and skill scaffolding / repo creation are refused (both are
-   * the owner's job from their main avatar chat). A bot run is a full OWNER run, so
-   * this is the only thing standing between it and the whole repo: it is a static
-   * per-run value, never model input.
-   */
-  pathScope?: { root: string; botName: string };
 }
 
 /** MCP server name; tools surface to the model as `mcp__repo__<tool>`. */
@@ -319,21 +307,6 @@ async function reconcileSharesAfterCommit(
 const OWNER_ONLY = REPO_OWNER_ONLY;
 const NO_REPO =
   "No knowledge repository is connected yet. If you are the owner, first create and connect a new repository with the `create_repo` tool, then try again. (If you already have a repo you've been using, you can also connect it directly in settings.) Do not walk through manual setup steps — use `create_repo`.";
-// The scoped (bot-run) counterparts. A bot cannot create the repo or scaffold
-// into the owner's `skills/`, so every refusal names the one place it CAN happen
-// — the owner's main avatar chat — instead of a tool this run will refuse.
-const NO_REPO_SCOPED =
-  "No knowledge repository is connected yet, so there is nowhere to keep your memory. The OWNER has to create and connect one from their MAIN avatar chat — `create_repo` is not available in a bot chat. Tell them that instead of walking through manual setup steps.";
-
-/** The redirect every out-of-scope path op returns (English, agent-facing). */
-function pathScopeRefusal(root: string): string {
-  return `This bot's repository access is scoped to its own memory folder \`${root}/\` (wiki/ and raw/ inside it). Adjust the path to live under that folder.`;
-}
-
-const SCAFFOLD_SCOPED =
-  "Skills are granted by the owner, so this bot cannot scaffold one into the owner's `skills/` folder — its repository access is limited to its own memory folder. Ask the owner to create the skill from their main avatar chat.";
-const CREATE_REPO_SCOPED =
-  "Only the owner's main avatar chat can create or connect the knowledge repository; a bot chat cannot. Tell the owner to do it there, then retry.";
 
 /**
  * Build the knowledge-repo management tool definitions bound to a single
@@ -365,40 +338,13 @@ export function buildRepoTools(
     canWrite && !ctx.viewerIsOwner
       ? "(shared account: the owner and trusted same-group teammates may write)"
       : "(owner only)";
-  // A bot run is a full OWNER run, so the path scope — not the write gate — is
-  // what keeps it inside its own memory folder. FIRST layer: normalize the
-  // model-supplied path and prefix-check it (the same guard shape the brain vault
-  // uses); resolveInRepo/realpathContained inside knowledgeRepo stay the second.
-  const scope = ctx.pathScope;
-  const scopedPath = (
-    raw: string,
-  ): { ok: true; path: string } | { ok: false; result: ReturnType<typeof text> } => {
-    if (!scope) {
-      return { ok: true, path: raw };
-    }
-    const checked = normalizeScopedPath(raw, scope.root);
-    return checked.ok
-      ? { ok: true, path: checked.norm }
-      : { ok: false, result: text(pathScopeRefusal(scope.root), true) };
-  };
-  // list_files takes no path argument, so a scoped run filters the tree through
-  // the same check instead of defaulting to the repo root.
-  const scopedListTree: typeof listTree = scope
-    ? async (repoRoot) =>
-        (await listTree(repoRoot)).filter((e) => normalizeScopedPath(e.path, scope.root).ok)
-    : listTree;
-  // Appended to every manage-tool description on a scoped run: a tool that still
-  // advertises the whole repo makes the model spend turns on refused paths.
-  const scopeNote = scope
-    ? ` YOUR ACCESS IS SCOPED: only your own memory folder \`${scope.root}/\` (its \`wiki/\` notes and \`raw/\` captures) is reachable — never the owner's own \`wiki/\`, their \`skills/\`, or any other path in the repository.`
-    : "";
   const resolveGated = (allowed: boolean): Resolved<RepoCtx> => {
     if (!allowed) {
       return { ok: false, result: text(OWNER_ONLY, true) };
     }
     const c = repoCtx();
     if (!c) {
-      return { ok: false, result: text(scope ? NO_REPO_SCOPED : NO_REPO, true) };
+      return { ok: false, result: text(NO_REPO, true) };
     }
     return { ok: true, repo: c };
   };
@@ -408,65 +354,44 @@ export function buildRepoTools(
   const manageTools = [
     tool(
       "list_files",
-      `Get the file list of my knowledge repository (personal repo). (owner or trusted same-group teammates; read-only)${scopeNote}`,
+      "Get the file list of my knowledge repository (personal repo). (owner or trusted same-group teammates; read-only)",
       {},
       () =>
-        runListFiles(resolveRead(), ensureClone, scopedListTree, {
-          empty: scope ? `(Your memory folder \`${scope.root}/\` is empty.)` : "(The repository is empty.)",
-          onBody: (body) =>
-            scope
-              ? `Your memory folder (\`${scope.root}/\`) file list:\n${body}`
-              : `Knowledge repository file list:\n${body}`,
+        runListFiles(resolveRead(), ensureClone, listTree, {
+          empty: "(The repository is empty.)",
+          onBody: (body) => `Knowledge repository file list:\n${body}`,
         }),
     ),
     tool(
       "read_file",
-      `Read the content of a file in my knowledge repository. (owner or trusted same-group teammates; read-only)${scopeNote}`,
-      {
-        path: z
-          .string()
-          .describe(
-            scope
-              ? `Path relative to the repository root (e.g. ${scope.root}/wiki/concepts/deploy.md)`
-              : "Path relative to the repository root (e.g. skills/foo/SKILL.md)",
-          ),
-      },
-      async (args) => {
-        const gated = resolveRead();
-        if (!gated.ok) return gated.result;
-        const p = scopedPath(args.path);
-        if (!p.ok) return p.result;
-        return runReadFile(gated, ensureClone, readRepoFile, p.path);
-      },
+      "Read the content of a file in my knowledge repository. (owner or trusted same-group teammates; read-only)",
+      { path: z.string().describe("Path relative to the repository root (e.g. skills/foo/SKILL.md)") },
+      (args) => runReadFile(resolveRead(), ensureClone, readRepoFile, args.path),
     ),
     tool(
       "write_file",
-      `Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. ${writeGate}${scopeNote}`,
+      `Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
       {
         path: z.string().describe("Path relative to the repository root"),
         content: z.string().describe("The full file content"),
       },
       async (args) => {
-        const gated = resolve();
-        if (!gated.ok) return gated.result;
-        const p = scopedPath(args.path);
-        if (!p.ok) return p.result;
         const out = await runWriteFile(
-          gated,
+          resolve(),
           ensureClone,
           writeRepoFile,
-          { ...args, path: p.path },
+          args,
           (path) => `Saved the file ${path}. (Not committed yet — push it with the commit tool.)`,
         );
-        if (!out.isError && isBrainNotePath(p.path, scope?.root)) {
-          ctx.onMemory?.({ action: "add", path: p.path });
+        if (!out.isError && isBrainNotePath(args.path)) {
+          ctx.onMemory?.({ action: "add", path: args.path });
         }
         return out;
       },
     ),
     tool(
       "edit_file",
-      `Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. \`old_string\` must match the file exactly (including whitespace/indentation) and be unique, unless you set \`replace_all\`. Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. ${writeGate}${scopeNote}`,
+      `Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. \`old_string\` must match the file exactly (including whitespace/indentation) and be unique, unless you set \`replace_all\`. Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
       {
         path: z.string().describe("Path relative to the repository root"),
         old_string: z.string().describe("The exact text to replace (must be unique in the file unless replace_all is true)"),
@@ -477,96 +402,61 @@ export function buildRepoTools(
           .describe("Replace every occurrence instead of requiring a unique match (default false)"),
       },
       async (args) => {
-        const gated = resolve();
-        if (!gated.ok) return gated.result;
-        const p = scopedPath(args.path);
-        if (!p.ok) return p.result;
         const out = await runEditFile(
-          gated,
+          resolve(),
           ensureClone,
           editRepoFile,
-          { ...args, path: p.path },
+          args,
           (path, count) =>
             `Edited ${path} (${count} replacement${count === 1 ? "" : "s"}). (Not committed yet — push it with the commit tool.)`,
         );
-        if (!out.isError && isBrainNotePath(p.path, scope?.root)) {
-          ctx.onMemory?.({ action: "update", path: p.path });
+        if (!out.isError && isBrainNotePath(args.path)) {
+          ctx.onMemory?.({ action: "update", path: args.path });
         }
         return out;
       },
     ),
     tool(
       "delete_file",
-      `Delete a file OR a whole directory (e.g. an entire skill folder \`skills/<name>\`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with the commit tool it is not removed from the remote** and may reappear on the next sync. ${writeGate}${scopeNote}`,
-      {
-        path: z
-          .string()
-          .describe(
-            scope
-              ? `Path relative to the repository root — a file (${scope.root}/wiki/concepts/deploy.md) or a directory (${scope.root}/wiki/concepts)`
-              : "Path relative to the repository root — a file (skills/foo/SKILL.md) or a directory (skills/foo)",
-          ),
-      },
-      async (args) => {
-        const gated = resolve();
-        if (!gated.ok) return gated.result;
-        const p = scopedPath(args.path);
-        if (!p.ok) return p.result;
-        return runDeleteFile(
-          gated,
+      `Delete a file OR a whole directory (e.g. an entire skill folder \`skills/<name>\`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with the commit tool it is not removed from the remote** and may reappear on the next sync. ${writeGate}`,
+      { path: z.string().describe("Path relative to the repository root — a file (skills/foo/SKILL.md) or a directory (skills/foo)") },
+      (args) =>
+        runDeleteFile(
+          resolve(),
           ensureClone,
           deleteRepoFile,
-          p.path,
+          args.path,
           (path) => `Deleted ${path}. (Not committed yet — push it with the commit tool.)`,
-        );
-      },
+        ),
     ),
     tool(
       "move_file",
-      `Rename or move a file/directory within my knowledge repository (e.g. rename a skill folder or relocate a note). Applies only to the working tree until you commit & push. ${writeGate}${scopeNote}`,
+      `Rename or move a file/directory within my knowledge repository (e.g. rename a skill folder or relocate a note). Applies only to the working tree until you commit & push. ${writeGate}`,
       {
         from: z.string().describe("Current path relative to the repository root"),
         to: z.string().describe("New path relative to the repository root"),
       },
-      async (args) => {
-        const gated = resolve();
-        if (!gated.ok) return gated.result;
-        // BOTH ends are checked: moving a note OUT of the memory folder would
-        // plant it in the owner's repo just as surely as writing it there.
-        const from = scopedPath(args.from);
-        if (!from.ok) return from.result;
-        const to = scopedPath(args.to);
-        if (!to.ok) return to.result;
-        return runMoveFile(
-          gated,
+      (args) =>
+        runMoveFile(
+          resolve(),
           ensureClone,
           moveRepoFile,
-          { from: from.path, to: to.path },
-          (a, b) => `Moved ${a} → ${b}. (Not committed yet — push it with the commit tool.)`,
-        );
-      },
+          args,
+          (from, to) => `Moved ${from} → ${to}. (Not committed yet — push it with the commit tool.)`,
+        ),
     ),
     tool(
       "scaffold_skill",
-      scope
-        ? `NOT AVAILABLE in this chat: skills live in the owner's \`skills/\` folder, outside your memory folder \`${scope.root}/\`. Do not call this — if a skill is needed, ask the owner to create it from their main avatar chat.`
-        : `Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with write_file and push with commit, and from the next conversation the avatar can use that skill. ${writeGate}`,
+      `Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with write_file and push with commit, and from the next conversation the avatar can use that skill. ${writeGate}`,
       {
         name: z.string().describe("Skill name (e.g. deploy-runbook)"),
         description: z.string().optional().describe("One-line description of the skill"),
       },
-      async (args) => {
-        const gated = resolve();
-        if (!gated.ok) return gated.result;
-        if (scope) return text(SCAFFOLD_SCOPED, true);
-        return runScaffoldSkill(gated, ensureClone, scaffoldSkill, args);
-      },
+      (args) => runScaffoldSkill(resolve(), ensureClone, scaffoldSkill, args),
     ),
     tool(
       "commit",
-      scope
-        ? `Commit the changes in your memory folder \`${scope.root}/\` and push them to the remote (branch) — nothing outside that folder is staged. Call this when a unit of work is finished or when the user requests it; until you do, what you wrote is only temporary. ${writeGate}`
-        : `Commit all changes in my knowledge repository and push to the remote (branch). Call this when a unit of work is finished or when the user requests it. ${writeGate}`,
+      `Commit all changes in my knowledge repository and push to the remote (branch). Call this when a unit of work is finished or when the user requests it. ${writeGate}`,
       { message: z.string().describe("Commit message") },
       async (args) => {
         if (!canWrite) {
@@ -574,7 +464,7 @@ export function buildRepoTools(
         }
         const c = repoCtx();
         if (!c) {
-          return text(scope ? NO_REPO_SCOPED : NO_REPO, true);
+          return text(NO_REPO, true);
         }
         // Either token can authenticate the push: on a GHES deployment a
         // github.com knowledge repo is covered by the EXTERNAL token
@@ -603,12 +493,7 @@ export function buildRepoTools(
           // No ensureClone here: commitAndPush operates on the already-synced
           // working tree (write_file/scaffold_skill cloned it) and guards with
           // its own NOT_CLONED check. Re-syncing would only add a needless fetch.
-          // A scoped run stages ONLY its memory folder: the clone is shared with
-          // the owner's own runs, so `git add -A` would push their unrelated
-          // work-in-progress under the bot's commit.
-          const committed = await commitAndPush(c, message, commitIdentityFor(store, ctx.owner), {
-            pathspec: scope?.root,
-          });
+          const committed = await commitAndPush(c, message, commitIdentityFor(store, ctx.owner));
           if (!committed) {
             return text(NO_CHANGES);
           }
@@ -633,17 +518,12 @@ export function buildRepoTools(
           // the share rows are only a snapshot of it. The working tree is right
           // here and freshly committed, so reconcile now instead of waiting for
           // the owner to open the 스킬 배우기 tab — and the rename this commit
-          // just recorded is the evidence the reconciliation reads. A scoped
-          // commit can't have touched `skills/` at all, and reading the shares
-          // off a bot's commit would only re-snapshot the owner's tree from a
-          // run that never saw it — so skip it entirely.
-          const shares = scope
-            ? ""
-            : await reconcileSharesAfterCommit(
-                store,
-                ctx.owner.id,
-                knowledgeClonePath(c.userId, c.config),
-              );
+          // just recorded is the evidence the reconciliation reads.
+          const shares = await reconcileSharesAfterCommit(
+            store,
+            ctx.owner.id,
+            knowledgeClonePath(c.userId, c.config),
+          );
           return text(`Committed and pushed the changes: ${c.repo}${shares}`);
         } catch (error) {
           return text(commitFailureMessage(error), true);
@@ -660,9 +540,7 @@ export function buildRepoTools(
   }
   const createTool = tool(
     "create_repo",
-    scope
-      ? "NOT AVAILABLE in this chat: only the owner's MAIN avatar chat can create or connect the knowledge repository. Do not call this — tell the owner to do it there."
-      : `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with scaffold_skill → write_file → commit. (owner only)`,
+    `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with scaffold_skill → write_file → commit. (owner only)`,
     {
       name: z.string().describe("New repository name (letters/digits and - _ . only, e.g. my-knowledge)"),
       org: z.string().optional().describe("GitHub organization to create the repo under (e.g. acme). Omit to create under the owner's personal account."),
@@ -672,9 +550,6 @@ export function buildRepoTools(
     async (args) => {
       if (!ctx.viewerIsOwner) {
         return text(OWNER_ONLY, true);
-      }
-      if (scope) {
-        return text(CREATE_REPO_SCOPED, true);
       }
       if (repoCtx()) {
         return text("A knowledge repository is already connected. There is no need to create a new one.", true);

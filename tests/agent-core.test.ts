@@ -589,13 +589,13 @@ describe("workspace dirs", () => {
       // The same conversation id resolves under ANY avatar: a colleague's
       // thread lives under the OTHER user's avatar, not the deleter's own.
       const colleagueThread = workspaceDirFor(config, "someone-elses-avatar", "conv-x");
-      const botThread = workspaceDirFor(config, "personal:owner:bot", "conv-x");
+      const groupAgentThread = workspaceDirFor(config, "group:team:agent", "conv-x");
       const untouched = workspaceDirFor(config, "someone-elses-avatar", "conv-other");
-      for (const dir of [colleagueThread, botThread, untouched]) seedWorkspace(dir);
+      for (const dir of [colleagueThread, groupAgentThread, untouched]) seedWorkspace(dir);
 
       deleteConversationWorkspaceCopies(config, ["conv-x"]);
 
-      for (const dir of [colleagueThread, botThread]) {
+      for (const dir of [colleagueThread, groupAgentThread]) {
         for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
           expect(fs.existsSync(path.join(dir, sub)), `${dir}/${sub}`).toBe(false);
         }
@@ -3905,7 +3905,7 @@ describe("buildPrompt", () => {
     expect(p).not.toContain(GETTING_STARTED);
   });
 
-  it("keeps getting-started OUT of colleague, teammate, routine, group-agent, and personal-bot turns", () => {
+  it("keeps getting-started OUT of colleague, teammate, routine, and group-agent turns", () => {
     const colleague = buildPrompt(
       req({ ...setupGaps, viewerIsOwner: false, viewerName: "동료" }),
       0,
@@ -3943,32 +3943,6 @@ describe("buildPrompt", () => {
       0,
     );
     expect(groupAgent).not.toContain(GETTING_STARTED);
-    // A personal bot (내 봇) IS an owner run, so it reaches the owner branch —
-    // but the setup pitch belongs to the owner's own avatar, or every bot thread
-    // would repeat the same offer.
-    const personalAgent = buildPrompt(
-      req({
-        ...setupGaps,
-        viewerIsOwner: true,
-        viewerName: "신진영",
-        personalAgentState: {
-          agentId: "a1",
-          ownerUserId: "u1",
-          displayName: "릴리즈 봇",
-          alias: "릴봇",
-          personaSet: false,
-          enabled: true,
-          ownerIsAdmin: true,
-          agentCount: 1,
-          maxAgents: 20,
-          queuedTaskCount: 0,
-          memoryRoot: "agents/release-bot-a1b2c3d4",
-          adoptedSkills: [],
-        },
-      }),
-      0,
-    );
-    expect(personalAgent).not.toContain(GETTING_STARTED);
   });
 
   it("stops offering setup once the conversation is no longer young", () => {
@@ -4217,8 +4191,6 @@ describe("buildPrompt", () => {
     expect(p).not.toContain("do not ask questions");
     // The calling system reads only the final text.
     expect(p).toContain("result.text");
-    // Bot creation is withheld on these runs (runPlan's registration gate).
-    expect(p).toContain("creating a personal bot is unavailable on these runs");
     // The browser gate cannot see that no client is attached, so the paragraph
     // carries the caveat the gate cannot: nobody may be on the other end.
     expect(p).toContain(
@@ -4278,7 +4250,7 @@ describe("buildPrompt", () => {
     );
     // The world was not rewound — the part the avatar would otherwise get wrong.
     expect(edit).toContain(
-      "Nothing else they did was undone: workspace and repository files, commits and pushes, browser actions, and any routines, bots or shared skills they created remain",
+      "Nothing else they did was undone: workspace and repository files, commits and pushes, browser actions, and any routines or shared skills they created remain",
     );
     expect(edit).toContain("Re-check that state before building on what you remember.");
 
@@ -4785,16 +4757,6 @@ describe("buildPrompt", () => {
     expect(on).toContain("ANCHORED TO the artifact on screen");
     expect(on).toContain("AskUserQuestion");
     expect(on).toContain("NEVER open a canvas just to ask");
-  });
-
-  it("tells a personal-bot run that its canvas controls never block", () => {
-    const bot = buildPrompt(
-      req({ viewerIsOwner: true, canvasEnabled: true, personalAgent: { agentId: "a1", ownerUserId: "u1" } }),
-      0,
-    );
-    expect(bot).toContain("canvas controls never block");
-    expect(bot).toContain("arrives as their next message");
-    expect(buildPrompt(req({ viewerIsOwner: true, canvasEnabled: true }), 0)).not.toContain("canvas controls never block");
   });
 
   it("gives a colleague the canvas guidance too when the canvas is on", () => {
@@ -5603,7 +5565,6 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
       false,
       undefined,
       true,
-      false,
       approvals,
     );
 
@@ -5653,7 +5614,6 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
       false,
       undefined,
       true,
-      false,
       approvals,
     );
   const QUESTIONS = [{ question: "색은?", header: "색", options: [{ label: "빨강" }, { label: "파랑" }], multiSelect: false }];

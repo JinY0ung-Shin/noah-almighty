@@ -2162,19 +2162,11 @@ describe("system tools (avatar system management)", () => {
     expect(create.description).toContain("never make one routine depend on another's output");
   });
 
-  it("describe_system names the turn's origin, and drops bot tools on a task-API run", async () => {
+  it("describe_system names the turn's origin on a task-API run", async () => {
     const s = setup("st-origin");
     const interactive = await callTool(toolsFor(s), "describe_system", {});
     expect(interactive.content[0].text).toContain(
       "This turn's origin: interactive chat",
-    );
-    // Control for the negatives below: this owner IS an admin, so the bot
-    // roster really does render its create/hand-off triggers here.
-    expect(interactive.content[0].text).toContain(
-      "You can create another with mcp__personal_agent__create_agent",
-    );
-    expect(interactive.content[0].text).toContain(
-      "Hand-off to a bot (mcp__personal_agent__delegate_to_bot): ",
     );
 
     const externalTools = buildSystemTools(s.store, {
@@ -2188,16 +2180,6 @@ describe("system tools (avatar system management)", () => {
       "This turn's origin: submitted by an EXTERNAL SYSTEM",
     );
     expect(external).toContain("POST /api/v1/avatar/tasks");
-    // The two metacognition surfaces must agree with the run plan: bot
-    // creation/hand-off is not registered for a turn nobody typed, so the
-    // roster must not offer either tool as available.
-    expect(external).not.toContain(
-      "You can create another with mcp__personal_agent__create_agent",
-    );
-    expect(external).not.toContain(
-      "Hand-off to a bot (mcp__personal_agent__delegate_to_bot): available",
-    );
-    expect(external).toContain("an external system submitted this turn");
     // Mirrors the prompt's browser caveat: the bridge gate reports CONNECTED
     // whether or not a client is actually attached to an API-submitted turn.
     expect(external).toContain(
@@ -2282,16 +2264,8 @@ describe("system tools (avatar system management)", () => {
     // branch, which a headless run never reaches — so this surface must skip it
     // too, or the two disagree about the same run.
     expect(routine).not.toContain("External task API:");
-    // ...and the bot tools runPlan withholds from an unattended run must not be
-    // advertised as available here either.
-    expect(routine).not.toContain(
-      "You can create another with mcp__personal_agent__create_agent",
-    );
-    expect(routine).toContain(
-      "this is an unattended run with no owner in the conversation",
-    );
 
-    // Control: the interactive run keeps both.
+    // Control: the interactive run keeps it.
     const interactive = (await callTool(toolsFor(s), "describe_system", {}))
       .content[0].text ?? "";
     expect(interactive).toContain("External task API:");
@@ -4311,28 +4285,6 @@ describe("canvas tools (#50)", () => {
     expect(captured!.awaitInput).toBe(false);
     expect(captured!.controls).toBeUndefined();
     expect(res.content[0].text).toContain("shown");
-  });
-
-  it("never parks when the run may not (a personal bot): controls act as wait:false", async () => {
-    let captured: CanvasRequest | null = null;
-    const tools = buildCanvasTools({
-      emitCanvas: async (req): Promise<CanvasResult> => {
-        captured = req;
-        return { behavior: "shown" };
-      },
-      canPark: false,
-    });
-    const res = await callTool(tools, "show", {
-      title: "고르기",
-      content: "A안 vs B안",
-      contentType: "markdown",
-      controls: [{ type: "buttons", id: "pick", options: [{ label: "A" }, { label: "B" }] }],
-    });
-    expect(res.isError).toBeFalsy();
-    expect(captured!.awaitInput).toBe(false);
-    expect(captured!.interaction).toBe("async");
-    expect(captured!.controls).toHaveLength(1); // the form still renders
-    expect(res.content[0].text).toContain("NOT blocking");
   });
 
   it("passes a vega (Vega-Lite) chart spec through to the canvas sink", async () => {

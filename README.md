@@ -16,7 +16,7 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   blocked as well.
 - **Built-in usage manual**: local avatars receive a compact feature index on every turn and
   read detailed guides through `mcp__system__read_manual` (the always-on system tool group). Guides cover
-  setup, chat, knowledge, skills/plugins, groups/bots, scheduling, external Task API integration,
+  setup, chat, knowledge, skills/plugins, groups, scheduling, external Task API integration,
   repositories, browser/web, credentials/SSH, artifacts and administration. Current account
   capabilities are checked separately through `describe_system`.
 - **Accounts**: self-service signup with username + password (no invite codes). The
@@ -374,7 +374,6 @@ host can run speaches/faster-whisper instead, with no code change.
 | `ROUTINE_MAX_CONCURRENT_RUNS` | How many scheduled routines may run at once across the server (default `10`; must be a whole number ≥ `1`, anything else falls back to the default). Each run is a full agent process, so this bounds the burst when many routines fall due together or after downtime. A due routine over the cap waits for a free slot. `지금 실행` is never refused by the cap but occupies a slot while it runs. |
 | `ROUTINE_MAX_CONCURRENT_RUNS_PER_USER` | How many of one user's routines may run at once (default `2`, same validation). Keep it below `ROUTINE_MAX_CONCURRENT_RUNS` so one user with many due routines can't take every slot. |
 | `AVATAR_TASK_TIMEOUT_MINUTES` | Wall-clock deadline for one external task API run (`POST /api/v1/avatar/tasks`; default `300` = 5 hours, minimum `1` — it cannot be disabled). Covers the whole run, including time waiting on a question and any background phase. A single pending request (question, permission, plan review or canvas input) still expires after 30 minutes without a response. |
-| `BOT_TASK_TIMEOUT_MINUTES` | Wall-clock deadline for one unattended 내 봇 run — a queued delegated task or a bot routine (default `30`, minimum `1`). Keep it short: a bot routine run holds one of the routine scheduler's slots (see `ROUTINE_MAX_CONCURRENT_RUNS`) for its whole duration, and a hung bot turn blocks its thread's queue. |
 | `DEFAULT_PLUGINS_DIR` | Path to built-in skills loaded for every avatar (default `<cwd>/default-skills`). Keep it inside the app tree: the pptx skill's converter resolves `playwright-core` from the app's `node_modules`. |
 | `NOAH_PPTX_*` | Optional tuning of the pptx skill's deck converter: `NOAH_PPTX_MAX_CONCURRENT` (host-wide conversion slots, default `2` — each running conversion is one headless Chromium inside the app container), `NOAH_PPTX_SLOT_WAIT_SECONDS` (`150`), `NOAH_PPTX_MAX_SECONDS` (`540`; keep it below the agent's 600 s Bash ceiling), `NOAH_PPTX_MAX_SLIDES` (`60`), `NOAH_PPTX_CHROMIUM` / `NOAH_PPTX_PYTHON` (explicit executables), `NOAH_PPTX_SELFTEST_RECORD`. `NOAH_PPTX_DEV` and `NOAH_PPTX_LOCK_NAMESPACE` are for dev boxes and tests. See `.env.example` and [docs/architecture/pptx-converter.md](docs/architecture/pptx-converter.md). |
 | `PLUGIN_AUTO_REFRESH_MINUTES` | Minutes before an enabled avatar plugin clone is refreshed from git at chat/routine start (default `10`; `0` disables auto refresh after the first clone). |

@@ -58,7 +58,6 @@ vi.mock("../src/server/agent/index.js", () => ({
 import { createApp, createServices, expandChatSlashCommand } from "../src/server/app.js";
 import { compactResultText } from "../src/server/routes/chat.js";
 import { cancelRun, getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
-import { personalAgentAvatarId } from "../src/server/personalAgents.js";
 import type { Store } from "../src/server/store.js";
 
 let tempDir: string;
@@ -428,42 +427,5 @@ describe("/compact — refusals", () => {
       "다른 질문",
       "[mock] 다른 질문",
     ]);
-  });
-
-  it("never queues a /compact behind a busy bot, and never touches a parked task", async () => {
-    const t = boot();
-    const owner = await newOwner(t);
-    const agent = t.store.createPersonalAgent(owner.id, { displayName: "리서치 봇" });
-    const avatarId = personalAgentAvatarId(owner.id, agent.id);
-    const send = (message: string) =>
-      owner.agent.post("/api/chat/stream").send({ avatarId, conversationId: "bot", message });
-
-    // Turn 1: the bot parks on a question (and leaves a session).
-    H.script.push((req, events) => {
-      events.onSessionId?.("sess-bot");
-      t.store.setBotTaskReport(req.personalAgent!.taskId!, { outcome: "need_input", summary: "어느 쪽?" });
-    });
-    await send("정리해줘").expect(200);
-    const [parked] = t.store.listBotTasksForConversation("bot");
-    expect(parked.status).toBe("waiting_input");
-
-    // A /compact now opens no card and leaves the parked question alone.
-    H.script.push(compactRun({ ok: true, trigger: "manual", preTokens: 3000, postTokens: 900 }));
-    await send("/compact").expect(200);
-    expect(t.store.listBotTasksForConversation("bot")).toEqual([parked]);
-    expect(H.requests[1].personalAgent?.taskId).toBeUndefined();
-
-    // While a turn runs, a /compact is refused outright — never queued.
-    let release: () => void = () => {};
-    H.script.push(() => new Promise<void>((resolve) => (release = resolve)));
-    const running = send("A안으로").then((r) => r);
-    for (let i = 0; i < 200 && !getActiveRunForConversation(owner.id, "bot"); i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    const busy = await send("/compact").expect(409);
-    expect(busy.body.error).toBe("봇이 작업 중일 때는 /compact를 쓸 수 없어요. 작업이 끝난 뒤 다시 시도해 주세요.");
-    expect(t.store.countQueuedBotTasks("bot")).toBe(0);
-    release();
-    await running;
   });
 });

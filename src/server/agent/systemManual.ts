@@ -29,7 +29,7 @@ DM is human-to-human UI functionality. DM content and contact lists are not adde
     title: "Shared server outbound network policy",
     summary: "Domain blocking, proxy denials, browser scope and deployment setup.",
     body: `## Scope
-An optional deployment overlay applies one outbound policy to ALL local avatars, personal bots, group agents, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. External gateways and remote hosts need their own policy for requests they originate.
+An optional deployment overlay applies one outbound policy to ALL local avatars, group agents, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. External gateways and remote hosts need their own policy for requests they originate.
 
 ## Behavior
 The container bootstrap installs IPv4/IPv6 firewall rules before Noah starts, then drops root and all capabilities. Only loopback, replies to incoming connections and TCP to the dedicated HTTP proxy (3128) and its admin-session-protected policy controller (3129) are allowed. Destination DNS resolution happens at the proxy. Programs that ignore HTTP_PROXY/HTTPS_PROXY fail closed; raw SSH and other direct protocols are unavailable. HTTP requests and HTTPS CONNECT destination domains are checked against the same list. HTTPS paths are encrypted and are not filtered. IP-literal proxy destinations are denied.
@@ -50,7 +50,7 @@ Report the blocked destination and ask the deployment administrator to review th
 Noah Almighty gives each user a main avatar with a profile/persona, skills, plugins and a personal knowledge repository. Local avatars run with tools supplied by Noah. External avatars use another gateway; read external-avatars for that separate workflow.
 
 ## Where to go
-- 내 아바타: configure your avatar through 프로필, 권한·연결 and 지식·플러그인 tabs.
+- 내 아바타: configure your avatar through 프로필, 권한·연결 and 지식·플러그인 tabs. Code/tool messages may call 내 아바타 "Settings/설정".
 - 탐색: find reachable teammate and group avatars and start conversations.
 - 대화: revisit conversation history and continue work.
 - 예약 작업: create, edit, pause and run scheduled work and read its results.
@@ -58,8 +58,6 @@ Noah Almighty gives each user a main avatar with a profile/persona, skills, plug
 - 스킬 배우기: browse and learn shared teammate skills.
 - 지식 그래프: explore the second brain's notes and relationships.
 - 알림: review notifications and pending information requests.
-- 내 아바타 → 내 봇: eligible users manage their personal bots. Code/tool messages may call 내 아바타 "Settings/설정".
-- 봇 오피스: view delegated personal-bot work when personal bots are available.
 - 관리자: system administrators manage users, groups, deployment features and external avatars.
 The visible controls depend on the account, deployment and conversation type. Use the current state/tool results before claiming a particular feature is enabled.
 
@@ -82,7 +80,7 @@ Open your own avatar or a reachable avatar from 탐색 and send a task. Continue
 
 ## Model and tool controls
 The composer can select a model tier (Opus/Sonnet/Haiku), reasoning effort and MCP tool groups for local avatars. A deployment model pin can hide/override the model choice; available tiers and image support depend on administrator configuration. Ask describe_system for this run's model and capabilities rather than guessing a concrete model from the tier name.
-The system tool group is always on for local avatars, including when all optional groups are off or an administrator restricts them. Its manual and state tools remain available; management tools still enforce owner/group/bot permissions. Other tool groups follow composer selection and administrator policy. Turning on a group does not grant owner privileges. Changes affecting an existing run may require the next turn or a new conversation; plugin load changes normally require a new conversation.
+The system tool group is always on for local avatars, including when all optional groups are off or an administrator restricts them. Its manual and state tools remain available; management tools still enforce owner/group permissions. Other tool groups follow composer selection and administrator policy. Turning on a group does not grant owner privileges. Changes affecting an existing run may require the next turn or a new conversation; plugin load changes normally require a new conversation.
 
 ## Questions and approvals
 Respond to question, permission, plan or canvas cards in Noah to let a waiting run continue. A submitted task or accepted plan is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
@@ -111,7 +109,6 @@ Personal avatar visibility is group or private, not public-to-everyone. Peer dis
 - A trusted teammate may have elevated file/command access with interactive approvals, but that does not make them the owner. System settings and personal integrations remain owner-controlled.
 - A plain non-owner run is read-only except for the specific public or scoped MCP capabilities its handlers allow.
 - Group shared agents use group resources and their group's capture policy. They do not inherit personal secrets, repositories or plugins.
-- Your personal bots act with your owner capabilities, but have separate identity, scoped memory and granted skills.
 
 ## Shared accounts
 The shared/communal account toggle is in the profile settings. It lets trusted teammates write and commit the account's PERSONAL knowledge repository as well as read it. Repository creation/connection remains owner-only. Turn it on only when this account's knowledge is intentionally maintained by the team.
@@ -123,7 +120,7 @@ Example: "팀원이 내 아바타를 못 찾는데 무엇을 확인해야 해?" 
     title: "Personal knowledge and second brain",
     summary: "Create/connect a repository, remember, recall, commit and resolve knowledge gaps.",
     body: `## Setup
-Connect one personal knowledge repository through 내 아바타's knowledge controls, or ask the main avatar to create and connect one. The internal GIT_TOKEN must be configured for authenticated creation/push. If no repository exists, use mcp__repo__create_repo before writing or scaffolding; a bot cannot create the owner's repository from its own thread.
+Connect one personal knowledge repository through 내 아바타's knowledge controls, or ask the main avatar to create and connect one. The internal GIT_TOKEN must be configured for authenticated creation/push. If no repository exists, use mcp__repo__create_repo before writing or scaffolding.
 
 ## Record and recall
 1. Tell the avatar what to remember, for example "이 장애 원인과 재발 방지 절차를 기억해줘". The /remember command is also a capture shortcut in interactive chat.
@@ -135,7 +132,7 @@ Connect one personal knowledge repository through 내 아바타's knowledge cont
 When a teammate asks something the avatar cannot answer, it can create an information request. The owner opens 알림, provides an answer to the information request and has the avatar capture it and resolve the request. Do not invent missing owner knowledge.
 
 ## Scope and troubleshooting
-Writes are normally owner-only; shared-account teammates are the deliberate exception. Personal bots use agents/<slug>/ within the same repository, outside the main avatar's root wiki/ search. Group knowledge is a separate repository and separate brain.
+Writes are normally owner-only; shared-account teammates are the deliberate exception. Group knowledge is a separate repository and separate brain.
 For "I remembered this but cannot find it", check which avatar was used, which repository/namespace received it, whether the commit succeeded and whether it is a wiki/ note. For a failed push, preserve the tool's error and use the dedicated repository tools; the shell has no Git credentials.`,
   },
   {
@@ -154,7 +151,7 @@ Search mcp__skill_exchange__find_shared_skills for skills shared by reachable te
 A learned copy is a local copy with origin/subscription metadata, not a live remote execution. It cannot be re-shared while linked to its origin. Manage updates/subscription through the skill-sharing controls; do not silently remove origin metadata to bypass sharing rules.
 
 ## Troubleshooting
-Check plugin enabled state, sync errors, selected content, permissions, and whether this is a fresh conversation. Personal bots load only the skills granted to them; an empty selection gives a bot no adopted skills. A registered plugin and a successfully loaded plugin are different states.`,
+Check plugin enabled state, sync errors, selected content, permissions, and whether this is a fresh conversation. A registered plugin and a successfully loaded plugin are different states.`,
   },
   {
     id: "groups-avatars",
@@ -171,24 +168,7 @@ A group can have several shared agents. Members chat with them in PRIVATE per-me
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
 Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited and read-only, not a general background delegation channel.
 
-Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question. To queue actual work to your own bot, read personal-bots instead.`,
-  },
-  {
-    id: "personal-bots",
-    title: "Personal bots and delegation",
-    summary: "Create/configure bots, grant skills, delegate tasks and find results.",
-    body: `## Availability and setup
-Personal bots (내 봇) are currently available only to system-admin accounts. Check describe_system before offering creation. The owner manages bot names, enablement, images and default models under 내 아바타 → 내 봇. The owner's MAIN avatar can create a bot conversationally through create_agent when that tool is present in an interactive run. External Task API runs cannot create bots this way.
-
-## Identity, memory and skills
-Each bot is a separate chat contact, visible only to its owner. It uses the owner's tool capabilities and integrations but its own persona and agents/<slug>/ memory namespace. Only granted skills load; ask the bot to adopt an eligible skill or manage selection in its settings. It can update its own profile/persona through its scoped tools. Configure an existing bot in settings or its own conversation rather than asking a sibling to rewrite it.
-
-## Delegate work
-Example: "리서치봇한테 이번 주 경쟁사 변경 사항을 조사하게 해줘."
-The main avatar's delegate_to_bot queues a self-contained request on the named bot's thread. The server runs it asynchronously. Results appear on the owner's 봇 오피스 board and the bot's conversation, NOT as a response to the originating chat. Report that work was queued; do not wait for it or claim completion. The receiving bot sees the request text, not the originating conversation. Hand-offs are bounded and each run consumes the owner's model usage; do not use delegation for work the user did not request.
-
-## Scheduled bot work
-Ask the bot to schedule its own work after confirming the exact schedule wording. Bot routine tools manage only routines bound to that bot. Each firing becomes delegated work and appears on the board; the owner manages all bot/main-avatar schedules in 예약 작업. See routines for schedule shapes.`,
+Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question.`,
   },
   {
     id: "routines",
@@ -206,8 +186,8 @@ All wall-clock times are KST (UTC+9). The tool accepts name (optional) and promp
 Example prompt: "공식 공지에서 어제 이후 변경된 내용을 찾아 출처 링크와 함께 한국어로 정리해줘. 접근할 수 없으면 원인을 보고해줘."
 
 ## Execution and results
-The 예약 작업 screen offers 지금 실행, edit, enable/pause and result viewing. Main-avatar routines run unattended with owner tools and keep results in a dedicated routine conversation. No person is present to answer questions, so tasks must be executable without interactive clarification or the owner's browser. A routine may open a registered working Git repository; the selection takes effect on its next scheduled run.
-There is a whole-run time limit, including fallback attempts. describe_system reports the configured main-avatar routine limit. On failure or timeout, inspect the error and any partial response before retrying; changes may already have occurred. Main-avatar routines are not the external Task API and do not use its respond endpoint. Bot-bound routines are dispatched as bot tasks; see personal-bots.
+The 예약 작업 screen offers 지금 실행, edit, enable/pause and result viewing. Routines run unattended with owner tools and keep results in a dedicated routine conversation. No person is present to answer questions, so tasks must be executable without interactive clarification or the owner's browser. A routine may open a registered working Git repository; the selection takes effect on its next scheduled run.
+There is a whole-run time limit, including fallback attempts. describe_system reports the configured routine limit. On failure or timeout, inspect the error and any partial response before retrying; changes may already have occurred. Routines are not the external Task API and do not use its respond endpoint.
 
 Use external-tasks when another system decides WHEN to trigger a task, rather than Noah's scheduler.`,
   },
@@ -216,7 +196,7 @@ Use external-tasks when another system decides WHEN to trigger a task, rather th
     title: "External Task API integration",
     summary: "Bearer keys, curl, submit/poll/respond/cancel, idempotency and errors.",
     body: `## Purpose and prerequisites
-An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user, a personal bot, group agent or external avatar. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
+An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user, a group agent or an external avatar. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
 
 ## Issue a key
 In 내 아바타 → 권한·연결 → 외부 작업 API, issue a named personal key. The raw key is shown only once; at most 10 may be active per user. Store it in the calling system's secret store/environment, never in a chat message or committed source file. NOAH_URL below is the actual externally reachable Noah origin, not the avatar's localhost; NOAH_API_KEY is the secret environment variable. Use HTTPS for a real deployment.
@@ -264,7 +244,7 @@ POST /api/v1/avatar/tasks/:id/respond accepts {"requestId":"...","value":...}.
 - Tool permission: {"behavior":"allow"} or {"behavior":"deny"}.
 - Plan approval: {"behavior":"approved"} or {"behavior":"rejected","feedback":"requested changes"}.
 - Canvas: follow that canvas's input schema; the user may answer in Noah instead.
-Success returns {"ok":true}. An expired/already-answered request returns 409; refresh the task rather than replaying it blindly. Browser work still needs the owner to have the conversation open with the Noah extension connected. API submission does not supply a remote browser. Interactive-only bot creation is unavailable on this path.
+Success returns {"ok":true}. An expired/already-answered request returns 409; refresh the task rather than replaying it blindly. Browser work still needs the owner to have the conversation open with the Noah extension connected. API submission does not supply a remote browser. Interactive-only share-link creation is unavailable on this path.
 
 ## 4. Cancel
 ~~~bash
@@ -370,7 +350,7 @@ New PowerPoint decks are designed as HTML/CSS slides and converted by the pptx s
 For draw.io, author an uncompressed mxfile XML .drawio file and publish it. Noah's file side panel offers an interactive diagram viewer. This viewer does not require the slide-rendering toolchain.
 
 ## Notifications
-mcp__system__notify_user leaves an in-app notification for the owner about an important result or required action. It is not an email/SMS service. Routine results remain in 예약 작업; delegated bot results appear on 봇 오피스. A notification supplements the stored result rather than proving delivery through an external channel.`,
+mcp__system__notify_user leaves an in-app notification for the owner about an important result or required action. It is not an email/SMS service. Routine results remain in 예약 작업. A notification supplements the stored result rather than proving delivery through an external channel.`,
   },
   {
     id: "external-avatars",
@@ -469,8 +449,7 @@ Set \`editable:true\` (best with markdown) to let the user edit or annotate the 
 With no controls and not editable, it just displays and returns immediately.
 To REFINE an artifact, call show again with the SAME \`canvasId\` (returned when you showed it) so it updates in place (keeping a version the user can roll back to) instead of stacking a new tab — don't re-emit a near-duplicate under a new id.
 Keep each artifact compact (oversized content is rejected).
-The client renders real, sanitized form controls — put NO scripts/JS in the content (it will be stripped).
-In a personal-bot conversation controls never block: the canvas returns at once and the owner's answer arrives as their next message.`,
+The client renders real, sanitized form controls — put NO scripts/JS in the content (it will be stripped).`,
   },
 ] as const;
 

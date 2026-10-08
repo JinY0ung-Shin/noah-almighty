@@ -61,13 +61,10 @@ import {
 } from "../modelTiers.js";
 import { isEffortLevel } from "../effortLevels.js";
 import { liftPluginMcpServers } from "../plugins.js";
-import { knowledgeClonePath } from "../knowledgeRepo.js";
-import { personalAgentMemoryRoot } from "../personalAgents.js";
 import {
   emptyOwnerState,
   summarizeGroupAgentState,
   summarizeOwnerState,
-  summarizePersonalAgentState,
 } from "./ownerState.js";
 import {
   buildCanUseToolSafetyNet,
@@ -349,7 +346,7 @@ export function planMcpToolFamilies(
  * The run's CONVERSATION scratch workspace: where tools that hand the model a
  * file of its own (get_attachment's `save_to_workspace`) write, and the path
  * describe_system names. Every run kind that has one sets it the same way —
- * the chat route's executeChatTurn (own-avatar, teammate, group-agent, bot and
+ * the chat route's executeChatTurn (own-avatar, teammate, group-agent and
  * external-task-API turns) and the owner-routine scheduler both pass
  * `cwd: activeRepoCwd ?? workspaceDir` with
  * `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined`, and set
@@ -479,13 +476,6 @@ export async function buildAgentRunPlan(
     GROUP_AGENT_PROFILE_SERVER_NAME,
     GROUP_AGENT_PROFILE_TOOL_NAMES,
   } = await import("./groupAgentProfileTools.js");
-  const {
-    buildPersonalAgentSelfServer,
-    buildPersonalAgentOwnerServer,
-    PERSONAL_AGENT_SERVER_NAME,
-    PERSONAL_AGENT_SELF_TOOL_NAMES,
-    PERSONAL_AGENT_OWNER_TOOL_NAMES,
-  } = await import("./personalAgentProfileTools.js");
 
   const streaming = Boolean(events);
   // Tool-access derivation lives in deriveAgentToolAccess (a pure, unit-tested
@@ -547,15 +537,6 @@ export async function buildAgentRunPlan(
   // the SINGLE source for the family booleans AND for `registered` — the set
   // the prompt and describe_system report — so report and reality can't drift.
   const groupAgentRun = request.groupAgent ?? null;
-  // PERSONAL-AGENT (내 봇) run: identity, plus ONE scoped personal-knowledge
-  // lens. Deliberately absent from deriveAgentToolAccess above and from
-  // planMcpToolFamilies below — a bot run IS a full owner run (request.avatar is
-  // the OWNER's own avatar), so the owner access algebra and every personal tool
-  // family must stay exactly as they are for the owner's main avatar. What this
-  // flag drives instead: the prompt identity swap, describe_system's bot block,
-  // the self-config server, the self-scoped routine tools, and the memory scope
-  // (`personalAgentScope` below) that parameterizes the repo/brain servers.
-  const personalAgentRun = request.personalAgent ?? null;
   const familyPlan = planMcpToolFamilies(enabledMcpToolGroups, Boolean(groupAgentRun));
   const personalKnowledgeToolsEnabled = familyPlan.personalKnowledge;
   const groupKnowledgeToolsEnabled = familyPlan.groupKnowledge;
@@ -664,41 +645,6 @@ export async function buildAgentRunPlan(
         request.viewerUserId ?? "",
       )
     : null;
-  // The bot's own live self-state, alongside (never instead of) the owner state
-  // above — a bot run has BOTH. Summarized against the VIEWER, not against
-  // request.personalAgent.ownerUserId, so a drifted request fails the owner
-  // match instead of confirming itself (avatar.id is the owner uuid by the
-  // personal-run contract, and the reach gate proved viewer == owner).
-  const personalAgentState = personalAgentRun
-    ? summarizePersonalAgentState(
-        store,
-        personalAgentRun.agentId,
-        request.viewerUserId ?? request.avatar.id,
-        // Per-THREAD backlog (queuedTaskCount): omitted → 0, so a run without a
-        // conversation id never reports another thread's queue.
-        request.conversationId,
-      )
-    : null;
-  // The bot's OWN memory namespace inside the owner's single knowledge repo —
-  // on a bot run this is the only thing standing between a full owner run and
-  // the owner's own vault/skills. Server-CONSTRUCTION parameterization only
-  // (exactly like buildGroupAgentBrainServer): the access algebra above never
-  // learns about personal agents. Static for the whole run — a bot disabled or
-  // deleted mid-run is caught by the NEXT turn's reach gate, not re-read here.
-  // A run whose row vanished between the reach gate and here falls back to a
-  // namespace keyed by the bot id (a folder no bot writes to), so a degenerate
-  // run is never WIDER than a healthy one.
-  const personalAgentScope = personalAgentRun
-    ? {
-        root:
-          personalAgentState?.memoryRoot ??
-          personalAgentMemoryRoot(personalAgentRun.agentId),
-        botName:
-          personalAgentState?.alias ||
-          personalAgentState?.displayName ||
-          request.avatar.displayName,
-      }
-    : undefined;
   // The ACTING member behind a group-agent run: commit identity, token source,
   // audit actor for the pinned group tools (groups own no credentials).
   const actingMemberRow =
@@ -747,9 +693,6 @@ export async function buildAgentRunPlan(
       // A successful wiki/ write is a second-brain capture — surface it as a
       // dedicated "기억" notice in the activity tree (no-op headless).
       onMemory: (e) => events?.onMemory?.({ ...e, scope: "personal" }),
-      // Bot runs: confine every path op to the bot's memory folder, stage only
-      // that subtree on commit, and refuse scaffold_skill/create_repo.
-      pathScope: personalAgentScope,
     },
     { allowCreate: allowRepoCreate },
   );
@@ -790,28 +733,24 @@ export async function buildAgentRunPlan(
     viewerIsOwner: ownerToolAccess,
     elevated: elevatedToolAccess,
     config,
-    // Bot runs recall from the bot's OWN memory vault, never the owner's.
-    scope: personalAgentScope,
   });
   const fileOutputActive = Boolean(request.cwd && events?.onFile);
   // PPTX share links (create_share_link on the file_output server): a bearer
   // URL that reaches OUTSIDE this conversation, so unlike show_file/share_file
   // it needs a PERSON who asked for it in a chat with their OWN avatar. Every
   // run kind that can execute with nobody watching — or on someone else's
-  // instructions — is excluded: bots (a bot turn may be a queued/routine one,
-  // indistinguishable here), group agents (member threads are private; sharing
-  // is the group second brain's job), consultations, routines and external-task
-  // API turns (not headless, so they need their own exclusion). The chat route
-  // supplies `onShareLink` only on those same interactive own-avatar turns and
-  // re-checks that per call. Computed HERE, before buildSystemServer, so
-  // describe_system reports the same boolean the tool, allowedTools and the
-  // prompt stamp all key on.
+  // instructions — is excluded: group agents (member threads are private;
+  // sharing is the group second brain's job), consultations, routines and
+  // external-task API turns (not headless, so they need their own exclusion).
+  // The chat route supplies `onShareLink` only on those same interactive
+  // own-avatar turns and re-checks that per call. Computed HERE, before
+  // buildSystemServer, so describe_system reports the same boolean the tool,
+  // allowedTools and the prompt stamp all key on.
   const shareLinkToolActive =
     fileOutputActive &&
     Boolean(events?.onShareLink) &&
     ownerToolAccess &&
     !groupAgentRun &&
-    !personalAgentRun &&
     !consultationRun &&
     !request.headless &&
     !request.externalTaskApi;
@@ -883,19 +822,6 @@ export async function buildAgentRunPlan(
     // keep refusing via viewerIsOwner.
     groupAgent: groupAgentRun
       ? { agentId: groupAgentRun.agentId, actingUserId: actingMember.id }
-      : undefined,
-    // Personal-agent runs: describe_system prints the BOT block ahead of the
-    // owner block, and the four routine tools refuse (same acting-user
-    // derivation as personalAgentState above).
-    personalAgent: personalAgentRun
-      ? {
-          agentId: personalAgentRun.agentId,
-          actingUserId: request.viewerUserId ?? request.avatar.id,
-          // Delegated-task self-state: WHICH card this turn writes to (if any)
-          // and the thread whose backlog the state summarizer counts.
-          taskId: personalAgentRun.taskId,
-          conversationId: request.conversationId,
-        }
       : undefined,
     // The working repo opened for this conversation (NAME only — the clone path is
     // never surfaced). Mirrors buildPrompt's activeRepoSection in describe_system.
@@ -1078,54 +1004,10 @@ export async function buildAgentRunPlan(
         actingUser: actingMember,
       })
     : null;
-  // Personal agents (내 봇). TWO tool SETS with opposite run kinds behind ONE
-  // server name: a bot run gets `update_profile` (it edits ITSELF) + the
-  // delegated-task `report_task`, an owner's own run gets `create_agent` (it
-  // stands a new bot up). `delegate_to_bot` (봇 간 위임) is the one tool BOTH
-  // sets carry. The gates are mutually exclusive by construction, so the name
-  // can never collide. No registration is the boundary — every handler
-  // re-checks the live owner+admin role (the mcp__ auto-allow fires first).
-  const personalAgentSelfActive = Boolean(personalAgentRun);
-  const personalAgentCreateActive =
-    ownerToolAccess &&
-    !groupAgentRun &&
-    !personalAgentRun &&
-    !consultationRun &&
-    // Owner-scheduled routines are excluded on purpose: creating a chat contact
-    // is a decision the owner makes in conversation, not unattended work.
-    !request.headless &&
-    // Same reasoning for a turn an EXTERNAL SYSTEM submitted through the task
-    // API: the owner did not type it, so an outside instruction must never
-    // stand up a new bot unattended. Not headless (questions still park), so it
-    // needs its own exclusion here.
-    !request.externalTaskApi &&
-    // The phase-1 feature gate (the same fact ownerState.personalAgentsEnabled
-    // reports to both metacognition surfaces).
-    ownerState.personalAgentsEnabled;
-  const personalAgentServer = personalAgentRun
-    ? buildPersonalAgentSelfServer(store, {
-        agentId: personalAgentRun.agentId,
-        owner,
-        // The delegated-task card this turn reports against. Absent on an
-        // untracked turn — report_task is registered either way and refuses
-        // with a redirect, so the tool set never varies per turn.
-        taskId: personalAgentRun.taskId ?? null,
-        conversationId: request.conversationId ?? null,
-        // adopt_skill/drop_skill resolve the owner's knowledge-repo clone to
-        // read the skill catalog; without config they fail closed.
-        config,
-      })
-    : personalAgentCreateActive
-      ? buildPersonalAgentOwnerServer(store, { owner, config })
-      : null;
-
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
-  // A personal-bot run never PARKS on canvas controls, for the same reason the
-  // hook denies its AskUserQuestion: a delegated turn can run with nobody there,
-  // so the answer arrives as the owner's next message instead.
   const canvasServer = canvasActive
-    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, canPark: !personalAgentRun })
+    ? buildCanvasServer({ emitCanvas: events!.onCanvas! })
     : null;
   // The handler self-gates on `allowed` in addition to `browserActive`: the
   // `mcp__` auto-allow in the PreToolUse hook fires before any owner check, and
@@ -1442,11 +1324,6 @@ export async function buildAgentRunPlan(
       }
     : {};
 
-  // A personal-agent run carries the FULL system tool set, routines included: a
-  // bot schedules its own recurring work, and `routine_jobs.personal_agent_id`
-  // binds each schedule to the bot that fires it. The handlers SELF-SCOPE that
-  // access (a bot lists/updates/deletes only its own rows — systemTools.ts), and
-  // both metacognition surfaces state the capability and its scope.
   const options: Record<string, unknown> = {
     plugins: pluginRoots,
     // The PreToolUse hook (below) is the real gate. `default` mode is required —
@@ -1476,8 +1353,6 @@ export async function buildAgentRunPlan(
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
       ...(groupBrainActive ? GROUP_BRAIN_TOOL_NAMES : []),
       ...(groupAgentProfileActive ? GROUP_AGENT_PROFILE_TOOL_NAMES : []),
-      ...(personalAgentSelfActive ? PERSONAL_AGENT_SELF_TOOL_NAMES : []),
-      ...(personalAgentCreateActive ? PERSONAL_AGENT_OWNER_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),
       ...(fileOutputActive ? FILE_OUTPUT_TOOL_NAMES : []),
@@ -1569,9 +1444,6 @@ export async function buildAgentRunPlan(
         : {}),
       ...(groupAgentProfileServer
         ? { [GROUP_AGENT_PROFILE_SERVER_NAME]: groupAgentProfileServer }
-        : {}),
-      ...(personalAgentServer
-        ? { [PERSONAL_AGENT_SERVER_NAME]: personalAgentServer }
         : {}),
       ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
       ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
@@ -1721,18 +1593,6 @@ export async function buildAgentRunPlan(
               toolSkillPolicy,
               // Text-only model this run: deny image/PDF Read before it 400s the turn.
               runVisionEnabled,
-              // Personal-bot run: AskUserQuestion is redirected to the
-              // turn-boundary protocol (report_task 'need_input' + end the turn)
-              // instead of parking on a modal nobody may be there to answer.
-              // The scope additionally confines native Write/Edit inside the
-              // owner's knowledge clone to this bot's own memory folder — the
-              // same root the scoped repo/brain servers enforce.
-              personalAgentScope
-                ? {
-                    clonePath: knowledgeClonePath(request.avatar.id, config),
-                    memoryRoot: personalAgentScope.root,
-                  }
-                : false,
               hookApprovals,
             ),
           ],
@@ -1776,8 +1636,6 @@ export async function buildAgentRunPlan(
     ownerGroups,
     ownerSecrets,
     groupAgentState,
-    personalAgentState,
-    personalAgentCreateActive,
     effectiveModel,
     modelChain,
     runVisionEnabled,

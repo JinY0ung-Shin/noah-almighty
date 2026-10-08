@@ -50,9 +50,6 @@
   const nav = [
     { view: "explore", label: "탐색", icon: "compass" },
     { view: "chat", label: "대화", icon: "chat" },
-    // 봇 오피스 rides the same admin gate as the 내 봇 feature it opens (phase 1),
-    // filtered into `visibleNav` below rather than rendered unconditionally.
-    { view: "bots", label: "봇 오피스", icon: "activity" },
     { view: "brain", label: "지식 그래프", icon: "network" },
     { view: "inbox", label: "알림", icon: "bell" },
     { view: "routines", label: "예약 작업", icon: "clock" },
@@ -78,13 +75,6 @@
       return conversationTokens.every((token) => hay.includes(token));
     });
   $: chatConversationCount = $appState.conversations.filter((conversation) => !conversation.isRoutine).length;
-  // 봇 오피스 badge: settled bot work the owner hasn't looked at (done/실패/입력
-  // 대기), summed across every bot. Derived at the top level and NAMED in the
-  // markup — a legacy-mode template expression tracks only what the markup
-  // itself reads, so reading this inside a helper would freeze the count.
-  // Three digits would push the nav label around, so it caps at 99+.
-  $: botUnseenCount = $appState.botTaskUnseen.total;
-  $: botUnseenLabel = botUnseenCount > 99 ? "99+" : String(botUnseenCount);
   $: conversationResultStatus = conversationsLoading
     ? "대화 목록을 불러오는 중입니다."
     : conversationsError
@@ -570,10 +560,6 @@
   // The count excludes the viewer, so "접속 2" means two OTHER people are here.
   let presenceOpen = false;
   $: isAdmin = Boolean(user.roles?.includes("admin"));
-  // Derived here (not filtered inline in the markup): a legacy-mode template
-  // expression tracks only what the MARKUP names, so `isAdmin` read inside an
-  // inline callback would leave the list frozen at its first value.
-  $: visibleNav = nav.filter((item) => item.view !== "bots" || isAdmin);
   $: presentOthers = ($appState.adminPresence?.users ?? []).filter((u) => u.id !== user.id);
   // Server-owned window, rendered in whole hours once it reaches one — "최근 60분"
   // is not how anyone says it.
@@ -646,7 +632,7 @@
     </div>
 
     <nav class="rail-nav" aria-label="주 메뉴">
-      {#each visibleNav as item}
+      {#each nav as item}
         <button
           class="nav-item"
           type="button"
@@ -658,14 +644,6 @@
           <span>{item.label}</span>
           {#if item.view === "inbox" && unreadCount > 0}
             <span class="nav-badge">{unreadCount}</span>
-          {:else if item.view === "bots" && botUnseenCount > 0}
-            <!-- A bare number next to a label doesn't say WHAT it counts: the
-                 hover title and the screen-reader text both spell it out, and
-                 the visible chip keeps the capped digits. -->
-            <span class="nav-badge" title={`확인하지 않은 봇 작업 결과 ${botUnseenCount}건`}>
-              <span aria-hidden="true">{botUnseenLabel}</span>
-              <span class="sr-only">확인하지 않은 봇 작업 결과 {botUnseenCount}건</span>
-            </span>
           {/if}
         </button>
       {/each}

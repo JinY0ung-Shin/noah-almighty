@@ -31,12 +31,6 @@ export const MAX_CANVAS_CONTROLS = 12;
  */
 export interface CanvasToolsContext {
   emitCanvas: (request: CanvasRequest) => Promise<CanvasResult>;
-  /**
-   * Whether controls may PARK the run until the user answers. `false` on a
-   * personal-bot run, which may be a delegated turn with nobody watching: every
-   * canvas there behaves as `wait:false`, so the answer arrives as a new message.
-   */
-  canPark?: boolean;
 }
 
 const controlSchema = z.object({
@@ -166,10 +160,10 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
             return text(`Control '${c.id}' has min (${c.min}) greater than max (${c.max}).`, true);
           }
         }
-        // BLOCKING only when controls exist, wait isn't disabled AND this run may
-        // park (never a personal-bot run). Async/editable canvases display and
-        // return immediately; the user's answer arrives later as a new chat turn.
-        const awaitInput = controls.length > 0 && (args.wait ?? true) && ctx.canPark !== false;
+        // BLOCKING only when controls exist AND wait isn't disabled. Async/editable
+        // canvases (wait:false) display and return immediately; the user's answer
+        // arrives later as a new chat turn.
+        const awaitInput = controls.length > 0 && (args.wait ?? true);
         const interaction: "blocking" | "async" | undefined =
           controls.length > 0 ? (awaitInput ? "blocking" : "async") : undefined;
         const editable = Boolean(args.editable);

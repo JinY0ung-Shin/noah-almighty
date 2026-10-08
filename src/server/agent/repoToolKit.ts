@@ -263,11 +263,9 @@ export async function runReadFile<C>(
 /**
  * True when a repo-relative path lands in the second-brain vault (`wiki/`) —
  * the write then raises a "기억" notice (MemoryEvent) on top of the tool row.
- * `root` moves the vault into a subtree (`<root>/wiki/`), so a personal agent
- * writing its OWN memory raises the same notice.
  */
-export function isBrainNotePath(path: string, root?: string): boolean {
-  return path.trim().replace(/^(\.\/)+/, "").startsWith(root ? `${root}/wiki/` : "wiki/");
+export function isBrainNotePath(path: string): boolean {
+  return /^(\.\/)*wiki\//.test(path.trim());
 }
 
 /** Run the shared write_file body; `success` builds the caller-specific message. */

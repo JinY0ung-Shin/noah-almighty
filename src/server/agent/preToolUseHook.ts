@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { AgentEvents } from "./events.js";
 import { MAIN_AGENT_ID } from "./events.js";
 import logger from "../logger.js";
@@ -268,40 +267,6 @@ function stateChangingGitInBash(command: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
-/**
- * Native file-mutation tools addressed by a path argument — the ones the
- * knowledge-clone guard below can resolve. Bash is deliberately absent: parsing
- * a shell command for write targets is the leaky game the active-repo denylist
- * already declines to play, and this is an integrity guard, not a boundary.
- */
-const NATIVE_FILE_WRITE_TOOLS: ReadonlySet<string> = new Set([
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "FileWrite",
-  "FileEdit",
-  "NotebookEdit",
-]);
-
-/**
- * A personal-bot (내 봇) run's knowledge-clone write scope. A bot run IS a full
- * owner run, so its native tools can reach the owner's knowledge clone on disk
- * even though every `mcp__repo__*` op is confined to the bot's memory folder.
- * This keeps the two paths consistent: same folder, and edits keep flowing
- * through the repo tools so they are staged and committed.
- */
-export interface PersonalAgentWriteScope {
-  /** Absolute path of the OWNER's knowledge-repo clone. */
-  clonePath: string;
-  /** Repo-relative memory root (`agents/<dir>`, no trailing slash). */
-  memoryRoot: string;
-}
-
-/** True when `target` IS `dir` or lives under it (both already resolved). */
-function isUnderDir(target: string, dir: string): boolean {
-  return target === dir || target.startsWith(dir + path.sep);
-}
-
 export function buildPreToolUseHook(
   events: AgentEvents,
   elevated: boolean,
@@ -314,20 +279,10 @@ export function buildPreToolUseHook(
   activeRepoMode = false,
   toolSkillPolicy: ToolSkillPolicy = DEFAULT_TOOL_SKILL_POLICY,
   visionEnabled = true,
-  // Personal-bot (내 봇) run: the question DIALOG is replaced by the
-  // turn-boundary protocol below. Last parameter with a default so the existing
-  // positional call sites (and the test suites that build the hook directly)
-  // stay valid. A scope OBJECT additionally confines native file writes to the
-  // bot's own memory folder — ONE parameter carries the run kind, so the two
-  // bot behaviors can never disagree about whether this is a bot run.
-  personalAgentRun: boolean | PersonalAgentWriteScope = false,
   // The run's ledger shared with buildCanUseToolSafetyNet: every allow passes
   // through `trace()` below, which records the ones the CLI may still ask about.
   approvals?: HookApprovalLedger,
 ) {
-  const personalAgentRunning = Boolean(personalAgentRun);
-  const botWriteScope =
-    typeof personalAgentRun === "object" ? personalAgentRun : null;
   return async (
     input: { tool_name?: string; tool_input?: unknown; tool_use_id?: string; agent_id?: string },
     toolUseID?: string,
@@ -366,22 +321,6 @@ export function buildPreToolUseHook(
     // reached the model as a "PreToolUse:AskUserQuestion hook error" (is_error),
     // so it survives only for a payload without usable answers.
     if (toolName === "AskUserQuestion") {
-      // Personal-bot conversations answer questions at the TURN BOUNDARY, never
-      // through a modal: a delegated turn may have been dispatched from the
-      // queue with the owner away, and a parked dialog would hang it until the
-      // hook budget expires. Interactive and queued bot turns follow the SAME
-      // protocol — one shape for the owner to read on the task card. This runs
-      // BEFORE the headless check because a bot run is normally interactive.
-      if (personalAgentRunning) {
-        agentLogger.info({ toolName, agentId }, "personal-bot question redirected to report_task");
-        return trace(
-          hookDeny(
-            "In a personal-bot conversation, never block on an interactive question dialog — the owner may be away and delegated turns can run unattended. " +
-              "Instead: (1) call mcp__personal_agent__report_task with outcome 'need_input' and the blocking question as the summary, then (2) END your turn with that question in your reply text. " +
-              "The owner's next message resumes the work.",
-          ),
-        );
-      }
       if (headless || !events.onQuestion) {
         return trace(
           hookDeny(
@@ -453,39 +392,6 @@ export function buildPreToolUseHook(
               "Branch-changing, history-rewriting, or destructive git is blocked to protect the active working tree. " +
               "Read-only git (status/diff/log/show/rev-parse/ls-files/grep) and local staging/normal commit (add/commit) are allowed.",
           ));
-        }
-      }
-    }
-
-    // Personal-bot run: the owner's knowledge clone is edited through the
-    // `mcp__repo__*` tools (which are path-scoped to this bot's memory folder
-    // and stage/commit what they write). A native Write/Edit into the clone
-    // would land outside that scope and outside any commit, so it is denied
-    // unless it targets the bot's own folder. Integrity guard like
-    // activeRepoMode, not a security boundary: Bash is not parsed.
-    if (botWriteScope && NATIVE_FILE_WRITE_TOOLS.has(toolName)) {
-      const rawPath =
-        asString(toolInput.file_path) || asString(toolInput.notebook_path);
-      if (rawPath) {
-        const clone = path.resolve(botWriteScope.clonePath);
-        // These tools take an ABSOLUTE file_path; a relative one resolves
-        // outside the clone and is left to the normal permission path.
-        const target = path.resolve(rawPath);
-        const memoryDir = path.resolve(clone, botWriteScope.memoryRoot);
-        if (isUnderDir(target, clone) && !isUnderDir(target, memoryDir)) {
-          const uiReason = `봇의 메모리 폴더(${botWriteScope.memoryRoot}/) 밖의 지식 저장소 파일은 직접 수정할 수 없습니다.`;
-          events.onBlocked?.({ toolUseId, toolName, agentId, uiReason });
-          agentLogger.info(
-            { toolName, agentId, memoryRoot: botWriteScope.memoryRoot },
-            "personal-bot knowledge-clone write blocked",
-          );
-          return trace(
-            hookDeny(
-              `${toolName} on this path is not allowed: the knowledge repository is edited through the mcp__repo__* tools, and this bot's folder is \`${botWriteScope.memoryRoot}/\`. ` +
-                `Write it with mcp__repo__write_file (or edit_file) under \`${botWriteScope.memoryRoot}/\` and push it with mcp__repo__commit — a native write there would neither be staged nor committed. ` +
-                "The rest of the owner's knowledge repository is not yours to edit; if something belongs outside your folder, tell the owner instead.",
-            ),
-          );
         }
       }
     }

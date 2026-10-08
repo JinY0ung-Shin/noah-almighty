@@ -2,10 +2,6 @@
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
 > The scheduler tick, job model, and how a routine run differs from a chat turn.
-> 봇 루틴 (`personal_agent_id` set) does NOT take the headless path below — it fires as a
-> scheduled DELEGATED TASK through `executeChatTurn`/the bot-task queue; mechanics live in
-> [personal-agents.md](personal-agents.md) §봇 루틴. Everything on this page describes the
-> legacy main-avatar path, which a NULL `personal_agent_id` keeps byte-identical.
 
 ## Routines
 - A routine (`routine_jobs` table, `get/list/create/update/deleteRoutineJob`, `markRoutineRun`) runs its
@@ -60,18 +56,15 @@
   `runningPerOwner`, module-level like the overlap guard) is claimed inside `executeRoutineJob` BEFORE
   its first await — that is what lets the tick count a job it just started on its next iteration — and
   it is shared with "지금 실행": a manual run is never refused by the caps but occupies its owner's slot.
-  Bot routines count too. It was strictly sequential until 2026-09 for the burst reason, which let ONE
-  long run (a bot routine holds its slot for the whole delegated turn) stall every routine on the
-  server; the per-owner cap is what keeps one owner with many due routines from taking every slot.
-- **A routine whose working repo is locked SKIPS rather than running without it.** The owner-avatar
-  path resolves the working repo FIRST (before plugin/knowledge loading, so a waiting job costs one lock
+  It was strictly sequential until 2026-09 for the burst reason, which let ONE long run stall every
+  routine on the server; the per-owner cap is what keeps one owner with many due routines from taking
+  every slot.
+- **A routine whose working repo is locked SKIPS rather than running without it.** The routine path
+  resolves the working repo FIRST (before plugin/knowledge loading, so a waiting job costs one lock
   lookup per tick, not a git fetch) and returns `skipped` on `locked`: no outcome recorded, the next
-  tick retries. Other open failures still fall back to the scratch workspace. A bot routine gets the
-  same skip from `executeChatTurn`'s `repo_locked` refusal reason — the turn refuses before writing any
-  message or task row (the firing's `touchConversation` still bumps the thread's `updated_at` on each
-  retry). The chat route itself still answers that refusal with 409.
-- **A restart re-runs every routine that was mid-run — at-least-once, not exactly-once.** Owner-avatar
-  routine runs are not in the run registry, so shutdown's `cancelAllRuns()` cannot reach them: the
+  tick retries. Other open failures still fall back to the scratch workspace.
+- **A restart re-runs every routine that was mid-run — at-least-once, not exactly-once.** Routine
+  runs are not in the run registry, so shutdown's `cancelAllRuns()` cannot reach them: the
   process exit kills them before `markRoutineRun`, `next_run_at` never advances, and each fires again
   from the start on the first tick after boot, repeating any external side effect it had already done.
   With the parallel scheduler that is up to `routineMaxConcurrentRuns` (plus manual runs) per restart

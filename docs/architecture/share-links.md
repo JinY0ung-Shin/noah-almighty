@@ -14,8 +14,8 @@
 - **PPTX download cards only** (`isPptxCard`: a visible `kind:"file"` with the PPTX media type) whose
   bytes still resolve as a `.pptx` on disk (`resolveShareableDeck`).
 - **The creator is the CONVERSATION owner** (`conversationOwner(cid) === user.id`) — of an own-avatar
-  thread (external-task-API threads included), an own bot's thread, or a colleague's own thread with
-  someone else's avatar (only while that avatar stays reachable for them). **Group-agent member threads
+  thread (external-task-API threads included) or a colleague's own thread with someone else's avatar
+  (only while that avatar stays reachable for them). **Group-agent member threads
   (`group:<gid>:<aid>`) cannot be link-shared in phase 1**: member threads are private and the team
   shares through its second brain, so the route refuses them, the client shows no button in a group-agent
   pane, and the group-agent prompt branch + describe_system say links are unavailable there.
@@ -76,9 +76,9 @@
 1. The row exists (joined with its creator — a row whose creator is gone is no link) and is unexpired.
 2. The creator is not suspended.
 3. `shareableThread(store, creator, cid)`: the conversation is still owned by the creator; its avatar is the
-   creator's own, or the creator's own bot (`personal:<creator>:<agent>`); `group:` threads never; any
-   other namespaced id fails closed; a colleague thread only while `resolveChatAvatar(creator, avatarId)`
-   still succeeds (the avatar owner went private, left the shared group or was suspended → the link dies).
+   creator's own; `group:` threads never; any other namespaced id fails closed; a colleague thread only while
+   `resolveChatAvatar(creator, avatarId)` still succeeds (the avatar owner went private, left the shared group or
+   was suspended → the link dies).
 4. The card's bytes still resolve as a `.pptx` (`resolveShareableDeck`).
 5. For a slide: the index is strict (`/^[1-9]\d?$/`), inside `slide_ids_json`, and the render resolves.
 
@@ -144,7 +144,7 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 - Create-or-reuse, the cap and the insert run in ONE transaction.
 - **Cascades are manual and sit next to EVERY `deleteCanvasArtifactsForConversation` call**
   (`deleteShareLinksForConversation`, declared on `StoreBase`): single and bulk conversation delete,
-  `deleteUser` (its own threads AND other people's threads with its avatar), group-agent, bot and group
+  `deleteUser` (its own threads AND other people's threads with its avatar), group-agent and group
   deletes. `deleteUser` also drops every row the user created (`owner_user_id`). A rewind/regenerate
   (`applyConversationRewind`) drops the links of the dropped rows' file cards (`deleteShareLinksForFiles`),
   next to the route's disk sweep. **A new conversation-deleting path must add the share-link cascade next to
@@ -156,12 +156,11 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 ## The avatar path (`mcp__file_output__create_share_link`)
 - **Three locks, all keyed on an interactive turn of the owner's OWN avatar:**
   1. `executeChatTurn` supplies `onShareLink` only when `viewerIsOwner && ownerUserId === avatar.id &&
-     !groupAgentHit && !personalAgentHit && !externalAgent && !ctx.externalTaskId &&
-     ctx.unattendedDeadlineMs === undefined` (`shareLinkTurn`) — never a bot turn (a queued or routine bot
-     turn looks interactive at the request level), a group-agent or colleague thread, an external avatar,
-     an external-task-API turn or any deadlined run.
+     !groupAgentHit && !externalAgent && !ctx.externalTaskId && ctx.unattendedDeadlineMs === undefined`
+     (`shareLinkTurn`) — never a group-agent or colleague thread, an external avatar, an external-task-API
+     turn or any deadlined run.
   2. runPlan registers the tool only when `shareLinkToolActive` = `fileOutputActive && events.onShareLink
-     && ownerToolAccess && !groupAgentRun && !personalAgentRun && !consultationRun && !request.headless &&
+     && ownerToolAccess && !groupAgentRun && !consultationRun && !request.headless &&
      !request.externalTaskApi`, computed before `buildSystemServer`. That ONE boolean drives the tool build,
      its own `allowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately NOT in
      `FILE_OUTPUT_TOOL_NAMES`), `SystemToolsContext.shareLinksEnabled` and `AgentRequest.shareLinksEnabled`
@@ -267,7 +266,7 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 `tests/share-links.test.ts` (routes, salted tokens/tickets and what a secret plus a logged id cannot mint,
 download names incl. the owner's download route, late send failures and 416/412, validity matrix, cascades,
 log hygiene), `tests/share-links-flow.test.ts` (end to end: the real chat route → runPlan → tool text →
-recipient HTTP, the gate agreement across bot/group-agent/colleague turns, and a rebuilt deck's new link
+recipient HTTP, the gate agreement across group-agent/colleague turns, and a rebuilt deck's new link
 naming the earlier one), `tests/chat-files.test.ts` (`sanitizeDownloadName` / `withDownloadExtension`, the
 card-name cap), `tests/routes-chat.test.ts` (`onShareLink` supply predicate, card lookup, error mapping,
 the background refusal vs a delivered steer, `otherActiveLinks` on created and reused results, the

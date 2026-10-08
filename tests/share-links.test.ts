@@ -8,7 +8,6 @@ import { chatFilesDir } from "../src/server/chatFiles.js";
 import { chatImagesDir } from "../src/server/chatImages.js";
 import { closeRun, openRun } from "../src/server/agent/runRegistry.js";
 import logger from "../src/server/logger.js";
-import { personalAgentAvatarId } from "../src/server/personalAgents.js";
 import {
   deriveShareToken,
   issueShareTicket,
@@ -847,16 +846,6 @@ describe("share links — which threads can share", () => {
     await open(viewer.agent, token).expect(404);
   });
 
-  it("shares a deck from the owner's own bot thread", async () => {
-    const t = boot();
-    const owner = await newUser(t.app, "owner"); // first signup = admin (the bot feature gate)
-    const viewer = await newUser(t.app, "viewer");
-    const bot = t.store.createPersonalAgent(owner.id, { displayName: "리서치 봇" });
-    const deck = seedDeck(t, owner.id, "conv-bot", { avatarId: personalAgentAvatarId(owner.id, bot.id) });
-    const link = (await create(owner.agent, "conv-bot", deck.card.id).expect(201)).body.link as ShareLinkSummary;
-    await open(viewer.agent, tokenOf(link.url)).expect(200);
-  });
-
   it("lets a colleague share their own thread's deck only while the avatar stays reachable", async () => {
     const t = boot();
     const avatarOwner = await newUser(t.app, "avatarowner");
@@ -949,7 +938,7 @@ describe("share links — cascades", () => {
     expect(rowCount(t.store, "owner_user_id = ?", bystander.id)).toBe(1);
   });
 
-  it("group-agent, bot and group deletes drop the links of their threads", async () => {
+  it("group-agent and group deletes drop the links of their threads", async () => {
     const t = boot();
     const owner = await newUser(t.app, "owner");
     const group = t.store.createGroup({ name: "플랫폼" });
@@ -960,17 +949,12 @@ describe("share links — cascades", () => {
     t.store.touchConversation(owner.id, "conv-ga-b", `group:${group.id}:${agentB.id}`, "안녕");
     rawLink(t.store, owner.id, "conv-ga-a");
     rawLink(t.store, owner.id, "conv-ga-b");
-    const bot = t.store.createPersonalAgent(owner.id, { displayName: "봇" });
-    t.store.touchConversation(owner.id, "conv-bot", personalAgentAvatarId(owner.id, bot.id), "안녕");
-    rawLink(t.store, owner.id, "conv-bot");
     const kept = seedDeck(t, owner.id, "conv-kept");
     await create(owner.agent, "conv-kept", kept.card.id).expect(201);
 
     expect(t.store.deleteGroupAgent(agentA.id)).toBe(true);
     expect(rowCount(t.store, "conversation_id = ?", "conv-ga-a")).toBe(0);
     expect(rowCount(t.store, "conversation_id = ?", "conv-ga-b")).toBe(1);
-    expect(t.store.deletePersonalAgent(bot.id)).toBe(true);
-    expect(rowCount(t.store, "conversation_id = ?", "conv-bot")).toBe(0);
     expect(t.store.deleteGroup(group.id)).toBe(true);
     expect(rowCount(t.store, "conversation_id = ?", "conv-ga-b")).toBe(0);
     expect(rowCount(t.store)).toBe(1);

@@ -16,7 +16,7 @@ import { callTool, shareGroup, signup, withTempDir } from "./helpers.js";
 //     the slide and the .pptx flow through viewer-bound tickets;
 //  3. the card button's create call reuses the avatar's link (one per card);
 //     revoke → every recipient call is the one 404, never a 401;
-//  4. bot, group-agent and colleague turns through the SAME route: no tool and
+//  4. group-agent and colleague turns through the SAME route: no tool and
 //     the prompt's redirect instead (the route's supply predicate and runPlan's
 //     registration gate agree);
 //  5. a rebuilt deck re-delivered is a NEW card: its link is a new one, the
@@ -72,7 +72,6 @@ vi.mock("../src/server/deckRender.js", async (importOriginal) => ({
 
 import { createApp, createServices } from "../src/server/app.js";
 import { FILE_OUTPUT_SHARE_LINK_TOOL_NAME } from "../src/server/agent/fileOutputTools.js";
-import { personalAgentAvatarId } from "../src/server/personalAgents.js";
 import {
   SHARE_LINK_GONE_MESSAGE,
   type ShareLinkCreateResult,
@@ -247,20 +246,18 @@ describe("share links end to end (chat route → runPlan → tool → recipient)
     }
   });
 
-  it("offers no tool on bot, group-agent and colleague turns — the prompt redirects instead", { timeout: 30_000 }, async () => {
+  it("offers no tool on group-agent and colleague turns — the prompt redirects instead", { timeout: 30_000 }, async () => {
     const { app, store } = boot();
     const owner = request.agent(app);
-    const ownerId = (await signup(owner, "gateowner").expect(201)).body.user.id as string; // first signup = admin
+    const ownerId = (await signup(owner, "gateowner").expect(201)).body.user.id as string;
     const colleague = request.agent(app);
     await signup(colleague, "gatecolleague").expect(201);
     // Co-members: the colleague reaches (and is trusted by) the owner's avatar.
     const groupId = await shareGroup(owner, ["gateowner", "gatecolleague"]);
     const groupAgent = store.createGroupAgent(groupId, { displayName: "팀 비서" })!;
-    const bot = store.createPersonalAgent(ownerId, { displayName: "릴리즈 봇" });
 
     const turns: Array<[string, ReturnType<typeof request.agent>, string]> = [
       ["own", owner, ownerId],
-      ["bot", owner, personalAgentAvatarId(ownerId, bot.id)],
       ["group", owner, `group:${groupId}:${groupAgent.id}`],
       ["colleague", colleague, ownerId],
     ];
@@ -272,14 +269,13 @@ describe("share links end to end (chat route → runPlan → tool → recipient)
     }
     expect(S.calls).toHaveLength(turns.length);
 
-    const [own, botRun, groupRun, colleagueRun] = turns.map((_, i) => offeredTo(i));
+    const [own, groupRun, colleagueRun] = turns.map((_, i) => offeredTo(i));
     expect(own).toMatchObject({ allowed: true, registered: true });
     expect(own.append).toContain(TOOL_LINE);
-    for (const run of [botRun, groupRun, colleagueRun]) {
+    for (const run of [groupRun, colleagueRun]) {
       expect(run).toMatchObject({ allowed: false, registered: false });
       expect(run.append).not.toContain(TOOL_LINE);
     }
-    expect(botRun.append).toContain(REDIRECT);
     expect(colleagueRun.append).toContain(REDIRECT);
     // A group-agent pane has no 공유 링크 button, so the avatar must not point at one.
     expect(groupRun.append).toContain(GROUP_REDIRECT);

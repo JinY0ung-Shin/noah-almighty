@@ -121,7 +121,7 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
   };
 }
 
-/** Fresh services + an ADMIN owner (the first user) with one bot and a group agent. */
+/** Fresh services + an ADMIN owner (the first user) with a group agent. */
 function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   const { config, store } = createServices({
     dataDir: path.join(tempDir, dir),
@@ -132,7 +132,6 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
     ...configOverrides,
   });
   const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
-  const bot = store.createPersonalAgent(owner.id, { displayName: "릴리즈 봇", alias: "릴봇" });
   const group = store.createGroup({ name: "팀", createdBy: owner.id });
   store.addGroupMember(group.id, owner.id, "member");
   const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 에이전트" })!;
@@ -148,7 +147,7 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
     viewerIsOwner: true,
     autoApprove: true,
   };
-  return { config, store, owner, bot, group, groupAgent, baseRequest };
+  return { config, store, owner, group, groupAgent, baseRequest };
 }
 
 /** What run #i registered: the allowedTools entry, the server's own tool, and the prompt. */
@@ -231,14 +230,6 @@ describe("create_share_link registration", () => {
       prompt: "redirect",
     },
     {
-      name: "a personal-bot turn",
-      request: (s) => ({
-        ...s.baseRequest,
-        personalAgent: { agentId: s.bot.id, ownerUserId: s.owner.id },
-      }),
-      prompt: "redirect",
-    },
-    {
       name: "a group shared-agent turn",
       request: (s) => ({
         ...s.baseRequest,
@@ -305,7 +296,6 @@ describe("create_share_link registration", () => {
     const cases: AgentRequest[] = [
       s.baseRequest,
       { ...s.baseRequest, externalTaskApi: true },
-      { ...s.baseRequest, personalAgent: { agentId: s.bot.id, ownerUserId: s.owner.id } },
       { ...s.baseRequest, viewerUserId: "x", viewerIsOwner: false, elevated: true },
     ];
     for (const request of cases) {
@@ -316,7 +306,7 @@ describe("create_share_link registration", () => {
       expect(run.fileOutput).toBe(true);
       expect(run.registered).toBe(run.allowed);
     }
-    expect(runs.map((run) => run.allowed)).toEqual([true, false, false, false]);
+    expect(runs.map((run) => run.allowed)).toEqual([true, false, false]);
   });
 });
 
@@ -588,25 +578,6 @@ describe("share-link standing prompt", () => {
     ["an external-task-API turn", { externalTaskApi: true }],
     ["a colleague", { viewerIsOwner: false }],
     ["a trusted teammate", { viewerIsOwner: false, elevated: true }],
-    [
-      "a personal bot",
-      {
-        personalAgentState: {
-          agentId: "a1",
-          ownerUserId: "owner",
-          displayName: "릴리즈 봇",
-          alias: "릴봇",
-          personaSet: false,
-          enabled: true,
-          ownerIsAdmin: true,
-          agentCount: 1,
-          maxAgents: 10,
-          queuedTaskCount: 0,
-          memoryRoot: "agents/release-bot-a1b2c3d4",
-          adoptedSkills: [],
-        },
-      },
-    ],
   ] as Array<[string, Partial<AgentRequest>]>)("redirects to the 공유 링크 button on %s", (_name, over) => {
     const prompt = promptFor({ fileOutputEnabled: true, ...over });
     expect(prompt).toContain(REDIRECT);
@@ -690,18 +661,6 @@ describe("describe_system share-link line", () => {
       expect(line).not.toContain("AVAILABLE in this run —");
     },
   );
-
-  it("bot run: the owner block says bots never create links", async () => {
-    const s = describeSetup("desc-bot");
-    const body = await s.describeWith({
-      fileOutputEnabled: true,
-      shareLinksEnabled: false,
-      personalAgent: { agentId: s.bot.id, actingUserId: s.owner.id },
-    });
-    expect(body).toContain("Current PERSONAL BOT (내 봇) state:");
-    expect(s.shareLineOf(body)).toContain("NOT available in this run — personal bots (내 봇) never create share links");
-    expect(s.shareLineOf(body)).toContain("공유 링크 button next to the deck's file card");
-  });
 
   it("group-agent branch: unavailable for group-agent threads, after the capability boundary and the single deck line", async () => {
     const s = describeSetup("desc-group");

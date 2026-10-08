@@ -6,92 +6,25 @@
 // body. No embeddings, no index server, no git/network — the caller hands in an
 // already-cloned `repoRoot`. Keyword ranking keeps the no-new-infra philosophy
 // (open decision #2); recency/importance can be layered on later via frontmatter.
-//
-// The vault normally sits at the repo root (`wiki/` + `raw/`), but a caller may
-// pass a `root` to move the whole scope into a subtree — that is how a personal
-// agent's OWN memory (`agents/<dir>/wiki|raw`) lives inside the owner's single
-// knowledge repo without ever reaching the owner's root vault.
 
 import path from "node:path";
 import { listTree, readFile } from "../knowledgeRepo.js";
-
-/**
- * Outcome of a scope check: the normalized (repo-relative) path to act on, or a
- * refusal the caller turns into its own message.
- */
-export type ScopedPathCheck = { ok: true; norm: string } | { ok: false };
-
-/** Historical name of `ScopedPathCheck`, kept for the `get_note` call sites. */
-export type WikiPathCheck = ScopedPathCheck;
-
-/**
- * Normalize a model-supplied path and confirm it is `prefix` or lives under
- * `prefix/`, so `<prefix>/../CLAUDE.md` can't step outside the scope.
- */
-function underPrefix(rawPath: string, prefix: string): ScopedPathCheck {
-  const norm = path.posix.normalize(rawPath.replace(/^[/]+/, ""));
-  if (norm !== prefix && !norm.startsWith(`${prefix}/`)) {
-    return { ok: false };
-  }
-  return { ok: true, norm };
-}
-
-/**
- * Normalize a scope ROOT (a repo-relative directory like `agents/bot-a1b2c3d4`).
- * The root is always server-derived, never model input, so this is purely
- * defensive — but it fails CLOSED (null): a broken root must refuse every path
- * rather than silently widen the scope back to the whole repo.
- */
-function scopeBase(root: string): string | null {
-  const base = root.replace(/^[/]+/, "").replace(/[/]+$/, "");
-  if (!base) {
-    return null;
-  }
-  const segments = base.split("/");
-  if (segments.some((s) => !s || s === "." || s === "..")) {
-    return null;
-  }
-  return base;
-}
-
-/** The `wiki`/`raw` pair a search scope covers — at the repo root, or under `root`. */
-function vaultScope(root?: string): { wiki: string; raw: string } | null {
-  if (root === undefined) {
-    return { wiki: "wiki", raw: "raw" };
-  }
-  const base = scopeBase(root);
-  return base ? { wiki: `${base}/wiki`, raw: `${base}/raw` } : null;
-}
-
-/** True when a repo-relative entry path IS `dir` or lives under `dir/`. */
-function isUnder(entryPath: string, dir: string): boolean {
-  return entryPath === dir || entryPath.startsWith(`${dir}/`);
-}
-
-/**
- * The shared path guard for a run confined to ONE repo subtree (a personal
- * agent's memory folder): normalize the model-supplied path and require it to be
- * `root` or live under `root/`. The repo tools run this BEFORE their file ops, so
- * `<root>/../../CLAUDE.md` is refused with a redirect; `resolveInRepo` /
- * `realpathContained` inside `knowledgeRepo` remain the second layer.
- */
-export function normalizeScopedPath(rawPath: string, root: string): ScopedPathCheck {
-  const base = scopeBase(root);
-  return base ? underPrefix(rawPath, base) : { ok: false };
-}
 
 /**
  * The shared wiki-path guard both `get_note` handlers (`brainTools.ts` /
  * `groupBrainTools.ts`) run before reading: strip leading slashes, normalize, and
  * confirm the result is `wiki` or lives under `wiki/` (so `wiki/../CLAUDE.md`
  * can't escape the vault). On success returns the normalized path to read with;
- * on failure the caller emits its own (repo vs group) refusal message. With
- * `opts.root` the guard moves to `<root>/wiki` — a bot's own memory vault — so a
- * path outside that subtree (including another bot's) is refused.
+ * on failure the caller emits its own (repo vs group) refusal message.
  */
-export function normalizeWikiPath(rawPath: string, opts?: { root?: string }): WikiPathCheck {
-  const vault = vaultScope(opts?.root);
-  return vault ? underPrefix(rawPath, vault.wiki) : { ok: false };
+export type WikiPathCheck = { ok: true; norm: string } | { ok: false };
+
+export function normalizeWikiPath(rawPath: string): WikiPathCheck {
+  const norm = path.posix.normalize(rawPath.replace(/^[/]+/, ""));
+  if (norm !== "wiki" && !norm.startsWith("wiki/")) {
+    return { ok: false };
+  }
+  return { ok: true, norm };
 }
 
 // Hard cap on `wiki/` notes scanned per search. NOTE: `listTree` orders entries
@@ -212,23 +145,16 @@ function makeSnippet(body: string, terms: string[]): string {
  * predates the vault layout → the caller points the avatar at `brain-migrate`),
  * distinct from a present-but-unmatched vault (`{kind:'ok', hits:[]}`). A note
  * that fails to read (oversize/unreadable) is skipped, never fatal.
- *
- * With `opts.root` the whole scope moves into that subtree (`<root>/wiki|raw`):
- * only its notes are scanned and the root vault stays invisible. Hit paths remain
- * FULL repo-relative, so `get_note`/`read_file` can open them as returned.
  */
 export async function rankBrainNotes(
   repoRoot: string,
   query: string,
   limit: number = DEFAULT_LIMIT,
-  opts?: { root?: string },
 ): Promise<BrainSearchResult> {
-  const vault = vaultScope(opts?.root);
-  if (!vault) {
-    return { kind: "no_vault" };
-  }
   const entries = await listTree(repoRoot);
-  const hasVault = entries.some((e) => isUnder(e.path, vault.wiki) || isUnder(e.path, vault.raw));
+  const hasVault = entries.some(
+    (e) => e.path === "wiki" || e.path.startsWith("wiki/") || e.path === "raw" || e.path.startsWith("raw/"),
+  );
   if (!hasVault) {
     return { kind: "no_vault" };
   }
@@ -236,11 +162,11 @@ export async function rankBrainNotes(
     .filter(
       (e) =>
         e.type === "file" &&
-        e.path.startsWith(`${vault.wiki}/`) &&
+        e.path.startsWith("wiki/") &&
         e.path.endsWith(".md") &&
         !e.path.endsWith("_template.md") &&
-        e.path !== `${vault.wiki}/index.md` &&
-        e.path !== `${vault.wiki}/log.md`,
+        e.path !== "wiki/index.md" &&
+        e.path !== "wiki/log.md",
     )
     .slice(0, SCAN_CAP);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);

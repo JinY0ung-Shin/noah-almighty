@@ -27,7 +27,7 @@ If describe_system is unavailable in this run, `bash ${CLAUDE_SKILL_DIR}/scripts
 question (exit 0 = converter installed, exit 4 = not; it starts no browser; its `selftest` line is informational).
 
 - Never install anything (no pip/apt/npm, no browser download) and never work around a missing toolchain.
-- When the system prompt says no one is watching (a scheduled routine, a delegated bot task), never ask questions:
+- When the system prompt says no one is watching (a scheduled routine), never ask questions:
   make sensible choices (the default font profile included), build and deliver. Otherwise follow the system
   prompt's rule for the turn.
 - `converter: INSTALLED` and a NEW deck in an interactive chat: §2's one scoping question comes next, before you
@@ -96,8 +96,7 @@ and before you read AUTHORING, ONE `AskUserQuestion` call settles what the reque
   and a later deck in the same conversation reuses the earlier answers. Ask only the questions still open (the
   user named a theme, brand colours, a length or the use → drop that question); skip the call when nothing is open
   or the user said to decide ("알아서").
-- Never where nobody can answer it now: a scheduled routine or automated task, a personal-bot conversation (the
-  hook denies the dialog there) or a delegated task, and a turn whose system prompt says
+- Never where nobody can answer it now: a scheduled routine or automated task, and a turn whose system prompt says
   `This turn was submitted by an **EXTERNAL SYSTEM**` (the external task API: the dialog is not blocked there and
   would park the task until someone answers it). Group-agent and teammate chats are interactive: ask there too.
 - Up to 3 questions in that one call, every label and description in the user's language. The FIRST option of
@@ -357,8 +356,7 @@ decks when describe_system reports `converter: NOT INSTALLED`. For a self-check 
 
 In an interactive chat, every build that exits 0 is delivered AND opens a review round: the user writes notes per
 slide on ONE canvas, and you apply all of them with one rebuild. Not in the runs §2 excludes (routines and
-automated tasks, personal-bot conversations and delegated tasks, EXTERNAL SYSTEM turns): there, deliver (§7) and
-finish. Each round, in this order:
+automated tasks, EXTERNAL SYSTEM turns): there, deliver (§7) and finish. Each round, in this order:
 
 1. `deck.sh build` exits 0 → `share_file` the new .pptx IN PLACE (§7). The user always has the latest file; never
    hold it back until they say they are done. A share link opens the card it was made for, and each round's file

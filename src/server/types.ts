@@ -253,28 +253,13 @@ export interface AppConfig {
    */
   routineMaxConcurrentRunsPerUser: number;
   /**
-   * Hard wall-clock deadline for ONE unattended 내 봇 run — a queued delegated
-   * task or a bot routine firing (`runBotRoutineJobNow`), a turn the SERVER
-   * started with nobody watching the stream (env `BOT_TASK_TIMEOUT_MINUTES`,
-   * default 30 minutes, floor 1 minute, same "cannot be disabled" reasoning as
-   * {@link AppConfig.routineRunTimeoutMs}).
-   *
-   * Only those unattended paths arm it: a turn the owner typed themselves stays
-   * un-deadlined, because a live viewer already has the stop button.
-   */
-  botTaskRunTimeoutMs: number;
-  /**
    * Hard wall-clock deadline for ONE external task API run (env
    * `AVATAR_TASK_TIMEOUT_MINUTES`, default 300 minutes = 5 hours, floor 1 minute,
    * same "cannot be disabled" reasoning as {@link AppConfig.routineRunTimeoutMs};
    * capped at setTimeout's ~24.8-day maximum). Covers the whole turn, time
    * parked on a question and the background phase included.
    *
-   * Deliberately separate from {@link AppConfig.botTaskRunTimeoutMs}, which stays
-   * short: a bot routine run holds one of the routine scheduler's slots (and one
-   * of its owner's) for its whole duration, and a hung bot turn pins its
-   * thread's queue. API runs have their own dispatcher (one per owner, four
-   * process-wide), which
+   * API runs have their own dispatcher (one per owner, four process-wide), which
    * is their own stall surface: a long or hung run holds its owner's only slot,
    * and one of the four, for up to this budget — the cancel route frees it.
    */
@@ -600,202 +585,6 @@ export interface GroupAgent {
   updatedAt: string | null;
 }
 
-/**
- * Structured, UNFORMATTED self-state for a PERSONAL-AGENT run — the 내 봇
- * analogue of `GroupAgentState` (agent/ownerState.ts builds it), with the same
- * metacognition invariant: consumed by BOTH `buildSystemPromptAppend` (the
- * personal-agent prompt branch) AND `describe_system`. Add a fact here and to
- * both consumers together.
- */
-export interface PersonalAgentState {
-  agentId: string;
-  ownerUserId: string;
-  /** The bot's display name — an owner has several, so state names WHICH. */
-  displayName: string;
-  alias: string;
-  /** Whether a persona/instructions text is currently set on the bot. */
-  personaSet: boolean;
-  enabled: boolean;
-  /**
-   * The owner still holds the admin role right now (the phase-1 feature gate,
-   * re-read LIVE). FAIL CLOSED once revoked: the state report must never claim
-   * more than the reach gate (findChattablePersonalAgent) still allows.
-   */
-  ownerIsAdmin: boolean;
-  /** Roster context: bots the owner holds against the cap (disabled ones included). */
-  agentCount: number;
-  maxAgents: number;
-  /**
-   * Delegated requests still QUEUED behind the current turn in THIS
-   * conversation (0 when the summarizer got no conversation id). Standing
-   * awareness only — the queue drains server-side, never by the bot.
-   */
-  queuedTaskCount: number;
-  /**
-   * Repo-relative root of this bot's OWN memory inside the owner's knowledge
-   * repo (`agents/<memoryDir>`, no trailing slash) — the same value that
-   * parameterizes the run's scoped repo/brain servers, so what the bot is TOLD
-   * about its memory is what the tools actually enforce.
-   */
-  memoryRoot: string;
-  /**
-   * Knowledge-repo skill slugs the owner granted this bot (live references, not
-   * copies). EMPTY MEANS NONE — a bot loads only what was granted, so both
-   * metacognition surfaces report the roster rather than implying the owner's
-   * whole skill set.
-   */
-  adoptedSkills: string[];
-}
-
-/**
- * A user's PERSONAL AGENT (내 봇): a chat-contact bot owned by ONE user, not a
- * users row — its public avatar id is `personal:<ownerUserId>:<id>`. Reachable
- * by its owner ALONE, and only while that owner still holds the admin role (the
- * phase-1 feature gate). Unlike a group agent it runs with the OWNER's full
- * capability, so `AgentRequest.groupAgent` must never be set for one.
- */
-export interface PersonalAgent {
-  /** Row id — the bot's identity; its public avatar id is `personal:<ownerUserId>:<id>`. */
-  id: string;
-  ownerUserId: string;
-  displayName: string;
-  /** How the bot names itself in chat; empty falls back to displayName. */
-  alias: string;
-  bio: string;
-  intro: string;
-  persona: string;
-  hashtags: string[];
-  hasImage: boolean;
-  /** Disabled blocks the NEXT turn but preserves the owner's threads. */
-  enabled: boolean;
-  /**
-   * Model TIER id (modelTiers.ts) seeding NEW conversations with this bot;
-   * null = fall back to the owner's own remembered default. Both writers
-   * validate it against the deployment's tiers.
-   */
-  defaultModel: string | null;
-  /**
-   * IMMUTABLE folder name for this bot's own memory, one path segment set at
-   * INSERT and never patched: the memory lives at `agents/<memoryDir>/` inside
-   * the OWNER's knowledge repo (`personalAgentMemoryRoot`). Derived from the
-   * display name plus the row id, so renaming a bot never orphans the tree it
-   * has been writing to.
-   */
-  memoryDir: string;
-  /**
-   * Knowledge-repo skill slugs (`skills/<slug>/`) this bot may LOAD — live
-   * references into the owner's repo, never copies, so the owner's edits reach
-   * the bot without a transfer step. EMPTY MEANS NONE, the opposite default of
-   * `User.knowledgeSelected` (null = load all): a bot starts with zero skills
-   * and the owner grants them one at a time.
-   */
-  selectedSkills: string[];
-  createdAt: string | null;
-  updatedAt: string | null;
-}
-
-/** Write shape for creating/patching a personal agent (omitted field = keep). */
-export interface PersonalAgentInput {
-  displayName: string;
-  alias?: string;
-  bio?: string;
-  intro?: string;
-  persona?: string;
-  hashtags?: string[];
-  enabled?: boolean;
-  /** undefined = keep the stored tier, null = clear it back to the owner default. */
-  defaultModel?: string | null;
-  /**
-   * FULL-REPLACE allowlist of knowledge-repo skill slugs (undefined = keep).
-   * `memoryDir` is deliberately absent from this shape: it is insert-only.
-   */
-  selectedSkills?: string[];
-}
-
-/**
- * Lifecycle of one delegated bot task (`bot_tasks` row). `queued` waits for the
- * conversation's active run to finish (the server dispatches it unattended);
- * `waiting_input` means the bot ENDED its turn asking the owner something — the
- * owner's next message in that thread RESUMES the same task. `done`/`failed`/
- * `cancelled` are terminal.
- */
-export type BotTaskStatus =
-  | "queued"
-  | "running"
-  | "waiting_input"
-  | "done"
-  | "failed"
-  | "cancelled";
-
-/**
- * One delegated unit of work in a PERSONAL-AGENT (내 봇) thread — every executed
- * user turn in a bot conversation is tracked as a task, which is what the 봇
- * 메신저 UI renders as 작업 카드/보드. Bookkeeping ONLY: capability stays the
- * A-1 full-owner-run contract; a task row never widens or narrows a run.
- */
-export interface BotTask {
-  id: string;
-  ownerUserId: string;
-  /** personal_agents.id — which bot the work belongs to. */
-  agentId: string;
-  conversationId: string;
-  /**
-   * In-memory run registry id while the task is running (live attach/cancel).
-   * NOT durable: a server restart loses the registry, and the boot sweep marks
-   * such tasks failed.
-   */
-  runId: string | null;
-  /** Short label derived from the request (first line, capped) for cards/boards. */
-  title: string;
-  /** The owner's full request text (the queued dispatcher replays it verbatim). */
-  requestText: string;
-  status: BotTaskStatus;
-  /**
-   * What the bot itself declared via mcp__personal_agent__report_task, written
-   * MID-run; the turn-finalize path reads it to pick done vs waiting_input.
-   * Null when the bot never reported (finalize treats a clean turn as done).
-   */
-  reportedOutcome: "done" | "need_input" | null;
-  /** The bot's own completion summary via mcp__personal_agent__report_task. */
-  resultSummary: string | null;
-  /** The question the bot is waiting on while status = waiting_input. */
-  pendingQuestion: string | null;
-  /** Failure cause (Korean, user-facing) for status = failed. */
-  error: string | null;
-  /** Resolved model of the last run (fallback-aware), for the task card. */
-  model: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  /**
-   * When the owner SAW this task's settled state (done/failed/waiting_input).
-   * NULL on a settled row = unseen → counted into the 봇 오피스 rail badge.
-   * Running/queued rows are never "unseen" (their motion is its own signal);
-   * an owner-initiated row-cancel stamps it immediately (they did it looking).
-   */
-  seenAt: string | null;
-  /**
-   * The routine (routine_jobs.id) that FIRED this task, when it came from a
-   * bot's schedule rather than the owner typing — the card's 예약 provenance,
-   * and the scheduler's re-enqueue dedupe key. NULL = owner-direct.
-   */
-  routineJobId: string | null;
-  /**
-   * 봇 간 위임: the personal_agents.id of the BOT whose turn handed this task
-   * off via mcp__personal_agent__delegate_to_bot. NULL when the owner asked
-   * directly OR when the owner's MAIN avatar delegated (then only
-   * `delegationDepth` says so). Provenance only — capability never changes.
-   */
-  delegatedByAgentId: string | null;
-  /**
-   * How many hand-offs deep this task sits: 0 = the owner typed it (or a
-   * routine fired it), 1 = delegated by the main avatar or by a depth-0 bot
-   * turn, 2 = delegated by a depth-1 turn — the CAP: a depth-2 turn may not
-   * delegate further (unbounded bot→bot chains are a cost amplifier).
-   */
-  delegationDepth: number;
-}
-
 /** A group the current user belongs to — surfaced on `User` and the roster. */
 export interface UserGroupMembership {
   id: string;
@@ -964,14 +753,6 @@ export interface AvatarSummary {
    * — a group agent runs the full local SDK stack, unlike external avatars.
    */
   groupAgent?: { groupId: string; groupName: string };
-  /**
-   * Set ONLY for the OWNER's own personal agents (avatar id
-   * `personal:<ownerUserId>:<agentId>`): the kind tag for the 내 봇 badge plus
-   * the bot's model-tier default, which seeds a NEW conversation with it
-   * (client makePane). Runtime stays "native" — a bot runs the full local SDK
-   * stack, unlike external avatars.
-   */
-  personalAgent?: { agentId: string; defaultModel: string | null };
 }
 
 export interface AvatarDetail extends AvatarSummary {
@@ -1073,11 +854,11 @@ export interface StoredMessage {
    * "응답 중 전달" badge. Only ever set on `role: "user"` rows.
    *
    * `"queued"` marks a USER row persisted while ANOTHER run was still active on
-   * the conversation (a 내 봇 queued turn, or a turn refused by the raced
-   * active-run re-check after its row was written). Such a row sits BEFORE that
-   * earlier run's answer in rowid order, so "every row after it" is not its own
-   * run's output — a rewind/regenerate can never anchor on it. Renders as an
-   * ordinary user bubble.
+   * the conversation (a routine's answer landing while the owner is mid-turn in
+   * the same thread, or a turn refused by the raced active-run re-check after
+   * its row was written). Such a row sits BEFORE that earlier run's answer in
+   * rowid order, so "every row after it" is not its own run's output — a
+   * rewind/regenerate can never anchor on it. Renders as an ordinary user bubble.
    */
   kind?: "steer" | "queued";
   response: AgentResponse | null;
@@ -1501,28 +1282,6 @@ export interface AgentRequest {
     captureAllowed: boolean;
   };
   /**
-   * Set ONLY for PERSONAL-AGENT (내 봇) runs, by the chat route and nothing
-   * else. A personal-agent run stays a FULL OWNER run: `avatar` above is the
-   * OWNER's own avatar (`avatar.id` = the owner's uuid) and the composite
-   * `personal:<owner>:<agent>` id lives only in the conversation binding /
-   * workspace keying / client-facing summaries. This field carries IDENTITY,
-   * not capability — it must NEVER flow into `deriveAgentToolAccess` /
-   * `planMcpToolFamilies` (that is what `groupAgent` above does, and it is a
-   * kill-switch). It drives the prompt identity swap, the `describe_system`
-   * block, self-config tool registration, and routine-tool suppression.
-   */
-  personalAgent?: {
-    agentId: string;
-    ownerUserId: string;
-    /**
-     * The `bot_tasks` row tracking THIS turn as a delegated task (set by the
-     * chat route / the queued-task dispatcher alongside the row transition).
-     * Identity/bookkeeping only — capability must stay untouched, exactly like
-     * the parent field. Absent on turns that track no task (e.g. greetings).
-     */
-    taskId?: string;
-  };
-  /**
    * True when the viewer may use tools at the OWNER's permission level — i.e. the
    * owner themselves OR a designated trusted user. Gates the tool hook (write/Bash
    * run instead of read-only). DISTINCT from viewerIsOwner: the owner-only knowledge
@@ -1548,10 +1307,10 @@ export interface AgentRequest {
    * True when this turn was submitted by an EXTERNAL SYSTEM through the owner's
    * personal task API (`ChatTurnContext.externalTaskId`), not typed by the
    * owner. Provenance for the prompt/describe_system and for the
-   * interactive-only gates (`create_agent` and `create_share_link` are
-   * registered only for turns a person is having with their own avatar): the
-   * run itself keeps the owner's full capability, and questions/permission
-   * prompts still park for an answer through the task API or the Noah UI.
+   * interactive-only gates (`create_share_link` is registered only for turns
+   * a person is having with their own avatar): the run itself keeps the
+   * owner's full capability, and questions/permission prompts still park for an
+   * answer through the task API or the Noah UI.
    */
   externalTaskApi?: boolean;
   /**
@@ -1559,7 +1318,7 @@ export interface AgentRequest {
    * edited an earlier message, or regenerated the latest answer). META-COGNITION
    * only — surfaced in `buildSystemPromptAppend` and `describe_system`: the
    * model's context ends at that point, but NOTHING the discarded turns did
-   * (workspace files, commits, browser actions, created routines/bots/links)
+   * (workspace files, commits, browser actions, created routines/links)
    * was undone. Set by the chat route only; never on headless runs.
    */
   rewind?: AgentRewindInfo;
@@ -1789,8 +1548,8 @@ export interface AgentRequest {
   /**
    * True only when THIS run registered `mcp__file_output__create_share_link`
    * (runPlan's `shareLinkToolActive`): file output, the host's `onShareLink`,
-   * and an interactive turn of the owner's own avatar — never a bot,
-   * group-agent, consultation, headless or external-task-API run. Stamped by
+   * and an interactive turn of the owner's own avatar — never a group-agent,
+   * consultation, headless or external-task-API run. Stamped by
    * `runClaudeAgent` from that same boolean, and mirrored by describe_system
    * (`SystemToolsContext.shareLinksEnabled`), so neither metacognition surface
    * offers a tool the run lacks; a run that can deliver files but not make
@@ -1841,27 +1600,6 @@ export interface AgentRequest {
    * agent/group vanished mid-run (the branch then renders a minimal identity).
    */
   groupAgentState?: GroupAgentState | null;
-  /**
-   * PERSONAL-AGENT self-state (META-COGNITION), set by `runClaudeAgent` for
-   * personal-agent runs only: feeds the 내 봇 prompt branch the same facts
-   * `describe_system` reports (see {@link PersonalAgentState}). Null when the
-   * bot vanished mid-run (the branch then renders a minimal identity).
-   */
-  personalAgentState?: PersonalAgentState | null;
-  /**
-   * OWNER self-state (META-COGNITION) read from `OwnerState.personalAgentsEnabled`
-   * and stamped onto the request by `runClaudeAgent`, alongside `secretNames` /
-   * `groupMemberships` / `learnableSkillCount` — the prompt builder takes every
-   * store-derived fact from that one stamp site.
-   *
-   * True only when THIS run actually registered
-   * `mcp__personal_agent__create_agent`: an owner-driven, interactive, non-bot
-   * run whose owner still holds the admin role (runPlan's
-   * `personalAgentCreateActive`). Blanked like the other owner facts for
-   * colleague/teammate/consultation/headless runs, so the standing 내 봇 creation
-   * guidance can never offer a tool the run lacks. False on a bot run too, which
-   * carries `update_profile` instead.
-   */
   avatarApiKeyCount?: number;
   /**
    * The configured wall-clock budget for ONE external task API run
@@ -1872,14 +1610,6 @@ export interface AgentRequest {
    * the same config value directly.
    */
   avatarTaskRunTimeoutMs?: number;
-  personalAgentsEnabled?: boolean;
-  /**
-   * Display names of the owner's ENABLED bots only (a disabled bot is not
-   * chattable, so naming it would be misleading) — the roster for that same
-   * standing guidance, stamped from `OwnerState.personalAgentNames` and blanked
-   * on the same runs.
-   */
-  personalAgentNames?: string[];
   /**
    * The registered git repo the avatar opened as this conversation's **working
    * repository** (`mcp__git_repo__open_repo`): the repo's registered name. Its
@@ -1992,13 +1722,6 @@ export interface RoutineJob {
   /** Set after a one-time schedule has made its single execution attempt. */
   completedAt: string | null;
   createdAt: string;
-  /**
-   * 봇 루틴: the personal_agents.id this routine belongs to, or NULL for the
-   * owner's main avatar (every legacy row). A bot routine fires as a DELEGATED
-   * BOT TASK in a composite-bound routine thread — capability stays the A-1
-   * full-owner run either way; this field only picks the identity/thread.
-   */
-  personalAgentId: string | null;
 }
 
 /**

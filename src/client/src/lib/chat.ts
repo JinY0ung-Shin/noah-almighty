@@ -38,8 +38,6 @@ import type {
   AgentResponse,
   AvatarDetail,
   AvatarSummary,
-  BotTask,
-  BotTaskStatus,
   CanvasArtifact,
   ChatPane,
   ConversationSummary,
@@ -126,20 +124,6 @@ function objectParticle(noun: string): string {
   return (last - 0xac00) % 28 === 0 ? "를" : "을";
 }
 
-/**
- * A 내 봇 (personal agent) can carry its own model tier, which outranks the
- * owner's remembered default: the bot was configured to run on that tier, so a
- * fresh thread with it starts there. Validated against the tiers THIS deployment
- * offers — a stored tier the server no longer offers falls back rather than
- * sending an unknown alias.
- */
-function personalAgentModelTier(avatar: AvatarDetail): string | undefined {
-  const tier = avatar.personalAgent?.defaultModel;
-  if (!tier) return undefined;
-  const tiers = readState().bootstrap?.modelSelection?.tiers ?? [];
-  return tiers.some((item) => item.id === tier) ? tier : undefined;
-}
-
 function makePane(
   avatar: AvatarDetail,
   conversationId = newId(),
@@ -182,7 +166,7 @@ function makePane(
     modelTier:
       avatar.runtime === "external"
         ? undefined
-        : (personalAgentModelTier(avatar) ?? readState().user?.modelDefault ?? undefined),
+        : (readState().user?.modelDefault ?? undefined),
     effort:
       avatar.runtime === "external"
         ? undefined
@@ -213,152 +197,6 @@ function abortDroppedPanes(before: ChatPane[]): void {
   for (const pane of before) {
     if (!live.has(pane.id)) pane.abortController?.abort();
   }
-}
-
-/* ---------- delegated bot tasks (봇 오피스) ---------- */
-
-const TERMINAL_BOT_TASK_STATUSES: BotTaskStatus[] = ["done", "failed", "cancelled"];
-
-function botTaskTime(iso: string | null | undefined): number {
-  const ms = Date.parse(iso || "");
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-/**
- * A task row off the wire is UNVALIDATED — it arrives from an SSE frame or a
- * 202 body, neither of which type-checks across the gap. Guarding on the three
- * fields every consumer keys on (identity, which bot, which state) keeps a
- * malformed payload out of the board instead of rendering an empty card.
- */
-export function isBotTask(value: unknown): value is BotTask {
-  if (!value || typeof value !== "object") return false;
-  const task = value as Partial<BotTask>;
-  return (
-    typeof task.id === "string" &&
-    task.id !== "" &&
-    typeof task.agentId === "string" &&
-    typeof task.status === "string"
-  );
-}
-
-/** Merge one task row into state.botTasks, newest first. */
-export function upsertBotTask(task: BotTask): void {
-  updateState((state) => {
-    state.botTasks = [task, ...state.botTasks.filter((item) => item.id !== task.id)].sort(
-      (a, b) => botTaskTime(b.createdAt) - botTaskTime(a.createdAt),
-    );
-  });
-}
-
-/**
- * Adopt a freshly fetched page of tasks. A local row the run stream already
- * advanced to a TERMINAL status wins over the fetched copy — the poll may have
- * been issued before that transition, and terminal never regresses server-side,
- * so this can only prevent a visible "완료 → 실행 중" flicker. Rows the response
- * doesn't mention are kept for the same reason (they arrived mid-flight).
- */
-export function mergeBotTasks(fetched: BotTask[]): void {
-  updateState((state) => {
-    const merged = new Map<string, BotTask>();
-    for (const task of fetched) merged.set(task.id, task);
-    for (const local of state.botTasks) {
-      const incoming = merged.get(local.id);
-      const localIsAhead =
-        TERMINAL_BOT_TASK_STATUSES.includes(local.status) &&
-        !TERMINAL_BOT_TASK_STATUSES.includes(incoming?.status as BotTaskStatus);
-      if (!incoming || localIsAhead) merged.set(local.id, local);
-    }
-    state.botTasks = [...merged.values()].sort(
-      (a, b) => botTaskTime(b.createdAt) - botTaskTime(a.createdAt),
-    );
-  });
-}
-
-/**
- * The status vocabulary 봇 오피스 speaks. It lives here rather than in one of the
- * views because the card (in the transcript), the roster line and the summary
- * bar all name the same states — three copies would drift apart one rename at a
- * time.
- */
-export const BOT_TASK_STATUS_LABELS: Record<BotTaskStatus, string> = {
-  queued: "대기 중",
-  running: "실행 중",
-  waiting_input: "입력 대기",
-  done: "완료",
-  failed: "실패",
-  cancelled: "취소됨",
-};
-
-/**
- * The states that ASK the owner for something, which is exactly what the server
- * stamps `seenAt` on. A running or queued row is never "unseen": its own motion
- * is the signal, and a cancelled one was ended by the owner while looking at it.
- */
-const SETTLED_BOT_TASK_STATUSES: BotTaskStatus[] = ["done", "failed", "waiting_input"];
-
-/** A settled row the owner hasn't looked at yet — the unseen chips count these. */
-export function isUnseenBotTask(task: BotTask): boolean {
-  return !task.seenAt && SETTLED_BOT_TASK_STATUSES.includes(task.status);
-}
-
-/**
- * Cancel a queued task or stop a running one — the same endpoint either way.
- * Lives here because the card that carries the button now renders inside the
- * TRANSCRIPT (ChatView) while the board around it is 봇 오피스; a view-local copy
- * would have to exist twice. The row the server returns is adopted AS-IS: a
- * stopped run does not end here, its terminal state arrives on a later
- * `bot_task` frame or poll, so the toast only claims the request was sent.
- */
-export async function cancelBotTask(task: BotTask): Promise<void> {
-  const running = task.status === "running";
-  try {
-    const result = await api<{ task: BotTask; stopping?: boolean }>(
-      `/api/me/bot-tasks/${encodeURIComponent(task.id)}/cancel`,
-      { method: "POST" },
-    );
-    if (result?.task) upsertBotTask(result.task);
-    notify(
-      result?.stopping ? "중지 요청을 보냈어요 — 곧 작업이 종료됩니다" : "작업을 취소했습니다.",
-      "ok",
-    );
-  } catch (err) {
-    notify(`작업을 ${running ? "중지" : "취소"}하지 못했습니다: ${(err as Error).message}`, "warn");
-  }
-}
-
-/**
- * Where each delegated task belongs in the transcript: immediately AFTER the
- * last USER message it postdates, so a card sits next to the turn that spawned
- * it. Bucket `-1` holds tasks older than every message (they render above the
- * first bubble). Both inputs are already chronological, so one merge pass with a
- * forward-only cursor places every task.
- *
- * Pure by design — the caller derives the map in a `$:` and the `{#each}` only
- * LOOKS UP its bucket, because that markup re-runs once per streamed token.
- */
-export function anchorBotTasksToMessages(
-  tasks: BotTask[],
-  messages: StoredMessage[],
-): Map<number, BotTask[]> {
-  const byAnchor = new Map<number, BotTask[]>();
-  if (!tasks.length) return byAnchor;
-  const anchors: { index: number; at: number }[] = [];
-  messages.forEach((message, index) => {
-    if (message.role !== "user") return;
-    const at = botTaskTime(message.createdAt);
-    if (at) anchors.push({ index, at });
-  });
-  const ordered = [...tasks].sort((a, b) => botTaskTime(a.createdAt) - botTaskTime(b.createdAt));
-  let cursor = 0;
-  for (const task of ordered) {
-    const at = botTaskTime(task.createdAt);
-    while (cursor + 1 < anchors.length && anchors[cursor + 1].at <= at) cursor += 1;
-    const anchor = anchors.length && anchors[cursor].at <= at ? anchors[cursor].index : -1;
-    const bucket = byAnchor.get(anchor);
-    if (bucket) bucket.push(task);
-    else byAnchor.set(anchor, [task]);
-  }
-  return byAnchor;
 }
 
 export async function startChatWith(
@@ -476,11 +314,10 @@ async function findConversationSummary(
  * Build a DETACHED pane for one stored conversation: resolve its summary, fetch
  * the messages and the avatar in parallel, and apply the per-conversation picker
  * selections. Deliberately touches no global state — not `view`, not
- * `chatPanes`, not the hash — so a caller that must NOT navigate to #/chat (봇
- * 오피스 mounts the chat surface inside its own view) can place the pane itself.
+ * `chatPanes`, not the hash — so the caller places the pane itself.
  * Returns null, having toasted, when the conversation is gone.
  */
-export async function loadPaneForConversation(
+async function loadPaneForConversation(
   conversationId: string,
 ): Promise<ChatPane | null> {
   const conv = await findConversationSummary(conversationId);
@@ -502,42 +339,6 @@ export async function loadPaneForConversation(
   );
   applyLoadedConversation(pane, loaded);
   return pane;
-}
-
-/**
- * 봇 오피스: make this bot's thread the ONLY chat pane WITHOUT leaving the bots
- * view. With a conversationId the stored thread is loaded; without one a fresh
- * pane is minted so a bot the owner never talked to still opens a composer.
- * The pane merely has to EXIST in state.chatPanes — that is what lets the
- * private updatePane resolve it and the mounted ChatView go live. Navigation
- * (view + hash) stays with the caller, which owns the #/bots/<agentId> route.
- */
-export async function openBotThreadPane(
-  summary: AvatarSummary,
-  conversationId?: string,
-): Promise<ChatPane | null> {
-  let pane: ChatPane | null;
-  if (conversationId) {
-    pane = await loadPaneForConversation(conversationId);
-  } else {
-    const { avatar } = await api<{ avatar: AvatarDetail }>(
-      `/api/avatars/${encodeURIComponent(summary.id)}`,
-    );
-    pane = makePane(avatar);
-  }
-  if (!pane) return null;
-  const placed = pane;
-  const before = [...readState().chatPanes];
-  updateState((state) => {
-    state.currentAvatar = placed.avatar;
-    state.chatPanes = [placed];
-    state.activePaneId = placed.id;
-  });
-  abortDroppedPanes(before);
-  // Only a STORED thread can have a run to rejoin, and this is never awaited:
-  // attachActiveRun resolves at run end (see selectConversation).
-  if (conversationId) void attachActiveRun(placed.id);
-  return placed;
 }
 
 export async function selectConversation(
@@ -870,8 +671,8 @@ export function cancelRewindEdit(paneId: string): void {
  * edited message — it and every row after it are replaced by the edited text and
  * the new answer. The discarded messages' shared file cards go with them and
  * their share links are revoked; everything else the discarded turns did stays
- * as it is (workspace/repo files, commits, browser actions, created routines and
- * bots). The dialog says both halves outright.
+ * as it is (workspace/repo files, commits, browser actions, created routines).
+ * The dialog says both halves outright.
  */
 export async function submitRewindEdit(paneId: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
@@ -887,8 +688,8 @@ export async function submitRewindEdit(paneId: string): Promise<void> {
   const later = pane.messages.length - index - 1;
   // What goes and what stays, said plainly: the later messages AND their shared
   // file cards and share links are deleted; work the turns did outside the chat
-  // (workspace/repo files, commits, browser actions, created routines and bots)
-  // is not undone.
+  // (workspace/repo files, commits, browser actions, created routines) is not
+  // undone.
   const confirmed = await confirmAction(
     later > 0
       ? `이 메시지부터 다시 시작할까요?\n\n이후 메시지 ${later}개와 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. 작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.`
@@ -940,8 +741,6 @@ interface RewindCleanup {
   conversationId: string;
   /** Attachments of the dropped rows (the file preview closes if it shows one). */
   attachmentIds: Set<string>;
-  /** Delegated-task cards anchored at/after the anchor row (their rows are deleted server-side). */
-  botTaskIds: Set<string>;
 }
 const pendingRewindCleanups = new Map<string, RewindCleanup>();
 
@@ -957,39 +756,19 @@ function adoptUserMessageId(
   if (row) adoptServerId(row, serverId);
 }
 
-/** Delegated-task cards the transcript shows at or after `anchorIndex`. */
-function botTaskIdsFromAnchor(pane: ChatPane, anchorIndex: number): Set<string> {
-  const tasks = readState().botTasks.filter(
-    (task) => task.conversationId === pane.conversationId,
-  );
-  const ids = new Set<string>();
-  if (!tasks.length) return ids;
-  for (const [index, bucket] of anchorBotTasksToMessages(tasks, pane.messages)) {
-    if (index >= anchorIndex) for (const task of bucket) ids.add(task.id);
-  }
-  return ids;
-}
-
 /**
  * The server applied the rewind before opening the run (that is what `open`
- * proves), so the side state of the dropped turns goes now: their task cards,
- * a file preview showing one of their cards, and canvases they created or
- * refined. Canvases carry no timestamps client-side, so they come back from the
- * server — merged with anything THIS run has already shown live, which the
- * fetch may not include yet.
+ * proves), so the side state of the dropped turns goes now: a file preview
+ * showing one of their cards, and canvases they created or refined. Canvases
+ * carry no timestamps client-side, so they come back from the server — merged
+ * with anything THIS run has already shown live, which the fetch may not
+ * include yet.
  */
 function applyRewindCleanup(
   paneId: string,
   cleanup: RewindCleanup,
   runId: string | undefined,
 ): void {
-  if (cleanup.botTaskIds.size) {
-    updateState((state) => {
-      state.botTasks = state.botTasks.filter(
-        (task) => !cleanup.botTaskIds.has(task.id),
-      );
-    });
-  }
   updatePane(paneId, (pane) => {
     if (
       pane.filePreview &&
@@ -1227,7 +1006,6 @@ export async function sendMessage(
           .flatMap((row) => (row.attachments ?? []).map((att) => att.id))
           .filter((id) => !carried.has(id)),
       ),
-      botTaskIds: botTaskIdsFromAnchor(pane, anchorIndex),
     });
   } else {
     pendingRewindCleanups.delete(paneId);
@@ -1323,27 +1101,6 @@ export async function sendMessage(
     });
     if (response.status === 401) {
       throw new Error("세션이 만료되었습니다. 다시 로그인해 주세요.");
-    }
-    // 202 = the bot was already busy, so the server QUEUED this turn as a
-    // delegated task instead of opening a stream. The body is JSON, not SSE:
-    // branch BEFORE readRunStream (202 is `ok`, so the error path below never
-    // sees it). The user bubble is already in the transcript and the draft is
-    // already cleared; the `finally` below unsets streaming, so the pane simply
-    // never enters a live turn — the task card carries the progress from here.
-    if (response.status === 202) {
-      // The server stored the message as a QUEUED row (it sits before the busy
-      // run's answer), so the bubble mirrors that kind and offers no rewind.
-      updatePane(paneId, (target) => {
-        const row = target.messages.find((m) => m.id === userMessage.id);
-        if (row) row.kind = "queued";
-      });
-      const queued = await response.json().catch(() => ({}));
-      if (isBotTask(queued?.task)) upsertBotTask(queued.task);
-      notify(
-        "봇이 작업 중이라 대기열에 추가했어요 — 현재 작업이 끝나면 자동으로 시작합니다.",
-        "info",
-      );
-      return;
     }
     if (!response.ok || !response.body) {
       const body = await response.json().catch(() => ({}));
@@ -1978,14 +1735,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
           if (detail) row.detail = detail;
         });
       }
-      return;
-    case "bot_task":
-      // A 봇 오피스 delegated-task row (bot_tasks). Deliberately its OWN event
-      // name rather than a variant of the `task` frames below: those are SDK
-      // activity rows keyed on `taskId` and mean something else entirely, and
-      // their handler would drop this payload on that guard. The shape check is
-      // defensive validation of an untrusted frame, not the discriminator.
-      if (isBotTask(data?.task)) upsertBotTask(data.task);
       return;
     case "task":
     case "task_update":

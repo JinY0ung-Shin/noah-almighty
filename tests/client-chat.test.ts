@@ -3698,7 +3698,7 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
     expect(pane(id).draft).toBe("고친 질문");
   });
 
-  it("on open, clears what the dropped turns left behind: task cards, a preview of their file, their canvases", async () => {
+  it("on open, clears what the dropped turns left behind: a preview of their file, their canvases", async () => {
     const card = { id: "file-a1", kind: "file", mediaType: "application/pdf", name: "보고서.pdf" };
     const id = seedPane({
       conversationId: "c",
@@ -3714,13 +3714,6 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
         { id: "c-dropped", title: "버려진", content: "x", contentType: "markdown", pending: false },
       ] as any,
       activeCanvasId: "c-dropped",
-    });
-    updateState((s) => {
-      s.botTasks = [
-        { id: "t-keep", agentId: "bot", conversationId: "c", status: "done", createdAt: "2026-09-30T00:00:01.500Z" },
-        { id: "t-drop", agentId: "bot", conversationId: "c", status: "waiting_input", createdAt: "2026-09-30T00:00:04.000Z" },
-        { id: "t-other", agentId: "bot", conversationId: "other", status: "done", createdAt: "2026-09-30T00:00:05.000Z" },
-      ] as any;
     });
     let releaseCanvases: () => void = () => {};
     const canvasesFetched = new Promise<void>((resolve) => (releaseCanvases = resolve));
@@ -3753,7 +3746,6 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
     await confirmNext(true);
     await waitFor(() => pane(id).canvases.some((c) => c.id === "c-live"));
     // Applied at `open`, before the canvas refetch lands.
-    expect(readState().botTasks.map((t) => t.id).sort()).toEqual(["t-keep", "t-other"]);
     expect(pane(id).filePreview ?? null).toBeNull();
     releaseCanvases();
     // The `open` refetch merged: the dropped canvas is gone, the restored version
@@ -3796,20 +3788,6 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
     });
     await sendMessage(id, "질문");
     expect(pane(id).messages.map((m) => m.id)).toEqual(["srv-u", "srv-stop"]);
-  });
-
-  it("marks a send the busy bot queued (202) so it offers no rewind", async () => {
-    const id = seedPane({ conversationId: "c" });
-    useFetch((url) => {
-      if (url === "/api/chat/stream")
-        return jsonRes({ queued: true, task: { id: "t1", agentId: "bot", conversationId: "c", status: "queued", createdAt: "t" } }, 202);
-      if (url === "/api/conversations") return jsonRes({ conversations: [] });
-      return undefined;
-    });
-    await sendMessage(id, "이것도 해줘");
-    const [queuedRow] = pane(id).messages;
-    expect(queuedRow).toMatchObject({ role: "user", content: "이것도 해줘", kind: "queued" });
-    expect(isRewindAnchor(queuedRow)).toBe(false);
   });
 });
 

@@ -3,9 +3,6 @@ import fs from "node:fs";
 import Database from "better-sqlite3";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import logger from "../logger.js";
-// A LEAF module by design (see its header): the memory-dir name is computed both
-// here (migrate/backfill) and in the personal-agents mixin's INSERT.
-import { personalAgentMemoryDirName } from "../personalAgentSlug.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type {
   AppConfig,
@@ -251,48 +248,6 @@ export interface GroupAgentRow {
   updated_at: string | null;
 }
 
-export interface PersonalAgentRow {
-  id: string;
-  owner_user_id: string;
-  display_name: string;
-  alias: string | null;
-  bio: string | null;
-  intro: string | null;
-  persona: string | null;
-  hashtags: string | null;
-  avatar_ext: string | null;
-  enabled: number;
-  default_model: string | null;
-  memory_dir: string | null;
-  selected_skills: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface BotTaskRow {
-  id: string;
-  owner_user_id: string;
-  agent_id: string;
-  conversation_id: string;
-  run_id: string | null;
-  title: string;
-  request_text: string;
-  status: string;
-  reported_outcome: string | null;
-  result_summary: string | null;
-  pending_question: string | null;
-  error: string | null;
-  model: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-  seen_at: string | null;
-  routine_job_id: string | null;
-  delegated_by_agent_id: string | null;
-  delegation_depth: number | null;
-  resume_log: string | null;
-}
-
 export interface RoutineJobRow {
   id: string;
   avatar_user_id: string;
@@ -311,7 +266,6 @@ export interface RoutineJobRow {
   last_error: string | null;
   completed_at: string | null;
   created_at: string;
-  personal_agent_id: string | null;
 }
 
 /**
@@ -604,67 +558,6 @@ export class StoreBase {
         created_at TEXT,
         updated_at TEXT
       );
-      -- PERSONAL AGENTS (내 봇): per-owner chat-contact bots, several per owner
-      -- (capped by MAX_PERSONAL_AGENTS in store/personalAgents.ts). NOT users
-      -- rows: the public avatar id is "personal:<owner_user_id>:<id>" (the
-      -- group:<gid>:<aid> precedent — conversations.avatar_user_id has no FK).
-      -- default_model is a modelTiers.ts tier id seeding NEW conversations with
-      -- the bot; NULL = the owner's own remembered default. A brand-new table:
-      -- CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
-      -- memory_dir / selected_skills are also added by addColumnIfMissing below
-      -- (they post-date the table), so both halves must stay in sync.
-      CREATE TABLE IF NOT EXISTS personal_agents (
-        id TEXT PRIMARY KEY,
-        owner_user_id TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        alias TEXT DEFAULT '',
-        bio TEXT DEFAULT '',
-        intro TEXT DEFAULT '',
-        persona TEXT DEFAULT '',
-        hashtags TEXT,
-        avatar_ext TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        default_model TEXT,
-        memory_dir TEXT,
-        selected_skills TEXT,
-        created_at TEXT,
-        updated_at TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_personal_agents_owner ON personal_agents(owner_user_id);
-      -- DELEGATED BOT TASKS: one row per executed user turn in a 내 봇 thread —
-      -- the unit the 봇 메신저 UI renders as a 작업 카드. BOOKKEEPING ONLY: a task
-      -- row never widens or narrows the run's capability (that stays the
-      -- full-owner-run contract). run_id is the IN-MEMORY run-registry key, so it
-      -- is meaningless across a restart — the boot sweep fails any row left
-      -- 'running'. No FKs (conversation_id/agent_id follow the avatar_user_id
-      -- precedent); the cascades are manual (store/personalAgents.ts,
-      -- store/admin.ts, store/conversations.ts). A brand-new table:
-      -- CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
-      CREATE TABLE IF NOT EXISTS bot_tasks (
-        id TEXT PRIMARY KEY,
-        owner_user_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        run_id TEXT,
-        title TEXT NOT NULL,
-        request_text TEXT NOT NULL,
-        status TEXT NOT NULL,
-        reported_outcome TEXT,
-        result_summary TEXT,
-        pending_question TEXT,
-        error TEXT,
-        model TEXT,
-        created_at TEXT NOT NULL,
-        started_at TEXT,
-        finished_at TEXT,
-        seen_at TEXT,
-        routine_job_id TEXT,
-        delegated_by_agent_id TEXT,
-        delegation_depth INTEGER DEFAULT 0,
-        resume_log TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_bot_tasks_owner ON bot_tasks(owner_user_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_bot_tasks_conversation ON bot_tasks(conversation_id, created_at ASC);
       -- Skills shared from an owner's knowledge repo (#skill-share): one row per
       -- (owner, skills/<slug> dir). METADATA SNAPSHOT ONLY — the content stays in
       -- the owner's repo and is copied into the learner's repo at learn time.
@@ -891,10 +784,6 @@ export class StoreBase {
     this.addColumnIfMissing("routine_jobs", "interval_minutes", "INTEGER");
     this.addColumnIfMissing("routine_jobs", "run_date", "TEXT");
     this.addColumnIfMissing("routine_jobs", "completed_at", "TEXT");
-    // 봇 루틴: NULL = the owner's main avatar (every pre-existing row), a
-    // personal_agents.id = the routine belongs to that bot and fires as a
-    // delegated bot task in a composite-bound routine thread.
-    this.addColumnIfMissing("routine_jobs", "personal_agent_id", "TEXT");
     // Routine conversations must never show in the normal chat history, even after
     // their routine is deleted (which orphans the conversation). Tag the row itself
     // so classification doesn't depend on the routine_jobs link still existing.
@@ -960,38 +849,11 @@ export class StoreBase {
     // trail is what keeps those copies matched to the row until their next
     // update rewrites the marker. NULL (and anything unparseable) reads as [].
     this.addColumnIfMissing("shared_skills", "previous_names", "TEXT");
-    // UNSEEN badge state (내 봇 작업): when the owner last LOOKED at this task's
-    // settled result. NULL = unseen, and only a settled row can be unseen — see
-    // store/botTasks.ts for the predicate. The CREATE TABLE already carries the
-    // column; this covers DBs that created bot_tasks before it existed.
-    this.addColumnIfMissing("bot_tasks", "seen_at", "TEXT");
-    // 봇 루틴 provenance: NULL = the owner asked directly; a routine_jobs.id =
-    // this task was fired by that schedule (the card shows an 예약 chip, and the
-    // scheduler skips re-enqueueing while one is still queued).
-    this.addColumnIfMissing("bot_tasks", "routine_job_id", "TEXT");
-    // 봇 간 위임 provenance + the hop cap's depth counter (see types.ts BotTask).
-    this.addColumnIfMissing("bot_tasks", "delegated_by_agent_id", "TEXT");
-    this.addColumnIfMissing("bot_tasks", "delegation_depth", "INTEGER DEFAULT 0");
-    // The parked state each owner ANSWER resumed this task from (JSON array,
-    // oldest first — see markBotTaskRunning): what a rewind that discards the
-    // answering turn restores. NULL until the first resume from waiting_input.
-    this.addColumnIfMissing("bot_tasks", "resume_log", "TEXT");
-    // IMMUTABLE per-bot memory folder name under `agents/` in the OWNER's
-    // knowledge repo (personalAgentMemoryRoot). Set at INSERT and never patched,
-    // so renaming a bot never orphans the tree it already wrote to; pre-existing
-    // rows are backfilled by migratePersonalAgentMemoryDirs() below.
-    this.addColumnIfMissing("personal_agents", "memory_dir", "TEXT");
-    // JSON array of knowledge-repo skill slugs this bot may LOAD (live
-    // references into `skills/<slug>/`, never copies). NULL/[] = NONE — the
-    // OPPOSITE default of users.knowledge_selected, where NULL means "load all":
-    // a bot starts with zero skills until its owner grants them.
-    this.addColumnIfMissing("personal_agents", "selected_skills", "TEXT");
     this.migrateGitTokenSecrets();
     this.migrateVisibility();
     this.migrateCanvasArtifacts();
     this.migrateOnboardedAndRoutineFlags();
     this.migrateGroupAgentsMulti();
-    this.migratePersonalAgentMemoryDirs();
     // Trust is now derived purely from group co-membership; the old per-(avatar,
     // viewer) trust table is dropped (its grants don't survive the migration).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
@@ -1220,37 +1082,6 @@ export class StoreBase {
       .run();
   }
 
-  /**
-   * Backfill `personal_agents.memory_dir` for bots created before the column
-   * existed. UNGATED by the user_version ladder on purpose: every INSERT now
-   * writes the column, so `memory_dir IS NULL` can only ever match rows that
-   * predate this migration — the value-guarded case the ladder rule exempts
-   * (like the git-token move above). The name is computed in TS, not SQL, so the
-   * backfilled value is byte-identical to what an INSERT would have produced.
-   */
-  private migratePersonalAgentMemoryDirs(): void {
-    const rows = this.db
-      .prepare(
-        "SELECT id, display_name FROM personal_agents WHERE memory_dir IS NULL OR memory_dir = ''",
-      )
-      .all() as { id: string; display_name: string }[];
-    if (rows.length === 0) {
-      return;
-    }
-    const update = this.db.prepare(
-      "UPDATE personal_agents SET memory_dir = ? WHERE id = ?",
-    );
-    const tx = this.db.transaction(() => {
-      for (const row of rows) {
-        update.run(
-          personalAgentMemoryDirName(row.display_name ?? "", row.id),
-          row.id,
-        );
-      }
-    });
-    tx();
-  }
-
   private migrateGitTokenSecrets(): void {
     const createdAt = now();
     this.db
@@ -1369,8 +1200,6 @@ export interface StoreBase {
   deleteShareLinksForConversation(conversationId: string): void;
   /** The links of specific deck cards — the rewind/regenerate cascade (store/shareLinks.ts). */
   deleteShareLinksForFiles(conversationId: string, fileIds: readonly string[]): void;
-  /** The bot-task half of a rewind (store/botTasks.ts). */
-  rewindBotTasks(conversationId: string, cutoff: string): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(

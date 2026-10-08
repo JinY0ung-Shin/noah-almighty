@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { personalAgentAvatarId } from "../personalAgents.js";
 import {
   formatMinuteOfDay,
   isFutureOnceSchedule,
@@ -35,7 +34,6 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
         lastError: row.last_error,
         completedAt: row.completed_at,
         createdAt: row.created_at,
-        personalAgentId: row.personal_agent_id ?? null,
       };
     }
 
@@ -85,29 +83,10 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
         | undefined;
     }
 
-    /**
-     * One owner's routines. `opts.personalAgentId` is TRI-STATE: omitted (or
-     * undefined) lists EVERYTHING — the owner's own routines and every bot's —
-     * which is what the routines route and RoutinesView keep seeing; a bot id
-     * narrows to that bot's; an explicit `null` narrows to the main-avatar ones
-     * (`personal_agent_id IS NULL`). The owner guard is the same either way:
-     * `avatar_user_id` stays the OWNER's uuid for a bot routine too.
-     */
-    listRoutineJobs(
-      avatarUserId: string,
-      opts: { personalAgentId?: string | null } = {},
-    ): RoutineJob[] {
-      const params: unknown[] = [avatarUserId];
-      let where = "avatar_user_id = ?";
-      if (opts.personalAgentId === null) {
-        where += " AND personal_agent_id IS NULL";
-      } else if (opts.personalAgentId !== undefined) {
-        where += " AND personal_agent_id = ?";
-        params.push(opts.personalAgentId);
-      }
+    listRoutineJobs(avatarUserId: string): RoutineJob[] {
       const rows = this.db
-        .prepare(`SELECT * FROM routine_jobs WHERE ${where} ORDER BY created_at ASC`)
-        .all(...params) as RoutineJobRow[];
+        .prepare("SELECT * FROM routine_jobs WHERE avatar_user_id = ? ORDER BY created_at ASC")
+        .all(avatarUserId) as RoutineJobRow[];
       return rows.map((r) => this.toRoutineJob(r));
     }
 
@@ -161,15 +140,6 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
         intervalMinutes?: number | null;
         runDate?: string | null;
         enabled?: boolean;
-        /**
-         * 봇 루틴: bind this routine to one of the owner's personal agents
-         * (personal_agents.id). Absent/null = the owner's main avatar, i.e. every
-         * legacy routine. A bound routine fires as a DELEGATED BOT TASK in a
-         * thread owned by the owner but bound to the bot's COMPOSITE avatar id;
-         * a routine never moves between identities afterwards (updateRoutineJob
-         * deliberately takes no such field).
-         */
-        personalAgentId?: string | null;
       },
     ): RoutineJob {
       const id = crypto.randomUUID();
@@ -198,19 +168,11 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
       // never as an immediately due job that could run unexpectedly.
       const enabled = requestedEnabled && isFutureOnceSchedule(normalizedSchedule);
       const nextRunAt = enabled ? nextRunIso(normalizedSchedule) : null;
-      const personalAgentId = input.personalAgentId || null;
-      // A bot routine's thread belongs to the BOT (composite avatar id) while the
-      // routine row keeps the OWNER's uuid in avatar_user_id — that is what lets
-      // the scheduler's suspended-owner JOIN and deleteUser's sweep stay
-      // untouched, and what binds the thread to the 봇 오피스 surfaces.
-      const threadAvatarId = personalAgentId
-        ? personalAgentAvatarId(avatarUserId, personalAgentId)
-        : avatarUserId;
       const tx = this.db.transaction(() => {
         this.db
           .prepare(
-            `INSERT INTO routine_jobs (id, avatar_user_id, conversation_id, name, prompt, minute_of_day, schedule_kind, days_of_week, interval_minutes, run_date, enabled, next_run_at, completed_at, created_at, personal_agent_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO routine_jobs (id, avatar_user_id, conversation_id, name, prompt, minute_of_day, schedule_kind, days_of_week, interval_minutes, run_date, enabled, next_run_at, completed_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             id,
@@ -227,23 +189,16 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
             nextRunAt,
             null,
             now(),
-            personalAgentId,
           );
         // Create the dedicated conversation eagerly so the client can always
         // open it (and so its title comes from the name/prompt, not from whatever
         // message lands in it first).
-        this.touchConversation(avatarUserId, conversationId, threadAvatarId, `[예약 작업] ${name || prompt}`, { isRoutine: true });
+        this.touchConversation(avatarUserId, conversationId, avatarUserId, `[예약 작업] ${name || prompt}`, { isRoutine: true });
       });
       tx();
       return this.toRoutineJob(this.routineJobRow(id)!);
     }
 
-    /**
-     * Patch a routine's label/prompt/schedule. There is deliberately NO
-     * `personalAgentId` here: a routine never moves between identities — its
-     * thread is already bound to one avatar id and its history would land under
-     * the wrong one — so re-binding means deleting and re-creating.
-     */
     updateRoutineJob(
       avatarUserId: string,
       id: string,

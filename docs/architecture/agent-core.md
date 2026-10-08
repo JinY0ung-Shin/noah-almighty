@@ -46,7 +46,7 @@ The `system` MCP group is always registered for local avatars, including old con
 or admin policies that omit it. `effectiveMcpToolGroups(selection, policy)` applies this invariant
 at both the chat preflight and run-plan boundary; the effective store policy and UI reflect it too.
 The composer and admin policy editor display system as checked and non-toggleable. Management
-handlers still enforce owner/group/bot scope, so tool registration does not grant new privileges.
+handlers still enforce owner/group scope, so tool registration does not grant new privileges.
 The manual tool is intentionally public: it reads only static allowlisted topics, never user state
 or files. An unknown topic returns the valid index with an error instead of resolving a path.
 `describe_system` points to the same manual; live state and permissions still come from its existing
@@ -216,7 +216,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   gets its own `allowedTools` entry keyed on the SAME boolean as its build.
 - **`create_share_link` gate (`mcp__file_output__create_share_link`).** It lives on the `file_output` server
   but registers only when runPlan's `shareLinkToolActive` holds: `fileOutputActive && events.onShareLink &&
-  ownerToolAccess && !groupAgentRun && !personalAgentRun && !consultationRun && !request.headless &&
+  ownerToolAccess && !groupAgentRun && !consultationRun && !request.headless &&
   !request.externalTaskApi`, computed right after `fileOutputActive`, before `buildSystemServer`. That one
   boolean drives the tool build (`shareLinkEnabled`/`createShareLink`/`signupOpen` on
   `FileOutputToolsContext`), its own `allowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately
@@ -320,7 +320,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   `ConfluenceToolsContext.isConversationLive` (runPlan: the conversation row still exists — ids are never reused) is
   checked after the write. Target = `ConfluenceToolsContext.workspaceDir` = runPlan's pure
   `conversationScratchDir(request)`. Every run with a conversation workspace (chat route `executeChatTurn`
-  for own-avatar, teammate, group-agent, bot and task-API turns; the owner-routine scheduler) passes
+  for own-avatar, teammate, group-agent and task-API turns; the owner-routine scheduler) passes
   `cwd: activeRepoCwd ?? workspaceDir` + `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined` with
   `activeRepoName` set alongside the clone, so an open working repo moves the scratch to
   `additionalDirs[0]` (never the clone). No `conversationId` (profile generators, consultations) →

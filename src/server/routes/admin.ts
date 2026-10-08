@@ -31,10 +31,6 @@ import {
 import { registerAdminExternalAgentRoutes } from "./adminExternalAgents.js";
 import { registerAdminEgressRoutes } from "./adminEgress.js";
 import { cleanupGroupDataDirs, groupAgentAvatarId } from "../groupAgents.js";
-import {
-  personalAgentAvatarId,
-  personalAgentWorkspaceParent,
-} from "../personalAgents.js";
 
 // ---- Admin -----------------------------------------------------------
 export function createAdminRouter(deps: RouterDeps): Router {
@@ -218,22 +214,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
           ...store.listConversationIdsForAvatar(req.params.id),
         ]),
       );
-      // Same pre-cascade snapshot for the user's personal agents (내 봇): their
-      // profile-image files and workspace trees are named by the COMPOSITE
-      // avatar id, which the `<userId>.`-prefixed avatar sweep below can't
-      // match, and deleteUser drops the rows that id is derived from. Their
-      // conversations are owned by this user, so the media dirs already ride
-      // the owned-conversation half of the snapshot above.
-      const personalAgentArtifacts = store
-        .listPersonalAgents(req.params.id, { includeDisabled: true })
-        .map((agent) => {
-          const avatarId = personalAgentAvatarId(agent.ownerUserId, agent.id);
-          return {
-            avatarId,
-            imageExt: store.getPersonalAgentImageExtByAvatarId(avatarId),
-            workspaceParent: personalAgentWorkspaceParent(config, agent),
-          };
-        });
       const removed = store.deleteUser(req.params.id);
       if (!removed) {
         apiError(res, 404, "사용자를 찾을 수 없습니다.");
@@ -268,10 +248,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
               fs.rmSync(path.join(avatarsDir, f), { force: true });
             }
           }
-        }
-        for (const bot of personalAgentArtifacts) {
-          deleteAvatarImageFile(config, bot.avatarId, bot.imageExt);
-          fs.rmSync(bot.workspaceParent, { recursive: true, force: true });
         }
         for (const conversationId of conversationIds) {
           deleteConversationImages(config, conversationId);

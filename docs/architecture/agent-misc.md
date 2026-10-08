@@ -70,8 +70,8 @@
   abort signal and rejects ITSELF with the abort reason. Relying on undici to reject an in-flight
   body read when the request signal aborts is a race it intermittently loses — observed as the
   idle/total deadline firing while the run hung forever on a quiet socket (and as a ~1/3 flake of
-  `tests/external-agent.test.ts`'s "times out when an open SSE stream goes idle" once the 2026-08
-  bot-tasks work shifted file timing). The raced rejection flows into the same `timeoutKind`
+  `tests/external-agent.test.ts`'s "times out when an open SSE stream goes idle" once an unrelated
+  2026-08 change shifted file timing). The raced rejection flows into the same `timeoutKind`
   mapping, so every user-facing timeout message is unchanged. The never-raced promise pre-attaches
   a `.catch` (unhandled-rejection guard) and the generator's `finally` removes the abort listener.
 

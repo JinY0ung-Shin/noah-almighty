@@ -14,9 +14,6 @@ import { createProfileRouter } from "./routes/profile.js";
 import { createPluginsRouter } from "./routes/plugins.js";
 import { createKnowledgeRepoRouter } from "./routes/knowledgeRepo.js";
 import { createGroupsRouter } from "./routes/groups.js";
-import { createPersonalAgentsRouter } from "./routes/personalAgents.js";
-import { createBotTasksRouter } from "./routes/botTasks.js";
-import { maybeDispatchNextBotTask } from "./botTaskRunner.js";
 import { createAvatarTasksRouter } from "./routes/avatarTasks.js";
 import { createRoutinesRouter } from "./routes/routines.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
@@ -94,13 +91,6 @@ export function createApp(services = createServices()) {
     store,
     observedModel,
     auditAs,
-    // Delegated bot tasks: a 내 봇 turn that just ended frees its thread, so the
-    // dispatcher can start whatever the owner queued behind it. Wired HERE
-    // because `routes/chat.ts` must not import `botTaskRunner` — the runner
-    // calls back into `executeChatTurn`.
-    onBotTurnSettled: (ownerUserId, conversationId) => {
-      void maybeDispatchNextBotTask(services, ownerUserId, conversationId);
-    },
   };
 
   const app = express();
@@ -195,8 +185,6 @@ export function createApp(services = createServices()) {
   app.use(createPluginsRouter(deps));
   app.use(createKnowledgeRepoRouter(deps));
   app.use(createGroupsRouter(deps));
-  app.use(createPersonalAgentsRouter(deps));
-  app.use(createBotTasksRouter(deps));
   app.use(createRoutinesRouter(deps));
   app.use(createAvatarTasksRouter(deps));
   app.use(createSkillShareRouter(deps));

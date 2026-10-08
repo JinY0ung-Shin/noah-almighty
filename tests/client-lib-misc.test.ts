@@ -71,8 +71,6 @@ import {
   loadInboxData,
   loadRoutinesData,
   loadSettingsData,
-  markBotTasksSeen,
-  refreshBotTaskUnseen,
   refreshKnowledgeStatus,
   refreshNotificationStatus,
   startKnowledgeWatch,
@@ -658,6 +656,18 @@ describe("nav routing", () => {
     expect(location.hash).toBe("#/chat/conv7");
   });
 
+  it("applyInitialRoute keeps a real screen for a bookmark to a view or tab that no longer exists", () => {
+    replaceState({ user: { id: "u", roles: ["admin"] } as any, view: "explore", settingsTab: "profile" });
+    // An unknown view parses as no route at all, so the boot view (탐색) stays.
+    history.replaceState(null, "", "#/retired-view/some-id");
+    applyInitialRoute();
+    expect(readState().view).toBe("explore");
+    // An unknown settings tab opens 설정 on the tab it already had, never a blank panel.
+    history.replaceState(null, "", "#/settings/retired-tab");
+    applyInitialRoute();
+    expect(readState()).toMatchObject({ view: "settings", settingsTab: "profile" });
+  });
+
   it("installRouteListener updates state on hashchange and invokes the chat callback", () => {
     replaceState({ user: { id: "u", roles: [] } as any });
     const onChat = vi.fn();
@@ -885,61 +895,8 @@ describe("loaders", () => {
     startKnowledgeWatch();
     expect(setInterval).toHaveBeenCalled();
     expect(addListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
-
-    // Logout runs through stop — another account's bot badge must not survive it.
-    replaceState({ botTaskUnseen: { total: 4, agents: { "bot-1": 4 } } });
     stopKnowledgeWatch();
     expect(removeListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
-    expect(readState().botTaskUnseen).toEqual({ total: 0, agents: {} });
-  });
-
-  it("refreshBotTaskUnseen replaces the badge counts and never asks when the feature is closed", async () => {
-    const fetchFn = useFetch((url) =>
-      url === "/api/me/bot-tasks/unseen" ? jsonRes({ total: 3, agents: { "bot-1": 2, "bot-2": 1 } }) : undefined,
-    );
-    // 내 봇 is admin-gated in phase 1 and the endpoint 403s for anyone else, so a
-    // non-admin must not spend a request a minute on it.
-    replaceState({ user: { id: "u", roles: [] } as any });
-    await refreshBotTaskUnseen();
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(readState().botTaskUnseen).toEqual({ total: 0, agents: {} });
-
-    replaceState({ user: { id: "u", roles: ["admin"] } as any });
-    await refreshBotTaskUnseen();
-    expect(readState().botTaskUnseen).toEqual({ total: 3, agents: { "bot-1": 2, "bot-2": 1 } });
-
-    // Best-effort: a failed poll keeps the last counts and stays silent.
-    useFetch(() => jsonRes({}, 500));
-    await refreshBotTaskUnseen();
-    expect(readState().botTaskUnseen.total).toBe(3);
-    expect(get(toasts)).toHaveLength(0);
-
-    // A body that lost its keys degrades to a hidden badge, never to NaN.
-    useFetch((url) => (url === "/api/me/bot-tasks/unseen" ? jsonRes({}) : undefined));
-    await refreshBotTaskUnseen();
-    expect(readState().botTaskUnseen).toEqual({ total: 0, agents: {} });
-  });
-
-  it("markBotTasksSeen posts the narrowed lane and replaces the badge from the response", async () => {
-    replaceState({
-      user: { id: "u", roles: ["admin"] } as any,
-      botTaskUnseen: { total: 3, agents: { "bot-1": 2, "bot-2": 1 } },
-    });
-    const bodies: string[] = [];
-    useFetch((url, init) => {
-      if (url !== "/api/me/bot-tasks/seen") return undefined;
-      bodies.push(String(init.body));
-      // The server answers the FRESH counts, so a narrowed stamp still reports
-      // the badges that survive it.
-      return jsonRes({ total: 1, agents: { "bot-2": 1 } });
-    });
-
-    await markBotTasksSeen("bot-1");
-    expect(JSON.parse(bodies[0])).toEqual({ agentId: "bot-1" });
-    expect(readState().botTaskUnseen).toEqual({ total: 1, agents: { "bot-2": 1 } });
-
-    await markBotTasksSeen();
-    expect(JSON.parse(bodies[1])).toEqual({});
   });
 
   it("loadRoutinesData / loadAdminOverview / loadAdminGroups populate their slices", async () => {

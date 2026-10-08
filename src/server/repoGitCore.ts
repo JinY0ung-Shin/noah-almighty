@@ -72,8 +72,7 @@ export async function currentBranch(repoRoot: string): Promise<string | null> {
  * CRITICAL: the porcelain flag is parameterized so each caller keeps its CURRENT
  * behavior — knowledge/group repos use plain `--porcelain`, the user-registered
  * git repos use `--porcelain -uall` (list untracked files individually). This is
- * a deferred breaking item; do NOT unify the flags here. A caller may also pass
- * `["--", <pathspec>]` to ask only about one subtree (the scoped commit path).
+ * a deferred breaking item; do NOT unify the flags here.
  */
 export async function dirtyPaths(
   repoRoot: string,
@@ -208,10 +207,6 @@ export async function restoreTrackedMcpJson(repoRoot: string): Promise<void> {
  *
  * PRESERVE: restoreTrackedMcpJson runs BEFORE `git add -A`, and auth is routed
  * per-host via tokenForGitUrl — this is the security-sensitive auth/push path.
- *
- * `pathspec` confines the staging to one repo subtree (a personal agent may only
- * commit its own memory folder): the add AND the has-changes probe are both
- * limited to it, so unrelated working-tree changes elsewhere stay uncommitted.
  */
 export async function commitAndPushClone(
   repoRoot: string,
@@ -225,7 +220,6 @@ export async function commitAndPushClone(
     identity: { name: string; email: string };
     log: Record<string, unknown>;
     pushedMessage: string;
-    pathspec?: string;
   },
 ): Promise<boolean> {
   if (!(await pathExists(path.join(repoRoot, ".git")))) {
@@ -239,23 +233,8 @@ export async function commitAndPushClone(
   // Undo any in-place `.mcp.json` strip done at load time before staging, so the
   // runtime-only edit never gets committed/pushed. MUST run before `git add -A`.
   await restoreTrackedMcpJson(repoRoot);
-  // `git add` is FATAL on a pathspec that matches nothing at all in the worktree
-  // or the index (a bot whose memory folder doesn't exist yet), and a scoped run
-  // must read that as "nothing to commit" — so it probes first and stages only
-  // what the probe found. Unscoped keeps add-then-probe: `git add -A` has no
-  // pathspec to miss. (Probing first is equivalent: `git add` can only stage what
-  // status already reported under the same pathspec.)
-  let hasChanges: boolean;
-  if (options.pathspec) {
-    const scope = ["--", options.pathspec];
-    hasChanges = (await dirtyPaths(repoRoot, scope)).length > 0;
-    if (hasChanges) {
-      await git(repoRoot, ["add", "-A", ...scope]);
-    }
-  } else {
-    await git(repoRoot, ["add", "-A"]);
-    hasChanges = (await dirtyPaths(repoRoot)).length > 0;
-  }
+  await git(repoRoot, ["add", "-A"]);
+  const hasChanges = (await dirtyPaths(repoRoot)).length > 0;
   const branch = safePushBranch(options.branch || (await currentBranch(repoRoot)) || "HEAD");
   if (hasChanges) {
     // commitMsg is the value of `-m` (a discrete argv element), so it's never

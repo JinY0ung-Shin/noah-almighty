@@ -638,39 +638,6 @@ export async function loadKnowledgeRepoRoots(
 }
 
 /**
- * Personal-bot (내 봇) variant of `loadKnowledgeRepoRoots`: a bot loads ONLY the
- * knowledge-repo skills its owner granted, so the context's `selected` is
- * replaced by the bot's allowlist. An EMPTY allowlist means NO skills — the
- * opposite default of `selected: null` (= all) — and it stays SILENT, because
- * "the marketplace has no loadable plugins" is the normal state of a bot nobody
- * has granted a skill to, not a warning worth showing.
- *
- * The clone is still ensured in that case: the same working tree feeds the bot's
- * standing memory (`loadKnowledgeRepoMemory`) and its scoped brain/repo tools,
- * so skipping it would leave those reading a stale (or missing) tree. Failures
- * are swallowed like everywhere else in this file — the repo tools report a real
- * clone failure with a usable message.
- */
-async function loadPersonalAgentKnowledgeRepoRoots(
-  ctx: KnowledgeRepoContext | null,
-  selectedSkills: string[],
-  onWarn?: (message: string) => void,
-): Promise<PluginRoot[]> {
-  if (!ctx) {
-    return [];
-  }
-  if (selectedSkills.length === 0) {
-    try {
-      await ensureClone(ctx);
-    } catch {
-      /* best-effort: the working tree is wanted, not required, for skills */
-    }
-    return [];
-  }
-  return loadKnowledgeRepoRoots({ ...ctx, selected: selectedSkills }, onWarn);
-}
-
-/**
  * Like `loadKnowledgeRepoRoots` but returns `{path, source}` entries for the
  * skills/intro paths, which attribute each skill to its origin. Tolerant: any
  * failure contributes no skills.
@@ -728,16 +695,7 @@ export async function loadAgentPluginRoots(
   avatarId: string,
   config: AppConfig,
   onWarn?: (message: string) => void,
-  opts?: {
-    disabledGroupIds?: Set<string>;
-    /**
-     * Personal-bot (내 봇) run: the bot's granted knowledge-repo skill slugs.
-     * Narrows the PERSONAL knowledge repo only — bundled defaults, the owner's
-     * plugin repos, and group repos load exactly as they do for the owner,
-     * because a bot run is a full owner run everywhere else.
-     */
-    personalAgent?: { selectedSkills: string[] };
-  },
+  opts?: { disabledGroupIds?: Set<string> },
 ): Promise<PluginRoot[]> {
   if (config.agentRuntime === "local") {
     return [];
@@ -749,8 +707,6 @@ export async function loadAgentPluginRoots(
   const groupContexts = groupKnowledgeRepoContextsForUser(store, avatarId, config).filter(
     (ctx) => !disabled?.has(ctx.groupId),
   );
-  const personalCtx = knowledgeRepoContextFor(store, avatarId, config);
-  const botSkills = opts?.personalAgent?.selectedSkills;
   return [
     ...(await loadDefaultPluginRoots(config, onWarn)),
     ...(await loadAvatarPluginRoots(
@@ -766,9 +722,7 @@ export async function loadAgentPluginRoots(
         },
       },
     )),
-    ...(await (botSkills
-      ? loadPersonalAgentKnowledgeRepoRoots(personalCtx, botSkills, onWarn)
-      : loadKnowledgeRepoRoots(personalCtx, onWarn))),
+    ...(await loadKnowledgeRepoRoots(knowledgeRepoContextFor(store, avatarId, config), onWarn)),
     // Shared knowledge repos of every group the avatar's owner belongs to — so
     // group skills load for all members' chats and routines alike.
     ...(await loadGroupKnowledgeRepoRoots(groupContexts, onWarn)),
@@ -812,27 +766,18 @@ async function readRepoClaudeMd(repoRoot: string, cap: number): Promise<string |
  * Unlike skills (pulled on demand), this is injected into the prompt every turn,
  * so it is capped. Personal memory is always included; the group toggle controls
  * only group memory.
- *
- * `personalAgentMemoryRoot` moves the PERSONAL half into a bot's own memory
- * folder: the bot's standing memory is the `CLAUDE.md` inside `agents/<dir>/`,
- * and the owner's repo-root `CLAUDE.md` is deliberately NOT read for it — the
- * bot edits what it always remembers, so it must not inherit the owner's.
- * Group memory is unaffected (a bot run is a full owner run for groups).
  */
 export async function loadKnowledgeRepoMemory(
   store: Store,
   avatarId: string,
   config: AppConfig,
-  opts?: { disabledGroupIds?: Set<string>; personalAgentMemoryRoot?: string },
+  opts?: { disabledGroupIds?: Set<string> },
 ): Promise<KnowledgeRepoMemory> {
   if (config.agentRuntime === "local") {
     return { personal: null, groups: [] };
   }
-  const personalRoot = opts?.personalAgentMemoryRoot
-    ? path.join(knowledgeClonePath(avatarId, config), opts.personalAgentMemoryRoot)
-    : knowledgeClonePath(avatarId, config);
   const personal = store.getKnowledgeRepo(avatarId).repo
-    ? await readRepoClaudeMd(personalRoot, PERSONAL_CLAUDE_MD_CAP)
+    ? await readRepoClaudeMd(knowledgeClonePath(avatarId, config), PERSONAL_CLAUDE_MD_CAP)
     : null;
   const disabled = opts?.disabledGroupIds;
   const groups: { name: string; content: string }[] = [];

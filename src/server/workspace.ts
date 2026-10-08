@@ -60,8 +60,8 @@ function removeWithoutFollowing(target: string): void {
  *
  * A workspace lives at `workspaces/<avatarSeg>/<conversationSeg>`, and the
  * avatar segment is the THREAD's avatar: a colleague's conversation with
- * someone else's avatar lives under THAT avatar's tree, as do bot and
- * group-agent threads under their composite ids. The conversation segment is
+ * someone else's avatar lives under THAT avatar's tree, as do group-agent
+ * threads under their composite ids. The conversation segment is
  * derived from the id alone, so each id is resolved under EVERY avatar folder
  * rather than under the deleter's own. No link is ever followed: a symlinked
  * avatar or workspace folder is skipped, and a symlink (or file) carrying one of

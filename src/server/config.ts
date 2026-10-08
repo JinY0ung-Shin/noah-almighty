@@ -129,12 +129,9 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // flight at once, server-wide and per owner.
     routineMaxConcurrentRuns: parsePositiveInt(env("ROUTINE_MAX_CONCURRENT_RUNS"), 10),
     routineMaxConcurrentRunsPerUser: parsePositiveInt(env("ROUTINE_MAX_CONCURRENT_RUNS_PER_USER"), 2),
-    // Same shape and same floor reasoning as the routine deadline above: the
-    // budget for one unattended delegated bot task, which nobody is watching.
-    botTaskRunTimeoutMs: Math.max(60_000, parseMinutes(env("BOT_TASK_TIMEOUT_MINUTES"), 30)),
-    // The external task API's own budget (see AppConfig), split from the bot one
-    // so a long API job never lengthens bot runs. Same floor, plus a ceiling:
-    // this is the knob operators set to hours or days.
+    // The external task API's own budget (see AppConfig). Same floor as the
+    // routine deadline above, plus a ceiling: this is the knob operators set to
+    // hours or days.
     avatarTaskRunTimeoutMs: Math.min(
       MAX_TIMER_MS,
       Math.max(60_000, parseMinutes(env("AVATAR_TASK_TIMEOUT_MINUTES"), 300)),

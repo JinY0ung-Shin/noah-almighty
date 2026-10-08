@@ -6,7 +6,7 @@ import { createAppServer } from "./appServer.js";
 import logger from "./logger.js";
 import { startAvatarTaskDispatcher } from "./avatarTaskRunner.js";
 import { startRoutineScheduler } from "./scheduler.js";
-import { startBotTaskDispatcher } from "./botTaskRunner.js";
+import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
@@ -20,6 +20,11 @@ import {
 // (our PreToolUse hook is the gate it recommends). Other warnings still print.
 filterAdvisoryProcessWarnings();
 const services = createServices();
+// Purge what the removed 내 봇 feature left in this deployment (bots, their
+// threads, bot-bound routines, their files) BEFORE anything can read it: the
+// scheduler started below would fire a bot-bound routine as the owner's main
+// avatar. A no-op once done; a failed purge throws and stops the boot.
+retirePersonalAgents(services);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);
@@ -51,9 +56,6 @@ server.listen(services.config.port, () => {
 // Fire owner-scheduled routine jobs in the background.
 const stopScheduler = startRoutineScheduler(services);
 const stopAvatarTaskDispatcher = startAvatarTaskDispatcher(services);
-// Delegated bot tasks (내 봇): fail whatever this restart interrupted, then
-// drain any backlog the owner queued before the process went down.
-const stopBotTaskDispatcher = startBotTaskDispatcher(services);
 
 // A rejected promise from an async Express 4 route handler is NOT routed to the
 // error middleware — it surfaces here. Log and CONTINUE: a single bad request
@@ -80,7 +82,6 @@ function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
   stopScheduler();
   stopAvatarTaskDispatcher();
-  stopBotTaskDispatcher();
   // Abort in-flight chat runs so their cancel path persists the streamed partial
   // and ends the SSE responses (otherwise open streams would block server.close
   // until the timeout and the watched turn would be lost).

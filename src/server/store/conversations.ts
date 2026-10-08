@@ -82,10 +82,10 @@ export interface ConversationRewindPlan {
    */
   resumeAt: SdkResumePoint | null;
   /**
-   * The anchor's created_at. Canvases and bot tasks created at or after it
-   * belong to the discarded turns — even on a regenerate, where the first
-   * dropped row (the answer) is persisted only at the END of the anchor's run,
-   * after everything that run created.
+   * The anchor's created_at. Canvases created at or after it belong to the
+   * discarded turns — even on a regenerate, where the first dropped row (the
+   * answer) is persisted only at the END of the anchor's run, after everything
+   * that run created.
    */
   cutoffCreatedAt: string;
 }
@@ -119,14 +119,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const rows = this.db
         .prepare(
           `SELECT c.id, c.avatar_user_id, c.title, c.updated_at, c.is_routine,
-                  COALESCE(u.display_name, ga.display_name, pa.display_name) AS avatar_display_name,
+                  COALESCE(u.display_name, ga.display_name) AS avatar_display_name,
                   r.id AS routine_id, r.prompt AS routine_prompt
            FROM conversations c
            LEFT JOIN users u ON u.id = c.avatar_user_id
            -- the concat mirrors groupAgentAvatarId() (../groupAgents.ts); keep in lockstep
            LEFT JOIN group_agents ga ON c.avatar_user_id = 'group:' || ga.group_id || ':' || ga.id
-           -- the concat mirrors personalAgentAvatarId() (../personalAgents.ts); keep in lockstep
-           LEFT JOIN personal_agents pa ON c.avatar_user_id = 'personal:' || pa.owner_user_id || ':' || pa.id
            LEFT JOIN routine_jobs r ON r.conversation_id = c.id
            WHERE ${where.join(" AND ")}
            ORDER BY c.updated_at DESC`,
@@ -176,14 +174,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const row = this.db
         .prepare(
           `SELECT c.id, c.avatar_user_id, c.title, c.updated_at, c.is_routine,
-                  COALESCE(u.display_name, ga.display_name, pa.display_name) AS avatar_display_name,
+                  COALESCE(u.display_name, ga.display_name) AS avatar_display_name,
                   r.id AS routine_id, r.prompt AS routine_prompt
            FROM conversations c
            LEFT JOIN users u ON u.id = c.avatar_user_id
            -- the concat mirrors groupAgentAvatarId() (../groupAgents.ts); keep in lockstep
            LEFT JOIN group_agents ga ON c.avatar_user_id = 'group:' || ga.group_id || ':' || ga.id
-           -- the concat mirrors personalAgentAvatarId() (../personalAgents.ts); keep in lockstep
-           LEFT JOIN personal_agents pa ON c.avatar_user_id = 'personal:' || pa.owner_user_id || ':' || pa.id
            LEFT JOIN routine_jobs r ON r.conversation_id = c.id
            WHERE c.owner_user_id = ? AND c.id = ?
            LIMIT 1`,
@@ -204,29 +200,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         .prepare("SELECT avatar_user_id FROM conversations WHERE id = ? AND owner_user_id = ?")
         .get(conversationId, ownerId) as { avatar_user_id: string } | undefined;
       return row?.avatar_user_id ?? null;
-    }
-
-    /**
-     * The owner's newest ORDINARY thread with one avatar — where a 봇 간 위임
-     * hand-off lands, so a delegated request joins the conversation the owner
-     * already has with that bot instead of minting a thread per hand-off.
-     * Routine threads are excluded: `[예약 작업]` conversations are the
-     * scheduler's own, pruned on its terms, and a hand-off dropped in one would
-     * be swept away with them. Null when the owner has never chatted with this
-     * avatar — the caller mints a fresh conversation id.
-     */
-    latestChatConversationIdForAvatar(
-      ownerUserId: string,
-      avatarUserId: string,
-    ): string | null {
-      const row = this.db
-        .prepare(
-          `SELECT id FROM conversations
-           WHERE owner_user_id = ? AND avatar_user_id = ? AND is_routine = 0
-           ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
-        )
-        .get(ownerUserId, avatarUserId) as { id: string } | undefined;
-      return row?.id ?? null;
     }
 
     /** Exact Gateway endpoint bound to an external conversation, if established. */
@@ -967,11 +940,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         this.deleteCanvasArtifactsForConversation(id);
         this.deleteShareLinksForConversation(id);
         this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
-        // Delegated bot tasks are per-thread bookkeeping (내 봇 threads only) —
-        // manual cascade, since bot_tasks has no FK onto conversations.
-        this.db.prepare("DELETE FROM bot_tasks WHERE conversation_id = ?").run(id);
-        // Same story for personal task-API rows (avatar_tasks): no FK onto
-        // conversations, so the thread's tasks would outlive it.
+        // Personal task-API rows (avatar_tasks) have no FK onto conversations,
+        // so the thread's tasks would outlive it — manual cascade.
         this.db.prepare("DELETE FROM avatar_tasks WHERE conversation_id = ?").run(id);
         this.db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
       });
@@ -989,14 +959,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       }
       const tx = this.db.transaction((conversationIds: string[]) => {
         const deleteMessages = this.db.prepare("DELETE FROM messages WHERE conversation_id = ?");
-        const deleteTasks = this.db.prepare("DELETE FROM bot_tasks WHERE conversation_id = ?");
         const deleteAvatarTasks = this.db.prepare("DELETE FROM avatar_tasks WHERE conversation_id = ?");
         const deleteConversation = this.db.prepare("DELETE FROM conversations WHERE id = ? AND owner_user_id = ? AND is_routine = 0");
         for (const conversationId of conversationIds) {
           this.deleteCanvasArtifactsForConversation(conversationId);
           this.deleteShareLinksForConversation(conversationId);
           deleteMessages.run(conversationId);
-          deleteTasks.run(conversationId);
           deleteAvatarTasks.run(conversationId);
           deleteConversation.run(conversationId, ownerId);
         }
@@ -1066,9 +1034,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     /**
      * Apply a rewind plan in ONE transaction: delete exactly the planned rows
      * (by id, so a row appended after planning survives), the share links of
-     * their deck cards, the bot tasks the discarded turns opened (and park again
-     * the ones they resumed — see rewindBotTasks), and the canvas state they
-     * produced; then clear the conversation's SDK session, whose
+     * their deck cards, and the canvas state they produced; then clear the
+     * conversation's SDK session, whose
      * transcript still holds the discarded turns (the re-run records its fork's
      * own id on success). The on-disk attachment bytes are the caller's sweep.
      * False when the conversation is not the owner's.
@@ -1096,7 +1063,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
               .map((att) => att.id),
           ),
         );
-        this.rewindBotTasks(conversationId, plan.cutoffCreatedAt);
         this.rewindCanvasArtifacts(conversationId, plan.cutoffCreatedAt);
         this.db
           .prepare(

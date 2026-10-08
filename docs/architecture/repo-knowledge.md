@@ -117,15 +117,9 @@
   brain-reflect REPLACES a changed value and records it as one terse `old → new` line in `wiki/log.md`,
   brain-ingest keeps the dated context in the `raw/` capture — `tests/agent-core.test.ts` pins all
   three wordings. The standing prompt states the same rule too (`brainSection` in `promptBuilder.ts`,
-  the `currentTruth` sentence) on every WRITE-capable run — owner/routine, shared-account teammate,
-  personal bot — and on no read-only one (plain teammate, consultation), because the avatar also
+  the `currentTruth` sentence) on every WRITE-capable run — owner/routine, shared-account teammate —
+  and on no read-only one (plain teammate, consultation), because the avatar also
   edits `wiki/` directly with the repo tools, where a skill-only rule would never reach.
-- **`agents/<dir>/` is the same convention one level down.** Each personal bot (내 봇) keeps its own
-  `wiki/` + `raw/` + `CLAUDE.md` under `agents/<memory_dir>/` in the SAME personal repo; the root
-  `wiki/`/`raw/` vault stays the OWNER's and is untouched by (and unreachable from) a bot run. A
-  scoped bot `commit` stages with a pathspec (`git add -A -- agents/<dir>`) so it can never sweep the
-  owner's unrelated working-tree changes out of the shared clone. Rest →
-  [personal-agents.md](personal-agents.md).
 - **Capture notice ("기억" chip):** a SUCCESSFUL `write_file`/`edit_file` under `wiki/` (personal or
   group repo, incl. group-agent runs) fires `AgentEvents.onMemory` (`MemoryEvent`, gated in the tool
   handlers via `isBrainNotePath`) → SSE `memory` (server-minted `id` so reattach replays dedupe) → a

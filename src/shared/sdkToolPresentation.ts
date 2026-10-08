@@ -69,7 +69,7 @@ export const SDK_HIDDEN_ACTIVITY_TOOLS = [
  * right now" / toolDenialKind: "cancelled") — the flaky silent auto-deny.
  * Rule-allowed tools never enter that cancellable ask path, and a hook DENY
  * still overrides an allowedTools rule, so the hook's guards (admin policy,
- * active-repo git, bot write scope, read-only viewers) keep working. Unknown
+ * active-repo git, read-only viewers) keep working. Unknown
  * names are harmless no-ops (same contract as UNUSED_SDK_BUILTIN_TOOLS), so
  * both shell-kill spellings ride along. AskUserQuestion stays OFF this list:
  * the hook intercepts it with a deny-carrying-answer, which must stay ahead

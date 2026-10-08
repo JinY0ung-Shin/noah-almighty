@@ -77,11 +77,10 @@ send.
   deletion aborts on an FK violation.
 
 ## Client dock (`src/client/src/components/DirectMessageDock.svelte`)
-- Mounted ONCE in `App.svelte` **outside** the `.workspace` grid, so the dock survives every view
-  (including the rail-less 봇 오피스). A collapsed **메시지** bar sits at the bottom-right with the
-  online count and the unread badge; pressing it expands a 360×520 **non-modal** chat window upward
-  (peer list → thread with a back button). The bar's badge replaces the old sidebar DM badge; the old
-  `DirectMessages.svelte` modal is gone.
+- Mounted ONCE in `App.svelte` **outside** the `.workspace` grid, so the dock survives every view. A
+  collapsed **메시지** bar sits at the bottom-right with the online count and the unread badge; pressing
+  it expands a 360×520 **non-modal** chat window upward (peer list → thread with a back button). The
+  bar's badge replaces the old sidebar DM badge; the old `DirectMessages.svelte` modal is gone.
 - **Light dismiss: a `pointerdown` anywhere OUTSIDE the dock collapses it.** The listener is on
   `document` in the CAPTURE phase — a target that stops propagation cannot keep the dock open — and it
   calls `collapse({ focusBar: false })`, because the pointer is already committing to something else and

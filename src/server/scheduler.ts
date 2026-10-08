@@ -9,13 +9,6 @@ import { resolveActiveWorkspaceRepo } from "./activeRepoResolve.js";
 import { getActiveRunForConversation } from "./agent/runRegistry.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../shared/mcpToolGroups.js";
 import {
-  botTaskTitle,
-  findChattablePersonalAgent,
-  personalAgentAvatarId,
-} from "./personalAgents.js";
-import { executeChatTurn, resolveChatTarget } from "./routes/chat.js";
-import { maybeDispatchNextBotTask } from "./botTaskRunner.js";
-import {
   claimRoutineSlot,
   isRoutineRunning,
   releaseRoutineSlot,
@@ -79,175 +72,8 @@ export { isRoutineRunning };
 type RoutineRunResult = { ok: boolean; error?: string; skipped?: boolean };
 
 /** Korean, user-facing: stored as the routine's `lastError` and shown in RoutinesView. */
-const BOT_UNAVAILABLE =
-  "봇이 비활성화되었거나 삭제되어 예약 작업을 실행할 수 없습니다.";
-const BOT_ROUTINE_STILL_QUEUED =
-  "이전 예약 실행이 아직 대기열에 있어 이번 회차를 건너뜁니다.";
 const ROUTINE_REPO_BUSY =
   "작업 저장소를 다른 대화에서 사용 중이라 예약 작업을 건너뜁니다.";
-
-/**
- * 봇 루틴: fire a routine that belongs to one of the owner's personal agents.
- *
- * A bot routine is a SCHEDULED DELEGATED TASK, not a second kind of run: it goes
- * through the very machinery 봇 오피스 uses — `executeChatTurn` and the
- * `bot_tasks` queue — inside the routine's own conversation, which is bound to
- * the bot's COMPOSITE avatar id. Capability is untouched (a personal-agent turn
- * IS a full owner run); this branch only picks the identity and the thread, so
- * the owner-avatar path below never sees a bot routine.
- *
- * Never throws — same contract as `runRoutineJobNow`, whose bot branch this is.
- */
-async function runBotRoutineJobNow(
-  services: AppServices,
-  job: RoutineJob,
-  personalAgentId: string,
-): Promise<RoutineRunResult> {
-  const { config, store } = services;
-  const avatarId = personalAgentAvatarId(job.avatarUserId, personalAgentId);
-  // Resolve the bot LIVE through the ONE reach gate a typed turn uses: it may
-  // have been deleted or disabled, or its owner demoted, since the routine was
-  // created. Fail closed but RECOVERABLE — the schedule is left alone, so
-  // re-enabling the bot resumes it at the next firing (the dispatcher's
-  // undispatchable-task precedent).
-  if (!findChattablePersonalAgent(store, job.avatarUserId, avatarId)) {
-    return { ok: false, error: BOT_UNAVAILABLE };
-  }
-  const owner = store.getUserById(job.avatarUserId);
-  if (!owner) {
-    return { ok: false, error: "아바타를 찾을 수 없습니다." };
-  }
-  // This routine's PREVIOUS firing is still waiting its turn. Skip the cycle
-  // rather than stacking a second identical task behind it: an unattended queue
-  // that grows one item per tick is how a slow bot turns into hours of repeated
-  // work nobody asked for. A skip records no outcome, so the job stays due and
-  // fires the moment the backlog drains.
-  if (store.hasQueuedBotTaskForRoutine(job.id)) {
-    return { ok: false, skipped: true, error: BOT_ROUTINE_STILL_QUEUED };
-  }
-  // Carry the routine conventions onto the thread BEFORE the turn. On the row
-  // createRoutineJob already minted this only bumps updated_at and (re)stamps
-  // is_routine — the title never changes, so an owner-renamed thread keeps its
-  // name and the composite binding stays as created.
-  store.touchConversation(
-    job.avatarUserId,
-    job.conversationId,
-    avatarId,
-    `[예약 작업] ${job.name || job.prompt}`,
-    { isRoutine: true },
-  );
-  /**
-   * The thread is busy — the owner is mid-turn with this bot, or an earlier task
-   * is still running. ENQUEUE rather than skip: a delegated task IS this
-   * firing's output, so handing it to the queue is a SUCCESSFUL outcome and the
-   * dispatcher starts it the moment the thread frees up. (No MAX_QUEUED_BOT_TASKS
-   * check: the dedupe above already caps a routine at one waiting firing.)
-   */
-  const enqueue = (userMessagePersisted = false): RoutineRunResult => {
-    if (!userMessagePersisted) {
-      store.addMessage(job.conversationId, {
-        role: "user",
-        content: job.prompt,
-        // The thread is busy: this row lands BEFORE the active run's answer,
-        // so it can never anchor a rewind (the chat route's queueBotTurn rule).
-        kind: "queued",
-      });
-    }
-    store.createBotTask({
-      ownerUserId: job.avatarUserId,
-      agentId: personalAgentId,
-      conversationId: job.conversationId,
-      title: botTaskTitle(job.prompt),
-      requestText: job.prompt,
-      status: "queued",
-      routineJobId: job.id,
-    });
-    // Close the settle race exactly as the chat route's 202 does: the run we
-    // deferred to may have finished between the check and this insert, in which
-    // case its own settle hook already found an empty queue.
-    void maybeDispatchNextBotTask(services, job.avatarUserId, job.conversationId);
-    return { ok: true };
-  };
-  if (getActiveRunForConversation(job.avatarUserId, job.conversationId)) {
-    return enqueue();
-  }
-  // The thread is free: run the turn NOW, the way the dispatcher runs a queued
-  // one (same resolve call, same unattended deadline + tier fallback).
-  const target = resolveChatTarget({
-    store,
-    // A bot avatar id can never resolve to an external or group agent.
-    externalAgents: [],
-    viewerGroupIds: new Set<string>(),
-    viewerUserId: job.avatarUserId,
-    avatarId,
-    hasImages: false,
-    ownerOnlyCommand: false,
-  });
-  if (!target.ok) {
-    return { ok: false, error: target.refusal.message };
-  }
-  // Only a row this firing produced may decide the outcome below: the turn can
-  // also RESUME a task the owner parked by hand (whose routine_job_id is NULL),
-  // leaving an older firing's row as the newest one for this routine.
-  const firedAt = new Date().toISOString();
-  const outcome = await executeChatTurn(
-    { config, store, observedModel: services.observedModel },
-    {
-      ownerUserId: job.avatarUserId,
-      ownerDisplayName: owner.displayName,
-      target: target.target,
-      conversationId: job.conversationId,
-      agentMessage: job.prompt,
-      displayMessage: job.prompt,
-      images: [],
-      regenerate: false,
-      audit: (entry) =>
-        store.audit({
-          actorUserId: job.avatarUserId,
-          actorName: owner.displayName,
-          action: entry.action === "chat" ? "routine_run" : entry.action,
-          status: entry.status ?? "success",
-          detail: `routine ${job.id}: ${entry.detail}`,
-        }),
-      routineJobId: job.id,
-      // Unattended: nobody can press stop or switch models, so the run gets a
-      // hard deadline and falls down the tier chain — the delegated-task budget,
-      // not routineRunTimeoutMs, because this IS a delegated task.
-      unattendedDeadlineMs: config.botTaskRunTimeoutMs,
-      modelFallback: true,
-    },
-    // No SSE client: the run registry journals every frame for a viewer who
-    // opens the thread mid-run.
-    { onRunOpen: () => true },
-  );
-  if (!outcome.ok) {
-    // The thread went busy between our check and openRun. Queue it — that race
-    // is exactly what the busy branch above exists for; the user bubble may
-    // already have been written by the refused turn.
-    if (outcome.refusal.reason === "active_run") {
-      return enqueue(outcome.refusal.userMessagePersisted === true);
-    }
-    // The thread's working repo is open in ANOTHER conversation. The turn
-    // refused before writing any message or task row, so this is a skip like
-    // the owner-avatar path's: no outcome recorded, the next tick retries. (The
-    // touchConversation above still bumps the thread's updated_at each retry.)
-    if (outcome.refusal.reason === "repo_locked") {
-      return { ok: false, skipped: true, error: ROUTINE_REPO_BUSY };
-    }
-    return { ok: false, error: outcome.refusal.message };
-  }
-  // Cap the routine thread like the legacy path — a long-lived routine must not
-  // grow its history without bound.
-  store.pruneRoutineMessages(job.conversationId);
-  // `ok` only means the turn RAN: executeChatTurn finalizes the task row instead
-  // of throwing, so the delegated task carries the real result.
-  const task = store.latestBotTaskForRoutine(job.id);
-  const settledThisRun = task && (task.finishedAt ?? task.createdAt) >= firedAt;
-  if (settledThisRun && task.status === "failed") {
-    return { ok: false, error: task.error ?? "예약 작업 실행에 실패했습니다." };
-  }
-  return { ok: true };
-}
 
 /**
  * Run a single routine job headlessly and append the result to its dedicated
@@ -262,12 +88,6 @@ async function runRoutineJobNow(
   services: AppServices,
   job: RoutineJob,
 ): Promise<RoutineRunResult> {
-  // 봇 루틴 fires as a delegated task in the bot's own thread and shares nothing
-  // below this line. Early-return keeps the owner-avatar path (personalAgentId
-  // NULL — every legacy routine) exactly as it was.
-  if (job.personalAgentId) {
-    return runBotRoutineJobNow(services, job, job.personalAgentId);
-  }
   const { config, store } = services;
   const abortController = new AbortController();
   // Hard deadline per unattended run: a hung SDK call must not wedge the job forever
@@ -477,13 +297,7 @@ export async function executeRoutineJob(
   // runs would point the SDK cwd at the SAME working-repo clone / scratch dir and
   // stomp each other (activeRepoLock is re-entrant by conversation id, so it won't
   // catch this). It retries on the next tick once the chat turn is done.
-  //
-  // A 봇 루틴 is exempt: its firing is a delegated task, so a busy thread makes it
-  // QUEUE behind the running turn (runBotRoutineJobNow) instead of losing the slot.
-  if (
-    !job.personalAgentId &&
-    getActiveRunForConversation(job.avatarUserId, job.conversationId)
-  ) {
+  if (getActiveRunForConversation(job.avatarUserId, job.conversationId)) {
     return { ok: false, skipped: true, error: "대화에서 응답을 생성 중이라 예약 작업을 건너뜁니다." };
   }
   // Synchronous, before the first await: the scheduler tick starts jobs without
@@ -531,9 +345,8 @@ export async function executeRoutineJob(
  * Capped rather than unbounded because each run is a full agent process: a
  * burst of due jobs (many routines on the same minute, or a restart after
  * downtime past many slots) must not fan out into one process per job. It used
- * to be strictly sequential for that reason, which let ONE long run — a bot
- * routine holds its slot for the whole delegated turn — delay every routine on
- * the server. The per-owner cap keeps one owner with many due routines from
+ * to be strictly sequential for that reason, which let ONE long run delay every
+ * routine on the server. The per-owner cap keeps one owner with many due routines from
  * taking every slot. Runs missed while the server was down fire once on the
  * next tick, then roll forward; there is no per-missed-day catch-up.
  */

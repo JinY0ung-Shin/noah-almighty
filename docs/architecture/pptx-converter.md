@@ -25,7 +25,7 @@
   runs as the same uid and gains nothing new, and it stays behind the ONE PreToolUse gate: plain colleagues
   and restricted headless runs are read-only. Elevated viewers run it **without a prompt** — every chat turn
   and routine passes `autoApprove: true` — so **the converter's own guards are the boundary**: lints, CSP,
-  network block, budgets and locks. The same path works unchanged in routines, bot tasks and the external task API.
+  network block, budgets and locks. The same path works unchanged in routines and the external task API.
 - **Existing decks stay python-pptx.** Editing a `.pptx` in place or using a user's own template/master goes
   through `reference/python-pptx.md` (+ `scripts/render_deck.sh` for LibreOffice renders). A converted deck is
   changed by editing its HTML and rebuilding — a python-pptx edit breaks the hash binding (below), which the
@@ -191,10 +191,10 @@ Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in p
   AUTHORING, a NEW deck in an interactive chat gets at most ONE `AskUserQuestion` per conversation, asking only what
   is still open: 테마 (the three best-fitting themes, the recommended one first with `(추천)`), 분량, 용도 (보고서형 /
   발표형). An outline for a large request goes into the chat text right before it, with a one-line confirm replacing
-  one of the questions. Never where nobody can answer now (routines, bot conversations, delegated tasks), nor on an
-  external-task-API turn, where the hook does NOT deny the dialog and it would park the task — so the skill keys that
-  exclusion on the prompt's verbatim `This turn was submitted by an **EXTERNAL SYSTEM**` marker (a test asserts it is
-  still in `promptBuilder.ts`: reword both together). Skill-only, no prompt change.
+  one of the questions. Never where nobody can answer now (routines and automated tasks), nor on an
+  external-task-API turn, where the hook does NOT deny the dialog and it would park the task — so the skill keys
+  that exclusion on the prompt's verbatim `This turn was submitted by an **EXTERNAL SYSTEM**` marker (a test asserts
+  it is still in `promptBuilder.ts`: reword both together). Skill-only, no prompt change.
 - **Review rounds (SKILL §11).** Every build that exits 0 is delivered first (`share_file` IN PLACE); then its
   renders are published `hidden` from `.build/<profile>/html/` (never `.build/check/`, stale after a build) — at most
   30 per turn in EVERY round, so a round that needs more (round 1 of a deck over 30 slides, a theme, footer or

@@ -3,7 +3,6 @@ import { hashToken } from "./auth.js";
 import { resolveStoredFile, sanitizeDownloadName, withDownloadExtension } from "./chatFiles.js";
 import { resolveStoredImage, SAFE_ID } from "./chatImages.js";
 import { GROUP_AGENT_AVATAR_PREFIX } from "./groupAgents.js";
-import { parsePersonalAgentRef } from "./personalAgents.js";
 import type { Store } from "./store.js";
 import type { ShareLinkLookup, ShareLinkRecord } from "./store/shareLinks.js";
 import type { AppConfig, ImageMediaType, MessageAttachment } from "./types.js";
@@ -151,8 +150,7 @@ export function shareDownloadName(name: string | undefined): string {
 /**
  * Whether `conversationId` is a thread whose decks its owner may share by link
  * — checked at creation AND on every recipient call:
- * - the owner's own-avatar threads (external-task-API threads included) and
- *   their own bots' threads: yes;
+ * - the owner's own-avatar threads (external-task-API threads included): yes;
  * - group-agent member threads: NO (phase 1 — member threads are private and
  *   the team shares through the group second brain);
  * - a colleague's own thread with someone else's avatar: only while that
@@ -167,10 +165,8 @@ export function shareableThread(store: Store, ownerUserId: string, conversationI
   if (!avatarId) return false;
   if (avatarId === ownerUserId) return true;
   if (avatarId.startsWith(GROUP_AGENT_AVATAR_PREFIX)) return false;
-  const bot = parsePersonalAgentRef(avatarId);
-  if (bot) return bot.ownerUserId === ownerUserId;
-  // Every other namespaced id (external:, malformed personal:/group:) fails
-  // closed; user ids never contain a colon.
+  // Every other namespaced id (external:, a malformed group:) fails closed;
+  // user ids never contain a colon.
   if (avatarId.includes(":")) return false;
   return store.resolveChatAvatar(ownerUserId, avatarId) !== null;
 }

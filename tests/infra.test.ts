@@ -240,23 +240,23 @@ function withEnvVars(values: Record<string, string | undefined>, fn: () => void)
 describe("avatar task API run timeout config", () => {
   const withEnv = withEnvVars;
   const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test" });
-  const unset = { AVATAR_TASK_TIMEOUT_MINUTES: undefined, BOT_TASK_TIMEOUT_MINUTES: undefined };
+  const unset = { AVATAR_TASK_TIMEOUT_MINUTES: undefined, ROUTINE_RUN_TIMEOUT_MINUTES: undefined };
 
-  it("defaults to 5 hours while bot tasks keep 30 minutes", () => {
+  it("defaults to 5 hours while routines keep 30 minutes", () => {
     withEnv(unset, () => {
       expect(load().avatarTaskRunTimeoutMs).toBe(300 * 60_000);
-      expect(load().botTaskRunTimeoutMs).toBe(30 * 60_000);
+      expect(load().routineRunTimeoutMs).toBe(30 * 60_000);
     });
   });
 
-  it("takes AVATAR_TASK_TIMEOUT_MINUTES when set, independent of BOT_TASK_TIMEOUT_MINUTES", () => {
+  it("takes AVATAR_TASK_TIMEOUT_MINUTES when set, independent of ROUTINE_RUN_TIMEOUT_MINUTES", () => {
     withEnv({ ...unset, AVATAR_TASK_TIMEOUT_MINUTES: "90" }, () => {
       expect(load().avatarTaskRunTimeoutMs).toBe(90 * 60_000);
-      expect(load().botTaskRunTimeoutMs).toBe(30 * 60_000);
+      expect(load().routineRunTimeoutMs).toBe(30 * 60_000);
     });
-    withEnv({ ...unset, BOT_TASK_TIMEOUT_MINUTES: "7" }, () => {
+    withEnv({ ...unset, ROUTINE_RUN_TIMEOUT_MINUTES: "7" }, () => {
       expect(load().avatarTaskRunTimeoutMs).toBe(300 * 60_000);
-      expect(load().botTaskRunTimeoutMs).toBe(7 * 60_000);
+      expect(load().routineRunTimeoutMs).toBe(7 * 60_000);
     });
   });
 

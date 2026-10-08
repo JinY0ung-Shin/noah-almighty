@@ -5,15 +5,12 @@ import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import {
   groupKnowledgeRepoSkillSources,
-  knowledgeRepoSkillSources,
-  KNOWLEDGE_REPO_SOURCE,
   listSkillsInRoots,
   loadAgentPluginRoots,
   loadGroupAgentKnowledgeMemory,
   loadGroupAgentPluginRoots,
   loadKnowledgeRepoMemory,
 } from "../plugins.js";
-import { knowledgeRepoContextFor } from "../knowledgeRepo.js";
 import { groupKnowledgeRepoContextFor } from "../groupKnowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
 import { resolveActiveWorkspaceRepo } from "../activeRepoResolve.js";
@@ -25,7 +22,6 @@ import type {
   AgentResponse,
   AgentRewindInfo,
   AppConfig,
-  BotTask,
   ExternalAgentConfig,
   MessageAttachment,
   SdkResumePoint,
@@ -128,15 +124,6 @@ import {
   listGroupAgentAvatarSummaries,
   type ChattableGroupAgent,
 } from "../groupAgents.js";
-import {
-  botTaskTitle,
-  findChattablePersonalAgent,
-  listPersonalAgentAvatarSummaries,
-  MAX_QUEUED_BOT_TASKS,
-  personalAgentAvatarDetail,
-  personalAgentMemoryRoot,
-  type ChattablePersonalAgent,
-} from "../personalAgents.js";
 import {
   isModelTier,
   modelTierLabel,
@@ -488,40 +475,21 @@ function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
 }
 
 
-/**
- * The avatar a chat turn actually targets, after every reach gate ran.
- *
- * `avatar` is the RUN-facing row and carries capability (a personal-agent turn
- * resolves it to the OWNER's own row); `threadAvatarId` is the THREAD-facing id
- * and carries identity (the composite `personal:<owner>:<agent>` for a bot).
- */
+/** The avatar a chat turn actually targets, after every reach gate ran. */
 export interface ChatTarget {
   externalAgent: ExternalAgentConfig | null;
   groupAgentHit: ChattableGroupAgent | null;
-  personalAgentHit: ChattablePersonalAgent | null;
   avatar: { id: string; displayName: string; alias: string; persona: string };
-  threadAvatarId: string;
-  threadAvatarLabel: string;
   viewerIsOwner: boolean;
 }
 
 /**
  * A turn that cannot start, in a transport-neutral shape: the HTTP route maps it
- * to `apiError`, the bot-task dispatcher just leaves its task queued.
+ * to `apiError`, the external task API runner re-queues its task on a 409.
  */
 export interface ChatTurnRefusal {
   status: number;
   message: string;
-  /**
-   * `active_run` is the one refusal a bot thread converts into a queued task.
-   * `task_gone` means the delegated row the caller handed us is no longer
-   * runnable (the owner cancelled it while it was being popped) — the
-   * dispatcher skips to the next item rather than treating it as contention.
-   * `repo_locked` means the conversation's working repo is open in ANOTHER
-   * conversation right now; the turn refused before writing any message or task
-   * row, so a routine firing treats it as "try again on the next tick".
-   */
-  reason?: "active_run" | "task_gone" | "repo_locked";
   /** True when the turn already wrote the user message before refusing. */
   userMessagePersisted?: boolean;
 }
@@ -561,7 +529,7 @@ function planTurnRewind(
     if (plan.anchor.kind === "queued") {
       return {
         ok: false,
-        refusal: { status: 400, message: "대기열로 보낸 메시지에는 다시 생성을 쓸 수 없습니다." },
+        refusal: { status: 400, message: "다른 응답이 진행되는 중에 저장된 메시지라 다시 생성할 수 없습니다." },
       };
     }
     return { ok: true, plan };
@@ -581,7 +549,7 @@ function planTurnRewind(
   if (plan.anchor.kind === "queued") {
     return {
       ok: false,
-      refusal: { status: 400, message: "대기열로 보낸 메시지부터는 다시 시작할 수 없습니다." },
+      refusal: { status: 400, message: "다른 응답이 진행되는 중에 저장된 메시지부터는 다시 시작할 수 없습니다." },
     };
   }
   return { ok: true, plan };
@@ -589,22 +557,16 @@ function planTurnRewind(
 
 /**
  * Work that may still write into this thread outside a live run — a rewind must
- * not cut history out from under it. A queued bot task (or a requeued API task)
- * already stored its user bubble and will not write it again, so dropping that
- * row would leave its answer without a question. A plain routine runs headless,
- * OUTSIDE the run registry, and appends its question+answer pair only when it
- * finishes — mid-rewind that pair would land between the re-run's question and
- * its answer. The live run itself is the active-run checks' job. Runs at plan
+ * not cut history out from under it. A requeued API task already stored its
+ * user bubble and will not write it again, so dropping that row would leave its
+ * answer without a question. A routine runs headless, OUTSIDE the run
+ * registry, and appends its question+answer pair only when it finishes —
+ * mid-rewind that pair would land between the re-run's question and its
+ * answer. The live run itself is the active-run checks' job. Runs at plan
  * time AND again right before the rewind is applied (synchronously, so nothing
  * can slip in between).
  */
 function rewindBusyRefusal(store: Store, conversationId: string): ChatTurnRefusal | null {
-  if (store.countQueuedBotTasks(conversationId) > 0) {
-    return {
-      status: 409,
-      message: "대기 중인 작업이 있어 지금은 다시 시작할 수 없습니다. 작업이 끝난 뒤 다시 시도해 주세요.",
-    };
-  }
   if (store.countPendingAvatarTasksForConversation(conversationId) > 0) {
     return { status: 409, message: "외부 작업이 진행 중이어서 지금은 다시 시작할 수 없습니다." };
   }
@@ -683,22 +645,13 @@ function hasVisibleImages(message: StoredMessage): boolean {
 }
 
 /**
- * Both moved to `../personalAgents.js` so the 봇 간 위임 MCP tool can share them
- * without an `agent/` → `routes/chat.js` import (that direction is a cycle —
- * see botTaskDispatchBroker.ts). Re-exported here because this route has been
- * their import path since they existed.
+ * User-facing note stored on a timed-out unattended run (an external task API
+ * run), derived from the SAME config value that armed the deadline. The SDK
+ * labels EVERY abort "Claude Code process aborted by user" (it only checks
+ * `signal.aborted`), and nobody was present to cancel an unattended task — see
+ * the routine scheduler's identical substitution.
  */
-export { botTaskTitle, MAX_QUEUED_BOT_TASKS };
-
-/**
- * User-facing note stored on a timed-out unattended run (delegated bot task,
- * bot routine, external task API run), derived from the SAME config value that
- * armed the deadline. The SDK labels EVERY abort "Claude Code
- * process aborted by user" (it only checks `signal.aborted`), and nobody was
- * present to cancel an unattended task — see the routine scheduler's identical
- * substitution.
- */
-function botTaskTimeoutMessage(timeoutMs: number): string {
+function unattendedTimeoutMessage(timeoutMs: number): string {
   return `실행 제한 시간(${formatDurationKo(timeoutMs)})을 초과해 작업이 중단되었습니다. 작업을 더 작은 단위로 나눠 다시 맡겨 주세요.`;
 }
 
@@ -713,8 +666,8 @@ export function formatDurationKo(ms: number): string {
 
 /**
  * Resolve who a chat turn is talking to and refuse every unreachable target,
- * in the ORDER the checks have always run (external → group agent → personal
- * agent → native row → image support → owner-only command).
+ * in the ORDER the checks have always run (external → group agent → native
+ * row → image support → owner-only command).
  */
 export function resolveChatTarget(args: {
   store: Store;
@@ -748,53 +701,17 @@ export function resolveChatTarget(args: {
       refusal: { status: 403, message: "그룹 에이전트가 비활성화되어 있습니다. 그룹 관리자에게 문의해 주세요." },
     };
   }
-  // Personal agent (내 봇): OWNER-only reach, and only while the owner still
-  // holds the admin role. A disabled bot gets its own 403 — the owner
-  // manages it themselves, so naming the state leaks nothing; every other
-  // miss collapses into the generic fail-closed 403 below.
-  const personalAgentHit =
-    externalAgent || groupAgentHit
-      ? null
-      : findChattablePersonalAgent(store, viewerUserId, avatarId, {
-          includeDisabled: true,
-        });
-  if (personalAgentHit && !personalAgentHit.agent.enabled) {
-    return {
-      ok: false,
-      refusal: { status: 403, message: "이 봇은 비활성화되어 있습니다. 설정 → 내 봇에서 활성화한 뒤 다시 시도해 주세요." },
-    };
-  }
   const avatar = externalAgent
     ? externalAvatarDetail(externalAgent)
     : groupAgentHit
       ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-      : // A bot turn is a FULL OWNER run, so the run-facing avatar is the
-        // OWNER's own (avatar.id = the owner's uuid) and every owner-keyed
-        // loader — plugins, knowledge repo, secrets, work repos, trust —
-        // works untouched. The bot's composite id lives in
-        // `threadAvatarId` below, never here. (types.ts personalAgent)
-        store.resolveChatAvatar(
-          viewerUserId,
-          personalAgentHit ? viewerUserId : avatarId,
-        );
+      : store.resolveChatAvatar(viewerUserId, avatarId);
   if (!avatar) {
     return {
       ok: false,
       refusal: { status: 403, message: "이 아바타와 대화할 수 없습니다." },
     };
   }
-  /**
-   * The id this THREAD is keyed by: the composite
-   * `personal:<owner>:<agent>` on a bot turn, else `avatar.id`. Everything
-   * thread-scoped — the conversation binding, the scratch workspace, the
-   * run registry, client-facing payloads — uses THIS, so a bot's history
-   * and files stay its own while the run keeps owner capability.
-   */
-  const threadAvatarId = personalAgentHit ? avatarId : avatar.id;
-  /** Chat target for audit/logs — the BOT's name on a personal turn. */
-  const threadAvatarLabel = personalAgentHit
-    ? personalAgentHit.agent.displayName
-    : avatar.displayName;
   if (externalAgent && args.hasImages) {
     return {
       ok: false,
@@ -814,9 +731,6 @@ export function resolveChatTarget(args: {
       refusal: { status: 403, message: "이 명령은 내 아바타와의 대화에서만 사용할 수 있습니다." },
     };
   }
-  // True for a bot turn by construction: the personal branch resolved
-  // `avatar` to the viewer's OWN row, and the reach gate already proved
-  // owner + admin. Keep it that way — a bot run must stay an owner run.
   const viewerIsOwner =
     !externalAgent && !groupAgentHit && viewerUserId === avatar.id;
   return {
@@ -824,10 +738,7 @@ export function resolveChatTarget(args: {
     target: {
       externalAgent,
       groupAgentHit,
-      personalAgentHit,
       avatar,
-      threadAvatarId,
-      threadAvatarLabel,
       viewerIsOwner,
     },
   };
@@ -838,18 +749,11 @@ export interface ChatTurnDeps {
   config: AppConfig;
   store: Store;
   observedModel: ObservedModelHolder;
-  /**
-   * Fired once a PERSONAL-AGENT turn's run has closed, so the delegated-task
-   * dispatcher can pick up the thread's next queued item. Injected rather than
-   * imported: `botTaskRunner` calls back into `executeChatTurn`, and a direct
-   * import here would close the cycle.
-   */
-  onBotTurnSettled?: (ownerUserId: string, conversationId: string) => void;
 }
 
 /**
  * Everything a turn needs that an HTTP request would normally supply. A
- * server-started turn (the delegated-task dispatcher) fills the same shape with
+ * server-started turn (the external task API runner) fills the same shape with
  * `undefined` for every optional selection, which the derivations below already
  * read as "use whatever is stored on the conversation".
  */
@@ -948,39 +852,23 @@ export interface ChatTurnContext {
     detail: string;
     status?: "success" | "error";
   }) => void;
-  // ---- Delegated bot tasks (내 봇) ---------------------------------------
-  // Every field below is inert unless `target.personalAgentHit` is set.
   /**
-   * The already-created `bot_tasks` row this turn executes (the dispatcher's
-   * queued item). Absent → the turn creates its own row, or resumes the
-   * thread's parked `waiting_input` one.
-   */
-  existingBotTaskId?: string;
-  /**
-   * Wall-clock budget for an UNATTENDED turn. Set only by the unattended callers:
-   * the bot-task dispatcher and bot routines pass `botTaskRunTimeoutMs`, the
-   * external task API `avatarTaskRunTimeoutMs`. An owner-typed turn has a live
-   * stop button, so it stays un-deadlined.
+   * Wall-clock budget for an UNATTENDED turn. Set only by the unattended caller,
+   * the external task API (`avatarTaskRunTimeoutMs`). An owner-typed turn has a
+   * live stop button, so it stays un-deadlined.
    */
   unattendedDeadlineMs?: number;
   /** Fall down the model tier chain on transient failures (unattended runs). */
   modelFallback?: boolean;
-  /** The user message is already stored (the queue persisted it on enqueue). */
+  /** The user message is already stored (an earlier, re-queued attempt wrote it). */
   skipUserMessagePersist?: boolean;
-  /**
-   * 봇 루틴 provenance: the routine_jobs.id this turn was fired by, stamped onto
-   * the task row this turn opens. Set only by the routine scheduler. PROVENANCE
-   * ONLY — it never changes how the turn runs; it labels the card and lets the
-   * scheduler dedupe its own queued firings.
-   */
-  routineJobId?: string;
   /**
    * The `avatar_tasks` row this turn executes, when an EXTERNAL SYSTEM submitted
    * the instruction through the owner's personal task API (`POST
    * /api/v1/avatar/tasks`). Set only by `avatarTaskRunner`. PROVENANCE, not
    * capability: the run stays a full owner run, but the SDK request is stamped
    * `externalTaskApi` so the prompt, `describe_system`, and the interactive-only
-   * tool gates (bot creation) can tell that no owner typed this turn.
+   * tool gates (share links) can tell that no owner typed this turn.
    */
   externalTaskId?: string;
 }
@@ -992,8 +880,8 @@ export interface ChatTurnHooks {
    * handshake sits. Return false to abandon the turn (the run is closed for
    * you); throwing is also safe. `info.userMessageId` is the persisted USER row
    * this run answers (the new row of a send or an edit-rewind, the re-run row of
-   * a regenerate); absent when there is none (a queued task whose row was
-   * stored at enqueue).
+   * a regenerate); absent when there is none (a re-queued task whose row an
+   * earlier attempt stored).
    */
   onRunOpen(runId: string, info?: { userMessageId?: string }): boolean;
 }
@@ -1019,15 +907,7 @@ export async function executeChatTurn(
   // A regenerate re-derives both from the STORED row it re-runs (see the rewind
   // plan below); every other turn keeps what the HTTP prelude derived.
   let { agentMessage, displayMessage } = ctx;
-  const {
-    externalAgent,
-    groupAgentHit,
-    personalAgentHit,
-    avatar,
-    threadAvatarId,
-    threadAvatarLabel,
-    viewerIsOwner,
-  } = ctx.target;
+  const { externalAgent, groupAgentHit, avatar, viewerIsOwner } = ctx.target;
   const decodedImages = ctx.images;
   // Absent (a server-started turn) reads as "keep whatever is stored", which is
   // the same null the HTTP prelude produces when the client sends nothing.
@@ -1127,9 +1007,8 @@ export async function executeChatTurn(
       refusal: {
         status: 409,
         message: activeRunMessage(activeRun.background),
-        // A bot thread QUEUES this turn instead of refusing it — nothing has
-        // been persisted yet, so the caller owns the whole enqueue.
-        reason: "active_run",
+        // Nothing has been persisted yet, so a caller that retries the turn
+        // (the task API runner) still owns the user message.
         userMessagePersisted: false,
       },
     };
@@ -1226,20 +1105,17 @@ export async function executeChatTurn(
     (viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id));
   /**
    * `onShareLink` (the avatar's create_share_link) is supplied ONLY on an
-   * interactive turn of the owner's OWN avatar: never a bot turn (queued and
-   * routine bot turns look interactive at the request level), a group-agent
-   * member thread (shared only via the group second brain), a colleague's
-   * thread, an external avatar, a turn an external system submitted through
-   * the task API, or any unattended (deadlined) run. A link is a bearer URL
-   * every signed-in user can open, so the owner must be the one asking —
-   * runPlan's registration gate is the second lock, the callback's own
-   * re-check the third.
+   * interactive turn of the owner's OWN avatar: never a group-agent member
+   * thread (shared only via the group second brain), a colleague's thread, an
+   * external avatar, a turn an external system submitted through the task API,
+   * or any unattended (deadlined) run. A link is a bearer URL every signed-in
+   * user can open, so the owner must be the one asking — runPlan's
+   * registration gate is the second lock, the callback's own re-check the third.
    */
   const shareLinkTurn =
     viewerIsOwner &&
     ownerUserId === avatar.id &&
     !groupAgentHit &&
-    !personalAgentHit &&
     !externalAgent &&
     !ctx.externalTaskId &&
     ctx.unattendedDeadlineMs === undefined;
@@ -1248,8 +1124,6 @@ export async function executeChatTurn(
   let releaseActiveRepoLock: (() => void) | null = null;
   // Group-agent runs skip the whole block: no isTrustedFor on a synthetic
   // id, no personal work-repo workspace (the run kind carries capability).
-  // Bot turns DO run it — `avatar` is the owner's own row, so the owner's
-  // registered repos and commit identity resolve exactly as usual.
   if (!externalAgent && !groupAgentHit) {
     const repoResolution = await resolveActiveWorkspaceRepo({
       store,
@@ -1278,7 +1152,6 @@ export async function executeChatTurn(
                   status: 409,
                   message:
                     "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
-                  reason: "repo_locked",
                 }
               : {
                   status: 502,
@@ -1361,11 +1234,7 @@ export async function executeChatTurn(
     // under the avatar so sessions cannot mix files by accident. Created here
     // (before the message persist) because the image staging writes into it.
     // External turns run no local workspace, so they don't get a directory.
-    const workspaceDir = workspaceDirFor(
-      config,
-      threadAvatarId,
-      conversationId,
-    );
+    const workspaceDir = workspaceDirFor(config, avatar.id, conversationId);
     if (!externalAgent) {
       fs.mkdirSync(workspaceDir, { recursive: true });
     }
@@ -1377,7 +1246,7 @@ export async function executeChatTurn(
     store.touchConversation(
       ownerUserId,
       conversationId,
-      threadAvatarId,
+      avatar.id,
       displayMessage,
       externalAgent ? { externalEndpoint: externalAgent.endpoint } : {},
     );
@@ -1437,9 +1306,9 @@ export async function executeChatTurn(
       if (!imageFileMode) {
         requestImages = saved.images;
       }
-      // A dispatched queued task skips this: the enqueue already stored the
-      // user's message, and re-adding it would double the bubble. The
-      // touchConversation above still ran, so the thread's updated_at moves.
+      // A re-queued task-API turn skips this: its earlier attempt already
+      // stored the user's message, and re-adding it would double the bubble.
+      // The touchConversation above still ran, so the thread's updated_at moves.
       if (!ctx.skipUserMessagePersist) {
         userMessageId = store.addMessage(conversationId, {
           role: "user",
@@ -1559,10 +1428,6 @@ export async function executeChatTurn(
     // restarted from this offset, so the cancel/error tails must start here
     // too or they resurrect narration the live view already moved away.
     let foldedTextOffset = 0;
-    // The model THIS run actually resolved to (fallback-aware), for the task
-    // card. Kept per-run rather than read back off `observedModel`, which is one
-    // app-wide box every concurrent run overwrites.
-    let observedRunModel: string | null = null;
     // Persisted rows AFTER the anchor that the rewind deletes (an edit's anchor
     // is replaced, not discarded) — what the avatar is told it lost.
     const rewindDiscarded = rewindPlan
@@ -1571,7 +1436,7 @@ export async function executeChatTurn(
     logger.info(
       {
         userId: ownerUserId,
-        avatarId: threadAvatarId,
+        avatarId: avatar.id,
         conversationId,
         regenerate,
         ...(rewindPlan
@@ -1599,9 +1464,9 @@ export async function executeChatTurn(
     if (racedRun) {
       releaseActiveRepoLock = null;
       // The row this turn just wrote now sits BEFORE the winner's answer, so it
-      // must never anchor a rewind (every caller that retries it — the bot
-      // queue, a routine, the task API — leaves it where it is). A rewind's own
-      // row is not written yet, and a regenerate's anchor is not this turn's.
+      // must never anchor a rewind (a caller that retries it — the task API —
+      // leaves it where it is). A rewind's own row is not written yet, and a
+      // regenerate's anchor is not this turn's.
       if (userMessageId && !rewindPlan) {
         store.markMessageQueued(userMessageId);
       }
@@ -1610,10 +1475,9 @@ export async function executeChatTurn(
         refusal: {
           status: 409,
           message: activeRunMessage(racedRun.background),
-          reason: "active_run",
           // The turn body already wrote the user message above, so a caller
-          // that turns this into a queued task must NOT persist it again. A
-          // rewind has written nothing yet (it applies just below).
+          // that retries the turn must NOT persist it again. A rewind has
+          // written nothing yet (it applies just below).
           userMessagePersisted: !rewindPlan,
         },
       };
@@ -1701,7 +1565,7 @@ export async function executeChatTurn(
       externalAgent || ctx.externalTaskId || ctx.compact ? undefined : new SteerChannel();
     openRun(runId, ownerUserId, {
       conversationId,
-      avatarId: threadAvatarId,
+      avatarId: avatar.id,
       onEvent: hooks.onEvent,
       abortController,
       steers,
@@ -1757,112 +1621,8 @@ export async function executeChatTurn(
       throw err;
     }
 
-    // ---- Delegated task bookkeeping (내 봇 threads only) ------------------
-    // Every executed turn in a bot thread IS a task row: the dispatcher hands
-    // us the queued one it popped, an owner message answering a parked question
-    // RESUMES that row, and anything else opens a new one. Best-effort start to
-    // finish — bookkeeping must never take down the turn it is describing.
-    // A box, not a bare `let`: every write happens inside publishBotTask, and a
-    // plain local would stay narrowed to `null` at the read sites below.
-    const botTask: { row: BotTask | null } = { row: null };
-    /**
-     * The ONE place a delegated-task row reaches the client. The frame is
-     * `bot_task`, NOT `task`: `task`/`task_update`/`task_end` already belong to
-     * the SDK activity relay (onTaskStart below), whose client handler keys on
-     * `data.taskId` and drops anything without one. Payload is the whole row —
-     * the client renders the card straight from it.
-     */
-    const publishBotTask = (task: BotTask | null): void => {
-      if (!task) return;
-      botTask.row = task;
-      emitRunEvent(runId, "bot_task", { task });
-    };
-    // A /compact is conversation maintenance, not delegated work: it opens no
-    // card, and it must never RESUME a task parked on a question — it answers
-    // nothing.
-    if (personalAgentHit && !ctx.compact) {
-      try {
-        const threadTasks = ctx.existingBotTaskId
-          ? []
-          : store.listBotTasksForConversation(conversationId);
-        const parked = threadTasks[threadTasks.length - 1];
-        publishBotTask(
-          ctx.existingBotTaskId
-            ? store.markBotTaskRunning(ctx.existingBotTaskId, runId)
-            : parked?.status === "waiting_input"
-              ? store.markBotTaskRunning(parked.id, runId)
-              : store.createBotTask({
-                  ownerUserId,
-                  agentId: personalAgentHit.agent.id,
-                  conversationId,
-                  title: botTaskTitle(displayMessage),
-                  requestText: displayMessage,
-                  status: "running",
-                  runId,
-                  routineJobId: ctx.routineJobId ?? null,
-                }),
-        );
-      } catch (err) {
-        logger.error(
-          { err, conversationId, runId },
-          "bot task could not be opened for this turn",
-        );
-      }
-      // The dispatcher's row would not go `running`: the owner cancelled it
-      // between the pop and this transition (markBotTaskRunning is guarded on
-      // status and answers null rather than resurrecting a closed task). Run
-      // nothing — untracked unattended work has no stop button anywhere.
-      if (ctx.existingBotTaskId && !botTask.row) {
-        closeRun(runId);
-        return {
-          ok: false,
-          refusal: {
-            status: 409,
-            message: "이미 종료된 작업입니다.",
-            reason: "task_gone",
-          },
-        };
-      }
-    }
-    /**
-     * Close the task out at a turn boundary. The DONE path re-reads the row
-     * first: the bot may have written `reported_outcome` mid-run via
-     * `mcp__personal_agent__report_task`, and `need_input` PARKS the task for
-     * the owner's answer instead of terminating it. `model` is omitted when the
-     * run never reported one, so a resume can't blank the stored value.
-     */
-    const settleBotTask = (
-      kind: "done" | "cancelled" | "failed",
-      error?: string,
-    ): void => {
-      const pending = botTask.row;
-      if (!pending) return;
-      try {
-        const model = observedRunModel ? { model: observedRunModel } : {};
-        if (kind !== "done") {
-          publishBotTask(
-            store.finishBotTask(pending.id, {
-              status: kind,
-              ...(kind === "failed" ? { error: error ?? null } : {}),
-              ...model,
-            }),
-          );
-          return;
-        }
-        const current = store.getBotTask(pending.id) ?? pending;
-        publishBotTask(
-          store.finishBotTask(pending.id, {
-            status:
-              current.reportedOutcome === "need_input" ? "waiting_input" : "done",
-            ...model,
-          }),
-        );
-      } catch (err) {
-        logger.error({ err, taskId: pending.id }, "bot task finalize failed");
-      }
-    };
-    // Unattended turn (the dispatcher started it, nobody can press stop): a hung
-    // SDK call must not pin this thread's whole queue. Owner-typed turns stay
+    // Unattended turn (the task API runner started it, nobody can press stop): a
+    // hung SDK call must not hold the thread forever. Owner-typed turns stay
     // un-deadlined — the stop button already is the deadline.
     let timedOut = false;
     const deadline = ctx.unattendedDeadlineMs
@@ -1983,12 +1743,12 @@ export async function executeChatTurn(
             : null;
         audit({
           action: "chat",
-          detail: `chat with ${threadAvatarLabel} (${response.runtime})`,
+          detail: `chat with ${avatar.displayName} (${response.runtime})`,
         });
         logger.info(
           {
             userId: ownerUserId,
-            avatarId: threadAvatarId,
+            avatarId: avatar.id,
             conversationId,
             runtime: response.runtime,
             durationMs: Date.now() - chatStart,
@@ -2044,18 +1804,7 @@ export async function executeChatTurn(
             avatar.id,
             config,
             (warn) => pluginWarnings.push(warn),
-            {
-              disabledGroupIds,
-              // Bot runs load only the knowledge-repo skills the owner granted
-              // this bot (empty = none); defaults/plugins/groups are unchanged.
-              ...(personalAgentHit
-                ? {
-                    personalAgent: {
-                      selectedSkills: personalAgentHit.agent.selectedSkills,
-                    },
-                  }
-                : {}),
-            },
+            { disabledGroupIds },
           );
       // Standing CLAUDE.md memory (personal repo always; group repos gated by the
       // toggle). Read after plugin roots ensured the clones for this turn.
@@ -2067,15 +1816,6 @@ export async function executeChatTurn(
           )
         : await loadKnowledgeRepoMemory(store, avatar.id, config, {
             disabledGroupIds,
-            // A bot's standing memory is the CLAUDE.md inside its OWN folder,
-            // never the owner's repo-root one.
-            ...(personalAgentHit
-              ? {
-                  personalAgentMemoryRoot: personalAgentMemoryRoot(
-                    personalAgentHit.agent.memoryDir,
-                  ),
-                }
-              : {}),
           });
 
       for (const warn of pluginWarnings) {
@@ -2085,21 +1825,11 @@ export async function executeChatTurn(
       const response = await runAgentStream(
         {
           message: agentMessage,
-          // A bot speaks as ITSELF while running with the OWNER's
-          // capability: the id stays the owner's (every capability key in
-          // runPlan reads it, and AgentOwner resolves commit identity from
-          // that user row) while only the conversational identity moves to
-          // the bot. `personalAgentState` carries no persona TEXT, so this
-          // is the ONLY channel a bot's persona can reach the prompt on.
-          // `??`, not `||`: an EMPTY bot alias/persona must stay empty
-          // rather than inherit the owner's — a persona-less bot must never
-          // recite its owner's persona as its own instructions.
           avatar: {
             id: avatar.id,
-            displayName:
-              personalAgentHit?.agent.displayName ?? avatar.displayName,
-            alias: personalAgentHit?.agent.alias ?? avatar.alias,
-            persona: personalAgentHit?.agent.persona ?? avatar.persona,
+            displayName: avatar.displayName,
+            alias: avatar.alias,
+            persona: avatar.persona,
           },
           // Lets in-process tools (open_repo/close_repo) key the working-repo
           // selection to this conversation.
@@ -2158,24 +1888,10 @@ export async function executeChatTurn(
                 ),
               }
             : undefined,
-          // Personal-agent run kind: IDENTITY only (prompt/self-config/
-          // describe_system). Capability stays the owner's — `avatar` above
-          // is the owner's own row and `groupAgent` must stay unset, or the
-          // run loses the owner tools this bot is meant to have.
-          personalAgent: personalAgentHit
-            ? {
-                agentId: personalAgentHit.agent.id,
-                ownerUserId: ownerUserId,
-                // Lets the bot report on ITS OWN task (report_task) without the
-                // model having to be told which row it is working. Bookkeeping,
-                // never capability — same contract as the parent field.
-                ...(botTask.row ? { taskId: botTask.row.id } : {}),
-              }
-            : undefined,
           autoApprove: true,
-          // Unattended delegated work falls down the tier chain on a transient
-          // model failure, exactly like a routine — there is no live viewer to
-          // hand the "try another model" nudge to.
+          // Unattended work (the task API) falls down the tier chain on a
+          // transient model failure, exactly like a routine — there is no live
+          // viewer to hand the "try another model" nudge to.
           ...(ctx.modelFallback ? { modelFallback: true } : {}),
           // Provenance stamp from the task runner: an EXTERNAL SYSTEM submitted
           // this instruction through the owner's task API. Capability is
@@ -2235,7 +1951,6 @@ export async function executeChatTurn(
           },
           onModel: (model) => {
             observedModel.set(model);
-            observedRunModel = model;
           },
           onSessionId: (sessionId) => {
             runSessionId = sessionId;
@@ -3360,12 +3075,12 @@ export async function executeChatTurn(
       }
       audit({
         action: "chat",
-        detail: `chat with ${threadAvatarLabel} (${response.runtime})`,
+        detail: `chat with ${avatar.displayName} (${response.runtime})`,
       });
       logger.info(
         {
           userId: ownerUserId,
-          avatarId: threadAvatarId,
+          avatarId: avatar.id,
           conversationId,
           runtime: response.runtime,
           background: turnFinalized,
@@ -3373,10 +3088,6 @@ export async function executeChatTurn(
         },
         "chat completed",
       );
-      // Settle the task BEFORE the terminal frame: `done`/`bg_end`/`cancelled`/
-      // `error` are what tell the client the run is over, and it stops reading
-      // there — a task frame behind one would only surface on the next refetch.
-      settleBotTask("done");
       if (turnFinalized) {
         // Background phase over: the visible turn and every wake-up report
         // were already persisted at their result boundaries — persisting the
@@ -3449,7 +3160,6 @@ export async function executeChatTurn(
                 resumePoint: compactKeptPoint(),
               })
             : null;
-        settleBotTask("cancelled");
         emitRunEvent(runId, "cancelled", {
           message: stopped,
           response,
@@ -3464,7 +3174,7 @@ export async function executeChatTurn(
         {
           detail,
           userId: ownerUserId,
-          avatarId: threadAvatarId,
+          avatarId: avatar.id,
           conversationId,
           durationMs: Date.now() - chatStart,
         },
@@ -3489,7 +3199,7 @@ export async function executeChatTurn(
       const userFacing = ctx.compact
         ? compactFailureText(detail)
         : timedOut
-        ? botTaskTimeoutMessage(ctx.unattendedDeadlineMs ?? 0)
+        ? unattendedTimeoutMessage(ctx.unattendedDeadlineMs ?? 0)
         : !externalAgent &&
             !config.anthropicModel &&
             isRetryableModelError(error)
@@ -3538,9 +3248,6 @@ export async function executeChatTurn(
               : undefined,
         });
       }
-      // The same Korean text the thread now carries, so the task card and the
-      // bubble never disagree about why the work stopped.
-      settleBotTask("failed", userFacing);
       emitRunEvent(runId, "error", {
         error: userFacing,
         background: turnFinalized,
@@ -3548,20 +3255,6 @@ export async function executeChatTurn(
     } finally {
       clearTimeout(deadline);
       closeRun(runId);
-      // The thread is free again: let the dispatcher pop its next queued task.
-      // AFTER closeRun, or the dispatcher's own active-run guard would see this
-      // run still holding the conversation and skip. Fire-and-forget, and it
-      // must never throw into a finalize that already succeeded.
-      if (personalAgentHit) {
-        try {
-          deps.onBotTurnSettled?.(ownerUserId, conversationId);
-        } catch (err) {
-          logger.error(
-            { err, conversationId },
-            "bot task dispatcher hand-off failed",
-          );
-        }
-      }
     }
     // Outer finally: release the per-clone lock on EVERY exit — normal end, the
     // attachRunClient early-return, OR a throw anywhere in the prelude above
@@ -3578,7 +3271,6 @@ export function createChatRouter({
   store,
   observedModel,
   auditAs,
-  onBotTurnSettled,
 }: RouterDeps): Router {
   const router = Router();
   const viewerGroupIds = (req: AuthenticatedRequest): Set<string> =>
@@ -3608,10 +3300,6 @@ export function createChatRouter({
       const externalImageIds = store.listExternalAvatarImageIds();
       const avatars = [
         ...store.listPublishedAvatars(req.user!.id),
-        // The viewer's OWN personal agents (내 봇, enabled only). Nobody else
-        // ever sees them, and the helper returns [] unless the viewer still
-        // holds the admin role (the phase-1 feature gate).
-        ...listPersonalAgentAvatarSummaries(store, req.user!.id),
         // Shared group agents of the viewer's groups (enabled only) — reach is
         // membership-scoped by the store query, like the native list above.
         ...listGroupAgentAvatarSummaries(store, req.user!.id),
@@ -3640,19 +3328,11 @@ export function createChatRouter({
       const groupAgentHit = external
         ? null
         : findChattableGroupAgent(store, req.user!.id, req.params.id);
-      // Personal agents come last and only for their own owner; a disabled one
-      // 404s here exactly like a disabled group agent (discovery hides it).
-      const personalAgentHit =
-        external || groupAgentHit
-          ? null
-          : findChattablePersonalAgent(store, req.user!.id, req.params.id);
       const avatar = external
         ? externalAvatarDetail(external)
         : groupAgentHit
           ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-          : personalAgentHit
-            ? personalAgentAvatarDetail(personalAgentHit.agent)
-            : store.getAvatar(req.user!.id, req.params.id);
+          : store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
         return;
@@ -3682,17 +3362,11 @@ export function createChatRouter({
       const groupAgentHit = external
         ? null
         : findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const personalAgentHit =
-        external || groupAgentHit
-          ? null
-          : findChattablePersonalAgent(store, req.user!.id, req.params.id);
       const avatar = external
         ? externalAvatarDetail(external)
         : groupAgentHit
           ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-          : personalAgentHit
-            ? personalAgentAvatarDetail(personalAgentHit.agent)
-            : store.getAvatar(req.user!.id, req.params.id);
+          : store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
         return;
@@ -3718,42 +3392,6 @@ export function createChatRouter({
         );
         const sources = await groupKnowledgeRepoSkillSources(ctx ? [ctx] : []);
         res.json({ skills: await listSkillsInRoots(sources) });
-        return;
-      }
-      if (personalAgentHit) {
-        // What a bot RUN actually loads: the bundled defaults and the owner's
-        // plugin repos unchanged (a bot run is a full owner run there), but the
-        // owner's PERSONAL knowledge repo narrowed to the skills they granted
-        // this bot — empty grants mean no knowledge-repo skills at all. Resolve
-        // against the owner's OWN avatar row: `avatar` here carries the
-        // composite `personal:` id, which no skill/plugin loader can key on.
-        const owner = store.getAvatar(req.user!.id, req.user!.id);
-        if (!owner) {
-          res.json({ skills: [] });
-          return;
-        }
-        const { sourced: ownerSources } = await resolveAvatarSkillSources(
-          store,
-          owner,
-          config,
-          false,
-        );
-        // Re-resolve the personal repo under the bot's allowlist rather than
-        // filtering resolved roots by name: `selected` is the SAME filter the
-        // run applies, so the panel can never advertise a skill the bot would
-        // not load.
-        const granted = personalAgentHit.agent.selectedSkills;
-        const ctx = knowledgeRepoContextFor(store, owner.id, config);
-        const botKnowledgeSources =
-          granted.length > 0 && ctx
-            ? await knowledgeRepoSkillSources({ ...ctx, selected: granted })
-            : [];
-        res.json({
-          skills: await listSkillsInRoots([
-            ...ownerSources.filter((s) => s.source !== KNOWLEDGE_REPO_SOURCE),
-            ...botKnowledgeSources,
-          ]),
-        });
         return;
       }
       const { sourced } = await resolveAvatarSkillSources(
@@ -3783,14 +3421,12 @@ export function createChatRouter({
       if (!external) {
         const avatar =
           findChattableGroupAgent(store, req.user!.id, req.params.id) ??
-          findChattablePersonalAgent(store, req.user!.id, req.params.id) ??
           store.getAvatar(req.user!.id, req.params.id);
         if (!avatar) {
           apiError(res, 404, "아바타를 찾을 수 없습니다.");
           return;
         }
-        // Native, group and personal agents all use the bootstrap model-tier
-        // picker (a bot's own tier default rides its AvatarSummary instead).
+        // Native + group agents both use the bootstrap model-tier picker.
         res.json({ models: [], defaultModel: null });
         return;
       }
@@ -4234,8 +3870,7 @@ export function createChatRouter({
         apiError(res, resolved.refusal.status, resolved.refusal.message);
         return;
       }
-      const { externalAgent, personalAgentHit, avatar, threadAvatarId, viewerIsOwner } =
-        resolved.target;
+      const { externalAgent, avatar, viewerIsOwner } = resolved.target;
       // A gateway avatar is stateless (the full text history rides every turn),
       // so there is no session of ours to compact.
       if (compact && externalAgent) {
@@ -4323,93 +3958,12 @@ export function createChatRouter({
         req.user!.id,
         conversationId,
       );
-      if (existingAvatarId && existingAvatarId !== threadAvatarId) {
+      if (existingAvatarId && existingAvatarId !== avatar.id) {
         apiError(res, 409, "이 대화는 다른 아바타의 대화입니다.");
         return;
       }
-      /**
-       * A 내 봇 thread QUEUES instead of refusing: the whole point of delegating
-       * is that the owner can hand over the next piece of work without waiting
-       * for the current one. The message is persisted NOW (so the thread reads
-       * in the order it was typed) and a `queued` task carries the replay text
-       * the dispatcher will run once the active run settles.
-       *
-       * `userMessagePersisted` distinguishes the two refusal sites: the
-       * pre-flight check has written nothing yet, the raced re-check already
-       * wrote the user turn.
-       */
-      const queueBotTurn = (refusal: ChatTurnRefusal): void => {
-        if (compact) {
-          // Queued, it would summarize the session the running turn is still
-          // writing — and the owner wants the context freed now, not later.
-          apiError(res, 409, "봇이 작업 중일 때는 /compact를 쓸 수 없어요. 작업이 끝난 뒤 다시 시도해 주세요.");
-          return;
-        }
-        if (regenerate || rewindFromMessageId !== undefined) {
-          // Re-running a turn against a busy bot has no queue semantics — the
-          // answer it would replace is still being written. A rewind neither:
-          // it would cut history out from under the run that is writing it.
-          apiError(res, refusal.status, refusal.message);
-          return;
-        }
-        if (decodedImages.length > 0) {
-          if (refusal.userMessagePersisted) {
-            // The bytes are already on the stored bubble; queueing would run the
-            // text alone and silently drop them. Keep the plain refusal.
-            apiError(res, refusal.status, refusal.message);
-            return;
-          }
-          apiError(
-            res,
-            400,
-            "봇이 작업 중일 때는 이미지 없이 텍스트만 보낼 수 있어요. 작업이 끝난 뒤 다시 시도해 주세요.",
-          );
-          return;
-        }
-        if (store.countQueuedBotTasks(conversationId) >= MAX_QUEUED_BOT_TASKS) {
-          apiError(
-            res,
-            429,
-            `이 봇의 대기열이 가득 찼습니다(최대 ${MAX_QUEUED_BOT_TASKS}개). 진행 중인 작업이 끝난 뒤 다시 시도해 주세요.`,
-          );
-          return;
-        }
-        if (!refusal.userMessagePersisted) {
-          store.touchConversation(
-            req.user!.id,
-            conversationId,
-            threadAvatarId,
-            displayMessage,
-          );
-          store.addMessage(conversationId, {
-            role: "user",
-            content: displayMessage,
-            // Written while the active run is still going — it lands BEFORE
-            // that run's answer, so it can never anchor a rewind.
-            kind: "queued",
-          });
-        }
-        const task = store.createBotTask({
-          ownerUserId: req.user!.id,
-          agentId: personalAgentHit!.agent.id,
-          conversationId,
-          title: botTaskTitle(displayMessage),
-          requestText: displayMessage,
-          status: "queued",
-        });
-        // Plain JSON, never SSE: there is no run to stream yet. The client shows
-        // the queued card and picks the run up through /api/chat/runs when the
-        // dispatcher starts it.
-        res.status(202).json({ queued: true, task });
-        // Close the enqueue race: the run we deferred to may have settled
-        // between its refusal and this insert, in which case its own settle hook
-        // already looked and found an empty queue. Poking the dispatcher again
-        // is free — it no-ops while a run still holds the thread.
-        onBotTurnSettled?.(req.user!.id, conversationId);
-      };
-
       const outcome = await executeChatTurn(
-        { config, store, observedModel, onBotTurnSettled },
+        { config, store, observedModel },
         {
           ownerUserId: req.user!.id,
           ownerDisplayName: req.user!.displayName,
@@ -4446,7 +4000,7 @@ export function createChatRouter({
             }
             emitRunEvent(runId, "open", {
               conversationId,
-              avatarId: threadAvatarId,
+              avatarId: avatar.id,
               runId,
               // The persisted row this run answers: the client adopts it as its
               // optimistic bubble's id (a later rewind names rows by server id).
@@ -4457,10 +4011,6 @@ export function createChatRouter({
         },
       );
       if (!outcome.ok) {
-        if (personalAgentHit && outcome.refusal.reason === "active_run") {
-          queueBotTurn(outcome.refusal);
-          return;
-        }
         apiError(res, outcome.refusal.status, outcome.refusal.message);
       }
     },
