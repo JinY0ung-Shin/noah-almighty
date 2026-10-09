@@ -387,8 +387,8 @@ The notes arrive as the next user message, `On the canvas "…" (id: …), The u
 `- <id>: <value>` line per control (empty = no note). Apply ALL of them, then ONE rebuild (when they change a lot of
 Korean text, `check --profile both` first — §5, §6) and the next round. An all-empty submission ends the review:
 say so in one line, no rebuild. A message with an older round's ids is a resend of notes already applied: do not
-apply them again. Without the canvas tool (a group-agent chat, or the owner has not enabled the experimental
-`canvas` feature), list the slides in your reply and invite `번호: 요청` lines in the chat. To let the user pick the
+apply them again. Without the canvas tool (a group-agent chat, or a conversation whose canvas tool group is
+turned off), list the slides in your reply and invite `번호: 요청` lines in the chat. To let the user pick the
 look, check two or three fitting themes on the same slides (one copy of the deck folder per theme, `--only
 01-cover 02-…`) and show those renders, from each copy's `.build/check/<profile>/html/`, side by side on the canvas.
 

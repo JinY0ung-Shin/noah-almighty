@@ -126,7 +126,7 @@ The 5-axis UI audit + fix pass landed (see DESIGN.md §5 item 9). Deliberately N
   Define `.empty` base + modifier like §4.2. Low value until a new empty state is added.
 - **risk:** low · **effort:** S · **breaking:** no
 
-### U5 — CanvasPanel remaining glyph buttons
+### U5 — Side panel (SidePanel/CanvasTab) remaining glyph buttons
 - `›` `‹` (collapse/expand), `⤢` (fullscreen), `−`/`+` (zoom) are text glyphs; Icon set lacks
   maximize/zoom icons. Add icons to `lib/icons.ts`, swap, and verify the 28px boxes optically.
 - **risk:** low · **effort:** S · **breaking:** no
@@ -196,9 +196,9 @@ no client change (see [`architecture/pptx-converter.md`](architecture/pptx-conve
 built:
 
 ### PC1 — Client polish for converter previews (none needed for correctness)
-- **Files:** `src/client/src/components/FilePreviewPanel.svelte`, `panelSlides` (`views/ChatView.svelte`,
+- **Files:** `src/client/src/components/FileTab.svelte`, `panelSlides` (`views/ChatView.svelte`,
   `lib/bubbleSegments.ts`).
-- **What (four optional fixes):** (a) append slides that arrive late to an already-open panel; (b) prefer
+- **What (four optional fixes):** (a) append slides that arrive late to an already-open file tab; (b) prefer
   the stamped slides (`parentId` = the card) in `panelSlides`; (c) the status line's handling of hidden
   attachments; (d) empty-state copy when the renders failed.
 - **Why deferred:** the existing hidden-image + `parentId` shape already renders any aspect ratio and size,

@@ -1,6 +1,6 @@
-// The owner's 공유 링크 dialog for ONE deck card, and the file-preview panel
-// button that hands the card to ChatView's single dialog instance (the panel
-// unmounts under a review canvas — that path is pinned in
+// The owner's 공유 링크 dialog for ONE deck card, and the deck tab's (FileTab)
+// button that hands the card to ChatView's single dialog instance (a review
+// canvas takes the side panel mid-create — that path is pinned in
 // svelte-chat-transcript). The dialog is a PORTALED Modal: it inerts everything
 // else under <body>, App's ConfirmationDialog and Toasts included, so a
 // confirmAction/notify raised from it would mount inert and hidden underneath
@@ -20,7 +20,7 @@ vi.mock("../src/client/src/lib/state.js", async (importOriginal) => ({
   notify: vi.fn(),
 }));
 
-import FilePreviewPanel from "../src/client/src/components/FilePreviewPanel.svelte";
+import FileTab from "../src/client/src/components/FileTab.svelte";
 import ShareLinkDialog from "../src/client/src/components/ShareLinkDialog.svelte";
 import dialogSource from "../src/client/src/components/ShareLinkDialog.svelte?raw";
 import { confirmAction, confirmation } from "../src/client/src/lib/confirm.js";
@@ -369,7 +369,7 @@ describe("ShareLinkDialog", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* entry point: the file-preview panel                                 */
+/* entry point: the deck's side-panel tab                              */
 /* ------------------------------------------------------------------ */
 
 function paneWith(attachment: MessageAttachment, over: Partial<ChatPane> = {}): ChatPane {
@@ -390,17 +390,22 @@ function paneWith(attachment: MessageAttachment, over: Partial<ChatPane> = {}): 
     livePlugins: [],
     groupKnowledgeOff: [],
     canvases: [],
-    filePreview: { attachment, slides: [] },
+    fileTabs: [{ attachment, slides: [] }],
+    sideTab: { kind: "file", id: attachment.id },
     ...over,
   } as unknown as ChatPane;
 }
 
-describe("FilePreviewPanel 공유 링크", () => {
+function tabProps(attachment: MessageAttachment, over: Partial<ChatPane> = {}) {
+  return { pane: paneWith(attachment, over), file: { attachment, slides: [] }, active: true };
+}
+
+describe("FileTab 공유 링크", () => {
   it("offers 공유 링크 next to 다운로드 on a PPTX card and hands the card to onShare", async () => {
     stubFetch();
     const onShare = vi.fn();
-    const { container } = render(FilePreviewPanel, { props: { pane: paneWith(DECK), onShare } });
-    const actions = container.querySelector(".file-preview-actions")!;
+    const { container } = render(FileTab, { props: { ...tabProps(DECK), onShare } });
+    const actions = container.querySelector(".file-tab .canvas-toolbar")!;
     const share = within(actions as HTMLElement).getByRole("button", { name: "공유 링크" }) as HTMLButtonElement;
     expect(share.disabled).toBe(false);
     // Right before the download link.
@@ -408,15 +413,16 @@ describe("FilePreviewPanel 공유 링크", () => {
     await fireEvent.click(share);
     expect(onShare).toHaveBeenCalledTimes(1);
     expect(onShare).toHaveBeenCalledWith(DECK);
-    // No dialog of the panel's own: ChatView's single instance opens instead,
-    // so a canvas that clears the preview cannot take an open dialog with it.
+    // No dialog of the tab's own: ChatView's single instance opens instead, so
+    // a tab that unmounts cannot take an open dialog with it.
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(calls).toEqual([]);
   });
 
   it("disables it while the card is still streaming, and says why", async () => {
-    const pane = paneWith(DECK, { streaming: true, liveAttachments: [DECK] });
-    const view = render(FilePreviewPanel, { props: { pane } });
+    const props = tabProps(DECK, { streaming: true, liveAttachments: [DECK] });
+    const pane = props.pane;
+    const view = render(FileTab, { props });
     const share = screen.getByRole("button", { name: "공유 링크" }) as HTMLButtonElement;
     expect(share.disabled).toBe(true);
     expect(share.title).toBe("응답이 끝난 뒤 만들 수 있습니다.");
@@ -425,18 +431,18 @@ describe("FilePreviewPanel 공유 링크", () => {
   });
 
   it("stays enabled while a LATER turn streams (the card itself is stored)", () => {
-    render(FilePreviewPanel, { props: { pane: paneWith(DECK, { streaming: true, liveAttachments: [] }) } });
+    render(FileTab, { props: tabProps(DECK, { streaming: true, liveAttachments: [] }) });
     expect((screen.getByRole("button", { name: "공유 링크" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("is absent for other file types and in a group agent's thread", async () => {
     const pdf: MessageAttachment = { id: "file-2", kind: "file", mediaType: "application/pdf", name: "보고.pdf" };
-    const view = render(FilePreviewPanel, { props: { pane: paneWith(pdf) } });
+    const view = render(FileTab, { props: tabProps(pdf) });
     expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
     const groupPane = paneWith(DECK, {
       avatar: { id: "group:g1:a1", username: "team", displayName: "팀 에이전트", groupAgent: { groupId: "g1", groupName: "팀" } } as any,
     });
-    await view.rerender({ pane: groupPane });
+    await view.rerender({ pane: groupPane, file: { attachment: DECK, slides: [] } });
     expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
   });
 });

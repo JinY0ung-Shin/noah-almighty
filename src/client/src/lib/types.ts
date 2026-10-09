@@ -233,21 +233,49 @@ export interface ChatPane {
   /** Visual-canvas artifacts shown in this conversation (#50). */
   canvases: PaneCanvas[];
   /**
-   * File attachment opened in the right-side preview panel (slides = the same
-   * message's hidden slide PNGs). Takes the canvas panel's slot while open;
-   * null/undefined = closed.
+   * Files opened as tabs of the right-side panel, next to the canvases (a
+   * file-card click; a live .drawio share opens one by itself). Live-only: a
+   * reload or another conversation starts with none.
    */
-  filePreview?: {
-    attachment: import("../../../server/types.js").MessageAttachment;
-    slides: import("../../../server/types.js").MessageAttachment[];
-  } | null;
-  /** Which canvas is currently shown in the side panel (artifact id). */
-  activeCanvasId?: string | null;
+  fileTabs?: PaneFileTab[];
+  /** The selected side-panel tab; null/undefined = the default (lib/sidePanel `resolveSideTab`). */
+  sideTab?: SideTabRef | null;
+  /**
+   * `false` once the viewer picks a tab themselves: what the avatar shows next
+   * then gets a dot (`sideUnseen`) instead of taking the panel over. A send
+   * re-arms it (undefined = following).
+   */
+  sideFollow?: boolean;
+  /** Tab keys (lib/sidePanel `tabKey`) of tabs that changed while another one showed. */
+  sideUnseen?: string[];
+  /**
+   * Highest canvas/file frame id this pane already applied, per run. The server
+   * replays a run's whole log on every (re)attach; a replayed frame rebuilds
+   * state but never re-selects a tab, re-opens a closed file or re-marks a dot.
+   */
+  sideSeen?: { runId: string; through: number } | null;
+  /**
+   * One-shot: the side panel must leave its collapsed strip (an ask for input,
+   * a file the viewer opened). SidePanel consumes and clears it.
+   */
+  sideExpand?: boolean;
   /** Whether the viewer is pinned to the transcript bottom (intent-based follow). */
   stickBottom?: boolean;
   /** Last assistant turn's token usage, for the composer badge. */
   usage?: import("../../../server/types.js").AgentUsage | null;
   abortController?: AbortController | null;
+}
+
+/** A file open in the right-side panel; slides = the same message's hidden slide PNGs. */
+export interface PaneFileTab {
+  attachment: import("../../../server/types.js").MessageAttachment;
+  slides: import("../../../server/types.js").MessageAttachment[];
+}
+
+/** One tab of the right-side panel: a canvas (artifact id) or an open file (attachment id). */
+export interface SideTabRef {
+  kind: "canvas" | "file";
+  id: string;
 }
 
 /**

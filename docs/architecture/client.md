@@ -194,9 +194,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   so they surface on the first view change); `handleSessionExpired` keeps a `#/share/` hash — and only that
   one — so the deck reopens right after the next login.
 - **`ShareLinkDialog` never calls `confirmAction` or `notify`.** ChatView owns the ONE instance — the chat
-  card's link button and the file-preview panel's 공유 링크 (`FilePreviewPanel`'s `onShare` callback) both
-  open it there, because the panel unmounts whenever a canvas asking for input clears `pane.filePreview`
-  and would take an open dialog with it, mid-create included. It is a portaled Modal (mounted inside the
+  card's link button and the deck tab's 공유 링크 (`FileTab`'s `onShare` callback) both open it there,
+  because a tab unmounts when it is closed (and the side panel with its last tab) and would take an open
+  dialog with it, mid-create included. It is a portaled Modal (mounted inside the
   chat view, a fixed overlay would sit in that view's stacking contexts), and a portaled modal inerts
   everything else under `<body>` — App's ConfirmationDialog and Toasts included, so either call would
   mount inert and hidden underneath. Revoke confirms inline; errors render in the card. jsdom ignores
@@ -211,12 +211,59 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   text-named button never keeps "복사됨" as its name; the dialog's 복사 is named `공유 링크 복사`.
 - **Link controls appear on PPTX cards only, never in a group-agent pane** (`avatar.groupAgent` or a
   `group:` id), and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
-  the server could find; `FilePreviewPanel` disables its button with a title instead).
+  the server could find; `FileTab` disables its button with a title instead).
 - **`panelSlides` IS the shared `cardSlideAttachments`**: the card's stamped renders when there are any,
   otherwise the legacy unstamped ones — never both (the deck-review loop publishes unstamped hidden canvas
   renders in the same turn as the deck, and mixing them showed every slide twice).
-- **`handleCanvas` clears `pane.filePreview` when a canvas WITH controls arrives**, so a review form is
-  never hidden behind the file preview (clicking the card reopens it).
+- **A canvas WITH controls always takes the side panel** (`handleCanvas` → `revealSideTab` with `force`),
+  so a review form is never hidden behind the deck tab the owner is reading; the deck's tab stays open
+  beside it.
+
+## Side panel: canvases + opened files as ONE tab strip
+- **One frame, not two panels taking turns.** `SidePanel.svelte` owns the width (ONE key,
+  `canvasPanelWidth`; the old `filePanelWidth` only seeds it), the collapse state and the tab strip;
+  `lib/sidePanel.ts` `sideTabs` is the single order (the pane's canvases, then `pane.fileTabs` in open
+  order) for the strip, its arrow keys and `neighborTab` (the fallback when the shown tab goes away).
+  Before the merge a `.drawio` preview and a canvas swapped the slot as two differently built panels with
+  their own widths, and the swap UNMOUNTED the other one — a half-typed canvas answer was lost.
+- **Every tab stays mounted** (the CLIENT CLAUDE.md always-mount rule). `CanvasTab` drops only its card
+  DOM while hidden — typed control/edit values live in its script state — so a hidden tab never adds a
+  second iframe/svg to the panel. It renders only while it (or its fullscreen view) shows and only when
+  type/content/theme changed: the `canvas` prop counts as changed on EVERY store write (legacy props treat
+  objects as always new), so an unguarded render ran DOMPurify — or all of mermaid/Vega — per keystroke for
+  every tab. A refinement in place re-seeds an UNTOUCHED edit draft (an edited one stays) and adds defaults
+  for new control ids while re-used ids keep what was typed (a SENT draft counts as untouched, so the
+  avatar's reply version replaces it). **The fullscreen stage is portaled to `<body>`**: `.canvas-panel`'s
+  backdrop-filter is the containing block of every fixed-position descendant, so inside the panel
+  "fullscreen" covered only the panel (and a hidden tabpanel hid it outright). It stays open when the
+  avatar shows another tab; when the restore to its ⤢ misses, closing it focuses the card's new ⤢ (tab
+  shown again) or else the shown tab — never `<body>`. `FileTab` keeps
+  its DOM (the draw.io viewer has no `destroy()`): it paints only into a body that has a width (hidden tab
+  or collapsed panel = 0) and its ResizeObserver repaints (debounced) when the width changes —
+  `.canvas-body` reserves its scrollbar gutter, so a tall diagram's scrollbar cannot flip that width.
+- **Selection** = `pane.sideTab`; `null` means the default (`resolveSideTab`: the latest canvas still
+  `pending`, else the latest canvas, else the latest file; answering or skipping a default-shown ask pins
+  it first, so the panel does not jump once `pending` clears). **What the avatar shows takes the panel while the pane FOLLOWS** (`sideFollow` undefined/true);
+  a pick by the viewer (`selectSideTab`, a file-card `openFileTab`) stops following, and every send
+  re-arms it (next to `stickBottom`). Not following → the viewer's tab stays and the new one gets a dot
+  (`sideUnseen`, tab keys); `revealSideTab` pins the CURRENT tab first, because a new last canvas would
+  otherwise become the default and take the panel anyway. A canvas WITH controls is the exception — it
+  always takes the panel and sets the one-shot `sideExpand`, which SidePanel consumes to leave the
+  collapsed strip WITHOUT persisting it (a file-card click sets it too, and so does a live `.drawio` the
+  pane follows: its preview never hid behind the strip before the merge). The collapsed strip carries a dot (and says so in
+  its aria-label) while a tab needs a look or the shown tab changed since the panel was folded.
+- **A replayed run log never re-opens, re-selects or re-counts.** The server replays a run's WHOLE log on
+  every (re)attach, so `pane.sideSeen` is a per-run watermark of the highest canvas/file frame id the pane
+  applied, and `attachActiveRun` passes the run snapshot's `lastEventId` as `seenThrough`: what the run
+  logged before the pane attached is history. A replayed frame still rebuilds state (content, pending,
+  ids) but never selects a tab, re-opens a `.drawio` tab the viewer closed, marks a dot or bumps the
+  client-side version count. Frames without a numeric id (tests) count as new. With nothing picked, the
+  default prefers the latest canvas still `pending`, so a pane returning to a parked run shows the ask —
+  even one that refined an older canvas in place — and moves on once a replayed `prompt_resolved` clears it.
+- **Deleting a canvas is its own confirmed action** (CanvasTab's trash → `confirmAction` → `deleteCanvas`,
+  which cancels a parked ask first). The strip's × only ever closes a FILE tab, which its card reopens.
+- **Split view keeps file cards as downloads** and the live `.drawio` auto-open single-pane only: the one
+  side panel serves the ACTIVE pane, and a tab opened unasked in another pane would surface later.
 
 ## Client ↔ server contracts mirrored by hand
 - No shared module across the TS/Svelte ↔ server boundary, so the client re-implements several server
@@ -258,7 +305,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `applyLoadedConversation` MERGES a re-read by id (server rows decide membership and order; a matched
   row keeps its `clientKey` and an activity snapshot the server does not have yet). A regenerate never
   adopts (a stale tab's server may re-run another row) — the run-end re-read settles its ids.
-  At `open` a rewind also closes a file preview of a dropped file and refetches canvases (keeping ones
+  At `open` a rewind also closes the side-panel tabs of dropped files and refetches canvases (keeping ones
   this run already showed) — once, replay-safe.
 - **The activity snapshot is WHITELISTED server-side.** The client seals the live tree and PUTs it to
   `/api/messages/:id/activity`, and `sanitizeActivity` (`routes/chat.ts`) rebuilds every agent/tool/task
@@ -376,10 +423,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **`App.svelte`의 모달 DOM 순서가 스택킹을 결정한다** — 전부 같은 `--z-modal`이라
   `ConfirmationDialog`가 마지막이어야 다른 모달 위에 그려진다. 순서 변경 금지(DESIGN.md §4.4).
 - **모달 동작(포커스 트랩·inert·초기 포커스·복원)은 `lib/modalBehavior.ts` 공유 모듈** —
-  `Modal.svelte`/`PromptModal.svelte`/`CanvasPanel.svelte`(canvas-fs)가 공용. PromptModal 루트
+  `Modal.svelte`/`PromptModal.svelte`/`CanvasTab.svelte`(canvas-fs)가 공용. PromptModal 루트
   인스턴스는 Escape=거부·백드롭 닫기 없음(의도), pane 인스턴스는 non-modal(aria-modal/inert 없음).
 - **테마 반응성:** `lib/theme.ts`의 `theme` 스토어는 `applyTheme()`만 발행하는 single-writer.
-  캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasPanel의 Vega/mermaid)는 이 스토어를
+  캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasTab의 Vega/mermaid)는 이 스토어를
   구독해 재스타일한다 — `data-theme`을 init에서 한 번만 읽는 패턴으로 되돌리면 토글 시 색이 낡는다.
 - **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어
   `decision_reason`, SDK/진단용). 클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는

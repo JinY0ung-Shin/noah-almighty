@@ -42,7 +42,7 @@
 | Card lookup over persisted messages | `store.listMessageAttachments` / `store.findCardMessageAttachments` (`store/conversations.ts`) |
 | Avatar host callback | `onShareLink` in `executeChatTurn` (`routes/chat.ts`) |
 | Avatar tool + gates + metacognition | `agent/fileOutputTools.ts` (`create_share_link`), `agent/runPlan.ts` (`shareLinkToolActive`), `agent/promptBuilder.ts` (`shareLinkSection`), `agent/systemTools.ts` (describe_system lines), `agent/systemManual.ts` (`files-canvas` topic) |
-| Client | `lib/shareLinks.ts`, `views/ShareView.svelte`, `components/{SlidePresenter,ShareLinkDialog,SettingsShareLinks}.svelte`, entry points in `FilePreviewPanel.svelte` / `ChatView.svelte` |
+| Client | `lib/shareLinks.ts`, `views/ShareView.svelte`, `components/{SlidePresenter,ShareLinkDialog,SettingsShareLinks}.svelte`, entry points in `FileTab.svelte` (the deck's side-panel tab) / `ChatView.svelte` |
 
 ## Token, link, viewer tickets
 - **Token** = `base64url(HMAC-SHA256(SESSION_SECRET, "noah-share-link:v2:" + linkId + ":" + token_salt))` —
@@ -209,12 +209,12 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 
 ## Client
 - **Entry points** (PPTX cards only; never in a group-agent pane): the `공유 링크` button next to 다운로드
-  in `FilePreviewPanel` (disabled with `응답이 끝난 뒤 만들 수 있습니다.` while the card is still live on a
-  streaming turn), and a sibling `link` icon button beside a PERSISTED chat card (`ChatView`
+  in the deck's side-panel tab (`FileTab`; disabled with `응답이 끝난 뒤 만들 수 있습니다.` while the card is
+  still live on a streaming turn), and a sibling `link` icon button beside a PERSISTED chat card (`ChatView`
   `attachmentCards`; the card is itself a button, so the pair is one flex item) — the only path in split
-  view, where a card click downloads. Both entry points open ChatView's single `ShareLinkDialog` (the
-  panel hands the card up through its `onShare` prop), so a review canvas that clears the file preview
-  never closes an open dialog.
+  view, where a card click downloads. Both entry points open ChatView's single `ShareLinkDialog` (the tab
+  hands the card up through its `onShare` prop), so neither a review canvas taking the panel nor the tab
+  unmounting (closed, or the panel losing its last tab) ever closes an open dialog.
 - **`ShareLinkDialog`** is a portaled Modal and therefore NEVER calls `confirmAction` or `notify` (a
   portaled modal inerts everything else under `<body>`, including App's ConfirmationDialog and Toasts):
   revoke confirms inline, errors render in the card. States: loading → none (1일 / 7일(기본) / 30일, the

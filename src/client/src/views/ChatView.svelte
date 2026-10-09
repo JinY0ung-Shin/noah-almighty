@@ -2,11 +2,10 @@
   import { afterUpdate, onDestroy, onMount, tick } from "svelte";
   import ActivityTree from "../components/ActivityTree.svelte";
   import AvatarImage from "../components/AvatarImage.svelte";
-  import CanvasPanel from "../components/CanvasPanel.svelte";
-  import FilePreviewPanel from "../components/FilePreviewPanel.svelte";
   import Icon from "../components/Icon.svelte";
   import PromptModal from "../components/PromptModal.svelte";
   import ShareLinkDialog from "../components/ShareLinkDialog.svelte";
+  import SidePanel from "../components/SidePanel.svelte";
   import { activePane, appState, newId, notify, readState, updateState } from "../lib/state";
   import {
     PLUGIN_STATUS_LABELS,
@@ -19,6 +18,7 @@
     isRewindAnchor,
     messageKey,
     newChat,
+    openFileTab,
     regenerate,
     respondPlanReview,
     selectConversation,
@@ -48,6 +48,7 @@
   import { formatFileSize, formatUsageLabel, renderMarkdown, renderMarkdownCached, timeLabel } from "../lib/format";
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
+  import { hasSideTabs } from "../lib/sidePanel";
   import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
@@ -808,19 +809,20 @@
 
   // The card whose share-link dialog is open; null = closed. The dialog
   // portals itself, so one instance serves every pane (split view included —
-  // there the card click downloads, and this is the only way to a link). The
-  // file-preview panel's 공유 링크 opens THIS instance too (its onShare): the
-  // panel unmounts whenever a canvas asking for input takes the side slot, and
-  // a dialog rendered inside it would vanish with it, mid-create included.
+  // there the card click downloads, and this is the only way to a link). A deck
+  // tab's 공유 링크 in the side panel opens THIS instance too (its onShare): the
+  // tab unmounts when it is closed (and the panel with its last tab), and a
+  // dialog rendered inside it would vanish with it, mid-create included.
   let shareTarget: { conversationId: string; attachment: MessageAttachment } | null = null;
 
   function openShareDialog(item: ChatPane, att: MessageAttachment): void {
     shareTarget = { conversationId: item.conversationId, attachment: att };
   }
 
-  // File-card click: open the right-side preview panel (slides + download
-  // button). Split view has no side-panel slot, so it keeps the direct
-  // download instead.
+  // File-card click: open the file as a tab of the right-side panel (slides +
+  // download), next to the conversation's canvases. Split view keeps the
+  // direct download: its panes are narrow, and the one side panel serves only
+  // the ACTIVE pane.
   function openFilePreview(item: ChatPane, att: MessageAttachment, source: MessageAttachment[] | undefined): void {
     if (readState().chatPanes.length > 1) {
       const a = document.createElement("a");
@@ -831,11 +833,7 @@
       a.remove();
       return;
     }
-    const slides = panelSlides(source, att);
-    updateState((state) => {
-      const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.filePreview = { attachment: att, slides };
-    });
+    openFileTab(item.id, att, panelSlides(source, att));
   }
 
   /* ---- slash autocomplete ---- */
@@ -2214,13 +2212,11 @@
         </section>
       {/each}
     </div>
-    <!-- Same side-panel slot as the single-pane branch, for the ACTIVE pane:
+    <!-- Same side panel as the single-pane branch, for the ACTIVE pane:
          without it a canvas created while split is invisible until the user is
          back to one pane. -->
-    {#if pane.filePreview}
-      <FilePreviewPanel {pane} onShare={(att) => openShareDialog(pane, att)} />
-    {:else if pane.canvases?.length}
-      <CanvasPanel {pane} />
+    {#if hasSideTabs(pane)}
+      <SidePanel {pane} onShare={(att) => openShareDialog(pane, att)} />
     {/if}
   </div>
 {:else}
@@ -2246,10 +2242,8 @@
       {@render composer(pane, false, 0)}
       <PromptModal paneId={pane.id} />
     </section>
-    {#if pane.filePreview}
-      <FilePreviewPanel {pane} onShare={(att) => openShareDialog(pane, att)} />
-    {:else if pane.canvases?.length}
-      <CanvasPanel {pane} />
+    {#if hasSideTabs(pane)}
+      <SidePanel {pane} onShare={(att) => openShareDialog(pane, att)} />
     {/if}
   </div>
 {/if}

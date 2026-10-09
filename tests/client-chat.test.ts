@@ -8,14 +8,16 @@ import {
   canRegenerate,
   cancelRewindEdit,
   clearChatHistory,
-  closeCanvas,
+  closeFileTab,
   closePane,
+  deleteCanvas,
   dismissCanvas,
   fetchCanvasVersions,
   humanTool,
   isRewindAnchor,
   messageKey,
   newChat,
+  openFileTab,
   openSeededChat,
   PLUGIN_STATUS_LABELS,
   regenerate,
@@ -23,8 +25,8 @@ import {
   rollbackCanvas,
   selectConversation,
   sendMessage,
+  selectSideTab,
   sendSteer,
-  setActiveCanvas,
   setRewindEditDraft,
   startChatWith,
   startNewChat,
@@ -37,6 +39,7 @@ import {
   attachRun,
   attachActiveRun,
 } from "../src/client/src/lib/chat.js";
+import { resolveSideTab } from "../src/client/src/lib/sidePanel.js";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import { liveSegmentRows, messageSegmentRows } from "../src/client/src/lib/activitySegments.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
@@ -163,7 +166,7 @@ function seedPane(overrides: Partial<ChatPane> = {}): string {
     groupKnowledgeOff: [],
     mcpToolGroups: [...DEFAULT_MCP_TOOL_GROUPS],
     canvases: [],
-    activeCanvasId: null,
+    sideTab: null,
     stickBottom: true,
     usage: null,
     abortController: null,
@@ -757,7 +760,7 @@ describe("pane lifecycle", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* stopPane / closePane / setActiveCanvas                              */
+/* stopPane / closePane / selectSideTab                                */
 /* ------------------------------------------------------------------ */
 
 describe("stop / close", () => {
@@ -806,10 +809,11 @@ describe("stop / close", () => {
     expect(readState().chatPanes[0].id).not.toBe(a);
   });
 
-  it("setActiveCanvas swaps the active canvas id", () => {
-    const id = seedPane({ canvases: [{ id: "cv1" } as any, { id: "cv2" } as any], activeCanvasId: "cv1" });
-    setActiveCanvas(id, "cv2");
-    expect(pane(id).activeCanvasId).toBe("cv2");
+  it("selectSideTab shows the picked tab and stops following what the avatar shows", () => {
+    const id = seedPane({ canvases: [{ id: "cv1" } as any, { id: "cv2" } as any], sideTab: { kind: "canvas", id: "cv1" } });
+    selectSideTab(id, { kind: "canvas", id: "cv2" });
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv2" });
+    expect(pane(id).sideFollow).toBe(false);
   });
 });
 
@@ -892,23 +896,23 @@ describe("canvas flows", () => {
     expect(pane(id).liveStatus).toBe("캔버스 응답을 건너뛰었습니다.");
   });
 
-  it("closeCanvas deletes the canvas, tolerating a not-found server response", async () => {
-    const id = seedPane({ canvases: [{ id: "cv1" } as any, { id: "cv2" } as any], activeCanvasId: "cv1" });
+  it("deleteCanvas deletes the canvas, tolerating a not-found server response", async () => {
+    const id = seedPane({ canvases: [{ id: "cv1" } as any, { id: "cv2" } as any], sideTab: { kind: "canvas", id: "cv1" } });
     useFetch((url, init) => {
       if (url.startsWith("/api/chat/canvases/cv1") && (init as any).method === "DELETE") {
         return jsonRes({ error: "캔버스를 찾을 수 없습니다." }, 404);
       }
       return undefined;
     });
-    await closeCanvas(id, "cv1");
+    await deleteCanvas(id, "cv1");
     expect(pane(id).canvases.map((c) => c.id)).toEqual(["cv2"]);
-    expect(pane(id).activeCanvasId).toBe("cv2");
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv2" });
   });
 
-  it("closeCanvas keeps the canvas when deletion fails for another reason", async () => {
-    const id = seedPane({ canvases: [{ id: "cv1" } as any], activeCanvasId: "cv1" });
+  it("deleteCanvas keeps the canvas when deletion fails for another reason", async () => {
+    const id = seedPane({ canvases: [{ id: "cv1" } as any], sideTab: { kind: "canvas", id: "cv1" } });
     useFetch(() => jsonRes({ error: "권한 없음" }, 500));
-    await closeCanvas(id, "cv1");
+    await deleteCanvas(id, "cv1");
     expect(pane(id).canvases.map((c) => c.id)).toEqual(["cv1"]);
     expect(get(toasts).some((t) => t.message.includes("권한 없음"))).toBe(true);
   });
@@ -1284,8 +1288,10 @@ describe("opening a seeded or brand-new chat", () => {
       modelTier: "opus",
       effort: "high",
       mcpToolGroups: ["git_repo", "web"],
-      activeCanvasId: "cv2",
+      sideTab: null,
     });
+    // Nothing picked yet: the panel shows the latest canvas.
+    expect(resolveSideTab(added)).toEqual({ kind: "canvas", id: "cv2" });
     expect(added.messages).toHaveLength(3);
     expect(added.canvases).toEqual([
       { id: "cv1", title: "최종", pending: false },
@@ -1794,10 +1800,10 @@ describe("stream events applied to a pane", () => {
     });
     expect(canvases[1]).toMatchObject({ title: "캔버스", contentType: "markdown", currentVersion: 1 });
     expect(canvases[2]).toMatchObject({ pending: true, requestId: "rq-b", runId: "rn-b" });
-    expect(pane(id).activeCanvasId).toBe("cv3");
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv3" });
   });
 
-  it("a shared .drawio pops the side preview and anchors the card to the text so far", async () => {
+  it("a shared .drawio opens as a side-panel tab and anchors the card to the text so far", async () => {
     const id = seedPane();
     const statuses = trackStatus(id);
     const attachment = { id: "d1", kind: "file", mediaType: DRAWIO_MEDIA_TYPE, name: "구조.drawio" };
@@ -1807,7 +1813,8 @@ describe("stream events applied to a pane", () => {
       ["file", { attachment }],
     ]);
     expect(pane(id).liveAttachments).toEqual([{ ...attachment, anchor: 4 }]);
-    expect(pane(id).filePreview).toMatchObject({ attachment: { id: "d1" }, slides: [] });
+    expect(pane(id).fileTabs).toEqual([{ attachment, slides: [] }]);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "d1" });
     expect(statuses()).toContain("파일을 공유했습니다.");
   });
 
@@ -1816,8 +1823,8 @@ describe("stream events applied to a pane", () => {
     const id = seedPane();
     const attachment = { id: "d2", kind: "file", mediaType: DRAWIO_MEDIA_TYPE, name: "구조.drawio" };
     await driveEvents(id, [["file", { attachment }]]);
-    // Split view has no side-panel slot; the preview would silently hijack it.
-    expect(pane(id).filePreview).toBeUndefined();
+    // A split pane's file cards stay downloads; no tab opens unasked there.
+    expect(pane(id).fileTabs ?? []).toEqual([]);
     expect(pane(id).liveAttachments).toHaveLength(1);
   });
 
@@ -3248,7 +3255,7 @@ describe("guards around the canvas panel and pane lifecycle", () => {
     await submitCanvas(id, "missing", { a: 1 });
     await submitCanvasEdit(id, "missing", "내용");
     await dismissCanvas(id, "missing");
-    await closeCanvas(id, "missing");
+    await deleteCanvas(id, "missing");
     expect(fetchFn).not.toHaveBeenCalled();
     expect(pane(id).canvases.map((c) => c.id)).toEqual(["cv1"]);
   });
@@ -3280,33 +3287,33 @@ describe("guards around the canvas panel and pane lifecycle", () => {
   it("closing the active canvas falls back to the tab before it, then to none", async () => {
     const id = seedPane({
       canvases: [{ id: "cv1" } as any, { id: "cv2" } as any],
-      activeCanvasId: "cv2",
+      sideTab: { kind: "canvas", id: "cv2" },
     });
     useFetch(() => jsonRes({ ok: true }));
-    await closeCanvas(id, "cv2");
-    expect(pane(id).activeCanvasId).toBe("cv1");
-    await closeCanvas(id, "cv1");
+    await deleteCanvas(id, "cv2");
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv1" });
+    await deleteCanvas(id, "cv1");
     expect(pane(id).canvases).toEqual([]);
-    expect(pane(id).activeCanvasId).toBeNull();
+    expect(pane(id).sideTab).toBeNull();
   });
 
   it("closing a parked canvas cancels its run and leaves the active tab alone", async () => {
     const id = seedPane({
       canvases: [{ id: "cv1", pending: true, requestId: "rq-c", runId: "rn-c" } as any, { id: "cv2" } as any],
-      activeCanvasId: "cv2",
+      sideTab: { kind: "canvas", id: "cv2" },
     });
     const posted: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/respond") posted.push(body(init));
       return jsonRes({ ok: true });
     });
-    await closeCanvas(id, "cv1");
-    // Closing the tab must release the run, not leave it parked on awaitResponse.
+    await deleteCanvas(id, "cv1");
+    // Deleting it must release the run, not leave it parked on awaitResponse.
     expect(posted).toEqual([
       { runId: "rn-c", requestId: "rq-c", value: { cancelled: true, deleteCanvas: true } },
     ]);
     expect(pane(id).canvases.map((c) => c.id)).toEqual(["cv2"]);
-    expect(pane(id).activeCanvasId).toBe("cv2");
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv2" });
   });
 
   it("closePane leaves nothing behind when there is no avatar to reopen with", () => {
@@ -3708,12 +3715,12 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
         row("u1", "user", "질문", { createdAt: "2026-09-30T00:00:03.000Z" }),
         row("a1", "assistant", "답", { createdAt: "2026-09-30T00:00:09.000Z", attachments: [card] }),
       ],
-      filePreview: { attachment: card as any, slides: [] },
+      fileTabs: [{ attachment: card as any, slides: [] }],
       canvases: [
         { id: "c-old", title: "이전", content: "v1", contentType: "markdown", pending: false },
         { id: "c-dropped", title: "버려진", content: "x", contentType: "markdown", pending: false },
       ] as any,
-      activeCanvasId: "c-dropped",
+      sideTab: { kind: "canvas", id: "c-dropped" },
     });
     let releaseCanvases: () => void = () => {};
     const canvasesFetched = new Promise<void>((resolve) => (releaseCanvases = resolve));
@@ -3746,7 +3753,7 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
     await confirmNext(true);
     await waitFor(() => pane(id).canvases.some((c) => c.id === "c-live"));
     // Applied at `open`, before the canvas refetch lands.
-    expect(pane(id).filePreview ?? null).toBeNull();
+    expect(pane(id).fileTabs).toEqual([]);
     releaseCanvases();
     // The `open` refetch merged: the dropped canvas is gone, the restored version
     // is in, and this run's live canvas survived a response that predates it.
@@ -3755,7 +3762,7 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
       ["c-old", "v1 복원"],
       ["c-live", "live"],
     ]);
-    expect(pane(id).activeCanvasId).toBe("c-live");
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "c-live" });
     await sending;
   });
 
@@ -4189,5 +4196,286 @@ describe("/compact in the chat pane", () => {
     expect(fetchFn).not.toHaveBeenCalled();
     startRewindEdit(id, "u2");
     expect(pane(id).rewindEdit).toEqual({ messageId: "u2", draft: "/compact 결정 사항은 남겨줘" });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* side panel: canvases + open files as ONE tab strip                  */
+/* ------------------------------------------------------------------ */
+
+describe("side panel tabs", () => {
+  const drawio = { id: "d-side", kind: "file", mediaType: DRAWIO_MEDIA_TYPE, name: "구성도.drawio" } as any;
+  const drawio2 = { ...drawio, id: "d-side-2", name: "두 번째.drawio" };
+  const deck = {
+    id: "deck-side",
+    kind: "file",
+    mediaType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    name: "보고.pptx",
+  } as any;
+
+  /** One read of a run's log, each frame carrying the server's numeric id. */
+  async function readLog(
+    paneId: string,
+    runId: string,
+    frames: Array<[number, string, unknown]>,
+    opts?: { seenThrough?: number },
+  ): Promise<void> {
+    const chunks = frames.map(([id, event, data]) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    useFetch((url) =>
+      url.includes(`/api/chat/runs/${runId}/events`)
+        ? {
+            ok: true,
+            status: 200,
+            body: streamFrom(chunks, () => readState().chatPanes.find((p) => p.id === paneId)?.abortController?.abort()),
+            json: async () => ({}),
+          }
+        : jsonRes({ ok: true }),
+    );
+    await attachRun(paneId, runId, opts);
+  }
+
+  it("a replayed log never re-opens a .drawio tab the viewer closed", async () => {
+    const id = seedPane();
+    const log: Array<[number, string, unknown]> = [
+      [1, "status", { label: "작업 중" }],
+      [2, "file", { attachment: drawio }],
+    ];
+    await readLog(id, "run-side-1", log);
+    expect(pane(id).fileTabs?.map((tab) => tab.attachment.id)).toEqual(["d-side"]);
+    closeFileTab(id, "d-side");
+    // The connection drops and the whole log replays into the same pane.
+    await readLog(id, "run-side-1", log);
+    expect(pane(id).fileTabs).toEqual([]);
+    // A frame the pane has not seen yet still opens its file.
+    await readLog(id, "run-side-1", [...log, [3, "file", { attachment: drawio2 }]]);
+    expect(pane(id).fileTabs?.map((tab) => tab.attachment.id)).toEqual(["d-side-2"]);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "d-side-2" });
+  });
+
+  it("attaching to a running conversation takes its logged frames as history", async () => {
+    const id = seedPane();
+    useFetch((url) => {
+      if (url.startsWith("/api/chat/runs?conversationId="))
+        return jsonRes({ run: { runId: "run-side-2", lastEventId: 2, eventCount: 2 } });
+      if (url.includes("/api/chat/runs/run-side-2/events"))
+        return {
+          ok: true,
+          status: 200,
+          body: streamFrom(
+            [
+              `id: 1\nevent: file\ndata: ${JSON.stringify({ attachment: drawio })}\n\n`,
+              `id: 2\nevent: canvas\ndata: ${JSON.stringify({ artifactId: "cv-a", title: "흐름", content: "x" })}\n\n`,
+              `id: 3\nevent: file\ndata: ${JSON.stringify({ attachment: drawio2 })}\n\n`,
+            ],
+            () => readState().chatPanes.find((p) => p.id === id)?.abortController?.abort(),
+          ),
+          json: async () => ({}),
+        };
+      return jsonRes({ ok: true });
+    });
+    await attachActiveRun(id);
+    // The state is rebuilt from the history (the canvas is there), but what was
+    // shown before this pane arrived does not open again — only what came after.
+    expect(pane(id).canvases.map((canvas) => canvas.id)).toEqual(["cv-a"]);
+    expect(pane(id).fileTabs?.map((tab) => tab.attachment.id)).toEqual(["d-side-2"]);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "d-side-2" });
+  });
+
+  it("shows a replayed ask that still parks the run, even one that refined an older canvas", async () => {
+    const id = seedPane({
+      canvases: [
+        { id: "cv-old", title: "예전", content: "a", contentType: "markdown" } as any,
+        { id: "cv-new", title: "최근", content: "b", contentType: "markdown" } as any,
+      ],
+    });
+    await readLog(
+      id,
+      "run-side-5",
+      [[1, "canvas", { artifactId: "cv-old", title: "예전", content: "a", controls: [{ id: "q" }], interaction: "blocking", requestId: "rq", runId: "run-side-5" }]],
+      { seenThrough: 1 },
+    );
+    // History to this pane — nothing is selected — yet the open question is what
+    // the panel shows, not the latest canvas.
+    expect(pane(id).sideTab).toBeNull();
+    expect(resolveSideTab(pane(id))).toEqual({ kind: "canvas", id: "cv-old" });
+    expect(pane(id).canvases[0]).toMatchObject({ pending: true, requestId: "rq" });
+  });
+
+  const ask = (artifactId: string, requestId: string, runId: string) => ({
+    artifactId,
+    title: artifactId,
+    content: "c",
+    controls: [{ id: "q", type: "text" }],
+    interaction: "blocking",
+    requestId,
+    runId,
+  });
+
+  it("answering or skipping an ask shown only by default keeps it on screen", async () => {
+    for (const act of ["submit", "skip"] as const) {
+      const id = seedPane({
+        canvases: [
+          { id: "cv-old", title: "예전", content: "a", contentType: "markdown", controls: [{ id: "q" }], pending: true, requestId: "rq", runId: "rn" } as any,
+          { id: "cv-new", title: "최근", content: "b", contentType: "markdown" } as any,
+        ],
+      });
+      expect(resolveSideTab(pane(id))).toEqual({ kind: "canvas", id: "cv-old" });
+      useFetch(() => jsonRes({ ok: true }));
+      if (act === "submit") await submitCanvas(id, "cv-old", { q: "답" });
+      else await dismissCanvas(id, "cv-old");
+      expect(pane(id).canvases[0].pending).toBe(false);
+      // No jump to the latest canvas right under the viewer.
+      expect(resolveSideTab(pane(id))).toEqual({ kind: "canvas", id: "cv-old" });
+      updateState((state) => {
+        state.chatPanes = [];
+      });
+    }
+  });
+
+  it("an ask answered earlier in the replayed log does not hold the panel", async () => {
+    const id = seedPane();
+    await readLog(
+      id,
+      "run-side-6",
+      [
+        [1, "canvas", ask("cv-a", "rq-a", "run-side-6")],
+        [2, "prompt_resolved", { requestId: "rq-a" }],
+        [3, "canvas", { artifactId: "cv-c", title: "C", content: "x", runId: "run-side-6" }],
+      ],
+      { seenThrough: 3 },
+    );
+    expect(resolveSideTab(pane(id))).toEqual({ kind: "canvas", id: "cv-c" });
+  });
+
+  it("the ask still parking the run shows, not one answered before it", async () => {
+    const id = seedPane();
+    await readLog(
+      id,
+      "run-side-7",
+      [
+        [1, "canvas", ask("cv-a", "rq-a", "run-side-7")],
+        [2, "prompt_resolved", { requestId: "rq-a" }],
+        [3, "canvas", ask("cv-b", "rq-b", "run-side-7")],
+      ],
+      { seenThrough: 3 },
+    );
+    expect(pane(id).canvases.map((canvas) => `${canvas.id}:${canvas.pending}`)).toEqual(["cv-a:false", "cv-b:true"]);
+    expect(resolveSideTab(pane(id))).toEqual({ kind: "canvas", id: "cv-b" });
+  });
+
+  it("a live .drawio the pane follows leaves the collapsed strip", async () => {
+    const id = seedPane();
+    await driveEvents(id, [["file", { attachment: drawio }]]);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "d-side" });
+    expect(pane(id).sideExpand).toBe(true);
+  });
+
+  it("a live .drawio behind a tab the viewer picked only gets a dot", async () => {
+    const id = seedPane({ canvases: [{ id: "cv-1", title: "첫", content: "", contentType: "markdown" } as any] });
+    selectSideTab(id, { kind: "canvas", id: "cv-1" });
+    await driveEvents(id, [["file", { attachment: drawio2 }]]);
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv-1" });
+    expect(pane(id).sideExpand ?? false).toBe(false);
+    expect(pane(id).sideUnseen).toEqual(["file:d-side-2"]);
+  });
+
+  it("a replayed canvas frame rebuilds the canvas without counting a new version", async () => {
+    const id = seedPane();
+    const log: Array<[number, string, unknown]> = [
+      [1, "canvas", { artifactId: "cv-v", title: "차트", content: "v1" }],
+      [2, "canvas", { artifactId: "cv-v", title: "차트", content: "v2" }],
+    ];
+    await readLog(id, "run-side-3", log);
+    expect(pane(id).canvases[0]).toMatchObject({ content: "v2", currentVersion: 2, versionCount: 2 });
+    await readLog(id, "run-side-3", log);
+    expect(pane(id).canvases[0]).toMatchObject({ content: "v2", currentVersion: 2, versionCount: 2 });
+  });
+
+  it("what the avatar shows after the viewer picked a tab gets a dot instead of the panel", async () => {
+    const id = seedPane({ canvases: [{ id: "cv-1", title: "첫", content: "", contentType: "markdown" } as any] });
+    openFileTab(id, deck, []);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "deck-side" });
+    expect(pane(id).sideFollow).toBe(false);
+    await driveEvents(id, [
+      ["canvas", { artifactId: "cv-2", title: "둘", content: "x" }],
+      ["file", { attachment: drawio }],
+    ]);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "deck-side" });
+    expect(pane(id).sideUnseen).toEqual(["canvas:cv-2", "file:d-side"]);
+    selectSideTab(id, { kind: "canvas", id: "cv-2" });
+    expect(pane(id).sideUnseen).toEqual(["file:d-side"]);
+  });
+
+  it("follows what the avatar shows until the viewer picks a tab — the default never takes over", async () => {
+    // Nothing picked, but following is off: the latest canvas the viewer sees
+    // must stay even though a NEWER canvas would become the default.
+    const id = seedPane({
+      sideFollow: false,
+      canvases: [{ id: "cv-1", title: "첫", content: "", contentType: "markdown" } as any],
+    });
+    await driveEvents(id, [["canvas", { artifactId: "cv-2", title: "둘", content: "x" }]]);
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv-1" });
+    expect(pane(id).sideUnseen).toEqual(["canvas:cv-2"]);
+  });
+
+  it("an ask for input takes the panel from any tab and out of the collapsed strip", async () => {
+    const id = seedPane();
+    openFileTab(id, deck, []);
+    updateState((state) => {
+      state.chatPanes.find((p) => p.id === id)!.sideExpand = false;
+    });
+    await driveEvents(id, [
+      ["canvas", { artifactId: "cv-q", title: "검토", content: "", controls: [{ id: "r1-all" }], interaction: "async" }],
+    ]);
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv-q" });
+    expect(pane(id).sideExpand).toBe(true);
+    // The deck stays open beside it.
+    expect(pane(id).fileTabs?.map((tab) => tab.attachment.id)).toEqual(["deck-side"]);
+  });
+
+  it("a send follows what the avatar shows again", async () => {
+    const id = seedPane({
+      conversationId: "c",
+      sideFollow: false,
+      canvases: [{ id: "cv-1", title: "첫", content: "", contentType: "markdown" } as any],
+      sideTab: { kind: "canvas", id: "cv-1" },
+    });
+    useFetch((url) => {
+      if (url === "/api/chat/stream")
+        return sseRes([
+          ["open", { conversationId: "c", runId: "r-follow" }],
+          ["canvas", { artifactId: "cv-2", title: "둘", content: "x", runId: "r-follow" }],
+          doneFrame("srv-a", "답"),
+        ]);
+      if (url.startsWith("/api/messages"))
+        return jsonRes({
+          messages: [],
+          canvases: [
+            { id: "cv-1", title: "첫", content: "", contentType: "markdown" },
+            { id: "cv-2", title: "둘", content: "x", contentType: "markdown" },
+          ],
+        });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await sendMessage(id, "보여줘");
+    expect(pane(id).sideFollow).toBe(true);
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv-2" });
+  });
+
+  it("openFileTab opens a file once; closing a tab shows the one beside it", () => {
+    const id = seedPane({ canvases: [{ id: "cv-1" } as any] });
+    openFileTab(id, deck, []);
+    openFileTab(id, drawio, []);
+    openFileTab(id, deck, [{ id: "slide-1" } as any]);
+    expect(pane(id).fileTabs?.map((tab) => tab.attachment.id)).toEqual(["deck-side", "d-side"]);
+    expect(pane(id).fileTabs?.[0].slides).toEqual([{ id: "slide-1" }]);
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "deck-side" });
+    expect(pane(id).sideExpand).toBe(true);
+    closeFileTab(id, "deck-side");
+    expect(pane(id).sideTab).toEqual({ kind: "file", id: "d-side" });
+    closeFileTab(id, "d-side");
+    expect(pane(id).sideTab).toEqual({ kind: "canvas", id: "cv-1" });
+    expect(pane(id).fileTabs).toEqual([]);
   });
 });

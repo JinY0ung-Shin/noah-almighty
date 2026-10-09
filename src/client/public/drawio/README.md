@@ -1,7 +1,7 @@
 # Vendored draw.io viewer (offline)
 
-Read-only renderer for `.drawio` attachments in the chat file-preview panel
-(`FilePreviewPanel.svelte`, loaded on demand by `src/client/src/lib/drawioViewer.ts`).
+Read-only renderer for `.drawio` attachments opened as a tab of the chat's side panel
+(`FileTab.svelte`, loaded on demand by `src/client/src/lib/drawioViewer.ts`).
 Vendored because the deploy environment has no internet access and the app CSP is
 same-origin only.
 

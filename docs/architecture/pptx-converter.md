@@ -206,8 +206,8 @@ Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in p
   `r1-all`), because the panel keeps what was typed under a re-used id. The submission arrives as the next user turn:
   all notes → ONE rebuild → the next round; a message with an older round's ids is a resend. Two share-link changes
   carry it: `share_file`'s stamped previews no longer count toward the 30 hidden images per turn (`routes/chat.ts`
-  counts only unstamped ones), and the client clears an open file preview when a canvas with controls arrives
-  (`lib/chat.ts`).
+  counts only unstamped ones), and a canvas with controls always takes the client's side panel, even from the deck
+  tab the owner is reading (`lib/chat.ts` `revealSideTab`).
 - **Speaker notes are the talk track** (SKILL §4/§7, AUTHORING §1): an opener that moves on from the previous slide's
   bridge (never restates it), the key point as spoken, the exact figures to cite, a bridge to the next slide,
   optionally a timing cue in parentheses at the end of the last line (`(약 1분)`, one form across every example); 2–5

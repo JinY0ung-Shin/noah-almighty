@@ -115,7 +115,7 @@
   function onKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
       // NOTE: stopPropagation does NOT stop the sibling window-level keydown
-      // listeners (Shell rail, CanvasPanel fullscreen, PromptModal) — window is
+      // listeners (Shell rail, CanvasTab fullscreen, PromptModal) — window is
       // the last node in the path. Each of those gates on its own open-state, so
       // one Escape won't cross-dismiss; we still close here.
       close();

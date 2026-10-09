@@ -434,7 +434,7 @@
   `fontconfig` and the pinned Python set ([`pptx-converter.md`](pptx-converter.md#docker-packaging)).
 - **draw.io viewer (.drawio share): preview is CLIENT-side, not a deckRender format.** `drawio` sits in
   the `chatFiles.ts` allowlist (mediaType `application/vnd.jgraph.mxfile`, no magic — text like csv/md/txt)
-  but deliberately NOT in `PREVIEWABLE_EXTENSIONS`: `FilePreviewPanel.svelte` fetches the file and renders
+  but deliberately NOT in `PREVIEWABLE_EXTENSIONS`: `FileTab.svelte` (a tab of the side panel) fetches the file and renders
   it with the **vendored draw.io viewer** (`src/client/public/drawio/`, pinned upstream tag — see its
   README for provenance/upgrade). The ~4 MB global script is NOT in the Vite bundle; `lib/drawioViewer.ts`
   injects a same-origin `<script>` on first use. **Verified under the app CSP: no `unsafe-eval`, no
@@ -444,8 +444,9 @@
   SAME upstream tag into `stencils/` to extend (no code change); (3) expected noise: one
   `/drawio/math/startup.js` request that 404s/nosniff-blocks per session (MathJax intentionally not
   vendored); (4) the render target div must NOT have the `mxgraph` class (the script's load-time auto-scan
-  would double-process it); (5) the viewer lays out for the width it was created at — the panel repaints
-  (debounced) on resize; (6) compressed `<diagram>` payloads render fine (the viewer inflates them), but
+  would double-process it); (5) the viewer lays out for the width it was created at — the tab paints only
+  into a body that has a width (a hidden tab or collapsed panel measures 0) and its ResizeObserver repaints
+  (debounced) when that width changes; (6) compressed `<diagram>` payloads render fine (the viewer inflates them), but
   the `drawio` skill tells the agent to AUTHOR uncompressed so later turns can edit the XML.
 - **Rewind/regenerate caveat:** the dropped rows' attachments (images AND files) and the share links of
   their file cards are deleted, so a canvas that embedded their slide images loses them — accepted (the new
@@ -470,14 +471,15 @@
   (a stored `canvas` key just normalizes away). Controls park the run via the SAME
   `awaitResponse`/`/api/chat/respond` path as `onQuestion`; display-only returns immediately. **A parked
   (blocking) form must stay ENABLED while `pane.streaming` is true** — the answer posts to
-  `/api/chat/respond` MID-run and the run resumes only on submit/skip, so `CanvasPanel` locks on
+  `/api/chat/respond` MID-run and the run resumes only on submit/skip, so `CanvasTab` locks on
   `streaming` only for the new-turn paths (async submit, re-submit, content edit); locking the blocking
   form deadlocks the question (8aed88d regression). While parked the frame handler pins the status line
   to `캔버스 응답을 기다리는 중…`, suppressing the periodic `tool_progress` status ticks (`실행 중: 캔버스 표시`)
   until the park resolves; the curated MCP tool labels live in `shared/sdkToolPresentation.ts`
   (`MCP_TOOL_LABELS`) so server status line and client activity rows agree.
   Artifacts persist on `AgentResponse.canvases` and rebuild
-  on reload (`canvasesFromMessages`); live via SSE `canvas` event → `CanvasPanel.svelte`. **Refine-in-place:**
+  on reload (`canvasesFromMessages`); live via SSE `canvas` event → a `CanvasTab.svelte` tab of the side
+  panel (`SidePanel.svelte`, shared with opened files — [client.md](client.md) § Side panel). **Refine-in-place:**
   `show` takes an optional `canvasId`; reusing it UPDATES that artifact (client `handleCanvas` +
   `canvasesFromMessages` AND server `record()` all upsert by id, latest-wins). **Size-cap:** `canvasTools.ts`
   rejects over-`MAX_CANVAS_CONTENT_CHARS` content (it rides every `resume` turn's transcript).
@@ -499,7 +501,7 @@
   (zoom) and keydown (Escape) — events inside the frame never reach the app's DOM. Links inside don't open.
 - **A drawing (`svg`/`vega`/`mermaid`) renders in its own SHADOW ROOT, never `{@html}`.** An `<svg><style>` is
   a stylesheet for the whole document, so in the app's DOM an avatar's drawing restyled the app (in Chromium a
-  `.canvas-panel {…}` rule inside an svg hid the panel). `shadowSvg` (CanvasPanel) keeps the drawing's own
+  `.canvas-panel {…}` rule inside an svg hid the panel). `shadowSvg` (CanvasTab) keeps the drawing's own
   sheet — mermaid's id-scoped one included — inside the drawing, gives each copy (panel/fullscreen) its own id
   scope, and carries the two app rules that sized it (`:host([data-fit]) svg { max-width: 100%; height: auto }`
   in the panel, natural size in fullscreen). The root is OPEN so export (`getSvgEl`) reads the `<svg>` out of
@@ -518,9 +520,12 @@
   `selectConversation`/`addConversationToSplit`/ChatView-onMount fire `attachActiveRun` WITHOUT awaiting it —
   it resolves only at RUN end, and awaiting it held the sidebar's per-conversation busy lock (disabled
   button) for the whole park; pane-REPLACING navigations abort the dropped panes' reader loops
-  (client-side only — the run stays reattachable). Split view mounts the SAME side-panel slot
-  (`FilePreviewPanel`/`CanvasPanel` for the ACTIVE pane) inside a `.chat-layout` wrapper — before, a canvas
-  created while split was invisible entirely. E2E pin: `tests/visual/canvas-park-return.spec.ts`.
+  (client-side only — the run stays reattachable). Split view mounts the SAME side panel (`SidePanel`
+  for the ACTIVE pane) inside a `.chat-layout` wrapper — before, a canvas created while split was invisible
+  entirely. The replay that rebuilds the form is HISTORY to the returning pane (`lastEventId` →
+  `seenThrough`): it selects nothing, and with no tab picked the panel's default prefers the latest canvas
+  still pending — so the parked ask shows, a refinement in place included, and the default moves on once
+  the replayed `prompt_resolved` clears it. E2E pin: `tests/visual/canvas-park-return.spec.ts`.
 - **Questions default to AskUserQuestion, not canvas controls** — controls are for decisions ANCHORED to
   the artifact on screen (stated in the standing canvas guidance + the `show` description). `describe_system`
   reports canvas availability via runPlan's `canvasActive` → `ctx.canvasEnabled`, carrying the same redirect.

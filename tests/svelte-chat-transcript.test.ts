@@ -600,11 +600,12 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
     );
   });
 
-  it("keeps a dialog opened from the preview panel through a review canvas, then shows the new link", async () => {
+  it("keeps a dialog opened from a deck tab through a review canvas, then shows the new link", async () => {
     // The deck-review loop: round 2 streams in this pane while the owner shares
-    // the STORED round-1 deck from the preview panel. The round ends with a
-    // canvas that asks for input, which clears the preview (handleCanvas) — a
-    // dialog rendered inside the panel went with it, mid-create included.
+    // the STORED round-1 deck from its side-panel tab. The round ends with a
+    // canvas that asks for input, which takes the panel (handleCanvas). The
+    // dialog lives in ChatView, so no tab change — or a tab unmounting — can
+    // take it along mid-create.
     const token = "A".repeat(43);
     const link = {
       id: "link-1",
@@ -647,7 +648,7 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
     const frame = (event: string, data: unknown) =>
       sse!.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     // A real pane (makePane) always carries these; the stream's handlers read them.
-    const streamingPane = Object.assign(pane([deckMessage()]), { canvases: [], filePreview: null });
+    const streamingPane = Object.assign(pane([deckMessage()]), { canvases: [], fileTabs: [] });
     replaceState({ avatars: [], chatPanes: [streamingPane], activePaneId: "pane-1" });
     const { container } = render(ChatView);
     const run = attachRun("pane-1", "run-2");
@@ -655,7 +656,7 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
       await waitFor(() => expect(sse).toBeTruthy());
       await fireEvent.click(container.querySelector(".msg-file-card")!);
       const panel = await waitFor(() => {
-        const el = container.querySelector<HTMLElement>(".file-preview-panel");
+        const el = container.querySelector<HTMLElement>(".canvas-panel .file-tab");
         expect(el).toBeTruthy();
         return el!;
       });
@@ -673,9 +674,11 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
         interaction: "async",
         runId: "run-2",
       });
-      await waitFor(() => expect(readState().chatPanes[0].filePreview).toBeNull());
+      await waitFor(() => expect(readState().chatPanes[0].sideTab).toEqual({ kind: "canvas", id: "cv-r2" }));
       await tick();
-      expect(container.querySelector(".file-preview-panel")).toBeNull();
+      // The review form shows; the deck's tab waits behind it, still mounted.
+      expect(panel.isConnected).toBe(true);
+      expect(panel.closest("[role=tabpanel]")?.hasAttribute("hidden")).toBe(true);
       // The SAME dialog, still mid-create…
       expect(screen.getByRole("dialog", { name: "공유 링크" })).toBe(dialog);
       expect(within(dialog).getByRole("button", { name: "만드는 중…" })).toBeTruthy();

@@ -2,14 +2,15 @@
 // @sveltejs/vite-plugin-svelte + @testing-library/svelte; see vitest.config.ts).
 // New component tests must be named tests/svelte-*.test.ts: that glob routes
 // them to this project, and to tsconfig.client.json for typechecking.
-import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
+import DOMPurify from "dompurify";
 import { get } from "svelte/store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ActivityTree from "../src/client/src/components/ActivityTree.svelte";
-import CanvasPanel from "../src/client/src/components/CanvasPanel.svelte";
 import RoutineModal from "../src/client/src/components/RoutineModal.svelte";
 import SettingsGroupCard from "../src/client/src/components/SettingsGroupCard.svelte";
+import SidePanel from "../src/client/src/components/SidePanel.svelte";
 import type { SettingsGroup } from "../src/client/src/components/SettingsGroupCard.svelte";
 import Toasts from "../src/client/src/components/Toasts.svelte";
 import Toggle from "../src/client/src/components/Toggle.svelte";
@@ -768,14 +769,14 @@ describe("SettingsGroupCard 공유 스킬", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* CanvasPanel — a parked blocking ask must stay answerable            */
+/* SidePanel (canvas tabs) — a parked blocking ask must stay answerable */
 /* ------------------------------------------------------------------ */
 
 function canvasPane(overrides: Record<string, unknown>, canvas: Record<string, unknown>): any {
   return {
     id: "p1",
     streaming: true,
-    activeCanvasId: "cv1",
+    sideTab: { kind: "canvas", id: "cv1" },
     canvases: [
       {
         id: "cv1",
@@ -792,11 +793,11 @@ function canvasPane(overrides: Record<string, unknown>, canvas: Record<string, u
   };
 }
 
-describe("CanvasPanel", () => {
+describe("SidePanel canvas tab", () => {
   const LOCKED = "아바타 응답이 끝난 뒤 보낼 수 있습니다.";
 
   it("a parked blocking canvas stays answerable while the run streams", async () => {
-    render(CanvasPanel, {
+    render(SidePanel, {
       props: {
         pane: canvasPane({}, { pending: true, requestId: "rq1", runId: "rn1", interaction: "blocking" }),
       },
@@ -815,7 +816,7 @@ describe("CanvasPanel", () => {
   });
 
   it("an async canvas locks its form while the avatar is responding", () => {
-    render(CanvasPanel, {
+    render(SidePanel, {
       props: { pane: canvasPane({}, { pending: false, interaction: "async" }) },
     });
 
@@ -826,7 +827,7 @@ describe("CanvasPanel", () => {
   });
 
   it("the edit path stays locked while parked (edits ride a new turn)", () => {
-    const { container } = render(CanvasPanel, {
+    const { container } = render(SidePanel, {
       props: {
         pane: canvasPane({}, { pending: true, requestId: "rq1", runId: "rn1", editable: true }),
       },
@@ -841,7 +842,7 @@ describe("CanvasPanel", () => {
   });
 
   it("an html canvas renders as its own sandboxed page, never into the app's DOM", () => {
-    const { container } = render(CanvasPanel, {
+    const { container } = render(SidePanel, {
       props: {
         pane: canvasPane(
           { streaming: false },
@@ -864,7 +865,7 @@ describe("CanvasPanel", () => {
     const drawing =
       '<svg viewBox="0 0 10 10"><style>.shape{fill:red} .canvas-panel{display:none}</style>' +
       '<rect class="shape" width="10" height="10"/></svg>';
-    const { container } = render(CanvasPanel, {
+    const { container } = render(SidePanel, {
       props: {
         pane: canvasPane({ streaming: false }, { title: "도형", content: drawing, contentType: "svg", controls: [] }),
       },
@@ -889,5 +890,207 @@ describe("CanvasPanel", () => {
     }
     expect(hrefs).toHaveLength(1);
     expect(atob(hrefs[0].split(",")[1])).toContain(".shape{fill:red}");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* SidePanel — canvases and opened files as ONE tab strip              */
+/* ------------------------------------------------------------------ */
+
+describe("SidePanel tabs", () => {
+  const pdf = { id: "file-1", kind: "file", mediaType: "application/pdf", name: "보고.pdf" };
+
+  function mixedPane(over: Record<string, unknown> = {}): any {
+    return {
+      ...canvasPane(
+        { streaming: false },
+        { interaction: "async", controls: [{ type: "text", id: "note", label: "의견" }] },
+      ),
+      avatar: { id: "owner-1", username: "owner", displayName: "나", isOwn: true },
+      conversationId: "conv-1",
+      liveAttachments: [],
+      fileTabs: [{ attachment: pdf, slides: [] }],
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    try {
+      localStorage.clear();
+    } catch {
+      /* no storage: the panel falls back to its defaults */
+    }
+    replaceState({ chatPanes: [] });
+  });
+
+  it("lists canvases and files in one strip, and a typed answer survives a switch", async () => {
+    const base = mixedPane();
+    const view = render(SidePanel, { props: { pane: base } });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["질문", "보고.pdf"]);
+    await fireEvent.input(screen.getByRole("textbox", { name: "의견" }), { target: { value: "작성 중인 의견" } });
+
+    await view.rerender({ pane: { ...base, sideTab: { kind: "file", id: "file-1" } } });
+    expect(screen.getByRole("tab", { name: "보고.pdf" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("textbox", { name: "의견" })).toBeNull();
+    expect(screen.getByText("이 파일 형식은 미리보기를 제공하지 않습니다. 다운로드해서 확인해 주세요.")).toBeTruthy();
+
+    await view.rerender({ pane: { ...base, sideTab: { kind: "canvas", id: "cv1" } } });
+    expect((screen.getByRole("textbox", { name: "의견" }) as HTMLTextAreaElement).value).toBe("작성 중인 의견");
+  });
+
+  it("marks a tab that changed while another showed, and a file tab's × closes it", async () => {
+    const pane = mixedPane({ sideTab: { kind: "canvas", id: "cv1" }, sideUnseen: ["file:file-1"] });
+    replaceState({ chatPanes: [pane] });
+    render(SidePanel, { props: { pane } });
+    expect(screen.getByRole("tab", { name: "보고.pdf (새 항목)" })).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "미리보기 닫기: 보고.pdf" }));
+    expect(readState().chatPanes[0].fileTabs).toEqual([]);
+  });
+
+  it("deletes a canvas only through its confirmed trash action", async () => {
+    const pane = mixedPane({ fileTabs: [] });
+    pane.canvases[0].controls = [];
+    replaceState({ chatPanes: [pane] });
+    const fetchFn = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }));
+    vi.stubGlobal("fetch", fetchFn);
+    try {
+      render(SidePanel, { props: { pane } });
+      // No tab carries a delete-× — the strip's × only ever closes a file tab.
+      expect(screen.queryByRole("button", { name: /캔버스 닫기/ })).toBeNull();
+      await fireEvent.click(screen.getByRole("button", { name: "캔버스 삭제" }));
+      await waitFor(() => expect(get(confirmation)?.title).toBe("캔버스를 삭제할까요?"));
+      expect(get(confirmation)?.tone).toBe("danger");
+      resolveConfirmation(false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fetchFn).not.toHaveBeenCalled();
+
+      await fireEvent.click(screen.getByRole("button", { name: "캔버스 삭제" }));
+      await waitFor(() => expect(get(confirmation)).toBeTruthy());
+      resolveConfirmation(true);
+      await waitFor(() => expect(readState().chatPanes[0].canvases).toEqual([]));
+      expect(fetchFn).toHaveBeenCalledWith("/api/chat/canvases/cv1", expect.objectContaining({ method: "DELETE" }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("renders a canvas once per change, not on every store write", async () => {
+    const drawing = '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>';
+    const pane = canvasPane({ streaming: false }, { content: drawing, contentType: "svg", controls: [] });
+    const view = render(SidePanel, { props: { pane } });
+    await waitFor(() => expect(document.querySelector(".canvas-svg")).toBeTruthy());
+    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    try {
+      // Unrelated writes (a streamed token…) hand the tab the same canvas again.
+      for (let i = 0; i < 5; i += 1) await view.rerender({ pane: { ...pane, liveText: "x".repeat(i + 1) } });
+      expect(sanitize).not.toHaveBeenCalled();
+      const refined = { ...pane.canvases[0], content: drawing.replace('width="10"', 'width="5"') };
+      await view.rerender({ pane: { ...pane, canvases: [refined] } });
+      expect(sanitize).toHaveBeenCalledTimes(1);
+    } finally {
+      sanitize.mockRestore();
+    }
+  });
+
+  it("a refinement re-seeds an untouched edit draft, keeps an edited one, and defaults new controls", async () => {
+    const original = { id: "cv1", title: "초안", content: "v1 원본", contentType: "markdown", editable: true, controls: [] };
+    const pane = { ...mixedPane({ fileTabs: [] }), canvases: [original] };
+    const view = render(SidePanel, { props: { pane } });
+    const draft = () => screen.getByRole("textbox", { name: "내용 편집" }) as HTMLTextAreaElement;
+    expect(draft().value).toBe("v1 원본");
+
+    const v2 = {
+      ...original,
+      content: "v2 수정본",
+      controls: [{ type: "slider", id: "level", label: "강도", min: 1, max: 9, defaultValue: 4 }],
+      interaction: "async",
+    };
+    await view.rerender({ pane: { ...pane, canvases: [v2] } });
+    // Untouched: it follows the new content, so 보내기 cannot send v1 back.
+    expect(draft().value).toBe("v2 수정본");
+    expect(screen.getByText("원본과 같은 내용입니다.")).toBeTruthy();
+    // The slider added by the refinement starts at its default.
+    expect((screen.getByRole("slider", { name: "강도" }) as HTMLInputElement).value).toBe("4");
+
+    await fireEvent.input(draft(), { target: { value: "내가 고치는 중" } });
+    await view.rerender({ pane: { ...pane, canvases: [{ ...v2, content: "v3 또 수정" }] } });
+    expect(draft().value).toBe("내가 고치는 중");
+  });
+
+  it("a sent edit is no longer an edit in progress: the avatar's next version replaces it", async () => {
+    const original = { id: "cv1", title: "초안", content: "v1 원본", contentType: "markdown", editable: true, controls: [] };
+    const pane = { ...mixedPane({ fileTabs: [] }), canvases: [original] };
+    const view = render(SidePanel, { props: { pane } });
+    const draft = () => screen.getByRole("textbox", { name: "내용 편집" }) as HTMLTextAreaElement;
+    await fireEvent.input(draft(), { target: { value: "내 수정본" } });
+    await fireEvent.click(screen.getByRole("button", { name: "수정해서 보내기" }));
+    await view.rerender({ pane: { ...pane, canvases: [{ ...original, content: "아바타가 반영한 v2" }] } });
+    expect(draft().value).toBe("아바타가 반영한 v2");
+    expect((screen.getByRole("button", { name: "수정해서 보내기" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("closing a fullscreen view whose ⤢ was re-created lands on the new ⤢", async () => {
+    const pane = {
+      ...canvasPane({ streaming: false }, { controls: [] }),
+      canvases: [
+        { id: "cv1", title: "하나", content: "첫 캔버스", contentType: "markdown", controls: [] },
+        { id: "cv2", title: "둘", content: "둘째 캔버스", contentType: "markdown", controls: [] },
+      ],
+      sideTab: { kind: "canvas", id: "cv1" },
+    };
+    const view = render(SidePanel, { props: { pane } });
+    await fireEvent.click(screen.getByRole("button", { name: "전체화면" }));
+    await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv2" } } });
+    await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv1" } } });
+    const stage = screen.getByRole("dialog", { name: "캔버스 전체화면" });
+    await fireEvent.click(within(stage).getAllByRole("button", { name: "닫기" })[0]);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "캔버스 전체화면" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "전체화면" }));
+  });
+
+  it("a tab the avatar shows next leaves an open fullscreen view; closing it lands on the shown tab", async () => {
+    const pane = {
+      ...canvasPane({ streaming: false }, { controls: [] }),
+      canvases: [
+        { id: "cv1", title: "하나", content: "첫 캔버스", contentType: "markdown", controls: [] },
+        { id: "cv2", title: "둘", content: "둘째 캔버스", contentType: "markdown", controls: [] },
+      ],
+    };
+    const view = render(SidePanel, { props: { pane } });
+    await fireEvent.click(screen.getByRole("button", { name: "전체화면" }));
+    const stage = screen.getByRole("dialog", { name: "캔버스 전체화면" });
+    await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv2" } } });
+    expect(stage.isConnected).toBe(true);
+    await fireEvent.click(within(stage).getAllByRole("button", { name: "닫기" })[0]);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "캔버스 전체화면" })).toBeNull());
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "둘" }));
+  });
+
+  it("the collapsed strip says when the panel moved on while folded", async () => {
+    localStorage.setItem("canvasPanelCollapsed", "1");
+    const pane = {
+      ...canvasPane({ streaming: false }, { controls: [] }),
+      canvases: [
+        { id: "cv1", title: "하나", content: "a", contentType: "markdown", controls: [] },
+        { id: "cv2", title: "둘", content: "b", contentType: "markdown", controls: [] },
+      ],
+      sideTab: { kind: "canvas", id: "cv1" },
+    };
+    const view = render(SidePanel, { props: { pane } });
+    expect(screen.getByRole("button", { name: "패널 펼치기" })).toBeTruthy();
+    await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv2" } } });
+    expect(screen.getByRole("button", { name: "패널 펼치기 (확인할 항목 있음)" })).toBeTruthy();
+  });
+
+  it("leaves its collapsed strip when an ask for input or an opened file needs it", async () => {
+    localStorage.setItem("canvasPanelCollapsed", "1");
+    const pane = mixedPane({ sideExpand: true });
+    replaceState({ chatPanes: [pane] });
+    const { container } = render(SidePanel, { props: { pane } });
+    await waitFor(() => expect(readState().chatPanes[0].sideExpand).toBe(false));
+    expect(container.querySelector("aside.canvas-panel")?.classList.contains("collapsed")).toBe(false);
+    // Shown this once — the viewer's choice to keep it folded still stands.
+    expect(localStorage.getItem("canvasPanelCollapsed")).toBe("1");
   });
 });

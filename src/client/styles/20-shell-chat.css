@@ -720,8 +720,9 @@ body.col-resizing {
   user-select: none;
 }
 
-/* ===== Visual canvas panel (#50): resizable via the left-edge handle,
-   collapsible to a slim strip, stacked on mobile. ===== */
+/* ===== Right-side panel (SidePanel): canvases (#50) and opened files as tabs of
+   ONE strip. Resizable via the left-edge handle, collapsible to a slim strip,
+   stacked on mobile. ===== */
 .canvas-panel {
   flex: none;
   width: 440px; /* fallback only — JS sets the clamped inline width */
@@ -748,6 +749,10 @@ body.col-resizing {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The fleet's classic scrollbars take width when they appear: without a
+     reserved gutter a tall diagram narrows the body it was laid out for, and
+     FileTab's width-keyed repaint could flip it back and forth. */
+  scrollbar-gutter: stable;
   padding: var(--s-4);
   display: flex;
   flex-direction: column;
@@ -812,6 +817,7 @@ body.col-resizing {
 .canvas-panel.collapsed {
   width: 28px !important;
 }
+.canvas-panel.collapsed .canvas-head,
 .canvas-panel.collapsed .canvas-body,
 .canvas-panel.collapsed .canvas-collapse,
 .canvas-panel.collapsed .canvas-resize {
@@ -821,18 +827,14 @@ body.col-resizing {
   display: block;
   writing-mode: vertical-rl;
 }
+/* The tab strip stays put above the scrolling tab body. */
 .canvas-head {
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
+  padding: var(--s-3) var(--s-4) 0;
   padding-right: var(--s-7); /* clear the collapse button */
-}
-.canvas-head h3 {
-  margin: 0;
-  font-size: var(--t-md);
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
 }
 .canvas-tabs {
   display: flex;
@@ -852,6 +854,10 @@ body.col-resizing {
   background: var(--surface-2);
 }
 .canvas-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
   font-size: var(--t-xs);
   padding: var(--s-0-5) var(--s-2);
   border: 0;
@@ -859,8 +865,29 @@ body.col-resizing {
   color: var(--muted);
   cursor: pointer;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.canvas-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.canvas-tab-icon {
+  display: inline-flex;
+  flex: none;
+}
+/* Something on that tab changed while another showed (or it waits for an
+   answer). Also on the collapsed strip, for any tab. */
+.canvas-tab-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.canvas-expand .canvas-tab-dot {
+  display: inline-block;
+  margin: var(--s-1);
 }
 .canvas-tab-wrap.active .canvas-tab {
   color: var(--text);
@@ -925,6 +952,15 @@ body.col-resizing {
 .canvas-tool-btn:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+/* The file tab's 다운로드 is a link dressed as a tool button. */
+a.canvas-tool-btn {
+  text-decoration: none;
+}
+/* Deleting a canvas is permanent — its control reads as such on hover. */
+.canvas-tool-btn.canvas-tool-danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .canvas-versions {
   display: flex;
@@ -1438,32 +1474,22 @@ body.col-resizing .canvas-html-frame {
   font-size: var(--t-xs);
 }
 
-/* Right-side file preview panel (msg-file-card click). Reuses the .canvas-panel
-   frame; these style only the panel's own chrome + slide list. */
-.file-preview-head {
+/* A file tab of the side panel (FileTab, msg-file-card click): the canvas card
+   frame; these style only its title block and the slide list. */
+.file-tab-title {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--line);
-}
-.file-preview-title {
-  display: flex;
+  flex: 1;
   min-width: 0;
   flex-direction: column;
   gap: var(--s-0-5);
 }
-.file-preview-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.file-tab-size {
+  font-size: var(--t-xs);
 }
-.file-preview-actions {
+.file-tab-body {
   display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--s-2);
+  flex-direction: column;
+  gap: var(--s-3);
 }
 .file-preview-slide {
   margin: 0;
@@ -1481,7 +1507,7 @@ body.col-resizing .canvas-html-frame {
 .file-preview-slide figcaption {
   font-size: var(--t-xs);
 }
-/* Interactive draw.io render (FilePreviewPanel). White like the slide PNGs so
+/* Interactive draw.io render (FileTab). White like the slide PNGs so
    diagrams stay readable in dark theme; the viewer manages its own inner DOM. */
 .file-preview-drawio {
   border: 1px solid var(--diagram-line);

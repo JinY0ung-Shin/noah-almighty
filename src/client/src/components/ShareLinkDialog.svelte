@@ -22,8 +22,8 @@
   import type { MessageAttachment, ShareLinkSummary } from "../lib/types";
 
   // Create / show / revoke the share link of ONE deck card. ChatView owns the
-  // one instance (the card's link button and the file-preview panel's 공유 링크
-  // both open it there). It is a portaled Modal (mounted inside the chat view,
+  // one instance (the card's link button and the deck's side-panel tab's 공유
+  // 링크 both open it there). It is a portaled Modal (mounted inside the chat view,
   // a fixed overlay would otherwise sit in that view's stacking contexts), and
   // a portaled modal inerts everything else under <body>, App's
   // ConfirmationDialog and Toasts included. So this dialog NEVER calls

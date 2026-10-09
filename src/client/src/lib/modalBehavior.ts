@@ -1,7 +1,7 @@
 // Dialog keyboard/focus behaviors, extracted from Modal.svelte so every
 // dialog-ish surface gets the SAME treatment — including the ones that cannot
 // use <Modal> because they render inside a chat pane (PromptModal) or float
-// over the whole app without an overlay component (CanvasPanel's fullscreen
+// over the whole app without an overlay component (CanvasTab's fullscreen
 // stage). Modal.svelte remains the reference implementation; these helpers are
 // a straight lift of what it already did.
 

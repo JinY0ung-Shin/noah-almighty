@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { selectConversation } from "../src/client/src/lib/chat.js";
+import { resolveSideTab } from "../src/client/src/lib/sidePanel.js";
 import { appState, readState, replaceState } from "../src/client/src/lib/state.js";
 
 const PRISTINE = structuredClone(readState());
@@ -200,7 +201,8 @@ describe("parked blocking canvas across conversation switches", () => {
       interaction: "blocking",
     });
     expect(canvas!.controls?.length).toBe(1);
-    expect(pane.activeCanvasId).toBe("cv-park");
+    // …and it is the tab the side panel shows.
+    expect(resolveSideTab(pane)).toEqual({ kind: "canvas", id: "cv-park" });
   });
 
   it("resolves the open while the run stays parked, and aborts the stream on leaving", async () => {

@@ -183,7 +183,7 @@ test("parked canvas selection buttons survive leaving and returning to the conve
 
   // 3. Return: reattach + replay must restore the canvas selection buttons.
   await page.getByRole("button", { name: "대화 열기: 질문 대화" }).click();
-  await expect(page.getByText("옵션을 골라주세요")).toBeVisible();
+  await expect(page.locator(".canvas-card .canvas-title", { hasText: "옵션을 골라주세요" })).toBeVisible();
   await expect(page.getByRole("button", { name: "옵션 A" })).toBeVisible();
 
   // 4. The open must RELEASE the sidebar's per-conversation busy lock. It used to
@@ -195,7 +195,7 @@ test("parked canvas selection buttons survive leaving and returning to the conve
   await page.getByRole("button", { name: "대화 열기: 다른 대화" }).click();
   await expect(page.getByText("안녕").first()).toBeVisible();
   await page.getByRole("button", { name: "대화 열기: 질문 대화" }).click();
-  await expect(page.getByText("옵션을 골라주세요")).toBeVisible();
+  await expect(page.locator(".canvas-card .canvas-title", { hasText: "옵션을 골라주세요" })).toBeVisible();
   await expect(page.getByRole("button", { name: "옵션 A" })).toBeVisible();
 
   // 6. Split view: the side-panel slot follows the ACTIVE pane. Adding c-other
@@ -209,6 +209,6 @@ test("parked canvas selection buttons survive leaving and returning to the conve
   await expect(page.getByRole("button", { name: "옵션 A" })).toBeHidden();
 
   await page.getByRole("button", { name: "대화 1" }).click();
-  await expect(page.getByText("옵션을 골라주세요")).toBeVisible();
+  await expect(page.locator(".canvas-card .canvas-title", { hasText: "옵션을 골라주세요" })).toBeVisible();
   await expect(page.getByRole("button", { name: "옵션 A" })).toBeVisible();
 });

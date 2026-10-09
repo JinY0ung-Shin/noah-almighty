@@ -403,7 +403,7 @@ describe("share route", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* item 1: a canvas that asks for input takes the side slot back       */
+/* item 1: a canvas that asks for input takes the side panel's tab    */
 /* ------------------------------------------------------------------ */
 
 function streamFrom(chunks: string[], onDrained?: () => void): ReadableStream<Uint8Array> {
@@ -439,10 +439,13 @@ function seedPane(): string {
     livePlugins: [],
     groupKnowledgeOff: [],
     canvases: [],
-    activeCanvasId: null,
     stickBottom: true,
     abortController: null,
-    filePreview: { attachment: deck, slides: [] },
+    // The owner opened the new deck card themselves (openFileTab), so what
+    // the avatar shows next only takes the panel when it asks for input.
+    fileTabs: [{ attachment: deck, slides: [] }],
+    sideTab: { kind: "file", id: deck.id },
+    sideFollow: false,
   } as unknown as ChatPane;
   updateState((state) => {
     state.chatPanes = [pane];
@@ -469,31 +472,35 @@ async function driveCanvasFrames(paneId: string, frames: unknown[]): Promise<voi
   await attachRun(paneId, runId);
 }
 
-describe("item 1 — a canvas with controls clears the file preview", () => {
-  const preview = (id: string) => readState().chatPanes.find((p) => p.id === id)?.filePreview;
+describe("item 1 — a canvas with controls takes the side panel's tab", () => {
+  const shown = (id: string) => readState().chatPanes.find((p) => p.id === id)?.sideTab;
+  const openFiles = (id: string) =>
+    (readState().chatPanes.find((p) => p.id === id)?.fileTabs ?? []).map((tab) => tab.attachment.id);
 
-  it("keeps the preview for a display-only canvas", async () => {
+  it("keeps the deck tab showing for a display-only canvas, which gets a dot", async () => {
     const id = seedPane();
     await driveCanvasFrames(id, [{ artifactId: "cv-show", title: "미리보기", content: "본문" }]);
-    expect(preview(id)?.attachment.id).toBe("deck-1");
+    expect(shown(id)).toEqual({ kind: "file", id: "deck-1" });
+    expect(readState().chatPanes[0].sideUnseen).toEqual(["canvas:cv-show"]);
   });
 
-  it("drops the preview when an async review form arrives, so the form is seen", async () => {
+  it("shows an async review form at once, so the form is seen — the deck stays open beside it", async () => {
     const id = seedPane();
     await driveCanvasFrames(id, [
       { artifactId: "cv-r1", title: "검토", content: "", controls: [{ id: "r1-s01" }], interaction: "async" },
     ]);
-    expect(preview(id)).toBeNull();
-    expect(readState().chatPanes[0].activeCanvasId).toBe("cv-r1");
+    expect(shown(id)).toEqual({ kind: "canvas", id: "cv-r1" });
+    expect(openFiles(id)).toEqual(["deck-1"]);
   });
 
-  it("drops it for a blocking form too, but not for an empty control list", async () => {
+  it("does it for a blocking form too, but not for an empty control list", async () => {
     const id = seedPane();
     await driveCanvasFrames(id, [{ artifactId: "cv-empty", controls: [] }]);
-    expect(preview(id)?.attachment.id).toBe("deck-1");
+    expect(shown(id)).toEqual({ kind: "file", id: "deck-1" });
     await driveCanvasFrames(id, [
       { artifactId: "cv-b", controls: [{ id: "q" }], interaction: "blocking", requestId: "rq", runId: "canvas-run" },
     ]);
-    expect(preview(id)).toBeNull();
+    expect(shown(id)).toEqual({ kind: "canvas", id: "cv-b" });
+    expect(openFiles(id)).toEqual(["deck-1"]);
   });
 });

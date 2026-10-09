@@ -406,7 +406,7 @@ export function publishWorkspaceImage(
 
 /**
  * Persist one already-validated in-memory image as a HIDDEN attachment (a
- * file-preview-panel slide) in the conversation store, linked to the visible
+ * slide of the side panel's file tab) in the conversation store, linked to the visible
  * download card it previews via `parentId`. The caller owns validation —
  * bytes here are either our own renderer's output or bytes it already sniffed.
  */

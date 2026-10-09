@@ -95,6 +95,12 @@ export interface RunSnapshot {
   conversationId?: string;
   avatarId?: string;
   eventCount: number;
+  /**
+   * Id of the newest frame emitted so far (non-replayed ones included). A
+   * client attaching mid-run treats every replayed frame up to here as history:
+   * it rebuilds state from them without re-opening panels it already showed.
+   */
+  lastEventId: number;
   pendingCount: number;
   cancelled: boolean;
   /** The visible turn is done but background work keeps the run alive. */
@@ -281,6 +287,7 @@ function snapshotRun(runId: string, run: Run): RunSnapshot {
     conversationId: run.conversationId,
     avatarId: run.avatarId,
     eventCount: run.events.length,
+    lastEventId: run.nextEventId,
     pendingCount: run.pending.size,
     cancelled: run.cancelled,
     background: run.background,

@@ -10,7 +10,7 @@
   // Vite chunk (kept out of the main bundle) and is CSP-safe — canvas rendering,
   // no eval/Function. Both GraphViewModal (settings) and BrainView (full page)
   // embed this; the parent owns fetching + the selected-note panel and listens
-  // for the `select` event. Mirrors CanvasPanel's lazy-lib pattern.
+  // for the `select` event. Mirrors CanvasTab's lazy-lib pattern.
 
   export let graph: KnowledgeGraph;
   // Id of the externally-selected node, so the parent can keep the highlight in

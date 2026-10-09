@@ -61,7 +61,7 @@ export const MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE = 30;
 
 /**
  * Media type of shared .drawio attachments — the marker the client's
- * FilePreviewPanel (and the share_file result note) key their diagram
+ * FileTab (and the share_file result note) key their diagram
  * rendering on. `src/client/src/lib/drawioViewer.ts` hand-mirrors the value.
  */
 export const DRAWIO_MEDIA_TYPE = "application/vnd.jgraph.mxfile";
@@ -92,7 +92,7 @@ const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[] }> = {
   txt: { mediaType: "text/plain" },
   // draw.io diagram (mxfile XML, possibly with deflate-compressed <diagram>
   // payloads — still a text file, so no magic prefix like csv/md/txt). This
-  // mediaType is what FilePreviewPanel keys on to render the diagram client-side.
+  // mediaType is what FileTab keys on to render the diagram client-side.
   drawio: { mediaType: DRAWIO_MEDIA_TYPE },
 };
 

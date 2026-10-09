@@ -7,6 +7,7 @@ import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
 import { newId, notify, readState, updateState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
+import { neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { formatTokenCount } from "./format";
 import {
   extensionSupportsSecretInput,
@@ -43,7 +44,9 @@ import type {
   ConversationSummary,
   LiveTaskRow,
   LiveToolRow,
+  MessageAttachment,
   PaneCanvas,
+  SideTabRef,
   SteerPublic,
   StoredMessage,
 } from "./types";
@@ -175,7 +178,8 @@ function makePane(
       ? [...readState().user!.mcpToolGroupsDefault!]
       : [...DEFAULT_MCP_TOOL_GROUPS],
     canvases,
-    activeCanvasId: canvases.length ? canvases[canvases.length - 1].id : null,
+    fileTabs: [],
+    sideTab: null,
     stickBottom: true,
     usage: null,
     abortController: null,
@@ -739,7 +743,7 @@ const pendingUserMessageIds = new Map<string, string>();
 /** What a rewind/regenerate's `open` clears locally once the server has applied it. */
 interface RewindCleanup {
   conversationId: string;
-  /** Attachments of the dropped rows (the file preview closes if it shows one). */
+  /** Attachments of the dropped rows (their side-panel file tabs close). */
   attachmentIds: Set<string>;
 }
 const pendingRewindCleanups = new Map<string, RewindCleanup>();
@@ -758,8 +762,8 @@ function adoptUserMessageId(
 
 /**
  * The server applied the rewind before opening the run (that is what `open`
- * proves), so the side state of the dropped turns goes now: a file preview
- * showing one of their cards, and canvases they created or refined. Canvases
+ * proves), so the side state of the dropped turns goes now: side-panel file
+ * tabs of their cards, and canvases they created or refined. Canvases
  * carry no timestamps client-side, so they come back from the server — merged
  * with anything THIS run has already shown live, which the fetch may not
  * include yet.
@@ -770,11 +774,10 @@ function applyRewindCleanup(
   runId: string | undefined,
 ): void {
   updatePane(paneId, (pane) => {
-    if (
-      pane.filePreview &&
-      cleanup.attachmentIds.has(pane.filePreview.attachment.id)
-    )
-      pane.filePreview = null;
+    const dropped = (pane.fileTabs ?? []).filter((tab) =>
+      cleanup.attachmentIds.has(tab.attachment.id),
+    );
+    for (const tab of dropped) removeFileTab(pane, tab.attachment.id);
   });
   // Not a transcript re-read of its own (it bumps nothing), but a later one — the
   // run-end re-read — supersedes it, so a late answer here is dropped.
@@ -794,11 +797,12 @@ function applyRewindCleanup(
           ),
           ...live,
         ];
+        const selected = pane.sideTab;
         if (
-          pane.activeCanvasId &&
-          !pane.canvases.some((canvas) => canvas.id === pane.activeCanvasId)
+          selected?.kind === "canvas" &&
+          !pane.canvases.some((canvas) => canvas.id === selected.id)
         )
-          pane.activeCanvasId = null;
+          pane.sideTab = null;
       });
     } catch {
       /* best effort — the next open of the conversation reloads them */
@@ -1054,6 +1058,9 @@ export async function sendMessage(
     // new answer streams in off-screen. onTranscriptScroll can still disengage
     // it the moment the user genuinely scrolls up.
     target.stickBottom = true;
+    // Same intent for the side panel: what this turn shows takes it again,
+    // even if the viewer had picked a tab during the last one.
+    target.sideFollow = true;
     target.liveStatus = "응답 준비 중…";
     target.abortController = controller;
   });
@@ -1229,11 +1236,15 @@ export async function attachActiveRun(paneId: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
   if (!pane || pane.streaming || !pane.conversationId) return;
   try {
-    const result = await api<{ run: { runId: string } | null }>(
+    const result = await api<{
+      run: { runId: string; lastEventId?: number; eventCount?: number } | null;
+    }>(
       `/api/chat/runs?conversationId=${encodeURIComponent(pane.conversationId)}`,
     );
     if (result.run?.runId) {
-      await attachRun(paneId, result.run.runId);
+      await attachRun(paneId, result.run.runId, {
+        seenThrough: result.run.lastEventId ?? result.run.eventCount,
+      });
       return;
     }
     if (pane.messages[pane.messages.length - 1]?.role === "user") {
@@ -1249,7 +1260,11 @@ export async function attachActiveRun(paneId: string): Promise<void> {
   }
 }
 
-export async function attachRun(paneId: string, runId: string): Promise<void> {
+export async function attachRun(
+  paneId: string,
+  runId: string,
+  opts: { seenThrough?: number } = {},
+): Promise<void> {
   // A wake nudge can race an attach that is already in flight; one loop per pane.
   if (activeRunLoops.has(paneId)) return;
   const controller = new AbortController();
@@ -1259,6 +1274,9 @@ export async function attachRun(paneId: string, runId: string): Promise<void> {
     target.liveRunId = runId;
     target.liveStatus = REATTACH_STATUS;
     target.abortController = controller;
+    // What the run logged before this pane attached is history to it: the
+    // replay rebuilds it without picking tabs or re-opening files for it.
+    if (opts.seenThrough) markSideSeen(target, runId, opts.seenThrough);
   });
   try {
     await followRun(paneId, runId, controller);
@@ -1787,7 +1805,7 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       enqueuePrompt(paneId, "question", data);
       return;
     case "canvas":
-      if (data?.artifactId) handleCanvas(paneId, data);
+      if (data?.artifactId) handleCanvas(paneId, data, frame.id);
       return;
     case "browser":
       if (data?.requestId && data?.op) handleBrowserOp(paneId, data);
@@ -1805,16 +1823,25 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             // (it's stamped after the emit), so this never overwrites one.
             pane.liveAttachments.push({ ...data.attachment, anchor: pane.liveText.length });
           }
-          // A live .drawio share pops the side preview panel open by itself —
-          // single-pane layout only: split view has no side-panel slot, so the
-          // preview would invisibly hijack the slot for later. Other formats
-          // keep click-to-open via the file card.
+          // A live .drawio share opens as a side-panel tab by itself, ONCE: a
+          // replayed frame (reconnect, return to the running conversation)
+          // never re-opens a tab the viewer closed. Single-pane layout only —
+          // a split pane's file cards stay downloads. Other formats keep
+          // click-to-open via the file card.
+          const fresh = freshSideFrame(pane, pane.liveRunId, frame.id);
           if (
+            fresh &&
             !data.attachment.hidden &&
             isDrawioAttachment(data.attachment) &&
             state.chatPanes.length === 1
           ) {
-            pane.filePreview = { attachment: data.attachment, slides: [] };
+            const current = resolveSideTab(pane);
+            if (!(pane.fileTabs ?? []).some((tab) => tab.attachment.id === data.attachment.id))
+              pane.fileTabs = [...(pane.fileTabs ?? []), { attachment: data.attachment, slides: [] }];
+            // The diagram it opens for is meant to be SEEN — the preview never
+            // stayed behind a collapsed strip before the panels merged.
+            if (revealSideTab(pane, { kind: "file", id: data.attachment.id }, current, false))
+              pane.sideExpand = true;
           }
         });
         setStatus(paneId, data.attachment.kind === "file" ? "파일을 공유했습니다." : "이미지를 표시했습니다.", true);
@@ -2898,7 +2925,7 @@ function awaitingCanvasAnswer(paneId: string): boolean {
   );
 }
 
-function handleCanvas(paneId: string, data: any): void {
+function handleCanvas(paneId: string, data: any, frameId = ""): void {
   const controls = Array.isArray(data.controls) ? data.controls : undefined;
   const interaction =
     data.interaction === "blocking" || data.interaction === "async"
@@ -2906,6 +2933,10 @@ function handleCanvas(paneId: string, data: any): void {
       : undefined;
   const pending = Boolean(controls && controls.length && interaction !== "async");
   updatePane(paneId, (pane) => {
+    const fresh = freshSideFrame(pane, pane.liveRunId ?? data.runId, frameId);
+    // What showed BEFORE this canvas joined: a new last canvas would otherwise
+    // become the default tab and take the panel over from the viewer.
+    const current = resolveSideTab(pane);
     const prev = pane.canvases.find((c) => c.id === data.artifactId);
     const entry: PaneCanvas = {
       id: data.artifactId,
@@ -2922,29 +2953,151 @@ function handleCanvas(paneId: string, data: any): void {
       // Refining in place bumps the version client-side too so the version-history
       // button (gated on versionCount > 1) appears WITHOUT a reload. The server is
       // authoritative on reload and may dedup an unchanged re-show, so this can
-      // briefly over-count; loadMessages re-hydrates the exact numbers.
-      currentVersion: prev ? (prev.currentVersion || 1) + 1 : 1,
-      versionCount: prev ? (prev.versionCount || 1) + 1 : 1,
+      // briefly over-count; loadMessages re-hydrates the exact numbers. A
+      // replayed frame was counted when it first arrived.
+      currentVersion: prev
+        ? fresh
+          ? (prev.currentVersion || 1) + 1
+          : prev.currentVersion
+        : 1,
+      versionCount: prev
+        ? fresh
+          ? (prev.versionCount || 1) + 1
+          : prev.versionCount
+        : 1,
     };
     const idx = pane.canvases.findIndex((c) => c.id === entry.id);
     if (idx >= 0) pane.canvases[idx] = entry;
     else pane.canvases.push(entry);
-    pane.activeCanvasId = entry.id;
-    // A canvas that ASKS for input must be seen. The file preview owns the side
-    // slot while it is open, so an owner who clicked the new deck card would
-    // never see the next review round's form (the deck-review loop would stall
-    // silently). Clicking the card reopens the preview.
-    if (controls?.length) pane.filePreview = null;
+    // A canvas that ASKS for input must be seen, whatever tab the viewer is
+    // on: an owner reading the new deck card's preview would otherwise never
+    // see the next review round's form (the deck-review loop would stall
+    // silently). The file tab stays open beside it.
+    if (fresh)
+      revealSideTab(
+        pane,
+        { kind: "canvas", id: entry.id },
+        current,
+        Boolean(controls?.length),
+      );
   });
   // A blocking canvas parks the run on the USER's answer — say so instead of
   // leaving the last "실행 중: …" tool label implying avatar work.
   if (pending) setStatus(paneId, "캔버스 응답을 기다리는 중…", true);
 }
 
-export function setActiveCanvas(paneId: string, canvasId: string): void {
+/* ---------- side panel: canvases + open files as one tab strip ---------- */
+
+/**
+ * Whether a canvas/file frame is NEW to this pane. The server replays a run's
+ * whole log on every (re)attach; a replayed frame must rebuild state without
+ * re-selecting a tab, re-opening a file the viewer closed or re-marking a dot.
+ * A frame without a numeric id counts as new.
+ */
+function freshSideFrame(
+  pane: ChatPane,
+  runId: string | null | undefined,
+  frameId: string,
+): boolean {
+  const id = Number(frameId);
+  if (!runId || !frameId || !Number.isFinite(id)) return true;
+  const seen = pane.sideSeen?.runId === runId ? pane.sideSeen.through : 0;
+  if (id <= seen) return false;
+  pane.sideSeen = { runId, through: id };
+  return true;
+}
+
+function markSideSeen(pane: ChatPane, runId: string, through: number): void {
+  const seen = pane.sideSeen?.runId === runId ? pane.sideSeen.through : 0;
+  if (through > seen) pane.sideSeen = { runId, through };
+}
+
+function selectTab(pane: ChatPane, ref: SideTabRef): void {
+  pane.sideTab = { kind: ref.kind, id: ref.id };
+  const key = tabKey(ref);
+  if (pane.sideUnseen?.includes(key))
+    pane.sideUnseen = pane.sideUnseen.filter((item) => item !== key);
+}
+
+function dropUnseen(pane: ChatPane, ref: SideTabRef): void {
+  const key = tabKey(ref);
+  if (pane.sideUnseen?.includes(key))
+    pane.sideUnseen = pane.sideUnseen.filter((item) => item !== key);
+}
+
+/**
+ * The avatar showed something in the side panel. While the pane follows (until
+ * the viewer picks a tab; every send re-arms it) — or when it asks for input
+ * (`force`) — it becomes the shown tab. Otherwise the viewer's tab stays and
+ * the new one gets a dot. `current` = what showed BEFORE the new tab joined.
+ * Returns whether it became the shown tab.
+ */
+function revealSideTab(
+  pane: ChatPane,
+  ref: SideTabRef,
+  current: SideTabRef | null,
+  force: boolean,
+): boolean {
+  if (force || pane.sideFollow !== false || !current) {
+    selectTab(pane, ref);
+    if (force) pane.sideExpand = true;
+    return true;
+  }
+  pane.sideTab = current;
+  if (sameTab(current, ref)) return true;
+  const key = tabKey(ref);
+  if (!(pane.sideUnseen ?? []).includes(key))
+    pane.sideUnseen = [...(pane.sideUnseen ?? []), key];
+  return false;
+}
+
+function removeFileTab(pane: ChatPane, attachmentId: string): void {
+  const ref: SideTabRef = { kind: "file", id: attachmentId };
+  if (!(pane.fileTabs ?? []).some((tab) => tab.attachment.id === attachmentId))
+    return;
+  if (sameTab(resolveSideTab(pane), ref)) pane.sideTab = neighborTab(pane, ref);
+  pane.fileTabs = (pane.fileTabs ?? []).filter(
+    (tab) => tab.attachment.id !== attachmentId,
+  );
+  dropUnseen(pane, ref);
+}
+
+/**
+ * The viewer picked a side-panel tab: it shows, and what the avatar shows next
+ * only gets a dot until the viewer's next send.
+ */
+export function selectSideTab(paneId: string, ref: SideTabRef): void {
   updatePane(paneId, (pane) => {
-    pane.activeCanvasId = canvasId;
+    selectTab(pane, ref);
+    pane.sideFollow = false;
   });
+}
+
+/**
+ * Open a shared file as a side-panel tab (a file-card click) — or bring its
+ * open tab forward — out of the collapsed strip if need be. Like any tab the
+ * viewer picks, it stops the panel following the avatar until the next send.
+ */
+export function openFileTab(
+  paneId: string,
+  attachment: MessageAttachment,
+  slides: MessageAttachment[],
+): void {
+  updatePane(paneId, (pane) => {
+    const tabs = pane.fileTabs ?? [];
+    const tab = { attachment, slides };
+    pane.fileTabs = tabs.some((item) => item.attachment.id === attachment.id)
+      ? tabs.map((item) => (item.attachment.id === attachment.id ? tab : item))
+      : [...tabs, tab];
+    selectTab(pane, { kind: "file", id: attachment.id });
+    pane.sideFollow = false;
+    pane.sideExpand = true;
+  });
+}
+
+/** Close a file's side-panel tab (its card reopens it); the tab beside it shows instead. */
+export function closeFileTab(paneId: string, attachmentId: string): void {
+  updatePane(paneId, (pane) => removeFileTab(pane, attachmentId));
 }
 
 // Submit the user's response to a canvas's controls. Two paths:
@@ -2952,6 +3105,17 @@ export function setActiveCanvas(paneId: string, canvasId: string): void {
 //   unblock the parked run, exactly as before.
 // - ASYNC / re-submit / post-reload (no live parked run): deliver the answer as a
 //   NEW chat turn via sendMessage(canvasSubmission) — naturally double-submit safe.
+/**
+ * An ask the panel shows only by default (nothing picked; it wins the default
+ * while `pending` — lib/sidePanel resolveSideTab) is pinned before the viewer
+ * answers or skips it: clearing `pending` would otherwise move the panel to the
+ * latest canvas right under them.
+ */
+function pinDefaultShown(pane: ChatPane, canvasId: string): void {
+  const ref: SideTabRef = { kind: "canvas", id: canvasId };
+  if (!pane.sideTab && sameTab(resolveSideTab(pane), ref)) pane.sideTab = ref;
+}
+
 export async function submitCanvas(
   paneId: string,
   canvasId: string,
@@ -2963,6 +3127,7 @@ export async function submitCanvas(
   const blocking = Boolean(canvas.pending && canvas.requestId && canvas.runId);
   if (blocking) {
     updatePane(paneId, (p) => {
+      pinDefaultShown(p, canvasId);
       const c = p.canvases.find((x) => x.id === canvasId);
       if (c) c.submitting = true;
     });
@@ -3054,6 +3219,7 @@ export async function dismissCanvas(
   const parked = Boolean(canvas?.pending && canvas?.requestId && canvas?.runId);
   if (canvas) await cancelParkedCanvas(canvas);
   updatePane(paneId, (p) => {
+    pinDefaultShown(p, canvasId);
     const c = p.canvases.find((x) => x.id === canvasId);
     if (c) c.pending = false;
   });
@@ -3066,10 +3232,11 @@ function isMissingCanvasError(err: unknown): boolean {
   );
 }
 
-// Close a canvas tab. A still-pending BLOCKING canvas must cancel its parked run
-// FIRST (else the run hangs on awaitResponse); a persisted canvas is hard-deleted
-// server-side; then it's removed locally and the active tab recomputed.
-export async function closeCanvas(
+// Delete a canvas (its own confirmed action in CanvasTab — never a tab's ×). A
+// still-pending BLOCKING canvas must cancel its parked run FIRST (else the run
+// hangs on awaitResponse); a persisted canvas is hard-deleted server-side; then
+// it's removed locally and the tab beside it shows if it was the shown one.
+export async function deleteCanvas(
   paneId: string,
   canvasId: string,
 ): Promise<void> {
@@ -3093,14 +3260,10 @@ export async function closeCanvas(
   updatePane(paneId, (p) => {
     const idx = p.canvases.findIndex((c) => c.id === canvasId);
     if (idx < 0) return;
+    const ref: SideTabRef = { kind: "canvas", id: canvasId };
+    if (sameTab(resolveSideTab(p), ref)) p.sideTab = neighborTab(p, ref);
     p.canvases.splice(idx, 1);
-    if (p.activeCanvasId === canvasId) {
-      const next =
-        p.canvases[idx] ||
-        p.canvases[idx - 1] ||
-        p.canvases[p.canvases.length - 1];
-      p.activeCanvasId = next ? next.id : null;
-    }
+    dropUnseen(p, ref);
   });
 }
 
@@ -3108,7 +3271,7 @@ export async function closeCanvas(
 export async function fetchCanvasVersions(
   canvasId: string,
 ): Promise<{ version: number; createdAt: string }[]> {
-  // Let the error PROPAGATE: CanvasPanel has a versionsError branch + a retry
+  // Let the error PROPAGATE: CanvasTab has a versionsError branch + a retry
   // button that only work if a failure actually throws. Swallowing to [] here
   // rendered a real failure as a silently empty version list.
   const res = await api<{
