@@ -486,8 +486,9 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     const { options } = sdkMock.calls[0];
     expect(options.model).toBe("sonnet");
     expect(options.effort).toBe("high");
-    // Only the `system` group enabled → only the system server is registered.
-    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual(["system"]);
+    // Only the `system` group enabled → only the system family is registered:
+    // the system server plus, on this owner run, the to-do server riding it.
+    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual(["system", "todo"]);
   });
 
   it("keeps a turn the external task API submitted a full owner run", async () => {

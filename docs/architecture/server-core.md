@@ -17,6 +17,11 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY
   `deleteCanvasArtifactsForConversation` call. Mechanics → [`share-links.md`](share-links.md).
+- **할 일 (to-dos)** have their own router (`routes/todos.ts`, `createTodosRouter`, mounted right after
+  routines) and store mixin (`store/todos.ts`, `withTodos`, composed outermost). Input validation is the
+  pure `src/server/todos.ts` (error CODES), shared with the avatar's `mcp__todo__*` tools; the wire
+  types, limits and display order are the import-free `src/shared/todos.ts`. Mechanics →
+  [`todos.md`](todos.md).
 - Non-obvious route homes: git-token/secrets/ssh-key/git-identity/**knowledge gap-inbox**
   (`/api/me/knowledge/requests`)/**notifications** all live in `routes/knowledgeRepo.ts`;
   **discovery** (`/api/avatars*`) + **conversations** + the **chat SSE** endpoint live in

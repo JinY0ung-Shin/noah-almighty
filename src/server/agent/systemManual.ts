@@ -53,6 +53,7 @@ Noah Almighty gives each user a main avatar with a profile/persona, skills, plug
 - 내 아바타: configure your avatar through 프로필, 권한·연결 and 지식·플러그인 tabs. Code/tool messages may call 내 아바타 "Settings/설정".
 - 탐색: find reachable teammate and group avatars and start conversations.
 - 대화: revisit conversation history and continue work.
+- 할 일: your work to-do list; in a chat, the 할 일 button under the message box shows it as a card. Read todos.
 - 예약 작업: create, edit, pause and run scheduled work and read its results.
 - 그룹: membership, shared repositories and group-agent settings.
 - 스킬 배우기: browse and learn shared teammate skills.
@@ -190,6 +191,30 @@ The 예약 작업 screen offers 지금 실행, edit, enable/pause and result vie
 There is a whole-run time limit, including fallback attempts. describe_system reports the configured routine limit. On failure or timeout, inspect the error and any partial response before retrying; changes may already have occurred. Routines are not the external Task API and do not use its respond endpoint.
 
 Use external-tasks when another system decides WHEN to trigger a task, rather than Noah's scheduler.`,
+  },
+  {
+    id: "todos",
+    title: "Work to-do list (할 일)",
+    summary: "One persistent list per user: 할 일 tab, chat card, mcp__todo__* tools, /todo.",
+    body: `## Where it lives
+Each user has ONE persistent work to-do list. 할 일 in the left menu shows it in full: add items, check them off, filter by 오늘 / 예정 / 마감 지남 / 전체 / 완료, search, and edit an item's title, memo, due date, priority and tags. In a chat, the 할 일 button under the message box toggles a card at the top right of the conversation with the most urgent open items and a quick-add field. Both show the same list.
+
+## Fields and limits
+Only the title is required (up to 200 characters). Optional: a memo (markdown, up to 4000 characters), a due date (a KST calendar DATE — no time of day), priority 높음/보통/낮음 (default 보통) and up to 5 tags. Overdue means due before today in KST. A user may keep up to 500 open items; the newest 200 completed items stay listed until 완료 항목 비우기 removes them.
+
+## Avatar tools (mcp__todo__*)
+Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar, a group agent or an avatar consultation. These tools are NOT TodoWrite/TaskCreate, which are the avatar's private per-run checklist and disappear when the turn ends.
+- list_todos: status open (default) | done | all, dueBefore (YYYY-MM-DD, exclusive), tag, query, includeNotes.
+- add_todos: 1-20 items per call, all-or-nothing; each {title, note?, dueDate?, priority?: high|normal|low, tags?}.
+- update_todo: {id, ...fields, done: true|false}; dueDate null or "" clears it, tags [] clears them.
+- delete_todo: only on an explicit request; not available on external Task API runs (mark done instead).
+Every result starts with today's KST date and the open/overdue/due-today counts. Items the avatar adds are marked with where they came from (chat, routine or task API) and link back to that conversation.
+/todo <text> asks the avatar to add what the text describes, reading the due date, priority and tags from it.
+
+## When the avatar adds items
+On an explicit request it adds right away and says in one line what it added. When a conversation surfaces a clear action item the owner owns, it may offer once at the end of a reply and adds only what the owner accepts; it does not suggest ideas, casual mentions or other people's tasks, and stops offering in that conversation once declined. Routines and external Task API runs add what their instruction asks without offering and report it in their result.
+
+Example: "/todo 금요일까지 3분기 보고서 초안, 우선순위 높음 #보고"`,
   },
   {
     id: "external-tasks",

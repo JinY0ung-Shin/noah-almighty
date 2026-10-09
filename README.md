@@ -62,6 +62,14 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   them headlessly and keeps each run's result in a dedicated routine conversation.
   The `/routine <task>` chat command creates a routine inline. The avatar itself can manage
   routines via the `mcp__system__*_routine` tools.
+- **To-do list (할 일)**: each user keeps one work to-do list — a title plus an optional memo, due
+  date (a date, never a time), priority and tags. The **할 일** tab (right below 대화) shows it in detail
+  with 오늘/예정/마감 지남/전체/완료 filters, and a toggle under the chat input pins a compact card to the
+  top right of the chat. The owner's own avatar manages the same list through the owner-only
+  `mcp__todo__*` tools: it adds items on request (or `/todo <내용>`), offers once to add clear action
+  items that come up in a conversation, and completes or edits them; routines and the external task API
+  can add items too (an API-submitted task cannot delete one). Mechanics:
+  [`docs/architecture/todos.md`](docs/architecture/todos.md).
 - **Groups**: the system admin creates named teams (`/api/admin/groups*`) and assigns group
   admins. Group co-membership in an avatar-sharing group is the SOLE source of trust/elevation —
   co-members **auto-trust each other symmetrically**: they see each other's `group`-visibility

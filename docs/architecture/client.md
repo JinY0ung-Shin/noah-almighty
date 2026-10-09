@@ -167,6 +167,13 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   `GET /api/avatars` (`listPublishedAvatars`) includes the viewer's OWN avatar plus public + group-teammate
   avatars.
 
+## 할 일 tab and chat card
+Mechanics → [`todos.md`](todos.md). Load-bearing for any change here: ONE store slice feeds the rail
+badge, the tab and the card; concurrent loads share one in-flight GET and only WRITES make a load stale
+(self-invalidating loads livelocked a direct `#/todos` open); the card mounts inside the active pane's
+`.chat-body` and picks pinned/popover/sheet from a `ResizeObserver`, never a layout read in `onMount`;
+transient dismissals never persist the per-browser preference.
+
 ## Share hash view (`#/share/<token>`) and the deck-card link controls
 Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **The first view only a link opens** (`views/ShareView.svelte`; not in the rail). `state.shareToken` holds

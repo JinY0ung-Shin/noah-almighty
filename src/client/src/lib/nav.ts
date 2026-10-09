@@ -11,7 +11,7 @@ function viewDenied(view: ViewName, state: ClientState): boolean {
   return ADMIN_ONLY_VIEWS.includes(view) && !state.user?.roles?.includes("admin");
 }
 
-const VIEW_ROUTES: ViewName[] = ["explore", "chat", "brain", "inbox", "routines", "groups", "skills", "settings", "admin", "share"];
+const VIEW_ROUTES: ViewName[] = ["explore", "chat", "todos", "brain", "inbox", "routines", "groups", "skills", "settings", "admin", "share"];
 const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",
@@ -51,6 +51,9 @@ export function currentRoute(): string {
   if (state.view === "routines") {
     return state.routineConversationId ? `#/routines/${encodeURIComponent(state.routineConversationId)}` : "#/routines";
   }
+  if (state.view === "todos") {
+    return state.todoSelectedId ? `#/todos/${encodeURIComponent(state.todoSelectedId)}` : "#/todos";
+  }
   if (state.view === "brain") {
     return state.brainSource && state.brainSource !== "personal"
       ? `#/brain/${encodeURIComponent(state.brainSource)}`
@@ -81,6 +84,7 @@ export function goView(view: ViewName, arg?: string): void {
     if (view === "settings" && isSettingsTab(arg)) state.settingsTab = arg;
     if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
     if (view === "routines" && arg) state.routineConversationId = arg;
+    if (view === "todos" && arg) state.todoSelectedId = arg;
     if (view === "brain") state.brainSource = arg || "personal";
     if (view === "share") state.shareToken = arg || "";
   });
@@ -99,6 +103,7 @@ export function applyInitialRoute(): void {
     if (view === "settings" && isSettingsTab(arg)) state.settingsTab = arg;
     if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
     if (view === "routines" && arg) state.routineConversationId = arg;
+    if (view === "todos" && arg) state.todoSelectedId = arg;
     if (view === "brain") state.brainSource = arg || "personal";
     if (view === "share") state.shareToken = arg || "";
   });
@@ -124,6 +129,7 @@ export function installRouteListener(onChatRoute?: (conversationId: string) => v
       if (view === "settings" && isSettingsTab(arg)) state.settingsTab = arg;
       if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
       if (view === "routines" && arg) state.routineConversationId = arg;
+      if (view === "todos" && arg) state.todoSelectedId = arg;
       if (view === "brain") state.brainSource = arg || "personal";
       // A second share link opened while the viewer is mounted: ShareView
       // refetches on the token change itself (same pure-state pattern).

@@ -32,6 +32,7 @@
   const viewLoaders: Record<ViewName, () => Promise<{ default: any }>> = {
     explore: () => import("./views/ExploreView.svelte"),
     chat: () => import("./views/ChatView.svelte"),
+    todos: () => import("./views/TodosView.svelte"),
     brain: () => import("./views/BrainView.svelte"),
     inbox: () => import("./views/InboxView.svelte"),
     routines: () => import("./views/RoutinesView.svelte"),
@@ -45,6 +46,7 @@
   const viewLabels: Record<ViewName, string> = {
     explore: "탐색",
     chat: "대화",
+    todos: "할 일",
     brain: "지식 그래프",
     inbox: "알림",
     routines: "예약 작업",

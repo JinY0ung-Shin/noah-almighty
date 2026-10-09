@@ -52,5 +52,9 @@ Durable principles for this layer:
   the current user/task instruction. Compatibility `buildPrompt` returns both for older tests/importers.
   The preset MUST carry `snapshot: false`: the CLI default (2.1.267+) records the first turn's system prompt
   and replays it on every resume, so the per-turn append — the live self-state — would silently freeze.
+  Because it is re-rendered every turn, keep the append STABLE across turns: a volatile value in it (a
+  count, a date, a clock) changes the cached prefix whenever it moves and re-bills the whole history at
+  cache-write rates. Live numbers belong in `describe_system` or tool results (the pending-request count,
+  the 할 일 counts and KST date), or in the user message (`/todo` carries its date).
 - **`agent-core.test.ts` checks the prompt with `toContain`/`not.toContain` substrings**, not byte-for-byte
   — adding a section is safe; changing an existing string (or its per-viewer presence) breaks a test.

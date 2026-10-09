@@ -1492,9 +1492,12 @@ button.composer-bridge:focus-visible {
   border-color: var(--accent, var(--text));
 }
 
-/* Owner-only per-conversation group-knowledge toggle (button + dropdown). */
+/* Owner-only per-conversation group-knowledge toggle (button + dropdown), the
+   MCP tool picker, and the 할 일 overlay switch (ChatView adds only its icon
+   layout and the pressed/overdue states). */
 .composer-gk-btn,
-.composer-tools-btn {
+.composer-tools-btn,
+.composer-todo-btn {
   flex: none;
   min-width: 0;
   border: 1px solid var(--line);
@@ -1516,7 +1519,8 @@ button.composer-bridge:focus-visible {
 .composer-gk-btn[aria-expanded="true"],
 .composer-gk-btn:hover,
 .composer-tools-btn[aria-expanded="true"],
-.composer-tools-btn:hover {
+.composer-tools-btn:hover,
+.composer-todo-btn:hover {
   color: var(--text);
   border-color: var(--accent, var(--text));
 }

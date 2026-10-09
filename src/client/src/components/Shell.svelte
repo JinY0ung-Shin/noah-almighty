@@ -50,6 +50,7 @@
   const nav = [
     { view: "explore", label: "탐색", icon: "compass" },
     { view: "chat", label: "대화", icon: "chat" },
+    { view: "todos", label: "할 일", icon: "check-square" },
     { view: "brain", label: "지식 그래프", icon: "network" },
     { view: "inbox", label: "알림", icon: "bell" },
     { view: "routines", label: "예약 작업", icon: "clock" },
@@ -62,6 +63,13 @@
   const themeIcons: Record<ThemePref, string> = { system: "monitor", light: "sun", dark: "moon" };
   const themeOrder: ThemePref[] = ["system", "light", "dark"];
 
+  // The 할 일 badge counts what needs attention now — overdue + due today — not
+  // every open item; the tooltip spells the split out.
+  $: todoCounts = $appState.todos.counts;
+  $: todoBadgeCount = todoCounts.overdue + todoCounts.dueToday;
+  $: todoBadgeTitle = [todoCounts.overdue ? `마감 지남 ${todoCounts.overdue}개` : "", todoCounts.dueToday ? `오늘 마감 ${todoCounts.dueToday}개` : ""]
+    .filter(Boolean)
+    .join(" · ");
   $: themeLabel = `테마: ${themeLabels[themePref]}`;
   $: themeIcon = themeIcons[themePref];
   $: activeConversationId =
@@ -644,6 +652,9 @@
           <span>{item.label}</span>
           {#if item.view === "inbox" && unreadCount > 0}
             <span class="nav-badge">{unreadCount}</span>
+          {/if}
+          {#if item.view === "todos" && todoBadgeCount > 0}
+            <span class="nav-badge" title={todoBadgeTitle}>{todoBadgeCount}</span>
           {/if}
         </button>
       {/each}

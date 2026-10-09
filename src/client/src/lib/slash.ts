@@ -77,6 +77,16 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     requiresArgs: true,
   },
   {
+    // Expanded server-side like /routine; the avatar reads any due date or
+    // priority out of the text and adds the item with its to-do tool.
+    name: "todo",
+    title: "할 일 추가",
+    argsLabel: "내용",
+    description: "뒤에 쓴 내용을 할 일 목록에 추가합니다. 마감일·우선순위가 적혀 있으면 함께 읽어 등록해요.",
+    ownerOnly: true,
+    requiresArgs: true,
+  },
+  {
     name: "find",
     title: "아바타 찾기",
     argsLabel: "요청",

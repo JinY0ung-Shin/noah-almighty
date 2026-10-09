@@ -18,3 +18,24 @@ export function persistRailCollapsed(collapsed: boolean): void {
     /* Private mode / blocked storage: keep the in-memory UI state working. */
   }
 }
+
+const TODO_OVERLAY_OPEN_KEY = "noah.todoOverlayOpen";
+
+/** Read the browser-local 할 일 chat-overlay switch. Off is the default. */
+export function loadTodoOverlayOpen(): boolean {
+  try {
+    return window.localStorage.getItem(TODO_OVERLAY_OPEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Persist only the non-default (on) state, like the rail preference above. */
+export function persistTodoOverlayOpen(open: boolean): void {
+  try {
+    if (open) window.localStorage.setItem(TODO_OVERLAY_OPEN_KEY, "true");
+    else window.localStorage.removeItem(TODO_OVERLAY_OPEN_KEY);
+  } catch {
+    /* Private mode / blocked storage: the switch still works for this page. */
+  }
+}

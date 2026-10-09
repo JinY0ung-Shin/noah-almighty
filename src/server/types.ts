@@ -1611,6 +1611,19 @@ export interface AgentRequest {
    */
   avatarTaskRunTimeoutMs?: number;
   /**
+   * The owner's 할 일 capability (META-COGNITION), stamped by `runClaudeAgent`
+   * ONLY on runs that registered the `mcp__todo__*` tools (runPlan's
+   * `todoToolsActive`: an interactive own-avatar chat, an owner routine, an
+   * external-task-API turn) — so the standing guidance never offers a tool the
+   * run lacks. `deleteEnabled` mirrors runPlan's `todoDeleteActive` (false on
+   * external-task-API turns). Mirrored by describe_system
+   * (`SystemToolsContext.todoToolsEnabled` / `todoDeleteEnabled`). Carries NO
+   * counts or date on purpose: the system-prompt append must stay stable across
+   * turns for prompt caching, so the live counts ride describe_system and the
+   * header of every to-do tool result instead.
+   */
+  todoState?: { deleteEnabled: boolean };
+  /**
    * The registered git repo the avatar opened as this conversation's **working
    * repository** (`mcp__git_repo__open_repo`): the repo's registered name. Its
    * clone is the SDK cwd, so the avatar edits/tests and commits locally with

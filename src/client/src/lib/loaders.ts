@@ -1,6 +1,7 @@
 import { api, refreshMe } from "./api";
 import { goView } from "./nav";
 import { notify, readState, replaceState, updateState } from "./state";
+import { emptyTodoState, refreshTodos, resetTodoClientState } from "./todos";
 import type {
   AdminGroupSummary,
   AdminPresence,
@@ -176,17 +177,13 @@ function onKnowledgeVisible(): void {
     void refreshKnowledgeStatus({ announce: true });
     void refreshNotificationStatus({ announce: true });
     void refreshAdminPresence();
+    // The to-do list rides the same tick: routines and external-task runs edit it
+    // with no chat stream open, so this is how their changes reach the overlay.
+    void refreshTodos();
   }
 }
-export function startKnowledgeWatch(): void {
-  stopKnowledgeWatch();
-  knowledgeWatchTimer = window.setInterval(onKnowledgeVisible, 60000);
-  document.addEventListener("visibilitychange", onKnowledgeVisible);
-  // Knowledge/notification counts arrive with loadInboxData at boot; presence has
-  // no such loader, so seed it here instead of leaving the badge blank for a minute.
-  void refreshAdminPresence();
-}
-export function stopKnowledgeWatch(): void {
+/** Stop the poll only. Leaves the account's state alone (startKnowledgeWatch reuses it on boot). */
+function clearKnowledgeWatch(): void {
   if (knowledgeWatchTimer != null) {
     window.clearInterval(knowledgeWatchTimer);
     knowledgeWatchTimer = null;
@@ -194,8 +191,31 @@ export function stopKnowledgeWatch(): void {
   document.removeEventListener("visibilitychange", onKnowledgeVisible);
   lastAnnouncedRequestCount = 0;
   lastAnnouncedNotificationCount = 0;
-  // Logout runs through here — don't leave another account's presence list in state.
-  replaceState({ adminPresence: null });
+}
+export function startKnowledgeWatch(): void {
+  // NOT stopKnowledgeWatch(): its account reset would wipe what boot already
+  // restored from the URL (a #/todos/<id> deep link's selection).
+  clearKnowledgeWatch();
+  knowledgeWatchTimer = window.setInterval(onKnowledgeVisible, 60000);
+  document.addEventListener("visibilitychange", onKnowledgeVisible);
+  // Knowledge/notification counts arrive with loadInboxData at boot; presence has
+  // no such loader, so seed it here instead of leaving the badge blank for a minute.
+  // The 할 일 list (rail badge + chat overlay) is seeded the same way.
+  void refreshAdminPresence();
+  void refreshTodos();
+}
+/** Stop the poll AND forget the account's state — the logout / session-expiry / teardown path. */
+export function stopKnowledgeWatch(): void {
+  clearKnowledgeWatch();
+  // Don't leave another account's presence list (or to-do list) in state.
+  resetTodoClientState();
+  replaceState({
+    adminPresence: null,
+    todos: emptyTodoState(),
+    todoSelectedId: "",
+    todoSearch: "",
+    todoOverlayDismissed: false,
+  });
 }
 
 export async function loadRoutinesData(): Promise<void> {

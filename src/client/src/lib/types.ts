@@ -44,6 +44,15 @@ export type {
 } from "../../../server/types.js";
 
 export type {
+  TodoCounts,
+  TodoItem,
+  TodoListResponse,
+  TodoPriority,
+  TodoSnapshot,
+  TodoSource,
+} from "../../../shared/todos";
+
+export type {
   ShareLinkCreateResult,
   ShareLinkExpiryDays,
   ShareLinkSummary,
@@ -52,6 +61,22 @@ export type {
 } from "../../../shared/shareLinks";
 
 import type { CanvasArtifact, RoutineJob } from "../../../server/types.js";
+import type { TodoCounts, TodoItem } from "../../../shared/todos";
+
+/** The 할 일 tab's status filters (오늘 = overdue + due today; 예정 = future-dated). */
+export type TodoFilter = "today" | "upcoming" | "overdue" | "all" | "done";
+
+/**
+ * The ONE client slice of the viewer's to-do list: the 할 일 tab, the chat
+ * overlay and the rail badge all read it, so a change in one shows in all.
+ * `todayKst`/`counts` are the server's snapshot from the latest response.
+ */
+export interface TodoState {
+  items: TodoItem[];
+  todayKst: string;
+  counts: TodoCounts;
+  loaded: boolean;
+}
 import type { McpToolGroupId } from "../../../shared/mcpToolGroups";
 
 /**
@@ -115,7 +140,9 @@ export type ViewName =
   | "settings"
   | "admin"
   /** A PPTX share link's viewer (`#/share/<token>`); not in the rail — only a link opens it. */
-  | "share";
+  | "share"
+  /** The 할 일 tab (`#/todos[/<id>]`). */
+  | "todos";
 export type SettingsTab = "profile" | "access" | "knowledge";
 export type AdminTab =
   | "overview"

@@ -416,6 +416,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         // PPT share links this user CREATED, whatever thread they point into
         // (the conversation sweep below covers the threads themselves).
         this.db.prepare("DELETE FROM share_links WHERE owner_user_id = ?").run(id);
+        this.db.prepare("DELETE FROM todo_items WHERE owner_user_id = ?").run(id);
         // Delete conversations owned by or targeting this user (+ their messages).
         const convRows = this.db
           .prepare(

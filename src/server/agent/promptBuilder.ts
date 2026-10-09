@@ -457,6 +457,38 @@ function shareLinkSection(request: AgentRequest): string | null {
 }
 
 /**
+ * The owner's 할 일 list: the standing trigger, ONLY when this run registered
+ * the `mcp__todo__*` tools (`request.todoState`, stamped from runPlan's
+ * `todoToolsActive`), so it never offers a tool the run lacks. Mirrored by
+ * describe_system's 할 일 line (same booleans).
+ *
+ * Deliberately STATIC — no counts, no date. The append is re-rendered on every
+ * turn (`snapshot: false`) and any change to it invalidates the cached prompt
+ * prefix, so a count that moved since the last turn (an add, a checkbox, a
+ * routine, KST midnight) would re-bill the whole history at cache-write rates.
+ * The live state rides describe_system and the `Today (KST): …` header of every
+ * to-do tool result instead (the pending-request count precedent). Short on
+ * purpose — the add_todos description and the manual topic `todos` carry the
+ * rest. The offer-once rule only fits a live conversation: a routine or
+ * task-API turn adds what it is told and reports it.
+ */
+function todoSection(request: AgentRequest): string | null {
+  const state = request.todoState;
+  if (!state) return null;
+  const policy =
+    request.headless || request.externalTaskApi
+      ? "This turn is not a live conversation: add or complete items as the instruction asks, without offering, and list what you changed in your result."
+      : "When the owner asks to add or track something (or sends /todo), add it and confirm in one line. For a clear action item the owner owns, offer ONCE at the end of your reply, batched, and add only what they accept — never for ideas, casual mentions or others' tasks, nor again once declined.";
+  return (
+    "할 일 (the owner's persistent work to-do list in Noah — the 할 일 tab and the card under the message box): manage it ONLY with `mcp__todo__*`; `TodoWrite`/`TaskCreate` are your private per-run checklist and vanish after this turn. " +
+    "Tool results start with today's KST date and the counts, so call `list_todos` for the current state (and before resolving a relative due date). " +
+    policy +
+    " Check for a near-duplicate before adding; prefer done over delete" +
+    (state.deleteEnabled ? "." : " (`delete_todo` is not available in this run).")
+  );
+}
+
+/**
  * Standing guidance for draw.io diagram work. Unlike decks there is no
  * per-deployment toolchain gate: the client renders shared .drawio files
  * itself, so this only needs the run to be able to publish files.
@@ -961,7 +993,7 @@ export function buildSystemPromptAppend(
       );
     }
     lines.push(
-      "You have NO personal-avatar capabilities: no personal knowledge repository or second brain, no secrets, no SSH, no scheduled routines, no notifications, and no plugins beyond the group repository. If asked about those, explain that a member's personal avatar handles them.",
+      "You have NO personal-avatar capabilities: no personal knowledge repository or second brain, no secrets, no SSH, no scheduled routines, no notifications, no 할 일 to-do list, and no plugins beyond the group repository. If asked about those, explain that a member's personal avatar handles them.",
     );
   } else if (request.headless && request.avatarConsultation) {
     // Avatar-to-avatar consultation (#ask-avatar): a one-shot headless turn
@@ -1085,6 +1117,10 @@ export function buildSystemPromptAppend(
       if (routineState.length > 0) {
         lines.push(`Current self-state: ${routineState.join(" ")}`);
       }
+      const routineTodoBlock = todoSection(request);
+      if (routineTodoBlock) {
+        lines.push(routineTodoBlock);
+      }
       const routineBrainBlock = mcpToolGroupEnabled(
         request,
         "personal_knowledge",
@@ -1166,6 +1202,10 @@ export function buildSystemPromptAppend(
         "When the owner asks about this system itself or requests configuration changes, check the current state with `mcp__system__describe_system`, then directly use `mcp__system__create_routine`/`update_routine`/`delete_routine` or `mcp__system__add_plugin`/`set_plugin_enabled` as appropriate. " +
           "For an important result or required action the user should be told about separately, leave an app notification with `mcp__system__notify_user`. Routine times are based on KST `HH:MM`, and plugin add/enable changes usually load starting from the next conversation.",
       );
+    }
+    const todoBlock = todoSection(request);
+    if (todoBlock) {
+      lines.push(todoBlock);
     }
     const knowledgeRepoConfigured = request.knowledgeRepoConfigured !== false;
     if (mcpToolGroupEnabled(request, "personal_knowledge")) {
@@ -1261,6 +1301,13 @@ export function buildSystemPromptAppend(
       name
         ? `The person you are talking to right now is a **colleague**, "${name}".${colleagueGapGuidance}`
         : `The person you are talking to right now is a **colleague**.${colleagueGapGuidance}`,
+    );
+    // Their 할 일 list is out of reach here (the todo tools ride owner runs
+    // only), while TodoWrite/TaskCreate are always available — without this
+    // line a "내 할 일에 넣어줘" lands in the private per-run checklist and the
+    // avatar reports success. Static text: safe for prompt caching.
+    lines.push(
+      "This person's 할 일 (their own Noah work to-do list) can only be changed by THEIR OWN avatar — you have no to-do tools here and cannot add to it. If they ask you to put something on their to-do list, say so and point them to the 할 일 tab, the quick-add box of the 할 일 card under the message box, or a chat with their own avatar (`/todo`); never use TodoWrite/TaskCreate for it and never claim it was added.",
     );
     // A trusted user works at the owner's tool level — don't claim read-only.
     // A plain colleague stays read-only.

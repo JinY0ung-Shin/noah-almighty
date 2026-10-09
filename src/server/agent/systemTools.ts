@@ -96,6 +96,15 @@ export interface SystemToolsContext {
    */
   shareLinksEnabled?: boolean;
   /**
+   * Whether THIS run registered the owner's to-do tools (`mcp__todo__*`,
+   * runPlan's `todoToolsActive`) and, of those, `delete_todo`
+   * (`todoDeleteActive`: false on external-task-API turns). Mirrors
+   * `AgentRequest.todoState`, so the prompt and describe_system report the SAME
+   * capability. Undefined → not registered.
+   */
+  todoToolsEnabled?: boolean;
+  todoDeleteEnabled?: boolean;
+  /**
    * Whether this run can drive the viewer's own browser through the extension
    * bridge. Owner-only and interactive-only; mirrors AgentRequest.browserEnabled
    * so prompt and describe_system report the SAME capability.
@@ -579,6 +588,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // partial output survives, so the avatar should size a routine's prompt to
           // fit rather than discover the ceiling by being killed.
           `- Routines run headlessly once at a specified KST date/time or recur on a daily, weekly, or interval schedule, work with the same tool permissions as the owner, and leave their results in the routines tab. A routine can also open one registered git repository as its working directory (open_repo) — the selection persists and takes effect from the routine's next scheduled run. Each run has a hard wall-clock limit of ${Math.round(ctx.config.routineRunTimeoutMs / 60_000)} minutes covering the ENTIRE run; when it is hit the run is aborted and only the text produced so far is kept. Scope a routine to fit that budget, and split work that cannot into several routines. Up to ${ctx.config.routineMaxConcurrentRunsPerUser} of the owner's routines run at the same time (${ctx.config.routineMaxConcurrentRuns} across the server) — a manual "지금 실행" run is never refused and can add more; one that falls due while those slots are busy, or while its working repository is open in another conversation, starts on a later check instead of being dropped. Routines due at the same time can therefore run side by side and finish in any order — never rely on one routine's output being ready when another starts.`,
+          "- 할 일: each user keeps ONE personal work to-do list (the 할 일 tab, plus a card toggled by the 할 일 button under the chat's message box). Only that user's own avatar can read or change it (`mcp__todo__*`, in their own chats, routines and task-API runs) — never through a teammate's chat or a group agent.",
           "- Secret values are not exposed; only their names are revealed to the avatar.",
           "- Remote git operations (clone/push, etc.) are performed only through dedicated MCP tools. The shell has no git credentials.",
           "- Background execution: `run_in_background` tasks keep running after the visible reply ends — the session stays alive, the avatar is woken when a task settles, and its follow-up arrives as a NEW chat message (the user sees a live indicator meanwhile). The user cannot send new messages in that conversation until the background work finishes or is cancelled (cancelling kills it).",
@@ -657,7 +667,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
               `- Model in use: ${gaModelLine}`,
               `- Reasoning effort: ${gaEffortLine}`,
               `- MCP tool groups enabled for this conversation: ${gaLabels.length ? gaLabels.join(", ") : "(none)"}`,
-              "- Capability boundary: NO personal knowledge repository/brain, secrets, SSH, routines, notifications, personal git repositories, or plugins beyond the group repository.",
+              "- Capability boundary: NO personal knowledge repository/brain, secrets, SSH, routines, notifications, 할 일 to-do lists, personal git repositories, or plugins beyond the group repository.",
               // Deployment-level capability (not group state): every member of
               // a group-agent run gets the elevated built-ins, so the SAME deck
               // line the owner block prints applies here.
@@ -690,6 +700,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const secretNames = state.secretNames;
         const groups = state.groups;
         const openRequests = state.openRequestCount;
+        // ONE read of the lazy getter (each access re-runs the KST date and four
+        // COUNT queries), and only when the line will state it.
+        const todos = ctx.todoToolsEnabled ? state.todos : null;
         // Mirrors the runtime's model resolution (claudeAgent: env pin > user
         // per-conversation tier > admin override > SDK default) so the avatar
         // reports the model it ACTUALLY runs with, not just the env value.
@@ -841,6 +854,14 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                 `- External task API: ${state.avatarApiKeyCount} active personal API keys. Manage them in 내 아바타 → 권한·연결 → 외부 작업 API. POST /api/v1/avatar/tasks accepts arbitrary {message, conversationId?} instructions with a personal Bearer key and runs the owner's main avatar asynchronously; GET /api/v1/avatar/tasks/:id reports results and pending questions, and POST .../:id/respond answers them. Each task may run for up to ${Math.round(ctx.config.avatarTaskRunTimeoutMs / 60_000)} minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES), including time spent waiting on questions and background work, and a single pending question or permission request expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer. This does not create or run scheduled routines. Never request the key in chat.`,
               ]),
           `- Routines: ${routines.length} (${routines.filter((r) => r.enabled).length} enabled)`,
+          // Mirrors buildSystemPromptAppend's to-do section (the same runPlan
+          // booleans); the live counts + KST date live HERE only, since the
+          // prompt section stays static for prompt caching.
+          `- 할 일 (the owner's work to-do list, mcp__todo__*): ${
+            todos
+              ? `open ${todos.counts.open}, overdue ${todos.counts.overdue}, due today ${todos.counts.dueToday}, completed ${todos.counts.done}; today is ${todos.todayKst} (KST). list_todos/add_todos/update_todo are available${ctx.todoDeleteEnabled ? ", and delete_todo" : "; delete_todo is NOT available in this run (an external system submitted it — mark items done instead)"}. The owner sees the list in the 할 일 tab and in the card toggled by the 할 일 button under the chat's message box. It is the owner's persistent list, separate from your private per-run TodoWrite/TaskCreate checklist`
+              : "not available in this run"
+          }`,
           `- Pending information requests: ${openRequests}${openRequests > 0 ? " (use pending_requests to view the details)" : ""}`,
         ];
         return text(lines.join("\n"));

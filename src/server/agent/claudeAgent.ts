@@ -273,6 +273,8 @@ export async function runClaudeAgent(
     fileOutputActive,
     shareLinkToolActive,
     skillExchangeActive,
+    todoToolsActive,
+    todoDeleteActive,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
@@ -382,6 +384,10 @@ export async function runClaudeAgent(
     // tool the run lacks; any other run with file output hears the 공유 링크
     // button redirect instead. Same boolean describe_system reports.
     shareLinksEnabled: shareLinkToolActive,
+    // 할 일 capability: rides ONLY runs that registered the to-do tools
+    // (runPlan's todoToolsActive — the skillExchangeActive precedent). No counts:
+    // they would change the per-turn append and break prompt caching.
+    todoState: todoToolsActive ? { deleteEnabled: todoDeleteActive } : undefined,
     // Deck standing guidance (see deckGuidance above): the converter branch
     // wins in promptBuilder's deckSection when both flags are set.
     deckRenderingEnabled: deckGuidance.deckRenderingEnabled,

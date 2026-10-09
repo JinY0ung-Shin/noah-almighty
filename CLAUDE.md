@@ -209,6 +209,16 @@ These are the invariants the project is built around. New work should reinforce 
   choice: **never add a check that fires because a slide has no image** (user decision 2026-09-30). Text over a picture
   must pass the converter's worst-case `text-on-picture` contrast, which holds for ANY photo, incl. one swapped in
   later in PowerPoint.
+- **할 일 is ONE per-user list behind ONE store.** The 할 일 tab, the chat overlay (toggled under the
+  composer) and the owner's avatar all write `todo_items` through `store/todos.ts`, validated by the pure
+  `src/server/todos.ts` (error CODES, Korean/English maps per channel); wire types, limits and the ONE
+  display order are the import-free `src/shared/todos.ts`, and due dates are optional KST calendar
+  dates (date only) from `routineSchedule.ts`. The `mcp__todo__*` tools exist ONLY on owner runs
+  (interactive own-avatar chat, owner routine, external task API — never colleague, group-agent or
+  consultation runs), ride the always-on `system` group so no saved tool selection or group policy can
+  drop them, and an API-submitted run cannot delete. They edit the owner's PERSISTENT list; the built-in
+  TodoWrite/TaskCreate are the avatar's private per-run checklist, and the tool text plus the prompt keep
+  the two apart. Mechanics → `docs/architecture/todos.md`.
 - **Knowledge repo = one per user, agent-managed** (the avatar edits its own repo via `mcp__repo__*`).
   **Second brain = a CONVENTION (`wiki/`+`raw/`) over that SAME repo, NOT a new store** — recall is
   read-only MCP search; capture writes through the repo-write tools + commit (uncommitted = not persisted).

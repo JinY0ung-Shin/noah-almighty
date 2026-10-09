@@ -177,7 +177,9 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   TaskStatus: "태스크 상태",
   TaskStop: "태스크 중지",
   TaskUpdate: "태스크 업데이트",
-  TodoWrite: "할 일 갱신",
+  // The CLI's private per-run checklist, NOT the owner's 할 일 list
+  // (mcp__todo__*) — so it must never read as "할 일".
+  TodoWrite: "작업 체크리스트 갱신",
   WebFetch: "웹 페이지 읽기",
   WebSearch: "웹 검색",
   Workflow: "워크플로 실행",
@@ -208,6 +210,10 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__knowledge__resolve_request: "요청 처리 완료",
   mcp__system__notify_user: "사용자 알림",
   mcp__system__read_manual: "시스템 사용 매뉴얼 조회",
+  mcp__todo__add_todos: "할 일 추가",
+  mcp__todo__delete_todo: "할 일 삭제",
+  mcp__todo__list_todos: "할 일 조회",
+  mcp__todo__update_todo: "할 일 수정",
   mcp__web__fetch: "웹 페이지 읽기",
 };
 
@@ -237,8 +243,27 @@ export function sdkToolLabel(name: string | undefined): string | undefined {
  * - `create_share_link`: its only string argument is an opaque attachment id,
  *   while what the user should see is how long the link will live — "7일"
  *   (the default when the model omits the expiry).
+ * - `mcp__todo__*`: item ids are opaque too — the title (one added item, a
+ *   retitle, a search query), what changed ("완료로 표시"), or a count.
  */
 export function mcpToolInputSummary(name: string | undefined, input: unknown): string | undefined {
+  const args = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const title = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  switch (name) {
+    // The to-do tools' first string argument is an opaque item id (or nothing,
+    // for a batch): show the title the user will recognise, or a count.
+    case "mcp__todo__add_todos": {
+      const items = Array.isArray(args.items) ? args.items : [];
+      const only = items.length === 1 ? title((items[0] as Record<string, unknown> | null)?.title) : undefined;
+      return only ?? `${items.length}개`;
+    }
+    case "mcp__todo__update_todo":
+      return title(args.title) ?? (args.done === true ? "완료로 표시" : args.done === false ? "다시 열기" : "내용 변경");
+    case "mcp__todo__delete_todo":
+      return "1개";
+    case "mcp__todo__list_todos":
+      return title(args.query) ?? (args.status === "done" ? "완료 항목" : args.status === "all" ? "전체" : "열린 항목");
+  }
   if (name === "mcp__file_output__create_share_link") {
     const days =
       typeof input === "object" && input !== null

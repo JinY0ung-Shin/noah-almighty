@@ -783,6 +783,7 @@ button:disabled {
 .model-menu,
 .effort-menu,
 .popover,
+.todo-overlay,
 .toast {
   border-color: var(--material-edge);
   border-radius: var(--r-lg);
@@ -1025,7 +1026,8 @@ button:disabled {
   .prompt-modal-card,
   .toast,
   .composer-gk-panel,
-  .composer-tools-panel {
+  .composer-tools-panel,
+  .todo-overlay {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }

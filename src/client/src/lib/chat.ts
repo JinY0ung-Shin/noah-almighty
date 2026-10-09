@@ -18,6 +18,7 @@ import {
   type BridgeReply,
 } from "./browserBridge";
 import { isCompactCommandText, resolveTypedSlashCommand } from "./slash";
+import { noteTodoToolEnd, noteTodoToolStart } from "./todos";
 import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
 import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
 import {
@@ -1718,6 +1719,8 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "tool": {
       if (!data?.toolUseId || !data?.name || HIDDEN_TOOLS.has(data.name))
         return;
+      // An mcp__todo__* call: re-read the 할 일 list when it ends (noteTodoToolEnd).
+      noteTodoToolStart(data.toolUseId, data.name);
       markTextBreak(paneId);
       ensureAgent(paneId, data.agentId || "main");
       const label = humanTool(data.name);
@@ -1742,6 +1745,7 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     }
     case "tool_end":
       if (data?.toolUseId) {
+        noteTodoToolEnd(data.toolUseId, data.ok !== false);
         updatePane(paneId, (pane) => {
           const row = pane.liveTools.find((t) => t.id === data.toolUseId);
           if (!row || row.status === "blocked") return;

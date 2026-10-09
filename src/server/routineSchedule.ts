@@ -65,6 +65,35 @@ function parseCalendarDate(value: unknown): CalendarDate | null {
   return { year, month, day, value: trimmed };
 }
 
+/**
+ * The canonical `YYYY-MM-DD` for a real calendar date, or null (`2026-02-31`,
+ * `10/9`, a non-string). Shared with to-do due dates so every KST calendar date
+ * the app stores is validated by this ONE parser.
+ */
+export function normalizeCalendarDate(value: unknown): string | null {
+  return parseCalendarDate(value)?.value ?? null;
+}
+
+/** The KST calendar date (`YYYY-MM-DD`) at `from`. */
+export function kstDateString(from: Date = new Date()): string {
+  return new Date(from.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** Day of week (0=Sun..6=Sat) of a real `YYYY-MM-DD` calendar date, or null. */
+export function calendarDateWeekday(value: unknown): number | null {
+  const date = parseCalendarDate(value);
+  return date ? new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay() : null;
+}
+
+const WEEKDAY_ABBREVIATIONS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/** Agent-facing KST "today" with its weekday, e.g. `2026-10-09 (Fri)`. */
+export function kstDateWithWeekday(from: Date = new Date()): string {
+  const today = kstDateString(from);
+  const weekday = calendarDateWeekday(today);
+  return weekday === null ? today : `${today} (${WEEKDAY_ABBREVIATIONS[weekday]})`;
+}
+
 /** Convert a KST calendar date + minutes-from-midnight to an exact UTC ISO instant. */
 function onceRunIso(runDate: string | null, minuteOfDay: number): string | null {
   const date = parseCalendarDate(runDate);

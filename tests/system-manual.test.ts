@@ -19,8 +19,9 @@ describe("official system manual", () => {
   it("keeps procedures out of the prompt while retaining live scope and safety", () => {
     // A TRIPWIRE against procedures creeping into the standing prompt — NOT a
     // bound on real owner prompts. The config is maximal over the BOOLEAN
-    // feature flags only (midTurnMessages and shareLinksEnabled included: every
-    // interactive owner run with file output carries both) and sets no
+    // feature flags only (midTurnMessages, shareLinksEnabled and todoState
+    // included: every interactive owner run with file output carries the first
+    // two, and every owner run with the to-do tools the last) and sets no
     // data-driven field. Real owner turns also carry sections this cap does not
     // measure: the External task API line (avatarApiKeyCount is stamped even at
     // 0 keys), the web-fetch proxy note, and the group, secret, Confluence and
@@ -37,6 +38,8 @@ describe("official system manual", () => {
       browserEnabled: true, canvasEnabled: true, visionEnabled: false,
       fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true,
       midTurnMessages: true, shareLinksEnabled: true,
+      // Static by design (no counts/date — prompt caching), so it is a flag here.
+      todoState: { deleteEnabled: true },
     };
     const prompt = buildSystemPromptAppend(flags);
     expect(prompt.length).toBeLessThan(18000);
@@ -47,6 +50,7 @@ describe("official system manual", () => {
     expect(visionPrompt).not.toContain("Screenshots and pixel-mode clicks are unavailable");
     expect(prompt).toContain("The user may send additional messages while you are working.");
     expect(prompt).toContain("Share links: `create_share_link`, ONLY if the user asks for a link.");
+    expect(prompt).toContain("manage it ONLY with `mcp__todo__*`");
     // The converter deck section (the longer of the two) is what this budgets.
     expect(prompt).toContain("edit its HTML and rebuild");
     expect(prompt).toContain("topic `browser-operations`");

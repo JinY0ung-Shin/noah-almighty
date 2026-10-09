@@ -476,6 +476,12 @@ export async function buildAgentRunPlan(
     GROUP_AGENT_PROFILE_SERVER_NAME,
     GROUP_AGENT_PROFILE_TOOL_NAMES,
   } = await import("./groupAgentProfileTools.js");
+  const {
+    buildTodoServer,
+    TODO_SERVER_NAME,
+    TODO_TOOL_NAMES,
+    TODO_DELETE_TOOL_NAME,
+  } = await import("./todoTools.js");
 
   const streaming = Boolean(events);
   // Tool-access derivation lives in deriveAgentToolAccess (a pure, unit-tested
@@ -761,6 +767,21 @@ export async function buildAgentRunPlan(
   // self-gates nothing because showing UI is harmless). Computed here, before
   // buildSystemServer, so describe_system reports it.
   const canvasActive = canvasToolsEnabled && Boolean(events?.onCanvas);
+  // 할 일 (the owner's persistent work to-do list, `mcp__todo__*`): OWNER-DRIVEN
+  // runs only — an interactive own-avatar chat, an owner routine, an
+  // external-task-API turn. Never a teammate's chat, a group agent (no owner)
+  // or a consultation (another avatar's question). It rides the always-on
+  // system family rather than a tool group of its own, so a saved tool-group
+  // selection or a group's MCP policy can never silently drop it. delete_todo
+  // is withheld from API turns: their message is machine-authored, so this is a
+  // speed bump against an injected, irreversible removal of items — not a full
+  // boundary (update_todo stays, and a leaked key IS the owner's session per
+  // CLAUDE.md). Computed before buildSystemServer so
+  // describe_system reports the SAME booleans the server build, allowedTools
+  // and the prompt stamp key on.
+  const todoToolsActive =
+    systemToolsEnabled && ownerToolAccess && !groupAgentRun && !consultationRun;
+  const todoDeleteActive = todoToolsActive && !request.externalTaskApi;
   // Deployment-level PPTX toolchain probes — memoized per process (boot pays
   // the spawn cost): the legacy LibreOffice/pdftoppm/python-pptx half, and the
   // pptx skill's HTML→PPTX converter (`deck.mjs probe`), whose state rides into
@@ -830,6 +851,9 @@ export async function buildAgentRunPlan(
     // create_share_link registration (shareLinkToolActive above): describe_system
     // states it as available, or names why not and points at the 공유 링크 button.
     shareLinksEnabled: shareLinkToolActive,
+    // The to-do tools' registration (todoToolsActive / todoDeleteActive above).
+    todoToolsEnabled: todoToolsActive,
+    todoDeleteEnabled: todoDeleteActive,
     browserEnabled: browserActive,
     canvasEnabled: canvasActive,
     deckRenderingAvailable,
@@ -1002,6 +1026,19 @@ export async function buildAgentRunPlan(
         agentId: groupAgentRun.agentId,
         groupName: groupAgentRun.groupName,
         actingUser: actingMember,
+      })
+    : null;
+  // To-do server (todoToolsActive above). The handlers re-check viewerIsOwner
+  // — registration is not the boundary under the mcp__ auto-allow — and stamp
+  // each new item with WHO added it and the conversation it came from.
+  const todoServer = todoToolsActive
+    ? buildTodoServer(store, {
+        avatarUserId: request.avatar.id,
+        owner,
+        viewerIsOwner: ownerToolAccess,
+        source: request.externalTaskApi ? "api" : request.headless ? "routine" : "avatar",
+        conversationId: request.conversationId,
+        deleteEnabled: todoDeleteActive,
       })
     : null;
   // Visual canvas server for this run; `canvasActive` is computed further up
@@ -1324,6 +1361,70 @@ export async function buildAgentRunPlan(
       }
     : {};
 
+  // App in-process MCP servers this run registers (its own block so a plugin
+  // server of the same name — which these always override — can be reported
+  // instead of vanishing silently).
+  const appMcpServers: Record<string, unknown> = {
+    ...(personalKnowledgeToolsEnabled
+      ? { [KNOWLEDGE_SERVER_NAME]: knowledgeServer }
+      : {}),
+    ...(personalKnowledgeToolsEnabled
+      ? { [REPO_SERVER_NAME]: repoServer }
+      : {}),
+    ...(systemToolsEnabled ? { [SYSTEM_SERVER_NAME]: systemServer } : {}),
+    ...(todoServer ? { [TODO_SERVER_NAME]: todoServer } : {}),
+    ...(confluenceToolsEnabled
+      ? { [CONFLUENCE_SERVER_NAME]: confluenceServer }
+      : {}),
+    ...(webFetchToolsEnabled
+      ? { [WEB_FETCH_SERVER_NAME]: webFetchServer }
+      : {}),
+    ...(avatarDirectoryToolsEnabled
+      ? { [AVATAR_DIRECTORY_SERVER_NAME]: avatarDirectoryServer }
+      : {}),
+    ...(skillExchangeActive
+      ? { [SKILL_EXCHANGE_SERVER_NAME]: skillExchangeServer }
+      : {}),
+    ...(sshToolsEnabled
+      ? { [SSH_IDENTITY_SERVER_NAME]: sshIdentityServer }
+      : {}),
+    ...(gitRepoToolsEnabled ? { [GIT_REPO_SERVER_NAME]: gitRepoServer } : {}),
+    ...(groupRepoActive ? { [GROUP_REPO_SERVER_NAME]: groupRepoServer } : {}),
+    ...(brainActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
+    ...(groupBrainActive
+      ? { [GROUP_BRAIN_SERVER_NAME]: groupBrainServer }
+      : {}),
+    ...(groupAgentProfileServer
+      ? { [GROUP_AGENT_PROFILE_SERVER_NAME]: groupAgentProfileServer }
+      : {}),
+    ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
+    ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
+    ...(fileOutputServer
+      ? { [FILE_OUTPUT_SERVER_NAME]: fileOutputServer }
+      : {}),
+    ...sshServers,
+    // The SSH host-trust server rides alongside hex-ssh, and only when hex-ssh
+    // itself is active (the owner stored a key) — trust management is pointless
+    // without a server to connect.
+    ...(sshActive ? { [SSH_TRUST_SERVER_NAME]: sshTrustServer } : {}),
+  };
+  // A plugin's .mcp.json server whose name an app server takes in THIS run is
+  // replaced by it. Say so (logs + the run's status line, like the chat route's
+  // pluginWarnings) rather than dropping a user's server without a trace; runs
+  // where that app server is inactive still register the plugin's.
+  const shadowedPluginServers = consultationRun
+    ? []
+    : Object.keys(liftedPluginMcpServers).filter((name) => Object.hasOwn(appMcpServers, name));
+  for (const name of shadowedPluginServers) {
+    agentLogger.warn(
+      { avatarId: request.avatar.id, server: name },
+      "plugin mcp server shadowed by an app server of the same name",
+    );
+    events?.onStatus?.(
+      `플러그인 경고: MCP 서버 "${name}"은(는) 앱 기본 도구와 이름이 같아 이번 실행에서는 앱 도구가 대신 쓰입니다`,
+    );
+  }
+
   const options: Record<string, unknown> = {
     plugins: pluginRoots,
     // The PreToolUse hook (below) is the real gate. `default` mode is required —
@@ -1337,6 +1438,9 @@ export async function buildAgentRunPlan(
       ...(personalKnowledgeToolsEnabled ? REPO_TOOL_NAMES : []),
       ...(allowRepoCreate ? [REPO_CREATE_TOOL_NAME] : []),
       ...(systemToolsEnabled ? SYSTEM_TOOL_NAMES : []),
+      ...(todoToolsActive ? TODO_TOOL_NAMES : []),
+      // Its own entry on the SAME boolean as its registration (not in TODO_TOOL_NAMES).
+      ...(todoDeleteActive ? [TODO_DELETE_TOOL_NAME] : []),
       ...(confluenceToolsEnabled ? CONFLUENCE_TOOL_NAMES : []),
       ...(webFetchToolsEnabled ? WEB_FETCH_TOOL_NAMES : []),
       ...(avatarDirectoryToolsEnabled ? AVATAR_DIRECTORY_TOOL_NAMES : []),
@@ -1405,53 +1509,14 @@ export async function buildAgentRunPlan(
     // registrations below — and so an opened work repo's .mcp.json can't
     // register servers behind the app's back.
     strictMcpConfig: true,
-    // Register the SSH host-trust server alongside hex-ssh, and only when hex-ssh
-    // itself is active (the owner stored a key) — trust management is pointless
-    // without a server to connect.
     mcpServers: {
       // Plugin-provided servers first: every app-managed name spread after
-      // this wins a collision, so a plugin can't shadow an app server. A
-      // consultation run gets NO plugin servers at all — third-party servers
-      // can't self-gate per viewer, so registration is their only gate.
+      // this wins a collision, so a plugin can't shadow an app server (the
+      // shadowed ones are reported above). A consultation run gets NO plugin
+      // servers at all — third-party servers can't self-gate per viewer, so
+      // registration is their only gate.
       ...(consultationRun ? {} : liftedPluginMcpServers),
-      ...(personalKnowledgeToolsEnabled
-        ? { [KNOWLEDGE_SERVER_NAME]: knowledgeServer }
-        : {}),
-      ...(personalKnowledgeToolsEnabled
-        ? { [REPO_SERVER_NAME]: repoServer }
-        : {}),
-      ...(systemToolsEnabled ? { [SYSTEM_SERVER_NAME]: systemServer } : {}),
-      ...(confluenceToolsEnabled
-        ? { [CONFLUENCE_SERVER_NAME]: confluenceServer }
-        : {}),
-      ...(webFetchToolsEnabled
-        ? { [WEB_FETCH_SERVER_NAME]: webFetchServer }
-        : {}),
-      ...(avatarDirectoryToolsEnabled
-        ? { [AVATAR_DIRECTORY_SERVER_NAME]: avatarDirectoryServer }
-        : {}),
-      ...(skillExchangeActive
-        ? { [SKILL_EXCHANGE_SERVER_NAME]: skillExchangeServer }
-        : {}),
-      ...(sshToolsEnabled
-        ? { [SSH_IDENTITY_SERVER_NAME]: sshIdentityServer }
-        : {}),
-      ...(gitRepoToolsEnabled ? { [GIT_REPO_SERVER_NAME]: gitRepoServer } : {}),
-      ...(groupRepoActive ? { [GROUP_REPO_SERVER_NAME]: groupRepoServer } : {}),
-      ...(brainActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
-      ...(groupBrainActive
-        ? { [GROUP_BRAIN_SERVER_NAME]: groupBrainServer }
-        : {}),
-      ...(groupAgentProfileServer
-        ? { [GROUP_AGENT_PROFILE_SERVER_NAME]: groupAgentProfileServer }
-        : {}),
-      ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
-      ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
-      ...(fileOutputServer
-        ? { [FILE_OUTPUT_SERVER_NAME]: fileOutputServer }
-        : {}),
-      ...sshServers,
-      ...(sshActive ? { [SSH_TRUST_SERVER_NAME]: sshTrustServer } : {}),
+      ...appMcpServers,
     },
     maxTurns: config.maxTurns,
     // Isolation mode: load NO filesystem settings, so we never leak the operator's
@@ -1651,6 +1716,8 @@ export async function buildAgentRunPlan(
     fileOutputActive,
     shareLinkToolActive,
     skillExchangeActive,
+    todoToolsActive,
+    todoDeleteActive,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,

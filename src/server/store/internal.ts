@@ -638,6 +638,29 @@ export class StoreBase {
       );
       CREATE INDEX IF NOT EXISTS idx_share_links_owner ON share_links(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_share_links_conversation ON share_links(conversation_id);
+      -- 할 일 (the owner's work to-do list, store/todos.ts). due_date is a KST
+      -- calendar date (YYYY-MM-DD) or NULL — never a time. source is who created
+      -- the row (user|avatar|routine|api); source_conversation_id is read through
+      -- a join that drops it once the conversation is gone, so no
+      -- conversation-deleting path needs a cascade. No FKs (share_links
+      -- precedent); deleteUser removes the rows manually. A brand-new table:
+      -- CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
+      CREATE TABLE IF NOT EXISTS todo_items (
+        id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        done INTEGER NOT NULL DEFAULT 0,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        due_date TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        source TEXT NOT NULL DEFAULT 'user',
+        source_conversation_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_todo_items_owner ON todo_items(owner_user_id, done, due_date);
       CREATE INDEX IF NOT EXISTS idx_group_agents_group ON group_agents(group_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
       CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);

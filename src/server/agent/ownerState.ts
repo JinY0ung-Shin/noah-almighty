@@ -5,8 +5,10 @@ import type {
   UserGroupMembership,
 } from "../types.js";
 import { groupAgentCaptureAllowed } from "../groupAgents.js";
+import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
+import type { TodoSnapshot } from "../../shared/todos.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -79,6 +81,14 @@ export interface OwnerState {
    * to the owner's personal knowledge repo (see repoTools.ts `writeAccess`).
    */
   sharedAccount: boolean;
+  /**
+   * The owner's 할 일 list counts against TODAY in KST, with that date.
+   * describe_system is its ONLY reader, by design — a deliberate exception to
+   * "an OwnerState fact feeds BOTH consumers": the prompt's to-do section stays
+   * STATIC (no counts, no date) because a per-turn append that changes breaks
+   * prompt caching; the prompt states only the capability (`todoState`).
+   */
+  todos: TodoSnapshot;
 }
 
 /**
@@ -126,6 +136,11 @@ export function summarizeOwnerState(
     modelOverride: store.getModelOverride(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),
     sharedAccount: store.isSharedAccount(avatarUserId),
+    // Lazy like the counts above: only describe_system reads it (the prompt stays static).
+    get todos() {
+      const todayKst = kstDateString();
+      return { todayKst, counts: store.countTodos(avatarUserId, todayKst) };
+    },
   };
 }
 
@@ -187,6 +202,7 @@ export function emptyOwnerState(store: Store, config: AppConfig): OwnerState {
     modelOverride: store.getModelOverride(),
     experimentalFeatures: [],
     sharedAccount: false,
+    todos: { todayKst: kstDateString(), counts: { open: 0, overdue: 0, dueToday: 0, done: 0 } },
   };
 }
 

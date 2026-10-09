@@ -6,6 +6,7 @@
   import PromptModal from "../components/PromptModal.svelte";
   import ShareLinkDialog from "../components/ShareLinkDialog.svelte";
   import SidePanel from "../components/SidePanel.svelte";
+  import TodoOverlay from "../components/TodoOverlay.svelte";
   import { activePane, appState, newId, notify, readState, updateState } from "../lib/state";
   import {
     PLUGIN_STATUS_LABELS,
@@ -51,6 +52,7 @@
   import { hasSideTabs } from "../lib/sidePanel";
   import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
+  import { setTodoOverlayOpen, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
   import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
@@ -185,6 +187,49 @@
 
   $: panes = $appState.chatPanes;
   $: pane = panes.find((item) => item.id === $appState.activePaneId) ?? panes[0] ?? null;
+  // 할 일 overlay: ONE card, hosted by the active pane's transcript region
+  // (TodoOverlay decides pinned/popover/sheet from that region's width). The
+  // toggle in every composer drives the same per-browser switch; it reads as
+  // pressed only while the card is actually shown (a popover dismissed by an
+  // outside click keeps the preference but is not visible).
+  $: todoOverlayOpen = $appState.todoOverlayOpen;
+  $: todoOverlayShown = todoOverlayVisible($appState);
+  $: todoLoaded = $appState.todos.loaded;
+  $: todoOpenCount = $appState.todos.counts.open;
+  $: todoOverdueCount = $appState.todos.counts.overdue;
+  /** The toggle's tooltip; state passed in (a template helper's own reads are untracked). */
+  function todoToggleTitle(shownHere: boolean, loaded: boolean, open: number, overdue: number): string {
+    return `${shownHere ? "할 일 목록 닫기" : "할 일 목록 띄우기"}${loaded ? ` · 열린 할 일 ${open}개` : ""}${overdue ? ` · 마감 지남 ${overdue}개` : ""}`;
+  }
+
+  // Whether the card showed in a toggle's pane at the moment a POINTER pressed
+  // it. Read at pointerdown because a split pane's own focusin activates that
+  // pane before the click lands, which would make "another pane" look like
+  // "this pane" and switch the card off. Keyboard activation has no pointerdown
+  // and reads the live state instead.
+  let todoTogglePress: { paneId: string; shownHere: boolean; at: number } | null = null;
+
+  function noteTodoTogglePress(item: ChatPane) {
+    todoTogglePress = { paneId: item.id, shownHere: todoOverlayShown && pane?.id === item.id, at: Date.now() };
+  }
+
+  /**
+   * The composer's 할 일 switch, per pane. The card lives in the ACTIVE pane
+   * only, so a toggle pressed where the card is not showing brings the card
+   * THERE (activates that pane, shows the card) instead of switching it off from
+   * a pane where it was never visible.
+   */
+  function toggleTodoOverlayIn(item: ChatPane) {
+    const press = todoTogglePress?.paneId === item.id && Date.now() - todoTogglePress.at < 2000 ? todoTogglePress : null;
+    todoTogglePress = null;
+    const shownHere = press ? press.shownHere : todoOverlayShown && pane?.id === item.id;
+    if (shownHere) {
+      setTodoOverlayOpen(false, { focus: true });
+      return;
+    }
+    if (pane?.id !== item.id) setActive(item.id);
+    setTodoOverlayOpen(true, { focus: true });
+  }
   $: splitClass = panes.length <= 1 ? "single" : $appState.chatLayout;
   // Split-add options: ALL visible avatars (duplicates allowed — you can run
   // several parallel conversations with the same avatar, incl. your own), with
@@ -1442,6 +1487,9 @@
 
 {#snippet transcript(item: ChatPane)}
   <div class="chat-body">
+    {#if todoOverlayOpen && pane && item.id === pane.id}
+      <TodoOverlay ownAvatar={item.avatar.id === $appState.user?.id} />
+    {/if}
     <div
       class="transcript scroll-thin"
       use:transcriptStick={item.id}
@@ -1930,7 +1978,26 @@
             <span>보내기 버튼으로 전송</span>
           {/if}
           {#if hasComposerControls(item) || formatUsageLabel(item.usage) || (sttPaneId === item.id && sttPhase)}
+            <!-- Pressed only in the pane that actually shows the card (the active one). -->
+            {@const todoHere = todoOverlayShown && pane?.id === item.id}
             <span class="composer-meta">
+              <!-- The 할 일 overlay switch: the VIEWER's own list, in every pane
+                   (one shared preference). Overdue carries text, not just a dot. -->
+              <button
+                class="composer-todo-btn"
+                type="button"
+                aria-pressed={todoHere ? "true" : "false"}
+                aria-controls={todoHere ? "todo-overlay" : undefined}
+                title={todoToggleTitle(todoHere, todoLoaded, todoOpenCount, todoOverdueCount)}
+                on:pointerdown={() => noteTodoTogglePress(item)}
+                on:click={() => toggleTodoOverlayIn(item)}
+              >
+                <Icon name="check-square" size={14} />
+                <span>할 일{todoLoaded ? ` ${todoOpenCount}` : ""}</span>
+                {#if todoOverdueCount}
+                  <span class="composer-todo-overdue"><span class="composer-todo-dot" aria-hidden="true"></span>지남 {todoOverdueCount}</span>
+                {/if}
+              </button>
               {#if sttPaneId === item.id && sttPhase}
                 <span class="composer-stt" data-phase={sttPhase}
                   >{sttPhase === "recording" ? `녹음 중 ${sttElapsed}초 / ${STT_MAX_SEC}초` : "전사 중…"}</span
@@ -2257,6 +2324,32 @@
 {/if}
 
 <style>
+  /* The 할 일 overlay switch in the composer hint row. Its chrome is the MCP
+     도구/그룹 지식 buttons' own rule (30-agent-md-composer.css joins it there);
+     only the icon layout and the accent-filled "shown" state live here. */
+  .composer-todo-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+  }
+  .composer-todo-btn[aria-pressed="true"] {
+    color: var(--accent-strong);
+    border-color: var(--accent-soft-strong);
+    background: var(--accent-soft);
+  }
+  .composer-todo-overdue {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    color: var(--warn);
+    font-weight: 600;
+  }
+  .composer-todo-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn);
+  }
   /* A deck card and its 공유 링크 control, kept together as ONE item of the
      attachment strip. */
   .msg-file-share {

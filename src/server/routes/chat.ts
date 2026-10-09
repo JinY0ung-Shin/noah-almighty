@@ -14,6 +14,7 @@ import {
 import { groupKnowledgeRepoContextFor } from "../groupKnowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
 import { resolveActiveWorkspaceRepo } from "../activeRepoResolve.js";
+import { kstDateWithWeekday } from "../routineSchedule.js";
 import type { Store } from "../store.js";
 import type {
   AgentConversationMessage,
@@ -319,6 +320,22 @@ export function expandChatSlashCommand(message: string): ChatSlashExpansion {
         : {
             message,
             error: "/routine 뒤에 작업 내용을 입력해 주세요.",
+            ownerOnly: true,
+          };
+    // "/todo <text>": add to the owner's 할 일 list. The avatar reads the due
+    // date/priority/tags out of the text itself, so no parsing happens here.
+    // Today's KST date rides THIS user message (not the system prompt, whose
+    // per-turn stability prompt caching depends on) so "금요일까지" resolves
+    // without a lookup.
+    case "todo":
+      return args
+        ? {
+            message: `Add the following to my Noah to-do list (할 일) with \`mcp__todo__add_todos\`. Today is ${kstDateWithWeekday()} (KST). Take the due date (resolve relative dates such as "내일" or "금요일까지" against today's KST date), priority and tags from the text when it states them, and add separate tasks as separate items. Ask only if something essential is missing, then confirm in one line what you added.\n\n${args}`,
+            ownerOnly: true,
+          }
+        : {
+            message,
+            error: "/todo 뒤에 추가할 할 일을 입력해 주세요.",
             ownerOnly: true,
           };
     case "find":

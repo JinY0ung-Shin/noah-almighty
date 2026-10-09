@@ -19,9 +19,12 @@ import type {
   RoutineJob,
   SettingsTab,
   Toast,
+  TodoFilter,
+  TodoState,
   User,
   ViewName,
 } from "./types";
+import { loadTodoOverlayOpen } from "./layout";
 
 export interface ClientState {
   booted: boolean;
@@ -89,6 +92,20 @@ export interface ClientState {
   splitAvatarId: string;
   streaming: boolean;
   themePref: "system" | "light" | "dark";
+  /** The viewer's 할 일 list (lib/todos.ts) — shared by the tab, the chat overlay and the rail badge. */
+  todos: TodoState;
+  todoFilter: TodoFilter;
+  todoSearch: string;
+  /** The item open in the 할 일 tab's editor ("" = none); mirrored into `#/todos/<id>`. */
+  todoSelectedId: string;
+  /** Whether the chat overlay is switched on — a per-browser preference (lib/layout.ts). */
+  todoOverlayOpen: boolean;
+  /**
+   * A transient dismissal of the popover/sheet (outside click, Escape): hides the
+   * card without touching the persisted preference. Cleared by the explicit
+   * switch, by pinned mode, and on logout. Never persisted.
+   */
+  todoOverlayDismissed: boolean;
 }
 
 export const appState = writable<ClientState>({
@@ -137,6 +154,12 @@ export const appState = writable<ClientState>({
   splitAvatarId: "",
   streaming: false,
   themePref: "system",
+  todos: { items: [], todayKst: "", counts: { open: 0, overdue: 0, dueToday: 0, done: 0 }, loaded: false },
+  todoFilter: "all",
+  todoSearch: "",
+  todoSelectedId: "",
+  todoOverlayOpen: loadTodoOverlayOpen(),
+  todoOverlayDismissed: false,
 });
 
 export const toasts = writable<Toast[]>([]);
@@ -250,6 +273,7 @@ export function setDocumentTitle(): void {
     skills: "스킬 배우기",
     settings: "내 아바타",
     admin: "관리자",
+    todos: "할 일",
     // From state, not set by the view: this subscriber rewrites the title on
     // EVERY store emission (the knowledge poll included), so a title the view
     // wrote to document.title directly would be gone within a minute.
