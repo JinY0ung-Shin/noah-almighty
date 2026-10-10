@@ -24,9 +24,10 @@ Non-obvious infrastructure constraints:
   never inside an `it()`.** Its returned accessor is `undefined` until the first `beforeEach` fires; the
   `let tempDir; const getTempDir = withTempDir(label, () => { tempDir = getTempDir(); })` idiom captures the
   fresh real OS temp dir (`fs.mkdtempSync`, cleaned per-test) at the right time.
-- **`setup-dom.ts` polyfills exactly two jsdom gaps** Svelte 5 needs: `Element.prototype.animate` (transition
-  directives) and `ResizeObserver` (the transcript's autoscroll controller). Both are safe only because jsdom
-  layout never changes; real timing/layout behavior is covered ONLY by the Playwright visual suite.
+- **`setup-dom.ts` polyfills exactly three jsdom gaps** Svelte 5 needs: `Element.prototype.animate` (transition
+  directives), `Element.prototype.getAnimations` (an `animate:` directive queries a leaving keyed row) and
+  `ResizeObserver` (the transcript's autoscroll controller). All are safe only because jsdom layout never
+  changes; real timing/layout behavior is covered ONLY by the Playwright visual suite.
 - **`pretest` (`npm run build:client -- --mode test`) runs only through `npm test`, NOT `npx vitest`.** A red
   `npm test` with ZERO test output almost always means the CLIENT BUILD broke (a Svelte/TS error aborts
   before any test runs), not a test failure. No test reads `dist/client`.

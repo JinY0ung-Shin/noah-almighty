@@ -841,6 +841,13 @@ export class StoreBase {
       "selected_mcp_tool_groups",
       "TEXT",
     );
+    // The owner's 할 일 list as of this conversation's FIRST to-do-capable turn
+    // (JSON — agent/todoSnapshot.ts owns the shape), stated in the system-prompt
+    // append. Written ONCE and never refreshed (user decision 2026-10-10), so the
+    // per-turn append stays byte-stable for prompt caching. NULL = not taken yet:
+    // a conversation from before this column takes its snapshot on its next
+    // owner turn.
+    this.addColumnIfMissing("conversations", "todo_snapshot", "TEXT");
     // Per-group ADMIN tool policy: which MCP tool groups this group's members
     // may use in chats they drive. NULL = no restriction; a JSON array
     // (including []) is an allowlist validated against src/shared/mcpToolGroups.ts.

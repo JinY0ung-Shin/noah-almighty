@@ -1524,6 +1524,24 @@ button.composer-bridge:focus-visible {
   color: var(--text);
   border-color: var(--accent, var(--text));
 }
+/* The 할 일 count's pop when the avatar changes the list — the composer switch's
+   `할 일 N` and the chat card's `(외 N개)` (ChatView / TodoOverlay apply it at
+   360 ms under no-preference only). Same shape as the DM badge's own
+   `dm-badge-pop`, which stays separate: its visual spec asserts that name. The
+   overshoot and the 360 ms (past DESIGN §2.5's 120–240 ms, which also forbids
+   bounce on programmatic motion) are the USER's choice for this cue (2026-10-10,
+   "숫자 튐") — not a motion-audit fix target. */
+@keyframes todo-count-pop {
+  from {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  to {
+    transform: scale(1);
+  }
+}
 .composer-gk-panel,
 .composer-tools-panel {
   position: absolute;

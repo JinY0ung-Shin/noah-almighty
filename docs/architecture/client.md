@@ -121,6 +121,27 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   (spec behavior, jsdom matches) — a test must await a macrotask, not just `tick()`. Trade-off accepted:
   Chrome's find-in-page can no longer reach inside an unopened card.
 
+- **Conditional motion on a keyed `{#each}` is gated INSIDE the transition/animation function, on
+  NON-reactive state read when it starts** (the 할 일 card animates only the avatar's changes). A removed
+  keyed row only ever sees its LAST render's params, and Svelte caches a transition's options per
+  element (an outro aborted by a revival keeps them), so make a conditional exit DEFERRED
+  (`out:rowOut={id}` returning `() => gate(id) ? fly(…) : { duration: 0 }`). `animate:` holds a leaving
+  row in place with absolute positioning — give the list a positioned ancestor, and hold a TOP-anchored,
+  content-sized container's height while rows glide or it overflows mid-motion (a classic scrollbar
+  flashes). Never hold a BOTTOM-anchored one (it shrinks from the top, so a hold makes the rows glide
+  up and then snap back down when it releases), nor under reduced motion (no glide to cover — the
+  release becomes a second, delayed jump). A NESTED keyed list's rows are measured only after the outer list applied, so rows that must glide
+  from where they WERE need a position snapshot taken before the change (the 할 일 card's
+  `onBeforeAvatarChange`). An equal list delivered as a NEW array still reconciles, and a reconcile
+  aborts running `animate:` glides without restarting them — keep the array's identity when nothing
+  changed. Write the glide
+  TRANSLATE-ONLY when items can change size: Svelte's `flip` also scales an element whose box changed (a
+  section losing a row squashes its text). Arrival
+  keyframes need `backwards` fill: a finished `forwards`/`both` animation stays in `getAnimations()` and
+  Svelte then skips holding the row. And never rebuild an `animate:` list's source on unrelated store
+  writes — every reconcile measures every row. jsdom rects are all zero, so only Playwright sees any of
+  this (`tests/visual/todo-overlay.spec.ts`).
+
 - **Never force a layout inside a component's mount task** (`getBoundingClientRect()`, `offsetHeight`,
   … in `onMount` during the app's initial mount). That layout runs while the `@font-face` Korean
   subsets are still UNLOADED, and in headless Chromium the text it shaped can stay on the system
@@ -172,7 +193,9 @@ Mechanics → [`todos.md`](todos.md). Load-bearing for any change here: ONE stor
 badge, the tab and the card; concurrent loads share one in-flight GET and only WRITES make a load stale
 (self-invalidating loads livelocked a direct `#/todos` open); the card mounts inside the active pane's
 `.chat-body` and picks pinned/popover/sheet from a `ResizeObserver`, never a layout read in `onMount`;
-transient dismissals never persist the per-browser preference.
+transient dismissals never persist the per-browser preference; the card has NO add path (the tab and
+the avatar add); and only the avatar's own changes animate — a tool-end claim diffed on the next
+applied load, never the poll or the viewer's own edits.
 
 ## Share hash view (`#/share/<token>`) and the deck-card link controls
 Mechanics of the links themselves → [`share-links.md`](share-links.md).

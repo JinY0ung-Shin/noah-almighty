@@ -11,7 +11,9 @@ import type { TodoItem, TodoListResponse } from "../../src/shared/todos.js";
 // alone (its reserve keeps a readable column without a dead gap) on an opaque
 // surface while popover/sheet stay frosted, the sheet spans the column, and
 // Escape/outside clicks only dismiss a transient card — which only the pinned
-// layout brings back on its own.
+// layout brings back on its own. One case samples every animation frame while
+// an avatar's mocked tool turn changes the list (jsdom has no layout, so the
+// glide and the held-out leaving row are only real here).
 
 const user = {
   id: "user-1",
@@ -259,6 +261,8 @@ async function openCard(
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#todo-overlay")).toBeVisible();
   await expect(page.locator("#todo-overlay .todo-overlay-item")).toHaveCount(5);
+  // The card reviews and completes; adding lives in the 할 일 tab (or the avatar).
+  await expect(page.locator("#todo-overlay").getByRole("textbox")).toHaveCount(0);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -273,6 +277,8 @@ for (const viewport of [
     await openCard(page, viewport);
     const card = page.locator("#todo-overlay");
     await expect(card).toHaveAttribute("data-mode", "pinned");
+    // A pinned card is a persistent side region Escape never closes: the toggle keeps focus.
+    await expect(page.locator(".chat-pane.active .composer-todo-btn")).toBeFocused();
     // Nothing behind a pinned card to frost: an opaque base, no backdrop blur.
     const pinnedSurface = await surface(page);
     expect(pinnedSurface.backdropFilter).toBe("none");
@@ -293,7 +299,7 @@ for (const viewport of [
     }
 
     // Pinned is persistent: Escape inside it does not dismiss it.
-    await page.locator("#todo-overlay .todo-overlay-input").focus();
+    await page.locator("#todo-overlay .todo-overlay-title").first().focus();
     await page.keyboard.press("Escape");
     await expect(card).toBeVisible();
   });
@@ -312,8 +318,9 @@ test("popover sits above the composer of a narrow column and Escape dismisses it
   expect(geometry.card.bottom).toBeLessThanOrEqual(geometry.composer.y);
   expect(Math.abs(geometry.body.right - geometry.card.right - 16)).toBeLessThanOrEqual(1);
 
-  // Escape from inside the card: dismissed, focus back on the toggle.
-  await page.locator("#todo-overlay .todo-overlay-input").focus();
+  // The toggle handed focus to the transient card itself (after first paint);
+  // Escape from there: dismissed, focus back on the toggle.
+  await expect(card).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
@@ -323,9 +330,8 @@ test("popover sits above the composer of a narrow column and Escape dismisses it
   await toggle.click();
   await expect(card).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
-  // The toggle hands focus to the card's quick-add (after first paint); let that
-  // land before moving the caret to the composer.
-  await expect(page.locator("#todo-overlay .todo-overlay-input")).toBeFocused();
+  // Let the card take focus again before moving the caret to the composer.
+  await expect(card).toBeFocused();
   const composer = page.locator(".chat-pane.active .composer textarea");
   await composer.focus();
   await page.keyboard.press("Escape");
@@ -345,7 +351,8 @@ test("sheet spans the chat column on a phone, above the composer, and Escape dis
   expect(Math.abs(geometry.body.right - geometry.card.right - 8)).toBeLessThanOrEqual(1);
   expect(geometry.card.bottom).toBeLessThanOrEqual(geometry.composer.y);
 
-  await page.locator("#todo-overlay .todo-overlay-input").focus();
+  // Escape from an item inside the card.
+  await page.locator("#todo-overlay .todo-overlay-title").first().focus();
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden();
   await expect(page.locator(".chat-pane.active .composer-todo-btn")).toHaveAttribute("aria-pressed", "false");
@@ -443,6 +450,371 @@ test("with the side panel open the card stays in the narrowed chat column, left 
   await panel.getByRole("button", { name: /^패널 펼치기/ }).click();
   await page.setViewportSize({ width: 1280, height: 900 });
   await expectBesidePanel("popover");
+});
+
+function sseFrames(frames: Array<{ event: string; data: unknown }>): string {
+  return frames
+    .map((frame, index) => `id: ${index + 1}\nevent: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`)
+    .join("");
+}
+
+/** One animation frame of the card, recorded in the page while the list changes. */
+interface MotionSample {
+  /** The list's scrollable overflow (> 0 would flash a scrollbar in a card that does not scroll). */
+  overflow: number;
+  /** Rows held out of flow (`animate:` fixes a leaving row) — by title. */
+  absolute: string[];
+  /** Rows that are leaving — on their own or with their whole section (Svelte marks them `inert`) — by title. */
+  leaving: string[];
+  /** Rows with a running animation (glide, exit, arrival) — by title. */
+  moving: string[];
+  /** Rows marked as the avatar's additions — by title. */
+  arrivals: string[];
+  /**
+   * Each row's y measured from the card's ANCHORED edge (the top of the pinned
+   * card, the bottom of the popover/sheet), so the whole card moving with the
+   * composer's height is not a row moving inside it — by title.
+   */
+  tops: Record<string, number>;
+  /** The card's height (it changes when its list does — once, unless a height hold releases later). */
+  height: number;
+  /** Whether any row or section is still moving (running transform keyframes; not the card's own entrance). */
+  cardMoving: boolean;
+  /** Whether any running motion in the card or on the composer count moves something (transform keyframes). */
+  transforms: boolean;
+  /** The composer count's animation name. */
+  pop: string;
+}
+
+async function startSampling(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const state = window as unknown as { __todoSamples: unknown[]; __todoSampling: boolean };
+    state.__todoSamples = [];
+    state.__todoSampling = true;
+    const card = document.querySelector<HTMLElement>("#todo-overlay")!;
+    const list = card.querySelector(".todo-overlay-body")!;
+    const titleOf = (row: Element) => row.querySelector(".todo-overlay-title")?.textContent?.trim() ?? "";
+    const moves = (animation: Animation) =>
+      animation.playState === "running" &&
+      ((animation.effect as KeyframeEffect | null)?.getKeyframes() ?? []).some(
+        (frame) => typeof frame.transform === "string" && frame.transform !== "none",
+      );
+    const step = () => {
+      const rows = [...list.querySelectorAll<HTMLElement>("li.todo-overlay-item")];
+      const count = document.querySelector(".chat-pane.active .composer-todo-count");
+      const cardBox = card.getBoundingClientRect();
+      const edge = card.dataset.mode === "pinned" ? cardBox.top : cardBox.bottom;
+      const inCard = card.getAnimations({ subtree: true });
+      state.__todoSamples.push({
+        overflow: list.scrollHeight - list.clientHeight,
+        absolute: rows.filter((row) => getComputedStyle(row).position === "absolute").map(titleOf),
+        leaving: rows.filter((row) => row.inert || row.closest("[inert]") !== null).map(titleOf),
+        moving: rows.filter((row) => row.getAnimations().some((animation) => animation.playState === "running")).map(titleOf),
+        arrivals: rows.filter((row) => row.dataset.arrival === "added").map(titleOf),
+        tops: Object.fromEntries(rows.map((row) => [titleOf(row), Math.round(row.getBoundingClientRect().top - edge)])),
+        height: Math.round(cardBox.height),
+        cardMoving: inCard.some((animation) => (animation.effect as KeyframeEffect | null)?.target !== card && moves(animation)),
+        transforms: [...inCard, ...(count?.getAnimations() ?? [])].some(moves),
+        pop: count ? getComputedStyle(count).animationName : "",
+      });
+      if (state.__todoSampling) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+async function stopSampling(page: Page): Promise<MotionSample[]> {
+  return page.evaluate(() => {
+    const state = window as unknown as { __todoSamples: MotionSample[]; __todoSampling: boolean };
+    state.__todoSampling = false;
+    return state.__todoSamples;
+  });
+}
+
+/** Until nothing in the card is animating any more (the 1.2 s wash included). */
+async function cardSettled(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document
+            .querySelector("#todo-overlay")!
+            .getAnimations({ subtree: true })
+            .filter((animation) => animation.playState === "running").length,
+      ),
+    )
+    .toBe(0);
+}
+
+/**
+ * Let the card settle, keep sampling half a second past that — beyond the 240 ms
+ * height hold, so a late snap would be recorded — then collect the samples.
+ */
+async function settleAndCollect(page: Page): Promise<MotionSample[]> {
+  await cardSettled(page);
+  await page.waitForTimeout(500);
+  return stopSampling(page);
+}
+
+/** Whether the rows differ: another set, or one sitting more than 1 px elsewhere (rounding noise is no move). */
+function rowsMoved(a: MotionSample, b: MotionSample): boolean {
+  const titles = Object.keys(a.tops);
+  if (titles.length !== Object.keys(b.tops).length) return true;
+  return titles.some((title) => !(title in b.tops) || Math.abs(a.tops[title] - b.tops[title]) > 1);
+}
+
+function maxOverflow(samples: MotionSample[]): number {
+  return Math.max(...samples.map((sample) => sample.overflow));
+}
+
+/**
+ * Once the change has landed (the final rows are all there) and nothing in the
+ * card moves any more, no row's y may change again — e.g. a height hold
+ * releasing late in a bottom-anchored card would snap every row back. With
+ * `cardHeight` (where no hold belongs: the popover, reduced motion) the card
+ * resizes at most once, in the very frame its rows change — a hold resizes it
+ * later, a second jump.
+ */
+function expectNoLateMoves(samples: MotionSample[], options: { cardHeight?: boolean } = {}): void {
+  if (options.cardHeight) {
+    // The frame the change lands: a row starts leaving (Svelte marks it `inert` in
+    // the same flush that resizes the card) or — an instant change — the rows
+    // differ. Glides hold rows in place on that frame, so tops alone can lag it.
+    const landed = samples.findIndex((sample) => sample.leaving.length > 0 || rowsMoved(sample, samples[0]));
+    const resizes = samples.flatMap((sample, index) =>
+      index > 0 && Math.abs(sample.height - samples[index - 1].height) > 1 ? [index] : [],
+    );
+    expect(landed).toBeGreaterThan(0);
+    expect(resizes.length).toBeLessThanOrEqual(1);
+    if (resizes.length) expect(resizes[0]).toBe(landed);
+  }
+  const key = (sample: MotionSample) => Object.keys(sample.tops).sort().join("|");
+  const finalRows = key(samples[samples.length - 1]);
+  let start = samples.findIndex((sample) => key(sample) === finalRows);
+  for (let index = samples.length - 1; index >= 0; index -= 1) {
+    if (samples[index].cardMoving) {
+      start = Math.max(start, index + 1);
+      break;
+    }
+  }
+  const settled = samples.slice(start);
+  // Sampled well past the 240 ms height hold (settleAndCollect).
+  expect(settled.length).toBeGreaterThan(20);
+  for (const sample of settled) {
+    expect(rowsMoved(sample, settled[0]), `${JSON.stringify(sample.tops)} vs ${JSON.stringify(settled[0].tops)}`).toBe(false);
+  }
+}
+
+/** A leaving row leaves from where it was: while it leaves its y stays put (±2 px). */
+function expectLeavesInPlace(samples: MotionSample[], title: string): void {
+  const before = samples[0].tops[title];
+  const during = samples.filter((sample) => sample.leaving.includes(title)).map((sample) => sample.tops[title]);
+  expect(during.length).toBeGreaterThan(0);
+  for (const top of during) expect(Math.abs(top - before), `${title}: y ${top}, was ${before}`).toBeLessThanOrEqual(2);
+}
+
+/**
+ * Serves the to-do list the avatar's tools change and one SSE turn per message:
+ * `open`, the turn's to-do tool calls (all started, then all ended — parallel
+ * calls that one re-read answers), `done`. Each turn first applies its queued
+ * server-side change. Registered after mockApp's catch-all, so these routes
+ * answer first.
+ */
+async function mockAvatarTurns(page: Page) {
+  let list: TodoItem[] = todoList.todos.map((item) => ({ ...item }));
+  const counts = () => {
+    const open = list.filter((item) => !item.done);
+    return {
+      open: open.length,
+      overdue: open.filter((item) => item.dueDate !== null && item.dueDate < TODAY).length,
+      dueToday: open.filter((item) => item.dueDate === TODAY).length,
+      done: list.length - open.length,
+    };
+  };
+  const complete = (id: string) =>
+    (list = list.map((item) =>
+      item.id === id ? { ...item, done: true, completedAt: "2026-07-12T04:00:00.000Z", updatedAt: "2026-07-12T04:00:00.000Z" } : item,
+    ));
+  const avatarTurns: Array<{ change: () => void; tools: number }> = [];
+  let turn = 0;
+  await page.route("**/api/me/todos", (route) => route.fulfill({ json: { todos: list, todayKst: TODAY, counts: counts() } }));
+  await page.route("**/api/me/todos/*", async (route) => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "");
+    const patch = route.request().postDataJSON() as { done?: boolean };
+    if (patch.done) complete(id);
+    await route.fulfill({ json: { todo: list.find((item) => item.id === id), todayKst: TODAY, counts: counts() } });
+  });
+  await page.route("**/api/chat/stream", async (route) => {
+    turn += 1;
+    const next = avatarTurns.shift();
+    next?.change(); // what the avatar's to-do tools did
+    const ids = Array.from({ length: next?.tools ?? 1 }, (_, index) => `tu-todo-${turn}-${index}`);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseFrames([
+        { event: "open", data: { conversationId: "conversation-1", runId: `run-todo-${turn}` } },
+        ...ids.map((toolUseId) => ({ event: "tool", data: { toolUseId, name: "mcp__todo__update_todo", input: {} } })),
+        ...ids.map((toolUseId) => ({ event: "tool_end", data: { toolUseId, ok: true } })),
+        {
+          event: "done",
+          data: {
+            message: {
+              id: `answer-${turn}`,
+              conversationId: "conversation-1",
+              role: "assistant",
+              content: "할 일을 정리했습니다.",
+              response: null,
+              createdAt: "2026-07-12T04:00:00.000Z",
+            },
+          },
+        },
+      ]),
+    });
+  });
+  return {
+    complete,
+    add: (item: TodoItem) => (list = [...list, item]),
+    /** Queue what the avatar's tools do on the next message's turn (`tools` parallel calls). */
+    nextTurn: (change: () => void, tools = 1) => avatarTurns.push({ change, tools }),
+  };
+}
+
+/** Send from the composer with Enter — a click on the send button would be an outside press that dismisses a popover. */
+async function sendWithEnter(page: Page, text: string): Promise<void> {
+  const composer = page.locator(".chat-pane.active .composer textarea");
+  await composer.fill(text);
+  await composer.press("Enter");
+}
+
+test("an avatar's change moves rows inside the card; the viewer's own checkbox moves none; reduced motion only fades", async ({ page }) => {
+  const server = await mockAvatarTurns(page);
+  const rows = page.locator("#todo-overlay .todo-overlay-item");
+
+  // 1) Motion on, pinned (top-anchored): the avatar completes the first of 다음's three rows.
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openCard(page, { width: 1680, height: 1000 });
+  await expect(page.locator("#todo-overlay")).toHaveAttribute("data-mode", "pinned");
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(false);
+  server.nextTurn(() => server.complete("todo-3"));
+  await startSampling(page);
+  await sendWithEnter(page, "온보딩 문서는 끝났어");
+  await expect(rows).toHaveCount(4);
+  let samples = await settleAndCollect(page);
+  // The leaving row was held out of flow inside the list while the rows below glided up…
+  expect(samples.some((sample) => sample.absolute.includes("신규 입사자 온보딩 문서 업데이트"))).toBe(true);
+  expectLeavesInPlace(samples, "신규 입사자 온보딩 문서 업데이트");
+  expect(samples.some((sample) => sample.moving.includes("배포 서버 디스크 사용량 점검"))).toBe(true);
+  expect(samples.some((sample) => sample.moving.includes("보안 취약점 패치 적용 일정 잡기"))).toBe(true);
+  // …without ever overflowing the card or moving again once settled, and the composer count popped.
+  expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(samples);
+  expect(samples.some((sample) => sample.pop === "todo-count-pop")).toBe(true);
+
+  // 2) The viewer's own checkbox: the row leaves at once, nothing glides, nothing pops.
+  await expect(page.locator(".chat-pane.active .composer-todo-count.is-popping")).toHaveCount(0); // the avatar's pop has expired
+  await startSampling(page);
+  await page.locator("#todo-overlay").getByRole("checkbox", { name: "완료: 배포 서버 디스크 사용량 점검" }).click();
+  await expect(rows).toHaveCount(3);
+  await page.waitForTimeout(400);
+  samples = await stopSampling(page);
+  expect(samples.length).toBeGreaterThan(5);
+  expect(samples.every((sample) => sample.moving.length === 0 && sample.absolute.length === 0)).toBe(true);
+  expect(samples.every((sample) => sample.pop !== "todo-count-pop")).toBe(true);
+  expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
+
+  // 3) Reduced motion: the avatar completes 다음's last row and adds one for today —
+  // the exit is instant, the arrival only fades (and washes), nothing pops, and
+  // the layout changes once (no held height to release later).
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+  server.nextTurn(() => {
+    server.complete("todo-5");
+    server.add(todo("todo-6", "아바타가 넣은 회의 준비", { dueDate: TODAY, source: "avatar" }));
+  });
+  await startSampling(page);
+  await sendWithEnter(page, "회의 준비도 넣어줘");
+  await expect(page.locator("#todo-overlay").getByText("아바타가 넣은 회의 준비")).toBeVisible();
+  await expect(page.locator("#todo-overlay").getByText("보안 취약점 패치 적용 일정 잡기")).toHaveCount(0);
+  samples = await settleAndCollect(page);
+  expect(samples.some((sample) => sample.arrivals.includes("아바타가 넣은 회의 준비"))).toBe(true);
+  expect(samples.some((sample) => sample.transforms)).toBe(false);
+  expect(samples.some((sample) => sample.absolute.length > 0)).toBe(false);
+  expect(samples.some((sample) => sample.pop === "todo-count-pop")).toBe(false);
+  expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(samples, { cardHeight: true });
+});
+
+test("in the bottom-anchored popover an avatar's change settles once: no row moves after its motion", async ({ page }) => {
+  const server = await mockAvatarTurns(page);
+  const card = page.locator("#todo-overlay");
+  const rows = page.locator("#todo-overlay .todo-overlay-item");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openCard(page, { width: 1024, height: 768 });
+  await expect(card).toHaveAttribute("data-mode", "popover");
+
+  // The avatar completes the middle of 다음's three rows: the card shrinks from
+  // its top, the rows above glide down, the row below stays where it is.
+  server.nextTurn(() => server.complete("todo-4"));
+  await startSampling(page);
+  await sendWithEnter(page, "디스크 점검은 끝났어");
+  await expect(rows).toHaveCount(4);
+  const samples = await settleAndCollect(page);
+  await expect(card).toBeVisible(); // still shown: sending never dismissed it
+  expect(samples.some((sample) => sample.absolute.includes("배포 서버 디스크 사용량 점검"))).toBe(true);
+  // The rows above glide down while the leaving row's own section moves with them — it still leaves in place.
+  expectLeavesInPlace(samples, "배포 서버 디스크 사용량 점검");
+  expect(samples.some((sample) => sample.moving.length > 0)).toBe(true);
+  expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(samples, { cardHeight: true });
+
+  // The lone 오늘 row: its whole section leaves (held by a static offset, no glide).
+  server.nextTurn(() => server.complete("todo-2"));
+  await startSampling(page);
+  await sendWithEnter(page, "미팅 자료도 끝났어");
+  await expect(rows).toHaveCount(3);
+  let more = await settleAndCollect(page);
+  expectLeavesInPlace(more, "고객사 미팅 자료 준비");
+  expect(maxOverflow(more)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(more, { cardHeight: true });
+
+  // Two parallel tool calls, one re-read: an overdue item lands at the top while
+  // 다음's last row is completed — the leaving row still leaves from where it was.
+  server.nextTurn(() => {
+    server.add(todo("todo-7", "새로 생긴 급한 일", { dueDate: "2026-07-10", source: "avatar" }));
+    server.complete("todo-5");
+  }, 2);
+  await startSampling(page);
+  await sendWithEnter(page, "급한 일 넣고 보안 패치 일정도 잡았어");
+  await expect(page.locator("#todo-overlay").getByText("새로 생긴 급한 일")).toBeVisible();
+  await expect(page.locator("#todo-overlay").getByText("보안 취약점 패치 적용 일정 잡기")).toHaveCount(0);
+  more = await settleAndCollect(page);
+  expectLeavesInPlace(more, "보안 취약점 패치 적용 일정 잡기");
+  expect(maxOverflow(more)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(more);
+});
+
+test("with a parallel addition above, the pinned card's leaving row still leaves from where it was", async ({ page }) => {
+  const server = await mockAvatarTurns(page);
+  const rows = page.locator("#todo-overlay .todo-overlay-item");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openCard(page, { width: 1680, height: 1000 });
+  await expect(page.locator("#todo-overlay")).toHaveAttribute("data-mode", "pinned");
+  // Two parallel tool calls, one re-read: an overdue item lands at the top (every
+  // row below shifts down before Svelte measures the leaving one) while 다음's
+  // first row is completed.
+  server.nextTurn(() => {
+    server.add(todo("todo-7", "새로 생긴 급한 일", { dueDate: "2026-07-10", source: "avatar" }));
+    server.complete("todo-3");
+  }, 2);
+  await startSampling(page);
+  await sendWithEnter(page, "급한 일 넣고 온보딩 문서는 끝났어");
+  await expect(page.locator("#todo-overlay").getByText("새로 생긴 급한 일")).toBeVisible();
+  await expect(rows).toHaveCount(5);
+  const samples = await settleAndCollect(page);
+  expectLeavesInPlace(samples, "신규 입사자 온보딩 문서 업데이트");
+  expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(samples);
 });
 
 test("in split view a press on the other pane's toggle moves the card there; a second press switches it off", async ({ page }) => {

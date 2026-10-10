@@ -275,6 +275,7 @@ export async function runClaudeAgent(
     skillExchangeActive,
     todoToolsActive,
     todoDeleteActive,
+    todoSnapshot,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
@@ -385,9 +386,10 @@ export async function runClaudeAgent(
     // button redirect instead. Same boolean describe_system reports.
     shareLinksEnabled: shareLinkToolActive,
     // 할 일 capability: rides ONLY runs that registered the to-do tools
-    // (runPlan's todoToolsActive — the skillExchangeActive precedent). No counts:
-    // they would change the per-turn append and break prompt caching.
-    todoState: todoToolsActive ? { deleteEnabled: todoDeleteActive } : undefined,
+    // (runPlan's todoToolsActive — the skillExchangeActive precedent), with the
+    // list FROZEN at this conversation's first such turn. No live counts: they
+    // would change the per-turn append and break prompt caching.
+    todoState: todoToolsActive ? { deleteEnabled: todoDeleteActive, snapshot: todoSnapshot } : undefined,
     // Deck standing guidance (see deckGuidance above): the converter branch
     // wins in promptBuilder's deckSection when both flags are set.
     deckRenderingEnabled: deckGuidance.deckRenderingEnabled,

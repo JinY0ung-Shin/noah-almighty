@@ -312,6 +312,35 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
+     * The 할 일 snapshot frozen for this conversation's system prompt (raw JSON —
+     * agent/todoSnapshot.ts owns the shape), written ONCE: every later turn only
+     * reads it back (the append must stay byte-stable for prompt caching), and
+     * the first one takes the write lock, re-checks, and runs `take` inside that
+     * IMMEDIATE transaction — so a throwing `take` stores nothing. Owner-scoped
+     * like the session id; null (and nothing taken) when the conversation does
+     * not exist under this owner.
+     */
+    ensureConversationTodoSnapshot(ownerId: string, conversationId: string, take: () => string): string | null {
+      const read = () =>
+        this.db
+          .prepare("SELECT todo_snapshot FROM conversations WHERE id = ? AND owner_user_id = ?")
+          .get(conversationId, ownerId) as { todo_snapshot: string | null } | undefined;
+      const stored = read();
+      if (!stored) return null;
+      if (stored.todo_snapshot !== null) return stored.todo_snapshot;
+      return this.db.transaction((): string | null => {
+        const row = read();
+        if (!row) return null;
+        if (row.todo_snapshot !== null) return row.todo_snapshot;
+        const snapshot = take();
+        this.db
+          .prepare("UPDATE conversations SET todo_snapshot = ? WHERE id = ? AND owner_user_id = ?")
+          .run(snapshot, conversationId, ownerId);
+        return snapshot;
+      }).immediate();
+    }
+
+    /**
      * The registered git-repo NAME opened as this conversation's working directory
      * (via `mcp__git_repo__open_repo`), or null when none is open. Durable home of
      * the per-conversation working surface (repoWorkspace.ts) so routine runs —

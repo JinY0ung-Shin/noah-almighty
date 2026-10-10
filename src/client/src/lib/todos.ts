@@ -7,6 +7,7 @@
 // Every response's {todayKst, counts} then replaces the snapshot, so the counts
 // and the overdue/today buckets always come from the server's KST clock.
 
+import { writable } from "svelte/store";
 import { ApiError, api } from "./api";
 import { persistTodoOverlayOpen } from "./layout";
 import { goView } from "./nav";
@@ -14,6 +15,7 @@ import { newId, notify, readState, updateState } from "./state";
 import type { TodoFilter, TodoState } from "./types";
 import { calendarDateWeekday } from "../../../server/routineSchedule";
 import {
+  TODO_TOOL_PREFIX,
   compareTodos,
   isTodoToolName,
   todoDueBucket,
@@ -194,9 +196,9 @@ let overlayFocusRequested = false;
 /**
  * The EXPLICIT switch — the composer toggle and the card's close button: turns
  * the per-browser preference on/off (persisted) and clears any transient
- * dismissal. `focus` asks the card to move focus into its quick-add box — set
- * only on an explicit toggle click, never when a persisted "on" re-opens it
- * after a reload.
+ * dismissal. `focus` asks a transient card (popover/sheet) to take focus, so
+ * Escape can hand it back to the toggle — set only on an explicit toggle click,
+ * never when a persisted "on" re-opens it after a reload.
  */
 export function setTodoOverlayOpen(open: boolean, options: { focus?: boolean } = {}): void {
   overlayFocusRequested = open && Boolean(options.focus);
@@ -269,9 +271,12 @@ export function isPendingTodo(item: TodoItem): boolean {
 }
 
 // Load/write coordination. Writes bump `writeSeq` when they START and again when
-// they SETTLE, so a GET that overlapped any part of a write is stale on arrival
-// and must not overwrite the optimistic list — the write's own response, or the
-// next poll, settles it instead. Loads never bump it, and concurrent loads share
+// they SETTLE, and a GET is stale on arrival when `writeSeq` moved during it (a
+// write began or settled) OR a write is still in flight when it lands (one that
+// began BEFORE it: the server may have answered the GET before applying that
+// write). Either way a GET that overlapped any part of a write must not overwrite
+// the optimistic list — the write's own response, or the next poll, settles it
+// instead. Loads never bump it, and concurrent loads share
 // ONE in-flight GET, so two loads can never invalidate each other: when every
 // load bumped a shared epoch, the boot refresh and the 할 일 tab's own load
 // (a direct #/todos open) re-spawned each other forever. `sessionEpoch` voids a
@@ -283,15 +288,42 @@ let inFlightLoad: Promise<void> | null = null;
 // landed, a failed write must resync): that GET may predate it, so exactly one
 // more read runs behind it instead of the request riding the stale one.
 let reloadQueued = false;
-// Writes still awaiting their response. A fresh read that a write overlaps is
-// dropped as stale; re-reading while writes are still in flight would only be
-// dropped again, so the LAST write to settle starts it instead.
+// Writes still awaiting their response. A GET that lands while one is in flight
+// is dropped as stale; re-reading while writes are still in flight would only be
+// dropped again, so the LAST write to settle starts an owed fresh read instead.
 let writesInFlight = 0;
 let pendingFreshRead = false;
 /** GETs one load may chain (stale re-reads + queued fresh reads); the poll covers anything beyond. */
 const MAX_LOAD_ROUNDS = 4;
+// The avatar's writes, for the card's motion: every successful add/update/delete
+// tool end bumps `avatarEndsSeen`, and a load COVERS the ends counted when its GET
+// started — applied or failed. While some end is uncovered (and recent), an
+// applied load diffs against the slice it replaces and hands the changes to the
+// card — so a GET that predates the last end (a poll it joined) keeps the claim
+// open for the read queued behind it. Only a GET that STARTED within
+// TODO_CLAIM_MAX_AGE_MS of the last end may honour a claim: a slow re-read still
+// animates, but once the read that should have shown it failed, a poll a minute
+// later never passes someone else's changes off as the avatar's.
+let avatarEndsSeen = 0;
+let avatarEndsCovered = 0;
+let lastAvatarEndAt = 0;
+const TODO_CLAIM_MAX_AGE_MS = 5000;
+// Read by the card's out: transition when a row STARTS to leave. Deliberately not
+// reactive: a removed keyed row only ever sees the params of its last render, so
+// a store would still say "not the avatar" at that moment. id → expiry (ms).
+const avatarDepartures = new Map<string, number>();
+// Open only while the update that applies an avatar's change flushes (Svelte
+// flushes in a microtask, each-block animations in the next); closed by a timer,
+// and at once by the viewer's own next write — so their edit never glides.
+let avatarFlushOpen = false;
 
+/**
+ * Call it right before the write's `try`, after the optimistic change: its
+ * `finally` must always reach endWrite. A write that never settles would leave
+ * `writesInFlight` stuck, and every later GET would be dropped as stale.
+ */
 function beginWrite(): number {
+  avatarFlushOpen = false;
   writeSeq += 1;
   writesInFlight += 1;
   return sessionEpoch;
@@ -333,6 +365,7 @@ function sameSession(session: number): boolean {
 }
 
 function mutate(change: (todos: TodoState) => void): void {
+  avatarFlushOpen = false;
   updateState((state) => {
     const next: TodoState = { ...state.todos, items: [...state.todos.items] };
     change(next);
@@ -361,16 +394,41 @@ function recount(todos: TodoState, doneDelta = 0): void {
   todos.counts = { open, overdue, dueToday, done: Math.max(0, todos.counts.done + doneDelta) };
 }
 
+/** The same rows, in the same order, with the same content. */
+function sameTodoItems(a: TodoItem[], b: TodoItem[]): boolean {
+  return a.length === b.length && a.every((item, index) => JSON.stringify(item) === JSON.stringify(b[index]));
+}
+
 /** One GET: applied, dropped as stale (a write overlapped it), or void (its session ended). */
 async function loadOnce(): Promise<"applied" | "stale" | "void"> {
   const seq = writeSeq;
   const session = sessionEpoch;
-  const body = await api<TodoListResponse>("/api/me/todos");
+  const avatarEndsAtStart = avatarEndsSeen;
+  const startedAt = Date.now();
+  let body: TodoListResponse;
+  try {
+    body = await api<TodoListResponse>("/api/me/todos");
+  } catch (err) {
+    if (sameSession(session)) avatarEndsCovered = Math.max(avatarEndsCovered, avatarEndsAtStart);
+    throw err;
+  }
   if (!sameSession(session)) return "void";
-  if (seq !== writeSeq) return "stale";
+  if (seq !== writeSeq || writesInFlight > 0) return "stale";
+  const previous = readState().todos;
+  const fetched = [...(body.todos ?? [])].sort(compareTodos);
+  // A re-read that changed nothing (a poll, the queued read after parallel tool
+  // calls) keeps the list's identity: views keyed on it must not reconcile —
+  // that would cut the card's running glides short mid-motion.
+  const items = sameTodoItems(previous.items, fetched) ? previous.items : fetched;
+  const avatarClaim = avatarEndsSeen > avatarEndsCovered && startedAt - lastAvatarEndAt <= TODO_CLAIM_MAX_AGE_MS;
+  avatarEndsCovered = Math.max(avatarEndsCovered, avatarEndsAtStart);
+  // Never on the first load (no list to show the change against). A load that
+  // gets this far overlapped none of the viewer's own writes (it would be stale),
+  // so an optimistic row of theirs — no server id yet — never reads as the avatar's.
+  if (avatarClaim && previous.loaded) noteAvatarChange(diffAvatarChange(previous.items, items));
   updateState((state) => {
     state.todos = {
-      items: [...(body.todos ?? [])].sort(compareTodos),
+      items,
       todayKst: body.todayKst ?? "",
       counts: body.counts ? { ...body.counts } : emptyTodoState().counts,
       loaded: true,
@@ -449,7 +507,6 @@ export interface TodoDraft {
 export async function createTodo(draft: TodoDraft): Promise<TodoItem | null> {
   const title = draft.title.replace(/\s+/g, " ").trim();
   if (!title) return null;
-  const session = beginWrite();
   const stamp = new Date().toISOString();
   const temp: TodoItem = {
     id: `${PENDING_PREFIX}${newId()}`,
@@ -469,6 +526,7 @@ export async function createTodo(draft: TodoDraft): Promise<TodoItem | null> {
     todos.items.push(temp);
     recount(todos);
   });
+  const session = beginWrite();
   try {
     const body = await api<{ todo: TodoItem } & TodoSnapshot>("/api/me/todos", {
       method: "POST",
@@ -520,7 +578,8 @@ function applyChanges(item: TodoItem, changes: TodoChanges): TodoItem {
 async function writeTodo(id: string, changes: TodoChanges, failure: string): Promise<TodoItem | null> {
   const before = readState().todos.items.find((item) => item.id === id);
   if (!before || isPendingTodo(before)) return null;
-  const session = beginWrite();
+  // The viewer's own edit: if this row leaves the card now, it is not the avatar's exit.
+  avatarDepartures.delete(id);
   let failed = false;
   const optimistic = applyChanges(before, changes);
   const doneDelta = optimistic.done === before.done ? 0 : optimistic.done ? 1 : -1;
@@ -528,6 +587,7 @@ async function writeTodo(id: string, changes: TodoChanges, failure: string): Pro
     todos.items = todos.items.map((item) => (item.id === id ? optimistic : item));
     recount(todos, doneDelta);
   });
+  const session = beginWrite();
   try {
     const body = await api<{ todo: TodoItem } & TodoSnapshot>(`/api/me/todos/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -581,7 +641,7 @@ export async function completeTodoWithUndo(item: TodoItem): Promise<void> {
 export async function deleteTodo(id: string): Promise<boolean> {
   const before = readState().todos.items.find((item) => item.id === id);
   if (!before || isPendingTodo(before)) return false;
-  const session = beginWrite();
+  avatarDepartures.delete(id);
   let reread = false;
   mutate((todos) => {
     todos.items = todos.items.filter((item) => item.id !== id);
@@ -592,6 +652,7 @@ export async function deleteTodo(id: string): Promise<boolean> {
       state.todoSelectedId = "";
     });
   }
+  const session = beginWrite();
   try {
     const body = await api<{ ok: boolean } & TodoSnapshot>(`/api/me/todos/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -641,24 +702,202 @@ export async function clearCompletedTodos(): Promise<number | null> {
 
 /* ---------- live avatar edits ---------- */
 
-// toolUseIds of `mcp__todo__*` calls seen in a run stream. When one ends OK the
-// avatar may have changed the list, so it is re-read — the stream itself never
-// carries the items. Bounded: an aborted run never sends its tool_end.
-const trackedTodoTools = new Set<string>();
+// `mcp__todo__*` calls seen in a run stream, toolUseId → tool name. When one ends
+// OK the avatar may have changed the list, so it is re-read — the stream itself
+// never carries the items. Bounded: an aborted run never sends its tool_end.
+const trackedTodoTools = new Map<string, string>();
 const MAX_TRACKED_TODO_TOOLS = 64;
+/** The one read-only to-do tool: its re-read can show no change of the avatar's. */
+const TODO_READ_TOOL = `${TODO_TOOL_PREFIX}list_todos`;
 
 export function noteTodoToolStart(toolUseId: string, name: unknown): void {
   if (!toolUseId || !isTodoToolName(name)) return;
-  trackedTodoTools.add(toolUseId);
+  trackedTodoTools.set(toolUseId, name as string);
   if (trackedTodoTools.size > MAX_TRACKED_TODO_TOOLS) {
-    const oldest = trackedTodoTools.values().next().value;
+    const oldest = trackedTodoTools.keys().next().value;
     if (oldest !== undefined) trackedTodoTools.delete(oldest);
   }
 }
 
 export function noteTodoToolEnd(toolUseId: string, ok: boolean): void {
-  if (!trackedTodoTools.delete(toolUseId)) return;
-  if (ok) requestFreshRead();
+  const name = trackedTodoTools.get(toolUseId);
+  if (name === undefined) return;
+  trackedTodoTools.delete(toolUseId);
+  if (!ok) return;
+  if (name !== TODO_READ_TOOL) {
+    avatarEndsSeen += 1;
+    lastAvatarEndAt = Date.now();
+  }
+  requestFreshRead();
+}
+
+/* ---------- avatar change motion ---------- */
+
+// What the chat card animates: ONLY changes an avatar's own add/update/delete
+// made (loadOnce diffs the re-read after its tool end against the slice it
+// replaces) — never the first load, a poll, a failed write's resync, a pending
+// row's swap or the viewer's own edits. Rows it added rise in with an accent
+// wash, rows it edited get the wash, rows it deleted or completed slide out,
+// and the composer's count pops.
+
+/** How long one change's motion may play (stagger + rise + the 1.2 s wash fit inside); after it a remount replays nothing. */
+export const TODO_ACTIVITY_MS = 1600;
+/** Delay between rows one change added, top to bottom; capped at the card's visible rows. */
+export const TODO_ARRIVAL_STAGGER_MS = 40;
+
+export interface TodoMark {
+  /** `added`: new or reopened — the row rises in; `changed`: edited and still open — the wash only. */
+  kind: "added" | "changed";
+  /** The change it belongs to (`TodoActivity.seq`). */
+  seq: number;
+  /** Its stagger delay in ms, fixed when the change landed. */
+  delay: number;
+}
+
+export interface TodoActivity {
+  /** Bumps once per applied avatar change. */
+  seq: number;
+  /** Rows the avatar just added or edited, by id, until their motion has played. */
+  marks: Record<string, TodoMark>;
+  /** The composer count's pop: the latest change's seq while it is fresh, else 0. */
+  pop: number;
+}
+
+export function emptyTodoActivity(): TodoActivity {
+  return { seq: 0, marks: {}, pop: 0 };
+}
+
+/** Motion state for the chat card and the composer count (never persisted). */
+export const todoActivity = writable<TodoActivity>(emptyTodoActivity());
+
+let activitySeq = 0;
+const activityTimers = new Set<ReturnType<typeof setTimeout>>();
+const beforeAvatarChangeListeners = new Set<() => void>();
+
+/**
+ * Run `listener` right BEFORE an avatar's change is applied — the DOM still shows
+ * the old list (the card holds its height for the motion). Returns the unsubscribe.
+ */
+export function onBeforeAvatarChange(listener: () => void): () => void {
+  beforeAvatarChangeListeners.add(listener);
+  return () => beforeAvatarChangeListeners.delete(listener);
+}
+
+export interface TodoListDiff {
+  /** New or reopened open items, in the shared display order. */
+  added: string[];
+  /** Open before and after, but edited. */
+  changed: string[];
+  /** Open before, now deleted or completed. */
+  departed: string[];
+}
+
+/**
+ * What an avatar's change did to the OPEN list, by id. A brand-new item counts
+ * only when the avatar created it (`source`): a GET that applies while a claim is
+ * open can also carry a routine's, the task API's or another tab's new rows. A
+ * reopened row leaves no such trail, nor does an edit or a removal. An
+ * unconfirmed optimistic row never counts: its swap is the viewer's own add.
+ */
+export function diffAvatarChange(before: TodoItem[], after: TodoItem[]): TodoListDiff {
+  const previous = new Map<string, TodoItem>();
+  for (const item of before) if (!isPendingTodo(item)) previous.set(item.id, item);
+  const next = new Map(after.map((item) => [item.id, item]));
+  const diff: TodoListDiff = { added: [], changed: [], departed: [] };
+  for (const item of [...after].sort(compareTodos)) {
+    if (item.done) continue;
+    const old = previous.get(item.id);
+    if (!old) {
+      if (item.source === "avatar") diff.added.push(item.id);
+    } else if (old.done) {
+      diff.added.push(item.id);
+    } else if (
+      old.updatedAt !== item.updatedAt ||
+      old.title !== item.title ||
+      old.dueDate !== item.dueDate ||
+      old.priority !== item.priority
+    ) {
+      diff.changed.push(item.id);
+    }
+  }
+  for (const old of previous.values()) {
+    if (old.done) continue;
+    const now = next.get(old.id);
+    if (!now || now.done) diff.departed.push(old.id);
+  }
+  return diff;
+}
+
+function noteAvatarChange(diff: TodoListDiff): void {
+  if (!diff.added.length && !diff.changed.length && !diff.departed.length) return;
+  for (const listener of beforeAvatarChangeListeners) {
+    // Motion only: a listener that throws must never keep the server's list out.
+    try {
+      listener();
+    } catch (err) {
+      console.warn("[todos] a before-change listener failed; the change applies without it", err);
+    }
+  }
+  const now = Date.now();
+  for (const id of diff.departed) avatarDepartures.set(id, now + TODO_ACTIVITY_MS);
+  // A row that came back is no longer leaving.
+  for (const id of [...diff.added, ...diff.changed]) avatarDepartures.delete(id);
+  avatarFlushOpen = true;
+  setTimeout(() => {
+    avatarFlushOpen = false;
+  }, 0);
+  const seq = (activitySeq += 1);
+  todoActivity.update((activity) => {
+    const marks = { ...activity.marks };
+    diff.added.forEach((id, index) => {
+      marks[id] = { kind: "added", seq, delay: Math.min(index, TODO_OVERLAY_LIMIT - 1) * TODO_ARRIVAL_STAGGER_MS };
+    });
+    for (const id of diff.changed) marks[id] = { kind: "changed", seq, delay: 0 };
+    for (const id of diff.departed) delete marks[id];
+    return { seq, marks, pop: seq };
+  });
+  const timer = setTimeout(() => {
+    activityTimers.delete(timer);
+    todoActivity.update((activity) => ({
+      seq: activity.seq,
+      marks: Object.fromEntries(Object.entries(activity.marks).filter(([, mark]) => mark.seq !== seq)),
+      pop: activity.pop === seq ? 0 : activity.pop,
+    }));
+    const expired = Date.now();
+    for (const [id, until] of avatarDepartures) if (until <= expired) avatarDepartures.delete(id);
+  }, TODO_ACTIVITY_MS);
+  activityTimers.add(timer);
+}
+
+/** One-shot: whether the avatar's change just removed this row from the open list (the card's out: transition). */
+export function takeAvatarDeparture(id: string): boolean {
+  const until = avatarDepartures.get(id);
+  avatarDepartures.delete(id);
+  return until !== undefined && until > Date.now();
+}
+
+/** Whether the update now flushing applies an avatar's change (the card's sibling glide and section fades). */
+export function avatarChangeFlushing(): boolean {
+  return avatarFlushOpen;
+}
+
+/**
+ * The change (seq) of the newest row the avatar added that sits past the card's
+ * visible rows — the 전체 보기 footer pops for it — else 0. Keyed on that change
+ * alone, so a later edit of the avatar's never re-pops it.
+ */
+export function todoHiddenArrivalSeq(
+  sections: TodoOverlaySection[],
+  marks: Record<string, TodoMark>,
+  items: TodoItem[],
+): number {
+  const shown = new Set(sections.flatMap((section) => section.items.map((item) => item.id)));
+  let seq = 0;
+  for (const item of items) {
+    const mark = marks[item.id];
+    if (!item.done && mark?.kind === "added" && !shown.has(item.id)) seq = Math.max(seq, mark.seq);
+  }
+  return seq;
 }
 
 /** Logout/session expiry: forget tracked tool calls and void in-flight loads (the slice itself is reset by the caller). */
@@ -670,4 +909,13 @@ export function resetTodoClientState(): void {
   reloadQueued = false;
   pendingFreshRead = false;
   overlayFocusRequested = false;
+  avatarEndsSeen = 0;
+  avatarEndsCovered = 0;
+  lastAvatarEndAt = 0;
+  avatarDepartures.clear();
+  avatarFlushOpen = false;
+  activitySeq = 0;
+  for (const timer of activityTimers) clearTimeout(timer);
+  activityTimers.clear();
+  todoActivity.set(emptyTodoActivity());
 }

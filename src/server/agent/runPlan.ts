@@ -66,6 +66,7 @@ import {
   summarizeGroupAgentState,
   summarizeOwnerState,
 } from "./ownerState.js";
+import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
   buildCanUseToolSafetyNet,
   buildPreToolUseHook,
@@ -782,6 +783,15 @@ export async function buildAgentRunPlan(
   const todoToolsActive =
     systemToolsEnabled && ownerToolAccess && !groupAgentRun && !consultationRun;
   const todoDeleteActive = todoToolsActive && !request.externalTaskApi;
+  // The 할 일 list as the prompt states it: FROZEN per conversation at its first
+  // to-do-capable turn and only read back afterwards (agent/todoSnapshot.ts —
+  // a write-once store call, so a re-plan or retry reads the same snapshot).
+  // Same gate as the tools: a teammate's, group-agent or consultation run never
+  // takes or sees the owner's list.
+  const todoSnapshot =
+    todoToolsActive && request.conversationId
+      ? resolveConversationTodoSnapshot(store, request.avatar.id, request.conversationId)
+      : null;
   // Deployment-level PPTX toolchain probes — memoized per process (boot pays
   // the spawn cost): the legacy LibreOffice/pdftoppm/python-pptx half, and the
   // pptx skill's HTML→PPTX converter (`deck.mjs probe`), whose state rides into
@@ -1718,6 +1728,7 @@ export async function buildAgentRunPlan(
     skillExchangeActive,
     todoToolsActive,
     todoDeleteActive,
+    todoSnapshot,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,

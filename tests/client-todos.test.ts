@@ -3,18 +3,22 @@
 // rail badge share. Pins the optimistic-write contract (change first, roll back
 // + toast + resync on failure), the snapshot rule (every response's
 // {todayKst, counts} wins), stale-load protection, the live refresh when an
-// avatar's mcp__todo__* call finishes, and storage-failure tolerance.
+// avatar's mcp__todo__* call finishes (and the card motion it alone may
+// trigger), and storage-failure tolerance.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { get } from "svelte/store";
 
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import {
+  avatarChangeFlushing,
   clearCompletedTodos,
   completeTodoWithUndo,
   createTodo,
   deleteTodo,
+  diffAvatarChange,
   dismissTodoOverlay,
   dueLabel,
+  emptyTodoActivity,
   emptyTodoState,
   isPendingTodo,
   loadTodos,
@@ -22,6 +26,7 @@ import {
   matchesTodoQuery,
   noteTodoToolEnd,
   noteTodoToolStart,
+  onBeforeAvatarChange,
   overlaySections,
   parseTagInput,
   resetTodoClientState,
@@ -29,11 +34,16 @@ import {
   setTodoDone,
   setTodoOverlayOpen,
   consumeTodoOverlayFocus,
+  takeAvatarDeparture,
+  todoActivity,
+  todoHiddenArrivalSeq,
   todoFilterCounts,
   todoOverlayMode,
   todoOverlayVisible,
   todoSeedText,
   updateTodo,
+  TODO_ACTIVITY_MS,
+  TODO_ARRIVAL_STAGGER_MS,
   TODO_OVERLAY_PINNED_MIN_WIDTH,
 } from "../src/client/src/lib/todos.js";
 import { loadTodoOverlayOpen } from "../src/client/src/lib/layout.js";
@@ -121,6 +131,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -430,6 +441,23 @@ describe("loads", () => {
     expect(readState().todos.items.map((item) => item.id)).toEqual(["dated", "undated", "done"]);
   });
 
+  it("keeps the list's identity when a re-read changed nothing, so keyed views never reconcile mid-motion", async () => {
+    const list = [todo({ id: "a" }), todo({ id: "b", dueDate: TODAY })];
+    useFetch(async (url) =>
+      url === "/api/me/todos"
+        ? jsonRes({ todos: list.map((item) => ({ ...item })), todayKst: TODAY, counts: counts({ open: 2, dueToday: 1 }) })
+        : undefined,
+    );
+    await loadTodos();
+    const first = readState().todos.items;
+    await loadTodos(); // equal content in fresh objects
+    expect(readState().todos.items).toBe(first);
+    list[0] = { ...list[0], title: "바뀐 제목", updatedAt: "2026-10-09T05:00:00.000Z" };
+    await loadTodos();
+    expect(readState().todos.items).not.toBe(first);
+    expect(readState().todos.items.find((item) => item.id === "a")?.title).toBe("바뀐 제목");
+  });
+
   it("discards a GET that started before a write, so it cannot undo the optimistic change", async () => {
     const item = todo({ id: "a" });
     seedTodos([item]);
@@ -445,6 +473,51 @@ describe("loads", () => {
     await load;
     expect(readState().todos.items[0].done).toBe(true);
     expect(readState().todos.counts.done).toBe(1);
+  });
+
+  it("discards a GET that started DURING a write and landed before it settled", async () => {
+    // The server may answer that GET before it applies the write, so its list can
+    // still hold the old row: applying it would undo the optimistic change until
+    // the write's own response lands.
+    const item = todo({ id: "a" });
+    seedTodos([item], { counts: counts({ open: 1 }) });
+    const patch = deferred<unknown>();
+    const fetchFn = useFetch(async (url, init) => {
+      if (url === "/api/me/todos" && !init.method) return jsonRes({ todos: [item], todayKst: TODAY, counts: counts({ open: 1 }) });
+      if (init.method === "PATCH") return patch.promise;
+      return undefined;
+    });
+    const completion = setTodoDone("a", true);
+    await flush();
+    expect(readState().todos.items[0].done).toBe(true);
+    await loadTodos(); // e.g. the 60 s poll, while the PATCH is still on the way
+    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.counts.done).toBe(1);
+    patch.resolve(jsonRes({ todo: { ...item, done: true }, todayKst: TODAY, counts: counts({ done: 1 }) }));
+    await completion;
+    await flush();
+    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.counts).toEqual(counts({ done: 1 }));
+    // A plain poll owes nothing: the write's own response settled the list.
+    expect(fetchFn.mock.calls.filter(([, init]) => !(init as RequestInit | undefined)?.method)).toHaveLength(1);
+  });
+
+  it("never wedges later loads when a write throws before it is sent", async () => {
+    // Every GET that lands while a write is in flight is dropped, so a write that
+    // was counted but never settled would freeze the list until logout.
+    seedTodos([todo({ id: "a" })]);
+    useFetch(async (url, init) =>
+      url === "/api/me/todos" && !init.method
+        ? jsonRes({ todos: [todo({ id: "a" }), todo({ id: "b" })], todayKst: TODAY, counts: counts({ open: 2 }) })
+        : undefined,
+    );
+    const uuid = vi.spyOn(globalThis.crypto, "randomUUID").mockImplementation(() => {
+      throw new Error("no uuid");
+    });
+    await expect(createTodo({ title: "x" })).rejects.toThrow("no uuid");
+    uuid.mockRestore();
+    await loadTodos();
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["a", "b"]);
   });
 
   it("shares ONE in-flight GET between overlapping loads (the direct #/todos open used to livelock)", async () => {
@@ -638,6 +711,291 @@ describe("live refresh after the avatar's to-do tools", () => {
     await flush();
     expect(fetchMock.mock.calls.some(([url]) => url === "/api/me/todos")).toBe(true);
     expect(readState().todos.items.map((item) => item.id)).toEqual(["from-avatar"]);
+  });
+});
+
+describe("avatar change motion", () => {
+  /** A GET-only server whose list the test swaps out, as the avatar's tools would. */
+  function listServer(list: () => TodoItem[]) {
+    return useFetch(async (url, init) => {
+      if (url !== "/api/me/todos" || init.method) return undefined;
+      const items = list();
+      return jsonRes({ todos: items, todayKst: TODAY, counts: counts({ open: items.filter((item) => !item.done).length }) });
+    });
+  }
+
+  let toolSeq = 0;
+  /** An avatar's to-do tool finishing in the run stream; resolves once the re-read it started has applied. */
+  async function avatarTool(name = "mcp__todo__add_todos"): Promise<void> {
+    const id = `tu-${(toolSeq += 1)}`;
+    noteTodoToolStart(id, name);
+    noteTodoToolEnd(id, true);
+    await loadTodos(); // joins the fresh read the tool end started
+  }
+
+  it("diffs the open list by id: the avatar's new or any reopened → added in display order, edited → changed, deleted or completed → departed", () => {
+    const keep = todo({ id: "keep" });
+    const edit = todo({ id: "edit" });
+    const gone = todo({ id: "gone" });
+    const finish = todo({ id: "finish" });
+    const reopen = todo({ id: "reopen", done: true, completedAt: "2026-10-08T00:00:00.000Z" });
+    const oldDone = todo({ id: "old-done", done: true });
+    const pending = todo({ id: "pending-1" });
+    const diff = diffAvatarChange(
+      [keep, edit, gone, finish, reopen, oldDone, pending],
+      [
+        keep,
+        { ...edit, title: "고친 제목", updatedAt: "2026-10-09T02:00:00.000Z" },
+        { ...finish, done: true, completedAt: "2026-10-09T02:00:00.000Z" },
+        { ...reopen, done: false, completedAt: null },
+        todo({ id: "new-undated", source: "avatar" }),
+        todo({ id: "new-dated", dueDate: "2026-10-02", source: "avatar" }),
+        // New rows the same GET carried from elsewhere are not the avatar's.
+        todo({ id: "from-routine", source: "routine" }),
+        todo({ id: "from-api", source: "api" }),
+        todo({ id: "from-other-tab", source: "user" }),
+      ],
+    );
+    expect(diff).toEqual({
+      // The shared order: dated first, then (same priority and age) by id.
+      added: ["new-dated", "new-undated", "reopen"],
+      changed: ["edit"],
+      // An unconfirmed optimistic row never departs: its swap is the viewer's own add.
+      departed: ["gone", "finish"],
+    });
+  });
+
+  it("marks what the avatar's write changed: rows it added stagger in, edits wash, departures register once, the count pops", async () => {
+    const keep = todo({ id: "keep" });
+    const edit = todo({ id: "edit" });
+    const gone = todo({ id: "gone" });
+    seedTodos([keep, edit, gone]);
+    listServer(() => [
+      keep,
+      { ...edit, title: "고친 제목", updatedAt: "2026-10-09T02:00:00.000Z" },
+      todo({ id: "a-dated", dueDate: "2026-10-02", source: "avatar" }),
+      todo({ id: "a-undated", source: "avatar" }),
+    ]);
+    await avatarTool();
+    expect(get(todoActivity)).toEqual({
+      seq: 1,
+      pop: 1,
+      marks: {
+        "a-dated": { kind: "added", seq: 1, delay: 0 },
+        "a-undated": { kind: "added", seq: 1, delay: TODO_ARRIVAL_STAGGER_MS },
+        edit: { kind: "changed", seq: 1, delay: 0 },
+      },
+    });
+    // The update that applied it is still flushing: the card's sibling glide keys on this.
+    expect(avatarChangeFlushing()).toBe(true);
+    await flush();
+    expect(avatarChangeFlushing()).toBe(false);
+    // The leaving row's out: transition asks once; nothing else counts as departed.
+    expect(takeAvatarDeparture("gone")).toBe(true);
+    expect(takeAvatarDeparture("gone")).toBe(false);
+    expect(takeAvatarDeparture("keep")).toBe(false);
+  });
+
+  it("caps the stagger at the card's visible rows, and spots an addition the card has no row for", async () => {
+    const seeded = Array.from({ length: 8 }, (_, i) => todo({ id: `s${i}`, dueDate: "2026-10-05" }));
+    seedTodos(seeded);
+    const added = Array.from({ length: 10 }, (_, i) => todo({ id: `n${i}`, dueDate: "2026-10-01", source: "avatar" }));
+    listServer(() => [...seeded, ...added]);
+    await avatarTool();
+    const { marks } = get(todoActivity);
+    expect(marks.n0.delay).toBe(0);
+    expect(marks.n7.delay).toBe(7 * TODO_ARRIVAL_STAGGER_MS);
+    expect(marks.n9.delay).toBe(7 * TODO_ARRIVAL_STAGGER_MS);
+    const items = readState().todos.items;
+    const { sections } = overlaySections(items, TODAY);
+    // The 8 visible rows are all new; n8/n9 fell past them, so the footer pops for change 1.
+    expect(todoHiddenArrivalSeq(sections, marks, items)).toBe(1);
+    const onlyVisible = Object.fromEntries(Object.entries(marks).filter(([id]) => id !== "n8" && id !== "n9"));
+    expect(todoHiddenArrivalSeq(sections, onlyVisible, items)).toBe(0);
+    // A later change of the avatar's (an edit) leaves the footer's key on change 1.
+    expect(todoHiddenArrivalSeq(sections, { ...marks, s0: { kind: "changed", seq: 2, delay: 0 } }, items)).toBe(1);
+  });
+
+  it("stays still for the first load, polls, list_todos, a failed write's resync and the viewer's own edits", async () => {
+    let list = [todo({ id: "first" })];
+    const fetchMock = listServer(() => list);
+    // The first load has nothing to show a change against, even right after a tool end.
+    await avatarTool();
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["first"]);
+    // A poll that brings someone else's change.
+    list = [...list, todo({ id: "from-poll" })];
+    await loadTodos();
+    // The avatar only READ the list.
+    list = [...list, todo({ id: "while-listing" })];
+    await avatarTool("mcp__todo__list_todos");
+    expect(readState().todos.items.map((item) => item.id).sort()).toEqual(["first", "from-poll", "while-listing"]);
+    // A failed write: rolled back, then resynced against a list that changed meanwhile.
+    fetchMock.mockImplementation(async (input: unknown, init: RequestInit = {}) => {
+      if (init.method === "PATCH") return jsonRes({ error: "서버 오류" }, 500);
+      return jsonRes({ todos: [...list, todo({ id: "after-failure" })], todayKst: TODAY, counts: counts({ open: 4 }) });
+    });
+    await setTodoDone("first", true);
+    await flush();
+    expect(readState().todos.items.map((item) => item.id)).toContain("after-failure");
+    // The viewer's own add, pending row swap included.
+    fetchMock.mockImplementation(async () => jsonRes({ todo: todo({ id: "mine" }), todayKst: TODAY, counts: counts({ open: 5 }) }, 201));
+    await createTodo({ title: "직접 추가" });
+    expect(get(todoActivity)).toEqual(emptyTodoActivity());
+    expect(takeAvatarDeparture("first")).toBe(false);
+  });
+
+  it("keeps the claim open until a read that started after the avatar's last write applies", async () => {
+    seedTodos([todo({ id: "old" })]);
+    const pollGet = deferred<unknown>();
+    let gets = 0;
+    useFetch(async (url, init) => {
+      if (url !== "/api/me/todos" || init.method) return undefined;
+      gets += 1;
+      return gets === 1
+        ? pollGet.promise
+        : jsonRes({ todos: [todo({ id: "old" }), todo({ id: "added-by-avatar", source: "avatar" })], todayKst: TODAY, counts: counts({ open: 2 }) });
+    });
+    const poll = loadTodos();
+    noteTodoToolStart("tu-x", "mcp__todo__add_todos");
+    noteTodoToolEnd("tu-x", true);
+    // The poll's answer predates the avatar's write: nothing to show yet.
+    pollGet.resolve(jsonRes({ todos: [todo({ id: "old" })], todayKst: TODAY, counts: counts({ open: 1 }) }));
+    await poll;
+    await flush();
+    expect(gets).toBe(2);
+    expect(get(todoActivity).marks).toEqual({ "added-by-avatar": { kind: "added", seq: 1, delay: 0 } });
+  });
+
+  it("never credits the viewer's own in-flight add to the avatar", async () => {
+    seedTodos([todo({ id: "old" })]);
+    const post = deferred<unknown>();
+    useFetch(async (url, init) => {
+      if (init.method === "POST") return post.promise;
+      // The server already has the viewer's row while its POST answer is still on the way.
+      return jsonRes({ todos: [todo({ id: "old" }), todo({ id: "srv-mine", title: "직접 추가" })], todayKst: TODAY, counts: counts({ open: 2 }) });
+    });
+    const creation = createTodo({ title: "직접 추가" });
+    noteTodoToolStart("tu-y", "mcp__todo__update_todo");
+    noteTodoToolEnd("tu-y", true); // deferred behind the write
+    await loadTodos(); // a poll lands inside the write
+    post.resolve(jsonRes({ todo: todo({ id: "srv-mine", title: "직접 추가" }), todayKst: TODAY, counts: counts({ open: 2 }) }, 201));
+    await creation;
+    await flush();
+    expect(get(todoActivity).marks).toEqual({});
+  });
+
+  it("lets a failed re-read close the claim, so the next poll is never shown as the avatar's", async () => {
+    seedTodos([todo({ id: "old" })]);
+    let failing = true;
+    useFetch(async (url, init) => {
+      if (url !== "/api/me/todos" || init.method) return undefined;
+      if (failing) return jsonRes({ error: "서버 오류" }, 500);
+      // The poll brings a row the avatar added in ANOTHER tab's chat — avatar-made,
+      // so only the closed claim (not the source rule) keeps it still here.
+      return jsonRes({ todos: [todo({ id: "old" }), todo({ id: "other-tab-added", source: "avatar" })], todayKst: TODAY, counts: counts({ open: 2 }) });
+    });
+    noteTodoToolStart("tu-f", "mcp__todo__add_todos");
+    noteTodoToolEnd("tu-f", true);
+    await loadTodos().catch(() => {}); // the fresh read it started fails
+    failing = false;
+    await loadTodos(); // the 60 s poll
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["old", "other-tab-added"]);
+    expect(get(todoActivity)).toEqual(emptyTodoActivity());
+  });
+
+  it("drops a claim nobody could show: a joined poll failed and the queued read never ran", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    seedTodos([todo({ id: "old" })]);
+    const pollGet = deferred<unknown>();
+    let gets = 0;
+    useFetch(async (url, init) => {
+      if (url !== "/api/me/todos" || init.method) return undefined;
+      gets += 1;
+      if (gets === 1) return pollGet.promise;
+      return jsonRes({ todos: [todo({ id: "old" }), todo({ id: "later", source: "avatar" })], todayKst: TODAY, counts: counts({ open: 2 }) });
+    });
+    const poll = loadTodos();
+    noteTodoToolStart("tu-j", "mcp__todo__add_todos");
+    noteTodoToolEnd("tu-j", true); // joins the poll, which then fails
+    pollGet.resolve(jsonRes({ error: "서버 오류" }, 500));
+    await poll.catch(() => {});
+    vi.advanceTimersByTime(60_000);
+    await loadTodos(); // the next poll, a minute later
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["later", "old"]);
+    expect(get(todoActivity)).toEqual(emptyTodoActivity());
+  });
+
+  it("still shows a change whose re-read started right after the tool end, however slow it answers", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    seedTodos([todo({ id: "old" })]);
+    const slowGet = deferred<unknown>();
+    useFetch(async (url, init) => (url === "/api/me/todos" && !init.method ? slowGet.promise : undefined));
+    noteTodoToolStart("tu-s", "mcp__todo__add_todos");
+    noteTodoToolEnd("tu-s", true); // its fresh read starts now…
+    vi.advanceTimersByTime(10_000); // …and answers ten seconds later
+    slowGet.resolve(jsonRes({ todos: [todo({ id: "old" }), todo({ id: "slow-add", source: "avatar" })], todayKst: TODAY, counts: counts({ open: 2 }) }));
+    await loadTodos();
+    expect(get(todoActivity).marks).toEqual({ "slow-add": { kind: "added", seq: 1, delay: 0 } });
+  });
+
+  it("applies the change even when a before-change listener throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stop = onBeforeAvatarChange(() => {
+      throw new Error("boom");
+    });
+    try {
+      seedTodos([todo({ id: "old" })]);
+      listServer(() => [todo({ id: "old" }), todo({ id: "added", source: "avatar" })]);
+      await avatarTool();
+      expect(readState().todos.items.map((item) => item.id)).toEqual(["added", "old"]);
+      expect(get(todoActivity).marks.added).toMatchObject({ kind: "added" });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("[todos]"), expect.any(Error));
+    } finally {
+      stop();
+    }
+  });
+
+  it("closes the flush window and the departure at the viewer's own next write", async () => {
+    const leaving = todo({ id: "leaving" });
+    const stays = todo({ id: "stays" });
+    seedTodos([leaving, stays]);
+    listServer(() => [stays, { ...leaving, done: true, completedAt: "2026-10-09T02:00:00.000Z" }]);
+    await avatarTool("mcp__todo__update_todo");
+    expect(avatarChangeFlushing()).toBe(true);
+    useFetch(async (url, init) =>
+      init.method === "PATCH" ? jsonRes({ todo: { ...stays, done: true }, todayKst: TODAY, counts: counts({ done: 2 }) }) : undefined,
+    );
+    // A click handled before the window's timer: the viewer's own completion never glides.
+    const own = setTodoDone("stays", true);
+    expect(avatarChangeFlushing()).toBe(false);
+    await own;
+    // Reopening the row the avatar completed makes any later exit of it the viewer's.
+    useFetch(async (url, init) =>
+      init.method === "PATCH" ? jsonRes({ todo: leaving, todayKst: TODAY, counts: counts({ open: 1, done: 1 }) }) : undefined,
+    );
+    await setTodoDone("leaving", false);
+    expect(takeAvatarDeparture("leaving")).toBe(false);
+  });
+
+  it("lets the motion expire after TODO_ACTIVITY_MS, and logout forgets it at once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const gone = todo({ id: "gone" });
+    seedTodos([gone]);
+    listServer(() => [todo({ id: "new", source: "avatar" })]);
+    await avatarTool("mcp__todo__delete_todo");
+    expect(get(todoActivity)).toMatchObject({ seq: 1, pop: 1, marks: { new: { kind: "added" } } });
+    vi.advanceTimersByTime(TODO_ACTIVITY_MS);
+    // A card opened (or a composer remounted) now replays nothing; the unconsumed departure is gone too.
+    expect(get(todoActivity)).toEqual({ seq: 1, pop: 0, marks: {} });
+    expect(takeAvatarDeparture("gone")).toBe(false);
+
+    seedTodos([todo({ id: "again" })]);
+    listServer(() => []);
+    await avatarTool("mcp__todo__delete_todo");
+    expect(get(todoActivity).pop).toBe(2);
+    stopKnowledgeWatch();
+    expect(get(todoActivity)).toEqual(emptyTodoActivity());
+    expect(takeAvatarDeparture("again")).toBe(false);
   });
 });
 

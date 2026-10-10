@@ -1,5 +1,6 @@
 import type { ScheduleKind } from "./routineSchedule.js";
 import type { McpToolGroupId } from "../shared/mcpToolGroups.js";
+import type { TodoPriority, TodoSource } from "../shared/todos.js";
 import type { BrowserSecretPolicy } from "./secretPolicy.js";
 
 export type AgentRuntime = "claude" | "local";
@@ -1226,6 +1227,27 @@ export interface EgressPolicyState {
   appliedBy: string | null;
 }
 
+/**
+ * The owner's 할 일 list as the system prompt states it: FROZEN per conversation
+ * at its first to-do-capable turn (`conversations.todo_snapshot`, written once
+ * through agent/todoSnapshot.ts) and never refreshed — user decision
+ * 2026-10-10 — so the per-turn append stays byte-stable for prompt caching.
+ * The LIVE counts still ride describe_system and every to-do tool result.
+ */
+export interface TodoPromptSnapshot {
+  /** When it was taken (UTC ISO instant; the prompt states it in KST). */
+  takenAt: string;
+  /** The KST calendar date the counts were computed against. */
+  todayKst: string;
+  counts: { open: number; overdue: number; dueToday: number };
+  /**
+   * The first open items in the shared display order (overdue first), at most
+   * `TODO_SNAPSHOT_ITEM_LIMIT`. `source` lets the prompt mark machine-authored
+   * (routine / task-API) titles.
+   */
+  items: { title: string; dueDate: string | null; priority: TodoPriority; source: TodoSource }[];
+}
+
 export interface AgentRequest {
   message: string;
   avatar: AgentAvatar;
@@ -1617,12 +1639,14 @@ export interface AgentRequest {
    * external-task-API turn) — so the standing guidance never offers a tool the
    * run lacks. `deleteEnabled` mirrors runPlan's `todoDeleteActive` (false on
    * external-task-API turns). Mirrored by describe_system
-   * (`SystemToolsContext.todoToolsEnabled` / `todoDeleteEnabled`). Carries NO
-   * counts or date on purpose: the system-prompt append must stay stable across
-   * turns for prompt caching, so the live counts ride describe_system and the
-   * header of every to-do tool result instead.
+   * (`SystemToolsContext.todoToolsEnabled` / `todoDeleteEnabled`). `snapshot` is
+   * the list FROZEN at this conversation's first to-do-capable turn (see
+   * {@link TodoPromptSnapshot}); null when the run has no conversation row or the
+   * stored value is unreadable. Never LIVE counts or today's date: the
+   * system-prompt append must stay stable across turns for prompt caching, so the
+   * live state rides describe_system and the header of every to-do tool result.
    */
-  todoState?: { deleteEnabled: boolean };
+  todoState?: { deleteEnabled: boolean; snapshot?: TodoPromptSnapshot | null };
   /**
    * The registered git repo the avatar opened as this conversation's **working
    * repository** (`mcp__git_repo__open_repo`): the repo's registered name. Its

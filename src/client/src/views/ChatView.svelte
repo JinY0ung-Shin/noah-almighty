@@ -52,7 +52,7 @@
   import { hasSideTabs } from "../lib/sidePanel";
   import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
-  import { setTodoOverlayOpen, todoOverlayVisible } from "../lib/todos";
+  import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
   import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
@@ -197,6 +197,10 @@
   $: todoLoaded = $appState.todos.loaded;
   $: todoOpenCount = $appState.todos.counts.open;
   $: todoOverdueCount = $appState.todos.counts.overdue;
+  // The count pops when the avatar changes the list, card shown or not: the
+  // fresh change's seq keys a remount (restarting the keyframes); 0 once it has
+  // played, so a later remount (pane switch) replays nothing.
+  $: todoCountPop = $todoActivity.pop;
   /** The toggle's tooltip; state passed in (a template helper's own reads are untracked). */
   function todoToggleTitle(shownHere: boolean, loaded: boolean, open: number, overdue: number): string {
     return `${shownHere ? "할 일 목록 닫기" : "할 일 목록 띄우기"}${loaded ? ` · 열린 할 일 ${open}개` : ""}${overdue ? ` · 마감 지남 ${overdue}개` : ""}`;
@@ -1993,7 +1997,11 @@
                 on:click={() => toggleTodoOverlayIn(item)}
               >
                 <Icon name="check-square" size={14} />
-                <span>할 일{todoLoaded ? ` ${todoOpenCount}` : ""}</span>
+                <span
+                  >할 일{#if todoLoaded}{" "}{#key todoCountPop}<span class="composer-todo-count" class:is-popping={todoCountPop > 0}
+                        >{todoOpenCount}</span
+                      >{/key}{/if}</span
+                >
                 {#if todoOverdueCount}
                   <span class="composer-todo-overdue"><span class="composer-todo-dot" aria-hidden="true"></span>지남 {todoOverdueCount}</span>
                 {/if}
@@ -2336,6 +2344,15 @@
     color: var(--accent-strong);
     border-color: var(--accent-soft-strong);
     background: var(--accent-soft);
+  }
+  /* The avatar changed the list: the number pops once (`todo-count-pop`,
+     30-agent-md-composer.css). inline-block only while popping — a transform
+     needs it, and the resting row stays exactly as laid out. */
+  @media (prefers-reduced-motion: no-preference) {
+    .composer-todo-count.is-popping {
+      display: inline-block;
+      animation: todo-count-pop 360ms var(--ease-out);
+    }
   }
   .composer-todo-overdue {
     display: inline-flex;

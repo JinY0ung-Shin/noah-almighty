@@ -55,6 +55,8 @@ Durable principles for this layer:
   Because it is re-rendered every turn, keep the append STABLE across turns: a volatile value in it (a
   count, a date, a clock) changes the cached prefix whenever it moves and re-bills the whole history at
   cache-write rates. Live numbers belong in `describe_system` or tool results (the pending-request count,
-  the 할 일 counts and KST date), or in the user message (`/todo` carries its date).
+  the 할 일 counts and KST date), or in the user message (`/todo` carries its date). A value written ONCE
+  per conversation and read back verbatim is stable too — the 할 일 list rides that way
+  (`conversations.todo_snapshot`, frozen at the first to-do-capable turn); never make it refresh mid-thread.
 - **`agent-core.test.ts` checks the prompt with `toContain`/`not.toContain` substrings**, not byte-for-byte
   — adding a section is safe; changing an existing string (or its per-viewer presence) breaks a test.

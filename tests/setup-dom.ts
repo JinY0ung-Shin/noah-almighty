@@ -30,6 +30,13 @@ if (typeof Element !== "undefined" && !(Element.prototype as Element & { animate
   });
 }
 
+// Svelte's `animate:` directive (the 할 일 card's sibling glide) asks a LEAVING
+// keyed row for its running animations, and jsdom has none. Nothing runs here,
+// so an empty list is honest.
+if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
+  Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] });
+}
+
 // jsdom has no ResizeObserver, and the transcript's stick-to-bottom controller
 // (lib/autoscroll.ts) constructs one on attach — so ANY component test that
 // mounts the chat transcript throws without this. Layout never changes in jsdom,

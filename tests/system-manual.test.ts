@@ -38,7 +38,8 @@ describe("official system manual", () => {
       browserEnabled: true, canvasEnabled: true, visionEnabled: false,
       fileOutputEnabled: true, deckRenderingEnabled: true, deckConverterEnabled: true,
       midTurnMessages: true, shareLinksEnabled: true,
-      // Static by design (no counts/date — prompt caching), so it is a flag here.
+      // A flag here: its list frozen per conversation (`snapshot`) is data-driven,
+      // like every other field this tripwire leaves out.
       todoState: { deleteEnabled: true },
     };
     const prompt = buildSystemPromptAppend(flags);

@@ -29,6 +29,10 @@ Durable principles for this layer:
   the state as an argument (`attachHint(item, $appState)`) or name it in the markup (`{@const}`).
   Neither svelte-check nor jsdom catches it: unrelated store writes re-evaluate the expression and mask
   the staleness — only a real browser shows it.
+- **Motion that should play only for SOME changes is gated inside the transition/animation function,
+  on non-reactive state read when it starts** — a removed keyed row only sees its last render's params,
+  and `animate:` lists need a positioned container whose height is held only when it is TOP-anchored. Details in `client.md` (Svelte 5 runtime
+  gotchas); verify geometry in Playwright, never jsdom.
 - **There IS a shared layer — reach for it before hand-mirroring.** `src/shared/*`
   (`mcpToolGroups.ts`, `sdkToolPresentation.ts`) is imported by BOTH sides, and `tsconfig.client.json`'s
   `include` list is the whitelist of server modules the client may import directly (`server/types.ts`,

@@ -79,6 +79,11 @@ export function kstDateString(from: Date = new Date()): string {
   return new Date(from.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+/** The KST wall-clock minute (`YYYY-MM-DD HH:MM`) at `from`. */
+export function kstDateTimeString(from: Date): string {
+  return new Date(from.getTime() + KST_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ");
+}
+
 /** Day of week (0=Sun..6=Sat) of a real `YYYY-MM-DD` calendar date, or null. */
 export function calendarDateWeekday(value: unknown): number | null {
   const date = parseCalendarDate(value);

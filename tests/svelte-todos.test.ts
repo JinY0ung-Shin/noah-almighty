@@ -9,7 +9,13 @@ import Shell from "../src/client/src/components/Shell.svelte";
 import TodosView from "../src/client/src/views/TodosView.svelte";
 import ChatView from "../src/client/src/views/ChatView.svelte";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
-import { setTodoOverlayOpen } from "../src/client/src/lib/todos.js";
+import {
+  loadTodos,
+  noteTodoToolEnd,
+  noteTodoToolStart,
+  resetTodoClientState,
+  setTodoOverlayOpen,
+} from "../src/client/src/lib/todos.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import type { ChatPane, User } from "../src/client/src/lib/types.js";
 import type { AvatarDetail } from "../src/server/types.js";
@@ -136,6 +142,10 @@ function fakeServer(initial: TodoItem[]) {
     get items() {
       return items;
     },
+    /** What an avatar's tool (or another tab) did server-side; the client learns of it on its next GET. */
+    setItems(next: TodoItem[]) {
+      items = [...next];
+    },
   };
 }
 
@@ -171,6 +181,8 @@ function flush(): Promise<void> {
 }
 
 beforeEach(() => {
+  // The store's load/write bookkeeping and the card's motion state are module-level.
+  resetTodoClientState();
   appState.set(structuredClone(PRISTINE));
   toasts.set([]);
   replaceState({ user, conversations: [], chatPanes: [], activePaneId: null });
@@ -521,19 +533,50 @@ describe("chat overlay", () => {
     expect(window.localStorage.getItem("noah.todoOverlayOpen")).toBeNull();
   });
 
-  it("adds from the quick box without any model call", async () => {
-    const server = fakeServer([]);
-    seedLoaded([]);
+  it("only reviews and completes: no add box in the card (adding is the 할 일 tab's form or the avatar)", async () => {
+    fakeServer([]);
+    seedLoaded([todo({ title: "회의록 공유" })]);
     seedChat();
     replaceState({ todoOverlayOpen: true });
     render(ChatView);
     const overlay = await screen.findByRole("complementary", { name: "할 일" });
-    await fireEvent.input(within(overlay).getByLabelText("새 할 일 제목"), { target: { value: "회의록 공유" } });
-    await fireEvent.submit(within(overlay).getByLabelText("새 할 일 제목").closest("form")!);
-    await waitFor(() => expect(server.writes()).toEqual([expect.objectContaining({ method: "POST", url: "/api/me/todos" })]));
-    // ChatView's own mount may GET run state; adding must never POST a chat turn.
-    expect(server.calls.some((call) => call.method === "POST" && call.url.startsWith("/api/chat"))).toBe(false);
-    await within(overlay).findByText("회의록 공유");
+    expect(within(overlay).queryByRole("textbox")).toBeNull();
+    expect(overlay.querySelector("form")).toBeNull();
+    expect(within(overlay).getByRole("checkbox", { name: "완료: 회의록 공유" })).toBeTruthy();
+  });
+
+  it("hands focus to a transient card on an explicit toggle, and Escape gives it back", async () => {
+    fakeServer([]);
+    seedLoaded([todo({ title: "다음 일" })]);
+    seedChat();
+    render(ChatView);
+    await fireEvent.click(toggle());
+    const card = document.getElementById("todo-overlay")!;
+    // jsdom never measures, so the card is a popover: focus moves in after first paint.
+    await waitFor(() => expect(document.activeElement).toBe(card));
+    expect(card.getAttribute("tabindex")).toBe("-1");
+    await fireEvent.keyDown(card, { key: "Escape" });
+    await waitFor(() => expect(card.hasAttribute("hidden")).toBe(true));
+    expect(document.activeElement).toBe(toggle());
+    // Focusable only for that moment: a click on its background never takes the caret.
+    expect(card.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("leaves focus on the toggle when the card it opened is pinned", async () => {
+    const ro = stubResizeObserver();
+    fakeServer([]);
+    seedLoaded([todo({ title: "다음 일" })]);
+    seedChat();
+    render(ChatView);
+    toggle().focus();
+    await fireEvent.click(toggle());
+    ro.resizeChatBody(1200); // the first measurement, before the deferred focus lands
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    await flush();
+    const card = document.getElementById("todo-overlay")!;
+    expect(card.classList.contains("is-pinned")).toBe(true);
+    expect(document.activeElement).toBe(toggle());
+    expect(card.hasAttribute("tabindex")).toBe(false);
   });
 
   it("completes with an undo toast, and the undo reopens the item", async () => {
@@ -702,14 +745,14 @@ describe("chat overlay", () => {
 
   it("dismisses the transient card on Escape and on an outside press — without forgetting the preference", async () => {
     fakeServer([]);
-    seedLoaded([todo()]);
+    seedLoaded([todo({ title: "보고서 검토" })]);
     seedChat();
     setTodoOverlayOpen(true);
     render(ChatView);
     const overlay = await screen.findByRole("complementary", { name: "할 일" });
-    const quickAdd = within(overlay).getByLabelText("새 할 일 제목");
-    quickAdd.focus(); // typing in the card, then Escape
-    await fireEvent.keyDown(quickAdd, { key: "Escape" });
+    const title = within(overlay).getByRole("button", { name: "보고서 검토" });
+    title.focus(); // moving through the card's items, then Escape
+    await fireEvent.keyDown(title, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "할 일" })).toBeNull());
     expect(readState()).toMatchObject({ todoOverlayOpen: true, todoOverlayDismissed: true });
     expect(window.localStorage.getItem("noah.todoOverlayOpen")).toBe("true");
@@ -758,13 +801,207 @@ describe("chat overlay", () => {
     const { unmount } = render(ChatView);
     const own = await screen.findByRole("complementary", { name: "할 일" });
     expect(own.textContent).toContain("/todo");
+    expect(own.textContent).toContain("할 일 탭");
     unmount();
 
-    // A colleague's avatar has no to-do tools: point to the viewer's own avatar instead.
+    // A colleague's avatar has no to-do tools: the 할 일 tab is the way to add.
     replaceState({ chatPanes: readState().chatPanes.map((pane) => ({ ...pane, avatar: { ...pane.avatar, id: "colleague-9" } })) });
     render(ChatView);
     const other = await screen.findByRole("complementary", { name: "할 일" });
-    expect(other.textContent).toContain("내 아바타와의 대화");
+    expect(other.textContent).toContain("할 일 탭");
     expect(other.textContent).not.toContain("/todo");
+    expect(other.textContent).not.toContain("아바타");
+  });
+
+  describe("motion for the avatar's changes", () => {
+    let toolSeq = 0;
+    /** An avatar's to-do tool finishing in the run stream (the re-read follows). */
+    async function avatarTool(name: string) {
+      const id = `tu-${(toolSeq += 1)}`;
+      noteTodoToolStart(id, name);
+      noteTodoToolEnd(id, true);
+      await loadTodos();
+      await flush();
+    }
+
+    function row(overlay: HTMLElement, title: string): HTMLLIElement | null {
+      return within(overlay).queryByText(title)?.closest("li") ?? null;
+    }
+
+    it("raises the rows the avatar adds, staggered, and pops the composer count — never a poll's", async () => {
+      const first = todo({ title: "기존 일" });
+      const server = fakeServer([first]);
+      seedLoaded([first]);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      expect(row(overlay, "기존 일")?.hasAttribute("data-arrival")).toBe(false);
+      expect(document.querySelector(".composer-todo-count.is-popping")).toBeNull();
+
+      server.setItems([
+        first,
+        todo({ title: "아바타 일 1", dueDate: "2026-10-01", source: "avatar" }),
+        todo({ title: "아바타 일 2", dueDate: "2026-10-02", source: "avatar" }),
+      ]);
+      await avatarTool("mcp__todo__add_todos");
+      const added = await waitFor(() => {
+        const found = row(overlay, "아바타 일 2");
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      expect(row(overlay, "아바타 일 1")?.dataset.arrival).toBe("added");
+      expect(row(overlay, "아바타 일 1")?.style.getPropertyValue("--todo-arrival-delay")).toBe("0ms");
+      expect(added.dataset.arrival).toBe("added");
+      expect(added.style.getPropertyValue("--todo-arrival-delay")).toBe("40ms");
+      expect(row(overlay, "기존 일")?.hasAttribute("data-arrival")).toBe(false);
+      const count = document.querySelector(".composer-todo-count.is-popping");
+      expect(count?.textContent).toBe("3");
+
+      // Someone else's change arriving with the 60 s poll stays still.
+      server.setItems([...server.items, todo({ title: "폴링으로 온 일" })]);
+      await loadTodos();
+      await flush();
+      expect(row(overlay, "폴링으로 온 일")?.hasAttribute("data-arrival")).toBe(false);
+    });
+
+    it("washes a row the avatar edits in place", async () => {
+      const item = todo({ title: "견적서" });
+      const server = fakeServer([item]);
+      seedLoaded([item]);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      server.setItems([{ ...item, title: "견적서 v2", updatedAt: "2026-10-09T04:00:00.000Z" }]);
+      await avatarTool("mcp__todo__update_todo");
+      await waitFor(() => expect(row(overlay, "견적서 v2")?.dataset.arrival).toBe("changed"));
+    });
+
+    it("slides out a row the avatar deletes, but the viewer's own completion leaves at once", async () => {
+      const keep = todo({ title: "남는 일" });
+      const doomed = todo({ title: "지울 일" });
+      const mine = todo({ title: "내가 끝낼 일" });
+      const server = fakeServer([keep, doomed, mine]);
+      seedLoaded([keep, doomed, mine]);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      const doomedRow = row(overlay, "지울 일")!;
+      const mineRow = row(overlay, "내가 끝낼 일")!;
+      const animate = vi.spyOn(Element.prototype, "animate");
+      const slidOut = (element: Element) =>
+        animate.mock.calls.some(
+          (call, index) => animate.mock.contexts[index] === element && (call[1] as KeyframeAnimationOptions | undefined)?.duration === 200,
+        );
+
+      server.setItems([keep, mine]);
+      await avatarTool("mcp__todo__delete_todo");
+      await waitFor(() => expect(row(overlay, "지울 일")).toBeNull());
+      expect(slidOut(doomedRow)).toBe(true);
+
+      await fireEvent.click(within(overlay).getByRole("checkbox", { name: "완료: 내가 끝낼 일" }));
+      await waitFor(() => expect(row(overlay, "내가 끝낼 일")).toBeNull());
+      expect(slidOut(mineRow)).toBe(false);
+      expect(row(overlay, "남는 일")).not.toBeNull();
+    });
+
+    it("pops the footer's count when the avatar's addition falls past the visible rows", async () => {
+      const seeded = Array.from({ length: 8 }, (_, i) => todo({ title: `마감 일 ${i}`, dueDate: "2026-10-01" }));
+      const server = fakeServer(seeded);
+      seedLoaded(seeded);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      expect(overlay.querySelector(".todo-overlay-more")).toBeNull();
+      server.setItems([...seeded, todo({ title: "언젠가 할 일", source: "avatar" })]);
+      await avatarTool("mcp__todo__add_todos");
+      await waitFor(() => expect(overlay.querySelector(".todo-overlay-more.is-popping")?.textContent).toBe("(외 1개)"));
+      expect(within(overlay).getByRole("button", { name: /전체 보기/ }).textContent).toBe("전체 보기 (외 1개) →");
+    });
+
+    /** `Element.animate` calls on `element` that ran for `duration` ms (Svelte drives transitions through it). */
+    function animatedFor(animate: { mock: { calls: unknown[][]; contexts: unknown[] } }, element: Element | null, duration: number): boolean {
+      return animate.mock.calls.some(
+        (call, index) => animate.mock.contexts[index] === element && (call[1] as KeyframeAnimationOptions | undefined)?.duration === duration,
+      );
+    }
+
+    it("fades in the row the avatar's exit brings into view — never one the viewer's own exit does", async () => {
+      const visible = Array.from({ length: 8 }, (_, i) => todo({ title: `마감 일 ${i}`, dueDate: "2026-10-01" }));
+      const ninth = todo({ title: "아홉째 일" });
+      const tenth = todo({ title: "열째 일" });
+      const server = fakeServer([...visible, ninth, tenth]);
+      seedLoaded([...visible, ninth, tenth]);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      expect(row(overlay, "아홉째 일")).toBeNull();
+      const animate = vi.spyOn(Element.prototype, "animate");
+
+      server.setItems(server.items.map((item) => (item.id === visible[0].id ? { ...item, done: true } : item)));
+      await avatarTool("mcp__todo__update_todo");
+      const entered = await waitFor(() => {
+        const found = row(overlay, "아홉째 일");
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      // Not one the avatar added (no rise of its own): it fades in behind the glide.
+      expect(entered.hasAttribute("data-arrival")).toBe(false);
+      expect(animatedFor(animate, entered, 160)).toBe(true);
+
+      await fireEvent.click(within(overlay).getByRole("checkbox", { name: "완료: 마감 일 1" }));
+      const next = await waitFor(() => {
+        const found = row(overlay, "열째 일");
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      expect(animatedFor(animate, next, 160)).toBe(false);
+    });
+
+    it("makes the avatar's exit instant under reduced motion", async () => {
+      stubMatchMedia(true); // every query matches: reduced motion (and the phone sheet)
+      const keep = todo({ title: "남는 일" });
+      const doomed = todo({ title: "지울 일" });
+      const server = fakeServer([keep, doomed]);
+      seedLoaded([keep, doomed]);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      const doomedRow = row(overlay, "지울 일")!;
+      const animate = vi.spyOn(Element.prototype, "animate");
+      server.setItems([keep]);
+      await avatarTool("mcp__todo__delete_todo");
+      await waitFor(() => expect(row(overlay, "지울 일")).toBeNull());
+      expect(animate.mock.contexts.includes(doomedRow)).toBe(false);
+    });
+
+    it("never re-measures the rows for state writes that leave the list alone (each streamed token)", async () => {
+      const items = [todo({ title: "첫째" }), todo({ title: "둘째" })];
+      const server = fakeServer(items);
+      seedLoaded(items);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      await flush();
+      const measure = vi.spyOn(Element.prototype, "getBoundingClientRect");
+      const rowMeasures = () =>
+        measure.mock.contexts.filter((element) => overlay.contains(element as Node) && (element as Element).matches("li, section")).length;
+      updateState((state) => {
+        state.chatPanes = state.chatPanes.map((pane) => ({ ...pane, liveText: `${pane.liveText}토큰` }));
+      });
+      await flush();
+      expect(rowMeasures()).toBe(0);
+      // A real change of the list does reconcile (and so measure) them.
+      server.setItems([...items, todo({ title: "셋째" })]);
+      await loadTodos();
+      await flush();
+      expect(rowMeasures()).toBeGreaterThan(0);
+    });
   });
 });

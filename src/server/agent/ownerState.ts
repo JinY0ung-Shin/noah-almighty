@@ -82,11 +82,12 @@ export interface OwnerState {
    */
   sharedAccount: boolean;
   /**
-   * The owner's 할 일 list counts against TODAY in KST, with that date.
+   * The owner's LIVE 할 일 counts against TODAY in KST, with that date.
    * describe_system is its ONLY reader, by design — a deliberate exception to
-   * "an OwnerState fact feeds BOTH consumers": the prompt's to-do section stays
-   * STATIC (no counts, no date) because a per-turn append that changes breaks
-   * prompt caching; the prompt states only the capability (`todoState`).
+   * "an OwnerState fact feeds BOTH consumers": a per-turn append that changes
+   * breaks prompt caching, so the prompt states the capability (`todoState`)
+   * plus the list FROZEN at the conversation's first to-do-capable turn
+   * (agent/todoSnapshot.ts), never these live numbers.
    */
   todos: TodoSnapshot;
 }

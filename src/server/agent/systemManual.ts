@@ -197,7 +197,7 @@ Use external-tasks when another system decides WHEN to trigger a task, rather th
     title: "Work to-do list (할 일)",
     summary: "One persistent list per user: 할 일 tab, chat card, mcp__todo__* tools, /todo.",
     body: `## Where it lives
-Each user has ONE persistent work to-do list. 할 일 in the left menu shows it in full: add items, check them off, filter by 오늘 / 예정 / 마감 지남 / 전체 / 완료, search, and edit an item's title, memo, due date, priority and tags. In a chat, the 할 일 button under the message box toggles a card at the top right of the conversation with the most urgent open items and a quick-add field. Both show the same list.
+Each user has ONE persistent work to-do list. 할 일 in the left menu shows it in full: add items, check them off, filter by 오늘 / 예정 / 마감 지남 / 전체 / 완료, search, and edit an item's title, memo, due date, priority and tags. In a chat, the 할 일 button under the message box toggles a card at the top right of the conversation with the most urgent open items; items are added in the 할 일 tab or by asking the avatar, not in the card. Both show the same list.
 
 ## Fields and limits
 Only the title is required (up to 200 characters). Optional: a memo (markdown, up to 4000 characters), a due date (a KST calendar DATE — no time of day), priority 높음/보통/낮음 (default 보통) and up to 5 tags. Overdue means due before today in KST. A user may keep up to 500 open items; the newest 200 completed items stay listed until 완료 항목 비우기 removes them.
