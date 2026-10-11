@@ -12,6 +12,8 @@ import { appState, readState, replaceState, toasts, updateState } from "../src/c
 import {
   avatarChangeFlushing,
   clearCompletedTodos,
+  clearDroppedTodos,
+  closeTodoWithUndo,
   completeTodoWithUndo,
   createTodo,
   deleteTodo,
@@ -20,6 +22,8 @@ import {
   dueLabel,
   emptyTodoActivity,
   emptyTodoState,
+  fromWireCounts,
+  fromWireTodo,
   isPendingTodo,
   loadTodos,
   matchesTodoFilter,
@@ -31,13 +35,14 @@ import {
   parseTagInput,
   resetTodoClientState,
   restoreTodoOverlay,
-  setTodoDone,
   setTodoOverlayOpen,
+  setTodoStatus,
   consumeTodoOverlayFocus,
   takeAvatarDeparture,
   todoActivity,
   todoHiddenArrivalSeq,
   todoFilterCounts,
+  todoListGroups,
   todoOverlayMode,
   todoOverlayVisible,
   todoSeedText,
@@ -50,7 +55,7 @@ import { loadTodoOverlayOpen } from "../src/client/src/lib/layout.js";
 import { attachRun } from "../src/client/src/lib/chat.js";
 import { startKnowledgeWatch, stopKnowledgeWatch } from "../src/client/src/lib/loaders.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
-import type { TodoCounts, TodoItem } from "../src/shared/todos.js";
+import { isOpenTodo, type TodoCounts, type TodoItem } from "../src/shared/todos.js";
 import type { ChatPane } from "../src/client/src/lib/types.js";
 
 const PRISTINE = structuredClone(readState());
@@ -61,7 +66,7 @@ function todo(overrides: Partial<TodoItem> = {}): TodoItem {
     id: overrides.id ?? `t-${Math.random().toString(36).slice(2)}`,
     title: "보고서 초안",
     note: "",
-    done: false,
+    status: "todo",
     priority: "normal",
     dueDate: null,
     tags: [],
@@ -69,13 +74,27 @@ function todo(overrides: Partial<TodoItem> = {}): TodoItem {
     sourceConversationId: null,
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
-    completedAt: null,
+    closedAt: null,
     ...overrides,
   };
 }
 
+/** A closed item as the server stores it: its status plus when it was closed. */
+function closed(status: "done" | "dropped", overrides: Partial<TodoItem> = {}): TodoItem {
+  return todo({ status, closedAt: "2026-10-08T00:00:00.000Z", ...overrides });
+}
+
 function counts(overrides: Partial<TodoCounts> = {}): TodoCounts {
-  return { open: 0, overdue: 0, dueToday: 0, done: 0, ...overrides };
+  return { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0, ...overrides };
+}
+
+function countsOf(items: TodoItem[]): TodoCounts {
+  return counts({
+    open: items.filter(isOpenTodo).length,
+    inProgress: items.filter((i) => i.status === "in_progress").length,
+    done: items.filter((i) => i.status === "done").length,
+    dropped: items.filter((i) => i.status === "dropped").length,
+  });
 }
 
 function seedTodos(items: TodoItem[], snapshot: Partial<{ todayKst: string; counts: TodoCounts }> = {}) {
@@ -83,7 +102,7 @@ function seedTodos(items: TodoItem[], snapshot: Partial<{ todayKst: string; coun
     state.todos = {
       items,
       todayKst: snapshot.todayKst ?? TODAY,
-      counts: snapshot.counts ?? counts({ open: items.filter((i) => !i.done).length, done: items.filter((i) => i.done).length }),
+      counts: snapshot.counts ?? countsOf(items),
       loaded: true,
     };
   });
@@ -145,21 +164,58 @@ describe("pure helpers", () => {
     expect(dueLabel("2027-01-04", TODAY)).toBe("2027년 1월 4일 (월)");
   });
 
-  it("filters: 오늘 = overdue + today, 예정 = future, 전체 = open only, 완료 = done", () => {
+  it("filters: 오늘 = overdue + today, 예정 = future, 진행 중, 전체 = open only, 완료 / 드랍 = that closed status", () => {
     const overdue = todo({ dueDate: "2026-10-01" });
     const today = todo({ dueDate: TODAY });
     const later = todo({ dueDate: "2026-11-01" });
     const undated = todo();
-    const done = todo({ done: true, dueDate: "2026-10-01" });
-    const all = [overdue, today, later, undated, done];
+    const running = todo({ status: "in_progress", dueDate: "2026-10-02" });
+    const done = closed("done", { dueDate: "2026-10-01" });
+    const dropped = closed("dropped", { dueDate: TODAY });
+    const all = [overdue, today, later, undated, running, done, dropped];
     const pick = (filter: Parameters<typeof matchesTodoFilter>[1]) => all.filter((item) => matchesTodoFilter(item, filter, TODAY));
-    expect(pick("today")).toEqual([overdue, today]);
+    // An in-progress item is open: the time filters and 전체 cover it too.
+    expect(pick("today")).toEqual([overdue, today, running]);
     expect(pick("upcoming")).toEqual([later]);
-    expect(pick("overdue")).toEqual([overdue]);
-    expect(pick("all")).toEqual([overdue, today, later, undated]);
+    expect(pick("overdue")).toEqual([overdue, running]);
+    expect(pick("in_progress")).toEqual([running]);
+    expect(pick("all")).toEqual([overdue, today, later, undated, running]);
     expect(pick("done")).toEqual([done]);
-    // 완료 trusts the server's count — a listing only carries the newest done items.
-    expect(todoFilterCounts(all, counts({ done: 250 }), TODAY)).toEqual({ today: 2, upcoming: 1, overdue: 1, all: 4, done: 250 });
+    expect(pick("dropped")).toEqual([dropped]);
+    // 완료 and 드랍 trust the server's counts — a listing only carries the newest closed items.
+    expect(todoFilterCounts(all, counts({ done: 250, dropped: 230 }), TODAY)).toEqual({
+      today: 3,
+      upcoming: 1,
+      overdue: 2,
+      in_progress: 1,
+      all: 5,
+      done: 250,
+      dropped: 230,
+    });
+  });
+
+  it("groups the tab's list: 진행 중 first whatever the due date, then the due buckets; 완료 / 드랍 one group each", () => {
+    const items = [
+      todo({ id: "run-late", status: "in_progress", dueDate: "2026-10-01" }),
+      todo({ id: "run", status: "in_progress" }),
+      todo({ id: "late", dueDate: "2026-10-02" }),
+      todo({ id: "now", dueDate: TODAY }),
+      todo({ id: "soon", dueDate: "2026-10-20" }),
+      todo({ id: "someday" }),
+    ];
+    const groups = (filter: Parameters<typeof todoListGroups>[1], list = items) =>
+      todoListGroups(list, filter, TODAY).map((group) => [group.label, group.items.map((item) => item.id)]);
+    expect(groups("all")).toEqual([
+      ["진행 중", ["run-late", "run"]],
+      ["마감 지남", ["late"]],
+      ["오늘", ["now"]],
+      ["예정", ["soon"]],
+      ["날짜 없음", ["someday"]],
+    ]);
+    expect(groups("in_progress", items.slice(0, 2))).toEqual([["진행 중", ["run-late", "run"]]]);
+    expect(groups("done", [closed("done", { id: "d" })])).toEqual([["완료", ["d"]]]);
+    expect(groups("dropped", [closed("dropped", { id: "x" })])).toEqual([["드랍", ["x"]]]);
+    expect(todoListGroups([], "all", TODAY)).toEqual([]);
   });
 
   it("searches title, memo and #tags with every token", () => {
@@ -178,7 +234,8 @@ describe("pure helpers", () => {
   it("splits the overlay's first 8 open items into 마감 지남 / 오늘 / 다음 in the shared order", () => {
     const items = [
       todo({ id: "u1" }),
-      todo({ id: "d1", done: true }),
+      closed("done", { id: "d1" }),
+      closed("dropped", { id: "dr1" }),
       todo({ id: "o1", dueDate: "2026-10-02" }),
       todo({ id: "t1", dueDate: TODAY, priority: "high" }),
       todo({ id: "f1", dueDate: "2026-10-20" }),
@@ -193,6 +250,25 @@ describe("pure helpers", () => {
     expect(hidden).toBe(2);
   });
 
+  it("leads the overlay with 진행 중 — an overdue in-progress item sits only there", () => {
+    const items = [
+      todo({ id: "o1", dueDate: "2026-10-02" }),
+      todo({ id: "run-late", status: "in_progress", dueDate: "2026-10-01" }),
+      todo({ id: "run", status: "in_progress" }),
+      todo({ id: "u1" }),
+    ];
+    const { sections, hidden } = overlaySections(items, TODAY);
+    expect(sections.map((s) => [s.id, s.label, s.items.map((i) => i.id)])).toEqual([
+      ["in_progress", "진행 중", ["run-late", "run"]],
+      ["overdue", "마감 지남", ["o1"]],
+      ["next", "다음", ["u1"]],
+    ]);
+    expect(hidden).toBe(0);
+    // In-progress items lead the shared order, so they take the card's rows first.
+    const crowded = [...Array.from({ length: 8 }, (_, i) => todo({ id: `late${i}`, dueDate: "2026-10-01" })), todo({ id: "run", status: "in_progress" })];
+    expect(overlaySections(crowded, TODAY).sections[0]).toMatchObject({ id: "in_progress", items: [expect.objectContaining({ id: "run" })] });
+  });
+
   it("picks pinned only on a wide host, popover below it, and a sheet on a narrow viewport", () => {
     expect(todoOverlayMode(TODO_OVERLAY_PINNED_MIN_WIDTH, false)).toBe("pinned");
     expect(todoOverlayMode(TODO_OVERLAY_PINNED_MIN_WIDTH - 1, false)).toBe("popover");
@@ -205,6 +281,8 @@ describe("pure helpers", () => {
     expect(seed).toContain("마감 2026-10-09 · 우선순위 높음 · #ops");
     expect(seed).toContain("체크리스트 3번까지");
     expect(seed).toContain("할 일 ID: abc");
+    // The owner's own words ask for the status changes — the avatar never guesses them.
+    expect(seed).toContain("시작하면 진행 중으로, 끝나면 완료로 표시");
   });
 });
 
@@ -250,9 +328,10 @@ describe("optimistic writes", () => {
       if (url === "/api/me/todos") return jsonRes({ todos: [item], todayKst: TODAY, counts: counts({ open: 1, dueToday: 1 }) });
       return undefined;
     });
-    const result = setTodoDone("a1", true);
-    expect(readState().todos.items[0]).toMatchObject({ done: true });
-    expect(readState().todos.items[0].completedAt).toBeTruthy();
+    const result = setTodoStatus("a1", "done");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ status: "done" });
+    expect(readState().todos.items[0]).toMatchObject({ status: "done" });
+    expect(readState().todos.items[0].closedAt).toBeTruthy();
     expect(readState().todos.counts).toEqual(counts({ open: 0, dueToday: 0, done: 1 }));
 
     gate.resolve(jsonRes({ error: "서버 내부 오류가 발생했습니다." }, 500));
@@ -262,6 +341,60 @@ describe("optimistic writes", () => {
     expect(lastToast().message).toContain("할 일을 완료하지 못했습니다");
     await flush();
     expect(fetchMock.mock.calls.some(([url, init]) => url === "/api/me/todos" && !init?.method)).toBe(true);
+  });
+
+  it("moves the counts with every status: 진행 중 stays open, 드랍 leaves it, and a failure puts both back", async () => {
+    const item = todo({ id: "s1", dueDate: "2026-10-01" });
+    seedTodos([item], { counts: counts({ open: 1, overdue: 1, done: 3, dropped: 2 }) });
+    const gates: { promise: Promise<unknown>; resolve: (value: unknown) => void }[] = [];
+    let stored = item;
+    const fetchMock = useFetch(async (url, init) => {
+      if (init.method === "PATCH") {
+        const gate = deferred<unknown>();
+        gates.push(gate);
+        return gate.promise;
+      }
+      // The failure's resync reads what the server really has.
+      if (url === "/api/me/todos") return jsonRes({ todos: [stored], todayKst: TODAY, counts: counts({ ...countsOf([stored]), overdue: 1, done: 3, dropped: 2 }) });
+      return undefined;
+    });
+    const started = setTodoStatus("s1", "in_progress");
+    // Still open: overdue and open keep it; closedAt stays empty.
+    expect(readState().todos.items[0]).toMatchObject({ status: "in_progress", closedAt: null });
+    expect(readState().todos.counts).toEqual(counts({ open: 1, inProgress: 1, overdue: 1, done: 3, dropped: 2 }));
+    const running = { ...item, status: "in_progress" as const, updatedAt: "2026-10-09T01:00:00.000Z" };
+    stored = running;
+    gates[0].resolve(jsonRes({ todo: running, todayKst: TODAY, counts: counts({ open: 1, inProgress: 1, overdue: 1, done: 3, dropped: 2 }) }));
+    await expect(started).resolves.toEqual(running);
+
+    const drop = setTodoStatus("s1", "dropped");
+    expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toEqual({ status: "dropped" });
+    expect(readState().todos.items[0]).toMatchObject({ status: "dropped" });
+    expect(readState().todos.items[0].closedAt).toBeTruthy();
+    expect(readState().todos.counts).toEqual(counts({ open: 0, done: 3, dropped: 3 }));
+    gates[1].resolve(jsonRes({ error: "서버 내부 오류가 발생했습니다." }, 500));
+    await expect(drop).resolves.toBeNull();
+    expect(readState().todos.items[0]).toEqual(running);
+    expect(readState().todos.counts).toEqual(counts({ open: 1, inProgress: 1, overdue: 1, done: 3, dropped: 2 }));
+    expect(lastToast().message).toBe("할 일을 드랍하지 못했습니다: 서버 내부 오류가 발생했습니다.");
+  });
+
+  it("names a failed status change after where the item was going (and, back to 시작 전, where it came from)", async () => {
+    seedTodos([todo({ id: "t" }), todo({ id: "p", status: "in_progress" }), closed("done", { id: "d" }), closed("dropped", { id: "x" })]);
+    useFetch(async (url, init) => {
+      if (init.method === "PATCH") return jsonRes({ error: "오류" }, 500);
+      if (url === "/api/me/todos") return jsonRes({ todos: readState().todos.items, todayKst: TODAY, counts: countsOf(readState().todos.items) });
+      return undefined;
+    });
+    const failure = async (id: string, status: Parameters<typeof setTodoStatus>[1]) => {
+      await setTodoStatus(id, status);
+      return lastToast().message;
+    };
+    expect(await failure("t", "in_progress")).toBe("진행 중으로 바꾸지 못했습니다: 오류");
+    expect(await failure("p", "todo")).toBe("시작 전으로 바꾸지 못했습니다: 오류");
+    expect(await failure("d", "todo")).toBe("완료를 되돌리지 못했습니다: 오류");
+    expect(await failure("x", "todo")).toBe("드랍을 되돌리지 못했습니다: 오류");
+    expect(await failure("x", "done")).toBe("할 일을 완료하지 못했습니다: 오류");
   });
 
   it("resyncs after a failed write even while a poll GET that predates the failure is in flight", async () => {
@@ -276,22 +409,22 @@ describe("optimistic writes", () => {
         gets += 1;
         return gets === 1
           ? pollGate.promise
-          : jsonRes({ todos: [{ ...item, done: true }], todayKst: TODAY, counts: counts({ done: 1 }) });
+          : jsonRes({ todos: [{ ...item, status: "done" }], todayKst: TODAY, counts: counts({ done: 1 }) });
       }
       return undefined;
     });
-    const write = setTodoDone("r1", true);
+    const write = setTodoStatus("r1", "done");
     const poll = loadTodos(); // the 60 s poll, started after the write
     // A gateway timeout: the server may still have applied the change.
     patchGate.resolve(jsonRes({ error: "시간 초과" }, 504));
     await expect(write).resolves.toBeNull();
-    expect(readState().todos.items[0].done).toBe(false);
+    expect(readState().todos.items[0].status).toBe("todo");
     pollGate.resolve(jsonRes({ todos: [item], todayKst: TODAY, counts: counts({ open: 1 }) }));
     await poll;
     await flush();
     // The poll overlapped the write and was dropped; the failure's fresh read ran behind it.
     expect(gets).toBe(2);
-    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.items[0].status).toBe("done");
   });
 
   it("defers an owed fresh read until the LAST in-flight write settles, then reads exactly once", async () => {
@@ -305,27 +438,27 @@ describe("optimistic writes", () => {
       if (init.method === "PATCH") return gates[url.split("/").pop() as "a" | "b" | "c"].promise;
       if (url === "/api/me/todos" && !init.method) {
         gets += 1;
-        return jsonRes({ todos: [a, { ...b, done: true }, { ...c, done: true }], todayKst: TODAY, counts: counts({ open: 1, done: 2 }) });
+        return jsonRes({ todos: [a, { ...b, status: "done" }, { ...c, status: "done" }], todayKst: TODAY, counts: counts({ open: 1, done: 2 }) });
       }
       return undefined;
     });
-    const writeA = setTodoDone("a", true);
-    const writeB = setTodoDone("b", true);
+    const writeA = setTodoStatus("a", "done");
+    const writeB = setTodoStatus("b", "done");
     gates.a.resolve(jsonRes({ error: "서버 오류" }, 500));
     await expect(writeA).resolves.toBeNull();
     await flush();
     // A's resync is owed, but B is still in flight: a GET now would only be dropped as stale.
     expect(gets).toBe(0);
-    const writeC = setTodoDone("c", true);
-    gates.b.resolve(jsonRes({ todo: { ...b, done: true }, todayKst: TODAY, counts: counts({ open: 2, done: 1 }) }));
+    const writeC = setTodoStatus("c", "done");
+    gates.b.resolve(jsonRes({ todo: { ...b, status: "done" }, todayKst: TODAY, counts: counts({ open: 2, done: 1 }) }));
     await writeB;
     await flush();
     expect(gets).toBe(0); // C is still in flight
-    gates.c.resolve(jsonRes({ todo: { ...c, done: true }, todayKst: TODAY, counts: counts({ open: 1, done: 2 }) }));
+    gates.c.resolve(jsonRes({ todo: { ...c, status: "done" }, todayKst: TODAY, counts: counts({ open: 1, done: 2 }) }));
     await writeC;
     await flush();
     expect(gets).toBe(1); // the last write to settle started it — one GET, none wasted
-    expect(readState().todos.items.map((item) => `${item.id}:${item.done}`).sort()).toEqual(["a:false", "b:true", "c:true"]);
+    expect(readState().todos.items.map((item) => `${item.id}:${item.status}`).sort()).toEqual(["a:todo", "b:done", "c:done"]);
   });
 
   it("drops a write's late answer after logout instead of writing into the reset list", async () => {
@@ -361,28 +494,60 @@ describe("optimistic writes", () => {
     expect(lastToast().message).toBe("이미 삭제된 할 일입니다.");
   });
 
-  it("offers 되돌리기 after a completion, and the action reopens the item", async () => {
-    const item = todo({ id: "u1" });
-    seedTodos([item]);
+  /** A PATCH server for one item: applies `status` like the routes do and records each body. */
+  function statusServer(item: TodoItem) {
+    let current = item;
     const patches: unknown[] = [];
     useFetch(async (url, init) => {
       if (init.method === "PATCH") {
         const body = JSON.parse(String(init.body));
         patches.push(body);
-        const next = { ...item, done: body.done, completedAt: body.done ? "2026-10-09T01:00:00.000Z" : null };
-        return jsonRes({ todo: next, todayKst: TODAY, counts: counts({ open: body.done ? 0 : 1, done: body.done ? 1 : 0 }) });
+        current = { ...current, status: body.status, closedAt: isOpenTodo(body) ? null : "2026-10-09T01:00:00.000Z" };
+        return jsonRes({ todo: current, todayKst: TODAY, counts: countsOf([current]) });
       }
       return undefined;
     });
+    return patches;
+  }
+
+  it("offers 되돌리기 after a completion, and the action reopens the item", async () => {
+    const item = todo({ id: "u1" });
+    seedTodos([item]);
+    const patches = statusServer(item);
     await completeTodoWithUndo(item);
     const toast = lastToast();
     expect(toast).toMatchObject({ kind: "ok", actionLabel: "되돌리기" });
-    expect(toast.message).toContain("보고서 초안");
+    expect(toast.message).toBe("할 일을 완료했습니다 · 보고서 초안");
     toast.action?.();
     await flush();
     await flush();
-    expect(patches).toEqual([{ done: true }, { done: false }]);
-    expect(readState().todos.items[0].done).toBe(false);
+    expect(patches).toEqual([{ status: "done" }, { status: "todo" }]);
+    expect(readState().todos.items[0].status).toBe("todo");
+  });
+
+  it("puts back the status the item had: an in-progress item completed or dropped returns to 진행 중", async () => {
+    const item = todo({ id: "p1", status: "in_progress" });
+    seedTodos([item]);
+    const patches = statusServer(item);
+    await completeTodoWithUndo(item);
+    lastToast().action?.();
+    await flush();
+    await flush();
+    expect(readState().todos.items[0].status).toBe("in_progress");
+
+    await closeTodoWithUndo(readState().todos.items[0], "dropped");
+    const toast = lastToast();
+    expect(toast).toMatchObject({ kind: "ok", actionLabel: "되돌리기", message: "할 일을 드랍했습니다 · 보고서 초안" });
+    toast.action?.();
+    await flush();
+    await flush();
+    expect(patches).toEqual([{ status: "done" }, { status: "in_progress" }, { status: "dropped" }, { status: "in_progress" }]);
+    expect(readState().todos.items[0]).toMatchObject({ status: "in_progress", closedAt: null });
+    // Dropping it again once it is dropped writes nothing.
+    await closeTodoWithUndo(readState().todos.items[0], "dropped");
+    expect(patches).toHaveLength(5);
+    await closeTodoWithUndo(readState().todos.items[0], "dropped");
+    expect(patches).toHaveLength(5);
   });
 
   it("deletes optimistically, clears the selection, and puts the row back on failure", async () => {
@@ -403,23 +568,61 @@ describe("optimistic writes", () => {
   });
 
   it("clears completed items only after the server confirms", async () => {
-    seedTodos([todo({ id: "open" }), todo({ id: "done", done: true })], { counts: counts({ open: 1, done: 7 }) });
+    seedTodos([todo({ id: "open" }), closed("done", { id: "done" }), closed("dropped", { id: "dropped" })], {
+      counts: counts({ open: 1, done: 7, dropped: 1 }),
+    });
     replaceState({ todoSelectedId: "done" });
     useFetch(async (url, init) =>
       url === "/api/me/todos/completed" && init.method === "DELETE"
-        ? jsonRes({ removed: 7, todayKst: TODAY, counts: counts({ open: 1 }) })
+        ? jsonRes({ removed: 7, todayKst: TODAY, counts: counts({ open: 1, dropped: 1 }) })
         : undefined,
     );
     await expect(clearCompletedTodos()).resolves.toBe(7);
-    expect(readState().todos.items.map((item) => item.id)).toEqual(["open"]);
-    expect(readState().todos.counts.done).toBe(0);
+    // Only the done rows: a dropped one stays for its own 비우기.
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["open", "dropped"]);
+    expect(readState().todos.counts).toMatchObject({ done: 0, dropped: 1 });
     expect(readState().todoSelectedId).toBe("");
+  });
+
+  it("clears dropped items through their own route, keeping done ones and an open selection", async () => {
+    seedTodos([todo({ id: "open" }), closed("done", { id: "done" }), closed("dropped", { id: "dropped" })], {
+      counts: counts({ open: 1, done: 1, dropped: 4 }),
+    });
+    replaceState({ todoSelectedId: "open" });
+    const fetchMock = useFetch(async (url, init) =>
+      url === "/api/me/todos/dropped" && init.method === "DELETE"
+        ? jsonRes({ removed: 4, todayKst: TODAY, counts: counts({ open: 1, done: 1 }) })
+        : undefined,
+    );
+    await expect(clearDroppedTodos()).resolves.toBe(4);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["open", "done"]);
+    expect(readState().todos.counts).toMatchObject({ done: 1, dropped: 0 });
+    expect(readState().todoSelectedId).toBe("open");
+  });
+
+  it("says in Korean which closed items it could not clear", async () => {
+    seedTodos([closed("dropped", { id: "dropped" })]);
+    useFetch(async () => jsonRes({ error: "서버 오류" }, 500));
+    await expect(clearDroppedTodos()).resolves.toBeNull();
+    expect(lastToast().message).toBe("드랍 항목을 비우지 못했습니다: 서버 오류");
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["dropped"]);
+  });
+
+  it("takes a deleted closed item off its own count", async () => {
+    seedTodos([closed("dropped", { id: "x" }), closed("done", { id: "d" })], { counts: counts({ done: 5, dropped: 3 }) });
+    const gate = deferred<unknown>();
+    useFetch(async (url, init) => (init.method === "DELETE" ? gate.promise : undefined));
+    const removal = deleteTodo("x");
+    expect(readState().todos.counts).toMatchObject({ done: 5, dropped: 2 });
+    gate.resolve(jsonRes({ ok: true, todayKst: TODAY, counts: counts({ done: 5, dropped: 2 }) }));
+    await expect(removal).resolves.toBe(true);
   });
 
   it("ignores actions on an unconfirmed (pending) row", async () => {
     seedTodos([todo({ id: "pending-123" })]);
     const fetchMock = useFetch(async () => undefined);
-    await expect(setTodoDone("pending-123", true)).resolves.toBeNull();
+    await expect(setTodoStatus("pending-123", "done")).resolves.toBeNull();
     await expect(deleteTodo("pending-123")).resolves.toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -430,15 +633,26 @@ describe("loads", () => {
     useFetch(async (url) =>
       url === "/api/me/todos"
         ? jsonRes({
-            todos: [todo({ id: "undated" }), todo({ id: "dated", dueDate: "2026-10-01" }), todo({ id: "done", done: true })],
+            todos: [
+              todo({ id: "undated" }),
+              closed("dropped", { id: "dropped", closedAt: "2026-10-07T00:00:00.000Z" }),
+              todo({ id: "dated", dueDate: "2026-10-01" }),
+              closed("done", { id: "done" }),
+              todo({ id: "running", status: "in_progress" }),
+            ],
             todayKst: TODAY,
-            counts: counts({ open: 2, overdue: 1, done: 1 }),
+            counts: counts({ open: 3, inProgress: 1, overdue: 1, done: 1, dropped: 1 }),
           })
         : undefined,
     );
     await loadTodos();
-    expect(readState().todos).toMatchObject({ loaded: true, todayKst: TODAY, counts: counts({ open: 2, overdue: 1, done: 1 }) });
-    expect(readState().todos.items.map((item) => item.id)).toEqual(["dated", "undated", "done"]);
+    expect(readState().todos).toMatchObject({
+      loaded: true,
+      todayKst: TODAY,
+      counts: counts({ open: 3, inProgress: 1, overdue: 1, done: 1, dropped: 1 }),
+    });
+    // In progress first, then by due date; closed ones newest close first.
+    expect(readState().todos.items.map((item) => item.id)).toEqual(["running", "dated", "undated", "done", "dropped"]);
   });
 
   it("keeps the list's identity when a re-read changed nothing, so keyed views never reconcile mid-motion", async () => {
@@ -464,14 +678,14 @@ describe("loads", () => {
     const staleGet = deferred<unknown>();
     useFetch(async (url, init) => {
       if (url === "/api/me/todos" && !init.method) return staleGet.promise;
-      if (init.method === "PATCH") return jsonRes({ todo: { ...item, done: true }, todayKst: TODAY, counts: counts({ done: 1 }) });
+      if (init.method === "PATCH") return jsonRes({ todo: { ...item, status: "done" }, todayKst: TODAY, counts: counts({ done: 1 }) });
       return undefined;
     });
     const load = loadTodos();
-    await setTodoDone("a", true);
+    await setTodoStatus("a", "done");
     staleGet.resolve(jsonRes({ todos: [item], todayKst: TODAY, counts: counts({ open: 1 }) }));
     await load;
-    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.items[0].status).toBe("done");
     expect(readState().todos.counts.done).toBe(1);
   });
 
@@ -487,16 +701,16 @@ describe("loads", () => {
       if (init.method === "PATCH") return patch.promise;
       return undefined;
     });
-    const completion = setTodoDone("a", true);
+    const completion = setTodoStatus("a", "done");
     await flush();
-    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.items[0].status).toBe("done");
     await loadTodos(); // e.g. the 60 s poll, while the PATCH is still on the way
-    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.items[0].status).toBe("done");
     expect(readState().todos.counts.done).toBe(1);
-    patch.resolve(jsonRes({ todo: { ...item, done: true }, todayKst: TODAY, counts: counts({ done: 1 }) }));
+    patch.resolve(jsonRes({ todo: { ...item, status: "done" }, todayKst: TODAY, counts: counts({ done: 1 }) }));
     await completion;
     await flush();
-    expect(readState().todos.items[0].done).toBe(true);
+    expect(readState().todos.items[0].status).toBe("done");
     expect(readState().todos.counts).toEqual(counts({ done: 1 }));
     // A plain poll owes nothing: the write's own response settled the list.
     expect(fetchFn.mock.calls.filter(([, init]) => !(init as RequestInit | undefined)?.method)).toHaveLength(1);
@@ -622,6 +836,72 @@ describe("loads", () => {
   });
 });
 
+describe("a pre-status server (a rollback, or a rebuilt client under the old server process)", () => {
+  /** An item as a server from before statuses sends it: `done` / `completedAt` only. */
+  function legacy(item: TodoItem) {
+    const { status, closedAt, ...rest } = item;
+    return { ...rest, done: status === "done", completedAt: closedAt };
+  }
+  /** Counts without inProgress / dropped. */
+  const legacyCounts = { open: 2, overdue: 1, dueToday: 0, done: 1 };
+
+  it("reads done/completedAt items and pre-status counts instead of coming up empty, through loads and writes", async () => {
+    const late = todo({ id: "late", dueDate: "2026-10-01" });
+    const other = todo({ id: "other" });
+    const done = closed("done", { id: "done" });
+    const renamed = { ...other, title: "새 제목", updatedAt: "2026-10-09T01:00:00.000Z" };
+    const added = todo({ id: "added", title: "새 할 일", createdAt: "2026-10-09T02:00:00.000Z" });
+    let list = [late, other, done];
+    useFetch(async (url, init) => {
+      if (url === "/api/me/todos" && !init.method) return jsonRes({ todos: list.map(legacy), todayKst: TODAY, counts: legacyCounts });
+      if (url === "/api/me/todos/other" && init.method === "PATCH") {
+        list = [late, renamed, done];
+        return jsonRes({ todo: legacy(renamed), todayKst: TODAY, counts: legacyCounts });
+      }
+      if (url === "/api/me/todos" && init.method === "POST") {
+        list = [...list, added];
+        return jsonRes({ todo: legacy(added), todayKst: TODAY, counts: { ...legacyCounts, open: 3 } }, 201);
+      }
+      return undefined;
+    });
+    await loadTodos();
+    let state = readState().todos;
+    // Exactly the current shape — statuses read off `done`, closedAt off `completedAt`, no legacy keys.
+    expect(state.items).toEqual([late, other, done]);
+    expect(state.counts).toEqual(counts({ open: 2, overdue: 1, done: 1 }));
+    // So the tab and the card show the open items.
+    expect(overlaySections(state.items, TODAY).sections.flatMap((section) => section.items.map((item) => item.id))).toEqual(["late", "other"]);
+    expect(todoFilterCounts(state.items, state.counts, TODAY)).toMatchObject({ all: 2, overdue: 1, done: 1, dropped: 0 });
+    // A re-read with the same content keeps the list's identity.
+    const first = state.items;
+    await loadTodos();
+    expect(readState().todos.items).toBe(first);
+
+    // A write's answer and a create's are normalized the same way.
+    await expect(updateTodo("other", { title: "새 제목" })).resolves.toEqual(renamed);
+    await expect(createTodo({ title: "새 할 일" })).resolves.toEqual(added);
+    state = readState().todos;
+    expect(state.items).toEqual([late, renamed, added, done]);
+    expect(state.counts).toEqual(counts({ open: 3, overdue: 1, done: 1 }));
+    // And the next poll still sees the same rows, so it changes nothing.
+    const settled = state.items;
+    await loadTodos();
+    expect(readState().todos.items).toBe(settled);
+  });
+
+  it("keeps a current server's legacy mirror off the items and fills absent counts with 0", () => {
+    const dropped = closed("dropped", { id: "x" });
+    // What the current server's toWireTodo sends: the item plus done (= closed) and completedAt.
+    expect(fromWireTodo({ ...dropped, done: true, completedAt: dropped.closedAt })).toEqual(dropped);
+    expect(Object.keys(fromWireTodo({ ...dropped, done: true, completedAt: dropped.closedAt }))).toEqual(Object.keys(dropped));
+    // An unknown status falls back on the done mirror.
+    expect(fromWireTodo({ ...legacy(closed("done")), status: "archived" }).status).toBe("done");
+    expect(fromWireTodo(legacy(todo())).status).toBe("todo");
+    expect(fromWireCounts(undefined)).toEqual(counts());
+    expect(fromWireCounts({ open: 4, done: 2 })).toEqual(counts({ open: 4, done: 2 }));
+  });
+});
+
 describe("live refresh after the avatar's to-do tools", () => {
   it("re-reads the list only when a tracked mcp__todo__* call ends OK", async () => {
     const fetchMock = useFetch(async (url) =>
@@ -720,7 +1000,7 @@ describe("avatar change motion", () => {
     return useFetch(async (url, init) => {
       if (url !== "/api/me/todos" || init.method) return undefined;
       const items = list();
-      return jsonRes({ todos: items, todayKst: TODAY, counts: counts({ open: items.filter((item) => !item.done).length }) });
+      return jsonRes({ todos: items, todayKst: TODAY, counts: countsOf(items) });
     });
   }
 
@@ -733,21 +1013,32 @@ describe("avatar change motion", () => {
     await loadTodos(); // joins the fresh read the tool end started
   }
 
-  it("diffs the open list by id: the avatar's new or any reopened → added in display order, edited → changed, deleted or completed → departed", () => {
+  it("diffs the open list by id: the avatar's new or any reopened → added in display order, edited → changed, deleted or closed → departed", () => {
     const keep = todo({ id: "keep" });
     const edit = todo({ id: "edit" });
+    const start = todo({ id: "start" });
     const gone = todo({ id: "gone" });
     const finish = todo({ id: "finish" });
-    const reopen = todo({ id: "reopen", done: true, completedAt: "2026-10-08T00:00:00.000Z" });
-    const oldDone = todo({ id: "old-done", done: true });
+    const drop = todo({ id: "drop", status: "in_progress" });
+    const reopen = closed("done", { id: "reopen" });
+    const undrop = closed("dropped", { id: "undrop" });
+    const oldDone = closed("done", { id: "old-done" });
+    const doneToDropped = closed("done", { id: "done-to-dropped" });
     const pending = todo({ id: "pending-1" });
+    const later = "2026-10-09T02:00:00.000Z";
     const diff = diffAvatarChange(
-      [keep, edit, gone, finish, reopen, oldDone, pending],
+      [keep, edit, start, gone, finish, drop, reopen, undrop, oldDone, doneToDropped, pending],
       [
         keep,
-        { ...edit, title: "고친 제목", updatedAt: "2026-10-09T02:00:00.000Z" },
-        { ...finish, done: true, completedAt: "2026-10-09T02:00:00.000Z" },
-        { ...reopen, done: false, completedAt: null },
+        { ...edit, title: "고친 제목", updatedAt: later },
+        { ...start, status: "in_progress", updatedAt: later },
+        { ...finish, status: "done", closedAt: later },
+        { ...drop, status: "dropped", closedAt: later },
+        { ...reopen, status: "todo", closedAt: null },
+        { ...undrop, status: "in_progress", closedAt: null },
+        oldDone,
+        // Closed before and after: not on the open list either time.
+        { ...doneToDropped, status: "dropped", closedAt: later },
         todo({ id: "new-undated", source: "avatar" }),
         todo({ id: "new-dated", dueDate: "2026-10-02", source: "avatar" }),
         // New rows the same GET carried from elsewhere are not the avatar's.
@@ -757,11 +1048,11 @@ describe("avatar change motion", () => {
       ],
     );
     expect(diff).toEqual({
-      // The shared order: dated first, then (same priority and age) by id.
-      added: ["new-dated", "new-undated", "reopen"],
-      changed: ["edit"],
+      // The shared order: in progress first, then dated, then (same priority and age) by id.
+      added: ["undrop", "new-dated", "new-undated", "reopen"],
+      changed: ["start", "edit"],
       // An unconfirmed optimistic row never departs: its swap is the viewer's own add.
-      departed: ["gone", "finish"],
+      departed: ["gone", "finish", "drop"],
     });
   });
 
@@ -834,7 +1125,7 @@ describe("avatar change motion", () => {
       if (init.method === "PATCH") return jsonRes({ error: "서버 오류" }, 500);
       return jsonRes({ todos: [...list, todo({ id: "after-failure" })], todayKst: TODAY, counts: counts({ open: 4 }) });
     });
-    await setTodoDone("first", true);
+    await setTodoStatus("first", "done");
     await flush();
     expect(readState().todos.items.map((item) => item.id)).toContain("after-failure");
     // The viewer's own add, pending row swap included.
@@ -959,21 +1250,21 @@ describe("avatar change motion", () => {
     const leaving = todo({ id: "leaving" });
     const stays = todo({ id: "stays" });
     seedTodos([leaving, stays]);
-    listServer(() => [stays, { ...leaving, done: true, completedAt: "2026-10-09T02:00:00.000Z" }]);
+    listServer(() => [stays, { ...leaving, status: "dropped", closedAt: "2026-10-09T02:00:00.000Z" }]);
     await avatarTool("mcp__todo__update_todo");
     expect(avatarChangeFlushing()).toBe(true);
     useFetch(async (url, init) =>
-      init.method === "PATCH" ? jsonRes({ todo: { ...stays, done: true }, todayKst: TODAY, counts: counts({ done: 2 }) }) : undefined,
+      init.method === "PATCH" ? jsonRes({ todo: { ...stays, status: "done" }, todayKst: TODAY, counts: counts({ done: 1, dropped: 1 }) }) : undefined,
     );
     // A click handled before the window's timer: the viewer's own completion never glides.
-    const own = setTodoDone("stays", true);
+    const own = setTodoStatus("stays", "done");
     expect(avatarChangeFlushing()).toBe(false);
     await own;
-    // Reopening the row the avatar completed makes any later exit of it the viewer's.
+    // Reopening the row the avatar dropped makes any later exit of it the viewer's.
     useFetch(async (url, init) =>
       init.method === "PATCH" ? jsonRes({ todo: leaving, todayKst: TODAY, counts: counts({ open: 1, done: 1 }) }) : undefined,
     );
-    await setTodoDone("leaving", false);
+    await setTodoStatus("leaving", "todo");
     expect(takeAvatarDeparture("leaving")).toBe(false);
   });
 

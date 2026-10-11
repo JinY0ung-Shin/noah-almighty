@@ -19,7 +19,7 @@ import {
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import type { ChatPane, User } from "../src/client/src/lib/types.js";
 import type { AvatarDetail } from "../src/server/types.js";
-import type { TodoCounts, TodoItem } from "../src/shared/todos.js";
+import { isOpenTodo, type TodoCounts, type TodoItem } from "../src/shared/todos.js";
 
 const PRISTINE = structuredClone(readState());
 const TODAY = "2026-10-09";
@@ -66,7 +66,7 @@ function todo(overrides: Partial<TodoItem> = {}): TodoItem {
     id: overrides.id ?? `todo-${seq}`,
     title: `할 일 ${seq}`,
     note: "",
-    done: false,
+    status: "todo",
     priority: "normal",
     dueDate: null,
     tags: [],
@@ -74,18 +74,20 @@ function todo(overrides: Partial<TodoItem> = {}): TodoItem {
     sourceConversationId: null,
     createdAt: `2026-10-01T00:00:${String(seq % 60).padStart(2, "0")}.000Z`,
     updatedAt: "2026-10-01T00:00:00.000Z",
-    completedAt: null,
+    closedAt: null,
     ...overrides,
   };
 }
 
 function countsOf(items: TodoItem[]): TodoCounts {
-  const open = items.filter((item) => !item.done);
+  const open = items.filter(isOpenTodo);
   return {
     open: open.length,
+    inProgress: open.filter((item) => item.status === "in_progress").length,
     overdue: open.filter((item) => item.dueDate && item.dueDate < TODAY).length,
     dueToday: open.filter((item) => item.dueDate === TODAY).length,
-    done: items.length - open.length,
+    done: items.filter((item) => item.status === "done").length,
+    dropped: items.filter((item) => item.status === "dropped").length,
   };
 }
 
@@ -114,9 +116,10 @@ function fakeServer(initial: TodoItem[]) {
       items.push(created);
       return jsonRes({ todo: created, ...snapshot() }, 201);
     }
-    if (url === "/api/me/todos/completed" && method === "DELETE") {
-      const removed = items.filter((item) => item.done).length;
-      items = items.filter((item) => !item.done);
+    const clearing = { "/api/me/todos/completed": "done", "/api/me/todos/dropped": "dropped" }[url];
+    if (clearing && method === "DELETE") {
+      const removed = items.filter((item) => item.status === clearing).length;
+      items = items.filter((item) => item.status !== clearing);
       return jsonRes({ removed, ...snapshot() });
     }
     const match = /^\/api\/me\/todos\/([^/]+)$/.exec(url);
@@ -129,7 +132,9 @@ function fakeServer(initial: TodoItem[]) {
         return jsonRes({ ok: true, ...snapshot() });
       }
       const next = { ...current, ...body } as TodoItem;
-      if (body?.done !== undefined) next.completedAt = body.done ? "2026-10-09T03:00:00.000Z" : null;
+      if (body?.status !== undefined && body.status !== current.status) {
+        next.closedAt = isOpenTodo(next) ? null : "2026-10-09T03:00:00.000Z";
+      }
       items = items.map((item) => (item.id === id ? next : item));
       return jsonRes({ todo: next, ...snapshot() });
     }
@@ -237,7 +242,7 @@ describe("할 일 tab", () => {
     const today = todo({ title: "오늘 리뷰", dueDate: TODAY, priority: "high" });
     const later = todo({ title: "다음달 회고", dueDate: "2026-11-20", tags: ["회고"] });
     const undated = todo({ title: "언젠가 정리", source: "avatar" });
-    const done = todo({ title: "끝난 일", done: true, completedAt: "2026-10-08T00:00:00.000Z" });
+    const done = todo({ title: "끝난 일", status: "done", closedAt: "2026-10-08T00:00:00.000Z" });
     fakeServer([overdue, today, later, undated, done]);
     render(TodosView);
 
@@ -251,13 +256,15 @@ describe("할 일 tab", () => {
     expect(within(list).getByText("아바타").getAttribute("title")).toBe("아바타가 대화에서 추가한 할 일");
     expect(within(list).queryByText("끝난 일")).toBeNull();
 
-    const chips = screen.getByRole("radiogroup", { name: "할 일 상태" });
+    const chips = screen.getByRole("radiogroup", { name: "할 일 필터" });
     expect(within(chips).getAllByRole("radio").map((chip) => chip.getAttribute("aria-label"))).toEqual([
       "오늘 2",
       "예정 1",
       "마감 지남 1",
+      "진행 중 0",
       "전체 4",
       "완료 1",
+      "드랍 0",
     ]);
     await fireEvent.click(within(chips).getByRole("radio", { name: "완료 1" }));
     expect(within(list).getByText("끝난 일")).toBeTruthy();
@@ -294,8 +301,74 @@ describe("할 일 tab", () => {
     render(TodosView);
     const box = (await screen.findByRole("checkbox", { name: "완료: 메일 회신" })) as HTMLInputElement;
     await fireEvent.click(box);
-    await waitFor(() => expect(server.writes()[0]).toMatchObject({ method: "PATCH", body: { done: true } }));
+    await waitFor(() => expect(server.writes()[0]).toMatchObject({ method: "PATCH", body: { status: "done" } }));
     await waitFor(() => expect(get(toasts).some((toast) => toast.actionLabel === "되돌리기")).toBe(true));
+  });
+
+  it("puts in-progress items in 진행 중 on top, tagged, whatever their due date", async () => {
+    const overdue = todo({ title: "지난 보고", dueDate: "2026-10-01" });
+    const runningLate = todo({ title: "진행 중인 지난 일", dueDate: "2026-10-02", status: "in_progress" });
+    const running = todo({ title: "진행 중인 일", status: "in_progress" });
+    const later = todo({ title: "다음달 회고", dueDate: "2026-11-20" });
+    fakeServer([overdue, runningLate, running, later]);
+    render(TodosView);
+    await screen.findByRole("button", { name: rowName("지난 보고") });
+    expect(screen.getByText(/열린 할 일 4개 · 진행 중 2개 · 오늘 마감 0개/)).toBeTruthy();
+    const list = screen.getByRole("region", { name: "할 일 목록" });
+    const heads = [...list.querySelectorAll(".routine-group-head span:first-child")].map((head) => head.textContent);
+    expect(heads).toEqual(["진행 중", "마감 지남", "예정"]);
+    const firstGroup = list.querySelector(".routine-group")!;
+    expect(within(firstGroup as HTMLElement).getAllByRole("button").map((row) => row.querySelector(".todo-row-title")?.textContent)).toEqual([
+      "진행 중인 지난 일",
+      "진행 중인 일",
+    ]);
+    // Heard with the row (inside its button), and the overdue one keeps its red due chip.
+    const lateRow = screen.getByRole("button", { name: rowName("진행 중인 지난 일") });
+    expect(lateRow.textContent).toContain("진행 중");
+    expect(lateRow.querySelector(".todo-due")?.getAttribute("data-bucket")).toBe("overdue");
+    expect(lateRow.closest("li")?.classList.contains("overdue")).toBe(true);
+
+    const chips = screen.getByRole("radiogroup", { name: "할 일 필터" });
+    await fireEvent.click(within(chips).getByRole("radio", { name: "진행 중 2" }));
+    expect(within(list).queryByText("지난 보고")).toBeNull();
+    expect(within(list).getByText("진행 중인 일")).toBeTruthy();
+    // The time filters cover open items, in-progress ones included.
+    await fireEvent.click(within(chips).getByRole("radio", { name: "마감 지남 2" }));
+    expect([...list.querySelectorAll(".routine-group-head span:first-child")].map((head) => head.textContent)).toEqual(["진행 중", "마감 지남"]);
+  });
+
+  it("keeps dropped items out of the open lists, in their own 드랍 filter, cleared there after confirmation", async () => {
+    const open = todo({ title: "남은 일" });
+    const dropped = todo({ title: "안 하기로 한 일", status: "dropped", closedAt: "2026-10-08T00:00:00.000Z", dueDate: "2026-10-01" });
+    const done = todo({ title: "끝난 일", status: "done", closedAt: "2026-10-08T01:00:00.000Z" });
+    const server = fakeServer([open, dropped, done]);
+    render(TodosView);
+    await screen.findByRole("button", { name: rowName("남은 일") });
+    const list = screen.getByRole("region", { name: "할 일 목록" });
+    expect(within(list).queryByText("안 하기로 한 일")).toBeNull();
+    expect(screen.queryByText("· 마감 지남 1개")).toBeNull();
+
+    const chips = screen.getByRole("radiogroup", { name: "할 일 필터" });
+    await fireEvent.click(within(chips).getByRole("radio", { name: "완료 1" }));
+    expect(within(list).queryByText("안 하기로 한 일")).toBeNull();
+    expect(screen.queryByRole("button", { name: "드랍 항목 비우기" })).toBeNull();
+
+    await fireEvent.click(within(chips).getByRole("radio", { name: "드랍 1" }));
+    const row = within(list).getByText("안 하기로 한 일").closest("li")!;
+    expect(row.classList.contains("dropped")).toBe(true);
+    expect(row.classList.contains("done")).toBe(false);
+    // Closed: no overdue stripe or red chip, and the checkbox (complete) stays empty.
+    expect(row.classList.contains("overdue")).toBe(false);
+    expect(row.querySelector(".todo-due")?.getAttribute("data-bucket")).toBe("closed");
+    expect((within(row as HTMLElement).getByRole("checkbox", { name: "완료: 안 하기로 한 일" }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByRole("button", { name: "완료 항목 비우기" })).toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: "드랍 항목 비우기" }));
+    await waitFor(() => expect(get(confirmation)?.title).toBe("드랍 항목을 비울까요?"));
+    resolveConfirmation(true);
+    await waitFor(() => expect(server.writes().at(-1)).toMatchObject({ method: "DELETE", url: "/api/me/todos/dropped" }));
+    await screen.findByText("드랍한 할 일이 없습니다");
+    expect(server.items.map((item) => item.title).sort()).toEqual(["끝난 일", "남은 일"]);
   });
 
   it("edits the selected item, and deletes it only after confirmation", async () => {
@@ -426,6 +499,122 @@ describe("할 일 tab editor", () => {
     await fireEvent.submit(editor);
     await waitFor(() => expect(server.writes()).toHaveLength(2));
     expect(server.writes()[1].body).toEqual({ note: "첫 줄\n둘째 줄" });
+  });
+
+  it("changes the status at once from its 상태 control — 진행 중, then 드랍 with 되돌리기 — never through 저장", async () => {
+    const item = todo({ title: "견적서 검토" });
+    const server = fakeServer([item]);
+    render(TodosView);
+    await fireEvent.click(await screen.findByRole("button", { name: rowName("견적서 검토") }));
+    const editor = screen.getByRole("form", { name: "할 일 편집" });
+    // A labelled group of pressed-state buttons (manual activation), not a radiogroup.
+    expect(within(editor).queryByRole("radiogroup")).toBeNull();
+    const control = within(editor).getByRole("group", { name: "상태" });
+    const segments = within(control).getAllByRole("button");
+    expect(segments.map((segment) => segment.textContent)).toEqual(["시작 전", "진행 중", "완료", "드랍"]);
+    expect(segments.map((segment) => segment.getAttribute("type"))).toEqual(["button", "button", "button", "button"]);
+    expect(segments.map((segment) => segment.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
+    expect(segments.map((segment) => segment.tabIndex)).toEqual([0, -1, -1, -1]);
+    expect(within(editor).getByText(/^추가 /)).toBeTruthy();
+
+    await fireEvent.click(within(control).getByRole("button", { name: "진행 중" }));
+    await waitFor(() => expect(server.writes()).toEqual([expect.objectContaining({ method: "PATCH", body: { status: "in_progress" } })]));
+    await waitFor(() => expect(within(control).getByRole("button", { name: "진행 중" }).getAttribute("aria-pressed")).toBe("true"));
+    // Applied outside the form: 저장 never armed.
+    expect((within(editor).getByRole("button", { name: "저장" }) as HTMLButtonElement).disabled).toBe(true);
+    const list = screen.getByRole("region", { name: "할 일 목록" });
+    expect(list.querySelector(".routine-group-head span")?.textContent).toBe("진행 중");
+    // Picking the status it already has writes nothing.
+    await fireEvent.click(within(control).getByRole("button", { name: "진행 중" }));
+    expect(server.writes()).toHaveLength(1);
+
+    await fireEvent.click(within(control).getByRole("button", { name: "드랍" }));
+    await waitFor(() => expect(server.writes().at(-1)).toMatchObject({ method: "PATCH", body: { status: "dropped" } }));
+    const undo = await waitFor(() => {
+      const found = get(toasts).find((toast) => toast.message === "할 일을 드랍했습니다 · 견적서 검토");
+      expect(found?.actionLabel).toBe("되돌리기");
+      return found!;
+    });
+    // Still selected: the editor shows when it was dropped, though 전체 no longer lists it.
+    expect(within(editor).getByText(/^드랍 /)).toBeTruthy();
+    expect(within(list).queryByText("견적서 검토")).toBeNull();
+    undo.action?.();
+    await waitFor(() => expect(server.writes().at(-1)).toMatchObject({ body: { status: "in_progress" } }));
+    await within(list).findByText("견적서 검토");
+  });
+
+  it("moves focus with the arrows and Home/End without writing; activating a button applies it, one write at a time", async () => {
+    const item = todo({ title: "보고서" });
+    const server = fakeServer([item]);
+    // Hold PATCHes while `hold` is set, so a second pick lands during the first write.
+    let hold = true;
+    let release: (() => void) | null = null;
+    const fetchFn = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const real = fetchFn.getMockImplementation() as (input: unknown, init?: RequestInit) => Promise<unknown>;
+    fetchFn.mockImplementation(async (input: unknown, init: RequestInit = {}) => {
+      if (init.method === "PATCH" && hold) await new Promise<void>((resolve) => (release = resolve));
+      return real(input, init);
+    });
+    const patches = () => fetchFn.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH").length;
+    render(TodosView);
+    await fireEvent.click(await screen.findByRole("button", { name: rowName("보고서") }));
+    const control = screen.getByRole("group", { name: "상태" });
+    const segment = (name: string) => within(control).getByRole("button", { name });
+    const pressed = () => within(control).getAllByRole("button").filter((button) => button.getAttribute("aria-pressed") === "true").map((button) => button.textContent);
+    const tabbable = () => within(control).getAllByRole("button").filter((button) => button.tabIndex === 0).map((button) => button.textContent);
+    expect(pressed()).toEqual(["시작 전"]);
+    expect(tabbable()).toEqual(["시작 전"]);
+
+    // Arrows and Home/End only MOVE focus (and the one tabbable button): nothing is written,
+    // toasted or re-sorted on the way, so 시작 전 → 드랍 stays one write.
+    segment("시작 전").focus();
+    const steps: [string, string][] = [
+      ["ArrowRight", "진행 중"],
+      ["ArrowDown", "완료"],
+      ["End", "드랍"],
+      ["ArrowRight", "시작 전"], // wraps
+      ["ArrowLeft", "드랍"], // wraps back
+      ["Home", "시작 전"],
+      ["ArrowUp", "드랍"],
+    ];
+    for (const [key, lands] of steps) {
+      await fireEvent.keyDown(document.activeElement!, { key });
+      expect(document.activeElement, `${key} → ${lands}`).toBe(segment(lands));
+    }
+    expect(tabbable()).toEqual(["드랍"]);
+    expect(pressed()).toEqual(["시작 전"]);
+    expect(patches()).toBe(0);
+    expect(get(toasts)).toEqual([]);
+    // Enter and Space are the button's own activation (a click): the key handler leaves them alone.
+    for (const key of ["Enter", " "]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      segment("드랍").dispatchEvent(event);
+      expect(event.defaultPrevented, key).toBe(false);
+    }
+    expect(patches()).toBe(0);
+
+    // Activating the focused 드랍: one PATCH, applied at once (optimistic).
+    await fireEvent.click(segment("드랍"));
+    expect(pressed()).toEqual(["드랍"]);
+    await waitFor(() => expect(release).not.toBeNull());
+    expect(control.getAttribute("aria-busy")).toBe("true");
+    // A second pick while that PATCH is in flight is ignored; focus may still move.
+    await fireEvent.click(segment("진행 중"));
+    await fireEvent.keyDown(segment("드랍"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(segment("완료"));
+    expect(patches()).toBe(1);
+    expect(pressed()).toEqual(["드랍"]);
+    hold = false;
+    release!();
+    await waitFor(() => expect(control.getAttribute("aria-busy")).toBeNull());
+    expect(server.writes()).toEqual([expect.objectContaining({ method: "PATCH", body: { status: "dropped" } })]);
+    // The tabbable button stays where focus was last moved (the answer brought no new status)…
+    expect(tabbable()).toEqual(["완료"]);
+    // …and once settled, the next activation goes through; Tab then lands on the new status.
+    await fireEvent.click(segment("진행 중"));
+    await waitFor(() => expect(server.writes().at(-1)).toMatchObject({ body: { status: "in_progress" } }));
+    await waitFor(() => expect(tabbable()).toEqual(["진행 중"]));
+    expect(server.writes()).toHaveLength(2);
   });
 });
 
@@ -595,8 +784,30 @@ describe("chat overlay", () => {
       return found!;
     });
     undo.action?.();
-    await waitFor(() => expect(server.writes().map((call) => call.body)).toEqual([{ done: true }, { done: false }]));
+    await waitFor(() => expect(server.writes().map((call) => call.body)).toEqual([{ status: "done" }, { status: "todo" }]));
     await within(overlay).findByText("PR 리뷰");
+  });
+
+  it("shows in-progress items in their own 진행 중 section on top; its checkbox still only completes", async () => {
+    const overdue = todo({ title: "지난 일", dueDate: "2026-10-02" });
+    const running = todo({ title: "진행 중인 보고", status: "in_progress", dueDate: "2026-10-01" });
+    const server = fakeServer([overdue, running]);
+    seedLoaded([overdue, running]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    render(ChatView);
+    const overlay = await screen.findByRole("complementary", { name: "할 일" });
+    const sections = within(overlay).getAllByRole("region");
+    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["진행 중", "마감 지남"]);
+    expect(within(sections[0]).getByText("진행 중인 보고")).toBeTruthy();
+    // The overdue in-progress item sits only in 진행 중, its due date still flagged.
+    expect(within(sections[1]).queryByText("진행 중인 보고")).toBeNull();
+    expect(sections[0].querySelector(".todo-overlay-due")?.getAttribute("data-bucket")).toBe("overdue");
+    // Review and complete only: no status control in the card.
+    expect(within(overlay).queryByRole("group", { name: "상태" })).toBeNull();
+    await fireEvent.click(within(overlay).getByRole("checkbox", { name: "완료: 진행 중인 보고" }));
+    await waitFor(() => expect(server.writes()[0]).toMatchObject({ method: "PATCH", body: { status: "done" } }));
+    await waitFor(() => expect(within(overlay).queryByRole("region", { name: "진행 중" })).toBeNull());
   });
 
   it("opens the 할 일 tab with the clicked item selected", async () => {
@@ -942,7 +1153,7 @@ describe("chat overlay", () => {
       expect(row(overlay, "아홉째 일")).toBeNull();
       const animate = vi.spyOn(Element.prototype, "animate");
 
-      server.setItems(server.items.map((item) => (item.id === visible[0].id ? { ...item, done: true } : item)));
+      server.setItems(server.items.map((item) => (item.id === visible[0].id ? { ...item, status: "done" as const } : item)));
       await avatarTool("mcp__todo__update_todo");
       const entered = await waitFor(() => {
         const found = row(overlay, "아홉째 일");

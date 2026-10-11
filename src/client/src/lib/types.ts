@@ -50,6 +50,7 @@ export type {
   TodoPriority,
   TodoSnapshot,
   TodoSource,
+  TodoStatus,
 } from "../../../shared/todos";
 
 export type {
@@ -63,8 +64,11 @@ export type {
 import type { CanvasArtifact, RoutineJob } from "../../../server/types.js";
 import type { TodoCounts, TodoItem } from "../../../shared/todos";
 
-/** The 할 일 tab's status filters (오늘 = overdue + due today; 예정 = future-dated). */
-export type TodoFilter = "today" | "upcoming" | "overdue" | "all" | "done";
+/**
+ * The 할 일 tab's filters (오늘 = overdue + due today; 예정 = future-dated; 진행 중 =
+ * in progress; 전체 = every open item; 완료 / 드랍 = that closed status).
+ */
+export type TodoFilter = "today" | "upcoming" | "overdue" | "in_progress" | "all" | "done" | "dropped";
 
 /**
  * The ONE client slice of the viewer's to-do list: the 할 일 tab, the chat

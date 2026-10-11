@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
 import {
-  MAX_LISTED_DONE_TODOS,
+  CLOSED_TODO_STATUSES,
+  MAX_LISTED_CLOSED_TODOS,
   MAX_OPEN_TODOS,
+  OPEN_TODO_STATUSES,
   TODO_SOURCES,
   compareTodos,
+  isOpenTodoStatus,
   isTodoPriority,
+  isTodoStatus,
+  type ClosedTodoStatus,
   type TodoCounts,
   type TodoItem,
   type TodoSource,
@@ -15,11 +20,15 @@ import { type Constructor, type StoreBase, now, parseNameList } from "./internal
 // 할 일 storage (see the todo_items table comment in internal.ts). Input is
 // validated BEFORE it gets here (`../todos.ts`), so this mixin only enforces the
 // per-user open cap, which must be checked inside the write transaction.
+// `status` is the source of truth, and EVERY write sets the `done` mirror (1
+// iff closed) in the same statement — the boot reconcile (migrateTodoStatuses)
+// relies on no row of this build ever disagreeing.
 
 interface TodoRow {
   id: string;
   title: string;
   note: string;
+  status: string;
   done: number;
   priority: string;
   due_date: string | null;
@@ -34,18 +43,24 @@ interface TodoRow {
 // The source conversation is surfaced only while it still exists and belongs to
 // the item's owner: deleting a conversation cuts the link without any cascade on
 // the many conversation-deleting paths, and the item itself stays.
-const TODO_SELECT = `SELECT t.id, t.title, t.note, t.done, t.priority, t.due_date, t.tags_json, t.source,
+const TODO_SELECT = `SELECT t.id, t.title, t.note, t.status, t.done, t.priority, t.due_date, t.tags_json, t.source,
     CASE WHEN c.id IS NULL THEN NULL ELSE t.source_conversation_id END AS source_conversation_id,
     t.created_at, t.updated_at, t.completed_at
   FROM todo_items t
   LEFT JOIN conversations c ON c.id = t.source_conversation_id AND c.owner_user_id = t.owner_user_id`;
+
+/** `('todo', 'in_progress')` — the open list, the open cap and the open-based counts. */
+const OPEN_STATUSES_SQL = `(${OPEN_TODO_STATUSES.map((status) => `'${status}'`).join(", ")})`;
+const OPEN_COUNT_SQL = `SELECT COUNT(*) AS c FROM todo_items WHERE owner_user_id = ? AND status IN ${OPEN_STATUSES_SQL}`;
+const STATUS_COUNT_SQL = "SELECT COUNT(*) AS c FROM todo_items WHERE owner_user_id = ? AND status = ?";
 
 function toTodo(row: TodoRow): TodoItem {
   return {
     id: row.id,
     title: row.title,
     note: row.note,
-    done: row.done === 1,
+    // The boot reconcile leaves no unknown status behind; the mirror is the fallback all the same.
+    status: isTodoStatus(row.status) ? row.status : row.done === 1 ? "done" : "todo",
     priority: isTodoPriority(row.priority) ? row.priority : "normal",
     dueDate: row.due_date,
     tags: parseNameList(row.tags_json) ?? [],
@@ -53,7 +68,7 @@ function toTodo(row: TodoRow): TodoItem {
     sourceConversationId: row.source_conversation_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    completedAt: row.completed_at,
+    closedAt: row.completed_at,
   };
 }
 
@@ -68,15 +83,21 @@ export type TodoUpdateResult = { ok: true; todo: TodoItem } | { ok: false; error
 
 export function withTodos<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class Todos extends Base {
-    /** Every open item plus the newest completed ones, in the shared display order. */
+    /**
+     * Every open item plus the newest done and, separately, the newest dropped
+     * ones (MAX_LISTED_CLOSED_TODOS each), in the shared display order.
+     */
     listTodos(ownerUserId: string): TodoItem[] {
       const open = this.db
-        .prepare(`${TODO_SELECT} WHERE t.owner_user_id = ? AND t.done = 0`)
+        .prepare(`${TODO_SELECT} WHERE t.owner_user_id = ? AND t.status IN ${OPEN_STATUSES_SQL}`)
         .all(ownerUserId) as TodoRow[];
-      const done = this.db
-        .prepare(`${TODO_SELECT} WHERE t.owner_user_id = ? AND t.done = 1 ORDER BY t.completed_at DESC LIMIT ?`)
-        .all(ownerUserId, MAX_LISTED_DONE_TODOS) as TodoRow[];
-      return [...open, ...done].map(toTodo).sort(compareTodos);
+      const closedStatement = this.db.prepare(
+        `${TODO_SELECT} WHERE t.owner_user_id = ? AND t.status = ? ORDER BY t.completed_at DESC LIMIT ?`,
+      );
+      const closed = CLOSED_TODO_STATUSES.flatMap(
+        (status) => closedStatement.all(ownerUserId, status, MAX_LISTED_CLOSED_TODOS) as TodoRow[],
+      );
+      return [...open, ...closed].map(toTodo).sort(compareTodos);
     }
 
     getTodo(ownerUserId: string, id: string): TodoItem | null {
@@ -88,27 +109,26 @@ export function withTodos<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     /** Counts against a KST calendar date (`kstDateString()`), passed in so tests can pin "today". */
     countTodos(ownerUserId: string, todayKst: string): TodoCounts {
-      const open = "SELECT COUNT(*) AS c FROM todo_items WHERE owner_user_id = ? AND done = 0";
       return {
-        open: this.count(open, ownerUserId),
-        overdue: this.count(`${open} AND due_date IS NOT NULL AND due_date < ?`, ownerUserId, todayKst),
-        dueToday: this.count(`${open} AND due_date = ?`, ownerUserId, todayKst),
-        done: this.count("SELECT COUNT(*) AS c FROM todo_items WHERE owner_user_id = ? AND done = 1", ownerUserId),
+        open: this.count(OPEN_COUNT_SQL, ownerUserId),
+        inProgress: this.count(STATUS_COUNT_SQL, ownerUserId, "in_progress"),
+        overdue: this.count(`${OPEN_COUNT_SQL} AND due_date IS NOT NULL AND due_date < ?`, ownerUserId, todayKst),
+        dueToday: this.count(`${OPEN_COUNT_SQL} AND due_date = ?`, ownerUserId, todayKst),
+        done: this.count(STATUS_COUNT_SQL, ownerUserId, "done"),
+        dropped: this.count(STATUS_COUNT_SQL, ownerUserId, "dropped"),
       };
     }
 
     /** Insert all items or none: a batch that would cross MAX_OPEN_TODOS is refused whole. */
     createTodos(ownerUserId: string, items: NewTodo[], meta: TodoCreateMeta): TodoCreateResult {
       return this.db.transaction((): TodoCreateResult => {
-        const open = this.count(
-          "SELECT COUNT(*) AS c FROM todo_items WHERE owner_user_id = ? AND done = 0",
-          ownerUserId,
-        );
+        const open = this.count(OPEN_COUNT_SQL, ownerUserId);
         if (open + items.length > MAX_OPEN_TODOS) return { ok: false, error: "LIMIT" };
+        // A new item is always open (NewTodo.status), so its done mirror is 0.
         const insert = this.db.prepare(
-          `INSERT INTO todo_items (id, owner_user_id, title, note, done, priority, due_date, tags_json,
+          `INSERT INTO todo_items (id, owner_user_id, title, note, status, done, priority, due_date, tags_json,
              source, source_conversation_id, created_at, updated_at, completed_at)
-           VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, NULL)`,
         );
         const ids: string[] = [];
         // One timestamp per batch, so the shared order (oldest first) keeps the
@@ -122,6 +142,7 @@ export function withTodos<TBase extends Constructor<StoreBase>>(Base: TBase) {
             ownerUserId,
             item.title,
             item.note,
+            item.status,
             item.priority,
             item.dueDate,
             JSON.stringify(item.tags),
@@ -140,32 +161,34 @@ export function withTodos<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.db.transaction((): TodoUpdateResult => {
         const current = this.getTodo(ownerUserId, id);
         if (!current) return { ok: false, error: "NOT_FOUND" };
-        // Reopening counts toward the open cap like a new item does.
-        if (patch.done === false && current.done) {
-          const open = this.count(
-            "SELECT COUNT(*) AS c FROM todo_items WHERE owner_user_id = ? AND done = 0",
-            ownerUserId,
-          );
-          if (open >= MAX_OPEN_TODOS) return { ok: false, error: "LIMIT" };
+        const status = patch.status ?? current.status;
+        const open = isOpenTodoStatus(status);
+        // Reopening (a done or dropped item back to an open status) counts
+        // toward the open cap like a new item does.
+        if (open && !isOpenTodoStatus(current.status) && this.count(OPEN_COUNT_SQL, ownerUserId) >= MAX_OPEN_TODOS) {
+          return { ok: false, error: "LIMIT" };
         }
         const stamp = now();
-        const done = patch.done ?? current.done;
-        const completedAt = done === current.done ? current.completedAt : done ? stamp : null;
+        // Kept while the status stays put; stamped on every move INTO a closed
+        // status (done → dropped too: it is when the item reached its current
+        // one); cleared on a move to an open status.
+        const closedAt = status === current.status ? current.closedAt : open ? null : stamp;
         this.db
           .prepare(
-            `UPDATE todo_items SET title = ?, note = ?, done = ?, priority = ?, due_date = ?, tags_json = ?,
+            `UPDATE todo_items SET title = ?, note = ?, status = ?, done = ?, priority = ?, due_date = ?, tags_json = ?,
                updated_at = ?, completed_at = ?
              WHERE owner_user_id = ? AND id = ?`,
           )
           .run(
             patch.title ?? current.title,
             patch.note ?? current.note,
-            done ? 1 : 0,
+            status,
+            open ? 0 : 1,
             patch.priority ?? current.priority,
             patch.dueDate !== undefined ? patch.dueDate : current.dueDate,
             JSON.stringify(patch.tags ?? current.tags),
             stamp,
-            completedAt,
+            closedAt,
             ownerUserId,
             id,
           );
@@ -177,9 +200,11 @@ export function withTodos<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.db.prepare("DELETE FROM todo_items WHERE owner_user_id = ? AND id = ?").run(ownerUserId, id).changes > 0;
     }
 
-    /** 완료 항목 비우기: removes every completed item (listed or not); returns how many. */
-    clearCompletedTodos(ownerUserId: string): number {
-      return this.db.prepare("DELETE FROM todo_items WHERE owner_user_id = ? AND done = 1").run(ownerUserId).changes;
+    /** 완료 항목 비우기 / 드랍 항목 비우기: removes every item of that closed status (listed or not); returns how many. */
+    clearClosedTodos(ownerUserId: string, status: ClosedTodoStatus): number {
+      return this.db
+        .prepare("DELETE FROM todo_items WHERE owner_user_id = ? AND status = ?")
+        .run(ownerUserId, status).changes;
     }
   };
 }

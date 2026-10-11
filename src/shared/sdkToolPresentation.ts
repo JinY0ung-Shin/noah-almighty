@@ -1,4 +1,5 @@
 import { DEFAULT_SHARE_LINK_EXPIRY_DAYS } from "./shareLinks.js";
+import type { TodoStatus } from "./todos.js";
 
 export const SDK_SUBAGENT_TOOLS = ["Task", "Agent"] as const;
 
@@ -234,6 +235,32 @@ export function sdkToolLabel(name: string | undefined): string | undefined {
 }
 
 /**
+ * The status an update_todo call sets. The summary cannot see the item's prior
+ * status, so `todo` names where the item lands ("시작 전으로 표시") — true for a
+ * reopen and for an in-progress reset alike.
+ */
+const TODO_STATUS_SET_LABELS: Record<TodoStatus, string> = {
+  todo: "시작 전으로 표시",
+  in_progress: "진행 중으로 표시",
+  done: "완료로 표시",
+  dropped: "드랍으로 표시",
+};
+
+/** list_todos' status filter; `open` (the default) reads as the fallback 열린 항목. */
+const TODO_LIST_FILTER_LABELS: Record<TodoStatus | "all", string> = {
+  todo: "시작 전",
+  in_progress: "진행 중",
+  done: "완료 항목",
+  dropped: "드랍 항목",
+  all: "전체",
+};
+
+/** A label for a model-supplied key — own keys only, so "constructor" and friends never match. */
+function ownLabel(labels: Record<string, string>, key: unknown): string | undefined {
+  return typeof key === "string" && Object.hasOwn(labels, key) ? labels[key] : undefined;
+}
+
+/**
  * The activity-row input summary (user-facing, Korean) for Noah tools whose
  * generic summary — the first string argument — would mislead. Kept here next
  * to the labels for the same reason: the server status line
@@ -244,7 +271,9 @@ export function sdkToolLabel(name: string | undefined): string | undefined {
  *   while what the user should see is how long the link will live — "7일"
  *   (the default when the model omits the expiry).
  * - `mcp__todo__*`: item ids are opaque too — the title (one added item, a
- *   retitle, a search query), what changed ("완료로 표시"), or a count.
+ *   retitle, a search query), the status an update sets ("완료로 표시",
+ *   "드랍으로 표시", …) or the status a listing filters on ("진행 중", …), or a
+ *   count.
  */
 export function mcpToolInputSummary(name: string | undefined, input: unknown): string | undefined {
   const args = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
@@ -258,11 +287,11 @@ export function mcpToolInputSummary(name: string | undefined, input: unknown): s
       return only ?? `${items.length}개`;
     }
     case "mcp__todo__update_todo":
-      return title(args.title) ?? (args.done === true ? "완료로 표시" : args.done === false ? "다시 열기" : "내용 변경");
+      return title(args.title) ?? ownLabel(TODO_STATUS_SET_LABELS, args.status) ?? "내용 변경";
     case "mcp__todo__delete_todo":
       return "1개";
     case "mcp__todo__list_todos":
-      return title(args.query) ?? (args.status === "done" ? "완료 항목" : args.status === "all" ? "전체" : "열린 항목");
+      return title(args.query) ?? ownLabel(TODO_LIST_FILTER_LABELS, args.status) ?? "열린 항목";
   }
   if (name === "mcp__file_output__create_share_link") {
     const days =

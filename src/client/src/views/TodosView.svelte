@@ -17,8 +17,10 @@
   import {
     TODO_FILTERS,
     TODO_PRIORITY_LABELS,
+    TODO_STATUS_LABELS,
     clearCompletedTodos,
-    completeTodoWithUndo,
+    clearDroppedTodos,
+    closeTodoWithUndo,
     createTodo,
     deleteTodo,
     dueDateText,
@@ -29,19 +31,22 @@
     matchesTodoFilter,
     matchesTodoQuery,
     parseTagInput,
-    setTodoDone,
+    setTodoStatus,
     todoFilterCounts,
+    todoListGroups,
     todoSeedText,
     todoSourceTitle,
     updateTodo,
     type TodoChanges,
   } from "../lib/todos";
-  import type { TodoFilter, TodoItem, TodoPriority } from "../lib/types";
+  import type { TodoFilter, TodoItem, TodoPriority, TodoStatus } from "../lib/types";
   import {
-    MAX_LISTED_DONE_TODOS,
+    MAX_LISTED_CLOSED_TODOS,
     MAX_TODO_NOTE_LENGTH,
     MAX_TODO_TITLE_LENGTH,
     TODO_PRIORITIES,
+    TODO_STATUSES,
+    isOpenTodo,
     todoDueBucket,
   } from "../../../shared/todos";
 
@@ -74,6 +79,14 @@
   let saving = false;
   let delegating = false;
   let openingSource = false;
+  // The item whose status write (the detail panel's 상태 control) is in flight:
+  // a further pick waits for it, so two PATCHes for one item never race (an
+  // earlier answer would briefly put the older status back).
+  let statusSavingId = "";
+  // The 상태 button Tab lands on (roving tabindex): the item's status, until the
+  // arrow keys move focus elsewhere in the group.
+  let statusFocus: TodoStatus = "todo";
+  let statusFocusFor = "";
 
   onMount(() => {
     void load();
@@ -100,26 +113,30 @@
   $: query = $appState.todoSearch;
   $: filterCounts = todoFilterCounts(items, counts, todayKst);
   $: filtered = items.filter((item) => matchesTodoFilter(item, filterId, todayKst) && matchesTodoQuery(item, query));
-  // Open filters group by due bucket (the order the shared sort already gives);
-  // 완료 is one newest-first group.
-  $: groups =
-    filterId === "done"
-      ? [{ id: "done", label: "완료", items: filtered }].filter((group) => group.items.length)
-      : [
-          { id: "overdue", label: "마감 지남", items: filtered.filter((item) => todoDueBucket(item.dueDate, todayKst) === "overdue") },
-          { id: "today", label: "오늘", items: filtered.filter((item) => todoDueBucket(item.dueDate, todayKst) === "today") },
-          { id: "upcoming", label: "예정", items: filtered.filter((item) => todoDueBucket(item.dueDate, todayKst) === "upcoming") },
-          { id: "none", label: "날짜 없음", items: filtered.filter((item) => todoDueBucket(item.dueDate, todayKst) === "none") },
-        ].filter((group) => group.items.length);
-  $: listedDone = items.filter((item) => item.done).length;
+  // Open filters: 진행 중 first, then the due buckets (the order the shared sort
+  // already gives); 완료 and 드랍 are one newest-first group each.
+  $: groups = todoListGroups(filtered, filterId, todayKst);
+  $: listedDone = items.filter((item) => item.status === "done").length;
+  $: listedDropped = items.filter((item) => item.status === "dropped").length;
   $: selected = items.find((item) => item.id === $appState.todoSelectedId) ?? null;
   $: syncForm(selected);
+  $: syncStatusFocus(selected);
   $: headerSummary = !todos.loaded
     ? "업무 할 일을 모아 두고 마감과 우선순위로 관리하세요"
-    : `열린 할 일 ${counts.open}개 · 오늘 마감 ${counts.dueToday}개`;
-  $: activeFilterLabel = TODO_FILTERS.find((filter) => filter.id === filterId)?.label ?? "전체";
+    : `열린 할 일 ${counts.open}개${counts.inProgress ? ` · 진행 중 ${counts.inProgress}개` : ""} · 오늘 마감 ${counts.dueToday}개`;
   $: countLabel = query.trim() ? `${filtered.length}개 찾음` : `${filtered.length}개`;
-  $: emptyList = counts.open === 0 && counts.done === 0 && !items.length;
+  $: emptyList = counts.open === 0 && counts.done === 0 && counts.dropped === 0 && !items.length;
+
+  /** The empty list's heading for a filter with nothing in it. */
+  const EMPTY_FILTER_TITLES: Record<TodoFilter, string> = {
+    today: "오늘 할 일이 없습니다",
+    upcoming: "예정된 할 일이 없습니다",
+    overdue: "마감 지난 할 일이 없습니다",
+    in_progress: "진행 중인 할 일이 없습니다",
+    all: "열린 할 일이 없습니다",
+    done: "완료한 할 일이 없습니다",
+    dropped: "드랍한 할 일이 없습니다",
+  };
 
   function syncForm(item: TodoItem | null) {
     if (!item) {
@@ -140,6 +157,15 @@
 
   function markDirty() {
     dirty = true;
+  }
+
+  // Another item, or a new status (applied here, or by the avatar): Tab lands on
+  // the status the item has now.
+  function syncStatusFocus(item: TodoItem | null) {
+    const key = item ? `${item.id}:${item.status}` : "";
+    if (key === statusFocusFor) return;
+    statusFocusFor = key;
+    if (item) statusFocus = item.status;
   }
 
   function setFilter(id: TodoFilter) {
@@ -195,9 +221,51 @@
     newTitleEl?.focus();
   }
 
+  // A row's checkbox: checking completes any item that is not done (an
+  // in-progress or dropped one too); unchecking a done one reopens it as 시작 전.
   function toggle(item: TodoItem, checked: boolean) {
-    if (checked) void completeTodoWithUndo(item);
-    else void setTodoDone(item.id, false);
+    if (checked) void closeTodoWithUndo(item, "done");
+    else void setTodoStatus(item.id, "todo");
+  }
+
+  // The editor's 상태 control applies at once — on a click, Enter or Space (the
+  // buttons' own activation) — outside the form's dirty/save cycle, like the
+  // checkbox it replaced. Closing (완료/드랍) offers 되돌리기.
+  async function chooseStatus(item: TodoItem, status: TodoStatus) {
+    if (statusSavingId === item.id || item.status === status || isPendingTodo(item)) return;
+    statusSavingId = item.id;
+    try {
+      if (status === "done" || status === "dropped") await closeTodoWithUndo(item, status);
+      else await setTodoStatus(item.id, status);
+    } finally {
+      if (statusSavingId === item.id) statusSavingId = "";
+    }
+  }
+
+  // Manual activation over a roving tabindex: arrows and Home/End only MOVE
+  // focus among the 상태 buttons — passing over a status never writes it, toasts
+  // or re-sorts the list, so 시작 전 → 드랍 is one write. Applying is the focused
+  // button's own click / Enter / Space.
+  function onStatusKeydown(event: KeyboardEvent, from: TodoStatus): void {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const index = TODO_STATUSES.indexOf(from);
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? TODO_STATUSES.length - 1
+          : (index + (event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1) + TODO_STATUSES.length) %
+            TODO_STATUSES.length;
+    statusFocus = TODO_STATUSES[nextIndex];
+    document.getElementById(`todo-status-${statusFocus}`)?.focus();
+  }
+
+  /** The editor's stamp: when it was closed (완료/드랍), else when it was added. */
+  function detailStamp(item: TodoItem): string {
+    if (item.status === "done" && item.closedAt) return `완료 ${relativeDayTimeLabel(item.closedAt)}`;
+    if (item.status === "dropped" && item.closedAt) return `드랍 ${relativeDayTimeLabel(item.closedAt)}`;
+    return `추가 ${relativeDayTimeLabel(item.createdAt)}`;
   }
 
   // Stacked (narrow) layout puts the editor below the list; reveal it so a
@@ -353,6 +421,19 @@
     const removed = await clearCompletedTodos();
     if (removed !== null) notify(`완료 항목 ${removed}개를 비웠습니다.`, "ok");
   }
+
+  async function clearDropped() {
+    const total = counts.dropped;
+    if (!total) return;
+    const confirmed = await confirmAction(`드랍한 할 일 ${total}개를 모두 삭제할까요? 되돌릴 수 없습니다.`, {
+      title: "드랍 항목을 비울까요?",
+      confirmLabel: "비우기",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    const removed = await clearDroppedTodos();
+    if (removed !== null) notify(`드랍 항목 ${removed}개를 비웠습니다.`, "ok");
+  }
 </script>
 
 <header class="view-header">
@@ -428,8 +509,9 @@
             <span class="routine-count muted nowrap">{countLabel}</span>
           </div>
           <!-- Each chip spells its own aria-label: the count is an inline span the
-               accname algorithm would glue on as "완료1". -->
-          <div class="routine-filter-chips" role="radiogroup" aria-label="할 일 상태">
+               accname algorithm would glue on as "완료1". Named 필터, not 상태: the
+               editor's 상태 control is the item's own status. -->
+          <div class="routine-filter-chips" role="radiogroup" aria-label="할 일 필터">
             {#each TODO_FILTERS as filter (filter.id)}
               {@const active = filterId === filter.id}
               {@const count = filterCounts[filter.id]}
@@ -459,9 +541,9 @@
             </div>
           {:else if !filtered.length}
             <div class="routine-empty tall">
-              <h3>{query.trim() ? "검색 결과가 없습니다" : `${activeFilterLabel} 할 일이 없습니다`}</h3>
+              <h3>{query.trim() ? "검색 결과가 없습니다" : EMPTY_FILTER_TITLES[filterId]}</h3>
               <p>
-                {#if query.trim()}“{query.trim()}”에 맞는 할 일을 찾지 못했습니다.{:else}다른 상태를 골라 보세요.{/if}
+                {#if query.trim()}“{query.trim()}”에 맞는 할 일을 찾지 못했습니다.{:else}다른 필터를 골라 보세요.{/if}
               </p>
               <div class="routine-empty-actions">
                 {#if query.trim()}<button class="ghost-sm" type="button" on:click={clearSearch}>검색어 지우기</button>{/if}
@@ -478,13 +560,15 @@
                 <ul class="routine-group-items todo-items">
                   {#each group.items as item (item.id)}
                     {@const bucket = todoDueBucket(item.dueDate, todayKst)}
+                    {@const open = isOpenTodo(item)}
                     {@const active = $appState.todoSelectedId === item.id}
                     {@const pending = isPendingTodo(item)}
                     <li
                       class="todo-row"
                       class:active
-                      class:done={item.done}
-                      class:overdue={!item.done && bucket === "overdue"}
+                      class:done={item.status === "done"}
+                      class:dropped={item.status === "dropped"}
+                      class:overdue={open && bucket === "overdue"}
                       aria-busy={pending ? "true" : undefined}
                     >
                       <!-- The label is only the touch-sized hit area; the name is the checkbox's own. -->
@@ -492,9 +576,9 @@
                         <input
                           class="todo-check"
                           type="checkbox"
-                          checked={item.done}
+                          checked={item.status === "done"}
                           disabled={pending}
-                          aria-label={item.done ? `완료 취소: ${item.title}` : `완료: ${item.title}`}
+                          aria-label={item.status === "done" ? `완료 취소: ${item.title}` : `완료: ${item.title}`}
                           on:change={(event) => toggle(item, event.currentTarget.checked)}
                         />
                       </label>
@@ -508,10 +592,13 @@
                         on:click={() => select(item)}
                       >
                         <span class="todo-row-title">{item.title}</span>
-                        {#if item.dueDate || item.priority !== "normal" || item.tags.length || item.source !== "user" || item.note}
+                        {#if item.status === "in_progress" || item.dueDate || item.priority !== "normal" || item.tags.length || item.source !== "user" || item.note}
                           <span class="todo-row-meta">
+                            {#if item.status === "in_progress"}
+                              <span class="tag todo-status" data-status="in_progress">{TODO_STATUS_LABELS.in_progress}</span>
+                            {/if}
                             {#if item.dueDate}
-                              <span class="tag todo-due" data-bucket={item.done ? "done" : bucket} title={dueDateText(item.dueDate, todayKst)}
+                              <span class="tag todo-due" data-bucket={open ? bucket : "closed"} title={dueDateText(item.dueDate, todayKst)}
                                 >{dueLabel(item.dueDate, todayKst)}</span
                               >
                             {/if}
@@ -530,7 +617,9 @@
               </div>
             {/each}
             {#if filterId === "done" && counts.done > listedDone}
-              <p class="muted todo-done-note">최근 완료한 {MAX_LISTED_DONE_TODOS}개만 표시합니다.</p>
+              <p class="muted todo-done-note">최근 완료한 {MAX_LISTED_CLOSED_TODOS}개만 표시합니다.</p>
+            {:else if filterId === "dropped" && counts.dropped > listedDropped}
+              <p class="muted todo-done-note">최근 드랍한 {MAX_LISTED_CLOSED_TODOS}개만 표시합니다.</p>
             {/if}
           {/if}
         </div>
@@ -538,6 +627,10 @@
         {#if filterId === "done" && counts.done > 0}
           <div class="todo-list-foot">
             <button class="ghost-sm danger" type="button" on:click={clearDone}>완료 항목 비우기</button>
+          </div>
+        {:else if filterId === "dropped" && counts.dropped > 0}
+          <div class="todo-list-foot">
+            <button class="ghost-sm danger" type="button" on:click={clearDropped}>드랍 항목 비우기</button>
           </div>
         {/if}
       </section>
@@ -548,20 +641,33 @@
           {@const item = selected}
           <form class="todo-detail" aria-label="할 일 편집" on:submit|preventDefault={save}>
             <div class="todo-detail-head">
-              <label class="todo-detail-done">
-                <input
-                  class="todo-check"
-                  type="checkbox"
-                  checked={item.done}
-                  on:change={(event) => toggle(item, event.currentTarget.checked)}
-                />
-                <span>{item.done ? "완료됨" : "완료로 표시"}</span>
-              </label>
-              <span class="muted todo-detail-stamp">
-                {item.done && item.completedAt
-                  ? `완료 ${relativeDayTimeLabel(item.completedAt)}`
-                  : `추가 ${relativeDayTimeLabel(item.createdAt)}`}
-              </span>
+              <!-- Applies at once (chooseStatus), never through 저장. A group of
+                   pressed-state buttons, not a radiogroup: moving focus never
+                   selects (manual activation), so the semantics say so. -->
+              <div class="field todo-detail-status">
+                <span id="todo-status-label">상태</span>
+                <div
+                  class="seg-control todo-status-control"
+                  role="group"
+                  aria-labelledby="todo-status-label"
+                  aria-busy={statusSavingId === item.id ? "true" : undefined}
+                >
+                  {#each TODO_STATUSES as status (status)}
+                    {@const current = item.status === status}
+                    <button
+                      id={`todo-status-${status}`}
+                      class="seg-btn"
+                      class:active={current}
+                      type="button"
+                      aria-pressed={current ? "true" : "false"}
+                      tabindex={statusFocus === status ? 0 : -1}
+                      on:click={() => chooseStatus(item, status)}
+                      on:keydown={(event) => onStatusKeydown(event, status)}>{TODO_STATUS_LABELS[status]}</button
+                    >
+                  {/each}
+                </div>
+              </div>
+              <span class="muted todo-detail-stamp">{detailStamp(item)}</span>
             </div>
             <label class="field">
               <span>제목</span>
@@ -784,6 +890,12 @@
     text-decoration: line-through;
     font-weight: 400;
   }
+  /* Dropped: set aside, not finished — muted like done, but never struck
+     through (that line reads as "did it"), and its checkbox stays empty. */
+  .todo-row.dropped .todo-row-title {
+    color: var(--muted);
+    font-weight: 400;
+  }
   .todo-row-meta {
     display: flex;
     flex-wrap: wrap;
@@ -812,6 +924,23 @@
     border-color: var(--danger-line);
     background: var(--danger-soft);
   }
+  /* 진행 중: the info tint plus a leading dot — a FORM difference too, since the
+     light theme's info and accent blues (the 오늘 chip) are nearly one hue. */
+  .tag.todo-status[data-status="in_progress"] {
+    gap: var(--s-1);
+    color: var(--info);
+    border-color: var(--info-line);
+    background: var(--info-soft);
+    font-weight: 600;
+  }
+  .tag.todo-status[data-status="in_progress"]::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
   .todo-done-note {
     margin: 0;
     padding: 0 var(--s-1-5);
@@ -829,17 +958,25 @@
   }
   .todo-detail-head {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: space-between;
     gap: var(--s-2);
     flex-wrap: wrap;
   }
-  .todo-detail-done {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--s-2);
-    font-weight: 600;
-    cursor: pointer;
+  .todo-detail-status {
+    min-width: 0;
+    max-width: 100%;
+  }
+  /* Four options in the editor's fixed measure (down to its 300px floor): the
+     shared segmented control, a little tighter than its default padding. */
+  .todo-status-control {
+    max-width: 100%;
+  }
+  .todo-status-control .seg-btn {
+    padding: var(--s-1-5) var(--s-3);
+  }
+  .todo-status-control[aria-busy="true"] .seg-btn {
+    cursor: progress;
   }
   .todo-detail-stamp {
     font-size: var(--t-xs);

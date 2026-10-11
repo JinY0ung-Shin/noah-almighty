@@ -6,12 +6,17 @@
 
 import {
   DEFAULT_TODO_PRIORITY,
+  DEFAULT_TODO_STATUS,
   MAX_TODO_NOTE_LENGTH,
   MAX_TODO_TAG_LENGTH,
   MAX_TODO_TAGS,
   MAX_TODO_TITLE_LENGTH,
+  isOpenTodoStatus,
   isTodoPriority,
+  isTodoStatus,
+  type OpenTodoStatus,
   type TodoPriority,
+  type TodoStatus,
 } from "../shared/todos.js";
 import { normalizeCalendarDate } from "./routineSchedule.js";
 
@@ -23,12 +28,15 @@ export type TodoInputError =
   | "INVALID_PRIORITY"
   | "INVALID_DUE_DATE"
   | "INVALID_TAGS"
+  | "INVALID_STATUS"
   | "INVALID_DONE"
   | "EMPTY_PATCH";
 
 export interface NewTodo {
   title: string;
   note: string;
+  /** A new item is always open: todo, or in_progress when it is already under way. */
+  status: OpenTodoStatus;
   priority: TodoPriority;
   dueDate: string | null;
   tags: string[];
@@ -38,10 +46,10 @@ export interface NewTodo {
 export interface TodoPatch {
   title?: string;
   note?: string;
+  status?: TodoStatus;
   priority?: TodoPriority;
   dueDate?: string | null;
   tags?: string[];
-  done?: boolean;
 }
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: TodoInputError };
@@ -61,6 +69,12 @@ function parseNote(raw: unknown): Parsed<string> {
   if (typeof raw !== "string") return fail("INVALID_NOTE");
   const note = raw.replace(/\r\n?/g, "\n").trim();
   return note.length > MAX_TODO_NOTE_LENGTH ? fail("NOTE_TOO_LONG") : ok(note);
+}
+
+/** A new item's status: open ones only — creating an item already done or dropped is refused. */
+function parseNewStatus(raw: unknown): Parsed<OpenTodoStatus> {
+  if (raw === undefined || raw === null || raw === "") return ok(DEFAULT_TODO_STATUS);
+  return isTodoStatus(raw) && isOpenTodoStatus(raw) ? ok(raw) : fail("INVALID_STATUS");
 }
 
 function parsePriority(raw: unknown): Parsed<TodoPriority> {
@@ -105,13 +119,22 @@ export function parseNewTodo(raw: unknown): Parsed<NewTodo> {
   if (!title.ok) return title;
   const note = parseNote(body.note);
   if (!note.ok) return note;
+  const status = parseNewStatus(body.status);
+  if (!status.ok) return status;
   const priority = parsePriority(body.priority);
   if (!priority.ok) return priority;
   const dueDate = parseDueDate(body.dueDate);
   if (!dueDate.ok) return dueDate;
   const tags = parseTags(body.tags);
   if (!tags.ok) return tags;
-  return ok({ title: title.value, note: note.value, priority: priority.value, dueDate: dueDate.value, tags: tags.value });
+  return ok({
+    title: title.value,
+    note: note.value,
+    status: status.value,
+    priority: priority.value,
+    dueDate: dueDate.value,
+    tags: tags.value,
+  });
 }
 
 export function parseTodoPatch(raw: unknown): Parsed<TodoPatch> {
@@ -142,9 +165,15 @@ export function parseTodoPatch(raw: unknown): Parsed<TodoPatch> {
     if (!tags.ok) return tags;
     patch.tags = tags.value;
   }
-  if (body.done !== undefined) {
+  if (body.status !== undefined) {
+    // Legacy `done` alongside a status is ambiguous, not a tiebreak.
+    if (!isTodoStatus(body.status) || body.done !== undefined) return fail("INVALID_STATUS");
+    patch.status = body.status;
+  } else if (body.done !== undefined) {
+    // The pre-status field, still sent by an already-open tab running an older
+    // bundle: done → done, not done → todo (that bundle has no other status).
     if (typeof body.done !== "boolean") return fail("INVALID_DONE");
-    patch.done = body.done;
+    patch.status = body.done ? "done" : "todo";
   }
   return Object.keys(patch).length ? ok(patch) : fail("EMPTY_PATCH");
 }

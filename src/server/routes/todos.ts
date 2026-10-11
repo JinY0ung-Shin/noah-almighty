@@ -9,6 +9,8 @@ import {
   MAX_TODO_TAGS,
   MAX_TODO_TAG_LENGTH,
   MAX_TODO_TITLE_LENGTH,
+  isOpenTodo,
+  type TodoItem,
   type TodoSnapshot,
 } from "../../shared/todos.js";
 import { apiError, type RouterDeps } from "./_shared.js";
@@ -22,19 +24,30 @@ export const KOREAN_TODO_ERROR: Record<TodoInputError, string> = {
   INVALID_PRIORITY: "우선순위는 높음·보통·낮음 중 하나여야 합니다.",
   INVALID_DUE_DATE: "마감일은 YYYY-MM-DD 형식의 실제 날짜여야 합니다.",
   INVALID_TAGS: `태그는 ${MAX_TODO_TAG_LENGTH}자 이하로 최대 ${MAX_TODO_TAGS}개까지 넣을 수 있습니다.`,
+  INVALID_STATUS: "상태는 시작 전·진행 중·완료·드랍 중 하나여야 하고, 새 할 일은 시작 전이나 진행 중으로만 추가할 수 있습니다.",
   INVALID_DONE: "완료 여부 값이 올바르지 않습니다.",
   EMPTY_PATCH: "변경할 내용이 없습니다.",
 };
 
-export const TODO_LIMIT_MESSAGE = `열린 할 일은 최대 ${MAX_OPEN_TODOS}개까지 둘 수 있습니다. 완료하거나 정리한 뒤 다시 추가해 주세요.`;
-/** The only way an edit hits the cap is reopening a completed item. */
-export const TODO_REOPEN_LIMIT_MESSAGE = `열린 할 일이 이미 최대 ${MAX_OPEN_TODOS}개라 다시 열 수 없어 아무것도 바뀌지 않았습니다. 다른 할 일을 완료하거나 정리한 뒤 다시 시도해 주세요.`;
+export const TODO_LIMIT_MESSAGE = `열린 할 일은 최대 ${MAX_OPEN_TODOS}개까지 둘 수 있습니다. 완료·드랍하거나 정리한 뒤 다시 추가해 주세요.`;
+/** The only way an edit hits the cap is reopening a done or dropped item. */
+export const TODO_REOPEN_LIMIT_MESSAGE = `열린 할 일이 이미 최대 ${MAX_OPEN_TODOS}개라 다시 열 수 없어 아무것도 바뀌지 않았습니다. 다른 할 일을 완료·드랍하거나 정리한 뒤 다시 시도해 주세요.`;
 const TODO_NOT_FOUND_MESSAGE = "할 일을 찾을 수 없습니다.";
 
 /** The counts and KST "today" every response carries (see `TodoSnapshot`). */
 export function todoSnapshot(store: Store, ownerUserId: string): TodoSnapshot {
   const todayKst = kstDateString();
   return { todayKst, counts: store.countTodos(ownerUserId, todayKst) };
+}
+
+/**
+ * An item as the routes send it: the item plus the pre-status fields an
+ * already-open tab running an OLDER bundle reads — `done` (true for any CLOSED
+ * item, so a dropped one leaves that tab's open list too) and `completedAt`
+ * (= closedAt). Nothing current reads them; they are not part of `TodoItem`.
+ */
+export function toWireTodo(todo: TodoItem): TodoItem & { done: boolean; completedAt: string | null } {
+  return { ...todo, done: !isOpenTodo(todo), completedAt: todo.closedAt };
 }
 
 // ---- 할 일 (the signed-in user's own work to-do list) -------------------
@@ -49,7 +62,7 @@ export function createTodosRouter({ store }: RouterDeps): Router {
 
   router.get("/api/me/todos", (req: AuthenticatedRequest, res) => {
     const userId = req.user!.id;
-    res.json({ todos: store.listTodos(userId), ...todoSnapshot(store, userId) });
+    res.json({ todos: store.listTodos(userId).map(toWireTodo), ...todoSnapshot(store, userId) });
   });
 
   router.post("/api/me/todos", (req: AuthenticatedRequest, res) => {
@@ -64,16 +77,23 @@ export function createTodosRouter({ store }: RouterDeps): Router {
       apiError(res, 409, TODO_LIMIT_MESSAGE);
       return;
     }
-    res.status(201).json({ todo: created.todos[0], ...todoSnapshot(store, userId) });
+    res.status(201).json({ todo: toWireTodo(created.todos[0]), ...todoSnapshot(store, userId) });
   });
 
-  // 완료 항목 비우기. A DELETE, never a body-less POST: a plain HTML form on
-  // another same-site intranet page can send a simple POST with the Lax session
-  // cookie, while a DELETE always needs a CORS preflight. Registered BEFORE
-  // `/api/me/todos/:id` so "completed" is never read as an item id.
+  // 완료 항목 비우기 / 드랍 항목 비우기. DELETEs, never body-less POSTs: a
+  // plain HTML form on another same-site intranet page can send a simple POST
+  // with the Lax session cookie, while a DELETE always needs a CORS preflight.
+  // Registered BEFORE `/api/me/todos/:id` so "completed"/"dropped" are never
+  // read as an item id.
   router.delete("/api/me/todos/completed", (req: AuthenticatedRequest, res) => {
     const userId = req.user!.id;
-    const removed = store.clearCompletedTodos(userId);
+    const removed = store.clearClosedTodos(userId, "done");
+    res.json({ removed, ...todoSnapshot(store, userId) });
+  });
+
+  router.delete("/api/me/todos/dropped", (req: AuthenticatedRequest, res) => {
+    const userId = req.user!.id;
+    const removed = store.clearClosedTodos(userId, "dropped");
     res.json({ removed, ...todoSnapshot(store, userId) });
   });
 
@@ -90,7 +110,7 @@ export function createTodosRouter({ store }: RouterDeps): Router {
       else apiError(res, 409, TODO_REOPEN_LIMIT_MESSAGE);
       return;
     }
-    res.json({ todo: updated.todo, ...todoSnapshot(store, userId) });
+    res.json({ todo: toWireTodo(updated.todo), ...todoSnapshot(store, userId) });
   });
 
   router.delete("/api/me/todos/:id", (req: AuthenticatedRequest, res) => {

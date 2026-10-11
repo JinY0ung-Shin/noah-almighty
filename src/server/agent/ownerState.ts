@@ -203,7 +203,7 @@ export function emptyOwnerState(store: Store, config: AppConfig): OwnerState {
     modelOverride: store.getModelOverride(),
     experimentalFeatures: [],
     sharedAccount: false,
-    todos: { todayKst: kstDateString(), counts: { open: 0, overdue: 0, dueToday: 0, done: 0 } },
+    todos: { todayKst: kstDateString(), counts: { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0 } },
   };
 }
 

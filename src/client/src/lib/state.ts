@@ -154,7 +154,12 @@ export const appState = writable<ClientState>({
   splitAvatarId: "",
   streaming: false,
   themePref: "system",
-  todos: { items: [], todayKst: "", counts: { open: 0, overdue: 0, dueToday: 0, done: 0 }, loaded: false },
+  todos: {
+    items: [],
+    todayKst: "",
+    counts: { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0 },
+    loaded: false,
+  },
   todoFilter: "all",
   todoSearch: "",
   todoSelectedId: "",

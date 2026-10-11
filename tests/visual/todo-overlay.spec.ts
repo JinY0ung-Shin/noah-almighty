@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
-import type { TodoItem, TodoListResponse } from "../../src/shared/todos.js";
+import { isOpenTodo, type TodoItem, type TodoListResponse } from "../../src/shared/todos.js";
 
 // The chat screen's 할 일 card (TodoOverlay.svelte) picks its presentation from the
 // chat column's measured width: pinned at the top-right of a ≥1000px column, a
@@ -11,9 +11,10 @@ import type { TodoItem, TodoListResponse } from "../../src/shared/todos.js";
 // alone (its reserve keeps a readable column without a dead gap) on an opaque
 // surface while popover/sheet stay frosted, the sheet spans the column, and
 // Escape/outside clicks only dismiss a transient card — which only the pinned
-// layout brings back on its own. One case samples every animation frame while
+// layout brings back on its own. Some cases sample every animation frame while
 // an avatar's mocked tool turn changes the list (jsdom has no layout, so the
-// glide and the held-out leaving row are only real here).
+// glide and the held-out leaving row are only real here) — a row moving into
+// the 진행 중 section on top included.
 
 const user = {
   id: "user-1",
@@ -38,7 +39,7 @@ function todo(id: string, title: string, extra: Partial<TodoItem> = {}): TodoIte
     id,
     title,
     note: "",
-    done: false,
+    status: "todo",
     priority: "normal",
     dueDate: null,
     tags: [],
@@ -46,7 +47,7 @@ function todo(id: string, title: string, extra: Partial<TodoItem> = {}): TodoIte
     sourceConversationId: null,
     createdAt: "2026-07-10T01:00:00.000Z",
     updatedAt: "2026-07-10T01:00:00.000Z",
-    completedAt: null,
+    closedAt: null,
     ...extra,
   };
 }
@@ -60,7 +61,7 @@ const todoList: TodoListResponse = {
     todo("todo-5", "보안 취약점 패치 적용 일정 잡기"),
   ],
   todayKst: TODAY,
-  counts: { open: 5, overdue: 1, dueToday: 1, done: 0 },
+  counts: { open: 5, inProgress: 0, overdue: 1, dueToday: 1, done: 0, dropped: 0 },
 };
 
 // Long paragraphs so the transcript's text runs the full width of its column —
@@ -623,25 +624,35 @@ function expectLeavesInPlace(samples: MotionSample[], title: string): void {
 async function mockAvatarTurns(page: Page) {
   let list: TodoItem[] = todoList.todos.map((item) => ({ ...item }));
   const counts = () => {
-    const open = list.filter((item) => !item.done);
+    const open = list.filter(isOpenTodo);
     return {
       open: open.length,
+      inProgress: open.filter((item) => item.status === "in_progress").length,
       overdue: open.filter((item) => item.dueDate !== null && item.dueDate < TODAY).length,
       dueToday: open.filter((item) => item.dueDate === TODAY).length,
-      done: list.length - open.length,
+      done: list.filter((item) => item.status === "done").length,
+      dropped: list.filter((item) => item.status === "dropped").length,
     };
   };
-  const complete = (id: string) =>
+  const setStatus = (id: string, status: TodoItem["status"]) =>
     (list = list.map((item) =>
-      item.id === id ? { ...item, done: true, completedAt: "2026-07-12T04:00:00.000Z", updatedAt: "2026-07-12T04:00:00.000Z" } : item,
+      item.id === id
+        ? {
+            ...item,
+            status,
+            closedAt: isOpenTodo({ status }) ? null : "2026-07-12T04:00:00.000Z",
+            updatedAt: "2026-07-12T04:00:00.000Z",
+          }
+        : item,
     ));
+  const complete = (id: string) => setStatus(id, "done");
   const avatarTurns: Array<{ change: () => void; tools: number }> = [];
   let turn = 0;
   await page.route("**/api/me/todos", (route) => route.fulfill({ json: { todos: list, todayKst: TODAY, counts: counts() } }));
   await page.route("**/api/me/todos/*", async (route) => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "");
-    const patch = route.request().postDataJSON() as { done?: boolean };
-    if (patch.done) complete(id);
+    const patch = route.request().postDataJSON() as { status?: TodoItem["status"] };
+    if (patch.status) setStatus(id, patch.status);
     await route.fulfill({ json: { todo: list.find((item) => item.id === id), todayKst: TODAY, counts: counts() } });
   });
   await page.route("**/api/chat/stream", async (route) => {
@@ -674,6 +685,8 @@ async function mockAvatarTurns(page: Page) {
   });
   return {
     complete,
+    /** The avatar marks an item 진행 중 (update_todo status in_progress). */
+    start: (id: string) => setStatus(id, "in_progress"),
     add: (item: TodoItem) => (list = [...list, item]),
     /** Queue what the avatar's tools do on the next message's turn (`tools` parallel calls). */
     nextTurn: (change: () => void, tools = 1) => avatarTurns.push({ change, tools }),
@@ -815,6 +828,42 @@ test("with a parallel addition above, the pinned card's leaving row still leaves
   expectLeavesInPlace(samples, "신규 입사자 온보딩 문서 업데이트");
   expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
   expectNoLateMoves(samples);
+});
+
+/** The card's section headings, top to bottom. */
+async function sectionLabels(page: Page): Promise<string[]> {
+  return page.locator("#todo-overlay .todo-overlay-section h3").allTextContents();
+}
+
+test("in-progress items lead the card in their own 진행 중 section; the avatar starting one moves it there and nothing moves after", async ({ page }) => {
+  const server = await mockAvatarTurns(page);
+  const card = page.locator("#todo-overlay");
+  // An overdue item already in progress sits in 진행 중 — not 마감 지남 — with its red due date.
+  server.start("todo-1");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openCard(page, { width: 1680, height: 1000 });
+  await expect(card).toHaveAttribute("data-mode", "pinned");
+  expect(await sectionLabels(page)).toEqual(["진행 중", "오늘", "다음"]);
+  const inProgress = card.locator(".todo-overlay-section").first();
+  await expect(inProgress.locator(".todo-overlay-title")).toHaveText(["분기 실적 보고서 초안 검토"]);
+  await expect(inProgress.locator(".todo-overlay-due")).toHaveAttribute("data-bucket", "overdue");
+  expectInsideChatBody(await layout(page));
+  expect(await transcriptTextUnderCard(page)).toEqual([]);
+
+  // The avatar starts 다음's last row: it leaves 다음 and lands at the end of 진행 중, washed.
+  server.nextTurn(() => server.start("todo-5"));
+  await startSampling(page);
+  await sendWithEnter(page, "보안 패치 일정 잡는 거 시작했어");
+  await expect(inProgress.locator(".todo-overlay-title")).toHaveText(["분기 실적 보고서 초안 검토", "보안 취약점 패치 적용 일정 잡기"]);
+  await expect(card.locator('li[data-arrival="changed"] .todo-overlay-title')).toHaveText(["보안 취약점 패치 적용 일정 잡기"]);
+  const samples = await settleAndCollect(page);
+  expect(await sectionLabels(page)).toEqual(["진행 중", "오늘", "다음"]);
+  await expect(card.locator(".todo-overlay-item")).toHaveCount(5);
+  // The sections below glided with the change, then everything stayed put inside the card.
+  expect(samples.some((sample) => sample.cardMoving)).toBe(true);
+  expect(maxOverflow(samples)).toBeLessThanOrEqual(0);
+  expectNoLateMoves(samples);
+  expectInsideChatBody(await layout(page));
 });
 
 test("in split view a press on the other pane's toggle moves the card there; a second press switches it off", async ({ page }) => {

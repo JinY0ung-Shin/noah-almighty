@@ -20,9 +20,10 @@
   // unasked; the column widening back to pinned brings the card back.
   // ChatView keeps this mounted while the preference is on; a dismissed card
   // stays mounted (hidden) so it can still see the column widen.
-  // It always lists the VIEWER's own items, whichever avatar the pane talks to.
-  // It only reviews and completes them: adding is the 할 일 tab's form or the
-  // viewer's own avatar (`mcp__todo__*`, `/todo`).
+  // It always lists the VIEWER's own items, whichever avatar the pane talks to,
+  // in-progress ones in their own 진행 중 section on top. It only reviews and
+  // completes them: adding — and setting 진행 중 or 드랍 — is the 할 일 tab's or the
+  // viewer's own avatar's (`mcp__todo__*`, `/todo`).
   import { onMount } from "svelte";
   import type { AnimationConfig } from "svelte/animate";
   import { quartOut } from "svelte/easing";
@@ -247,10 +248,10 @@
 
   // Motion for the AVATAR's changes only (lib/todos.ts decides which those are):
   // a row it added rises in with an accent wash and a row it edited gets the wash
-  // (CSS, `data-arrival`); a row it deleted or completed slides out while the
-  // rows below glide up; any other row that enters with the change (the next item
-  // moving into the visible rows, an edit that moved a row to another section)
-  // fades in behind them. These read NON-reactive state when the motion STARTS —
+  // (CSS, `data-arrival`); a row it deleted or closed (completed or dropped)
+  // slides out while the rows below glide up; any other row that enters with the
+  // change (the next item moving into the visible rows, an edit that moved a row
+  // to another section — a new due date, or 진행 중) fades in behind them. These read NON-reactive state when the motion STARTS —
   // a removed keyed row only ever sees the params of its last render — so the
   // viewer's own checkbox, a poll and the first load stay instant. quartOut is
   // the svelte/easing curve closest to `--ease-out` (the Toasts precedent).

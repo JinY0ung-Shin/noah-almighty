@@ -17,23 +17,39 @@ import { calendarDateWeekday } from "../../../server/routineSchedule";
 import {
   TODO_TOOL_PREFIX,
   compareTodos,
+  isOpenTodo,
+  isOpenTodoStatus,
+  isTodoStatus,
   isTodoToolName,
   todoDueBucket,
+  type ClosedTodoStatus,
   type TodoCounts,
   type TodoItem,
-  type TodoListResponse,
   type TodoPriority,
-  type TodoSnapshot,
   type TodoSource,
+  type TodoStatus,
 } from "../../../shared/todos";
 
 export function emptyTodoState(): TodoState {
-  return { items: [], todayKst: "", counts: { open: 0, overdue: 0, dueToday: 0, done: 0 }, loaded: false };
+  return {
+    items: [],
+    todayKst: "",
+    counts: { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0 },
+    loaded: false,
+  };
 }
 
 /* ---------- labels ---------- */
 
 export const TODO_PRIORITY_LABELS: Record<TodoPriority, string> = { high: "높음", normal: "보통", low: "낮음" };
+
+/** In the detail panel's order (the shared TODO_STATUSES). */
+export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
+  todo: "시작 전",
+  in_progress: "진행 중",
+  done: "완료",
+  dropped: "드랍",
+};
 
 const SOURCE_TITLES: Record<TodoSource, string> = {
   user: "직접 추가한 할 일",
@@ -79,18 +95,25 @@ export const TODO_FILTERS: { id: TodoFilter; label: string }[] = [
   { id: "today", label: "오늘" },
   { id: "upcoming", label: "예정" },
   { id: "overdue", label: "마감 지남" },
+  { id: "in_progress", label: "진행 중" },
   { id: "all", label: "전체" },
   { id: "done", label: "완료" },
+  { id: "dropped", label: "드랍" },
 ];
 
 export function isTodoFilter(value: unknown): value is TodoFilter {
   return TODO_FILTERS.some((filter) => filter.id === value);
 }
 
-/** 오늘 = overdue + due today, 예정 = future-dated, 전체 = every OPEN item, 완료 = done. */
+/**
+ * 오늘 = overdue + due today, 예정 = future-dated, 진행 중 = in progress, 전체 =
+ * every OPEN item (the time filters cover open items too), 완료 / 드랍 = that
+ * closed status.
+ */
 export function matchesTodoFilter(item: TodoItem, filter: TodoFilter, todayKst: string): boolean {
-  if (filter === "done") return item.done;
-  if (item.done) return false;
+  if (filter === "done" || filter === "dropped") return item.status === filter;
+  if (!isOpenTodo(item)) return false;
+  if (filter === "in_progress") return item.status === "in_progress";
   const bucket = todoDueBucket(item.dueDate, todayKst);
   if (filter === "today") return bucket === "overdue" || bucket === "today";
   if (filter === "upcoming") return bucket === "upcoming";
@@ -107,14 +130,23 @@ export function matchesTodoQuery(item: TodoItem, query: string): boolean {
 
 /**
  * Chip counts. Open-item chips count the list itself (every open item is
- * listed); 완료 uses the server's count, since a listing carries only the newest
- * completed items.
+ * listed); 완료 and 드랍 use the server's counts, since a listing carries only
+ * the newest closed items of each.
  */
 export function todoFilterCounts(items: TodoItem[], counts: TodoCounts, todayKst: string): Record<TodoFilter, number> {
-  const out: Record<TodoFilter, number> = { today: 0, upcoming: 0, overdue: 0, all: 0, done: counts.done };
+  const out: Record<TodoFilter, number> = {
+    today: 0,
+    upcoming: 0,
+    overdue: 0,
+    in_progress: 0,
+    all: 0,
+    done: counts.done,
+    dropped: counts.dropped,
+  };
   for (const item of items) {
-    if (item.done) continue;
+    if (!isOpenTodo(item)) continue;
     out.all += 1;
+    if (item.status === "in_progress") out.in_progress += 1;
     const bucket = todoDueBucket(item.dueDate, todayKst);
     if (bucket === "overdue") {
       out.overdue += 1;
@@ -136,6 +168,41 @@ export function parseTagInput(text: string): string[] {
     out.push(tag);
   }
   return out;
+}
+
+export interface TodoListGroup {
+  id: "in_progress" | "overdue" | "today" | "upcoming" | "none" | "done" | "dropped";
+  label: string;
+  items: TodoItem[];
+}
+
+/**
+ * The 할 일 tab's groups over items that already pass `filter`, keeping their
+ * (shared) order: 완료 and 드랍 are one newest-first group each; an open filter
+ * puts every in-progress item in 진행 중 FIRST, whatever its due date (an
+ * overdue one keeps its red chip there), then the due buckets of the items not
+ * started yet. Empty groups are left out.
+ */
+export function todoListGroups(items: TodoItem[], filter: TodoFilter, todayKst: string): TodoListGroup[] {
+  const groups: TodoListGroup[] =
+    filter === "done" || filter === "dropped"
+      ? [{ id: filter, label: TODO_STATUS_LABELS[filter], items }]
+      : [
+          { id: "in_progress", label: TODO_STATUS_LABELS.in_progress, items: items.filter((item) => item.status === "in_progress") },
+          ...(
+            [
+              { id: "overdue", label: "마감 지남" },
+              { id: "today", label: "오늘" },
+              { id: "upcoming", label: "예정" },
+              { id: "none", label: "날짜 없음" },
+            ] as const
+          ).map(({ id, label }) => ({
+            id,
+            label,
+            items: items.filter((item) => item.status === "todo" && todoDueBucket(item.dueDate, todayKst) === id),
+          })),
+        ];
+  return groups.filter((group) => group.items.length);
 }
 
 /* ---------- chat overlay ---------- */
@@ -165,27 +232,33 @@ export function todoOverlayMode(hostWidth: number, narrowViewport: boolean): Tod
 }
 
 export interface TodoOverlaySection {
-  id: "overdue" | "today" | "next";
+  id: "in_progress" | "overdue" | "today" | "next";
   label: string;
   items: TodoItem[];
 }
 
-/** The overlay's first `limit` OPEN items in the shared order, split into 마감 지남 / 오늘 / 다음. */
+/**
+ * The overlay's first `limit` OPEN items in the shared order (in-progress ones
+ * lead it), split into 진행 중 / 마감 지남 / 오늘 / 다음 — an in-progress item
+ * sits ONLY in 진행 중, whatever its due date.
+ */
 export function overlaySections(
   items: TodoItem[],
   todayKst: string,
   limit = TODO_OVERLAY_LIMIT,
 ): { sections: TodoOverlaySection[]; hidden: number } {
-  const open = items.filter((item) => !item.done).sort(compareTodos);
+  const open = items.filter(isOpenTodo).sort(compareTodos);
   const shown = open.slice(0, limit);
+  const waiting = shown.filter((item) => item.status === "todo");
   const bucketOf = (item: TodoItem) => todoDueBucket(item.dueDate, todayKst);
   const sections: TodoOverlaySection[] = [
-    { id: "overdue" as const, label: "마감 지남", items: shown.filter((item) => bucketOf(item) === "overdue") },
-    { id: "today" as const, label: "오늘", items: shown.filter((item) => bucketOf(item) === "today") },
+    { id: "in_progress" as const, label: TODO_STATUS_LABELS.in_progress, items: shown.filter((item) => item.status === "in_progress") },
+    { id: "overdue" as const, label: "마감 지남", items: waiting.filter((item) => bucketOf(item) === "overdue") },
+    { id: "today" as const, label: "오늘", items: waiting.filter((item) => bucketOf(item) === "today") },
     {
       id: "next" as const,
       label: "다음",
-      items: shown.filter((item) => bucketOf(item) === "upcoming" || bucketOf(item) === "none"),
+      items: waiting.filter((item) => bucketOf(item) === "upcoming" || bucketOf(item) === "none"),
     },
   ].filter((section) => section.items.length);
   return { sections, hidden: open.length - shown.length };
@@ -257,8 +330,61 @@ export function todoSeedText(item: TodoItem): string {
   const lines = ["다음 할 일을 진행해줘.", "", `할 일: ${item.title}`];
   if (meta.length) lines.push(meta.join(" · "));
   if (item.note) lines.push("", item.note);
-  lines.push("", `(할 일 ID: ${item.id} — 끝나면 이 할 일을 완료로 표시하거나 메모를 갱신해줘.)`);
+  lines.push("", `(할 일 ID: ${item.id} — 시작하면 진행 중으로, 끝나면 완료로 표시하거나 메모를 갱신해줘.)`);
   return lines.join("\n");
+}
+
+/* ---------- wire ingestion ---------- */
+
+// The mirror of the server's `toWireTodo`. A tab running THIS bundle may talk
+// to a server from before statuses existed — a rollback, or a dev box whose
+// rebuilt dist/client is served by the old server process still running — which
+// sends `done`/`completedAt` only and pre-status counts. Read verbatim, every
+// item would arrive with `status: undefined`, none would be open, and the tab
+// and the card would come up EMPTY. So every item and count entering the store
+// is normalized here; the legacy mirror a current server adds never rides along
+// (the canonical shape also keeps `sameTodoItems`' content comparison exact).
+
+/** An item as any server version sends it. */
+type WireTodo = Omit<TodoItem, "status" | "closedAt"> & {
+  status?: unknown;
+  closedAt?: string | null;
+  done?: unknown;
+  completedAt?: string | null;
+};
+
+interface WireSnapshot {
+  todayKst?: string;
+  counts?: Partial<TodoCounts>;
+}
+
+export function fromWireTodo(raw: WireTodo): TodoItem {
+  return {
+    id: raw.id,
+    title: raw.title,
+    note: raw.note,
+    status: isTodoStatus(raw.status) ? raw.status : raw.done === true ? "done" : "todo",
+    priority: raw.priority,
+    dueDate: raw.dueDate,
+    tags: raw.tags,
+    source: raw.source,
+    sourceConversationId: raw.sourceConversationId,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    closedAt: raw.closedAt ?? raw.completedAt ?? null,
+  };
+}
+
+/** Counts a pre-status server never sends (in progress, dropped) are 0 there. */
+export function fromWireCounts(raw: Partial<TodoCounts> | undefined): TodoCounts {
+  return {
+    open: raw?.open ?? 0,
+    inProgress: raw?.inProgress ?? 0,
+    overdue: raw?.overdue ?? 0,
+    dueToday: raw?.dueToday ?? 0,
+    done: raw?.done ?? 0,
+    dropped: raw?.dropped ?? 0,
+  };
 }
 
 /* ---------- store writes ---------- */
@@ -374,24 +500,57 @@ function mutate(change: (todos: TodoState) => void): void {
   });
 }
 
-function applySnapshot(todos: TodoState, snapshot: Partial<TodoSnapshot> | undefined): void {
+function applySnapshot(todos: TodoState, snapshot: WireSnapshot | undefined): void {
   if (snapshot?.todayKst) todos.todayKst = snapshot.todayKst;
-  if (snapshot?.counts) todos.counts = { ...snapshot.counts };
+  if (snapshot?.counts) todos.counts = fromWireCounts(snapshot.counts);
 }
 
-/** Optimistic counts: open-based ones from the list (every open item is listed), done adjusted by delta. */
-function recount(todos: TodoState, doneDelta = 0): void {
+/** How a write moves the closed counts (a listing carries only the newest closed items, so those are adjusted, not counted). */
+interface ClosedDelta {
+  done: number;
+  dropped: number;
+}
+
+const NO_CLOSED_DELTA: ClosedDelta = { done: 0, dropped: 0 };
+
+/** One item of `status` arriving (sign 1) or leaving (sign -1). */
+function closedDelta(status: TodoStatus, sign: 1 | -1): ClosedDelta {
+  return { done: status === "done" ? sign : 0, dropped: status === "dropped" ? sign : 0 };
+}
+
+/** An item moving from one status to another. */
+function statusDelta(before: TodoStatus, after: TodoStatus): ClosedDelta {
+  const left = closedDelta(before, -1);
+  const arrived = closedDelta(after, 1);
+  return { done: left.done + arrived.done, dropped: left.dropped + arrived.dropped };
+}
+
+function negated(delta: ClosedDelta): ClosedDelta {
+  return { done: -delta.done, dropped: -delta.dropped };
+}
+
+/** Optimistic counts: open-based ones from the list (every open item is listed), done/dropped adjusted by `delta`. */
+function recount(todos: TodoState, delta: ClosedDelta = NO_CLOSED_DELTA): void {
   let open = 0;
+  let inProgress = 0;
   let overdue = 0;
   let dueToday = 0;
   for (const item of todos.items) {
-    if (item.done) continue;
+    if (!isOpenTodo(item)) continue;
     open += 1;
+    if (item.status === "in_progress") inProgress += 1;
     const bucket = todoDueBucket(item.dueDate, todos.todayKst);
     if (bucket === "overdue") overdue += 1;
     else if (bucket === "today") dueToday += 1;
   }
-  todos.counts = { open, overdue, dueToday, done: Math.max(0, todos.counts.done + doneDelta) };
+  todos.counts = {
+    open,
+    inProgress,
+    overdue,
+    dueToday,
+    done: Math.max(0, todos.counts.done + delta.done),
+    dropped: Math.max(0, todos.counts.dropped + delta.dropped),
+  };
 }
 
 /** The same rows, in the same order, with the same content. */
@@ -405,9 +564,9 @@ async function loadOnce(): Promise<"applied" | "stale" | "void"> {
   const session = sessionEpoch;
   const avatarEndsAtStart = avatarEndsSeen;
   const startedAt = Date.now();
-  let body: TodoListResponse;
+  let body: { todos?: WireTodo[] } & WireSnapshot;
   try {
-    body = await api<TodoListResponse>("/api/me/todos");
+    body = await api<{ todos?: WireTodo[] } & WireSnapshot>("/api/me/todos");
   } catch (err) {
     if (sameSession(session)) avatarEndsCovered = Math.max(avatarEndsCovered, avatarEndsAtStart);
     throw err;
@@ -415,7 +574,7 @@ async function loadOnce(): Promise<"applied" | "stale" | "void"> {
   if (!sameSession(session)) return "void";
   if (seq !== writeSeq || writesInFlight > 0) return "stale";
   const previous = readState().todos;
-  const fetched = [...(body.todos ?? [])].sort(compareTodos);
+  const fetched = (body.todos ?? []).map(fromWireTodo).sort(compareTodos);
   // A re-read that changed nothing (a poll, the queued read after parallel tool
   // calls) keeps the list's identity: views keyed on it must not reconcile —
   // that would cut the card's running glides short mid-motion.
@@ -430,7 +589,7 @@ async function loadOnce(): Promise<"applied" | "stale" | "void"> {
     state.todos = {
       items,
       todayKst: body.todayKst ?? "",
-      counts: body.counts ? { ...body.counts } : emptyTodoState().counts,
+      counts: fromWireCounts(body.counts),
       loaded: true,
     };
   });
@@ -512,7 +671,7 @@ export async function createTodo(draft: TodoDraft): Promise<TodoItem | null> {
     id: `${PENDING_PREFIX}${newId()}`,
     title,
     note: draft.note?.trim() ?? "",
-    done: false,
+    status: "todo",
     priority: draft.priority ?? "normal",
     dueDate: draft.dueDate || null,
     tags: draft.tags ?? [],
@@ -520,7 +679,7 @@ export async function createTodo(draft: TodoDraft): Promise<TodoItem | null> {
     sourceConversationId: null,
     createdAt: stamp,
     updatedAt: stamp,
-    completedAt: null,
+    closedAt: null,
   };
   mutate((todos) => {
     todos.items.push(temp);
@@ -528,7 +687,7 @@ export async function createTodo(draft: TodoDraft): Promise<TodoItem | null> {
   });
   const session = beginWrite();
   try {
-    const body = await api<{ todo: TodoItem } & TodoSnapshot>("/api/me/todos", {
+    const body = await api<{ todo: WireTodo } & WireSnapshot>("/api/me/todos", {
       method: "POST",
       body: JSON.stringify({
         title,
@@ -539,12 +698,13 @@ export async function createTodo(draft: TodoDraft): Promise<TodoItem | null> {
       }),
     });
     if (!sameSession(session)) return null;
+    const created = fromWireTodo(body.todo);
     mutate((todos) => {
-      todos.items = todos.items.filter((item) => item.id !== temp.id && item.id !== body.todo.id);
-      todos.items.push(body.todo);
+      todos.items = todos.items.filter((item) => item.id !== temp.id && item.id !== created.id);
+      todos.items.push(created);
       applySnapshot(todos, body);
     });
-    return body.todo;
+    return created;
   } catch (err) {
     if (!sameSession(session)) return null;
     mutate((todos) => {
@@ -565,13 +725,16 @@ export interface TodoChanges {
   /** null clears the due date. */
   dueDate?: string | null;
   tags?: string[];
-  done?: boolean;
+  status?: TodoStatus;
 }
 
 function applyChanges(item: TodoItem, changes: TodoChanges): TodoItem {
   const stamp = new Date().toISOString();
   const next: TodoItem = { ...item, ...changes, updatedAt: stamp };
-  if (changes.done !== undefined && changes.done !== item.done) next.completedAt = changes.done ? stamp : null;
+  // The server's rule: a move into a closed status stamps closedAt, a move to an open one clears it.
+  if (changes.status !== undefined && changes.status !== item.status) {
+    next.closedAt = isOpenTodoStatus(changes.status) ? null : stamp;
+  }
   return next;
 }
 
@@ -582,24 +745,25 @@ async function writeTodo(id: string, changes: TodoChanges, failure: string): Pro
   avatarDepartures.delete(id);
   let failed = false;
   const optimistic = applyChanges(before, changes);
-  const doneDelta = optimistic.done === before.done ? 0 : optimistic.done ? 1 : -1;
+  const delta = statusDelta(before.status, optimistic.status);
   mutate((todos) => {
     todos.items = todos.items.map((item) => (item.id === id ? optimistic : item));
-    recount(todos, doneDelta);
+    recount(todos, delta);
   });
   const session = beginWrite();
   try {
-    const body = await api<{ todo: TodoItem } & TodoSnapshot>(`/api/me/todos/${encodeURIComponent(id)}`, {
+    const body = await api<{ todo: WireTodo } & WireSnapshot>(`/api/me/todos/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(changes),
     });
     if (!sameSession(session)) return null;
+    const saved = fromWireTodo(body.todo);
     mutate((todos) => {
       todos.items = todos.items.filter((item) => item.id !== id);
-      todos.items.push(body.todo);
+      todos.items.push(saved);
       applySnapshot(todos, body);
     });
-    return body.todo;
+    return saved;
   } catch (err) {
     if (!sameSession(session)) return null;
     const gone = err instanceof ApiError && err.status === 404;
@@ -607,7 +771,7 @@ async function writeTodo(id: string, changes: TodoChanges, failure: string): Pro
       todos.items = gone
         ? todos.items.filter((item) => item.id !== id)
         : todos.items.map((item) => (item.id === id ? before : item));
-      recount(todos, -doneDelta);
+      recount(todos, negated(delta));
     });
     notify(gone ? "이미 삭제된 할 일입니다." : `${failure}: ${(err as Error).message}`);
     failed = true;
@@ -624,18 +788,39 @@ export function updateTodo(id: string, changes: TodoChanges): Promise<TodoItem |
   return writeTodo(id, changes, "할 일을 저장하지 못했습니다");
 }
 
-export function setTodoDone(id: string, done: boolean): Promise<TodoItem | null> {
-  return writeTodo(id, { done }, done ? "할 일을 완료하지 못했습니다" : "완료를 되돌리지 못했습니다");
+/** The failure toast's lead for a status change, by where the item goes (and, back to 시작 전, where it comes from). */
+function statusFailure(before: TodoStatus | undefined, after: TodoStatus): string {
+  if (after === "done") return "할 일을 완료하지 못했습니다";
+  if (after === "dropped") return "할 일을 드랍하지 못했습니다";
+  if (after === "in_progress") return "진행 중으로 바꾸지 못했습니다";
+  if (before === "done") return "완료를 되돌리지 못했습니다";
+  if (before === "dropped") return "드랍을 되돌리지 못했습니다";
+  return "시작 전으로 바꾸지 못했습니다";
+}
+
+export function setTodoStatus(id: string, status: TodoStatus): Promise<TodoItem | null> {
+  const before = readState().todos.items.find((item) => item.id === id);
+  return writeTodo(id, { status }, statusFailure(before?.status, status));
+}
+
+/**
+ * Close an item — complete or drop it — with a 되돌리기 toast that puts back the
+ * status it had (an in-progress item returns to 진행 중, not 시작 전).
+ */
+export async function closeTodoWithUndo(item: TodoItem, status: ClosedTodoStatus): Promise<void> {
+  const previous = readState().todos.items.find((entry) => entry.id === item.id)?.status ?? item.status;
+  if (previous === status) return;
+  const closed = await setTodoStatus(item.id, status);
+  if (!closed) return;
+  notify(`${status === "done" ? "할 일을 완료했습니다" : "할 일을 드랍했습니다"} · ${item.title}`, "ok", {
+    actionLabel: "되돌리기",
+    action: () => void setTodoStatus(item.id, previous),
+  });
 }
 
 /** Complete with a 되돌리기 toast — the overlay's and the list's checkbox action. */
-export async function completeTodoWithUndo(item: TodoItem): Promise<void> {
-  const done = await setTodoDone(item.id, true);
-  if (!done) return;
-  notify(`할 일을 완료했습니다 · ${item.title}`, "ok", {
-    actionLabel: "되돌리기",
-    action: () => void setTodoDone(item.id, false),
-  });
+export function completeTodoWithUndo(item: TodoItem): Promise<void> {
+  return closeTodoWithUndo(item, "done");
 }
 
 export async function deleteTodo(id: string): Promise<boolean> {
@@ -645,7 +830,7 @@ export async function deleteTodo(id: string): Promise<boolean> {
   let reread = false;
   mutate((todos) => {
     todos.items = todos.items.filter((item) => item.id !== id);
-    recount(todos, before.done ? -1 : 0);
+    recount(todos, closedDelta(before.status, -1));
   });
   if (readState().todoSelectedId === id) {
     updateState((state) => {
@@ -654,7 +839,7 @@ export async function deleteTodo(id: string): Promise<boolean> {
   }
   const session = beginWrite();
   try {
-    const body = await api<{ ok: boolean } & TodoSnapshot>(`/api/me/todos/${encodeURIComponent(id)}`, {
+    const body = await api<{ ok: boolean } & WireSnapshot>(`/api/me/todos/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
     if (sameSession(session)) mutate((todos) => applySnapshot(todos, body));
@@ -665,7 +850,7 @@ export async function deleteTodo(id: string): Promise<boolean> {
     if (err instanceof ApiError && err.status === 404) return true;
     mutate((todos) => {
       todos.items.push(before);
-      recount(todos, before.done ? 1 : 0);
+      recount(todos, closedDelta(before.status, 1));
     });
     notify(`할 일을 삭제하지 못했습니다: ${(err as Error).message}`);
     return false;
@@ -675,29 +860,41 @@ export async function deleteTodo(id: string): Promise<boolean> {
   }
 }
 
-/** 완료 항목 비우기 — not optimistic: a bulk delete waits for the server. Returns the removed count. */
-export async function clearCompletedTodos(): Promise<number | null> {
+/** 완료 / 드랍 항목 비우기 — not optimistic: a bulk delete waits for the server. Returns the removed count. */
+async function clearClosedTodos(status: ClosedTodoStatus): Promise<number | null> {
   const session = beginWrite();
   try {
-    const body = await api<{ removed: number } & TodoSnapshot>("/api/me/todos/completed", { method: "DELETE" });
+    const body = await api<{ removed: number } & WireSnapshot>(`/api/me/todos/${status === "done" ? "completed" : "dropped"}`, {
+      method: "DELETE",
+    });
     if (!sameSession(session)) return null;
     const selected = readState().todos.items.find((item) => item.id === readState().todoSelectedId);
     mutate((todos) => {
-      todos.items = todos.items.filter((item) => !item.done);
+      todos.items = todos.items.filter((item) => item.status !== status);
       applySnapshot(todos, body);
     });
-    if (selected?.done) {
+    if (selected?.status === status) {
       updateState((state) => {
         state.todoSelectedId = "";
       });
     }
     return body.removed;
   } catch (err) {
-    if (sameSession(session)) notify(`완료 항목을 비우지 못했습니다: ${(err as Error).message}`);
+    if (sameSession(session)) {
+      notify(`${status === "done" ? "완료" : "드랍"} 항목을 비우지 못했습니다: ${(err as Error).message}`);
+    }
     return null;
   } finally {
     endWrite(session);
   }
+}
+
+export function clearCompletedTodos(): Promise<number | null> {
+  return clearClosedTodos("done");
+}
+
+export function clearDroppedTodos(): Promise<number | null> {
+  return clearClosedTodos("dropped");
 }
 
 /* ---------- live avatar edits ---------- */
@@ -737,8 +934,8 @@ export function noteTodoToolEnd(toolUseId: string, ok: boolean): void {
 // made (loadOnce diffs the re-read after its tool end against the slice it
 // replaces) — never the first load, a poll, a failed write's resync, a pending
 // row's swap or the viewer's own edits. Rows it added rise in with an accent
-// wash, rows it edited get the wash, rows it deleted or completed slide out,
-// and the composer's count pops.
+// wash, rows it edited get the wash, rows it deleted or closed (completed or
+// dropped) slide out, and the composer's count pops.
 
 /** How long one change's motion may play (stagger + rise + the 1.2 s wash fit inside); after it a remount replays nothing. */
 export const TODO_ACTIVITY_MS = 1600;
@@ -786,9 +983,9 @@ export function onBeforeAvatarChange(listener: () => void): () => void {
 export interface TodoListDiff {
   /** New or reopened open items, in the shared display order. */
   added: string[];
-  /** Open before and after, but edited. */
+  /** Open before and after, but edited (a todo ↔ in_progress move included). */
   changed: string[];
-  /** Open before, now deleted or completed. */
+  /** Open before, now deleted or closed (done or dropped). */
   departed: string[];
 }
 
@@ -805,25 +1002,26 @@ export function diffAvatarChange(before: TodoItem[], after: TodoItem[]): TodoLis
   const next = new Map(after.map((item) => [item.id, item]));
   const diff: TodoListDiff = { added: [], changed: [], departed: [] };
   for (const item of [...after].sort(compareTodos)) {
-    if (item.done) continue;
+    if (!isOpenTodo(item)) continue;
     const old = previous.get(item.id);
     if (!old) {
       if (item.source === "avatar") diff.added.push(item.id);
-    } else if (old.done) {
+    } else if (!isOpenTodo(old)) {
       diff.added.push(item.id);
     } else if (
       old.updatedAt !== item.updatedAt ||
       old.title !== item.title ||
       old.dueDate !== item.dueDate ||
-      old.priority !== item.priority
+      old.priority !== item.priority ||
+      old.status !== item.status
     ) {
       diff.changed.push(item.id);
     }
   }
   for (const old of previous.values()) {
-    if (old.done) continue;
+    if (!isOpenTodo(old)) continue;
     const now = next.get(old.id);
-    if (!now || now.done) diff.departed.push(old.id);
+    if (!now || !isOpenTodo(now)) diff.departed.push(old.id);
   }
   return diff;
 }
@@ -895,7 +1093,7 @@ export function todoHiddenArrivalSeq(
   let seq = 0;
   for (const item of items) {
     const mark = marks[item.id];
-    if (!item.done && mark?.kind === "added" && !shown.has(item.id)) seq = Math.max(seq, mark.seq);
+    if (isOpenTodo(item) && mark?.kind === "added" && !shown.has(item.id)) seq = Math.max(seq, mark.seq);
   }
   return seq;
 }

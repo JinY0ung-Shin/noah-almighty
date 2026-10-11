@@ -9,7 +9,7 @@ import logger from "../logger.js";
 import type { Store } from "../store.js";
 import type { TodoPromptSnapshot } from "../types.js";
 import { kstDateString, normalizeCalendarDate } from "../routineSchedule.js";
-import { isTodoPriority, TODO_SOURCES } from "../../shared/todos.js";
+import { isOpenTodoStatus, isTodoPriority, isTodoStatus, TODO_SOURCES } from "../../shared/todos.js";
 
 const agentLogger = logger.child({ module: "agent" });
 
@@ -19,13 +19,13 @@ export const TODO_SNAPSHOT_ITEM_LIMIT = 20;
 /** The owner's list right now: counts against today's KST date plus the first open items in the shared display order. */
 export function takeTodoPromptSnapshot(store: Store, ownerUserId: string, now: Date = new Date()): TodoPromptSnapshot {
   const todayKst = kstDateString(now);
-  const { open, overdue, dueToday } = store.countTodos(ownerUserId, todayKst);
-  const items = store
-    .listTodos(ownerUserId)
-    .filter((todo) => !todo.done)
-    .slice(0, TODO_SNAPSHOT_ITEM_LIMIT)
-    .map(({ title, dueDate, priority, source }) => ({ title, dueDate, priority, source }));
-  return { takenAt: now.toISOString(), todayKst, counts: { open, overdue, dueToday }, items };
+  const { open, inProgress, overdue, dueToday } = store.countTodos(ownerUserId, todayKst);
+  const items: TodoPromptSnapshot["items"] = [];
+  for (const { title, dueDate, priority, source, status } of store.listTodos(ownerUserId)) {
+    if (items.length === TODO_SNAPSHOT_ITEM_LIMIT) break;
+    if (isOpenTodoStatus(status)) items.push({ title, dueDate, priority, source, status });
+  }
+  return { takenAt: now.toISOString(), todayKst, counts: { open, inProgress, overdue, dueToday }, items };
 }
 
 const isCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
@@ -46,7 +46,12 @@ function isTakenAt(value: unknown): value is string {
   );
 }
 
-/** A stored snapshot, or null when the stored text is not one — an unreadable value never reaches the prompt. */
+/**
+ * A stored snapshot, or null when the stored text is not one — an unreadable
+ * value never reaches the prompt. A field this shape gained later
+ * (`counts.inProgress`, an item's `status`) may be ABSENT — a snapshot stored
+ * before statuses existed, read as 0 / `todo` — but never malformed.
+ */
 export function parseTodoPromptSnapshot(raw: string | null): TodoPromptSnapshot | null {
   if (!raw) return null;
   let value: unknown;
@@ -59,19 +64,20 @@ export function parseTodoPromptSnapshot(raw: string | null): TodoPromptSnapshot 
   const { takenAt, todayKst, counts, items } = value as Record<string, unknown>;
   if (!isTakenAt(takenAt) || !isCalendarDate(todayKst)) return null;
   if (!counts || typeof counts !== "object" || !Array.isArray(items)) return null;
-  const { open, overdue, dueToday } = counts as Record<string, unknown>;
-  if (!isCount(open) || !isCount(overdue) || !isCount(dueToday)) return null;
+  const { open, inProgress = 0, overdue, dueToday } = counts as Record<string, unknown>;
+  if (!isCount(open) || !isCount(inProgress) || !isCount(overdue) || !isCount(dueToday)) return null;
   const parsed: TodoPromptSnapshot["items"] = [];
   for (const item of items) {
     if (!item || typeof item !== "object") return null;
-    const { title, dueDate, priority, source } = item as Record<string, unknown>;
+    const { title, dueDate, priority, source, status = "todo" } = item as Record<string, unknown>;
     if (typeof title !== "string" || !(dueDate === null || isCalendarDate(dueDate)) || !isTodoPriority(priority)) {
       return null;
     }
     if (!(TODO_SOURCES as readonly unknown[]).includes(source)) return null;
-    parsed.push({ title, dueDate, priority, source: source as TodoPromptSnapshot["items"][number]["source"] });
+    if (!isTodoStatus(status) || !isOpenTodoStatus(status)) return null;
+    parsed.push({ title, dueDate, priority, source: source as TodoPromptSnapshot["items"][number]["source"], status });
   }
-  return { takenAt, todayKst, counts: { open, overdue, dueToday }, items: parsed };
+  return { takenAt, todayKst, counts: { open, inProgress, overdue, dueToday }, items: parsed };
 }
 
 /**

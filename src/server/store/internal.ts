@@ -639,17 +639,22 @@ export class StoreBase {
       CREATE INDEX IF NOT EXISTS idx_share_links_owner ON share_links(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_share_links_conversation ON share_links(conversation_id);
       -- 할 일 (the owner's work to-do list, store/todos.ts). due_date is a KST
-      -- calendar date (YYYY-MM-DD) or NULL — never a time. source is who created
-      -- the row (user|avatar|routine|api); source_conversation_id is read through
-      -- a join that drops it once the conversation is gone, so no
-      -- conversation-deleting path needs a cascade. No FKs (share_links
-      -- precedent); deleteUser removes the rows manually. A brand-new table:
-      -- CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
+      -- calendar date (YYYY-MM-DD) or NULL — never a time. status
+      -- (todo|in_progress|done|dropped) is the source of truth; done is a MIRROR
+      -- every write sets with it (1 iff done or dropped), so a rollback to a
+      -- pre-status build still reads closed items as done, and completed_at is
+      -- when the item was CLOSED (done or dropped). migrateTodoStatuses adds the
+      -- column to pre-status DBs and creates the status index on every DB.
+      -- source is who created the row (user|avatar|routine|api);
+      -- source_conversation_id is read through a join that drops it once the
+      -- conversation is gone, so no conversation-deleting path needs a cascade.
+      -- No FKs (share_links precedent); deleteUser removes the rows manually.
       CREATE TABLE IF NOT EXISTS todo_items (
         id TEXT PRIMARY KEY,
         owner_user_id TEXT NOT NULL,
         title TEXT NOT NULL,
         note TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'todo',
         done INTEGER NOT NULL DEFAULT 0,
         priority TEXT NOT NULL DEFAULT 'normal',
         due_date TEXT,
@@ -660,7 +665,6 @@ export class StoreBase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
-      CREATE INDEX IF NOT EXISTS idx_todo_items_owner ON todo_items(owner_user_id, done, due_date);
       CREATE INDEX IF NOT EXISTS idx_group_agents_group ON group_agents(group_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
       CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
@@ -884,6 +888,7 @@ export class StoreBase {
     this.migrateCanvasArtifacts();
     this.migrateOnboardedAndRoutineFlags();
     this.migrateGroupAgentsMulti();
+    this.migrateTodoStatuses();
     // Trust is now derived purely from group co-membership; the old per-(avatar,
     // viewer) trust table is dropped (its grants don't survive the migration).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
@@ -1097,6 +1102,35 @@ export class StoreBase {
           "OR title LIKE '[루틴] %' OR title LIKE '[예약 작업] %')",
       )
       .run();
+  }
+
+  /** 할 일 statuses (todo|in_progress|done|dropped) over the pre-status
+   *  `done` flag. Adds `status` (every existing row starts as 'todo'), then
+   *  RECONCILES it with the `done` mirror: a row whose `done` disagrees with its
+   *  status — or whose status is no known value — takes its status from `done`.
+   *  That is the upgrade backfill (done = 1 → 'done') AND the roll-forward repair
+   *  after a rollback, when a pre-status build completed or reopened rows by
+   *  `done` alone (a reopened dropped row comes back 'todo'). It stays UNGATED
+   *  on purpose: this build writes status and done together in every statement,
+   *  so the predicate can only ever match rows a pre-status build wrote, never
+   *  one the app creates later (the value-guarded kind, unlike the
+   *  user_version ladder's backfills). The status index replaces the
+   *  (owner, done, due_date) one, which nothing reads anymore; a rollback build
+   *  re-creates that one harmlessly. */
+  private migrateTodoStatuses(): void {
+    this.addColumnIfMissing("todo_items", "status", "TEXT NOT NULL DEFAULT 'todo'");
+    this.db
+      .prepare(
+        "UPDATE todo_items SET status = CASE WHEN done = 1 THEN 'done' ELSE 'todo' END " +
+          "WHERE status NOT IN ('todo', 'in_progress', 'done', 'dropped') " +
+          "OR (done = 1 AND status IN ('todo', 'in_progress')) " +
+          "OR (done = 0 AND status IN ('done', 'dropped'))",
+      )
+      .run();
+    this.db.exec(`
+      DROP INDEX IF EXISTS idx_todo_items_owner;
+      CREATE INDEX IF NOT EXISTS idx_todo_items_owner_status ON todo_items(owner_user_id, status, due_date);
+    `);
   }
 
   /** Normalize visibility to the 2-state enum. Idempotent: backfills rows that

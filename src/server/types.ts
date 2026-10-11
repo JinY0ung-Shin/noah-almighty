@@ -1,6 +1,6 @@
 import type { ScheduleKind } from "./routineSchedule.js";
 import type { McpToolGroupId } from "../shared/mcpToolGroups.js";
-import type { TodoPriority, TodoSource } from "../shared/todos.js";
+import type { OpenTodoStatus, TodoPriority, TodoSource } from "../shared/todos.js";
 import type { BrowserSecretPolicy } from "./secretPolicy.js";
 
 export type AgentRuntime = "claude" | "local";
@@ -1239,13 +1239,16 @@ export interface TodoPromptSnapshot {
   takenAt: string;
   /** The KST calendar date the counts were computed against. */
   todayKst: string;
-  counts: { open: number; overdue: number; dueToday: number };
+  /** `open` includes `inProgress`. */
+  counts: { open: number; inProgress: number; overdue: number; dueToday: number };
   /**
-   * The first open items in the shared display order (overdue first), at most
-   * `TODO_SNAPSHOT_ITEM_LIMIT`. `source` lets the prompt mark machine-authored
-   * (routine / task-API) titles.
+   * The first open items in the shared display order (in progress first, then
+   * overdue), at most `TODO_SNAPSHOT_ITEM_LIMIT`. `source` lets the prompt mark
+   * machine-authored (routine / task-API) titles, `status` the ones in progress.
+   * A snapshot stored before statuses existed reads as inProgress 0 and every
+   * item `todo` — exact, since nothing could be in progress then.
    */
-  items: { title: string; dueDate: string | null; priority: TodoPriority; source: TodoSource }[];
+  items: { title: string; dueDate: string | null; priority: TodoPriority; source: TodoSource; status: OpenTodoStatus }[];
 }
 
 export interface AgentRequest {
