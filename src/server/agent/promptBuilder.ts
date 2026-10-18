@@ -417,7 +417,7 @@ function canvasSection(request: AgentRequest): string | null {
   }
   return (
     "**Visual canvas** is available via `mcp__canvas__show`. BEFORE creating one, read `mcp__system__read_manual` topic `canvas-operations` for formats, controls and wait/edit behavior. " +
-    "Use it for charts, diagrams or reviews WITH the user: prefer vega for charts and mermaid for diagrams; no scripts/JS. Reuse the SAME canvasId to refine an artifact. " +
+    "Use it for charts, diagrams or reviews WITH the user: prefer vega for charts and mermaid for diagrams (double-quote mermaid labels that contain punctuation); no scripts/JS. Reuse the SAME canvasId to refine an artifact. " +
     "Controls collect a decision ANCHORED TO the artifact on screen. For a plain question use AskUserQuestion — NEVER open a canvas just to ask the user something."
   );
 }

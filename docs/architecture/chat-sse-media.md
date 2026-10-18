@@ -513,6 +513,21 @@
   node as an empty box; sequence/gantt/pie/timeline/journey/quadrant/xychart/gitGraph already used `<text>`. Use
   the ROOT `htmlLabels` key — `flowchart.htmlLabels` is deprecated and loses to it. The visual spec renders all
   six affected types and fails if a label goes missing (e.g. after a mermaid upgrade).
+- **mermaid is PARSED server-side before display (#69)** — the client-side render error was a banner only
+  the user saw, so the avatar never learned its diagram broke. `show` runs `checkMermaidSyntax`
+  (`agent/mermaidCheck.ts`) with the SAME `mermaid` package the client bundles; a parse error returns as an
+  agent-facing tool error (parser detail + the quote-the-label fix) and NOTHING is shown. It runs in an
+  `eval` worker thread, not in-process: under Node DOMPurify loads as an empty shell, and the worker's
+  pass-through stub (it only parses, never renders) must stay out of the server's module graph; a hung parse
+  is cut at 5 s and the idle worker exits after 60 s. **FAIL-OPEN by contract** — boot failure, a failed
+  self-test (a quoted-label flowchart that exercises the stub), a timeout or a TypeError/ReferenceError is
+  `unverified` and the canvas shows as before; only a real parse verdict rejects. A self-test failure the
+  WORKER reports switches the check off for the process; a timeout or crashed worker just retries next call.
+  Known blind spot: a parse that hangs here (mermaid's entity regex on a pathological source) is shown anyway
+  and can freeze the user's tab the same way — rejecting on timeout would break fail-open.
+  `tests/agent-mermaid-check.test.ts` asserts `{ ok: true }` (not merely "not rejected") for 16 diagram
+  types, so a mermaid upgrade that silently darkens the check fails there. A parse-clean source can still fail
+  in the client's layout/render step — that case stays user-only.
 - **A PARKED canvas survives a conversation switch ONLY through the run-event replay.** `record()` runs at
   resolve time, so a parked ask is NOT in the canvas tables yet; returning to the conversation rebuilds the
   form purely from the journal's `canvas` frame (`tests/routes-chat-canvas-park.test.ts` +

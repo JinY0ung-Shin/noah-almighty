@@ -4344,6 +4344,35 @@ describe("canvas tools (#50)", () => {
     expect(called).toBe(false); // never reaches the sink
   });
 
+  it("rejects a mermaid parse error back to the model without showing the canvas (#69)", async () => {
+    let called = false;
+    const tools = buildCanvasTools({
+      emitCanvas: async (): Promise<CanvasResult> => {
+        called = true;
+        return { behavior: "shown" };
+      },
+    });
+    const res = await callTool(tools, "show", {
+      title: "구성도",
+      content: "flowchart LR\n  P_OMG ==>|/api/llm (모델 호출)| U_EDGE",
+      contentType: "mermaid",
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("Mermaid syntax error");
+    expect(res.content[0].text).toContain("Parse error on line 2");
+    expect(res.content[0].text).toContain('-->|"POST /api (json)"|');
+    expect(called).toBe(false);
+
+    // The quoted fix goes through.
+    const fixed = await callTool(tools, "show", {
+      title: "구성도",
+      content: 'flowchart LR\n  P_OMG ==>|"/api/llm (모델 호출)"| U_EDGE',
+      contentType: "mermaid",
+    });
+    expect(fixed.isError).toBeFalsy();
+    expect(called).toBe(true);
+  });
+
   it("awaits input and reports the submission when controls are declared", async () => {
     const tools = buildCanvasTools({
       emitCanvas: async (req): Promise<CanvasResult> => {

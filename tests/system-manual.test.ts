@@ -65,6 +65,7 @@ describe("official system manual", () => {
     expect(readSystemManual("browser-operations").text).toContain("CLOSES the staging tab for you");
     expect(readSystemManual("browser-operations").text).not.toContain("No stored secret is enabled");
     expect(readSystemManual("canvas-operations").text).toContain("pass `wait:false`");
+    expect(readSystemManual("canvas-operations").text).toContain("Double-quote every node/edge label");
   });
 
   it("offers a compact index and complete individually addressable guides", () => {

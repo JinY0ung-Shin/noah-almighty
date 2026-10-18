@@ -3,6 +3,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { CanvasControl } from "../types.js";
 import type { CanvasRequest, CanvasResult } from "./events.js";
+import { checkMermaidSyntax } from "./mermaidCheck.js";
 import { text } from "./mcpTools.js";
 
 /** MCP server name; the tool surfaces to the model as `mcp__canvas__show`. */
@@ -81,6 +82,27 @@ export function formatSubmission(values: Record<string, unknown>): string {
   return `The user responded on the canvas:\n${lines.join("\n")}`;
 }
 
+/** Agent-facing parse-error text: the parser's own detail plus the usual fix. */
+export function mermaidSyntaxError(detail: string): string {
+  const head =
+    "Mermaid syntax error — the canvas was NOT shown. Fix the diagram source and call show again " +
+    "(pass the same canvasId if you were refining one).\n" +
+    `${detail}\n`;
+  if (detail.startsWith("No diagram type detected")) {
+    return (
+      head +
+      "The first line must name a supported diagram type, e.g. `flowchart LR`, `sequenceDiagram`, `classDiagram`, " +
+      "`stateDiagram-v2`, `erDiagram`, `gantt`, `pie`, `mindmap`, `timeline`, `gitGraph` (zenuml is not available)."
+    );
+  }
+  return (
+    head +
+    "Line numbers count from the diagram-type line and skip front matter, %% comment lines and leading blank lines. " +
+    "Most common cause: a node or edge label containing ( ) [ ] { } | : ; # or a quote without double quotes around it — " +
+    'quote it: A["Login (SSO)"], A -->|"POST /api (json)"| B, and write a literal double quote inside a label as #quot;.'
+  );
+}
+
 /**
  * Build the canvas tool. INTENTIONALLY NOT self-gated (unlike the owner-only MCP
  * servers): showing UI grants no elevation, the panel is read-only display + form
@@ -94,7 +116,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
     tool(
       "show",
       "Show a visual canvas to the user in the chat side panel. Use it to share a diagram, mockup, layout, chart, or option comparison and refine it together — not to repeat text the chat could already render. " +
-        "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; PREFER this for any data chart over hand-drawn SVG, it is far cheaper in tokens — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), or 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open). " +
+        "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; PREFER this for any data chart over hand-drawn SVG, it is far cheaper in tokens — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content; double-quote every node/edge label that contains punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] -->|\"POST /api (json)\"| B — the source is syntax-checked before display and a parse error comes back to you to fix), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), or 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open). " +
         "Never include scripts or executable JS in content; it is sanitized away. " +
         "To collect a decision ANCHORED TO the artifact on screen (choosing between the mockups shown, tuning a value against the chart, marking up the content), pass `controls`: 'buttons' (a few choices as cards, single or multiSelect), 'select' (a dropdown when there are many options), 'slider'/'number' (a numeric value, with min/max/step), 'date' (a calendar date), and/or 'text' inputs. Each control is required by default — set `required:false` to make it optional. " +
         "For a plain question or a simple choice with no visual content to show, use the built-in AskUserQuestion tool instead — never open a canvas just to ask something. " +
@@ -158,6 +180,14 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
             c.min > c.max
           ) {
             return text(`Control '${c.id}' has min (${c.min}) greater than max (${c.max}).`, true);
+          }
+        }
+        // The client renders mermaid, so without this a parse error was a banner
+        // only the user saw. Fail-open: only a real parse verdict rejects.
+        if (args.contentType === "mermaid") {
+          const check = await checkMermaidSyntax(args.content);
+          if (check.ok === false) {
+            return text(mermaidSyntaxError(check.error), true);
           }
         }
         // BLOCKING only when controls exist AND wait isn't disabled. Async/editable
