@@ -16,6 +16,10 @@ export const ICON_PATHS: Record<string, string> = {
   send: '<path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   play: '<path d="M7 4.5v15l13-7.5-13-7.5Z"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  // A circle struck through — 드랍 (decided not to do it), never trash (delete).
+  ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
+  minus: '<path d="M5 12h14"/>',
   refresh: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   menu: '<path d="M3 12h18M3 6h18M3 18h18"/>',
@@ -27,6 +31,7 @@ export const ICON_PATHS: Record<string, string> = {
   eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7C3.49 7.17 7.61 4 12 4s8.51 3.17 9.94 7.65a1 1 0 0 1 0 .7C20.51 16.83 16.39 20 12 20s-8.51-3.17-9.94-7.65Z"/><circle cx="12" cy="12" r="3"/>',
   "eye-off": '<path d="m2 2 20 20"/><path d="M10.58 10.58a2 2 0 0 0 2.83 2.83"/><path d="M9.88 4.24A10.95 10.95 0 0 1 12 4c4.39 0 8.51 3.17 9.94 7.65a1 1 0 0 1 0 .7 10.7 10.7 0 0 1-2.29 3.95"/><path d="M6.61 6.61a10.73 10.73 0 0 0-4.55 5.04 1 1 0 0 0 0 .7C3.49 16.83 7.61 20 12 20a10.9 10.9 0 0 0 5.39-1.43"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  "file-text": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h8M8 17h5"/>',
   // Two chain halves — the 공유 링크 button beside a deck's file card.
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',

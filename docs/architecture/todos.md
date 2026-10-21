@@ -236,7 +236,11 @@
   while Enter and Space each send exactly one PATCH (jsdom cannot turn Enter/Space into a click).
 - **The chat card** mounts once inside the active pane's `.chat-body`, so it can never cover the
   composer and an open canvas/file panel moves it left with the column. A `ResizeObserver` picks the
-  mode (no layout read in `onMount`): pinned from a 1000px chat column; while pinned the transcript pads
+  mode (no layout read in `onMount`): pinned from a 1000px chat column — top-right, growing with its list
+  down to the composer (`max-height: 100% − 2×12px`, it was a fixed 50% that cut rows mid-line) and then
+  scrolling, the list's bottom edge masked to a fade while rows remain below (`.has-more`, read in the
+  scroll handler, a list `ResizeObserver`, after a paint plus once more after the motion window whenever
+  the sections change, and on `document.fonts.ready` — never in the mount task); while pinned the transcript pads
   its right side by `clamp(24px, 2×328 + 800 + 24 − W, 328px)`, so nothing moves from 1456px, the full
   800px column shifts left down to 1152px, and below that it narrows to W − 352 (648px at the
   threshold) with the card 12px beside it. Narrower columns get a popover above the composer (the
@@ -254,16 +258,59 @@
   anywhere, the composer included, dismisses a transient card unless an IME composition is active,
   another handler already called `preventDefault` (slash menu, rewind editor) or kept the key from
   reaching `window` (the DM dock stops propagation at its root), or focus is in a dialog.
-- **The card only reviews and completes** — its quick-add was removed (user decision 2026-10-10): a
-  checkbox with a 되돌리기 toast, a title that opens the item in the tab; adding is the 할 일 tab's form or
-  the viewer's own avatar. An explicit toggle focuses a TRANSIENT card through a temporary `tabindex=-1`
-  (dropped on blur) and Escape returns focus to the toggle; a pinned card leaves focus on the toggle.
-  The empty state points to the avatar (`/todo`) or the 할 일 tab in the viewer's OWN pane, and to the
-  할 일 tab only in a colleague's pane — a colleague's avatar has no `mcp__todo__*` tools (its prompt says
-  so). In-progress items lead the card in their own 진행 중 section (`overlaySections`: 진행 중 · 마감 지남
-  · 오늘 · 다음 over the first 8 open items in the shared order; an in-progress item sits ONLY there) —
-  a section heading, no per-row badge in a 300px card. The card cannot set 진행 중 or 드랍: that is the
-  tab's status control or the avatar.
+- **What the card does** (user decisions 2026-10-10, widened 2026-10-21). A checkbox completes with a
+  되돌리기 toast; a title opens the item in the tab. Each row's ACTIONS start it (진행 중으로, ▶) or put an
+  in-progress one back (시작 전으로, ⏸), and drop it (드랍, ⊘ — never trash: drop is not delete) with
+  `closeTodoWithUndo`'s 되돌리기, which restores the status it had; a start/pause has no toast (the row
+  moving into or out of 진행 중 is the feedback), and a second action on a row — its checkbox included —
+  is ignored until its PATCH settles (a component-local `busy` set). An action taken from the keyboard
+  keeps focus in the card: on the moved row's same button, or after a drop on the next row's title (the
+  previous one at the end), else the card itself (the tab's delete precedent). Adding stays the 할 일 tab's form or the viewer's own avatar
+  — the card's quick-add was removed 2026-10-10 and stays removed. On a hover-capable pointer the
+  actions share the trailing grid cell with the row's meta (`opacity: 0` yet focusable, so
+  `:focus-within` reveals them; the meta goes `visibility: hidden`) — the cell is always as wide as the
+  wider of the two, so revealing them never re-ellipsizes the title, and the 22px buttons sit in the 16px
+  line box with negative margins, so a row stays one checkbox line. That reveal is for a `(hover: hover)
+  and (pointer: fine)` pointer only, and the meta hides only on hover or while an ACTION holds focus — a
+  focused checkbox or title keeps the due date visible (and in the accessibility tree). Under
+  `(hover: none), (pointer: coarse)` the actions get their own always-visible column, and on a coarse
+  pointer the actions, chips and section toggles are 44px targets (the component's own sizes would
+  otherwise outrank the global rule). An explicit toggle focuses a TRANSIENT card through a temporary
+  `tabindex=-1` (dropped on blur) and Escape returns focus to the toggle; a pinned card leaves focus on
+  the toggle. The empty state points to the avatar (`/todo`) or the 할 일 tab in the viewer's OWN pane,
+  and to the 할 일 tab only in a colleague's pane — a colleague's avatar has no `mcp__todo__*` tools (its
+  prompt says so).
+- **Rows carry their meta in one line**: a high-priority `!` badge (`role="img"`, outside the title
+  button so its name stays the title), the first tag (`#tag +N`, ≤84px), and in the trailing cell a memo
+  icon, a ✦ for an item the avatar/routine/API added (`todoSourceTitle`) and the due label. In-progress
+  items get no per-row badge: they lead the card in their own 진행 중 section.
+- **Sections** (`overlaySections(items, today, limit, collapsed)`): 진행 중 · 마감 지남 · 오늘 · 다음 over ALL
+  open items in the shared order (an in-progress item sits ONLY in 진행 중). The first
+  `TODO_OVERLAY_LIMIT` (8) items of the EXPANDED sections get rows; each heading is a fold button
+  (chevron, label, `members.length`) and a COLLAPSED section shows only that, spending none of the row
+  budget — so folding 진행 중 lets more of 다음 show. An expanded section left with no rows is omitted and
+  counts into `hidden` (the footer's "외 N개"). The folded ids persist per browser
+  (`noah.todoOverlayCollapsed`, `lib/layout.ts`, unknown ids and junk read as none). An avatar's
+  addition inside a folded section pops that heading's count (`todoSectionArrivalSeq`), not the footer.
+  Both pops play only while `avatarChangeFlushing()` (read when the `{#key}` remounts): the viewer's own
+  fold or start that moves a still-marked row past the budget never pops anything.
+- **The header sums up the day.** Below the title row, `todoTodayProgress`: 오늘 완료 N (done items whose
+  `closedAt` falls on the server's KST day — a listing carries the newest 200 done, so today's are in it)
+  · 남음 M (open items overdue or due today, in progress included), with a progress bar (`--ok` once
+  nothing is left, and NOT animated — only the avatar's changes move); the text is a button into the tab's
+  오늘 filter, the `role="progressbar"` beside it (a button's children are presentational). 오늘 완료
+  counts anything closed today, undated items included, while 남음 counts only overdue/due-today ones, so
+  the bar can read full after a day of other work — by design, not a due-work tracker. Then chips — 진행 중 / 마감 지남 / 예정,
+  only the non-empty ones, counted by the tab's own `todoFilterCounts` — each opening the tab on that
+  filter (`openTodosFiltered` also clears the tab's search, so the list matches the chip's count; a
+  transient card is dismissed first). Their accessible names
+  (`마감 지남 1개, 할 일 탭에서 보기`) differ from the section headings' on purpose. No progress line when
+  N + M is 0; no summary block when there is also no chip.
+- **Minimize is the PINNED card's** (`noah.todoOverlayMinimized`, per browser; one fixed name, 할 일
+  최소화, with `aria-pressed`): the header's − folds
+  everything under it (`.todo-overlay-content[hidden]`) and the counts line adds `· 마감 지남 N · 오늘
+  N/M`; the transcript's reserve stays, so minimizing never reflows the conversation. A popover/sheet is
+  transient already: the button is absent there and the preference is kept but not applied.
 - **Only the avatar's OWN changes animate** (user decision 2026-10-10: motion on avatar add/delete plus
   a count pop; never auto-open the card). A successful to-do tool end other than `list_todos`
   (`noteTodoToolEnd`) bumps a counter and stamps the time; every GET covers the ends counted at its
@@ -286,7 +333,7 @@
   everything expires after `TODO_ACTIVITY_MS` (1.6 s), so opening the card later replays nothing, and
   `resetTodoClientState` clears it.
 - **Card motion** (`TodoOverlay.svelte`): one keyed list of sections and rows stays mounted once loaded
-  (the empty state is a sibling), rebuilt only when the items or `todayKst` references change — every
+  (the empty state is a sibling), rebuilt only when the items, `todayKst` or folded-sections references change — every
   reconcile of an `animate:` list measures every row, and the store is written per streamed token.
   Added rows rise 6px over 240 ms with a 1.2 s `--accent-soft` wash, staggered 40 ms (cap 7 steps; an
   arrival hidden by the 8-row cap pops the footer's "(외 N개)" instead); edited rows get the wash only;

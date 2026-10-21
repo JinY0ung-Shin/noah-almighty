@@ -99,12 +99,14 @@ function jsonRes(data: unknown, status = 200) {
 function fakeServer(initial: TodoItem[]) {
   let items = [...initial];
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = [];
+  let gate: Promise<void> | null = null;
   const snapshot = () => ({ todayKst: TODAY, counts: countsOf(items) });
   const fetchMock = vi.fn(async (input: unknown, init: RequestInit = {}) => {
     const url = String(input);
     const method = init.method ?? "GET";
     const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
     calls.push({ method, url, body });
+    if (gate && method !== "GET") await gate;
     if (url === "/api/me/todos" && method === "GET") return jsonRes({ todos: items, ...snapshot() });
     if (url === "/api/me/todos" && method === "POST") {
       const created = todo({
@@ -146,6 +148,17 @@ function fakeServer(initial: TodoItem[]) {
     writes: () => calls.filter((call) => call.method !== "GET"),
     get items() {
       return items;
+    },
+    /** Hold every write's response until the returned release is called. */
+    holdWrites(): () => void {
+      let release = () => {};
+      gate = new Promise<void>((resolve) => {
+        release = () => {
+          gate = null;
+          resolve();
+        };
+      });
+      return release;
     },
     /** What an avatar's tool (or another tab) did server-side; the client learns of it on its next GET. */
     setItems(next: TodoItem[]) {
@@ -713,7 +726,7 @@ describe("chat overlay", () => {
     expect(window.localStorage.getItem("noah.todoOverlayOpen")).toBe("true");
     // It lives in the transcript region, so it can never sit over the composer.
     expect(overlay.parentElement?.classList.contains("chat-body")).toBe(true);
-    expect(within(overlay).getByText("마감 지남")).toBeTruthy();
+    expect(within(overlay).getByRole("region", { name: "마감 지남" })).toBeTruthy();
     expect(within(overlay).getByText("지난 일")).toBeTruthy();
     expect(within(overlay).getByText("오늘 일")).toBeTruthy();
 
@@ -722,7 +735,7 @@ describe("chat overlay", () => {
     expect(window.localStorage.getItem("noah.todoOverlayOpen")).toBeNull();
   });
 
-  it("only reviews and completes: no add box in the card (adding is the 할 일 tab's form or the avatar)", async () => {
+  it("has no add box in the card (adding is the 할 일 tab's form or the avatar)", async () => {
     fakeServer([]);
     seedLoaded([todo({ title: "회의록 공유" })]);
     seedChat();
@@ -808,6 +821,153 @@ describe("chat overlay", () => {
     await fireEvent.click(within(overlay).getByRole("checkbox", { name: "완료: 진행 중인 보고" }));
     await waitFor(() => expect(server.writes()[0]).toMatchObject({ method: "PATCH", body: { status: "done" } }));
     await waitFor(() => expect(within(overlay).queryByRole("region", { name: "진행 중" })).toBeNull());
+  });
+
+  it("starts, pauses and drops a row from its actions; a drop's undo restores the status it had", async () => {
+    const item = todo({ title: "배포 점검" });
+    const server = fakeServer([item]);
+    seedLoaded([item]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    render(ChatView);
+    const overlay = await screen.findByRole("complementary", { name: "할 일" });
+    await fireEvent.click(within(overlay).getByRole("button", { name: "진행 중으로: 배포 점검" }));
+    await waitFor(() => expect(server.writes().map((call) => call.body)).toEqual([{ status: "in_progress" }]));
+    const running = await within(overlay).findByRole("region", { name: "진행 중" });
+    expect(within(running).getByText("배포 점검")).toBeTruthy();
+    // No toast for a start: the row moving into 진행 중 is the feedback.
+    expect(get(toasts).some((toast) => toast.actionLabel === "되돌리기")).toBe(false);
+    await fireEvent.click(within(overlay).getByRole("button", { name: "드랍: 배포 점검" }));
+    await waitFor(() => expect(within(overlay).queryByText("배포 점검")).toBeNull());
+    const undo = await waitFor(() => {
+      const found = get(toasts).find((toast) => toast.actionLabel === "되돌리기");
+      expect(found?.message).toContain("드랍");
+      return found!;
+    });
+    undo.action?.();
+    await waitFor(() =>
+      expect(server.writes().map((call) => call.body)).toEqual([{ status: "in_progress" }, { status: "dropped" }, { status: "in_progress" }]),
+    );
+    await within(overlay).findByRole("button", { name: "시작 전으로: 배포 점검" });
+    await fireEvent.click(within(overlay).getByRole("button", { name: "시작 전으로: 배포 점검" }));
+    await waitFor(() => expect(server.writes().at(-1)?.body).toEqual({ status: "todo" }));
+    await waitFor(() => expect(within(overlay).queryByRole("region", { name: "진행 중" })).toBeNull());
+  });
+
+  it("ignores a second action on a row until its write settles", async () => {
+    const item = todo({ title: "보고서" });
+    const server = fakeServer([item]);
+    seedLoaded([item]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    render(ChatView);
+    const overlay = await screen.findByRole("complementary", { name: "할 일" });
+    const release = server.holdWrites();
+    await fireEvent.click(within(overlay).getByRole("button", { name: "진행 중으로: 보고서" }));
+    await fireEvent.click(within(overlay).getByRole("button", { name: "드랍: 보고서" }));
+    // The checkbox of the row (re-created in 진행 중) waits for that write too.
+    const check = () => within(overlay).getByRole("checkbox", { name: "완료: 보고서" }) as HTMLInputElement;
+    expect(check().disabled).toBe(true);
+    await fireEvent.click(check());
+    expect(server.writes().map((call) => call.body)).toEqual([{ status: "in_progress" }]);
+    release();
+    await waitFor(() => expect(check().disabled).toBe(false));
+    expect(server.writes()).toHaveLength(1);
+  });
+
+  it("keeps the keyboard in the card after an action: on the moved row's button, or the next row after a drop", async () => {
+    const first = todo({ title: "첫째 일" });
+    const second = todo({ title: "둘째 일" });
+    fakeServer([first, second]);
+    seedLoaded([first, second]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    render(ChatView);
+    const overlay = await screen.findByRole("complementary", { name: "할 일" });
+    const start = within(overlay).getByRole("button", { name: "진행 중으로: 첫째 일" });
+    start.focus();
+    await fireEvent.click(start);
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("시작 전으로: 첫째 일"));
+    const dropButton = within(overlay).getByRole("button", { name: "드랍: 첫째 일" });
+    dropButton.focus();
+    await fireEvent.click(dropButton);
+    await waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe("둘째 일"));
+    expect(overlay.contains(document.activeElement)).toBe(true);
+  });
+
+  it("folds a section to its heading and count, and remembers it per browser", async () => {
+    fakeServer([]);
+    seedLoaded([todo({ title: "다음 일 A" }), todo({ title: "다음 일 B" }), todo({ title: "지난 일", dueDate: "2026-10-01" })]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    const view = render(ChatView);
+    const overlay = await screen.findByRole("complementary", { name: "할 일" });
+    const heading = within(overlay).getByRole("button", { name: "다음 2" });
+    expect(heading.getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(heading);
+    await waitFor(() => expect(within(overlay).queryByText("다음 일 A")).toBeNull());
+    expect(within(overlay).getByRole("button", { name: "다음 2" }).getAttribute("aria-expanded")).toBe("false");
+    expect(within(overlay).getByText("지난 일")).toBeTruthy();
+    expect(JSON.parse(window.localStorage.getItem("noah.todoOverlayCollapsed") ?? "[]")).toEqual(["next"]);
+    view.unmount();
+    render(ChatView);
+    const again = await screen.findByRole("complementary", { name: "할 일" });
+    expect(within(again).getByRole("button", { name: "다음 2" }).getAttribute("aria-expanded")).toBe("false");
+    expect(within(again).queryByText("다음 일 A")).toBeNull();
+  });
+
+  it("sums up the day in the header; its chips and progress open the tab on that filter", async () => {
+    fakeServer([]);
+    seedLoaded([
+      todo({ title: "끝낸 일", status: "done", closedAt: "2026-10-09T01:00:00.000Z" }),
+      todo({ title: "지난 일", dueDate: "2026-10-01" }),
+      todo({ title: "오늘 일", dueDate: TODAY, priority: "high", tags: ["보고", "주간"], note: "메모" }),
+      todo({ title: "진행 일", status: "in_progress", source: "avatar" }),
+    ]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    render(ChatView);
+    const overlay = await screen.findByRole("complementary", { name: "할 일" });
+    expect(within(overlay).getByRole("button", { name: "오늘 완료 1 · 남음 2" })).toBeTruthy();
+    expect(within(overlay).getByRole("progressbar", { name: "오늘 진척도" }).getAttribute("aria-valuenow")).toBe("1");
+    // Only chips with something in them (no 예정 here).
+    expect(overlay.querySelectorAll(".todo-overlay-chip")).toHaveLength(2);
+    // The row's meta: high priority, the first tag (+N), a memo, the avatar's own addition.
+    const row = within(overlay).getByText("오늘 일").closest("li")!;
+    expect(within(row).getByRole("img", { name: "우선순위 높음" })).toBeTruthy();
+    expect(within(row).getByText("#보고 +1")).toBeTruthy();
+    expect(within(row).getByRole("img", { name: "메모 있음" })).toBeTruthy();
+    const running = within(overlay).getByText("진행 일").closest("li")!;
+    expect(within(running).getByRole("img", { name: "아바타가 대화에서 추가한 할 일" })).toBeTruthy();
+    replaceState({ todoSearch: "남은 검색어" });
+    await fireEvent.click(within(overlay).getByRole("button", { name: "마감 지남 1개, 할 일 탭에서 보기" }));
+    // A leftover search would make the tab disagree with the chip's count.
+    expect(readState()).toMatchObject({ view: "todos", todoFilter: "overdue", todoSearch: "" });
+  });
+
+  it("minimizes only the pinned card, to its header, and remembers it", async () => {
+    const ro = stubResizeObserver();
+    fakeServer([]);
+    seedLoaded([todo({ title: "지난 일", dueDate: "2026-10-01" })]);
+    seedChat();
+    replaceState({ todoOverlayOpen: true });
+    render(ChatView);
+    await flush();
+    const card = () => document.getElementById("todo-overlay")!;
+    // A transient (popover) card has no minimize: it is dismissed instead.
+    expect(within(card()).queryByRole("button", { name: "할 일 최소화" })).toBeNull();
+    ro.resizeChatBody(1200);
+    const minimize = await within(card()).findByRole("button", { name: "할 일 최소화" });
+    expect(minimize.getAttribute("aria-pressed")).toBe("false");
+    await fireEvent.click(minimize);
+    await waitFor(() => expect(card().classList.contains("is-minimized")).toBe(true));
+    expect(minimize.getAttribute("aria-pressed")).toBe("true");
+    expect(card().querySelector<HTMLElement>(".todo-overlay-content")!.hidden).toBe(true);
+    expect(card().querySelector(".todo-overlay-counts")?.textContent).toContain("마감 지남 1");
+    expect(window.localStorage.getItem("noah.todoOverlayMinimized")).toBe("true");
+    await fireEvent.click(minimize);
+    await waitFor(() => expect(card().classList.contains("is-minimized")).toBe(false));
+    expect(window.localStorage.getItem("noah.todoOverlayMinimized")).toBeNull();
   });
 
   it("opens the 할 일 tab with the clicked item selected", async () => {

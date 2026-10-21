@@ -13,7 +13,7 @@ import { persistTodoOverlayOpen } from "./layout";
 import { goView } from "./nav";
 import { newId, notify, readState, updateState } from "./state";
 import type { TodoFilter, TodoState } from "./types";
-import { calendarDateWeekday } from "../../../server/routineSchedule";
+import { calendarDateWeekday, kstDateString } from "../../../server/routineSchedule";
 import {
   TODO_TOOL_PREFIX,
   compareTodos,
@@ -231,37 +231,88 @@ export function todoOverlayMode(hostWidth: number, narrowViewport: boolean): Tod
   return hostWidth >= TODO_OVERLAY_PINNED_MIN_WIDTH ? "pinned" : "popover";
 }
 
+export const TODO_OVERLAY_SECTION_IDS = ["in_progress", "overdue", "today", "next"] as const;
+export type TodoOverlaySectionId = (typeof TODO_OVERLAY_SECTION_IDS)[number];
+
 export interface TodoOverlaySection {
-  id: "in_progress" | "overdue" | "today" | "next";
+  id: TodoOverlaySectionId;
   label: string;
+  /** The rows the card renders (none while collapsed). */
   items: TodoItem[];
+  /** Every open item of the section — the heading's count. */
+  members: TodoItem[];
+  collapsed: boolean;
 }
 
 /**
- * The overlay's first `limit` OPEN items in the shared order (in-progress ones
- * lead it), split into 진행 중 / 마감 지남 / 오늘 / 다음 — an in-progress item
- * sits ONLY in 진행 중, whatever its due date.
+ * The card's sections over ALL open items in the shared order (in-progress ones
+ * lead it): 진행 중 / 마감 지남 / 오늘 / 다음 — an in-progress item sits ONLY in
+ * 진행 중, whatever its due date. The first `limit` items of the EXPANDED
+ * sections get rows; a collapsed section shows only its heading and count and
+ * spends none of the budget (collapsing 진행 중 lets more of 다음 show). An
+ * expanded section left with no rows is omitted and its items count as `hidden`
+ * (the footer's "외 N개").
  */
 export function overlaySections(
   items: TodoItem[],
   todayKst: string,
   limit = TODO_OVERLAY_LIMIT,
+  collapsed: ReadonlySet<string> = new Set(),
 ): { sections: TodoOverlaySection[]; hidden: number } {
   const open = items.filter(isOpenTodo).sort(compareTodos);
-  const shown = open.slice(0, limit);
-  const waiting = shown.filter((item) => item.status === "todo");
+  const waiting = open.filter((item) => item.status === "todo");
   const bucketOf = (item: TodoItem) => todoDueBucket(item.dueDate, todayKst);
-  const sections: TodoOverlaySection[] = [
-    { id: "in_progress" as const, label: TODO_STATUS_LABELS.in_progress, items: shown.filter((item) => item.status === "in_progress") },
-    { id: "overdue" as const, label: "마감 지남", items: waiting.filter((item) => bucketOf(item) === "overdue") },
-    { id: "today" as const, label: "오늘", items: waiting.filter((item) => bucketOf(item) === "today") },
-    {
-      id: "next" as const,
-      label: "다음",
-      items: waiting.filter((item) => bucketOf(item) === "upcoming" || bucketOf(item) === "none"),
-    },
-  ].filter((section) => section.items.length);
-  return { sections, hidden: open.length - shown.length };
+  const groups: { id: TodoOverlaySectionId; label: string; members: TodoItem[] }[] = [
+    { id: "in_progress", label: TODO_STATUS_LABELS.in_progress, members: open.filter((item) => item.status === "in_progress") },
+    { id: "overdue", label: "마감 지남", members: waiting.filter((item) => bucketOf(item) === "overdue") },
+    { id: "today", label: "오늘", members: waiting.filter((item) => bucketOf(item) === "today") },
+    { id: "next", label: "다음", members: waiting.filter((item) => bucketOf(item) === "upcoming" || bucketOf(item) === "none") },
+  ];
+  let budget = limit;
+  let hidden = 0;
+  const sections: TodoOverlaySection[] = [];
+  for (const group of groups) {
+    if (!group.members.length) continue;
+    if (collapsed.has(group.id)) {
+      sections.push({ ...group, items: [], collapsed: true });
+      continue;
+    }
+    const rows = group.members.slice(0, Math.max(0, budget));
+    budget -= rows.length;
+    hidden += group.members.length - rows.length;
+    if (rows.length) sections.push({ ...group, items: rows, collapsed: false });
+  }
+  return { sections, hidden };
+}
+
+/**
+ * The card header's 오늘 progress: `done` = items completed on the server's KST
+ * day (a listing carries the newest 200 done, so today's are in it), `left` = open
+ * items overdue or due that day (in progress included). Both 0 → no progress line.
+ */
+export function todoTodayProgress(items: TodoItem[], todayKst: string): { done: number; left: number } {
+  let done = 0;
+  let left = 0;
+  if (!todayKst) return { done, left };
+  for (const item of items) {
+    if (item.status === "done") {
+      const closedAt = item.closedAt ? Date.parse(item.closedAt) : Number.NaN;
+      if (Number.isFinite(closedAt) && kstDateString(new Date(closedAt)) === todayKst) done += 1;
+    } else if (isOpenTodo(item)) {
+      const bucket = todoDueBucket(item.dueDate, todayKst);
+      if (bucket === "overdue" || bucket === "today") left += 1;
+    }
+  }
+  return { done, left };
+}
+
+/** A header chip: open the 할 일 tab on that filter — search cleared, so the list matches the chip's count. */
+export function openTodosFiltered(filter: TodoFilter): void {
+  updateState((state) => {
+    state.todoFilter = filter;
+    state.todoSearch = "";
+  });
+  goView("todos");
 }
 
 let overlayFocusRequested = false;
@@ -1082,18 +1133,32 @@ export function avatarChangeFlushing(): boolean {
 /**
  * The change (seq) of the newest row the avatar added that sits past the card's
  * visible rows — the 전체 보기 footer pops for it — else 0. Keyed on that change
- * alone, so a later edit of the avatar's never re-pops it.
+ * alone, so a later edit of the avatar's never re-pops it. An addition inside a
+ * COLLAPSED section is that section's (`todoSectionArrivalSeq`), not the footer's.
  */
 export function todoHiddenArrivalSeq(
   sections: TodoOverlaySection[],
   marks: Record<string, TodoMark>,
   items: TodoItem[],
 ): number {
-  const shown = new Set(sections.flatMap((section) => section.items.map((item) => item.id)));
+  const shown = new Set(
+    sections.flatMap((section) => (section.collapsed ? section.members : section.items).map((item) => item.id)),
+  );
   let seq = 0;
   for (const item of items) {
     const mark = marks[item.id];
     if (isOpenTodo(item) && mark?.kind === "added" && !shown.has(item.id)) seq = Math.max(seq, mark.seq);
+  }
+  return seq;
+}
+
+/** Like `todoHiddenArrivalSeq` for a collapsed section: its heading's count pops for the avatar's newest addition in it. */
+export function todoSectionArrivalSeq(section: TodoOverlaySection, marks: Record<string, TodoMark>): number {
+  if (!section.collapsed) return 0;
+  let seq = 0;
+  for (const item of section.members) {
+    const mark = marks[item.id];
+    if (mark?.kind === "added") seq = Math.max(seq, mark.seq);
   }
   return seq;
 }

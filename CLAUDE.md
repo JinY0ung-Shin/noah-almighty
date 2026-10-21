@@ -221,9 +221,9 @@ These are the invariants the project is built around. New work should reinforce 
   the two apart. An item's `status` is `todo`/`in_progress` (OPEN — the cap, counts, badge, card and
   prompt) or `done`/`dropped` (CLOSED; user decision 2026-10-10): test open-ness with `isOpenTodo`, never
   `!== "done"`, and keep EVERY write setting the `done` column with it — it is a rollback mirror, and the
-  ungated boot reconcile rewrites any row whose mirror disagrees. The chat card only reviews and
-  completes — adding, 진행 중 and 드랍 are the tab's or the avatar's (user decisions 2026-10-10) — and
-  animates only the avatar's own changes. The prompt states the list FROZEN
+  ungated boot reconcile rewrites any row whose mirror disagrees. The chat card reviews, completes,
+  starts/pauses and drops (row actions, user decision 2026-10-21) — ADDING stays the tab's or the
+  avatar's (user decision 2026-10-10) — and animates only the avatar's own changes. The prompt states the list FROZEN
   at a conversation's first to-do-capable turn (`conversations.todo_snapshot`, written once and never
   refreshed so the append stays prompt-cache stable — user decision 2026-10-10); the live counts ride
   `describe_system` and the tool headers.

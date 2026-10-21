@@ -262,7 +262,7 @@ async function openCard(
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#todo-overlay")).toBeVisible();
   await expect(page.locator("#todo-overlay .todo-overlay-item")).toHaveCount(5);
-  // The card reviews and completes; adding lives in the 할 일 tab (or the avatar).
+  // The card reviews, completes, starts and drops; adding lives in the 할 일 tab (or the avatar).
   await expect(page.locator("#todo-overlay").getByRole("textbox")).toHaveCount(0);
 }
 
@@ -305,6 +305,59 @@ for (const viewport of [
     await expect(card).toBeVisible();
   });
 }
+
+test("the pinned card grows with its list down to the composer, then scrolls with a fading edge", async ({ page }) => {
+  await openCard(page, { width: 1680, height: 1000 });
+  const card = page.locator("#todo-overlay");
+  const body = card.locator(".todo-overlay-body");
+  await expect(card).toHaveAttribute("data-mode", "pinned");
+  // Tall window: every row fits, nothing is cut, no fade.
+  const roomy = await body.evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+  expect(roomy.scroll).toBeLessThanOrEqual(roomy.client + 1);
+  await expect(body).not.toHaveClass(/has-more/);
+
+  // Short window: the card stops at the composer and the list scrolls, its bottom edge fading.
+  await page.setViewportSize({ width: 1680, height: 480 });
+  await expect(body).toHaveClass(/has-more/);
+  const geometry = await layout(page);
+  expectInsideChatBody(geometry);
+  expect(geometry.body.bottom - geometry.card.bottom).toBeLessThanOrEqual(16);
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await expect(body).not.toHaveClass(/has-more/);
+});
+
+test("a row's actions show on hover or focus in place of its meta, without moving the row or its title", async ({ page }) => {
+  await openCard(page, { width: 1680, height: 1000 });
+  const row = page.locator("#todo-overlay .todo-overlay-item").filter({ hasText: "고객사 미팅 자료 준비" });
+  const measure = () =>
+    row.evaluate((el) => {
+      const title = el.querySelector(".todo-overlay-title")!;
+      const actions = el.querySelector<HTMLElement>(".todo-overlay-actions")!;
+      return {
+        rowHeight: el.getBoundingClientRect().height,
+        titleWidth: title.getBoundingClientRect().width,
+        actions: getComputedStyle(actions).opacity,
+        meta: getComputedStyle(el.querySelector(".todo-overlay-meta")!).visibility,
+        inside: actions.getBoundingClientRect().right <= el.getBoundingClientRect().right + 0.5,
+      };
+    });
+  const resting = await measure();
+  expect(resting).toMatchObject({ actions: "0", meta: "visible" });
+  // A row is one checkbox line, the hidden 22px actions included.
+  expect(resting.rowHeight).toBeLessThanOrEqual(28);
+  await row.hover();
+  const hovered = await measure();
+  expect(hovered).toMatchObject({ actions: "1", meta: "hidden", inside: true });
+  expect(hovered.rowHeight).toBe(resting.rowHeight);
+  expect(hovered.titleWidth).toBe(resting.titleWidth);
+  // Keyboard reaches them too: tabbing onto an action reveals them, while focus on
+  // the title keeps the due date in view.
+  await page.mouse.move(0, 0);
+  await row.locator(".todo-overlay-title").focus();
+  expect(await measure()).toMatchObject({ actions: "0", meta: "visible" });
+  await row.getByRole("button", { name: "진행 중으로: 고객사 미팅 자료 준비" }).focus();
+  expect(await measure()).toMatchObject({ actions: "1", meta: "hidden" });
+});
 
 test("popover sits above the composer of a narrow column and Escape dismisses it from the card or the composer", async ({ page }) => {
   await openCard(page, { width: 1024, height: 768 });
@@ -830,9 +883,9 @@ test("with a parallel addition above, the pinned card's leaving row still leaves
   expectNoLateMoves(samples);
 });
 
-/** The card's section headings, top to bottom. */
+/** The card's section headings (label only — the heading also carries its count), top to bottom. */
 async function sectionLabels(page: Page): Promise<string[]> {
-  return page.locator("#todo-overlay .todo-overlay-section h3").allTextContents();
+  return page.locator("#todo-overlay .todo-overlay-section h3 .todo-overlay-section-toggle > span:not(.todo-overlay-section-count)").allTextContents();
 }
 
 test("in-progress items lead the card in their own 진행 중 section; the avatar starting one moves it there and nothing moves after", async ({ page }) => {

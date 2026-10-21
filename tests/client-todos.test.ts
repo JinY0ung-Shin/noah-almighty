@@ -42,6 +42,8 @@ import {
   todoActivity,
   todoHiddenArrivalSeq,
   todoFilterCounts,
+  todoSectionArrivalSeq,
+  todoTodayProgress,
   todoListGroups,
   todoOverlayMode,
   todoOverlayVisible,
@@ -51,7 +53,13 @@ import {
   TODO_ARRIVAL_STAGGER_MS,
   TODO_OVERLAY_PINNED_MIN_WIDTH,
 } from "../src/client/src/lib/todos.js";
-import { loadTodoOverlayOpen } from "../src/client/src/lib/layout.js";
+import {
+  loadTodoOverlayCollapsed,
+  loadTodoOverlayMinimized,
+  loadTodoOverlayOpen,
+  persistTodoOverlayCollapsed,
+  persistTodoOverlayMinimized,
+} from "../src/client/src/lib/layout.js";
 import { attachRun } from "../src/client/src/lib/chat.js";
 import { startKnowledgeWatch, stopKnowledgeWatch } from "../src/client/src/lib/loaders.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
@@ -267,6 +275,76 @@ describe("pure helpers", () => {
     // In-progress items lead the shared order, so they take the card's rows first.
     const crowded = [...Array.from({ length: 8 }, (_, i) => todo({ id: `late${i}`, dueDate: "2026-10-01" })), todo({ id: "run", status: "in_progress" })];
     expect(overlaySections(crowded, TODAY).sections[0]).toMatchObject({ id: "in_progress", items: [expect.objectContaining({ id: "run" })] });
+  });
+
+  it("folds a collapsed section to its heading and count, spending none of the row budget on it", () => {
+    const items = [
+      todo({ id: "run1", status: "in_progress" }),
+      todo({ id: "run2", status: "in_progress" }),
+      todo({ id: "o1", dueDate: "2026-10-02" }),
+      ...Array.from({ length: 8 }, (_, i) => todo({ id: `n${i}` })),
+    ];
+    const open = overlaySections(items, TODAY);
+    expect(open.sections.map((s) => [s.id, s.items.length, s.members.length, s.collapsed])).toEqual([
+      ["in_progress", 2, 2, false],
+      ["overdue", 1, 1, false],
+      ["next", 5, 8, false],
+    ]);
+    expect(open.hidden).toBe(3);
+    // Collapsing 진행 중 frees its two rows for 다음; its heading still counts both.
+    const folded = overlaySections(items, TODAY, 8, new Set(["in_progress"]));
+    expect(folded.sections.map((s) => [s.id, s.items.length, s.members.length, s.collapsed])).toEqual([
+      ["in_progress", 0, 2, true],
+      ["overdue", 1, 1, false],
+      ["next", 7, 8, false],
+    ]);
+    expect(folded.hidden).toBe(1);
+    // An expanded section past the budget is left out; its items count as hidden.
+    const tight = overlaySections(items, TODAY, 2);
+    expect(tight.sections.map((s) => s.id)).toEqual(["in_progress"]);
+    expect(tight.hidden).toBe(9);
+  });
+
+  it("pops a collapsed section's count, not the footer, for an avatar addition inside it", () => {
+    const items = [todo({ id: "a", source: "avatar" }), todo({ id: "b" })];
+    const marks = { a: { kind: "added" as const, seq: 3, delay: 0 } };
+    const folded = overlaySections(items, TODAY, 8, new Set(["next"]));
+    expect(todoHiddenArrivalSeq(folded.sections, marks, items)).toBe(0);
+    expect(todoSectionArrivalSeq(folded.sections[0], marks)).toBe(3);
+    const open = overlaySections(items, TODAY, 1);
+    // Expanded: a row it has (a) never pops the section's count.
+    expect(todoSectionArrivalSeq(open.sections[0], marks)).toBe(0);
+  });
+
+  it("sums up the KST day: completed today against what is still overdue or due today", () => {
+    const items = [
+      // 2026-10-08T15:30Z is 00:30 KST on the 9th — today; 14:30Z is still the 8th.
+      closed("done", { id: "d1", closedAt: "2026-10-08T15:30:00.000Z" }),
+      closed("done", { id: "d2", closedAt: "2026-10-08T14:30:00.000Z" }),
+      closed("dropped", { id: "x1", closedAt: "2026-10-09T01:00:00.000Z" }),
+      todo({ id: "late", dueDate: "2026-10-01" }),
+      todo({ id: "now", dueDate: TODAY, status: "in_progress" }),
+      todo({ id: "later", dueDate: "2026-10-20" }),
+      todo({ id: "undated" }),
+    ];
+    expect(todoTodayProgress(items, TODAY)).toEqual({ done: 1, left: 2 });
+    expect(todoTodayProgress(items, "")).toEqual({ done: 0, left: 0 });
+  });
+
+  it("remembers the card's folded sections and minimized state per browser, tolerating junk", () => {
+    const known = ["in_progress", "overdue", "today", "next"];
+    persistTodoOverlayCollapsed(new Set(["next", "overdue"]));
+    expect([...loadTodoOverlayCollapsed(known)].sort()).toEqual(["next", "overdue"]);
+    persistTodoOverlayCollapsed(new Set());
+    expect(window.localStorage.getItem("noah.todoOverlayCollapsed")).toBeNull();
+    window.localStorage.setItem("noah.todoOverlayCollapsed", '["next", 3, "gone"]');
+    expect([...loadTodoOverlayCollapsed(known)]).toEqual(["next"]);
+    window.localStorage.setItem("noah.todoOverlayCollapsed", "{not json");
+    expect(loadTodoOverlayCollapsed(known).size).toBe(0);
+    persistTodoOverlayMinimized(true);
+    expect(loadTodoOverlayMinimized()).toBe(true);
+    persistTodoOverlayMinimized(false);
+    expect(window.localStorage.getItem("noah.todoOverlayMinimized")).toBeNull();
   });
 
   it("picks pinned only on a wide host, popover below it, and a sheet on a narrow viewport", () => {

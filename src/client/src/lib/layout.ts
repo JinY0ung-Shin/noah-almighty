@@ -39,3 +39,46 @@ export function persistTodoOverlayOpen(open: boolean): void {
     /* Private mode / blocked storage: the switch still works for this page. */
   }
 }
+
+const TODO_OVERLAY_COLLAPSED_KEY = "noah.todoOverlayCollapsed";
+
+/** The chat card's collapsed sections (ids), browser-local. Unknown or malformed values read as none. */
+export function loadTodoOverlayCollapsed(known: readonly string[]): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(TODO_OVERLAY_COLLAPSED_KEY) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string" && known.includes(id)) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Persist the collapsed sections; none collapsed removes the key. */
+export function persistTodoOverlayCollapsed(collapsed: ReadonlySet<string>): void {
+  try {
+    if (collapsed.size) window.localStorage.setItem(TODO_OVERLAY_COLLAPSED_KEY, JSON.stringify([...collapsed]));
+    else window.localStorage.removeItem(TODO_OVERLAY_COLLAPSED_KEY);
+  } catch {
+    /* Private mode / blocked storage: the sections still fold for this page. */
+  }
+}
+
+const TODO_OVERLAY_MINIMIZED_KEY = "noah.todoOverlayMinimized";
+
+/** Whether the pinned chat card is folded to its header, browser-local. Expanded is the default. */
+export function loadTodoOverlayMinimized(): boolean {
+  try {
+    return window.localStorage.getItem(TODO_OVERLAY_MINIMIZED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Persist only the non-default (minimized) state. */
+export function persistTodoOverlayMinimized(minimized: boolean): void {
+  try {
+    if (minimized) window.localStorage.setItem(TODO_OVERLAY_MINIMIZED_KEY, "true");
+    else window.localStorage.removeItem(TODO_OVERLAY_MINIMIZED_KEY);
+  } catch {
+    /* Private mode / blocked storage: the card still folds for this page. */
+  }
+}
