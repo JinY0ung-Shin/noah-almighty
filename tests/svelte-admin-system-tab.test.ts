@@ -101,6 +101,30 @@ describe("admin 시스템 tab seeding", () => {
     expect(modelInput.value).toBe("claude-opus-4-8");
   });
 
+  it("서버 에이전트 is off by default; turning it ON goes through the credential warning first", async () => {
+    await openSystemTab();
+    expect(screen.getByRole("heading", { name: "서버 에이전트" })).toBeTruthy();
+    expect(screen.getByText(/^꺼짐 —/)).toBeTruthy();
+    const warning = /자기 서버에서 이 배포의 모델 인증정보\(API 키 또는 구독 토큰\)를 읽을 수 있습니다/;
+    await fireEvent.click(screen.getByRole("button", { name: "켜기" }));
+    expect(screen.getByText(warning)).toBeTruthy();
+    expect(calls.some((call) => call.url.includes("/api/admin/server-agents"))).toBe(false);
+    await fireEvent.click(screen.getByRole("button", { name: "취소" }));
+    expect(screen.queryByText(warning)).toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: "켜기" }));
+    systemPayload = { ...systemPayload, serverAgentsEnabled: true };
+    await fireEvent.click(screen.getByRole("button", { name: "경고를 확인했고 켭니다" }));
+    await waitFor(() => expect(screen.getByText(/^켜짐 —/)).toBeTruthy());
+    const put = calls.find((call) => call.method === "PUT" && call.url.includes("/api/admin/server-agents"))!;
+    expect(JSON.parse(put.body!)).toEqual({ enabled: true, acknowledged: true });
+
+    systemPayload = { ...systemPayload, serverAgentsEnabled: false };
+    await fireEvent.click(screen.getByRole("button", { name: "끄기" }));
+    await waitFor(() => expect(screen.getByText(/^꺼짐 —/)).toBeTruthy());
+    expect(JSON.parse(calls.filter((call) => call.method === "PUT").at(-1)!.body!)).toEqual({ enabled: false });
+  });
+
   it("keeps unsaved policy edits across a manual 새로고침", async () => {
     await openSystemTab();
 

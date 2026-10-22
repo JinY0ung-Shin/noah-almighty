@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AppConfig } from "./types.js";
 import { sanitizeName } from "./marketplace.js";
 import { runPython } from "./pythonExec.js";
+import { ServerAgentError } from "./serverAgents/errors.js";
 
 // Per-user SSH host-trust store. hex-ssh verifies host keys fail-closed against
 // a known_hosts file (its `KNOWN_HOSTS_PATH`), RE-READING it on every connection
@@ -28,14 +29,18 @@ export interface TrustedHostEntry {
 }
 
 /** The host token hex-ssh matches against: bare host on :22, `[host]:port` else. */
-function hostToken(host: string, port: number): string {
+export function hostToken(host: string, port: number): string {
   return port === 22 ? host : `[${host}]:${port}`;
+}
+
+/** `SHA256:` + unpadded-base64 sha256 of a raw (wire-format) public key. */
+export function fingerprintOfRawKey(raw: Buffer): string {
+  return "SHA256:" + createHash("sha256").update(raw).digest("base64").replace(/=+$/, "");
 }
 
 /** `SHA256:` + unpadded-base64 sha256 of the raw key — hex-ssh's exact format. */
 function fingerprintOf(keyBase64: string): string {
-  const raw = Buffer.from(keyBase64, "base64");
-  return "SHA256:" + createHash("sha256").update(raw).digest("base64").replace(/=+$/, "");
+  return fingerprintOfRawKey(Buffer.from(keyBase64, "base64"));
 }
 
 /** Parse a known_hosts file body into entries (ignoring comments/markers). */
@@ -193,4 +198,82 @@ export async function removeTrustedHost(
     await fs.writeFile(file, kept.length ? kept.join("\n") + "\n" : "");
   }
   return removed;
+}
+
+// ---------- server agents (서버 에이전트) ----------
+// The ssh2 transport verifies host keys against the SAME per-owner known_hosts
+// hex-ssh uses, so one trust decision covers both. The settings card shows the
+// live key first and trusts only the fingerprint the owner saw (TOCTOU-safe).
+
+export type KnownHostKeyStatus = "trusted" | "mismatch" | "unknown";
+
+/**
+ * How a presented key relates to the trusted entries for host:port: any entry
+ * with the same fingerprint → trusted; entries exist but none match → mismatch
+ * (rotated key or interception); no entry for the token → unknown.
+ */
+export function knownHostKeyStatus(knownHostsBody: string, host: string, port: number, rawKey: Buffer): KnownHostKeyStatus {
+  const token = hostToken(host, port);
+  const entries = parseKnownHosts(knownHostsBody).filter((e) => e.host === token);
+  if (entries.length === 0) {
+    return "unknown";
+  }
+  const fingerprint = fingerprintOfRawKey(rawKey);
+  return entries.some((e) => e.fingerprint === fingerprint) ? "trusted" : "mismatch";
+}
+
+/** Key types the owner trusts for host:port (the transport prefers exactly these, so a mismatch is a real one). */
+export function trustedKeyTypes(knownHostsBody: string, host: string, port: number): string[] {
+  const token = hostToken(host, port);
+  return [...new Set(parseKnownHosts(knownHostsBody).filter((e) => e.host === token).map((e) => e.keyType))];
+}
+
+async function readKnownHosts(userId: string, config: AppConfig): Promise<string> {
+  try {
+    return await fs.readFile(knownHostsPath(userId, config), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** The host's live key (NOT trusted by this call) compared with the owner's known_hosts. Throws on fetch failure. */
+export async function inspectHostKey(
+  userId: string,
+  config: AppConfig,
+  host: string,
+  port: number,
+): Promise<{ fingerprint: string; keyType: string; trusted: boolean; mismatch: boolean }> {
+  const { line, fingerprint, keyType } = await fetchHostKey(host, port);
+  const rawKey = Buffer.from(line.split(/\s+/)[2] ?? "", "base64");
+  const status = knownHostKeyStatus(await readKnownHosts(userId, config), host, port, rawKey);
+  return { fingerprint, keyType, trusted: status === "trusted", mismatch: status === "mismatch" };
+}
+
+/**
+ * Trust host:port only if its live key still has the fingerprint the owner
+ * was shown — a key swapped between "show" and "trust" is refused
+ * (HOST_KEY_MISMATCH) instead of silently trusted.
+ */
+export async function trustHostWithFingerprint(
+  userId: string,
+  config: AppConfig,
+  host: string,
+  port: number,
+  expectedFingerprint: string,
+): Promise<{ entry: TrustedHostEntry; changed: boolean }> {
+  const { line, fingerprint, keyType } = await fetchHostKey(host, port);
+  if (fingerprint !== expectedFingerprint.trim()) {
+    throw new ServerAgentError("HOST_KEY_MISMATCH", "fingerprint changed since it was shown");
+  }
+  const file = knownHostsPath(userId, config);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const { body, changed } = upsertHostLine(await readKnownHosts(userId, config), line);
+  await fs.writeFile(file, body);
+  return { entry: { host: hostToken(host, port), keyType, fingerprint }, changed };
+}
+
+/** The owner's known_hosts has at least one key for host:port. */
+export async function isHostTrusted(userId: string, config: AppConfig, host: string, port: number): Promise<boolean> {
+  const token = hostToken(host, port);
+  return parseKnownHosts(await readKnownHosts(userId, config)).some((e) => e.host === token);
 }

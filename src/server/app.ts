@@ -17,6 +17,7 @@ import { createGroupsRouter } from "./routes/groups.js";
 import { createAvatarTasksRouter } from "./routes/avatarTasks.js";
 import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
+import { createServerAgentsRouter } from "./routes/serverAgents.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createChatRouter, conversationHistoryForPrompt, expandChatSlashCommand } from "./routes/chat.js";
 import { createAdminRouter } from "./routes/admin.js";
@@ -184,6 +185,8 @@ export function createApp(services = createServices()) {
   app.use(createRoutinesRouter(deps));
   app.use(createTodosRouter(deps));
   app.use(createAvatarTasksRouter(deps));
+  // 서버 에이전트: the owner's SSH servers (register, trust host key, check/install).
+  app.use(createServerAgentsRouter(deps));
   app.use(createSkillShareRouter(deps));
   app.use(createChatRouter(deps));
   // PPT share links: owner create/list/revoke + the signed-in recipient routes.

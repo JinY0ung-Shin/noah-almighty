@@ -968,6 +968,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const tx = this.db.transaction(() => {
         this.deleteCanvasArtifactsForConversation(id);
         this.deleteShareLinksForConversation(id);
+        this.deleteServerAgentSessionsForConversation(id);
         this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
         // Personal task-API rows (avatar_tasks) have no FK onto conversations,
         // so the thread's tasks would outlive it — manual cascade.
@@ -993,6 +994,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         for (const conversationId of conversationIds) {
           this.deleteCanvasArtifactsForConversation(conversationId);
           this.deleteShareLinksForConversation(conversationId);
+          this.deleteServerAgentSessionsForConversation(conversationId);
           deleteMessages.run(conversationId);
           deleteAvatarTasks.run(conversationId);
           deleteConversation.run(conversationId, ownerId);
@@ -1093,6 +1095,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           ),
         );
         this.rewindCanvasArtifacts(conversationId, plan.cutoffCreatedAt);
+        // The kept history no longer matches what any remote server-agent session saw.
+        this.deleteServerAgentSessionsForConversation(conversationId);
         this.db
           .prepare(
             "UPDATE conversations SET agent_session_id = NULL, updated_at = ? WHERE id = ? AND owner_user_id = ?",

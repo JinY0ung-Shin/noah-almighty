@@ -2,6 +2,8 @@ import type {
   AgentRewindInfo,
   AppConfig,
   GroupAgentState,
+  OwnerServerAgentSummary,
+  ServerAgentsUnavailableReason,
   UserGroupMembership,
 } from "../types.js";
 import { groupAgentCaptureAllowed } from "../groupAgents.js";
@@ -90,6 +92,13 @@ export interface OwnerState {
    * (agent/todoSnapshot.ts), never these live numbers.
    */
   todos: TodoSnapshot;
+  /**
+   * The owner's registered 서버 에이전트 (enabled or not), STABLE fields only —
+   * both surfaces list them: the prompt (where the avatar learns what it can
+   * delegate to) and describe_system, which adds the LIVE install state and
+   * sessions from the store itself.
+   */
+  serverAgents: OwnerServerAgentSummary[];
 }
 
 /**
@@ -142,6 +151,16 @@ export function summarizeOwnerState(
       const todayKst = kstDateString();
       return { todayKst, counts: store.countTodos(avatarUserId, todayKst) };
     },
+    // Eager: runPlan's registration gate reads it on every owner run (≤30 rows).
+    serverAgents: store.listServerAgents(avatarUserId).map((server) => ({
+      name: server.name,
+      host: server.host,
+      port: server.port,
+      username: server.username,
+      role: server.role,
+      access: server.access,
+      enabled: server.enabled,
+    })),
   };
 }
 
@@ -204,6 +223,7 @@ export function emptyOwnerState(store: Store, config: AppConfig): OwnerState {
     experimentalFeatures: [],
     sharedAccount: false,
     todos: { todayKst: kstDateString(), counts: { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0 } },
+    serverAgents: [],
   };
 }
 
@@ -284,6 +304,32 @@ export function rewindTurnState(rewind: AgentRewindInfo): string {
     `${head}: you cannot see what was discarded, so if the user refers to it, say so instead of guessing. ` +
     `${aftermath} Re-check that state before building on what you remember.`
   );
+}
+
+/**
+ * Why an owner run has no server-agent tools (runPlan's
+ * `serverAgentsUnavailable`). ONE text for both metacognition surfaces — the
+ * prompt's server-agent line and describe_system's — each adds its own label.
+ */
+export function serverAgentsUnavailableText(reason: ServerAgentsUnavailableReason): string {
+  switch (reason) {
+    case "admin_disabled":
+      return "the system administrator has not enabled server agents on this Noah deployment (Admin → 시스템 → 서버 에이전트; off by default because a remote run hands the deployment's model credentials to the registrant's server) — the owner can still register servers and trust host keys, but checks and delegations stay off until an admin enables it";
+    case "egress_blocked":
+      return "this deployment's egress policy blocks direct outbound connections, so SSH (and with it every server agent) is unavailable";
+    case "ssh_group_unavailable":
+      // Deliberately policy-neutral (the avatar is never told a tool policy exists),
+      // but never "off in this conversation": the composer cannot turn it on.
+      return "the SSH tool group is not available to this account's runs — it is not a conversation setting, so do not suggest re-enabling a tool group in the composer";
+    case "no_servers":
+      return "no server is registered — the owner adds one in Settings → 권한·연결 → 서버 에이전트";
+    case "no_ssh_key":
+      return "the owner has no SSH_PRIVATE_KEY secret — generate or register one first (Settings → 권한·연결 → 시크릿)";
+    case "all_disabled":
+      return "every registered server is disabled in Settings → 권한·연결 → 서버 에이전트";
+    case "ssh_group_off":
+      return "the SSH tool group is OFF for this conversation (server agents ride it)";
+  }
 }
 
 /** Product-wide UI capability; never reads private DM content or presence into agent context. */

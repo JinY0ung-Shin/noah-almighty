@@ -1,6 +1,7 @@
 <script lang="ts">
   import SettingsAvatarApiKeys from "./SettingsAvatarApiKeys.svelte";
   import SettingsShareLinks from "./SettingsShareLinks.svelte";
+  import SettingsServerAgents from "./SettingsServerAgents.svelte";
   import Icon from "./Icon.svelte";
   import BrowserBridgeGuideModal from "./BrowserBridgeGuideModal.svelte";
   import RevealableInput from "./RevealableInput.svelte";
@@ -1173,6 +1174,10 @@
     </form>
   </section>
 {/if}
+
+<!-- 서버 에이전트: right under the 시크릿 card whose SSH key it connects with. Always
+     mounted (an unsaved server draft survives a tab switch). -->
+<SettingsServerAgents active={active && Boolean(user)} />
 
 <style>
   .experimental-list {

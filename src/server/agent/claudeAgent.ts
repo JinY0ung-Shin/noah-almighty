@@ -281,6 +281,10 @@ export async function runClaudeAgent(
     deckAuthoring,
     confluenceSaveToWorkspace,
     canWriteFiles,
+    serverAgentOwnerRun,
+    serverAgentsActive,
+    serverAgentCheckActive,
+    serverAgentsUnavailable,
   } = plan;
 
   if (events) {
@@ -418,6 +422,17 @@ export async function runClaudeAgent(
     // this run has a live steer channel, so the viewer can keep typing while it
     // works. Same boolean describe_system reports (runPlan's system ctx).
     midTurnMessages: Boolean(events?.steers),
+    // 서버 에이전트: owner runs only (D10), with the SAME booleans runPlan used
+    // for the registration and describe_system's ctx. Registered rows only —
+    // the live install state rides describe_system, keeping the append stable.
+    serverAgents: serverAgentOwnerRun
+      ? {
+          active: serverAgentsActive,
+          checkEnabled: serverAgentCheckActive,
+          unavailableReason: serverAgentsUnavailable,
+          servers: ownerState.serverAgents,
+        }
+      : undefined,
   };
 
   const setSystemPrompt = () => {

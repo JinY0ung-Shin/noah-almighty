@@ -81,6 +81,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
+        // 서버 에이전트 deployment switch (PUT /api/admin/server-agents), default off.
+        serverAgentsEnabled: store.isServerAgentsEnabled(),
         // Admin-selected model override + whether an env ANTHROPIC_MODEL shadows it
         // (env wins, mirroring the API-key-vs-subscription precedence).
         modelOverride: store.getModelOverride(),
@@ -583,6 +585,30 @@ export function createAdminRouter(deps: RouterDeps): Router {
     auditAs(req, "set_signup_mode", `signup mode = ${mode}`);
     logger.warn({ actorId: req.user!.id, mode }, "signup mode changed");
     res.json({ signupMode: mode });
+  });
+
+  // 서버 에이전트 on/off. A check or delegation hands this deployment's model
+  // credentials (API key / subscription token) to the CLI on the registrant's own
+  // server, where that account can read them — so turning it ON requires the
+  // admin's explicit acknowledgement of exactly that.
+  router.put("/api/admin/server-agents", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== "boolean") {
+      apiError(res, 400, "enabled는 true 또는 false여야 합니다.");
+      return;
+    }
+    if (enabled && req.body?.acknowledged !== true) {
+      apiError(
+        res,
+        400,
+        "서버 에이전트를 켜려면 경고를 확인해야 합니다. 서버를 등록한 사용자는 자기 서버에서 이 배포의 모델 인증정보를 읽을 수 있습니다.",
+      );
+      return;
+    }
+    store.setServerAgentsEnabled(enabled);
+    auditAs(req, "set_server_agents_enabled", `server agents = ${enabled ? "on" : "off"}`);
+    logger.warn({ actorId: req.user!.id, enabled }, "server agents switch changed");
+    res.json({ serverAgentsEnabled: enabled });
   });
 
   // Admin-selected agent model. An env ANTHROPIC_MODEL still wins at runtime

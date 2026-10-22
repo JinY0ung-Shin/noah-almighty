@@ -2220,6 +2220,48 @@ describe("background phase", () => {
     expect(statuses()).toContain("에이전트 작업 중: @tester · general-purpose · 테스트 실행");
   });
 
+  it("nests a server-agent card whose parent is a delegate TOOL row under the agent that made the call", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      ["tool", { toolUseId: "td", name: "mcp__server_agents__delegate", input: { tasks: [] } }],
+      ["agent", { agentId: "server-agent:r1", parentId: "td", description: "web-01 · 서버 에이전트" }],
+      ["agent", { agentId: "server-agent:r2", parentId: "td", description: "db-01 · 서버 에이전트" }],
+      // A subagent's own delegate call nests its cards under that subagent.
+      ["agent", { agentId: "sub1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
+      ["tool", { toolUseId: "td2", name: "mcp__server_agents__delegate", agentId: "sub1", input: { tasks: [] } }],
+      ["agent", { agentId: "server-agent:r3", parentId: "td2", description: "web-02 · 서버 에이전트" }],
+    ]);
+    const p = pane(id);
+    expect(p.liveAgents.find((a) => a.id === "server-agent:r1")).toMatchObject({ parentId: "main", label: "web-01 · 서버 에이전트" });
+    expect(p.liveAgents.find((a) => a.id === "server-agent:r2")).toMatchObject({ parentId: "main" });
+    expect(p.liveAgents.find((a) => a.id === "server-agent:r3")).toMatchObject({ parentId: "sub1" });
+  });
+
+  it("renders a server-agent card's namespaced rows on the card, never touching a main row with the same raw id", async () => {
+    const id = seedPane();
+    await driveEvents(id, [
+      ["tool", { toolUseId: "toolu_main", name: "Bash", input: { command: "ls" } }],
+      ["tool", { toolUseId: "td", name: "mcp__server_agents__delegate", input: { tasks: [] } }],
+      ["agent", { agentId: "server-agent:r1", parentId: "td", description: "web-01 · 서버 에이전트" }],
+      // The runner namespaces every remote-originated id as `<cardId>:<id>` — even one that copies a main id.
+      ["tool", { toolUseId: "server-agent:r1:toolu_main", name: "Read", agentId: "server-agent:r1", input: { file_path: "/etc/hosts" } }],
+      ["tool_end", { toolUseId: "server-agent:r1:toolu_main", ok: true }],
+    ]);
+    const p = pane(id);
+    const remote = p.liveTools.find((t) => t.id === "server-agent:r1:toolu_main")!;
+    expect(remote).toMatchObject({ agentId: "server-agent:r1", status: "done" });
+    const main = p.liveTools.find((t) => t.id === "toolu_main")!;
+    // The remote end closed only its own namespaced row.
+    expect(main.agentId).toBe("main");
+    expect(main.status).not.toBe("done");
+  });
+
+  it("passes a parent that names neither an agent nor a tool through unchanged", async () => {
+    const id = seedPane();
+    await driveEvents(id, [["agent", { agentId: "orphan", parentId: "toolu_unknown", description: "조사" }]]);
+    expect(pane(id).liveAgents.find((a) => a.id === "orphan")).toMatchObject({ parentId: "toolu_unknown" });
+  });
+
   it("a visible turn keeps the whole live tree in the live bubble", async () => {
     const id = seedPane();
     await driveEvents(id, [["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }]]);

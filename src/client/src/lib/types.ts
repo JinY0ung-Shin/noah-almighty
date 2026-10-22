@@ -61,6 +61,16 @@ export type {
   ShareViewSlide,
 } from "../../../shared/shareLinks";
 
+export type {
+  ServerAgentAccess,
+  ServerAgentErrorCode,
+  ServerAgentHostKeyResponse,
+  ServerAgentInput,
+  ServerAgentInstallState,
+  ServerAgentListResponse,
+  ServerAgentView,
+} from "../../../shared/serverAgents";
+
 import type { CanvasArtifact, RoutineJob } from "../../../server/types.js";
 import type { TodoCounts, TodoItem } from "../../../shared/todos";
 

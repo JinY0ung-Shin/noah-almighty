@@ -8,13 +8,22 @@ import {
   type ScheduleError,
 } from "../routineSchedule.js";
 import type { Store } from "../store.js";
-import type { AgentOwner, AgentRewindInfo, AppConfig, Plugin, RoutineJob, RoutineSchedulePatch } from "../types.js";
+import type {
+  AgentOwner,
+  AgentRewindInfo,
+  AppConfig,
+  Plugin,
+  RoutineJob,
+  RoutineSchedulePatch,
+  ServerAgentsUnavailableReason,
+} from "../types.js";
 import { text } from "./mcpTools.js";
 import { DEFAULT_MODEL_TIER } from "../modelTiers.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 import {
   gettingStartedGaps,
   rewindTurnState,
+  serverAgentsUnavailableText,
   summarizeGroupAgentState,
   summarizeOwnerState,
 } from "./ownerState.js";
@@ -34,6 +43,7 @@ import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
   SHARE_LINK_EXPIRY_DAYS,
 } from "../../shared/shareLinks.js";
+import { serverAgentInstallLine, serverAgentTargetLabel } from "./serverAgentTools.js";
 
 /**
  * Per-conversation context for avatar-system management tools. These tools let
@@ -209,6 +219,23 @@ export interface SystemToolsContext {
    * viewerIsOwner (false on these runs).
    */
   groupAgent?: { agentId: string; actingUserId: string };
+  /** The conversation this run belongs to (describe_system names its remote server-agent sessions). */
+  conversationId?: string;
+  /**
+   * runPlan's `sshActive`: hex-ssh is registered for THIS run. The SSH line
+   * reports it instead of secret-name presence. Undefined (older callers/tests)
+   * → the legacy key-presence wording.
+   */
+  sshEnabled?: boolean;
+  /**
+   * runPlan's `serverAgentsActive` / `serverAgentCheckActive` /
+   * `serverAgentsUnavailable`: whether THIS run registered
+   * `mcp__server_agents__*` (and check_server), or why not. Mirrors
+   * `AgentRequest.serverAgents` so both surfaces report the same capability.
+   */
+  serverAgentsEnabled?: boolean;
+  serverAgentCheckEnabled?: boolean;
+  serverAgentsUnavailable?: ServerAgentsUnavailableReason | null;
 }
 
 /** MCP server name; tools surface to the model as `mcp__system__<tool>`. */
@@ -231,6 +258,44 @@ export const SYSTEM_TOOL_NAMES = [
 ] as const;
 
 const OWNER_ONLY = "This tool can only be used in a conversation the avatar owner is participating in.";
+
+/** D10: a non-owner run hears only that the capability exists and is the owner's. */
+const NON_OWNER_SERVER_AGENTS_LINE =
+  "- Server agents: an owner-only capability (they run with the owner's SSH key and server accounts), so they are not available in this conversation.";
+
+/**
+ * describe_system's server-agent block: whether THIS run has the tools (the
+ * runPlan booleans), then each registered server with its LIVE install state
+ * against the CLI this build ships and this conversation's remote session.
+ * The prompt states only the stable half (ownerState.serverAgents).
+ */
+async function serverAgentLines(store: Store, ctx: SystemToolsContext): Promise<string[]> {
+  const servers = store.listServerAgents(ctx.avatarUserId);
+  const head = ctx.serverAgentsEnabled
+    ? `available in this run — delegate (parallel, one task per server), list_servers, reset_session${
+        ctx.serverAgentCheckEnabled ? ", check_server" : " (check_server only in an interactive chat with the owner)"
+      }; tiers apply as configured, also on unattended runs`
+    : ctx.serverAgentsUnavailable
+      ? `not available in this run — ${serverAgentsUnavailableText(ctx.serverAgentsUnavailable)}`
+      : ctx.serverAgentsEnabled === false
+        ? "not available in this run"
+        : servers.length
+          ? "state of this run unknown"
+          : "no server registered";
+  if (servers.length === 0) {
+    return [`- Server agents (mcp__server_agents__*): ${head}`];
+  }
+  const { localCliInfo } = await import("../serverAgents/installer.js");
+  const localVersion = localCliInfo().version;
+  const sessions = new Set(ctx.conversationId ? store.listServerAgentSessionIds(ctx.conversationId) : []);
+  return [
+    `- Server agents (mcp__server_agents__*): ${head}. Registered (Noah ships agent CLI ${localVersion}):`,
+    ...servers.map(
+      (server) =>
+        `  - ${server.name} — ${serverAgentTargetLabel(server)} · ${server.enabled ? "enabled" : "DISABLED"} · agent: ${serverAgentInstallLine(server, localVersion)} · remote session in this conversation: ${sessions.has(server.id) ? "yes" : "no"}`,
+    ),
+  ];
+}
 
 /** Agent-facing (English) messages for each schedule validation error. */
 const ENGLISH_SCHEDULE_ERROR: Record<ScheduleError, string> = {
@@ -571,7 +636,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
     ),
     tool(
       "describe_system",
-      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; groups and roles; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
+      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; groups and roles; secret names; whether SSH and server agents are enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
       {},
       async () => {
         const user = store.getUserById(ctx.avatarUserId);
@@ -684,7 +749,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // and the deck line's tail says which this run is.
           const turnLines = rewindLines(ctx);
           return text(
-            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}`,
+            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}\n${NON_OWNER_SERVER_AGENTS_LINE}`,
           );
         }
         // Repo/token/secret/group/git-repo/open-request/model facts come from the
@@ -831,7 +896,25 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // browser there is nothing to type them into, and saying otherwise
           // would have the avatar offer a route it does not have.
           `- Browser-typeable secrets: ${state.browserSecrets.length ? state.browserSecrets.map((policy) => `\`${policy.name}\` → ${policy.hosts.join(", ")} (${policy.passwordOnly ? "password fields only" : "any text field"})`).join("; ") + (ctx.browserEnabled ? " — pass the NAME as `secretName` to mcp__browser__type/fill_form (instead of `value`) and the bridge types the value; you never see it, echoes come back [REDACTED:<NAME>], and the extension refuses the secret outside those sites, on the wrong field kind, or if the user declines the one-time confirmation popup their browser shows the first time a secret is typed in that browser session (one approval covers every allowed site until the browser closes). Never type a credential literally; one-time codes and payment details are off-limits regardless" : " — but browser control is NOT connected in this run, so none of them can be typed anywhere here; they only work in an interactive chat with the browser bridge on") : `(none — the owner enables browser input per secret under 설정 → 권한·연결 → 시크릿 → 브라우저 입력, naming the sites it may be typed on${ctx.browserEnabled ? "" : "; browser control is not connected in this run either"})`}`,
-          `- Remote SSH tools: ${secretNames.includes("SSH_PRIVATE_KEY") ? "enabled (SSH_PRIVATE_KEY set)" : "disabled (no SSH_PRIVATE_KEY secret)"}`,
+          // From runPlan's registration boolean when stamped (sshActive), so a
+          // key with the SSH group off — or no allowed tool — never reads as
+          // enabled; the legacy key-presence wording is for ctx-less callers.
+          `- Remote SSH tools: ${
+            ctx.sshEnabled === undefined
+              ? secretNames.includes("SSH_PRIVATE_KEY")
+                ? "enabled (SSH_PRIVATE_KEY set)"
+                : "disabled (no SSH_PRIVATE_KEY secret)"
+              : ctx.sshEnabled
+                ? `enabled — the hex-ssh tools are registered for this run${webProxy.egressPolicy === "domain-proxy" ? ", but this deployment's egress policy blocks direct outbound connections, so SSH connections will fail" : ""}`
+                : `disabled for this run — ${
+                    !secretNames.includes("SSH_PRIVATE_KEY")
+                      ? "no SSH_PRIVATE_KEY secret"
+                      : !enabledMcpToolGroups.includes("ssh")
+                        ? "the SSH tool group is OFF for this conversation"
+                        : "the deployment's SSH tool policy allows no SSH tools here"
+                  }`
+          }`,
+          ...(await serverAgentLines(store, ctx)),
           `- Groups: ${groups.length ? groups.map((g) => `${g.name}(${g.role === "admin" ? "admin" : "member"}, shared repository ${g.knowledgeRepoConfigured ? "connected" : "none"}${g.avatarSharing ? "" : ", avatar sharing off"})`).join(", ") : "(none)"} — members of the same group automatically trust each other mutually (this is the ONLY source of elevated access; manage trust by managing group membership).${groups.some((g) => !g.avatarSharing) ? ' Groups marked "avatar sharing off" are knowledge-sharing-only: their co-membership grants neither avatar visibility nor mutual trust.' : ""}`,
           `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (groups.some((g) => g.avatarSharing) ? "available — you can ask a same-group teammate's avatar one question on the owner's behalf; it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : groups.length > 0 ? "enabled, but none of the owner's groups share avatars (avatar sharing off), so no teammate avatar is reachable" : "enabled, but the owner belongs to no groups, so no teammate avatar is reachable (consultation requires shared group membership)") : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Skill exchange (mcp__skill_exchange__*): ${enabledMcpToolGroups.includes("avatars") ? `${state.learnableSkillCount} skill(s) shared by teammates are learnable (find_shared_skills → learn_skill copies one into the knowledge repository${state.knowledgeRepoConfigured ? "" : " — connect a knowledge repository first"}); this avatar shares ${state.sharedSkillCount} of its own, learned by teammates ${state.sharedSkillLearnTotal} time(s) so far (share_skill/unshare_skill, also manageable in the '스킬 배우기' tab). A learned skill loads from the NEXT conversation` : "OFF for this conversation (avatars tool group deselected)"}`,

@@ -110,6 +110,9 @@
   They silently depend on the **image carrying python3 + `cryptography` + `paramiko`** (no
   `ssh-keygen`/`ssh-keyscan`). A base-image change breaks them at RUNTIME, not build. A unit test asserts
   the TS `fingerprintOf` and the python SHA256 format agree — keep it green.
+- **Server agents (서버 에이전트) reuse the same vault key + per-owner known_hosts** but connect with Noah's own
+  ssh2 client (passphrase supported, fail-closed host check, TOCTOU-safe `trustHostWithFingerprint` for the
+  settings card) — see [`server-agents.md`](server-agents.md).
 - **SSH host-key trust is agent-managed + volume-persistent.** `mcp__ssh_trust__{add,list,remove}_host`
   (sshTrustTools.ts) write a per-owner `known_hosts` under `${dataDir}/ssh/<userId>` (data volume →
   survives restarts), injected into hex-ssh as `KNOWN_HOSTS_PATH` (re-read per connection, so `add_host`

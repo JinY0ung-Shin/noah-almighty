@@ -20,6 +20,7 @@ import {
   type UserRow,
   MODEL_OVERRIDE_KEY,
   PRESENCE_WINDOW_MS,
+  SERVER_AGENTS_ENABLED_KEY,
   SIGNUP_MODE_KEY,
   now,
 } from "./internal.js";
@@ -214,6 +215,19 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
       this.setAppSecret(SIGNUP_MODE_KEY, mode);
     }
 
+    /**
+     * 서버 에이전트 deployment switch (default OFF). Checks and delegations refuse
+     * while it is off: they hand this deployment's model credentials to the CLI on
+     * the registrant's own server, so an admin must opt in knowingly.
+     */
+    isServerAgentsEnabled(): boolean {
+      return this.getAppSecret(SERVER_AGENTS_ENABLED_KEY) === "on";
+    }
+
+    setServerAgentsEnabled(enabled: boolean): void {
+      this.setAppSecret(SERVER_AGENTS_ENABLED_KEY, enabled ? "on" : "off");
+    }
+
     /** Admin-selected agent model (UI), or null if unset. Env ANTHROPIC_MODEL wins. */
     getModelOverride(): string | null {
       const raw = this.getAppSecret(MODEL_OVERRIDE_KEY);
@@ -381,6 +395,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         // (the conversation sweep below covers the threads themselves).
         this.db.prepare("DELETE FROM share_links WHERE owner_user_id = ?").run(id);
         this.db.prepare("DELETE FROM todo_items WHERE owner_user_id = ?").run(id);
+        this.deleteServerAgentsForOwner(id);
         // Delete conversations owned by or targeting this user (+ their messages).
         const convRows = this.db
           .prepare(
@@ -393,6 +408,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
           // Both directions: this user's own threads AND other people's
           // threads with this user's avatar (a colleague's links die with it).
           this.deleteShareLinksForConversation(c.id);
+          this.deleteServerAgentSessionsForConversation(c.id);
           delMsgs.run(c.id);
         }
         this.db

@@ -217,6 +217,7 @@ export function withRetiredPersonalAgents<TBase extends Constructor<StoreBase>>(
         for (const id of threadIds) {
           this.deleteCanvasArtifactsForConversation(id);
           this.deleteShareLinksForConversation(id);
+          this.deleteServerAgentSessionsForConversation(id);
           purge.messages += deleteMessages.run(id).changes;
           deleteAvatarTasks.run(id);
           purge.notifications += deleteNotifications.run(id).changes;
