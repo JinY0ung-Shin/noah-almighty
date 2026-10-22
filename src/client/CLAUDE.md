@@ -15,8 +15,8 @@ Durable principles for this layer:
   names). So porting/restoring a feature = reproducing the SAME DOM structure + class names — don't invent
   new ones (a custom class with no CSS renders unstyled). The old frontend is the parity reference at git
   `f0a6128`. Server types are SHARED via the `lib/types.ts` re-export barrel, never re-declared.
-- **`app.ts` serves a strict same-origin CSP** (`connect-src 'self'`; `script-src 'self'
-  'wasm-unsafe-eval'` — wasm COMPILATION only, for the composer mic's Silero VAD). So: no inline
+- **`app.ts` serves a strict same-origin CSP** (`connect-src 'self'`; `script-src 'self'`, no
+  `'wasm-unsafe-eval'`). So: no inline
   `<script>` (the build emits none), no `eval`, no `blob:`/remote `<img>`, no `Function`-ctor renderers —
   any first-paint theming or content rendering must stay CSP-safe (the canvas/theme designs are built
   around this). Widen a directive in `app.ts` only when a feature genuinely needs it.
@@ -25,7 +25,7 @@ Durable principles for this layer:
   `autosize` fix that only a real-DOM measurement caught.
 - **Legacy-mode template dependencies are resolved at COMPILE time** (every component here is non-runes).
   A template expression depends only on what the MARKUP names — helper calls are `untrack`ed, so state
-  read solely inside a helper's closure renders STALE (the composer mic's `title` froze this way). Pass
+  read solely inside a helper's closure renders STALE (a composer button's `title` once froze this way). Pass
   the state as an argument (`attachHint(item, $appState)`) or name it in the markup (`{@const}`).
   Neither svelte-check nor jsdom catches it: unrelated store writes re-evaluate the expression and mask
   the staleness — only a real browser shows it.

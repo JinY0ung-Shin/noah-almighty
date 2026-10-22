@@ -280,19 +280,6 @@ export const SIGNUP_MODE_KEY = "signup_mode";
 /** app_config key: admin-selected agent model, overriding nothing when an env
  *  ANTHROPIC_MODEL is set (env wins, mirroring the API-key/subscription rule). */
 export const MODEL_OVERRIDE_KEY = "agent_model_override";
-/**
- * app_config key: admin-managed speech-to-text endpoint, JSON `{ url, model }`
- * with `model` null meaning "inherit the env default" (`SttOverride`).
- *
- * Precedence is the INVERSE of MODEL_OVERRIDE_KEY above: here the ADMIN value
- * wins and env `STT_URL`/`STT_MODEL` are only the fallback the panel displays.
- * The model override defers to env because a deployment pins its agent model
- * deliberately at boot; an STT endpoint is operational plumbing an operator
- * must be able to re-point at runtime without a redeploy. Env is never seeded
- * into this key — a seed-if-unset write would re-fire every boot and clobber a
- * deliberate clear.
- */
-export const STT_OVERRIDE_KEY = "stt_override";
 
 /**
  * Generic constructor type used to compose the per-domain mixins back onto a
@@ -892,6 +879,10 @@ export class StoreBase {
     // Trust is now derived purely from group co-membership; the old per-(avatar,
     // viewer) trust table is dropped (its grants don't survive the migration).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
+    // The speech-to-text feature is removed; drop its admin endpoint override.
+    // Nothing writes this key any more, so the delete can only match a row left
+    // by an older release — keep the key name reserved.
+    this.db.prepare("DELETE FROM app_config WHERE key = ?").run("stt_override");
   }
 
   /** One-time backfill of canvas artifacts that pre-date the dedicated tables:

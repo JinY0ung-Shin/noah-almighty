@@ -37,12 +37,6 @@
   let hexError = "";
   // hex-ssh policy local checkbox matrix: policy[role][toolName] = boolean
   let hexPolicy: Record<string, Record<string, boolean>> = {};
-  // STT endpoint override draft (empty url = "no admin override")
-  let sttUrlInput = "";
-  let sttModelInput = "";
-  let sttLanguageInput = "";
-  let sttBusy = false;
-  let sttError = "";
   // builtin tool/skill policy local state: checked = DISABLED deployment-wide
   let toolSkillBusy = false;
   let toolSkillError = "";
@@ -56,7 +50,6 @@
   const signupStatusId = "admin-signup-status";
   const tokenStatusId = "admin-token-status";
   const modelStatusId = "admin-model-status";
-  const sttStatusId = "admin-stt-status";
   const hexStatusId = "admin-hex-policy-status";
   const toolSkillStatusId = "admin-tool-skill-status";
 
@@ -137,6 +130,7 @@
     clear_claude_token: "구독 토큰 해제",
     set_model_override: "아바타 모델 지정",
     clear_model_override: "아바타 모델 해제",
+    // Speech-to-text was removed; its labels stay for the retained audit rows.
     set_stt_override: "STT 설정 변경",
     clear_stt_override: "STT 설정 해제",
     set_model_vision_policy: "모델 비전 정책 변경",
@@ -213,46 +207,6 @@
         : savedModelOverride
           ? "저장됨"
           : "SDK 기본값 사용 중";
-  // STT: an admin override WINS over env, so the inputs seed from the effective
-  // saved value — env values show pre-filled and stay saveable as an override.
-  $: sttOverride = (sys.sttOverride && typeof sys.sttOverride === "object" ? sys.sttOverride : null) as {
-    url?: string;
-    model?: string | null;
-    language?: string | null;
-  } | null;
-  $: sttEnvUrl = String(sys.sttEnvUrl || "");
-  $: sttEnvModel = String(sys.sttEnvModel || "");
-  $: sttEnvLanguage = String(sys.sttEnvLanguage || "");
-  $: savedSttUrl = String(sttOverride?.url ?? sttEnvUrl ?? "");
-  // Empty = inherit. The env model shows only as a PLACEHOLDER: pre-filling it
-  // would pin it into the override on the next save.
-  $: savedSttModel = String(sttOverride?.model ?? "");
-  // Same inherit rule for the language bias; an override saved before the
-  // language field existed simply has no key, which reads as "inherit".
-  $: savedSttLanguage = String(sttOverride?.language ?? "");
-  $: sttUrlTrimmed = sttUrlInput.trim();
-  $: sttModelTrimmed = sttModelInput.trim();
-  // Lowercased here, not just server-side, so the card shows the value that
-  // will actually be stored.
-  $: sttLanguageTrimmed = sttLanguageInput.trim().toLowerCase();
-  $: sttDirty =
-    sttUrlTrimmed !== savedSttUrl || sttModelTrimmed !== savedSttModel || sttLanguageTrimmed !== savedSttLanguage;
-  $: sttCanSave = Boolean(!sttBusy && sttDirty);
-  $: sttStatus = sttBusy
-    ? "저장 중…"
-    : sttError
-      ? `저장 실패: ${sttError}`
-      : sttDirty
-        ? !sttUrlTrimmed && sttOverride
-          ? sttEnvUrl
-            ? "저장하면 환경 변수(STT_URL) 값으로 되돌립니다."
-            : "저장하면 STT 설정을 해제합니다. 마이크 버튼이 숨겨집니다."
-          : "저장하지 않은 변경 사항이 있습니다."
-        : sttOverride
-          ? "관리자 설정 적용 중"
-          : sttEnvUrl
-            ? "환경 변수(STT_URL) 값을 사용 중입니다."
-            : "미설정 — 마이크 버튼이 숨겨져 있습니다.";
   $: claudeTokenTrimmed = claudeToken.trim();
   $: tokenCanSave = Boolean(!subBusy && claudeTokenTrimmed);
   $: tokenStatus = subBusy
@@ -336,7 +290,6 @@
       if (!panelsSeeded || !toolSkillDirty) syncToolSkillFromSys();
       if (!panelsSeeded || !visionDirty) syncVisionPolicyFromSys();
       if (!panelsSeeded || !modelDirty) modelInput = String(unwrapSystem($appState.adminSystem).modelOverride || "");
-      if (!panelsSeeded || !sttDirty) syncSttFromSys();
       panelsSeeded = true;
     } catch (err) {
       error = (err as Error).message;
@@ -503,57 +456,6 @@
       notify(`모델 설정은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
       modelBusy = false;
-    }
-  }
-
-  // ---- system: speech-to-text endpoint ----
-  function syncSttFromSys() {
-    const cur = unwrapSystem($appState.adminSystem);
-    const override = cur.sttOverride && typeof cur.sttOverride === "object" ? cur.sttOverride : null;
-    sttUrlInput = String(override?.url ?? cur.sttEnvUrl ?? "");
-    sttModelInput = String(override?.model ?? "");
-    sttLanguageInput = String(override?.language ?? "");
-  }
-
-  async function saveStt() {
-    if (sttBusy || !sttDirty) return;
-    const url = sttUrlTrimmed;
-    const model = sttModelTrimmed;
-    const language = sttLanguageTrimmed;
-    // Clearing the url with no override to delete leaves nothing to send — the
-    // env value, if any, isn't ours to remove.
-    if (!url && !sttOverride) {
-      notify("서버 주소를 입력해 주세요.", "warn");
-      return;
-    }
-    const successMessage = url
-      ? "STT 설정을 저장했습니다."
-      : sttEnvUrl
-        ? "STT 설정을 해제했습니다. 환경 변수 값을 사용합니다."
-        : "STT 설정을 해제했습니다.";
-    sttBusy = true;
-    sttError = "";
-    try {
-      if (url)
-        await api("/api/admin/stt", {
-          method: "PUT",
-          body: JSON.stringify({ url, ...(model ? { model } : {}), ...(language ? { language } : {}) }),
-        });
-      else await api("/api/admin/stt", { method: "DELETE" });
-    } catch (err) {
-      sttBusy = false;
-      sttError = (err as Error).message;
-      notify(`저장 실패: ${sttError}`);
-      return;
-    }
-    try {
-      await loadAdminOverview();
-      syncSttFromSys();
-      notify(successMessage, "ok");
-    } catch (err) {
-      notify(`STT 설정은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      sttBusy = false;
     }
   }
 
@@ -1059,67 +961,6 @@
                   <button class="primary" type="submit" disabled={!modelCanSave}>{modelBusy ? "저장 중…" : modelValueTrimmed ? "모델 저장" : "기본값 사용"}</button>
                 </div>
               </form>
-            </section>
-
-            <!-- speech-to-text endpoint -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>음성 인식 (STT)</h3>
-                  <p class="muted">채팅 입력창 마이크 버튼이 사용할 OpenAI 호환 음성 인식 서버입니다. 저장하면 환경 변수(STT_URL)보다 우선 적용됩니다.</p>
-                </div>
-              </div>
-              <form class="settings-form" on:submit|preventDefault={saveStt}>
-                <label class="field">
-                  <span>서버 주소</span>
-                  <!-- aria-label disambiguates from the 아바타 모델 card's own
-                       fields; it keeps the visible label as a prefix (WCAG 2.5.3). -->
-                  <input
-                    name="stt-url"
-                    bind:value={sttUrlInput}
-                    placeholder="http://127.0.0.1:8000/v1"
-                    autocomplete="off"
-                    aria-label="STT 서버 주소"
-                    aria-describedby={sttStatusId}
-                    aria-invalid={sttError ? "true" : undefined}
-                    disabled={sttBusy}
-                    on:input={() => (sttError = "")}
-                  />
-                </label>
-                <label class="field">
-                  <span>모델 이름</span>
-                  <input
-                    name="stt-model"
-                    bind:value={sttModelInput}
-                    placeholder={sttEnvModel}
-                    autocomplete="off"
-                    aria-label="STT 모델 이름"
-                    aria-describedby={sttStatusId}
-                    disabled={sttBusy}
-                    on:input={() => (sttError = "")}
-                  />
-                  <span class="field-hint">비워 두면 기본 모델을 사용합니다.</span>
-                </label>
-                <label class="field">
-                  <span>언어</span>
-                  <input
-                    name="stt-language"
-                    bind:value={sttLanguageInput}
-                    placeholder={sttEnvLanguage}
-                    autocomplete="off"
-                    aria-label="STT 언어"
-                    aria-describedby={sttStatusId}
-                    disabled={sttBusy}
-                    on:input={() => (sttError = "")}
-                  />
-                  <span class="field-hint">전사 언어 바이어스 (ISO 코드, 예: ko). 비워 두면 기본값, auto는 자동 감지.</span>
-                </label>
-                <div class="settings-save-row">
-                  <span id={sttStatusId} class="settings-save-status" class:dirty={sttDirty && !sttBusy && !sttError} class:pending={sttBusy} class:invalid={Boolean(sttError)} role="status" aria-live="polite">{sttStatus}</span>
-                  <button class="primary" type="submit" disabled={!sttCanSave}>{sttBusy ? "저장 중…" : sttUrlTrimmed ? "STT 저장" : "설정 해제"}</button>
-                </div>
-              </form>
-              <p class="muted">변경 사항은 각 사용자가 페이지를 새로 고친 뒤부터 적용됩니다.</p>
             </section>
 
             <!-- per-tier vision (image input) policy -->

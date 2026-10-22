@@ -398,12 +398,6 @@ export interface BootstrapInfo {
    */
   visionEnabled?: boolean;
   /**
-   * True when the deployment has speech-to-text configured: the composer shows
-   * the mic button and POSTs recordings to `/api/stt`. Optional for older
-   * servers (absent = no voice input).
-   */
-  sttEnabled?: boolean;
-  /**
    * Per-conversation model picker config: selectable tiers + whether an env-pinned
    * ANTHROPIC_MODEL locks the choice (then the composer hides the picker). Optional
    * for forward-compat with an older server that omits it.

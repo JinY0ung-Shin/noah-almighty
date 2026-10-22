@@ -65,20 +65,18 @@ describe("noah-almighty platform", () => {
       .expect(404);
   });
 
-  it("serves a same-origin CSP that allows wasm compilation but no script eval", async () => {
+  it("serves a same-origin CSP with no script eval or wasm compilation", async () => {
     const app = testApp();
     const res = await request(app).get("/api/bootstrap").expect(200);
     const csp = res.headers["content-security-policy"] as string;
 
-    // The composer mic's Silero VAD compiles wasm; that is the only widening.
-    expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
+    expect(csp).toContain("script-src 'self';");
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("connect-src 'self'");
 
     const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src"))!;
     expect(scriptSrc).not.toContain("unsafe-inline");
-    // A bare 'unsafe-eval' would enable JS eval; 'wasm-unsafe-eval' does not match it.
-    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).not.toContain("unsafe-eval");
   });
 
   it("reports the configured default GitHub host", async () => {

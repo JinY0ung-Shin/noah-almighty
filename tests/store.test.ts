@@ -321,6 +321,16 @@ describe("store app config (app-wide secrets)", () => {
     expect(makeStore("secretB").getAppSecret("claude_oauth_token")).toBeNull();
   });
 
+  it("drops the retired speech-to-text override on reopen and keeps other keys", () => {
+    const first = makeStore();
+    first.setAppSecret("stt_override", JSON.stringify({ url: "http://stt:8000/v1", model: null, language: null }));
+    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.close();
+    const second = makeStore();
+    expect(second.getAppSecret("stt_override")).toBeNull();
+    expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+  });
+
   it("stores the hex-ssh tool policy as app config", () => {
     const store = makeStore();
     expect(store.getHexSshToolPolicy()).toEqual(DEFAULT_HEX_SSH_TOOL_POLICY);

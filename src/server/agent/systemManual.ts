@@ -86,9 +86,8 @@ The system tool group is always on for local avatars, including when all optiona
 ## Questions and approvals
 Respond to question, permission, plan or canvas cards in Noah to let a waiting run continue. A submitted task or accepted plan is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
 
-## Attachments and voice
+## Attachments
 Attach supported files with the composer. Image understanding depends on the selected model; a text-only model receives image file paths rather than visible images. Generated files arrive as file cards; local filesystem paths are not download links. Read files-canvas for previews and exports.
-The microphone appears only when speech-to-text is configured. Record, stop, review the transcribed text in the input and send it. It can also stop automatically on silence or at the recording limit. Voice input is transcription into a normal message.
 
 ## Background work
 Background shell work can outlive the first visible reply. Noah keeps the session alive and delivers follow-up reports as new messages. While it runs, this conversation cannot accept another message; cancelling stops the work. A server restart also ends pending background processes. Subagent work is forced into the foreground in this host.
@@ -394,7 +393,7 @@ Configuration includes enablement, endpoint, allowed groups, a write-only gatewa
 - External avatar: a Noah user chats with an agent hosted by ANOTHER gateway. The local manual/prompt/tools described here are not automatically injected into that gateway.
 
 ## Administration and troubleshooting
-System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Speech-to-text is configured under 관리자 → 시스템 or by deployment settings; users see its microphone on a subsequent page load. Subscription/API credentials are administrator-managed and must not be collected in chat.
+System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
 For a missing feature, first inspect this run's state and visible controls, then distinguish account role, group membership, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.`,
   },
   {

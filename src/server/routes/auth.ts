@@ -10,7 +10,6 @@ import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_s
 import { DEFAULT_MODEL_TIER, MODEL_TIERS } from "../modelTiers.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
-import { resolveSttTarget } from "../stt.js";
 
 // ---- Auth ------------------------------------------------------------
 export function createAuthRouter({ config, store }: RouterDeps): Router {
@@ -155,11 +154,6 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // Lets onboarding show the Confluence PAT field only when the deployment
       // has a Confluence host configured (the PAT is useless otherwise).
       confluenceConfigured: Boolean(config.confluenceUrl),
-      // Lets the composer show its mic button only where the deployment has a
-      // speech-to-text service configured — env `STT_URL` or the admin-panel
-      // override, which wins over it. Read at page load, so a just-configured
-      // endpoint reaches a signed-in user on their next load.
-      sttEnabled: Boolean(resolveSttTarget(config, store)),
       // Deployment default for image input (MODEL_VISION). Per-TIER support
       // rides on modelSelection.tiers[].vision below; this global remains the
       // fallback for locked/unresolvable cases.

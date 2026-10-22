@@ -99,7 +99,7 @@ send.
   persist in `localStorage` (`dmDockOpen`, `dmDockPeer`). At ≤640 px it becomes a full-width bottom sheet
   (75dvh) collapsed by dragging its grabber down.
 - **The composer is the chat composer's own building blocks, not a look-alike.** The thread view renders
-  `.composer-box.no-attach.no-stt` around a borderless `<textarea>` and the icon-only `.send-button`, so
+  `.composer-box.no-attach` around a borderless `<textarea>` and the icon-only `.send-button`, so
   the rounded material box, its `:focus-within` ring and the accent button all arrive from the composer
   layer instead of being re-invented. The textarea reset lives on the WIDENED
   `.composer textarea, .composer-box textarea` selector in `30-agent-md-composer.css` — the dock sits

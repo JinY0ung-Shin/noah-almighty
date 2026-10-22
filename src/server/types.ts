@@ -170,25 +170,6 @@ export interface AppConfig {
    */
   confluenceUrl?: string;
   /**
-   * Base URL of the deployment's OpenAI-compatible speech-to-text service (env
-   * `STT_URL`), including the API version segment — e.g. `http://stt:8000/v1`.
-   * Unset DISABLES the feature: `POST /api/stt` 503s and the composer hides its
-   * mic button (`sttEnabled` in `/api/bootstrap`).
-   */
-  sttUrl?: string;
-  /**
-   * Model name sent with each transcription request (env `STT_MODEL`). The
-   * service picks what it actually has loaded, so this only has to name it.
-   */
-  sttModel: string;
-  /**
-   * ISO-639-1 language biasing every transcription (env `STT_LANGUAGE`, default
-   * `ko` for a Korean-speaking fleet), lowercased. The sentinel `auto` sends NO
-   * language field at all, leaving the engine to detect it. The admin override's
-   * own value wins over this — see `resolveSttTarget` in `stt.ts`.
-   */
-  sttLanguage: string;
-  /**
    * Deployment-wide DEFAULT browser-control allowlist (env
    * `BROWSER_ALLOWED_ORIGINS`, comma-separated hostnames / `*.wildcards`).
    * Served via `GET /api/browser-extension` and applied by the Noah page to a
@@ -285,21 +266,6 @@ export interface AppConfig {
   hexSshCommand: string;
   /** Server-only static registry loaded from `EXTERNAL_AGENTS_JSON`. */
   externalAgents?: ExternalAgentConfig[];
-}
-
-/**
- * Admin-panel override of the speech-to-text endpoint, stored in `app_config`.
- * Unlike the model override, THIS wins over the env (`STT_URL`/`STT_MODEL`),
- * which stays the fallback an operator sees in the panel — see
- * `resolveSttTarget` in `stt.ts`. `url` is already normalized (trailing slashes
- * stripped) when stored; `model` null means "inherit `config.sttModel`", and
- * `language` null means "inherit `config.sttLanguage`" — including for a row
- * written before the field existed, whose JSON has no `language` key at all.
- */
-export interface SttOverride {
-  url: string;
-  model: string | null;
-  language: string | null;
 }
 
 /**

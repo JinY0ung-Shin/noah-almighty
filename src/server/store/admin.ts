@@ -13,7 +13,6 @@ import type {
   AvatarVisibility,
   ExternalAgentConfig,
   SignupMode,
-  SttOverride,
 } from "../types.js";
 import {
   type Constructor,
@@ -22,7 +21,6 @@ import {
   MODEL_OVERRIDE_KEY,
   PRESENCE_WINDOW_MS,
   SIGNUP_MODE_KEY,
-  STT_OVERRIDE_KEY,
   now,
 } from "./internal.js";
 import type { AppSecretState } from "./secrets.js";
@@ -205,7 +203,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.toAdminSummary(this.userRowById(userId)!);
     }
 
-    // ---- App-wide settings (signup gating, model + stt override) ----------
+    // ---- App-wide settings (signup gating, model override) ----------
 
     getSignupMode(): SignupMode {
       const raw = this.getAppSecret(SIGNUP_MODE_KEY);
@@ -228,40 +226,6 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     clearModelOverride(): void {
       this.deleteAppSecret(MODEL_OVERRIDE_KEY);
-    }
-
-    /**
-     * Admin-managed speech-to-text endpoint, or null when none is stored (the
-     * deployment then falls back to env `STT_URL`/`STT_MODEL`). Anything
-     * unreadable — a SESSION_SECRET rotation, hand-edited JSON, a shape from a
-     * future version — reads as null rather than throwing: a garbled override
-     * degrades to the env fallback, exactly as the other app_config readers do.
-     */
-    getSttOverride(): SttOverride | null {
-      const raw = this.getAppSecret(STT_OVERRIDE_KEY);
-      if (!raw) return null;
-      try {
-        const parsed = JSON.parse(raw) as { url?: unknown; model?: unknown; language?: unknown };
-        const url = typeof parsed?.url === "string" ? parsed.url.trim() : "";
-        if (!url) return null;
-        const model = typeof parsed?.model === "string" ? parsed.model.trim() : "";
-        // Rows written before the language field existed carry no `language` key
-        // at all; a missing one reads as "inherit the env default", never as a
-        // reason to discard an override the deployment is currently using.
-        const language = typeof parsed?.language === "string" ? parsed.language.trim() : "";
-        return { url, model: model || null, language: language || null };
-      } catch {
-        return null;
-      }
-    }
-
-    /** Store the override. Values arrive already validated + normalized by the route. */
-    setSttOverride(url: string, model: string | null, language: string | null): void {
-      this.setAppSecret(STT_OVERRIDE_KEY, JSON.stringify({ url, model, language }));
-    }
-
-    clearSttOverride(): void {
-      this.deleteAppSecret(STT_OVERRIDE_KEY);
     }
 
     /** UI-managed deployment-wide external avatars, encrypted as one versioned registry. */

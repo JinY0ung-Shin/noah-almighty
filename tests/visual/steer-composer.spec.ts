@@ -6,7 +6,7 @@ import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 // grows a second send button next to the stop button, and a steer the server
 // accepted renders as a dimmed "전달 대기 중" bubble above the live bubble. These
 // are geometry/structure checks (no screenshots): the composer row is a CSS grid
-// with one explicit column list per attach/mic combination, so a fifth child
+// with one explicit column list per attach/steer combination, so an extra child
 // that no list accounts for silently wraps onto its own row — jsdom cannot see
 // that, only a real viewport can. Checked at desktop AND phone width.
 
@@ -79,9 +79,6 @@ async function mockApp(page: Page): Promise<void> {
         githubHost: "github.com",
         signupMode: "open",
         confluenceConfigured: false,
-        // The mic button is the composer's widest configuration: attach + mic +
-        // steer + stop must all share the row.
-        sttEnabled: true,
         modelSelection: {
           tiers: [{ id: "default", label: "기본", description: "균형", model: null }],
           locked: false,
@@ -190,7 +187,7 @@ test("a streaming local pane shows the mid-turn send button beside stop on one r
   await expectSingleComposerRow(page, 0.5);
 
   // Phone width: the attach button steps aside for the duration of the stream
-  // (an image cannot be sent mid-turn anyway), so mic + steer + stop share the
+  // (an image cannot be sent mid-turn anyway), so steer + stop share the
   // row with a textarea that is still wide enough to read what is being typed.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(steerButton).toBeVisible();

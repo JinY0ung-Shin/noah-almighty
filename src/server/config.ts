@@ -89,14 +89,6 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     readOnlyTools,
     githubHost,
     confluenceUrl: env("CONFLUENCE_URL") || undefined,
-    // Speech-to-text service (composer mic). The env value already carries the
-    // `/v1` segment, so a trailing slash is stripped here rather than producing
-    // `//audio/transcriptions` at every call site.
-    sttUrl: env("STT_URL").replace(/\/+$/, "") || undefined,
-    sttModel: env("STT_MODEL", "Qwen/Qwen3-ASR-1.7B"),
-    // The fleet speaks Korean, so bias every transcription toward `ko` rather
-    // than leaving detection to the engine; `auto` opts back out (no field sent).
-    sttLanguage: env("STT_LANGUAGE", "ko").toLowerCase(),
     // Default browser-control allowlist, seeded into browsers whose extension
     // allowlist is still empty (see AppConfig). Normalized here once; the
     // self-host filtering happens per request, where Noah's host is known.

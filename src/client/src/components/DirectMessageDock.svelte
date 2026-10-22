@@ -766,13 +766,13 @@
 
         <!-- The chat composer's own building blocks, not a look-alike: one
              rounded material box that owns the focus ring, a borderless
-             textarea, an icon-only accent send button. `no-attach no-stt`
+             textarea, an icon-only accent send button. `no-attach`
              picks the two-column grid — there is no image or mic control
              here. The keyboard hint moved off the placeholder (which vanishes
              the moment you type) onto an sr-only description plus the button's
              title. -->
         <form class="dm-dock-composer" on:submit|preventDefault={send}>
-          <div class="composer-box no-attach no-stt">
+          <div class="composer-box no-attach">
             <textarea
               bind:this={composerEl}
               bind:value={draft}

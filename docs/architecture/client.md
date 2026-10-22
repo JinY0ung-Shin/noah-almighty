@@ -32,11 +32,10 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 
 ## CSP
 - **`app.ts` serves a strict same-origin CSP** (`connect-src 'self'`, `img-src 'self' data:`,
-  `script-src 'self' 'wasm-unsafe-eval'`). So remote `<img>` in rendered markdown is BLOCKED and the
+  `script-src 'self'`). So remote `<img>` in rendered markdown is BLOCKED and the
   browser can't fetch cross-origin — widen the relevant directive in `app.ts` if a feature needs it. The
-  Svelte build emits no inline `<script>`, so a `script-src` with no `'unsafe-inline'` is safe;
-  `'wasm-unsafe-eval'` is the one deliberate addition (WebAssembly compilation for the composer mic's
-  Silero VAD — it does not enable JS `eval`, see [`stt.md`](./stt.md)).
+  Svelte build emits no inline `<script>`, so a `script-src` with no `'unsafe-inline'` is safe; nothing
+  compiles WebAssembly either, so `'wasm-unsafe-eval'` stays out too.
 
 ## Theme (light / dark / system) — `src/lib/theme.ts`
 - **One device-local preference, resolved in JS, applied as an attribute.** `localStorage["noah-theme"]` is

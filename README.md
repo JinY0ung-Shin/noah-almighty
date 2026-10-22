@@ -267,91 +267,6 @@ both as in [docs/egress-policy.md](docs/egress-policy.md), and roll back by re-t
 running `up -d --no-build` with both compose files. The converter needs nothing from the egress
 boundary: its Chromium only talks to loopback, which the egress firewall allows.
 
-## Speech-to-text (optional)
-
-The composer's mic button records an utterance, posts it to `POST /api/stt`, and drops the
-transcript into the chat input. It appears only when a transcription endpoint is configured, so this
-whole section is opt-in — as is the `stt` compose service, which lives behind a `stt` profile and is
-ignored by a plain `docker compose up`. `Alt+M` toggles recording from anywhere in the chat view, so
-you never have to reach for the button.
-
-There are two ways to configure that endpoint: the `STT_URL`/`STT_MODEL`/`STT_LANGUAGE` env trio
-below, or the admin panel (관리자 → 시스템), which stores an endpoint at runtime and needs no
-redeploy. **The admin value wins** when both are set; env stays the fallback the panel displays and
-what a cleared override returns to. Users see the mic appear (or disappear) on their next page load.
-
-Every transcription is biased toward Korean (`STT_LANGUAGE`, default `ko`) rather than leaving the
-engine to detect a language: a short Korean utterance is exactly the case auto-detection gets wrong.
-Set it to `auto` if your users speak something else, or per endpoint in the admin panel.
-
-The mic stops itself when you finish speaking — a Silero voice-activity detector runs in the browser
-(fully offline, served from this deployment like every other asset, and lazy-loaded on the first
-recording, so the first mic click fetches roughly 8MB once). Stopping manually and the 60-second cap
-both still apply, and a recording with no speech in it is discarded without a transcription request.
-There is nothing to configure: it is on wherever the mic button is, and if it fails to load the mic
-simply falls back to stopping only when you click it.
-
-The reference engine is **Qwen3-ASR-1.7B** (Apache 2.0) served by vLLM on the deploy host's GPU.
-The deploy host has no Hugging Face or internet access, so both artifacts are carried in by hand:
-
-1. **Provision offline.** The engine runs a small DERIVED image, `noah-almighty-stt:v0.27.1-audio`
-   (`docker/stt.Dockerfile`): the official `vllm/vllm-openai` image ships **without** vLLM's
-   `[audio]` extra, so every transcription request would fail inside it with
-   `ImportError: Please install vllm[audio] for audio support` — the derived image adds the four
-   packages that extra resolves to (soundfile, PyAV, soxr, scipy) on top of the pinned base and
-   changes nothing else. On a machine with internet access, download the weights and build the
-   image, then transfer both to the deploy host:
-
-   ```bash
-   huggingface-cli download Qwen/Qwen3-ASR-1.7B --local-dir Qwen3-ASR-1.7B
-   docker compose --profile stt build stt      # builds noah-almighty-stt:v0.27.1-audio
-   docker save noah-almighty-stt:v0.27.1-audio -o noah-stt.tar
-   ```
-
-   (Behind a corporate mirror/proxy, export `PIP_INDEX_URL`/`PIP_TRUSTED_HOST` and the proxy vars
-   first — the build forwards them exactly like the app image's build, and an intercepting proxy's
-   CA rides the same `CA_CERT_FILE` build arg the app image trusts.) On the deploy host, the
-   weights go to `./docker/stt-models/Qwen3-ASR-1.7B` (the directory is git-ignored and
-   bind-mounted read-only at `/models`), and the image goes straight in with
-   `docker load -i noah-stt.tar`, which keeps the name `docker-compose.yml` expects so no edit is
-   needed — the offline host never builds anything. If you route it through the corporate registry
-   instead, edit the compose file's `image:` to the exact reference you pushed.
-
-2. **Start it.** Add `STT_URL=http://stt:8000/v1` to `.env`, then one command starts the engine and
-   recreates the app container so it reads the new `.env`:
-
-   ```bash
-   docker compose --profile stt up -d
-   ```
-
-   Keep passing `--profile stt` (or export `COMPOSE_PROFILES=stt`) for later `up`/`down` on this
-   deployment — without it, compose does not manage the `stt` service at all. The container publishes
-   **no host port**: it is reachable only from the compose network, and Noah's authenticated
-   `POST /api/stt` is the only way in. First start takes a few minutes to load weights; watch
-   `docker compose --profile stt logs -f stt` until the healthcheck goes healthy.
-
-3. **Verify.** Call the upstream from inside the app container, which also proves the compose network
-   resolves `stt`. `--noproxy '*'` matters when a corporate `HTTP_PROXY` is set in `.env`:
-
-   ```bash
-   docker compose cp sample.wav noah-almighty:/tmp/sample.wav   # a few seconds of mono speech
-   docker compose exec noah-almighty curl -sS --noproxy '*' \
-     -F file=@/tmp/sample.wav -F model=Qwen/Qwen3-ASR-1.7B \
-     http://stt:8000/v1/audio/transcriptions
-   # {"text":"..."}
-   ```
-
-   Then confirm end to end with the mic button in the composer — this second check is NOT optional
-   redundancy: the browser records WebM/Ogg/MP4 (which is what `/api/stt` accepts), and vLLM decodes
-   WebM through a different library (PyAV) than the WAV above (libsndfile), so only the mic proves
-   the container the fleet actually sends.
-
-**Check this at deploy time:** confirm the vLLM build you pinned exposes `/v1/audio/transcriptions`
-for Qwen3-ASR (day-0 support was announced upstream, but it is version-dependent — the `curl` above
-is the check). If your pinned build lacks it, point `STT_URL` at any OpenAI-compatible wrapper
-serving the same contract: the app depends on the contract, not on vLLM or on this model. A CPU-only
-host can run speaches/faster-whisper instead, with no code change.
-
 ## Configuration
 
 | Env | Purpose |
@@ -371,9 +286,6 @@ host can run speaches/faster-whisper instead, with no code change.
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Optional corporate proxy for outbound web access — used by the `mcp__web__fetch` avatar tool and inherited by the SDK subprocess (built-in WebFetch/WebSearch). Put intranet hosts/domain suffixes in `NO_PROXY` so they bypass the proxy. |
 | `NODE_EXTRA_CA_CERTS` | Optional PEM bundle for intranet HTTPS behind a private corporate CA — honored by the app process (`mcp__web__fetch`) and the SDK subprocess (built-in WebFetch). Docker images built with the `CA_CERT_FILE` arg already contain `/usr/local/share/ca-certificates/extra-proxy-ca.crt`. |
 | `CONFLUENCE_URL` | Optional app-wide Confluence Server/Data Center base URL for page, attachment, and image/draw.io asset tools. Per-avatar PATs are stored as the `CONFLUENCE_PAT` user secret. |
-| `STT_URL` | Optional OpenAI-compatible speech-to-text base URL including `/v1` (e.g. `http://stt:8000/v1`) — the composer's mic button posts the recording to `<STT_URL>/audio/transcriptions`. **Unset (default) hides the mic button** unless an admin configured an endpoint in 관리자 → 시스템, which also **overrides** this value when both are set. Any engine serving that contract works; see [Speech-to-text](#speech-to-text-optional). |
-| `STT_MODEL` | Model name sent with each transcription request (default `Qwen/Qwen3-ASR-1.7B`). Must match what the upstream serves — vLLM's `--served-model-name`. The admin panel can override it per endpoint; an override that names no model inherits this one. |
-| `STT_LANGUAGE` | ISO-639-1 code sent with each transcription request to bias it toward one language (default `ko`). Set `auto` to send no language at all and let the engine detect it. The upstream validates the code against what the served model supports. The admin panel can override it under the same precedence as the URL; an override that names no language inherits this one. |
 | `BROWSER_ALLOWED_ORIGINS` | Optional comma-separated DEFAULT browser-control allowlist (`intra.example.com,*.corp.local`). Seeded once into a browser whose extension allowlist is still empty — a user-edited or managed (enterprise-policy) list is never touched, and the user can change it afterwards in 설정 → 접근/보안. Entries that would cover Noah's own host (including a bare `*`) are dropped before serving: the app UI must never become drivable by default. |
 | `LOG_LEVEL` | Pino log level: `trace`/`debug`/`info`/`warn`/`error` (default `debug` in dev, `info` in prod). |
 | `MAX_TURNS` | Maximum agent turns per chat run (default `1000`). |

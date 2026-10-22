@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterUpdate, onDestroy, onMount, tick } from "svelte";
+  import { afterUpdate, onMount, tick } from "svelte";
   import ActivityTree from "../components/ActivityTree.svelte";
   import AvatarImage from "../components/AvatarImage.svelte";
   import Icon from "../components/Icon.svelte";
@@ -43,7 +43,6 @@
     type BridgeVersionVerdict,
   } from "../lib/browserBridge";
   import { autosize, clickOutside, copyText, downscaleImageToDataUrl, enhanceMarkdown, readFileAsDataUrl } from "../lib/dom";
-  import { STT_MAX_SEC, startVoiceInput, type SttPhase, type SttSession } from "../lib/stt";
   import { loadAvatars, loadConversations } from "../lib/loaders";
   import { goView, routeFromHash } from "../lib/nav";
   import { formatFileSize, formatUsageLabel, renderMarkdown, renderMarkdownCached, timeLabel } from "../lib/format";
@@ -670,12 +669,9 @@
   }
 
   // The disabled send button's title enumerates what WOULD make it sendable, so
-  // it has to name the inputs this pane actually has: image attach is native-only,
-  // voice depends on the deployment.
-  function emptyComposerHint(item: ChatPane, state: ReturnType<typeof readState>): string {
-    const voice = Boolean(state.bootstrap?.sttEnabled);
-    if (isExternalPane(item)) return voice ? "메시지 또는 음성을 추가하세요" : "메시지를 입력하세요";
-    return voice ? "메시지, 이미지 또는 음성을 추가하세요" : "메시지 또는 이미지를 추가하세요";
+  // it has to name the inputs this pane actually has: image attach is native-only.
+  function emptyComposerHint(item: ChatPane): string {
+    return isExternalPane(item) ? "메시지를 입력하세요" : "메시지 또는 이미지를 추가하세요";
   }
 
   async function onPickImages(event: Event, item: ChatPane) {
@@ -710,122 +706,6 @@
       if (target) target.pendingImages = (target.pendingImages || []).filter((img) => img.id !== id);
     });
   }
-
-  /* ---- voice input (STT) ---- */
-  // ONE take at a time across every pane — the mic is a single device — so the
-  // session lives on the view, not on a pane. Only the finished transcript
-  // touches the store: the textarea is one-way bound to `draft` (and autosize is
-  // keyed on it), so a DOM write would be overwritten on the next render.
-  let sttPaneId = "";
-  let sttPhase: SttPhase | "" = "";
-  let sttElapsed = 0;
-  let sttSession: SttSession | null = null;
-  // Whether THIS take will stop on its own. False until the end-of-speech
-  // detector reports itself listening, because where it cannot load the take
-  // still ends on the button or the 60s cap — and the hint must not say
-  // otherwise.
-  let sttAutoStop = false;
-  // A stop pressed while getUserMedia is still pending (the browser's permission
-  // prompt is up) has no session to stop yet — remember it and drop the take as
-  // soon as one exists, so the mic never keeps recording unattended.
-  let sttCancelPending = false;
-
-  // Click-time read only. A TEMPLATE expression must never get its session
-  // state from a helper's closure: legacy mode resolves an expression's
-  // dependencies at COMPILE time and `untrack`s the call, so a `title` computed
-  // in here would sit frozen at "음성 입력" for the whole take (the mic button
-  // names `sttPaneId`/`sttPhase` in the markup instead).
-  function micBusyElsewhere(item: ChatPane): boolean {
-    return Boolean(sttPaneId) && sttPaneId !== item.id;
-  }
-
-  async function toggleVoiceInput(item: ChatPane): Promise<void> {
-    if (micBusyElsewhere(item) || sttPhase === "transcribing") return;
-    if (sttPaneId === item.id) {
-      // Second press stops the take; before the session exists it means "never mind".
-      if (sttSession) sttSession.stop();
-      else sttCancelPending = true;
-      return;
-    }
-    sttPaneId = item.id;
-    sttPhase = "recording";
-    sttElapsed = 0;
-    sttAutoStop = false;
-    sttCancelPending = false;
-    try {
-      const session = await startVoiceInput({
-        onPhase: (phase) => (sttPhase = phase),
-        onElapsed: (seconds) => (sttElapsed = seconds),
-        onAutoStopArmed: () => (sttAutoStop = true),
-      });
-      sttSession = session;
-      if (sttCancelPending) session.cancel();
-      const text = await session.done;
-      if (text) appendTranscript(item.id, text);
-    } catch (err) {
-      notify((err as Error).message, "warn");
-    } finally {
-      sttSession = null;
-      sttPaneId = "";
-      sttPhase = "";
-      sttElapsed = 0;
-      sttAutoStop = false;
-      sttCancelPending = false;
-    }
-  }
-
-  /** Voice text EXTENDS the draft instead of replacing it, then hands focus back. */
-  function appendTranscript(paneId: string, text: string): void {
-    const existing = readState().chatPanes.find((item) => item.id === paneId)?.draft || "";
-    setDraft(paneId, existing ? `${existing} ${text}` : text);
-    focusComposer(paneId);
-  }
-
-  function cancelVoiceInput(): void {
-    if (sttSession) sttSession.cancel();
-    else if (sttPaneId) sttCancelPending = true;
-  }
-
-  /**
-   * Which pane Alt+M acts on: the composer holding focus wins, so a split view
-   * dictates into the box the user is already in; a lone pane needs no
-   * disambiguation. With several panes and focus elsewhere it resolves to
-   * nothing rather than guessing which conversation to talk into. A take
-   * already in flight owns the shortcut outright — its stop half has to work
-   * from anywhere in the view, and pressing it at any other pane would no-op.
-   */
-  function voiceShortcutPaneId(event: KeyboardEvent): string {
-    if (sttPaneId) return sttPaneId;
-    const inComposer = [event.target, document.activeElement].find(
-      (node): node is HTMLElement => node instanceof HTMLElement && Boolean(node.closest(".composer-box")),
-    );
-    const owner = inComposer?.closest<HTMLElement>("[data-pane]")?.dataset.pane;
-    return owner || (panes.length === 1 ? panes[0].id : "");
-  }
-
-  // Alt+M is the mic button from anywhere in the chat view. Keyed on
-  // `event.code` so the binding survives non-QWERTY layouts, and the ctrlKey
-  // exclusion also drops AltGr (which reports ctrl+alt) so layouts that type
-  // their extra characters with it are unaffected. No recording logic of its
-  // own: the toggle already handles busy/transcribing/stop/cancel-pending.
-  function onGlobalKeydown(event: KeyboardEvent): void {
-    if (event.code !== "KeyM" || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    if (event.isComposing) return;
-    const state = readState();
-    // App.svelte swaps ONE top-level view at a time, so this listener already
-    // dies with the component; the view check keeps it correct if chat ever
-    // moves under the always-mounted pattern the settings tabs use.
-    if (!state.bootstrap?.sttEnabled || state.view !== "chat") return;
-    const target = panes.find((item) => item.id === voiceShortcutPaneId(event));
-    if (!target) return;
-    event.preventDefault();
-    void toggleVoiceInput(target);
-  }
-
-  // Release the mic when the pane holding it goes away (closed pane, view swap)
-  // instead of recording into a draft nobody can see.
-  $: if (sttPaneId && !panes.some((item) => item.id === sttPaneId)) cancelVoiceInput();
-  onDestroy(cancelVoiceInput);
 
   // Live (just-sent) bubbles render from the locally-held data URL; on reload it
   // falls back to the owner-scoped serving endpoint.
@@ -1441,7 +1321,6 @@
   }
 </script>
 
-<svelte:window on:keydown={onGlobalKeydown} />
 
 {#snippet fileCard(item: ChatPane, att: MessageAttachment, source: MessageAttachment[] | undefined)}
   <button class="msg-file-card" type="button" on:click={() => openFilePreview(item, att, source)}>
@@ -1870,7 +1749,6 @@
         <div
           class="composer-box"
           class:no-attach={isExternalPane(item)}
-          class:no-stt={!$appState.bootstrap?.sttEnabled}
           class:with-steer={canSteer(item)}
         >
           {#if !isExternalPane(item)}
@@ -1910,39 +1788,6 @@
             on:keydown={(event) => onComposerKeydown(event, item)}
             on:paste={(event) => onComposerPaste(event, item)}
           ></textarea>
-          {#if $appState.bootstrap?.sttEnabled}
-            {@const owns = sttPaneId === item.id}
-            {@const busy = Boolean(sttPaneId) && !owns}
-            {@const recording = owns && sttPhase === "recording"}
-            {@const transcribing = owns && sttPhase === "transcribing"}
-            {@const micLabel = busy
-              ? "다른 대화에서 녹음 중입니다"
-              : transcribing
-                ? "전사 중…"
-                : recording
-                  ? "녹음 중지"
-                  : "음성 입력"}
-            <!-- The shortcut rides the title, not the accessible name: it is
-                 discoverability, and `aria-keyshortcuts` is where a screen
-                 reader expects to find it. Only the two states the shortcut
-                 actually drives advertise it. -->
-            {@const micTitle = busy || transcribing ? micLabel : `${micLabel} (Alt+M)`}
-            <!-- Deliberately NOT hidden while streaming: the composer stays
-                 editable mid-stream, so dictating the next message must work too. -->
-            <button
-              class="composer-mic"
-              class:recording
-              type="button"
-              aria-label={micLabel}
-              aria-keyshortcuts="Alt+M"
-              aria-pressed={recording ? "true" : "false"}
-              title={micTitle}
-              disabled={busy || transcribing}
-              on:click={() => toggleVoiceInput(item)}
-            >
-              <Icon name={recording ? "stop" : "mic"} />
-            </button>
-          {/if}
           <!-- Mid-turn send, LEFT of the stop button: two different actions on a
                streaming turn — hand the model another message, or kill the run —
                so they are two controls, never one that changes meaning. It stays
@@ -1966,7 +1811,7 @@
             class:is-stop={item.streaming}
             type="button"
             aria-label={item.streaming ? "응답 중지" : "보내기"}
-            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : emptyComposerHint(item, $appState)}
+            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : emptyComposerHint(item)}
             disabled={!item.streaming && !canSendMessage(item)}
             on:click={() => (item.streaming ? stopPane(item.id) : submit(item))}
           >
@@ -1981,7 +1826,7 @@
           {:else}
             <span>보내기 버튼으로 전송</span>
           {/if}
-          {#if hasComposerControls(item) || formatUsageLabel(item.usage) || (sttPaneId === item.id && sttPhase)}
+          {#if hasComposerControls(item) || formatUsageLabel(item.usage)}
             <!-- Pressed only in the pane that actually shows the card (the active one). -->
             {@const todoHere = todoOverlayShown && pane?.id === item.id}
             <span class="composer-meta">
@@ -2006,16 +1851,6 @@
                   <span class="composer-todo-overdue"><span class="composer-todo-dot" aria-hidden="true"></span>지남 {todoOverdueCount}</span>
                 {/if}
               </button>
-              {#if sttPaneId === item.id && sttPhase}
-                <span class="composer-stt" data-phase={sttPhase}
-                  >{sttPhase === "recording" ? `녹음 중 ${sttElapsed}초 / ${STT_MAX_SEC}초` : "전사 중…"}</span
-                >
-                <!-- Its own span, and only once the detector is actually
-                     listening: the counter must stay on one line, this may wrap. -->
-                {#if sttPhase === "recording" && sttAutoStop}
-                  <span>말이 끝나면 자동으로 멈춰요</span>
-                {/if}
-              {/if}
               {#if hasComposerControls(item)}
                 <button
                   class="composer-settings-btn"
