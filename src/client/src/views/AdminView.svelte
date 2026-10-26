@@ -5,6 +5,7 @@
   import AdminUserRow from "../components/AdminUserRow.svelte";
   import AdminExternalAgentsPanel from "../components/AdminExternalAgentsPanel.svelte";
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
+  import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
   import { loadAdminGroups, loadAdminOverview } from "../lib/loaders";
@@ -68,6 +69,7 @@
     { id: "overview", label: "개요", icon: "activity" },
     { id: "users", label: "사용자", icon: "users" },
     { id: "external-agents", label: "외부 아바타", icon: "globe" },
+    { id: "mcp", label: "공용 MCP", icon: "link" },
     { id: "access", label: "가입·접근", icon: "key" },
     { id: "system", label: "시스템", icon: "server" },
     { id: "audit", label: "감사 로그", icon: "list" },
@@ -165,6 +167,14 @@
     external_agent_disable: "외부 아바타 비활성화",
     external_agent_image: "외부 아바타 사진 변경",
     external_agent_test: "외부 아바타 연결 확인",
+    shared_mcp_create: "공용 MCP 서버 추가",
+    shared_mcp_update: "공용 MCP 서버 수정",
+    shared_mcp_enable: "공용 MCP 서버 사용",
+    shared_mcp_disable: "공용 MCP 서버 끄기",
+    shared_mcp_delete: "공용 MCP 서버 삭제",
+    shared_mcp_check: "공용 MCP 서버 연결 확인",
+    shared_mcp_bind: "공용 MCP 서버 시크릿 연결",
+    shared_mcp_unbind: "공용 MCP 서버 시크릿 연결 해제",
     knowledge_repo_create: "지식 저장소 생성",
     knowledge_repo_push: "지식 저장소 푸시",
     group_repo_create: "그룹 지식 저장소 생성",
@@ -770,6 +780,7 @@
         {reloadGroups}
       />
       <AdminEgressPanel active={$appState.adminTab === "access"} />
+      <AdminSharedMcpPanel active={$appState.adminTab === "mcp"} />
       {#if $appState.adminTab === "overview"}
         <div class="admin-list">
           <section class="settings-card">

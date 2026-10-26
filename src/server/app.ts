@@ -19,6 +19,7 @@ import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
 import { createServerAgentsRouter } from "./routes/serverAgents.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
+import { createSharedMcpRouter } from "./routes/sharedMcp.js";
 import { createChatRouter, conversationHistoryForPrompt, expandChatSlashCommand } from "./routes/chat.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
@@ -188,6 +189,7 @@ export function createApp(services = createServices()) {
   // 서버 에이전트: the owner's SSH servers (register, trust host key, check/install).
   app.use(createServerAgentsRouter(deps));
   app.use(createSkillShareRouter(deps));
+  app.use(createSharedMcpRouter(deps));
   app.use(createChatRouter(deps));
   // PPT share links: owner create/list/revoke + the signed-in recipient routes.
   app.use(createShareLinksRouter(deps));

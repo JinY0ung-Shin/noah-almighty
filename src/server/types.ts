@@ -1194,6 +1194,104 @@ export interface EgressPolicyState {
   appliedBy: string | null;
 }
 
+/** Wire transport of an admin-registered shared MCP server (Streamable HTTP or legacy SSE). */
+export type SharedMcpTransport = "http" | "sse";
+
+/**
+ * One credential "slot" an admin defines on a shared MCP server: WHERE a
+ * user's secret goes (`header`) and in what shape (`format`, exactly one
+ * `{secret}`). The admin never names a secret — each user binds one of THEIR
+ * OWN secrets to the slot (`user_shared_mcp_bindings`), and that bind is the
+ * consent (user decision 2026-10-26).
+ */
+export interface SharedMcpSecretSlot {
+  /** Stable id (bindings key on it; survives edits of label/header/format). */
+  id: string;
+  /** Display label (user-facing), e.g. "API 토큰". */
+  label: string;
+  header: string;
+  /** Header value template with exactly one `{secret}`, e.g. `Bearer {secret}`. */
+  format: string;
+}
+
+/**
+ * 공용 MCP 서버 — an EXTERNAL HTTP MCP server a system admin registered for
+ * every avatar (`app_config` key `shared_mcp_servers`, encrypted like every app
+ * secret). Credentials ride `secretSlots` filled from each run OWNER's own
+ * bound secrets, through the stdio↔HTTP bridge, so no value ever sits in the
+ * CLI's `--mcp-config` argv. See `src/server/sharedMcpServers.ts` and
+ * docs/architecture/secrets-ssh.md.
+ */
+export interface SharedMcpServer {
+  /** The MCP server name — the CLI exposes its tools as `mcp__<name>__<tool>`. */
+  name: string;
+  /** Display label (user-facing). */
+  label: string;
+  /** What the server is for — shown to users AND stated to the avatar. */
+  description: string;
+  url: string;
+  transport: SharedMcpTransport;
+  /** Fixed headers sent on EVERY run (no user secret). */
+  headers: Record<string, string>;
+  secretSlots: SharedMcpSecretSlot[];
+  enabled: boolean;
+  updatedAt: string;
+}
+
+/** Admin read of a shared MCP server: the stored row + its origin (what bindings are tied to). */
+export interface SharedMcpServerView extends SharedMcpServer {
+  origin: string;
+}
+
+/** A user's secret bound to one slot, tied to the server ORIGIN it was bound for. */
+export interface SharedMcpBinding {
+  serverName: string;
+  slotId: string;
+  secretName: string;
+  origin: string;
+}
+
+/** What a signed-in user sees of an ENABLED shared MCP server + their own bindings (no header values). */
+export interface SharedMcpServerUserView {
+  name: string;
+  label: string;
+  description: string;
+  /** Where a bound secret is sent (scheme://host[:port]). */
+  origin: string;
+  slots: {
+    id: string;
+    label: string;
+    header: string;
+    /** The user's secret bound to this slot for the CURRENT origin, or null. */
+    boundSecret: string | null;
+    /** A binding exists but was made for another origin (the admin moved the server) — rebind needed. */
+    stale: boolean;
+  }[];
+}
+
+/**
+ * One enabled shared MCP server as THIS run resolved it (runPlan's
+ * `planSharedMcpRun`) — the ONE derivation both metacognition surfaces read:
+ *  - `active`: registered for this run;
+ *  - `needs_binding`: the owner has not bound a secret to `unboundSlots`
+ *    (labels) for the server's current origin (`hostChanged` = an old binding
+ *    was for a previous address) → not registered;
+ *  - `missing_secrets`: a bound secret is gone from the vault → not registered;
+ *  - `secrets_unavailable`: the server needs a user's secret and this run kind
+ *    never carries one (plain colleague / restricted headless / group-agent
+ *    runs) → not registered.
+ * Names (`unboundSlots`, `missingSecrets`) ride owner runs only.
+ */
+export interface SharedMcpRunState {
+  name: string;
+  label: string;
+  description: string;
+  status: "active" | "needs_binding" | "missing_secrets" | "secrets_unavailable";
+  unboundSlots: string[];
+  hostChanged: boolean;
+  missingSecrets: string[];
+}
+
 /**
  * The owner's 할 일 list as the system prompt states it: FROZEN per conversation
  * at its first to-do-capable turn (`conversations.todo_snapshot`, written once
@@ -1674,6 +1772,13 @@ export interface AgentRequest {
    * trusted and group-agent runs get none (D10: owner-only).
    */
   serverAgents?: ServerAgentPromptState;
+  /**
+   * 공용 MCP 서버 (admin-registered external HTTP MCP servers) as this run
+   * resolved them — runPlan's `planSharedMcpRun`, the SAME states describe_system
+   * gets (`SystemToolsContext.sharedMcpServers`). Stable between turns unless the
+   * admin edits the list or the owner changes a secret. Absent on consultation runs.
+   */
+  sharedMcpServers?: SharedMcpRunState[];
 }
 
 /** One registered server as the owner's self-state reports it (stable, non-secret fields). */

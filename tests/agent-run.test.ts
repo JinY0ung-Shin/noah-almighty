@@ -1426,7 +1426,12 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
       JSON.stringify({ corp: { command: "node", args: ["server.js"] } }),
     );
     const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    const secretsDir = path.join(config.dataDir, "runtime", "mcp-secrets");
+    let filesAtSpawn: string[] = [];
+    sdkMock.impl = () => {
+      filesAtSpawn = fs.readdirSync(secretsDir);
+      return handleFrom([initMsg(), successResult("ok")]);
+    };
 
     await runAgentStream(baseRequest, [{ type: "local", path: pluginDir }], config, store, events);
 
@@ -1439,9 +1444,10 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(corp.args).toContain("--secrets");
     const hooks = options.hooks as { PostToolUse?: unknown[] };
     expect(Array.isArray(hooks.PostToolUse)).toBe(true);
-    // The one-shot secret file was written to disk (consumed by the wrapper at runtime).
-    const secretsDir = path.join(config.dataDir, "runtime", "mcp-secrets");
-    expect(fs.readdirSync(secretsDir).length).toBeGreaterThan(0);
+    // The one-shot secret file was on disk when the CLI spawned (the wrapper
+    // consumes it at runtime), and nothing unconsumed outlives the run.
+    expect(filesAtSpawn.length).toBeGreaterThan(0);
+    expect(fs.readdirSync(secretsDir)).toEqual([]);
   });
 
   it("registers the redaction hook for a BROWSER-typeable secret, and only for the opted-in names", async () => {

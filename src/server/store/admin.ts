@@ -424,6 +424,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         // user filed as the asker (their name would otherwise keep surfacing in
         // other owners' inboxes).
         this.db.prepare("DELETE FROM user_secrets WHERE user_id = ?").run(id);
+        this.db.prepare("DELETE FROM user_shared_mcp_bindings WHERE user_id = ?").run(id);
         this.db
           .prepare("DELETE FROM knowledge_requests WHERE avatar_user_id = ? OR asker_user_id = ?")
           .run(id, id);

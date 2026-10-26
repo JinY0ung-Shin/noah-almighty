@@ -63,6 +63,11 @@ import {
 import { isEffortLevel } from "../effortLevels.js";
 import { liftPluginMcpServers } from "../plugins.js";
 import {
+  mcpHttpBridgeServerDef,
+  planSharedMcpRun,
+  type McpHttpBridgeConfig,
+} from "../sharedMcpServers.js";
+import {
   emptyOwnerState,
   summarizeGroupAgentState,
   summarizeOwnerState,
@@ -182,6 +187,16 @@ function sweepStaleMcpSecretFiles(dir: string): void {
     }
   }
 }
+
+/**
+ * Header names whose FIXED values are credentials for the PostToolUse redaction
+ * set. Deliberately narrow — a matched value is shredded out of EVERY tool
+ * output of the run, so a non-secret like `X-Session-Mode: stateless` must not
+ * qualify. Slot values (a user's secret) are always redacted regardless.
+ */
+const CREDENTIAL_HEADER_RE = /^(?:proxy-)?authorization$|^cookie$|api[-_]?key|token|secret|password|credential/i;
+/** An auth scheme word ahead of the credential (`Bearer <tok>`) — the bare token is redacted too. */
+const AUTH_SCHEME_RE = /^(?:bearer|basic|token|apikey|digest)\s+(\S.*)$/i;
 
 /**
  * The subset of the owner's secret vault that may be injected as env into the
@@ -882,6 +897,28 @@ export async function buildAgentRunPlan(
   const serverAgentsActive = serverAgentOwnerRun && serverAgentsUnavailable === null;
   const serverAgentCheckActive =
     serverAgentsActive && !request.headless && !request.externalTaskApi;
+  // 공용 MCP 서버 (admin-registered external HTTP MCP servers,
+  // sharedMcpServers.ts): resolved HERE so describe_system's ctx, the
+  // registration below and the prompt stamp read ONE derivation. A server's
+  // credential slots fill from the secrets the OWNER bound to them (for the
+  // server's current origin) — only on runs that may carry the vault, the
+  // plugin-MCP injection line (elevated, never a group agent); otherwise, or
+  // with a slot unbound, the server sits this run out (user decision
+  // 2026-10-26). A consultation run gets no external servers at all, exactly
+  // like plugin servers, and neither does a restricted headless run (intro /
+  // hashtag generation) — it has no use for third-party tools.
+  const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools)
+    ? null
+    : planSharedMcpRun(store.getSharedMcpServers(), {
+        bindings: groupAgentRun ? [] : store.listSharedMcpBindings(request.avatar.id),
+        secrets: mcpInjectableSecretEnv(ownerSecrets),
+        secretsAllowed: elevatedToolAccess && !groupAgentRun,
+      });
+  // Slot and secret NAMES are owner self-state (the prompt's secret-name list
+  // rides owner runs only): any other viewer hears THAT one is missing.
+  const sharedMcpStates = sharedMcpPlan?.states.map((state) =>
+    ownerToolAccess ? state : { ...state, unboundSlots: [], missingSecrets: [] },
+  );
   const systemServer = buildSystemServer(store, {
     avatarUserId: request.avatar.id,
     owner,
@@ -942,6 +979,7 @@ export async function buildAgentRunPlan(
     serverAgentsEnabled: serverAgentsActive,
     serverAgentCheckEnabled: serverAgentCheckActive,
     serverAgentsUnavailable,
+    sharedMcpServers: sharedMcpStates,
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -1265,6 +1303,14 @@ export async function buildAgentRunPlan(
     "scripts",
     "mcp-secret-wrapper.mjs",
   );
+  // The stdio↔HTTP relay for HTTP MCP servers whose url/headers carry secrets
+  // (admin 공용 servers + owned `.mcp.json` http/sse entries): same one-shot
+  // 0600 handoff, but the bridge holds the values in memory, not in its env.
+  const mcpHttpBridgePath = path.join(
+    process.cwd(),
+    "scripts",
+    "mcp-http-bridge.mjs",
+  );
   const mcpRunId = randomUUID();
   sweepStaleMcpSecretFiles(mcpSecretsDir);
   const injectableSecretEnv = mcpInjectableSecretEnv(ownerSecrets);
@@ -1326,15 +1372,50 @@ export async function buildAgentRunPlan(
       // below), which every CLI-spawned server INHERITS — blank them on
       // non-owned (group/default) servers so those never see the vault.
       maskEnvNames: Object.keys(shellSecretEnv),
+      // Same gate as secretWrapper (the lift ignores it while that is null).
+      httpBridge: { scriptPath: mcpHttpBridgePath, secrets: injectableSecretEnv },
     },
   );
-  const liftedPluginMcpServers = lifted.servers;
-  if (lifted.secretFiles.length > 0) {
-    fs.mkdirSync(mcpSecretsDir, { recursive: true, mode: 0o700 });
-    for (const file of lifted.secretFiles) {
-      fs.writeFileSync(file, JSON.stringify(injectableSecretEnv), {
-        mode: 0o600,
-      });
+  // Every ENABLED admin server reserves its name for this run — mounted or
+  // not. Otherwise a server that sits the run out (unbound slot, colleague
+  // run) would let a same-named plugin server take `mcp__<name>__*` while both
+  // metacognition surfaces say that name is NOT available.
+  const sharedMcpNames = new Set((sharedMcpStates ?? []).map((state) => state.name));
+  const liftedPluginMcpServers = Object.fromEntries(
+    Object.entries(lifted.servers).filter(([name]) => !sharedMcpNames.has(name)),
+  );
+  // 공용 MCP servers this run registers (sharedMcpPlan above): a header-less
+  // server goes to the CLI natively; anything with headers runs through the
+  // bridge on its own handoff file, so no header value enters --mcp-config.
+  // (Every handoff file is written by writeMcpHandoffFiles below.)
+  const sharedMcpServerDefs: Record<string, unknown> = {};
+  const sharedMcpBridgeFiles: { name: string; path: string; config: McpHttpBridgeConfig }[] = [];
+  for (const registration of sharedMcpPlan?.registrations ?? []) {
+    if (registration.kind === "native") {
+      sharedMcpServerDefs[registration.name] = registration.def;
+      continue;
+    }
+    const file = path.join(
+      mcpSecretsDir,
+      `shared-${mcpRunId}-${registration.name}.json`,
+    );
+    sharedMcpBridgeFiles.push({ name: registration.name, path: file, config: registration.config });
+    sharedMcpServerDefs[registration.name] = mcpHttpBridgeServerDef(
+      mcpHttpBridgePath,
+      file,
+    );
+  }
+  // An admin server takes its name over from a plugin `.mcp.json` server —
+  // reported like the app-server shadowing below, never dropped silently.
+  for (const name of sharedMcpNames) {
+    if (Object.hasOwn(lifted.servers, name)) {
+      agentLogger.warn(
+        { avatarId: request.avatar.id, server: name },
+        "plugin mcp server shadowed by a shared mcp server of the same name",
+      );
+      events?.onStatus?.(
+        `플러그인 경고: MCP 서버 "${name}"은(는) 관리자가 등록한 공용 MCP 서버와 이름이 같아 이번 실행에서 제외됩니다`,
+      );
     }
   }
   if (Object.keys(liftedPluginMcpServers).length > 0) {
@@ -1384,12 +1465,6 @@ export async function buildAgentRunPlan(
   // CLI's --mcp-config ARGV, world-readable via /proc/<pid>/cmdline (this was
   // a real pre-wrapper exposure). Only non-secret config stays in env.
   const sshSecretsFile = path.join(mcpSecretsDir, `ssh-${mcpRunId}.json`);
-  if (sshActive && Object.keys(sshSecrets).length > 0) {
-    fs.mkdirSync(mcpSecretsDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(sshSecretsFile, JSON.stringify(sshSecrets), {
-      mode: 0o600,
-    });
-  }
   const sshServers = sshActive
     ? {
         [HEX_SSH_SERVER_NAME]: {
@@ -1599,6 +1674,9 @@ export async function buildAgentRunPlan(
       // servers at all — third-party servers can't self-gate per viewer, so
       // registration is their only gate.
       ...(consultationRun ? {} : liftedPluginMcpServers),
+      // Admin 공용 servers override a same-named plugin server (reported
+      // above); app servers still win over both (their names are reserved).
+      ...sharedMcpServerDefs,
       ...appMcpServers,
     },
     maxTurns: config.maxTurns,
@@ -1707,6 +1785,74 @@ export async function buildAgentRunPlan(
     options.additionalDirectories = additionalDirectories;
   }
 
+  // One-shot MCP handoff files (plugin secret-wrapper env, hex-ssh secrets,
+  // HTTP-bridge configs). Only files a REGISTERED server's argv names are
+  // written — a server shadowed by an app/shared server of the same name never
+  // spawns, so its plaintext would otherwise sit there until the stale sweep.
+  // The run loop calls writeMcpHandoffFiles right before EVERY query() attempt:
+  // the first attempt's servers consume (delete) their files, and a model
+  // fallback / self-heal retry respawns the CLI on the same options.
+  const registeredMcpArgs = new Set(
+    Object.values(options.mcpServers as Record<string, { args?: unknown }>).flatMap(
+      (def) => (Array.isArray(def?.args) ? def.args : []),
+    ),
+  );
+  const mcpBridgeFiles = [...lifted.bridgeFiles, ...sharedMcpBridgeFiles].filter((file) =>
+    registeredMcpArgs.has(file.path),
+  );
+  const mcpHandoffFiles = [
+    ...lifted.secretFiles.map((file) => ({ path: file, content: JSON.stringify(injectableSecretEnv) })),
+    ...(sshActive && Object.keys(sshSecrets).length > 0
+      ? [{ path: sshSecretsFile, content: JSON.stringify(sshSecrets) }]
+      : []),
+    ...mcpBridgeFiles.map((file) => ({ path: file.path, content: JSON.stringify(file.config) })),
+  ].filter((file) => registeredMcpArgs.has(file.path));
+  const writeMcpHandoffFiles = (): void => {
+    if (mcpHandoffFiles.length === 0) {
+      return;
+    }
+    fs.mkdirSync(mcpSecretsDir, { recursive: true, mode: 0o700 });
+    for (const file of mcpHandoffFiles) {
+      fs.writeFileSync(file.path, file.content, { mode: 0o600 });
+    }
+  };
+  // Run end (every exit path): a file the CLI never consumed — an abort right
+  // after query(), a crash before a server spawned — must not wait for the
+  // hourly stale sweep with resolved values in it. Best-effort.
+  const removeMcpHandoffFiles = (): void => {
+    for (const file of mcpHandoffFiles) {
+      try {
+        fs.rmSync(file.path, { force: true });
+      } catch {
+        /* best effort — the stale sweep is the backstop */
+      }
+    }
+  };
+  // Header values a bridged server sends that look like credentials, literal
+  // ones included (an admin's static API key rides colleague runs too): a remote
+  // that echoes a header back must not land it in the model's context. Keyed
+  // `<server>:<header>` so the marker names what was hidden, never the value.
+  // The bridge's own redact list (the exact — trimmed — secret values it sends)
+  // rides along: a vault value stored with a trailing newline would otherwise
+  // slip past the vault-value match.
+  const bridgeHeaderRedactions: Record<string, string> = {};
+  for (const file of mcpBridgeFiles) {
+    for (const [header, value] of Object.entries(file.config.headers)) {
+      // An unresolved template (a plugin `.mcp.json` entry: `Bearer ${TOKEN}`)
+      // is file content the avatar may Read/Edit, not a credential.
+      if (CREDENTIAL_HEADER_RE.test(header) && !value.includes("${")) {
+        bridgeHeaderRedactions[`${file.name}:${header}`] = value;
+        const bare = AUTH_SCHEME_RE.exec(value)?.[1];
+        if (bare) {
+          bridgeHeaderRedactions[`${file.name}:${header}:token`] = bare;
+        }
+      }
+    }
+    file.config.redact.forEach((value, index) => {
+      bridgeHeaderRedactions[`${file.name}:secret${index + 1}`] = value;
+    });
+  }
+
   // PreToolUse hook: enforcement + interactivity. Runs in-process, so it can call
   // straight into the events sink and await the user.
   if (events) {
@@ -1717,10 +1863,15 @@ export async function buildAgentRunPlan(
     // injectable vault to a process, so everything in it is redactable; browser
     // input exposes only the individually opted-in names, and its set is a
     // subset of the broad one, so this reads as a merge either way.
-    const redactSecretEnv =
-      Object.keys(shellSecretEnv).length > 0 || lifted.secretFiles.length > 0
+    // A bridged server holding vault values counts as a broad exposure too.
+    const redactSecretEnv = {
+      ...(Object.keys(shellSecretEnv).length > 0 ||
+      mcpHandoffFiles.some((file) => file.path !== sshSecretsFile) ||
+      mcpBridgeFiles.some((file) => file.config.redact.length > 0)
         ? injectableSecretEnv
-        : browserSecretEnv;
+        : browserSecretEnv),
+      ...bridgeHeaderRedactions,
+    };
     const hookApprovals = createHookApprovalLedger();
     options.hooks = {
       PreToolUse: [
@@ -1816,6 +1967,12 @@ export async function buildAgentRunPlan(
     serverAgentsActive,
     serverAgentCheckActive,
     serverAgentsUnavailable,
+    // 공용 MCP self-state for the prompt stamp (the SAME states describe_system
+    // got; undefined on a consultation run).
+    sharedMcpStates,
+    // Called by the run loop before every query() attempt, and at run end.
+    writeMcpHandoffFiles,
+    removeMcpHandoffFiles,
   };
 }
 

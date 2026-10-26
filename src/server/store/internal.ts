@@ -445,6 +445,18 @@ export class StoreBase {
         created_at TEXT,
         PRIMARY KEY (user_id, name)
       );
+      -- 공용 MCP 서버: a user's OWN secret bound to one admin-defined credential
+      -- slot, tied to the server origin it was bound for (a moved server needs a
+      -- rebind). Names only — the value stays in user_secrets.
+      CREATE TABLE IF NOT EXISTS user_shared_mcp_bindings (
+        user_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        slot_id TEXT NOT NULL,
+        secret_name TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        created_at TEXT,
+        PRIMARY KEY (user_id, server_name, slot_id)
+      );
       CREATE TABLE IF NOT EXISTS git_repositories (
         user_id TEXT NOT NULL,
         name TEXT NOT NULL,

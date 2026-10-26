@@ -27,7 +27,11 @@ import {
   normalizeBrowserSecretHosts,
   type BrowserSecretPolicy,
 } from "../secretPolicy.js";
-import type { User } from "../types.js";
+import {
+  SHARED_MCP_SERVERS_CONFIG_KEY,
+  normalizeStoredSharedMcpServers,
+} from "../sharedMcpServers.js";
+import type { SharedMcpBinding, SharedMcpServer, User } from "../types.js";
 import { now, type Constructor, type StoreBase } from "./internal.js";
 
 /** `user_secrets.browser_hosts` → the raw parsed value, or null when unusable. */
@@ -180,6 +184,11 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
           .prepare("DELETE FROM user_secrets WHERE user_id = ? AND name = ?")
           .run(userId, name);
         removed = res.changes > 0;
+        // A deleted secret takes its 공용 MCP bindings with it (re-adding the
+        // same name later must not silently re-arm a server).
+        this.db
+          .prepare("DELETE FROM user_shared_mcp_bindings WHERE user_id = ? AND secret_name = ?")
+          .run(userId, name);
         if (name === "SSH_PRIVATE_KEY") {
           this.db.prepare("UPDATE users SET ssh_public_key = NULL WHERE id = ?").run(userId);
         }
@@ -425,6 +434,78 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
       const normalized = normalizeToolSkillPolicy(policy);
       this.setAppSecret(TOOL_SKILL_POLICY_CONFIG_KEY, JSON.stringify(normalized));
       return normalized;
+    }
+
+    /**
+     * 공용 MCP 서버 list (admin-managed, see sharedMcpServers.ts). Missing/
+     * corrupt/unreadable (SESSION_SECRET rotated) → empty list, i.e. nothing
+     * registered — fail closed. Read fresh on every run.
+     */
+    getSharedMcpServers(): SharedMcpServer[] {
+      const raw = this.getAppSecret(SHARED_MCP_SERVERS_CONFIG_KEY);
+      if (!raw) {
+        return [];
+      }
+      try {
+        return normalizeStoredSharedMcpServers(JSON.parse(raw));
+      } catch {
+        return [];
+      }
+    }
+
+    /** Replace the whole list (callers validated every entry with parseSharedMcpServer). */
+    setSharedMcpServers(servers: SharedMcpServer[]): SharedMcpServer[] {
+      const normalized = normalizeStoredSharedMcpServers(servers);
+      this.setAppSecret(SHARED_MCP_SERVERS_CONFIG_KEY, JSON.stringify(normalized));
+      return normalized;
+    }
+
+    /** The user's own 공용 MCP slot bindings (secret NAMES + the origin each was bound for). */
+    listSharedMcpBindings(userId: string): SharedMcpBinding[] {
+      const rows = this.db
+        .prepare(
+          "SELECT server_name, slot_id, secret_name, origin FROM user_shared_mcp_bindings WHERE user_id = ? ORDER BY server_name, slot_id",
+        )
+        .all(userId) as { server_name: string; slot_id: string; secret_name: string; origin: string }[];
+      return rows.map((row) => ({
+        serverName: row.server_name,
+        slotId: row.slot_id,
+        secretName: row.secret_name,
+        origin: row.origin,
+      }));
+    }
+
+    setSharedMcpBinding(userId: string, binding: SharedMcpBinding): void {
+      this.db
+        .prepare(
+          `INSERT INTO user_shared_mcp_bindings (user_id, server_name, slot_id, secret_name, origin, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (user_id, server_name, slot_id)
+           DO UPDATE SET secret_name = excluded.secret_name, origin = excluded.origin, created_at = excluded.created_at`,
+        )
+        .run(userId, binding.serverName, binding.slotId, binding.secretName, binding.origin, now());
+    }
+
+    deleteSharedMcpBinding(userId: string, serverName: string, slotId: string): boolean {
+      return (
+        this.db
+          .prepare("DELETE FROM user_shared_mcp_bindings WHERE user_id = ? AND server_name = ? AND slot_id = ?")
+          .run(userId, serverName, slotId).changes > 0
+      );
+    }
+
+    /**
+     * Drop every user's bindings to a server (it was deleted), or to the slots
+     * it no longer has (`keepSlotIds`) — a re-created server or slot of the same
+     * name/id must start unbound.
+     */
+    pruneSharedMcpBindings(serverName: string, keepSlotIds: string[] = []): void {
+      const keep = keepSlotIds.length
+        ? ` AND slot_id NOT IN (${keepSlotIds.map(() => "?").join(", ")})`
+        : "";
+      this.db
+        .prepare(`DELETE FROM user_shared_mcp_bindings WHERE server_name = ?${keep}`)
+        .run(serverName, ...keepSlotIds);
     }
 
     /**

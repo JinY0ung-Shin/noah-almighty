@@ -17,6 +17,7 @@ const ADMIN_TABS: AdminTab[] = [
   "overview",
   "users",
   "external-agents",
+  "mcp",
   "access",
   "system",
   "audit",

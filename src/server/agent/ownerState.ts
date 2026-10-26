@@ -4,6 +4,7 @@ import type {
   GroupAgentState,
   OwnerServerAgentSummary,
   ServerAgentsUnavailableReason,
+  SharedMcpRunState,
   UserGroupMembership,
 } from "../types.js";
 import { groupAgentCaptureAllowed } from "../groupAgents.js";
@@ -334,3 +335,37 @@ export function serverAgentsUnavailableText(reason: ServerAgentsUnavailableReaso
 
 /** Product-wide UI capability; never reads private DM content or presence into agent context. */
 export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in users across groups via the 메시지 dock at the bottom-right corner of the screen (a collapsible chat window available on every view). It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";
+
+/**
+ * 공용 MCP 서버 lines (runPlan's `planSharedMcpRun` states) — ONE wording for
+ * both metacognition surfaces: the prompt's standing section and
+ * describe_system. Slot/secret names ride only owner runs (runPlan strips them
+ * for everyone else, like the prompt's secret-name list), so a teammate hears
+ * that something is missing, never which.
+ */
+export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
+  const fix =
+    "If the user wants it, tell them to open Settings → 권한·연결 → 시크릿, find this server under 공용 MCP 서버 and pick which of their own secrets to connect (adding the secret first if needed); it applies from their next message.";
+  return states.map((state) => {
+    const label = state.label && state.label !== state.name ? ` (${state.label})` : "";
+    const about = state.description ? ` — ${state.description}` : "";
+    const head = `\`${state.name}\`${label}${about}`;
+    switch (state.status) {
+      case "active":
+        return `${head}: available in this run as \`mcp__${state.name}__*\`.`;
+      case "needs_binding":
+        if (state.unboundSlots.length === 0) {
+          return `${head}: NOT available in this conversation — the avatar owner has not connected a secret to it.`;
+        }
+        return state.hostChanged
+          ? `${head}: NOT available in this run — the admin moved it to a new address since the owner connected a secret, so the connection was reset (${state.unboundSlots.join(", ")}) and must be made again. ${fix}`
+          : `${head}: NOT available in this run — the owner has not connected a secret to ${state.unboundSlots.map((slot) => `"${slot}"`).join(", ")}. ${fix}`;
+      case "missing_secrets":
+        return state.missingSecrets.length > 0
+          ? `${head}: NOT available in this run — the secret(s) the owner connected (${state.missingSecrets.map((name) => `\`${name}\``).join(", ")}) are missing or unusable (a value must be a single line). ${fix}`
+          : `${head}: NOT available in this conversation — a secret the avatar owner connected to it is missing.`;
+      case "secrets_unavailable":
+        return `${head}: NOT available in this conversation — it authenticates with personal secrets from a user's own vault, which this kind of run never carries.`;
+    }
+  });
+}

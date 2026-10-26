@@ -16,6 +16,7 @@ import {
   type GroupKnowledgeRepoContext,
 } from "./groupKnowledgeRepo.js";
 import logger from "./logger.js";
+import { mcpHttpBridgeServerDef, type McpHttpBridgeConfig } from "./sharedMcpServers.js";
 import type { Store } from "./store.js";
 import type {
   AppConfig,
@@ -190,6 +191,37 @@ function expandPluginRoot(value: string, rootDir: string): string {
   return value.split("${CLAUDE_PLUGIN_ROOT}").join(rootDir);
 }
 
+/** The CLI's `--mcp-config` env reference forms: `${VAR}` and `${VAR:-default}`. */
+const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
+
+/** Env names an http/sse def's url + string header values reference. */
+function httpDefEnvRefs(def: PluginMcpServerDef): string[] {
+  const names = new Set<string>();
+  const scan = (value: unknown) => {
+    if (typeof value !== "string") return;
+    for (const match of value.matchAll(ENV_REF_RE)) names.add(match[1]);
+  };
+  scan(def.url);
+  if (def.headers && typeof def.headers === "object") {
+    Object.values(def.headers as Record<string, unknown>).forEach(scan);
+  }
+  return [...names];
+}
+
+/** Rewrite the url + string header values of an http/sse def through `fn`. */
+function mapHttpDefStrings(def: PluginMcpServerDef, fn: (value: string) => string): void {
+  if (typeof def.url === "string") {
+    def.url = fn(def.url);
+  }
+  if (def.headers && typeof def.headers === "object" && !Array.isArray(def.headers)) {
+    const headers: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(def.headers as Record<string, unknown>)) {
+      headers[name] = typeof value === "string" ? fn(value) : value;
+    }
+    def.headers = headers;
+  }
+}
+
 /**
  * Secret-handoff wiring for `liftPluginMcpServers`: the app-owned wrapper
  * script plus the directory the per-server mode-0600 secret files go in. The
@@ -232,9 +264,19 @@ export interface McpSecretWrapper {
  *    shadow the owner's own server. App in-process servers are spread AFTER
  *    the lifted map at the call site, so app names always win overall.
  *
+ *  - http/sse defs: on an OWNED root with the wrapper armed, a url/header
+ *    `${NAME}` naming a VAULT secret makes the server run through the
+ *    stdio↔HTTP bridge (`scripts/mcp-http-bridge.mjs`) instead — the resolved
+ *    url/headers go in a one-shot 0600 file (`bridgeFiles`), only its PATH in
+ *    argv; any other `${VAR}` still expands from env, as the CLI would. On a
+ *    NON-owned root, references to `maskEnvNames` are blanked: the CLI expands
+ *    `${VAR}` in url/headers from its own env, which holds the shell-exposed
+ *    secrets — a group repo's server URL must not receive them.
+ *
  * Returns the servers plus the secret-file paths the wrapped defs reference;
  * the caller writes the injectable env to each (0600) BEFORE starting the
- * query. `secretWrapper: null` (no injectable secrets) lifts without wrapping.
+ * query, and each `bridgeFiles` config to its path the same way.
+ * `secretWrapper: null` (no injectable secrets) lifts without wrapping.
  */
 export async function liftPluginMcpServers(
   rootPaths: string[],
@@ -248,10 +290,21 @@ export async function liftPluginMcpServers(
      * inherits — group/default servers must not see those values.
      */
     maskEnvNames?: string[];
+    /**
+     * OWNED http/sse bridging: the bridge script and the injectable vault
+     * values its `${NAME}` references resolve from. Used only while
+     * `secretWrapper` is armed (an elevated run with injectable secrets).
+     */
+    httpBridge?: { scriptPath: string; secrets: Record<string, string> } | null;
   },
-): Promise<{ servers: Record<string, PluginMcpServerDef>; secretFiles: string[] }> {
+): Promise<{
+  servers: Record<string, PluginMcpServerDef>;
+  secretFiles: string[];
+  bridgeFiles: { name: string; path: string; config: McpHttpBridgeConfig }[];
+}> {
   const servers: Record<string, PluginMcpServerDef> = {};
   const secretFiles: string[] = [];
+  const bridgeFiles: { name: string; path: string; config: McpHttpBridgeConfig }[] = [];
   for (const rootPath of rootPaths) {
     const defs = await readPluginMcpServers(rootPath);
     const owned = isOwnedPluginRoot(rootPath, opts.avatarUserId, opts.config);
@@ -279,6 +332,55 @@ export async function liftPluginMcpServers(
         }
       }
       const type = typeof def.type === "string" ? def.type : "stdio";
+      if (type === "http" || type === "sse") {
+        const bridge = opts.httpBridge;
+        const vaultRefs =
+          owned && opts.secretWrapper && bridge
+            ? httpDefEnvRefs(def).filter((ref) => Object.hasOwn(bridge.secrets, ref))
+            : [];
+        // Fields the bridge cannot carry (oauth, headersHelper, …) would be lost
+        // silently — such a server stays native (its vault refs unresolved, as
+        // before this feature) and the owner hears why in the server log.
+        const unbridgeable = Object.keys(def).filter((key) => !["type", "url", "headers"].includes(key));
+        if (vaultRefs.length > 0 && unbridgeable.length > 0) {
+          logger.warn(
+            { server: name, fields: unbridgeable },
+            "plugin http mcp server references vault secrets but has fields the bridge cannot carry; left to the CLI without secrets",
+          );
+        }
+        if (bridge && opts.secretWrapper && vaultRefs.length > 0 && unbridgeable.length === 0 && typeof def.url === "string") {
+          const file = path.join(
+            opts.secretWrapper.secretsDir,
+            `http-${opts.secretWrapper.runId}-${sanitizeName(name)}.json`,
+          );
+          const headers: Record<string, string> = {};
+          for (const [headerName, value] of Object.entries((def.headers ?? {}) as Record<string, unknown>)) {
+            if (typeof value === "string") headers[headerName] = value;
+          }
+          bridgeFiles.push({
+            name,
+            path: file,
+            // Templates stay UNRESOLVED: the bridge fills vault refs and env refs
+            // in ONE pass, so a vault value containing `${…}` is never expanded again.
+            config: {
+              url: def.url as string,
+              transport: type,
+              headers,
+              redact: vaultRefs.map((ref) => bridge.secrets[ref]).filter((value) => value.length > 0),
+              vault: Object.fromEntries(vaultRefs.map((ref) => [ref, bridge.secrets[ref]])),
+              expandEnv: true,
+            },
+          });
+          servers[name] = mcpHttpBridgeServerDef(bridge.scriptPath, file);
+          continue;
+        }
+        const mask = opts.maskEnvNames ?? [];
+        if (!owned && mask.length > 0) {
+          mapHttpDefStrings(def, (value) =>
+            value.replace(ENV_REF_RE, (whole, ref: string) => (mask.includes(ref) ? "" : whole)),
+          );
+        }
+      }
       if (!owned && type === "stdio" && opts.maskEnvNames?.length) {
         def.env = {
           ...(def.env && typeof def.env === "object" ? (def.env as object) : {}),
@@ -313,7 +415,7 @@ export async function liftPluginMcpServers(
       servers[name] = def;
     }
   }
-  return { servers, secretFiles };
+  return { servers, secretFiles, bridgeFiles };
 }
 
 async function isPluginDir(dir: string): Promise<boolean> {

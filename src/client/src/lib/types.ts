@@ -2,6 +2,9 @@ export type {
   AdminGroupSummary,
   AdminExternalAgent,
   AdminExternalAgentInput,
+  SharedMcpServerUserView,
+  SharedMcpServerView,
+  SharedMcpTransport,
   AdminPresence,
   AdminPresenceUser,
   AdminStats,
@@ -162,6 +165,7 @@ export type AdminTab =
   | "overview"
   | "users"
   | "external-agents"
+  | "mcp"
   | "access"
   | "system"
   | "audit";

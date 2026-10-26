@@ -33,6 +33,48 @@
   `${CLAUDE_PLUGIN_ROOT}` is expanded app-side (the CLI no longer sees the plugin origin); first
   definition of a name wins (load order default → avatar plugins → knowledge repo → group), and app
   in-process servers spread after the lifted map so app names always win.
+- **공용 MCP 서버 (admin-registered external HTTP MCP, `sharedMcpServers.ts` + `routes/sharedMcp.ts`):** ONE
+  `app_config` blob (`shared_mcp_servers`, encrypted; unreadable/corrupt → empty list, entries that fail
+  `parseSharedMcpServer` — or stored slots without an id — are DROPPED: fail closed), admin CRUD under
+  `/api/admin/shared-mcp-servers` (name = id, immutable; app server names/`hex-ssh` reserved; audit `shared_mcp_*`).
+  **The admin never names a user's secret** (user decision 2026-10-26, after review): a server declares
+  `secretSlots` (`{id, label, header, format}` with exactly one `{secret}`) plus fixed `headers`; neither the URL
+  nor a fixed header may carry `${…}`/`{secret}`. Each user BINDS one of their own non-reserved vault secrets to
+  each slot (`user_shared_mcp_bindings`, names only, `PUT|DELETE /api/me/shared-mcp-servers/:name/slots/:slotId`,
+  audit `shared_mcp_bind`/`unbind`) — the bind IS the consent, and it stores the server ORIGIN: an admin who
+  moves the server to another host turns every binding stale (never applied to the new host; the card says
+  "다시 연결"). Slot ids are SERVER-minted: a create ignores client ids and an update keeps only ids the stored
+  server already has (anything else is a new slot), so no path can revive an orphaned binding; a create also
+  prunes leftovers for the name. Bindings are pruned when the slot or server is removed, when the bound secret is deleted, and in
+  `deleteUser`. `GET /api/me/shared-mcp-servers` returns label/description/origin and the caller's own bindings.
+  The admin connection check spawns the SAME bridge with the CHECKING admin's own bindings. **Per run**
+  `planSharedMcpRun` (in runPlan, before describe_system's ctx) resolves each enabled server from the OWNER's
+  bindings + injectable vault: `active` / `needs_binding` (+`hostChanged`) / `missing_secrets` /
+  `secrets_unavailable` — a slotted server registers ONLY on `elevatedToolAccess && !groupAgent` runs with every
+  slot bound for the current origin to a secret that still exists (trimmed; a value with a line break counts
+  as missing); consultation and restricted headless (intro/hashtag) runs get none. Slot/secret names
+  ride owner runs only. A server with no headers at all registers natively (`{type, url}`); anything else runs
+  through **`scripts/mcp-http-bridge.mjs`** (`node --use-system-ca … --config <0600 file>`): the file holds the
+  RESOLVED url/headers + a redact list, is consumed (deleted) on read, and the bridge keeps values in memory — not
+  in its env, unlike the stdio wrapper — so neither argv nor `/proc/<pid>/environ` carries them. It relays
+  JSON-RPC transport-to-transport (sets the negotiated protocol version from the initialize response, orders
+  notifications before later sends, answers a failed upstream request with a scrubbed JSON-RPC error, scrubbing
+  BEFORE truncating). Bound vault values join the PostToolUse redaction set, and so does every credential-looking
+  bridged header value (`<server>:<header>` — a narrow name match, never an unresolved `${…}` template — plus the
+  bare token after a `Bearer`/`Basic`/`Token` scheme word, and each slot's trimmed value as sent). Every ENABLED admin
+  server reserves its name for the run, mounted or not: a same-named plugin server is dropped (status-line
+  warning), so `mcp__<name>__*` never points at something the metacognition says is unavailable; app servers win
+  over both. Shared servers ignore the composer's tool-group picker and group tool policy, like plugin servers.
+- **One-shot MCP handoff files are written per ATTEMPT** (`plan.writeMcpHandoffFiles`, called right before every
+  `query()`): the plugin secret-wrapper env, hex-ssh secrets and bridge configs are consumed by the first spawn, and
+  a model fallback / self-heal retry respawns the CLI on the same options. `plan.removeMcpHandoffFiles` deletes
+  any left unconsumed when the run ends (abort right after `query()`, a CLI dying before a server spawned). Only files a REGISTERED server's argv
+  names are written, so a shadowed server leaves no plaintext behind. The SAME bridge serves OWNED plugin
+  `.mcp.json` http/sse entries whose url/headers reference vault names as `${NAME}` (`expandEnv: true` keeps the
+  CLI's `${VAR}` env expansion for the rest — templates stay unresolved in the file and the bridge fills vault + env
+  refs in ONE pass, so a vault value containing `${…}` is never expanded again; a def with fields the bridge cannot
+  carry, e.g. `oauth`/`headersHelper`, stays native), and NON-owned http/sse entries get references to shell-exposed names
+  blanked — the CLI would otherwise expand them from its own env into a group repo's URL.
 - **Per-secret AGENT-SHELL exposure (opt-in):** `user_secrets.shell_expose` (0 default) — toggled per key
   via `PATCH /api/me/secrets/:name {shellExpose}` (셸 노출 checkbox in the 시크릿 card; hidden for reserved
   names via the client-imported `secretPolicy.isShellExposableSecret`). Flagged values merge into

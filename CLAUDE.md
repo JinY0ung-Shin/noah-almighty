@@ -197,6 +197,14 @@ These are the invariants the project is built around. New work should reinforce 
   and payment details stay off-limits on every surface. Both metacognition surfaces list the enabled
   names + sites and branch on whether the bridge is connected. Mechanics →
   `docs/architecture/browser-bridge/actions.md`, `secrets-ssh.md`.
+- **An external HTTP MCP server gets a user's secret only because THAT USER bound it — and only through the bridge.**
+  Admin 공용 MCP 서버 (`sharedMcpServers.ts`) declare credential SLOTS (header + format), never secret names; each
+  user binds one of their own secrets per slot, tied to the server ORIGIN (a moved host resets every binding —
+  user decision 2026-10-26). Anything with headers runs through `scripts/mcp-http-bridge.mjs` on a one-shot 0600
+  file (the SDK puts `mcpServers` in CLI argv), rewritten before EVERY query attempt. Registration IS the gate
+  (third-party servers cannot self-gate under the `mcp__` auto-allow): a slotted server mounts only on elevated,
+  non-group-agent, non-consultation runs with every slot bound, else it sits the run out and BOTH metacognition
+  surfaces say why. Mechanics → `docs/architecture/secrets-ssh.md`.
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
   route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode or

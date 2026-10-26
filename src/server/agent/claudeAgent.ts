@@ -285,6 +285,9 @@ export async function runClaudeAgent(
     serverAgentsActive,
     serverAgentCheckActive,
     serverAgentsUnavailable,
+    sharedMcpStates,
+    writeMcpHandoffFiles,
+    removeMcpHandoffFiles,
   } = plan;
 
   if (events) {
@@ -433,6 +436,10 @@ export async function runClaudeAgent(
           servers: ownerState.serverAgents,
         }
       : undefined,
+    // 공용 MCP 서버: runPlan's ONE derivation (the states describe_system got).
+    // Every viewer class hears which servers are mounted; only the owner's
+    // branches name missing secrets (the prompt section gates that).
+    sharedMcpServers: sharedMcpStates,
   };
 
   const setSystemPrompt = () => {
@@ -612,6 +619,9 @@ export async function runClaudeAgent(
       try {
         // Keep the Query handle (not just its iterator) so we can call the
         // getContextUsage() control method on it during the turn.
+        // Every attempt spawns a fresh CLI whose MCP servers read (and delete)
+        // their one-shot handoff files — (re)write them for THIS spawn.
+        writeMcpHandoffFiles();
         const queryHandle = sdk.query({ prompt: queryPrompt, options });
         // The PREFERRED occupancy source: the SDK's authoritative context usage,
         // asked while the session is still live (the control channel answers
@@ -915,6 +925,8 @@ export async function runClaudeAgent(
     // close runs BEFORE the route's own `cancelled`/`error` frame, which is the
     // order the client relies on.
     steers?.close();
+    // The CLI is gone: drop any MCP handoff file it never consumed.
+    removeMcpHandoffFiles();
   }
 
   // The answer is what the model STREAMED, not the SDK's terminal `result`

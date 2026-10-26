@@ -31,7 +31,7 @@
     isShellExposableSecret,
     type BrowserSecretPolicy,
   } from "../../../server/secretPolicy";
-  import type { User } from "../lib/types";
+  import type { SharedMcpServerUserView, User } from "../lib/types";
 
   export let active = false;
 
@@ -289,6 +289,80 @@
   let presetErrors: Record<string, string> = {};
 
   // arbitrary secret form
+  // 공용 MCP 서버 the admin registered: each credential slot shows which of MY
+  // secrets I connected to it. Connecting is my consent for that secret to be
+  // sent to the server's host — the admin never names a secret.
+  let sharedMcpServers: SharedMcpServerUserView[] = [];
+  let sharedMcpBusy: Record<string, boolean> = {};
+  // Reload on every activation of the tab: the admin may have added, moved or
+  // re-slotted a server since this (always-mounted) tab last looked.
+  let sharedMcpWasActive = false;
+  $: if (active !== sharedMcpWasActive) {
+    sharedMcpWasActive = active;
+    if (active) void loadSharedMcpServers();
+  }
+  // …and whenever my secret list changes: deleting a secret drops its
+  // bindings server-side, so a re-added name must not still read as connected.
+  let sharedMcpSecretsKey = "";
+  $: {
+    const key = (user?.secretNames || []).join(",");
+    if (key !== sharedMcpSecretsKey) {
+      const changed = sharedMcpSecretsKey !== "" || sharedMcpServers.length > 0;
+      sharedMcpSecretsKey = key;
+      if (active && changed) void loadSharedMcpServers();
+    }
+  }
+  $: sharedMcpSlotted = sharedMcpServers.filter((server) => server.slots.length > 0);
+  $: bindableSecretNames = (user?.secretNames || []).filter(isShellExposableSecret);
+
+  async function loadSharedMcpServers(): Promise<void> {
+    try {
+      sharedMcpServers = (await api<{ servers: SharedMcpServerUserView[] }>("/api/me/shared-mcp-servers")).servers;
+    } catch {
+      // Informational only: the card works without the list.
+      sharedMcpServers = [];
+    }
+  }
+
+  async function bindSharedMcpSlot(
+    server: SharedMcpServerUserView,
+    slot: SharedMcpServerUserView["slots"][number],
+    select: HTMLSelectElement,
+  ): Promise<void> {
+    const slotId = slot.id;
+    const secretName = select.value;
+    const key = `${server.name}/${slotId}`;
+    if (sharedMcpBusy[key]) return;
+    sharedMcpBusy = { ...sharedMcpBusy, [key]: true };
+    try {
+      const path = `/api/me/shared-mcp-servers/${encodeURIComponent(server.name)}/slots/${encodeURIComponent(slotId)}`;
+      const result = await api<{ servers: SharedMcpServerUserView[] }>(
+        path,
+        secretName ? { method: "PUT", body: JSON.stringify({ secretName }) } : { method: "DELETE" },
+      );
+      sharedMcpServers = result.servers;
+      notify(
+        secretName
+          ? `${secretName} 시크릿을 ${server.label}에 연결했습니다. 다음 메시지부터 ${server.origin}로 전송됩니다.`
+          : `${server.label} 연결을 해제했습니다.`,
+        "ok",
+      );
+    } catch (err) {
+      notify(`연결 실패: ${(err as Error).message}`);
+      // The rendered `value` did not change, so the DOM keeps the rejected
+      // pick unless it is put back by hand.
+      select.value = slot.boundSecret ?? "";
+    } finally {
+      sharedMcpBusy = { ...sharedMcpBusy, [key]: false };
+    }
+  }
+
+  function addSecretForShared(server: SharedMcpServerUserView): void {
+    extraName = `${server.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TOKEN`;
+    extraError = "";
+    requestAnimationFrame(() => document.getElementById("secret-extra-value")?.focus());
+  }
+
   let extraName = "";
   let extraValue = "";
   let extraBusy = false;
@@ -962,12 +1036,49 @@
       </div>
     </div>
     <ul class="hint-list">
-      <li>직접 등록한 플러그인·지식 저장소의 <code>.mcp.json</code> MCP 서버에 환경변수로 주입돼요 — 본인·같은 그룹원과의 대화에서만.</li>
+      <li>직접 등록한 플러그인·지식 저장소의 <code>.mcp.json</code> MCP 서버에 환경변수로(HTTP 서버는 헤더의 <code>{"${이름}"}</code>으로) 주입되고, 공용 MCP 서버에는 아래에서 직접 연결한 시크릿만 들어가요 — 본인·같은 그룹원과의 대화에서만.</li>
       <li><strong>셸 노출</strong>을 켜면 셸(Bash)에서 같은 이름의 환경변수로도 쓸 수 있어요. 필요한 키만 켜세요.</li>
       <li><strong>브라우저 입력</strong>을 켜면 아바타가 브라우저 확장을 통해 이 시크릿을 지정한 사이트의 로그인 필드에 이름으로 입력할 수 있어요. 값은 아바타에게 보이지 않고, 지정한 사이트 밖에서는 거부되며, 브라우저 세션마다 처음 한 번 브라우저에서 확인해요(그 한 번이 허용해 둔 모든 사이트에 적용돼요).</li>
       <li>도구 출력에 값이 나타나면 자동으로 가려져요.</li>
       <li>GIT_TOKEN·GITHUB_TOKEN·SSH 계열은 전용 경로로만 쓰이고, 그룹 저장소 MCP 서버·일반 사용자 대화에는 어떤 시크릿도 주입되지 않아요.</li>
     </ul>
+
+    {#if sharedMcpSlotted.length}
+      <div class="shared-mcp-secret-box">
+        <strong>공용 MCP 서버에 연결할 시크릿</strong>
+        <p class="muted">관리자가 등록한 서버입니다. 각 인증 자리에 내 시크릿 중 하나를 연결하면 다음 메시지부터 그 서버 주소로 전송되고, 연결하지 않으면 내 아바타에서 빠집니다.</p>
+        <ul>
+          {#each sharedMcpSlotted as server (server.name)}
+            <li>
+              <div class="shared-mcp-secret-head">
+                <span class="shared-mcp-secret-server">{server.label}</span>
+                <span class="muted mono">{server.origin}</span>
+              </div>
+              {#if server.description}<span class="muted shared-mcp-secret-desc">{server.description}</span>{/if}
+              {#each server.slots as slot (slot.id)}
+                {@const key = `${server.name}/${slot.id}`}
+                <label class="shared-mcp-slot">
+                  <span>{slot.label} <span class="muted mono">({slot.header})</span></span>
+                  <select
+                    value={slot.boundSecret ?? ""}
+                    disabled={sharedMcpBusy[key]}
+                    aria-label={`${server.label} ${slot.label}에 연결할 시크릿`}
+                    on:change={(event) => bindSharedMcpSlot(server, slot, event.currentTarget)}
+                  >
+                    <option value="">연결 안 함</option>
+                    {#each bindableSecretNames as name}<option value={name}>{name}</option>{/each}
+                  </select>
+                  {#if slot.stale}
+                    <span class="shared-mcp-stale" role="status">서버 주소가 바뀌어 연결이 해제됐어요. 다시 연결해 주세요.</span>
+                  {/if}
+                </label>
+              {/each}
+              <button class="linkish small" type="button" on:click={() => addSecretForShared(server)}>이 서버용 시크릿 새로 추가</button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
 
     <div class="secret-preset-list">
       {#each SECRET_PRESETS as preset}
@@ -1166,7 +1277,7 @@
     </div>
     <form class="settings-form" on:submit|preventDefault={saveExtraSecret}>
       <label class="field"><span>이름</span><input bind:value={extraName} placeholder="SSH_PRIVATE_KEY" autocomplete="off" required aria-describedby={extraStatusId} aria-invalid={extraNameValid ? undefined : "true"} disabled={extraBusy} on:input={() => (extraError = "")} /></label>
-      <label class="field"><span>값</span><textarea rows="4" bind:value={extraValue} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----…" autocomplete="off" required aria-describedby={extraStatusId} disabled={extraBusy} on:input={() => (extraError = "")}></textarea></label>
+      <label class="field"><span>값</span><textarea id="secret-extra-value" rows="4" bind:value={extraValue} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----…" autocomplete="off" required aria-describedby={extraStatusId} disabled={extraBusy} on:input={() => (extraError = "")}></textarea></label>
       <div class="settings-save-row">
         <span id={extraStatusId} class="settings-save-status" class:dirty={Boolean(extraNameTrimmed && extraHasValue && extraNameValid && !extraBusy && !extraError)} class:pending={extraBusy} class:invalid={!extraNameValid || Boolean(extraError)} role="status" aria-live="polite">{extraStatus}</span>
         <button class="primary" type="submit" disabled={!extraCanSave}>{extraBusy ? "저장 중…" : "추가 시크릿 저장"}</button>
@@ -1180,6 +1291,19 @@
 <SettingsServerAgents active={active && Boolean(user)} />
 
 <style>
+  .shared-mcp-secret-box { margin: var(--s-3) 0; padding: var(--s-3); border: 1px solid var(--line); border-radius: var(--r-md); }
+  .shared-mcp-secret-box p { margin: var(--s-1) 0 var(--s-2); }
+  .shared-mcp-secret-box ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-2); }
+  .shared-mcp-secret-box li { display: grid; gap: var(--s-1-5); padding-top: var(--s-2); border-top: 1px solid var(--line); }
+  .shared-mcp-secret-box li:first-child { border-top: 0; padding-top: 0; }
+  .shared-mcp-secret-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2); }
+  .shared-mcp-secret-head .mono { overflow-wrap: anywhere; font-size: var(--t-sm); }
+  .shared-mcp-secret-server { font-weight: 600; }
+  .shared-mcp-secret-desc { font-size: var(--t-sm); }
+  .shared-mcp-slot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+  .shared-mcp-slot select { min-width: 12rem; max-width: 100%; }
+  .shared-mcp-stale { flex-basis: 100%; font-size: var(--t-sm); color: var(--warn); }
+  .shared-mcp-secret-box .linkish { justify-self: start; }
   .experimental-list {
     display: flex;
     flex-direction: column;

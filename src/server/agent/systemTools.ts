@@ -16,6 +16,7 @@ import type {
   RoutineJob,
   RoutineSchedulePatch,
   ServerAgentsUnavailableReason,
+  SharedMcpRunState,
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { DEFAULT_MODEL_TIER } from "../modelTiers.js";
@@ -24,6 +25,7 @@ import {
   gettingStartedGaps,
   rewindTurnState,
   serverAgentsUnavailableText,
+  sharedMcpServerLines,
   summarizeGroupAgentState,
   summarizeOwnerState,
 } from "./ownerState.js";
@@ -236,6 +238,12 @@ export interface SystemToolsContext {
   serverAgentsEnabled?: boolean;
   serverAgentCheckEnabled?: boolean;
   serverAgentsUnavailable?: ServerAgentsUnavailableReason | null;
+  /**
+   * runPlan's 공용 MCP states (`planSharedMcpRun`) — the SAME array stamped on
+   * `AgentRequest.sharedMcpServers`. Undefined (consultation runs, older
+   * callers) → the line is omitted.
+   */
+  sharedMcpServers?: SharedMcpRunState[];
 }
 
 /** MCP server name; tools surface to the model as `mcp__system__<tool>`. */
@@ -294,6 +302,25 @@ async function serverAgentLines(store: Store, ctx: SystemToolsContext): Promise<
       (server) =>
         `  - ${server.name} — ${serverAgentTargetLabel(server)} · ${server.enabled ? "enabled" : "DISABLED"} · agent: ${serverAgentInstallLine(server, localVersion)} · remote session in this conversation: ${sessions.has(server.id) ? "yes" : "no"}`,
     ),
+  ];
+}
+
+/**
+ * describe_system's 공용 MCP block, for every viewer class — the runtime mirror
+ * of the prompt's standing section (both word each server via
+ * ownerState.sharedMcpServerLines).
+ */
+function sharedMcpLines(ctx: SystemToolsContext): string[] {
+  const states = ctx.sharedMcpServers;
+  if (!states) {
+    return [];
+  }
+  if (states.length === 0) {
+    return ["- Shared MCP servers (admin-registered external HTTP MCP servers): none registered on this deployment"];
+  }
+  return [
+    "- Shared MCP servers (admin-registered external HTTP MCP servers; credentials are filled server-side from the owner's secrets and never shown):",
+    ...sharedMcpServerLines(states).map((line) => `  - ${line}`),
   ];
 }
 
@@ -738,6 +765,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
               // line the owner block prints applies here.
               deckCapabilityLine(ctx),
               imageSourcesLine(ctx),
+              ...sharedMcpLines(ctx),
               GROUP_AGENT_SHARE_LINK_LINE,
               "- Group admins manage this agent in the 그룹 (Groups) view on the left rail.",
             ].join("\n"),
@@ -749,7 +777,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // and the deck line's tail says which this run is.
           const turnLines = rewindLines(ctx);
           return text(
-            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}\n${NON_OWNER_SERVER_AGENTS_LINE}`,
+            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}\n${NON_OWNER_SERVER_AGENTS_LINE}${sharedMcpLines(ctx).map((line) => `\n${line}`).join("")}`,
           );
         }
         // Repo/token/secret/group/git-repo/open-request/model facts come from the
@@ -915,6 +943,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                   }`
           }`,
           ...(await serverAgentLines(store, ctx)),
+          ...sharedMcpLines(ctx),
           `- Groups: ${groups.length ? groups.map((g) => `${g.name}(${g.role === "admin" ? "admin" : "member"}, shared repository ${g.knowledgeRepoConfigured ? "connected" : "none"}${g.avatarSharing ? "" : ", avatar sharing off"})`).join(", ") : "(none)"} — members of the same group automatically trust each other mutually (this is the ONLY source of elevated access; manage trust by managing group membership).${groups.some((g) => !g.avatarSharing) ? ' Groups marked "avatar sharing off" are knowledge-sharing-only: their co-membership grants neither avatar visibility nor mutual trust.' : ""}`,
           `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (groups.some((g) => g.avatarSharing) ? "available — you can ask a same-group teammate's avatar one question on the owner's behalf; it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : groups.length > 0 ? "enabled, but none of the owner's groups share avatars (avatar sharing off), so no teammate avatar is reachable" : "enabled, but the owner belongs to no groups, so no teammate avatar is reachable (consultation requires shared group membership)") : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Skill exchange (mcp__skill_exchange__*): ${enabledMcpToolGroups.includes("avatars") ? `${state.learnableSkillCount} skill(s) shared by teammates are learnable (find_shared_skills → learn_skill copies one into the knowledge repository${state.knowledgeRepoConfigured ? "" : " — connect a knowledge repository first"}); this avatar shares ${state.sharedSkillCount} of its own, learned by teammates ${state.sharedSkillLearnTotal} time(s) so far (share_skill/unshare_skill, also manageable in the '스킬 배우기' tab). A learned skill loads from the NEXT conversation` : "OFF for this conversation (avatars tool group deselected)"}`,
