@@ -6,7 +6,7 @@ import { type AuthenticatedRequest } from "./auth.js";
 import { loadConfig } from "./config.js";
 import logger from "./logger.js";
 import { Store } from "./store.js";
-import type { AgentResponse, AppConfig } from "./types.js";
+import type { AppConfig } from "./types.js";
 import { avatarDir, type AppServices, type ObservedModelHolder, type RouterDeps } from "./routes/_shared.js";
 import { migrateGroupAgentDiskArtifacts } from "./groupAgents.js";
 import { createAuthRouter } from "./routes/auth.js";
@@ -20,14 +20,14 @@ import { createTodosRouter } from "./routes/todos.js";
 import { createServerAgentsRouter } from "./routes/serverAgents.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSharedMcpRouter } from "./routes/sharedMcp.js";
-import { createChatRouter, conversationHistoryForPrompt, expandChatSlashCommand } from "./routes/chat.js";
+import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
 
 export type { AppServices };
-export { conversationHistoryForPrompt, expandChatSlashCommand };
+export { expandChatSlashCommand };
 
 export function createServices(configOverrides: Partial<AppConfig> = {}): AppServices {
   const config = loadConfig(configOverrides);
@@ -136,19 +136,7 @@ export function createApp(services = createServices()) {
     express.static(path.join(process.cwd(), "node_modules", "@fontsource-variable", "noto-sans-kr")),
   );
 
-  app.get("/vendor/marked.esm.js", (_req, res) => {
-    res.type("application/javascript");
-    res.sendFile(path.join(process.cwd(), "node_modules", "marked", "lib", "marked.esm.js"));
-  });
-  app.get("/vendor/purify.es.mjs", (_req, res) => {
-    res.type("application/javascript");
-    res.sendFile(path.join(process.cwd(), "node_modules", "dompurify", "dist", "purify.es.mjs"));
-  });
-
-  const builtClientRoot = path.join(process.cwd(), "dist", "client");
-  const clientRoot = fs.existsSync(path.join(builtClientRoot, "index.html"))
-    ? builtClientRoot
-    : path.join(process.cwd(), "public");
+  const clientRoot = path.join(process.cwd(), "dist", "client");
   app.use(express.static(clientRoot));
 
   // ---- Request logging ----------------------------------------------------
@@ -234,5 +222,3 @@ export function createApp(services = createServices()) {
 
   return app;
 }
-
-export type { AgentResponse };

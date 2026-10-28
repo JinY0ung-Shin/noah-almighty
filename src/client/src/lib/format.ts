@@ -110,18 +110,6 @@ export function repoToHref(repo: string | null, githubHost: string): string | nu
   return null;
 }
 
-export function timeToMinute(value: string): number {
-  const [hh, mm] = value.split(":").map((part) => Number(part));
-  return (Number.isFinite(hh) ? hh : 0) * 60 + (Number.isFinite(mm) ? mm : 0);
-}
-
-export function minuteToTime(minute: number | null | undefined): string {
-  const value = Math.max(0, Math.min(1439, Number(minute) || 0));
-  const hh = String(Math.floor(value / 60)).padStart(2, "0");
-  const mm = String(value % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
 // Short, locale-aware timestamp for message rows / conversation list. Includes
 // the year only when the date isn't from the current year (older "06. 11."
 // alone is ambiguous). Mirrors the old core.js timeLabel().

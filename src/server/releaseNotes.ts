@@ -378,11 +378,6 @@ export const CURRENT_RELEASE_ID: string | null = RELEASE_NOTES[0]?.id ?? null;
 /** How many releases the dialog shows at most (long-away users aren't walled). */
 export const MAX_RELEASES_SHOWN = 3;
 
-/** Whether `id` is a registered release id (validation for the seen endpoint). */
-export function isKnownReleaseId(id: unknown): id is string {
-  return typeof id === "string" && RELEASE_NOTES.some((note) => note.id === id);
-}
-
 /**
  * Releases the user hasn't seen yet, newest first, capped. `lastSeen` null or
  * unknown (pruned id / rollback) counts as "never seen" — see the module note.

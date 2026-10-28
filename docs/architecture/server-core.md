@@ -11,8 +11,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `routes/`. Handlers live in `routes/{auth,profile,directMessages,plugins,knowledgeRepo,groups,routines,chat,admin}.ts`,
   each a `(deps) => Router` factory. Shared route helpers (`apiError`, `safeString`, `looksLikeRepo`,
   `avatarDir`, MIME/size/password consts, `AppServices`) live in `routes/_shared.ts`.
-  **`createApp`/`createServices`/`expandChatSlashCommand`/`conversationHistoryForPrompt`/`AppServices`/
-  `AgentResponse` are still imported from `app.ts`** (re-exported) — don't change those import paths.
+  **`createApp`/`createServices`/`expandChatSlashCommand`/`AppServices` are still imported from `app.ts`**
+  (re-exported) — don't change those import paths.
 - **PPT share links** have their own router (`routes/shareLinks.ts`, `createShareLinksRouter`, mounted right
   after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY

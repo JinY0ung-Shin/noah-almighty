@@ -1064,11 +1064,6 @@ tbody tr:hover td {
   background: var(--panel-strong);
 }
 
-.response-title {
-  font-weight: 700;
-  font-size: var(--t-md);
-}
-
 /* ============================================================
    Composer
    ============================================================ */
@@ -1190,9 +1185,6 @@ tbody tr:hover td {
 .composer-thumb-remove svg {
   width: 12px;
   height: 12px;
-}
-.composer-box.focused {
-  border-color: var(--accent);
 }
 
 /* Widened to `.composer-box textarea`: the DM dock reuses the SAME
@@ -1835,39 +1827,6 @@ button.composer-bridge:focus-visible {
 }
 .scroll-bottom[hidden] {
   display: none;
-}
-
-/* ============================================================
-   Boot skeleton
-   ============================================================ */
-.boot {
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: var(--s-4);
-}
-.boot-mark {
-  width: 52px;
-  height: 52px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r-lg);
-  object-fit: cover;
-  box-shadow: var(--shadow-md);
-}
-.boot-spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--line);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-.boot-label {
-  color: var(--muted);
-  font-size: var(--t-sm);
 }
 
 /* ============================================================

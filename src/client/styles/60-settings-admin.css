@@ -438,12 +438,6 @@
   grid-row: 1;
   align-self: stretch;
 }
-.plugin-add.rows-2 .primary {
-  grid-row: 1 / span 2;
-}
-.plugin-add.rows-3 .primary {
-  grid-row: 1 / span 3;
-}
 
 /* Trusted-user search-and-add (settings → 권한·연결). */
 .trusted-search {
@@ -1692,9 +1686,7 @@
   .plugin-add {
     grid-template-columns: 1fr;
   }
-  .plugin-add .primary,
-  .plugin-add.rows-2 .primary,
-  .plugin-add.rows-3 .primary {
+  .plugin-add .primary {
     grid-column: 1;
     grid-row: auto;
   }

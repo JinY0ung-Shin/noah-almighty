@@ -16,8 +16,6 @@ export type ModelVisionPolicy = Record<string, boolean>;
 /** app_config row key (see store/secrets.ts get/setModelVisionPolicy). */
 export const MODEL_VISION_POLICY_CONFIG_KEY = "model_vision_policy";
 
-export const EMPTY_MODEL_VISION_POLICY: ModelVisionPolicy = {};
-
 /**
  * Normalize unknown input into a policy map: keep only known tier ids with
  * strict-boolean values. Anything else (bad shape, unknown tier, non-boolean)

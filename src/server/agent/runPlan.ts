@@ -2129,6 +2129,3 @@ export async function buildAgentRunPlan(
     removeMcpHandoffFiles,
   };
 }
-
-/** Everything `runClaudeAgent`'s streaming loop consumes from the plan. */
-export type AgentRunPlan = Awaited<ReturnType<typeof buildAgentRunPlan>>;

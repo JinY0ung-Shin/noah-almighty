@@ -12,7 +12,6 @@ import {
   deriveShareToken,
   issueShareTicket,
   newShareTokenSalt,
-  otherActiveShareLinks,
   pickShareLinkCard,
   shareTicketLinkId,
   signShareTicket,

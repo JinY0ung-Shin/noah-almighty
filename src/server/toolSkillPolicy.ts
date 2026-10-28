@@ -194,10 +194,6 @@ export function parseToolSkillPolicy(value: unknown): ToolSkillPolicy | null {
   };
 }
 
-export function isToolSkillPolicyEmpty(policy: ToolSkillPolicy): boolean {
-  return policy.disabledTools.length === 0 && policy.disabledSkills.length === 0;
-}
-
 /**
  * Compile the policy into `disallowedTools` entries: bare tool names remove
  * the tool from the model's context entirely; `Skill(<name>)` specifiers deny

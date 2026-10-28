@@ -1,4 +1,4 @@
-// Generates the app icon set into public/ (icon-192/512, maskable,
+// Generates the app icon set into src/client/public/ (icon-192/512, maskable,
 // apple-touch-icon, favicon PNGs + .ico). Dependency-free: hand-rolled PNG
 // encoder (zlib deflate + CRC32) drawing the "N" mark on a teal tile.
 // Run: node scripts/generate-icons.mjs
@@ -7,7 +7,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
+const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "client", "public");
 
 /* ---------------- PNG encoder ---------------- */
 const CRC_TABLE = (() => {

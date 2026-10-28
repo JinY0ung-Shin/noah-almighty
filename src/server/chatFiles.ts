@@ -172,11 +172,6 @@ export function chatFilesDir(config: AppConfig, conversationId: string): string 
   return path.join(config.dataDir, "chat-files", safeConversationDir(conversationId));
 }
 
-/** Human list of shareable extensions on a run WITHOUT an active Craft app, for agent-facing error text. */
-export const SHAREABLE_EXTENSIONS = Object.keys(DOCUMENT_FILE_TYPES);
-/** The extensions only a run with an active Craft app may share. */
-export const CRAFT_SHAREABLE_EXTENSIONS = Object.keys(CRAFT_FILE_TYPES);
-
 /** The extensions share_file accepts on one run. */
 export function shareableExtensions(craftFileTypes: boolean): string[] {
   return Object.keys(shareFileTypes(craftFileTypes));

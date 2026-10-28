@@ -4,7 +4,6 @@
   import { answerPrompt, humanTool, summarizeInput } from "../lib/chat";
   import { openModalFocus, trapTab } from "../lib/modalBehavior";
   import { appState } from "../lib/state";
-  import type { PromptRequest } from "../lib/types";
 
   // When `paneId` is set the modal is scoped to one chat pane (rendered inside it
   // by ChatView): it shows only that pane's pending prompt and is positioned over

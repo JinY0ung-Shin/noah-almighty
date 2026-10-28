@@ -1542,24 +1542,6 @@ body.col-resizing .canvas-html-frame {
   margin-bottom: var(--s-3);
 }
 
-/* Alias of .tag — geometry + deltas live with the chip family in
-   30-agent-md-composer.css; only the runtime status variants stay here. */
-.meta-badge.runtime-blocked {
-  color: var(--warn);
-  border-color: var(--warn-line);
-  background: var(--warn-soft);
-}
-.meta-badge.runtime-local {
-  color: var(--info);
-  border-color: var(--info-line);
-  background: var(--info-soft);
-}
-.meta-badge.runtime-error {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-soft);
-}
-
 /* Streaming caret + status */
 .stream-caret {
   display: inline-block;

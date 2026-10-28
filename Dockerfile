@@ -262,7 +262,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # The `node` user only ever WRITES under APP_DATA_DIR (default /app/data): the
 # SQLite DB, avatar images, agent-session transcripts, per-conversation
 # workspaces, ssh known_hosts, and any cloned repos. The rest of /app (dist,
-# node_modules, public, default-skills) is read-only at runtime, so we only
+# node_modules, default-skills) is read-only at runtime, so we only
 # chown the data dir — `chown -R /app` would needlessly re-stamp tens of
 # thousands of node_modules files and duplicate them into a new image layer.
 # HOME-based tool caches (gh/git/python, SDK MCP logs) land under /home/node,

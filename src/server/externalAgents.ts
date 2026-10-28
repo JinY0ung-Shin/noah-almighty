@@ -1,6 +1,5 @@
 import type {
   AdminExternalAgent,
-  AdminExternalAgentInput,
   AvatarDetail,
   AvatarSummary,
   ExternalAgentConfig,

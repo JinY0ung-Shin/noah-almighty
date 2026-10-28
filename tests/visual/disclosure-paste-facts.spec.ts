@@ -41,7 +41,7 @@ async function attrsOf(cdp: CDPSession, ref: Ref): Promise<Record<string, string
 /** background.js clickPoint — byte-for-byte the move → press → release sequence. */
 async function bridgeClick(cdp: CDPSession, ref: Ref) {
   const { quads } = await cdp.send("DOM.getContentQuads", { backendNodeId: ref.backendNodeId });
-  const [x1, y1, x2, , x3, y3] = quads[0];
+  const [x1, y1, , , x3, y3] = quads[0];
   const x = (x1 + x3) / 2;
   const y = (y1 + y3) / 2;
   const base = { x, y, button: "left" as const, clickCount: 1, pointerType: "mouse" as const };

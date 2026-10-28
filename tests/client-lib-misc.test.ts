@@ -85,14 +85,12 @@ import {
   formatTokenCount,
   hashHue,
   initials,
-  minuteToTime,
   normalizeTags,
   renderMarkdown,
   renderMarkdownCached,
   repoToHref,
   routineTitle,
   timeLabel,
-  timeToMinute,
 } from "../src/client/src/lib/format.js";
 
 /* ------------------------------------------------------------------ */
@@ -1007,14 +1005,6 @@ describe("format helpers", () => {
     expect(repoToHref("nonsense", "github.com")).toBeNull();
   });
 
-  it("timeToMinute / minuteToTime round-trip and clamp", () => {
-    expect(timeToMinute("09:30")).toBe(570);
-    expect(timeToMinute("bad")).toBe(0);
-    expect(minuteToTime(570)).toBe("09:30");
-    expect(minuteToTime(-5)).toBe("00:00");
-    expect(minuteToTime(99999)).toBe("23:59");
-    expect(minuteToTime(null)).toBe("00:00");
-  });
 
   it("timeLabel returns '' for empty/invalid and includes the year only when not current", () => {
     expect(timeLabel(null)).toBe("");

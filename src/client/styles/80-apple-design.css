@@ -645,11 +645,6 @@ button:disabled {
   transform: translateY(-1px);
 }
 
-.composer-send,
-.composer-stop {
-  border-radius: var(--r-pill);
-}
-
 .canvas-panel {
   border-left-color: var(--line-soft);
   background: var(--material-regular);
@@ -680,7 +675,6 @@ button:disabled {
 
 /* Overlays materialize as thick glass, preserving spatial hierarchy. */
 .modal-overlay,
-.permission-modal-overlay,
 .canvas-fs {
   background: var(--scrim);
   -webkit-backdrop-filter: saturate(120%) blur(10px);
@@ -696,9 +690,7 @@ button:disabled {
   pointer-events: none;
 }
 
-.modal-card,
-.permission-modal,
-.prompt-modal-card {
+.modal-card {
   border-color: var(--material-edge);
   border-radius: var(--r-xl);
   background: var(--material-thick);
@@ -780,8 +772,6 @@ button:disabled {
 .composer-gk-panel,
 .composer-tools-panel,
 .slash-menu,
-.model-menu,
-.effort-menu,
 .popover,
 .todo-overlay,
 .toast {
@@ -798,11 +788,6 @@ button:disabled {
 .composer-tools-panel,
 .slash-menu {
   transform-origin: bottom left;
-}
-
-.model-menu,
-.effort-menu {
-  transform-origin: bottom right;
 }
 
 .toast {
@@ -953,9 +938,6 @@ button:disabled {
 /* Accessibility: preserve useful feedback while removing vestibular travel. */
 @media (prefers-reduced-motion: reduce) {
   .message,
-  .permission-modal,
-  .prompt-modal-card,
-  .permission-modal-overlay,
   .canvas-fs {
     animation-name: apple-crossfade !important;
     animation-duration: 160ms !important;
@@ -1020,10 +1002,7 @@ button:disabled {
   .composer,
   .canvas-panel,
   .modal-overlay,
-  .permission-modal-overlay,
   .modal-card,
-  .permission-modal,
-  .prompt-modal-card,
   .toast,
   .composer-gk-panel,
   .composer-tools-panel,

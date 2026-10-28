@@ -56,4 +56,3 @@ const logger = pino({
 });
 
 export default logger;
-export type Logger = pino.Logger;

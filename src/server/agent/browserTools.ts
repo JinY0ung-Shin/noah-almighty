@@ -1,10 +1,8 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type {
-  BrowserCookie,
   BrowserRequest,
   BrowserResult,
-  BrowserStorageEntry,
   BrowserTab,
 } from "./events.js";
 import { browserSecretHostAllowed, type BrowserSecretPolicy } from "../secretPolicy.js";

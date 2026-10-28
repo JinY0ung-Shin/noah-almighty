@@ -535,20 +535,6 @@ describe("slash-command expansion at the route boundary", () => {
 });
 
 describe("discovery + listing edge cases", () => {
-  it("lists the owner's registered git repos (name/repo/branch only)", async () => {
-    const { store, app } = boot();
-    const owner = request.agent(app);
-    const ownerId = (await signup(owner, "gitrepos").expect(201)).body.user.id as string;
-    store.upsertGitRepo(ownerId, "beta", "acme/beta", "dev");
-    store.upsertGitRepo(ownerId, "alpha", "acme/alpha", null);
-
-    const res = await owner.get("/api/me/git-repos").expect(200);
-    expect(res.body.repos).toEqual([
-      { name: "alpha", repo: "acme/alpha", branch: null },
-      { name: "beta", repo: "acme/beta", branch: "dev" },
-    ]);
-  });
-
   it("returns an empty message list when no conversationId is supplied", async () => {
     const { app } = boot();
     const owner = request.agent(app);

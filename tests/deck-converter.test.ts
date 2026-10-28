@@ -948,7 +948,6 @@ describe("deck converter CLI (toolchain-free)", () => {
     // the work bound: past it, only bounds that are never more lenient — a piece cut no further, one box per piece,
     // translucent text against the box's corners — and the message says so. A tiny budget forces it here: 80 % white
     // text on forest's 0.72 scrim passes the exact search (4.95:1) but not the corner bound
-    const tpcTextOf = (el: El) => ((el.paragraphs as { runs: { text: string }[] }[])[0].runs[0].text);
     const tpcSource = ["00-util.js", "55-text-on-picture.js"].map((f) => fs.readFileSync(path.join(KIT, "tools", "extract", "inpage", f), "utf8")).join("\n");
     const tight = (...edits: [string | RegExp, string][]) => {
       let src = tpcSource;

@@ -3,7 +3,6 @@ import {
   CURRENT_RELEASE_ID,
   MAX_RELEASES_SHOWN,
   RELEASE_NOTES,
-  isKnownReleaseId,
   releaseDateLabel,
   unseenReleases,
 } from "../src/server/releaseNotes.js";
@@ -48,10 +47,7 @@ describe("release notes registry", () => {
     }
   });
 
-  it("validates known ids and formats date labels", () => {
-    expect(isKnownReleaseId(CURRENT_RELEASE_ID)).toBe(true);
-    expect(isKnownReleaseId("nope")).toBe(false);
-    expect(isKnownReleaseId(42)).toBe(false);
+  it("formats date labels", () => {
     expect(releaseDateLabel("2026-07-29")).toBe("2026년 7월 29일");
     // Same-day second release keeps the plain date label.
     expect(releaseDateLabel("2026-07-29.2")).toBe("2026년 7월 29일");

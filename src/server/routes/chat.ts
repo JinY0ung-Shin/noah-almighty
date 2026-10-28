@@ -3547,20 +3547,6 @@ export function createChatRouter({
     },
   );
 
-  // The owner's registered general git repos, for the active-repo-workspace
-  // picker (#47). Returns name/repo/branch only — never the local clone path.
-  router.get(
-    "/api/me/git-repos",
-    requireAuth(store),
-    (req: AuthenticatedRequest, res) => {
-      res.json({
-        repos: store
-          .listGitRepos(req.user!.id)
-          .map((r) => ({ name: r.name, repo: r.repo, branch: r.branch })),
-      });
-    },
-  );
-
   // ---- Conversations & messages ---------------------------------------
 
   router.get(

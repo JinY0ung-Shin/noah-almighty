@@ -75,10 +75,6 @@ export function allActiveServerAgentRunIds(): Set<string> {
   return new Set(live.keys());
 }
 
-export function activeServerAgentRunCount(): number {
-  return live.size;
-}
-
 /**
  * Claim a server row for deletion: slots on it are refused until the returned
  * release runs. Null when another delete of the same row is already in flight.

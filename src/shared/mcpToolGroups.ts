@@ -161,7 +161,3 @@ export function allMcpToolGroupsSelected(groups: readonly McpToolGroupId[]): boo
 export function withoutDefaultOffMcpToolGroups(groups: readonly McpToolGroupId[]): McpToolGroupId[] {
   return groups.filter((id) => !isDefaultOffMcpToolGroup(id));
 }
-
-export function mcpToolGroupLabelEn(id: McpToolGroupId): string {
-  return MCP_TOOL_GROUPS.find((group) => group.id === id)?.labelEn ?? id;
-}

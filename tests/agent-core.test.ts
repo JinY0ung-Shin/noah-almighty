@@ -1,12 +1,10 @@
 import {
   execFileSync,
   spawn,
-  type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import tls from "node:tls";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Response } from "express";
 import { createServices, expandChatSlashCommand } from "../src/server/app.js";
@@ -14,22 +12,7 @@ import {
   TOUR_SCENARIOS,
   TOUR_SLUG_LIST,
 } from "../src/shared/tourScenarios.js";
-import { loadConfig } from "../src/server/config.js";
-import { applyCustomGithubCa } from "../src/server/tlsCa.js";
-import { loadDotEnv } from "../src/server/loadEnv.js";
-import {
-  buildKnowledgeTools,
-  KNOWLEDGE_SERVER_NAME,
-  KNOWLEDGE_TOOL_NAMES,
-  type KnowledgeToolsContext,
-} from "../src/server/agent/knowledgeTools.js";
 import { readSystemManual } from "../src/server/agent/systemManual.js";
-import { normalizeHashtags } from "../src/server/store.js";
-import {
-  buildAvatarDirectoryTools,
-  AVATAR_DIRECTORY_SERVER_NAME,
-  AVATAR_DIRECTORY_TOOL_NAMES,
-} from "../src/server/agent/avatarDirectoryTools.js";
 import {
   gitAuthConfig,
   serverGitEnv,
@@ -125,78 +108,14 @@ import {
 } from "../src/shared/sdkToolPresentation.js";
 import { emptyOwnerState, summarizeOwnerState } from "../src/server/agent/ownerState.js";
 import { deckAuthoringStatusFor, deckGuidanceFlags } from "../src/server/deckRender.js";
-import { executeRoutineJob } from "../src/server/scheduler.js";
-import {
-  formatMinuteOfDay,
-  nextRunIso,
-  parseRoutineSchedule,
-  parseTimeToMinute,
-} from "../src/server/routineSchedule.js";
 import type { AgentEvents } from "../src/server/agent/events.js";
-import { decryptSecret, encryptSecret } from "../src/server/crypto.js";
 import {
-  commitAndPush,
-  commitIdentityFor,
-  ensureClone,
   knowledgeClonePath,
-  knowledgeRepoContextFor,
-  resolveInRepo,
-  scaffoldSkill,
-  readFile as readKnowledgeFile,
-  writeFile as writeKnowledgeFile,
-  writeRepoTemplate,
 } from "../src/server/knowledgeRepo.js";
 import {
-  buildRepoTools,
-  createRemoteRepo,
-  REPO_CREATE_TOOL_NAME,
-  REPO_SERVER_NAME,
-  REPO_TOOL_NAMES,
-} from "../src/server/agent/repoTools.js";
-import {
-  buildGroupRepoTools,
-  GROUP_REPO_SERVER_NAME,
-  GROUP_REPO_TOOL_NAMES,
-} from "../src/server/agent/groupRepoTools.js";
-import {
-  buildGitRepoTools,
-  GIT_REPO_SERVER_NAME,
-  GIT_REPO_TOOL_NAMES,
-} from "../src/server/agent/gitRepoTools.js";
-import {
-  gitRepoClonePath,
-  gitRepoContextFromRecord,
-} from "../src/server/gitRepos.js";
-import {
   buildSystemTools,
-  SYSTEM_SERVER_NAME,
-  SYSTEM_TOOL_NAMES,
   type SystemToolsContext,
 } from "../src/server/agent/systemTools.js";
-import {
-  knownHostsPath,
-  parseKnownHosts,
-  upsertHostLine,
-  addTrustedHost,
-  listTrustedHosts,
-  removeTrustedHost,
-} from "../src/server/sshTrust.js";
-import {
-  buildSshTrustTools,
-  SSH_TRUST_SERVER_NAME,
-  SSH_TRUST_TOOL_NAMES,
-} from "../src/server/agent/sshTrustTools.js";
-import {
-  buildSshIdentityTools,
-  SSH_IDENTITY_SERVER_NAME,
-  SSH_IDENTITY_TOOL_NAMES,
-} from "../src/server/agent/sshIdentityTools.js";
-import {
-  buildConfluenceTools,
-  CONFLUENCE_SERVER_NAME,
-  CONFLUENCE_TOOL_NAMES,
-} from "../src/server/agent/confluenceTools.js";
-import { generateSshKeyPair } from "../src/server/sshIdentity.js";
 import {
   deleteConversationWorkspaceCopies,
   SERVER_WORKSPACE_COPY_DIRS,
@@ -206,7 +125,6 @@ import type { AgentRequest, AppConfig, Plugin } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
   normalizeHexSshToolPolicy,
-  type HexSshToolPolicy,
 } from "../src/server/hexSshPolicy.js";
 
 import {

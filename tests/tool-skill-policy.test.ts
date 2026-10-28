@@ -43,7 +43,6 @@ import {
   TOGGLABLE_BUILTIN_TOOLS,
   disallowedEntriesForPolicy,
   isAgentTeamsDisabled,
-  isToolSkillPolicyEmpty,
   normalizeSkillDiscoveryCache,
   normalizeToolSkillPolicy,
   parseToolSkillPolicy,
@@ -129,8 +128,6 @@ describe("tool/skill policy validators", () => {
   it("compiles the policy into disallowedTools entries", () => {
     const policy = { disabledTools: ["WebFetch"], disabledSkills: ["code-review"] };
     expect(disallowedEntriesForPolicy(policy)).toEqual(["WebFetch", "Skill(code-review)"]);
-    expect(isToolSkillPolicyEmpty(policy)).toBe(false);
-    expect(isToolSkillPolicyEmpty(DEFAULT_TOOL_SKILL_POLICY)).toBe(true);
   });
 
   it("derives the agent-teams feature switch from the SendMessage toggle", () => {

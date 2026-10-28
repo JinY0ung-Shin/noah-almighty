@@ -7,12 +7,13 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 
 ## Structure
 - **The frontend is Svelte + Vite under `src/client/`, NOT vanilla `public/`** (migrated 2026-06, commit
-  `b8505fb`). `public/` now holds only static assets (favicons, manifest, PWA icons). Entry
+  `b8505fb`). Static assets (favicons, manifest, PWA icons, `sw.js`, the draw.io viewer) live in
+  `src/client/public/` (Vite's `publicDir`); the old repo-root `public/` is gone. Entry
   `src/client/index.html` → `src/client/src/main.ts` → `App.svelte`; views in `src/views/*.svelte`, shared
   components in `src/components/*.svelte`, non-UI logic/stores in `src/lib/*.ts`. `lib/state.ts` is the
   central writable store (`appState` + `updateState`/`readState`/`replaceState`/`notify`); other lib:
   `chat`, `loaders`, `api`, `nav`, `slash`, `format`, `dom`, `knowledge`, `onboarding`, `theme`, `sse`.
-  Built by `vite build` → `dist/client`, which `app.ts` serves (falling back to `public/`).
+  Built by `vite build` → `dist/client`, which `app.ts` serves (no build → only the SPA fallback's 404 hint).
 - **`src/lib/state.ts`:** `appState` is a Svelte `writable`; mutate via `updateState(fn)`
   (mutate-then-reassign; also recomputes `streaming`), read via `readState()`, patch via
   `replaceState(patch)`, toast via `notify(msg, kind?, {actionLabel?, action?})`. Reactivity comes from the
@@ -299,8 +300,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   validators. Update these in lockstep:
   - `normalizeTags` (`lib/format.ts`) ↔ server `normalizeHashtags`
   - repo-href building ↔ server `githubHost` resolution
-  - the schedule builder (`RoutineModal.svelte` + `formatRoutineSchedule`/`timeToMinute`/`minuteToTime` in
-    `lib/format.ts`) ↔ server `routineSchedule.ts` (once/daily/weekly/interval semantics)
+  - the schedule builder (`RoutineModal.svelte` + `formatRoutineSchedule` in `lib/format.ts`) ↔ server
+    `routineSchedule.ts` (once/daily/weekly/interval semantics)
 - **`SteerPublic` is hand-mirrored because it lives in a ROUTE module, not `server/types.ts`.**
   `lib/types.ts` re-exports server types through that barrel, but this one is exported from
   `routes/chat.ts`, which `tsconfig.client.json` must never include (it reaches express and
