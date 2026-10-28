@@ -35,6 +35,14 @@ moved symbols so importers keep their paths:
   `claudeAgent.ts`, which is where the test suites import them from). `runClaudeAgent` went 1400 → ~450
   lines; the split point is exact because the setup half declares **no `let` at all** — it is pure
   derivation over store/config/plugins, and the loop half owns every accumulator.
+- `runCapabilities.ts` — **the backend-agnostic half of `runPlan.ts`** (2026-10-29, design N1):
+  `buildRunCapabilities` (tool access, families, the in-process MCP servers, model chain, describe_system's
+  ctx, `mcpAllowedTools`) and `stampPromptRequest` (the request as both prompt builders see it), shared by
+  every runner so their gates cannot drift. `buildAgentRunPlan` =
+  capabilities + the SDK-only half (options bag, hooks, CLI-spawned hex-ssh / plugin / 공용 MCP servers and
+  their secret handoff). The pure helpers moved here and are re-exported from `runPlan.ts` (and
+  `claudeAgent.ts`). A NEW tool still updates BOTH lists, now `inProcessMcpServers` + `mcpAllowedTools`
+  here.
 Keep the re-export set in `claudeAgent.ts` minimal to the original public surface.
 
 ### Official product manual

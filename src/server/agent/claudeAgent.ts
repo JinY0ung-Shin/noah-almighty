@@ -12,7 +12,6 @@ import type { AgentEvents } from "./events.js";
 import logger from "../logger.js";
 import { isRecord, asNumber, asString } from "./agentUtils.js";
 import { steerToSdkUserMessage, type SteerChannel } from "./steerChannel.js";
-import { deckGuidanceFlags } from "../deckRender.js";
 import {
   buildSystemPromptAppend,
   buildUserPrompt,
@@ -49,6 +48,7 @@ export {
   type McpToolFamilyPlan,
 } from "./runPlan.js";
 import { buildAgentRunPlan } from "./runPlan.js";
+import { stampPromptRequest } from "./runCapabilities.js";
 
 const agentLogger = logger.child({ module: "agent" });
 
@@ -251,34 +251,9 @@ export async function runClaudeAgent(
     sdk,
     streaming,
     options,
-    ownerToolAccess,
-    webFetchProxyState,
-    ownerState,
-    ownerGroups,
-    ownerSecrets,
     effectiveModel,
     modelChain,
-    runVisionEnabled,
     agentStart,
-    knowledgeRepoConfigured,
-    sharedAccount,
-    toolSkillPolicy,
-    registeredMcpToolGroups,
-    adminBlockedMcpToolGroups,
-    browserActive,
-    canvasActive,
-    fileOutputActive,
-    shareLinkToolActive,
-    skillExchangeActive,
-    todoToolsActive,
-    todoDeleteActive,
-    todoSnapshot,
-    deckRenderingAvailable,
-    deckToolchain,
-    deckAuthoring,
-    confluenceSaveToWorkspace,
-    canWriteFiles,
-    sharedMcpStates,
     writeMcpHandoffFiles,
     removeMcpHandoffFiles,
   } = plan;
@@ -304,117 +279,7 @@ export async function runClaudeAgent(
   let contextUsage: { total: number; window: number } | undefined;
   let usedModel = effectiveModel;
 
-  // Deck standing guidance: the deployment toolchain (legacy and/or the pptx
-  // skill's converter) AND a turn that can publish files (preview embeds + the
-  // download card) AND a viewer allowed to author — deckAuthoring, the SAME
-  // status describe_system's deck line branches on, so a read-only colleague or
-  // an admin-disabled `pptx` skill gets no deck guidance on either surface.
-  const deckGuidance = deckGuidanceFlags({
-    deckRenderingAvailable,
-    deckConverterInstalled: deckToolchain.converter,
-    fileOutputActive,
-    deckAuthoring,
-  });
-
-  // Owner self-state (secret names, group memberships) flows to every
-  // OWNER-DRIVEN turn: interactive owner chats AND owner-scheduled routines
-  // (ownerToolAccess) — the same gate that registers the owner-level tools, so
-  // prompt awareness and tool availability never diverge. Restricted headless
-  // runs (intro/hashtag generation) and colleague/trusted chats keep them empty.
-  const promptRequest: AgentRequest = {
-    ...request,
-    secretNames: ownerToolAccess ? ownerState.secretNames : [],
-    shellExposedSecretNames: ownerToolAccess
-      ? ownerState.shellExposedSecretNames
-      : [],
-    // Secrets the owner enabled for BROWSER INPUT. Same owner gate as the two
-    // above; the browser paragraph only renders when the bridge is actually on,
-    // so a run without it never advertises names it could not type.
-    browserSecrets: ownerToolAccess ? ownerState.browserSecrets : [],
-    knowledgeRepoConfigured,
-    // Shared-account self-state rides on EVERY viewer class (it is not a secret):
-    // the teammate branch switches its repo guidance to "writes allowed" on it,
-    // and the owner branch surfaces it as META-COGNITION.
-    sharedAccount,
-    gitTokenSet: ownerState.gitTokenSet,
-    githubHost: config.githubHost,
-    confluenceUrlConfigured: Boolean(config.confluenceUrl),
-    confluencePatConfigured: Boolean(
-      ownerSecrets.CONFLUENCE_PAT ||
-      ownerSecrets.CONFLUENCE_PERSONAL_ACCESS_TOKEN,
-    ),
-    // get_attachment's save_to_workspace can land this run — runPlan's ONE
-    // derivation, the same boolean describe_system's ctx got.
-    confluenceSaveToWorkspace,
-    // This run's tools may write files (runPlan's elevatedToolAccess) — the
-    // same boolean describe_system's ctx got, so the vision listing's "place the
-    // file" tail and the image-sources line agree for every viewer class.
-    canWriteFiles,
-    // Web-fetch proxy self-state (META-COGNITION): redacted HTTP(S)_PROXY/
-    // NO_PROXY snapshot so the avatar knows whether external sites are
-    // reachable through the corporate proxy. Mirrored by describe_system.
-    webFetchProxy: webFetchProxyState(),
-    groupMemberships: ownerToolAccess ? ownerGroups : [],
-    // Skill-exchange self-state (#skill-share): counts ride ONLY runs that
-    // registered the tools (skillExchangeActive), so the standing note and
-    // tool availability can't diverge.
-    learnableSkillCount: skillExchangeActive
-      ? ownerState.learnableSkillCount
-      : 0,
-    sharedSkillCount: skillExchangeActive ? ownerState.sharedSkillCount : 0,
-    // The REGISTERED set (see registeredMcpToolGroups): standing tool guidance
-    // must match the servers this run actually mounts.
-    mcpToolGroups: registeredMcpToolGroups,
-    // Rides to the prompt ONLY so admin-blocked groups are excluded from the
-    // "user deselected" standing note — the avatar is deliberately NOT told
-    // that a policy exists or what it blocks (it only knows its enabled set).
-    adminBlockedMcpToolGroups,
-    // Canvas standing guidance fires for ALL viewer classes of a canvas-enabled
-    // turn (colleagues see canvases too). Experimental-feature self-state is
-    // owner-driven only (META-COGNITION), matching describe_system's gating.
-    canvasEnabled: canvasActive,
-    browserEnabled: browserActive,
-    fileOutputEnabled: fileOutputActive,
-    // Share links: rides ONLY runs that registered create_share_link (the
-    // skillExchangeActive precedent), so the standing line never offers a
-    // tool the run lacks; any other run with file output hears the 공유 링크
-    // button redirect instead. Same boolean describe_system reports.
-    shareLinksEnabled: shareLinkToolActive,
-    // 할 일 capability: rides ONLY runs that registered the to-do tools
-    // (runPlan's todoToolsActive — the skillExchangeActive precedent), with the
-    // list FROZEN at this conversation's first such turn. No live counts: they
-    // would change the per-turn append and break prompt caching.
-    todoState: todoToolsActive ? { deleteEnabled: todoDeleteActive, snapshot: todoSnapshot } : undefined,
-    // Deck standing guidance (see deckGuidance above): the converter branch
-    // wins in promptBuilder's deckSection when both flags are set.
-    deckRenderingEnabled: deckGuidance.deckRenderingEnabled,
-    deckConverterEnabled: deckGuidance.deckConverterEnabled,
-    visionEnabled: runVisionEnabled,
-    experimentalFeatures: ownerToolAccess
-      ? ownerState.experimentalFeatures
-      : [],
-    // Admin tool/skill policy self-state (META-COGNITION): all viewer classes —
-    // a disabled skill may still show in the CLI's listing (stale discovery
-    // cache), so the standing note stops the avatar from attempting/suggesting
-    // it. Mirrored by describe_system.
-    adminDisabledTools: toolSkillPolicy.disabledTools,
-    adminDisabledSkills: toolSkillPolicy.disabledSkills,
-    // External task API self-state, owner runs only: the live
-    // key count, plus the CONFIGURED per-run budget — config, not store, so an
-    // operator's AVATAR_TASK_TIMEOUT_MINUTES is what the avatar states, never
-    // the manual's default. An API run is an owner run, so the same gate covers
-    // its provenance paragraph; describe_system reads the same config value.
-    avatarApiKeyCount: request.viewerIsOwner ? ownerState.avatarApiKeyCount : undefined,
-    avatarTaskRunTimeoutMs: request.viewerIsOwner ? config.avatarTaskRunTimeoutMs : undefined,
-    // Mid-turn messages (steers) — META-COGNITION only, no capability change:
-    // this run has a live steer channel, so the viewer can keep typing while it
-    // works. Same boolean describe_system reports (runPlan's system ctx).
-    midTurnMessages: Boolean(events?.steers),
-    // 공용 MCP 서버: runPlan's ONE derivation (the states describe_system got).
-    // Every viewer class hears which servers are mounted; only the owner's
-    // branches name missing secrets (the prompt section gates that).
-    sharedMcpServers: sharedMcpStates,
-  };
+  const promptRequest: AgentRequest = stampPromptRequest(request, plan, config, events);
 
   const setSystemPrompt = () => {
     options.systemPrompt = {
