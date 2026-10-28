@@ -1170,8 +1170,10 @@ export async function buildRunCapabilities(
     // get_attachment's save_to_workspace target: the conversation scratch
     // workspace, never an open repo clone (undefined → the option refuses).
     workspaceDir: scratchWorkspaceDir,
-    // pi: the saved file's path as the model sees it (its sandbox path).
-    ...(piWorkspace ? { displayPath: toSandboxPath } : {}),
+    // pi: the saved file's path as the model sees it (its sandbox path), and
+    // no link followed anywhere below the user's sandbox root (`c/<conv>` is
+    // the agent's too).
+    ...(piWorkspace ? { displayPath: toSandboxPath, workspaceAnchor: piWorkspace.hostRoot } : {}),
     // A save that lands after the conversation was deleted (its copy sweep
     // already ran) is undone: conversation ids are never reused, so "the row
     // still exists" is the whole liveness test.

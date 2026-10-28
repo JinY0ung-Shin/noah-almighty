@@ -1069,7 +1069,12 @@ export async function executeChatTurn(
     const legacyWorkspaceDir = workspaceDirFor(config, avatar.id, conversationId);
     const piPrepared = piWorkspace ? preparePiRunWorkspace(config, piRunClass, legacyWorkspaceDir) : null;
     const workspaceDir = piPrepared?.hostConversationDir ?? legacyWorkspaceDir;
-    fs.mkdirSync(workspaceDir, { recursive: true });
+    // Server writes below a pi sandbox root never follow a link from there
+    // down (`c/<conv>` is the agent's); the SDK scratch folder anchors itself.
+    const workspaceAnchor = piPrepared?.hostRoot;
+    // pi: preparePiRunWorkspace already made the folder through pinned
+    // descriptors — a by-name mkdir here would follow a planted link.
+    if (!piPrepared) fs.mkdirSync(workspaceDir, { recursive: true });
     // The run's explicit output roots — the active repo clone first (the run
     // cwd) when one is open, then the conversation scratch workspace. show_file,
     // share_file and share_file's deck-preview sidecar lookup all resolve
@@ -1134,6 +1139,7 @@ export async function executeChatTurn(
         conversationId,
         workspaceDir,
         saved.attachments,
+        workspaceAnchor,
       );
       if (!imageFileMode) {
         requestImages = saved.images;
@@ -1159,6 +1165,7 @@ export async function executeChatTurn(
         conversationId,
         workspaceDir,
         rewindPlan.anchor.attachments,
+        workspaceAnchor,
       );
       if (turnVisionEnabled) {
         requestImages = readChatImages(
@@ -1354,7 +1361,7 @@ export async function executeChatTurn(
         deleteChatFileAttachments(config, conversationId, swept);
         // Their staged workspace copies go with them (captures and saved
         // Confluence files are tool side effects of the dropped turns: they stay).
-        deleteStagedAttachmentCopies(workspaceDir, swept);
+        deleteStagedAttachmentCopies(workspaceDir, swept, workspaceAnchor);
       }
     }
 
@@ -2223,7 +2230,7 @@ export async function executeChatTurn(
               } else if (store.conversationOwner(conversationId) !== ownerUserId) {
                 saveSkipped = "conversation_gone";
               } else {
-                const saved = saveBrowserCapture(workspaceDir, captureBytes);
+                const saved = saveBrowserCapture(workspaceDir, captureBytes, Date.now(), workspaceAnchor);
                 if ("error" in saved) {
                   // The real reason: bytes that are no image vs a save that
                   // failed (TOO_LARGE is unreachable behind the relay's own

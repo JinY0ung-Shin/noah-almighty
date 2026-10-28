@@ -487,7 +487,7 @@ describe("confluence tools — request + attachment plumbing", () => {
     /** get_attachment with save_to_workspace on, against this test's workspace. */
     function save(
       args: Record<string, unknown>,
-      over: { visionEnabled?: boolean; workspaceDir?: string; elevated?: boolean } = {},
+      over: { visionEnabled?: boolean; workspaceDir?: string; workspaceAnchor?: string; elevated?: boolean } = {},
     ) {
       return callTool(
         buildConfluenceTools({ ...ctx(), workspaceDir: workspace, ...over }),
@@ -686,6 +686,39 @@ describe("confluence tools — request + attachment plumbing", () => {
       expect(planted).toBe(path.join(savedDir(), "att-1-diagram-3.png"));
       expect(fs.lstatSync(planted).isFile()).toBe(true);
       expect(fs.readdirSync(outside)).toEqual(["same.png"]);
+    });
+
+    it("on a pi run never follows a link ABOVE the workspace (the conversation folder itself), refusing before the download", async () => {
+      // The pi layout: <user root>/c/<conv>, where the sandbox owns `c/<conv>` too.
+      const userRoot = path.join(tempDir, "u-attacker");
+      const victimConv = path.join(tempDir, "u-victim", "c", "conv-v");
+      fs.mkdirSync(path.join(userRoot, "c"), { recursive: true });
+      fs.mkdirSync(path.join(victimConv, "confluence"), { recursive: true });
+      const conv = path.join(userRoot, "c", "conv-a");
+      fs.symlinkSync(victimConv, conv);
+      const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const res = await save({ attachment_id: "att-1" }, { workspaceDir: conv, workspaceAnchor: userRoot });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("symlink");
+      expect(methods).toEqual([]);
+      expect(fs.readdirSync(path.join(victimConv, "confluence"))).toEqual([]);
+
+      // The same link swapped in WHILE the download is in flight: the save
+      // goes through the pinned chain and refuses; the victim stays empty.
+      fs.unlinkSync(conv);
+      fs.mkdirSync(conv);
+      stubFetch((url) => {
+        if (url.pathname.endsWith("/content/att-1")) {
+          return json({ id: "att-1", type: "attachment", title: "diagram.png", metadata: { mediaType: "image/png" }, _links: { download: "/download/attachments/7/file" } });
+        }
+        fs.renameSync(conv, `${conv}-moved`);
+        fs.symlinkSync(victimConv, conv);
+        return fakeBinary({ contentType: "image/png", bytes: PNG });
+      });
+      const raced = JSON.parse((await save({ attachment_id: "att-1" }, { workspaceDir: conv, workspaceAnchor: userRoot })).content[0].text ?? "{}");
+      expect(raced.savedPath).toBeUndefined();
+      expect(raced.saveError).toBeTruthy();
+      expect(fs.readdirSync(path.join(victimConv, "confluence"))).toEqual([]);
     });
 
     it("without a workspace, refuses before sending any request", async () => {

@@ -98,6 +98,38 @@ user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`,
   cleanup works unchanged (its workspace dir is the sandbox folder). Account deletion removes the user's whole
   `u-<key>` workspace and Noah's repo-copy records (`routes/admin.ts`).
 
+### Host-side filesystem discipline (`pinnedFs.ts`, review C1)
+
+Everything under `u-<key>` is the sandbox's, at Noah's own uid: the agent can replace ANY folder Noah later walks
+into (`.noah`, `.noah/skills`, `c`, `c/<conv>`, `attachments/`, `repos/<owner>`, a copy's `.git`) with a symlink.
+`ln -s ../.. /workspace/.noah/skills` once made the skill sync list `PI_WORKSPACES_DIR` and delete every other
+user's sandbox. So no host-side write, listing, rename or removal below the user root resolves an agent-owned
+component by NAME:
+
+- **Folders are pinned by descriptor** (`PinnedDir`, `piSandboxDir`): opened one segment at a time with
+  `O_DIRECTORY|O_NOFOLLOW`, each from the previous folder's descriptor (`/proc/self/fd/<fd>/<name>` — openat
+  for Node), missing segments created by `mkdir` under the pinned parent and RE-opened no-follow. A link or a
+  file anywhere on the way refuses the operation. Only the user root's parent (the operator's
+  `PI_WORKSPACES_DIR`) is trusted as configured.
+- **Entries go through the descriptor:** exclusive creates (`O_CREAT|O_EXCL|O_NOFOLLOW`, mode set by `fchmod`),
+  no-follow reads, renames inside the pinned folder, and a recursive removal that pins every sub-folder the same
+  way and unlinks every link (never `fs.rmSync` on an agent-owned tree).
+- **Reads by an already-checked path** (`share_file`/`show_file`/`copy_image` publishers, the deck sidecar
+  manifest + renders, the working-copy read-back) verify the OPENED file's kernel path (`fdPathIs`,
+  `readFileVerified`, `listDirVerified`) against the realpath they checked, so a folder swapped for a link
+  between the check and the open is refused.
+- **Users:** skill sync (a planted link → this run lists the skills `via: "mcp"` and says so in `failures`),
+  `ensurePiConversationDir`, the D3 move (destination side), attachment staging (`stageChatImageFilesFromAttachments`
+  / `stagePiAttachmentFiles`), browser captures, Confluence `save_to_workspace` (`workspaceAnchor` = the user
+  root), the rewind cascade (`deleteStagedAttachmentCopies`), repo copies + `.prev` + the commit's `.git` refresh,
+  conversation and account deletion. The generic writers take an `anchor` (the deepest folder the agent cannot
+  replace) — the pi user root on pi runs, the scratch workspace itself on the SDK path.
+- **Residual (documented, not closable from Node):** a missing folder created on the way can be raced only into a
+  refusal; a file's CONTENT is the agent's after Noah wrote it; and without `/proc/self/fd` (non-Linux dev hosts —
+  pi is Linux-only) entries are addressed by name under the pinned folder's original path (check-then-act) and the
+  opened-file check passes. **A new host-side operation below a sandbox root MUST go through `piSandboxDir` /
+  `PinnedDir`** — `removeNoFollow` and by-name `fs.*` calls are only for paths whose every ancestor is Noah's.
+
 ## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)
 
 pi does not load Claude Code plugin roots. Each pi turn `materializePiSkills` syncs the run's `pluginRoots` into

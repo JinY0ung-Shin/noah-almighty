@@ -25,13 +25,23 @@
  * root and of what was written is kept in `.noah/skills/.noah-sync.json`, and a
  * root is rewritten only when either side changed. Noah owns `.noah/skills`
  * wholesale (a stale root is removed); nothing outside it is ever touched.
+ *
+ * The sandbox can replace `.noah`, `.noah/skills` or anything inside them with
+ * a link (review C1: `ln -s ../.. .noah/skills` once made this sync list
+ * `PI_WORKSPACES_DIR` and delete every other user's workspace). So every write,
+ * listing and removal here goes through descriptor-pinned folders
+ * (`piSandboxDir`, `pinnedFs.ts`): a link anywhere below the user root refuses
+ * the sync — the run then lists the skills as `via: "mcp"` (read through
+ * `mcp__skills__read`, like a colleague run) instead of at paths Noah could not
+ * write — and nothing is ever followed or removed outside `.noah/skills`.
  */
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig, PiSkillIndexEntry, PluginRoot } from "../../types.js";
 import { skillMdMeta } from "../skillDiscovery.js";
-import { PI_SANDBOX_ROOT, removeNoFollow, type PiWorkspace } from "./piWorkspace.js";
+import type { PinnedDir } from "../../pinnedFs.js";
+import { PI_SANDBOX_ROOT, piSandboxDir, type PiWorkspace } from "./piWorkspace.js";
 
 /** Where skills live in the sandbox. */
 export const PI_SKILLS_SANDBOX_DIR = path.posix.join(PI_SANDBOX_ROOT, ".noah", "skills");
@@ -181,9 +191,11 @@ interface Manifest {
   roots: Record<string, { source: string; dest: string }>;
 }
 
-function readManifest(file: string): Manifest {
+function readManifest(skills: PinnedDir): Manifest {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Manifest;
+    const raw = skills.readFile(MANIFEST, 4 * 1024 * 1024);
+    if (!raw) throw new Error("no manifest");
+    const parsed = JSON.parse(raw.toString("utf8")) as Manifest;
     if (parsed.version === SYNC_VERSION && parsed.roots && typeof parsed.roots === "object") return parsed;
   } catch {
     /* rebuilt below */
@@ -191,22 +203,44 @@ function readManifest(file: string): Manifest {
   return { version: SYNC_VERSION, roots: {} };
 }
 
-/** Copy one root's included skills into `target` (a fresh folder), rewriting Markdown. */
-function writeRoot(source: string, dirs: string[], target: string, sandboxRoot: string): void {
-  fs.mkdirSync(target, { recursive: true, mode: 0o755 });
+/**
+ * Copy one root's included skills into `target` (a fresh pinned folder),
+ * rewriting Markdown. Every sub-folder is pinned and every file created
+ * exclusively, so a link the sandbox races into the fresh folder is never
+ * written through (the copy fails instead).
+ */
+function writeRoot(source: string, dirs: string[], target: PinnedDir, sandboxRoot: string): void {
   const budget = { files: 0, bytes: 0 };
-  for (const dir of dirs) {
-    const skillSandboxDir = path.posix.join(sandboxRoot, dir);
-    for (const file of walk(path.join(source, "skills", dir), budget)) {
-      const dest = path.join(target, dir, ...file.rel.split("/"));
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      if (file.rel.toLowerCase().endsWith(".md")) {
-        fs.writeFileSync(dest, rewriteSkillMarkdown(fs.readFileSync(file.abs, "utf8"), skillSandboxDir));
-      } else {
-        fs.copyFileSync(file.abs, dest);
-      }
-      fs.chmodSync(dest, file.mode & 0o111 ? 0o755 : 0o644);
+  const folders = new Map<string, PinnedDir>();
+  const folderOf = (parts: string[]): PinnedDir => {
+    const key = parts.join("/");
+    let folder = folders.get(key);
+    if (!folder) {
+      const opened = target.dir(parts, { create: true, mode: 0o755 });
+      if (!opened) throw new Error(`could not create ${key} in the sandbox skill copy`);
+      folders.set(key, opened);
+      folder = opened;
     }
+    return folder;
+  };
+  try {
+    for (const dir of dirs) {
+      const skillSandboxDir = path.posix.join(sandboxRoot, dir);
+      for (const file of walk(path.join(source, "skills", dir), budget)) {
+        const parts = [dir, ...file.rel.split("/")];
+        const name = parts.pop()!;
+        const folder = folderOf(parts);
+        const mode = file.mode & 0o111 ? 0o755 : 0o644;
+        if (file.rel.toLowerCase().endsWith(".md")) {
+          const data = rewriteSkillMarkdown(fs.readFileSync(file.abs, "utf8"), skillSandboxDir);
+          if (folder.writeFileExclusive(name, data, mode) !== "written") throw new Error(`${dir}/${file.rel} already exists`);
+        } else {
+          folder.copyFileIn(file.abs, name, mode);
+        }
+      }
+    }
+  } finally {
+    for (const folder of folders.values()) folder.close();
   }
 }
 
@@ -227,6 +261,17 @@ export interface MaterializeInput {
  * path that does not exist.
  */
 export function materializePiSkills(input: MaterializeInput): PiSkillPlan {
+  const skills = input.workspace.hostRoot
+    ? piSandboxDir(input.workspace, [".noah", "skills"], { create: true, mode: 0o755 })
+    : null;
+  try {
+    return materializeInto(input, skills);
+  } finally {
+    skills?.close();
+  }
+}
+
+function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiSkillPlan {
   const { config, workspace, pluginRoots, ownerRun } = input;
   const disabled = new Set(input.disabledSkills);
   const plan: PiSkillPlan = { entries: [], mcpSources: new Map(), failures: [] };
@@ -244,28 +289,24 @@ export function materializePiSkills(input: MaterializeInput): PiSkillPlan {
       return !isDisabled(disabled, meta.name || dir, dir, pluginName);
     });
     if (dirs.length === 0) continue;
-    // A colleague's sandbox only ever receives the bundled (public) skills.
-    roots.push({ label, source, dirs, local: ownerRun || kind === "default" });
+    // A colleague's sandbox only ever receives the bundled (public) skills;
+    // with no usable `.noah/skills` (unmounted, or a link/file planted there)
+    // every root is read through mcp__skills__read instead.
+    roots.push({ label, source, dirs, local: skills !== null && (ownerRun || kind === "default") });
+  }
+  if (workspace.hostRoot && !skills) {
+    plan.failures.push(".noah/skills: not a plain folder in the sandbox (a link or a file there is never followed); skills are read through mcp__skills__read this run");
   }
 
-  const hostSkills = workspace.hostRoot ? path.join(workspace.hostRoot, ".noah", "skills") : null;
-  const manifestFile = hostSkills ? path.join(hostSkills, MANIFEST) : null;
-  const manifest = manifestFile ? readManifest(manifestFile) : { version: SYNC_VERSION, roots: {} };
+  const manifest = skills ? readManifest(skills) : { version: SYNC_VERSION, roots: {} };
   const next: Manifest = { version: SYNC_VERSION, roots: {} };
   const written = new Set<string>();
-  if (hostSkills) {
-    try {
-      fs.mkdirSync(hostSkills, { recursive: true, mode: 0o755 });
-    } catch {
-      /* every local root below then fails and is left out */
-    }
-  }
 
   for (const root of roots) {
     const sandboxRoot = path.posix.join(PI_SKILLS_SANDBOX_DIR, root.label);
-    if (root.local) {
-      if (!hostSkills) continue;
-      const target = path.join(hostSkills, root.label);
+    if (root.local && skills) {
+      // Stat-only fingerprint walks go through the pinned folder too.
+      const target = skills.entry(root.label);
       try {
         const sourceFp = fingerprint(
           [String(SYNC_VERSION), root.label, ...root.dirs],
@@ -275,15 +316,21 @@ export function materializePiSkills(input: MaterializeInput): PiSkillPlan {
         );
         const destFp = () => fingerprint([], walk(target, { files: 0, bytes: 0 }));
         const known = manifest.roots[root.label];
-        const isDir = fs.lstatSync(target, { throwIfNoEntry: false })?.isDirectory() ?? false;
+        const isDir = skills.kind(root.label) === "dir";
         if (!(known && isDir && known.source === sourceFp && known.dest === destFp())) {
-          const tmp = path.join(hostSkills, `.tmp-${root.label}-${randomBytes(4).toString("hex")}`);
+          const tmpName = `.tmp-${root.label}-${randomBytes(4).toString("hex")}`;
           try {
-            writeRoot(root.source, root.dirs, tmp, sandboxRoot);
-            removeNoFollow(target);
-            fs.renameSync(tmp, target);
+            const tmp = skills.dir([tmpName], { create: true, mode: 0o755 });
+            if (!tmp) throw new Error("could not create a staging folder in .noah/skills");
+            try {
+              writeRoot(root.source, root.dirs, tmp, sandboxRoot);
+            } finally {
+              tmp.close();
+            }
+            skills.remove(root.label);
+            skills.rename(tmpName, root.label);
           } finally {
-            removeNoFollow(tmp);
+            skills.remove(tmpName);
           }
         }
         next.roots[root.label] = { source: sourceFp, dest: destFp() };
@@ -308,13 +355,15 @@ export function materializePiSkills(input: MaterializeInput): PiSkillPlan {
     }
   }
 
-  if (hostSkills) {
-    // Noah owns .noah/skills: anything there that is not a current root goes.
+  if (skills) {
+    // Noah owns .noah/skills: anything there that is not a current root goes
+    // (through the pinned folder — never a listing of wherever a link points).
     try {
-      for (const name of fs.readdirSync(hostSkills)) {
-        if (name !== MANIFEST && !written.has(name)) removeNoFollow(path.join(hostSkills, name));
+      for (const entry of skills.list()) {
+        if (entry.name !== MANIFEST && !written.has(entry.name)) skills.remove(entry.name);
       }
-      fs.writeFileSync(manifestFile!, JSON.stringify(next));
+      const tmpManifest = `.tmp-manifest-${randomBytes(4).toString("hex")}`;
+      if (skills.writeFileExclusive(tmpManifest, JSON.stringify(next)) === "written") skills.rename(tmpManifest, MANIFEST);
     } catch {
       /* the next turn re-syncs */
     }

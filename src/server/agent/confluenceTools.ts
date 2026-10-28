@@ -1,11 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AppConfig } from "../types.js";
-import { readRegularFileAsync } from "../chatImages.js";
+import { PinnedDir, segmentsBelow } from "../pinnedFs.js";
 import { asString } from "./agentUtils.js";
 import { text } from "./mcpTools.js";
 
@@ -50,6 +49,12 @@ export interface ConfluenceToolsContext {
    */
   workspaceDir?: string;
   /**
+   * The deepest folder above `workspaceDir` the agent cannot replace — a pi
+   * run's sandbox user root, where `c/<conv>` itself is the agent's. No link
+   * is followed from here down to `confluence/`. Unset → `workspaceDir`.
+   */
+  workspaceAnchor?: string;
+  /**
    * How a saved file's path is NAMED to the model (`savedPath`). pi runs write
    * into the sandbox conversation folder through its host path and hand the
    * model the sandbox path (`/workspace/...`); unset → the host path as is.
@@ -83,6 +88,10 @@ const SAVE_INLINE_REDIRECT = "Call get_attachment again without save_to_workspac
 const WORKSPACE_SAVE_UNAVAILABLE = `Saving attachments to the workspace is not available in this run. ${SAVE_INLINE_REDIRECT}`;
 const WORKSPACE_SAVE_NOT_A_FOLDER = `${WORKSPACE_SAVE_DIR}/ in the conversation scratch workspace is not a plain folder (a symlink or a file there is never followed), so the attachment was not saved. Rename or remove it, then retry.`;
 const WORKSPACE_SAVE_GONE = "The conversation scratch workspace no longer exists, so the attachment was not saved.";
+const WORKSPACE_SAVE_LINKED =
+  "The conversation scratch workspace is reached through a symlink or a file (never followed), so the attachment was not saved. Restore it as a plain folder, then retry.";
+const WORKSPACE_SAVE_AFTER_DELETE =
+  "The conversation was deleted while the attachment was being saved, so the saved copy was removed.";
 const WORKSPACE_SAVE_NOT_WRITABLE = `The conversation scratch workspace or its ${WORKSPACE_SAVE_DIR}/ folder is not writable, so the attachment was not saved.`;
 /** Cap on a saved file's sanitized title (extension included). */
 const MAX_SAVED_NAME_CHARS = 80;
@@ -666,37 +675,25 @@ function errnoCode(error: unknown): string {
 }
 
 /**
- * Create `target` EXCLUSIVELY and write `data` into it. `wx` is O_CREAT|O_EXCL:
- * it never replaces an existing file and never follows a symlink planted at the
- * name. A failed write removes the partial file this call created.
+ * Create `name` EXCLUSIVELY in the pinned folder and write `data` into it:
+ * O_CREAT|O_EXCL through the descriptor never replaces an existing file and
+ * never follows a symlink planted at the name. A failed write removes the
+ * partial file this call created.
  */
-async function writeNewFile(target: string, data: Buffer): Promise<"written" | "exists" | { code: string }> {
-  let handle: FileHandle;
+function writeNewFile(dir: PinnedDir, name: string, data: Buffer): "written" | "exists" | { code: string } {
   try {
-    handle = await fs.promises.open(target, "wx");
+    return dir.writeFileExclusive(name, data);
   } catch (error) {
-    return errnoCode(error) === "EEXIST" ? "exists" : { code: errnoCode(error) };
-  }
-  try {
-    await handle.writeFile(data);
-    await handle.close();
-    return "written";
-  } catch (error) {
-    await handle.close().catch(() => {});
-    await fs.promises.unlink(target).catch(() => {});
     return { code: errnoCode(error) };
   }
 }
 
-/** True when `filePath` is a regular file — never read through a symlink — holding exactly `data`. */
-async function holdsSameBytes(filePath: string, data: Buffer): Promise<boolean> {
+/** True when `name` in the pinned folder is a regular file — never read through a symlink — holding exactly `data`. */
+function holdsSameBytes(dir: PinnedDir, name: string, data: Buffer): boolean {
   // A size mismatch (the usual case for a changed attachment) costs one lstat, not a read.
-  const stat = await fs.promises.lstat(filePath).catch(() => null);
+  const stat = dir.lstat(name);
   if (!stat?.isFile() || stat.size !== data.length) return false;
-  const read = await readRegularFileAsync(filePath, data.length);
-  if ("buffer" in read) return read.buffer.equals(data);
-  // readRegularFileAsync refuses an empty file; an empty download matches one.
-  return read.error === "EMPTY" && data.length === 0;
+  return dir.readFile(name, data.length)?.equals(data) ?? false;
 }
 
 /** "20260930-181005": the KST wall clock (UTC+9, no DST) — the stamp browser captures are named with. */
@@ -727,9 +724,12 @@ function* candidateNames(name: { stem: string; ext: string }, nowMs: number): Ge
  * folder — or, before it exists, the workspace that will hold it — is writable.
  * The cheap pre-check the handler runs BEFORE the download, and the first step
  * of {@link saveToWorkspace} after it, when the agent's shell may have raced it.
+ * With an `anchor` above the workspace (a pi run), every folder from it down to
+ * the workspace must be a real folder, never a link.
  */
 async function checkSaveFolder(
   workspaceDir: string,
+  anchor: string = workspaceDir,
 ): Promise<{ ok: true; dir: string; exists: boolean } | { ok: false; message: string }> {
   let root: string;
   try {
@@ -738,6 +738,10 @@ async function checkSaveFolder(
   } catch {
     return { ok: false, message: WORKSPACE_SAVE_GONE };
   }
+  const below = segmentsBelow(anchor, workspaceDir);
+  const pinned = below ? PinnedDir.openBelow(anchor, below) : null;
+  if (!pinned) return { ok: false, message: WORKSPACE_SAVE_LINKED };
+  pinned.close();
   const dir = path.join(root, WORKSPACE_SAVE_DIR);
   const dirStat = await fs.promises.lstat(dir).catch(() => null);
   if (dirStat && !dirStat.isDirectory()) return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
@@ -753,53 +757,48 @@ async function checkSaveFolder(
  * Save a downloaded attachment as `<workspaceDir>/confluence/<name>`. A LOCAL
  * write — nothing here talks to Confluence. Containment: {@link checkSaveFolder}
  * runs again (the pre-download check can be stale by now); the name is one
- * sanitized segment; and every path handed back is re-resolved, so a folder
- * swapped for a symlink mid-save cannot land bytes outside the workspace. Never
- * overwrites: an existing file with the SAME bytes is reused (a repeat save
- * returns its path), anything else moves on to the next candidate name.
- * `savedPath` is spelled under `workspaceDir` as given — the same prefix the
- * run's cwd and describe_system use.
+ * sanitized segment; and the folder is PINNED by descriptor from `anchor` down
+ * (`pinnedFs.ts`) with the file created exclusively through it, so a folder
+ * swapped for a symlink mid-save can never land bytes outside the workspace.
+ * Never overwrites: an existing file with the SAME bytes is reused (a repeat
+ * save returns its path), anything else moves on to the next candidate name.
+ * A save that lands after the conversation was deleted (`isLive` false) is
+ * removed again through the same descriptor. `savedPath` is spelled under
+ * `workspaceDir` as given — the same prefix the run's cwd and describe_system use.
  */
 async function saveToWorkspace(
   workspaceDir: string,
   name: { stem: string; ext: string },
   data: Buffer,
-  nowMs: number = Date.now(),
+  options: { nowMs?: number; anchor?: string; isLive?: () => boolean } = {},
 ): Promise<{ ok: true; savedPath: string } | { ok: false; message: string }> {
-  const folder = await checkSaveFolder(workspaceDir);
+  const anchor = options.anchor ?? workspaceDir;
+  const folder = await checkSaveFolder(workspaceDir, anchor);
   if (!folder.ok) return folder;
-  const { dir } = folder;
-  if (!folder.exists) {
-    try {
-      await fs.promises.mkdir(dir);
-    } catch (error) {
-      if (errnoCode(error) !== "EEXIST") return { ok: false, message: WORKSPACE_SAVE_NOT_WRITABLE };
+  const below = segmentsBelow(anchor, workspaceDir);
+  const dir = below ? PinnedDir.openBelow(anchor, [...below, WORKSPACE_SAVE_DIR], { create: true }) : null;
+  // A link (or a file) at confluence/ or on the way: never followed.
+  if (!dir) return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
+  try {
+    for (const fileName of candidateNames(name, options.nowMs ?? Date.now())) {
+      const outcome = writeNewFile(dir, fileName, data);
+      if (outcome !== "written" && outcome !== "exists") {
+        return {
+          ok: false,
+          message: `Could not save the attachment to the conversation scratch workspace (${outcome.code}).`,
+        };
+      }
+      if (outcome === "exists" && !holdsSameBytes(dir, fileName, data)) continue;
+      if (options.isLive && !options.isLive()) {
+        // The conversation was deleted while this save was in flight: its
+        // sweep already ran, so this copy would outlive the conversation.
+        dir.unlink(fileName);
+        return { ok: false, message: WORKSPACE_SAVE_AFTER_DELETE };
+      }
+      return { ok: true, savedPath: path.join(path.resolve(workspaceDir), WORKSPACE_SAVE_DIR, fileName) };
     }
-    // lstat: a symlink reads as a symlink here, never as the folder it points at.
-    const dirStat = await fs.promises.lstat(dir).catch(() => null);
-    if (!dirStat?.isDirectory()) return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
-  }
-  for (const fileName of candidateNames(name, nowMs)) {
-    const target = path.join(dir, fileName);
-    const outcome = await writeNewFile(target, data);
-    if (outcome !== "written" && outcome !== "exists") {
-      return {
-        ok: false,
-        message: `Could not save the attachment to the conversation scratch workspace (${outcome.code}).`,
-      };
-    }
-    if (outcome === "exists" && !(await holdsSameBytes(target, data))) continue;
-    // Realpath containment of what is handed back: `dir` hangs off the
-    // realpath'd workspace and was a plain folder, so a clean save resolves to
-    // EXACTLY `target` — a strictly tighter test than "inside the workspace". Anything
-    // else means the folder was swapped mid-save: undo a file this call
-    // created (O_EXCL made it ours) and refuse.
-    const real = await fs.promises.realpath(target).catch(() => null);
-    if (real !== target) {
-      if (outcome === "written") await fs.promises.unlink(target).catch(() => {});
-      return { ok: false, message: WORKSPACE_SAVE_NOT_A_FOLDER };
-    }
-    return { ok: true, savedPath: path.join(path.resolve(workspaceDir), WORKSPACE_SAVE_DIR, fileName) };
+  } finally {
+    dir.close();
   }
   // Unreachable in practice: it takes every numbered name AND five fresh
   // random ones colliding.
@@ -983,7 +982,7 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
         // cannot land. saveToWorkspace repeats them after the download.
         if (args.save_to_workspace) {
           if (!ctx.workspaceDir) return text(WORKSPACE_SAVE_UNAVAILABLE, true);
-          const folder = await checkSaveFolder(ctx.workspaceDir);
+          const folder = await checkSaveFolder(ctx.workspaceDir, ctx.workspaceAnchor);
           if (!folder.ok) return text(`${folder.message} ${SAVE_INLINE_REDIRECT}`, true);
         }
         const resolved = await resolveAttachment(ctx, args);
@@ -1030,14 +1029,9 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
               mediaType,
             ),
             bytes.data,
+            { anchor: ctx.workspaceAnchor, isLive: ctx.isConversationLive },
           );
-          if (saved.ok && ctx.isConversationLive && !ctx.isConversationLive()) {
-            // The conversation was deleted while this save was in flight: its
-            // sweep already ran, so this copy would outlive the conversation.
-            await fs.promises.unlink(saved.savedPath).catch(() => {});
-            payload.saveError =
-              "The conversation was deleted while the attachment was being saved, so the saved copy was removed.";
-          } else if (saved.ok) payload.savedPath = ctx.displayPath ? ctx.displayPath(saved.savedPath) : saved.savedPath;
+          if (saved.ok) payload.savedPath = ctx.displayPath ? ctx.displayPath(saved.savedPath) : saved.savedPath;
           else payload.saveError = saved.message;
         }
         const savedNote = payload.savedPath

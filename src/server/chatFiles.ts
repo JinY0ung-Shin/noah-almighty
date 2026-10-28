@@ -8,8 +8,8 @@ import {
   detectImageMediaType,
   isInside,
   safeConversationDir,
+  readRegularFileSync,
   saveHiddenChatImage,
-  keepIfContained,
   workspaceSubdirForWrite,
 } from "./chatImages.js";
 
@@ -271,14 +271,11 @@ export function publishWorkspaceFile(
   if (stat.size === 0) return { error: "EMPTY" };
   if (stat.size > MAX_CHAT_FILE_BYTES) return { error: "TOO_LARGE" };
 
-  let buffer: Buffer;
-  try {
-    buffer = fs.readFileSync(source);
-  } catch {
-    return { error: "READ_FAILED" };
-  }
-  if (buffer.length === 0) return { error: "EMPTY" };
-  if (buffer.length > MAX_CHAT_FILE_BYTES) return { error: "TOO_LARGE" };
+  // Read through the opened file's identity check: a folder on the way swapped
+  // for a link since the realpath above never redirects the read.
+  const read = readRegularFileSync(source, MAX_CHAT_FILE_BYTES);
+  if ("error" in read) return { error: read.error };
+  const buffer = read.buffer;
   if (fileType.magic && !fileType.magic.some((prefix) => buffer.subarray(0, prefix.length).equals(prefix))) {
     return { error: "UNSUPPORTED" };
   }
@@ -376,11 +373,11 @@ export type SaveBrowserCaptureResult =
  * the sniffed bytes, exactly as {@link publishBrowserScreenshot} derives it.
  * This is the copy the avatar can place into something it produces (e.g. a
  * deck's `assets/`), independent of the user-facing card. The workspace is
- * agent-writable, so the folder must be a real directory
- * (`workspaceSubdirForWrite`), the file is created exclusively (`wx`), never
- * through a link, and must still resolve inside the folder afterwards
- * (`keepIfContained`, which removes it otherwise); a name collision draws a
- * fresh suffix and a write that fails part-way removes its partial file.
+ * agent-writable, so the folder is pinned with no link followed below `anchor`
+ * (`workspaceSubdirForWrite` — a pi run passes its sandbox user root) and the
+ * file is created exclusively through that descriptor, never through a link;
+ * a name collision draws a fresh suffix and a write that fails part-way removes
+ * its partial file.
  * Returns the absolute path the model is told. The errors separate "not an
  * image" (EMPTY/UNSUPPORTED) from a save that failed (TOO_LARGE, WRITE_FAILED)
  * so the tool result can name the real reason.
@@ -389,35 +386,37 @@ export function saveBrowserCapture(
   workspaceDir: string,
   buffer: Buffer,
   nowMs: number = Date.now(),
+  anchor?: string,
 ): SaveBrowserCaptureResult {
   if (buffer.length === 0) return { error: "EMPTY" };
   if (buffer.length > MAX_CHAT_FILE_BYTES) return { error: "TOO_LARGE" };
   const mediaType = detectImageMediaType(buffer);
   if (!mediaType) return { error: "UNSUPPORTED" };
-  const dir = workspaceSubdirForWrite(workspaceDir, "captures");
+  const dir = workspaceSubdirForWrite(workspaceDir, "captures", anchor);
   if (!dir) return { error: "WRITE_FAILED" };
-  const stamp = kstFileStamp(nowMs);
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const file = path.join(dir, `${stamp}-${crypto.randomBytes(3).toString("hex")}.${MIME_EXT[mediaType]}`);
-    try {
-      fs.writeFileSync(file, buffer, { flag: "wx" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue; // taken: draw another suffix
-      // The exclusive create makes any file at this name OURS, so a write that
-      // failed part-way (ENOSPC) must not leave a truncated capture behind.
+  try {
+    const openedAt = dir.realPath();
+    const stamp = kstFileStamp(nowMs);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const name = `${stamp}-${crypto.randomBytes(3).toString("hex")}.${MIME_EXT[mediaType]}`;
       try {
-        fs.rmSync(file, { force: true });
+        // Exclusive, through the pinned folder: never through a link, and a
+        // write that fails part-way removes its partial file.
+        if (dir.writeFileExclusive(name, buffer) === "exists") continue; // taken: draw another suffix
       } catch {
-        // best effort
+        return { error: "WRITE_FAILED" };
       }
-      return { error: "WRITE_FAILED" };
+      // Moved away since it was pinned: the returned path would name something else.
+      if (dir.realPath() !== openedAt) {
+        dir.unlink(name);
+        return { error: "WRITE_FAILED" };
+      }
+      return { path: path.join(path.resolve(workspaceDir), "captures", name) };
     }
-    // The folder was real when checked; a link swapped in since would have
-    // taken the write elsewhere, so the saved path must resolve to itself.
-    if (!keepIfContained(workspaceDir, "captures", file)) return { error: "WRITE_FAILED" };
-    return { path: file };
+    return { error: "WRITE_FAILED" };
+  } finally {
+    dir.close();
   }
-  return { error: "WRITE_FAILED" };
 }
 
 /**

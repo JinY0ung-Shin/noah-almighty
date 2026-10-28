@@ -12,12 +12,16 @@
  * 1000 — design D6). This module is the ONE mapping between the two views and
  * the seam lane I2 builds on (attachment staging, captures, Confluence saves,
  * show_file/share_file translation, cascades). It never follows a symlink out
- * of the user's root: a sandbox process can plant one.
+ * of the user's root: a sandbox process can plant one. Every host-side WRITE,
+ * listing or removal below the user root goes through a descriptor-pinned
+ * folder (`pinnedFs.ts`, {@link piSandboxDir}) — never through a path whose
+ * agent-controlled components are resolved by name.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentImageFileInput, AppConfig } from "../../types.js";
+import { PinnedDir, withPinnedDir } from "../../pinnedFs.js";
 
 /** The sandbox mount point (pi `SANDBOX_WORKSPACE`). */
 export const PI_SANDBOX_ROOT = "/workspace";
@@ -102,18 +106,53 @@ function isInsideRealRoot(root: string, candidate: string): boolean {
 }
 
 /**
+ * The user's root (`u-<key>`) pinned, created 0700 when missing. Its PARENT is
+ * the operator's `PI_WORKSPACES_DIR` (trusted, followed as configured); the
+ * root itself and everything below it are the sandbox's, so they are only
+ * ever reached through {@link PinnedDir}.
+ */
+function pinnedUserRoot(workspace: PiWorkspace, create: boolean): PinnedDir | null {
+  if (!workspace.hostRoot) return null;
+  const workspacesDir = path.dirname(workspace.hostRoot);
+  if (create) {
+    try {
+      fs.mkdirSync(workspacesDir, { recursive: true });
+    } catch {
+      return null;
+    }
+  }
+  return PinnedDir.openBelow(workspacesDir, [path.basename(workspace.hostRoot)], { create, mode: 0o700 });
+}
+
+/**
+ * A folder below the user's sandbox root (`rel`: plain segments, e.g.
+ * `["c", seg, "attachments"]`), pinned by descriptor with no link followed
+ * anywhere below the root; missing segments are created (`mode`) with
+ * `create`. Null when the mount is not configured or any segment is a link or
+ * not a folder. The caller closes it.
+ */
+export function piSandboxDir(
+  workspace: PiWorkspace,
+  rel: readonly string[],
+  options: { create?: boolean; mode?: number } = {},
+): PinnedDir | null {
+  return withPinnedDir(pinnedUserRoot(workspace, options.create ?? false), (root) => root?.dir(rel, options) ?? null);
+}
+
+/** `c/<seg>` of the workspace as segments. */
+function conversationSegments(workspace: PiWorkspace): string[] {
+  return ["c", path.posix.basename(workspace.conversationDir)];
+}
+
+/**
  * Create the conversation folder (0700, like pi's own dirs) when Noah can reach
- * the workspaces. Best effort: a missing mount only means Noah cannot stage
+ * the workspaces, refusing when `c` or the folder itself is a link or a file the
+ * sandbox planted. Best effort: a missing mount only means Noah cannot stage
  * files — the model can still `mkdir -p` the folder itself.
  */
 export function ensurePiConversationDir(workspace: PiWorkspace): boolean {
   if (!workspace.hostConversationDir || !workspace.hostRoot) return false;
-  try {
-    fs.mkdirSync(workspace.hostConversationDir, { recursive: true, mode: 0o700 });
-    return isInsideRealRoot(workspace.hostRoot, workspace.hostConversationDir);
-  } catch {
-    return false;
-  }
+  return withPinnedDir(piSandboxDir(workspace, conversationSegments(workspace), { create: true, mode: 0o700 }), Boolean);
 }
 
 /**
@@ -127,26 +166,30 @@ export function ensurePiConversationDir(workspace: PiWorkspace): boolean {
 export function stagePiAttachmentFiles(workspace: PiWorkspace, files: AgentImageFileInput[]): AgentImageFileInput[] {
   if (!files.length || !ensurePiConversationDir(workspace)) return [];
   const staged: AgentImageFileInput[] = [];
-  const targetDir = path.join(workspace.hostConversationDir!, "attachments");
-  for (const file of files) {
-    const mapped = piSandboxPath(workspace, file.path);
-    if (mapped && piHostPath(workspace, mapped) === path.resolve(file.path)) {
-      staged.push({ ...file, path: mapped });
-      continue;
+  let targetDir: PinnedDir | null | undefined;
+  try {
+    for (const file of files) {
+      const mapped = piSandboxPath(workspace, file.path);
+      if (mapped && piHostPath(workspace, mapped) === path.resolve(file.path)) {
+        staged.push({ ...file, path: mapped });
+        continue;
+      }
+      const name = path.basename(file.path);
+      targetDir ??= piSandboxDir(workspace, [...conversationSegments(workspace), "attachments"], { create: true, mode: 0o700 });
+      if (!targetDir) break;
+      try {
+        const stat = fs.lstatSync(file.path);
+        if (!stat.isFile()) continue;
+        // Never write THROUGH a link the sandbox may have left at the target.
+        targetDir.remove(name);
+        targetDir.copyFileIn(file.path, name);
+        staged.push({ ...file, path: path.posix.join(workspace.conversationDir, "attachments", name) });
+      } catch {
+        /* best effort — see above */
+      }
     }
-    const name = path.basename(file.path);
-    const target = path.join(targetDir, name);
-    try {
-      fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
-      const stat = fs.lstatSync(file.path);
-      if (!stat.isFile()) continue;
-      // Never write THROUGH a link the sandbox may have left at the target.
-      fs.rmSync(target, { force: true });
-      fs.copyFileSync(file.path, target, fs.constants.COPYFILE_EXCL);
-      staged.push({ ...file, path: path.posix.join(workspace.conversationDir, "attachments", name) });
-    } catch {
-      /* best effort — see above */
-    }
+  } finally {
+    targetDir?.close();
   }
   return staged;
 }
@@ -215,12 +258,15 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
   } catch {
     return result;
   }
-  if (!ensurePiConversationDir(workspace)) return result;
+  const destination = piSandboxDir(workspace, conversationSegments(workspace), { create: true, mode: 0o700 });
+  if (!destination) return result;
   result.alreadyDone = false;
   let bytes = 0;
   let entries = 0;
   let capped = false;
-  const walk = (from: string, to: string, depth: number): void => {
+  // `to` is the pinned sandbox folder: the legacy side is read by name (Noah's
+  // data dir), the sandbox side only ever through descriptors.
+  const walk = (from: string, to: PinnedDir, depth: number): void => {
     let names: fs.Dirent[];
     try {
       names = fs.readdirSync(from, { withFileTypes: true });
@@ -236,7 +282,6 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
         return;
       }
       const source = path.join(from, entry.name);
-      const target = path.join(to, entry.name);
       let stat: fs.Stats;
       try {
         stat = fs.lstatSync(source);
@@ -249,18 +294,16 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
           result.skipped += 1;
           continue;
         }
-        try {
-          const existing = fs.lstatSync(target, { throwIfNoEntry: false });
-          if (existing && !existing.isDirectory()) {
-            result.skipped += 1;
-            continue;
-          }
-          if (!existing) fs.mkdirSync(target, { mode: 0o700 });
-        } catch {
-          result.skipped += 1;
+        const target = to.dir([entry.name], { create: true, mode: 0o700 });
+        if (!target) {
+          result.skipped += 1; // a file or a link there: never written through
           continue;
         }
-        walk(source, target, depth + 1);
+        try {
+          walk(source, target, depth + 1);
+        } finally {
+          target.close();
+        }
         try {
           fs.rmdirSync(source); // only when now empty
         } catch {
@@ -277,8 +320,7 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
         return;
       }
       try {
-        fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
-        fs.chmodSync(target, stat.mode & 0o111 ? 0o755 : 0o644);
+        to.copyFileIn(source, entry.name, stat.mode & 0o111 ? 0o755 : 0o644);
         fs.unlinkSync(source);
         bytes += stat.size;
         result.moved += 1;
@@ -287,7 +329,11 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
       }
     }
   };
-  walk(legacyDir, workspace.hostConversationDir, 0);
+  try {
+    walk(legacyDir, destination, 0);
+  } finally {
+    destination.close();
+  }
   if (!capped) {
     try {
       fs.mkdirSync(legacyDir, { recursive: true });
@@ -306,7 +352,8 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
  * whoever ran it, so each id is resolved under EVERY `u-*` folder (like the SDK
  * half resolves it under every avatar folder). No link is ever followed: a
  * linked user/`c`/conversation folder is skipped and a link named like a copy
- * folder is unlinked. Best effort; never throws.
+ * folder is unlinked — every step through a pinned descriptor, so a link
+ * swapped in mid-sweep is never descended. Best effort; never throws.
  */
 export function deletePiConversationCopies(
   workspacesDir: string | undefined,
@@ -314,41 +361,42 @@ export function deletePiConversationCopies(
   copyDirs: readonly string[],
 ): void {
   if (!workspacesDir || conversationIds.length === 0) return;
-  let users: fs.Dirent[];
-  try {
-    users = fs.readdirSync(workspacesDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const segments = conversationIds.map(piConversationSegment);
-  for (const user of users) {
-    if (!user.isDirectory() || !user.name.startsWith("u-")) continue;
-    const conversations = path.join(workspacesDir, user.name, "c");
-    if (!realDirectory(conversations)) continue;
-    for (const segment of segments) {
-      const folder = path.join(conversations, segment);
-      if (!realDirectory(folder)) continue;
-      for (const name of copyDirs) removeNoFollow(path.join(folder, name));
+  withPinnedDir(PinnedDir.open(workspacesDir), (top) => {
+    if (!top) return;
+    let users: fs.Dirent[];
+    try {
+      users = top.list();
+    } catch {
+      return;
     }
-  }
+    const segments = conversationIds.map(piConversationSegment);
+    for (const user of users) {
+      if (!user.isDirectory() || !user.name.startsWith("u-")) continue;
+      withPinnedDir(top.dir([user.name, "c"]), (conversations) => {
+        if (!conversations) return;
+        for (const segment of segments) {
+          withPinnedDir(conversations.dir([segment]), (folder) => {
+            for (const name of copyDirs) folder?.remove(name);
+          });
+        }
+      });
+    }
+  });
 }
 
-/** Remove a deleted user's WHOLE sandbox workspace (account deletion). Best effort. */
+/** Remove a deleted user's WHOLE sandbox workspace (account deletion), never following a link inside it. Best effort. */
 export function deletePiUserWorkspace(config: AppConfig, userId: string): void {
   const workspacesDir = config.pi?.workspacesDir;
   if (!workspacesDir) return;
-  removeNoFollow(path.join(workspacesDir, piUserKey(userId)));
+  withPinnedDir(PinnedDir.open(workspacesDir), (top) => top?.remove(piUserKey(userId)));
 }
 
-function realDirectory(target: string): boolean {
-  try {
-    return fs.lstatSync(target, { throwIfNoEntry: false })?.isDirectory() ?? false;
-  } catch {
-    return false;
-  }
-}
-
-/** Remove `target` without following it: a real folder recursively, anything else by unlink. */
+/**
+ * Remove `target` without following its LAST component: a real folder
+ * recursively, anything else by unlink. Only for paths whose every ancestor is
+ * Noah's own (data dir records); anything below a sandbox root goes through
+ * {@link piSandboxDir} / `PinnedDir.remove` instead.
+ */
 export function removeNoFollow(target: string): void {
   try {
     const stat = fs.lstatSync(target, { throwIfNoEntry: false });

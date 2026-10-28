@@ -193,7 +193,8 @@ async function runRoutineJobNow(
     const legacyWorkspaceDir = workspaceDirFor(config, avatar.id, job.conversationId);
     const piPrepared = piWorkspace ? preparePiRunWorkspace(config, piRunClass, legacyWorkspaceDir) : null;
     const workspaceDir = piPrepared?.hostConversationDir ?? legacyWorkspaceDir;
-    fs.mkdirSync(workspaceDir, { recursive: true });
+    // pi: already made through pinned descriptors (a by-name mkdir would follow a planted link).
+    if (!piPrepared) fs.mkdirSync(workspaceDir, { recursive: true });
 
     const response = await runAgentStream(
       {

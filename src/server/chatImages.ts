@@ -9,6 +9,7 @@ import type {
   ImageMediaType,
   MessageAttachment,
 } from "./types.js";
+import { PinnedDir, fdPathIs, segmentsBelow } from "./pinnedFs.js";
 
 /**
  * Chat image attachments (user-uploaded images fed to the model + rendered in
@@ -258,13 +259,9 @@ export function readWorkspaceImage(
   const statError = imageStatFailure(stat);
   if (statError) return { error: statError };
 
-  let buffer: Buffer;
-  try {
-    buffer = fs.readFileSync(source);
-  } catch {
-    return { error: "READ_FAILED" };
-  }
-  return imageFromBytes(buffer, source);
+  const read = readRegularFileSync(source, MAX_CHAT_IMAGE_BYTES);
+  if ("error" in read) return { error: read.error };
+  return imageFromBytes(read.buffer, source);
 }
 
 /**
@@ -345,6 +342,9 @@ export async function readRegularFileAsync(
     return { error: "READ_FAILED" };
   }
   try {
+    // The OPENED file must be the one checked: a folder on the way swapped
+    // for a link since the realpath (O_NOFOLLOW guards only the last name).
+    if (!fdPathIs(handle.fd, realPath)) return { error: "READ_FAILED" };
     const stat = await handle.stat();
     if (!stat.isFile()) return { error: "NOT_FILE" };
     if (stat.size === 0) return { error: "EMPTY" };
@@ -365,6 +365,34 @@ export async function readRegularFileAsync(
     return { error: "READ_FAILED" };
   } finally {
     await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * {@link readRegularFileAsync} for synchronous callers: same flags, the same
+ * opened-file identity check, the same caps.
+ */
+export function readRegularFileSync(realPath: string, maxBytes: number): ReadRegularFileResult {
+  let fd: number;
+  try {
+    fd = fs.openSync(realPath, SAFE_READ_FLAGS);
+  } catch {
+    return { error: "READ_FAILED" };
+  }
+  try {
+    if (!fdPathIs(fd, realPath)) return { error: "READ_FAILED" };
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return { error: "NOT_FILE" };
+    if (stat.size === 0) return { error: "EMPTY" };
+    if (stat.size > maxBytes) return { error: "TOO_LARGE" };
+    const buffer = fs.readFileSync(fd);
+    if (buffer.length > maxBytes) return { error: "TOO_LARGE" };
+    if (buffer.length === 0) return { error: "EMPTY" };
+    return { buffer };
+  } catch {
+    return { error: "READ_FAILED" };
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -475,30 +503,28 @@ export function deleteChatImageAttachments(
 export function deleteStagedAttachmentCopies(
   workspaceDir: string,
   attachments: MessageAttachment[] | undefined,
+  /** As in {@link stageChatImageFilesFromAttachments}: no link is followed below it. */
+  anchor: string = workspaceDir,
 ): void {
   if (!attachments?.length) return;
   const ids = new Set(
     attachments.filter((att) => att.kind === "image" && SAFE_ID.test(att.id)).map((att) => att.id),
   );
   if (ids.size === 0) return;
-  const dir = path.join(workspaceDir, "attachments");
-  let entries: string[];
+  const below = segmentsBelow(anchor, workspaceDir);
+  const dir = below ? PinnedDir.openBelow(anchor, [...below, "attachments"]) : null;
+  if (!dir) return;
   try {
-    if (!fs.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return;
-    entries = fs.readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    const dot = name.lastIndexOf(".");
-    if (dot <= 0 || !ids.has(name.slice(0, dot)) || !EXT_MIME[name.slice(dot + 1).toLowerCase()]) continue;
-    const target = path.join(dir, name);
-    try {
-      const stat = fs.lstatSync(target, { throwIfNoEntry: false });
-      if (stat && !stat.isDirectory()) fs.unlinkSync(target);
-    } catch {
-      // Best effort, like the other per-conversation sweeps.
+    for (const entry of dir.list()) {
+      const name = entry.name;
+      const dot = name.lastIndexOf(".");
+      if (dot <= 0 || !ids.has(name.slice(0, dot)) || !EXT_MIME[name.slice(dot + 1).toLowerCase()]) continue;
+      if (dir.kind(name) !== "dir") dir.unlink(name);
     }
+  } catch {
+    // Best effort, like the other per-conversation sweeps.
+  } finally {
+    dir.close();
   }
 }
 
@@ -543,48 +569,29 @@ export function readChatImages(
 }
 
 /**
- * `<workspaceDir>/<name>` (absolute) made ready for a SERVER write, or null when
- * it cannot be used safely. The scratch workspace is AGENT-WRITABLE, so the
- * agent can put a symlink (or a plain file) where a server writer expects its
- * folder: anything but a real directory there is refused, and callers create
- * each file exclusively, so no server write ever lands through a link. Shared
- * by the attachment staging below and the browser-capture copies
+ * `<workspaceDir>/<name>/` PINNED for a SERVER write (`pinnedFs.ts`), or null
+ * when it cannot be used safely. The scratch workspace is AGENT-WRITABLE, so
+ * the agent can put a symlink (or a plain file) where a server writer expects
+ * its folder — or, on a pi run, at ANY folder between the user's sandbox root
+ * and it (`c/<conv>` itself): every segment from `anchor` (the deepest folder
+ * the agent cannot replace — the pi user root; default the workspace itself)
+ * down to `<name>` is opened without following links, and the caller writes
+ * through the returned descriptor with exclusive creates, so no server write
+ * ever lands through a link, even one swapped in mid-write. The caller closes
+ * it. Shared by the attachment staging below and the browser-capture copies
  * (`chatFiles.ts`).
  */
-export function workspaceSubdirForWrite(workspaceDir: string, name: string): string | null {
-  const dir = path.resolve(workspaceDir, name);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    return fs.lstatSync(dir).isDirectory() ? dir : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Post-write containment for a file a server writer JUST created in
- * `<workspaceDir>/<name>/` (after {@link workspaceSubdirForWrite} and an
- * exclusive create): its realpath must be exactly
- * `realpath(workspaceDir)/<name>/<basename>`. The folder was a real directory
- * when checked, but the agent can swap a link in before the write lands, and
- * the file would then sit wherever the link points. On any mismatch (or when
- * the file cannot be resolved) the file just created is unlinked and false is
- * returned, so the caller reports the save as skipped.
- */
-export function keepIfContained(workspaceDir: string, name: string, file: string): boolean {
-  try {
-    if (fs.realpathSync(file) === path.join(fs.realpathSync(workspaceDir), name, path.basename(file))) {
-      return true;
+export function workspaceSubdirForWrite(workspaceDir: string, name: string, anchor: string = workspaceDir): PinnedDir | null {
+  const below = segmentsBelow(anchor, workspaceDir);
+  if (!below) return null;
+  if (anchor === workspaceDir) {
+    try {
+      fs.mkdirSync(workspaceDir, { recursive: true });
+    } catch {
+      return null;
     }
-  } catch {
-    // Unresolvable: treated as outside.
   }
-  try {
-    fs.rmSync(file, { force: true });
-  } catch {
-    // Best effort: the caller reports the save as skipped either way.
-  }
-  return false;
+  return PinnedDir.openBelow(anchor, [...below, name], { create: true });
 }
 
 /**
@@ -607,38 +614,42 @@ export function stageChatImageFilesFromAttachments(
   conversationId: string,
   workspaceDir: string,
   attachments: MessageAttachment[] | undefined,
+  /** The deepest folder the agent cannot replace (a pi run's sandbox user root); default `workspaceDir`. */
+  anchor?: string,
 ): AgentImageFileInput[] {
   if (!attachments?.length) return [];
-  let dir: string | null | undefined;
+  let dir: PinnedDir | null | undefined;
+  let openedAt: string | null = null;
   const staged: AgentImageFileInput[] = [];
-  for (const att of attachments) {
-    if (att.kind !== "image" || att.hidden) continue;
-    const resolved = resolveStoredImage(config, conversationId, att.id);
-    if (!resolved) continue;
-    if (dir === undefined) dir = workspaceSubdirForWrite(workspaceDir, "attachments");
-    if (!dir) break; // no usable attachments/ folder: nothing can be staged
-    const dest = path.join(dir, `${att.id}.${MIME_EXT[resolved.mediaType]}`);
-    try {
-      fs.rmSync(dest, { force: true });
-    } catch {
-      continue; // e.g. a folder of that name: not ours to remove
-    }
-    try {
-      fs.copyFileSync(resolved.path, dest, fs.constants.COPYFILE_EXCL);
-    } catch (error) {
-      // EEXIST: something reappeared at the name since the unlink — not ours.
-      // Any other failure (ENOSPC mid-copy) may leave OUR partial file: remove it.
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        try {
-          fs.rmSync(dest, { force: true });
-        } catch {
-          // best effort
-        }
+  try {
+    for (const att of attachments) {
+      if (att.kind !== "image" || att.hidden) continue;
+      const resolved = resolveStoredImage(config, conversationId, att.id);
+      if (!resolved) continue;
+      if (dir === undefined) {
+        dir = workspaceSubdirForWrite(workspaceDir, "attachments", anchor);
+        openedAt = dir?.realPath() ?? null;
       }
-      continue; // skip unreadable/uncopyable, like readChatImages
+      if (!dir) break; // no usable attachments/ folder: nothing can be staged
+      const name = `${att.id}.${MIME_EXT[resolved.mediaType]}`;
+      if (dir.kind(name) === "dir") continue; // a folder of that name: not ours to remove
+      dir.unlink(name);
+      try {
+        dir.copyFileIn(resolved.path, name);
+      } catch (error) {
+        // EEXIST: something reappeared at the name since the unlink — not ours.
+        // Any other failure (ENOSPC mid-copy) may leave OUR partial file: remove it.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") dir.unlink(name);
+        continue; // skip unreadable/uncopyable, like readChatImages
+      }
+      staged.push({ path: path.join(workspaceDir, "attachments", name), mediaType: resolved.mediaType, name: att.name });
     }
-    if (!keepIfContained(workspaceDir, "attachments", dest)) continue;
-    staged.push({ path: dest, mediaType: resolved.mediaType, name: att.name });
+    // The copies landed in the pinned folder whatever happened; if the agent
+    // moved that folder away meanwhile, the paths below would name whatever
+    // now sits at `attachments/`, so none is listed.
+    if (dir && dir.realPath() !== openedAt) return [];
+  } finally {
+    dir?.close();
   }
   return staged;
 }
