@@ -56,8 +56,8 @@ async function runTask(services: AppServices, task: AvatarTask, attempts: number
       update("failed", { error: "대화가 삭제되었거나 자신의 아바타 대화가 아닙니다." });
       return;
     }
-    const target = resolveChatTarget({ store, externalAgents: [], viewerGroupIds: new Set(),
-      viewerUserId: owner.id, avatarId: owner.id, hasImages: false, ownerOnlyCommand: false });
+    const target = resolveChatTarget({ store, viewerUserId: owner.id, avatarId: owner.id,
+      ownerOnlyCommand: false });
     if (!target.ok) {
       update("failed", { error: target.refusal.message });
       pruneGhostThread();

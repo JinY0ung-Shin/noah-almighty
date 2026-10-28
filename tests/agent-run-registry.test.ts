@@ -93,7 +93,7 @@ describe("runRegistry: mid-turn messages", () => {
     expect(pushRunSteer("st-nope", "u", "x")).toEqual({ ok: false, reason: "not_found" });
     expect(pushRunSteer("st-1", "other", "x")).toEqual({ ok: false, reason: "not_found" });
 
-    // A run with no channel at all (an external gateway avatar).
+    // A run with no channel at all (an external-task-API turn).
     openRun("st-ext", "u", { conversationId: "c-stext" });
     expect(pushRunSteer("st-ext", "u", "x")).toEqual({ ok: false, reason: "unsupported" });
 

@@ -259,10 +259,6 @@
     return Boolean(item.avatar.isOwn || item.avatar.id === user?.id);
   }
 
-  function isExternalPane(item: ChatPane): boolean {
-    return item.avatar.runtime === "external";
-  }
-
   function eligibleGroups(item: ChatPane) {
     return isOwnPane(item) ? (user?.groups || []).filter((g) => g.knowledgeRepoConfigured) : [];
   }
@@ -286,8 +282,7 @@
   }
 
   function hasComposerControls(item: ChatPane): boolean {
-    // External panes get the settings row for the gateway model picker; native
-    // panes always get it too — the MCP tool-group picker always exists
+    // Every pane gets the settings row — the MCP tool-group picker always exists
     // (MCP_TOOL_GROUPS is a non-empty registry), so the row is never empty. The
     // per-item argument is kept for call-site clarity and future gating.
     void item;
@@ -415,7 +410,7 @@
 
   $: browserBridgeSelected =
     !adminBlockedMcpToolGroupSet.has("browser") &&
-    $appState.chatPanes.some((p) => !isExternalPane(p) && selectedMcpToolGroups(p).includes("browser"));
+    $appState.chatPanes.some((p) => selectedMcpToolGroups(p).includes("browser"));
   $: if (browserBridgeSelected && !bridgeCompatStarted) {
     bridgeCompatStarted = true;
     void probeBridgeCompat();
@@ -474,12 +469,6 @@
   }
 
   function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
-    if (isExternalPane(item)) {
-      return (
-        item.modelTier ||
-        (item.externalDefaultModel ? `기본 (${item.externalDefaultModel})` : "기본 모델")
-      );
-    }
     const parts: string[] = [];
     if (hasModelPicker()) parts.push(modelTierLabel(item));
     if (hasEffortPicker()) parts.push(`강도 ${effortLabel(item)}`);
@@ -521,17 +510,6 @@
     if (closing && mcpToolsOpenPaneId === item.id) mcpToolsOpenPaneId = "";
   }
 
-  // Gateway model catalogs load eagerly per EXTERNAL pane: on desktop the
-  // composer controls are always visible (the settings toggle only exists on
-  // mobile), so there is no interaction to hook a lazy fetch onto — populate
-  // the picker as soon as the pane exists. ensureExternalModels is one-shot
-  // per pane (undefined-check + in-flight guard), so this settles immediately.
-  $: for (const paneItem of panes) {
-    if (isExternalPane(paneItem) && paneItem.externalModels === undefined) {
-      void ensureExternalModels(paneItem);
-    }
-  }
-
   function toggleMcpToolsPanel(item: ChatPane) {
     const closing = mcpToolsOpenPaneId === item.id;
     mcpToolsOpenPaneId = closing ? "" : item.id;
@@ -563,7 +541,7 @@
     return Boolean(
       !item.streaming &&
         item.avatar &&
-        (item.draft.trim() || (!isExternalPane(item) && item.pendingImages?.length)),
+        (item.draft.trim() || item.pendingImages?.length),
     );
   }
 
@@ -609,7 +587,7 @@
   // enforces it on upload); env-pinned deployments fall back to the global flag.
   function paneVisionEnabled(item: ChatPane, state: ReturnType<typeof readState> = readState()): boolean {
     const boot = state.bootstrap;
-    if (!boot || isExternalPane(item)) return true;
+    if (!boot) return true;
     const sel = boot.modelSelection;
     if (!sel || sel.locked) return boot.visionEnabled !== false;
     const tier = item.modelTier || state.user?.modelDefault || "";
@@ -620,10 +598,6 @@
 
   async function addImages(item: ChatPane, files: FileList | File[] | null | undefined) {
     if (!files) return;
-    if (isExternalPane(item)) {
-      notify("외부 아바타는 아직 이미지 첨부를 지원하지 않습니다.", "warn");
-      return;
-    }
     // Vision-off pane = FILE MODE: the server stages the image in the agent
     // workspace and hands the model only the path, so the ORIGINAL bytes go up
     // (no canvas re-encode) and only the four types the server sniffs pass.
@@ -673,11 +647,8 @@
     return paneVisionEnabled(item, state) ? "이미지 첨부" : "이미지 첨부 (모델이 내용을 보지 못하고 파일로 전달됨)";
   }
 
-  // The disabled send button's title enumerates what WOULD make it sendable, so
-  // it has to name the inputs this pane actually has: image attach is native-only.
-  function emptyComposerHint(item: ChatPane): string {
-    return isExternalPane(item) ? "메시지를 입력하세요" : "메시지 또는 이미지를 추가하세요";
-  }
+  // The disabled send button's title enumerates what WOULD make it sendable.
+  const EMPTY_COMPOSER_HINT = "메시지 또는 이미지를 추가하세요";
 
   async function onPickImages(event: Event, item: ChatPane) {
     const input = event.currentTarget as HTMLInputElement;
@@ -686,7 +657,6 @@
   }
 
   function onComposerPaste(event: ClipboardEvent, item: ChatPane) {
-    if (isExternalPane(item)) return;
     const clipboard = event.clipboardData;
     if (!clipboard) return;
     // Prefer items (covers screenshots/copied images), fall back to files (some
@@ -809,36 +779,6 @@
       skillsInFlight.delete(item.id);
     }
   }
-  // Gateway model catalog for an external pane's model picker, fetched once
-  // (lazily) the first time the composer settings open. Mirrors ensureSkills:
-  // the result lives on the pane for reactivity; a failure soft-fails to a
-  // default-only picker (externalModels = null) instead of blocking the chat.
-  const externalModelsInFlight = new Set<string>();
-  async function ensureExternalModels(item: ChatPane) {
-    if (item.externalModels !== undefined || externalModelsInFlight.has(item.id)) return;
-    externalModelsInFlight.add(item.id);
-    try {
-      const result = await api<{ models: string[]; defaultModel: string | null }>(
-        `/api/avatars/${encodeURIComponent(item.avatar.id)}/models`,
-      );
-      updateState((state) => {
-        const target = state.chatPanes.find((p) => p.id === item.id);
-        if (target) {
-          target.externalModels = result.models || [];
-          target.externalDefaultModel = result.defaultModel ?? null;
-        }
-      });
-    } catch {
-      updateState((state) => {
-        const target = state.chatPanes.find((p) => p.id === item.id);
-        if (target) target.externalModels = null;
-      });
-      notify("Gateway 모델 목록을 가져오지 못했습니다. 기본 모델로 대화를 계속합니다.", "warn");
-    } finally {
-      externalModelsInFlight.delete(item.id);
-    }
-  }
-
   function closeSlash() {
     slashPaneId = "";
     slashIndex = 0;
@@ -908,9 +848,7 @@
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       if (item.streaming) {
         // Mid-turn message: the server hands it to the model between the running
-        // turn's tool calls. An external avatar runs behind the gateway, which
-        // has no such channel — there Enter keeps inserting a newline.
-        if (isExternalPane(item)) return;
+        // turn's tool calls.
         if (item.pendingImages?.length) {
           // Swallow the Enter too: the user meant "send", and a stray newline on
           // top of the refusal is noise.
@@ -934,8 +872,7 @@
   }
 
   /**
-   * Can this pane take a mid-turn message at all? Local panes only — an external
-   * gateway run has no channel for one — for as long as a turn is streaming. It
+   * Can this pane take a mid-turn message at all? For as long as a turn is streaming. It
    * deliberately does NOT look at the draft: the control is a standing part of
    * the streaming composer, disabled while there is nothing to send, so the grid
    * column list never changes under the user's fingers as they type. Reads only
@@ -943,7 +880,7 @@
    * whenever the pane object changes.
    */
   function canSteer(item: ChatPane): boolean {
-    return Boolean(!isExternalPane(item) && item.streaming);
+    return Boolean(item.streaming);
   }
 
   /**
@@ -958,14 +895,12 @@
   }
 
   /**
-   * The composer's placeholder while a turn is streaming. Local panes say that a
-   * message sent now is delivered between the avatar's next two actions, and name
-   * the gesture that actually sends on this device — Enter only sends where a
-   * physical keyboard was detected. External panes keep the old wording: there
-   * the draft really is only a head start on the next turn.
+   * The composer's placeholder while a turn is streaming: a message sent now is
+   * delivered between the avatar's next two actions, and the text names the
+   * gesture that actually sends on this device — Enter only sends where a
+   * physical keyboard was detected.
    */
-  function streamingPlaceholder(item: ChatPane, sends: boolean): string {
-    if (isExternalPane(item)) return "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)";
+  function streamingPlaceholder(sends: boolean): string {
     return sends
       ? "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다"
       : "응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 다음 작업 사이에 전달됩니다";
@@ -1155,23 +1090,6 @@
     );
   }
 
-  // Gateway model for an EXTERNAL pane: lives on the pane and rides the next
-  // chat POST (per-conversation). Unlike the native tier there is no per-user
-  // default — the admin-configured agent model is the baseline, and "" clears
-  // back to it.
-  function setExternalModel(item: ChatPane, modelId: string) {
-    updateState((state) => {
-      const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.modelTier = modelId || undefined;
-    });
-    notify(
-      modelId
-        ? `모델을 ${modelId}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`
-        : "기본 모델로 되돌렸습니다. 다음 메시지부터 적용됩니다.",
-      "info",
-    );
-  }
-
   // Reasoning effort, mirroring setModelTier: lives on the pane, rides the next chat
   // POST (per-conversation), and writes through to the remembered per-user default.
   // Every value is a real level (the default is "높음"/high when never chosen).
@@ -1213,7 +1131,6 @@
   function runtimeBadge(message: StoredMessage): string | null {
     const runtime = message.response?.runtime;
     if (runtime === "local") return "로컬";
-    if (runtime === "external") return "외부 아바타";
     if (message.response?.summary === "오류" || message.response?.summary === "중지됨") return message.response.summary;
     return null;
   }
@@ -1395,12 +1312,12 @@
               <h3>{item.avatar.alias || item.avatar.displayName} 아바타와 대화</h3>
               <p>{item.avatar.bio || (item.avatar.elevated || own ? "무엇이든 물어보세요." : "무엇이든 물어보세요. 이 아바타의 도구는 읽기 전용으로 실행됩니다.")}</p>
             </div>
-            {#if own && !isExternalPane(item)}
+            {#if own}
               <!-- The owner's own avatar gets guided tours instead of generic
                    chips: a first-time owner needs to see what the avatar can do,
-                   not a prompt they still have to judge. Colleague, group-agent
-                   and external panes keep the chips (isOwn is false for all
-                   three, group agents included). -->
+                   not a prompt they still have to judge. Colleague and
+                   group-agent panes keep the chips (isOwn is false for both,
+                   group agents included). -->
               <div class="starter-prompts tour-cards" role="group" aria-label="체험 시나리오">
                 <p class="tour-caption">처음이라면 이 중 하나로 시작해 보세요. 카드를 누르면 입력창에 준비됩니다.</p>
                 {#each tourScenarios as scenario (scenario.slug)}
@@ -1732,7 +1649,7 @@
             </div>
           {/if}
         {/if}
-        {#if !isExternalPane(item) && item.pendingImages?.length}
+        {#if item.pendingImages?.length}
           <div class="composer-attachments" aria-label="첨부한 이미지">
             {#each item.pendingImages as img (img.id)}
               <div class="composer-thumb">
@@ -1753,35 +1670,31 @@
         {/if}
         <div
           class="composer-box"
-          class:no-attach={isExternalPane(item)}
           class:with-steer={canSteer(item)}
         >
-          {#if !isExternalPane(item)}
-            <label
-              class="composer-attach"
-              class:disabled={item.streaming}
-              title={attachHint(item, $appState)}
-              aria-label={attachHint(item, $appState)}
-            >
-              <Icon name="image" />
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple
-                hidden
-                disabled={item.streaming}
-                on:change={(event) => onPickImages(event, item)}
-              />
-            </label>
-          {/if}
+          <label
+            class="composer-attach"
+            class:disabled={item.streaming}
+            title={attachHint(item, $appState)}
+            aria-label={attachHint(item, $appState)}
+          >
+            <Icon name="image" />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              hidden
+              disabled={item.streaming}
+              on:change={(event) => onPickImages(event, item)}
+            />
+          </label>
           <!-- Intentionally NOT disabled while streaming: disabling blurs the
                textarea (focus loss after every send) and blocks composing the
-               next message. On a local pane what is typed mid-stream can now be
-               SENT into the running turn (see `canSteer`); on an external one it
-               is still only a head start on the next turn. -->
+               next message. What is typed mid-stream can be SENT into the
+               running turn (see `canSteer`). -->
           <textarea
             rows="1"
-            placeholder={item.streaming ? streamingPlaceholder(item, enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
+            placeholder={item.streaming ? streamingPlaceholder(enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
             value={item.draft}
             aria-label={`${item.avatar.alias || item.avatar.displayName}에게 보낼 메시지`}
             aria-describedby={paneDomId("composer-hint", item.id)}
@@ -1816,7 +1729,7 @@
             class:is-stop={item.streaming}
             type="button"
             aria-label={item.streaming ? "응답 중지" : "보내기"}
-            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : emptyComposerHint(item)}
+            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : EMPTY_COMPOSER_HINT}
             disabled={!item.streaming && !canSendMessage(item)}
             on:click={() => (item.streaming ? stopPane(item.id) : submit(item))}
           >
@@ -1870,27 +1783,6 @@
                   <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet)}</span>
                 </button>
                 <span id={paneDomId("composer-controls", item.id)} class="composer-controls" class:open={composerSettingsOpenPaneId === item.id}>
-                  {#if isExternalPane(item)}
-                    <select
-                      class="composer-model-select"
-                      aria-label="이 대화에 사용할 Gateway 모델"
-                      title="이 대화에서 다음 메시지부터 사용할 Gateway 모델을 고릅니다"
-                      value={item.modelTier ?? ""}
-                      disabled={item.externalModels === undefined}
-                      on:change={(event) => setExternalModel(item, event.currentTarget.value)}
-                    >
-                      <option value="">
-                        {item.externalModels === undefined
-                          ? "모델 목록 불러오는 중…"
-                          : item.externalDefaultModel
-                            ? `기본 (${item.externalDefaultModel})`
-                            : "기본 모델"}
-                      </option>
-                      {#each (item.externalModels ?? []).filter((id) => id !== item.externalDefaultModel) as modelId (modelId)}
-                        <option value={modelId}>{modelId}</option>
-                      {/each}
-                    </select>
-                  {:else}
                   {#if $appState.bootstrap?.modelSelection?.tiers.length}
                     <select
                       class="composer-model-select"
@@ -1940,13 +1832,12 @@
                     title="이 대화에서 다음 메시지부터 사용할 MCP 도구 묶음을 고릅니다"
                     on:click={() => toggleMcpToolsPanel(item)}
                   >MCP 도구 {mcpToolsCount(item, adminBlockedMcpToolGroupSet)}</button>
-                  {/if}
                 </span>
               {/if}
               {#if formatUsageLabel(item.usage)}
                 <span class="composer-usage">{formatUsageLabel(item.usage)}</span>
               {/if}
-              {#if bridgeCompat && !isExternalPane(item) && selectedMcpToolGroups(item).includes("browser") && !adminBlockedMcpToolGroupSet.has("browser")}
+              {#if bridgeCompat && selectedMcpToolGroups(item).includes("browser") && !adminBlockedMcpToolGroupSet.has("browser")}
                 {@const badge = bridgeBadge(bridgeCompat)}
                 {#if bridgeCompat.level === "current"}
                   <span class="composer-bridge" data-status="current" title={badge.title}>{badge.text}</span>
@@ -1990,7 +1881,7 @@
           {/each}
         </div>
       {/if}
-      {#if !isExternalPane(item) && mcpToolsOpenPaneId === item.id}
+      {#if mcpToolsOpenPaneId === item.id}
         <div
           id={paneDomId("composer-tools-panel", item.id)}
           class="composer-tools-panel"

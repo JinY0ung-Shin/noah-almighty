@@ -23,14 +23,12 @@ import type {
   AgentResponse,
   AgentRewindInfo,
   AppConfig,
-  ExternalAgentConfig,
   MessageAttachment,
   SdkResumePoint,
   StoredMessage,
 } from "../types.js";
 import type { ConversationRewindPlan } from "../store/conversations.js";
 import type {
-  AgentEvents,
   CompactEvent,
   BrowserCookie,
   BrowserStorageEntry,
@@ -106,18 +104,6 @@ import {
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import {
-  probeExternalAgentGateway,
-  runExternalAgent,
-} from "../agent/externalAgent.js";
-import {
-  externalAvatarDetail,
-  findExternalAgent,
-  findVisibleExternalAgent,
-  isSafeExternalModelId,
-  listExternalAvatarSummaries,
-  mergeExternalAgentRegistries,
-} from "../externalAgents.js";
 import {
   findChattableGroupAgent,
   groupAgentAvatarDetail,
@@ -494,7 +480,6 @@ function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
 
 /** The avatar a chat turn actually targets, after every reach gate ran. */
 export interface ChatTarget {
-  externalAgent: ExternalAgentConfig | null;
   groupAgentHit: ChattableGroupAgent | null;
   avatar: { id: string; displayName: string; alias: string; persona: string };
   viewerIsOwner: boolean;
@@ -683,56 +668,36 @@ export function formatDurationKo(ms: number): string {
 
 /**
  * Resolve who a chat turn is talking to and refuse every unreachable target,
- * in the ORDER the checks have always run (external → group agent → native
- * row → image support → owner-only command).
+ * in the ORDER the checks have always run (group agent → native row →
+ * owner-only command).
  */
 export function resolveChatTarget(args: {
   store: Store;
-  externalAgents: ExternalAgentConfig[];
-  viewerGroupIds: Set<string>;
   viewerUserId: string;
   avatarId: string;
-  /** This turn carries image attachments (external avatars refuse them). */
-  hasImages: boolean;
   /** The message expanded from an owner-only slash command (`/learn`, …). */
   ownerOnlyCommand: boolean;
 }): { ok: true; target: ChatTarget } | { ok: false; refusal: ChatTurnRefusal } {
   const { store, viewerUserId, avatarId } = args;
-  const externalAgent = findVisibleExternalAgent(
-    args.externalAgents,
-    avatarId,
-    args.viewerGroupIds,
-  );
   // Group shared agent: member-only reach; a member-visible DISABLED agent
   // gets its own 403 (they already know it exists — no leak), everything
-  // else collapses into the generic 403 below (external precedent). Images
-  // are allowed: unlike externals, group agents run the full local stack.
-  const groupAgentHit = externalAgent
-    ? null
-    : findChattableGroupAgent(store, viewerUserId, avatarId, {
-        includeDisabled: true,
-      });
+  // else collapses into the generic 403 below.
+  const groupAgentHit = findChattableGroupAgent(store, viewerUserId, avatarId, {
+    includeDisabled: true,
+  });
   if (groupAgentHit && !groupAgentHit.agent.enabled) {
     return {
       ok: false,
       refusal: { status: 403, message: "그룹 에이전트가 비활성화되어 있습니다. 그룹 관리자에게 문의해 주세요." },
     };
   }
-  const avatar = externalAgent
-    ? externalAvatarDetail(externalAgent)
-    : groupAgentHit
-      ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-      : store.resolveChatAvatar(viewerUserId, avatarId);
+  const avatar = groupAgentHit
+    ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
+    : store.resolveChatAvatar(viewerUserId, avatarId);
   if (!avatar) {
     return {
       ok: false,
       refusal: { status: 403, message: "이 아바타와 대화할 수 없습니다." },
-    };
-  }
-  if (externalAgent && args.hasImages) {
-    return {
-      ok: false,
-      refusal: { status: 400, message: "외부 아바타는 아직 이미지 첨부를 지원하지 않습니다." },
     };
   }
   // ownerOnly bites on a RAW `/command`: server-expanded commands (e.g. /learn)
@@ -748,12 +713,10 @@ export function resolveChatTarget(args: {
       refusal: { status: 403, message: "이 명령은 내 아바타와의 대화에서만 사용할 수 있습니다." },
     };
   }
-  const viewerIsOwner =
-    !externalAgent && !groupAgentHit && viewerUserId === avatar.id;
+  const viewerIsOwner = !groupAgentHit && viewerUserId === avatar.id;
   return {
     ok: true,
     target: {
-      externalAgent,
       groupAgentHit,
       avatar,
       viewerIsOwner,
@@ -924,7 +887,7 @@ export async function executeChatTurn(
   // A regenerate re-derives both from the STORED row it re-runs (see the rewind
   // plan below); every other turn keeps what the HTTP prelude derived.
   let { agentMessage, displayMessage } = ctx;
-  const { externalAgent, groupAgentHit, avatar, viewerIsOwner } = ctx.target;
+  const { groupAgentHit, avatar, viewerIsOwner } = ctx.target;
   const decodedImages = ctx.images;
   // Absent (a server-started turn) reads as "keep whatever is stored", which is
   // the same null the HTTP prelude produces when the client sends nothing.
@@ -932,25 +895,18 @@ export async function executeChatTurn(
   const requestedEffort = ctx.requestedEffort ?? null;
   const requestedMcpToolGroups = ctx.requestedMcpToolGroups ?? null;
   const requestedGroupKnowledgeOff = ctx.requestedGroupKnowledgeOff ?? null;
-  const existingAvatarId = store.getConversationAvatarId(
-    ownerUserId,
-    conversationId,
-  );
   // Effective vision for THIS turn's model, mirroring claudeAgent's
   // resolution chain (env pin > this turn's tier pick > stored tier >
   // admin override > default) against the admin per-tier policy. Gates the
   // upload below AND the regenerate image re-feed; the run itself
-  // recomputes the same value. External turns keep the deployment default
-  // (gateway models are outside the tier policy; their composer has no
-  // attach UI anyway).
-  const turnModel = externalAgent
-    ? config.anthropicModel
-    : (config.anthropicModel ??
-      (requestedModel === null
-        ? store.getConversationModel(ownerUserId, conversationId)
-        : requestedModel || null) ??
-      store.getModelOverride() ??
-      DEFAULT_MODEL_TIER);
+  // recomputes the same value.
+  const turnModel =
+    config.anthropicModel ??
+    (requestedModel === null
+      ? store.getConversationModel(ownerUserId, conversationId)
+      : requestedModel || null) ??
+    store.getModelOverride() ??
+    DEFAULT_MODEL_TIER;
   const turnVisionEnabled = visionForModel(
     turnModel,
     store.getModelVisionPolicy(),
@@ -960,36 +916,8 @@ export async function executeChatTurn(
   // every local image turn they are staged as FILES in the conversation scratch
   // workspace (below), and here the model receives ONLY their paths
   // (buildUserPrompt), never image content blocks (which would 400 the whole
-  // turn at the API layer). External turns never reach here with images
-  // (rejected above).
-  const imageFileMode =
-    decodedImages.length > 0 && !turnVisionEnabled && !externalAgent;
-  if (externalAgent && existingAvatarId) {
-    const boundEndpoint = store.getConversationExternalEndpoint(
-      ownerUserId,
-      conversationId,
-    );
-    if (!boundEndpoint) {
-      return {
-        ok: false,
-        refusal: {
-          status: 409,
-          message:
-            "이 기존 대화에는 신뢰한 Gateway 주소 정보가 없습니다. 기록 보호를 위해 새 대화를 시작해 주세요.",
-        },
-      };
-    }
-    if (boundEndpoint !== externalAgent.endpoint) {
-      return {
-        ok: false,
-        refusal: {
-          status: 409,
-          message:
-            "이 대화는 이전 Gateway 주소에 연결되어 있습니다. 기록 보호를 위해 새 대화를 시작해 주세요.",
-        },
-      };
-    }
-  }
+  // turn at the API layer).
+  const imageFileMode = decodedImages.length > 0 && !turnVisionEnabled;
   const conversationMcpToolGroups = requestedMcpToolGroups ??
     store.getConversationMcpToolGroups(ownerUserId, conversationId) ?? [
       ...DEFAULT_MCP_TOOL_GROUPS,
@@ -1035,12 +963,6 @@ export async function executeChatTurn(
   // one — on a fresh session the CLI would compact nothing. Checked before any
   // write, like every refusal here.
   if (ctx.compact) {
-    if (externalAgent) {
-      return {
-        ok: false,
-        refusal: { status: 400, message: "외부 아바타 대화에서는 /compact를 사용할 수 없습니다." },
-      };
-    }
     if (!store.getAgentSessionId(ownerUserId, conversationId)) {
       return {
         ok: false,
@@ -1117,15 +1039,13 @@ export async function executeChatTurn(
   // belt-and-suspenders — open_repo is itself elevated-only — in case trust
   // changed since the repo was opened.
   const elevatedViewer =
-    !externalAgent &&
     !groupAgentHit &&
     (viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id));
   /**
    * `onShareLink` (the avatar's create_share_link) is supplied ONLY on an
    * interactive turn of the owner's OWN avatar: never a group-agent member
-   * thread (shared only via the group second brain), a colleague's thread, an
-   * external avatar, a turn an external system submitted through the task API,
-   * or any unattended (deadlined) run. A link is a bearer URL every signed-in
+   * thread (shared only via the group second brain), a colleague's thread, a
+   * turn an external system submitted through the task API, or any unattended (deadlined) run. A link is a bearer URL every signed-in
    * user can open, so the owner must be the one asking — runPlan's
    * registration gate is the second lock, the callback's own re-check the third.
    */
@@ -1133,7 +1053,6 @@ export async function executeChatTurn(
     viewerIsOwner &&
     ownerUserId === avatar.id &&
     !groupAgentHit &&
-    !externalAgent &&
     !ctx.externalTaskId &&
     ctx.unattendedDeadlineMs === undefined;
   let activeRepoCwd: string | null = null;
@@ -1141,7 +1060,7 @@ export async function executeChatTurn(
   let releaseActiveRepoLock: (() => void) | null = null;
   // Group-agent runs skip the whole block: no isTrustedFor on a synthetic
   // id, no personal work-repo workspace (the run kind carries capability).
-  if (!externalAgent && !groupAgentHit) {
+  if (!groupAgentHit) {
     const repoResolution = await resolveActiveWorkspaceRepo({
       store,
       config,
@@ -1203,15 +1122,13 @@ export async function executeChatTurn(
     // row that recorded where its segment ended, the run resumes THAT point
     // (resume + resumeSessionAt, forked into a new session by runPlan) and keeps
     // the exact context up to there — tool calls and results included. Without
-    // one (a legacy/cancelled/errored row, an external avatar, an image re-feed)
+    // one (a legacy/cancelled/errored row, an image re-feed)
     // it starts fresh from the kept text history below, as a regenerate used to.
     const rewindResumeAt =
-      rewindPlan?.resumeAt && !externalAgent && !imageTurn
-        ? rewindPlan.resumeAt
-        : null;
+      rewindPlan?.resumeAt && !imageTurn ? rewindPlan.resumeAt : null;
     const resumeSessionId = rewindPlan
       ? rewindResumeAt?.sessionId
-      : externalAgent || imageTurn
+      : imageTurn
         ? undefined
         : (store.getAgentSessionId(ownerUserId, conversationId) ??
           undefined);
@@ -1250,11 +1167,8 @@ export async function executeChatTurn(
     // Per-conversation workspace: each chat session gets an isolated cwd, scoped
     // under the avatar so sessions cannot mix files by accident. Created here
     // (before the message persist) because the image staging writes into it.
-    // External turns run no local workspace, so they don't get a directory.
     const workspaceDir = workspaceDirFor(config, avatar.id, conversationId);
-    if (!externalAgent) {
-      fs.mkdirSync(workspaceDir, { recursive: true });
-    }
+    fs.mkdirSync(workspaceDir, { recursive: true });
     // The run's explicit output roots — the active repo clone first (the run
     // cwd) when one is open, then the conversation scratch workspace. show_file,
     // share_file and share_file's deck-preview sidecar lookup all resolve
@@ -1265,7 +1179,6 @@ export async function executeChatTurn(
       conversationId,
       avatar.id,
       displayMessage,
-      externalAgent ? { externalEndpoint: externalAgent.endpoint } : {},
     );
     // Persist the owner's group-knowledge selection now that the row exists, so
     // it survives reload and applies to later turns until changed again.
@@ -1278,7 +1191,6 @@ export async function executeChatTurn(
     }
     // Persist the chosen model so it survives reload and applies to later
     // turns until changed. null = client sent nothing → leave the stored value.
-    // Native rows hold a tier alias; external rows hold a gateway model id.
     if (requestedModel !== null) {
       store.setConversationModel(
         ownerUserId,
@@ -1287,14 +1199,14 @@ export async function executeChatTurn(
       );
     }
     // Persist the chosen effort level (same semantics as the model tier above).
-    if (!externalAgent && requestedEffort !== null) {
+    if (requestedEffort !== null) {
       store.setConversationEffort(
         ownerUserId,
         conversationId,
         requestedEffort || null,
       );
     }
-    if (!externalAgent && requestedMcpToolGroups !== null) {
+    if (requestedMcpToolGroups !== null) {
       store.setConversationMcpToolGroups(
         ownerUserId,
         conversationId,
@@ -1310,16 +1222,13 @@ export async function executeChatTurn(
       // The persisted attachments are the same either way — the bubble
       // renders identically; only the MODEL-facing shape differs. Every local
       // turn stages the uploads as workspace files; only a vision turn also
-      // gets them as image blocks. (An external turn carries no images and
-      // runs no workspace.)
-      if (!externalAgent) {
-        requestImageFiles = stageChatImageFilesFromAttachments(
-          config,
-          conversationId,
-          workspaceDir,
-          saved.attachments,
-        );
-      }
+      // gets them as image blocks.
+      requestImageFiles = stageChatImageFilesFromAttachments(
+        config,
+        conversationId,
+        workspaceDir,
+        saved.attachments,
+      );
       if (!imageFileMode) {
         requestImages = saved.images;
       }
@@ -1339,14 +1248,12 @@ export async function executeChatTurn(
       // send. On a text-only turn that is the only form they take, never image
       // blocks the API would reject, so a regenerate under a swapped model
       // still sees them. A vision turn gets the re-fed image blocks as well.
-      if (!externalAgent) {
-        requestImageFiles = stageChatImageFilesFromAttachments(
-          config,
-          conversationId,
-          workspaceDir,
-          rewindPlan.anchor.attachments,
-        );
-      }
+      requestImageFiles = stageChatImageFilesFromAttachments(
+        config,
+        conversationId,
+        workspaceDir,
+        rewindPlan.anchor.attachments,
+      );
       if (turnVisionEnabled) {
         requestImages = readChatImages(
           config,
@@ -1562,24 +1469,22 @@ export async function executeChatTurn(
         deleteChatFileAttachments(config, conversationId, swept);
         // Their staged workspace copies go with them (captures and saved
         // Confluence files are tool side effects of the dropped turns: they stay).
-        if (!externalAgent) deleteStagedAttachmentCopies(workspaceDir, swept);
+        deleteStagedAttachmentCopies(workspaceDir, swept);
       }
     }
 
     const abortController = new AbortController();
     // Mid-turn messages ("steers"): the viewer can keep typing while this run
-    // streams. Two run kinds get no channel, and POST …/message answers 409 for
-    // both. An EXTERNAL gateway avatar is one stateless request/response with no
-    // live stdin to fold a message into. An EXTERNAL-TASK-API turn is the
-    // interactive-only gate every such capability carries (`AgentRequest`'s own
-    // contract: midTurnMessages is never set there) — nobody typed it, the key
-    // holder answers only through /respond, and both metacognition surfaces
-    // already tell the avatar no person is on the other side.
+    // streams. An EXTERNAL-TASK-API turn gets no channel (POST …/message answers
+    // 409): it is the interactive-only gate every such capability carries
+    // (`AgentRequest`'s own contract: midTurnMessages is never set there) —
+    // nobody typed it, the key holder answers only through /respond, and both
+    // metacognition surfaces already tell the avatar no person is on the other
+    // side.
     // A native /compact gets none either: it is one CLI command with no model
     // turn to fold a message into, and a steered "/compact" would run as a
     // command inside the turn (the steer route refuses that text outright).
-    const steers =
-      externalAgent || ctx.externalTaskId || ctx.compact ? undefined : new SteerChannel();
+    const steers = ctx.externalTaskId || ctx.compact ? undefined : new SteerChannel();
     openRun(runId, ownerUserId, {
       conversationId,
       avatarId: avatar.id,
@@ -1650,132 +1555,6 @@ export async function executeChatTurn(
       : undefined;
 
     try {
-      if (externalAgent) {
-        // External avatars are conversation-stateless and run their own tool
-        // stack behind the gateway. Do not resolve local plugins, knowledge,
-        // MCP servers, repos, workspaces, or SDK sessions. The one local
-        // setting that DOES apply is the viewer-picked gateway model id
-        // (this turn's pick, else the stored per-conversation choice); the
-        // admin-configured model stays the default when neither is set.
-        const selectedExternalModel =
-          requestedModel === null
-            ? store.getConversationModel(ownerUserId, conversationId)
-            : requestedModel || null;
-        const response = await runExternalAgent(
-          {
-            message: agentMessage,
-            conversationHistory,
-          },
-          selectedExternalModel
-            ? { ...externalAgent, model: selectedExternalModel }
-            : externalAgent,
-          {
-            onDelta: (text) => {
-              streamedText += text;
-              emitRunEvent(runId, "delta", { text });
-            },
-            onThinking: (text) => {
-              streamedThinking += text;
-              emitRunEvent(runId, "thinking", { text });
-            },
-            onTextFold: (text) => {
-              // Demoted narration joins the reasoning stream (persisted as
-              // response.thinking)…
-              streamedThinking += (streamedThinking ? "\n\n" : "") + text;
-              // …and leaves the answer: cancel/error tails must not resurrect it.
-              foldedTextOffset = streamedText.length;
-              // Anchors index into the answer text, and the answer just
-              // restarted from empty — every stamped card now belongs before
-              // the new tail.
-              for (const attachment of shownAttachments) {
-                if (typeof attachment.anchor === "number") attachment.anchor = 0;
-              }
-              emitRunEvent(runId, "text_fold", {});
-            },
-            onStatus: (label) => {
-              emitRunEvent(runId, "status", { label });
-            },
-            // onModel and onSessionId are intentionally OMITTED for external
-            // runs: external Gateway telemetry must not overwrite the local SDK
-            // model shown in the admin system overview, and a gateway SDK
-            // session id must never become Noah continuation state
-            // (runExternalAgent nulls onSessionId regardless). runSessionId
-            // stays null here and the external branch returns before any reader,
-            // so no handler is wired.
-            onPlugin: (event) => {
-              emitRunEvent(runId, "plugin", event);
-            },
-            onToolStart: (event) => {
-              emitRunEvent(runId, "tool", event);
-            },
-            onToolEnd: (event) => {
-              emitRunEvent(runId, "tool_end", event);
-            },
-            onTaskStart: (event) => {
-              emitRunEvent(runId, "task", event);
-            },
-            onTaskUpdate: (event) => {
-              emitRunEvent(runId, "task_update", event);
-            },
-            onTaskEnd: (event) => {
-              emitRunEvent(runId, "task_end", event);
-            },
-            onAgentStart: (event) => {
-              emitRunEvent(runId, "agent", event);
-            },
-            onAgentEnd: (event) => {
-              emitRunEvent(runId, "agent_end", event);
-            },
-            onBlocked: (event) => {
-              emitRunEvent(runId, "blocked", event);
-            },
-            onMemory: (event) => {
-              // Stable id: an SSE reattach replays the whole event log, and
-              // the client dedupes 기억 rows by this id.
-              emitRunEvent(runId, "memory", { id: crypto.randomUUID(), ...event });
-            },
-            onCompact: (event) => {
-              emitRunEvent(runId, "compact", { id: crypto.randomUUID(), ...event });
-            },
-            onPlan: (event) => {
-              if (event.plan) latestPlan = event.plan;
-              emitRunEvent(runId, "plan", {
-                plan: event.plan,
-                planning: event.planning ?? false,
-              });
-            },
-          } satisfies AgentEvents,
-          abortController,
-        );
-        if (latestPlan) response.plan = latestPlan;
-        if (streamedThinking) response.thinking = streamedThinking;
-
-        const assistantMessage =
-          store.conversationOwner(conversationId) === ownerUserId
-            ? store.addMessage(conversationId, {
-                role: "assistant",
-                content: response.text || response.summary,
-                response,
-              })
-            : null;
-        audit({
-          action: "chat",
-          detail: `chat with ${avatar.displayName} (${response.runtime})`,
-        });
-        logger.info(
-          {
-            userId: ownerUserId,
-            avatarId: avatar.id,
-            conversationId,
-            runtime: response.runtime,
-            durationMs: Date.now() - chatStart,
-          },
-          "external chat completed",
-        );
-        emitRunEvent(runId, "done", { message: assistantMessage, response });
-        return { ok: true };
-      }
-
       // Load plugin roots (read-only): default plugins + the avatar's own + its
       // personal knowledge repo + group knowledge repos. Shared with the routine
       // scheduler via `loadAgentPluginRoots` so the two can't drift. Tolerate
@@ -3140,7 +2919,7 @@ export async function executeChatTurn(
         // (which now include this cancelled turn's user message + partial)
         // instead of resuming a half-written session that omits it. (chat-02)
         // A /compact ran on a FORK, so the conversation's own session is intact.
-        if (!externalAgent && !ctx.compact) {
+        if (!ctx.compact) {
           store.setAgentSessionId(ownerUserId, conversationId, null);
         }
         // Keep whatever the model already streamed before the stop. The client's
@@ -3155,7 +2934,7 @@ export async function executeChatTurn(
         const cancelledThinking = streamedThinking.slice(persistedThinkingOffset);
         const response: AgentResponse = {
           kind: "text",
-          runtime: externalAgent ? "external" : config.agentRuntime,
+          runtime: config.agentRuntime,
           summary: "중지됨",
           text: cancelledText,
           ...(latestPlan && !turnFinalized ? { plan: latestPlan } : {}),
@@ -3217,8 +2996,7 @@ export async function executeChatTurn(
         ? compactFailureText(detail)
         : timedOut
         ? unattendedTimeoutMessage(ctx.unattendedDeadlineMs ?? 0)
-        : !externalAgent &&
-            !config.anthropicModel &&
+        : !config.anthropicModel &&
             isRetryableModelError(error)
           ? `지금 ${modelTierLabel(failedTier)} 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델(${alternatives})로 바꿔 다시 시도해 보세요.`
           : detail.trim()
@@ -3229,7 +3007,7 @@ export async function executeChatTurn(
         // don't discard the partial the user already watched stream — keep it
         // alongside the error so a reload shows what the live view showed. A
         // failed /compact leaves the session alone (it ran on a fork).
-        if (!externalAgent && !ctx.compact) {
+        if (!ctx.compact) {
           store.setAgentSessionId(ownerUserId, conversationId, null);
         }
         // Background phase: earlier segments are already stored messages, so
@@ -3256,7 +3034,7 @@ export async function executeChatTurn(
             (latestPlan && !turnFinalized) || erroredThinking
               ? {
                   kind: "text",
-                  runtime: externalAgent ? "external" : config.agentRuntime,
+                  runtime: config.agentRuntime,
                   summary: "오류",
                   text: content,
                   ...(latestPlan && !turnFinalized ? { plan: latestPlan } : {}),
@@ -3290,21 +3068,6 @@ export function createChatRouter({
   auditAs,
 }: RouterDeps): Router {
   const router = Router();
-  const viewerGroupIds = (req: AuthenticatedRequest): Set<string> =>
-    new Set((req.user?.groups ?? []).map((group) => group.id));
-  const effectiveExternalAgents = () =>
-    mergeExternalAgentRegistries(
-      config.externalAgents,
-      store.getManagedExternalAgents(),
-    );
-  // Gateway model catalogs for the external-avatar composer picker, cached per
-  // agent so opening the settings row doesn't probe the gateway on every hit.
-  // Keyed by id+endpoint (an admin rebind changes the endpoint → fresh probe).
-  const externalModelCatalogCache = new Map<
-    string,
-    { at: number; models: string[] }
-  >();
-  const EXTERNAL_MODEL_CATALOG_TTL_MS = 60_000;
 
   // ---- Discovery -------------------------------------------------------
 
@@ -3312,22 +3075,11 @@ export function createChatRouter({
     "/api/avatars",
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
-      // External summaries hardcode hasImage:false (pure config); overlay the
-      // admin-set profile images stored outside the registry.
-      const externalImageIds = store.listExternalAvatarImageIds();
       const avatars = [
         ...store.listPublishedAvatars(req.user!.id),
         // Shared group agents of the viewer's groups (enabled only) — reach is
         // membership-scoped by the store query, like the native list above.
         ...listGroupAgentAvatarSummaries(store, req.user!.id),
-        ...listExternalAvatarSummaries(
-          effectiveExternalAgents(),
-          viewerGroupIds(req),
-        ).map((summary) =>
-          externalImageIds.has(summary.id)
-            ? { ...summary, hasImage: true }
-            : summary,
-        ),
       ].sort((a, b) => a.displayName.localeCompare(b.displayName));
       res.json({ avatars });
     },
@@ -3337,27 +3089,13 @@ export function createChatRouter({
     "/api/avatars/:id",
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
-      const external = findVisibleExternalAgent(
-        effectiveExternalAgents(),
-        req.params.id,
-        viewerGroupIds(req),
-      );
-      const groupAgentHit = external
-        ? null
-        : findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const avatar = external
-        ? externalAvatarDetail(external)
-        : groupAgentHit
-          ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-          : store.getAvatar(req.user!.id, req.params.id);
+      const groupAgentHit = findChattableGroupAgent(store, req.user!.id, req.params.id);
+      const avatar = groupAgentHit
+        ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
+        : store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
         return;
-      }
-      if (external) {
-        // Detail mirrors the list overlay: images live outside the registry.
-        avatar.hasImage =
-          store.getExternalAvatarImageExt(avatar.id) !== null;
       }
       res.json({ avatar });
     },
@@ -3371,25 +3109,12 @@ export function createChatRouter({
     "/api/avatars/:id/skills",
     requireAuth(store),
     async (req: AuthenticatedRequest, res) => {
-      const external = findVisibleExternalAgent(
-        effectiveExternalAgents(),
-        req.params.id,
-        viewerGroupIds(req),
-      );
-      const groupAgentHit = external
-        ? null
-        : findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const avatar = external
-        ? externalAvatarDetail(external)
-        : groupAgentHit
-          ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-          : store.getAvatar(req.user!.id, req.params.id);
+      const groupAgentHit = findChattableGroupAgent(store, req.user!.id, req.params.id);
+      const avatar = groupAgentHit
+        ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
+        : store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
-        return;
-      }
-      if (external) {
-        res.json({ skills: [] });
         return;
       }
       // The local runtime loads no plugins/skills, so there's nothing to list.
@@ -3421,58 +3146,6 @@ export function createChatRouter({
     },
   );
 
-  // Gateway model catalog for an EXTERNAL avatar's composer model picker.
-  // Visibility mirrors getAvatar/skills (shared external visibility helper).
-  // Returns the gateway-advertised Claude model ids plus the admin-configured
-  // default; a native avatar gets an empty catalog (its picker uses the
-  // bootstrap model tiers instead). Probes are cached briefly per agent.
-  router.get(
-    "/api/avatars/:id/models",
-    requireAuth(store),
-    async (req: AuthenticatedRequest, res) => {
-      const external = findVisibleExternalAgent(
-        effectiveExternalAgents(),
-        req.params.id,
-        viewerGroupIds(req),
-      );
-      if (!external) {
-        const avatar =
-          findChattableGroupAgent(store, req.user!.id, req.params.id) ??
-          store.getAvatar(req.user!.id, req.params.id);
-        if (!avatar) {
-          apiError(res, 404, "아바타를 찾을 수 없습니다.");
-          return;
-        }
-        // Native + group agents both use the bootstrap model-tier picker.
-        res.json({ models: [], defaultModel: null });
-        return;
-      }
-      const cacheKey = `${external.id}\n${external.endpoint}`;
-      const cached = externalModelCatalogCache.get(cacheKey);
-      if (cached && Date.now() - cached.at < EXTERNAL_MODEL_CATALOG_TTL_MS) {
-        res.json({
-          models: cached.models,
-          defaultModel: external.model ?? null,
-        });
-        return;
-      }
-      try {
-        const probe = await probeExternalAgentGateway(external);
-        externalModelCatalogCache.set(cacheKey, {
-          at: Date.now(),
-          models: probe.models,
-        });
-        res.json({ models: probe.models, defaultModel: external.model ?? null });
-      } catch (error) {
-        logger.warn(
-          { externalAgentId: external.id, detail: (error as Error).message },
-          "external model catalog probe failed",
-        );
-        apiError(res, 502, "Gateway 모델 목록을 가져오지 못했습니다.");
-      }
-    },
-  );
-
   // ---- Conversations & messages ---------------------------------------
 
   router.get(
@@ -3487,10 +3160,6 @@ export function createChatRouter({
         conversations: store
           .listConversations(req.user!.id, avatarId, kind)
           .map((conversation) => {
-            const external = findExternalAgent(
-              effectiveExternalAgents(),
-              conversation.avatarUserId,
-            );
             // Live run state (in-memory map lookup per row) so the sidebar can
             // badge a conversation that is still working — the only in-app signal
             // once the user navigates away from its pane.
@@ -3500,7 +3169,6 @@ export function createChatRouter({
             );
             return {
               ...conversation,
-              ...(external ? { avatarDisplayName: external.displayName } : {}),
               activeRun: active ? { background: active.background } : null,
             };
           }),
@@ -3868,24 +3536,15 @@ export function createChatRouter({
       }
       const resolved = resolveChatTarget({
         store,
-        externalAgents: effectiveExternalAgents(),
-        viewerGroupIds: viewerGroupIds(req),
         viewerUserId: req.user!.id,
         avatarId,
-        hasImages: decodedImages.length > 0,
         ownerOnlyCommand: slashExpansion.ownerOnly === true,
       });
       if (!resolved.ok) {
         apiError(res, resolved.refusal.status, resolved.refusal.message);
         return;
       }
-      const { externalAgent, avatar, viewerIsOwner } = resolved.target;
-      // A gateway avatar is stateless (the full text history rides every turn),
-      // so there is no session of ours to compact.
-      if (compact && externalAgent) {
-        apiError(res, 400, "외부 아바타 대화에서는 /compact를 사용할 수 없습니다.");
-        return;
-      }
+      const { avatar, viewerIsOwner } = resolved.target;
       // Owner-only per-conversation group-knowledge selection, chosen in the UI and
       // sent with the turn: the group ids turned OFF (skills + CLAUDE.md). The client
       // owns this state from the moment a chat starts, so no separate persist step is
@@ -3907,20 +3566,13 @@ export function createChatRouter({
       // default (PUT /api/me/chat-defaults → users.model_default) that seeds the next
       // new conversation's pane; this per-conversation value still overrides that
       // default for an already-started thread.
-      // External conversations reuse the same slot for the GATEWAY model id the
-      // viewer picked (validated syntactically here; the gateway is the authority
-      // on whether the id actually exists). Native turns keep tier-alias semantics.
       const rawModel = safeString(req.body?.model);
       const requestedModel: string | null =
         req.body?.model === undefined || req.body?.model === null
           ? null
-          : externalAgent
-            ? isSafeExternalModelId(rawModel)
-              ? rawModel
-              : "" // sent but not a usable model id (incl. empty) → clear to default
-            : isModelTier(rawModel)
-              ? rawModel
-              : ""; // sent but not a known tier (incl. empty) → clear to default
+          : isModelTier(rawModel)
+            ? rawModel
+            : ""; // sent but not a known tier (incl. empty) → clear to default
 
       // Per-conversation reasoning effort, same client-owned model as the tier
       // above: a known level applies; "" clears back to the SDK default; nothing

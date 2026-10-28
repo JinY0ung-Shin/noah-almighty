@@ -139,12 +139,12 @@ describe("AvatarCapabilitiesModal", () => {
     await waitFor(() => expect(screen.getByText("제가 할 수 있는 일을 소개합니다.")).toBeTruthy());
   });
 
-  it("says so when the avatar has no skills (an external avatar always answers empty)", async () => {
+  it("says so when the avatar has no skills or plugins", async () => {
     mockFetch({
-      detail: () => ok({ avatar: { ...detail, runtime: "external", intro: "", plugins: [] } }),
+      detail: () => ok({ avatar: { ...detail, intro: "", plugins: [] } }),
       skills: () => ok({ skills: [] }),
     });
-    render(AvatarCapabilitiesModal, { props: { avatar: { ...avatar, runtime: "external" } } });
+    render(AvatarCapabilitiesModal, { props: { avatar } });
 
     await waitFor(() => expect(screen.getByText("사용 가능한 스킬이 없습니다.")).toBeTruthy());
     expect(screen.queryByText("플러그인")).toBeNull();

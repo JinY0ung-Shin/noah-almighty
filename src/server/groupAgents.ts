@@ -12,9 +12,8 @@ import { workspaceDirFor } from "./workspace.js";
 import type { Store } from "./store.js";
 
 /**
- * Group shared-agent helpers (id namespace, reach gate, wire projections) —
- * mirrors the externalAgents.ts helper set for the OTHER non-users avatar
- * kind. Unlike externals, a group agent runs the full local SDK stack; these
+ * Group shared-agent helpers (id namespace, reach gate, wire projections) for
+ * the non-users avatar kind. A group agent runs the full local SDK stack; these
  * helpers cover only identity + discovery/reach, never the run itself.
  */
 
@@ -67,13 +66,13 @@ export interface ChattableGroupAgent {
 }
 
 /**
- * THE single reach gate for group agents, used by detail/skills/models/chat/
+ * THE single reach gate for group agents, used by detail/skills/chat/
  * image alike: ref parse → agent exists in THAT group → enabled → viewer is a
  * member of the owning group. Fails closed (null) on every miss — non-members
  * get the same not-found/forbidden shape as an unknown avatar (no existence
  * leak). Reach is MEMBERSHIP-only: the group's avatar-sharing policy does not
  * apply (a knowledge-sharing-only group still reaches its shared agents), and
- * system admins do NOT bypass membership (external-avatar precedent).
+ * system admins do NOT bypass membership.
  *
  * `includeDisabled` lets the chat route distinguish member-visible "disabled"
  * (dedicated 403 message) from not-found; discovery/read surfaces omit it.
@@ -112,9 +111,6 @@ export function groupAgentAvatarSummary(
     // Member-only reach — "group" is exact, not a compromise.
     visibility: "group",
     updatedAt: null,
-    // Full local SDK stack, unlike externals: keep the native runtime so
-    // external-only client branches never fire for group agents.
-    runtime: "native",
     sharesGroup: false,
     groupAgent: { groupId: agent.groupId, groupName },
   };

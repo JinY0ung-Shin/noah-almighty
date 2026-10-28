@@ -3,6 +3,14 @@ import path from "node:path";
 import { safeConversationDir } from "./chatImages.js";
 import logger from "./logger.js";
 import { avatarDir } from "./routes/_shared.js";
+import {
+  errorCode,
+  isPlainSegment,
+  listEntries,
+  recordFailure,
+  removeRetired,
+  type SweepTally,
+} from "./retiredFiles.js";
 import type { Store } from "./store.js";
 import type { RetiredPersonalAgentPurge } from "./store/retiredPersonalAgents.js";
 import type { AppConfig } from "./types.js";
@@ -110,16 +118,8 @@ const BOT_AVATAR_PREFIX = "personal:";
 const BOT_WORKSPACE_PREFIX = "personal-";
 /** An SDK session id as the CLI mints it; anything else is never joined into a path. */
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
-/** How many failed paths the warning names. */
-const FAILED_PATH_SAMPLE = 20;
 /** Version tag of the stored pending document. */
 const PENDING_VERSION = 1;
-
-interface SweepTally {
-  failures: number;
-  /** The first FAILED_PATH_SAMPLE failed paths, each with its error code. */
-  sample: string[];
-}
 
 /**
  * What a later boot must retry: exact-shape paths RELATIVE to their root (see
@@ -135,22 +135,6 @@ function isSessionId(value: unknown): value is string {
   return typeof value === "string" && SESSION_ID.test(value);
 }
 
-function recordFailure(sweep: SweepTally, target: string, code: string | undefined): void {
-  sweep.failures += 1;
-  if (sweep.sample.length < FAILED_PATH_SAMPLE) {
-    sweep.sample.push(`${target} (${code ?? "error"})`);
-  }
-}
-
-function errorCode(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException).code;
-}
-
-function isPermissionError(err: unknown): boolean {
-  const code = errorCode(err);
-  return code === "EACCES" || code === "EPERM";
-}
-
 /** A failed bookkeeping write only costs a cheap re-run; it never fails the boot. */
 function guarded(consequence: string, write: () => void): void {
   try {
@@ -158,105 +142,6 @@ function guarded(consequence: string, write: () => void): void {
   } catch (err) {
     logger.warn({ err }, `retired personal-agent ${consequence}`);
   }
-}
-
-/**
- * Remove `target` — a file, a link (unlinked, never followed) or a whole tree —
- * when it exists; true when it is gone. A read-only directory inside a tree
- * (what `go mod download` leaves behind) makes every unlink in it fail with
- * EACCES, so on a permission error the target and every real directory below
- * it are made owner-writable and the removal is retried once. Anything still
- * in place counts as a failure.
- */
-function removeRetired(target: string, sweep: SweepTally): boolean {
-  let stat: fs.Stats | undefined;
-  try {
-    stat = fs.lstatSync(target, { throwIfNoEntry: false });
-  } catch (err) {
-    recordFailure(sweep, target, errorCode(err));
-    return false;
-  }
-  if (!stat) {
-    return true;
-  }
-  try {
-    fs.rmSync(target, { recursive: true, force: true });
-    return true;
-  } catch (err) {
-    if (!stat.isDirectory() || !isPermissionError(err)) {
-      recordFailure(sweep, target, errorCode(err));
-      return false;
-    }
-  }
-  grantOwnerAccess(target);
-  try {
-    fs.rmSync(target, { recursive: true, force: true });
-    return true;
-  } catch (err) {
-    recordFailure(sweep, target, errorCode(err));
-    return false;
-  }
-}
-
-/**
- * Add u+rwx to `dir` ITSELF and to every real directory below it, each BEFORE
- * it is read (a 0000 or 0444 folder cannot even be listed). Every entry is
- * lstat-checked first and a link is never chmodded or descended into:
- * chmodSync follows links, and Node has no lchmod on Linux, so following one
- * could rewrite the mode of a folder outside the bot tree. Nothing above `dir`
- * is touched. Best-effort: the retried removal is what decides success.
- */
-function grantOwnerAccess(dir: string): void {
-  try {
-    const stat = fs.lstatSync(dir);
-    if (!stat.isDirectory()) {
-      return;
-    }
-    fs.chmodSync(dir, (stat.mode & 0o7777) | 0o700);
-  } catch {
-    return;
-  }
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      grantOwnerAccess(path.join(dir, entry.name));
-    }
-  }
-}
-
-/**
- * The entries of `dir` ([] when it does not exist). Any other listing error
- * counts as a failure and yields null, so a folder that cannot be read never
- * lets the marker be stamped.
- */
-function listEntries(dir: string, sweep: SweepTally): fs.Dirent[] | null {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true });
-  } catch (err) {
-    const code = errorCode(err);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return [];
-    }
-    recordFailure(sweep, dir, code);
-    return null;
-  }
-}
-
-/** One path segment that cannot climb out of its folder. */
-function isPlainSegment(name: string | undefined): name is string {
-  return (
-    typeof name === "string" &&
-    name.length > 0 &&
-    name.length <= 255 &&
-    name !== "." &&
-    name !== ".." &&
-    !/[/\\\0]/.test(name)
-  );
 }
 
 /**

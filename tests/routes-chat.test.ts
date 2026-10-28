@@ -9,7 +9,6 @@ import type {
   AgentResponse,
   AppConfig,
   ConversationSummary,
-  ExternalAgentConfig,
   MessageAttachment,
 } from "../src/server/types.js";
 import type {
@@ -57,23 +56,10 @@ type RunImpl = (
   abortController: AbortController,
 ) => Promise<AgentResponse>;
 
-/** Same idea as RunImpl, for the gateway-backed (external avatar) turn. */
-type ExternalRunImpl = (
-  request: { message: string; conversationHistory?: unknown },
-  external: ExternalAgentConfig,
-  events: AgentEvents,
-  abortController?: AbortController,
-) => Promise<AgentResponse>;
-
 const H = vi.hoisted(() => ({
   requests: [] as AgentRequest[],
   impl: null as RunImpl | null,
   retryable: false,
-  // External avatars run behind a gateway: mocked at the same network seam the
-  // SDK is mocked at, so the route's own relay/fan-out is what gets tested.
-  externalImpl: null as ExternalRunImpl | null,
-  externalRequests: [] as { message: string; external: ExternalAgentConfig }[],
-  probeModels: null as string[] | null,
   // Server-side preview rendering shells out to soffice/pdftoppm, which no test
   // box has. [] reproduces the missing-toolchain result; a non-empty value
   // stands in for a successful render.
@@ -107,29 +93,6 @@ vi.mock("../src/server/agent/index.js", () => ({
   isRetryableModelError: vi.fn(() => H.retryable),
 }));
 
-vi.mock("../src/server/agent/externalAgent.js", () => ({
-  runExternalAgent: vi.fn(
-    async (
-      agentRequest: { message: string; conversationHistory?: unknown },
-      external: ExternalAgentConfig,
-      events: AgentEvents,
-      abortController?: AbortController,
-    ): Promise<AgentResponse> => {
-      H.externalRequests.push({ message: agentRequest.message, external });
-      if (!H.externalImpl) {
-        throw new Error("no externalImpl configured for this test");
-      }
-      return H.externalImpl(agentRequest, external, events, abortController);
-    },
-  ),
-  probeExternalAgentGateway: vi.fn(async () => {
-    if (!H.probeModels) {
-      throw new Error("gateway unreachable");
-    }
-    return { models: H.probeModels, durationMs: 1 };
-  }),
-}));
-
 // Only the toolchain shell-out is replaced; isPreviewableExtension and the rest
 // of the module stay real.
 vi.mock("../src/server/deckRender.js", async (importOriginal) => ({
@@ -149,9 +112,6 @@ const getTempDir = withTempDir("routes-chat", () => {
   H.requests.length = 0;
   H.impl = null;
   H.retryable = false;
-  H.externalImpl = null;
-  H.externalRequests.length = 0;
-  H.probeModels = null;
   H.previewPages = [];
 });
 
@@ -3087,61 +3047,6 @@ describe("mid-turn user messages (steers)", () => {
     expect(store.getAgentSessionId(ownerId, "conv-turnend")).toBe("sess-turnend");
   }, LIVE);
 
-  it("409s a mid-turn message on an external gateway avatar's run", async () => {
-    const external: ExternalAgentConfig = {
-      id: "research",
-      displayName: "Research Agent",
-      alias: "리서처",
-      bio: "외부 조사 에이전트",
-      persona: "공개 소개",
-      intro: "외부 Gateway에서 실행됩니다.",
-      hashtags: ["research"],
-      endpoint: "https://gateway.example.com/v1/agents/messages",
-      agent: "claude",
-      apiKey: "gateway-secret",
-      visibleToGroupIds: [],
-    };
-    const services = createServices({
-      dataDir: tempDir,
-      agentRuntime: "claude",
-      sessionSecret: "test",
-      externalAgents: [external],
-    });
-    const app = createApp(services);
-    const viewer = request.agent(app);
-    const viewerId = (await signup(viewer, "steerext").expect(201)).body.user.id as string;
-    const group = services.store.createGroup({ name: "ext-viewers" });
-    services.store.addGroupMember(group.id, viewerId);
-    external.visibleToGroupIds = [group.id];
-
-    let release!: () => void;
-    const parked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let refused: { status: number; error: string } | null = null;
-    H.externalImpl = async (_req, _ext, events) => {
-      events.onDelta?.("외부 답변");
-      const runId = getActiveRunForConversation(viewerId, "conv-steerext")!.runId;
-      const res = await viewer.post(`/api/chat/runs/${runId}/message`).send({ message: "중간에" });
-      refused = { status: res.status, error: res.body.error };
-      release();
-      await parked;
-      return { kind: "text", runtime: "external", summary: "완료", text: "외부 답변" };
-    };
-
-    await viewer
-      .post("/api/chat/stream")
-      .send({ avatarId: "external:research", conversationId: "conv-steerext", message: "조사해줘" })
-      .expect(200);
-
-    // A stateless gateway turn has no live stdin to fold a message into, so the
-    // capability is refused rather than silently dropped.
-    expect(refused).toEqual({
-      status: 409,
-      error: "이 대화에서는 응답 중에 메시지를 보낼 수 없습니다.",
-    });
-  }, LIVE);
-
   it("410s a mid-turn message once the run was stopped, and reports the queued one as dropped", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
@@ -3333,142 +3238,6 @@ describe("context compaction notices", () => {
   });
 });
 
-describe("external avatar turns", () => {
-  /** A gateway-backed avatar; `visibleToGroupIds` is filled in per test. */
-  function externalAvatar(): ExternalAgentConfig {
-    return {
-      id: "research",
-      displayName: "Research Agent",
-      alias: "리서처",
-      bio: "외부 조사 에이전트",
-      persona: "공개 소개",
-      intro: "외부 Gateway에서 실행됩니다.",
-      hashtags: ["research"],
-      endpoint: "https://gateway.example.com/v1/agents/messages",
-      agent: "claude",
-      model: "gateway-default",
-      apiKey: "gateway-secret",
-      visibleToGroupIds: [],
-    };
-  }
-
-  /** Boot an app where `external` is reachable by the (only) signed-up viewer. */
-  async function bootWithExternal(username: string) {
-    const external = externalAvatar();
-    const services = createServices({
-      dataDir: tempDir,
-      agentRuntime: "claude",
-      sessionSecret: "test",
-      externalAgents: [external],
-    });
-    const app = createApp(services);
-    const viewer = request.agent(app);
-    const viewerId = (await signup(viewer, username).expect(201)).body.user.id as string;
-    const group = services.store.createGroup({ name: "ext-viewers" });
-    services.store.addGroupMember(group.id, viewerId);
-    external.visibleToGroupIds = [group.id];
-    return { services, app, viewer, viewerId, external, store: services.store };
-  }
-
-  it("fans out every gateway event and keeps the turn out of local SDK state", async () => {
-    const { store, viewer, viewerId } = await bootWithExternal("extfan");
-
-    H.externalImpl = async (_req, _external, events) => {
-      events.onStatus?.("조사 중");
-      events.onPlugin?.({ status: "installed", name: "gateway-plugin" });
-      events.onToolStart?.({ toolUseId: "t1", name: "WebSearch", agentId: "main" });
-      events.onToolEnd?.({ toolUseId: "t1", ok: true });
-      events.onTaskStart?.({ taskId: "k1", description: "조사" });
-      events.onTaskUpdate?.({ taskId: "k1", status: "running" });
-      events.onTaskEnd?.({ taskId: "k1", ok: true, status: "done" });
-      events.onAgentStart?.({ agentId: "a1", parentId: "main", subagentType: "explore" });
-      events.onAgentEnd?.({ agentId: "a1", ok: true });
-      events.onBlocked?.({ toolName: "Bash", agentId: "main", reason: "read-only" });
-      events.onMemory?.({ scope: "personal", action: "add", path: "wiki/외부.md" });
-      events.onCompact?.({ ok: true, trigger: "auto", preTokens: 120_000 });
-      events.onPlan?.({ plan: "", planning: true });
-      events.onPlan?.({ plan: "외부 계획" });
-      events.onThinking?.("외부 생각");
-      events.onDelta?.("외부 답변");
-      // A gateway session id must never become Noah continuation state, so the
-      // route wires no onSessionId at all for external runs.
-      expect(events.onSessionId).toBeUndefined();
-      expect(events.onModel).toBeUndefined();
-      return { kind: "text", runtime: "external", summary: "완료", text: "외부 답변" };
-    };
-
-    const res = await viewer
-      .post("/api/chat/stream")
-      .send({ avatarId: "external:research", conversationId: "conv-ext", message: "조사해줘" })
-      .expect(200);
-
-    const frames = parseSse(res.text);
-    const names = frames.map((f) => f.event);
-    for (const name of [
-      "open", "status", "plugin", "tool", "tool_end", "task", "task_update", "task_end",
-      "agent", "agent_end", "blocked", "memory", "compact", "plan", "thinking", "delta", "done",
-    ]) {
-      expect(names).toContain(name);
-    }
-    expect(frames.filter((f) => f.event === "plan")).toHaveLength(2);
-    expect(frameData(frames.find((f) => f.event === "memory")!).id).toEqual(expect.any(String));
-
-    const done = frames.find((f) => f.event === "done")!.data as { response: AgentResponse };
-    expect(done.response.plan).toBe("외부 계획");
-    expect(done.response.thinking).toBe("외부 생각");
-
-    const assistant = store.listMessages(viewerId, "conv-ext").find((m) => m.role === "assistant")!;
-    expect(assistant.content).toBe("외부 답변");
-    // Stateless by contract: nothing to resume next turn.
-    expect(store.getAgentSessionId(viewerId, "conv-ext")).toBeNull();
-    expect(store.listAudit(viewerId, true).some((e) => e.detail === "chat with Research Agent (external)")).toBe(true);
-  });
-
-  it("sends the viewer-picked gateway model, falling back to the admin default", async () => {
-    const { viewer } = await bootWithExternal("extmodel");
-    H.externalImpl = async (_req, _external, events) => {
-      events.onDelta?.("답");
-      return { kind: "text", runtime: "external", summary: "완료", text: "답" };
-    };
-
-    await viewer
-      .post("/api/chat/stream")
-      .send({ avatarId: "external:research", conversationId: "conv-extm", message: "질문", model: "gateway-alt" })
-      .expect(200);
-    expect(H.externalRequests[0].external.model).toBe("gateway-alt");
-
-    // No pick this turn → the conversation's stored pick still applies.
-    await viewer
-      .post("/api/chat/stream")
-      .send({ avatarId: "external:research", conversationId: "conv-extm", message: "또" })
-      .expect(200);
-    expect(H.externalRequests[1].external.model).toBe("gateway-alt");
-
-    // A brand-new conversation with no pick keeps the admin-configured default.
-    await viewer
-      .post("/api/chat/stream")
-      .send({ avatarId: "external:research", conversationId: "conv-extm2", message: "새 대화" })
-      .expect(200);
-    expect(H.externalRequests[2].external.model).toBe("gateway-default");
-  });
-
-  it("502s the composer model catalog when the gateway probe fails", async () => {
-    const { viewer } = await bootWithExternal("extcatalog");
-
-    H.probeModels = null; // the mocked probe throws
-    const failed = await viewer.get("/api/avatars/external:research/models").expect(502);
-    expect(failed.body.error).toContain("Gateway 모델 목록");
-
-    // A recovered gateway is probed again (the failure was never cached).
-    H.probeModels = ["claude-sonnet-5", "claude-opus-5"];
-    const ok = await viewer.get("/api/avatars/external:research/models").expect(200);
-    expect(ok.body).toEqual({
-      models: ["claude-sonnet-5", "claude-opus-5"],
-      defaultModel: "gateway-default",
-    });
-  });
-});
-
 describe("group shared agents in the chat routes", () => {
   it("lists a group agent's skills from the group repo only, and hides it from non-members", async () => {
     const { store, app } = boot();
@@ -3482,11 +3251,6 @@ describe("group shared agents in the chat routes", () => {
     // The group has no shared repo yet, so there is nothing to list — the
     // viewer's OWN avatar skills must not leak into a group-agent panel.
     await owner.get(`/api/avatars/${avatarId}/skills`).expect(200).expect({ skills: [] });
-    // Group agents use the bootstrap tier picker, not a gateway catalog.
-    await owner
-      .get(`/api/avatars/${avatarId}/models`)
-      .expect(200)
-      .expect({ models: [], defaultModel: null });
 
     const outsider = request.agent(app);
     await signup(outsider, "gaoutsider").expect(201);
@@ -3724,11 +3488,8 @@ describe("create_share_link host callback (onShareLink)", () => {
     // and an unattended (deadlined) one.
     const target = resolveChatTarget({
       store,
-      externalAgents: [],
-      viewerGroupIds: new Set<string>(),
       viewerUserId: ownerId,
       avatarId: ownerId,
-      hasImages: false,
       ownerOnlyCommand: false,
     });
     if (!target.ok) throw new Error("expected the owner's own avatar to resolve");

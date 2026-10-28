@@ -65,15 +65,15 @@
   redirects (e.g. `NO_REPO` → "use `create_repo`"). Greeting-only text once left it unaware it had
   `create_repo` mid-conversation.
 
-## External agent stream: abort must not trust undici
-- `readSseFrames` (`agent/externalAgent.ts`) races every `reader.read()` against the upstream
-  abort signal and rejects ITSELF with the abort reason. Relying on undici to reject an in-flight
-  body read when the request signal aborts is a race it intermittently loses — observed as the
-  idle/total deadline firing while the run hung forever on a quiet socket (and as a ~1/3 flake of
-  `tests/external-agent.test.ts`'s "times out when an open SSE stream goes idle" once an unrelated
-  2026-08 change shifted file timing). The raced rejection flows into the same `timeoutKind`
-  mapping, so every user-facing timeout message is unchanged. The never-raced promise pre-attaches
-  a `.catch` (unhandled-rejection guard) and the generator's `finally` removes the abort listener.
+## SSE stream readers: abort must not trust undici
+- Lesson from the removed external-avatar runner (`agent/externalAgent.ts`, deleted 2026-10-29), whose
+  `readSseFrames` any new upstream SSE reader (the pi runner) copies: race every `reader.read()` against
+  the upstream abort signal and reject ITSELF with the abort reason. Relying on undici to reject an
+  in-flight body read when the request signal aborts is a race it intermittently loses — observed as
+  the idle/total deadline firing while the run hung forever on a quiet socket (a ~1/3 test flake once
+  an unrelated 2026-08 change shifted file timing). Map the raced rejection through the same timeout
+  classification so user-facing timeout messages stay one set; pre-attach a `.catch` to the never-raced
+  promise (unhandled-rejection guard) and remove the abort listener in the generator's `finally`.
 
 ## Testing git/repo tools offline
 - Point the repo at a LOCAL bare remote (`git init --bare`) so clone/commit/push need no network —

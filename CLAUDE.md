@@ -109,7 +109,7 @@ These are the invariants the project is built around. New work should reinforce 
   persists as its own message (`turn_end`, not `done`). A steer starting with `/` rides
   `client_composed: true` — a raw stdin message IS a CLI slash command (a mid-run `/new` once ran
   `/clear` and silently emptied the session). Persist at DELIVERY only, local SDK runs only
-  (never external avatars / external-task-API turns), `midTurnMessages` on BOTH metacognition surfaces.
+  (never external-task-API turns), `midTurnMessages` on BOTH metacognition surfaces.
   Mechanics → `docs/architecture/chat-sse-media.md`.
 - **A rewind cuts HISTORY, never the world.** Editing an earlier message and 다시 생성 share ONE plan →
   apply path: `planConversationRewind` before the turn's first await, `applyConversationRewind` right
@@ -256,38 +256,11 @@ These are the invariants the project is built around. New work should reinforce 
   default when resuming an existing thread.
 - **Modules are split behind UNCHANGED exports.** When refactoring, keep import paths stable via
   re-exports rather than forcing callers to move.
-- **External avatars share one versioned wire contract with oh-my-gateway.**
-  `src/server/agent/externalAgent.ts` consumes `claude-agent-sdk-message-v1` from
-  `POST /v1/agents/messages`, then sends normalized `sdk_message` payloads through the SAME
-  `dispatchSdkMessage` used by local SDK runs. When changing SDK event handling or the external stream
-  shape, update and verify both Noah and oh-my-gateway's endpoint mapper; never fork a second handler.
-  Preserve stateless semantics: send the complete stored text history each turn, ignore upstream
-  `session_id`, and propagate aborts. Run Noah's `tests/external-agent.test.ts` together with the
-  gateway endpoint and `/v1/responses` regression tests. `visibleToGroupIds` is a Noah-only visibility
-  ACL and group binding is REQUIRED: an entry without a non-empty list is visible to NO ONE (fail
-  closed — legacy env/registry entries stay parseable but dark until an operator assigns groups; the
-  admin UI refuses to save without one), a non-empty list means membership in any listed group, and
-  unknown/deleted group IDs fail closed. Enforce it through the shared external-agent visibility helper
-  on list, detail, skills, and every new chat turn; never treat it as trust/elevation or a Gateway tool
-  policy, and never let `avatar_sharing` gate it (it is an admin ACL, not peer sharing). System
-  admins do not bypass membership. Revocation blocks the next request but preserves user-owned history
-  and does not interrupt a run that already passed its start-time authorization check. Admin-managed
-  entries live as one versioned, AES-GCM-encrypted registry under `app_config`; environment entries are
-  read-only and win same-ID collisions. API keys are write-only (`apiKeySet` only on reads), and admin
-  Gateway checks use authenticated `/v1/models` rather than executing an agent/tool turn. Bind a stored
-  API key to its exact normalized endpoint: an address change must use key `set` or `clear`, never `keep`.
-  Keep external ids immutable: a history-bearing entry may be disabled but not deleted, and changing its
-  managed endpoint requires explicit confirmation plus conversation-binding migration. Every external
-  conversation stores the exact endpoint it first trusted; an unapproved env/config re-point must fail
-  closed before sending history, and a legacy conversation whose binding is `NULL` must start over rather
-  than lazily adopting the current address. Commit a confirmed managed rebind and its encrypted registry
-  compare-and-swap in one immediate DB transaction. Registry caching may skip scrypt/JSON work only while the exact DB
-  ciphertext is unchanged; tamper, wrong secrets, and invalid versions must still become an empty registry.
 
 ## Module map
 - **HTTP:** `app.ts` is thin glue (`createApp` mounts per-domain routers); handlers in
-  `src/server/routes/{auth,profile,directMessages,plugins,knowledgeRepo,groups,routines,chat,admin,browserExtension}.ts`,
-  with external avatar admin CRUD registered from `routes/adminExternalAgents.ts` (+ `_shared.ts`).
+  `src/server/routes/{auth,profile,directMessages,plugins,knowledgeRepo,groups,routines,chat,admin,browserExtension}.ts`
+  (+ `_shared.ts`).
 - **Agent:** `claudeAgent.ts` re-exports `buildPrompt` / `buildSystemPromptAppend` / `buildUserPrompt`
   (`agent/promptBuilder.ts`), SDK-message handlers (`agent/sdkMessageHandlers.ts`), the PreToolUse hook
   (`agent/preToolUseHook.ts`). Shared self-state in `agent/ownerState.ts`; MCP helpers in
@@ -300,7 +273,7 @@ These are the invariants the project is built around. New work should reinforce 
   `sdkToolPresentation.ts`); `tsconfig.client.json`'s `include` lists the extra server modules the
   client may import. New cross-boundary code goes there, not into a hand-copy.
 - **Tests:** ~38 vitest files by area — `agent-*`, `client-*`, `svelte-*`, `browser-*`, `store`,
-  `infra`, `app`, `chat-history`, `external-agent` (+ `tests/helpers.ts`).
+  `infra`, `app`, `chat-history` (+ `tests/helpers.ts`).
 - Module-level cautions: [`src/server/CLAUDE.md`](src/server/CLAUDE.md),
   [`src/server/agent/CLAUDE.md`](src/server/agent/CLAUDE.md), [`src/client/CLAUDE.md`](src/client/CLAUDE.md).
   Operational detail: [`docs/ARCHITECTURE-NOTES.md`](docs/ARCHITECTURE-NOTES.md) (index →

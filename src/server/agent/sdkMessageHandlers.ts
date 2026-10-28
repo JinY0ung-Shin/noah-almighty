@@ -1102,8 +1102,8 @@ export function extractMainAssistantText(message: Record<string, unknown>): stri
 
 /**
  * Normalized result of dispatching one recursively-serialized Claude Agent SDK
- * envelope. Both the in-process SDK iterator and the external gateway runner use
- * this function, so SDK event semantics stay identical across the two paths.
+ * envelope. Every SDK message stream goes through this one function, so SDK
+ * event semantics stay identical across run paths.
  */
 export interface SdkMessageDispatchResult {
   kind:
@@ -1129,7 +1129,7 @@ export function dispatchSdkMessage(
   events: AgentEvents | undefined,
   state: LoopState,
 ): SdkMessageDispatchResult {
-  // One trace point for both local and gateway-delivered SDK messages.
+  // One trace point for every dispatched SDK message.
   traceSdkMessage(message);
 
   if (message.type === "stream_event") {

@@ -133,7 +133,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return rows.map((r) => this.toConversationSummary(r));
     }
 
-    /** Deployment-wide history count used to guard external-avatar deletion/repointing. */
+    /** Deployment-wide count of conversations bound to one avatar id. */
     countConversationsForAvatar(avatarId: string): number {
       return this.count(
         "SELECT COUNT(*) AS c FROM conversations WHERE avatar_user_id = ?",
@@ -202,21 +202,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return row?.avatar_user_id ?? null;
     }
 
-    /** Exact Gateway endpoint bound to an external conversation, if established. */
-    getConversationExternalEndpoint(
-      ownerId: string,
-      conversationId: string,
-    ): string | null {
-      const row = this.db
-        .prepare(
-          "SELECT external_endpoint FROM conversations WHERE id = ? AND owner_user_id = ?",
-        )
-        .get(conversationId, ownerId) as
-        | { external_endpoint: string | null }
-        | undefined;
-      return row?.external_endpoint ?? null;
-    }
-
     /** The owner of a conversation regardless of caller (null if it doesn't exist). */
     conversationOwner(conversationId: string): string | null {
       const row = this.db
@@ -230,7 +215,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       conversationId: string,
       avatarUserId: string,
       firstUserText: string,
-      opts: { isRoutine?: boolean; externalEndpoint?: string } = {},
+      opts: { isRoutine?: boolean } = {},
     ): void {
       const timestamp = now();
       // Look up by id ALONE so a conversation id that already exists under a
@@ -239,31 +224,13 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       // Express 4, escape the async handler as an unhandled rejection). The chat
       // route also rejects a foreign supplied id up front with a 409.
       const existing = this.db
-        .prepare(
-          "SELECT owner_user_id, external_endpoint FROM conversations WHERE id = ?",
-        )
-        .get(conversationId) as
-        | { owner_user_id: string; external_endpoint: string | null }
-        | undefined;
+        .prepare("SELECT owner_user_id FROM conversations WHERE id = ?")
+        .get(conversationId) as { owner_user_id: string } | undefined;
       if (existing) {
         if (existing.owner_user_id !== ownerId) {
           throw new Error("CONVERSATION_OWNER_MISMATCH");
         }
-        if (
-          opts.externalEndpoint &&
-          existing.external_endpoint !== opts.externalEndpoint
-        ) {
-          throw new Error(
-            existing.external_endpoint
-              ? "EXTERNAL_ENDPOINT_MISMATCH"
-              : "EXTERNAL_ENDPOINT_UNBOUND",
-          );
-        }
         // Promote to routine-tagged if asked (idempotent); never clears the flag.
-        // Existing external rows must already be endpoint-bound. In particular,
-        // legacy NULL rows may contain a transcript from before this column existed;
-        // silently adopting the current endpoint could disclose that history after
-        // an env/config change.
         this.db
           .prepare(
             `UPDATE conversations SET updated_at = ?${opts.isRoutine ? ", is_routine = 1" : ""} WHERE id = ?`,
@@ -277,8 +244,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const title = autoConversationTitle(firstUserText);
       this.db
         .prepare(
-          `INSERT INTO conversations (id, owner_user_id, avatar_user_id, title, is_routine, external_endpoint, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO conversations (id, owner_user_id, avatar_user_id, title, is_routine, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           conversationId,
@@ -286,7 +253,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           avatarUserId,
           title,
           opts.isRoutine ? 1 : 0,
-          opts.externalEndpoint ?? null,
           timestamp,
           timestamp,
         );

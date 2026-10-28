@@ -25,7 +25,7 @@
   it: all answer segments, steers and `bg_message` reports of that run. (The old `dropLastAssistant`
   removed only the last row, so segments resurfaced on reload and the user text reached the model twice.)
   - **Exact context via recorded resume points.** `claudeAgent.ts` fires `onResumePoint({sessionId,
-    uuid})` for every MAIN-chain assistant message (local loop only — the gateway never emits one). The
+    uuid})` for every MAIN-chain assistant message (local loop only). The
     route keeps the latest per run (reset on every `onSessionId`, i.e. per attempt) and stamps it on the
     assistant rows the four SUCCESS boundaries persist (`turn_end`, background finalize, `bg_message`,
     `done`) as `messages.sdk_session_id`/`sdk_uuid` — server-only, never on `StoredMessage`. A boundary
@@ -35,7 +35,7 @@
     kept history ends at such a row runs `resume` + `resumeSessionAt` + `forkSession: true` (runPlan): the
     model keeps tool calls and results up to that point, and the source transcript is never rewritten (a
     fork copies the chain with the SAME uuids into a NEW session, so every older row's point stays valid).
-  - **Fallbacks.** No point (legacy, cancelled, errored or external rows; a vision re-feed — image turns
+  - **Fallbacks.** No point (legacy, cancelled or errored rows; a vision re-feed — image turns
     start fresh as before) → a fresh session over the KEPT text history (`conversationHistoryForPrompt(
     plan.keep)`). A point the CLI can no longer find (`No message found with message.uuid of: …` — a deep
     pre-compaction target; one inside compaction's preserved tail still resolves) or a swept transcript
@@ -81,7 +81,7 @@
 - **Interim narration FOLDS into the reasoning view (`text_fold`), so the answer is the LAST text block.**
   An agentic turn narrates between tool calls, which made the bubble grow enormous. When a NEW main-agent
   text block starts, every earlier block of the turn is demoted: `foldPendingText`
-  (`sdkMessageHandlers.ts`, shared by `claudeAgent.ts` AND `externalAgent.ts`) fires `onTextFold(text)`
+  (`sdkMessageHandlers.ts`, `dispatchSdkMessage` — the one SDK-message handler) fires `onTextFold(text)`
   and advances the `TextFoldState` indexes that mark where the kept tail begins. Trigger = a text delta
   arriving while completed `assistantChunks` are still unfolded (block *k*'s deltas stream BEFORE block
   *k*'s assembled text is recorded); a `keepLast` sweep at each result boundary and at run end covers
@@ -117,7 +117,7 @@
   - **Gates:**
     - no empty-turn retry and no self-heal (a fresh session has nothing to compact);
     - no steer channel, and a `/compact` steer is refused (it would run mid-turn in the CLI);
-    - refused with no SDK session yet, for external avatars, with images, as an edit's new text, and on
+    - refused with no SDK session yet, with images, as an edit's new text, and on
       regenerate of a `/compact` row.
   - **Rewind interplay:** an edit OF a `/compact` row into ordinary text is a normal rewind — its kept history
     ends before the compaction, in the untouched source.
@@ -287,8 +287,8 @@
   inside the frame as `steer.message`, so a message the model never saw never enters history.
   **Endpoint:** `POST /api/chat/runs/:runId/message` — session cookie only (never a personal API key),
   plain text capped at `MAX_STEER_LENGTH` (20k chars); 400 empty/too long, 404 unknown/ended/other-user
-  run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **Out of scope by design:** external
-  gateway avatars and external-task-API turns get NO channel (`steers` undefined → `midTurnMessages`
+  run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **Out of scope by design:**
+  external-task-API turns get NO channel (`steers` undefined → `midTurnMessages`
   false on both metacognition surfaces), a steer carries no images, no slash expansion and no canvas, and
   a queued steer cannot be cancelled. Client: pending steers render as dimmed 전달 대기 중 bubbles above
   the live bubble, `delivered` moves them into `pane.messages` (응답 중 전달 badge), `dropped` returns the
@@ -327,8 +327,7 @@
   same way instead of skipping the re-feed. `imageTurn` (the fresh-SDK-session-on-images rule) now
   applies only to VISION-ON turns, so a file-mode turn keeps its plain-string prompt and its session
   resume. The composer therefore no longer hides the attach UI for a text-only tier — in file mode it
-  sends the ORIGINALS (no downscale, since nothing is fed to the model). EXTERNAL avatars keep the
-  plain 400 (their gateway runs no local workspace). Unchanged: the PreToolUse hook denies `Read` on
+  sends the ORIGINALS (no downscale, since nothing is fed to the model). Unchanged: the PreToolUse hook denies `Read` on
   raster/PDF paths (must fire BEFORE the read-only auto-allow; SVG stays readable; redirect:
   `pdftotext` for PDFs, `show_file` to show the USER), and Confluence tools return a note instead of
   MCP image blocks (per-run `ctx.visionEnabled`). Surfaced in the standing prompt (`noVisionSection`,
@@ -338,7 +337,7 @@
   A vision turn used to get image blocks only, so no image the avatar SAW could reach a deliverable
   (the pptx skill's "use the user's photo" was impossible on exactly the turns that carry one). Now the
   fresh send AND the rewind/regenerate re-feed run `stageChatImageFilesFromAttachments` on every
-  non-external turn: a vision turn carries BOTH `AgentRequest.images` (blocks, unchanged) and
+  turn: a vision turn carries BOTH `AgentRequest.images` (blocks, unchanged) and
   `imageFiles` (the same attachments, same order), and `buildUserPrompt` words the listing per case. A
   text-only turn keeps its "cannot view" text. A vision turn says the images shown are ALSO files, claims
   "in the same order" only while both lists have the same length, and ends by run capability: a run that

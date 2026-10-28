@@ -674,7 +674,7 @@ export interface AgentEvents {
    * `sessionId` (that message's own session — a fork reports its NEW id). Fires
    * for every such message, so the host keeps the LATEST one and stamps it on
    * each assistant row it persists (turn_end / background finalize / bg_message
-   * / done). Local SDK runs only: the external gateway never emits it.
+   * / done).
    */
   onResumePoint?: (point: import("../types.js").SdkResumePoint) => void;
   /** Plugin install lifecycle. */
@@ -708,7 +708,7 @@ export interface AgentEvents {
   /**
    * Inbound mid-turn user messages for this run; the held-open prompt generator
    * yields them to the SDK and the run loop feeds `command_lifecycle` frames
-   * back. Absent on headless/external runs.
+   * back. Absent on headless/external-task-API runs.
    */
   steers?: SteerChannel;
   /** A tool was auto-denied (no interactive prompt). */
@@ -760,7 +760,7 @@ export interface AgentEvents {
   /**
    * Make (or reuse) a share link for a PPTX card of this conversation. The chat
    * route supplies it ONLY on an interactive turn of the owner's own avatar (never
-   * group-agent, external-avatar, external-task-API or unattended turns) and
+   * group-agent, external-task-API or unattended turns) and
    * re-checks that inside; `runPlan.ts` registers `create_share_link` only when it
    * is present AND the run passes the same gate. Absent = the tool is not offered.
    */

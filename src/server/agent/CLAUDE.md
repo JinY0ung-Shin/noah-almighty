@@ -28,8 +28,8 @@ Durable principles for this layer:
   CLI's `command_lifecycle` frames back through `noteLifecycle`. The RUN LOOP owns its lifetime: it
   closes the channel at a task-free, steer-free `result` boundary and again in the whole
   attempt loop's `finally` — never the generator, so a self-heal retry can rebuild the generator and keep
-  consuming. A run given no channel simply cannot be steered; that is how headless and external runs opt
-  out, and `midTurnMessages` reports it on both metacognition surfaces.
+  consuming. A run given no channel simply cannot be steered; that is how headless and external-task-API runs
+  opt out, and `midTurnMessages` reports it on both metacognition surfaces.
 - **`ownerState.ts` is the metacognition sync point.** `summarizeOwnerState` returns UNFORMATTED self-state
   DATA consumed by BOTH `buildSystemPromptAppend` (English prompt appended to the SDK default system prompt) and `describe_system` (tool text); gating +
   formatting stay at each call site. Add a self-state fact to `OwnerState` and BOTH consumers together.

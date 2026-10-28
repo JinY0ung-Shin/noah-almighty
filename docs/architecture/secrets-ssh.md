@@ -197,43 +197,6 @@
   Managed via `PUT/DELETE /api/admin/claude-token` + the 관리자 ▸ 구독 로그인 card; status surfaces through
   `GET /api/admin/system` (`subscriptionConnected`, `apiKeyOverride`). setup-token tokens are long-lived,
   so there's no refresh logic.
-- **External-avatar registry is app-wide and admin-managed.** UI entries are stored as one versioned
-  JSON value under encrypted `app_config[external_agents_registry_v1]`; no schema migration is needed.
-  `EXTERNAL_AGENTS_JSON` entries remain read-only and take precedence on an ID collision, while the
-  remaining managed entries are merged into the live registry on every request. The admin DTO returns
-  only `apiKeySet`, never the bearer value. A corrupt/undecryptable registry fails closed. Ciphertext
-  identity and the parsed registry are cached per Store instance, so steady-state reads avoid repeating
-  synchronous scrypt while a DB change/tamper is still detected on the next request. External IDs are
-  immutable: history-bearing entries can be disabled but not deleted, and an endpoint change needs
-  explicit confirmation because the next stateless turn sends the complete stored transcript. Existing
-  bearer keys are bound to the exact endpoint and cannot be kept across an address change. Each external
-  conversation also stores its trusted endpoint; an unapproved env/config re-point fails closed and asks
-  the user to start a new conversation instead of forwarding history to the new address. Pre-binding
-  legacy rows with `NULL` fail closed instead of adopting the current endpoint. Confirmed managed
-  endpoint changes compare-and-swap the encrypted registry and rebind eligible conversation rows in one
-  immediate SQLite transaction, so write failure or a concurrent admin update cannot split the two. The
-  admin "인증·모델 확인" calls authenticated `/v1/models`, requires at least one Claude model, and
-  deliberately does not execute an agent turn or tools. The configured endpoint is separately
-  constrained to the exact `/v1/agents/messages` path contract; its SSE stream is validated on the
-  first real chat turn.
-- **External avatar profile images live OUTSIDE the registry.** Bytes on disk in the same `avatarDir`
-  as user photos (stem = the public `external:<id>` avatar id), extension in the
-  `external_avatar_images` table (CREATE TABLE IF NOT EXISTS = the migration). Admin-only
-  `PUT/DELETE /api/admin/external-agents/:id/image` (works for env entries too — the registry is
-  untouched); the public `GET /api/users/:id/avatar-image` route falls back to the external ext
-  lookup. `externalAvatarSummary`/`adminExternalAgent` stay pure (`hasImage: false`) — route code
-  overlays the stored state (avatars list, avatar detail, admin DTOs). Agent delete manually
-  cascades the image row + file. Shared upload validation lives in `_shared.ts`
-  (`decodeAvatarImage`/`saveAvatarImageFile`/`deleteAvatarImageFile`, also used by profile photos).
-- **`conversations.selected_model` is dual-semantic.** Native conversations store a model TIER alias;
-  external conversations store a GATEWAY model id (viewer-picked per conversation, `isSafeExternalModelId`
-  charset, cleared→admin default). One column is safe because a conversation is bound to a single avatar
-  for life; the chat route branches validation on `externalAgent`. The composer picker's catalog comes
-  from viewer-facing `GET /api/avatars/:id/models` (shared visibility helper, `probeExternalAgentGateway`
-  behind a 60s per-agent cache in the chat-router closure; native avatars answer `{ models: [] }`). The
-  client fetches it EAGERLY per external pane (ChatView reactive loop) because desktop shows composer
-  controls inline — the mobile-only settings toggle can't be the fetch trigger. External panes also skip
-  the native model/effort default seeding in `makePane` so a tier alias never leaks to the gateway.
 
 ## On-prem GitHub CA
 - **One var `GITHUB_CA_CERT`** (PEM path, `applyCustomGithubCa` in `tlsCa.ts`, called from `index.ts`).

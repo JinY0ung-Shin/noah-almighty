@@ -16,7 +16,6 @@ const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",
   "users",
-  "external-agents",
   "mcp",
   "access",
   "system",

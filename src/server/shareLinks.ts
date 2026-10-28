@@ -157,7 +157,7 @@ export function shareDownloadName(name: string | undefined): string {
  *   avatar is still reachable for them (`resolveChatAvatar`: not suspended,
  *   still visible through a shared group) — a link must not outlive the reach
  *   the thread was built on;
- * - anything else (external avatars carry no file cards): no.
+ * - anything else: no.
  */
 export function shareableThread(store: Store, ownerUserId: string, conversationId: string): boolean {
   if (store.conversationOwner(conversationId) !== ownerUserId) return false;
@@ -165,7 +165,8 @@ export function shareableThread(store: Store, ownerUserId: string, conversationI
   if (!avatarId) return false;
   if (avatarId === ownerUserId) return true;
   if (avatarId.startsWith(GROUP_AGENT_AVATAR_PREFIX)) return false;
-  // Every other namespaced id (external:, a malformed group:) fails closed;
+  // Every other namespaced id (a retired external:/personal:, a malformed
+  // group:) fails closed;
   // user ids never contain a colon.
   if (avatarId.includes(":")) return false;
   return store.resolveChatAvatar(ownerUserId, avatarId) !== null;

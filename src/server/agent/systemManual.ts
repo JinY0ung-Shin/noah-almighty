@@ -29,7 +29,7 @@ DM is human-to-human UI functionality. DM content and contact lists are not adde
     title: "Shared server outbound network policy",
     summary: "Domain blocking, proxy denials, browser scope and deployment setup.",
     body: `## Scope
-An optional deployment overlay applies one outbound policy to ALL local avatars, group agents, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. External gateways and remote hosts need their own policy for requests they originate.
+An optional deployment overlay applies one outbound policy to ALL local avatars, group agents, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. Remote hosts need their own policy for requests they originate.
 
 ## Behavior
 The container bootstrap installs IPv4/IPv6 firewall rules before Noah starts, then drops root and all capabilities. Only loopback, replies to incoming connections and TCP to the dedicated HTTP proxy (3128) and its admin-session-protected policy controller (3129) are allowed. Destination DNS resolution happens at the proxy. Programs that ignore HTTP_PROXY/HTTPS_PROXY fail closed; raw SSH and other direct protocols are unavailable. HTTP requests and HTTPS CONNECT destination domains are checked against the same list. HTTPS paths are encrypted and are not filtered. IP-literal proxy destinations are denied.
@@ -47,7 +47,7 @@ Report the blocked destination and ask the deployment administrator to review th
     title: "Getting started and navigation",
     summary: "Account setup, menu map, first useful tasks.",
     body: `## Purpose and access
-Noah Almighty gives each user a main avatar with a profile/persona, skills, plugins and a personal knowledge repository. Local avatars run with tools supplied by Noah. External avatars use another gateway; read external-avatars for that separate workflow.
+Noah Almighty gives each user a main avatar with a profile/persona, skills, plugins and a personal knowledge repository. Avatars run with tools supplied by Noah.
 
 ## Where to go
 - 내 아바타: configure your avatar through 프로필, 권한·연결 and 지식·플러그인 tabs. Code/tool messages may call 내 아바타 "Settings/설정".
@@ -59,7 +59,7 @@ Noah Almighty gives each user a main avatar with a profile/persona, skills, plug
 - 스킬 배우기: browse and learn shared teammate skills.
 - 지식 그래프: explore the second brain's notes and relationships.
 - 알림: review notifications and pending information requests.
-- 관리자: system administrators manage users, groups, deployment features and external avatars.
+- 관리자: system administrators manage users, groups and deployment features.
 The visible controls depend on the account, deployment and conversation type. Use the current state/tool results before claiming a particular feature is enabled.
 
 ## First setup
@@ -69,6 +69,10 @@ The visible controls depend on the account, deployment and conversation type. Us
 4. Ask your MAIN avatar to create and connect a personal knowledge repository. With a token configured and create_repo available, it can do this directly after you give a repository name.
 5. Try: "우리 팀 배포 절차를 기억해줘", then ask a question about that procedure in another conversation. Read knowledge for capture and recall details.
 6. Join a group through its administrator to share team knowledge and reach teammate avatars. Avatar-sharing policy and profile visibility determine peer access.
+
+## Administration and troubleshooting
+System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
+For a missing feature, first inspect this run's state and visible controls, then distinguish account role, group membership, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.
 
 Reading this manual does not grant permissions. For an action, use only the tools this run actually has.`,
   },
@@ -223,7 +227,7 @@ Example: "/todo 금요일까지 3분기 보고서 초안, 우선순위 높음 #�
     title: "External Task API integration",
     summary: "Bearer keys, curl, submit/poll/respond/cancel, idempotency and errors.",
     body: `## Purpose and prerequisites
-An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user, a group agent or an external avatar. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
+An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user or a group agent. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
 
 ## Issue a key
 In 내 아바타 → 권한·연결 → 외부 작업 API, issue a named personal key. The raw key is shown only once; at most 10 may be active per user. Store it in the calling system's secret store/environment, never in a chat message or committed source file. NOAH_URL below is the actual externally reachable Noah origin, not the avatar's localhost; NOAH_API_KEY is the secret environment variable. Use HTTPS for a real deployment.
@@ -381,23 +385,6 @@ For draw.io, author an uncompressed mxfile XML .drawio file and publish it. Noah
 
 ## Notifications
 mcp__system__notify_user leaves an in-app notification for the owner about an important result or required action. It is not an email/SMS service. Routine results remain in 예약 작업. A notification supplements the stored result rather than proving delivery through an external channel.`,
-  },
-  {
-    id: "external-avatars",
-    title: "External avatars and administration",
-    summary: "Gateway-backed avatars, visibility ACLs, admin settings and support boundaries.",
-    body: `## External avatars
-Administrators can register external avatars under 관리자 → 외부 아바타, or operators can configure deployment entries. The external gateway owns the model, prompt, tools and execution. Noah provides discovery, conversation storage and its transcript/activity UI. Local MCP, repository/plugin, model/effort, routine and image controls are not supplied to those external turns.
-An external avatar requires at least one allowed Noah group. Only members of its allowed groups can reach it; even system administrators must be members. This is a visibility ACL, not a grant of local tools or trust. Existing conversation history remains user-owned after access is revoked, but new requests are blocked.
-Configuration includes enablement, endpoint, allowed groups, a write-only gateway API key and timeouts. The admin connection check checks gateway authentication/models without executing an agent turn. Environment-managed entries are read-only in the UI. Existing conversations bind to the endpoint they trusted; changing endpoints requires the supported confirmation/migration flow, or a new conversation for an environment change.
-
-## Do not confuse the two external features
-- External Task API: another server asks the owner's LOCAL main avatar to do work. Read external-tasks for the Bearer API and curl examples.
-- External avatar: a Noah user chats with an agent hosted by ANOTHER gateway. The local manual/prompt/tools described here are not automatically injected into that gateway.
-
-## Administration and troubleshooting
-System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
-For a missing feature, first inspect this run's state and visible controls, then distinguish account role, group membership, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.`,
   },
   {
     id: "browser-operations",

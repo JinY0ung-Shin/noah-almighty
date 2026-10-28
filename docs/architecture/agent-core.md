@@ -50,7 +50,7 @@ handlers still enforce owner/group scope, so tool registration does not grant ne
 The manual tool is intentionally public: it reads only static allowlisted topics, never user state
 or files. An unknown topic returns the valid index with an error instead of resolving a path.
 `describe_system` points to the same manual; live state and permissions still come from its existing
-scoped readers. External gateway avatars do not receive this local prompt/tool set.
+scoped readers.
 
 The standing prompt uses a compact topic index. Browser, canvas and working-repository blocks
 keep current scope, safety rules and a BEFORE-use manual trigger; long procedures live in

@@ -1,6 +1,6 @@
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentRequest, AgentResponse, AppConfig, ExternalAgentConfig, SdkResumePoint } from "../src/server/types.js";
+import type { AgentRequest, AgentResponse, AppConfig, SdkResumePoint } from "../src/server/types.js";
 import type { AgentEvents } from "../src/server/agent/events.js";
 import { signup, withTempDir } from "./helpers.js";
 
@@ -352,35 +352,6 @@ describe("/compact — refusals", () => {
     expect(t.store.listMessages(owner.id, "fresh")).toHaveLength(2);
     expect(t.store.listMessages(owner.id, "has-session")).toHaveLength(2);
     expect(t.store.listMessages(owner.id, "never-used")).toHaveLength(0);
-  });
-
-  it("refuses an external avatar's conversation", async () => {
-    const external: ExternalAgentConfig = {
-      id: "research",
-      displayName: "Research Agent",
-      alias: "리서처",
-      bio: "외부 조사 에이전트",
-      persona: "",
-      intro: "",
-      hashtags: [],
-      endpoint: "http://127.0.0.1:9/v1/agents/messages",
-      agent: "claude",
-      model: "gateway-model",
-      system: "",
-      apiKey: "gateway-secret",
-    };
-    const t = boot({ externalAgents: [external] });
-    const viewer = await newOwner(t, "viewer");
-    const group = t.store.createGroup({ name: "ext-viewers" });
-    t.store.addGroupMember(group.id, viewer.id);
-    external.visibleToGroupIds = [group.id];
-
-    const res = await viewer.agent
-      .post("/api/chat/stream")
-      .send({ avatarId: "external:research", conversationId: "ext-1", message: "/compact" })
-      .expect(400);
-    expect(res.body.error).toBe("외부 아바타 대화에서는 /compact를 사용할 수 없습니다.");
-    expect(H.requests).toHaveLength(0);
   });
 
   it("refuses a mid-turn /compact before it can reach the CLI", async () => {

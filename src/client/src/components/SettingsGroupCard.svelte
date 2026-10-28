@@ -653,7 +653,6 @@
         pluginCount: 0,
         visibility: "group",
         updatedAt: null,
-        runtime: "native",
         groupAgent: { groupId: group.id, groupName: group.name },
       });
     } catch (err) {

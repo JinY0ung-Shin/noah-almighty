@@ -3193,8 +3193,8 @@ describe("dispatchSdkMessage", () => {
   });
 
   it("routes a system compact_boundary through the shared dispatch", () => {
-    // Both the local SDK loop and the external gateway runner go through here, so
-    // a compaction leaves the same trace on either path.
+    // Every SDK message stream goes through here, so a compaction leaves the
+    // same trace on every path.
     const state = createLoopState();
     const events = sink();
 
@@ -3217,7 +3217,7 @@ describe("dispatchSdkMessage", () => {
   });
 
   it("still extracts assistant text and usage without an events sink", () => {
-    // The headless/external path passes no sink: text extraction and the context
+    // A path with no events (headless) passes no sink: text extraction and the context
     // snapshot must survive, but nothing may be emitted.
     const state = createLoopState();
     const result = dispatchSdkMessage(

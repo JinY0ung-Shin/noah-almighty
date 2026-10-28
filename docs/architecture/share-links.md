@@ -156,9 +156,9 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 ## The avatar path (`mcp__file_output__create_share_link`)
 - **Three locks, all keyed on an interactive turn of the owner's OWN avatar:**
   1. `executeChatTurn` supplies `onShareLink` only when `viewerIsOwner && ownerUserId === avatar.id &&
-     !groupAgentHit && !externalAgent && !ctx.externalTaskId && ctx.unattendedDeadlineMs === undefined`
-     (`shareLinkTurn`) — never a group-agent or colleague thread, an external avatar, an external-task-API
-     turn or any deadlined run.
+     !groupAgentHit && !ctx.externalTaskId && ctx.unattendedDeadlineMs === undefined`
+     (`shareLinkTurn`) — never a group-agent or colleague thread, an external-task-API turn or any
+     deadlined run.
   2. runPlan registers the tool only when `shareLinkToolActive` = `fileOutputActive && events.onShareLink
      && ownerToolAccess && !groupAgentRun && !consultationRun && !request.headless &&
      !request.externalTaskApi`, computed before `buildSystemServer`. That ONE boolean drives the tool build,

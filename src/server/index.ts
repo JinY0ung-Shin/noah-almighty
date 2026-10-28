@@ -7,6 +7,7 @@ import logger from "./logger.js";
 import { startAvatarTaskDispatcher } from "./avatarTaskRunner.js";
 import { startRoutineScheduler } from "./scheduler.js";
 import { retirePersonalAgents } from "./retirePersonalAgents.js";
+import { retireExternalAvatars } from "./retireExternalAvatars.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
@@ -33,6 +34,10 @@ scrubServerOnlySecretEnv(process.env);
 // scheduler started below would fire a bot-bound routine as the owner's main
 // avatar. A no-op once done; a failed purge throws and stops the boot.
 retirePersonalAgents(services);
+// Delete what the removed external avatars left (their whole conversation
+// history, registry and images — user decision D4) before anything can serve
+// it. A no-op once done; a failed purge throws and stops the boot.
+retireExternalAvatars(services);
 // The removed Craft apps left only a retry queue on disk; drop it (best effort).
 retireCraftApps(services.config);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git

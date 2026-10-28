@@ -3,12 +3,11 @@
   import Icon from "../components/Icon.svelte";
   import RevealableInput from "../components/RevealableInput.svelte";
   import AdminUserRow from "../components/AdminUserRow.svelte";
-  import AdminExternalAgentsPanel from "../components/AdminExternalAgentsPanel.svelte";
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
-  import { loadAdminGroups, loadAdminOverview } from "../lib/loaders";
+  import { loadAdminOverview } from "../lib/loaders";
   import { goView } from "../lib/nav";
   import { appState, notify, replaceState, updateState } from "../lib/state";
   import { timeLabel } from "../lib/format";
@@ -55,13 +54,11 @@
   const toolSkillStatusId = "admin-tool-skill-status";
 
   // 그룹 관리 moved to the shared 그룹 view (GroupsView) — #/admin/groups
-  // redirects there (lib/nav.ts); adminGroups stays loaded for the
-  // external-agents panel's visibility picker.
+  // redirects there (lib/nav.ts).
   type AdminTabDef = { id: AdminTab; label: string; icon: string };
   const tabs: AdminTabDef[] = [
     { id: "overview", label: "개요", icon: "activity" },
     { id: "users", label: "사용자", icon: "users" },
-    { id: "external-agents", label: "외부 아바타", icon: "globe" },
     { id: "mcp", label: "공용 MCP", icon: "link" },
     { id: "access", label: "가입·접근", icon: "key" },
     { id: "system", label: "시스템", icon: "server" },
@@ -293,7 +290,7 @@
     loading = true;
     error = "";
     try {
-      await Promise.all([loadAdminOverview(), loadAdminGroups()]);
+      await loadAdminOverview();
       // Preserve unsaved policy edits across a manual 새로고침 (the header button
       // calls load() on every tab): only re-seed a panel from server state when
       // it has NO pending edits — otherwise the refresh silently discards them,
@@ -689,19 +686,14 @@
   async function reloadUsers() {
     await loadAdminOverview();
   }
-  async function reloadGroups() {
-    await loadAdminGroups();
-  }
 </script>
 
 <header class="view-header">
   <div class="title">
     <h1>관리자</h1>
-    <p>사용자·외부 아바타·접근·시스템을 관리하세요</p>
+    <p>사용자·접근·시스템을 관리하세요</p>
   </div>
-  {#if $appState.adminTab !== "external-agents"}
-    <button class="ghost-sm" type="button" disabled={loadBusy} on:click={load}>{loadBusy ? "새로고침 중…" : "새로고침"}</button>
-  {/if}
+  <button class="ghost-sm" type="button" disabled={loadBusy} on:click={load}>{loadBusy ? "새로고침 중…" : "새로고침"}</button>
 </header>
 
 <div class="view-body scroll-thin">
@@ -734,11 +726,6 @@
     </div>
 
     <div class="admin-panel" role="tabpanel" id="admin-panel" aria-labelledby={`admin-tab-${$appState.adminTab}`}>
-      <AdminExternalAgentsPanel
-        active={$appState.adminTab === "external-agents"}
-        groups={$appState.adminGroups}
-        {reloadGroups}
-      />
       <AdminEgressPanel active={$appState.adminTab === "access"} />
       <AdminSharedMcpPanel active={$appState.adminTab === "mcp"} />
       {#if $appState.adminTab === "overview"}
@@ -1074,9 +1061,9 @@
               <form class="settings-form" on:submit|preventDefault={saveToolSkillPolicy}>
                 <div class="field">
                   <span>내장 도구 비활성화</span>
-                  <div class="external-agent-group-picker" role="group" aria-label="내장 도구 비활성화" aria-describedby={toolSkillStatusId}>
+                  <div class="policy-option-picker" role="group" aria-label="내장 도구 비활성화" aria-describedby={toolSkillStatusId}>
                     {#each togglableTools as entry (entry.id)}
-                      <label class="external-agent-group-option">
+                      <label class="policy-option">
                         <input type="checkbox" bind:checked={disabledToolChecks[entry.id]} aria-describedby={toolSkillStatusId} disabled={toolSkillBusy} on:change={() => (toolSkillError = "")} />
                         <span><strong>{entry.labelKo}</strong><small class="muted">{entry.descriptionKo}</small></span>
                       </label>
@@ -1087,15 +1074,15 @@
                   <span>스킬 비활성화</span>
                   {#if sys.skillDiscovery}
                     <p class="muted">CLI v{sys.skillDiscovery.cliVersion} 기준으로 발견한 스킬/커맨드 {discoveredSkills.length}개입니다.</p>
-                    <div class="external-agent-group-picker" role="group" aria-label="스킬 비활성화" aria-describedby={toolSkillStatusId}>
+                    <div class="policy-option-picker" role="group" aria-label="스킬 비활성화" aria-describedby={toolSkillStatusId}>
                       {#each discoveredSkills as skill (skill.name)}
-                        <label class="external-agent-group-option">
+                        <label class="policy-option">
                           <input type="checkbox" bind:checked={disabledSkillChecks[skill.name]} aria-describedby={toolSkillStatusId} disabled={toolSkillBusy} on:change={() => (toolSkillError = "")} />
                           <span><strong>{skill.name}</strong>{#if skill.description}<small class="muted">{skill.description}</small>{/if}</span>
                         </label>
                       {/each}
                       {#each customDisabledSkills as name (name)}
-                        <label class="external-agent-group-option">
+                        <label class="policy-option">
                           <input type="checkbox" checked disabled={toolSkillBusy} on:change={() => removeCustomDisabledSkill(name)} />
                           <span><strong>{name}</strong><small class="muted">직접 추가됨 — 체크를 해제하면 목록에서 제거됩니다.</small></span>
                         </label>
@@ -1104,9 +1091,9 @@
                   {:else}
                     <div class="empty-note">스킬 목록을 불러오지 못했습니다. 아래 입력으로 스킬 이름을 직접 추가해 비활성화할 수 있습니다.</div>
                     {#if customDisabledSkills.length}
-                      <div class="external-agent-group-picker" role="group" aria-label="직접 추가한 비활성 스킬" aria-describedby={toolSkillStatusId}>
+                      <div class="policy-option-picker" role="group" aria-label="직접 추가한 비활성 스킬" aria-describedby={toolSkillStatusId}>
                         {#each customDisabledSkills as name (name)}
-                          <label class="external-agent-group-option">
+                          <label class="policy-option">
                             <input type="checkbox" checked disabled={toolSkillBusy} on:change={() => removeCustomDisabledSkill(name)} />
                             <span><strong>{name}</strong><small class="muted">직접 추가됨 — 체크를 해제하면 목록에서 제거됩니다.</small></span>
                           </label>

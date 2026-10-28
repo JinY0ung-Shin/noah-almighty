@@ -500,7 +500,7 @@ export async function runClaudeAgent(
   // Mid-turn user messages for THIS run (interactive streaming chat only). The
   // held-open generator yields them into the CLI's stdin and the loop below
   // feeds the CLI's `command_lifecycle` frames back so the host can report
-  // delivery. Absent on headless/external runs.
+  // delivery. Absent on headless/external-task-API runs.
   const steers = events?.steers;
 
   // A result the attempt loop is about to RETRY is not a turn boundary — the
@@ -660,7 +660,7 @@ export async function runClaudeAgent(
           // entry a later rewind can resume AT (SDK `resumeSessionAt`), so the
           // host keeps the latest one per persisted row. Emitted here, not in
           // the shared dispatcher, because only a LOCAL transcript can be
-          // resumed — the gateway runner must never produce one.
+          // resumed.
           //
           // A native /compact run streams NO assistant message at all: its
           // chain entries are the compact_boundary and the user messages after

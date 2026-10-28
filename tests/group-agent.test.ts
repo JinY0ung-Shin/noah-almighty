@@ -881,7 +881,7 @@ describe("group-agent routes", () => {
     expect(afterDelete.body.groups[0].agents[0].id).toBe(second.body.agent.id);
   });
 
-  it("shows the agent to members only, across list/detail/skills/models", async () => {
+  it("shows the agent to members only, across list/detail/skills", async () => {
     const { app, store } = boot("routes-visibility");
     const admin = request.agent(app);
     await signup(admin, "sys-admin").expect(201);
@@ -900,7 +900,6 @@ describe("group-agent routes", () => {
     const card = list.body.avatars.find((a: { id: string }) => a.id === agentId);
     expect(card).toMatchObject({
       displayName: "팀 비서",
-      runtime: "native",
       visibility: "group",
       groupAgent: { groupId, groupName: "Team" },
     });
@@ -915,9 +914,6 @@ describe("group-agent routes", () => {
     expect(skills.body.skills).toEqual([]); // local runtime
     await outsider.get(`/api/avatars/${encodeURIComponent(agentId)}/skills`).expect(404);
 
-    const models = await member.get(`/api/avatars/${encodeURIComponent(agentId)}/models`).expect(200);
-    expect(models.body).toEqual({ models: [], defaultModel: null });
-    await outsider.get(`/api/avatars/${encodeURIComponent(agentId)}/models`).expect(404);
 
     // Disabling hides it from discovery entirely.
     store.updateGroupAgent(agentRow.id, { enabled: false });

@@ -1,7 +1,5 @@
 export type {
   AdminGroupSummary,
-  AdminExternalAgent,
-  AdminExternalAgentInput,
   SharedMcpServerUserView,
   SharedMcpServerView,
   SharedMcpTransport,
@@ -142,7 +140,6 @@ export type SettingsTab = "profile" | "access" | "knowledge";
 export type AdminTab =
   | "overview"
   | "users"
-  | "external-agents"
   | "mcp"
   | "access"
   | "system"
@@ -243,12 +240,8 @@ export interface ChatPane {
    * serving URL (`/api/conversations/:id/images/:imageId`).
    */
   localImages?: Record<string, string>;
-  /** User-chosen model for this conversation; "" / undefined = server default. Native panes hold a model TIER alias; external panes hold a GATEWAY model id. */
+  /** User-chosen model TIER alias for this conversation; "" / undefined = server default. */
   modelTier?: string;
-  /** Gateway model catalog for an EXTERNAL avatar's picker, lazily fetched when the composer settings first open. undefined = not fetched yet, null = fetch failed (default-only picker). */
-  externalModels?: string[] | null;
-  /** Admin-configured default gateway model id for an EXTERNAL avatar (null = gateway decides), from the same catalog fetch. */
-  externalDefaultModel?: string | null;
   /** User-chosen reasoning effort level for this conversation; "" / undefined = SDK default (high). */
   effort?: string;
   /** MCP tool groups enabled for this conversation; defaults to every group. */

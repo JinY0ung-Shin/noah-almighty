@@ -214,7 +214,7 @@ export function avatarDir(config: AppConfig): string {
 
 /**
  * Decode + validate a data-URL avatar upload (png/jpeg/webp, ≤ MAX_AVATAR_BYTES).
- * Shared by the profile photo upload and the admin external-avatar photo upload
+ * Shared by the profile photo upload and the group-agent photo upload
  * so the accepted formats/limits can't drift apart.
  */
 export function decodeAvatarImage(
@@ -243,7 +243,7 @@ export function decodeAvatarImage(
 /**
  * Write an avatar image under avatarDir as `<stem>.<ext>`, removing any stale
  * sibling extension so prior files don't linger. The stem is either a user id
- * or an external avatar id — both come from server-validated registries, never
+ * or a group agent's avatar id — both come from server-validated rows, never
  * raw client input.
  */
 export function saveAvatarImageFile(

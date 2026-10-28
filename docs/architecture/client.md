@@ -413,10 +413,6 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `flex-basis: 6em` is what keeps a merely long label truncating on one line wherever the bubble is
   wide. The 에이전트 badge is `flex:none`+`nowrap` because `.bubble`'s inherited `overflow-wrap:anywhere`
   otherwise broke it into one syllable per line on phones.
-- **Admin external avatars are independently lazy-loaded.** `AdminExternalAgentsPanel.svelte` stays
-  mounted with an `active` prop so its API cannot blank the existing admin overview and unsaved editor
-  state is not coupled to tab switches. Its modal uses explicit `keep|set|clear` API-key intent and
-  forces an Explore cache refresh after CRUD so runtime visibility changes appear immediately.
 
 ## Client verification
 - **`npx svelte-check --tsconfig ./tsconfig.client.json`** is the real client type/template check (also
@@ -461,9 +457,6 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어
   `decision_reason`, SDK/진단용). 클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는
   영어 텍스트를 한국어로 바꾸지 말 것(반대도 금지) — `preToolUseHook.ts`가 레퍼런스.
-- **admin 외부 아바타 검증 메시지는 `routes/adminExternalAgents.ts`가 `EXTERNAL_AGENTS_JSON[0].`
-  접두사를 정규식으로 벗겨 렌더한다** — `externalAgents.ts`의 한국어 throw는 `.field` 형태를
-  유지해야 조사가 어색하게 잘리지 않는다.
 - **audit log의 status는 `success`/`error` 외에 `ok`도 존재**(`agent/sshIdentityTools.ts`).
   클라이언트 라벨 매핑(`AdminView.svelte`)은 세 값 모두 처리한다.
 - **아이콘 경로의 단일 출처는 `lib/icons.ts`** (`ICON_PATHS` + `iconSvg`) — `Icon.svelte`와

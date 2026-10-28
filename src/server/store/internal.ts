@@ -391,7 +391,6 @@ export class StoreBase {
         avatar_user_id TEXT NOT NULL,
         title TEXT,
         working_repo TEXT,
-        external_endpoint TEXT,
         created_at TEXT,
         updated_at TEXT
       );
@@ -524,19 +523,9 @@ export class StoreBase {
         created_at TEXT,
         PRIMARY KEY (artifact_id, version)
       );
-      -- Profile images for EXTERNAL avatars (admin-set). External agents have no
-      -- users row, so the users.avatar_ext pattern gets its own tiny table keyed
-      -- by the public avatar id ("external:<registry id>"). Image bytes live on
-      -- disk next to user avatar images; this row only records the extension.
-      -- Deliberately NOT inside the encrypted registry: images are not secret,
-      -- and env-defined (read-only) agents can carry one too.
-      CREATE TABLE IF NOT EXISTS external_avatar_images (
-        external_avatar_id TEXT PRIMARY KEY,
-        ext TEXT NOT NULL
-      );
       -- Shared GROUP AGENTS (several per group allowed, group-admin managed).
       -- NOT users rows: the public avatar id is "group:<group_id>:<id>"
-      -- (external:<id> precedent — conversations.avatar_user_id has no FK).
+      -- (conversations.avatar_user_id has no FK).
       -- Pre-multi DBs (group_id PK, no id column) are rebuilt by
       -- migrateGroupAgentsMulti(), which also rewrites conversation bindings.
       -- capture_scope: who may write+commit to the shared second brain through
@@ -694,7 +683,7 @@ export class StoreBase {
     // Where an assistant row's segment ended in the LOCAL SDK transcript (the
     // session id + last main-chain assistant uuid), so a later rewind can
     // resume exactly there (SDK resume + resumeSessionAt, forked). NULL on user
-    // rows, external-avatar rows, cancel/error rows and every legacy row — a
+    // rows, cancel/error rows and every legacy row — a
     // rewind onto one of those falls back to the stored text history.
     // Server-only: never mapped onto StoredMessage.
     this.addColumnIfMissing("messages", "sdk_session_id", "TEXT");
@@ -784,10 +773,9 @@ export class StoreBase {
     // their working repo, and so an interactive open in a routine's thread carries to
     // every scheduled run on the same conversation id.
     this.addColumnIfMissing("conversations", "working_repo", "TEXT");
-    // Exact stateless Gateway endpoint this external conversation first trusted.
-    // Binding prevents an env/config change from silently sending the stored full
-    // transcript to a different endpoint on the next turn.
-    this.addColumnIfMissing("conversations", "external_endpoint", "TEXT");
+    // `conversations.external_endpoint` belonged to the retired external avatars
+    // (store/retiredExternalAvatars.ts): deployments that ran them keep the dead
+    // column, nothing reads or writes it, and a fresh DB never gets it.
     // Capability hashtags (역량 해시태그): a JSON array of short searchable tags the
     // avatar generates from its skills/persona, shown in discovery (탐색) and queried
     // by the cross-avatar `mcp__avatars__search_avatars` tool. Null/[] = none.
@@ -1276,7 +1264,7 @@ export interface StoreBase {
     conversationId: string,
     avatarUserId: string,
     firstUserText: string,
-    opts?: { isRoutine?: boolean; externalEndpoint?: string },
+    opts?: { isRoutine?: boolean },
   ): void;
   deleteCanvasArtifactsForConversation(conversationId: string): void;
   /** Sibling of the canvas cascade at EVERY conversation-deleting site (store/shareLinks.ts). */

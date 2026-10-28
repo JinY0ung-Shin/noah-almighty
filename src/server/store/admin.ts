@@ -1,17 +1,11 @@
 import { hashPassword } from "../auth.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
-import {
-  MANAGED_EXTERNAL_AGENTS_KEY,
-  parseManagedExternalAgents,
-  serializeManagedExternalAgents,
-} from "../externalAgents.js";
 import type {
   AdminPresence,
   AdminStats,
   AdminUserDetail,
   AdminUserSummary,
   AvatarVisibility,
-  ExternalAgentConfig,
   SignupMode,
 } from "../types.js";
 import {
@@ -23,25 +17,9 @@ import {
   SIGNUP_MODE_KEY,
   now,
 } from "./internal.js";
-import type { AppSecretState } from "./secrets.js";
 
 export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class Admin extends Base {
-    private managedExternalAgentsCache:
-      | {
-          source: AppSecretState;
-          state: {
-            agents: ExternalAgentConfig[];
-            configError: "decrypt_failed" | "invalid" | null;
-          };
-      }
-      | undefined;
-
-    override close(): void {
-      this.managedExternalAgentsCache = undefined;
-      super.close();
-    }
-
     // ---- Admin ------------------------------------------------------------
 
     private toAdminSummary(row: UserRow): AdminUserSummary {
@@ -226,147 +204,6 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     clearModelOverride(): void {
       this.deleteAppSecret(MODEL_OVERRIDE_KEY);
-    }
-
-    /** UI-managed deployment-wide external avatars, encrypted as one versioned registry. */
-    getManagedExternalAgentsState(): {
-      agents: ExternalAgentConfig[];
-      configError: "decrypt_failed" | "invalid" | null;
-    } {
-      const source = this.getAppSecretState(MANAGED_EXTERNAL_AGENTS_KEY);
-      if (this.managedExternalAgentsCache?.source !== source) {
-        let state: {
-          agents: ExternalAgentConfig[];
-          configError: "decrypt_failed" | "invalid" | null;
-        };
-        if (source.status === "missing") {
-          state = { agents: [], configError: null };
-        } else if (source.status === "unreadable") {
-          state = { agents: [], configError: "decrypt_failed" };
-        } else {
-          try {
-            state = {
-              agents: parseManagedExternalAgents(source.value),
-              configError: null,
-            };
-          } catch {
-            state = { agents: [], configError: "invalid" };
-          }
-        }
-        this.managedExternalAgentsCache = { source, state };
-      }
-      const cached = this.managedExternalAgentsCache!.state;
-      return {
-        configError: cached.configError,
-        // Route code gets fresh mutable objects; cache-owned plaintext remains
-        // immutable by convention and cannot be poisoned by a caller.
-        agents: cached.agents.map((agent) => ({
-          ...agent,
-          hashtags: [...agent.hashtags],
-          ...(agent.visibleToGroupIds
-            ? { visibleToGroupIds: [...agent.visibleToGroupIds] }
-            : {}),
-        })),
-      };
-    }
-
-    getManagedExternalAgents(): ExternalAgentConfig[] {
-      return this.getManagedExternalAgentsState().agents;
-    }
-
-    /**
-     * Admin-set profile image extension for an EXTERNAL avatar (keyed by the
-     * public "external:<id>" avatar id), or null when none. The counterpart of
-     * users.avatar_ext for agents that have no users row; bytes live on disk.
-     */
-    getExternalAvatarImageExt(externalAvatarId: string): string | null {
-      const row = this.db
-        .prepare(
-          "SELECT ext FROM external_avatar_images WHERE external_avatar_id = ?",
-        )
-        .get(externalAvatarId) as { ext: string } | undefined;
-      return row?.ext ?? null;
-    }
-
-    /** Set (or clear with null) an external avatar's stored image extension. */
-    setExternalAvatarImageExt(externalAvatarId: string, ext: string | null): void {
-      if (ext) {
-        this.db
-          .prepare(
-            "INSERT INTO external_avatar_images (external_avatar_id, ext) VALUES (?, ?) " +
-              "ON CONFLICT(external_avatar_id) DO UPDATE SET ext = excluded.ext",
-          )
-          .run(externalAvatarId, ext);
-      } else {
-        this.db
-          .prepare("DELETE FROM external_avatar_images WHERE external_avatar_id = ?")
-          .run(externalAvatarId);
-      }
-    }
-
-    /** Avatar ids ("external:<id>") that currently have a stored image. */
-    listExternalAvatarImageIds(): Set<string> {
-      const rows = this.db
-        .prepare("SELECT external_avatar_id FROM external_avatar_images")
-        .all() as { external_avatar_id: string }[];
-      return new Set(rows.map((row) => row.external_avatar_id));
-    }
-
-    setManagedExternalAgents(agents: readonly ExternalAgentConfig[]): void {
-      if (!agents.length) {
-        this.deleteAppSecret(MANAGED_EXTERNAL_AGENTS_KEY);
-        this.managedExternalAgentsCache = undefined;
-        return;
-      }
-      this.setAppSecret(
-        MANAGED_EXTERNAL_AGENTS_KEY,
-        serializeManagedExternalAgents(agents),
-      );
-      this.managedExternalAgentsCache = undefined;
-    }
-
-    /**
-     * Compare-and-swap the managed registry and, when requested, move exact
-     * conversation endpoint bindings in the same IMMEDIATE SQLite transaction.
-     * This prevents a failed registry write or a concurrent admin process from
-     * leaving stored transcripts bound to a different endpoint than the active
-     * registry. NULL legacy rows are adopted only through the administrator's
-     * explicit endpoint-change confirmation path.
-     */
-    replaceManagedExternalAgents(
-      expectedAgents: readonly ExternalAgentConfig[],
-      nextAgents: readonly ExternalAgentConfig[],
-      rebind?: {
-        avatarId: string;
-        previousEndpoint: string;
-        nextEndpoint: string;
-      },
-    ): boolean {
-      const expected = serializeManagedExternalAgents(expectedAgents);
-      const replace = this.db.transaction(() => {
-        const current = this.getManagedExternalAgentsState();
-        if (
-          current.configError ||
-          serializeManagedExternalAgents(current.agents) !== expected
-        ) {
-          return false;
-        }
-        if (rebind) {
-          this.db
-            .prepare(
-              "UPDATE conversations SET external_endpoint = ? " +
-                "WHERE avatar_user_id = ? AND (external_endpoint IS NULL OR external_endpoint = ?)",
-            )
-            .run(
-              rebind.nextEndpoint,
-              rebind.avatarId,
-              rebind.previousEndpoint,
-            );
-        }
-        this.setManagedExternalAgents(nextAgents);
-        return true;
-      });
-      return replace.immediate();
     }
 
     deleteUser(id: string): boolean {

@@ -164,17 +164,9 @@ function makePane(
     // Seed the composer pickers from the owner's remembered defaults so the last
     // choice carries to a new conversation (null/undefined = fall back to the
     // hardcoded server/SDK default). selectConversation() overrides these with the
-    // per-conversation stored value when resuming an existing thread. External
-    // panes stay unseeded: their model slot holds a GATEWAY model id, so a native
-    // tier alias must never leak into it (undefined = admin-configured default).
-    modelTier:
-      avatar.runtime === "external"
-        ? undefined
-        : (readState().user?.modelDefault ?? undefined),
-    effort:
-      avatar.runtime === "external"
-        ? undefined
-        : (readState().user?.effortDefault ?? undefined),
+    // per-conversation stored value when resuming an existing thread.
+    modelTier: readState().user?.modelDefault ?? undefined,
+    effort: readState().user?.effortDefault ?? undefined,
     mcpToolGroups: readState().user?.mcpToolGroupsDefault
       ? [...readState().user!.mcpToolGroupsDefault!]
       : [...DEFAULT_MCP_TOOL_GROUPS],
@@ -1082,24 +1074,15 @@ export async function sendMessage(
         regenerate: opts.regenerate === true,
         ...(rewindFromMessageId ? { rewindFromMessageId } : {}),
         multiSession: readState().chatPanes.length > 1,
-        // External avatars run their own tool stack behind the gateway, so the
-        // local-only composer settings (effort/knowledge/MCP groups) stay off
-        // that path. The MODEL is the exception: the viewer may pick a gateway
-        // model id per conversation ("" = clear back to the admin default).
-        ...(pane.avatar.runtime === "external"
-          ? { model: pane.modelTier || "" }
-          : {
-              groupKnowledgeOff: pane.groupKnowledgeOff || [],
-              // Model tier / reasoning effort / MCP groups: the pane is seeded from
-              // remembered defaults, then persisted per native conversation.
-              model: pane.modelTier || DEFAULT_MODEL_TIER,
-              effort: pane.effort || DEFAULT_EFFORT_LEVEL,
-              mcpToolGroups:
-                pane.mcpToolGroups ?? DEFAULT_MCP_TOOL_GROUPS,
-            }),
+        groupKnowledgeOff: pane.groupKnowledgeOff || [],
+        // Model tier / reasoning effort / MCP groups: the pane is seeded from
+        // remembered defaults, then persisted per conversation.
+        model: pane.modelTier || DEFAULT_MODEL_TIER,
+        effort: pane.effort || DEFAULT_EFFORT_LEVEL,
+        mcpToolGroups: pane.mcpToolGroups ?? DEFAULT_MCP_TOOL_GROUPS,
         // Staged image attachments (data URLs). The server reuses our id as the
         // stored attachment id + filename. Omit when none.
-        images: pane.avatar.runtime !== "external" && pendingImages.length
+        images: pendingImages.length
           ? pendingImages.map((img) => ({ id: img.id, data: img.dataUrl }))
           : undefined,
         // Non-blocking canvas submission/edit (#50), when this turn was triggered
@@ -1189,8 +1172,7 @@ export async function sendMessage(
  *
  * Deliberately NOT a variant of `sendMessage`: there is no new run to open, no
  * slash expansion (the server never sees an expanded steer) and no image
- * attachment (those wait for the turn to end). External avatars run behind the
- * gateway, which has no mid-turn channel at all, so they never reach the POST.
+ * attachment (those wait for the turn to end).
  *
  * The draft is cleared optimistically and put BACK on any failure, because the
  * text only exists in the composer until the server has acknowledged it.
@@ -1198,7 +1180,6 @@ export async function sendMessage(
 export async function sendSteer(paneId: string, rawText: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
   if (!pane || !pane.streaming || !pane.liveRunId || pane.steerSending) return;
-  if (pane.avatar?.runtime === "external") return;
   const message = rawText.trim();
   if (!message) return;
   // /compact is a command of its own turn: mid-run it would reach the CLI's stdin

@@ -1099,8 +1099,8 @@ tbody tr:hover td {
   transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
 }
 
-/* The row is `attach | textarea | send`, and attach is optional: it is
-   native-panes-only (external avatars take no images). Each combination needs
+/* The row is `attach | textarea | send`, and attach is optional (the DM dock
+   composer has none). Each combination needs
    its own column list — one column too many strands a button in the middle 1fr
    slot and squeezes the textarea into an `auto` one. */
 .composer-box.no-attach {

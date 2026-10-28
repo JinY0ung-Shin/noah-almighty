@@ -87,6 +87,24 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   reserved FOREVER. It never touches the `agents/<dir>/` folders the bots left in users' knowledge repos (the
   users' own git content); the unused `routine_jobs.personal_agent_id` column stays on old DBs, like other
   retired columns.
+- **The retired external avatars (oh-my-gateway, removed 2026-10-29) are purged at boot the same way.**
+  `retireExternalAvatars` (`src/server/retireExternalAvatars.ts` + the `store/retiredExternalAvatars.ts`
+  mixin, called from `index.ts` right after `retirePersonalAgents`) deletes ALL external-avatar history
+  (user decision D4 — the old "revocation preserves history" promise is void): every conversation whose
+  avatar id starts with `external:` gets `deleteConversation`'s cascade (messages, canvases, share links,
+  `avatar_tasks`, notifications, routine rows pointing into it), plus any other row keyed by an `external:`
+  avatar id; each thread's `chat-images/`/`chat-files/` media and its server-written workspace copies;
+  every `avatars/external:*` profile image and `workspaces/external-*` tree (found by NAME prefix); the
+  `external_agents_registry_v1`
+  `app_config` row; and `DROP TABLE external_avatar_images`. `conversations.external_endpoint` stays as
+  a dead column, like other retired columns. Media dirs that fail to delete are kept PENDING
+  (`retired:external_avatars:pending`) and retried every boot; a pass with ZERO failures stamps the
+  `retired:external_avatars` marker (read by EXISTENCE). A marked boot returns at once unless a pending
+  row exists or the `external_avatar_images` table re-appears (an older release booted after the stamp),
+  which re-runs the full purge — so the `external:` prefix, that table name and the registry key stay
+  reserved FOREVER. A still-set `EXTERNAL_AGENTS_JSON` is ignored with one boot warning. Tests:
+  `tests/retire-external-avatars.test.ts`. The no-follow removal / listing / failure-tally primitives both
+  retirements use live in `src/server/retiredFiles.ts`.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

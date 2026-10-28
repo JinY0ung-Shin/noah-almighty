@@ -2421,19 +2421,6 @@ describe("mid-turn messages (steers)", () => {
     expect(get(toasts).some((t) => t.message.includes("응답이 마무리되는 중이라"))).toBe(true);
   });
 
-  it("an external pane never reaches the steer route", async () => {
-    const id = seedPane({
-      streaming: true,
-      liveRunId: "run-79",
-      draft: "외부 아바타",
-      avatar: { id: "ext-1", alias: "외부", displayName: "External", runtime: "external" } as any,
-    });
-    const fetchFn = noFetch();
-    await sendSteer(id, "외부 아바타");
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(pane(id).draft).toBe("외부 아바타");
-  });
-
   it("a steer needs a live run: no run id, no request", async () => {
     const id = seedPane({ streaming: true, liveRunId: null, draft: "보낼 곳이 없음" });
     const fetchFn = noFetch();
@@ -2962,7 +2949,7 @@ describe("interactive prompts raised by a run", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* pane defaults, external avatars                                     */
+/* pane defaults                                                       */
 /* ------------------------------------------------------------------ */
 
 describe("composer defaults on a new pane", () => {
@@ -2989,43 +2976,6 @@ describe("composer defaults on a new pane", () => {
       mcpToolGroups: ["git_repo"],
       groupKnowledgeOff: ["g7"],
     });
-  });
-
-  it("leaves an external pane unseeded and sends only its gateway model", async () => {
-    replaceState({
-      user: { id: "owner", roles: [], modelDefault: "opus", effortDefault: "low" } as any,
-    });
-    const bodies: any[] = [];
-    useFetch((url, init) => {
-      if (url === "/api/avatars/ext1")
-        return jsonRes({ avatar: { id: "ext1", alias: "게이트웨이", isOwn: false, runtime: "external" } });
-      if (url === "/api/chat/stream") {
-        bodies.push(body(init));
-        return sseRes(doneWith("외부 응답"));
-      }
-      if (url === "/api/conversations") return jsonRes({ conversations: [] });
-      return undefined;
-    });
-
-    await startChatWith({ id: "ext1" } as any);
-    const id = readState().chatPanes[0].id;
-    // A native tier alias must never leak into a slot holding a gateway model id.
-    expect(pane(id).modelTier).toBeUndefined();
-    expect(pane(id).effort).toBeUndefined();
-
-    updateState((s) => {
-      const p = s.chatPanes.find((x) => x.id === id)!;
-      p.pendingImages = [STAGED_IMAGE];
-    });
-    await sendMessage(id, "안녕");
-
-    // External avatars run their own stack behind the gateway: the local-only
-    // composer settings and the image upload path stay off it.
-    expect(bodies[0]).toMatchObject({ avatarId: "ext1", model: "" });
-    expect(bodies[0].effort).toBeUndefined();
-    expect(bodies[0].groupKnowledgeOff).toBeUndefined();
-    expect(bodies[0].mcpToolGroups).toBeUndefined();
-    expect(bodies[0].images).toBeUndefined();
   });
 });
 

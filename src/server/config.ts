@@ -2,7 +2,6 @@ import path from "node:path";
 import type { AgentRuntime, AppConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { MODEL_TIER_IDS } from "./modelTiers.js";
-import { parseExternalAgents } from "./externalAgents.js";
 
 function env(name: string, fallback = ""): string {
   return process.env[name]?.trim() || fallback;
@@ -145,9 +144,6 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     browserBridgeMultimediaNotice: ["true", "1", "on"].includes(
       env("BROWSER_BRIDGE_MULTIMEDIA_NOTICE").toLowerCase(),
     ),
-    // Static, server-only external avatar registry. Credentials stay in config
-    // and are never projected into the public avatar API.
-    externalAgents: parseExternalAgents(process.env.EXTERNAL_AGENTS_JSON),
     ...overrides,
     // dbPath/agentSessionsDir need no re-spread: `dataDir` above is already
     // `overrides.dataDir ?? env(...)`, so both derive from the overridden value

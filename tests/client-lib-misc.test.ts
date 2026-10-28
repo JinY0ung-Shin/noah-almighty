@@ -492,7 +492,7 @@ describe("slash commands", () => {
     });
   });
 
-  it("offers /compact on every local avatar pane — the owner's and a colleague's — but never on an external one", () => {
+  it("offers /compact on every avatar pane — the owner's and a colleague's", () => {
     const compact = commandsForPane(otherPane).find((c) => c.name === "compact");
     expect(compact).toMatchObject({
       title: "대화 맥락 정리",
@@ -507,11 +507,6 @@ describe("slash commands", () => {
       command: { name: "compact" },
       args: "결정 사항은 남겨줘",
     });
-    // The gateway behind an external avatar has no such command.
-    const externalPane = { avatar: { id: "external:gw", isOwn: false, runtime: "external" } } as any;
-    expect(commandsForPane(externalPane).map((c) => c.name)).not.toContain("compact");
-    expect(commandsForPane(externalPane).map((c) => c.name)).toContain("summarize");
-    expect(resolveTypedSlashCommand(externalPane, "/compact")).toBeNull();
   });
 
   it("recognizes the /compact text itself, with or without what to keep", () => {
@@ -590,8 +585,8 @@ describe("nav routing", () => {
     expect(currentRoute()).toBe("#/settings/knowledge");
     replaceState({ view: "admin", adminTab: "audit" });
     expect(currentRoute()).toBe("#/admin/audit");
-    replaceState({ view: "admin", adminTab: "external-agents" });
-    expect(currentRoute()).toBe("#/admin/external-agents");
+    replaceState({ view: "admin", adminTab: "mcp" });
+    expect(currentRoute()).toBe("#/admin/mcp");
     replaceState({ view: "brain", brainSource: "group:42" });
     expect(currentRoute()).toBe("#/brain/group%3A42");
     replaceState({ view: "brain", brainSource: "personal" });

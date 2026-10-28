@@ -2,7 +2,7 @@
 // what the avatar can do, so their own pane trades the generic starter chips for
 // the shared tour contract's scenarios. Three things are easy to get wrong and
 // are pinned here: WHO gets the cards (only the owner's personal avatar —
-// `isOwn` is false for colleague, group-agent and external panes alike), that a
+// `isOwn` is false for colleague and group-agent panes alike), that a
 // browser tour turns its own prerequisite on in the same click, and that a card
 // SEEDS the composer rather than sending (the owner reviews and presses send).
 //
@@ -148,17 +148,6 @@ describe("chat empty state — guided tour cards", () => {
     await waitFor(() => expect(container.querySelector(".starter-prompts")).toBeTruthy());
     expect(container.querySelectorAll(".tour-card").length).toBe(0);
     expect(chipTexts(container)).toContain("이 아바타가 잘 아는 분야를 요약해줘.");
-  });
-
-  it("keeps an external avatar on the chips even if it ever reports isOwn", async () => {
-    // The tours drive local MCP tool groups an external run does not have, so the
-    // external check is a guard in its own right — not a restatement of isOwn.
-    mount(paneOf(avatarOf({ id: "ext-1", isOwn: true, runtime: "external" } as Partial<AvatarDetail>)));
-    const { container } = render(ChatView);
-
-    await waitFor(() => expect(container.querySelector(".starter-prompts")).toBeTruthy());
-    expect(container.querySelectorAll(".tour-card").length).toBe(0);
-    expect(chipTexts(container).length).toBeGreaterThan(0);
   });
 
   it("seeds '/tour <slug>' into the composer without sending it", async () => {

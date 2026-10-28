@@ -55,8 +55,8 @@ export async function downscaleImageToDataUrl(
 
 // First image file in a clipboard: prefer items (covers screenshots/copied
 // images), fall back to files (some browsers only populate one of the two for
-// a pasted image). Shared by the profile photo and external-avatar photo
-// Ctrl+V handlers; ChatView's multi-file composer paste stays separate.
+// a pasted image). Used by the profile photo Ctrl+V handler; ChatView's
+// multi-file composer paste stays separate.
 export function pastedImageFile(clipboard: DataTransfer | null): File | null {
   if (!clipboard) return null;
   const fromItems = Array.from(clipboard.items || [])

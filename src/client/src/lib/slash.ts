@@ -8,12 +8,6 @@ export interface SlashCommand {
   description: string;
   argsLabel?: string;
   ownerOnly?: boolean;
-  /**
-   * Runs only on a LOCAL avatar session (Noah's own SDK run). Hidden in an
-   * external avatar's pane, whose gateway has no such command — the server
-   * refuses it there, so the menu never offers it.
-   */
-  nativeOnly?: boolean;
   requiresArgs?: boolean;
   prompt?: (args: string) => string;
   action?: "new";
@@ -52,7 +46,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     title: "대화 맥락 정리",
     argsLabel: "남길 내용",
     description: "지금까지의 대화를 요약해 컨텍스트를 줄입니다. 뒤에 적은 내용은 요약에 꼭 남길 것으로 전달됩니다.",
-    nativeOnly: true,
   },
   {
     name: "learn",
@@ -97,8 +90,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
 export function commandsForPane(pane: ChatPane | null): SlashCommand[] {
   const ownsAvatar = Boolean(pane?.avatar?.isOwn || (pane?.avatar?.id && pane.avatar.id === readState().user?.id));
-  const external = pane?.avatar?.runtime === "external";
-  return SLASH_COMMANDS.filter((cmd) => (!cmd.ownerOnly || ownsAvatar) && !(cmd.nativeOnly && external));
+  return SLASH_COMMANDS.filter((cmd) => !cmd.ownerOnly || ownsAvatar);
 }
 
 /**

@@ -187,8 +187,6 @@ function seedStreaming(overrides: Partial<ChatPane> = {}): void {
   } as unknown as Parameters<typeof replaceState>[0]);
 }
 
-const externalAvatar = { ...avatar, id: "avatar-ext", runtime: "external" } as unknown as AvatarDetail;
-
 function composerTextarea(container: HTMLElement): HTMLTextAreaElement {
   const el = container.querySelector<HTMLTextAreaElement>(".composer-box textarea");
   expect(el).toBeTruthy();
@@ -228,28 +226,11 @@ describe("composer mid-turn messages", () => {
     expect(container.querySelector(".composer-box.with-steer")).toBeTruthy();
   });
 
-  it("an external pane keeps the old mid-stream composer: no button, Enter breaks the line", async () => {
-    seedStreaming({ avatar: externalAvatar });
-    const { container } = render(ChatView);
-
-    expect(container.querySelector(".send-button.steer-send")).toBeNull();
-    expect(container.querySelector(".composer-box.with-steer")).toBeNull();
-    await fireEvent.keyDown(composerTextarea(container), { key: "Enter" });
-    expect(vi.mocked(sendSteer)).not.toHaveBeenCalled();
-  });
-
-  it("says a message can be sent mid-answer — but only where one actually can", () => {
+  it("says a message can be sent mid-answer", () => {
     seedStreaming();
-    const local = render(ChatView);
-    expect(composerTextarea(local.container).placeholder).toBe(
+    const { container } = render(ChatView);
+    expect(composerTextarea(container).placeholder).toBe(
       "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다",
-    );
-    local.unmount();
-
-    seedStreaming({ avatar: externalAvatar });
-    const external = render(ChatView);
-    expect(composerTextarea(external.container).placeholder).toBe(
-      "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)",
     );
   });
 

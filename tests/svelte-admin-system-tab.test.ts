@@ -67,8 +67,6 @@ function stubAdminFetch(systemOverrides: Record<string, unknown> = {}): void {
       if (url.includes("/api/admin/users")) return json({ users: [] });
       if (url.includes("/api/audit")) return json({ audit: [] });
       if (url.includes("/api/admin/groups")) return json({ groups: [] });
-      if (url.includes("/api/admin/external-agents"))
-        return json({ agents: [], configError: null, shadowedManagedIds: [] });
       return json({});
     }),
   );

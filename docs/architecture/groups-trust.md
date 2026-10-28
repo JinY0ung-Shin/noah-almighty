@@ -11,9 +11,9 @@
   `'group'` and no longer consults `published` (the column survives in old DBs, unread). The discovery
   SQL predicate (`VISIBILITY_WHERE`) and `isVisibleTo` (used by `getAvatar`/`resolveChatAvatar`) gate on
   `visibility` over the `SHARING_TEAMMATES` fragment. Owner-self always bypasses the check. Consequence
-  of retiring `public`: for native avatars non-owner reach ⇔ trust — the "visible but read-only
-  stranger" viewer class survives only for external avatars; the non-elevated code paths stay as a
-  fail-closed floor. UI: a 2-option `seg-control` in `SettingsProfileTab.svelte`
+  of retiring `public`: non-owner reach ⇔ trust — the "visible but read-only stranger" viewer class
+  no longer exists (its last carrier, the external avatars, was removed 2026-10-29); the non-elevated
+  code paths stay as a fail-closed floor. UI: a 2-option `seg-control` in `SettingsProfileTab.svelte`
   (`PATCH /api/me {visibility}` silently skips invalid values); admin moderation =
   `PUT /api/admin/users/:id/visibility` (400s invalid values incl. the retired `public` — intentional
   asymmetry, both pinned in tests). Admin stats count `groupAvatars` (was `publicAvatars`).
@@ -75,7 +75,7 @@
 
 ## Group shared agents (그룹 에이전트)
 - **Several per group** (`group_agents`, uuid `id` PK + `group_id` index), team avatars that are NOT
-  users rows: public avatar id `group:<groupId>:<agentId>` (`external:<id>` precedent —
+  users rows: public avatar id `group:<groupId>:<agentId>` (a namespaced id —
   `conversations.avatar_user_id` has no FK; conversation summaries COALESCE the display name via a
   `group_agents` LEFT JOIN on the composite id). Pre-multi DBs (`group_id` PK, one agent, avatar id
   `group:<groupId>`) are rebuilt by `migrateGroupAgentsMulti` (store/internal.ts — fresh uuid per row +
@@ -88,7 +88,7 @@
   workspace tree, chat image/file dirs from a pre-cascade snapshot); disable stays the
   thread-preserving alternative. `deleteGroup` cascades every agent the same way.
 - **Reach = owning-group membership ONLY** through `findChattableGroupAgent` (the single gate used by
-  detail/skills/models/chat): independent of `avatar_sharing` (a knowledge-only group still reaches its
+  detail/skills/chat): independent of `avatar_sharing` (a knowledge-only group still reaches its
   agent), no sysadmin bypass, fail-closed 403/404 shapes; a member-visible DISABLED agent gets a
   dedicated 403. Each member's threads are PRIVATE (`owner_user_id` = viewer) — the team shares via the
   SECOND BRAIN, never the conversation stream. For the same reason **group-agent threads cannot be

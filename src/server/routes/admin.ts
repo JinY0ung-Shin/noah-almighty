@@ -28,7 +28,6 @@ import {
   MIN_PASSWORD_LENGTH,
   type RouterDeps,
 } from "./_shared.js";
-import { registerAdminExternalAgentRoutes } from "./adminExternalAgents.js";
 import { registerAdminEgressRoutes } from "./adminEgress.js";
 import { cleanupGroupDataDirs, groupAgentAvatarId } from "../groupAgents.js";
 
@@ -37,7 +36,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
   const { config, store, observedModel, auditAs } = deps;
   const router = Router();
 
-  registerAdminExternalAgentRoutes(router, deps);
   registerAdminEgressRoutes(router, deps);
 
   // System/runtime info: which model the agent is pinned to (config) vs. which

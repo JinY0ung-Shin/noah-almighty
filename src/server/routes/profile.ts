@@ -409,13 +409,11 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
   );
 
   router.get("/api/users/:id/avatar-image", (req, res) => {
-    // Users first, then the namespaced avatar kinds ("external:<id>",
-    // "group:<groupId>:<agentId>") — the prefixes can't collide with a user UUID, and
-    // every lookup only hits disk when a registered row matched (so an
-    // arbitrary :id never becomes a file path).
+    // Users first, then group agents ("group:<groupId>:<agentId>") — the prefix
+    // can't collide with a user UUID, and every lookup only hits disk when a
+    // registered row matched (so an arbitrary :id never becomes a file path).
     const ext =
       store.getAvatarExt(req.params.id) ??
-      store.getExternalAvatarImageExt(req.params.id) ??
       store.getGroupAgentImageExtByAvatarId(req.params.id);
     if (!ext) {
       res.status(404).json({ error: "No avatar image" });
