@@ -492,24 +492,14 @@ describe("slash commands", () => {
     });
   });
 
-  it("offers /compact on every avatar pane — the owner's and a colleague's", () => {
-    const compact = commandsForPane(otherPane).find((c) => c.name === "compact");
-    expect(compact).toMatchObject({
-      title: "대화 맥락 정리",
-      argsLabel: "남길 내용",
-      description: "지금까지의 대화를 요약해 컨텍스트를 줄입니다. 뒤에 적은 내용은 요약에 꼭 남길 것으로 전달됩니다.",
-    });
-    // Optional args: "/compact" alone is a complete command, sent as the literal.
-    expect(compact?.requiresArgs).toBeFalsy();
-    expect(compact?.ownerOnly).toBeFalsy();
-    expect(commandsForPane(ownPane).map((c) => c.name)).toContain("compact");
-    expect(resolveTypedSlashCommand(otherPane, "/compact  결정 사항은 남겨줘 ")).toMatchObject({
-      command: { name: "compact" },
-      args: "결정 사항은 남겨줘",
-    });
+  it("no longer offers the retired /compact on any pane", () => {
+    expect(commandsForPane(otherPane).map((c) => c.name)).not.toContain("compact");
+    expect(commandsForPane(ownPane).map((c) => c.name)).not.toContain("compact");
+    // Typed, it is no menu command: the literal goes out and the server refuses it.
+    expect(resolveTypedSlashCommand(ownPane, "/compact 결정 사항은 남겨줘")).toBeNull();
   });
 
-  it("recognizes the /compact text itself, with or without what to keep", () => {
+  it("recognizes a legacy /compact row's text, with or without what to keep", () => {
     expect(isCompactCommandText("/compact")).toBe(true);
     expect(isCompactCommandText("  /compact 결정 사항은 남겨줘")).toBe(true);
     expect(isCompactCommandText("/COMPACT")).toBe(true);
@@ -548,10 +538,8 @@ describe("slash commands", () => {
 
   it("filterSlashCommands matches across name/title/description/source and returns all on empty query", () => {
     expect(filterSlashCommands(SLASH_COMMANDS, "")).toBe(SLASH_COMMANDS);
-    // "요약" is /summarize's title AND part of /compact's description.
-    const byTitle = filterSlashCommands(SLASH_COMMANDS, "요약");
-    expect(byTitle.map((c) => c.name)).toEqual(["summarize", "compact"]);
-    expect(filterSlashCommands(SLASH_COMMANDS, "맥락 정리").map((c) => c.name)).toEqual(["compact"]);
+    expect(filterSlashCommands(SLASH_COMMANDS, "요약").map((c) => c.name)).toEqual(["summarize"]);
+    expect(filterSlashCommands(SLASH_COMMANDS, "새 대화").map((c) => c.name)).toEqual(["new"]);
   });
 });
 

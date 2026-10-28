@@ -110,8 +110,8 @@ These are the invariants the project is built around. New work should reinforce 
   effects are never undone and BOTH metacognition surfaces say so. A user row written while another run
   is active is `kind: "queued"` and never an anchor. **A new message-deleting path cascades like
   `applyConversationRewind`** (attachments minus carried ones, their staged workspace copies included,
-  per-card share links and canvases from the anchor time). Native `/compact` (the ONE slash
-  command sent to the CLI verbatim) compacts a FORK, so older rows' rewind points stay exact. Mechanics →
+  per-card share links and canvases from the anchor time). The manual `/compact` is RETIRED (refused like
+  `/new`; context compacts automatically), so no slash command ever reaches the CLI verbatim. Mechanics →
   `docs/architecture/chat-sse-media.md`.
 - **git remote work is MCP-only BY DESIGN.** The agent shell has NO git credentials (stripped from the
   subprocess env), so Bash `git push`/`gh` can never authenticate. Route every git-ish capability through

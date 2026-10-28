@@ -76,7 +76,7 @@ interface Run {
   /**
    * Mid-turn user messages for this run, when it has one (a local streaming
    * chat turn). `pushRunSteer` writes to it and the run loop drains it; absent
-   * on external-task-API and /compact runs, which take no mid-turn message.
+   * on external-task-API runs, which take no mid-turn message.
    */
   steers?: SteerChannel;
 }
@@ -400,8 +400,7 @@ export function awaitResponse(
  * Scoped exactly like the other run endpoints — an unknown, ended, or
  * other-user run is `not_found` and says nothing more. The refusals map 1:1 to
  * the route's statuses:
- *  - `unsupported` the run has no channel at all (an external-task-API turn,
- *                  a native /compact).
+ *  - `unsupported` the run has no channel at all (an external-task-API turn).
  *  - `closed`      the turn is wrapping up (or was stopped), so nothing more
  *                  can reach the model.
  *  - `too_many`    MAX_UNDELIVERED_STEERS are already waiting.

@@ -526,7 +526,7 @@ describe("ChatView transcript · 여기서부터 다시", () => {
     expect(container.querySelector(".thinking-card-body")?.textContent).toContain(THINKING);
   });
 
-  it("hides 다시 생성 on a /compact turn but keeps its row editable", () => {
+  it("hides 다시 생성 on a legacy /compact turn but keeps its row editable", () => {
     replaceState({
       avatars: [],
       chatPanes: [pane([userRow("u-c", "/compact 결정 사항은 남겨줘"), assistantMessage()])],

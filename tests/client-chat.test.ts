@@ -4092,57 +4092,40 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
   });
 });
 
-describe("/compact in the chat pane", () => {
-  it("sends /compact as its own turn — the literal, like every built-in", async () => {
+describe("the retired /compact in the chat pane", () => {
+  it("sends a typed /compact as a plain literal; the server's refusal restores the draft", async () => {
     const id = seedPane({ conversationId: "c", avatar: { id: "av1", alias: "노아", displayName: "Noah", isOwn: true } as any });
     const bodies: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/stream") {
         bodies.push(body(init));
-        return sseRes([
-          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
-          ["compact", { id: "cmp", ok: true, trigger: "manual", preTokens: 18_049, postTokens: 1_378 }],
-          doneFrame("srv-a", "대화 맥락을 요약해 정리했습니다 (약 18.0K → 1.4K 토큰). 이후 대화는 요약본을 바탕으로 이어집니다."),
-        ]);
+        return jsonRes({ error: "/compact는 더 이상 지원하지 않습니다. 대화가 길어지면 맥락은 자동으로 정리됩니다." }, 400);
       }
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    await sendMessage(id, "/compact  결정 사항은 남겨줘");
+    await sendMessage(id, "/compact 결정 사항은 남겨줘");
     expect(bodies[0].message).toBe("/compact 결정 사항은 남겨줘");
-    expect(pane(id).messages.map((m) => m.content)).toEqual([
-      "/compact 결정 사항은 남겨줘",
-      "대화 맥락을 요약해 정리했습니다 (약 18.0K → 1.4K 토큰). 이후 대화는 요약본을 바탕으로 이어집니다.",
-    ]);
-  });
-
-  it("never sends /compact as a mid-turn message: the text stays and a toast says when", async () => {
-    const id = seedPane({ streaming: true, liveRunId: "run-live", draft: "/compact 결정 사항은 남겨줘" });
-    const fetchFn = noFetch();
-    for (const text of ["/compact", "/compact 결정 사항은 남겨줘", "  /COMPACT  "]) {
-      await sendSteer(id, text);
-    }
-    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).messages).toEqual([]);
     expect(pane(id).draft).toBe("/compact 결정 사항은 남겨줘");
-    expect(pane(id).steerSending).toBeFalsy();
-    expect(get(toasts).some((t) => t.message === "/compact는 응답이 끝난 뒤에 보내 주세요.")).toBe(true);
+    expect(get(toasts).some((t) => t.message.includes("/compact는 더 이상 지원하지 않습니다"))).toBe(true);
   });
 
-  it("still sends a steer that merely starts with the letters", async () => {
+  it("sends a mid-turn /compact like any other slash-leading steer", async () => {
     const id = seedPane({ streaming: true, liveRunId: "run-live" });
     const bodies: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/runs/run-live/message") {
         bodies.push(body(init));
-        return jsonRes({ steer: { id: "s1", text: "/compactify 로 이름 바꿔줘", state: "queued", createdAt: "t", followUp: false } });
+        return jsonRes({ steer: { id: "s1", text: "/compact", state: "queued", createdAt: "t", followUp: false } });
       }
       return undefined;
     });
-    await sendSteer(id, "/compactify 로 이름 바꿔줘");
-    expect(bodies).toEqual([{ message: "/compactify 로 이름 바꿔줘" }]);
+    await sendSteer(id, "/compact");
+    expect(bodies).toEqual([{ message: "/compact" }]);
   });
 
-  it("offers no 다시 생성 for a /compact turn, but its row can still be edited", () => {
+  it("offers no 다시 생성 for a legacy /compact turn, but its row can still be edited", () => {
     const messages = [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "/compact 결정 사항은 남겨줘"), row("a2", "assistant", "대화 맥락을 요약해 정리했습니다.")];
     expect(canRegenerate(messages)).toBe(false);
     expect(isRewindAnchor(messages[2])).toBe(true);

@@ -25,7 +25,6 @@ import type {
 } from "../types.js";
 import type { ConversationRewindPlan } from "../store/conversations.js";
 import type {
-  CompactEvent,
   BrowserCookie,
   BrowserStorageEntry,
   BrowserTab,
@@ -141,12 +140,6 @@ interface ChatSlashExpansion {
   message: string;
   error?: string;
   ownerOnly?: boolean;
-  /**
-   * The CLI's own `/compact`: not a prompt expansion — the turn becomes a
-   * native compaction (`ChatTurnContext.compact` → `AgentRequest.compact`),
-   * and `message` stays the literal the user typed.
-   */
-  compact?: { instructions: string };
 }
 
 // Validate + size-cap a client-sent activity-tree snapshot before persisting it on
@@ -351,12 +344,16 @@ export function expandChatSlashCommand(message: string): ChatSlashExpansion {
         ownerOnly: true,
       };
     }
-    // "/compact [what to keep]" is NOT a prompt: the run sends the CLI's own
-    // slash command verbatim so the SDK summarizes the conversation natively.
-    // The text after it is what the summary must keep, passed on as the
-    // command's instructions.
+    // The manual /compact was retired: context is compacted automatically
+    // when it nears the limit. Refused like /new, so the literal never reaches
+    // the model (or the CLI, which would run it as its own command). Older
+    // threads may still hold a "/compact" row; regenerate refuses it with this
+    // same text.
     case "compact":
-      return { message, compact: { instructions: args } };
+      return {
+        message,
+        error: "/compact는 더 이상 지원하지 않습니다. 대화가 길어지면 맥락은 자동으로 정리됩니다.",
+      };
     case "new":
       return {
         message,
@@ -571,64 +568,6 @@ function sameMessageIds(a: StoredMessage[], b: StoredMessage[]): boolean {
   return a.length === b.length && a.every((message, i) => message.id === b[i].id);
 }
 
-/**
- * Why a /compact has no session to summarize. A thread WITH messages can lack
- * one for several reasons — its last turn was stopped or failed (both paths
- * clear the session so the next turn rebuilds from the stored rows), it is a
- * routine thread (routine runs never save one), or it predates sessions — so
- * the wording names no cause; sending one message gives it a session in every
- * case. A thread without messages simply has nothing yet.
- */
-function compactNoSessionRefusal(
-  store: Store,
-  ownerUserId: string,
-  conversationId: string,
-): ChatTurnRefusal {
-  return store.listMessages(ownerUserId, conversationId).length > 0
-    ? {
-        status: 400,
-        message:
-          "지금은 정리할 대화 맥락이 없습니다. 메시지를 하나 보낸 뒤 다시 시도해 주세요.",
-      }
-    : { status: 400, message: "아직 정리할 대화 맥락이 없습니다." };
-}
-
-/** A compact bubble's token figure: plain digits under 1,000, else "18.0K". */
-function compactTokenLabel(tokens: number): string {
-  return tokens < 1000 ? String(Math.round(tokens)) : `${(tokens / 1000).toFixed(1)}K`;
-}
-
-/** A failed native /compact's bubble; `detail` is the SDK's (English) cause. */
-function compactFailureText(detail?: string): string {
-  const cause = (detail ?? "").replace(/\s+/g, " ").trim();
-  // The everyday refusal — a short thread, or a /compact right after another
-  // one — gets a Korean sentence instead of the CLI's English.
-  if (/not enough messages to compact/i.test(cause)) {
-    return "아직 정리할 만큼 대화가 쌓이지 않아 맥락을 정리하지 않았습니다.";
-  }
-  return cause
-    ? `맥락 정리에 실패했습니다: ${cause.length > 120 ? `${cause.slice(0, 120)}…` : cause}`
-    : "맥락 정리에 실패했습니다.";
-}
-
-/**
- * The bubble a native /compact run leaves — composed here because the CLI
- * streams no text for the command. The figures appear only when the compact
- * event carried both sides AND the summary is smaller (re-compacting a short
- * thread can grow it — the activity row still shows both numbers); no event at
- * all means nothing was compacted.
- */
-export function compactResultText(outcome: CompactEvent | null): string {
-  if (!outcome?.ok) {
-    return compactFailureText(outcome?.error);
-  }
-  const figures =
-    outcome.preTokens && outcome.postTokens && outcome.postTokens < outcome.preTokens
-      ? ` (약 ${compactTokenLabel(outcome.preTokens)} → ${compactTokenLabel(outcome.postTokens)} 토큰)`
-      : "";
-  return `대화 맥락을 요약해 정리했습니다${figures}. 이후 대화는 요약본을 바탕으로 이어집니다.`;
-}
-
 /** A user row's own (bubble) images — what a rewind or regenerate re-feeds. */
 function hasVisibleImages(message: StoredMessage): boolean {
   return (message.attachments ?? []).some((att) => att.kind === "image" && !att.hidden);
@@ -786,13 +725,6 @@ export interface ChatTurnContext {
    * `regenerate` and with fresh `images` (the HTTP prelude refuses both).
    */
   rewindFromMessageId?: string;
-  /**
-   * Native `/compact [instructions]` (see ChatSlashExpansion.compact): the run
-   * summarizes the conversation's SDK session instead of answering, on a FORK
-   * of it, and the bubble is composed from the compact event. Set only by the
-   * HTTP route, for an interactive local chat turn.
-   */
-  compact?: { instructions: string };
   requestedModel?: string | null;
   requestedEffort?: string | null;
   requestedMcpToolGroups?: McpToolGroupId[] | null;
@@ -931,18 +863,6 @@ export async function executeChatTurn(
     };
   }
 
-  // Native /compact summarizes the conversation's SDK SESSION, so there must be
-  // one — on a fresh session the CLI would compact nothing. Checked before any
-  // write, like every refusal here.
-  if (ctx.compact) {
-    if (!store.getAgentSessionId(ownerUserId, conversationId)) {
-      return {
-        ok: false,
-        refusal: compactNoSessionRefusal(store, ownerUserId, conversationId),
-      };
-    }
-  }
-
   // Rewind (edit an earlier message) / regenerate (re-run the latest one):
   // PLAN now, before the first await, and APPLY only once the run is reserved
   // (just before openRun below) — a turn refused anywhere in between must leave
@@ -975,15 +895,16 @@ export async function executeChatTurn(
       // and a stale client picking a different row cannot swap the text in.
       displayMessage = rewindPlan.anchor.content;
       const expansion = expandChatSlashCommand(displayMessage);
-      agentMessage = expansion.error ? displayMessage : expansion.message;
-      // A /compact row has no answer to redo: its "answer" is the compaction,
-      // and re-running it would summarize the already-summarized session.
-      if (expansion.compact) {
+      // A stored row whose command no longer expands (a retired /compact from
+      // an older thread) is refused exactly as typing it now would be — never
+      // re-run as a literal the model would read as an instruction.
+      if (expansion.error) {
         return {
           ok: false,
-          refusal: { status: 400, message: "/compact는 다시 생성할 수 없습니다." },
+          refusal: { status: 400, message: expansion.error },
         };
       }
+      agentMessage = expansion.message;
       // The same convenience guard resolveChatTarget runs on a typed command.
       if (expansion.ownerOnly && ownerUserId !== avatar.id) {
         return {
@@ -1099,14 +1020,6 @@ export async function executeChatTurn(
         : (store.getAgentSessionId(ownerUserId, conversationId) ??
           undefined);
     const resumeSessionAt = rewindResumeAt?.uuid;
-    // Re-read after the repo-resolution await: a turn that ended in between may
-    // have cleared the session the early check saw. Still before any write.
-    if (ctx.compact && !resumeSessionId) {
-      return {
-        ok: false,
-        refusal: compactNoSessionRefusal(store, ownerUserId, conversationId),
-      };
-    }
     // Carry prior context on every turn. It is INJECTED into the prompt only when
     // there's no SDK session to resume (buildPrompt guards on resumeSessionId) —
     // a fresh (image/rewind) turn needs it, and a resume turn keeps it latent so
@@ -1249,24 +1162,8 @@ export async function executeChatTurn(
     // rows such a boundary persists get no point, and neither does the final
     // `done` row when the run's last boundary carried one.
     let lastTurnErrorSubtype: string | null = null;
-    // A native /compact's outcome, from the run's compact event (the CLI streams
-    // no text for it): what the bubble says, and whether the conversation moves
-    // onto the fork's compacted session.
-    // (Asserted rather than annotated: it is assigned only inside the onCompact
-    // callback, and an annotated `= null` would narrow it to null at the read.)
-    let compactOutcome = null as CompactEvent | null;
     const resumePointFor = (errorSubtype: string | null | undefined) =>
       errorSubtype ? undefined : (runResumePoint ?? undefined);
-    // A FAILED or STOPPED /compact changed nothing the conversation resumes: it
-    // ran on a fork, and the conversation stays on its own session. So its row
-    // carries the point the /compact row itself sat on — the previous answer's,
-    // in that untouched session — and a rewind right after it stays exact.
-    // (Only a SUCCESSFUL compaction stamps the fork's own point.)
-    const compactKeptPoint = (): SdkResumePoint | undefined =>
-      ctx.compact && userMessageId
-        ? (store.planConversationRewind(ownerUserId, conversationId, userMessageId, "from")
-            ?.resumeAt ?? undefined)
-        : undefined;
     // Accumulate the main-agent text as it streams, so the cancel/error paths can
     // persist the partial the user already watched (not an empty "(중지됨)" stub).
     let streamedText = "";
@@ -1336,7 +1233,6 @@ export async function executeChatTurn(
               rewindResume: Boolean(rewindResumeAt),
             }
           : {}),
-        ...(ctx.compact ? { compact: true } : {}),
       },
       "chat stream started",
     );
@@ -1447,10 +1343,7 @@ export async function executeChatTurn(
     // nobody typed it, the key holder answers only through /respond, and both
     // metacognition surfaces already tell the avatar no person is on the other
     // side.
-    // A native /compact gets none either: it is one CLI command with no model
-    // turn to fold a message into, and a steered "/compact" would run as a
-    // command inside the turn (the steer route refuses that text outright).
-    const steers = ctx.externalTaskId || ctx.compact ? undefined : new SteerChannel();
+    const steers = ctx.externalTaskId ? undefined : new SteerChannel();
     openRun(runId, ownerUserId, {
       conversationId,
       avatarId: avatar.id,
@@ -1634,9 +1527,6 @@ export async function executeChatTurn(
           ...(rewindKind
             ? { rewind: { kind: rewindKind, discardedMessages: rewindDiscarded } }
             : {}),
-          // Native /compact: the CLI command runs verbatim against a fork of
-          // `resumeSessionId` (the conversation's session, checked above).
-          ...(ctx.compact ? { compact: ctx.compact } : {}),
         },
         pluginRoots,
         config,
@@ -1872,7 +1762,6 @@ export async function executeChatTurn(
           // Compaction happened (or failed). Same id discipline as 기억 —
           // a reattach replays the log and the client dedupes on it.
           onCompact: (event) => {
-            if (ctx.compact) compactOutcome = event;
             emitRunEvent(runId, "compact", { id: crypto.randomUUID(), ...event });
           },
           // Plan mode: the avatar submitted a plan via ExitPlanMode. Surface it as
@@ -2791,17 +2680,8 @@ export async function executeChatTurn(
         response.thinking = thinkingTail;
       }
 
-      // Native /compact: the CLI answers with no text, so the bubble is composed
-      // from its compact event. Only a SUCCESSFUL compaction moves the
-      // conversation onto the fork's compacted session (and marks where it
-      // ended); a failed one keeps the old session, which the fork never touched.
-      const compactFailed = Boolean(ctx.compact) && !compactOutcome?.ok;
-      if (ctx.compact) {
-        response.text = compactResultText(compactOutcome);
-      }
-
       // Remember this run's SDK session so the next turn resumes its context.
-      if (runSessionId && !compactFailed) {
+      if (runSessionId) {
         store.setAgentSessionId(ownerUserId, conversationId, runSessionId);
       }
       audit({
@@ -2840,9 +2720,7 @@ export async function executeChatTurn(
                 attachments: shownAttachments.slice(persistedAttachmentsOffset),
                 // Where this answer ended in the transcript — the point a later
                 // rewind onto the next user message resumes at.
-                resumePoint: compactFailed
-                  ? compactKeptPoint()
-                  : resumePointFor(lastTurnErrorSubtype),
+                resumePoint: resumePointFor(lastTurnErrorSubtype),
               })
             : null;
         emitRunEvent(runId, "done", { message: assistantMessage, response });
@@ -2853,10 +2731,7 @@ export async function executeChatTurn(
         // incomplete, so the NEXT turn rebuilds context from stored messages
         // (which now include this cancelled turn's user message + partial)
         // instead of resuming a half-written session that omits it. (chat-02)
-        // A /compact ran on a FORK, so the conversation's own session is intact.
-        if (!ctx.compact) {
-          store.setAgentSessionId(ownerUserId, conversationId, null);
-        }
+        store.setAgentSessionId(ownerUserId, conversationId, null);
         // Keep whatever the model already streamed before the stop. The client's
         // finalizeStopped keeps it on screen, so the persisted record must carry
         // it too — otherwise the visible answer is gone on the next reload/revisit.
@@ -2887,8 +2762,6 @@ export async function executeChatTurn(
                     : "(중지됨)"),
                 response,
                 attachments: shownAttachments.slice(persistedAttachmentsOffset),
-                // A stopped /compact: the point its /compact row sat on.
-                resumePoint: compactKeptPoint(),
               })
             : null;
         emitRunEvent(runId, "cancelled", {
@@ -2927,9 +2800,7 @@ export async function executeChatTurn(
         .join(", ");
       // OUR deadline wins the message: the SDK labels every abort as the user's
       // doing, and no user was there to press stop on an unattended task.
-      const userFacing = ctx.compact
-        ? compactFailureText(detail)
-        : timedOut
+      const userFacing = timedOut
         ? unattendedTimeoutMessage(ctx.unattendedDeadlineMs ?? 0)
         : !config.anthropicModel &&
             isRetryableModelError(error)
@@ -2940,11 +2811,8 @@ export async function executeChatTurn(
       if (store.conversationOwner(conversationId) === ownerUserId) {
         // Clear the session for the same reason as the cancel path (chat-02), and
         // don't discard the partial the user already watched stream — keep it
-        // alongside the error so a reload shows what the live view showed. A
-        // failed /compact leaves the session alone (it ran on a fork).
-        if (!ctx.compact) {
-          store.setAgentSessionId(ownerUserId, conversationId, null);
-        }
+        // alongside the error so a reload shows what the live view showed.
+        store.setAgentSessionId(ownerUserId, conversationId, null);
         // Background phase: earlier segments are already stored messages, so
         // only the tail since the last result boundary rides the error bubble.
         const erroredText = streamedText.slice(
@@ -2963,8 +2831,6 @@ export async function executeChatTurn(
           role: "assistant",
           content,
           attachments: shownAttachments.slice(persistedAttachmentsOffset),
-          // A failed /compact: the point its /compact row sat on.
-          resumePoint: compactKeptPoint(),
           response:
             (latestPlan && !turnFinalized) || erroredThinking
               ? {
@@ -3413,22 +3279,6 @@ export function createChatRouter({
         }
       }
 
-      // Native /compact (see ChatSlashExpansion.compact). A regenerate never is
-      // one — its text is re-derived from the stored row, which refuses it —
-      // and a canvas interaction is not typed text.
-      const compact =
-        regenerate || canvasSubmission ? undefined : slashExpansion.compact;
-      if (compact) {
-        if (decodedImages.length > 0) {
-          apiError(res, 400, "/compact에는 이미지를 첨부할 수 없습니다.");
-          return;
-        }
-        if (rewindFromMessageId !== undefined) {
-          apiError(res, 400, "/compact는 수정해서 보낼 수 없습니다. 새 메시지로 보내 주세요.");
-          return;
-        }
-      }
-
       // Validate BEFORE switching to SSE so failures stay plain JSON. A turn with
       // image attachments but no text is allowed (the images are the message).
       // A rewind/regenerate may carry only its anchor's images, which the turn
@@ -3547,7 +3397,6 @@ export function createChatRouter({
           images: decodedImages,
           regenerate,
           rewindFromMessageId,
-          compact,
           requestedModel,
           requestedEffort,
           requestedMcpToolGroups,
@@ -3662,12 +3511,6 @@ export function createChatRouter({
       }
       if (message.length > MAX_STEER_LENGTH) {
         apiError(res, 400, "메시지가 너무 깁니다.");
-        return;
-      }
-      // A steer reaches the CLI's stdin verbatim, where a leading /compact would
-      // run as a command INSIDE the live turn. It is a turn of its own.
-      if (/^\/compact(?:\s|$)/i.test(message)) {
-        apiError(res, 400, "/compact는 응답이 끝난 뒤에 보내 주세요.");
         return;
       }
       const pushed = pushRunSteer(runId, req.user!.id, message);

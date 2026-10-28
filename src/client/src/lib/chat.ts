@@ -553,8 +553,8 @@ function lastTurnOpenerIndex(messages: StoredMessage[]): number {
 
 /**
  * Whether 다시 생성 can re-run the latest turn — its opener exists, was not queued,
- * and is not a `/compact` (re-running a compaction is refused server-side; the
- * row can still be EDITED into an ordinary message).
+ * and is not a retired `/compact` row (refused server-side; the row can still be
+ * EDITED into an ordinary message).
  */
 export function canRegenerate(messages: StoredMessage[]): boolean {
   const anchor = messages[lastTurnOpenerIndex(messages)];
@@ -1182,12 +1182,6 @@ export async function sendSteer(paneId: string, rawText: string): Promise<void> 
   if (!pane || !pane.streaming || !pane.liveRunId || pane.steerSending) return;
   const message = rawText.trim();
   if (!message) return;
-  // /compact is a command of its own turn: mid-run it would reach the CLI's stdin
-  // and run inside the turn. Refused before the draft is touched, so it stays put.
-  if (isCompactCommandText(message)) {
-    notify("/compact는 응답이 끝난 뒤에 보내 주세요.", "warn");
-    return;
-  }
   const runId = pane.liveRunId;
   updatePane(paneId, (target) => {
     target.draft = "";

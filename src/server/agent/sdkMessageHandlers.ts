@@ -1046,7 +1046,7 @@ export function handleSystemEvent(message: Record<string, unknown>, events: Agen
     const trigger = asString(metadata?.trigger);
     const preTokens = asNumber(metadata?.pre_tokens);
     // What the summary left of the conversation — the other half of the
-    // "before → after" a native /compact reports (auto compactions carry it too).
+    // "before → after" (CLIs that send post_tokens).
     const postTokens = asNumber(metadata?.post_tokens);
     events.onCompact?.({
       ok: true,

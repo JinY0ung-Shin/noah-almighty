@@ -87,11 +87,10 @@ describe("official system manual", () => {
     expect(index.text).not.toContain("curl -sS");
   });
 
-  it("documents native /compact and what the avatar can still see after it", () => {
+  it("no longer documents the retired manual /compact", () => {
     const page = readSystemManual("chat").text;
-    expect(page).toContain("`/compact [what to keep]` summarizes the conversation so far to free context");
-    expect(page).toContain("the avatar sees only that summary (plus what the user asked to keep)");
-    expect(page).toContain("the earlier messages stay in the chat and can still be rewound to");
+    expect(page).not.toContain("/compact");
+    expect(page).toContain("Editing an earlier message rewinds the conversation to it");
   });
 
   it("documents the deck converter without claiming it is available", () => {

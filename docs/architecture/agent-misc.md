@@ -46,12 +46,12 @@
   list + Korean card copy (the client renders the 체험 시나리오 cards from it), while the English walkthrough
   prompts live server-only in `src/server/tourScenarios.ts` — an unknown slug fails with a Korean error
   instead of expanding, and trailing text after the slug rides along as a focus hint like `/learn`'s.
-- **`/compact [what to keep]` is the ONE native command: it reaches the CLI VERBATIM.** A slash command only
-  runs when it IS the prompt, so `expandChatSlashCommand` returns `compact: {instructions}` instead of an
-  expansion, and `claudeAgent` sends exactly `/compact[ <instructions>]` with no `buildUserPrompt` wrapper,
-  history or images. Mechanics and gates → [`chat-sse-media.md`](chat-sse-media.md) (native `/compact`
-  bullet). Every other text, including a mid-turn message, must never start a CLI command: the steer route
-  refuses a `/compact` steer, and a wrapped prompt never starts with `/`.
+- **No text ever starts a CLI command.** The manual `/compact` was retired (2026-10-29, pi migration):
+  `expandChatSlashCommand` refuses it with a Korean `error` exactly like `/new`, and a 다시 생성 of a
+  legacy `/compact` row is refused with that same text (the client hides the button via
+  `isCompactCommandText`). A wrapped prompt never starts with `/`, and a slash-leading steer rides
+  `client_composed: true`. Automatic compaction is unchanged (`compact_boundary` → `onCompact` → the
+  `compact` activity row + chip; `AUTO_COMPACT_WINDOW`).
 
 ## git remote work is MCP-only
 - The agent shell has no git credentials (stripped from the subprocess env), so Bash `git clone/push`/`gh`
