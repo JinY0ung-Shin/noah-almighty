@@ -46,13 +46,17 @@ const indexOf = (re: RegExp): number => dockerfile.findIndex((instruction) => re
 
 describe("Dockerfile — converter layers", () => {
   const uv = indexOf(/^RUN .*uv --version/);
-  const aptConverter = indexOf(/^RUN apt-get update .*chromium-headless-shell/);
+  const aptConverter = indexOf(/^RUN .*apt-get update .*chromium-headless-shell/);
   const copyRequirements = dockerfile.indexOf(
     `COPY ${KIT}/requirements.txt /tmp/deck-requirements.txt`,
   );
   const pip = indexOf(/^RUN .*pip3 install .*-r \/tmp\/deck-requirements\.txt/);
   const npmCopy = dockerfile.indexOf("COPY package.json package-lock.json* ./");
-  const copyAll = dockerfile.indexOf("COPY . .");
+  const npmInstall = indexOf(/^RUN .*npm install;/);
+  const copyFontconf = dockerfile.indexOf("COPY docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/");
+  const copyPptx = dockerfile.indexOf("COPY default-skills/skills/pptx ./default-skills/skills/pptx");
+  // The app COPY leaves out the pptx tree: the converter layer already put it in place.
+  const copyAll = dockerfile.indexOf("COPY --exclude=default-skills/skills/pptx . .");
   const npmBuild = dockerfile.indexOf("RUN npm run build");
   const selftest = indexOf(/^RUN .*deck\.mjs selftest/);
 
@@ -73,7 +77,12 @@ describe("Dockerfile — converter layers", () => {
     expect(apt).toContain(
       'apt-get install -y --no-install-recommends fontconfig $( [ "$DECK_CONVERTER" != "0" ] && echo chromium-headless-shell )',
     );
-    expect(apt).toContain("apt-get clean && rm -rf /var/lib/apt/lists/*");
+    // Downloads ride a BuildKit cache mount; docker-clean is parked for the RUN and restored, so
+    // images built FROM this one keep stock apt behaviour.
+    expect(apt).toMatch(
+      /^RUN --mount=type=cache,target=\/var\/cache\/apt,sharing=locked --mount=type=cache,target=\/var\/lib\/apt\/lists,sharing=locked mv \/etc\/apt\/apt\.conf\.d\/docker-clean \/etc\/apt\/docker-clean\.parked /,
+    );
+    expect(apt).toContain("&& mv /etc/apt/docker-clean.parked /etc/apt/apt.conf.d/docker-clean");
     expect(apt).toContain("command -v fc-cache");
     expect(apt).toContain(
       '{ [ "$DECK_CONVERTER" = "0" ] || /usr/lib/chromium/chromium-headless-shell --version; }',
@@ -87,12 +96,12 @@ describe("Dockerfile — converter layers", () => {
     expect(pip).toBe(copyRequirements + 1);
     expect(pip).toBeLessThan(npmCopy);
     const run = dockerfile[pip];
+    // pip's own cache is a BuildKit cache mount (never in the layer), hence no --no-cache-dir.
+    expect(run).toMatch(/^RUN --mount=type=cache,target=\/root\/\.cache\/pip /);
     expect(run).toContain(
-      'pip3 install --break-system-packages --no-cache-dir --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt;',
+      'pip3 install --break-system-packages --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt;',
     );
-    expect(run).toContain(
-      "else pip3 install --break-system-packages --no-cache-dir -r /tmp/deck-requirements.txt;",
-    );
+    expect(run).toContain("else pip3 install --break-system-packages -r /tmp/deck-requirements.txt;");
     expect(run).toContain("&& rm -f /tmp/deck-requirements.txt");
     // No unpinned package survives next to the requirements file.
     expect(dockerfile.filter((i) => /pip3? install/.test(i))).toEqual([run]);
@@ -110,21 +119,26 @@ describe("Dockerfile — converter layers", () => {
     );
   });
 
-  it("registers the fonts and precompiles the converter after COPY . . and npm run build", () => {
-    expect(copyAll).toBeGreaterThan(npmCopy);
-    expect(npmBuild).toBeGreaterThan(copyAll);
-    expect(selftest).toBeGreaterThan(npmBuild);
+  it("registers the fonts and self-tests the converter after npm install but BEFORE the app COPY", () => {
+    // The converter needs node_modules (playwright-core) and nothing from the app code, so a
+    // code-only rebuild reuses this layer instead of re-running the ~40 s self-test.
+    expect(npmInstall).toBe(npmCopy + 1);
+    expect(copyFontconf).toBeGreaterThan(npmInstall);
+    expect(copyPptx).toBe(copyFontconf + 1);
+    expect(selftest).toBe(copyPptx + 1);
+    expect(copyAll).toBeGreaterThan(selftest);
+    expect(npmBuild).toBe(copyAll + 1);
+    // Exactly one app COPY, and it is the excluding one.
+    expect(dockerfile.filter((i) => /^COPY (--\S+ )*\. \.$/.test(i))).toEqual([dockerfile[copyAll]]);
     const run = dockerfile[selftest];
-    expect(run).toMatch(
-      /^RUN cp docker\/fontconfig\/60-noah-deck-fonts\.conf \/etc\/fonts\/conf\.d\/ && fc-cache -f >\/dev\/null && fc-list \| grep -q Pretendard /,
-    );
+    expect(run).toMatch(/^RUN fc-cache -f >\/dev\/null && fc-list \| grep -q Pretendard /);
     expect(run).toContain(`&& python3 -m compileall -q ${KIT}/tools`);
     expect(run).toContain("&& mkdir -p /usr/local/share/noah-almighty");
   });
 
   it("runs the self-test in a throwaway TMPDIR/HOME with --record and the strict-golden mapping", () => {
     const argStrict = dockerfile.indexOf("ARG DECK_CONVERTER_STRICT_GOLDEN=0");
-    expect(argStrict).toBeGreaterThan(npmBuild);
+    expect(argStrict).toBeGreaterThan(npmInstall);
     expect(argStrict).toBeLessThan(selftest);
     const run = dockerfile[selftest];
     expect(run).toContain('if [ "$DECK_CONVERTER" != "0" ]; then T="$(mktemp -d)";');
@@ -155,7 +169,7 @@ describe("Dockerfile — converter layers", () => {
 
   it("sets the image's working directory the fontconfig <dir> is relative to", () => {
     expect(dockerfile.indexOf("WORKDIR /app")).toBeGreaterThan(-1);
-    expect(dockerfile.indexOf("WORKDIR /app")).toBeLessThan(copyAll);
+    expect(dockerfile.indexOf("WORKDIR /app")).toBeLessThan(copyPptx);
   });
 });
 
