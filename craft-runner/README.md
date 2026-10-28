@@ -86,12 +86,12 @@ relayed back; server→client requests are answered by the runner; `resources/*`
 ### Residual risk (pre-existing posture — follow-up issue #71)
 
 Every agent Bash in the Noah container runs as **uid 1000, the same uid as the Noah server**: it owns
-`sock/`, can read every `inbox/<sid>` and plant files in every `outbox/<sid>`, and can read
-`CRAFT_CONTROL_SECRET` from Noah's own `/proc/<pid>/environ`. The handshakes stop a socket squatter from
+`sock/`, can read every `inbox/<sid>` and plant files in every `outbox/<sid>`. (Noah's own
+`/proc/<pid>/environ` — and with it `CRAFT_CONTROL_SECRET` — is unreadable since #71 phase 0: the node binary
+is execute-only and Noah drops the secret from `process.env` at boot.) The handshakes stop a socket squatter from
 LEARNING the secret or a token from the wire, and stop a fake runner from passing Noah's check — but a
 **transparent same-uid proxy** (rename the real socket, listen in its place, forward bytes both ways) still
-reads and can alter the JSON-RPC stream after the handshake, and a process that already holds the secret
-(via `/proc/<pid>/environ`) can authenticate itself. "Admin-only" is a product-exposure gate, NOT a security
+reads and can alter the JSON-RPC stream after the handshake. "Admin-only" is a product-exposure gate, NOT a security
 boundary against other users' agents. Closing this needs Bash-uid separation (agent subprocess under its own
 uid, or the exchange behind a separate uid) — tracked in issue #71.
 

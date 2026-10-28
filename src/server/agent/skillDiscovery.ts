@@ -13,6 +13,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import logger from "../logger.js";
 import type { AppConfig } from "../types.js";
+import { GIT_CREDENTIAL_ENV_NAMES, scrubServerOnlySecretEnv } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type {
   DiscoveredSkill,
@@ -27,6 +28,20 @@ const PREFLIGHT_TIMEOUT_MS = 30_000;
 
 /** Race marker for that cap — see the deadline in runSkillPreflight. */
 const TIMED_OUT = Symbol("preflight deadline");
+
+/**
+ * The preflight CLI's env: like a run's (agentSubprocessEnv in runPlan, not
+ * imported here — runPlan imports this module), no git credentials and no
+ * server-only secrets (#71).
+ */
+function discoveryEnv(agentSessionsDir: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const name of GIT_CREDENTIAL_ENV_NAMES) {
+    delete env[name];
+  }
+  scrubServerOnlySecretEnv(env);
+  return { ...env, CLAUDE_CONFIG_DIR: agentSessionsDir };
+}
 
 /**
  * Version of the Claude Code CLI bundled in the installed SDK (the discovery
@@ -148,10 +163,7 @@ async function runSkillPreflight(config: AppConfig): Promise<DiscoveredSkill[]> 
       maxTurns: 1,
       abortController: abort,
       cwd: config.dataDir,
-      env: {
-        ...process.env,
-        CLAUDE_CONFIG_DIR: config.agentSessionsDir,
-      },
+      env: discoveryEnv(config.agentSessionsDir),
     },
   });
   // ONE deadline for the WHOLE preflight — enumeration AND the post-abort

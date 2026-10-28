@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { sanitizeName } from "./marketplace.js";
+import { sanitizeName, serverGitEnv } from "./marketplace.js";
 import {
   SKILL_DIR,
   ensureClone,
@@ -618,7 +618,7 @@ async function worktreeNameStatus(repoRoot: string): Promise<string> {
   const run = (args: string[]) =>
     execFileAsync("git", ["-C", repoRoot, ...args], {
       timeout: 120_000,
-      env: { ...process.env, GIT_INDEX_FILE: indexFile },
+      env: { ...serverGitEnv(), GIT_INDEX_FILE: indexFile },
     });
   try {
     await run(["add", "-A"]);

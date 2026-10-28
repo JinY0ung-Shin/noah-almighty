@@ -5,11 +5,12 @@ import { promisify } from "node:util";
 import type { AppConfig, GitRepository } from "./types.js";
 import type { Store } from "./store.js";
 import {
-  gitAuthArgs,
+  gitAuthConfig,
   marketplaceCloneUrl,
   pathExists,
   sanitizeName,
   scrubGitError,
+  serverGitEnv,
 } from "./marketplace.js";
 import { tokenForGitUrl } from "./gitCredentials.js";
 import { withRepoLock } from "./gitMutex.js";
@@ -89,14 +90,14 @@ async function checkoutBranch(repoRoot: string, branch: string): Promise<void> {
 }
 
 async function pullRebase(ctx: GitRepoContext, repoRoot: string, url: string): Promise<void> {
-  const auth = gitAuthArgs(url, ctx.token ?? undefined);
-  await git(repoRoot, [...auth, "fetch", "--prune", "--tags", "origin"]);
+  const auth = gitAuthConfig(url, ctx.token ?? undefined);
+  await git(repoRoot, ["fetch", "--prune", "--tags", "origin"], undefined, auth);
   try {
     if (ctx.branch) {
       await checkoutBranch(repoRoot, ctx.branch);
       await git(repoRoot, ["rebase", "--autostash", `origin/${ctx.branch}`]);
     } else {
-      await git(repoRoot, [...auth, "pull", "--rebase", "--autostash"]);
+      await git(repoRoot, ["pull", "--rebase", "--autostash"], undefined, auth);
     }
   } catch (error) {
     // NEVER leave the clone mid-rebase: the activeRepoMode PreToolUse guard blocks
@@ -169,7 +170,7 @@ async function ensureGitRepoCloneLocked(
   assertSafeGitValue(ctx.branch, "branch");
   const url = marketplaceCloneUrl(ctx.repo, ctx.config.githubHost);
   assertSafeGitValue(url, "repo");
-  const auth = gitAuthArgs(url, ctx.token ?? undefined);
+  const auth = gitAuthConfig(url, ctx.token ?? undefined);
 
   if (await pathExists(path.join(repoRoot, ".git"))) {
     const existing = await originUrl(repoRoot);
@@ -194,13 +195,13 @@ async function ensureGitRepoCloneLocked(
 
   if (!(await pathExists(path.join(repoRoot, ".git")))) {
     await fs.mkdir(path.dirname(repoRoot), { recursive: true });
-    const args = [...auth, "clone"];
+    const args = ["clone"];
     if (ctx.branch) {
       args.push("--branch", ctx.branch);
     }
     args.push("--", url, repoRoot);
     try {
-      await execFileAsync("git", args, { timeout: 180_000 });
+      await execFileAsync("git", args, { timeout: 180_000, env: serverGitEnv(auth) });
     } catch (error) {
       // Remove a half-initialized clone so the next run re-clones cleanly (git-06).
       await fs.rm(repoRoot, { recursive: true, force: true }).catch(() => {});
@@ -242,9 +243,9 @@ export async function pushGitRepo(ctx: GitRepoContext): Promise<string> {
   return withRepoLock(repoRoot, async () => {
     await ensureGitRepoCloneLocked(ctx, repoRoot);
     const url = marketplaceCloneUrl(ctx.repo, ctx.config.githubHost);
-    const auth = gitAuthArgs(url, ctx.token ?? undefined);
+    const auth = gitAuthConfig(url, ctx.token ?? undefined);
     const branch = safePushBranch(ctx.branch || (await currentBranch(repoRoot)) || "HEAD");
-    await git(repoRoot, [...auth, "push", "origin", `HEAD:${branch}`]);
+    await git(repoRoot, ["push", "origin", `HEAD:${branch}`], undefined, auth);
     return branch;
   });
 }

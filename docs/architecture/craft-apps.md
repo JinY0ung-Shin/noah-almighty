@@ -14,9 +14,10 @@ chat. Tool groups per app, **off by default**.
 > **"Admin-only" is a PRODUCT-EXPOSURE gate, not a security boundary against other users'
 > agents.** Every agent Bash in the Noah container — every user's, admin or not — runs as Noah's
 > own uid 1000. That uid owns the exchange volume and its sockets, can read every session's
-> `inbox/`/`outbox/` and the one-shot relay handoff files, and can read Noah's own process
-> environment (`/proc/<pid>/environ`, which holds `CRAFT_CONTROL_SECRET`). This is the
-> PRE-EXISTING same-uid posture (`secrets-ssh.md`), kept by user decision 2026-10-28; what the
+> `inbox/`/`outbox/` and the one-shot relay handoff files. (Since #71 phase 0 Noah's own process
+> environment is no longer readable — the node binary is execute-only and the server drops
+> `CRAFT_CONTROL_SECRET` from `process.env` at boot.) This is the PRE-EXISTING same-uid posture
+> (`secrets-ssh.md`, "Same-uid posture (#71)"), kept by user decision 2026-10-28; what the
 > handshakes below add and what remains is under [Security posture](#security-posture).
 > Separating the agent's Bash uid is tracked in issue
 > [#71](https://github.com/JinY0ung-Shin/noah-almighty/issues/71).
@@ -276,8 +277,8 @@ retried after the next good health probe. **A new conversation-deleting path cal
 What "admin-only" means today, accurately: the Craft tools are REGISTERED only on an admin's
 interactive own-avatar runs, so nobody else is OFFERED them. It is not an isolation boundary
 between users' agents, because every agent Bash runs as uid 1000 — the uid that owns the
-exchange volume and its sockets — and the agent can read Noah's own process environment
-(`/proc/<pid>/environ`) like every other server secret (pre-existing, `secrets-ssh.md`). Bash uid
+exchange volume and its sockets (pre-existing, `secrets-ssh.md`). Noah's own process environment
+is protected since #71 phase 0 (non-dumpable server, secret dropped from `process.env`). Bash uid
 separation is issue [#71](https://github.com/JinY0ung-Shin/noah-almighty/issues/71).
 
 What the handshakes close: a uid-1000 process that swaps a socket path for its own listener (a
@@ -288,10 +289,9 @@ no CLI byte is forwarded).
 
 Residual risks (documented, accepted for the admin-only beta):
 
-- **Secret theft from the environment.** Any agent Bash can read `CRAFT_CONTROL_SECRET` from
-  Noah's `/proc/<pid>/environ` and then speak the control protocol itself (grant a token for any
-  sid it can list under `inbox/`, attach to that session). Stripping the secret from the agent's
-  OWN env does not stop this.
+- **Secret theft from the environment — closed by #71 phase 0.** Noah's `/proc/<pid>/environ`
+  is unreadable (execute-only node → non-dumpable) and the secret is dropped from `process.env`
+  at boot, so no child of Noah inherits it. Before phase 0 any agent Bash could read it there.
 - **Transparent same-uid proxy.** A proxy that relays the handshake to the real socket unchanged
   can read and alter the JSON-RPC stream AFTER it (forged tool results or preview images). The MAC
   authenticates the peer, not the bytes that follow.

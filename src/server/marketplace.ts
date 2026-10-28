@@ -36,11 +36,10 @@ export function normalizeGithubHost(host?: string | null): string {
 }
 
 /**
- * Redact the auth header from a git error before it's returned to a client or
- * logged. `execFile` rejections embed the full argv — including our
- * `http.extraHeader=Authorization: Basic <base64>` — in `err.message`, and that
- * base64 trivially decodes back to the token. Strip it so the token never
- * escapes via an error path.
+ * Redact an auth header from a git error before it's returned to a client or
+ * logged. The header now rides the environment (gitAuthConfig), not the argv
+ * `execFile` embeds in `err.message`, but git or a remote can still echo it and
+ * the base64 trivially decodes back to the token — keep stripping it.
  */
 export function scrubGitError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -64,8 +63,9 @@ function assertSafeArg(value: string, what: string): void {
  *
  * The token is intentionally NOT injected here: embedding it in the remote URL
  * would persist it in the clone's `.git/config` on disk. Authentication is
- * instead supplied per-invocation via `gitAuthArgs` (an `http.extraHeader`),
- * which git uses for the transfer but never writes to disk.
+ * instead supplied per-invocation via `gitAuthConfig` (an `http.extraHeader`
+ * passed through the environment), which git uses for the transfer but never
+ * writes to disk.
  */
 export function marketplaceCloneUrl(source: string, githubHost = DEFAULT_GITHUB_HOST): string {
   if (/^[\w.-]+\/[\w.-]+$/.test(source)) {
@@ -74,23 +74,56 @@ export function marketplaceCloneUrl(source: string, githubHost = DEFAULT_GITHUB_
   return source;
 }
 
+/** git config entries applied to ONE server-side git invocation (key, value). */
+export type GitConfigPairs = readonly (readonly [string, string])[];
+
 /**
- * Per-invocation git auth for a token, as `git -c` args injecting an
- * `Authorization: Basic …` HTTP header (GitHub accepts `x-access-token:TOKEN`).
- * Returns [] when there's no token or the URL isn't an https transfer (e.g.
- * ssh/git@), so the header is only attached where it's actually used.
+ * Per-invocation git auth for a token: an `http.extraHeader` carrying
+ * `Authorization: Basic …` (GitHub accepts `x-access-token:TOKEN`). Returns []
+ * when there's no token or the URL isn't an https transfer (e.g. ssh/git@), so
+ * the header is only attached where it's actually used.
  *
- * Unlike a token-in-URL remote, the header lives only in this process's argv —
- * git never persists it to `.git/config`, so the clone on disk stays clean.
+ * The entry reaches git through {@link serverGitEnv} (GIT_CONFIG_* env), never
+ * argv: a process's cmdline is world-readable under /proc, its environment is
+ * not (#71). git never persists it to `.git/config`, so the clone stays clean.
  */
-export function gitAuthArgs(url: string, token?: string): string[] {
+export function gitAuthConfig(url: string, token?: string): GitConfigPairs {
   // Case-insensitive https check to match `tokenForGitUrl` (gitCredentials.ts):
   // a `HTTPS://`-cased URL must route auth consistently in both places (git-08).
   if (!token || !/^https:\/\//i.test(url)) {
     return [];
   }
   const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-  return ["-c", `http.extraHeader=Authorization: Basic ${basic}`];
+  return [["http.extraHeader", `Authorization: Basic ${basic}`]];
+}
+
+/**
+ * Config every server-run git command gets: the clones it works in are edited
+ * by the agent, so repo-local hooks and an fsmonitor command must never run
+ * inside the server's git (#71).
+ */
+const SERVER_GIT_HARDENING: GitConfigPairs = [
+  ["core.hooksPath", "/dev/null"],
+  ["core.fsmonitor", "false"],
+];
+
+/**
+ * Environment for a server-side git process: the server's own env plus
+ * {@link SERVER_GIT_HARDENING} and `extra` (e.g. {@link gitAuthConfig}) as
+ * GIT_CONFIG_COUNT/KEY/VALUE entries — command-scoped config that git reads
+ * like `-c` without it ever appearing in argv.
+ */
+export function serverGitEnv(
+  extra: GitConfigPairs = [],
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const pairs = [...SERVER_GIT_HARDENING, ...extra];
+  const env: NodeJS.ProcessEnv = { ...base, GIT_CONFIG_COUNT: String(pairs.length) };
+  pairs.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${index}`] = key;
+    env[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+  return env;
 }
 
 /**
@@ -100,7 +133,7 @@ export function gitAuthArgs(url: string, token?: string): string[] {
  */
 async function resolveTarget(destination: string, ref?: string): Promise<string> {
   const git = (...args: string[]) =>
-    execFileAsync("git", ["-C", destination, ...args], { timeout: 60_000 });
+    execFileAsync("git", ["-C", destination, ...args], { timeout: 60_000, env: serverGitEnv() });
   if (ref) {
     try {
       await git("rev-parse", "--verify", "--quiet", `origin/${ref}`);
@@ -147,12 +180,15 @@ export async function syncGitRepo(
   if (ref !== undefined) {
     assertSafeArg(ref, "ref");
   }
-  const auth = gitAuthArgs(url, token);
+  const auth = gitAuthConfig(url, token);
   const git = (...args: string[]) =>
-    execFileAsync("git", ["-C", destination, ...args], { timeout: 120_000 });
+    execFileAsync("git", ["-C", destination, ...args], { timeout: 120_000, env: serverGitEnv() });
 
   if (await pathExists(path.join(destination, ".git"))) {
-    await git(...auth, "fetch", "--all", "--prune", "--tags");
+    await execFileAsync("git", ["-C", destination, "fetch", "--all", "--prune", "--tags"], {
+      timeout: 120_000,
+      env: serverGitEnv(auth),
+    });
   } else {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     // `--` stops git from treating a crafted url/destination as an option.
@@ -161,8 +197,8 @@ export async function syncGitRepo(
     try {
       await execFileAsync(
         "git",
-        [...auth, "clone", "--depth", "1", "--no-single-branch", "--", url, destination],
-        { timeout: 120_000 },
+        ["clone", "--depth", "1", "--no-single-branch", "--", url, destination],
+        { timeout: 120_000, env: serverGitEnv(auth) },
       );
     } catch (error) {
       // A timeout kills git mid-clone, so its own cleanup doesn't run; a leftover

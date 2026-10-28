@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import logger from "./logger.js";
-import { gitAuthArgs, marketplaceCloneUrl, pathExists, sanitizeName } from "./marketplace.js";
+import { gitAuthConfig, marketplaceCloneUrl, pathExists, sanitizeName, serverGitEnv } from "./marketplace.js";
 import { tokenForGitUrl, type GitTokenSet } from "./gitCredentials.js";
 import { withRepoLock } from "./gitMutex.js";
 import {
@@ -162,7 +162,7 @@ async function ensureCloneLocked(ctx: KnowledgeRepoContext, repoRoot: string): P
   // `ext` (T3.8).
   assertSafeGitValue(url, "repo");
   assertSafeGitValue(ctx.branch, "branch");
-  const auth = gitAuthArgs(url, tokenForGitUrl(url, ctx.config, repoTokens(ctx)));
+  const auth = gitAuthConfig(url, tokenForGitUrl(url, ctx.config, repoTokens(ctx)));
 
   // If the connected repo was changed in settings, the existing clone's `origin`
   // still points at the OLD repo and `git fetch origin` would silently keep
@@ -186,17 +186,17 @@ async function ensureCloneLocked(ctx: KnowledgeRepoContext, repoRoot: string): P
   }
 
   if (await pathExists(path.join(repoRoot, ".git"))) {
-    await git(repoRoot, [...auth, "fetch", "--prune", "origin"]);
+    await git(repoRoot, ["fetch", "--prune", "origin"], undefined, auth);
   } else {
     await fs.mkdir(path.dirname(repoRoot), { recursive: true });
     // `--` stops a crafted url/repoRoot from being parsed as an option.
-    const args = [...auth, "clone"];
+    const args = ["clone"];
     if (ctx.branch) {
       args.push("--branch", ctx.branch);
     }
     args.push("--", url, repoRoot);
     try {
-      await execFileAsync("git", args, { timeout: 180_000 });
+      await execFileAsync("git", args, { timeout: 180_000, env: serverGitEnv(auth) });
     } catch (error) {
       // A failed/interrupted clone leaves a half-initialized dir that poisons
       // every later sync (next run sees a dir, skips clone, then fails). Remove

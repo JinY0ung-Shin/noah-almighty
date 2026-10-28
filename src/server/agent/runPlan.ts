@@ -48,6 +48,7 @@ import { knownHostsPath } from "../sshTrust.js";
 import {
   GIT_CREDENTIAL_ENV_NAMES,
   SSH_MCP_SECRET_ENV_NAMES,
+  scrubServerOnlySecretEnv,
 } from "../secretPolicy.js";
 import {
   HEX_SSH_SERVER_NAME,
@@ -127,16 +128,12 @@ export function withoutGitCredentialEnv(
 }
 
 // App-internal secrets the agent subprocess must NEVER be able to read from its
-// environment. SESSION_SECRET is the AES-256-GCM master key for EVERY user's
-// at-rest secrets (git tokens, the secret vault, the Claude subscription token):
-// a Bash-capable elevated viewer that read it out of the subprocess env (or
-// /proc) could decrypt all tenants' secrets straight out of the shared DB. The
-// subprocess never opens the app DB, so stripping it costs nothing. (Git
-// credentials are stripped separately above — they flow only through the
-// app-managed git MCP bridge.) CRAFT_CONTROL_SECRET authenticates the
-// craft-runner's control socket, which grants MCP tokens for ANY conversation's
-// Craft session — the agent only ever holds its own run's token.
-const SENSITIVE_APP_ENV_NAMES = ["SESSION_SECRET", "CRAFT_CONTROL_SECRET"] as const;
+// environment (SERVER_ONLY_SECRET_ENV_NAMES, secretPolicy.ts): SESSION_SECRET is
+// the master key for EVERY user's at-rest secrets, CRAFT_CONTROL_SECRET grants
+// craft-runner tokens for ANY conversation. The boot scrub already removed them
+// from process.env; stripping here again keeps a caller-supplied base env safe.
+// (Git credentials are stripped separately above — they flow only through the
+// app-managed git MCP bridge.)
 
 export function agentSubprocessEnv(
   baseEnv: Record<string, string | undefined>,
@@ -144,9 +141,7 @@ export function agentSubprocessEnv(
   agentTeamsDisabled = false,
 ): Record<string, string | undefined> {
   const env = withoutGitCredentialEnv(baseEnv);
-  for (const name of SENSITIVE_APP_ENV_NAMES) {
-    delete env[name];
-  }
+  scrubServerOnlySecretEnv(env);
   return {
     ...env,
     CLAUDE_CONFIG_DIR: agentSessionsDir,

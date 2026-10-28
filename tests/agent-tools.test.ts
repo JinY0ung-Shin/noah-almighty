@@ -28,7 +28,6 @@ import {
   type AvatarAskOutcome,
 } from "../src/server/agent/avatarAsk.js";
 import {
-  gitAuthArgs,
   marketplaceCloneUrl,
   normalizeGithubHost,
   pathExists,

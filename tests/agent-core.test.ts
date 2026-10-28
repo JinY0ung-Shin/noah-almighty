@@ -31,7 +31,8 @@ import {
   AVATAR_DIRECTORY_TOOL_NAMES,
 } from "../src/server/agent/avatarDirectoryTools.js";
 import {
-  gitAuthArgs,
+  gitAuthConfig,
+  serverGitEnv,
   marketplaceCloneUrl,
   normalizeGithubHost,
   pathExists,
@@ -736,17 +737,30 @@ describe("marketplace helpers", () => {
     );
   });
 
-  it("supplies token auth via an http header arg, not the URL", () => {
-    // No token, or non-https transport → no auth args.
-    expect(gitAuthArgs("https://github.com/o/r.git")).toEqual([]);
-    expect(gitAuthArgs("git@github.com:o/r.git", "tok")).toEqual([]);
+  it("supplies token auth as an http header config entry, not the URL", () => {
+    // No token, or non-https transport → no auth entry.
+    expect(gitAuthConfig("https://github.com/o/r.git")).toEqual([]);
+    expect(gitAuthConfig("git@github.com:o/r.git", "tok")).toEqual([]);
     // https + token → an Authorization: Basic header git uses but never persists.
-    const args = gitAuthArgs("https://github.com/o/r.git", "tok");
     const basic = Buffer.from("x-access-token:tok").toString("base64");
-    expect(args).toEqual([
-      "-c",
-      `http.extraHeader=Authorization: Basic ${basic}`,
+    expect(gitAuthConfig("https://github.com/o/r.git", "tok")).toEqual([
+      ["http.extraHeader", `Authorization: Basic ${basic}`],
     ]);
+  });
+
+  it("passes server git config through GIT_CONFIG_* env, hooks and fsmonitor off (#71)", () => {
+    const auth = gitAuthConfig("https://github.com/o/r.git", "tok");
+    const env = serverGitEnv(auth, { PATH: "/usr/bin" });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.GIT_CONFIG_COUNT).toBe("3");
+    const pairs = [0, 1, 2].map((i) => [env[`GIT_CONFIG_KEY_${i}`], env[`GIT_CONFIG_VALUE_${i}`]]);
+    expect(pairs).toEqual([
+      ["core.hooksPath", "/dev/null"],
+      ["core.fsmonitor", "false"],
+      ["http.extraHeader", auth[0][1]],
+    ]);
+    // Without auth only the hardening rides along.
+    expect(serverGitEnv([], {}).GIT_CONFIG_COUNT).toBe("2");
   });
 
   it("selects internal vs external git tokens by clone URL host", () => {

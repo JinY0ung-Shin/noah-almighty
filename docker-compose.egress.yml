@@ -12,6 +12,11 @@ services:
     cap_drop: [ALL]
     cap_add: [NET_ADMIN, SETUID, SETGID, SETPCAP]
     security_opt: [no-new-privileges:true]
+    # The egress image replaces the base ENTRYPOINT (and its tini), so Docker's
+    # init reaps here. It runs as ROOT in this image (the entrypoint drops to
+    # `node` only for Node), so its environment is not readable to the node
+    # uid — unlike the base service, where it must stay off (#71).
+    init: true
     environment:
       NOAH_EGRESS_PROXY_IP: ${NOAH_EGRESS_PROXY_IP:-172.30.247.2}
     depends_on:

@@ -11,6 +11,7 @@ import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
 import { startCraftRunnerProbe } from "./craftRunner.js";
+import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import {
   deckToolchainLogFields,
   probeDeckRendering,
@@ -21,6 +22,12 @@ import {
 // (our PreToolUse hook is the gate it recommends). Other warnings still print.
 filterAdvisoryProcessWarnings();
 const services = createServices();
+// The config has now read every server-only secret (SESSION_SECRET,
+// CRAFT_CONTROL_SECRET). Drop them from process.env so no process this server
+// starts from here on — git, converters, agent CLIs — inherits them (#71). The
+// image also makes the node binary execute-only, so this process itself is
+// non-dumpable and its initial environment unreadable to other processes.
+scrubServerOnlySecretEnv(process.env);
 // Purge what the removed 내 봇 feature left in this deployment (bots, their
 // threads, bot-bound routines, their files) BEFORE anything can read it: the
 // scheduler started below would fire a bot-bound routine as the owner's main

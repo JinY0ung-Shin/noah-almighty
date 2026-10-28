@@ -32,7 +32,7 @@ import { signup, makeBareRemote, withTempDir } from "./helpers.js";
 //  - src/server/gitRepos.ts              (clone/status/diff/commit/file ops)
 //  - src/server/activeRepoLock.ts        (per-clone workspace lock)
 //  - src/server/activeRepoResolve.ts     (open-repo → cwd resolution)
-// Everything runs OFFLINE against LOCAL bare remotes: `gitAuthArgs` returns [] for
+// Everything runs OFFLINE against LOCAL bare remotes: `gitAuthConfig` returns [] for
 // non-https URLs, so a local path needs no credentials.
 
 let tempDir: string;

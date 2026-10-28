@@ -126,8 +126,32 @@
   def becomes `node scripts/mcp-secret-wrapper.mjs --secrets <file> -- <real command…>`. The wrapper
   reads the file, DELETES it (one-shot), and execs the real server with secrets merged over its env;
   `sweepStaleMcpSecretFiles` removes >1h crash leftovers at the next run. Residual (accepted) exposure:
-  everything runs as ONE container uid, so a determined Bash user can still read same-uid `/proc/*/environ`
-  or files — the wrapper closes the casual `env`-dump and world-readable-argv tiers, not uid isolation.
+  everything runs as ONE container uid (see "Same-uid posture (#71)" below) — the wrapper closes the casual
+  `env`-dump and world-readable-argv tiers, not uid isolation.
+- **Same-uid posture (#71) — what phase 0 closes and what it doesn't.** The server, every agent CLI and
+  every agent Bash run as the image's `node` uid. Phase 0 (2026-10-28):
+  - **node and tini are execute-only** (`chmod 0711` in the Dockerfile), so every process running node —
+    the server, the MCP secret wrapper and the node MCP servers it execs, the relays/bridges — is
+    non-dumpable: its `/proc/<pid>/environ` and memory are unreadable to other processes of the same uid.
+    PID 1 holds the container's full environment, so it is the image's own tini, started through
+    `docker-entrypoint.sh`'s `exec` (`ENTRYPOINT ["docker-entrypoint.sh", "/usr/bin/tini", "--"]`) with
+    compose `init: false` — verified on the built image: Docker's `init: true` (readable docker-init) and a
+    tini started directly by the runtime both kept a READABLE environment. The egress overlay keeps
+    `init: true`: its image runs that init as root. The HEALTHCHECK runs behind `env -u` so its short-lived
+    shell/curl never carry the server-only secrets.
+  - **The server drops `SERVER_ONLY_SECRET_ENV_NAMES`** (`SESSION_SECRET`, `CRAFT_CONTROL_SECRET`,
+    `secretPolicy.ts`) from `process.env` right after the config reads them (`index.ts`), so no process it
+    starts later inherits them; `agentSubprocessEnv`, the skill-discovery preflight and the server-agent base
+    env strip the same list again.
+  - **Server git never carries a token in argv** (argv is world-readable under `/proc/<pid>/cmdline`): the
+    `http.extraHeader` rides `GIT_CONFIG_COUNT/KEY/VALUE` env via `serverGitEnv` (`marketplace.ts`), and
+    every server git command also runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false` — the
+    clones are agent-edited, so their own hooks must never run in the server's git.
+  - **Still open (needs uid separation, #71):** the shared data volume (SQLite DB, every user's
+    workspaces/clones/transcripts) is readable and writable by any agent Bash; the native CLI binary is
+    readable, so a CLI process's environ (its run's shell-exposed vault secrets and model credentials) is
+    readable by other agents; a server git child's environ (one call's auth header) is readable while it
+    runs; non-node MCP servers keep a readable environ. No hook rule can be the boundary.
 - **Two git tokens, vault-backed, host-routed.** Each user can store TWO git tokens as named
   `user_secrets`: `GIT_TOKEN` (`INTERNAL_GIT_TOKEN_SECRET_NAME`) for the internal `GITHUB_HOST`, and
   `GITHUB_TOKEN` (`EXTERNAL_GIT_TOKEN_SECRET_NAME`) for github.com. `tokenForGitUrl` in

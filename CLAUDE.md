@@ -214,10 +214,19 @@ These are the invariants the project is built around. New work should reinforce 
   (user decision 2026-10-28): admin toggle `craft_apps_enabled` + run owner is a SYSTEM ADMIN + interactive own-avatar
   chat (never headless/externalTaskApi/group/consultation/colleague) + the app's DEFAULT-OFF `craft_*` tool group picked;
   both metacognition surfaces say which and why. **"Admin-only" is an EXPOSURE gate, not a security boundary**: every
-  agent Bash runs as Noah's uid 1000 and can reach the exchange volume and Noah's own env (pre-existing posture, #71) —
+  agent Bash runs as Noah's uid 1000 and can reach the exchange volume (pre-existing posture, #71) —
   fix that before opening Craft to non-admins. A new app = a runner registry entry + a SOURCE security review (deny list,
   clamps, self-test); apps without folder confinement (LightCraft, FilmCraft, …) are not eligible. **A new
   conversation-deleting path calls `purgeCraftSessions`.** Mechanics → `docs/architecture/craft-apps.md`.
+- **Same-uid hardening (#71 phase 0): the server process is non-dumpable, server-only secrets never reach a child,
+  and nothing secret rides argv.** The image makes node and tini EXECUTE-ONLY (`chmod 0711`) so their environ/memory
+  are unreadable to other same-uid processes — PID 1 is that tini, started via `docker-entrypoint.sh`'s exec, so
+  compose `init: true` must stay OFF on the base service (a runtime-started PID 1 stays readable); `index.ts` drops `SERVER_ONLY_SECRET_ENV_NAMES`
+  (`secretPolicy.ts`) from `process.env` right after the config loads — **a new server-only secret joins that list**,
+  and a new child-process env starts from the scrubbed `process.env`. Server git passes auth and config only through
+  `serverGitEnv` (GIT_CONFIG_* env, hooks + fsmonitor OFF in agent-edited clones), never `-c` in argv (cmdline is
+  world-readable). This is NOT uid isolation: the shared data volume stays reachable by every agent Bash until #71's
+  uid separation lands. Mechanics → `docs/architecture/secrets-ssh.md` ("Same-uid posture (#71)").
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
   route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode or

@@ -58,10 +58,13 @@ services:
       # stays empty on plain-HTTP deployments.
       - ./docker/tls:/app/tls:ro
     restart: unless-stopped
-    # PID-1 reaping backstop: tini reaps zombie child processes so the app's
-    # graceful-shutdown handlers receive signals reliably even when the node
-    # process spawns child processes (SDK subprocess, git, gh, etc.).
-    init: true
+    # PID 1 is the image's own EXECUTE-ONLY tini (Dockerfile ENTRYPOINT): it
+    # reaps zombie child processes (SDK subprocess, git, gh, …) and forwards
+    # signals to the graceful-shutdown handlers. Compose `init: true` must stay
+    # OFF here: Docker's docker-init would become PID 1 as the `node` uid with a
+    # readable binary, exposing the container environment (SESSION_SECRET) to
+    # the agent's Bash via /proc/1/environ (#71).
+    init: false
 
   # Craft apps sidecar (craft-runner/README.md): runs the pinned PhotoCraft CLI
   # as headless MCP servers, one unprivileged uid per conversation. Opt-in:

@@ -24,7 +24,6 @@ import {
   AVATAR_DIRECTORY_TOOL_NAMES,
 } from "../src/server/agent/avatarDirectoryTools.js";
 import {
-  gitAuthArgs,
   marketplaceCloneUrl,
   normalizeGithubHost,
   pathExists,

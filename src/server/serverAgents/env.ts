@@ -1,13 +1,12 @@
 import { DEFAULT_MODEL_TIER } from "../modelTiers.js";
-import { GIT_CREDENTIAL_ENV_NAMES } from "../secretPolicy.js";
+import { GIT_CREDENTIAL_ENV_NAMES, SERVER_ONLY_SECRET_ENV_NAMES } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import { CLAUDE_OAUTH_TOKEN_KEY } from "../store.js";
 import type { AppConfig } from "../types.js";
 
 // Mirrors runPlan's agentSubprocessEnv + subscription-auth block WITHOUT
 // importing runPlan (it would import this module back through the agent tools).
-// Keep the two in step: a new app-internal secret stripped there belongs here too.
-const SENSITIVE_APP_ENV_NAMES = ["SESSION_SECRET"] as const;
+// Both strip the same SERVER_ONLY_SECRET_ENV_NAMES list (secretPolicy.ts).
 
 /**
  * The env a remote server-agent run starts from, built the SAME way runPlan
@@ -18,7 +17,7 @@ const SENSITIVE_APP_ENV_NAMES = ["SESSION_SECRET"] as const;
  */
 export function serverAgentBaseEnv(store: Store, config: AppConfig): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
-  for (const name of [...GIT_CREDENTIAL_ENV_NAMES, ...SENSITIVE_APP_ENV_NAMES]) {
+  for (const name of [...GIT_CREDENTIAL_ENV_NAMES, ...SERVER_ONLY_SECRET_ENV_NAMES]) {
     delete env[name];
   }
   if (!config.anthropicApiKey) {

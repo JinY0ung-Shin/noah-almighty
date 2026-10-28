@@ -39,6 +39,7 @@ RUN sh /usr/local/bin/apt_mirror_sources.sh \
     ripgrep \
     procps \
     jq \
+    tini \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /usr/local/bin/apt_mirror_sources.sh
@@ -221,10 +222,12 @@ EXPOSE 48787
 # Probe http first, then https with -k: the app serves exactly ONE of the two
 # (TLS_CERT_FILE/TLS_KEY_FILE), and in https mode the cert names the deploy
 # host — not localhost — so chain verification can't be part of the probe.
+# Exec form behind `env -u`: Docker starts the probe with the container's full
+# environment, so the server-only secrets are dropped before the shell and curl
+# start — the probe processes are readable to the node uid (#71).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -f --noproxy '*' "http://localhost:${PORT:-48787}/api/bootstrap" \
-    || curl -fk --noproxy '*' "https://localhost:${PORT:-48787}/api/bootstrap" \
-    || exit 1
+  CMD ["env", "-u", "SESSION_SECRET", "-u", "CRAFT_CONTROL_SECRET", "sh", "-c", \
+    "curl -f --noproxy '*' \"http://localhost:${PORT:-48787}/api/bootstrap\" || curl -fk --noproxy '*' \"https://localhost:${PORT:-48787}/api/bootstrap\" || exit 1"]
 
 # Drop root privileges: the node:22 base image ships a `node` user (uid 1000).
 # The `node` user only ever WRITES under APP_DATA_DIR (default /app/data): the
@@ -241,6 +244,23 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # volume is attached.
 RUN mkdir -p /app/data && chown node:node /app/data
 
+# node and tini are EXECUTE-ONLY (#71): a process whose executable its uid
+# cannot read is marked non-dumpable by the kernel, so its /proc/<pid>/environ
+# and memory are unreadable to the agent's Bash and every other process — they
+# run as the same `node` uid. Executing them is unaffected; only reading the
+# file is denied. tini matters because PID 1 holds the container's FULL
+# environment (SESSION_SECRET included): it is this image's ENTRYPOINT instead
+# of compose `init: true`, whose docker-init binary is readable. The server
+# also drops its server-only secrets from process.env at boot
+# (scrubServerOnlySecretEnv), so the processes it starts never inherit them.
+RUN chmod 0711 /usr/local/bin/node /usr/bin/tini
+
 USER node
 
+# tini reaps zombies and forwards signals (graceful shutdown). It is started by
+# the node image's docker-entrypoint.sh (`exec "$@"`), NOT directly by the
+# container runtime: only an exec from an already-unprivileged process applies
+# the execute-only protection above (verified — a runtime-started tini as PID 1
+# kept a readable environment).
+ENTRYPOINT ["docker-entrypoint.sh", "/usr/bin/tini", "--"]
 CMD ["node", "dist/server/index.js"]

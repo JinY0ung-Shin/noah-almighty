@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import logger from "./logger.js";
-import { gitAuthArgs, pathExists, scrubGitError } from "./marketplace.js";
+import { gitAuthConfig, pathExists, scrubGitError, serverGitEnv, type GitConfigPairs } from "./marketplace.js";
 import { tokenForGitUrl, type GitTokenSet } from "./gitCredentials.js";
 import { safeIdentity, safePushBranch } from "./repoGitGuards.js";
 import type { AppConfig } from "./types.js";
@@ -31,15 +31,17 @@ export { assertSafeGitValue } from "./repoGitGuards.js";
  * Run `git -C <repoRoot> <args>` and resolve with `{stdout, stderr}`. The
  * default timeout (120s) matches every call site's prior inline wrapper; pass an
  * explicit timeout to override (the clone paths use longer ones at their own
- * `execFile` call, outside this helper).
+ * `execFile` call, outside this helper). `config` (e.g. gitAuthConfig) rides
+ * the environment via serverGitEnv — never argv — next to the hardening every
+ * server git command gets.
  */
-export function git(repoRoot: string, args: string[], timeout = 120_000) {
-  return execFileAsync("git", ["-C", repoRoot, ...args], { timeout });
+export function git(repoRoot: string, args: string[], timeout = 120_000, config: GitConfigPairs = []) {
+  return execFileAsync("git", ["-C", repoRoot, ...args], { timeout, env: serverGitEnv(config) });
 }
 
 /**
  * The clone's `origin` remote URL (clean, without any auth — auth is supplied
- * per-call via `http.extraHeader`, never written to `.git/config`), or null when
+ * per-call via an env-borne `http.extraHeader`, never written to `.git/config`), or null when
  * there's no origin / on error. Used to detect that the configured repo changed
  * out from under an existing clone so the stale one can be re-cloned.
  */
@@ -248,12 +250,12 @@ export async function commitAndPushClone(
     return false;
   }
 
-  const auth = gitAuthArgs(options.url, tokenForGitUrl(options.url, options.config, options.tokens));
+  const auth = gitAuthConfig(options.url, tokenForGitUrl(options.url, options.config, options.tokens));
   // Absorb remote commits pushed since the last sync BEFORE pushing. Fetch is
   // best-effort: offline, the push below reports the real network error.
   if (branch !== "HEAD") {
     try {
-      await git(repoRoot, [...auth, "fetch", "origin", branch]);
+      await git(repoRoot, ["fetch", "origin", branch], undefined, auth);
     } catch {
       /* fall through to push */
     }
@@ -276,7 +278,7 @@ export async function commitAndPushClone(
       }
     }
   }
-  await git(repoRoot, [...auth, "push", "origin", `HEAD:${branch}`]);
+  await git(repoRoot, ["push", "origin", `HEAD:${branch}`], undefined, auth);
   logger.info({ ...options.log, branch }, options.pushedMessage);
   return true;
 }
