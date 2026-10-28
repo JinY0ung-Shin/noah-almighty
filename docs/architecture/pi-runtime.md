@@ -61,7 +61,9 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
    reports its response id via `onSessionId` AND `onResumePoint({sessionId: id, uuid: id})`, so the chat route
    persists it as `agent_session_id` and stamps it on the assistant row; a rewind onto that row forks from it
    (pi branches on an older `previous_response_id`; no fork flag).
-6. **Errors** — 404/409 on a continued session → once, a new session from history (status-free, the model is told
+6. **Errors** — 404/409 on a continued session, or 400 `model_not_configured` (the operator removed the session's
+   model from pi; a session's model is fixed, so a rewind onto a row of that session would otherwise fail every time;
+   `isLostPiSession`) → once, a new session from history (status-free, the model is told
    in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). A model
    fallback chain (routines, task API: `modelFallback`) gives each attempt a fresh session.
 
@@ -195,7 +197,7 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
 | Broker id | Source | Model-facing name | Child Noah spawns | Secrets |
 |---|---|---|---|---|
 | `hex-ssh` | the owner's SSH key (`sshActive`, same gate as the SDK) | `mcp__hex-ssh__<tool>` (SDK name unchanged) | `scripts/hex-ssh-policy-proxy.mjs` → `HEX_SSH_UPSTREAM_COMMAND` | SSH material in the child's env (Noah spawns it itself: no argv, no wrapper file) |
-| `plugins` | the run's plugin roots' `.mcp.json` (first name wins, load order) | `mcp__plugins__<server>__<tool>` | stdio: the def's command (`${CLAUDE_PLUGIN_ROOT}`/`${VAR}` expanded, cwd = def `cwd` or the root) — **bundled roots only** (see below); http/sse: `mcp-http-bridge.mjs` | OWNED roots' http defs get the injectable vault (`${NAME}` refs via the bridge's one-shot 0600 config); stdio children and group/default roots never |
+| `plugins` | the run's plugin roots' `.mcp.json` (first name wins, load order) | `mcp__plugins__<server>__<tool>` | stdio: the def's command (`${CLAUDE_PLUGIN_ROOT}`/`${VAR}` expanded, cwd = def `cwd` or the root) — **bundled roots only** (see below); http/sse: `mcp-http-bridge.mjs` | NO plugin def gets the vault on pi. An http/sse def outside the bundled roots that names ANY `${…}` placeholder sits out (`piPlaceholderRefusal`); bundled defs keep `${VAR}` expansion from Noah's scrubbed env |
 | `shared` | admin 공용 MCP servers (`planSharedMcpRun`, owner bindings) | `mcp__shared__<server>__<tool>` | always the bridge (header-less ones too: keeps `--use-system-ca` + error scrubbing) | slot values only in the bridge config file (written right before spawn, deleted by the bridge, `rm` again after) |
 
 - pi's `mcp_call` resolves the SDK form `mcp__<server>__<tool>` by suffix (`resolveAlias` in pi), so skills that
@@ -231,9 +233,13 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   headers), and so are admin 공용 MCP servers. A user who needs a stdio tool on pi gets it bundled into
   `default-skills`, as an http server, or as a 공용 MCP server. Moving plugin stdio servers INTO the viewer's
   sandbox would need pi's per-user sandbox MCP (a pi-gateway change, out of scope).
-  **Open item:** an OWNED root's http def may name vault secrets in its URL/headers (`${NAME}`), and the knowledge
-  repo is agent-editable — so an agent-edited def can send those values to a host of its choosing from Noah's
-  network, past the sandbox egress allowlist. The SDK path has the same exposure; not changed here.
+  **Placeholders (hardening 5a):** the same agent-writability decides http/sse defs. Every root but the bundled one
+  is agent-editable, so a def there naming a `${NAME}` placeholder (a vault secret, or a value from Noah's own env)
+  could send it to a host of its choosing from Noah's network, past the sandbox egress allowlist. On pi such a def
+  sits out with a reason (`piPlaceholderRefusal`; both metacognition surfaces list it, and the prompt's secret
+  section plus describe_system's secret line say no plugin def receives a secret here); one without placeholders
+  relays verbatim. A user's secret reaches an external server only through a 공용 MCP slot binding. The SDK path
+  keeps vault substitution for OWNED roots — its agent Bash already shares the container (#71).
 - **The SDK runner is unchanged — the pre-existing #71 posture.** There every plugin stdio server (knowledge
   repo included, with the owner's vault through the secret wrapper) is a CLI child in the Noah container, next to
   the agent's own Bash, which already reaches the shared data volume as the same uid; refusing the servers there
@@ -260,7 +266,8 @@ holds it:
   (status `팀원 아바타의 답변을 기다리는 중…`, capped at the consultation budget + 30 s; a message the user sends wakes
   it too), then delivers everything queued as ONE follow-up turn (the steer `turn_end` contract). So the answer always
   lands in a live run the client is attached to — no server-started turn the client would only discover on reload. A
-  run that ends anyway (cancel, error) aborts its jobs; nothing is delivered later.
+  run that ends anyway (cancel, error) aborts its jobs; nothing is delivered later. Stop pressed DURING that wait ends
+  the run as cancelled (`PiGatewayError("aborted")`), never as `done`.
 - **Unattended pi runs** (routines, task API — no steer channel) keep the waiting call (`avatars` broker timeout
   240 s ≥ the 3 min consultation budget).
 - **Canvas**: on pi `neverWait` — controls always render non-blocking (the existing `wait:false` path) and the
@@ -274,6 +281,13 @@ holds it:
 Mounted by `createApp` at `/mcp/:server` on every runtime (no token exists without a pi run → always 401). Its only
 auth is the bearer run token; session cookies and other app auth never apply (`tests/pi-runner.test.ts` pins that a
 signed-in cookie alone gets 401). The registry lives per Store (`piServicesFor`), shared by the router and runner.
+It is mounted BEFORE the global `express.json({limit: "50mb"})`, so its own 16 MB body cap is the effective one.
+
+**Network exposure (operator requirement):** the router shares Noah's listener, so with no allowlist the run token's
+secrecy is the only barrier for an off-network caller. Either bind/firewall the port to the broker's network, or set
+`NOAH_MCP_ALLOWED_CIDRS` (`mcpHttp/networkAcl.ts`, `net.BlockList`): only those TCP peers (never `X-Forwarded-For`;
+`::ffff:` IPv4 peers are mapped) pass, everyone else gets 403 before the body is parsed or the token is read. Default
+open; an invalid entry stops the boot.
 
 ## Operator setup (our dedicated instance, D5)
 
@@ -299,7 +313,7 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 ## Env (config.ts → `AppConfig.pi`)
 
 `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL` + `PI_GATEWAY_API_KEY` (required; the key is in `SERVER_ONLY_SECRET_ENV_NAMES`),
-`PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `PI_MODEL_MAP` (validated JSON; malformed stops the boot), `PI_DECK_SANDBOX`.
+`PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional `/mcp` peer allowlist), `PI_MODEL_MAP` (validated JSON; malformed stops the boot), `PI_DECK_SANDBOX`.
 
 ## Existing deployments
 

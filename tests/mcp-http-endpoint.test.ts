@@ -243,3 +243,47 @@ describe("McpRunRegistry + /mcp/:server", () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe("NOAH_MCP_ALLOWED_CIDRS (optional peer allowlist)", () => {
+  it("parses CIDRs and bare hosts, maps IPv4-on-IPv6 peers, and fails the boot on a typo", async () => {
+    const { parseMcpNetworkAcl } = await import("../src/server/mcpHttp/networkAcl.js");
+    expect(parseMcpNetworkAcl("")).toBeNull();
+    expect(parseMcpNetworkAcl(undefined)).toBeNull();
+    const acl = parseMcpNetworkAcl("10.0.0.0/8, 192.168.1.7 fd00::/8")!;
+    expect(acl.cidrs).toEqual(["10.0.0.0/8", "192.168.1.7", "fd00::/8"]);
+    expect(acl.allows("10.1.2.3")).toBe(true);
+    expect(acl.allows("::ffff:10.1.2.3")).toBe(true);
+    expect(acl.allows("192.168.1.7")).toBe(true);
+    expect(acl.allows("192.168.1.8")).toBe(false);
+    expect(acl.allows("fd12::1")).toBe(true);
+    expect(acl.allows("127.0.0.1")).toBe(false);
+    expect(acl.allows(undefined)).toBe(false);
+    for (const bad of ["10.0.0.0/33", "nope", "10.0.0.0/x", "fd00::/129"]) {
+      expect(() => parseMcpNetworkAcl(bad), bad).toThrow("NOAH_MCP_ALLOWED_CIDRS");
+    }
+  });
+
+  it("refuses a peer outside the list with 403 before the token is even looked at; inside it the token rules", async () => {
+    const { parseMcpNetworkAcl } = await import("../src/server/mcpHttp/networkAcl.js");
+    const token = registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } });
+    for (const [cidrs, expected] of [["10.0.0.0/8", 403], ["127.0.0.0/8", 200]] as const) {
+      const app = express();
+      app.use(createMcpHttpRouter({ registry, networkAcl: parseMcpNetworkAcl(cidrs) }));
+      const server = http.createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp/repo`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}` },
+          body: JSON.stringify(initBody),
+        });
+        expect(res.status, cidrs).toBe(expected);
+        await res.body?.cancel();
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+  });
+});

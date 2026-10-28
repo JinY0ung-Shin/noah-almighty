@@ -26,7 +26,11 @@
  *   items with status `incomplete` (the deltas were already streamed). An
  *   `incomplete` message item that is NOT immediately followed by the terminal
  *   event is such a discarded attempt: its text leaves the answer (folded into
- *   the reasoning view when a fold sink exists).
+ *   the reasoning view when a fold sink exists). Only the FAILED attempt's text
+ *   goes: pi checkpoints at each model call's `message_start` and keeps the
+ *   item's text before it, and since that event is not on the wire the adapter
+ *   uses the call boundaries it does see — a `response.created` and every
+ *   `response.tool_result` (the next model call starts after the tools ran).
  * - AskUserQuestion ends the pi turn (`requires_action` + `function_call`); the
  *   answer is the NEXT request's `function_call_output`. `runPiTurn` loops that
  *   inside one Noah run so the host still sees one blocking `onQuestion`.
@@ -207,6 +211,8 @@ export class PiEventAdapter {
   private readonly itemFirstBlock = new Map<string, number>();
   private currentMessageItem: string | null = null;
   private pendingDiscard: string | null = null;
+  /** First block of the CURRENT model call (blocks before it survive a retry discard). */
+  private attemptStartBlock = 0;
   private readonly tools = new Map<string, ToolRecord>();
   /** reasoning item id → which delta family it streams (pi sends both summary_text and reasoning_text). */
   private readonly reasoningSource = new Map<string, "text" | "summary">();
@@ -268,8 +274,11 @@ export class PiEventAdapter {
     const itemId = this.pendingDiscard;
     this.pendingDiscard = null;
     if (!itemId) return;
-    const first = this.itemFirstBlock.get(itemId);
-    if (first === undefined) return;
+    const itemFirst = this.itemFirstBlock.get(itemId);
+    if (itemFirst === undefined) return;
+    // Text the item carried from EARLIER model calls (before the last tool
+    // result) stays, like pi's own `discardAttempt`.
+    const first = Math.max(itemFirst, this.attemptStartBlock);
     const end = this.blocks.length;
     if (this.foldEnabled) {
       const start = Math.max(first, this.foldIndex);
@@ -360,6 +369,7 @@ export class PiEventAdapter {
     }
     switch (type) {
       case "response.created": {
+        this.attemptStartBlock = this.blocks.length;
         const response = isRecord(data.response) ? data.response : {};
         this.responseId = asString(response.id) || this.responseId;
         const model = asString(response.model);
@@ -452,6 +462,7 @@ export class PiEventAdapter {
       case "response.tool_result":
         this.closeText();
         this.toolEnd(asString(data.tool_use_id), data.is_error !== true);
+        this.attemptStartBlock = this.blocks.length;
         return null;
       case "response.completed":
       case "response.incomplete":

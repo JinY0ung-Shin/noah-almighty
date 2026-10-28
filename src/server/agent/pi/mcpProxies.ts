@@ -39,7 +39,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AppConfig, PiProxiedMcpFacts, PluginRoot } from "../../types.js";
 import { HEX_SSH_SERVER_NAME } from "../../hexSshPolicy.js";
-import { isOwnedPluginRoot, liftPluginMcpServers } from "../../plugins.js";
+import { liftPluginMcpServers } from "../../plugins.js";
 import { GIT_CREDENTIAL_ENV_NAMES, scrubServerOnlySecretEnv } from "../../secretPolicy.js";
 import { sanitizeName } from "../../marketplace.js";
 import {
@@ -97,7 +97,11 @@ export interface PiMcpProxyInput {
   pluginRoots: PluginRoot[];
   /** The run may carry the owner's vault (elevated, not a consultation). */
   secretsAllowed: boolean;
-  /** The owner's vault minus reserved git/SSH names. */
+  /**
+   * The owner's vault minus reserved git/SSH names. Redaction only: no plugin
+   * `.mcp.json` def receives it on pi ({@link piPlaceholderRefusal}); a user's
+   * secret reaches an external server only through a 공용 MCP slot binding.
+   */
   injectableSecretEnv: Record<string, string>;
   /** hex-ssh registration (runCapabilities' `sshActive`). */
   sshActive: boolean;
@@ -161,6 +165,27 @@ function expandEnvRefs(value: string, env: Record<string, string>): string {
 
 const ENV_REF_NAMES = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g;
 
+/**
+ * Why an http/sse plugin def may NOT be relayed on a pi run, or null when it
+ * may: Noah fills `${NAME}` placeholders in a def's URL/headers only for the
+ * plugins bundled with this Noah build. Every other root is agent-writable
+ * (see {@link piStdioRootRefusal}), so a def there that names a placeholder
+ * could send the owner's vault value — or a value from Noah's own env — to any
+ * host from Noah's network, past the sandbox's egress allowlist (hardening
+ * 5a). Such a def sits out with this reason (both metacognition surfaces list
+ * it); one without placeholders is still relayed, verbatim. Model-facing English.
+ */
+export function piPlaceholderRefusal(rootPath: string, config: AppConfig, values: readonly string[]): string | null {
+  if (piPluginRootKind(config, rootPath) === "default") return null;
+  const refs = [...new Set(values.flatMap((value) => [...value.matchAll(ENV_REF_NAMES)].map((match) => match[1]!)))];
+  if (refs.length === 0) return null;
+  return (
+    `its URL or headers name \${…} placeholders (${refs.map((ref) => `\`${ref}\``).join(", ")}) and it is not defined in a plugin bundled with Noah; ` +
+    "on this runtime Noah never fills a placeholder (a vault secret or a server value) into a definition an agent can edit, because the agent could point it at any host. " +
+    "To call an external server with the owner's own secret, ask the system administrator to register it as a shared MCP server (관리자 → 공용 MCP) with a credential slot the owner binds"
+  );
+}
+
 function bridgeUpstream(
   proxy: PiProxyServerName,
   name: string,
@@ -190,7 +215,6 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
   const baseEnv = piProxyBaseEnv();
   const upstreams: PiMcpUpstream[] = [];
   const facts: PiProxiedMcpFacts = { hexSsh: false, pluginServers: [], skippedPluginServers: [] };
-  const vault = input.secretsAllowed ? input.injectableSecretEnv : {};
   let vaultExposed = false;
   const bridges: { name: string; config: McpHttpBridgeConfig }[] = [];
 
@@ -234,12 +258,13 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
   for (const state of input.sharedMcpPlan?.states ?? []) sharedNames.add(state.name);
 
   // Plugin `.mcp.json` servers: first definition of a name wins (load order).
-  // An http/sse def from an OWNED root may reference the vault; a stdio def
-  // spawns only from a bundled root (piStdioRootRefusal), which never gets it.
+  // No plugin def ever gets the vault on pi: an http/sse def with placeholders
+  // relays only from a bundled root (piPlaceholderRefusal), and a stdio def
+  // spawns only from one (piStdioRootRefusal).
   const reserved = new Set(input.reservedNames);
   const seen = new Set<string>();
   for (const root of input.pluginRoots) {
-    const owned = isOwnedPluginRoot(root.path, input.avatarUserId, input.config);
+    const bundled = piPluginRootKind(input.config, root.path) === "default";
     const { servers } = await liftPluginMcpServers([root.path], {
       avatarUserId: input.avatarUserId,
       config: input.config,
@@ -268,19 +293,14 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
         for (const [header, value] of Object.entries((def.headers ?? {}) as Record<string, unknown>)) {
           if (typeof value === "string") headers[header] = value;
         }
-        const refs = owned
-          ? [...new Set([def.url, ...Object.values(headers)].flatMap((v) => [...v.matchAll(ENV_REF_NAMES)].map((m) => m[1]!)))]
-              .filter((ref) => Object.hasOwn(vault, ref))
-          : [];
-        const config: McpHttpBridgeConfig = {
-          url: def.url,
-          transport: type,
-          headers,
-          redact: refs.map((ref) => vault[ref]!).filter((value) => value.length > 0),
-          ...(refs.length ? { vault: Object.fromEntries(refs.map((ref) => [ref, vault[ref]!])) } : {}),
-          expandEnv: true,
-        };
-        if (refs.length) vaultExposed = true;
+        const placeholderRefusal = piPlaceholderRefusal(root.path, input.config, [def.url, ...Object.values(headers)]);
+        if (placeholderRefusal) {
+          skip(placeholderRefusal);
+          continue;
+        }
+        // A bundled def keeps the CLI's `${VAR}` expansion from Noah's (scrubbed)
+        // env; any other def has no placeholders left to expand.
+        const config: McpHttpBridgeConfig = { url: def.url, transport: type, headers, redact: [], ...(bundled ? { expandEnv: true } : {}) };
         bridges.push({ name, config });
         upstreams.push(bridgeUpstream(PI_PLUGINS_SERVER_NAME, name, config, secretsDir, runId, baseEnv));
         facts.pluginServers.push(name);

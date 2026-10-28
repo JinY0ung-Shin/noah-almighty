@@ -34,6 +34,8 @@ import { piSandboxDeckToolchain } from "../src/server/deckRender.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../src/server/workspace.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog } from "../src/server/agent/pi/mcpCatalog.js";
 import { callTool, gitInit, makeBareRemote, makeSkill, withTempDir } from "./helpers.js";
+import { SteerChannel } from "../src/server/agent/steerChannel.js";
+import { PiAsyncJobs } from "../src/server/agent/pi/asyncJobs.js";
 
 const dir = withTempDir("pi-workspace");
 
@@ -395,6 +397,58 @@ describe("run capabilities on pi", () => {
     expect(refused.isError).toBe(true);
     expect(refused.content[0]!.text).toContain("only read files under /workspace");
     expect(seen).toHaveLength(1);
+  });
+
+  // Review L4/L5/L6 + hardening 5a: what pi does NOT have must not be
+  // advertised, on BOTH metacognition surfaces.
+  it("states pi's real ask_avatar mode, checklist, subagent switch and plugin-secret rule on BOTH surfaces", async () => {
+    const { store, config, owner, mate } = setup();
+    store.setToolSkillPolicy({ disabledTools: ["Task", "Agent"], disabledSkills: [] });
+    store.setUserSecret(owner.id, "API_TOKEN", "tok-123456789");
+    const interactive = (): AgentEvents => ({ steers: new SteerChannel() });
+    const build = async () => {
+      const caps = await buildRunCapabilities(request(owner), [], config, store, interactive(), undefined, () => 0, {
+        runtime: "pi",
+        piAsyncJobs: new PiAsyncJobs(() => true),
+      });
+      const describe = (await callServerTool(caps.inProcessMcpServers.system, "describe_system", {})).content[0]!.text;
+      const stamped = stampPromptRequest(request(owner), caps, config, interactive());
+      return { caps, describe, prompt: buildSystemPromptAppend(stamped), turn: buildPiTurnPreamble(stamped) };
+    };
+
+    // No avatar-sharing group → no ask_avatar → no background-ask claim (L4).
+    const lonely = await build();
+    expect(lonely.caps.mcpAllowedTools).not.toContain("mcp__avatars__ask_avatar");
+    expect(lonely.caps.piRuntimeFacts?.asyncAskAvatar).toBe(false);
+    expect(lonely.turn).not.toContain("returns at once with a consultation id");
+    expect(lonely.describe).toContain("mcp__avatars__ask_avatar (when available) waits for the answer");
+
+    // TodoWrite/TaskCreate do not exist on pi (L5).
+    expect(lonely.prompt).toContain("this runtime has no private checklist tool (no `TodoWrite`/`TaskCreate`)");
+    expect(lonely.prompt).not.toContain("are your private per-run checklist");
+    expect(lonely.describe).toContain("this runtime has no TodoWrite/TaskCreate");
+    expect(lonely.describe).not.toContain("your private per-run TodoWrite/TaskCreate checklist");
+
+    // The admin subagent switch is not a tool gate on pi (L6).
+    expect(lonely.prompt).toContain("that subagent switch is NOT enforced by a tool gate");
+    expect(lonely.describe).toContain("the subagent switch is NOT enforced by a tool gate here");
+    expect(lonely.describe).not.toContain("removed deployment-wide");
+
+    // No plugin .mcp.json def receives a vault secret on pi (5a).
+    expect(lonely.prompt).toContain("on this runtime NO plugin or knowledge-repo `.mcp.json` server receives them");
+    expect(lonely.prompt).not.toContain("custom secrets are provided as environment variables");
+    expect(lonely.describe).toContain("on this runtime no plugin/knowledge-repo .mcp.json server receives them");
+
+    // With a reachable teammate the tool exists, and so does its background mode.
+    const group = store.createGroup({ name: "team", createdBy: owner.id });
+    store.addGroupMember(group.id, owner.id, "admin");
+    store.addGroupMember(group.id, mate.id, "member");
+    store.setGroupAvatarSharing(group.id, true);
+    const teamed = await build();
+    expect(teamed.caps.mcpAllowedTools).toContain("mcp__avatars__ask_avatar");
+    expect(teamed.caps.piRuntimeFacts?.asyncAskAvatar).toBe(true);
+    expect(teamed.turn).toContain("returns at once with a consultation id");
+    expect(teamed.describe).toContain("mcp__avatars__ask_avatar returns at once with a consultation id");
   });
 
   it("deck state comes from PI_DECK_SANDBOX on BOTH surfaces, and git_repo commit / skills read are gated per run", async () => {

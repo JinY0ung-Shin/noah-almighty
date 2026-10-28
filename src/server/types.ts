@@ -185,8 +185,9 @@ export interface PiModelMapping {
  * `SystemToolsContext.piRuntime` → describe_system). Its presence alone says
  * "this run executes in the user's pi sandbox": a mid-turn message arrives only
  * after the current answer, a model/effort switch starts a new session from the
- * stored text history, and there are no CLI-only servers (hex-ssh, plugin and
- * 공용 MCP).
+ * stored text history, and hex-ssh, plugin `.mcp.json` and 공용 MCP servers are
+ * relayed by Noah as an MCP client (`mcpProxies`, `agent/pi/mcpProxies.ts`)
+ * instead of being CLI children.
  */
 export interface PiRuntimeFacts {
   /** Sandbox path of this conversation's work folder (`/workspace/c/<seg>`), when known. */
@@ -255,6 +256,12 @@ export interface PiRuntimeConfig {
    * registered by `scripts/pi-register-mcp.mjs`); logged at boot.
    */
   mcpPublicUrl?: string;
+  /**
+   * Optional allowlist of peer addresses/CIDRs that may reach `/mcp` (env
+   * `NOAH_MCP_ALLOWED_CIDRS`, comma separated). Unset → open: the run token is
+   * the only barrier, so the operator must bind/firewall the port.
+   */
+  mcpAllowedCidrs?: string[];
   /** Tier / model id → pi model (env `PI_MODEL_MAP`, JSON). Unmapped → pi's default model. */
   modelMap: Record<string, PiModelMapping>;
   /** The sandbox image carries the deck toolchain (env `PI_DECK_SANDBOX`). */

@@ -5,6 +5,7 @@ import { kstDateTimeString } from "../routineSchedule.js";
 import {
   DIRECT_MESSAGE_STATE,
   gettingStartedGaps,
+  piAdminDisabledToolsNote,
   rewindTurnState,
   sharedMcpServerLines,
 } from "./ownerState.js";
@@ -362,7 +363,11 @@ function secretsSection(
   return (
     "Environment-variable names registered in the **Secrets** tab of Settings: " +
     secretNames.map((name) => `\`${name}\``).join(", ") +
-    ". You cannot read the values; do not output or guess them. The server injects them where they are needed: custom secrets are provided as environment variables to the MCP servers registered by YOUR OWN plugins/knowledge repo (`.mcp.json`), while git credentials (`GIT_TOKEN`/`GITHUB_TOKEN`) and SSH material flow only into their dedicated built-in tools. MCP servers from group repositories never receive these secrets." +
+    ". You cannot read the values; do not output or guess them. The server injects them where they are needed: " +
+    (piRuntime
+      ? // Hardening 5a: no plugin `.mcp.json` def gets the vault on pi (mcpProxies piPlaceholderRefusal).
+        "on this runtime NO plugin or knowledge-repo `.mcp.json` server receives them — a definition outside the plugins bundled with Noah that names a `${NAME}` placeholder is left out of the run (see the left-out plugin servers above); a secret reaches an external server only through an admin shared MCP server whose credential slot the owner bound. Git credentials (`GIT_TOKEN`/`GITHUB_TOKEN`) and SSH material flow only into their dedicated built-in tools."
+      : "custom secrets are provided as environment variables to the MCP servers registered by YOUR OWN plugins/knowledge repo (`.mcp.json`), while git credentials (`GIT_TOKEN`/`GITHUB_TOKEN`) and SSH material flow only into their dedicated built-in tools. MCP servers from group repositories never receive these secrets.") +
     shellNote +
     browserNote
   );
@@ -526,8 +531,13 @@ function todoSection(request: AgentRequest): string | null {
     : request.headless || request.externalTaskApi
       ? `This turn is not a live conversation: ${unattendedPolicy}`
       : livePolicy;
+  // pi has no TodoWrite/TaskCreate (its built-ins are read/write/edit/ls/find/grep/bash) — review L5.
+  const checklist = request.piRuntime
+    ? "this runtime has no private checklist tool (no `TodoWrite`/`TaskCreate`), so a working note you keep for yourself is never the owner's list. "
+    : "`TodoWrite`/`TaskCreate` are your private per-run checklist and vanish after this turn. ";
   const section =
-    "할 일 (the owner's persistent work to-do list in Noah — the 할 일 tab and the card under the message box): manage it ONLY with `mcp__todo__*`; `TodoWrite`/`TaskCreate` are your private per-run checklist and vanish after this turn. " +
+    "할 일 (the owner's persistent work to-do list in Noah — the 할 일 tab and the card under the message box): manage it ONLY with `mcp__todo__*`; " +
+    checklist +
     "Tool results start with today's KST date and the counts, so call `list_todos` for the current state (and before resolving a relative due date). " +
     policy +
     " Check for a near-duplicate before adding. Each item has a status — `todo`, `in_progress`, `done` or `dropped` (the owner decided not to do it); change it with `update_todo` only on the owner's word (they started, finished or are dropping it, or you finished a task they gave you), never on a guess, and mark an abandoned item `dropped` rather than deleting it" +
@@ -976,7 +986,8 @@ export function buildSystemPromptAppend(
     ].filter(Boolean);
     lines.push(
       `The system administrator disabled the following for ALL avatars in this deployment — ${disabledParts.join("; ")}. ` +
-        "They are unavailable even if they appear in a tool or skill listing. Do not attempt, retry, or suggest them; if the user asks for one, explain that it is administratively disabled.",
+        "They are unavailable even if they appear in a tool or skill listing. Do not attempt, retry, or suggest them; if the user asks for one, explain that it is administratively disabled." +
+        (request.piRuntime ? piAdminDisabledToolsNote(adminDisabledTools) : ""),
     );
   }
   const knowledgeMemoryBlock = knowledgeMemorySection(request);
@@ -1478,7 +1489,10 @@ export function buildSystemPromptAppend(
     // line a "내 할 일에 넣어줘" lands in the private per-run checklist and the
     // avatar reports success. Static text: safe for prompt caching.
     lines.push(
-      "This person's 할 일 (their own Noah work to-do list) can only be changed by THEIR OWN avatar — you have no to-do tools here and cannot add to it. If they ask you to put something on their to-do list, say so and point them to the 할 일 tab or a chat with their own avatar (`/todo`); never use TodoWrite/TaskCreate for it and never claim it was added.",
+      "This person's 할 일 (their own Noah work to-do list) can only be changed by THEIR OWN avatar — you have no to-do tools here and cannot add to it. If they ask you to put something on their to-do list, say so and point them to the 할 일 tab or a chat with their own avatar (`/todo`); " +
+        (request.piRuntime
+          ? "never treat a note you keep for yourself as that list and never claim it was added."
+          : "never use TodoWrite/TaskCreate for it and never claim it was added."),
     );
     // A trusted user works at the owner's tool level — don't claim read-only.
     // A plain colleague stays read-only.

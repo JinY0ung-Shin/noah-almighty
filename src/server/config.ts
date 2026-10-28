@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AgentRuntime, AppConfig, PiModelMapping, PiRuntimeConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { MODEL_TIER_IDS } from "./modelTiers.js";
+import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 
 function env(name: string, fallback = ""): string {
   return process.env[name]?.trim() || fallback;
@@ -74,11 +75,14 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
     throw new Error("PI_GATEWAY_URL must be an absolute URL (e.g. http://pi-gateway:8080).");
   }
   const workspacesDir = env("PI_WORKSPACES_DIR");
+  // Validated here so a typo fails the boot instead of opening or closing /mcp.
+  const mcpAcl = parseMcpNetworkAcl(env("NOAH_MCP_ALLOWED_CIDRS"));
   return {
     gatewayUrl,
     apiKey,
     ...(workspacesDir ? { workspacesDir: path.resolve(workspacesDir) } : {}),
     ...(env("NOAH_MCP_PUBLIC_URL") ? { mcpPublicUrl: env("NOAH_MCP_PUBLIC_URL") } : {}),
+    ...(mcpAcl ? { mcpAllowedCidrs: mcpAcl.cidrs } : {}),
     modelMap: parsePiModelMap(env("PI_MODEL_MAP")),
     deckSandbox: ["true", "1", "on"].includes(env("PI_DECK_SANDBOX").toLowerCase()),
   };

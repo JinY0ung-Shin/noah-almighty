@@ -5703,3 +5703,30 @@ describe("interpretResult prompt-token summation", () => {
     ).toBeUndefined();
   });
 });
+
+describe("planMcpToolFamilies", () => {
+  // The personal-run pin the retired group-agent suite used to carry:
+  // `registered` mirrors the selection (plus the always-on system group), and
+  // each family flag matches it.
+  it("registers exactly the selected groups (in selection order) plus system", async () => {
+    const { planMcpToolFamilies } = await import("../src/server/agent/runCapabilities.js");
+    const { DEFAULT_MCP_TOOL_GROUPS } = await import("../src/shared/mcpToolGroups.js");
+    const plan = planMcpToolFamilies(["web", "personal_knowledge"]);
+    expect(plan.registered).toEqual(["web", "personal_knowledge", "system"]);
+    expect(plan).toMatchObject({
+      personalKnowledge: true,
+      web: true,
+      system: true,
+      groupKnowledge: false,
+      gitRepo: false,
+      confluence: false,
+      ssh: false,
+      avatars: false,
+      canvas: false,
+      browser: false,
+    });
+    expect(planMcpToolFamilies([]).registered).toEqual(["system"]);
+    const all = planMcpToolFamilies([...DEFAULT_MCP_TOOL_GROUPS]);
+    expect(all.registered).toEqual([...DEFAULT_MCP_TOOL_GROUPS]);
+  });
+});

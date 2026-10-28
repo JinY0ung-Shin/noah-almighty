@@ -752,7 +752,24 @@ export async function buildRunCapabilities(
   // pi + an interactive chat (a live steer channel): ask_avatar runs in the
   // background and its answer arrives as a follow-up message (design D8).
   // Unattended pi runs (routines, the task API) keep the waiting call.
-  const piAsyncAsk = piRun && Boolean(events?.steers) && Boolean(runOptions.piAsyncJobs);
+  //
+  // Avatar consultation (#ask-avatar): OWNER-DRIVEN runs (owner chats + owner
+  // routines) may ask a same-group teammate's avatar one question.
+  // `avatarConsultation` is the depth guard — a consultation run never
+  // re-registers the tool, so ask chains cannot nest. avatarAskActive is the
+  // SINGLE boolean used byte-identically in allowedTools + the ctx injection
+  // below (the executor's absence unregisters the tool; the handler still
+  // self-gates on viewerIsOwner).
+  const avatarAskActive =
+    avatarDirectoryToolsEnabled &&
+    ownerToolAccess &&
+    !consultationRun &&
+    // No avatar-sharing group → no reachable target (trust = shared membership
+    // in a group with avatar sharing ON; sharing-off groups grant neither
+    // visibility nor trust), so keep the tool out of the prompt entirely.
+    ownerState.groups.some((g) => g.avatarSharing);
+  // Only a run that HAS ask_avatar can describe its background mode (review L4).
+  const piAsyncAsk = piRun && avatarAskActive && Boolean(events?.steers) && Boolean(runOptions.piAsyncJobs);
   // pi self-state, ONE value for both metacognition surfaces (describe_system
   // here, the prompt through stampPromptRequest).
   const piRuntimeFacts: PiRuntimeFacts | undefined = piRun
@@ -832,21 +849,8 @@ export async function buildRunCapabilities(
   // things outside its own expertise. Visibility is from the VIEWER's POV (the
   // person chatting), and the current avatar is excluded from its own results.
   //
-  // Avatar consultation (#ask-avatar) rides the same server: OWNER-DRIVEN runs
-  // (owner chats + owner routines) may ask a same-group teammate's avatar one
-  // question. `avatarConsultation` is the depth guard — a consultation run never
-  // re-registers the tool, so ask chains cannot nest. avatarAskActive is the
-  // SINGLE boolean used byte-identically in allowedTools + the ctx injection
-  // below (the executor's absence unregisters the tool; the handler still
-  // self-gates on viewerIsOwner).
-  const avatarAskActive =
-    avatarDirectoryToolsEnabled &&
-    ownerToolAccess &&
-    !consultationRun &&
-    // No avatar-sharing group → no reachable target (trust = shared membership
-    // in a group with avatar sharing ON; sharing-off groups grant neither
-    // visibility nor trust), so keep the tool out of the prompt entirely.
-    ownerState.groups.some((g) => g.avatarSharing);
+  // Avatar consultation (#ask-avatar) rides the same server: see avatarAskActive
+  // above (derived there so the pi async-ask fact can AND it).
   const avatarDirectoryServer = buildAvatarDirectoryServer(store, {
     avatarUserId: request.avatar.id,
     viewerUserId: request.viewerUserId ?? request.avatar.id,

@@ -298,6 +298,36 @@ describe("PiEventAdapter edge semantics (synthetic frames per pi api/mapper.ts)"
     expect(adapter.answerText(true)).toBe("full");
   });
 
+  it("a retry keeps the item's text from EARLIER model calls (before the last tool result), like pi's discardAttempt", () => {
+    // pi keeps ONE message item across tool calls; the failed model call is
+    // the one after the last tool result, so only ITS text leaves the answer.
+    const toolUse = ev("response.tool_use", { tool_use_id: "t1", name: "bash", input: { command: "ls" } });
+    const toolResult = ev("response.tool_result", { tool_use_id: "t1", is_error: false });
+    for (const fold of [false, true]) {
+      const { events, calls } = recorder({ fold });
+      const adapter = new PiEventAdapter(events);
+      feed(adapter, [
+        created,
+        msgAdded("msg_1"),
+        delta("msg_1", "Looking first."),
+        toolUse,
+        toolResult,
+        delta("msg_1", "half an ans"),
+        msgDone("msg_1", "incomplete"),
+        msgAdded("msg_2"),
+        delta("msg_2", "The full answer."),
+        msgDone("msg_2", "completed"),
+        ev("response.completed", { response: { id: "resp_s_1", status: "completed" } }),
+      ]);
+      if (fold) {
+        expect(only(calls, "fold")).toEqual([["fold", "Looking first."], ["fold", "half an ans"]]);
+        expect(adapter.answerText(true)).toBe("The full answer.");
+      } else {
+        expect(adapter.answerText(true)).toBe("Looking first.\n\nThe full answer.");
+      }
+    }
+  });
+
   it("usage: context_tokens is the snapshot, output accumulates, no snapshot → no window", () => {
     const withCtx = new PiEventAdapter(recorder().events, { contextWindow: 200_000 });
     const a = withCtx.handle(

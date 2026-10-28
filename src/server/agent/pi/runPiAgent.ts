@@ -90,6 +90,21 @@ export function piSessionKey(responseId: string): string {
   return responseId.replace(/^resp_/, "").replace(/_\d+$/, "");
 }
 
+/**
+ * A continued session pi cannot run: unknown (404), in a state that does not
+ * match (409), or pinned to a model pi no longer has (400
+ * `model_not_configured` — pi fixes a session's model at creation, so only a
+ * new session can recover). Each self-heals once from the text history.
+ */
+export function isLostPiSession(error: unknown): error is PiGatewayError {
+  return (
+    error instanceof PiGatewayError &&
+    (error.kind === "not_found" ||
+      error.kind === "conflict" ||
+      (error.kind === "bad_request" && error.code === "model_not_configured"))
+  );
+}
+
 /** The pi model a NEW session uses for a Noah tier / model id (unmapped → pi's default model). */
 function piModelFor(config: AppConfig, model: string | undefined): { model?: string; contextWindow?: number } {
   const mapped = model ? config.pi?.modelMap[model] : undefined;
@@ -337,15 +352,11 @@ export async function runPiAgent(
         } catch (error) {
           if (signal?.aborted || input) throw error;
           // The stored session is gone (pi restarted with a wiped DB, another
-          // user's id, a session stuck on a question): rebuild from history once.
-          if (
-            !healed &&
-            previous &&
-            error instanceof PiGatewayError &&
-            (error.kind === "not_found" || error.kind === "conflict")
-          ) {
+          // user's id, a session stuck on a question) or can no longer run (the
+          // operator removed its model from pi): rebuild from history once.
+          if (!healed && previous && isLostPiSession(error)) {
             healed = true;
-            agentLogger.warn({ conversationId, previous, kind: error.kind }, "pi session missing; retrying with stored history");
+            agentLogger.warn({ conversationId, previous, kind: error.kind, code: error.code }, "pi session missing; retrying with stored history");
             previous = undefined;
             newSessionReason = "session_lost";
             continue;
@@ -389,6 +400,10 @@ export async function runPiAgent(
             void asyncJobs.waitForChange(signal, left).then(finish);
           });
         }
+        // Stop pressed while waiting: the run was CANCELLED (its jobs are
+        // aborted in the finally), not completed — the route maps this error
+        // through its cancel path instead of emitting `done`.
+        if (signal?.aborted) throw new PiGatewayError("aborted");
       }
       // Steers that arrived while pi was answering: pi cannot take them
       // mid-response (design P2), so they become ONE follow-up turn. Checked

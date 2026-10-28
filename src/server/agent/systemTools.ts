@@ -23,6 +23,7 @@ import { DEFAULT_MODEL_TIER } from "../modelTiers.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 import {
   gettingStartedGaps,
+  piAdminDisabledToolsNote,
   rewindTurnState,
   sharedMcpServerLines,
   summarizeOwnerState,
@@ -822,7 +823,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // Mirrors buildSystemPromptAppend's web-fetch proxy self-state (the
           // shared webFetchProxyState helper; values already redacted).
           `- Web fetch (mcp__web__fetch): ${enabledMcpToolGroups.includes("web") ? "enabled for this conversation" : "OFF for this conversation (web tool group deselected)"}; ${webProxy.httpsProxy || webProxy.httpProxy ? `external URLs go through the corporate proxy (${webProxy.httpsProxy ?? webProxy.httpProxy}${webProxy.noProxy ? `; NO_PROXY: ${webProxy.noProxy}` : ""})` : "no HTTP_PROXY/HTTPS_PROXY configured — intranet URLs direct; external sites may be unreachable if this deployment requires a proxy"}`,
-          `- Admin-disabled built-in tools: ${ctx.toolSkillPolicy?.disabledTools.length ? ctx.toolSkillPolicy.disabledTools.map((name) => `\`${name}\``).join(", ") + " (removed deployment-wide by the system administrator)" : "(none)"}`,
+          `- Admin-disabled built-in tools: ${ctx.toolSkillPolicy?.disabledTools.length ? ctx.toolSkillPolicy.disabledTools.map((name) => `\`${name}\``).join(", ") + (ctx.piRuntime ? " (disabled deployment-wide by the system administrator; these are Claude Agent SDK tool names, so WebFetch/WebSearch/NotebookEdit do not exist on this runtime anyway" + (piAdminDisabledToolsNote(ctx.toolSkillPolicy.disabledTools) ? ", and the subagent switch is NOT enforced by a tool gate here — pi's own `Agent` tool stays callable, so honor it yourself and never spawn a subagent" : "") + ")" : " (removed deployment-wide by the system administrator)") : "(none)"}`,
           `- Admin-disabled skills: ${ctx.toolSkillPolicy?.disabledSkills.length ? ctx.toolSkillPolicy.disabledSkills.map((name) => `\`${name}\``).join(", ") + " (deployment-wide; they may still appear in a skill listing but every invocation is blocked)" : "(none)"}`,
           `- Knowledge repository: ${knowledgeRepo.repo || "(none)"}${knowledgeRepo.branch ? ` @ ${knowledgeRepo.branch}` : ""}`,
           `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted same-group teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
@@ -847,7 +848,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           ownerShareLinkLine(store, ctx),
           `- Internal Git token (GIT_TOKEN): ${state.gitTokenSet ? "set" : "not set"}`,
           `- Getting started: ${gettingStartedLine}`,
-          `- Secret names: ${secretNames.length ? secretNames.map((name) => `\`${name}\``).join(", ") + " (custom secrets are injected as env into MCP servers from your own plugins/knowledge repo; git/SSH credentials go only to their dedicated tools)" : "(none)"}`,
+          `- Secret names: ${secretNames.length ? secretNames.map((name) => `\`${name}\``).join(", ") + (ctx.piRuntime
+                ? " (on this runtime no plugin/knowledge-repo .mcp.json server receives them — a def outside the bundled plugins that names a ${NAME} placeholder is left out, see the relayed-servers line; a secret reaches an external server only via a bound shared MCP slot; git/SSH credentials go only to their dedicated tools)"
+                : " (custom secrets are injected as env into MCP servers from your own plugins/knowledge repo; git/SSH credentials go only to their dedicated tools)") : "(none)"}`,
           `- Shell-exposed secrets: ${ctx.piRuntime ? (state.shellExposedSecretNames.length ? `UNAVAILABLE on this runtime — ${state.shellExposedSecretNames.map((name) => `\`${name}\``).join(", ")} are set to 셸 노출, but the pi sandbox shell receives no secrets, so \`$NAME\` is empty in bash; use the dedicated MCP tools, or tell the owner the task needs a secret this runtime cannot hand to the shell` : "(none — and on this runtime the pi sandbox shell receives no secrets at all)") : state.shellExposedSecretNames.length ? state.shellExposedSecretNames.map((name) => `\`${name}\``).join(", ") + " — usable as `$NAME` in Bash on elevated runs; values are redacted from tool outputs (per-secret 셸 노출 toggle in Settings)" : "(none — every secret stays out of the agent shell; enable per-secret with the 셸 노출 toggle in Settings)"}`,
           // Browser input is the SECOND per-key exposure the owner can grant, so
           // it sits next to the shell one. It branches on whether the bridge is
@@ -903,7 +906,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // prompt section stays static for prompt caching.
           `- 할 일 (the owner's work to-do list, mcp__todo__*): ${
             todos
-              ? `open ${todos.counts.open} (in progress ${todos.counts.inProgress}), overdue ${todos.counts.overdue}, due today ${todos.counts.dueToday}, completed ${todos.counts.done}, dropped ${todos.counts.dropped}; today is ${todos.todayKst} (KST). list_todos/add_todos/update_todo are available${ctx.todoDeleteEnabled ? ", and delete_todo" : "; delete_todo is NOT available in this run (an external system submitted it — mark items done or dropped instead)"}; update_todo moves an item between the statuses todo, in_progress, done and dropped (the owner decided not to do it) — on the owner's word only. The owner sees the list in the 할 일 tab (where each item's detail panel sets its status) and in the card toggled by the 할 일 button under the chat's message box (in-progress items on top; its checkbox completes). It is the owner's persistent list, separate from your private per-run TodoWrite/TaskCreate checklist`
+              ? `open ${todos.counts.open} (in progress ${todos.counts.inProgress}), overdue ${todos.counts.overdue}, due today ${todos.counts.dueToday}, completed ${todos.counts.done}, dropped ${todos.counts.dropped}; today is ${todos.todayKst} (KST). list_todos/add_todos/update_todo are available${ctx.todoDeleteEnabled ? ", and delete_todo" : "; delete_todo is NOT available in this run (an external system submitted it — mark items done or dropped instead)"}; update_todo moves an item between the statuses todo, in_progress, done and dropped (the owner decided not to do it) — on the owner's word only. The owner sees the list in the 할 일 tab (where each item's detail panel sets its status) and in the card toggled by the 할 일 button under the chat's message box (in-progress items on top; its checkbox completes). It is the owner's persistent list, separate from ${ctx.piRuntime ? "any working note you keep for yourself (this runtime has no TodoWrite/TaskCreate)" : "your private per-run TodoWrite/TaskCreate checklist"}`
               : "not available in this run"
           }`,
           `- Pending information requests: ${openRequests}${openRequests > 0 ? " (use pending_requests to view the details)" : ""}`,

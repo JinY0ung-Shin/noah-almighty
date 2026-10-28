@@ -24,6 +24,7 @@ import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
 import { createMcpHttpRouter } from "./mcpHttp/endpoint.js";
+import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 import { piServicesFor } from "./agent/pi/piRuntime.js";
 
 export type { AppServices };
@@ -76,6 +77,20 @@ export function createApp(services = createServices()) {
   };
 
   const app = express();
+  // Noah's HTTP MCP endpoint for pi-gateway's broker (docs/architecture/pi-runtime.md).
+  // Its ONLY auth is the per-run bearer token, and only under /mcp/: no session
+  // cookie is read there (a cookie alone gets the same 401 as no token), and no
+  // other router sees these paths. Mounted on every runtime — without a pi run
+  // no token exists, so every request is a 401. Mounted BEFORE the global JSON
+  // parser so its own 16 MB body cap is the effective one, with the optional
+  // NOAH_MCP_ALLOWED_CIDRS peer allowlist checked before any body is parsed.
+  app.use(
+    createMcpHttpRouter({
+      registry: piServicesFor(store, config).registry,
+      basePath: "/mcp",
+      networkAcl: parseMcpNetworkAcl(config.pi?.mcpAllowedCidrs?.join(",")),
+    }),
+  );
   // Limit bumped from 3mb to accommodate chat image attachments (base64-inflated,
   // up to MAX_CHAT_IMAGES_PER_MESSAGE × ~5MB; the client downscales before send).
   app.use(express.json({ limit: "50mb" }));
@@ -141,13 +156,6 @@ export function createApp(services = createServices()) {
     });
     next();
   });
-
-  // Noah's HTTP MCP endpoint for pi-gateway's broker (docs/architecture/pi-runtime.md).
-  // Its ONLY auth is the per-run bearer token, and only under /mcp/: no session
-  // cookie is read there (a cookie alone gets the same 401 as no token), and no
-  // other router sees these paths. Mounted on every runtime — without a pi run
-  // no token exists, so every request is a 401.
-  app.use(createMcpHttpRouter({ registry: piServicesFor(store, config).registry, basePath: "/mcp" }));
 
   // Per-domain routers (split from the original monolithic createApp closure).
   // Mounted in the SAME order the routes were registered before so relative

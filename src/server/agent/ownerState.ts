@@ -177,6 +177,18 @@ export function gettingStartedGaps(
 }
 
 /**
+ * pi: what the admin built-in-tool disables mean on this runtime (review L6).
+ * The policy names Claude Agent SDK tools; pi has none of WebFetch/WebSearch/
+ * NotebookEdit, and its own subagent tool (`Agent`) cannot be switched off
+ * per request (design P1), so the subagent toggle is the model's to honor.
+ * Mirrored by describe_system's admin-disabled line.
+ */
+export function piAdminDisabledToolsNote(disabledTools: readonly string[]): string {
+  if (!disabledTools.some((name) => name === "Agent" || name === "Task")) return "";
+  return " On this runtime that subagent switch is NOT enforced by a tool gate (pi's own `Agent` tool stays callable), so honor it yourself: never spawn a subagent with `Agent`; do the work in this run.";
+}
+
+/**
  * Turn PROVENANCE of a rewind (`AgentRequest.rewind`): the viewer edited an
  * earlier message or regenerated the latest answer. ONE text for both
  * metacognition surfaces — buildSystemPromptAppend's per-turn line and

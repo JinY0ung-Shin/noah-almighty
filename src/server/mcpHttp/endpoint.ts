@@ -48,6 +48,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import logger from "../logger.js";
+import type { McpNetworkAcl } from "./networkAcl.js";
 
 const log = logger.child({ module: "mcp-http" });
 
@@ -398,6 +399,8 @@ export interface McpHttpRouterOptions {
   registry: McpRunRegistry;
   /** Mount prefix; the route is `<basePath>/:server`. Default `/mcp`. */
   basePath?: string;
+  /** Optional peer-address allowlist (`NOAH_MCP_ALLOWED_CIDRS`); unset = the token alone. */
+  networkAcl?: McpNetworkAcl | null;
 }
 
 /**
@@ -408,7 +411,16 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
   const { registry } = options;
   const basePath = (options.basePath ?? "/mcp").replace(/\/+$/, "");
   const router = Router();
+  const acl = options.networkAcl ?? null;
 
+  // Before the body parser: a peer outside the allowlist costs no parse.
+  router.all(`${basePath}/:server`, (req: Request, res: Response, next) => {
+    if (acl && !acl.allows(req.socket.remoteAddress)) {
+      jsonRpcError(res, 403, -32001, "Forbidden: this address may not reach the MCP endpoint");
+      return;
+    }
+    next();
+  });
   router.all(`${basePath}/:server`, express.json({ limit: BODY_LIMIT }), async (req: Request, res: Response) => {
     try {
       const token = bearerToken(req);
