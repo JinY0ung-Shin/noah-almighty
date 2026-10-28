@@ -642,6 +642,10 @@ export class StoreBase {
     // the previous turn was still running (see StoredMessage.kind). NULL on
     // every ordinary row, so the mapper omits the field entirely for those.
     this.addColumnIfMissing("messages", "kind", "TEXT");
+    // Who answered a `kind = 'consultation'` row (a teammate avatar a pi run
+    // consulted in the background): JSON `MessageConsultationSource`. NULL on
+    // every other row.
+    this.addColumnIfMissing("messages", "consultation_json", "TEXT");
     // Where an assistant row's segment ended in the LOCAL SDK transcript (the
     // session id + last main-chain assistant uuid), so a later rewind can
     // resume exactly there (SDK resume + resumeSessionAt, forked). NULL on user

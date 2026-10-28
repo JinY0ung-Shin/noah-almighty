@@ -102,7 +102,14 @@ export interface SteerPublic {
   createdAt: string;
   followUp: boolean;
   /**
-   * The persisted `kind: "steer"` user row, `null` when the conversation was
+   * Present when Noah pushed it, not the viewer: a consulted teammate avatar's
+   * answer (persisted as `kind: "consultation"`). Never a pending "나" bubble,
+   * never handed back to the composer when dropped.
+   */
+  source?: import("../../../server/types.js").MessageConsultationSource;
+  /**
+   * The persisted user row (`kind: "steer"`, or `"consultation"` with a
+   * `source`), `null` when the conversation was
    * deleted mid-run. Present only on the `delivered` SSE frame — the POST
    * response's steer never carries it, and the other three states omit the key.
    */

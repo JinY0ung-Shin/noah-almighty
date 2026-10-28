@@ -1388,6 +1388,14 @@ body.col-resizing .canvas-html-frame {
   font-weight: 500;
 }
 
+/* A consulted teammate avatar's answer, delivered by Noah: the avatars' side
+   (left, panel bubble) under that avatar's name, plain text like a user bubble. */
+.message.consultation .bubble {
+  white-space: pre-wrap;
+  border-style: dashed;
+  border-bottom-left-radius: var(--r-sm);
+}
+
 /* Attached images inside a chat bubble. `white-space: pre-wrap` on the bubble
    would otherwise add stray whitespace around the block, so the strip is a flex
    row; a margin separates it from any caption text below. */

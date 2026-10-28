@@ -164,11 +164,14 @@ export async function runPiAgent(
   // steer boundary, exactly where the SDK loop moves its fold index.
   let anchorText = "";
   // Background jobs of this run (ask_avatar in an interactive chat): a result
-  // rides the steer channel — the model text + the Korean bubble — and becomes
-  // a follow-up turn below.
+  // rides the steer channel — the model text (with its provenance) + the Korean
+  // bubble + WHO answered, so the route persists it as that avatar's row, never
+  // as the owner's — and becomes a follow-up turn below.
   const steerChannel = events?.steers;
   const asyncJobs = steerChannel
-    ? new PiAsyncJobs((delivery) => Boolean(steerChannel.push(delivery.agentText, { displayText: delivery.displayText })))
+    ? new PiAsyncJobs((delivery) =>
+        Boolean(steerChannel.push(delivery.agentText, { displayText: delivery.displayText, source: delivery.source })),
+      )
     : undefined;
   const capabilities = await buildRunCapabilities(
     request,

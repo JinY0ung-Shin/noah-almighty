@@ -12,6 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import logger from "../../logger.js";
+import type { SteerSource } from "../steerChannel.js";
 
 const log = logger.child({ module: "agent", component: "pi-async" });
 
@@ -20,6 +21,12 @@ export interface PiAsyncDelivery {
   agentText: string;
   /** What the chat shows and persists as the row (Korean). */
   displayText: string;
+  /**
+   * Who the result comes from. The row is persisted as THEIRS
+   * (`kind: "consultation"`), so a history rebuild never re-feeds it as the
+   * owner's own words.
+   */
+  source: SteerSource;
 }
 
 export class PiAsyncJobs {

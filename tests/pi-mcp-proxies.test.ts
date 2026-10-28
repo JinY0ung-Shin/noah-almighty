@@ -564,6 +564,10 @@ describe("asynchronous tools on pi", () => {
       const record = steers.records()[0]!;
       expect(record.displayText).toBe("@mate 아바타의 답변이 도착했습니다.\n\nShip it on Friday.");
       expect(record.state).toBe("completed");
+      // Live delivery keeps the provenance line, and the record says WHO answered,
+      // so the route persists it as that avatar's row (never the owner's).
+      expect(record.text).toContain("Delivered by Noah, not typed by the user.");
+      expect(record.source).toEqual({ kind: "consultation", id: expect.stringMatching(/^ask-[0-9a-f]{8}$/), username: "mate", displayName: "Mate" });
     } finally {
       await broker.close();
     }
@@ -617,7 +621,7 @@ describe("asynchronous tools on pi", () => {
     });
     jobs.start("ask", async (signal) => {
       await new Promise((resolve) => setTimeout(resolve, 30));
-      return signal.aborted ? null : { agentText: "late", displayText: "늦음" };
+      return signal.aborted ? null : { agentText: "late", displayText: "늦음", source: { kind: "consultation", id: "ask-1" } };
     });
     jobs.abortAll();
     await jobs.waitForChange(undefined, 1000);

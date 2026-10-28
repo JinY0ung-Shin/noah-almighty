@@ -348,6 +348,39 @@ describe("ChatView transcript · mid-turn messages", () => {
     expect(rows[0].querySelector(".steer-badge")).toBeNull();
     expect(rows[1].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
   });
+
+  it("renders a consulted avatar's answer under THAT avatar's name, never as 나, with no 편집", () => {
+    const question = {
+      id: "u-ask",
+      conversationId: "conv-1",
+      role: "user",
+      content: "@mate에게 물어봐줘",
+      createdAt: "2026-07-26T01:00:00.000Z",
+      response: null,
+    } as unknown as StoredMessage;
+    const answer = {
+      ...question,
+      id: "u-answer",
+      content: "@mate 아바타의 답변이 도착했습니다.\n\n금요일에 배포해요",
+      kind: "consultation",
+      consultation: { id: "ask-0123abcd", username: "mate", displayName: "Mate" },
+    } as unknown as StoredMessage;
+    const anonymous = { ...answer, id: "u-anon", consultation: { id: "" } } as unknown as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([question, answer, anonymous])], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    // Only the owner's own question is a "나" row.
+    expect(container.querySelectorAll(".message.user")).toHaveLength(1);
+    const rows = Array.from(container.querySelectorAll(".message.consultation"));
+    expect(rows).toHaveLength(2);
+    const role = rows[0].querySelector(".msg-role")!.textContent!;
+    expect(role).toContain("@mate (Mate) 아바타의 답변");
+    expect(role).not.toContain("나");
+    expect(rows[0].querySelector(".steer-badge")?.textContent).toBe("팀원 상담 결과");
+    expect(rows[0].querySelector(".bubble")?.textContent).toContain("금요일에 배포해요");
+    expect(rows[1].querySelector(".msg-role")!.textContent).toContain("팀원 아바타의 답변");
+    expect(rows.every((r) => !r.querySelector('button[aria-label="편집"]'))).toBe(true);
+  });
 });
 
 /* ------------------------------------------------------------------ */

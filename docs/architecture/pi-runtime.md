@@ -241,12 +241,18 @@ holds it:
   gates (`preflightAvatarAsk` — unknown/self/untrusted refuse at once) and returns `Consultation ask-<id> … started in
   the background`. The consultation (still on the SDK runner, `piRuntimeSupports`) runs as a `PiAsyncJobs` job; its
   result is pushed into the run's SteerChannel with BOTH texts (`askOutcomeDelivery`: English with provenance for the
-  model, a Korean bubble carrying the answer for the chat — `SteerRecord.displayText`, persisted as the `kind:
-  "steer"` row). After the pi response completes, `runPiAgent` keeps the run OPEN while jobs are pending (status
-  `팀원 아바타의 답변을 기다리는 중…`, capped at the consultation budget + 30 s; a message the user sends wakes it too),
-  then delivers everything queued as ONE follow-up turn (the steer `turn_end` contract). So the answer always lands
-  in a live run the client is attached to — no server-started turn the client would only discover on reload. A run
-  that ends anyway (cancel, error) aborts its jobs; nothing is delivered later.
+  model, a Korean bubble carrying the answer for the chat — `SteerRecord.displayText` — plus WHO answered,
+  `SteerRecord.source`). The route persists it as a `kind: "consultation"` user row with that source
+  (`messages.consultation_json`), NEVER as a `steer` the owner typed: another avatar's answer is untrusted input, and
+  any history rebuild (a fresh session after a cancel, model change, heal or rewind; `read_conversation`) re-feeds
+  it framed by `consultationHistoryText` as that avatar's untrusted data, never as the owner's words. It is never a
+  rewind/regenerate anchor, the client renders it under the consulted avatar's name (`@x 아바타의 답변`, badge `팀원
+  상담 결과`), never shows it as a pending "나" bubble and never hands a dropped one back to the composer
+  (`SteerPublic.source`). After the pi response completes, `runPiAgent` keeps the run OPEN while jobs are pending
+  (status `팀원 아바타의 답변을 기다리는 중…`, capped at the consultation budget + 30 s; a message the user sends wakes
+  it too), then delivers everything queued as ONE follow-up turn (the steer `turn_end` contract). So the answer always
+  lands in a live run the client is attached to — no server-started turn the client would only discover on reload. A
+  run that ends anyway (cancel, error) aborts its jobs; nothing is delivered later.
 - **Unattended pi runs** (routines, task API — no steer channel) keep the waiting call (`avatars` broker timeout
   240 s ≥ the 3 min consultation budget).
 - **Canvas**: on pi `neverWait` — controls always render non-blocking (the existing `wait:false` path) and the

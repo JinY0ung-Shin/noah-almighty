@@ -2243,6 +2243,31 @@ describe("mid-turn messages (steers)", () => {
     expect(get(toasts).filter((t) => t.message.includes("되돌려 두었습니다"))).toHaveLength(1);
   });
 
+  it("a consulted avatar's answer is never the viewer's: no pending bubble, no draft restore, delivered as its row", async () => {
+    const source = { id: "ask-0123abcd", username: "mate", displayName: "Mate" };
+    const id = seedPane({ draft: "쓰던 글" });
+    const row = {
+      ...steerUserRow("um-c1", "@mate 아바타의 답변이 도착했습니다.\n\n금요일"),
+      kind: "consultation",
+      consultation: source,
+    };
+    await driveEvents(id, [
+      steerFrame("s-consult-1", "queued", "@mate 아바타의 답변이 도착했습니다.\n\n금요일", { source }),
+      steerFrame("s-consult-1", "delivered", "@mate 아바타의 답변이 도착했습니다.\n\n금요일", { source, message: row }),
+      // A run that ended before taking one: dropped, and NOT handed to the composer.
+      steerFrame("s-consult-2", "queued", "@mate 아바타의 답변이 도착했습니다.\n\n늦음", { source }),
+      steerFrame("s-consult-2", "dropped", "@mate 아바타의 답변이 도착했습니다.\n\n늦음", { source }),
+      // Delivered after the conversation was deleted: the stand-in keeps the provenance.
+      steerFrame("s-consult-3", "delivered", "@mate 아바타의 답변", { source, message: null }),
+    ]);
+    const p = pane(id);
+    expect(p.steers).toEqual([]);
+    expect(p.draft).toBe("쓰던 글");
+    expect(get(toasts).filter((t) => t.message.includes("되돌려 두었습니다"))).toHaveLength(0);
+    expect(p.messages.find((m) => m.id === "um-c1")).toMatchObject({ kind: "consultation", consultation: source });
+    expect(p.messages.find((m) => m.id === "s-consult-3")).toMatchObject({ role: "user", kind: "consultation", consultation: source });
+  });
+
   it("a completed steer just drops any pending row it still has", async () => {
     const id = seedPane();
     await driveEvents(id, [

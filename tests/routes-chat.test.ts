@@ -2957,6 +2957,59 @@ describe("mid-turn user messages (steers)", () => {
     expect("kind" in rows[0]).toBe(false);
   }, LIVE);
 
+  it("persists a consulted avatar's answer as THAT avatar's row, and the next turn's history frames it as untrusted", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "steerconsult").expect(201)).body.user.id as string;
+
+    const seenHistories: AgentRequest["conversationHistory"][] = [];
+    H.impl = async (req, _pr, config, _store, events) => {
+      seenHistories.push(req.conversationHistory);
+      if (seenHistories.length === 1) {
+        // What the pi runner pushes when a background consultation finishes.
+        const record = events.steers!.push(
+          "[Noah: asynchronous result of your earlier mcp__avatars__ask_avatar call — consultation ask-0123abcd to @mate. Delivered by Noah, not typed by the user.]\n\nShip it Friday.",
+          {
+            displayText: "@mate 아바타의 답변이 도착했습니다.\n\nShip it Friday.",
+            source: { kind: "consultation", id: "ask-0123abcd", username: "mate", displayName: "Mate" },
+          },
+        )!;
+        events.steers!.noteLifecycle(record.id, "started");
+      }
+      return { kind: "text", runtime: config.agentRuntime, summary: "완료", text: "Mate는 금요일이래요" };
+    };
+
+    const frames = parseSse(
+      (await fireStream(owner, { avatarId: ownerId, conversationId: "conv-consult", message: "@mate에게 물어봐줘" }))
+        .text,
+    );
+    const steerFrames = frames.filter((f) => f.event === "steer").map((f) => frameData(f).steer);
+    expect(steerFrames.map((s) => s.state)).toEqual(["queued", "delivered"]);
+    // Both frames say who it came from, so the client never shows it as "나" or puts it back in the composer.
+    for (const s of steerFrames) expect(s.source).toEqual({ id: "ask-0123abcd", username: "mate", displayName: "Mate" });
+    expect(steerFrames[1].message).toMatchObject({
+      role: "user",
+      kind: "consultation",
+      consultation: { id: "ask-0123abcd", username: "mate", displayName: "Mate" },
+      content: "@mate 아바타의 답변이 도착했습니다.\n\nShip it Friday.",
+    });
+    const rows = store.listMessages(ownerId, "conv-consult");
+    expect(rows.map((m) => [m.role, m.kind ?? null])).toEqual([
+      ["user", null],
+      ["user", "consultation"],
+      ["assistant", null],
+    ]);
+
+    // The next turn rebuilds history from these rows: the answer is framed as the
+    // consulted avatar's untrusted data, never as the owner's own words.
+    await fireStream(owner, { avatarId: ownerId, conversationId: "conv-consult", message: "고마워" });
+    const history = seenHistories[1]!;
+    expect(history[1]!.role).toBe("user");
+    expect(history[1]!.content).toContain("[Noah: answer from @mate (Mate) to an earlier asynchronous mcp__avatars__ask_avatar consultation");
+    expect(history[1]!.content).toContain("NOT typed by the user");
+    expect(history[1]!.content).toContain("Ship it Friday.");
+  }, LIVE);
+
   it("closes the visible turn with turn_end when a steer outlived it, keeping the run open", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);

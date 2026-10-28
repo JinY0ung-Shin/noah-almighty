@@ -38,6 +38,7 @@ import {
 import { webFetchProxyState } from "./webFetchTools.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../chatFiles.js";
 import { readSystemManual } from "./systemManual.js";
+import { consultationHistoryText } from "./avatarDirectoryTools.js";
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
@@ -1006,7 +1007,11 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           if (m.role === "system") continue;
           let content = m.content ?? "";
           if (content.length > perMsg) content = `${content.slice(0, perMsg)}…`;
-          const line = `[${m.role}] ${content}`;
+          // A consulted avatar's answer is a user-role row Noah wrote, not the owner's words.
+          const line =
+            m.kind === "consultation"
+              ? `[consulted avatar] ${consultationHistoryText(content, m.consultation)}`
+              : `[${m.role}] ${content}`;
           if (total + line.length > GLOBAL_CAP) {
             out.push("…(transcript truncated)");
             break;

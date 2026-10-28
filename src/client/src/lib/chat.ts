@@ -524,7 +524,20 @@ export async function clearChatHistory(): Promise<number> {
  * same run), so there is no turn boundary in front of it to restart from.
  */
 function isTurnOpener(message: StoredMessage | undefined): boolean {
-  return message?.role === "user" && message.kind !== "steer";
+  // A consulted avatar's answer arrives the same way (and is not the viewer's).
+  return message?.role === "user" && message.kind !== "steer" && message.kind !== "consultation";
+}
+
+/**
+ * The label of a consulted teammate avatar's answer row (`kind: "consultation"`):
+ * Noah delivered it, so it is attributed to that avatar, never to "나".
+ */
+export function consultationLabel(message: StoredMessage): string {
+  const source = message.consultation;
+  const who = source?.username
+    ? `@${source.username}${source.displayName ? ` (${source.displayName})` : ""}`
+    : "팀원";
+  return `${who} 아바타의 답변`;
 }
 
 /**
@@ -1901,6 +1914,9 @@ function settleSteer(id: string): boolean {
 
 function upsertPendingSteer(pane: ChatPane, steer: SteerPublic): void {
   if (settledSteers.has(steer.id)) return;
+  // A consulted avatar's answer is not the viewer's message: it appears once
+  // delivered, attributed to that avatar — never as a pending "나" bubble.
+  if (steer.source) return;
   const list = pane.steers || [];
   if (list.some((item) => item.id === steer.id)) return;
   pane.steers = [
@@ -1951,7 +1967,9 @@ function handleSteer(
                   conversationId: pane.conversationId,
                   role: "user",
                   content: steer.text,
-                  kind: "steer",
+                  ...(steer.source
+                    ? { kind: "consultation" as const, consultation: steer.source }
+                    : { kind: "steer" as const }),
                   response: null,
                   createdAt: steer.createdAt,
                 };
@@ -1968,8 +1986,9 @@ function handleSteer(
       return;
     case "dropped": {
       updatePane(paneId, (pane) => dropPendingSteer(pane, steer.id));
-      // It never reached the model, so the text is the user's again.
-      if (!settleSteer(steer.id)) return;
+      // It never reached the model, so the text is the user's again — unless
+      // Noah pushed it (a consulted avatar's answer): that was never theirs.
+      if (!settleSteer(steer.id) || steer.source) return;
       restoreSteerDraft(paneId, steer.text);
       notify(
         "응답이 끝나 전달되지 않은 메시지를 입력창에 되돌려 두었습니다.",

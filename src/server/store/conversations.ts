@@ -8,6 +8,7 @@ import type {
   CanvasVersion,
   ConversationSummary,
   MessageAttachment,
+  MessageConsultationSource,
   SdkResumePoint,
   StoredMessage,
 } from "../types.js";
@@ -548,6 +549,24 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
+     * Parse a consultation row's source column. A corrupt or missing value still
+     * yields an (anonymous) source: the row stays marked as NOT the owner's words.
+     */
+    private parseConsultationJson(json: string | null): MessageConsultationSource {
+      try {
+        const parsed = json ? (JSON.parse(json) as Partial<MessageConsultationSource>) : {};
+        return {
+          id: typeof parsed.id === "string" ? parsed.id : "",
+          ...(typeof parsed.username === "string" && parsed.username ? { username: parsed.username } : {}),
+          ...(typeof parsed.displayName === "string" && parsed.displayName ? { displayName: parsed.displayName } : {}),
+        };
+      } catch {
+        logger.warn("skipping corrupt consultation_json on a stored message");
+        return { id: "" };
+      }
+    }
+
+    /**
      * The attachment lists of a conversation's persisted messages, NEWEST
      * message first (messages without attachments skipped; entries that are
      * not attachment objects dropped). Owner-scoped: [] when `ownerId` does not
@@ -608,6 +627,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         response_json: string | null;
         attachments_json: string | null;
         kind: string | null;
+        consultation_json: string | null;
         created_at: string;
       }[];
       return rows.map((r) => ({
@@ -620,6 +640,9 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         // before the column existed (no `kind` key at all), so nothing that
         // compares stored messages has to learn about it.
         ...(r.kind === "steer" || r.kind === "queued" ? { kind: r.kind } : {}),
+        ...(r.kind === "consultation"
+          ? { kind: r.kind, consultation: this.parseConsultationJson(r.consultation_json) }
+          : {}),
         response: this.parseResponseJson(r.response_json),
         createdAt: r.created_at,
       }));
@@ -638,8 +661,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
          * message the model never received must not appear in history at all.
          * `"queued"` for a USER row written while ANOTHER run is active on the
          * thread (an enqueue) — it can never anchor a rewind.
+         * `"consultation"` (with `consultation`) for a row NOAH wrote: a
+         * consulted teammate avatar's answer, never the owner's words.
          */
-        kind?: "steer" | "queued";
+        kind?: "steer" | "queued" | "consultation";
+        /** Who answered — stored only with `kind: "consultation"`. */
+        consultation?: MessageConsultationSource;
         /**
          * Where this ASSISTANT row's segment ended in the local SDK transcript —
          * what a later rewind onto the next user row resumes at. Server-only:
@@ -651,10 +678,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const id = crypto.randomUUID();
       const createdAt = now();
       const attachments = input.attachments?.length ? input.attachments : undefined;
+      const consultation =
+        input.kind === "consultation" ? (input.consultation ?? { id: "" }) : undefined;
       this.db
         .prepare(
-          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, sdk_session_id, sdk_uuid, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, consultation_json, sdk_session_id, sdk_uuid, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -664,6 +693,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           input.response ? JSON.stringify(input.response) : null,
           attachments ? JSON.stringify(attachments) : null,
           input.kind ?? null,
+          consultation ? JSON.stringify(consultation) : null,
           input.resumePoint?.sessionId ?? null,
           input.resumePoint?.uuid ?? null,
           createdAt,
@@ -675,6 +705,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         content: input.content,
         attachments,
         ...(input.kind ? { kind: input.kind } : {}),
+        ...(consultation ? { consultation } : {}),
         response: input.response ?? null,
         createdAt,
       };
@@ -1047,7 +1078,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
      * message. A steer sits mid-turn (folded after a tool call, or heading a
      * follow-up turn of the same run), so the run it belongs to started at the
      * ordinary message before it — re-running from the steer would drop that
-     * message from the re-run's context. Owner-scoped; null when there is none.
+     * message from the re-run's context. A consulted avatar's answer
+     * (`consultation`) arrives the same way and is skipped alike — and it is
+     * not the owner's message to re-run at all. Owner-scoped; null when there
+     * is none.
      */
     findRegenerateAnchorId(ownerId: string, conversationId: string): string | null {
       if (!this.ownsConversation(ownerId, conversationId)) {
@@ -1055,7 +1089,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       }
       const row = this.db
         .prepare(
-          "SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' AND (kind IS NULL OR kind <> 'steer') ORDER BY rowid DESC LIMIT 1",
+          "SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' AND (kind IS NULL OR kind NOT IN ('steer', 'consultation')) ORDER BY rowid DESC LIMIT 1",
         )
         .get(conversationId) as { id: string } | undefined;
       return row?.id ?? null;

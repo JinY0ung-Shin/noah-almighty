@@ -717,6 +717,18 @@ export interface MessageAttachment {
   anchor?: number;
 }
 
+/**
+ * The consulted avatar behind a `kind: "consultation"` row (see
+ * {@link StoredMessage.kind}). `username` is absent when the target could not
+ * be resolved.
+ */
+export interface MessageConsultationSource {
+  /** The background job id (`ask-<8 hex>`) the model was given. */
+  id: string;
+  username?: string;
+  displayName?: string;
+}
+
 export interface StoredMessage {
   id: string;
   conversationId: string;
@@ -737,8 +749,19 @@ export interface StoredMessage {
    * its row was written). Such a row sits BEFORE that earlier run's answer in
    * rowid order, so "every row after it" is not its own run's output — a
    * rewind/regenerate can never anchor on it. Renders as an ordinary user bubble.
+   *
+   * `"consultation"` marks a row NOAH wrote, not the viewer: the answer of a
+   * teammate avatar a pi run consulted in the background (asynchronous
+   * `mcp__avatars__ask_avatar`, design D8), delivered to the model as a
+   * follow-up message. It is a `role: "user"` row so the transcript keeps its
+   * alternation, but it is NEVER the owner's words: the history builder wraps
+   * it as untrusted data from that avatar (`consultationHistoryText`), it is
+   * never a rewind/regenerate anchor, and the client renders it attributed to
+   * the consulted avatar. `consultation` says which one.
    */
-  kind?: "steer" | "queued";
+  kind?: "steer" | "queued" | "consultation";
+  /** Who answered — on a `kind: "consultation"` row only. */
+  consultation?: MessageConsultationSource;
   response: AgentResponse | null;
   createdAt: string;
 }

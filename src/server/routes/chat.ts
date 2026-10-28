@@ -20,10 +20,12 @@ import type {
   AgentRewindInfo,
   AppConfig,
   MessageAttachment,
+  MessageConsultationSource,
   SdkResumePoint,
   StoredMessage,
 } from "../types.js";
 import type { ConversationRewindPlan } from "../store/conversations.js";
+import { consultationHistoryText } from "../agent/avatarDirectoryTools.js";
 import type {
   BrowserCookie,
   BrowserStorageEntry,
@@ -425,6 +427,11 @@ export function conversationHistoryForPrompt(
     if (!message.content.trim() || isEmptyStoppedAssistant(message)) {
       return [];
     }
+    // A consulted avatar's answer is a user-role row Noah wrote: it re-enters
+    // framed as that avatar's untrusted data, never as the owner's words.
+    if (message.kind === "consultation") {
+      return [{ role: "user", content: consultationHistoryText(message.content, message.consultation) }];
+    }
     return [{ role: message.role, content: message.content }];
   });
 }
@@ -528,7 +535,8 @@ function planTurnRewind(
   if (!plan) {
     return { ok: false, refusal: { status: 404, message: "메시지를 찾을 수 없습니다." } };
   }
-  if (plan.anchor.role !== "user" || plan.anchor.kind === "steer") {
+  // A consulted avatar's answer is not the owner's message: never an edit anchor.
+  if (plan.anchor.role !== "user" || plan.anchor.kind === "steer" || plan.anchor.kind === "consultation") {
     return {
       ok: false,
       refusal: { status: 400, message: "이 메시지에서는 다시 시작할 수 없습니다." },
@@ -688,12 +696,29 @@ export interface SteerPublic {
   state: SteerRecord["state"];
   createdAt: string;
   followUp: boolean;
-  /** The persisted `kind: "steer"` user row. Only on the `delivered` frame. */
+  /**
+   * Present when NOAH pushed it, not the viewer: a consulted avatar's answer.
+   * The client never shows it as the viewer's pending bubble and never hands it
+   * back to the composer when it is dropped.
+   */
+  source?: MessageConsultationSource;
+  /**
+   * The persisted user row (`kind: "steer"`, or `kind: "consultation"` with a
+   * `source`). Only on the `delivered` frame.
+   */
   message?: StoredMessage | null;
+}
+
+/** A channel record's source as the stored/wire shape (the channel's `kind` tag dropped). */
+function consultationSourceOf(record: SteerRecord): MessageConsultationSource | undefined {
+  if (!record.source) return undefined;
+  const { kind: _kind, ...source } = record.source;
+  return source;
 }
 
 /** Project a channel record onto the wire shape (drops nothing sensitive; it is the viewer's own text). */
 function publicSteer(record: SteerRecord): SteerPublic {
+  const source = consultationSourceOf(record);
   return {
     id: record.id,
     // A machine-delivered message (a pi run's async tool result) shows its Korean bubble.
@@ -701,6 +726,7 @@ function publicSteer(record: SteerRecord): SteerPublic {
     state: record.state,
     createdAt: record.createdAt,
     followUp: record.followUp,
+    ...(source ? { source } : {}),
   };
 }
 
@@ -1400,10 +1426,14 @@ export async function executeChatTurn(
       let message: StoredMessage | null = null;
       try {
         if (store.conversationOwner(conversationId) === ownerUserId) {
+          // A consulted avatar's answer is persisted as THAT avatar's row
+          // (provenance kept), never as a steer the owner typed — a later
+          // history rebuild would otherwise hand it back as the owner's words.
+          const source = consultationSourceOf(record);
           message = store.addMessage(conversationId, {
             role: "user",
             content: record.displayText ?? record.text,
-            kind: "steer",
+            ...(source ? { kind: "consultation" as const, consultation: source } : { kind: "steer" as const }),
           });
         }
       } catch (err) {

@@ -33,6 +33,15 @@ import { randomUUID } from "node:crypto";
  */
 export type SteerState = "queued" | "delivered" | "completed" | "dropped";
 
+/** Who a machine-delivered record comes from (see {@link SteerRecord.source}). */
+export interface SteerSource {
+  kind: "consultation";
+  /** The background job id the model was given. */
+  id: string;
+  username?: string;
+  displayName?: string;
+}
+
 export interface SteerRecord {
   /** Also the SDK user message's `uuid`, which is how the CLI keys its lifecycle frames. */
   id: string;
@@ -44,6 +53,13 @@ export interface SteerRecord {
    * the model, a Korean bubble for the user. Absent for a typed message.
    */
   displayText?: string;
+  /**
+   * Set when NOAH pushed the record, not the viewer: a consulted teammate
+   * avatar's answer (`pi/asyncJobs.ts`). Persisted as a `kind: "consultation"`
+   * row carrying this source — never as the viewer's own message — and never
+   * handed back to the composer when it is dropped.
+   */
+  source?: SteerSource;
   createdAt: string;
   state: SteerState;
   /**
@@ -85,7 +101,7 @@ export class SteerChannel {
    * turn is wrapping up, so nothing more can reach the model) — the route maps
    * that to a 410.
    */
-  push(text: string, options: { displayText?: string } = {}): SteerRecord | null {
+  push(text: string, options: { displayText?: string; source?: SteerSource } = {}): SteerRecord | null {
     if (this.isClosed) {
       return null;
     }
@@ -93,6 +109,7 @@ export class SteerChannel {
       id: randomUUID(),
       text,
       ...(options.displayText !== undefined ? { displayText: options.displayText } : {}),
+      ...(options.source ? { source: options.source } : {}),
       createdAt: new Date().toISOString(),
       state: "queued",
       followUp: false,

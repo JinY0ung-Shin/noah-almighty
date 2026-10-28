@@ -17,6 +17,7 @@
     closePane,
     hasVisibleImages,
     isRewindAnchor,
+    consultationLabel,
     messageKey,
     newChat,
     openFileTab,
@@ -1295,10 +1296,15 @@
           <!-- Named in the markup (not read inside a helper) so legacy-mode
                tracking re-renders the bubble the moment the editor opens/closes. -->
           {@const editing = message.role === "user" && item.rewindEdit?.messageId === message.id}
-          <div class={`message ${message.role}`}>
+          <!-- A consulted teammate avatar's answer (kind "consultation") is a
+               user-role row Noah wrote: it renders on the avatars' side under
+               THAT avatar's name, never as "나", and offers no edit. -->
+          {@const consultation = message.role === "user" && message.kind === "consultation"}
+          <div class={`message ${consultation ? "consultation" : message.role}`}>
             <div class="msg-role">
               <span class="role-dot"></span>
-              <span>{message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>
+              <span>{consultation ? consultationLabel(message) : message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>
+              {#if consultation}<span class="tag steer-badge">팀원 상담 결과</span>{/if}
               <!-- A message the viewer sent WHILE the avatar was answering. The
                    badge is what tells it apart from an ordinary turn: it landed
                    between the previous turn's tool calls, not after it. -->
