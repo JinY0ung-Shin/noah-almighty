@@ -24,17 +24,21 @@ export function craftAppLabelKo(appId: string): string {
 /** Defensive parse of the `/api/me` field; anything malformed is "no Craft apps". */
 export function normalizeCraftApps(raw: unknown): CraftAppsInfo | null {
   if (!raw || typeof raw !== "object") return null;
-  const value = raw as { enabled?: unknown; apps?: unknown };
+  const value = raw as { enabled?: unknown; configured?: unknown; runnerReachable?: unknown; apps?: unknown };
   const apps = Array.isArray(value.apps)
     ? value.apps.flatMap((app) => {
-        const id = (app as { id?: unknown } | null)?.id;
-        const status = (app as { status?: unknown } | null)?.status;
+        const { id, status, version } = (app ?? {}) as { id?: unknown; status?: unknown; version?: unknown };
         return typeof id === "string" && typeof status === "string" && CRAFT_STATUSES.has(status)
-          ? [{ id, status: status as CraftAppStatus }]
+          ? [{ id, status: status as CraftAppStatus, ...(typeof version === "string" && version ? { version } : {}) }]
           : [];
       })
     : [];
-  return { enabled: value.enabled === true, apps };
+  return {
+    enabled: value.enabled === true,
+    ...(typeof value.configured === "boolean" ? { configured: value.configured } : {}),
+    ...(typeof value.runnerReachable === "boolean" ? { runnerReachable: value.runnerReachable } : {}),
+    apps,
+  };
 }
 
 /**

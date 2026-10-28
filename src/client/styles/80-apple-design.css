@@ -812,7 +812,7 @@ button:disabled {
 /* Scroll edges read as depth, not a stack of hard separators. */
 .rail-history,
 .settings-body,
-.admin-users,
+.admin-users > .admin-list,
 .inbox-list,
 .routine-manage-list {
   mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);

@@ -46,7 +46,7 @@ describe("craft tool-group availability", () => {
     expect([...CRAFT_TOOL_GROUP_IDS].sort()).toEqual(
       ["craft_designcraft", "craft_figcraft", "craft_photocraft", "craft_vectorcraft"],
     );
-    expect(craftAppLabelKo("photocraft")).toBe("포토크래프트");
+    expect(craftAppLabelKo("photocraft")).toBe("PhotoCraft");
     expect(craftAppLabelKo("unknown-app")).toBe("unknown-app");
   });
 
@@ -79,6 +79,20 @@ describe("craft tool-group availability", () => {
     expect(normalizeCraftApps({ enabled: "yes", apps: [{ id: "photocraft", status: "weird" }, null, { id: 3 }] })).toEqual({
       enabled: false,
       apps: [],
+    });
+    // Runner reachability and per-app versions ride along when the server sends them.
+    expect(
+      normalizeCraftApps({
+        enabled: true,
+        configured: true,
+        runnerReachable: false,
+        apps: [{ id: "photocraft", status: "ready", version: "0.16.0" }, { id: "figcraft", status: "unavailable", version: 7 }],
+      }),
+    ).toEqual({
+      enabled: true,
+      configured: true,
+      runnerReachable: false,
+      apps: [{ id: "photocraft", status: "ready", version: "0.16.0" }, { id: "figcraft", status: "unavailable" }],
     });
   });
 
@@ -204,7 +218,7 @@ function previewFrames(n: number, at: number, runId: string): Array<[number, str
 }
 
 describe("craft_preview", () => {
-  it("a following pane shows the card under the app's Korean name, with its slide", async () => {
+  it("a following pane shows the card under the app's display name, with its slide", async () => {
     const id = seedPane();
     await readLog(id, "run-c1", previewFrames(1, 1, "run-c1"));
     const tabs = pane(id).fileTabs ?? [];
@@ -212,7 +226,7 @@ describe("craft_preview", () => {
     expect(tabs[0]).toMatchObject({
       attachment: { id: "pc-1" },
       craftApp: "photocraft",
-      label: "포토크래프트 · 미리보기 1.png",
+      label: "PhotoCraft · 미리보기 1.png",
     });
     expect(tabs[0].slides.map((s) => s.id)).toEqual(["pc-1-s"]);
     expect(resolveSideTab(pane(id))).toEqual({ kind: "file", id: "pc-1" });

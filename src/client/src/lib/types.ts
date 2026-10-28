@@ -332,7 +332,11 @@ export type CraftAppStatus = "ready" | "failed" | "unavailable";
 /** `GET /api/me`'s `craftApps` (spec P1 §6): the admin toggle + per-app runner status. */
 export interface CraftAppsInfo {
   enabled: boolean;
-  apps: { id: string; status: CraftAppStatus }[];
+  /** Exchange env set on this deployment (absent = not reported). */
+  configured?: boolean;
+  /** The runner answered its last health probe (absent = not reported). */
+  runnerReachable?: boolean;
+  apps: { id: string; status: CraftAppStatus; version?: string }[];
 }
 
 /** One tab of the right-side panel: a canvas (artifact id) or an open file (attachment id). */

@@ -9,10 +9,10 @@
  * The MCP server name IS the app id, so the tools are `mcp__photocraft__*` etc.
  */
 export const CRAFT_APPS = [
-  { id: "photocraft",  labelKo: "포토크래프트",  labelEn: "PhotoCraft (Photoshop-style image editor)",  toolGroupId: "craft_photocraft" },
-  { id: "vectorcraft", labelKo: "벡터크래프트",  labelEn: "VectorCraft (Illustrator-style vector editor)", toolGroupId: "craft_vectorcraft" },
-  { id: "designcraft", labelKo: "디자인크래프트", labelEn: "DesignCraft (InDesign-style page layout)",     toolGroupId: "craft_designcraft" },
-  { id: "figcraft",    labelKo: "피그크래프트",  labelEn: "FigCraft (Figma-style UI design)",            toolGroupId: "craft_figcraft" },
+  { id: "photocraft",  labelKo: "PhotoCraft",    labelEn: "PhotoCraft (Photoshop-style image editor)",  toolGroupId: "craft_photocraft" },
+  { id: "vectorcraft", labelKo: "VectorCraft",   labelEn: "VectorCraft (Illustrator-style vector editor)", toolGroupId: "craft_vectorcraft" },
+  { id: "designcraft", labelKo: "DesignCraft",   labelEn: "DesignCraft (InDesign-style page layout)",     toolGroupId: "craft_designcraft" },
+  { id: "figcraft",    labelKo: "FigCraft",      labelEn: "FigCraft (Figma-style UI design)",            toolGroupId: "craft_figcraft" },
 ] as const;
 export type CraftAppId = (typeof CRAFT_APPS)[number]["id"];
 export type CraftApp = (typeof CRAFT_APPS)[number];

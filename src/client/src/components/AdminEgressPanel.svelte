@@ -133,10 +133,12 @@
 {/if}
 
 <style>
-  .egress-card { margin-bottom: 1rem; }
+  .egress-card { margin-bottom: var(--s-4); }
   .egress-add-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-  .egress-add-row label { display: flex; align-items: center; gap: .5rem; }
-  .egress-domains { list-style: none; padding: 0; max-height: 20rem; overflow-y: auto; }
-  .egress-domains li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .6rem 0; }
+  .egress-add-row label { display: flex; align-items: center; gap: .5rem; font-size: var(--t-sm); }
+  .egress-domains { list-style: none; margin: var(--s-3) 0; padding: 0; max-height: 20rem; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+  .egress-domains:empty { display: none; }
+  .egress-domains li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: var(--s-2) var(--s-3); font-size: var(--t-sm); }
+  .egress-domains li + li { border-top: 1px solid var(--line); }
   .egress-domains li div { min-width: 0; display: grid; gap: .2rem; overflow-wrap: anywhere; }
 </style>

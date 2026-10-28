@@ -66,28 +66,28 @@ export const MCP_TOOL_GROUPS = [
   // deployment with the craft-runner (the server gates every run regardless).
   {
     id: "craft_photocraft",
-    labelKo: "포토크래프트",
+    labelKo: "PhotoCraft",
     labelEn: "PhotoCraft",
     descriptionKo: "관리자 전용 베타 · 포토샵 스타일 이미지 편집 (craft-runner 필요)",
     defaultOff: true,
   },
   {
     id: "craft_vectorcraft",
-    labelKo: "벡터크래프트",
+    labelKo: "VectorCraft",
     labelEn: "VectorCraft",
     descriptionKo: "관리자 전용 베타 · 일러스트레이터 스타일 벡터 편집 (craft-runner 필요)",
     defaultOff: true,
   },
   {
     id: "craft_designcraft",
-    labelKo: "디자인크래프트",
+    labelKo: "DesignCraft",
     labelEn: "DesignCraft",
     descriptionKo: "관리자 전용 베타 · 인디자인 스타일 페이지 레이아웃 (craft-runner 필요)",
     defaultOff: true,
   },
   {
     id: "craft_figcraft",
-    labelKo: "피그크래프트",
+    labelKo: "FigCraft",
     labelEn: "FigCraft",
     descriptionKo: "관리자 전용 베타 · 피그마 스타일 UI 디자인 (craft-runner 필요)",
     defaultOff: true,

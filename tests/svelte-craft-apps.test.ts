@@ -4,7 +4,7 @@
 //   starts unchecked, a hidden one never counts in "N/M", and a pick persists
 //   on the conversation but never into the remembered default;
 // - 관리자 → 시스템 carries the Craft 앱 switch (PUT /api/admin/craft-apps).
-import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AdminView from "../src/client/src/views/AdminView.svelte";
@@ -130,10 +130,10 @@ describe("composer craft tool groups", () => {
     seedChat({ admin: true, craftApps: ready });
     const { container } = render(ChatView);
     const panel = await openPicker(container);
-    const photo = screen.getByRole("checkbox", { name: /포토크래프트/ }) as HTMLInputElement;
+    const photo = screen.getByRole("checkbox", { name: /PhotoCraft/ }) as HTMLInputElement;
     expect(photo.checked).toBe(false);
-    expect(screen.queryByRole("checkbox", { name: /벡터크래프트/ })).toBeNull();
-    expect(screen.queryByRole("checkbox", { name: /디자인크래프트/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /VectorCraft/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /DesignCraft/ })).toBeNull();
     expect(panel.querySelectorAll("input[type=checkbox]")).toHaveLength(nonCraftCount + 1);
     const button = container.querySelector("button.composer-tools-btn")!;
     expect(button.textContent).toContain(`/${nonCraftCount + 1}`);
@@ -143,7 +143,7 @@ describe("composer craft tool groups", () => {
     seedChat({ admin: false, craftApps: ready });
     const first = render(ChatView);
     await openPicker(first.container);
-    expect(screen.queryByRole("checkbox", { name: /크래프트/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /(Photo|Vector|Design|Fig)Craft/ })).toBeNull();
     expect(first.container.querySelector("button.composer-tools-btn")!.textContent).toContain(`${nonCraftCount}/${nonCraftCount}`);
     first.unmount();
 
@@ -151,7 +151,7 @@ describe("composer craft tool groups", () => {
     const second = render(ChatView);
     await openPicker(second.container);
     await waitFor(() => expect(calls.some((call) => call.url === "/api/me")).toBe(true));
-    expect(screen.queryByRole("checkbox", { name: /크래프트/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /(Photo|Vector|Design|Fig)Craft/ })).toBeNull();
   });
 
   it("a hidden craft group kept in a saved selection never counts", async () => {
@@ -167,19 +167,19 @@ describe("composer craft tool groups", () => {
     meCraftApps = ready;
     const { container } = render(ChatView);
     await openPicker(container);
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: /포토크래프트/ })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /PhotoCraft/ })).toBeTruthy());
   });
 
   it("a pick turns the group on for THIS conversation but not the remembered default", async () => {
     seedChat({ admin: true, craftApps: ready });
     const { container } = render(ChatView);
     await openPicker(container);
-    await fireEvent.click(screen.getByRole("checkbox", { name: /포토크래프트/ }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: /PhotoCraft/ }));
     expect(readState().chatPanes[0].mcpToolGroups).toContain("craft_photocraft");
     expect(readState().user!.mcpToolGroupsDefault).not.toContain("craft_photocraft");
     const put = calls.find((call) => call.method === "PUT" && call.url === "/api/me/chat-defaults")!;
     expect(JSON.parse(put.body!).mcpToolGroups).not.toContain("craft_photocraft");
-    expect((screen.getByRole("checkbox", { name: /포토크래프트/ }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: /PhotoCraft/ }) as HTMLInputElement).checked).toBe(true);
   });
 });
 
@@ -219,11 +219,35 @@ describe("관리자 → 시스템 Craft 앱 switch", () => {
     expect(JSON.parse(put.body!)).toEqual({ enabled: true });
     // The composer's view of availability follows the switch.
     await waitFor(() => expect(readState().craftApps?.enabled).toBe(true));
-    expect(screen.getByText("앱 상태: 포토크래프트 준비됨")).toBeTruthy();
+    const status = screen.getByRole("list", { name: "Craft 앱 상태" });
+    expect(within(status).getAllByRole("listitem").map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toEqual(["PhotoCraft 사용 가능"]);
 
     systemPayload = { ...systemPayload, craftAppsEnabled: false };
     await fireEvent.click(screen.getByRole("button", { name: "Craft 앱 끄기" }));
     await waitFor(() => expect(screen.getByText(/^꺼져 있습니다\./)).toBeTruthy());
     expect(JSON.parse(calls.filter((call) => call.method === "PUT").at(-1)!.body!)).toEqual({ enabled: false });
+  });
+
+  it("tells an app the runner does not serve apart from a runner it cannot reach", async () => {
+    systemPayload = { ...systemPayload, craftAppsEnabled: true };
+    meCraftApps = {
+      enabled: true,
+      configured: true,
+      runnerReachable: true,
+      apps: [{ id: "photocraft", status: "ready", version: "0.16.0" }, { id: "vectorcraft", status: "unavailable" }],
+    };
+    await openSystemTab();
+    const rows = () =>
+      within(screen.getByRole("list", { name: "Craft 앱 상태" }))
+        .getAllByRole("listitem")
+        .map((row) => row.textContent?.replace(/\s+/g, " ").trim());
+    await waitFor(() => expect(rows()).toEqual(["PhotoCraft v0.16.0 사용 가능", "VectorCraft 아직 미지원"]));
+    expect(screen.queryByText(/craft-runner에 연결할 수 없습니다/)).toBeNull();
+
+    cleanup();
+    meCraftApps = { enabled: true, configured: true, runnerReachable: false, apps: [{ id: "photocraft", status: "unavailable" }] };
+    await openSystemTab();
+    await waitFor(() => expect(rows()).toEqual(["PhotoCraft 연결 안 됨"]));
+    expect(screen.getByText(/craft-runner에 연결할 수 없습니다/)).toBeTruthy();
   });
 });

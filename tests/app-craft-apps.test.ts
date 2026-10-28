@@ -159,7 +159,7 @@ describe("chat route: Craft previews", () => {
     expect(first.app).toBe("photocraft");
     const files = frames.filter((frame) => frame.event === "file").map((frame) => (frame.data as { attachment: { id: string; hidden?: boolean; parentId?: string; name?: string } }).attachment);
     const card = files.find((attachment) => attachment.id === first.attachmentId)!;
-    expect(card.name).toBe("포토크래프트 미리보기.png");
+    expect(card.name).toBe("PhotoCraft 미리보기.png");
     expect(files.some((attachment) => attachment.hidden && attachment.parentId === card.id)).toBe(true);
     expect(results.at(-1)).toMatchObject({ published: [], skipped: 1 });
     const saved = store.listMessageAttachments(admin.id, "conv-craft").flat();

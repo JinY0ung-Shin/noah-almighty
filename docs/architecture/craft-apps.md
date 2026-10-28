@@ -209,7 +209,7 @@ conversation like the other copy folders.
 ## Previews, delivery, audit
 
 - Previews: the chat route's `onCraftPreview` publishes each image like a browser screenshot
-  (`publishCraftPreview` → visible file card "포토크래프트 미리보기.png" + hidden slide with
+  (`publishCraftPreview` → visible file card "PhotoCraft 미리보기.png" + hidden slide with
   `parentId`), at most `MAX_CRAFT_PREVIEWS_PER_MESSAGE` (12) per run, then emits
   `craft_preview {runId, app, attachmentId}` after the `file` events. The client follows it in the
   side panel.

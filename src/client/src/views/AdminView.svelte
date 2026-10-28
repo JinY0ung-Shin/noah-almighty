@@ -266,11 +266,19 @@
         ? "켜져 있습니다. 시스템 관리자가 채팅의 MCP 도구에서 Craft 앱을 고를 수 있습니다."
         : "꺼져 있습니다. 아무도 Craft 앱 도구를 쓸 수 없습니다.";
   // Runner health per app (`GET /api/me` craftApps) so an ON switch that still
-  // offers nothing in the composer says why. Unknown until the first read.
-  const CRAFT_STATUS_LABELS = { ready: "준비됨", failed: "시작 실패", unavailable: "연결 안 됨" } as const;
-  $: craftAppsHealth = ($appState.craftApps?.apps ?? [])
-    .map((app) => `${craftAppLabelKo(app.id)} ${CRAFT_STATUS_LABELS[app.status]}`)
-    .join(" · ");
+  // offers nothing in the composer says why. Unknown until the first read. An
+  // app the reachable runner does not register is "not supported yet", not a
+  // broken connection.
+  $: craftInfo = $appState.craftApps;
+  $: craftRunnerDown = craftInfo?.configured !== false && craftInfo?.runnerReachable === false;
+  $: craftAppRows = (craftInfo?.apps ?? []).map((app) => {
+    const label = craftAppLabelKo(app.id);
+    if (app.status === "ready") return { id: app.id, label, version: app.version ?? "", text: "사용 가능", tone: "ok" };
+    if (app.status === "failed") return { id: app.id, label, version: app.version ?? "", text: "시작 실패", tone: "danger" };
+    return craftInfo?.runnerReachable === true
+      ? { id: app.id, label, version: "", text: "아직 미지원", tone: "" }
+      : { id: app.id, label, version: "", text: "연결 안 됨", tone: "write" };
+  });
   $: hexTools = Array.isArray(sys.hexSshTools) ? sys.hexSshTools : [];
   $: hexSavedKey = hexPolicyKeyFromSaved(sys.hexSshToolPolicy || {}, hexTools);
   $: hexCurrentKey = hexPolicyKeyFromMatrix(hexPolicy, hexTools);
@@ -835,8 +843,12 @@
       {#if $appState.adminTab === "overview"}
         <div class="admin-list">
           <section class="settings-card">
-            <h3>현황</h3>
-            <p class="muted">이 인스턴스의 전체 사용 현황입니다.</p>
+            <div class="panel-section-head">
+              <div>
+                <h3>현황</h3>
+                <p class="muted">이 인스턴스의 전체 사용 현황입니다.</p>
+              </div>
+            </div>
             <div class="stat-grid">
               {#each statCards as c}
                 {#if c.target}
@@ -1111,6 +1123,7 @@
                   <h3>서버 에이전트</h3>
                   <p class="muted">사용자가 등록한 SSH 서버에서 Claude Code 에이전트를 실행해 작업을 위임하는 기능입니다. 기본값은 꺼짐입니다.</p>
                 </div>
+                <span class="tag {serverAgentsEnabled ? 'ok' : ''}">{serverAgentsEnabled ? "켜짐" : "꺼짐"}</span>
               </div>
               {#if serverAgentsConfirming}
                 <div class="warn-box" role="alert">{SERVER_AGENTS_WARNING}</div>
@@ -1136,8 +1149,9 @@
               <div class="panel-section-head">
                 <div>
                   <h3>Craft 앱 (관리자 전용 베타)</h3>
-                  <p class="muted">아바타가 포토크래프트 같은 Craft 앱으로 이미지를 편집합니다. 서버에 craft-runner 서비스가 있어야 하고, 시스템 관리자의 대화형 채팅에서만 쓸 수 있습니다. 기본값은 꺼짐입니다.</p>
+                  <p class="muted">아바타가 PhotoCraft 같은 Craft 앱으로 이미지를 편집합니다. 서버에 craft-runner 서비스가 있어야 하고, 시스템 관리자의 대화형 채팅에서만 쓸 수 있습니다. 기본값은 꺼짐입니다.</p>
                 </div>
+                <span class="tag {craftAppsEnabled ? 'ok' : ''}">{craftAppsEnabled ? "켜짐" : "꺼짐"}</span>
               </div>
               <div class="settings-save-row">
                 <span id={craftAppsStatusId} class="settings-save-status" class:pending={craftAppsBusy} class:invalid={Boolean(craftAppsError)} role="status" aria-live="polite">{craftAppsStatus}</span>
@@ -1147,8 +1161,20 @@
                   <button class="primary" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 켜기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(true)}>{craftAppsBusy ? "저장 중…" : "켜기"}</button>
                 {/if}
               </div>
-              {#if craftAppsEnabled && craftAppsHealth}
-                <p class="muted">앱 상태: {craftAppsHealth}</p>
+              {#if craftAppsEnabled && craftInfo?.configured === false}
+                <p class="warn-box">서버에 craft-runner 설정(CRAFT_EXCHANGE_DIR, CRAFT_CONTROL_SECRET)이 없어 켜져 있어도 쓸 수 없습니다.</p>
+              {:else if craftAppsEnabled && craftAppRows.length}
+                {#if craftRunnerDown}
+                  <p class="warn-box">craft-runner에 연결할 수 없습니다. craft-runner 컨테이너가 실행 중인지 확인하세요.</p>
+                {/if}
+                <ul class="craft-app-status" aria-label="Craft 앱 상태">
+                  {#each craftAppRows as row (row.id)}
+                    <li>
+                      <span class="craft-app-name"><strong>{row.label}</strong>{#if row.version}{" "}<span class="muted mono">v{row.version}</span>{/if}</span>
+                      <span class="tag {row.tone}">{row.text}</span>
+                    </li>
+                  {/each}
+                </ul>
               {/if}
             </section>
 

@@ -679,7 +679,7 @@ describe("Craft apps in a run", () => {
     await refreshCraftRunnerHealth(env.config);
     const { append } = await run({ ...env.ownerRequest, mcpToolGroups: [...DEFAULT_MCP_TOOL_GROUPS] }, env);
     expect(append).toContain('PhotoCraft (Photoshop-style image editor) v0.16.0 is ready on this deployment but OFF for this conversation');
-    expect(append).toContain('"포토크래프트"');
+    expect(append).toContain('"PhotoCraft"');
     expect(runner!.ops.map((op) => op.op)).not.toContain("open");
   });
 

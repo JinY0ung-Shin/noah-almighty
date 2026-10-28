@@ -586,7 +586,7 @@
 }
 
 .sys-card {
-  margin-bottom: var(--s-4);
+  margin-bottom: 0;
 }
 .sys-grid {
   display: grid;
@@ -619,7 +619,7 @@
 }
 .hex-policy-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(76px, 96px));
+  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(84px, 120px));
   gap: 1px;
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -636,10 +636,15 @@
   text-align: center;
 }
 .hex-policy-tool {
-  display: grid;
-  gap: var(--s-1);
+  /* Name · id · category on one line (wrapping when narrow); a grid cell
+     stretched the category chip into a full-width bar. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--s-2);
+  row-gap: var(--s-1);
   min-width: 220px;
-  padding: var(--s-2);
+  padding: var(--s-2) var(--s-3);
 }
 .hex-policy-tool strong {
   font-size: var(--t-sm);
@@ -650,7 +655,7 @@
 .hex-policy-check {
   display: grid;
   place-items: center;
-  min-height: 62px;
+  min-height: 44px;
   padding: var(--s-2);
 }
 
@@ -660,9 +665,117 @@
   border-color: var(--danger-line);
   background: var(--danger-soft);
 }
+.tag.ok {
+  color: var(--ok);
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+}
 .admin-panel {
-  margin-top: var(--s-3);
+  margin-top: var(--s-4);
   min-width: 0;
+  /* Starts on the tab bar's left edge and stops at a readable width — no
+     centred column floating in a wide window (user decision 2026-10-28). */
+  max-width: 1200px;
+}
+.admin-panel .admin-list,
+.admin-panel .admin-users {
+  max-width: none;
+  margin: 0;
+}
+.admin-panel .admin-users-head > .muted {
+  font-size: var(--t-sm);
+}
+/* The tool/skill pickers: tall enough that a long description is not cut mid-line. */
+.admin-panel .settings-form .external-agent-group-picker {
+  max-height: 360px;
+}
+.admin-panel .hex-policy-head:first-child {
+  text-align: left;
+  padding-inline: var(--s-3);
+}
+/* Section cards are forms and prose, not table rows: they get the settings
+   card padding; rows inside them keep the compact --pad-card. */
+.admin-panel > .admin-list {
+  gap: var(--s-4);
+}
+.admin-panel .settings-card {
+  padding: var(--s-5);
+}
+@media (max-width: 760px) {
+  .admin-panel .settings-card {
+    padding: var(--s-4);
+  }
+}
+/* Body copy in a card reads at --t-sm (an unstyled <p> fell back to 16px and
+   1em margins); the head's one-line description stays --t-xs. */
+.admin-panel .settings-card p {
+  margin: 0 0 var(--s-3);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+}
+.admin-panel .settings-card p:last-child {
+  margin-bottom: 0;
+}
+.admin-panel .settings-card .panel-section-head p {
+  margin: var(--s-0-5) 0 0;
+  font-size: var(--t-xs);
+}
+.admin-panel .settings-card > .settings-save-row + :is(p, ul) {
+  margin-top: var(--s-3);
+}
+/* A lone action sits where every other card's action sits: the right edge. */
+.admin-panel .settings-save-row > .primary:only-child {
+  margin-left: auto;
+}
+/* Qualifiers inside a field label (model ids, "매핑 없음 …") are notes, not label text. */
+.admin-panel .field > span .muted {
+  font-size: var(--t-xs);
+  font-weight: 400;
+}
+/* Checkbox option cards (built-in tool / skill policy): the form-wide
+   `.settings-form .field input { width: 100% }` stretched the checkbox and
+   pushed the text to the far edge; `.field span` made the description bold. */
+.settings-form .external-agent-group-option input[type="checkbox"] {
+  width: auto;
+  flex: none;
+  margin: 2px 0 0;
+}
+.field .external-agent-group-option > span {
+  color: var(--text);
+  font-weight: 400;
+}
+.field .external-agent-group-option small {
+  font-size: var(--t-xs);
+  font-weight: 400;
+}
+.craft-app-status {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.craft-app-status li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-2-5) var(--s-3);
+  font-size: var(--t-sm);
+}
+.craft-app-status li + li {
+  border-top: 1px solid var(--line);
+}
+.craft-app-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.craft-app-name .mono {
+  font-size: var(--t-xs);
 }
 .nowrap {
   white-space: nowrap;
