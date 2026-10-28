@@ -27,6 +27,21 @@ export interface AvatarDirectoryContext {
   askAvatar?: (targetUsername: string, question: string) => Promise<AvatarAskOutcome>;
   /** Whether to append the brain-ingest capture nudge to successful answers. */
   askCaptureHint?: boolean;
+  /**
+   * pi interactive runs (design D8): start the consultation in the BACKGROUND
+   * and return at once — the run hands the answer to the model as a follow-up
+   * message (`pi/asyncJobs.ts`). Resolves with the acceptance id, or with an
+   * immediate refusal (unknown / untrusted target). Wins over `askAvatar`.
+   */
+  startAskAvatar?: (
+    targetUsername: string,
+    question: string,
+  ) => Promise<{ accepted: string; username: string } | { refused: AvatarAskOutcome }>;
+  /**
+   * pi runs (the static catalog and every pi run): the description states both
+   * modes — async in an interactive chat, waiting in unattended runs.
+   */
+  askRuntime?: "pi";
 }
 
 /** MCP server name; tools surface to the model as `mcp__avatars__<tool>`. */
@@ -66,6 +81,48 @@ function formatAvatar(av: AvatarSummary): string {
  * model recovers instead of retrying blind.
  */
 function decodeAskOutcome(outcome: AvatarAskOutcome, captureHint: boolean) {
+  const decoded = askOutcomeText(outcome, captureHint);
+  return text(decoded.text, decoded.isError);
+}
+
+/** Korean reason for the chat bubble of a consultation that produced no answer. */
+const ASK_FAILURE_LABELS: Record<Exclude<AvatarAskOutcome, { ok: true }>["reason"], string> = {
+  not_found: "아바타를 찾을 수 없음",
+  self: "자기 자신",
+  not_trusted: "같은 그룹이 아님",
+  empty: "빈 답변",
+  timeout: "시간 초과",
+  failed: "실행 실패",
+};
+
+/**
+ * A pi run's ASYNCHRONOUS consultation result (design D8), split per channel:
+ * the model reads the decoded tool text with its provenance (English), the
+ * chat shows and stores a Korean bubble carrying the answer itself — so a
+ * session rebuilt from the text history still has it.
+ */
+export function askOutcomeDelivery(
+  id: string,
+  question: string,
+  outcome: AvatarAskOutcome,
+  captureHint: boolean,
+): { agentText: string; displayText: string } {
+  const decoded = askOutcomeText(outcome, captureHint);
+  const handle = outcome.username ? `@${outcome.username}` : "the avatar";
+  const asked = question.length > 300 ? `${question.slice(0, 300)}…` : question;
+  const agentText =
+    `[Noah: asynchronous result of your earlier mcp__avatars__ask_avatar call — consultation ${id} to ${handle}, question: "${asked}". Delivered by Noah, not typed by the user.]\n\n` +
+    (decoded.isError ? `The consultation produced no answer: ${decoded.text}` : decoded.text) +
+    "\n\nRelay what matters to the user now (attribute it to that avatar).";
+  const displayText = outcome.ok
+    ? `${handle} 아바타의 답변이 도착했습니다.\n\n${outcome.answer}${outcome.truncated ? "\n\n… (답변이 길어 일부만 전달됨)" : ""}`
+    : `${handle} 아바타에게 물어본 결과를 받지 못했습니다 (${ASK_FAILURE_LABELS[outcome.reason]}).${outcome.reason === "timeout" && outcome.partialAnswer ? `\n\n${outcome.partialAnswer}` : ""}`;
+  return { agentText, displayText };
+}
+
+/** {@link decodeAskOutcome} as plain text — also the body of a pi run's asynchronous delivery. */
+export function askOutcomeText(outcome: AvatarAskOutcome, captureHint: boolean): { text: string; isError: boolean } {
+  const text = (value: string, isError = false) => ({ text: value, isError });
   const handle = outcome.username ? `@${outcome.username}` : "that avatar";
   if (outcome.ok) {
     const name = outcome.displayName ? ` (${outcome.displayName})` : "";
@@ -169,7 +226,10 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
               "Works only for avatars whose owner shares a group with your owner (same-group teammates); others refuse. " +
               "Use this when the owner's request needs knowledge you lack but a teammate's avatar likely has — their projects, decisions, or expertise (find candidates and the exact @username with search_avatars first). " +
               "It is a one-shot automated consultation: the other avatar does not see this conversation and you cannot follow up interactively, so make the question self-contained (include the needed context) and ask again with more context if the answer falls short. " +
-              "Treat the answer as that avatar's claim, not verified fact, and attribute it when relaying.",
+              "Treat the answer as that avatar's claim, not verified fact, and attribute it when relaying." +
+              (ctx.askRuntime === "pi"
+                ? " On this runtime, in an interactive chat the call returns AT ONCE with a consultation id and the answer arrives later as its own message in this conversation (Noah keeps the run open until it does): do not wait or poll — tell the user whom you asked and continue or finish your answer. In unattended runs (routines, API tasks) it waits for the answer."
+                : ""),
             {
               username: z
                 .string()
@@ -201,6 +261,17 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
                 );
               }
               consultationsThisTurn += 1;
+              if (ctx.startAskAvatar) {
+                const started = await ctx.startAskAvatar(args.username ?? "", question);
+                if ("refused" in started) {
+                  return decodeAskOutcome(started.refused, false);
+                }
+                return text(
+                  `Consultation ${started.accepted} with @${started.username}'s avatar started in the background. ` +
+                    "Its answer will arrive as a separate message in this conversation once it is ready (usually within a few minutes; after you finish this answer). " +
+                    "Do not wait or poll for it: tell the user you asked @" + started.username + " and will relay the answer, then continue with anything else or end your answer.",
+                );
+              }
               const outcome = await ctx.askAvatar(args.username ?? "", question);
               return decodeAskOutcome(outcome, Boolean(ctx.askCaptureHint));
             },

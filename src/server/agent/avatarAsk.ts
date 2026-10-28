@@ -68,35 +68,53 @@ function capAnswer(raw: string): { answer: string; truncated: boolean } {
   return { answer: trimmed.slice(0, AVATAR_ASK_ANSWER_CAP), truncated: true };
 }
 
+/**
+ * The consultation's synchronous gates (target exists, is not the asker, is
+ * visible, and its owner is trusted): the refusal outcome, or the resolved
+ * target. Run again by `askAvatar` itself; exported so a background start (pi
+ * runs, design D8) can refuse at once instead of in a later message.
+ */
+export function preflightAvatarAsk(
+  store: Store,
+  input: Pick<AvatarAskInput, "askerUserId" | "targetUsername">,
+):
+  | { ok: false; outcome: AvatarAskOutcome }
+  | { ok: true; username: string; target: NonNullable<ReturnType<Store["resolveChatAvatar"]>> } {
+  const username = input.targetUsername.trim().replace(/^@/, "");
+  const targetUser = username ? store.getUserByUsername(username) : null;
+  if (!targetUser) {
+    return { ok: false, outcome: { ok: false, reason: "not_found", username } };
+  }
+  if (targetUser.id === input.askerUserId) {
+    return { ok: false, outcome: { ok: false, reason: "self", username } };
+  }
+  // Visibility gate (public/group/private + suspended), then the trust gate.
+  // Both fail as if the avatar didn't exist where that avoids leaking existence.
+  const target = store.resolveChatAvatar(input.askerUserId, targetUser.id);
+  if (!target) {
+    return { ok: false, outcome: { ok: false, reason: "not_found", username } };
+  }
+  if (!store.isTrustedFor(input.askerUserId, target.id)) {
+    return {
+      ok: false,
+      outcome: { ok: false, reason: "not_trusted", username, displayName: target.displayName },
+    };
+  }
+  return { ok: true, username, target };
+}
+
 export async function askAvatar(
   store: Store,
   config: AppConfig,
   input: AvatarAskInput,
   deps: AvatarAskDeps = {},
 ): Promise<AvatarAskOutcome> {
-  const username = input.targetUsername.trim().replace(/^@/, "");
   const question = input.question.trim();
-  const targetUser = username ? store.getUserByUsername(username) : null;
-  if (!targetUser) {
-    return { ok: false, reason: "not_found", username };
+  const preflight = preflightAvatarAsk(store, input);
+  if (!preflight.ok) {
+    return preflight.outcome;
   }
-  if (targetUser.id === input.askerUserId) {
-    return { ok: false, reason: "self", username };
-  }
-  // Visibility gate (public/group/private + suspended), then the trust gate.
-  // Both fail as if the avatar didn't exist where that avoids leaking existence.
-  const target = store.resolveChatAvatar(input.askerUserId, targetUser.id);
-  if (!target) {
-    return { ok: false, reason: "not_found", username };
-  }
-  if (!store.isTrustedFor(input.askerUserId, target.id)) {
-    return {
-      ok: false,
-      reason: "not_trusted",
-      username,
-      displayName: target.displayName,
-    };
-  }
+  const { username, target } = preflight;
   // Early-out BEFORE the expensive prep (plugin-root sync can clone/pull).
   if (input.parentSignal?.aborted) {
     return { ok: false, reason: "failed", username, detail: "the asking run was cancelled" };

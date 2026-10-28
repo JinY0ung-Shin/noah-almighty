@@ -30,13 +30,13 @@ import type { AgentOwner, AppConfig } from "../../types.js";
 import type { Store } from "../../store.js";
 import { piSandboxDeckToolchain } from "../../deckRender.js";
 import { buildFileOutputServer, FILE_OUTPUT_SERVER_NAME } from "../fileOutputTools.js";
+import { PI_PROXY_SERVER_NAMES } from "./mcpProxies.js";
 
 /**
- * Every in-process MCP server a Noah run can build (runCapabilities.ts). The
- * pi broker ids, in registration order. All match pi's id rule
- * `^[a-z0-9][a-z0-9_-]{0,47}$`.
+ * Every in-process MCP server a Noah run can build (runCapabilities.ts), in
+ * registration order — the servers this static catalog lists.
  */
-export const PI_MCP_SERVER_NAMES = [
+export const PI_NOAH_SERVER_NAMES = [
   "knowledge",
   "repo",
   "system",
@@ -57,9 +57,18 @@ export const PI_MCP_SERVER_NAMES = [
   "skills",
 ] as const;
 
+/**
+ * The pi broker ids: Noah's own servers, then the proxies of servers Noah
+ * relays as an MCP client (`pi/mcpProxies.ts` — hex-ssh, plugin `.mcp.json`,
+ * 공용 MCP), whose tool lists are per run and are NOT in this catalog. All
+ * match pi's id rule `^[a-z0-9][a-z0-9_-]{0,47}$`.
+ */
+export const PI_MCP_SERVER_NAMES = [...PI_NOAH_SERVER_NAMES, ...PI_PROXY_SERVER_NAMES] as const;
+
+export type PiNoahServerName = (typeof PI_NOAH_SERVER_NAMES)[number];
 export type PiMcpServerName = (typeof PI_MCP_SERVER_NAMES)[number];
 
-export type NoahMcpCatalog = Record<PiMcpServerName, Tool[]>;
+export type NoahMcpCatalog = Record<PiNoahServerName, Tool[]>;
 
 const INERT_OWNER: AgentOwner = { id: "", username: "", displayName: "" };
 const refuse = async (): Promise<never> => {
@@ -67,7 +76,7 @@ const refuse = async (): Promise<never> => {
 };
 
 /** The widest form of each server — every optional tool registered. */
-async function buildCatalogServers(store: Store, config: AppConfig): Promise<Record<PiMcpServerName, { instance: McpServer }>> {
+async function buildCatalogServers(store: Store, config: AppConfig): Promise<Record<PiNoahServerName, { instance: McpServer }>> {
   const [
     { buildKnowledgeServer },
     { buildRepoServer },
@@ -117,6 +126,8 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
       avatarUserId: "",
       viewerUserId: "",
       askAvatar: refuse,
+      // Both modes: async in an interactive chat, waiting in unattended runs (design D8).
+      askRuntime: "pi",
     }),
     skill_exchange: buildSkillExchangeServer(store, base),
     ssh_identity: buildSshIdentityServer(store, base),
@@ -125,7 +136,8 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     group_repo: buildGroupRepoServer(store, base),
     brain: buildBrainServer(store, base),
     group_brain: buildGroupBrainServer(store, base),
-    canvas: buildCanvasServer({ emitCanvas: refuse }),
+    // pi canvases never wait (design D8): the submission is the next user turn.
+    canvas: buildCanvasServer({ emitCanvas: refuse, neverWait: true }),
     browser: buildBrowserServer({
       execute: refuse,
       allowed: false,
@@ -143,7 +155,7 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     }),
     ssh_trust: buildSshTrustServer({ avatarUserId: "", config }),
     skills: buildSkillsServer({}),
-  } as Record<PiMcpServerName, { instance: McpServer }>;
+  } as Record<PiNoahServerName, { instance: McpServer }>;
 }
 
 /** `tools/list` of one server, exactly as the endpoint would serve it. */
@@ -176,7 +188,7 @@ export function noahMcpCatalog(store: Store, config: AppConfig): Promise<NoahMcp
     catalog = (async () => {
       const servers = await buildCatalogServers(store, config);
       const entries = await Promise.all(
-        PI_MCP_SERVER_NAMES.map(async (name) => [name, await listServerTools(servers[name].instance)] as const),
+        PI_NOAH_SERVER_NAMES.map(async (name) => [name, await listServerTools(servers[name].instance)] as const),
       );
       return Object.fromEntries(entries) as NoahMcpCatalog;
     })();

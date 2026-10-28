@@ -36,7 +36,14 @@ export type SteerState = "queued" | "delivered" | "completed" | "dropped";
 export interface SteerRecord {
   /** Also the SDK user message's `uuid`, which is how the CLI keys its lifecycle frames. */
   id: string;
+  /** What the model receives. */
   text: string;
+  /**
+   * What the chat shows and persists, when it differs from `text` — a pi run's
+   * asynchronous tool result (`pi/asyncJobs.ts`): English with provenance for
+   * the model, a Korean bubble for the user. Absent for a typed message.
+   */
+  displayText?: string;
   createdAt: string;
   state: SteerState;
   /**
@@ -78,13 +85,14 @@ export class SteerChannel {
    * turn is wrapping up, so nothing more can reach the model) — the route maps
    * that to a 410.
    */
-  push(text: string): SteerRecord | null {
+  push(text: string, options: { displayText?: string } = {}): SteerRecord | null {
     if (this.isClosed) {
       return null;
     }
     const record: SteerRecord = {
       id: randomUUID(),
       text,
+      ...(options.displayText !== undefined ? { displayText: options.displayText } : {}),
       createdAt: new Date().toISOString(),
       state: "queued",
       followUp: false,

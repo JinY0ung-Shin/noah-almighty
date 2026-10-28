@@ -355,6 +355,48 @@ export interface McpHttpBridgeConfig {
   expandEnv?: boolean;
 }
 
+/**
+ * Header names whose FIXED values are credentials for the tool-output redaction
+ * set. Deliberately narrow — a matched value is shredded out of EVERY tool
+ * output of the run, so a non-secret like `X-Session-Mode: stateless` must not
+ * qualify. Slot values (a user's secret) are always redacted regardless.
+ */
+const CREDENTIAL_HEADER_RE = /^(?:proxy-)?authorization$|^cookie$|api[-_]?key|token|secret|password|credential/i;
+/** An auth scheme word ahead of the credential (`Bearer <tok>`) — the bare token is redacted too. */
+const AUTH_SCHEME_RE = /^(?:bearer|basic|token|apikey|digest)\s+(\S.*)$/i;
+
+/**
+ * Header values a bridged server sends that look like credentials, literal
+ * ones included (an admin's static API key rides colleague runs too): a remote
+ * that echoes a header back must not land it in the model's context. Keyed
+ * `<server>:<header>` so the marker names what was hidden, never the value.
+ * The bridge's own redact list (the exact — trimmed — secret values it sends)
+ * rides along: a vault value stored with a trailing newline would otherwise
+ * slip past the vault-value match. Shared by the SDK run plan and the pi proxies.
+ */
+export function mcpBridgeRedactions(
+  files: { name: string; config: Pick<McpHttpBridgeConfig, "headers" | "redact"> }[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const file of files) {
+    for (const [header, value] of Object.entries(file.config.headers)) {
+      // An unresolved template (a plugin `.mcp.json` entry: `Bearer ${TOKEN}`)
+      // is file content the avatar may Read/Edit, not a credential.
+      if (CREDENTIAL_HEADER_RE.test(header) && !value.includes("${")) {
+        out[`${file.name}:${header}`] = value;
+        const bare = AUTH_SCHEME_RE.exec(value)?.[1];
+        if (bare) {
+          out[`${file.name}:${header}:token`] = bare;
+        }
+      }
+    }
+    file.config.redact.forEach((value, index) => {
+      out[`${file.name}:secret${index + 1}`] = value;
+    });
+  }
+  return out;
+}
+
 /** The stdio definition that runs the bridge on a config file (only the PATH is in argv). */
 export function mcpHttpBridgeServerDef(
   bridgeScriptPath: string,

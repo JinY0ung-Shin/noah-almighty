@@ -267,7 +267,7 @@ function sharedMcpLines(ctx: SystemToolsContext): string[] {
   }
   return [
     "- Shared MCP servers (admin-registered external HTTP MCP servers; credentials are filled server-side from the owner's secrets and never shown):",
-    ...sharedMcpServerLines(states).map((line) => `  - ${line}`),
+    ...sharedMcpServerLines(states, { piRelay: Boolean(ctx.piRuntime) }).map((line) => `  - ${line}`),
   ];
 }
 
@@ -585,7 +585,8 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
       ? `Work in this conversation's folder \`${pi.conversationDir}\` and pass ABSOLUTE paths (the shell starts in /workspace, not there). `
       : "Use absolute paths under /workspace. ") +
     "Built-in tools: read/write/edit/ls/find/grep/bash; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
-    "No WebSearch (use mcp__web__fetch for a known URL). Not available on this runtime: hex-ssh remote tools, plugin `.mcp.json` servers and the admin 공용 MCP servers. " +
+    "No WebSearch (use mcp__web__fetch for a known URL). " +
+    "hex-ssh, plugin `.mcp.json` and admin 공용 MCP servers are relayed by Noah as `mcp__hex-ssh__<tool>`, `mcp__plugins__<server>__<tool>` and `mcp__shared__<server>__<tool>` (the `mcp__<server>__<tool>` form resolves too); the session's tool list is read when the pi session starts, so a server connected since appears only in a later session and a removed one is refused. " +
     "A model or reasoning-effort change starts a NEW session that continues from the saved text history (earlier tool results are not carried over). " +
     "The system prompt is fixed when the conversation starts, so this tool is the source of CURRENT state"
   );
@@ -618,6 +619,20 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
             .filter(Boolean)
             .join("; ")
     }. Admin-disabled skills are left out; a skill learned or added now is copied on the next turn but listed in the instructions only from the next conversation`,
+    `- Relayed MCP servers (this run): hex-ssh ${pi.mcpProxies?.hexSsh ? "relayed (see the SSH line)" : "not relayed (see the SSH line)"}; plugin .mcp.json servers ${
+      pi.mcpProxies?.pluginServers.length
+        ? pi.mcpProxies.pluginServers.map((name) => `\`${name}\``).join(", ") + " (as mcp__plugins__<server>__<tool>)"
+        : "none"
+    }${
+      pi.mcpProxies?.skippedPluginServers.length
+        ? `; left out: ${pi.mcpProxies.skippedPluginServers.map((s) => `\`${s.name}\` (${s.reason})`).join(", ")}`
+        : ""
+    }. Their secrets stay in Noah and never enter your sandbox`,
+    `- Long-running tools on this runtime: ${
+      pi.asyncAskAvatar
+        ? "mcp__avatars__ask_avatar returns at once with a consultation id and its answer arrives as its own message after your current answer (the run stays open for it)"
+        : "mcp__avatars__ask_avatar (when available) waits for the answer in this run"
+    }; a canvas never waits — its submission arrives as the user's next message`,
     ...(pi.activeRepoDir
       ? [
           `- Working repository copy: ${pi.activeRepoDir}/ (a copy of '${ctx.activeRepoName ?? "?"}' in your sandbox; save with mcp__git_repo__commit, then mcp__git_repo__push — git commits made inside the sandbox are not saved)`,

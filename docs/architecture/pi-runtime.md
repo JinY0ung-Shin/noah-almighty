@@ -23,16 +23,19 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 ## One run (`agent/pi/runPiAgent.ts`)
 
 1. **Capabilities** — `buildRunCapabilities(…, { runtime: "pi", piConversationDir })` (`agent/runCapabilities.ts`),
-   the SAME plan the SDK runner wraps into its options bag. `runtime: "pi"` withholds what only exists as a CLI
-   subprocess today (hex-ssh → `sshActive=false`, 공용 MCP → `sharedMcpPlan=null`, plugin `.mcp.json` servers are
-   never lifted) and stamps `PiRuntimeFacts` onto describe_system's ctx and (via `stampPromptRequest`) the prompt.
+   the SAME plan the SDK runner wraps into its options bag (hex-ssh, 공용 MCP and plugin servers included — Noah
+   relays them, see "Proxied MCP servers"), and stamps `PiRuntimeFacts` onto describe_system's ctx and (via
+   `stampPromptRequest`) the prompt.
 2. **Run token** — `McpRunRegistry.register` with EVERY name in `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`):
-   built servers serve calls, unbuilt ones are tool-less stubs. Gates: `listTools` answers `tools/list` from the
-   static catalog (all tools of every server, widest form — built once per process from inert contexts), and
-   `allowCall` admits only this run's `mcpAllowedTools`; a refusal names `mcp__system__describe_system` and forbids
-   workarounds. Why static: pi lists a session's MCP tools ONCE at session build and keeps them while later turns
-   (each with its own token and capabilities) reuse the session. Handlers still self-gate. The token rides the
-   `x-noah-run-token` request header; revoked in `finally` (in-flight handlers abort).
+   Noah's own servers (`PI_NOAH_SERVER_NAMES`; built ones serve calls, unbuilt ones are tool-less stubs) and the three
+   relay ids (`hex-ssh`, `plugins`, `shared`). Gates: `listTools` answers `tools/list` of Noah's own servers from the
+   static catalog (all tools of every server, widest form — built once per process from inert contexts); a relay
+   lists THIS run's tools (per token). `allowCall` admits only this run's `mcpAllowedTools` (relays: a tool of a
+   source this run relays that passes its filter); a refusal names `mcp__system__describe_system` and forbids
+   workarounds. `transformResult` redacts every result (`capabilities.piRedactions`). Why static: pi lists a
+   session's MCP tools ONCE at session build and keeps them while later turns (each with its own token and
+   capabilities) reuse the session. Handlers still self-gate. The token rides the `x-noah-run-token` request header;
+   revoked in `finally` (in-flight handlers abort).
 3. **Prompt (D2)** — `buildSystemPromptAppend` with `piRuntime` set, rendered at the conversation's FIRST pi turn and
    frozen in `conversations.pi_instructions` (`ensureConversationPiInstructions`, write-once like `todo_snapshot`);
    sent as `instructions` only when a session starts, and re-sent verbatim for every later session (model switch,
@@ -64,7 +67,9 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 | context window (P5) | from `PI_MODEL_MAP[tier].contextWindow`; no compaction chip | — |
 | subagents (P6) | flat: pi's `Agent` is one card | — |
 | no per-session cwd (P1) | the model is told to work in `/workspace/c/<seg>/` with absolute paths (prompt + describe_system + refusal redirects); Noah creates the folder 0700 | both |
-| no WebSearch, no hex-ssh / plugin / 공용 MCP on pi | not registered; stated | both |
+| no WebSearch | not registered; stated | both |
+| relayed MCP tool lists are per SESSION | pi reads `tools/list` when it builds the session (first turn, after ~5 idle minutes, a model change); a server/tool connected later appears only in a later session, a removed one is refused at call time | both (runtime line + prompt sentence) |
+| broker calls cannot wait minutes | `ask_avatar` in a chat runs in the background, a canvas never waits (see "Asynchronous tools") | both + tool descriptions |
 | date fixed at session creation | KST date/time line prepended to every input | turn input |
 
 ## Files: the sandbox conversation folder (`agent/pi/piWorkspace.ts`)
@@ -142,6 +147,62 @@ slot per sandbox, python-pptx present); off = `converter: NOT INSTALLED` with th
 render path is off (no LibreOffice in the sandbox); `libreOffice` keeps the host value because share_file's approximate
 previews still render Noah-side. Both metacognition surfaces and the static catalog's share_file wording read it.
 
+## Proxied MCP servers (`agent/pi/mcpProxies.ts`)
+
+Servers that exist only as a process or a remote endpoint are relayed by Noah as an MCP CLIENT and re-exported
+on the run endpoint. Broker ids are global and pi freezes a session's tool list, so each kind is ONE stable id:
+
+| Broker id | Source | Model-facing name | Child Noah spawns | Secrets |
+|---|---|---|---|---|
+| `hex-ssh` | the owner's SSH key (`sshActive`, same gate as the SDK) | `mcp__hex-ssh__<tool>` (SDK name unchanged) | `scripts/hex-ssh-policy-proxy.mjs` → `HEX_SSH_UPSTREAM_COMMAND` | SSH material in the child's env (Noah spawns it itself: no argv, no wrapper file) |
+| `plugins` | the run's plugin roots' `.mcp.json` (first name wins, load order) | `mcp__plugins__<server>__<tool>` | stdio: the def's command (`${CLAUDE_PLUGIN_ROOT}`/`${VAR}` expanded, cwd = def `cwd` or the root); http/sse: `mcp-http-bridge.mjs` | OWNED roots get the injectable vault (stdio: env, vault wins; http: `${NAME}` refs via the bridge's one-shot 0600 config); group/default roots never |
+| `shared` | admin 공용 MCP servers (`planSharedMcpRun`, owner bindings) | `mcp__shared__<server>__<tool>` | always the bridge (header-less ones too: keeps `--use-system-ca` + error scrubbing) | slot values only in the bridge config file (written right before spawn, deleted by the bridge, `rm` again after) |
+
+- pi's `mcp_call` resolves the SDK form `mcp__<server>__<tool>` by suffix (`resolveAlias` in pi), so skills that
+  name a plugin/shared tool the SDK way keep working. A plugin server named like a Noah server or an enabled shared
+  server sits out (SDK parity) and both surfaces list it with the reason; so does an http def with fields the bridge
+  cannot carry (`oauth`, `headersHelper`, …).
+- hex-ssh's per-viewer-class allowlist holds three times: the policy proxy (env `HEX_SSH_ALLOWED_TOOLS`), the
+  pool (`allowTool` filters `tools/list` AND refuses `tools/call`), and the endpoint's `allowCall`.
+- **Lifecycle:** one `PiMcpProxyPool` per run; nothing is spawned at plan time — a child starts on the first
+  `tools/list`/`tools/call` that needs it (`tools/list` at session build: 10 s per source, a slow one is left out
+  rather than failing the whole id within pi's 15 s). `finally` closes every client (stdin EOF → SIGTERM →
+  SIGKILL; the policy proxy now also exits on stdin EOF) with a 0.5 s grace before the run returns; the close keeps
+  going after. A closed pool refuses calls instead of respawning. Tests prove no process outlives it.
+- **Redaction (`piRedactions`)**: the relays' secrets (the whole injectable vault once any of it reached a child,
+  credential-looking bridge headers + their bare tokens via `mcpBridgeRedactions` — shared with the SDK plan, the
+  SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`) plus every browser-typeable secret value. Applied
+  by the endpoint's `transformResult` to EVERY Noah MCP result of the run (`redactSecretValues`, `[REDACTED:<NAME>]`).
+  pi's built-ins need none: the sandbox holds no secrets.
+- **Security note:** plugin stdio servers run in the NOAH container, as they do as CLI children on the SDK path.
+  The knowledge repo is an OWNED plugin root the agent can edit and commit, so its `.mcp.json` is agent-influenced
+  code that Noah spawns with the owner's vault — on pi this is the one remaining route for agent-authored code into
+  the Noah container (#71). Moving plugin servers into the sandbox needs pi's sandbox-MCP support per user (not
+  available without pi changes); until then treat it as an open item.
+
+## Asynchronous tools (design D8, `agent/pi/asyncJobs.ts`)
+
+pi's broker gives a call at most its server timeout, so a Noah tool that waits on a person or another run no longer
+holds it:
+
+- **`mcp__avatars__ask_avatar`, interactive chat** (a run with a steer channel): the handler runs the synchronous
+  gates (`preflightAvatarAsk` — unknown/self/untrusted refuse at once) and returns `Consultation ask-<id> … started in
+  the background`. The consultation (still on the SDK runner, `piRuntimeSupports`) runs as a `PiAsyncJobs` job; its
+  result is pushed into the run's SteerChannel with BOTH texts (`askOutcomeDelivery`: English with provenance for the
+  model, a Korean bubble carrying the answer for the chat — `SteerRecord.displayText`, persisted as the `kind:
+  "steer"` row). After the pi response completes, `runPiAgent` keeps the run OPEN while jobs are pending (status
+  `팀원 아바타의 답변을 기다리는 중…`, capped at the consultation budget + 30 s; a message the user sends wakes it too),
+  then delivers everything queued as ONE follow-up turn (the steer `turn_end` contract). So the answer always lands
+  in a live run the client is attached to — no server-started turn the client would only discover on reload. A run
+  that ends anyway (cancel, error) aborts its jobs; nothing is delivered later.
+- **Unattended pi runs** (routines, task API — no steer channel) keep the waiting call (`avatars` broker timeout
+  240 s ≥ the 3 min consultation budget).
+- **Canvas**: on pi `neverWait` — controls always render non-blocking (the existing `wait:false` path) and the
+  submission arrives as the user's next message. Known edge: while a run is still open (waiting for a consultation)
+  the client does not submit an async canvas (`submitCanvas` returns while streaming), as on the SDK path.
+- Tool descriptions (static catalog: `askRuntime: "pi"`, `neverWait`), the prompt (`piAsyncToolsSentence`) and
+  describe_system ("Long-running tools on this runtime") state this.
+
 ## The `/mcp` endpoint (`mcpHttp/endpoint.ts`)
 
 Mounted by `createApp` at `/mcp/:server` on every runtime (no token exists without a pi run → always 401). Its only
@@ -156,9 +217,13 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 ```
 
 - Registers one broker entry per `PI_MCP_SERVER_NAMES` name (ids = Noah server names, so pi's `mcp__<id>__<tool>`
-  equals every `mcp__repo__commit`-style name in prompts/skills/manual), header
-  `Authorization: Bearer {{ctx.header:x-noah-run-token}}`, `timeoutSec` 600 (pi's cap). Refuses to take over an id
-  pointing elsewhere without `--force`. The admin key is read from the environment only and never stored by Noah.
+  equals every `mcp__repo__commit`-style name in prompts/skills/manual, plus the relays `hex-ssh`/`plugins`/`shared`),
+  header `Authorization: Bearer {{ctx.header:x-noah-run-token}}`. `timeoutSec` 120 by default; longer only where the
+  server's own work needs it (`SERVER_TIMEOUT_SEC`: `avatars` 240 — unattended ask_avatar still waits; `repo`/`git_repo`/
+  `group_repo` 300 — clone/sync/push + sandbox copy; `file_output` 240 — Noah-side deck previews; `hex-ssh` 600,
+  `plugins`/`shared` 300 — remote/third-party). Browser ops fit easily (the bridge relay times out at 45 s).
+  `--timeout-sec N` overrides every id. Refuses to take over an id pointing elsewhere without `--force`. The admin
+  key is read from the environment only and never stored by Noah.
 - `--configure-instance` also disables pi's `request_admin` and `present_file` built-ins (Noah has its own) and deploys
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;
   pi enforces no placeholder, the template keeps `{{WORKSPACE}}`, `{{LANGUAGE}}`, `{{DATETIME}}`).
@@ -179,15 +244,19 @@ the first pi turn of an old conversation rebuilds context from the text history 
 ## Seams left for later lanes
 
 - **I2 (workspace/files/skills/repos):** done — see "Files", "Skills", "Working repositories", "Decks" above.
-- **I3 (proxies/async/presentation):** hex-ssh, plugin `.mcp.json` and 공용 MCP servers are absent on pi
-  (`sshActive=false`, `sharedMcpPlan=null` under `runtime: "pi"`); re-export them on the run endpoint (register
-  stable names, add them to `PI_MCP_SERVER_NAMES` + the script) and lift those two lines. No `transformResult`
-  redaction is wired yet. `ask_avatar`/canvas still block synchronously (broker timeout 600 s).
+- **I3 (proxies/async/presentation):** done — see "Proxied MCP servers" and "Asynchronous tools". Korean labels for
+  pi built-ins (`LS` 폴더 보기, `McpSearch` 도구 찾기, `PresentFile`, `RequestAdmin`), `mcp__skills__read`, pi
+  `mcp__git_repo__commit`, hex-ssh tools and relayed `mcp__plugins|shared__<server>__<tool>` names
+  (`sdkToolLabel`, which the client `humanTool` now shares); the admin 시스템 panel shows `pi-gateway`.
 
 ## Verify
 
 - `tests/pi-workspace.test.ts` — path mapping, D3 move, cascades, skill sync + `mcp__skills__read`, the repo-copy
   round trip against a local bare remote (incl. a colleague's copy and a moved-base refusal), deck state, catalog.
+- `tests/pi-mcp-proxies.test.ts` — the relay plan (secret routing, skips, redaction set), the pool against a real
+  stdio fixture (lazy start, names, no leaked process), hex-ssh's allowlist through the real policy proxy, a run
+  through the endpoint (shared server via the real bridge, plugin server, redaction incl. a browser secret), async
+  ask_avatar as a follow-up turn, the never-waiting canvas, labels.
 - `tests/pi-runner.test.ts` — runner against a scripted fake client (frozen prompt, continuation, model switch,
   rewind, 404 heal, question, steers, fallback, the endpoint as the broker sees it), `piRuntimeSupports`, config,
   the `/mcp` mount, the script's server list.

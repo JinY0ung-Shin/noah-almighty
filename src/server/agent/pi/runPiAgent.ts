@@ -27,6 +27,12 @@
  *     the same run (the SDK path's "undelivered steer → turn_end" contract).
  *  6. A model/effort change starts a new session from the text history (pi
  *     fixes both per session, design P3); the user hears it on the status line.
+ *  7. hex-ssh, plugin `.mcp.json` and 공용 MCP servers are relayed by Noah as an
+ *     MCP client (`mcpProxies.ts`, stable ids `hex-ssh`/`plugins`/`shared`);
+ *     every Noah MCP result is redacted at the endpoint with the run's set.
+ *  8. A tool that would hold the broker for minutes runs in the background
+ *     (design D8, `asyncJobs.ts`): its result is pushed as a steer, and the run
+ *     stays open until its jobs settle, so it always arrives as a follow-up turn.
  */
 import type { McpServer as McpServerType } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -49,6 +55,11 @@ import { PI_RUN_TOKEN_HEADER, piRuntimeSupports, piServicesFor } from "./piRunti
 import { ensurePiConversationDir, piWorkspaceFor, stagePiAttachmentFiles } from "./piWorkspace.js";
 import { materializePiSkills } from "./piSkills.js";
 import { PiTurnFailedError, runPiTurn, type PiRunResult } from "./eventAdapter.js";
+import { PI_PROXY_SERVER_NAMES, PiMcpProxyPool } from "./mcpProxies.js";
+import { PiAsyncJobs } from "./asyncJobs.js";
+import { redactSecretValues } from "../postToolUseHook.js";
+import { AVATAR_ASK_TIMEOUT_MS } from "../avatarAskShared.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   PiGatewayError,
   type PiReasoningEffort,
@@ -60,6 +71,11 @@ import {
 const agentLogger = logger.child({ module: "agent" });
 
 export const EMPTY_PI_RESPONSE_MESSAGE = "pi-gateway 응답이 비어 있습니다.";
+
+/** Longest the run stays open for its background jobs after the answer (a consultation's own budget + margin). */
+const ASYNC_WAIT_CAP_MS = AVATAR_ASK_TIMEOUT_MS + 30_000;
+/** How long run end waits for relayed MCP children to exit before returning (they keep closing after). */
+const PROXY_CLOSE_GRACE_MS = 500;
 
 /** Retries of a stream OPEN on 503 capacity / 429 (no turn ran). */
 const PI_OPEN_RETRY: Omit<PiRetryOptions, "signal"> = { attempts: 4, baseDelayMs: 2_000, maxDelayMs: 30_000 };
@@ -147,6 +163,13 @@ export async function runPiAgent(
   // anchor (see runCapabilities' currentTextAnchor). Reset on a fold and at a
   // steer boundary, exactly where the SDK loop moves its fold index.
   let anchorText = "";
+  // Background jobs of this run (ask_avatar in an interactive chat): a result
+  // rides the steer channel — the model text + the Korean bubble — and becomes
+  // a follow-up turn below.
+  const steerChannel = events?.steers;
+  const asyncJobs = steerChannel
+    ? new PiAsyncJobs((delivery) => Boolean(steerChannel.push(delivery.agentText, { displayText: delivery.displayText })))
+    : undefined;
   const capabilities = await buildRunCapabilities(
     request,
     pluginRoots,
@@ -155,7 +178,13 @@ export async function runPiAgent(
     events,
     abortController,
     () => anchorText.length,
-    { runtime: "pi", piConversationDir: workspace.conversationDir, piWorkspace: workspace, piSkills },
+    {
+      runtime: "pi",
+      piConversationDir: workspace.conversationDir,
+      piWorkspace: workspace,
+      piSkills,
+      ...(asyncJobs ? { piAsyncJobs: asyncJobs } : {}),
+    },
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
   const effort = piEffortFor(capabilities.userEffort);
@@ -206,15 +235,30 @@ export async function runPiAgent(
   const catalog = await noahMcpCatalog(store, config);
   const allowedTools = new Set(capabilities.mcpAllowedTools);
   const built = capabilities.inProcessMcpServers as Record<string, McpServerSource | undefined>;
+  // Relayed servers: children start on first use, all closed at run end.
+  const proxies = new PiMcpProxyPool(capabilities.piMcpProxies?.upstreams ?? []);
+  const proxyNames = new Set<string>(PI_PROXY_SERVER_NAMES);
   const servers: Record<string, McpServerSource> = {};
-  for (const name of PI_MCP_SERVER_NAMES) servers[name] = built[name] ?? stubServer(name);
+  for (const name of PI_MCP_SERVER_NAMES) {
+    servers[name] = proxyNames.has(name)
+      ? proxies.serverFor(name as (typeof PI_PROXY_SERVER_NAMES)[number])
+      : (built[name] ?? stubServer(name));
+  }
+  const redactions = capabilities.piRedactions ?? {};
   const tokenAbort = new AbortController();
   const token = registry.register({
     servers,
     gates: {
+      // Noah's own servers answer from the static catalog; a relayed one lists
+      // THIS run's tools (undefined → the endpoint asks the server).
       listTools: (server) => catalog[server as keyof typeof catalog],
-      allowCall: (server, tool) => allowedTools.has(`mcp__${server}__${tool}`),
+      allowCall: (server, tool) =>
+        proxyNames.has(server) ? proxies.allowsCall(server, tool) : allowedTools.has(`mcp__${server}__${tool}`),
       refusalMessage,
+      // Every result leaves Noah redacted: a relayed server echoing a vault
+      // value or a header, a page echoing a browser-typed password.
+      transformResult: (_server, _tool, result) =>
+        Object.keys(redactions).length > 0 ? (redactSecretValues(result, redactions).value as CallToolResult) : result,
     },
     signal: tokenAbort.signal,
     context: { conversationId, principal },
@@ -321,6 +365,28 @@ export async function runPiAgent(
         }
       }
       usage = result.usage ?? usage;
+      // Background jobs still running (design D8): keep the run open until one
+      // delivers (or the user sends a message) — their result is a steer.
+      if (asyncJobs && steers && !signal?.aborted && asyncJobs.pending > 0 && steers.undelivered().length === 0) {
+        const waitStart = Date.now();
+        events?.onStatus?.("팀원 아바타의 답변을 기다리는 중…");
+        while (asyncJobs.pending > 0 && steers.undelivered().length === 0 && !signal?.aborted) {
+          const left = ASYNC_WAIT_CAP_MS - (Date.now() - waitStart);
+          if (left <= 0) break;
+          await new Promise<void>((resolve) => {
+            let off = (): void => undefined;
+            const finish = (): void => {
+              off();
+              resolve();
+            };
+            // A push (a job's result or a message the user typed) wakes the run.
+            off = steers.onChange((_record, change) => {
+              if (change.previous === null) finish();
+            });
+            void asyncJobs.waitForChange(signal, left).then(finish);
+          });
+        }
+      }
       // Steers that arrived while pi was answering: pi cannot take them
       // mid-response (design P2), so they become ONE follow-up turn. Checked
       // and closed in the same tick so nothing slips between.
@@ -351,8 +417,14 @@ export async function runPiAgent(
     }
   } finally {
     steers?.close();
+    // A job the run did not wait out (cancel, error) delivers nothing.
+    asyncJobs?.abortAll();
     tokenAbort.abort();
     await registry.revoke(token).catch(() => undefined);
+    const closing = proxies.close().catch((error: unknown) =>
+      agentLogger.warn({ conversationId, err: String(error) }, "pi mcp proxies did not close cleanly"),
+    );
+    await Promise.race([closing, new Promise((resolve) => setTimeout(resolve, PROXY_CLOSE_GRACE_MS).unref())]);
   }
 
   const final = result!;

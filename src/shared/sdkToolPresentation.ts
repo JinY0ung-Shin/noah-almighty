@@ -1,4 +1,5 @@
 import { DEFAULT_SHARE_LINK_EXPIRY_DAYS } from "./shareLinks.js";
+import { HEX_SSH_SERVER_NAME, HEX_SSH_TOOL_INFOS } from "../server/hexSshPolicy.js";
 import type { TodoStatus } from "./todos.js";
 
 export const SDK_SUBAGENT_TOOLS = ["Task", "Agent"] as const;
@@ -151,9 +152,13 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   Glob: "파일 찾기",
   Grep: "내용 검색",
   ListMcpResources: "MCP 리소스 목록",
+  // pi-gateway built-ins (agent/pi/eventAdapter.ts PI_TOOL_PRESENTATION names).
+  LS: "폴더 보기",
   Mcp: "MCP 도구",
+  McpSearch: "도구 찾기",
   Monitor: "모니터링 시작",
   NotebookEdit: "노트북 편집",
+  PresentFile: "파일 보여주기",
   Projects: "프로젝트 지식",
   ProposeGoal: "목표 제안",
   ProposeSkills: "스킬 제안",
@@ -166,6 +171,7 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   RemoteTrigger: "원격 트리거",
   REPL: "REPL 실행",
   ReportFindings: "리뷰 결과 보고",
+  RequestAdmin: "관리자 요청",
   ScheduleWakeup: "후속 실행 예약",
   SendFeedback: "피드백 전송",
   SendMessage: "팀원 메시지 전송",
@@ -201,6 +207,7 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
  * "캔버스 표시" in the activity row but a raw "show" in the status line.
  */
 export const MCP_TOOL_LABELS: Record<string, string> = {
+  mcp__avatars__ask_avatar: "아바타에게 질문",
   mcp__canvas__show: "캔버스 표시",
   mcp__confluence__describe_config: "Confluence 설정 확인",
   mcp__confluence__extract_page_assets: "Confluence 자산 추출",
@@ -212,17 +219,29 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__file_output__create_share_link: "공유 링크 만들기",
   mcp__file_output__share_file: "파일 공유",
   mcp__file_output__show_file: "이미지 표시",
+  // pi runs: the sandbox copy's commit (gitRepoTools GIT_REPO_PI_COMMIT_TOOL_NAME).
+  mcp__git_repo__commit: "작업 저장소 커밋",
   mcp__knowledge__pending_requests: "대기 요청 확인",
   mcp__knowledge__request_info: "정보 요청 기록",
   mcp__knowledge__resolve_request: "요청 처리 완료",
   mcp__system__notify_user: "사용자 알림",
+  mcp__skills__read: "스킬 읽기",
   mcp__system__read_manual: "시스템 사용 매뉴얼 조회",
   mcp__todo__add_todos: "할 일 추가",
   mcp__todo__delete_todo: "할 일 삭제",
   mcp__todo__list_todos: "할 일 조회",
   mcp__todo__update_todo: "할 일 수정",
   mcp__web__fetch: "웹 페이지 읽기",
+  // hex-ssh (relayed by Noah on pi, a CLI server on the SDK path): the admin panel's labels.
+  ...Object.fromEntries(HEX_SSH_TOOL_INFOS.map((info) => [`mcp__${HEX_SSH_SERVER_NAME}__${info.name}`, info.label])),
 };
+
+/**
+ * pi runs: the aggregate broker ids Noah relays third-party servers under
+ * (`agent/pi/mcpProxies.ts`) — `mcp__plugins__<server>__<tool>`,
+ * `mcp__shared__<server>__<tool>`. Their label names the tool and its server.
+ */
+const RELAYED_AGGREGATE_RE = /^mcp__(plugins|shared)__(.+?)__(.+)$/;
 
 /**
  * Human-readable label for a tool name, for status lines and activity rows. Raw
@@ -234,6 +253,8 @@ export function sdkToolLabel(name: string | undefined): string | undefined {
   if (!name) return undefined;
   const mapped = SDK_TOOL_LABELS[name] ?? MCP_TOOL_LABELS[name];
   if (mapped) return mapped;
+  const relayed = RELAYED_AGGREGATE_RE.exec(name);
+  if (relayed) return `${relayed[3]!.replace(/_/g, " ")} (${relayed[2]})`;
   // Server segments may themselves contain underscores (git_repo, group_repo),
   // so match the server non-greedily and take the tool segment.
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);

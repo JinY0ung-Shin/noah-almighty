@@ -26,6 +26,7 @@ import {
   SDK_HIDDEN_ACTIVITY_TOOLS,
   SDK_TOOL_LABELS,
   mcpToolInputSummary,
+  sdkToolLabel,
 } from "../../../shared/sdkToolPresentation";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../../../shared/mcpToolGroups";
 import {
@@ -75,11 +76,9 @@ export const PLUGIN_STATUS_LABELS: Record<string, string> = {
 
 export function humanTool(name: string | undefined): string {
   if (!name) return "도구";
-  if (TOOL_LABELS[name]) return TOOL_LABELS[name];
-  // Keep in lockstep with sdkToolLabel (src/shared/sdkToolPresentation.ts):
-  // server segments may contain underscores (git_repo, group_repo).
-  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
-  return (mcp ? mcp[2] : name).replace(/_/g, " ");
+  // The SAME fallback chain as the server status line (unmapped mcp names →
+  // their tool segment; pi's relayed aggregates → "tool (server)").
+  return TOOL_LABELS[name] ?? sdkToolLabel(name) ?? "도구";
 }
 
 // Intelligent one-line summary of a tool's input: prefer a recognizable key

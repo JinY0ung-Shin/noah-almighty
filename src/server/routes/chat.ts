@@ -696,7 +696,8 @@ export interface SteerPublic {
 function publicSteer(record: SteerRecord): SteerPublic {
   return {
     id: record.id,
-    text: record.text,
+    // A machine-delivered message (a pi run's async tool result) shows its Korean bubble.
+    text: record.displayText ?? record.text,
     state: record.state,
     createdAt: record.createdAt,
     followUp: record.followUp,
@@ -1394,7 +1395,7 @@ export async function executeChatTurn(
         if (store.conversationOwner(conversationId) === ownerUserId) {
           message = store.addMessage(conversationId, {
             role: "user",
-            content: record.text,
+            content: record.displayText ?? record.text,
             kind: "steer",
           });
         }

@@ -218,7 +218,11 @@ export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in
  * for everyone else, like the prompt's secret-name list), so a teammate hears
  * that something is missing, never which.
  */
-export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
+export function sharedMcpServerLines(
+  states: SharedMcpRunState[],
+  /** pi runs: Noah relays them under the `shared` broker id (`mcp__shared__<name>__<tool>`). */
+  opts: { piRelay?: boolean } = {},
+): string[] {
   const fix =
     "If the user wants it, tell them to open Settings → 권한·연결 → 시크릿, find this server under 공용 MCP 서버 and pick which of their own secrets to connect (adding the secret first if needed); it applies from their next message.";
   return states.map((state) => {
@@ -227,7 +231,9 @@ export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
     const head = `\`${state.name}\`${label}${about}`;
     switch (state.status) {
       case "active":
-        return `${head}: available in this run as \`mcp__${state.name}__*\`.`;
+        return opts.piRelay
+          ? `${head}: available in this run as \`mcp__shared__${state.name}__<tool>\` (relayed by Noah).`
+          : `${head}: available in this run as \`mcp__${state.name}__*\`.`;
       case "needs_binding":
         if (state.unboundSlots.length === 0) {
           return `${head}: NOT available in this conversation — the avatar owner has not connected a secret to it.`;

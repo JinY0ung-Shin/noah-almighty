@@ -11,7 +11,8 @@
  * Options (each also read from the env named in brackets):
  *   --gateway URL     pi-gateway origin [PI_GATEWAY_URL]
  *   --noah-url URL    the base the BROKER uses to reach this Noah [NOAH_MCP_PUBLIC_URL]
- *   --timeout-sec N   broker per-call timeout for every server (default 600, pi's cap)
+ *   --timeout-sec N   broker per-call timeout for EVERY server, overriding the per-server
+ *                     defaults below (1..600, pi's cap)
  *   --configure-instance
  *                     also disable pi's request_admin / present_file built-ins and deploy
  *                     scripts/pi-system-prompt.md as the live system prompt (name "noah")
@@ -23,8 +24,16 @@
  * stays out of shell history and `ps`); Noah never stores it.
  *
  * Broker ids ARE Noah's server names (`repo`, `system`, `git_repo`, …), so pi's
- * `mcp__<id>__<tool>` names equal the names Noah's prompts and skills use. Each
- * entry forwards the run token: `Authorization: Bearer {{ctx.header:x-noah-run-token}}`.
+ * `mcp__<id>__<tool>` names equal the names Noah's prompts and skills use; the
+ * last three ids are servers Noah RELAYS as an MCP client (`hex-ssh`, and the
+ * `plugins` / `shared` aggregates). Each entry forwards the run token:
+ * `Authorization: Bearer {{ctx.header:x-noah-run-token}}`.
+ *
+ * Timeouts: 120 s unless a server's own work takes longer (SERVER_TIMEOUT_SEC).
+ * The two tools that used to hold a call for minutes no longer do on pi (design
+ * D8): a canvas never waits for the user, and ask_avatar in a chat returns at
+ * once (its answer arrives as a follow-up turn). Browser ops are bounded by the
+ * bridge's own ~45 s relay timeout, well inside 120 s.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -50,7 +59,32 @@ export const NOAH_MCP_SERVER_NAMES = [
   "file_output",
   "ssh_trust",
   "skills",
+  "hex-ssh",
+  "plugins",
+  "shared",
 ];
+
+const DEFAULT_TIMEOUT_SEC = 120;
+/** Per-server broker timeouts (s) where the server's own work can outlast the default. */
+export const SERVER_TIMEOUT_SEC = {
+  // ask_avatar in an UNATTENDED run (routine, API task) still waits for the consultation (3 min budget).
+  avatars: 240,
+  // clone / sync / push of a large repository (git clone budget 180 s) plus the sandbox copy.
+  repo: 300,
+  git_repo: 300,
+  group_repo: 300,
+  // share_file renders deck previews Noah-side (LibreOffice + pdftoppm, 120 s per stage).
+  file_output: 240,
+  // relayed servers: a remote command over SSH, third-party tools of unknown duration.
+  "hex-ssh": 600,
+  plugins: 300,
+  shared: 300,
+};
+
+/** The broker timeout one server gets (`override` = --timeout-sec). */
+export function timeoutFor(name, override) {
+  return override ?? SERVER_TIMEOUT_SEC[name] ?? DEFAULT_TIMEOUT_SEC;
+}
 
 const BROKER_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 const RUN_TOKEN_HEADER = "x-noah-run-token";
@@ -59,7 +93,7 @@ const PROMPT_NAME = "noah";
 const DISABLED_BUILTINS = ["request_admin", "present_file"];
 
 function parseArgs(argv) {
-  const opts = { force: false, dryRun: false, remove: false, configure: false, timeoutSec: 600 };
+  const opts = { force: false, dryRun: false, remove: false, configure: false, timeoutSec: undefined };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => {
@@ -108,13 +142,13 @@ function sameEntry(have, want) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 26).join("\n"));
+    console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2).join("\n").split("\n */")[0]);
     return;
   }
   const adminKey = process.env.PI_GATEWAY_ADMIN_KEY?.trim();
   if (!opts.gateway || !adminKey) throw new Error("need --gateway (or PI_GATEWAY_URL) and PI_GATEWAY_ADMIN_KEY in the environment");
   if (!opts.noahUrl) throw new Error("need --noah-url (or NOAH_MCP_PUBLIC_URL): the base pi's broker uses to reach this Noah");
-  if (!Number.isInteger(opts.timeoutSec) || opts.timeoutSec < 1 || opts.timeoutSec > 600) {
+  if (opts.timeoutSec !== undefined && (!Number.isInteger(opts.timeoutSec) || opts.timeoutSec < 1 || opts.timeoutSec > 600)) {
     throw new Error("--timeout-sec must be an integer 1..600");
   }
   const base = `${opts.gateway.replace(/\/+$/, "")}/admin/api`;
@@ -146,7 +180,7 @@ async function main() {
 
   const listed = await admin("GET", "/mcp/servers");
   const existing = new Map((listed.servers ?? []).map((s) => [s.config?.id, s.config]));
-  const ours = (config, name) => config?.transport?.url === brokerEntry(name, opts.noahUrl, opts.timeoutSec).transport.url;
+  const ours = (config, name) => config?.transport?.url === brokerEntry(name, opts.noahUrl, timeoutFor(name, opts.timeoutSec)).transport.url;
 
   for (const name of NOAH_MCP_SERVER_NAMES) {
     if (!BROKER_ID.test(name)) throw new Error(`server name ${name} is not a valid pi broker id`);
@@ -156,7 +190,7 @@ async function main() {
       else console.log(`skip ${name}: ${have ? `not ours (${have.transport?.url ?? "?"})` : "absent"}`);
       continue;
     }
-    const want = brokerEntry(name, opts.noahUrl, opts.timeoutSec);
+    const want = brokerEntry(name, opts.noahUrl, timeoutFor(name, opts.timeoutSec));
     if (have && sameEntry(have, want)) {
       console.log(`ok ${name} (unchanged)`);
       continue;

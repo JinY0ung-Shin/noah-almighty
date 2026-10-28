@@ -41,6 +41,7 @@ import {
 import { HEX_SSH_SERVER_NAME } from "../hexSshPolicy.js";
 import { liftPluginMcpServers } from "../plugins.js";
 import {
+  mcpBridgeRedactions,
   mcpHttpBridgeServerDef,
   type McpHttpBridgeConfig,
 } from "../sharedMcpServers.js";
@@ -158,16 +159,6 @@ function sweepStaleMcpSecretFiles(dir: string): void {
     }
   }
 }
-
-/**
- * Header names whose FIXED values are credentials for the PostToolUse redaction
- * set. Deliberately narrow — a matched value is shredded out of EVERY tool
- * output of the run, so a non-secret like `X-Session-Mode: stateless` must not
- * qualify. Slot values (a user's secret) are always redacted regardless.
- */
-const CREDENTIAL_HEADER_RE = /^(?:proxy-)?authorization$|^cookie$|api[-_]?key|token|secret|password|credential/i;
-/** An auth scheme word ahead of the credential (`Bearer <tok>`) — the bare token is redacted too. */
-const AUTH_SCHEME_RE = /^(?:bearer|basic|token|apikey|digest)\s+(\S.*)$/i;
 
 /**
  * Derive everything a run needs before the SDK stream opens: tool access, MCP
@@ -644,30 +635,9 @@ export async function buildAgentRunPlan(
       }
     }
   };
-  // Header values a bridged server sends that look like credentials, literal
-  // ones included (an admin's static API key rides colleague runs too): a remote
-  // that echoes a header back must not land it in the model's context. Keyed
-  // `<server>:<header>` so the marker names what was hidden, never the value.
-  // The bridge's own redact list (the exact — trimmed — secret values it sends)
-  // rides along: a vault value stored with a trailing newline would otherwise
-  // slip past the vault-value match.
-  const bridgeHeaderRedactions: Record<string, string> = {};
-  for (const file of mcpBridgeFiles) {
-    for (const [header, value] of Object.entries(file.config.headers)) {
-      // An unresolved template (a plugin `.mcp.json` entry: `Bearer ${TOKEN}`)
-      // is file content the avatar may Read/Edit, not a credential.
-      if (CREDENTIAL_HEADER_RE.test(header) && !value.includes("${")) {
-        bridgeHeaderRedactions[`${file.name}:${header}`] = value;
-        const bare = AUTH_SCHEME_RE.exec(value)?.[1];
-        if (bare) {
-          bridgeHeaderRedactions[`${file.name}:${header}:token`] = bare;
-        }
-      }
-    }
-    file.config.redact.forEach((value, index) => {
-      bridgeHeaderRedactions[`${file.name}:secret${index + 1}`] = value;
-    });
-  }
+  // Credential-looking header values + the bridges' own redact lists
+  // (mcpBridgeRedactions, shared with the pi proxies).
+  const bridgeHeaderRedactions = mcpBridgeRedactions(mcpBridgeFiles);
 
   // PreToolUse hook: enforcement + interactivity. Runs in-process, so it can call
   // straight into the events sink and await the user.

@@ -205,6 +205,24 @@ export interface PiRuntimeFacts {
   skills?: PiSkillIndexEntry[];
   /** Sandbox path of the open working repo's COPY (`/workspace/repos/<owner>/<name>`, design D1). */
   activeRepoDir?: string;
+  /** The servers Noah relays as an MCP client on this run (`agent/pi/mcpProxies.ts`). */
+  mcpProxies?: PiProxiedMcpFacts;
+  /**
+   * `mcp__avatars__ask_avatar` returns at once and its answer arrives as a
+   * follow-up message (design D8) — interactive pi chats only; unattended pi
+   * runs keep the waiting call.
+   */
+  asyncAskAvatar?: boolean;
+}
+
+/** What both metacognition surfaces say about a pi run's relayed MCP servers. */
+export interface PiProxiedMcpFacts {
+  /** hex-ssh is relayed (`mcp__hex-ssh__<tool>`). */
+  hexSsh: boolean;
+  /** Plugin `.mcp.json` servers relayed under `mcp__plugins__<server>__<tool>`. */
+  pluginServers: string[];
+  /** Plugin servers left out, and why (English, model-facing). */
+  skippedPluginServers: { name: string; reason: string }[];
 }
 
 /** One skill a pi run can use (see {@link PiRuntimeFacts.skills}). */

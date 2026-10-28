@@ -36,8 +36,15 @@ Durable principles for this layer:
 - **Every MCP tool MUST self-gate in its handler** — the `mcp__`-prefix auto-allow in the PreToolUse hook
   fires BEFORE any owner check. **Guard conventions differ per file BY DESIGN** (owner-only vs elevated vs
   group-member vs intentionally ungated); don't "normalize" them.
-- **A new tool means updating BOTH `mcpServers` AND `allowedTools`** in `runPlan.ts` — two hand-synced
-  lists. Miss one and the model either sees a tool it can't call or calls one it can't see.
+- **A new tool means updating BOTH `inProcessMcpServers` AND `mcpAllowedTools`** in `runCapabilities.ts`
+  (the backend-agnostic half both runners share) — two hand-synced lists. `mcpAllowedTools` is the SDK's
+  `allowedTools` half AND the pi endpoint's per-call gate. Miss one and the model either sees a tool it
+  can't call or calls one it can't see.
+- **A new SERVER also reaches pi** (`docs/architecture/pi-runtime.md`): add its name to
+  `PI_NOAH_SERVER_NAMES` + the static catalog build (`agent/pi/mcpCatalog.ts`) AND to
+  `NOAH_MCP_SERVER_NAMES` in `scripts/pi-register-mcp.mjs` (a test keeps the two equal); broker ids are
+  GLOBAL per pi instance, so the operator re-runs the script. A third-party/process server is never its own
+  id — it rides Noah's relays (`agent/pi/mcpProxies.ts`: `hex-ssh`, `plugins`, `shared`).
 - **A browser op is a bigger commitment than an MCP tool.** Adding one to `browserTools.ts` also means
   `BROWSER_TOOL_NAMES`, `events.ts` (`BrowserRequest`/`BrowserResult`), the `routes/chat.ts` relay +
   audit row, the client `BridgeOperation`/`BridgeReply` (+ its Korean progress label), and

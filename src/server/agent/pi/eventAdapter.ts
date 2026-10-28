@@ -49,14 +49,10 @@ export type PiToolKind = "tool" | "agent" | "question" | "hidden";
 
 /**
  * pi built-in tool name → how Noah presents it. `noahName` is what reaches
- * `ToolEvent.name` (and so the client's label/summary tables).
- *
- * Shared-layer follow-ups (`src/shared/sdkToolPresentation.ts`, not edited by
- * this lane): `LS`, `McpSearch`, `PresentFile`, `RequestAdmin` have no Korean
- * label yet — `sdkToolLabel` degrades them to the raw name until
- * `SDK_TOOL_LABELS` gains e.g. LS "폴더 보기", McpSearch "도구 찾기",
- * PresentFile "파일 보여주기", RequestAdmin "관리자 요청". The client
- * `humanTool`/`summarizeInput` needs the same four plus pi's `path`-keyed inputs.
+ * `ToolEvent.name` (and so the client's label/summary tables). Their Korean
+ * labels (`LS`, `McpSearch`, `PresentFile`, `RequestAdmin` included) live in
+ * `SDK_TOOL_LABELS` (`src/shared/sdkToolPresentation.ts`); pi inputs key their
+ * path as `path`, which both summaries already read.
  */
 export const PI_TOOL_PRESENTATION: Readonly<Record<string, { kind: PiToolKind; noahName: string }>> = {
   read: { kind: "tool", noahName: "Read" },

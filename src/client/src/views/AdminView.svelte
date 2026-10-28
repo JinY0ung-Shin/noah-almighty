@@ -860,7 +860,7 @@
               <div class="sys-grid">
                 <div class="sys-row">
                   <span class="sys-key muted">런타임</span>
-                  <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "claude" ? "Claude Agent SDK" : "로컬 스텁"}</span></span>
+                  <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "claude" ? "Claude Agent SDK" : sys.agentRuntime === "pi" ? "pi-gateway" : "로컬 스텁"}</span></span>
                 </div>
                 <div class="sys-row">
                   <span class="sys-key muted">설정된 모델</span>

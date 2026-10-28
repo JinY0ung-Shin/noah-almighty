@@ -8,6 +8,6 @@
     "rootDir": ".",
     "isolatedModules": true
   },
-  "include": ["src/client/src/**/*.ts", "src/client/src/**/*.svelte", "src/shared/**/*.ts", "src/server/types.ts", "src/server/routineSchedule.ts", "src/server/experimentalFeatures.ts", "src/server/releaseNotes.ts", "src/server/modelTiers.ts", "src/server/effortLevels.ts", "tests/client-*.test.ts", "tests/svelte-*.test.ts"],
+  "include": ["src/client/src/**/*.ts", "src/client/src/**/*.svelte", "src/shared/**/*.ts", "src/server/types.ts", "src/server/routineSchedule.ts", "src/server/experimentalFeatures.ts", "src/server/releaseNotes.ts", "src/server/modelTiers.ts", "src/server/effortLevels.ts", "src/server/hexSshPolicy.ts", "tests/client-*.test.ts", "tests/svelte-*.test.ts"],
   "exclude": ["node_modules", "dist"]
 }

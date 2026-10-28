@@ -34,6 +34,9 @@ import {
 } from "../deckRender.js";
 import { piSandboxPath, piToolPathToHost, type PiWorkspace } from "./pi/piWorkspace.js";
 import type { PiSkillPlan } from "./pi/piSkills.js";
+import type { PiAsyncJobs } from "./pi/asyncJobs.js";
+import { planPiMcpProxies, type PiMcpProxyPlan } from "./pi/mcpProxies.js";
+import { PI_NOAH_SERVER_NAMES } from "./pi/mcpCatalog.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
 import { normalizeGitRepoName } from "../gitRepos.js";
 import { visionForModel } from "../modelVisionPolicy.js";
@@ -252,9 +255,9 @@ export function buildModelFallbackChain(primary: string): string[] {
 export interface RunCapabilityOptions {
   /**
    * `pi`: the run executes on pi-gateway (docs/architecture/pi-runtime.md).
-   * Servers that only exist as CLI subprocesses (hex-ssh, plugin `.mcp.json`,
-   * admin 공용 MCP) are not proxied onto the HTTP MCP endpoint yet, so they are
-   * withheld here and BOTH metacognition surfaces report them absent.
+   * Servers that exist only as processes or remote endpoints (hex-ssh, plugin
+   * `.mcp.json`, admin 공용 MCP) are relayed by Noah as an MCP client
+   * (`piMcpProxies`, served under the stable ids `hex-ssh`/`plugins`/`shared`).
    */
   runtime?: Extract<AgentRuntime, "claude" | "pi">;
   /** pi runs: the sandbox path of this conversation's work folder (`/workspace/c/<seg>`). */
@@ -268,6 +271,12 @@ export interface RunCapabilityOptions {
   piWorkspace?: PiWorkspace;
   /** pi runs: the skills materialized into the sandbox / served by mcp__skills__read (`pi/piSkills.ts`). */
   piSkills?: PiSkillPlan;
+  /**
+   * pi runs with a live steer channel (interactive chat): background jobs of
+   * this run (design D8). `ask_avatar` starts its consultation here and
+   * returns at once; runPiAgent delivers the answer as a follow-up turn.
+   */
+  piAsyncJobs?: PiAsyncJobs;
 }
 
 /**
@@ -689,10 +698,9 @@ export async function buildRunCapabilities(
   const canWriteFiles = elevatedToolAccess;
   // hex-ssh registration (the server itself is built further down). Computed
   // HERE so describe_system's SSH line reports this boolean, not secret names.
-  // hex-ssh is a CLI-spawned stdio server: a pi run has no route to it until
-  // Noah proxies it onto the HTTP MCP endpoint (docs/architecture/pi-runtime.md).
+  // The SDK registers it as a CLI stdio server; a pi run reaches it through
+  // Noah's relay (`piMcpProxies` below) — the key never enters the sandbox.
   const sshActive =
-    !piRun &&
     sshToolsEnabled &&
     Boolean(ownerSecrets.SSH_PRIVATE_KEY && hexSshAllowedTools.length > 0);
   // 공용 MCP 서버 (admin-registered external HTTP MCP servers,
@@ -705,10 +713,9 @@ export async function buildRunCapabilities(
   // 2026-10-26). A consultation run gets no external servers at all, exactly
   // like plugin servers, and neither does a restricted headless run (intro /
   // hashtag generation) — it has no use for third-party tools.
-  // A pi run gets none either, for now: admin servers are CLI-registered
-  // (natively or through the stdio bridge) and not yet proxied onto the HTTP
-  // MCP endpoint (docs/architecture/pi-runtime.md).
-  const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools) || piRun
+  // A pi run gets the same plan; Noah relays the mounted servers itself
+  // (`piMcpProxies` below, tools as `mcp__shared__<name>__<tool>`).
+  const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools)
     ? null
     : planSharedMcpRun(store.getSharedMcpServers(), {
         bindings: store.listSharedMcpBindings(request.avatar.id),
@@ -720,10 +727,38 @@ export async function buildRunCapabilities(
   const sharedMcpStates = sharedMcpPlan?.states.map((state) =>
     ownerToolAccess ? state : { ...state, unboundSlots: [], missingSecrets: [] },
   );
+  // pi: the servers Noah relays as an MCP client (hex-ssh, plugin `.mcp.json`,
+  // 공용 MCP) and the values the endpoint redacts from every result. Planned
+  // HERE (nothing is spawned yet — the pool starts children lazily) so both
+  // metacognition surfaces name the same servers the endpoint serves.
+  const piMcpProxies: PiMcpProxyPlan | undefined = piRun
+    ? await planPiMcpProxies({
+        config,
+        avatarUserId: request.avatar.id,
+        pluginRoots: consultationRun ? [] : pluginRoots,
+        secretsAllowed: elevatedToolAccess && !consultationRun,
+        injectableSecretEnv: mcpInjectableSecretEnv(ownerSecrets),
+        sshActive,
+        sshSecrets: Object.fromEntries(
+          SSH_MCP_SECRET_ENV_NAMES.flatMap((name) =>
+            ownerSecrets[name] !== undefined ? [[name, ownerSecrets[name]] as const] : [],
+          ),
+        ),
+        hexSshAllowedTools,
+        sharedMcpPlan,
+        reservedNames: PI_NOAH_SERVER_NAMES,
+      })
+    : undefined;
+  // pi + an interactive chat (a live steer channel): ask_avatar runs in the
+  // background and its answer arrives as a follow-up message (design D8).
+  // Unattended pi runs (routines, the task API) keep the waiting call.
+  const piAsyncAsk = piRun && Boolean(events?.steers) && Boolean(runOptions.piAsyncJobs);
   // pi self-state, ONE value for both metacognition surfaces (describe_system
   // here, the prompt through stampPromptRequest).
   const piRuntimeFacts: PiRuntimeFacts | undefined = piRun
     ? {
+        ...(piMcpProxies ? { mcpProxies: piMcpProxies.facts } : {}),
+        asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),
         // Owner self-state (the names), like the prompt's secret list.
         shellSecretsUnavailable: ownerToolAccess ? ownerState.shellExposedSecretNames : [],
@@ -834,8 +869,37 @@ export async function buildRunCapabilities(
           },
           askCaptureHint:
             personalKnowledgeToolsEnabled && knowledgeRepoConfigured,
+          // pi interactive chat (design D8): the consultation runs in the
+          // background; its answer reaches the model as a follow-up message.
+          ...(piAsyncAsk
+            ? {
+                startAskAvatar: async (targetUsername: string, question: string) => {
+                  const { askAvatar, preflightAvatarAsk } = await import("./avatarAsk.js");
+                  const { askOutcomeDelivery } = await import("./avatarDirectoryTools.js");
+                  const preflight = preflightAvatarAsk(store, { askerUserId: request.avatar.id, targetUsername });
+                  if (!preflight.ok) return { refused: preflight.outcome };
+                  const captureHint = personalKnowledgeToolsEnabled && knowledgeRepoConfigured;
+                  let jobId = "";
+                  jobId = runOptions.piAsyncJobs!.start("ask", async (signal) => {
+                    const outcome = await askAvatar(store, config, {
+                      askerUserId: request.avatar.id,
+                      askerName: owner.displayName,
+                      targetUsername,
+                      question,
+                      // Aborted when the run ends without taking it (cancel, error).
+                      parentSignal: signal,
+                    });
+                    // A cancelled asking run delivers nothing.
+                    if (signal.aborted) return null;
+                    return askOutcomeDelivery(jobId, question, outcome, captureHint);
+                  });
+                  return { accepted: jobId, username: preflight.username };
+                },
+              }
+            : {}),
         }
       : {}),
+    ...(piRun ? { askRuntime: "pi" as const } : {}),
   });
   // Skill exchange (#skill-share): search skills teammates' avatars shared,
   // learn one into the owner's knowledge repo, (un)share own repo skills.
@@ -921,7 +985,7 @@ export async function buildRunCapabilities(
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
   const canvasServer = canvasActive
-    ? buildCanvasServer({ emitCanvas: events!.onCanvas! })
+    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, ...(piRun ? { neverWait: true } : {}) })
     : null;
   // The handler self-gates on `allowed` in addition to `browserActive`: the
   // `mcp__` auto-allow in the PreToolUse hook fires before any owner check, and
@@ -1248,6 +1312,21 @@ export async function buildRunCapabilities(
     inProcessMcpServers,
     mcpAllowedTools,
     piRuntimeFacts,
+    piMcpProxies,
+    // pi: what the endpoint redacts from EVERY Noah MCP result of the run —
+    // the relayed servers' secrets (piMcpProxies) plus the browser-typeable
+    // values (a page can echo a typed password into a later snapshot or fetch).
+    // The SDK half builds its PostToolUse set itself (runPlan).
+    piRedactions: piRun
+      ? {
+          ...piMcpProxies?.redactions,
+          ...Object.fromEntries(
+            browserSecretPolicies.flatMap((policy) =>
+              injectableSecretEnv[policy.name] !== undefined ? [[policy.name, injectableSecretEnv[policy.name]!] as const] : [],
+            ),
+          ),
+        }
+      : undefined,
   };
 }
 
