@@ -2061,6 +2061,9 @@ describe("system tools (avatar system management)", () => {
     expect(res.content[0].text).not.toContain("private-key");
     // SSH key present → the dedicated status line reports SSH tools as active.
     expect(res.content[0].text).toContain("Remote SSH tools: enabled");
+    // Background tasks are disabled: no background-execution line any more.
+    expect(res.content[0].text).not.toContain("Background execution");
+    expect(res.content[0].text).not.toContain("run_in_background");
   });
 
   it("describe_system reports the live routine concurrency caps", async () => {

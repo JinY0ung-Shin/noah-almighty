@@ -374,6 +374,16 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
       (options.env as Record<string, string | undefined>)
         .CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
     ).toBe("0");
+    // Background tasks are disabled, and their controls are neither offered
+    // nor pre-allowed.
+    expect(
+      (options.env as Record<string, string | undefined>)
+        .CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,
+    ).toBe("1");
+    expect(options.disallowedTools).toEqual(expect.arrayContaining(["TaskStop", "TaskOutput"]));
+    for (const shellControl of ["BashOutput", "KillShell", "KillBash"]) {
+      expect(options.allowedTools).not.toContain(shellControl);
+    }
     // `snapshot: false` keeps the per-turn append live on resumed sessions; the
     // CLI's default would replay the first turn's recorded prompt instead.
     expect(options.systemPrompt).toMatchObject({

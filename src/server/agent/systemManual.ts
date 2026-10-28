@@ -93,9 +93,6 @@ Respond to question, permission, plan or canvas cards in Noah to let a waiting r
 ## Attachments
 Attach supported files with the composer. Image understanding depends on the selected model; a text-only model receives image file paths rather than visible images. Generated files arrive as file cards; local filesystem paths are not download links. Read files-canvas for previews and exports.
 
-## Background work
-Background shell work can outlive the first visible reply. Noah keeps the session alive and delivers follow-up reports as new messages. While it runs, this conversation cannot accept another message; cancelling stops the work. A server restart also ends pending background processes. Subagent work is forced into the foreground in this host.
-
 Example: "이 파일을 분석하고 결과를 CSV 파일로 줘. 불명확한 기준은 먼저 물어봐."`,
   },
   {
@@ -251,12 +248,12 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID" \\
 ~~~
 GET /api/v1/avatar/tasks/:id returns {"task":...}. GET /api/v1/avatar/tasks returns the latest 100 as {"tasks":[...]}.
 - queued: waiting to start.
-- running: executing, including background work still settling.
+- running: executing.
 - waiting_input: inspect pendingRequests and answer the outstanding question/permission/canvas request.
 - succeeded: read result.text and result.summary. result is the task's final response, not the whole conversation transcript.
 - failed: inspect error and the partial response in Noah; work may have partially changed external systems.
 - cancelled: cancelled.
-Poll until a terminal state with a reasonable delay/backoff. Noah also displays the conversation and its live question/approval UI. Background follow-up reports are accumulated into result.text before completion; result.summary is from the final report.
+Poll until a terminal state with a reasonable delay/backoff. Noah also displays the conversation and its live question/approval UI.
 
 ## 3. Answer a pending request
 Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question, permission or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
@@ -282,7 +279,7 @@ Queued work is cancelled; running work receives an asynchronous stop request. Po
 ## Limits and recovery
 - At most 20 unfinished tasks per user; at most 60 new submissions/minute. 429 includes Retry-After: 60. Respect it.
 - API tasks run one per user and at most four across the server. A busy conversation/repository causes waiting/retry; do not submit duplicates because the queue is slow. A long or stuck task holds its owner's only slot until it finishes, fails, or is cancelled, so that user's later tasks wait — cancel stuck work instead of waiting out the budget.
-- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input and any background phase. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled, and a permission request as denied.
+- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled, and a permission request as denied.
 - Queued tasks survive a restart. A task interrupted while running becomes failed, not automatically retried. Review partial effects before submitting again.
 - Deleting its Noah conversation also deletes task history. Do not rely on the task endpoint as permanent archival storage. There is currently no automatic retention cleanup for completed task rows.
 - 400: check the request body/field constraints. 401: check Bearer key validity/revocation and account state. 404: verify the task/conversation id belongs to this owner and still exists. 409: inspect the conflict (idempotency mismatch, expired response or completed task); do not treat every 409 as retryable. 429: back off.

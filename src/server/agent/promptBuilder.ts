@@ -782,21 +782,6 @@ export function buildSystemPromptAppend(
       systemManualIndex(true) +
       "\n\nSystem tools are always available; individual handlers still enforce permissions. For Noah usage/setup/integration questions, FIRST read the relevant topic with `mcp__system__read_manual`; omit topic for the index. Read `external-tasks` before giving API endpoints, JSON or curl. Check `mcp__system__describe_system` for current settings/access. Never infer current permissions or configuration from the manual."
   );
-  // Background execution (META-COGNITION of host behavior): the SDK keeps the
-  // session alive past the visible reply while background tasks run, and this
-  // host delivers wake-up turns as NEW chat messages. Without this note the
-  // model either promises follow-ups it assumes are impossible, or hands quick
-  // work to the background and silently locks the conversation. Subagent spawns
-  // are Bash-excluded here BY DESIGN: the hook force-rewrites every Task/Agent
-  // spawn to the foreground, flag omitted or not (see SUBAGENT_SPAWN_TOOLS in
-  // preToolUseHook.ts for why).
-  lines.push(
-    "Background execution (`run_in_background` on Bash): background commands keep running after your visible reply ends — the session stays alive, you are woken when a task settles, and your follow-up reply reaches the user as a NEW chat message (the user sees a live background-task indicator meanwhile). " +
-      "Caveats: the user CANNOT send a new message in this conversation until the background work finishes (their only alternative is cancelling, which kills the tasks), and a server restart also kills pending background work. " +
-      "Therefore run quick work in the foreground, reserve `run_in_background` for genuinely long commands, and when you do hand work to the background, tell the user what is running and roughly how long it should take. " +
-      "Subagent spawns (Task/Agent) ALWAYS run in the foreground in this host — `run_in_background` is forced off whether you pass it or omit it, so the spawn returns the subagent's answer; never promise the user that a spawned subagent is working in the background. " +
-      "A finished subagent cannot be continued — to follow up, spawn a new one and give it the full context it needs.",
-  );
   const disabledToolGroupsBlock = disabledMcpToolGroupsSection(request);
   if (disabledToolGroupsBlock) {
     lines.push(disabledToolGroupsBlock);
@@ -1206,7 +1191,7 @@ export function buildSystemPromptAppend(
           // THIS run's budget, stamped from config so the operator's value is
           // the one stated. Same sentences as describe_system's origin line.
           (request.avatarTaskRunTimeoutMs
-            ? `This run has a hard wall-clock budget of ${Math.round(request.avatarTaskRunTimeoutMs / 60_000)} minutes covering the WHOLE run, time spent waiting on questions and background work included; when it runs out the run is stopped and the task fails — the calling system gets an error instead of your result, and only what was produced so far is kept in this conversation. A single pending question or permission request also expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer. Scope the work to fit, and if it cannot fit, do the most important part first and say in your result what remains. `
+            ? `This run has a hard wall-clock budget of ${Math.round(request.avatarTaskRunTimeoutMs / 60_000)} minutes covering the WHOLE run, time spent waiting on questions included; when it runs out the run is stopped and the task fails — the calling system gets an error instead of your result, and only what was produced so far is kept in this conversation. A single pending question or permission request also expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer. Scope the work to fit, and if it cannot fit, do the most important part first and say in your result what remains. `
             : "") +
           "Your final reply is stored as the task's `result.text` and is the only thing the calling system reads, so end with a clear, self-contained summary of what you did and what remains.",
       );
@@ -1292,7 +1277,7 @@ export function buildSystemPromptAppend(
       // so "how long can an API task run?" gets the live value. Same sentence as
       // describe_system's External task API line.
       const taskBudget = request.avatarTaskRunTimeoutMs
-        ? ` Each task may run for up to ${Math.round(request.avatarTaskRunTimeoutMs / 60_000)} minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES), including time spent waiting on questions and background work, and a single pending question or permission request expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer.`
+        ? ` Each task may run for up to ${Math.round(request.avatarTaskRunTimeoutMs / 60_000)} minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES), including time spent waiting on questions, and a single pending question or permission request expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer.`
         : "";
       lines.push(`External task API: ${request.avatarApiKeyCount} active personal API keys. The owner can issue/revoke keys in 내 아바타 → 권한·연결 → 외부 작업 API. External systems send arbitrary instructions as JSON {message, conversationId?} to POST /api/v1/avatar/tasks with a Bearer key to run the owner's main avatar. Tasks are queued, results stay in the conversation, and questions/permissions can be answered in Noah or through the task respond API.${taskBudget} This is independent of scheduled routines. Never ask the owner to paste an API key into chat.`);
     }

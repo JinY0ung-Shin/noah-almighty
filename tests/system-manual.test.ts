@@ -93,6 +93,13 @@ describe("official system manual", () => {
     expect(page).toContain("Editing an earlier message rewinds the conversation to it");
   });
 
+  it("no longer documents background work (background tasks are disabled)", () => {
+    expect(readSystemManual("chat").text).not.toContain("## Background work");
+    const tasks = readSystemManual("external-tasks").text;
+    expect(tasks).not.toContain("Background follow-up reports");
+    expect(tasks).not.toContain("background phase");
+  });
+
   it("documents the deck converter without claiming it is available", () => {
     const page = readSystemManual("files-canvas").text;
     expect(page).toContain("New PowerPoint decks are designed as HTML/CSS slides and converted by the pptx skill");

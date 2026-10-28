@@ -66,16 +66,15 @@ export const SDK_HIDDEN_ACTIVITY_TOOLS = [
  * Rule-allowed tools never enter that cancellable ask path, and a hook DENY
  * still overrides an allowedTools rule, so the hook's guards (admin policy,
  * active-repo git, read-only viewers) keep working. Unknown
- * names are harmless no-ops (same contract as UNUSED_SDK_BUILTIN_TOOLS), so
- * both shell-kill spellings ride along. AskUserQuestion stays OFF this list:
+ * names are harmless no-ops (same contract as UNUSED_SDK_BUILTIN_TOOLS).
+ * AskUserQuestion stays OFF this list:
  * the hook intercepts it with a deny-carrying-answer, which must stay ahead
- * of any rule.
+ * of any rule. The background-shell companions (BashOutput/KillShell/KillBash)
+ * left the list when background tasks were disabled — there is no background
+ * shell to read or kill.
  */
 export const SDK_ELEVATED_BUILTIN_TOOLS = [
   "Bash",
-  "BashOutput",
-  "KillShell",
-  "KillBash",
   "Write",
   "Edit",
   "MultiEdit",
@@ -125,6 +124,11 @@ export const UNUSED_SDK_BUILTIN_TOOLS = [
   // sessionIsolation.ts).
   "ListAgents",
   ...SDK_RETIRED_TOOLS,
+  // Background-task controls: background tasks are disabled
+  // (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS), yet the bundled 2.1.283 still
+  // offers TaskStop (measured), so there is nothing for them to act on.
+  "TaskStop",
+  "TaskOutput",
 ] as const;
 
 export const SDK_TOOL_LABELS: Record<string, string> = {

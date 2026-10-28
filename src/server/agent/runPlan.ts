@@ -132,6 +132,13 @@ export function agentSubprocessEnv(
     // retired: pinned OFF so a deploy-environment value cannot turn the teams
     // runtime back on (its SendMessage tool is disallowed regardless).
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "0",
+    // Background tasks are disabled (ahead of the pi-gateway move, which has
+    // none). Measured on the bundled CLI 2.1.283: the flag drops
+    // `run_in_background` from the Bash AND Agent schemas, so a Bash call that
+    // still passes it fails the CLI's own input validation before any hook, and
+    // nothing can outlive the turn. The held-open stdin generator and
+    // onTurnResult stay — mid-turn steers ride them.
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
   };
 }
 

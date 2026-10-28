@@ -85,7 +85,9 @@ Stored (`AvatarTaskStatus`): `queued` → `running` → `succeeded` | `failed` |
 - The chat turn's own terminal event decides the outcome, not the HTTP acceptance: `executeChatTurn`
   returns `ok` even after persisting an SDK failure, so `runTask` reads `done` / `error` / `cancelled`
   off `hooks.onEvent` and defaults to `failed` ("작업이 결과 없이 종료되었습니다") when nothing terminal arrives.
-- **A background phase does NOT end the task.** When the turn hands work to background tasks or
+- **A background phase does NOT end the task.** (Unreachable since background tasks were disabled on
+  2026-10-29 — `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`; the aggregate stays until the SDK runner is
+  removed, so a task now ends at its first `done`.) When the turn hands work to background tasks or
   subagents, `chat.ts` emits `done` EARLY with `background: true` and a placeholder text
   ("백그라운드 작업을 진행 중입니다."), then a `bg_message` per wake-up report, and closes the phase with
   **`bg_end`, not a second `done`**. So the row stays `running` until `bg_end`, and the stored
@@ -140,8 +142,7 @@ off a `WeakMap` keyed by `AppServices`, so a test's second app never shares a qu
   first interactive turn.
 - **Unattended-run behavior**: `unattendedDeadlineMs = config.avatarTaskRunTimeoutMs`
   (`AVATAR_TASK_TIMEOUT_MINUTES`, default 300 = 5 hours, 1-minute floor, capped at setTimeout's
-  ~24.8-day maximum) covers the WHOLE turn including time parked on a question and the background
-  phase up to `bg_end`. It is the API's OWN knob, independent of the routine budget
+  ~24.8-day maximum) covers the WHOLE turn including time parked on a question. It is the API's OWN knob, independent of the routine budget
   (`ROUTINE_RUN_TIMEOUT_MINUTES`, see [routines.md](routines.md)): API runs never take a routine
   scheduler slot, they sit behind this dispatcher's caps instead — which are their own stall surface:
   a long or hung task holds its owner's only slot, and one of the four, for up to the full budget, so

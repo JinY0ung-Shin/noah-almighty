@@ -173,9 +173,22 @@
   a sub-agent's own tool call (a shell past ~3 s, or backgrounded) nests under that agent's card: the
   handler maps tool_use id → issuing agent (`LoopState.toolAgentIds`), and every task frame carries
   that `agentId`. Such rows used to render at the root, away from the agent that ran them.
-  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is the blunt alternative — strips `run_in_background` from
-  tool schemas entirely, but kills Bash background tasks too.)
-- **Background phase (`run_in_background` tasks outliving the visible reply).** A `query()` is NOT one
+  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` — now SET, see the next bullet — strips `run_in_background`
+  from the Bash and Agent schemas; the rewrite stays as a guard.)
+- **Background tasks are DISABLED (2026-10-29, ahead of the pi-gateway move).** `agentSubprocessEnv`
+  sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`. Measured on the bundled CLI 2.1.283 against a fake API:
+  `run_in_background` vanishes from the Bash and Agent schemas, a Bash call that still passes it fails
+  the CLI's input validation (`An unexpected parameter run_in_background was provided`) before any hook,
+  and an Agent spawn the hook rewrites with `run_in_background: false` still runs in the foreground.
+  `TaskStop`/`TaskOutput` are disallowed (2.1.283 still offers TaskStop) and BashOutput/KillShell/KillBash
+  left `SDK_ELEVATED_BUILTIN_TOOLS`; the standing prompt section, the `describe_system` line and the manual
+  section about background work are gone. What STAYS: the held-open generator and `onTurnResult` (the
+  mid-turn steers below ride them). The background-phase machinery described next — the `bg_tasks`,
+  `bg_message` and `bg_end` frames, `markRunBackground`, the client's `backgroundPhase` UI and the task
+  API's background aggregate — can no longer fire; it stays in code for now and is slated for removal
+  together with the SDK runner (pi migration Phase 5).
+- **Background phase (`run_in_background` tasks outliving the visible reply — no longer reachable, see
+  above).** A `query()` is NOT one
   model turn: with live background tasks (Bash `run_in_background` — subagent spawns are forced
   foreground, see above) the CLI can emit the first
   `result`, wake the model when a task settles (`task_notification`), and stream follow-up turns, each
@@ -211,8 +224,8 @@
   segment bookkeeping runs BEFORE that dedupe so a replay closes the same segments. Known v1 limits (deliberate): a new `POST
   /api/chat/stream` still 409s during the phase — but the composer no longer strands the viewer there,
   it delivers the text as a MID-TURN message (next bullet) whose answer arrives as a `bg_message`
-  wake-up turn — and a server restart kills pending background work; both are stated in the standing
-  prompt guidance (`promptBuilder.ts`) and `describe_system`.
+  wake-up turn — and a server restart kills pending background work; both used to be stated in the
+  standing prompt guidance and `describe_system` (removed with the 2026-10-29 disable).
 - **Mid-turn user messages ("steers") ride the held-open input, and the CLI's own queue does the
   folding.** Someone watching an agentic turn wants to correct it, not wait it out — the same thing
   typing into Claude Code mid-run does. Streaming turns already pass an async generator as the SDK

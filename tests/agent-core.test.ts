@@ -718,6 +718,9 @@ describe("marketplace helpers", () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe("/tmp/agent-sessions");
     // Agent teams are retired: the CLI teams runtime is pinned off.
     expect(env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe("0");
+    // Background tasks are disabled: no run_in_background in the Bash/Agent
+    // schemas, nothing outlives the turn.
+    expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe("1");
     // SESSION_SECRET is the AES master key for every at-rest secret — it must
     // never reach the subprocess env where the agent's Bash/`env` could read it.
     expect(env.SESSION_SECRET).toBeUndefined();
@@ -728,12 +731,13 @@ describe("marketplace helpers", () => {
     expect(env.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
   });
 
-  it("keeps the retired agent-teams runtime off even when the deploy env turns it on", () => {
+  it("keeps agent teams off and background tasks disabled whatever the deploy env says", () => {
     const env = agentSubprocessEnv(
-      { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" },
+      { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1", CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "0" },
       "/tmp/agent-sessions",
     );
     expect(env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe("0");
+    expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe("1");
   });
 
   it("only forwards SSH-specific secrets to the SSH MCP subprocess", () => {
@@ -3920,10 +3924,11 @@ describe("buildPrompt", () => {
 
     expect(systemAppend).toContain("Noah Almighty (avatar-chat)");
     expect(systemAppend).toContain("mcp__system__describe_system");
-    // Standing background-execution guidance: wake-ups arrive as NEW messages,
-    // and backgrounding blocks the conversation until the work settles.
-    expect(systemAppend).toContain("Background execution");
-    expect(systemAppend).toContain("NEW chat message");
+    // Background tasks are disabled, so the standing background-execution
+    // guidance (and its subagent/SendMessage caveats) is gone.
+    expect(systemAppend).not.toContain("Background execution");
+    expect(systemAppend).not.toContain("run_in_background");
+    expect(systemAppend).not.toContain("SendMessage");
     expect(systemAppend).not.toContain("Earlier conversation history");
     expect(systemAppend).not.toContain(
       "User message:\n방금 말한 내용을 이어서 처리해줘",

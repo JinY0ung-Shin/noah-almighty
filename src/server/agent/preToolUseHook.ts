@@ -54,8 +54,13 @@ const AUTO_ALLOWED_META_TOOLS: ReadonlySet<string> = new Set(["Skill", ...SDK_IN
  * same bubble, and matches what the prompt promises, while the parked asks (a
  * question or permission raised after the visible turn ended) are still
  * unverified for background subagents. Agents that run in the background anyway
- * (remote agents) are rendered from their task events in sdkMessageHandlers. Bash keeps `run_in_background`: a running shell
- * makes no further tool calls, so backgrounding it never bypasses the gate.
+ * (remote agents) are rendered from their task events in sdkMessageHandlers.
+ * Since background tasks were disabled (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS in
+ * agentSubprocessEnv) the flag is no longer in the Agent schema at all; the
+ * rewrite stays as a belt-and-braces guard — measured on 2.1.283, an injected
+ * `run_in_background: false` still runs the spawn normally in the foreground.
+ * Bash needs no rewrite: its schema is strict, so a call that still passes
+ * `run_in_background` fails the CLI's input validation before reaching this hook.
  */
 const SUBAGENT_SPAWN_TOOLS: ReadonlySet<string> = new Set(SDK_SUBAGENT_TOOLS);
 
