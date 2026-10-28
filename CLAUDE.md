@@ -127,23 +127,6 @@ These are the invariants the project is built around. New work should reinforce 
   an in-process MCP bridge (`mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*`) and keep the
   no-Bash-fallback line in its error text. Per-user git tokens are used server-side only, never reach the
   agent.
-- **A server agent is Noah's OWN pinned CLI running ON the owner's server — every decision stays in Noah.**
-  `mcp__server_agents__delegate` runs one slim SDK query per registered server with
-  `spawnClaudeCodeProcess` over an ssh2 exec channel (no daemon/port/root there; SSH auth is the auth):
-  the tier gate (`read` = no shell / `exec` = +Bash / `full` = +edit tools — tool-level; the server account
-  is the real boundary), deny-all confirmer, redaction, progress and audit ride the stdio control protocol.
-  OWNER-ONLY (owner chat, owner routine, external task API — never colleague/group/consultation runs; owner's
-  key, owner's servers), and unattended runs keep the tier as-is (user decision). The remote CLI receives the
-  deployment's model credentials, so the whole feature stays OFF until a system admin enables it after
-  acknowledging that registrants can read them (`server_agents_enabled`, enforced at registration, the check
-  route, `checkServerAgent` AND the runner — user decision). Host keys are fail-closed
-  against the owner's known_hosts and trusted only via the fingerprint the owner SAW; secrets reach the remote
-  CLI on a stdin line through an env ALLOWLIST, never argv; remote state lives in `~/.claude-noah`, never
-  `~/.claude`; the binary is copied from THIS build (SDK↔CLI must match) and a dropped channel is a failure,
-  never a silent success. Never add `settingSources: project` or `allowedTools` to the remote run (a server-side
-  settings file could exfiltrate the token; bare allowedTools out-approve the gate). **A new
-  conversation-deleting path also calls `deleteServerAgentSessionsForConversation`.** Mechanics →
-  `docs/architecture/server-agents.md`.
 - **Browser control is a RELAY into the user's own browser, and the extension runs no page JS EXCEPT one
   fixed bridge-authored expression for `read_storage`.** An
   `mcp__browser__*` op is a wire contract crossing FIVE hand-synced layers (`agent/browserTools.ts` →

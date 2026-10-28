@@ -15,7 +15,6 @@ import type {
   Plugin,
   RoutineJob,
   RoutineSchedulePatch,
-  ServerAgentsUnavailableReason,
   SharedMcpRunState,
   CraftRunState,
 } from "../types.js";
@@ -26,7 +25,6 @@ import {
   craftAppsLines,
   gettingStartedGaps,
   rewindTurnState,
-  serverAgentsUnavailableText,
   sharedMcpServerLines,
   summarizeGroupAgentState,
   summarizeOwnerState,
@@ -47,7 +45,6 @@ import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
   SHARE_LINK_EXPIRY_DAYS,
 } from "../../shared/shareLinks.js";
-import { serverAgentInstallLine, serverAgentTargetLabel } from "./serverAgentTools.js";
 
 /**
  * Per-conversation context for avatar-system management tools. These tools let
@@ -223,23 +220,12 @@ export interface SystemToolsContext {
    * viewerIsOwner (false on these runs).
    */
   groupAgent?: { agentId: string; actingUserId: string };
-  /** The conversation this run belongs to (describe_system names its remote server-agent sessions). */
-  conversationId?: string;
   /**
    * runPlan's `sshActive`: hex-ssh is registered for THIS run. The SSH line
    * reports it instead of secret-name presence. Undefined (older callers/tests)
    * → the legacy key-presence wording.
    */
   sshEnabled?: boolean;
-  /**
-   * runPlan's `serverAgentsActive` / `serverAgentCheckActive` /
-   * `serverAgentsUnavailable`: whether THIS run registered
-   * `mcp__server_agents__*` (and check_server), or why not. Mirrors
-   * `AgentRequest.serverAgents` so both surfaces report the same capability.
-   */
-  serverAgentsEnabled?: boolean;
-  serverAgentCheckEnabled?: boolean;
-  serverAgentsUnavailable?: ServerAgentsUnavailableReason | null;
   /**
    * runPlan's 공용 MCP states (`planSharedMcpRun`) — the SAME array stamped on
    * `AgentRequest.sharedMcpServers`. Undefined (consultation runs, older
@@ -275,44 +261,6 @@ export const SYSTEM_TOOL_NAMES = [
 ] as const;
 
 const OWNER_ONLY = "This tool can only be used in a conversation the avatar owner is participating in.";
-
-/** D10: a non-owner run hears only that the capability exists and is the owner's. */
-const NON_OWNER_SERVER_AGENTS_LINE =
-  "- Server agents: an owner-only capability (they run with the owner's SSH key and server accounts), so they are not available in this conversation.";
-
-/**
- * describe_system's server-agent block: whether THIS run has the tools (the
- * runPlan booleans), then each registered server with its LIVE install state
- * against the CLI this build ships and this conversation's remote session.
- * The prompt states only the stable half (ownerState.serverAgents).
- */
-async function serverAgentLines(store: Store, ctx: SystemToolsContext): Promise<string[]> {
-  const servers = store.listServerAgents(ctx.avatarUserId);
-  const head = ctx.serverAgentsEnabled
-    ? `available in this run — delegate (parallel, one task per server), list_servers, reset_session${
-        ctx.serverAgentCheckEnabled ? ", check_server" : " (check_server only in an interactive chat with the owner)"
-      }; tiers apply as configured, also on unattended runs`
-    : ctx.serverAgentsUnavailable
-      ? `not available in this run — ${serverAgentsUnavailableText(ctx.serverAgentsUnavailable)}`
-      : ctx.serverAgentsEnabled === false
-        ? "not available in this run"
-        : servers.length
-          ? "state of this run unknown"
-          : "no server registered";
-  if (servers.length === 0) {
-    return [`- Server agents (mcp__server_agents__*): ${head}`];
-  }
-  const { localCliInfo } = await import("../serverAgents/installer.js");
-  const localVersion = localCliInfo().version;
-  const sessions = new Set(ctx.conversationId ? store.listServerAgentSessionIds(ctx.conversationId) : []);
-  return [
-    `- Server agents (mcp__server_agents__*): ${head}. Registered (Noah ships agent CLI ${localVersion}):`,
-    ...servers.map(
-      (server) =>
-        `  - ${server.name} — ${serverAgentTargetLabel(server)} · ${server.enabled ? "enabled" : "DISABLED"} · agent: ${serverAgentInstallLine(server, localVersion)} · remote session in this conversation: ${sessions.has(server.id) ? "yes" : "no"}`,
-    ),
-  ];
-}
 
 /**
  * describe_system's 공용 MCP block, for every viewer class — the runtime mirror
@@ -672,7 +620,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
     ),
     tool(
       "describe_system",
-      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; groups and roles; secret names; whether SSH and server agents are enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
+      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; groups and roles; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
       {},
       async () => {
         const user = store.getUserById(ctx.avatarUserId);
@@ -786,7 +734,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // and the deck line's tail says which this run is.
           const turnLines = rewindLines(ctx);
           return text(
-            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}\n${NON_OWNER_SERVER_AGENTS_LINE}${sharedMcpLines(ctx).map((line) => `\n${line}`).join("")}`,
+            `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}${sharedMcpLines(ctx).map((line) => `\n${line}`).join("")}`,
           );
         }
         // Repo/token/secret/group/git-repo/open-request/model facts come from the
@@ -951,7 +899,6 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                         : "the deployment's SSH tool policy allows no SSH tools here"
                   }`
           }`,
-          ...(await serverAgentLines(store, ctx)),
           ...sharedMcpLines(ctx),
           ...(ctx.craftApps
             ? craftAppsLines(ctx.craftApps, "describe").map((line, index) => (index === 0 ? `- ${line}` : `  ${line}`))

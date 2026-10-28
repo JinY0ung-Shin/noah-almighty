@@ -70,7 +70,6 @@ const RESERVED_SERVER_NAMES: ReadonlySet<string> = new Set([
   "hex-ssh",
   "knowledge",
   "repo",
-  "server_agents",
   "skill_exchange",
   "ssh_identity",
   "ssh_trust",

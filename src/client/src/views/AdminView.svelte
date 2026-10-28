@@ -33,10 +33,6 @@
   let modelBusy = false;
   let hexBusy = false;
   let signupBusy = false;
-  // 서버 에이전트 switch: turning it ON passes through a confirm step showing the credential warning.
-  let serverAgentsBusy = false;
-  let serverAgentsConfirming = false;
-  let serverAgentsError = "";
   let craftAppsBusy = false;
   let craftAppsError = "";
   let tokenError = "";
@@ -59,10 +55,7 @@
   const tokenStatusId = "admin-token-status";
   const modelStatusId = "admin-model-status";
   const hexStatusId = "admin-hex-policy-status";
-  const serverAgentsStatusId = "admin-server-agents-status";
   const craftAppsStatusId = "admin-craft-apps-status";
-  const SERVER_AGENTS_WARNING =
-    "서버를 등록한 사용자는 자기 서버에서 이 배포의 모델 인증정보(API 키 또는 구독 토큰)를 읽을 수 있습니다. 신뢰하는 사용자만 있는 환경에서만 켜세요.";
   const toolSkillStatusId = "admin-tool-skill-status";
 
   // 그룹 관리 moved to the shared 그룹 view (GroupsView) — #/admin/groups
@@ -152,6 +145,7 @@
     clear_stt_override: "STT 설정 해제",
     set_model_vision_policy: "모델 비전 정책 변경",
     set_hex_ssh_policy: "hex-ssh 도구 정책 변경",
+    // Server agents were removed; the label stays for the retained audit rows.
     set_server_agents_enabled: "서버 에이전트 기능 설정",
     set_craft_apps_enabled: "Craft 앱 기능 설정",
     craft_tool: "Craft 앱 도구 실행",
@@ -249,14 +243,6 @@
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
-  $: serverAgentsEnabled = sys.serverAgentsEnabled === true;
-  $: serverAgentsStatus = serverAgentsBusy
-    ? "저장 중…"
-    : serverAgentsError
-      ? `저장 실패: ${serverAgentsError}`
-      : serverAgentsEnabled
-        ? "켜짐 — 사용자가 등록한 서버에서 점검·위임이 동작합니다."
-        : "꺼짐 — 서버 등록과 호스트 신뢰만 할 수 있고 점검·위임은 동작하지 않습니다.";
   $: craftAppsEnabled = sys.craftAppsEnabled === true;
   $: craftAppsStatus = craftAppsBusy
     ? "저장 중…"
@@ -570,10 +556,10 @@
     }
   }
 
-  // ---- system: 서버 에이전트 switch ----
-  // Craft 앱 switch (admin-only beta). No acknowledgement step: unlike server
-  // agents it hands nothing to a user-controlled host — the apps run in the
-  // deployment's own network-less craft-runner, for system admins only.
+  // ---- system: Craft 앱 switch (admin-only beta) ----
+  // No acknowledgement step: it hands nothing to a user-controlled host — the
+  // apps run in the deployment's own network-less craft-runner, for system
+  // admins only.
   async function saveCraftApps(enabled: boolean) {
     if (craftAppsBusy) return;
     craftAppsBusy = true;
@@ -595,33 +581,6 @@
       notify(`저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
       craftAppsBusy = false;
-    }
-  }
-
-  async function saveServerAgents(enabled: boolean) {
-    if (serverAgentsBusy) return;
-    serverAgentsBusy = true;
-    serverAgentsError = "";
-    try {
-      // Enabling carries the acknowledgement the confirm step just collected.
-      await api("/api/admin/server-agents", {
-        method: "PUT",
-        body: JSON.stringify(enabled ? { enabled: true, acknowledged: true } : { enabled: false }),
-      });
-    } catch (err) {
-      serverAgentsBusy = false;
-      serverAgentsError = (err as Error).message;
-      notify(`저장 실패: ${serverAgentsError}`);
-      return;
-    }
-    serverAgentsConfirming = false;
-    try {
-      await loadAdminOverview();
-      notify(enabled ? "서버 에이전트 기능을 켰습니다." : "서버 에이전트 기능을 껐습니다.", "ok");
-    } catch (err) {
-      notify(`저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      serverAgentsBusy = false;
     }
   }
 
@@ -1114,34 +1073,6 @@
                   <button class="primary" type="submit" disabled={visionBusy}>{visionBusy ? "저장 중…" : "저장"}</button>
                 </div>
               </form>
-            </section>
-
-            <!-- 서버 에이전트 switch -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>서버 에이전트</h3>
-                  <p class="muted">사용자가 등록한 SSH 서버에서 Claude Code 에이전트를 실행해 작업을 위임하는 기능입니다. 기본값은 꺼짐입니다.</p>
-                </div>
-                <span class="tag {serverAgentsEnabled ? 'ok' : ''}">{serverAgentsEnabled ? "켜짐" : "꺼짐"}</span>
-              </div>
-              {#if serverAgentsConfirming}
-                <div class="warn-box" role="alert">{SERVER_AGENTS_WARNING}</div>
-                <div class="settings-save-row">
-                  <span id={serverAgentsStatusId} class="settings-save-status" class:pending={serverAgentsBusy} class:invalid={Boolean(serverAgentsError)} role="status" aria-live="polite">{serverAgentsStatus}</span>
-                  <button class="btn" type="button" disabled={serverAgentsBusy} on:click={() => (serverAgentsConfirming = false)}>취소</button>
-                  <button class="primary" type="button" disabled={serverAgentsBusy} on:click={() => saveServerAgents(true)}>{serverAgentsBusy ? "저장 중…" : "경고를 확인했고 켭니다"}</button>
-                </div>
-              {:else}
-                <div class="settings-save-row">
-                  <span id={serverAgentsStatusId} class="settings-save-status" class:pending={serverAgentsBusy} class:invalid={Boolean(serverAgentsError)} role="status" aria-live="polite">{serverAgentsStatus}</span>
-                  {#if serverAgentsEnabled}
-                    <button class="btn" type="button" disabled={serverAgentsBusy} aria-describedby={serverAgentsStatusId} on:click={() => saveServerAgents(false)}>{serverAgentsBusy ? "저장 중…" : "끄기"}</button>
-                  {:else}
-                    <button class="primary" type="button" disabled={serverAgentsBusy} aria-describedby={serverAgentsStatusId} on:click={() => { serverAgentsError = ""; serverAgentsConfirming = true; }}>켜기</button>
-                  {/if}
-                </div>
-              {/if}
             </section>
 
             <!-- Craft 앱 switch (admin-only beta) -->

@@ -17,7 +17,6 @@ import { createGroupsRouter } from "./routes/groups.js";
 import { createAvatarTasksRouter } from "./routes/avatarTasks.js";
 import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
-import { createServerAgentsRouter } from "./routes/serverAgents.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSharedMcpRouter } from "./routes/sharedMcp.js";
 import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
@@ -174,8 +173,6 @@ export function createApp(services = createServices()) {
   app.use(createRoutinesRouter(deps));
   app.use(createTodosRouter(deps));
   app.use(createAvatarTasksRouter(deps));
-  // 서버 에이전트: the owner's SSH servers (register, trust host key, check/install).
-  app.use(createServerAgentsRouter(deps));
   app.use(createSkillShareRouter(deps));
   app.use(createSharedMcpRouter(deps));
   app.use(createChatRouter(deps));

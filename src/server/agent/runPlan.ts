@@ -27,7 +27,6 @@ import type {
   AgentRequest,
   AgentOwner,
   PluginRoot,
-  ServerAgentsUnavailableReason,
 } from "../types.js";
 import type { Store } from "../store.js";
 import { CLAUDE_OAUTH_TOKEN_KEY } from "../store.js";
@@ -521,12 +520,6 @@ export async function buildAgentRunPlan(
     TODO_TOOL_NAMES,
     TODO_DELETE_TOOL_NAME,
   } = await import("./todoTools.js");
-  const {
-    buildServerAgentServer,
-    SERVER_AGENTS_SERVER_NAME,
-    SERVER_AGENT_TOOL_NAMES,
-    SERVER_AGENT_CHECK_TOOL_NAME,
-  } = await import("./serverAgentTools.js");
 
   const streaming = Boolean(events);
   // Tool-access derivation lives in deriveAgentToolAccess (a pure, unit-tested
@@ -885,38 +878,6 @@ export async function buildAgentRunPlan(
   const sshActive =
     sshToolsEnabled &&
     Boolean(ownerSecrets.SSH_PRIVATE_KEY && hexSshAllowedTools.length > 0);
-  // 서버 에이전트 (`mcp__server_agents__*`): delegate work to a Claude Code CLI
-  // running ON the owner's registered SSH servers. OWNER-ONLY (D10 — the
-  // remote runs use the owner's SSH key and server accounts): an interactive
-  // own-avatar chat, an owner routine or an external-task-API turn (the tier
-  // applies as-is to unattended runs, D6); never a teammate, a group agent or a
-  // consultation. Rides the `ssh` tool group. The reason is computed for EVERY
-  // owner run so both metacognition surfaces can say why the family is off;
-  // the order puts the deployment-level blocks first (the admin switch — off by
-  // default, since a remote run hands this deployment's model credentials to the
-  // registrant's server — then egress, then an ssh group
-  // the admin tool policy removed — NOT the owner's to switch on, so it must
-  // never read as "off in this conversation"), then what the owner can fix.
-  // check_server additionally needs a person in the conversation.
-  const serverAgentOwnerRun = ownerToolAccess && !groupAgentRun && !consultationRun;
-  const serverAgentsUnavailable: ServerAgentsUnavailableReason | null = !store.isServerAgentsEnabled()
-    ? "admin_disabled"
-    : webFetchProxyState().egressPolicy === "domain-proxy"
-      ? "egress_blocked"
-      : adminBlockedMcpToolGroups.includes("ssh")
-        ? "ssh_group_unavailable"
-        : ownerState.serverAgents.length === 0
-          ? "no_servers"
-          : !ownerSecrets.SSH_PRIVATE_KEY
-            ? "no_ssh_key"
-            : !ownerState.serverAgents.some((server) => server.enabled)
-              ? "all_disabled"
-              : !sshToolsEnabled
-                ? "ssh_group_off"
-                : null;
-  const serverAgentsActive = serverAgentOwnerRun && serverAgentsUnavailable === null;
-  const serverAgentCheckActive =
-    serverAgentsActive && !request.headless && !request.externalTaskApi;
   // 공용 MCP 서버 (admin-registered external HTTP MCP servers,
   // sharedMcpServers.ts): resolved HERE so describe_system's ctx, the
   // registration below and the prompt stamp read ONE derivation. A server's
@@ -1037,12 +998,8 @@ export async function buildAgentRunPlan(
     scratchWorkspaceDir,
     confluenceSaveToWorkspace,
     canWriteFiles,
-    // SSH self-state from the SAME booleans the registrations below use.
-    conversationId: request.conversationId,
+    // SSH self-state from the SAME boolean the registration below uses.
     sshEnabled: sshActive,
-    serverAgentsEnabled: serverAgentsActive,
-    serverAgentCheckEnabled: serverAgentCheckActive,
-    serverAgentsUnavailable,
     sharedMcpServers: sharedMcpStates,
     craftApps: craftState,
   });
@@ -1571,27 +1528,6 @@ export async function buildAgentRunPlan(
       }
     : {};
 
-  // Server-agent server (serverAgentsActive above). The handlers re-check
-  // `allowed` — registration is not the boundary under the mcp__ auto-allow.
-  // The model is read per call from the live options bag: a routine's model
-  // fallback chain may have switched it by the time the avatar delegates.
-  const serverAgentServer = serverAgentsActive
-    ? buildServerAgentServer({
-        store,
-        config,
-        ownerUserId: request.avatar.id,
-        ownerName: owner.displayName,
-        allowed: serverAgentsActive,
-        checkEnabled: serverAgentCheckActive,
-        conversationId: request.conversationId ?? null,
-        runKind: request.externalTaskApi ? "api" : request.headless ? "routine" : "chat",
-        model: () => String(options.model ?? effectiveModel),
-        ...(userEffort ? { effort: userEffort } : {}),
-        ...(events ? { events } : {}),
-        ...(abortController ? { parentSignal: abortController.signal } : {}),
-      })
-    : null;
-
   // Craft relays (one stdio server per ACTIVE app, named after the app so its
   // tools are `mcp__<app>__*`) + the stage tool. The relay gets the runner
   // socket and this run's token on a one-shot 0600 handoff file (written by
@@ -1635,7 +1571,6 @@ export async function buildAgentRunPlan(
       : {}),
     ...(systemToolsEnabled ? { [SYSTEM_SERVER_NAME]: systemServer } : {}),
     ...(todoServer ? { [TODO_SERVER_NAME]: todoServer } : {}),
-    ...(serverAgentServer ? { [SERVER_AGENTS_SERVER_NAME]: serverAgentServer } : {}),
     ...(confluenceToolsEnabled
       ? { [CONFLUENCE_SERVER_NAME]: confluenceServer }
       : {}),
@@ -1706,9 +1641,6 @@ export async function buildAgentRunPlan(
       ...(todoToolsActive ? TODO_TOOL_NAMES : []),
       // Its own entry on the SAME boolean as its registration (not in TODO_TOOL_NAMES).
       ...(todoDeleteActive ? [TODO_DELETE_TOOL_NAME] : []),
-      ...(serverAgentsActive ? SERVER_AGENT_TOOL_NAMES : []),
-      // Its own entry on the SAME boolean as its registration (not in SERVER_AGENT_TOOL_NAMES).
-      ...(serverAgentCheckActive ? [SERVER_AGENT_CHECK_TOOL_NAME] : []),
       ...(confluenceToolsEnabled ? CONFLUENCE_TOOL_NAMES : []),
       ...(webFetchToolsEnabled ? WEB_FETCH_TOOL_NAMES : []),
       ...(avatarDirectoryToolsEnabled ? AVATAR_DIRECTORY_TOOL_NAMES : []),
@@ -2111,12 +2043,6 @@ export async function buildAgentRunPlan(
     // path itself rides describe_system's ctx only.)
     confluenceSaveToWorkspace,
     canWriteFiles,
-    // Server-agent self-state for the prompt stamp (the same booleans the
-    // registration, allowedTools and describe_system's ctx use).
-    serverAgentOwnerRun,
-    serverAgentsActive,
-    serverAgentCheckActive,
-    serverAgentsUnavailable,
     // 공용 MCP self-state for the prompt stamp (the SAME states describe_system
     // got; undefined on a consultation run).
     sharedMcpStates,

@@ -1,7 +1,6 @@
 import type { ScheduleKind } from "./routineSchedule.js";
 import type { McpToolGroupId } from "../shared/mcpToolGroups.js";
 import type { OpenTodoStatus, TodoPriority, TodoSource } from "../shared/todos.js";
-import type { ServerAgentAccess } from "../shared/serverAgents.js";
 import type { BrowserSecretPolicy } from "./secretPolicy.js";
 
 export type AgentRuntime = "claude" | "local";
@@ -1775,18 +1774,6 @@ export interface AgentRequest {
    */
   avatarConsultation?: boolean;
   /**
-   * 서버 에이전트 self-state (META-COGNITION), stamped by `runClaudeAgent` ONLY on
-   * owner runs (interactive own-avatar chat, owner routine, external-task-API
-   * turn — runPlan's owner gate). `active` is runPlan's `serverAgentsActive`
-   * (the `mcp__server_agents__*` registration) and `checkEnabled` its
-   * `serverAgentCheckActive`; `unavailableReason` names why the family is off.
-   * Mirrored by describe_system (`SystemToolsContext.serverAgentsEnabled`).
-   * STABLE values only (registered rows, never live install state) — the
-   * append must not change between turns for prompt caching. Colleague,
-   * trusted and group-agent runs get none (D10: owner-only).
-   */
-  serverAgents?: ServerAgentPromptState;
-  /**
    * 공용 MCP 서버 (admin-registered external HTTP MCP servers) as this run
    * resolved them — runPlan's `planSharedMcpRun`, the SAME states describe_system
    * gets (`SystemToolsContext.sharedMcpServers`). Stable between turns unless the
@@ -1859,34 +1846,6 @@ export interface CraftRunState {
     /** The workspace's `craft/out/` is at its 2 GiB cap: the latest output mirror skipped newer results. */
     workspaceOutFull: boolean;
   };
-}
-
-/** One registered server as the owner's self-state reports it (stable, non-secret fields). */
-export interface OwnerServerAgentSummary {
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  role: string;
-  access: ServerAgentAccess;
-  enabled: boolean;
-}
-
-/** Why a run has no `mcp__server_agents__*` tools although it is an owner run. */
-export type ServerAgentsUnavailableReason =
-  | "admin_disabled"
-  | "egress_blocked"
-  | "ssh_group_unavailable"
-  | "no_servers"
-  | "no_ssh_key"
-  | "all_disabled"
-  | "ssh_group_off";
-
-export interface ServerAgentPromptState {
-  active: boolean;
-  checkEnabled: boolean;
-  unavailableReason: ServerAgentsUnavailableReason | null;
-  servers: OwnerServerAgentSummary[];
 }
 
 /**

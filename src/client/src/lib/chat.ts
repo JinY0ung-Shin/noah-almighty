@@ -2239,21 +2239,14 @@ function ensureAgent(
       if (background) existing.background = true;
       return;
     }
-    // A parent that is a TOOL row, not an agent (a server-agent card names the
-    // delegate call that started it), nests the card under the agent that made
-    // that call — the tree only descends through agents.
-    const parentTool = pane.liveAgents.some((a) => a.id === parentId)
-      ? undefined
-      : pane.liveTools.find((t) => t.id === parentId);
-    const parent = parentTool?.agentId || parentId || "main";
     pane.liveAgents.push({
       id: agentId,
-      parentId: parent,
+      parentId: parentId || "main",
       label: label || "하위 작업",
       status: status || "running",
       isMain: false,
       // A nested agent belongs to its parent's turn, like the parent's own rows.
-      segment: rowSegment(pane, parent),
+      segment: rowSegment(pane, parentId || "main"),
       ...(name ? { name } : {}),
       ...(background ? { background: true } : {}),
     });

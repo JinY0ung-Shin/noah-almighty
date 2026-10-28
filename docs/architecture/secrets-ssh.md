@@ -141,8 +141,8 @@
     shell/curl never carry the server-only secrets.
   - **The server drops `SERVER_ONLY_SECRET_ENV_NAMES`** (`SESSION_SECRET`, `CRAFT_CONTROL_SECRET`,
     `secretPolicy.ts`) from `process.env` right after the config reads them (`index.ts`), so no process it
-    starts later inherits them; `agentSubprocessEnv`, the skill-discovery preflight and the server-agent base
-    env strip the same list again.
+    starts later inherits them; `agentSubprocessEnv` and the skill-discovery preflight strip the same list
+    again.
   - **Server git never carries a token in argv** (argv is world-readable under `/proc/<pid>/cmdline`): the
     `http.extraHeader` rides `GIT_CONFIG_COUNT/KEY/VALUE` env via `serverGitEnv` (`marketplace.ts`), and
     every server git command also runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false` — the
@@ -151,7 +151,7 @@
     `<CLAUDE_CONFIG_DIR>/sessions/<pid>.json` and listens on `<TMPDIR>/cc-socks/<pid>.sock`, so with the shared
     config dir `ListAgents` listed other users' runs and `SendMessage{to}` (by name or `uds:<path>`) injected a
     turn into them, unprompted (permission-mode parity) and without Bash. Every Noah-spawned CLI — chat runs,
-    the skill-discovery preflight, server-agent runs and their install check — now passes
+    the skill-discovery preflight — now passes
     `settings: CROSS_SESSION_SETTINGS` (`crossSessionInbound: "refuse"`, `agent/sessionIsolation.ts`), and
     `ListAgents` is in `UNUSED_SDK_BUILTIN_TOOLS`. Splitting config dirs alone would NOT close it (the socket path
     is predictable); in-run agent teams are unaffected (same CLI process, mailbox, not a peer socket). **A new
@@ -185,9 +185,6 @@
   They silently depend on the **image carrying python3 + `cryptography` + `paramiko`** (no
   `ssh-keygen`/`ssh-keyscan`). A base-image change breaks them at RUNTIME, not build. A unit test asserts
   the TS `fingerprintOf` and the python SHA256 format agree — keep it green.
-- **Server agents (서버 에이전트) reuse the same vault key + per-owner known_hosts** but connect with Noah's own
-  ssh2 client (passphrase supported, fail-closed host check, TOCTOU-safe `trustHostWithFingerprint` for the
-  settings card) — see [`server-agents.md`](server-agents.md).
 - **SSH host-key trust is agent-managed + volume-persistent.** `mcp__ssh_trust__{add,list,remove}_host`
   (sshTrustTools.ts) write a per-owner `known_hosts` under `${dataDir}/ssh/<userId>` (data volume →
   survives restarts), injected into hex-ssh as `KNOWN_HOSTS_PATH` (re-read per connection, so `add_host`

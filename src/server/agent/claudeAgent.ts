@@ -282,10 +282,6 @@ export async function runClaudeAgent(
     deckAuthoring,
     confluenceSaveToWorkspace,
     canWriteFiles,
-    serverAgentOwnerRun,
-    serverAgentsActive,
-    serverAgentCheckActive,
-    serverAgentsUnavailable,
     sharedMcpStates,
     craftState,
     craftSession,
@@ -428,17 +424,6 @@ export async function runClaudeAgent(
     // this run has a live steer channel, so the viewer can keep typing while it
     // works. Same boolean describe_system reports (runPlan's system ctx).
     midTurnMessages: Boolean(events?.steers),
-    // 서버 에이전트: owner runs only (D10), with the SAME booleans runPlan used
-    // for the registration and describe_system's ctx. Registered rows only —
-    // the live install state rides describe_system, keeping the append stable.
-    serverAgents: serverAgentOwnerRun
-      ? {
-          active: serverAgentsActive,
-          checkEnabled: serverAgentCheckActive,
-          unavailableReason: serverAgentsUnavailable,
-          servers: ownerState.serverAgents,
-        }
-      : undefined,
     // 공용 MCP 서버: runPlan's ONE derivation (the states describe_system got).
     // Every viewer class hears which servers are mounted; only the owner's
     // branches name missing secrets (the prompt section gates that).

@@ -207,6 +207,30 @@ describe("store app config (app-wide secrets)", () => {
     expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
   });
 
+  it("drops the retired server-agent tables and app config on reopen", () => {
+    type Db = { exec(sql: string): void; prepare(sql: string): { all(...params: unknown[]): unknown[] } };
+    const dbOf = (store: unknown) => (store as unknown as { db: Db }).db;
+    const first = makeStore();
+    // What an older release left behind.
+    dbOf(first).exec(`
+      CREATE TABLE server_agents (id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL);
+      CREATE TABLE server_agent_sessions (conversation_id TEXT NOT NULL, server_agent_id TEXT NOT NULL);
+      CREATE INDEX idx_server_agent_sessions_server ON server_agent_sessions(server_agent_id);
+    `);
+    first.setAppSecret("server_agents_enabled", "on");
+    first.setAppSecret("server_agent_deployment_id", "0123456789abcdef");
+    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.close();
+    const second = makeStore();
+    const leftovers = dbOf(second)
+      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'server_agent%' OR name LIKE 'idx_server_agent%'")
+      .all();
+    expect(leftovers).toEqual([]);
+    expect(second.getAppSecret("server_agents_enabled")).toBeNull();
+    expect(second.getAppSecret("server_agent_deployment_id")).toBeNull();
+    expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+  });
+
   it("stores the hex-ssh tool policy as app config", () => {
     const store = makeStore();
     expect(store.getHexSshToolPolicy()).toEqual(DEFAULT_HEX_SSH_TOOL_POLICY);

@@ -281,12 +281,6 @@ export const SIGNUP_MODE_KEY = "signup_mode";
  *  ANTHROPIC_MODEL is set (env wins, mirroring the API-key/subscription rule). */
 export const MODEL_OVERRIDE_KEY = "agent_model_override";
 /**
- * app_config key: a system admin enabled 서버 에이전트 ("on"; anything else = off).
- * Off by default — existing deployments start disabled — because a remote run hands
- * the deployment's model credentials to the CLI on the registrant's server.
- */
-export const SERVER_AGENTS_ENABLED_KEY = "server_agents_enabled";
-/**
  * app_config key: a system admin enabled the Craft apps beta ("on"; anything
  * else = off). Off by default, so a deploy that adds the craft-runner changes
  * nothing until an admin opts in (craftRunner.ts, agent/craftTools.ts).
@@ -676,40 +670,6 @@ export class StoreBase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
-      -- 서버 에이전트 (store/serverAgents.ts): the owner's registered SSH servers
-      -- the avatar delegates to (the CLI runs ON the server). access is
-      -- read|exec|full; install_state is a JSON ServerAgentInstallState or NULL.
-      -- server_agent_sessions maps (conversation, server) to the remote CLI
-      -- session a delegate resumes. No FKs: deleteServerAgent/deleteUser remove
-      -- rows manually, and EVERY conversation-deleting path calls
-      -- deleteServerAgentSessionsForConversation next to the share-link cascade
-      -- (a rewind clears the conversation's mappings too).
-      CREATE TABLE IF NOT EXISTS server_agents (
-        id TEXT PRIMARY KEY,
-        owner_user_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        host TEXT NOT NULL,
-        port INTEGER NOT NULL DEFAULT 22,
-        username TEXT NOT NULL,
-        workdir TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT '',
-        notes TEXT NOT NULL DEFAULT '',
-        access TEXT NOT NULL DEFAULT 'read',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        install_state TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE (owner_user_id, name)
-      );
-      CREATE TABLE IF NOT EXISTS server_agent_sessions (
-        conversation_id TEXT NOT NULL,
-        server_agent_id TEXT NOT NULL,
-        remote_session_id TEXT NOT NULL,
-        cli_version TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, server_agent_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_server_agent_sessions_server ON server_agent_sessions(server_agent_id);
       CREATE INDEX IF NOT EXISTS idx_group_agents_group ON group_agents(group_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
       CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
@@ -941,6 +901,18 @@ export class StoreBase {
     // Nothing writes this key any more, so the delete can only match a row left
     // by an older release — keep the key name reserved.
     this.db.prepare("DELETE FROM app_config WHERE key = ?").run("stt_override");
+    // The server agents feature (SSH remote CLI delegation) is removed: drop its
+    // tables and its app_config keys (the admin switch and the deployment id its
+    // remote pid files carried). Nothing creates or writes these any more, so
+    // this can only match what an older release left — keep the table and key
+    // names reserved. Remote ~/.noah-agent and ~/.claude-noah dirs on registered
+    // servers are the operator's to clean up by hand.
+    this.db.exec("DROP INDEX IF EXISTS idx_server_agent_sessions_server");
+    this.db.exec("DROP TABLE IF EXISTS server_agent_sessions");
+    this.db.exec("DROP TABLE IF EXISTS server_agents");
+    this.db
+      .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
+      .run("server_agents_enabled", "server_agent_deployment_id");
   }
 
   /** One-time backfill of canvas artifacts that pre-date the dedicated tables:
@@ -1313,10 +1285,6 @@ export interface StoreBase {
   deleteShareLinksForConversation(conversationId: string): void;
   /** The links of specific deck cards — the rewind/regenerate cascade (store/shareLinks.ts). */
   deleteShareLinksForFiles(conversationId: string, fileIds: readonly string[]): void;
-  /** Sibling of the share-link cascade at EVERY conversation-deleting site + rewind (store/serverAgents.ts). */
-  deleteServerAgentSessionsForConversation(conversationId: string): void;
-  /** deleteUser's server-agent sweep (store/serverAgents.ts). */
-  deleteServerAgentsForOwner(ownerUserId: string): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(

@@ -214,10 +214,6 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__knowledge__pending_requests: "대기 요청 확인",
   mcp__knowledge__request_info: "정보 요청 기록",
   mcp__knowledge__resolve_request: "요청 처리 완료",
-  mcp__server_agents__check_server: "서버 점검",
-  mcp__server_agents__delegate: "서버에 위임",
-  mcp__server_agents__list_servers: "서버 목록",
-  mcp__server_agents__reset_session: "서버 세션 초기화",
   mcp__system__notify_user: "사용자 알림",
   mcp__system__read_manual: "시스템 사용 매뉴얼 조회",
   mcp__todo__add_todos: "할 일 추가",
@@ -283,8 +279,6 @@ function ownLabel(labels: Record<string, string>, key: unknown): string | undefi
  *   retitle, a search query), the status an update sets ("완료로 표시",
  *   "드랍으로 표시", …) or the status a listing filters on ("진행 중", …), or a
  *   count.
- * - `mcp__server_agents__delegate`: its first string argument sits inside the
- *   tasks array — show the target servers ("web-01, db-01") instead.
  */
 export function mcpToolInputSummary(name: string | undefined, input: unknown): string | undefined {
   const args = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
@@ -303,13 +297,6 @@ export function mcpToolInputSummary(name: string | undefined, input: unknown): s
       return "1개";
     case "mcp__todo__list_todos":
       return title(args.query) ?? ownLabel(TODO_LIST_FILTER_LABELS, args.status) ?? "열린 항목";
-    case "mcp__server_agents__delegate": {
-      const tasks = Array.isArray(args.tasks) ? args.tasks : [];
-      const servers = tasks
-        .map((task) => title((task as Record<string, unknown> | null)?.server))
-        .filter((server): server is string => Boolean(server));
-      return servers.length ? servers.join(", ") : `${tasks.length}개`;
-    }
   }
   if (name === "mcp__file_output__create_share_link") {
     const days =
