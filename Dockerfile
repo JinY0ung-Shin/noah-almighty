@@ -252,10 +252,10 @@ EXPOSE 48787
 # (TLS_CERT_FILE/TLS_KEY_FILE), and in https mode the cert names the deploy
 # host — not localhost — so chain verification can't be part of the probe.
 # Exec form behind `env -u`: Docker starts the probe with the container's full
-# environment, so the server-only secrets are dropped before the shell and curl
+# environment, so the server-only secret is dropped before the shell and curl
 # start — the probe processes are readable to the node uid (#71).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD ["env", "-u", "SESSION_SECRET", "-u", "CRAFT_CONTROL_SECRET", "sh", "-c", \
+  CMD ["env", "-u", "SESSION_SECRET", "sh", "-c", \
     "curl -f --noproxy '*' \"http://localhost:${PORT:-48787}/api/bootstrap\" || curl -fk --noproxy '*' \"https://localhost:${PORT:-48787}/api/bootstrap\" || exit 1"]
 
 # Drop root privileges: the node:22 base image ships a `node` user (uid 1000).

@@ -135,10 +135,6 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // the image at build time and exposed under this fixed name (see Dockerfile).
     // Override with HEX_SSH_COMMAND when the global bin isn't available.
     hexSshCommand: env("HEX_SSH_COMMAND", "hex-ssh-mcp"),
-    // Craft apps (admin-only beta, craftRunner.ts): both must be set or the
-    // feature reads "not configured" everywhere (fail closed).
-    craftExchangeDir: env("CRAFT_EXCHANGE_DIR") || undefined,
-    craftControlSecret: env("CRAFT_CONTROL_SECRET") || undefined,
     // MODEL_VISION=off marks the serving backend as text-only: image uploads,
     // image/PDF Read, and Confluence image blocks are all cut off BEFORE they
     // can 400 a whole turn at the API layer.

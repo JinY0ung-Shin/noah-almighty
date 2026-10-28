@@ -231,6 +231,34 @@ describe("store app config (app-wide secrets)", () => {
     expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
   });
 
+  it("drops the retired Craft apps switch on reopen", () => {
+    const first = makeStore();
+    first.setAppSecret("craft_apps_enabled", "on");
+    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.close();
+    const second = makeStore();
+    expect(second.getAppSecret("craft_apps_enabled")).toBeNull();
+    expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+  });
+
+  it("reads stored tool-group selections naming the retired craft_* groups without them", () => {
+    type Db = { prepare(sql: string): { run(...params: unknown[]): unknown } };
+    const store = makeStore();
+    const db = (store as unknown as { db: Db }).db;
+    const user = store.createUser({ username: "crafty", displayName: "Crafty", password: "password123" });
+    store.touchConversation(user.id, "c-craft", user.id, "hi");
+    db.prepare("UPDATE conversations SET selected_mcp_tool_groups = ? WHERE id = ?").run(
+      JSON.stringify(["web", "craft_photocraft", "system", "craft_figcraft"]),
+      "c-craft",
+    );
+    db.prepare("UPDATE users SET mcp_tool_groups_default = ? WHERE id = ?").run(
+      JSON.stringify(["canvas", "craft_vectorcraft"]),
+      user.id,
+    );
+    expect(store.getConversationMcpToolGroups(user.id, "c-craft")).toEqual(["web", "system"]);
+    expect(store.getUserById(user.id)!.mcpToolGroupsDefault).toEqual(["canvas"]);
+  });
+
   it("stores the hex-ssh tool policy as app config", () => {
     const store = makeStore();
     expect(store.getHexSshToolPolicy()).toEqual(DEFAULT_HEX_SSH_TOOL_POLICY);

@@ -264,20 +264,6 @@ export interface AppConfig {
    * on a closed network. Override via `HEX_SSH_COMMAND` for local dev.
    */
   hexSshCommand: string;
-  /**
-   * Craft apps (admin-only beta): where THIS container mounts the shared
-   * `craft-exchange` volume (env `CRAFT_EXCHANGE_DIR`; compose sets
-   * `/app/craft-exchange`). The craft-runner's control/MCP sockets live in its
-   * `sock/`, the per-conversation input/output mirrors in `inbox/` and `outbox/`.
-   * Unset (or no {@link AppConfig.craftControlSecret}) = feature unavailable.
-   */
-  craftExchangeDir?: string;
-  /**
-   * Shared secret for the craft-runner's control socket (env
-   * `CRAFT_CONTROL_SECRET`). Server-side only: stripped from the agent
-   * subprocess env next to SESSION_SECRET.
-   */
-  craftControlSecret?: string;
   /** Server-only static registry loaded from `EXTERNAL_AGENTS_JSON`. */
   externalAgents?: ExternalAgentConfig[];
 }
@@ -1780,72 +1766,6 @@ export interface AgentRequest {
    * admin edits the list or the owner changes a secret. Absent on consultation runs.
    */
   sharedMcpServers?: SharedMcpRunState[];
-  /**
-   * Craft apps self-state (META-COGNITION) as runPlan resolved it for this run
-   * (`agent/craftTools.ts` `prepareCraftRun`) — the SAME object describe_system
-   * gets (`SystemToolsContext.craftApps`). Present on owner-driven runs whose
-   * owner is a system admin or whose selection names a Craft tool group;
-   * absent everywhere else (colleague, group-agent, consultation runs).
-   */
-  craftApps?: CraftRunState;
-}
-
-/**
- * Why a Craft app is not available to a run, in gate order (deployment-level
- * first, then the run kind, then the conversation's choice, then the runner).
- */
-export type CraftUnavailableReason =
-  | "not_configured"
-  | "admin_disabled"
-  | "not_admin"
-  | "run_kind"
-  | "no_vision"
-  | "no_workspace"
-  | "group_unavailable"
-  | "group_off"
-  | "runner_unreachable"
-  | "app_unavailable"
-  | "app_failed"
-  | "session_failed"
-  /** The runner refused to open a NEW session: its shared exchange storage is over budget (Addendum B N2). */
-  | "storage_full";
-
-export interface CraftAppRunState {
-  id: import("../shared/craftApps.js").CraftAppId;
-  labelEn: string;
-  /** Its relay MCP server (`mcp__<id>__*`) is registered for this run. */
-  active: boolean;
-  reason: CraftUnavailableReason | null;
-  /** From the runner's health, when known. */
-  status?: "ready" | "failed";
-  version?: string;
-  tools?: number;
-  /** The runner's own (English) failure text for an app that failed its self-test. */
-  error?: string;
-}
-
-/** One run's Craft state: every app's availability plus the session paths when one is open. */
-export interface CraftRunState {
-  apps: CraftAppRunState[];
-  /** At least one Craft tool group is in the conversation's selection. */
-  selected: boolean;
-  /** The conversation's session (open on this run), as the APPS see it. */
-  session: { inDir: string; outDir: string } | null;
-  /** Absolute workspace folder the outbox is mirrored into (`<workspace>/craft/out`). */
-  workspaceOutDir: string | null;
-  /** `mcp__craft_files__stage` is registered. */
-  stageToolActive: boolean;
-  /**
-   * Disk-budget skips (Addendum B N2), LIVE — the session updates them in
-   * place, so describe_system reads the latest; the prompt shows them as of
-   * the run's start.
-   */
-  storage: {
-    /** The runner's shared exchange storage is over budget: workspace inputs were NOT mirrored in and staging is refused. */
-    exchangeFull: boolean;
-    /** The workspace's `craft/out/` is at its 2 GiB cap: the latest output mirror skipped newer results. */
-    workspaceOutFull: boolean;
-  };
 }
 
 /**

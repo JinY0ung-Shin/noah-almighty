@@ -7,7 +7,6 @@ import type { Store } from "./store.js";
 import type { RetiredPersonalAgentPurge } from "./store/retiredPersonalAgents.js";
 import type { AppConfig } from "./types.js";
 import { deleteConversationWorkspaceCopies } from "./workspace.js";
-import { purgeCraftSessions } from "./craftRunner.js";
 
 /**
  * Boot-time retirement of the removed 내 봇 (personal agents) feature: delete
@@ -73,7 +72,6 @@ export function retirePersonalAgents(deps: {
   // thread id under EVERY avatar folder; best-effort, never throws. A bot
   // thread's own workspace goes with its bot tree below.
   deleteConversationWorkspaceCopies(config, conversationIds);
-  purgeCraftSessions(config, conversationIds);
   const projectsRoot = path.join(config.agentSessionsDir, "projects");
   const projectEntries = listEntries(projectsRoot, sweep);
   const sessionIds = new Set([...(snapshot?.sessionIds ?? []).filter(isSessionId), ...pending.sessionIds]);

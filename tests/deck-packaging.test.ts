@@ -180,11 +180,12 @@ describe("docker-compose.yml", () => {
     expect(app).toContain("args:");
     expect(app).toMatch(/^ {8}DECK_CONVERTER: \$\{DECK_CONVERTER:-1\}$/m);
     expect(app).toMatch(/^ {8}DECK_CONVERTER_STRICT_GOLDEN: \$\{DECK_CONVERTER_STRICT_GOLDEN:-0\}$/m);
-    // No runtime knob is needed: init reaps Chromium children, Playwright passes
+    // No runtime knob is needed: the image's own tini (ENTRYPOINT, so compose
+    // `init` stays false — #71) reaps Chromium children, Playwright passes
     // --disable-dev-shm-usage, so no shm_size / cap_add for the converter.
-    expect(compose.slice(compose.indexOf("  noah-almighty:"), compose.indexOf("\nvolumes:"))).toMatch(
-      /^ {4}init: true$/m,
-    );
+    const service = compose.slice(compose.indexOf("  noah-almighty:"), compose.indexOf("\nvolumes:"));
+    expect(service).toMatch(/^ {4}init: false$/m);
+    expect(service).not.toMatch(/shm_size|cap_add/);
   });
 });
 

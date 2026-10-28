@@ -59,59 +59,13 @@ export const MCP_TOOL_GROUPS = [
     labelEn: "system management",
     descriptionKo: "사용 매뉴얼, 상태 확인, 예약 작업, 플러그인, 알림",
   },
-  // ArtCraft apps (src/shared/craftApps.ts — the ids are each app's
-  // `toolGroupId`). DEFAULT-OFF: their tool lists are large, so a new
-  // conversation, a remembered default and every saved selection leave them
-  // off; only an explicit pick turns one on. Usable only by system admins on a
-  // deployment with the craft-runner (the server gates every run regardless).
-  {
-    id: "craft_photocraft",
-    labelKo: "PhotoCraft",
-    labelEn: "PhotoCraft",
-    descriptionKo: "관리자 전용 베타 · 포토샵 스타일 이미지 편집 (craft-runner 필요)",
-    defaultOff: true,
-  },
-  {
-    id: "craft_vectorcraft",
-    labelKo: "VectorCraft",
-    labelEn: "VectorCraft",
-    descriptionKo: "관리자 전용 베타 · 일러스트레이터 스타일 벡터 편집 (craft-runner 필요)",
-    defaultOff: true,
-  },
-  {
-    id: "craft_designcraft",
-    labelKo: "DesignCraft",
-    labelEn: "DesignCraft",
-    descriptionKo: "관리자 전용 베타 · 인디자인 스타일 페이지 레이아웃 (craft-runner 필요)",
-    defaultOff: true,
-  },
-  {
-    id: "craft_figcraft",
-    labelKo: "FigCraft",
-    labelEn: "FigCraft",
-    descriptionKo: "관리자 전용 베타 · 피그마 스타일 UI 디자인 (craft-runner 필요)",
-    defaultOff: true,
-  },
 ] as const;
 
 export type McpToolGroupId = (typeof MCP_TOOL_GROUPS)[number]["id"];
 
-/**
- * A group that is OFF unless explicitly picked (the Craft apps): never part of
- * {@link DEFAULT_MCP_TOOL_GROUPS}, never re-added by a default or a legacy
- * `null` selection, and stripped from remembered per-user defaults.
- */
-export function isDefaultOffMcpToolGroup(id: McpToolGroupId): boolean {
-  const group = MCP_TOOL_GROUPS.find((entry) => entry.id === id);
-  return Boolean(group && "defaultOff" in group && group.defaultOff);
-}
+export const DEFAULT_MCP_TOOL_GROUPS = MCP_TOOL_GROUPS.map((group) => group.id) as McpToolGroupId[];
 
-/** The groups a new conversation (or a `null` = "default" selection) gets: every group except the default-off ones. */
-export const DEFAULT_MCP_TOOL_GROUPS = MCP_TOOL_GROUPS.map((group) => group.id).filter(
-  (id) => !isDefaultOffMcpToolGroup(id),
-) as McpToolGroupId[];
-
-const MCP_TOOL_GROUP_SET = new Set<string>(MCP_TOOL_GROUPS.map((group) => group.id));
+const MCP_TOOL_GROUP_SET = new Set<string>(DEFAULT_MCP_TOOL_GROUPS);
 
 export function isMcpToolGroupId(value: unknown): value is McpToolGroupId {
   return typeof value === "string" && MCP_TOOL_GROUP_SET.has(value);
@@ -145,19 +99,6 @@ export function effectiveMcpToolGroups(
   return selected.filter(id => isRequiredMcpToolGroup(id) || !allowed || allowed.includes(id));
 }
 
-/**
- * Whether a selection equals the DEFAULT (so it may be stored as `null`): every
- * default group on and NO default-off group picked — a selection that adds one
- * must stay explicit, or storing it as "default" would silently drop the pick.
- */
 export function allMcpToolGroupsSelected(groups: readonly McpToolGroupId[]): boolean {
-  return (
-    DEFAULT_MCP_TOOL_GROUPS.every((id) => isRequiredMcpToolGroup(id) || groups.includes(id)) &&
-    !groups.some((id) => isDefaultOffMcpToolGroup(id))
-  );
-}
-
-/** `groups` without the default-off ones — for remembered per-user defaults, which never carry them. */
-export function withoutDefaultOffMcpToolGroups(groups: readonly McpToolGroupId[]): McpToolGroupId[] {
-  return groups.filter((id) => !isDefaultOffMcpToolGroup(id));
+  return DEFAULT_MCP_TOOL_GROUPS.every((id) => isRequiredMcpToolGroup(id) || groups.includes(id));
 }

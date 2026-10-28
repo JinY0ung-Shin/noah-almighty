@@ -42,12 +42,6 @@ export const MAX_CHAT_FILES_PER_MESSAGE = 3;
  */
 export const MAX_SHARED_SCREENSHOTS_PER_MESSAGE = 12;
 /**
- * Max Craft app previews (`render_preview` images) auto-shared per run — its
- * own budget like the screenshot one. Past it the model still sees the image;
- * only the user-facing card is skipped.
- */
-export const MAX_CRAFT_PREVIEWS_PER_MESSAGE = 12;
-/**
  * Max browser screenshots SAVED as files into the conversation scratch
  * workspace (`captures/`, {@link saveBrowserCapture}) per RUN: one chat run,
  * including its steer follow-up turns and background wake-ups, like the share
@@ -73,33 +67,12 @@ export const MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE = 30;
 export const DRAWIO_MEDIA_TYPE = "application/vnd.jgraph.mxfile";
 
 /**
- * SVG content sniff: UTF-8 text (no NUL), starting with markup, with an
- * `<svg` element in its head. Served as a DOWNLOAD only (never inline — the
- * route adds a sandbox CSP on top), since an SVG can carry script.
- */
-export function looksLikeSvg(buffer: Buffer): boolean {
-  const head = buffer.subarray(0, 4096);
-  if (head.includes(0)) return false;
-  const textHead = head.toString("utf8").replace(/^\uFEFF/, "").trimStart();
-  return textHead.startsWith("<") && /<svg[\s>]/i.test(textHead);
-}
-
-/** WebP: a RIFF container whose form type is `WEBP`. */
-function looksLikeWebp(buffer: Buffer): boolean {
-  return buffer.length >= 12 && buffer.subarray(0, 4).equals(Buffer.from("RIFF")) && buffer.subarray(8, 12).equals(Buffer.from("WEBP"));
-}
-
-/**
  * Downloadable document types the agent may share. Extension is the lookup key
  * (from the SOURCE file's basename); `magic` is a byte-prefix check applied to
  * the actual content where the format has one (OOXML containers are zip, pdf is
- * `%PDF`) so a mislabeled file can't ride an innocuous extension; `check` is a
- * content test for formats a prefix cannot pin (WebP, SVG).
- *
- * The image and PSD/.pcraft types live apart in {@link CRAFT_FILE_TYPES}.
+ * `%PDF`) so a mislabeled file can't ride an innocuous extension.
  */
-type FileTypeRule = { mediaType: string; magic?: Buffer[]; check?: (buffer: Buffer) => boolean };
-const DOCUMENT_FILE_TYPES: Record<string, FileTypeRule> = {
+const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[] }> = {
   pptx: {
     mediaType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     magic: [Buffer.from("PK")],
@@ -124,42 +97,10 @@ const DOCUMENT_FILE_TYPES: Record<string, FileTypeRule> = {
 };
 
 /**
- * Craft app results (`<workspace>/craft/out/`): a finished image or native
- * design file is a FILE the user keeps, so it gets a download card (raster
- * images plus a hidden preview slide — see the chat route); show_file stays
- * the way to display an image inline. Accepted ONLY on runs where at least one
- * Craft app is active (Addendum A5, `craftFileTypes`); every other run keeps
- * the document list. Already-stored cards are served regardless.
- */
-const CRAFT_FILE_TYPES: Record<string, FileTypeRule> = {
-  png: { mediaType: "image/png", magic: [Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])] },
-  jpg: { mediaType: "image/jpeg", magic: [Buffer.from([0xff, 0xd8, 0xff])] },
-  jpeg: { mediaType: "image/jpeg", magic: [Buffer.from([0xff, 0xd8, 0xff])] },
-  webp: { mediaType: "image/webp", check: looksLikeWebp },
-  svg: { mediaType: "image/svg+xml", check: looksLikeSvg },
-  // Photoshop document (`8BPS`; PSB shares the signature).
-  psd: { mediaType: "image/vnd.adobe.photoshop", magic: [Buffer.from("8BPS")] },
-  // PhotoCraft's native bundle: a zip (local-file header).
-  pcraft: { mediaType: "application/vnd.photocraft", magic: [Buffer.from([0x50, 0x4b, 0x03, 0x04])] },
-};
-
-/** Every type a stored card may have (the download route serves them all). */
-const FILE_TYPES: Record<string, FileTypeRule> = { ...DOCUMENT_FILE_TYPES, ...CRAFT_FILE_TYPES };
-
-/** The share_file type table of one run. */
-function shareFileTypes(craftFileTypes: boolean): Record<string, FileTypeRule> {
-  return craftFileTypes ? FILE_TYPES : DOCUMENT_FILE_TYPES;
-}
-
-/** Shared image types whose card also gets a hidden preview slide (raster images the panel can render). */
-export const SHARED_IMAGE_PREVIEW_EXTENSIONS: ReadonlySet<string> = new Set(["png", "jpg", "jpeg", "webp"]);
-
-/**
- * Image extensions the DOWNLOAD route may serve for the auto-shared cards
- * (`publishBrowserScreenshot` / `publishCraftPreview`), whose MIME is sniffed
- * from the bytes. GIF stays out of {@link FILE_TYPES}: share_file takes the
- * formats a Craft app writes; show_file is still the way to display an image
- * inline.
+ * Image extensions the DOWNLOAD route may serve, written ONLY by the
+ * browser-screenshot auto-share (`publishBrowserScreenshot`). Deliberately NOT
+ * in {@link FILE_TYPES}: share_file keeps routing images through show_file
+ * (inline bubble), never a download card.
  */
 const SERVED_IMAGE_TYPES: Record<string, { mediaType: string }> = {
   png: { mediaType: "image/png" },
@@ -168,14 +109,26 @@ const SERVED_IMAGE_TYPES: Record<string, { mediaType: string }> = {
   gif: { mediaType: "image/gif" },
 };
 
+/**
+ * SERVE-ONLY types: cards that share_file stored on runs of the removed Craft
+ * apps (2026-10-29) — finished images and design files. No new share can
+ * create them (share_file takes {@link FILE_TYPES} only), but the download
+ * route keeps serving the existing cards rather than 404ing them; an SVG is
+ * always an attachment under a sandbox CSP (routes/chat.ts).
+ */
+const LEGACY_SERVED_FILE_TYPES: Record<string, { mediaType: string }> = {
+  jpeg: { mediaType: "image/jpeg" },
+  svg: { mediaType: "image/svg+xml" },
+  psd: { mediaType: "image/vnd.adobe.photoshop" },
+  pcraft: { mediaType: "application/vnd.photocraft" },
+};
+
 export function chatFilesDir(config: AppConfig, conversationId: string): string {
   return path.join(config.dataDir, "chat-files", safeConversationDir(conversationId));
 }
 
-/** The extensions share_file accepts on one run. */
-export function shareableExtensions(craftFileTypes: boolean): string[] {
-  return Object.keys(shareFileTypes(craftFileTypes));
-}
+/** Human list of shareable extensions, for agent-facing error text. */
+export const SHAREABLE_EXTENSIONS = Object.keys(FILE_TYPES);
 
 /**
  * The longest download name stored or served, in UTF-16 units — the same unit
@@ -282,8 +235,6 @@ export function publishWorkspaceFile(
   inputPath: string,
   allowedRoots: string[],
   requestedName?: string,
-  /** The run has an active Craft app: image/PSD/.pcraft types are accepted too. */
-  craftFileTypes = false,
 ): PublishWorkspaceFileResult {
   const roots = allowedRoots.flatMap((root) => {
     try {
@@ -307,7 +258,7 @@ export function publishWorkspaceFile(
   }
 
   const ext = path.extname(source).slice(1).toLowerCase();
-  const fileType = shareFileTypes(craftFileTypes)[ext];
+  const fileType = FILE_TYPES[ext];
   if (!fileType) return { error: "UNSUPPORTED" };
 
   let stat: fs.Stats;
@@ -329,9 +280,6 @@ export function publishWorkspaceFile(
   if (buffer.length === 0) return { error: "EMPTY" };
   if (buffer.length > MAX_CHAT_FILE_BYTES) return { error: "TOO_LARGE" };
   if (fileType.magic && !fileType.magic.some((prefix) => buffer.subarray(0, prefix.length).equals(prefix))) {
-    return { error: "UNSUPPORTED" };
-  }
-  if (fileType.check && !fileType.check(buffer)) {
     return { error: "UNSUPPORTED" };
   }
 
@@ -378,33 +326,6 @@ export function publishBrowserScreenshot(
   buffer: Buffer,
   pageTitle?: string,
 ): PublishBrowserScreenshotResult {
-  // Card label (user-facing → Korean): the page title is what tells several
-  // captures in one turn apart.
-  const cleanTitle = sanitizeDownloadName(pageTitle);
-  const title = cleanTitle ? cutDownloadName(cleanTitle, 80) : undefined;
-  return publishImageCard(config, conversationId, buffer, title ? `스크린샷 - ${title}` : "스크린샷");
-}
-
-/**
- * A Craft app's preview image (`render_preview` …) as the SAME card+slide pair
- * a browser screenshot gets, labelled with the app's Korean name.
- */
-export function publishCraftPreview(
-  config: AppConfig,
-  conversationId: string,
-  buffer: Buffer,
-  appLabelKo: string,
-): PublishBrowserScreenshotResult {
-  return publishImageCard(config, conversationId, buffer, `${appLabelKo} 미리보기`);
-}
-
-/** The shared half: a visible download card + a hidden preview copy, MIME from the bytes. */
-function publishImageCard(
-  config: AppConfig,
-  conversationId: string,
-  buffer: Buffer,
-  stem: string,
-): PublishBrowserScreenshotResult {
   if (buffer.length === 0) return { error: "EMPTY" };
   if (buffer.length > MAX_CHAT_FILE_BYTES) return { error: "TOO_LARGE" };
   const mediaType = detectImageMediaType(buffer);
@@ -420,7 +341,11 @@ function publishImageCard(
   } catch {
     return { error: "WRITE_FAILED" };
   }
-  const name = `${stem}.${ext}`;
+  // Card label (user-facing → Korean): the page title is what tells several
+  // captures in one turn apart.
+  const cleanTitle = sanitizeDownloadName(pageTitle);
+  const title = cleanTitle ? cutDownloadName(cleanTitle, 80) : undefined;
+  const name = `${title ? `스크린샷 - ${title}` : "스크린샷"}.${ext}`;
   let slide: MessageAttachment;
   try {
     slide = saveHiddenChatImage(config, conversationId, buffer, mediaType, name, id);
@@ -518,7 +443,7 @@ export function resolveStoredFile(
   });
   if (!file) return null;
   const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
-  const fileType = FILE_TYPES[ext] ?? SERVED_IMAGE_TYPES[ext];
+  const fileType = FILE_TYPES[ext] ?? SERVED_IMAGE_TYPES[ext] ?? LEGACY_SERVED_FILE_TYPES[ext];
   if (!fileType) return null;
   return { path: path.join(dir, file), mediaType: fileType.mediaType, ext };
 }

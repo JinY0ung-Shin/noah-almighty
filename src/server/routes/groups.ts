@@ -3,7 +3,6 @@ import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { GROUP_AGENT_FIELD_CAPS } from "../agent/groupAgentProfileTools.js";
 import { deleteConversationImages } from "../chatImages.js";
-import { purgeCraftSessions } from "../craftRunner.js";
 import { deleteConversationFiles } from "../chatFiles.js";
 import logger from "../logger.js";
 import { inspectRepoContents } from "../plugins.js";
@@ -219,9 +218,6 @@ export function createGroupsRouter({ config, store, auditAs }: RouterDeps): Rout
         deleteConversationImages(config, conversationId);
         deleteConversationFiles(config, conversationId);
       }
-      // Same per-conversation cascade as every other delete path (a group
-      // agent never opens a Craft session, so this is normally a no-op).
-      purgeCraftSessions(config, conversationIds);
     } catch (err) {
       logger.warn({ err, groupId, agentId: agent.id }, "group-agent delete disk cleanup failed");
     }

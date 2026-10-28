@@ -75,16 +75,6 @@ import {
 } from "./ownerState.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
-  buildCraftFilesServer,
-  CRAFT_FILES_SERVER_NAME,
-  CRAFT_FILES_TOOL_NAMES,
-  craftRelayServerDef,
-  markCraftSessionFailed,
-  prepareCraftRun,
-} from "./craftTools.js";
-import { craftExchangePaths } from "../craftRunner.js";
-import { CRAFT_APPS, craftAppById, type CraftAppId } from "../../shared/craftApps.js";
-import {
   buildCanUseToolSafetyNet,
   buildPreToolUseHook,
   createHookApprovalLedger,
@@ -129,8 +119,7 @@ export function withoutGitCredentialEnv(
 
 // App-internal secrets the agent subprocess must NEVER be able to read from its
 // environment (SERVER_ONLY_SECRET_ENV_NAMES, secretPolicy.ts): SESSION_SECRET is
-// the master key for EVERY user's at-rest secrets, CRAFT_CONTROL_SECRET grants
-// craft-runner tokens for ANY conversation. The boot scrub already removed them
+// the master key for EVERY user's at-rest secrets. The boot scrub already removed it
 // from process.env; stripping here again keeps a caller-supplied base env safe.
 // (Git credentials are stripped separately above — they flow only through the
 // app-managed git MCP bridge.)
@@ -327,21 +316,11 @@ export interface McpToolFamilyPlan {
   runKindBlocked: McpToolGroupId[];
 }
 
-/**
- * `activeCraftApps`: the Craft apps whose relay this run registers (runPlan's
- * prepareCraftRun — the gate lives there, not here, because it needs the
- * runner's live health). A selected Craft group whose app is not active lands
- * in `runKindBlocked`, like any other forced-off family: its own Craft
- * self-state line says why, so the "user deselected" note must not.
- */
 export function planMcpToolFamilies(
   enabled: McpToolGroupId[],
   groupAgentRun: boolean,
-  activeCraftApps: readonly CraftAppId[] = [],
 ): McpToolFamilyPlan {
   const has = (id: McpToolGroupId) => enabled.includes(id);
-  const craft = (id: CraftAppId) =>
-    has(craftAppById(id).toolGroupId) && !groupAgentRun && activeCraftApps.includes(id);
   const byId: Record<McpToolGroupId, boolean> = {
     personal_knowledge: has("personal_knowledge") && !groupAgentRun,
     group_knowledge: has("group_knowledge"),
@@ -358,10 +337,6 @@ export function planMcpToolFamilies(
     // tool it cannot call.
     browser: has("browser") && !groupAgentRun,
     system: true,
-    craft_photocraft: craft("photocraft"),
-    craft_vectorcraft: craft("vectorcraft"),
-    craft_designcraft: craft("designcraft"),
-    craft_figcraft: craft("figcraft"),
   };
   const registered = effectiveMcpToolGroups(enabled).filter((id) => byId[id]);
   return {
@@ -592,6 +567,8 @@ export async function buildAgentRunPlan(
   const canvasToolsEnabled = familyPlan.canvas;
   const browserToolsEnabled = familyPlan.browser;
   const systemToolsEnabled = familyPlan.system;
+  const registeredMcpToolGroups = familyPlan.registered;
+  const runKindBlockedMcpToolGroups = familyPlan.runKindBlocked;
   // Effective model: an env-pinned ANTHROPIC_MODEL wins (mirrors the API-key vs.
   // subscription rule) and is a HARD lock; otherwise the user's per-conversation
   // tier pick (a Claude alias, resolved to a concrete model by the operator's
@@ -900,50 +877,6 @@ export async function buildAgentRunPlan(
   const sharedMcpStates = sharedMcpPlan?.states.map((state) =>
     ownerToolAccess ? state : { ...state, unboundSlots: [], missingSecrets: [] },
   );
-  // Craft apps (admin-only beta, agent/craftTools.ts): gated ONCE here from live
-  // store + runner state, because the per-app relay servers are byte pipes that
-  // cannot self-gate — registration plus the runner's per-run token are the
-  // whole gate. Interactive own-avatar chats only: the chat route supplies
-  // onCraftPreview exactly on those turns, and headless / external-task-API /
-  // group-agent / consultation runs are excluded explicitly as well. The
-  // session (open → inbox mirror → sync_in) is prepared now so BOTH
-  // metacognition surfaces report what actually happened; the token is granted
-  // last, right before the plan returns.
-  // Conversation ids are never reused, so "the row still exists" is the whole
-  // liveness test (the Craft mirrors and the Confluence save path share it).
-  const conversationIdForLiveness = request.conversationId;
-  const craftPrep = await prepareCraftRun({
-    store,
-    config,
-    ownerUserId: request.avatar.id,
-    ownerRun: ownerToolAccess && !groupAgentRun && !consultationRun,
-    interactive:
-      ownerToolAccess &&
-      !groupAgentRun &&
-      !consultationRun &&
-      !request.headless &&
-      !request.externalTaskApi &&
-      Boolean(events?.onCraftPreview),
-    visionEnabled: runVisionEnabled,
-    conversationId: request.conversationId,
-    workspaceDir: scratchWorkspaceDir,
-    rawMcpToolGroups: request.mcpToolGroups,
-    policyAllowed: adminAllowedMcpToolGroups,
-    // Same liveness test as the Confluence save path: a mirror into a deleted
-    // conversation's workspace (its copy sweep already ran) is skipped.
-    isConversationLive: conversationIdForLiveness
-      ? () => store.conversationOwner(conversationIdForLiveness) !== null
-      : undefined,
-  });
-  const craftState = craftPrep?.state;
-  const craftSession = craftPrep?.session ?? null;
-  const activeCraftApps = (craftState?.apps ?? []).filter((app) => app.active).map((app) => app.id);
-  // The family plan again, now knowing which Craft relays register: its
-  // `registered` set is what both surfaces report as this run's tool groups.
-  // (A failed grant below removes the Craft groups from it again, in place.)
-  const craftFamilyPlan = planMcpToolFamilies(enabledMcpToolGroups, Boolean(groupAgentRun), activeCraftApps);
-  const registeredMcpToolGroups = craftFamilyPlan.registered;
-  const runKindBlockedMcpToolGroups = craftFamilyPlan.runKindBlocked;
   const systemServer = buildSystemServer(store, {
     avatarUserId: request.avatar.id,
     owner,
@@ -1001,7 +934,6 @@ export async function buildAgentRunPlan(
     // SSH self-state from the SAME boolean the registration below uses.
     sshEnabled: sshActive,
     sharedMcpServers: sharedMcpStates,
-    craftApps: craftState,
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -1271,47 +1203,34 @@ export async function buildAgentRunPlan(
     }
     return result;
   };
-  // share_file's image/PSD/.pcraft types ride ONLY runs with an active Craft
-  // app (Addendum A5): the description is built from the plan-time fact, the
-  // host check from the LIVE one (a refused grant below flips the apps off and
-  // rebuilds this server without them, so text and check stay equal).
-  const craftShareTypesLive = () => Boolean(craftSession && craftState?.apps.some((app) => app.active));
-  const buildFileOutput = (craftFileTypes: boolean) =>
-    buildFileOutputServer({
-      showFile: async (request) => stampAttachmentAnchor(await events!.onFile!(request)),
-      // A Craft result may still be on its way into craft/out/ (the loop
-      // mirrors after each Craft call, but share_file can run first): pull
-      // the outbox once more before resolving the path.
-      shareFile: events!.onShareFile
-        ? async (request) => {
-            const craftLive = craftFileTypes && craftShareTypesLive();
-            if (craftLive) await craftSession?.collectOutputs();
-            return stampAttachmentAnchor(await events!.onShareFile!({ ...request, craftFileTypes: craftLive }));
-          }
-        : async () => ({
-            behavior: "error" as const,
-            message: "File sharing is unavailable in this run.",
-          }),
-      // share_file's description names the converter's in-place/exact-render
-      // workflow only when the deployment actually has the converter.
-      deckConverterInstalled: deckToolchain.converter,
-      craftFileTypes,
-      // create_share_link is built from the SAME boolean as its allowedTools
-      // entry below, describe_system's ctx above and claudeAgent's prompt
-      // stamp, so the four can't drift. The handler still refuses without
-      // the host callback.
-      ...(shareLinkToolActive
-        ? {
-            shareLinkEnabled: true,
-            createShareLink: events!.onShareLink,
-            // Read live per call (an app_config value, cached per
-            // ciphertext): whether "anyone signed in" really means anyone
-            // who can reach Noah, for the result's audience caveat.
-            signupOpen: () => store.getSignupMode() === "open",
-          }
-        : {}),
-    });
-  const fileOutputServer = fileOutputActive ? buildFileOutput(craftShareTypesLive()) : null;
+  const fileOutputServer = fileOutputActive
+    ? buildFileOutputServer({
+        showFile: async (request) => stampAttachmentAnchor(await events!.onFile!(request)),
+        shareFile: events!.onShareFile
+          ? async (request) => stampAttachmentAnchor(await events!.onShareFile!(request))
+          : async () => ({
+              behavior: "error" as const,
+              message: "File sharing is unavailable in this run.",
+            }),
+        // share_file's description names the converter's in-place/exact-render
+        // workflow only when the deployment actually has the converter.
+        deckConverterInstalled: deckToolchain.converter,
+        // create_share_link is built from the SAME boolean as its allowedTools
+        // entry below, describe_system's ctx above and claudeAgent's prompt
+        // stamp, so the four can't drift. The handler still refuses without
+        // the host callback.
+        ...(shareLinkToolActive
+          ? {
+              shareLinkEnabled: true,
+              createShareLink: events!.onShareLink,
+              // Read live per call (an app_config value, cached per
+              // ciphertext): whether "anyone signed in" really means anyone
+              // who can reach Noah, for the result's audience caveat.
+              signupOpen: () => store.getSignupMode() === "open",
+            }
+          : {}),
+      })
+    : null;
 
   // SSH host-trust tools (add/list/remove the hosts hex-ssh will connect to).
   // NOT owner-only: host fingerprints are public, and a viewer who can drive
@@ -1463,6 +1382,9 @@ export async function buildAgentRunPlan(
       "plugin mcp servers lifted",
     );
   }
+  // Conversation ids are never reused, so "the row still exists" is the whole
+  // liveness test of the Confluence save path.
+  const conversationIdForLiveness = request.conversationId;
   const confluenceServer = buildConfluenceServer({
     config,
     ownerSecrets,
@@ -1528,37 +1450,6 @@ export async function buildAgentRunPlan(
       }
     : {};
 
-  // Craft relays (one stdio server per ACTIVE app, named after the app so its
-  // tools are `mcp__<app>__*`) + the stage tool. The relay gets the runner
-  // socket and this run's token on a one-shot 0600 handoff file (written by
-  // writeMcpHandoffFiles below like every other) — only the PATH rides argv.
-  const craftRelayPath = path.join(process.cwd(), "scripts", "craft-mcp-relay.mjs");
-  const craftMcpSocket = craftExchangePaths(config)?.mcpSocket;
-  const craftRelayFiles: { app: CraftAppId; path: string; content: string }[] =
-    craftSession && craftMcpSocket
-      ? activeCraftApps.map((app) => ({
-          app,
-          path: path.join(mcpSecretsDir, `craft-${mcpRunId}-${app}.json`),
-          content: JSON.stringify({ socket: craftMcpSocket, token: craftSession.token, app }),
-        }))
-      : [];
-  const craftServers: Record<string, unknown> = Object.fromEntries(
-    craftRelayFiles.map((file) => [file.app, craftRelayServerDef(craftRelayPath, file.path)]),
-  );
-  // The stage tool re-checks the live state per call (mcp__ auto-allow): a
-  // failed grant flips it off after registration was decided.
-  const craftFilesServer =
-    craftSession && craftState?.stageToolActive
-      ? buildCraftFilesServer({
-          allowed: () => Boolean(craftState.stageToolActive),
-          stage: (inputPath) =>
-            craftSession.stage(
-              [request.cwd, ...(request.additionalDirs ?? [])].filter((dir): dir is string => Boolean(dir)),
-              inputPath,
-            ),
-        })
-      : null;
-
   // App in-process MCP servers this run registers (its own block so a plugin
   // server of the same name — which these always override — can be reported
   // instead of vanishing silently).
@@ -1605,8 +1496,6 @@ export async function buildAgentRunPlan(
     // itself is active (the owner stored a key) — trust management is pointless
     // without a server to connect.
     ...(sshActive ? { [SSH_TRUST_SERVER_NAME]: sshTrustServer } : {}),
-    ...craftServers,
-    ...(craftFilesServer ? { [CRAFT_FILES_SERVER_NAME]: craftFilesServer } : {}),
   };
   // A plugin's .mcp.json server whose name an app server takes in THIS run is
   // replaced by it. Say so (logs + the run's status line, like the chat route's
@@ -1663,10 +1552,6 @@ export async function buildAgentRunPlan(
       // Nested in the file_output server below; built only on this boolean.
       ...(shareLinkToolActive ? [FILE_OUTPUT_SHARE_LINK_TOOL_NAME] : []),
       ...(sshActive ? SSH_TRUST_TOOL_NAMES : []),
-      // Server-level rules: the relays' tool names come from the runner's
-      // manifest, not from here. Same booleans as their registration above.
-      ...craftRelayFiles.map((file) => `mcp__${file.app}`),
-      ...(craftFilesServer ? CRAFT_FILES_TOOL_NAMES : []),
       "Skill",
       "TodoWrite",
       ...TASK_ORCHESTRATION_TOOLS,
@@ -1854,7 +1739,6 @@ export async function buildAgentRunPlan(
       ? [{ path: sshSecretsFile, content: JSON.stringify(sshSecrets) }]
       : []),
     ...mcpBridgeFiles.map((file) => ({ path: file.path, content: JSON.stringify(file.config) })),
-    ...craftRelayFiles.map((file) => ({ path: file.path, content: file.content })),
   ].filter((file) => registeredMcpArgs.has(file.path));
   const writeMcpHandoffFiles = (): void => {
     if (mcpHandoffFiles.length === 0) {
@@ -1970,39 +1854,6 @@ export async function buildAgentRunPlan(
     options.canUseTool = buildCanUseToolSafetyNet(hookApprovals);
   }
 
-  // Craft: grant the run token LAST, so no exit between here and the run loop's
-  // outer finally (which releases it) can leave a token live. A refused grant
-  // unregisters the relays and the stage tool again and flips the shared state
-  // in place — describe_system's ctx holds the same object, and the prompt is
-  // built from it after this returns — so neither surface advertises them.
-  if (craftSession && craftState && !(await craftSession.grant())) {
-    const mcpServers = options.mcpServers as Record<string, unknown>;
-    for (const file of craftRelayFiles) delete mcpServers[file.app];
-    delete mcpServers[CRAFT_FILES_SERVER_NAME];
-    // share_file loses the Craft types with the apps (description included).
-    if (mcpServers[FILE_OUTPUT_SERVER_NAME] === fileOutputServer && fileOutputServer) {
-      mcpServers[FILE_OUTPUT_SERVER_NAME] = buildFileOutput(false);
-    }
-    const craftRules = new Set<string>([
-      ...craftRelayFiles.map((file) => `mcp__${file.app}`),
-      ...CRAFT_FILES_TOOL_NAMES,
-    ]);
-    options.allowedTools = (options.allowedTools as string[]).filter((name) => !craftRules.has(name));
-    // In place: writeMcpHandoffFiles, the system ctx and the returned plan
-    // all hold these arrays.
-    const craftFiles = new Set(craftRelayFiles.map((file) => file.path));
-    mcpHandoffFiles.splice(0, mcpHandoffFiles.length, ...mcpHandoffFiles.filter((file) => !craftFiles.has(file.path)));
-    const craftGroups = new Set<McpToolGroupId>(CRAFT_APPS.map((app) => app.toolGroupId));
-    runKindBlockedMcpToolGroups.push(...registeredMcpToolGroups.filter((id) => craftGroups.has(id)));
-    registeredMcpToolGroups.splice(
-      0,
-      registeredMcpToolGroups.length,
-      ...registeredMcpToolGroups.filter((id) => !craftGroups.has(id)),
-    );
-    markCraftSessionFailed(craftState);
-    events?.onStatus?.("Craft 앱 세션을 열지 못해 이번 실행에서는 Craft 도구를 쓸 수 없습니다");
-  }
-
   return {
     sdk,
     streaming,
@@ -2012,7 +1863,6 @@ export async function buildAgentRunPlan(
     // destructures up top rather than named consts.
     ownerToolAccess,
     webFetchProxyState,
-    owner,
     ownerState,
     ownerGroups,
     ownerSecrets,
@@ -2046,10 +1896,6 @@ export async function buildAgentRunPlan(
     // 공용 MCP self-state for the prompt stamp (the SAME states describe_system
     // got; undefined on a consultation run).
     sharedMcpStates,
-    // Craft apps: the state for the prompt stamp (the SAME object describe_system
-    // got) and the session the run loop tracks results against and releases.
-    craftState,
-    craftSession,
     // Called by the run loop before every query() attempt, and at run end.
     writeMcpHandoffFiles,
     removeMcpHandoffFiles,

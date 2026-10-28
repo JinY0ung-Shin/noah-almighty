@@ -7,7 +7,6 @@
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
   import { api } from "../lib/api";
-  import { craftAppLabelKo, refreshCraftApps } from "../lib/craftApps";
   import { confirmAction } from "../lib/confirm";
   import { loadAdminGroups, loadAdminOverview } from "../lib/loaders";
   import { goView } from "../lib/nav";
@@ -33,8 +32,6 @@
   let modelBusy = false;
   let hexBusy = false;
   let signupBusy = false;
-  let craftAppsBusy = false;
-  let craftAppsError = "";
   let tokenError = "";
   let modelError = "";
   let signupError = "";
@@ -55,7 +52,6 @@
   const tokenStatusId = "admin-token-status";
   const modelStatusId = "admin-model-status";
   const hexStatusId = "admin-hex-policy-status";
-  const craftAppsStatusId = "admin-craft-apps-status";
   const toolSkillStatusId = "admin-tool-skill-status";
 
   // 그룹 관리 moved to the shared 그룹 view (GroupsView) — #/admin/groups
@@ -93,11 +89,7 @@
     { id: "closed" as SignupMode, label: "차단", desc: "신규 가입을 받지 않습니다." },
   ];
 
-  onMount(() => {
-    void load();
-    // The Craft 앱 card shows runner health from /api/me's craftApps.
-    void refreshCraftApps(() => api("/api/me"));
-  });
+  onMount(load);
 
   // ---- derived ----
   // loadAdminOverview stores the raw GET /api/admin/system response, which is
@@ -243,28 +235,6 @@
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
-  $: craftAppsEnabled = sys.craftAppsEnabled === true;
-  $: craftAppsStatus = craftAppsBusy
-    ? "저장 중…"
-    : craftAppsError
-      ? `저장 실패: ${craftAppsError}`
-      : craftAppsEnabled
-        ? "켜져 있습니다. 시스템 관리자가 채팅의 MCP 도구에서 Craft 앱을 고를 수 있습니다."
-        : "꺼져 있습니다. 아무도 Craft 앱 도구를 쓸 수 없습니다.";
-  // Runner health per app (`GET /api/me` craftApps) so an ON switch that still
-  // offers nothing in the composer says why. Unknown until the first read. An
-  // app the reachable runner does not register is "not supported yet", not a
-  // broken connection.
-  $: craftInfo = $appState.craftApps;
-  $: craftRunnerDown = craftInfo?.configured !== false && craftInfo?.runnerReachable === false;
-  $: craftAppRows = (craftInfo?.apps ?? []).map((app) => {
-    const label = craftAppLabelKo(app.id);
-    if (app.status === "ready") return { id: app.id, label, version: app.version ?? "", text: "사용 가능", tone: "ok" };
-    if (app.status === "failed") return { id: app.id, label, version: app.version ?? "", text: "시작 실패", tone: "danger" };
-    return craftInfo?.runnerReachable === true
-      ? { id: app.id, label, version: "", text: "아직 미지원", tone: "" }
-      : { id: app.id, label, version: "", text: "연결 안 됨", tone: "write" };
-  });
   $: hexTools = Array.isArray(sys.hexSshTools) ? sys.hexSshTools : [];
   $: hexSavedKey = hexPolicyKeyFromSaved(sys.hexSshToolPolicy || {}, hexTools);
   $: hexCurrentKey = hexPolicyKeyFromMatrix(hexPolicy, hexTools);
@@ -553,34 +523,6 @@
       notify(`구독 토큰은 삭제했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
       subBusy = false;
-    }
-  }
-
-  // ---- system: Craft 앱 switch (admin-only beta) ----
-  // No acknowledgement step: it hands nothing to a user-controlled host — the
-  // apps run in the deployment's own network-less craft-runner, for system
-  // admins only.
-  async function saveCraftApps(enabled: boolean) {
-    if (craftAppsBusy) return;
-    craftAppsBusy = true;
-    craftAppsError = "";
-    try {
-      await api("/api/admin/craft-apps", { method: "PUT", body: JSON.stringify({ enabled }) });
-    } catch (err) {
-      craftAppsBusy = false;
-      craftAppsError = (err as Error).message;
-      notify(`저장 실패: ${craftAppsError}`);
-      return;
-    }
-    try {
-      await loadAdminOverview();
-      // The composer's craft groups read /api/me's craftApps — refresh it too.
-      await refreshCraftApps(() => api("/api/me"));
-      notify(enabled ? "Craft 앱 기능을 켰습니다." : "Craft 앱 기능을 껐습니다.", "ok");
-    } catch (err) {
-      notify(`저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      craftAppsBusy = false;
     }
   }
 
@@ -1073,40 +1015,6 @@
                   <button class="primary" type="submit" disabled={visionBusy}>{visionBusy ? "저장 중…" : "저장"}</button>
                 </div>
               </form>
-            </section>
-
-            <!-- Craft 앱 switch (admin-only beta) -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>Craft 앱 (관리자 전용 베타)</h3>
-                  <p class="muted">아바타가 PhotoCraft 같은 Craft 앱으로 이미지를 편집합니다. 서버에 craft-runner 서비스가 있어야 하고, 시스템 관리자의 대화형 채팅에서만 쓸 수 있습니다. 기본값은 꺼짐입니다.</p>
-                </div>
-                <span class="tag {craftAppsEnabled ? 'ok' : ''}">{craftAppsEnabled ? "켜짐" : "꺼짐"}</span>
-              </div>
-              <div class="settings-save-row">
-                <span id={craftAppsStatusId} class="settings-save-status" class:pending={craftAppsBusy} class:invalid={Boolean(craftAppsError)} role="status" aria-live="polite">{craftAppsStatus}</span>
-                {#if craftAppsEnabled}
-                  <button class="btn" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 끄기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(false)}>{craftAppsBusy ? "저장 중…" : "끄기"}</button>
-                {:else}
-                  <button class="primary" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 켜기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(true)}>{craftAppsBusy ? "저장 중…" : "켜기"}</button>
-                {/if}
-              </div>
-              {#if craftAppsEnabled && craftInfo?.configured === false}
-                <p class="warn-box">서버에 craft-runner 설정(CRAFT_EXCHANGE_DIR, CRAFT_CONTROL_SECRET)이 없어 켜져 있어도 쓸 수 없습니다.</p>
-              {:else if craftAppsEnabled && craftAppRows.length}
-                {#if craftRunnerDown}
-                  <p class="warn-box">craft-runner에 연결할 수 없습니다. craft-runner 컨테이너가 실행 중인지 확인하세요.</p>
-                {/if}
-                <ul class="craft-app-status" aria-label="Craft 앱 상태">
-                  {#each craftAppRows as row (row.id)}
-                    <li>
-                      <span class="craft-app-name"><strong>{row.label}</strong>{#if row.version}{" "}<span class="muted mono">v{row.version}</span>{/if}</span>
-                      <span class="tag {row.tone}">{row.text}</span>
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
             </section>
 
             <!-- hex-ssh policy -->

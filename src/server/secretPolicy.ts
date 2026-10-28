@@ -32,13 +32,12 @@ export const SSH_MCP_SECRET_ENV_NAMES = [
 
 /**
  * Server-only secrets read from the environment at boot. SESSION_SECRET is the
- * AES-256-GCM master key for every user's at-rest secrets; CRAFT_CONTROL_SECRET
- * authenticates the craft-runner control socket. No agent-adjacent process may
- * ever hold them: `agentSubprocessEnv` strips them per spawn, and the server
+ * AES-256-GCM master key for every user's at-rest secrets. No agent-adjacent
+ * process may ever hold them: `agentSubprocessEnv` strips them per spawn, and the server
  * deletes them from its own `process.env` once the config has read them, so no
  * child process it starts afterwards (git, converters, CLIs) inherits them (#71).
  */
-export const SERVER_ONLY_SECRET_ENV_NAMES = ["SESSION_SECRET", "CRAFT_CONTROL_SECRET"] as const;
+export const SERVER_ONLY_SECRET_ENV_NAMES = ["SESSION_SECRET"] as const;
 
 /** Delete {@link SERVER_ONLY_SECRET_ENV_NAMES} from `env` in place. */
 export function scrubServerOnlySecretEnv(env: Record<string, string | undefined>): void {

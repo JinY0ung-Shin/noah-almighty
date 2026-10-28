@@ -10,7 +10,7 @@ import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
-import { startCraftRunnerProbe } from "./craftRunner.js";
+import { retireCraftApps } from "./retireCraftApps.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import {
   deckToolchainLogFields,
@@ -22,9 +22,9 @@ import {
 // (our PreToolUse hook is the gate it recommends). Other warnings still print.
 filterAdvisoryProcessWarnings();
 const services = createServices();
-// The config has now read every server-only secret (SESSION_SECRET,
-// CRAFT_CONTROL_SECRET). Drop them from process.env so no process this server
-// starts from here on — git, converters, agent CLIs — inherits them (#71). The
+// The config has now read every server-only secret (SESSION_SECRET). Drop them
+// from process.env so no process this server starts from here on — git,
+// converters, agent CLIs — inherits them (#71). The
 // image also makes the node binary execute-only, so this process itself is
 // non-dumpable and its initial environment unreadable to other processes.
 scrubServerOnlySecretEnv(process.env);
@@ -33,6 +33,8 @@ scrubServerOnlySecretEnv(process.env);
 // scheduler started below would fire a bot-bound routine as the owner's main
 // avatar. A no-op once done; a failed purge throws and stops the boot.
 retirePersonalAgents(services);
+// The removed Craft apps left only a retry queue on disk; drop it (best effort).
+retireCraftApps(services.config);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);
@@ -50,10 +52,6 @@ if (deckToolchain.selftest === "drift") {
     "deck converter golden drift recorded at image build (README.md#deck-converter-golden-drift)",
   );
 }
-// Craft apps (admin-only beta): probe the craft-runner's health once now and
-// keep re-probing in the background while it is unreachable (it may start
-// after Noah). Memoized for runs and GET /api/me; a no-op when not configured.
-const stopCraftRunnerProbe = startCraftRunnerProbe(services.config);
 const app = createApp(services);
 
 const { server, protocol } = createAppServer(app, services.config);
@@ -94,7 +92,6 @@ function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
   stopScheduler();
   stopAvatarTaskDispatcher();
-  stopCraftRunnerProbe();
   // Abort in-flight chat runs so their cancel path persists the streamed partial
   // and ends the SSE responses (otherwise open streams would block server.close
   // until the timeout and the watched turn would be lost).

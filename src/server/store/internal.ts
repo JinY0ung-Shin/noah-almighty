@@ -280,12 +280,6 @@ export const SIGNUP_MODE_KEY = "signup_mode";
 /** app_config key: admin-selected agent model, overriding nothing when an env
  *  ANTHROPIC_MODEL is set (env wins, mirroring the API-key/subscription rule). */
 export const MODEL_OVERRIDE_KEY = "agent_model_override";
-/**
- * app_config key: a system admin enabled the Craft apps beta ("on"; anything
- * else = off). Off by default, so a deploy that adds the craft-runner changes
- * nothing until an admin opts in (craftRunner.ts, agent/craftTools.ts).
- */
-export const CRAFT_APPS_ENABLED_KEY = "craft_apps_enabled";
 
 /**
  * Generic constructor type used to compose the per-domain mixins back onto a
@@ -913,6 +907,10 @@ export class StoreBase {
     this.db
       .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
       .run("server_agents_enabled", "server_agent_deployment_id");
+    // The Craft apps feature (craft-runner sidecar) is removed: drop its admin
+    // switch. Nothing writes this key any more, so the delete can only match a
+    // row left by an older build — keep the key name reserved.
+    this.db.prepare("DELETE FROM app_config WHERE key = ?").run("craft_apps_enabled");
   }
 
   /** One-time backfill of canvas artifacts that pre-date the dedicated tables:

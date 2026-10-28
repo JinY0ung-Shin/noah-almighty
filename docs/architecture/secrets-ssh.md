@@ -139,7 +139,7 @@
     tini started directly by the runtime both kept a READABLE environment. The egress overlay keeps
     `init: true`: its image runs that init as root. The HEALTHCHECK runs behind `env -u` so its short-lived
     shell/curl never carry the server-only secrets.
-  - **The server drops `SERVER_ONLY_SECRET_ENV_NAMES`** (`SESSION_SECRET`, `CRAFT_CONTROL_SECRET`,
+  - **The server drops `SERVER_ONLY_SECRET_ENV_NAMES`** (`SESSION_SECRET`,
     `secretPolicy.ts`) from `process.env` right after the config reads them (`index.ts`), so no process it
     starts later inherits them; `agentSubprocessEnv` and the skill-discovery preflight strip the same list
     again.

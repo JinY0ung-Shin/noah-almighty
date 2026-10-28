@@ -16,10 +16,9 @@ describe("server-only secret env", () => {
   });
 
   it("keeps them out of the agent subprocess env even from an unscrubbed base", () => {
-    const base: Record<string, string | undefined> = { SESSION_SECRET: "s", CRAFT_CONTROL_SECRET: "c", HOME: "/home/node" };
+    const base: Record<string, string | undefined> = { SESSION_SECRET: "s", HOME: "/home/node" };
     const env = agentSubprocessEnv(base, "/data/agent-sessions");
     expect(env).not.toHaveProperty("SESSION_SECRET");
-    expect(env).not.toHaveProperty("CRAFT_CONTROL_SECRET");
     expect(env.HOME).toBe("/home/node");
   });
 
@@ -29,7 +28,7 @@ describe("server-only secret env", () => {
     const scrub = index.indexOf("scrubServerOnlySecretEnv(process.env);");
     expect(services).toBeGreaterThan(-1);
     expect(scrub).toBeGreaterThan(services);
-    // Before anything else starts processes (deck probes, craft probe, listen).
+    // Before anything else starts processes (deck probes, listen).
     expect(scrub).toBeLessThan(index.indexOf("probeDeckRendering();"));
   });
 
@@ -44,7 +43,7 @@ describe("server-only secret env", () => {
 
   it("compose keeps Docker's readable init off the base service, on for the root egress image", () => {
     const base = fs.readFileSync(path.join(__dirname, "../docker-compose.yml"), "utf8");
-    const app = base.slice(base.indexOf("  noah-almighty:"), base.indexOf("  craft-runner:"));
+    const app = base.slice(base.indexOf("  noah-almighty:"), base.indexOf("\nvolumes:"));
     expect(app).toMatch(/^\s+init: false$/m);
     const egress = fs.readFileSync(path.join(__dirname, "../docker-compose.egress.yml"), "utf8");
     const egressApp = egress.slice(egress.indexOf("  noah-almighty:"), egress.indexOf("  egress-proxy:"));

@@ -33,9 +33,6 @@ scripts/openxml-validator/obj/
 scripts/deck-docker-smoke.sh
 scripts/openxml-validator/
 
-# craft-runner sidecar is its own image (docker-compose service craft-runner)
-craft-runner/
-
 # Dev-only trees: never read at runtime or by the build (`npm run build` compiles
 # src/ only). Excluding them keeps a docs- or tests-only commit a full cache hit.
 docs/

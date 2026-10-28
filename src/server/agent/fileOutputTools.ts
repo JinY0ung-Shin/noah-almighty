@@ -38,13 +38,6 @@ export interface FileOutputToolsContext {
    */
   deckConverterInstalled?: boolean;
   /**
-   * The run has an active Craft app (runPlan): share_file's description names
-   * the image/PSD/.pcraft types, which the host then accepts — the request
-   * carries the same fact (`ShareFileRequest.craftFileTypes`, set by runPlan).
-   * Absent/false = the document types only, in the text AND the check.
-   */
-  craftFileTypes?: boolean;
-  /**
    * Build `create_share_link` (runPlan's `shareLinkToolActive`: an interactive
    * turn of the owner's own avatar whose host supplied `onShareLink`). Absent/
    * false = the tool does not exist in this run, and show_file/share_file are
@@ -67,16 +60,14 @@ export interface FileOutputToolsContext {
 
 type SharedFile = Extract<FileOutputResult, { behavior: "shown" }>;
 
-/** share_file's description; the PPTX sentence depends on the converter, the type list on an active Craft app. */
-function shareFileDescription(deckConverterInstalled: boolean, craftFileTypes: boolean): string {
+/** share_file's description; only the PPTX sentence depends on the converter. */
+function shareFileDescription(deckConverterInstalled: boolean): string {
   const pptxSentence = deckConverterInstalled
     ? "For a PPTX built by the `pptx` skill's converter, pass the built file IN PLACE (use `name` for the user-facing filename; never copy, rename or edit it after building) — the card's side panel then shows the converter's exact slide renders; for any other PPTX/DOCX/XLSX/PDF the server AUTOMATICALLY renders approximate page previews. Either way, do NOT render or publish slide images yourself for delivery. "
     : "For PPTX/DOCX/XLSX/PDF the server AUTOMATICALLY renders page previews into the card's side panel — do NOT render or publish slide images yourself for delivery. ";
   return (
     "Hand a generated document to the user as a DOWNLOAD CARD in the chat. " +
-    (craftFileTypes
-      ? "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio) — or a finished image/design file (PNG, JPEG, WebP, SVG, PSD, .pcraft), e.g. a Craft app result from craft/out/ (to merely SHOW an image inline, use show_file). "
-      : "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio). ") +
+    "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio). " +
     pptxSentence +
     "A shared .drawio file renders as an INTERACTIVE diagram in that same panel (client-side) — never export a diagram to PNG just to deliver it. " +
     "Pass the local file path from your working directory; never paste a local path or file:// URL into Markdown, because the browser cannot reach your filesystem and there is NO Bash workaround for delivering files. " +
@@ -305,7 +296,7 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
     ),
     tool(
       "share_file",
-      shareFileDescription(deckConverterInstalled, ctx.craftFileTypes === true),
+      shareFileDescription(deckConverterInstalled),
       {
         path: z.string().min(1).max(4096).describe("File path, relative to the current working directory or absolute inside an allowed working root."),
         name: z.string().max(200).optional().describe("Download filename shown to the user (defaults to the file's basename). Keep the correct extension."),

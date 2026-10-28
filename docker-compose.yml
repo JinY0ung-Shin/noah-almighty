@@ -44,15 +44,8 @@ services:
       # Force the container's data volume regardless of the .env value
       # (environment wins over env_file).
       APP_DATA_DIR: /app/data
-      # Craft apps (admin-only beta): the exchange volume shared with the
-      # craft-runner service below, plus the control-socket secret from .env.
-      # Either one unset = the feature is unavailable (fail closed).
-      CRAFT_EXCHANGE_DIR: /app/craft-exchange
-      CRAFT_CONTROL_SECRET: ${CRAFT_CONTROL_SECRET:-}
     volumes:
       - noah-almighty-data:/app/data
-      # Unix sockets + per-conversation inbox/outbox of the craft-runner.
-      - craft-exchange:/app/craft-exchange
       # HTTPS certs (optional): on the deploy host drop PEMs into ./docker/tls
       # and set TLS_CERT_FILE/TLS_KEY_FILE to /app/tls/<file> in .env. Read-only;
       # stays empty on plain-HTTP deployments.
@@ -66,71 +59,5 @@ services:
     # the agent's Bash via /proc/1/environ (#71).
     init: false
 
-  # Craft apps sidecar (craft-runner/README.md): runs the pinned PhotoCraft CLI
-  # as headless MCP servers, one unprivileged uid per conversation. Opt-in:
-  # set COMPOSE_PROFILES=craft in .env (and CRAFT_CONTROL_SECRET, 32+ chars),
-  # because building it downloads the pinned app release from GitHub (or
-  # CRAFT_RELEASE_BASE). It shares ONLY the craft-exchange volume with Noah —
-  # never the noah-almighty-data volume — and has no network at all: Noah talks
-  # to it over the two unix sockets in that volume.
-  craft-runner:
-    profiles: ["craft"]
-    build:
-      # Repo root, so the image reuses docker/apt_mirror_sources.sh and the
-      # same CA_CERT_FILE as the main service.
-      context: .
-      dockerfile: craft-runner/Dockerfile
-      args:
-        APT_MIRROR_HOST: ${APT_MIRROR_HOST:-}
-        CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
-        CRAFT_RELEASE_BASE: ${CRAFT_RELEASE_BASE:-https://github.com/storytold}
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-}
-        http_proxy: ${http_proxy:-}
-        https_proxy: ${https_proxy:-}
-        no_proxy: ${no_proxy:-}
-    # No network interface at all (not even loopback to the host): the apps
-    # can neither reach the internet nor the internal network / Noah's API.
-    network_mode: none
-    read_only: true
-    tmpfs:
-      # Per-session HOME/TMPDIR live here; mode 0711 so session uids cannot
-      # share files through a world-writable /tmp.
-      - /tmp:size=1g,mode=0711
-    # The daemon is root but keeps only what session isolation needs: spawn
-    # children as per-session uids (SETUID/SETGID), own/mode the exchange tree
-    # (CHOWN/FOWNER/DAC_OVERRIDE) and kill children (KILL). Children run with
-    # no capabilities.
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - CHOWN
-      - FOWNER
-      - DAC_OVERRIDE
-      - KILL
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 8g
-    cpus: 4
-    pids_limit: 512
-    # Only these variables — never env_file: .env (model credentials and
-    # every other secret stay out of this container). The secret is never
-    # sent over the sockets: both sides prove it with an HMAC challenge.
-    # CRAFT_EXCHANGE_MAX_BYTES caps the whole exchange volume (default 20 GiB;
-    # each conversation's out/ is capped at 2 GiB) — it shares the host disk
-    # with Noah's data volume.
-    environment:
-      CRAFT_CONTROL_SECRET: ${CRAFT_CONTROL_SECRET:-}
-      CRAFT_MAX_PROCS: 3
-      CRAFT_EXCHANGE_MAX_BYTES: ${CRAFT_EXCHANGE_MAX_BYTES:-21474836480}
-    volumes:
-      - craft-exchange:/exchange
-    restart: unless-stopped
-    init: true
-
 volumes:
   noah-almighty-data:
-  craft-exchange:

@@ -109,12 +109,6 @@ export interface ShareFileRequest {
   path: string;
   /** Download filename shown to the user; defaults to the file's basename. */
   name?: string;
-  /**
-   * Set by runPlan (never by the model): this run has an active Craft app, so
-   * the image/PSD/.pcraft types are accepted too (Addendum A5). Absent = the
-   * document types only.
-   */
-  craftFileTypes?: boolean;
 }
 
 /**
@@ -779,27 +773,4 @@ export interface AgentEvents {
    * not registered (a headless run has no browser to drive).
    */
   onBrowser?: (request: BrowserRequest) => Promise<BrowserResult>;
-  /**
-   * Publish the images a Craft app returned (`mcp__<app>__render_preview` …)
-   * to the user: a visible file card + a hidden preview slide per image (the
-   * browser-screenshot shape), then a `craft_preview` SSE event. The chat route
-   * supplies it ONLY on an interactive turn of the owner's own avatar; its
-   * presence is part of runPlan's Craft gate (the "interactive" half).
-   */
-  onCraftPreview?: (request: CraftPreviewRequest) => Promise<CraftPreviewResult>;
-}
-
-/** Images ONE Craft tool result carried, already sniffed as PNG/JPEG/WebP/GIF. */
-export interface CraftPreviewRequest {
-  app: import("../../shared/craftApps.js").CraftAppId;
-  tool: string;
-  images: { buffer: Buffer; mediaType: import("../types.js").ImageMediaType }[];
-  /** Text anchor for the visible cards (see runPlan's currentTextAnchor). */
-  anchor: number;
-}
-
-export interface CraftPreviewResult {
-  published: import("../types.js").MessageAttachment[];
-  /** Images not published (per-message cap, conversation gone, write failure). */
-  skipped: number;
 }

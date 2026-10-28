@@ -824,6 +824,33 @@ describe("chat-stream request validation", () => {
     await signup(bob, "filedl2").expect(201);
     await bob.get("/api/conversations/conv-file/files/deck-1").expect(404);
   });
+
+  it("keeps serving cards the removed Craft apps stored (images, PSD, .pcraft; SVG sandboxed)", async () => {
+    const { app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "craftcards").expect(201)).body.user.id as string;
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-craft", message: "hi" }).expect(200);
+    const dir = chatFilesDir(config, "conv-craft");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "psd-1.psd"), Buffer.concat([Buffer.from("8BPS"), Buffer.alloc(32)]));
+    fs.writeFileSync(path.join(dir, "svg-1.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    fs.writeFileSync(path.join(dir, "pc-1.pcraft"), Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(32)]));
+    fs.writeFileSync(path.join(dir, "jpeg-1.jpeg"), Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+
+    const psd = await owner.get("/api/conversations/conv-craft/files/psd-1").expect(200);
+    expect(psd.headers["content-type"]).toContain("image/vnd.adobe.photoshop");
+    expect(psd.headers["content-disposition"]).toContain("attachment;");
+    const svg = await owner.get("/api/conversations/conv-craft/files/svg-1").expect(200);
+    expect(svg.headers["content-type"]).toContain("image/svg+xml");
+    expect(svg.headers["content-disposition"]).toContain("attachment;");
+    expect(svg.headers["content-security-policy"]).toContain("sandbox");
+    expect((await owner.get("/api/conversations/conv-craft/files/pc-1").expect(200)).headers["content-type"]).toContain(
+      "application/vnd.photocraft",
+    );
+    expect((await owner.get("/api/conversations/conv-craft/files/jpeg-1").expect(200)).headers["content-type"]).toContain(
+      "image/jpeg",
+    );
+  });
 });
 
 describe("working-repo resolution failures (before SSE)", () => {

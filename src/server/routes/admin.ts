@@ -6,7 +6,6 @@ import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
 import { sanitizeName } from "../marketplace.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
-import { craftAppsClientStatus, purgeCraftSessions } from "../craftRunner.js";
 import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
@@ -82,10 +81,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
-        // Craft apps beta switch (PUT /api/admin/craft-apps), default off, plus
-        // what the deployment's craft-runner currently serves.
-        craftAppsEnabled: store.isCraftAppsEnabled(),
-        craftApps: craftAppsClientStatus(config, store.isCraftAppsEnabled()),
         // Admin-selected model override + whether an env ANTHROPIC_MODEL shadows it
         // (env wins, mirroring the API-key-vs-subscription precedence).
         modelOverride: store.getModelOverride(),
@@ -251,7 +246,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
         // is already gone above, but their threads with OTHER avatars live
         // under those avatars' trees — resolved by conversation id.
         deleteConversationWorkspaceCopies(config, conversationIds);
-        purgeCraftSessions(config, conversationIds);
       } catch (err) {
         logger.warn({ err, targetId: req.params.id }, "post-delete disk cleanup failed");
       }
@@ -512,7 +506,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
         // workspace trees are removed whole by cleanupGroupDataDirs above; this
         // keeps the server-written copies swept even if that ever narrows.
         deleteConversationWorkspaceCopies(config, artifact.conversationIds);
-        purgeCraftSessions(config, artifact.conversationIds);
       }
     } catch (err) {
       logger.warn({ err, groupId: req.params.id }, "post-delete disk cleanup failed");
@@ -590,21 +583,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
     auditAs(req, "set_signup_mode", `signup mode = ${mode}`);
     logger.warn({ actorId: req.user!.id, mode }, "signup mode changed");
     res.json({ signupMode: mode });
-  });
-
-  // Craft apps (admin-only beta) on/off. Even when on, a Craft run also needs
-  // the craft-runner configured + healthy and a system admin's own interactive
-  // chat (agent/craftTools.ts); off stops every Craft run from the next turn.
-  router.put("/api/admin/craft-apps", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const enabled = req.body?.enabled;
-    if (typeof enabled !== "boolean") {
-      apiError(res, 400, "enabled는 true 또는 false여야 합니다.");
-      return;
-    }
-    store.setCraftAppsEnabled(enabled);
-    auditAs(req, "set_craft_apps_enabled", `craft apps = ${enabled ? "on" : "off"}`);
-    logger.warn({ actorId: req.user!.id, enabled }, "craft apps switch changed");
-    res.json({ craftAppsEnabled: enabled, craftApps: craftAppsClientStatus(config, enabled) });
   });
 
   // Admin-selected agent model. An env ANTHROPIC_MODEL still wins at runtime

@@ -742,35 +742,6 @@
   font-size: var(--t-xs);
   font-weight: 400;
 }
-.craft-app-status {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-}
-.craft-app-status li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: var(--s-2-5) var(--s-3);
-  font-size: var(--t-sm);
-}
-.craft-app-status li + li {
-  border-top: 1px solid var(--line);
-}
-.craft-app-name {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--s-2);
-  min-width: 0;
-}
-.craft-app-name .mono {
-  font-size: var(--t-xs);
-}
 .nowrap {
   white-space: nowrap;
 }
