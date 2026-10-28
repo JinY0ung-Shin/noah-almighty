@@ -286,6 +286,12 @@ export const MODEL_OVERRIDE_KEY = "agent_model_override";
  * the deployment's model credentials to the CLI on the registrant's server.
  */
 export const SERVER_AGENTS_ENABLED_KEY = "server_agents_enabled";
+/**
+ * app_config key: a system admin enabled the Craft apps beta ("on"; anything
+ * else = off). Off by default, so a deploy that adds the craft-runner changes
+ * nothing until an admin opts in (craftRunner.ts, agent/craftTools.ts).
+ */
+export const CRAFT_APPS_ENABLED_KEY = "craft_apps_enabled";
 
 /**
  * Generic constructor type used to compose the per-domain mixins back onto a

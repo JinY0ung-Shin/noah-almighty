@@ -21,6 +21,7 @@ import {
   MODEL_OVERRIDE_KEY,
   PRESENCE_WINDOW_MS,
   SERVER_AGENTS_ENABLED_KEY,
+  CRAFT_APPS_ENABLED_KEY,
   SIGNUP_MODE_KEY,
   now,
 } from "./internal.js";
@@ -226,6 +227,19 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     setServerAgentsEnabled(enabled: boolean): void {
       this.setAppSecret(SERVER_AGENTS_ENABLED_KEY, enabled ? "on" : "off");
+    }
+
+    /**
+     * Craft apps deployment switch (default OFF). Even when on, a Craft run also
+     * needs the craft-runner configured and healthy, a system-admin owner and an
+     * interactive own-avatar chat (agent/craftTools.ts `planCraftApps`).
+     */
+    isCraftAppsEnabled(): boolean {
+      return this.getAppSecret(CRAFT_APPS_ENABLED_KEY) === "on";
+    }
+
+    setCraftAppsEnabled(enabled: boolean): void {
+      this.setAppSecret(CRAFT_APPS_ENABLED_KEY, enabled ? "on" : "off");
     }
 
     /** Admin-selected agent model (UI), or null if unset. Env ANTHROPIC_MODEL wins. */

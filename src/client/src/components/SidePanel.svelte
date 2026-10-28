@@ -142,7 +142,8 @@
   $: anyNeedsLook = (collapsed && keyOf(current) !== foldedOn) || tabs.some((tab) => needsLook(tab, null, unseen));
 
   function tabLabel(tab: SideTab): string {
-    return tab.kind === "canvas" ? tab.canvas.title : tab.file.attachment.name || "파일";
+    // A Craft app's live preview tab carries the app's Korean name (`label`).
+    return tab.kind === "canvas" ? tab.canvas.title : tab.file.label || tab.file.attachment.name || "파일";
   }
   function domId(paneId: string, prefix: string, key: string): string {
     return `${prefix}-${paneId}-${key}`.replace(/[^a-zA-Z0-9_-]/g, "-");

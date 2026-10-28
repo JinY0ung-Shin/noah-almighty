@@ -315,6 +315,24 @@ export interface ChatPane {
 export interface PaneFileTab {
   attachment: import("../../../server/types.js").MessageAttachment;
   slides: import("../../../server/types.js").MessageAttachment[];
+  /**
+   * Set only on a Craft app's LIVE preview tab (opened by a `craft_preview`
+   * frame, lib/chat `handleCraftPreview`): the app id. The next preview of the
+   * same app replaces this tab in place instead of opening one more; a tab the
+   * viewer opened from a card never carries it, so it is never swapped away.
+   */
+  craftApp?: string;
+  /** Strip label overriding the file name (a Craft preview: the app's Korean name). */
+  label?: string;
+}
+
+/** Runner health of one Craft app as `GET /api/me` reports it (admins only). */
+export type CraftAppStatus = "ready" | "failed" | "unavailable";
+
+/** `GET /api/me`'s `craftApps` (spec P1 §6): the admin toggle + per-app runner status. */
+export interface CraftAppsInfo {
+  enabled: boolean;
+  apps: { id: string; status: CraftAppStatus }[];
 }
 
 /** One tab of the right-side panel: a canvas (artifact id) or an open file (attachment id). */

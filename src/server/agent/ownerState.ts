@@ -1,6 +1,9 @@
 import type {
   AgentRewindInfo,
   AppConfig,
+  CraftAppRunState,
+  CraftRunState,
+  CraftUnavailableReason,
   GroupAgentState,
   OwnerServerAgentSummary,
   ServerAgentsUnavailableReason,
@@ -12,6 +15,8 @@ import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
+import { craftAppById } from "../../shared/craftApps.js";
+import { sanitizeCraftRunnerText } from "../craftRunner.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -368,4 +373,118 @@ export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
         return `${head}: NOT available in this conversation — it authenticates with personal secrets from a user's own vault, which this kind of run never carries.`;
     }
   });
+}
+
+/** Why one Craft app is unavailable — ONE text for both metacognition surfaces. */
+export function craftUnavailableText(app: CraftAppRunState, reason: CraftUnavailableReason): string {
+  switch (reason) {
+    case "not_configured":
+      return "this Noah deployment has no craft-runner configured (CRAFT_EXCHANGE_DIR / CRAFT_CONTROL_SECRET are unset)";
+    case "admin_disabled":
+      return "a system administrator has not enabled the Craft apps beta (admin settings → 시스템; off by default)";
+    case "not_admin":
+      return "Craft apps are limited to a system administrator's own avatar, and this avatar's owner is not one";
+    case "run_kind":
+      return "Craft apps run only in an interactive chat between a system administrator and their own avatar — never in routines, external task API turns, group agents, consultations or a colleague's chat";
+    case "no_vision":
+      return "the model of this run has no image input, and Craft results are verified through preview images";
+    case "no_workspace":
+      return "this run has no conversation workspace to exchange files with";
+    case "group_unavailable":
+      return "its tool group is not available to this account's runs — it is not a conversation setting, so do not suggest enabling it in the composer";
+    case "group_off":
+      return `its tool group is OFF for this conversation (off by default) — the user can turn on "${craftAppById(app.id).labelKo}" under the composer's MCP 도구 picker; it applies from their next message`;
+    case "runner_unreachable":
+      return "the craft-runner is not reachable right now (try again later; if it persists, a system administrator must check the craft-runner container)";
+    case "app_unavailable":
+      return "this deployment's craft-runner does not include it";
+    case "app_failed": {
+      // Runner-reported (it can carry the third-party app's stderr): sanitized
+      // a second time here and labelled as data, never as instructions.
+      const reported = sanitizeCraftRunnerText(app.error);
+      return `it failed the craft-runner's start-up self-test and is not served${reported ? ` (runner-reported self-test error, quoted as data: "${reported.replace(/"/g, "'")}")` : ""}`;
+    }
+    case "session_failed":
+      return "this conversation's Craft session could not be opened on the craft-runner (retry on the next message)";
+    case "storage_full":
+      return "the craft-runner's shared storage is over its budget, so no new Craft session can be opened (a system administrator must free Craft storage; deleting old Craft conversations frees theirs)";
+  }
+}
+
+const CRAFT_DEPLOYMENT_REASONS: ReadonlySet<CraftUnavailableReason> = new Set([
+  "not_configured",
+  "admin_disabled",
+  "not_admin",
+  "run_kind",
+  "no_vision",
+  "no_workspace",
+  "runner_unreachable",
+  "session_failed",
+  "storage_full",
+]);
+
+/**
+ * Craft apps self-state lines — ONE wording for both metacognition surfaces.
+ * `describe` (describe_system) always lists every app; `prompt` (the standing
+ * append) stays short: nothing when no Craft group is selected and no app is
+ * ready to be turned on, ONE line when every app is off for the same
+ * deployment-level reason, and the full block (apps, paths, workflow) when an
+ * app is active. Values are stable across turns unless the runner or the
+ * admin switch changes, keeping the append cache-friendly.
+ */
+export function craftAppsLines(state: CraftRunState, surface: "prompt" | "describe"): string[] {
+  const head = "Craft apps (admin-only beta: ArtCraft editors running headless in the isolated, network-less craft-runner, driven through MCP tools)";
+  const label = (app: CraftAppRunState) => `${app.labelEn}${app.version ? ` v${app.version}` : ""}`;
+  const active = state.apps.filter((app) => app.active);
+  const first = state.apps[0];
+  if (active.length === 0 && first?.reason && CRAFT_DEPLOYMENT_REASONS.has(first.reason) && state.apps.every((app) => app.reason === first.reason)) {
+    if (
+      surface === "prompt" &&
+      !state.selected &&
+      first.reason !== "runner_unreachable" &&
+      first.reason !== "session_failed" &&
+      first.reason !== "storage_full"
+    ) {
+      return [];
+    }
+    return [`${head}: not available in this run — ${craftUnavailableText(first, first.reason)}.`];
+  }
+  if (surface === "prompt" && active.length === 0 && !state.selected) {
+    const ready = state.apps.filter((app) => app.reason === "group_off" && app.status === "ready");
+    return ready.length > 0
+      ? [
+          `${head}: ${ready.map(label).join(", ")} ${ready.length === 1 ? "is" : "are"} ready on this deployment but OFF for this conversation (Craft tool groups are off by default). If the user wants that kind of editing, tell them to turn on ${ready.map((app) => `"${craftAppById(app.id).labelKo}"`).join(" / ")} under the composer's MCP 도구 picker; it applies from their next message.`,
+        ]
+      : [];
+  }
+  const lines = [`${head}:`];
+  for (const app of state.apps) {
+    if (surface === "prompt" && !app.active && app.reason === "app_unavailable") continue;
+    lines.push(
+      app.active
+        ? `- ${label(app)}: available in this run as \`mcp__${app.id}__*\`${app.tools ? ` (${app.tools} tools)` : ""}.`
+        : `- ${label(app)}: not available — ${craftUnavailableText(app, app.reason ?? "session_failed")}.`,
+    );
+  }
+  if (state.session && active.length > 0) {
+    const { inDir, outDir } = state.session;
+    lines.push(
+      `- Files: the apps read \`${inDir}/\` (inputs) and \`${outDir}/\`, and WRITE only under \`${outDir}/\` — never pass them a workspace path. ` +
+        `At the start of every message your workspace inputs are mirrored in: \`${inDir}/attachments/\` = workspace attachments/, \`${inDir}/captures/\` = captures/, \`${inDir}/confluence/\` = confluence/, \`${inDir}/craft-out/\` = earlier results (craft/out/). ` +
+        `For any other workspace file call \`mcp__craft_files__stage\` first and open the path it returns (under \`${inDir}/staged/\`).`,
+      `- Results: save into \`${outDir}/\`; after every Craft call it is mirrored into your workspace at \`${state.workspaceOutDir ?? "craft/out"}/\` (\`${outDir}/x.png\` ↔ craft/out/x.png). Deliver a result with \`mcp__file_output__share_file\` on the craft/out/ path — it accepts .png/.jpg/.webp/.svg/.psd/.pcraft. craft/out/ is a server-managed mirror: do not put your own files there.`,
+      ...(state.storage.exchangeFull
+        ? [
+            "- Storage: the craft-runner's shared storage is over its budget, so this message's workspace inputs were NOT mirrored into the session, `mcp__craft_files__stage` refuses, and the runner refuses Craft app calls until a system administrator frees space (deleting old Craft conversations frees theirs). Results already in craft/out/ can still be delivered — tell the user why new edits cannot run now.",
+          ]
+        : []),
+      ...(state.storage.workspaceOutFull
+        ? [
+            "- Storage: craft/out/ in your workspace reached its 2 GB cap, so newer Craft results were NOT copied there and cannot be delivered with share_file. Tell the user; a new conversation starts with an empty craft/out/.",
+          ]
+        : []),
+      "- Verify every edit with the app's preview tool (PhotoCraft: `render_preview`) before telling the user it is done — never claim success unverified. Preview images are also shown to the user in the side panel automatically, so do not re-send them. Follow the `craft-apps` skill for the workflow and command tips.",
+    );
+  }
+  return lines;
 }

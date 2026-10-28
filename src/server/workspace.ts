@@ -22,10 +22,11 @@ export function workspaceDirFor(config: AppConfig, avatarId: string, conversatio
 /**
  * The folders of a conversation's scratch workspace that SERVER writers fill:
  * staged chat attachments (`chatImages.ts`), browser screenshot copies
- * (`chatFiles.ts`) and Confluence attachments saved with `save_to_workspace`
- * (`agent/confluenceTools.ts`).
+ * (`chatFiles.ts`), Confluence attachments saved with `save_to_workspace`
+ * (`agent/confluenceTools.ts`) and the Craft apps' output mirror `craft/out/`
+ * (`craftExchange.ts` — the whole `craft/` folder is server-managed).
  */
-export const SERVER_WORKSPACE_COPY_DIRS = ["attachments", "captures", "confluence"] as const;
+export const SERVER_WORKSPACE_COPY_DIRS = ["attachments", "captures", "confluence", "craft"] as const;
 
 /** A real directory at `target` (never a link to one), or false. */
 function isRealDirectory(target: string): boolean {

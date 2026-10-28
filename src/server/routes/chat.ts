@@ -35,6 +35,8 @@ import type {
   BrowserCookie,
   BrowserStorageEntry,
   BrowserTab,
+  CraftPreviewRequest,
+  CraftPreviewResult,
   DeckSidecarFact,
   ShareLinkRequest,
   ShareLinkResult,
@@ -58,6 +60,7 @@ import { TOUR_PROMPTS } from "../tourScenarios.js";
 import {
   decodeChatImages,
   deleteChatImageAttachments,
+  detectImageMediaType,
   deleteConversationImages,
   deleteStagedAttachmentCopies,
   publishWorkspaceImage,
@@ -93,6 +96,7 @@ import {
   deleteChatFileAttachments,
   deleteConversationFiles,
   publishBrowserScreenshot,
+  publishCraftPreview,
   publishWorkspaceFile,
   resolveStoredFile,
   saveBrowserCapture,
@@ -100,7 +104,9 @@ import {
   MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
   MAX_SAVED_CAPTURES_PER_TURN,
   MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
-  SHAREABLE_EXTENSIONS,
+  MAX_CRAFT_PREVIEWS_PER_MESSAGE,
+  SHARED_IMAGE_PREVIEW_EXTENSIONS,
+  shareableExtensions,
   MAX_CHAT_FILE_BYTES,
   sanitizeDownloadName,
   withDownloadExtension,
@@ -149,6 +155,8 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
+import { purgeCraftSessions } from "../craftRunner.js";
+import { craftAppById } from "../../shared/craftApps.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
@@ -1410,6 +1418,8 @@ export async function executeChatTurn(
     // Browser screenshots saved as workspace FILES (`captures/`) this run — a
     // budget of its own too, independent of the share cap above.
     let savedCaptureCount = 0;
+    // Craft app previews auto-shared as file cards this run (own budget).
+    let sharedCraftPreviewCount = 0;
     // Documents the model shared via share_file this run. Counted on its own
     // rather than off `shownAttachments`, which also carries the screenshot
     // auto-share's kind:"file" cards — a browsing loop must not spend this cap.
@@ -2832,12 +2842,14 @@ export async function executeChatTurn(
                 message: "The conversation no longer exists, so the file cannot be shared.",
               };
             }
+            const craftFileTypes = requestData.craftFileTypes === true;
             const result = publishWorkspaceFile(
               config,
               conversationId,
               requestData.path,
               outputRoots,
               requestData.name,
+              craftFileTypes,
             );
             if ("error" in result) {
               const maxMb = Math.round(MAX_CHAT_FILE_BYTES / (1024 * 1024));
@@ -2852,7 +2864,7 @@ export async function executeChatTurn(
                 NOT_FILE: "The supplied path is not a regular file.",
                 EMPTY: "The file is empty.",
                 TOO_LARGE: `The file is larger than the ${maxMb} MB limit.`,
-                UNSUPPORTED: `Unsupported file type. share_file accepts: ${SHAREABLE_EXTENSIONS.map((e) => `.${e}`).join(", ")} — and the content must match the extension. There is no Bash or Markdown workaround for delivering other file types.`,
+                UNSUPPORTED: `Unsupported file type. share_file accepts: ${shareableExtensions(craftFileTypes).map((e) => `.${e}`).join(", ")} — and the content must match the extension. There is no Bash or Markdown workaround for delivering other file types.`,
                 READ_FAILED: "The file could not be read.",
               } as const;
               return { behavior: "error", message: messages[result.error] };
@@ -2881,6 +2893,23 @@ export async function executeChatTurn(
             let previewTotal: number | undefined;
             let deckSidecar: DeckSidecarFact | undefined;
             const stored = resolveStoredFile(config, conversationId, result.attachment.id);
+            // A shared raster image (a Craft result) gets one hidden copy of
+            // itself as the card's preview slide — the screenshot card shape,
+            // so the side panel shows the picture. Best-effort like the rest.
+            if (stored && SHARED_IMAGE_PREVIEW_EXTENSIONS.has(stored.ext)) {
+              try {
+                const bytes = fs.readFileSync(stored.path);
+                const mediaType = detectImageMediaType(bytes);
+                if (mediaType) {
+                  attachPreview(
+                    saveHiddenChatImage(config, conversationId, bytes, mediaType, result.attachment.name ?? "image", result.attachment.id),
+                  );
+                  previewCount = 1;
+                }
+              } catch (err) {
+                logger.warn({ err, conversationId, fileId: result.attachment.id }, "shared image preview could not be stored");
+              }
+            }
             if (stored && isPreviewableExtension(stored.ext)) {
               if (stored.ext === "pptx") {
                 const sidecar = await loadConverterPreviews({
@@ -2963,6 +2992,51 @@ export async function executeChatTurn(
               ...(deckSidecar ? { deckSidecar } : {}),
             };
           },
+          // Craft app previews (admin-only beta): the images a Craft tool
+          // returned, published like a browser screenshot (visible card +
+          // hidden slide), then `craft_preview` so the side panel can follow.
+          // Supplied on the SAME interactive own-avatar turns as share links —
+          // its presence is part of runPlan's Craft gate.
+          ...(shareLinkTurn
+            ? {
+                onCraftPreview: async (requestData: CraftPreviewRequest): Promise<CraftPreviewResult> => {
+                  const published: MessageAttachment[] = [];
+                  let skipped = 0;
+                  for (const image of requestData.images) {
+                    if (
+                      sharedCraftPreviewCount >= MAX_CRAFT_PREVIEWS_PER_MESSAGE ||
+                      store.conversationOwner(conversationId) !== ownerUserId
+                    ) {
+                      skipped += 1;
+                      continue;
+                    }
+                    const result = publishCraftPreview(
+                      config,
+                      conversationId,
+                      image.buffer,
+                      craftAppById(requestData.app).labelKo,
+                    );
+                    if ("error" in result) {
+                      skipped += 1;
+                      continue;
+                    }
+                    sharedCraftPreviewCount += 1;
+                    result.file.anchor = requestData.anchor;
+                    for (const attachment of [result.file, result.slide]) {
+                      shownAttachments.push(attachment);
+                      emitRunEvent(runId, "file", { runId, attachment });
+                    }
+                    emitRunEvent(runId, "craft_preview", {
+                      runId,
+                      app: requestData.app,
+                      attachmentId: result.file.id,
+                    });
+                    published.push(result.file, result.slide);
+                  }
+                  return { published, skipped };
+                },
+              }
+            : {}),
           // create_share_link: a login-required link to one PPTX card, made
           // (or reused) for the owner who asked for it in THIS turn. Absent =
           // runPlan never registers the tool (see shareLinkTurn above).
@@ -3669,6 +3743,8 @@ export function createChatRouter({
       // …and the server-written copies in their scratch workspaces (staged
       // attachments, capture/Confluence files), resolved across avatar trees.
       deleteConversationWorkspaceCopies(config, deletedIds);
+      // …and their Craft sessions on the craft-runner (best effort, retried).
+      purgeCraftSessions(config, deletedIds);
       res.json({
         ok: true,
         deleted: deletedIds.length,
@@ -3698,6 +3774,7 @@ export function createChatRouter({
       deleteConversationImages(config, req.params.id);
       deleteConversationFiles(config, req.params.id);
       deleteConversationWorkspaceCopies(config, [req.params.id]);
+      purgeCraftSessions(config, [req.params.id]);
       res.json({ ok: true });
     },
   );
@@ -3756,6 +3833,11 @@ export function createChatRouter({
         attachmentContentDisposition(downloadName, `file.${resolved.ext}`),
       );
       res.setHeader("X-Content-Type-Options", "nosniff");
+      // An SVG (a Craft result) can carry script: always a download, and
+      // sandboxed with no fetches even if something renders it directly.
+      if (resolved.ext === "svg") {
+        res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      }
       res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
       res.sendFile(resolved.path);
     },

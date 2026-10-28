@@ -10,6 +10,7 @@ import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
+import { startCraftRunnerProbe } from "./craftRunner.js";
 import {
   deckToolchainLogFields,
   probeDeckRendering,
@@ -42,6 +43,10 @@ if (deckToolchain.selftest === "drift") {
     "deck converter golden drift recorded at image build (README.md#deck-converter-golden-drift)",
   );
 }
+// Craft apps (admin-only beta): probe the craft-runner's health once now and
+// keep re-probing in the background while it is unreachable (it may start
+// after Noah). Memoized for runs and GET /api/me; a no-op when not configured.
+const stopCraftRunnerProbe = startCraftRunnerProbe(services.config);
 const app = createApp(services);
 
 const { server, protocol } = createAppServer(app, services.config);
@@ -82,6 +87,7 @@ function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
   stopScheduler();
   stopAvatarTaskDispatcher();
+  stopCraftRunnerProbe();
   // Abort in-flight chat runs so their cancel path persists the streamed partial
   // and ends the SSE responses (otherwise open streams would block server.close
   // until the timeout and the watched turn would be lost).

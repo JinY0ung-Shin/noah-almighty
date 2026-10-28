@@ -1,0 +1,8 @@
+# Build context for craft-runner/Dockerfile is the repo root (shared apt mirror /
+# corporate CA files under docker/). BuildKit reads THIS file instead of the root
+# .dockerignore for this Dockerfile, so the runner image sees only what it COPYs.
+**
+!docker/apt_mirror_sources.sh
+!docker/*.crt
+!docker/*.crt.example
+!craft-runner/src/

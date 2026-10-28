@@ -32,3 +32,6 @@ scripts/openxml-validator/obj/
 # the host checkout), so neither belongs inside the image.
 scripts/deck-docker-smoke.sh
 scripts/openxml-validator/
+
+# craft-runner sidecar is its own image (docker-compose service craft-runner)
+craft-runner/

@@ -27,7 +27,9 @@ import {
   SDK_TOOL_LABELS,
   mcpToolInputSummary,
 } from "../../../shared/sdkToolPresentation";
-import { DEFAULT_MCP_TOOL_GROUPS } from "../../../shared/mcpToolGroups";
+import { cardSlideAttachments } from "../../../shared/shareLinks";
+import { DEFAULT_MCP_TOOL_GROUPS, withoutDefaultOffMcpToolGroups } from "../../../shared/mcpToolGroups";
+import { craftAppLabelKo } from "./craftApps";
 import {
   hasRows,
   rowSegment,
@@ -175,8 +177,10 @@ function makePane(
       avatar.runtime === "external"
         ? undefined
         : (readState().user?.effortDefault ?? undefined),
+    // Default-off groups (the Craft apps) never ride a remembered default into
+    // a new conversation; only an explicit pick in THAT conversation adds one.
     mcpToolGroups: readState().user?.mcpToolGroupsDefault
-      ? [...readState().user!.mcpToolGroupsDefault!]
+      ? withoutDefaultOffMcpToolGroups(readState().user!.mcpToolGroupsDefault!)
       : [...DEFAULT_MCP_TOOL_GROUPS],
     canvases,
     fileTabs: [],
@@ -1851,6 +1855,10 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         setStatus(paneId, data.attachment.kind === "file" ? "파일을 공유했습니다." : "이미지를 표시했습니다.", true);
       }
       return;
+    case "craft_preview":
+      if (typeof data?.attachmentId === "string" && typeof data?.app === "string")
+        handleCraftPreview(paneId, data.app, data.attachmentId, frame.id);
+      return;
     case "plan":
       // Plan mode. EnterPlanMode emits a `planning` signal with no plan yet — show a
       // "writing plan…" placeholder so the (tool-row-suppressed) planning phase isn't
@@ -3104,6 +3112,69 @@ export function openFileTab(
     pane.sideFollow = false;
     pane.sideExpand = true;
   });
+}
+
+/**
+ * A Craft app (PhotoCraft etc.) rendered a preview: the server already sent
+ * the `file` frames for its card + hidden slide; this shows that card in the
+ * side panel under the app's Korean name. It follows the drawio auto-open
+ * rules — single-pane only, a replayed frame never re-opens or re-marks, and
+ * `revealSideTab` decides between taking the panel (following) and a dot (the
+ * viewer picked a tab). ONE live tab per app: the next preview replaces the
+ * app's previous auto-opened tab in place (a card the viewer opened stays).
+ * After a reload these are ordinary file cards; nothing here is persisted.
+ */
+function handleCraftPreview(
+  paneId: string,
+  app: string,
+  attachmentId: string,
+  frameId: string,
+): void {
+  const label = craftAppLabelKo(app);
+  let shown = false;
+  updateState((state) => {
+    const pane = state.chatPanes.find((item) => item.id === paneId);
+    if (!pane) return;
+    const fresh = freshSideFrame(pane, pane.liveRunId, frameId);
+    if (!fresh || state.chatPanes.length !== 1) return;
+    const pool = [
+      ...(pane.liveAttachments ?? []),
+      ...(pane.messages ?? []).flatMap((message) => message.attachments ?? []),
+    ];
+    const card = pool.find((att) => att.id === attachmentId && !att.hidden);
+    if (!card) return;
+    const name = card.name || "미리보기";
+    const tab = {
+      attachment: card,
+      slides: cardSlideAttachments(pool, card.id),
+      craftApp: app,
+      label: name.includes(label) ? name : `${label} · ${name}`,
+    };
+    const current = resolveSideTab(pane);
+    const tabs = pane.fileTabs ?? [];
+    const previous = tabs.find((item) => item.craftApp === app && item.attachment.id !== card.id);
+    if (tabs.some((item) => item.attachment.id === card.id)) {
+      pane.fileTabs = tabs.map((item) => (item.attachment.id === card.id ? tab : item));
+    } else if (previous) {
+      // Same slot, new id: carry the selection and the dot over to it.
+      const oldRef: SideTabRef = { kind: "file", id: previous.attachment.id };
+      pane.fileTabs = tabs.map((item) => (item === previous ? tab : item));
+      if (sameTab(pane.sideTab, oldRef)) pane.sideTab = { kind: "file", id: card.id };
+      dropUnseen(pane, oldRef);
+    } else {
+      pane.fileTabs = [...tabs, tab];
+    }
+    const wasShown = current && previous && sameTab(current, { kind: "file", id: previous.attachment.id });
+    shown = revealSideTab(
+      pane,
+      { kind: "file", id: card.id },
+      wasShown ? { kind: "file", id: card.id } : current,
+      false,
+    );
+    // A preview is meant to be SEEN, like a live .drawio: out of the collapsed strip.
+    if (shown) pane.sideExpand = true;
+  });
+  if (shown) setStatus(paneId, `${label} 미리보기를 표시했습니다.`, true);
 }
 
 /** Close a file's side-panel tab (its card reopens it); the tab beside it shows instead. */

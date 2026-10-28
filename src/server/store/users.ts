@@ -6,6 +6,7 @@ import { CURRENT_RELEASE_ID } from "../releaseNotes.js";
 import {
   type McpToolGroupId,
   normalizeMcpToolGroups,
+  withoutDefaultOffMcpToolGroups,
 } from "../../shared/mcpToolGroups.js";
 import type { AvatarVisibility, User } from "../types.js";
 import {
@@ -61,7 +62,9 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         effortDefault: row.effort_default?.trim() || null,
         mcpToolGroupsDefault: (() => {
           const parsed = parseNameList(row.mcp_tool_groups_default);
-          return parsed ? normalizeMcpToolGroups(parsed) : null;
+          // Default-off groups (the Craft apps) never seed a new conversation,
+          // whatever an older row holds.
+          return parsed ? withoutDefaultOffMcpToolGroups(normalizeMcpToolGroups(parsed)) : null;
         })(),
         // Effective system-admin tool policy (intersection across the user's
         // policy-bearing groups; null = unrestricted). Display state for the
@@ -405,7 +408,9 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       const mcp =
         patch.mcpToolGroups !== undefined
           ? patch.mcpToolGroups
-            ? JSON.stringify(normalizeMcpToolGroups(patch.mcpToolGroups))
+            ? // A remembered default never carries a default-off group: picking
+              // one is a per-conversation choice, not a new default.
+              JSON.stringify(withoutDefaultOffMcpToolGroups(normalizeMcpToolGroups(patch.mcpToolGroups)))
             : null
           : row.mcp_tool_groups_default;
       this.db

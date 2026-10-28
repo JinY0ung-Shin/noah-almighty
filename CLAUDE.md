@@ -205,6 +205,19 @@ These are the invariants the project is built around. New work should reinforce 
   (third-party servers cannot self-gate under the `mcp__` auto-allow): a slotted server mounts only on elevated,
   non-group-agent, non-consultation runs with every slot bound, else it sits the run out and BOTH metacognition
   surfaces say why. Mechanics → `docs/architecture/secrets-ssh.md`.
+- **Craft apps (third-party CLI editors) run in a NETWORK-LESS sidecar, one uid per conversation — the container is the
+  boundary, the app's own `--automation-*-root` confinement is only a backstop.** `craft-runner/` (zero-dep Node, compose
+  profile `craft`, `network_mode: none`, read-only, caps reduced) serves each app's stdio MCP over unix sockets on the
+  `craft-exchange` volume; Noah registers `scripts/craft-mcp-relay.mjs` per app on a one-shot 0600 handoff, mirrors
+  workspace inputs → `inbox/<sid>/` and `outbox/<sid>/` → workspace `craft/out/` (additive), and grants/revokes a per-RUN
+  token. Both sockets use HMAC MUTUAL auth — neither the control secret nor a run token ever crosses in plaintext. Gate
+  (user decision 2026-10-28): admin toggle `craft_apps_enabled` + run owner is a SYSTEM ADMIN + interactive own-avatar
+  chat (never headless/externalTaskApi/group/consultation/colleague) + the app's DEFAULT-OFF `craft_*` tool group picked;
+  both metacognition surfaces say which and why. **"Admin-only" is an EXPOSURE gate, not a security boundary**: every
+  agent Bash runs as Noah's uid 1000 and can reach the exchange volume and Noah's own env (pre-existing posture, #71) —
+  fix that before opening Craft to non-admins. A new app = a runner registry entry + a SOURCE security review (deny list,
+  clamps, self-test); apps without folder confinement (LightCraft, FilmCraft, …) are not eligible. **A new
+  conversation-deleting path calls `purgeCraftSessions`.** Mechanics → `docs/architecture/craft-apps.md`.
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
   route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode or

@@ -7,6 +7,7 @@
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
   import { api } from "../lib/api";
+  import { craftAppLabelKo, refreshCraftApps } from "../lib/craftApps";
   import { confirmAction } from "../lib/confirm";
   import { loadAdminGroups, loadAdminOverview } from "../lib/loaders";
   import { goView } from "../lib/nav";
@@ -36,6 +37,8 @@
   let serverAgentsBusy = false;
   let serverAgentsConfirming = false;
   let serverAgentsError = "";
+  let craftAppsBusy = false;
+  let craftAppsError = "";
   let tokenError = "";
   let modelError = "";
   let signupError = "";
@@ -57,6 +60,7 @@
   const modelStatusId = "admin-model-status";
   const hexStatusId = "admin-hex-policy-status";
   const serverAgentsStatusId = "admin-server-agents-status";
+  const craftAppsStatusId = "admin-craft-apps-status";
   const SERVER_AGENTS_WARNING =
     "서버를 등록한 사용자는 자기 서버에서 이 배포의 모델 인증정보(API 키 또는 구독 토큰)를 읽을 수 있습니다. 신뢰하는 사용자만 있는 환경에서만 켜세요.";
   const toolSkillStatusId = "admin-tool-skill-status";
@@ -96,7 +100,11 @@
     { id: "closed" as SignupMode, label: "차단", desc: "신규 가입을 받지 않습니다." },
   ];
 
-  onMount(load);
+  onMount(() => {
+    void load();
+    // The Craft 앱 card shows runner health from /api/me's craftApps.
+    void refreshCraftApps(() => api("/api/me"));
+  });
 
   // ---- derived ----
   // loadAdminOverview stores the raw GET /api/admin/system response, which is
@@ -145,6 +153,8 @@
     set_model_vision_policy: "모델 비전 정책 변경",
     set_hex_ssh_policy: "hex-ssh 도구 정책 변경",
     set_server_agents_enabled: "서버 에이전트 기능 설정",
+    set_craft_apps_enabled: "Craft 앱 기능 설정",
+    craft_tool: "Craft 앱 도구 실행",
     set_tool_skill_policy: "도구·스킬 정책 변경",
     set_egress_policy: "외부 통신 차단 정책 적용",
     egress_policy_failed: "외부 통신 차단 정책 적용 실패",
@@ -247,6 +257,20 @@
       : serverAgentsEnabled
         ? "켜짐 — 사용자가 등록한 서버에서 점검·위임이 동작합니다."
         : "꺼짐 — 서버 등록과 호스트 신뢰만 할 수 있고 점검·위임은 동작하지 않습니다.";
+  $: craftAppsEnabled = sys.craftAppsEnabled === true;
+  $: craftAppsStatus = craftAppsBusy
+    ? "저장 중…"
+    : craftAppsError
+      ? `저장 실패: ${craftAppsError}`
+      : craftAppsEnabled
+        ? "켜져 있습니다. 시스템 관리자가 채팅의 MCP 도구에서 Craft 앱을 고를 수 있습니다."
+        : "꺼져 있습니다. 아무도 Craft 앱 도구를 쓸 수 없습니다.";
+  // Runner health per app (`GET /api/me` craftApps) so an ON switch that still
+  // offers nothing in the composer says why. Unknown until the first read.
+  const CRAFT_STATUS_LABELS = { ready: "준비됨", failed: "시작 실패", unavailable: "연결 안 됨" } as const;
+  $: craftAppsHealth = ($appState.craftApps?.apps ?? [])
+    .map((app) => `${craftAppLabelKo(app.id)} ${CRAFT_STATUS_LABELS[app.status]}`)
+    .join(" · ");
   $: hexTools = Array.isArray(sys.hexSshTools) ? sys.hexSshTools : [];
   $: hexSavedKey = hexPolicyKeyFromSaved(sys.hexSshToolPolicy || {}, hexTools);
   $: hexCurrentKey = hexPolicyKeyFromMatrix(hexPolicy, hexTools);
@@ -539,6 +563,33 @@
   }
 
   // ---- system: 서버 에이전트 switch ----
+  // Craft 앱 switch (admin-only beta). No acknowledgement step: unlike server
+  // agents it hands nothing to a user-controlled host — the apps run in the
+  // deployment's own network-less craft-runner, for system admins only.
+  async function saveCraftApps(enabled: boolean) {
+    if (craftAppsBusy) return;
+    craftAppsBusy = true;
+    craftAppsError = "";
+    try {
+      await api("/api/admin/craft-apps", { method: "PUT", body: JSON.stringify({ enabled }) });
+    } catch (err) {
+      craftAppsBusy = false;
+      craftAppsError = (err as Error).message;
+      notify(`저장 실패: ${craftAppsError}`);
+      return;
+    }
+    try {
+      await loadAdminOverview();
+      // The composer's craft groups read /api/me's craftApps — refresh it too.
+      await refreshCraftApps(() => api("/api/me"));
+      notify(enabled ? "Craft 앱 기능을 켰습니다." : "Craft 앱 기능을 껐습니다.", "ok");
+    } catch (err) {
+      notify(`저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
+    } finally {
+      craftAppsBusy = false;
+    }
+  }
+
   async function saveServerAgents(enabled: boolean) {
     if (serverAgentsBusy) return;
     serverAgentsBusy = true;
@@ -1077,6 +1128,27 @@
                     <button class="primary" type="button" disabled={serverAgentsBusy} aria-describedby={serverAgentsStatusId} on:click={() => { serverAgentsError = ""; serverAgentsConfirming = true; }}>켜기</button>
                   {/if}
                 </div>
+              {/if}
+            </section>
+
+            <!-- Craft 앱 switch (admin-only beta) -->
+            <section class="settings-card">
+              <div class="panel-section-head">
+                <div>
+                  <h3>Craft 앱 (관리자 전용 베타)</h3>
+                  <p class="muted">아바타가 포토크래프트 같은 Craft 앱으로 이미지를 편집합니다. 서버에 craft-runner 서비스가 있어야 하고, 시스템 관리자의 대화형 채팅에서만 쓸 수 있습니다. 기본값은 꺼짐입니다.</p>
+                </div>
+              </div>
+              <div class="settings-save-row">
+                <span id={craftAppsStatusId} class="settings-save-status" class:pending={craftAppsBusy} class:invalid={Boolean(craftAppsError)} role="status" aria-live="polite">{craftAppsStatus}</span>
+                {#if craftAppsEnabled}
+                  <button class="btn" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 끄기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(false)}>{craftAppsBusy ? "저장 중…" : "끄기"}</button>
+                {:else}
+                  <button class="primary" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 켜기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(true)}>{craftAppsBusy ? "저장 중…" : "켜기"}</button>
+                {/if}
+              </div>
+              {#if craftAppsEnabled && craftAppsHealth}
+                <p class="muted">앱 상태: {craftAppsHealth}</p>
               {/if}
             </section>
 

@@ -17,11 +17,13 @@ import type {
   RoutineSchedulePatch,
   ServerAgentsUnavailableReason,
   SharedMcpRunState,
+  CraftRunState,
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { DEFAULT_MODEL_TIER } from "../modelTiers.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 import {
+  craftAppsLines,
   gettingStartedGaps,
   rewindTurnState,
   serverAgentsUnavailableText,
@@ -244,6 +246,13 @@ export interface SystemToolsContext {
    * callers) → the line is omitted.
    */
   sharedMcpServers?: SharedMcpRunState[];
+  /**
+   * runPlan's Craft apps state (`prepareCraftRun`) — the SAME object stamped on
+   * `AgentRequest.craftApps`, read at call time (a failed grant after this ctx
+   * was built flips it in place). Undefined → no Craft line (not an admin's
+   * owner run and no Craft group selected).
+   */
+  craftApps?: CraftRunState;
 }
 
 /** MCP server name; tools surface to the model as `mcp__system__<tool>`. */
@@ -944,6 +953,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           }`,
           ...(await serverAgentLines(store, ctx)),
           ...sharedMcpLines(ctx),
+          ...(ctx.craftApps
+            ? craftAppsLines(ctx.craftApps, "describe").map((line, index) => (index === 0 ? `- ${line}` : `  ${line}`))
+            : []),
           `- Groups: ${groups.length ? groups.map((g) => `${g.name}(${g.role === "admin" ? "admin" : "member"}, shared repository ${g.knowledgeRepoConfigured ? "connected" : "none"}${g.avatarSharing ? "" : ", avatar sharing off"})`).join(", ") : "(none)"} — members of the same group automatically trust each other mutually (this is the ONLY source of elevated access; manage trust by managing group membership).${groups.some((g) => !g.avatarSharing) ? ' Groups marked "avatar sharing off" are knowledge-sharing-only: their co-membership grants neither avatar visibility nor mutual trust.' : ""}`,
           `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (groups.some((g) => g.avatarSharing) ? "available — you can ask a same-group teammate's avatar one question on the owner's behalf; it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : groups.length > 0 ? "enabled, but none of the owner's groups share avatars (avatar sharing off), so no teammate avatar is reachable" : "enabled, but the owner belongs to no groups, so no teammate avatar is reachable (consultation requires shared group membership)") : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Skill exchange (mcp__skill_exchange__*): ${enabledMcpToolGroups.includes("avatars") ? `${state.learnableSkillCount} skill(s) shared by teammates are learnable (find_shared_skills → learn_skill copies one into the knowledge repository${state.knowledgeRepoConfigured ? "" : " — connect a knowledge repository first"}); this avatar shares ${state.sharedSkillCount} of its own, learned by teammates ${state.sharedSkillLearnTotal} time(s) so far (share_skill/unshare_skill, also manageable in the '스킬 배우기' tab). A learned skill loads from the NEXT conversation` : "OFF for this conversation (avatars tool group deselected)"}`,

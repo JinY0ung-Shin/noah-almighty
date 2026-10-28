@@ -13,6 +13,7 @@ import logger from "../logger.js";
 import { isRecord, asNumber, asString } from "./agentUtils.js";
 import { steerToSdkUserMessage, type SteerChannel } from "./steerChannel.js";
 import { deckGuidanceFlags } from "../deckRender.js";
+import { createCraftToolTracker, handleCraftCompletion } from "./craftTools.js";
 import {
   buildSystemPromptAppend,
   buildUserPrompt,
@@ -286,6 +287,8 @@ export async function runClaudeAgent(
     serverAgentCheckActive,
     serverAgentsUnavailable,
     sharedMcpStates,
+    craftState,
+    craftSession,
     writeMcpHandoffFiles,
     removeMcpHandoffFiles,
   } = plan;
@@ -440,7 +443,16 @@ export async function runClaudeAgent(
     // Every viewer class hears which servers are mounted; only the owner's
     // branches name missing secrets (the prompt section gates that).
     sharedMcpServers: sharedMcpStates,
+    // Craft apps: runPlan's prepareCraftRun state (after the grant), the SAME
+    // object describe_system reads. Owner-driven admin runs only.
+    craftApps: craftState,
   };
+
+  // Craft calls of this run (every attempt): audited, outputs mirrored into
+  // craft/out/, images published as previews. Tracks only the ACTIVE apps.
+  const craftTracker = createCraftToolTracker(
+    craftSession ? (craftState?.apps ?? []).filter((app) => app.active).map((app) => app.id) : [],
+  );
 
   const setSystemPrompt = () => {
     options.systemPrompt = {
@@ -669,6 +681,17 @@ export async function runClaudeAgent(
             foldPendingText(textFold, assistantChunks, deltaChunks, events, false);
           }
           const dispatched = dispatchSdkMessage(message, events, state);
+          // Awaited, so craft/out/ already holds what the call saved before
+          // the loop reads on (share_file re-pulls anyway — it can run first).
+          for (const completion of craftTracker(message)) {
+            await handleCraftCompletion(completion, {
+              store,
+              owner: { id: request.avatar.id, displayName: owner.displayName },
+              session: craftSession,
+              events,
+              anchor: assistantChunks.slice(textFold.chunkIndex).join("\n\n").length,
+            });
+          }
           if (message.type === "system" && message.subtype === "init") {
             attemptSessionId = asString(message.session_id);
           }
@@ -927,6 +950,9 @@ export async function runClaudeAgent(
     steers?.close();
     // The CLI is gone: drop any MCP handoff file it never consumed.
     removeMcpHandoffFiles();
+    // Craft: revoke this run's token (kills its app processes) and pull the
+    // final outputs into craft/out/. Never throws.
+    await craftSession?.release();
   }
 
   // The answer is what the model STREAMED, not the SDK's terminal `result`

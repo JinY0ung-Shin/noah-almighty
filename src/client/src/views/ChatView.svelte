@@ -60,10 +60,12 @@
     MCP_TOOL_GROUPS,
     effectiveMcpToolGroups,
     isRequiredMcpToolGroup,
+    withoutDefaultOffMcpToolGroups,
     type McpToolGroupId,
   } from "../../../shared/mcpToolGroups";
   import { TOUR_SCENARIOS, type TourScenario } from "../../../shared/tourScenarios";
   import { isPptxCard } from "../../../shared/shareLinks";
+  import { hiddenCraftToolGroups, isSystemAdmin, refreshCraftApps } from "../lib/craftApps";
 
   let splitAvatarId = "";
   let splitAddBusy = false;
@@ -316,6 +318,15 @@
     return effectiveMcpToolGroups(selected);
   }
 
+  // Craft-app groups (`craft_*`, admin-only beta) the picker must not offer:
+  // all of them unless the viewer is a system admin, the feature is on and that
+  // app's runner reports `ready` (`GET /api/me` craftApps, lib/craftApps). A
+  // hidden group is never shown, counted or toggled, but a saved selection keeps
+  // it (the server gates the run). Top-level `$:` for the same reason as the
+  // admin-blocked set below; helpers take it as a PARAMETER.
+  $: hiddenMcpToolGroupSet = hiddenCraftToolGroups($appState.craftApps, $appState.user);
+  $: visibleMcpToolGroups = MCP_TOOL_GROUPS.filter((group) => !hiddenMcpToolGroupSet.has(group.id));
+
   // Admin per-group tool policy from /api/me (`user.allowedMcpToolGroups`, the
   // effective intersection): blocked groups render disabled in the picker; the
   // server clamps every run regardless. A top-level `$:` derivation, NOT a
@@ -463,12 +474,17 @@
     goView("settings", "access");
   }
 
-  function mcpToolsLabel(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
-    const effective = selectedMcpToolGroups(item).filter((id) => !adminBlocked.has(id));
-    return `도구 ${effective.length}/${MCP_TOOL_GROUPS.length}`;
+  /** "N/M" over the groups the picker SHOWS — a hidden Craft group counts on neither side. */
+  function mcpToolsCount(item: ChatPane, adminBlocked: Set<McpToolGroupId>, hidden: Set<McpToolGroupId>): string {
+    const effective = selectedMcpToolGroups(item).filter((id) => !adminBlocked.has(id) && !hidden.has(id));
+    return `${effective.length}/${MCP_TOOL_GROUPS.filter((group) => !hidden.has(group.id)).length}`;
   }
 
-  function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
+  function mcpToolsLabel(item: ChatPane, adminBlocked: Set<McpToolGroupId>, hidden: Set<McpToolGroupId>): string {
+    return `도구 ${mcpToolsCount(item, adminBlocked, hidden)}`;
+  }
+
+  function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>, hidden: Set<McpToolGroupId>): string {
     if (isExternalPane(item)) {
       return (
         item.modelTier ||
@@ -480,7 +496,7 @@
     if (hasEffortPicker()) parts.push(`강도 ${effortLabel(item)}`);
     const groupLabel = groupKnowledgeLabel(item);
     if (groupLabel) parts.push(groupLabel);
-    parts.push(mcpToolsLabel(item, adminBlocked));
+    parts.push(mcpToolsLabel(item, adminBlocked, hidden));
     return parts.join(" · ");
   }
 
@@ -531,6 +547,9 @@
     const closing = mcpToolsOpenPaneId === item.id;
     mcpToolsOpenPaneId = closing ? "" : item.id;
     if (!closing && gkOpenPaneId === item.id) gkOpenPaneId = "";
+    // The Craft runner may have come up (or failed) since boot, and a login
+    // from the auth screen never read craftApps: re-read it for admins.
+    if (!closing && isSystemAdmin($appState.user)) void refreshCraftApps(() => api("/api/me"));
   }
 
   function toggleGroupKnowledgePanel(item: ChatPane) {
@@ -1185,7 +1204,7 @@
 
   function setMcpToolGroup(item: ChatPane, groupId: McpToolGroupId, on: boolean) {
     // Admin-blocked groups are disabled in the picker; ignore any stray toggle.
-    if (isRequiredMcpToolGroup(groupId) || adminBlockedMcpToolGroupSet.has(groupId)) return;
+    if (isRequiredMcpToolGroup(groupId) || adminBlockedMcpToolGroupSet.has(groupId) || hiddenMcpToolGroupSet.has(groupId)) return;
     const current = new Set(selectedMcpToolGroups(item));
     if (on) current.add(groupId);
     else current.delete(groupId);
@@ -1193,11 +1212,13 @@
     updateState((state) => {
       const target = state.chatPanes.find((p) => p.id === item.id);
       if (target) target.mcpToolGroups = next;
-      if (state.user) state.user.mcpToolGroupsDefault = [...next];
+      if (state.user) state.user.mcpToolGroupsDefault = withoutDefaultOffMcpToolGroups(next);
     });
     const label = MCP_TOOL_GROUPS.find((group) => group.id === groupId)?.labelKo ?? groupId;
     notify(`"${label}" MCP 도구를 ${on ? "사용" : "사용 해제"}했습니다. 다음 메시지부터 적용됩니다.`, "info");
-    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ mcpToolGroups: next }) }).catch((err) =>
+    // The remembered default never carries a Craft group (default-off per
+    // conversation); THIS conversation's pick rides the next chat turn.
+    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ mcpToolGroups: withoutDefaultOffMcpToolGroups(next) }) }).catch((err) =>
       notify(`기본 MCP 도구 설정을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
     );
   }
@@ -1862,7 +1883,7 @@
                 >
                   <Icon name="gear" size={16} />
                   <span class="composer-settings-label">설정</span>
-                  <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet)}</span>
+                  <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet, hiddenMcpToolGroupSet)}</span>
                 </button>
                 <span id={paneDomId("composer-controls", item.id)} class="composer-controls" class:open={composerSettingsOpenPaneId === item.id}>
                   {#if isExternalPane(item)}
@@ -1934,7 +1955,7 @@
                     aria-controls={paneDomId("composer-tools-panel", item.id)}
                     title="이 대화에서 다음 메시지부터 사용할 MCP 도구 묶음을 고릅니다"
                     on:click={() => toggleMcpToolsPanel(item)}
-                  >MCP 도구 {selectedMcpToolGroups(item).filter((id) => !adminBlockedMcpToolGroupSet.has(id)).length}/{MCP_TOOL_GROUPS.length}</button>
+                  >MCP 도구 {mcpToolsCount(item, adminBlockedMcpToolGroupSet, hiddenMcpToolGroupSet)}</button>
                   {/if}
                 </span>
               {/if}
@@ -1994,7 +2015,7 @@
           use:clickOutside={{ onOutside: () => (mcpToolsOpenPaneId = ""), ignore: ".composer-tools-btn" }}
         >
           <div class="composer-tools-title">이 대화에서 사용할 MCP 도구</div>
-          {#each MCP_TOOL_GROUPS as group (group.id)}
+          {#each visibleMcpToolGroups as group (group.id)}
             {@const adminBlocked = adminBlockedMcpToolGroupSet.has(group.id)}
             <label class="composer-tools-item">
               <input

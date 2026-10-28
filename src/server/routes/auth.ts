@@ -10,6 +10,7 @@ import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_s
 import { DEFAULT_MODEL_TIER, MODEL_TIERS } from "../modelTiers.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
+import { craftAppsClientStatus } from "../craftRunner.js";
 
 // ---- Auth ------------------------------------------------------------
 export function createAuthRouter({ config, store }: RouterDeps): Router {
@@ -193,6 +194,13 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
 
   router.get("/api/me", (req, res) => {
     const user = store.getUserBySessionToken(sessionTokenFromRequest(req));
+    // Craft apps (admin-only beta): system admins also hear what the
+    // deployment can serve, so the composer shows a Craft tool group only
+    // when it is usable. Everyone else's payload is unchanged.
+    if (user && store.isAdmin(user.id)) {
+      res.json({ user, craftApps: craftAppsClientStatus(config, store.isCraftAppsEnabled()) });
+      return;
+    }
     res.json({ user });
   });
 

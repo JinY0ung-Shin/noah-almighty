@@ -4,6 +4,7 @@ import { normalizeGithubHost } from "../marketplace.js";
 import { kstDateTimeString } from "../routineSchedule.js";
 import {
   DIRECT_MESSAGE_STATE,
+  craftAppsLines,
   gettingStartedGaps,
   rewindTurnState,
   serverAgentsUnavailableText,
@@ -13,6 +14,7 @@ import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
   effectiveMcpToolGroups,
+  isDefaultOffMcpToolGroup,
   MCP_TOOL_GROUPS,
   type McpToolGroupId,
 } from "../../shared/mcpToolGroups.js";
@@ -48,8 +50,13 @@ function disabledMcpToolGroupsSection(request: AgentRequest): string | null {
   // excluded here so the user-deselected note below can't (mis)attribute an
   // admin block to the user's own composer choice.
   const adminBlocked = request.adminBlockedMcpToolGroups ?? [];
+  // Default-off groups (the Craft apps) are not a user's "disabled" choice —
+  // they are off unless picked, and their own self-state section covers them.
   const userDisabled = MCP_TOOL_GROUPS.filter(
-    (group) => !enabled.includes(group.id) && !adminBlocked.includes(group.id),
+    (group) =>
+      !enabled.includes(group.id) &&
+      !adminBlocked.includes(group.id) &&
+      !isDefaultOffMcpToolGroup(group.id),
   );
   if (userDisabled.length === 0) {
     return null;
@@ -1010,6 +1017,13 @@ export function buildSystemPromptAppend(
   const sharedMcpBlock = sharedMcpSection(request);
   if (sharedMcpBlock) {
     lines.push(sharedMcpBlock);
+  }
+  // Craft apps (admin-only beta): stamped only on owner-driven runs of an admin
+  // (or with a Craft group selected) — runPlan's prepareCraftRun, the SAME
+  // state describe_system reports. Short or absent unless an app is active.
+  const craftLines = request.craftApps ? craftAppsLines(request.craftApps, "prompt") : [];
+  if (craftLines.length > 0) {
+    lines.push(craftLines.join("\n"));
   }
   // Mid-turn user messages (steers). ONE standing line for every viewer class
   // of a run that carries a live steer channel — the person can talk while the

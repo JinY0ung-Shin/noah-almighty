@@ -46,7 +46,7 @@ import {
 import { summarizeGroupAgentState } from "../src/server/agent/ownerState.js";
 import { chatImagesDir } from "../src/server/chatImages.js";
 import { chatFilesDir } from "../src/server/chatFiles.js";
-import { MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
+import { MCP_TOOL_GROUPS, isDefaultOffMcpToolGroup } from "../src/shared/mcpToolGroups.js";
 import { buildGroupAgentRepoTools, GROUP_AGENT_REPO_TOOL_NAMES } from "../src/server/agent/groupRepoTools.js";
 import { buildGroupAgentBrainTools } from "../src/server/agent/groupBrainTools.js";
 import {
@@ -362,7 +362,9 @@ describe("deriveAgentToolAccess (group-agent class)", () => {
 });
 
 describe("planMcpToolFamilies (run-kind tool containment)", () => {
-  const ALL = MCP_TOOL_GROUPS.map((g) => g.id);
+  // Every DEFAULT group (the default-off Craft groups are gated by their own
+  // runner-aware plan — tests/agent-craft-apps.test.ts).
+  const ALL = MCP_TOOL_GROUPS.map((g) => g.id).filter((id) => !isDefaultOffMcpToolGroup(id));
 
   it("personal run: registered mirrors the selection, nothing run-kind-blocked", () => {
     const plan = planMcpToolFamilies(ALL, false);
