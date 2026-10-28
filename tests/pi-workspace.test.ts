@@ -28,7 +28,7 @@ import { buildSkillsTools } from "../src/server/agent/skillsTools.js";
 import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopySandboxPath } from "../src/server/agent/pi/piRepoCopy.js";
 import { buildGitRepoTools, GIT_REPO_PI_COMMIT_TOOL_NAME } from "../src/server/agent/gitRepoTools.js";
 import { buildRunCapabilities, stampPromptRequest } from "../src/server/agent/runCapabilities.js";
-import { buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { deckCapabilityLine } from "../src/server/agent/systemTools.js";
 import { piSandboxDeckToolchain } from "../src/server/deckRender.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../src/server/workspace.js";
@@ -431,8 +431,10 @@ describe("run capabilities on pi", () => {
     );
     expect(caps.mcpAllowedTools).toContain("mcp__skills__read");
     expect(caps.piRuntimeFacts?.activeRepoDir).toBe(piRepoCopySandboxPath(on.owner.id, "app"));
-    const prompt = buildSystemPromptAppend(stampPromptRequest(request(on.owner, { activeRepoName: "app" }), caps, on.config, undefined));
-    expect(prompt).toContain(`Your working copy is \`${piRepoCopySandboxPath(on.owner.id, "app")}/\``);
+    const stamped = stampPromptRequest(request(on.owner, { activeRepoName: "app" }), caps, on.config, undefined);
+    // The open repo changes mid-conversation, so it rides the turn input (review L8).
+    expect(buildSystemPromptAppend(stamped)).not.toContain("Your working copy is");
+    expect(buildPiTurnPreamble(stamped)).toContain(`Your working copy is \`${piRepoCopySandboxPath(on.owner.id, "app")}/\``);
     expect(piSandboxDeckToolchain({ defaultPluginsDir: "", pi: undefined }).converter).toBe(false);
   });
 

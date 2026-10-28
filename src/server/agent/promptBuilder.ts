@@ -515,16 +515,27 @@ function shareLinkSection(request: AgentRequest): string | null {
 function todoSection(request: AgentRequest): string | null {
   const state = request.todoState;
   if (!state) return null;
-  const policy =
-    request.headless || request.externalTaskApi
-      ? "This turn is not a live conversation: add or complete items as the instruction asks, without offering, and list what you changed in your result."
-      : "When the owner asks to add or track something (or sends /todo), add it and confirm in one line. For a clear action item the owner owns, offer ONCE at the end of your reply, batched, and add only what they accept — never for ideas, casual mentions or others' tasks, nor again once declined.";
+  const unattendedPolicy =
+    "add or complete items as the instruction asks, without offering, and list what you changed in your result.";
+  const livePolicy =
+    "When the owner asks to add or track something (or sends /todo), add it and confirm in one line. For a clear action item the owner owns, offer ONCE at the end of your reply, batched, and add only what they accept — never for ideas, casual mentions or others' tasks, nor again once declined.";
+  // pi freezes this text for every run kind of the conversation (routine,
+  // task API, live chat), so it states both rules; the turn's input says which applies.
+  const policy = request.piRuntime
+    ? `In a live chat: ${livePolicy} On a turn that is not a live conversation (a routine or a task-API submission — the turn's input says so): ${unattendedPolicy}`
+    : request.headless || request.externalTaskApi
+      ? `This turn is not a live conversation: ${unattendedPolicy}`
+      : livePolicy;
   const section =
     "할 일 (the owner's persistent work to-do list in Noah — the 할 일 tab and the card under the message box): manage it ONLY with `mcp__todo__*`; `TodoWrite`/`TaskCreate` are your private per-run checklist and vanish after this turn. " +
     "Tool results start with today's KST date and the counts, so call `list_todos` for the current state (and before resolving a relative due date). " +
     policy +
     " Check for a near-duplicate before adding. Each item has a status — `todo`, `in_progress`, `done` or `dropped` (the owner decided not to do it); change it with `update_todo` only on the owner's word (they started, finished or are dropping it, or you finished a task they gave you), never on a guess, and mark an abandoned item `dropped` rather than deleting it" +
-    (state.deleteEnabled ? " unless they explicitly ask to delete." : " (`delete_todo` is not available in this run).");
+    (request.piRuntime
+      ? " unless they explicitly ask to delete (`delete_todo` is not available on a task-API turn)."
+      : state.deleteEnabled
+        ? " unless they explicitly ask to delete."
+        : " (`delete_todo` is not available in this run).");
   return state.snapshot ? `${section}\n${todoSnapshotBlock(state.snapshot)}` : section;
 }
 
@@ -664,20 +675,33 @@ function activeRepoSection(request: AgentRequest): string | null {
   if (!name) {
     return null;
   }
-  const piCopy = request.piRuntime?.activeRepoDir;
-  if (piCopy) {
-    // pi (design D1): a sandbox COPY; Noah commits from its working tree.
-    return (
-      `**Working repository**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it. ` +
-      `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
-      "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no network and no git credentials, so never fetch, pull or push from it."
-    );
+  // pi: the open repo changes between turns of one conversation, so its
+  // line rides the turn's input (piActiveRepoTurnLine), never the frozen prompt.
+  if (request.piRuntime) {
+    return null;
   }
   return (
     `**Working repository**: your current working directory IS the local clone of the registered git repository '${name}' (you opened it with \`open_repo\`). ` +
     "Work on its files directly with the native tools — `Read`/`Edit`/`Write`, run tests and `rg`/search, and use local git via Bash for inspection and commit workflow (`git status`/`diff`/`log`/`show`/`rev-parse`/`ls-files`/`grep`/`blame`, plus `git add` and `git commit`). " +
     "Remote/sync operations — `clone`/`fetch`/`pull`/`push` — MUST go through the `mcp__git_repo__*` tools, NOT Bash: your shell has no git credentials. Branch-changing, history-rewriting, or destructive operations such as `reset`/`checkout`/`switch`/`merge`/`rebase`/`commit --amend` are blocked in Bash to protect the working tree. " +
     `After you finish local edits, stage and commit with native git, then persist remotely with \`mcp__git_repo__push\` (name='${name}'). Use \`close_repo\` when done to return to the scratch workspace, which also remains available as an additional writable directory for throwaway files.`
+  );
+}
+
+/**
+ * pi only: the working-repository line of THIS turn (design D1 — a sandbox
+ * COPY; Noah commits from its working tree). Per turn because `open_repo` /
+ * `close_repo` change it mid-conversation while the system prompt is frozen.
+ * Same facts as describe_system's working-repository lines.
+ */
+function piActiveRepoTurnLine(request: AgentRequest): string | null {
+  const name = request.activeRepoName?.trim();
+  const piCopy = request.piRuntime?.activeRepoDir;
+  if (!name || !piCopy || !mcpToolGroupEnabled(request, "git_repo")) return null;
+  return (
+    `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it. ` +
+    `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
+    "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no network and no git credentials, so never fetch, pull or push from it."
   );
 }
 
@@ -829,10 +853,9 @@ function piRelayedMcpSentence(pi: NonNullable<AgentRequest["piRuntime"]>): strin
  * at once. Mirrored by describe_system's pi lines.
  */
 function piAsyncToolsSentence(request: AgentRequest): string {
+  // ask_avatar's background mode depends on the run kind (interactive chats
+  // only), so it rides the turn's input (piRunKindParagraph), not this frozen text.
   return (
-    (request.piRuntime?.asyncAskAvatar
-      ? "`mcp__avatars__ask_avatar` returns at once with a consultation id; the answer arrives as its own message after your current answer (Noah keeps the run open for it), so tell the user whom you asked instead of waiting or polling. "
-      : "") +
     (request.canvasEnabled
       ? "A canvas never waits on this runtime: after showing one with controls, finish your answer — the user's submission arrives as their next message. "
       : "")
@@ -1103,11 +1126,11 @@ export function buildSystemPromptAppend(
   // of a run that carries a live steer channel — the person can talk while the
   // avatar works, so it must expect a late instruction instead of treating it
   // as a stray. Mirrored by describe_system (AgentRequest.midTurnMessages).
-  if (request.midTurnMessages === true) {
+  // On pi the line rides the turn's input (piRunKindParagraph): the prompt is
+  // frozen per conversation and only live-chat turns have a steer channel.
+  if (request.midTurnMessages === true && !request.piRuntime) {
     lines.push(
-      request.piRuntime
-        ? "The user may send additional messages while you are working. On this runtime they are NOT shown to you between tool calls: each one arrives as the NEXT user turn, right after your current answer finishes. When one arrives, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch."
-        : "The user may send additional messages while you are working. They arrive as ordinary user messages between your tool calls (or as the next turn if you have already finished). Read them as they arrive, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch.",
+      "The user may send additional messages while you are working. They arrive as ordinary user messages between your tool calls (or as the next turn if you have already finished). Read them as they arrive, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch.",
     );
   }
   // Turn PROVENANCE of a rewind (edit an earlier message / regenerate the
@@ -1187,7 +1210,7 @@ export function buildSystemPromptAppend(
     if (consultationBrainBlock) {
       lines.push(consultationBrainBlock);
     }
-  } else if (request.headless) {
+  } else if (request.headless && !piOwnerRun(request)) {
     lines.push(
       request.allowHeadlessTools
         ? "This is the **automated execution** of a scheduled routine task. No one is watching the response in real time, so do not ask questions — carry the given task through to completion and report the result."
@@ -1320,8 +1343,8 @@ export function buildSystemPromptAppend(
     lines.push(
       request.piRuntime
         ? // Frozen for the whole conversation on pi, so it cannot name ONE turn's
-          // provenance; an API-submitted turn says so in its own user input.
-          `The person you are talking to is this avatar's **owner**${name ? `, "${name}"` : ""} — except on a turn whose user message says an external system submitted it.`
+          // run kind; each turn's input states it (piRunKindParagraph).
+          `This conversation belongs to this avatar's **owner**${name ? `, "${name}"` : ""}. Its turns can be the owner chatting live, a scheduled routine running unattended, or a task the owner's task API submitted: each turn's input starts with a run-kind note that says which one it is and what that means for questions and scope — follow that note.`
         : request.externalTaskApi
         ? name
           ? `This conversation belongs to this avatar's **owner**, "${name}" — but no person is typing in it right now: THIS turn was submitted on the owner's behalf by an external system.`
@@ -1428,7 +1451,12 @@ export function buildSystemPromptAppend(
     // The owner's unfinished setup + the licence to offer to fix it ONCE. Last
     // in the branch on purpose: every capability it can point at (create_repo,
     // the repo/brain guidance) has already been stated above.
-    const gettingStartedBlock = gettingStartedSection(request);
+    // A routine/task-API first turn on pi freezes the prompt too: the
+    // unprompted setup pitch fits a live chat only, so it is left out there.
+    const gettingStartedBlock =
+      request.piRuntime && (request.headless || request.externalTaskApi)
+        ? null
+        : gettingStartedSection(request);
     if (gettingStartedBlock) {
       lines.push(gettingStartedBlock);
     }
@@ -1585,6 +1613,51 @@ export function buildUserPrompt(
   return lines.join("\n\n");
 }
 
+/**
+ * pi: an OWNER routine (headless with owner tools). Its standing prompt is
+ * the owner branch — frozen once for every run kind of the conversation
+ * (design D2) — and its routine-specific rules ride the turn's input
+ * ({@link piRunKindParagraph}). Consultations and restricted headless runs
+ * never reach pi (`piRuntimeSupports`).
+ */
+function piOwnerRun(request: AgentRequest): boolean {
+  return Boolean(request.piRuntime) && Boolean(request.viewerIsOwner) && Boolean(request.allowHeadlessTools);
+}
+
+/**
+ * pi only: the run-kind statement of THIS turn — what the frozen system
+ * prompt cannot know, because one conversation mixes live chat, routine runs
+ * and task-API submissions (review M2). Agrees with describe_system's origin,
+ * mid-turn-message and long-running-tools lines for the same turn.
+ */
+function piRunKindParagraph(request: AgentRequest): string {
+  const authority =
+    " Where the standing instructions describe tools or permissions that differ on this turn, this note and `mcp__system__describe_system` are authoritative; a tool this turn lacks is refused when called.";
+  if (request.externalTaskApi) {
+    return `Run kind (this turn): an external-system task. ${externalTaskTurnParagraph(request)}${authority}`;
+  }
+  if (request.headless) {
+    return (
+      "Run kind (this turn): the **automated execution** of a scheduled routine task — an UNATTENDED run. No one is watching the response in real time, so do not ask questions — carry the given task through to completion and report the result. " +
+      "It runs with the same tool permissions as the owner's normal conversation; perform the file/remote/repository operations it needs, but since you cannot wait for confirmation questions or permission prompts, keep the scope of your work conservative." +
+      (mcpToolGroupEnabled(request, "system")
+        ? " If there is an important result the user should be told about separately, leave an app notification with `mcp__system__notify_user`."
+        : "") +
+      authority
+    );
+  }
+  return (
+    "Run kind (this turn): interactive chat — a person is on the other side of this conversation." +
+    (request.midTurnMessages === true
+      ? " The user may send additional messages while you are working. On this runtime they are NOT shown to you between tool calls: each one arrives as the NEXT user turn, right after your current answer finishes. When one arrives, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch."
+      : "") +
+    (request.piRuntime?.asyncAskAvatar
+      ? " `mcp__avatars__ask_avatar` returns at once with a consultation id; the answer arrives as its own message after your current answer (Noah keeps the run open for it), so tell the user whom you asked instead of waiting or polling."
+      : "") +
+    authority
+  );
+}
+
 export function buildPrompt(
   request: AgentRequest,
   openRequestCount?: number,
@@ -1595,19 +1668,22 @@ export function buildPrompt(
 /**
  * pi only: the per-turn lines the frozen system prompt cannot carry (design
  * D2) — the current KST date/time (pi fixes its own at session creation), a
- * rewind's provenance, an external-task turn's provenance, and a new session's
- * reason. Prepended to the turn's user input.
+ * rewind's provenance, the turn's RUN KIND (live chat / routine / task API,
+ * with the guidance that depends on it), the open working repo, and a new
+ * session's reason. Prepended to the turn's user input.
  */
 export function buildPiTurnPreamble(
   request: AgentRequest,
   options: { now?: Date; newSessionReason?: "model_changed" | "session_lost" } = {},
 ): string {
   const lines = [`[Current date and time: ${kstDateTimeString(options.now ?? new Date())} KST]`];
+  lines.push(piRunKindParagraph(request));
   if (request.rewind && !request.headless) {
     lines.push(`Conversation rewind (this turn): ${rewindTurnState(request.rewind)}`);
   }
-  if (request.externalTaskApi) {
-    lines.push(externalTaskTurnParagraph(request));
+  const activeRepoLine = piActiveRepoTurnLine(request);
+  if (activeRepoLine) {
+    lines.push(activeRepoLine);
   }
   if (options.newSessionReason) {
     lines.push(

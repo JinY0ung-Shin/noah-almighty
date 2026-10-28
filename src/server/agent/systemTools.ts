@@ -890,7 +890,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // owner-in-conversation matter, and the two surfaces must agree.
           // The task budget reads config directly; the prompt's standing line
           // carries the same sentence from the value runClaudeAgent stamps.
-          ...(ctx.headless
+          // On pi the owner branch is the frozen prompt of EVERY run kind
+          // (a routine included), so the line stays there and here.
+          ...(ctx.headless && !ctx.piRuntime
             ? []
             : [
                 `- External task API: ${state.avatarApiKeyCount} active personal API keys. Manage them in 내 아바타 → 권한·연결 → 외부 작업 API. POST /api/v1/avatar/tasks accepts arbitrary {message, conversationId?} instructions with a personal Bearer key and runs the owner's main avatar asynchronously; GET /api/v1/avatar/tasks/:id reports results and pending questions, and POST .../:id/respond answers them. Each task may run for up to ${Math.round(ctx.config.avatarTaskRunTimeoutMs / 60_000)} minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES), including time spent waiting on questions, and a single pending question or permission request expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer. This does not create or run scheduled routines. Never request the key in chat.`,

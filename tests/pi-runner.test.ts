@@ -160,9 +160,12 @@ describe("runPiAgent", () => {
     const conversationDir = `/workspace/c/${piConversationSegment("conv-1")}`;
     expect(req!.instructions).toContain("Runtime: your own pi sandbox");
     expect(req!.instructions).toContain(conversationDir);
-    expect(req!.instructions).toContain("arrives as the NEXT user turn");
+    // Run-kind guidance (mid-turn messages included) rides the turn input (M2).
+    expect(req!.instructions).not.toContain("arrives as the NEXT user turn");
     expect(req!.instructions).not.toContain("[Current date and time");
     expect(inputText(req!)).toMatch(/^\[Current date and time: \d{4}-\d\d-\d\d \d\d:\d\d KST\]/);
+    expect(inputText(req!)).toContain("Run kind (this turn): interactive chat");
+    expect(inputText(req!)).toContain("arrives as the NEXT user turn");
     expect(inputText(req!)).toContain("User message:\nhello there");
     expect(of(calls, "session")).toEqual(["resp_s1_1"]);
     expect(of(calls, "resume")).toEqual([{ sessionId: "resp_s1_1", uuid: "resp_s1_1" }]);
@@ -300,6 +303,39 @@ describe("runPiAgent", () => {
     expect(response.text).toBe("Blue it is");
     expect(questions).toHaveLength(1);
     expect(requests[1]).toMatchObject({ previousResponseId: "resp_q_1", input: { kind: "answer", callId: "call_1" } });
+  });
+
+  it.each([
+    ["a routine, then live chat", true],
+    ["live chat, then a routine", false],
+  ])("one frozen prompt across run kinds, each turn stating its own (%s)", async (_label, routineFirst) => {
+    const { store, config, base } = setup();
+    const routineReq = base({ headless: true, allowHeadlessTools: true });
+    const chatReq = (resume?: string) => base(resume ? { resumeSessionId: resume } : {});
+    const { client, requests } = fakeClient([() => textTurn("resp_k_1", "one"), () => textTurn("resp_k_2", "two")]);
+    const order = routineFirst ? ["routine", "chat"] : ["chat", "routine"];
+    for (const [index, kind] of order.entries()) {
+      const resume = index === 0 ? undefined : "resp_k_1";
+      const req = kind === "routine" ? { ...routineReq, ...(resume ? { resumeSessionId: resume } : {}) } : chatReq(resume);
+      const steerEvents = kind === "chat" ? recorder({ steers: new SteerChannel() }).events : undefined;
+      await runPiAgent(req, [], config, store, steerEvents, undefined, { client });
+    }
+    const [first, second] = requests;
+    // The first turn's instructions carry neither run kind's branch.
+    expect(first!.instructions).toContain("each turn's input starts with a run-kind note");
+    expect(first!.instructions).not.toContain("automated execution");
+    expect(first!.instructions).not.toContain("talking to right now");
+    // The second turn continues the SAME session, and its input names ITS kind.
+    expect(second!.previousResponseId).toBe("resp_k_1");
+    expect(second!.instructions).toBeUndefined();
+    const [routineText, chatText] = routineFirst
+      ? [inputText(first!), inputText(second!)]
+      : [inputText(second!), inputText(first!)];
+    expect(routineText).toContain("Run kind (this turn): the **automated execution** of a scheduled routine");
+    expect(routineText).not.toContain("arrives as the NEXT user turn");
+    expect(chatText).toContain("Run kind (this turn): interactive chat");
+    expect(chatText).toContain("arrives as the NEXT user turn");
+    expect(chatText).not.toContain("do not ask questions");
   });
 
   it("delivers mid-turn messages together as ONE follow-up turn after the answer (turn_end contract)", async () => {
@@ -468,12 +504,84 @@ describe("pi prompt variant", () => {
     expect(pi).not.toContain("Conversation rewind (this turn)");
     expect(pi).not.toContain("submitted by an **EXTERNAL SYSTEM**");
     expect(pi).toContain("sandbox shell receives NO secrets");
-    expect(pi).toContain("arrives as the NEXT user turn");
+    expect(pi).not.toContain("arrives as the NEXT user turn");
     const turn = buildPiTurnPreamble(owner, { now: new Date("2026-10-29T00:00:00Z") });
     expect(turn).toContain("[Current date and time: 2026-10-29 09:00 KST]");
     expect(turn).toContain("Conversation rewind (this turn)");
     expect(turn).toContain("submitted by an **EXTERNAL SYSTEM**");
   });
+  // Review M2: one conversation mixes routine runs, task-API turns and live
+  // chat, while pi freezes the append at the first turn. The frozen text must
+  // be the same whichever kind came first; the kind rides each turn's input.
+  const shared = {
+    message: "m",
+    avatar: { id: "o", displayName: "O", alias: "", persona: "" },
+    viewerIsOwner: true,
+    viewerName: "Ann",
+    elevated: true,
+    mcpToolGroups: ["system", "git_repo", "avatars"],
+    activeRepoName: "notes",
+    // Setup complete: the live-chat-only getting-started pitch is a separate,
+    // deliberate omission on an unattended first turn.
+    gitTokenSet: true,
+    knowledgeRepoConfigured: true,
+    groupMemberships: [{ id: "g", name: "Team", role: "member", knowledgeRepoConfigured: false, avatarSharing: true }],
+    todoState: { deleteEnabled: true },
+  } as AgentRequest;
+  const facts = (asyncAskAvatar: boolean) => ({
+    conversationDir: "/workspace/c/x",
+    shellSecretsUnavailable: [],
+    asyncAskAvatar,
+    activeRepoDir: "/workspace/repos/o/notes",
+  });
+  const routine: AgentRequest = { ...shared, headless: true, allowHeadlessTools: true, piRuntime: facts(false) };
+  const chat: AgentRequest = { ...shared, midTurnMessages: true, piRuntime: facts(true) };
+  const api: AgentRequest = { ...shared, externalTaskApi: true, piRuntime: facts(false), todoState: { deleteEnabled: false } };
+
+  it("freezes the same append for a routine, a task-API and an interactive first turn", () => {
+    const frozen = buildSystemPromptAppend(routine);
+    expect(buildSystemPromptAppend(chat)).toBe(frozen);
+    expect(buildSystemPromptAppend(api)).toBe(frozen);
+    // No run-kind branch, mid-turn line, background-ask line or open-repo line in it.
+    expect(frozen).not.toContain("automated execution");
+    expect(frozen).not.toContain("talking to right now");
+    expect(frozen).not.toContain("arrives as the NEXT user turn");
+    expect(frozen).not.toContain("returns at once with a consultation id");
+    expect(frozen).not.toContain("Working repository");
+    // It points at the per-turn note instead, and keeps the owner's standing state.
+    expect(frozen).toContain("each turn's input starts with a run-kind note");
+    expect(frozen).toContain("On a turn that is not a live conversation");
+  });
+
+  it("states each turn's run kind, and only that one's guidance, in the turn input", () => {
+    const now = new Date("2026-10-29T00:00:00Z");
+    const routineTurn = buildPiTurnPreamble(routine, { now });
+    expect(routineTurn).toContain("Run kind (this turn): the **automated execution** of a scheduled routine");
+    expect(routineTurn).toContain("do not ask questions");
+    expect(routineTurn).toContain("mcp__system__notify_user");
+    expect(routineTurn).not.toContain("arrives as the NEXT user turn");
+    expect(routineTurn).not.toContain("returns at once with a consultation id");
+
+    const chatTurn = buildPiTurnPreamble(chat, { now });
+    expect(chatTurn).toContain("Run kind (this turn): interactive chat — a person is on the other side of this conversation.");
+    expect(chatTurn).toContain("arrives as the NEXT user turn");
+    expect(chatTurn).toContain("returns at once with a consultation id");
+    expect(chatTurn).not.toContain("do not ask questions");
+
+    const apiTurn = buildPiTurnPreamble(api, { now });
+    expect(apiTurn).toContain("Run kind (this turn): an external-system task.");
+    expect(apiTurn).toContain("submitted by an **EXTERNAL SYSTEM**");
+    expect(apiTurn).not.toContain("automated execution");
+
+    // The open working repo is per turn (L8): every kind names the sandbox copy.
+    for (const turn of [routineTurn, chatTurn, apiTurn]) {
+      expect(turn).toContain("**Working repository (this turn)**");
+      expect(turn).toContain("/workspace/repos/o/notes/");
+      expect(turn).toContain("`mcp__system__describe_system` are authoritative");
+    }
+    expect(buildPiTurnPreamble({ ...chat, activeRepoName: undefined }, { now })).not.toContain("Working repository");
+  });
+
   it("leaves the SDK append unchanged", () => {
     const sdk = buildSystemPromptAppend(owner);
     expect(sdk).not.toContain("Runtime: your own pi sandbox");

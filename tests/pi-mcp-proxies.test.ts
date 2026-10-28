@@ -574,7 +574,7 @@ describe("asynchronous tools on pi", () => {
   });
 
   it("unattended pi runs keep the waiting call; the prompt states the async contract", async () => {
-    const pi = buildSystemPromptAppend({
+    const request: AgentRequest & { piRuntime: NonNullable<AgentRequest["piRuntime"]> } = {
       message: "m",
       avatar: { id: "o", displayName: "O", alias: "", persona: "" },
       viewerIsOwner: true,
@@ -585,13 +585,19 @@ describe("asynchronous tools on pi", () => {
         asyncAskAvatar: true,
         mcpProxies: { hexSsh: true, pluginServers: ["jira-cli"], skippedPluginServers: [] },
       },
-    });
-    expect(pi).toContain("`mcp__avatars__ask_avatar` returns at once with a consultation id");
+    };
+    const pi = buildSystemPromptAppend(request);
+    // The background-ask contract depends on the run kind, so it rides the
+    // turn input (review M2), never the frozen append.
+    expect(pi).not.toContain("returns at once with a consultation id");
+    expect(buildPiTurnPreamble(request)).toContain("`mcp__avatars__ask_avatar` returns at once with a consultation id");
+    expect(buildPiTurnPreamble({ ...request, piRuntime: { ...request.piRuntime, asyncAskAvatar: false } })).not.toContain(
+      "returns at once with a consultation id",
+    );
     expect(pi).toContain("A canvas never waits on this runtime");
     expect(pi).toContain("`mcp__plugins__<name>__<tool>`");
     expect(pi).toContain("Plugin MCP servers in this conversation: `jira-cli`");
     expect(pi).not.toContain("the hex-ssh remote tools, plugin");
-    void buildPiTurnPreamble;
   });
 
   it("a pi canvas never parks the run on the user", async () => {

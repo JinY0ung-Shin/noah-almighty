@@ -39,8 +39,16 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 3. **Prompt (D2)** — `buildSystemPromptAppend` with `piRuntime` set, rendered at the conversation's FIRST pi turn and
    frozen in `conversations.pi_instructions` (`ensureConversationPiInstructions`, write-once like `todo_snapshot`);
    sent as `instructions` only when a session starts, and re-sent verbatim for every later session (model switch,
-   lost session). Per-turn facts ride the user input instead (`buildPiTurnPreamble`): the KST date/time line, a
-   rewind's provenance, an external-task turn's provenance paragraph, and a new session's reason. The pi variant
+   lost session). Per-turn facts ride the user input instead (`buildPiTurnPreamble`): the KST date/time line, the
+   turn's RUN KIND (`piRunKindParagraph`: live chat + the mid-turn-message line + background `ask_avatar`, a
+   routine's unattended rules, or the external-task provenance paragraph — the same three cases as describe_system's
+   origin line), a rewind's provenance, the open working repo's sandbox copy (`piActiveRepoTurnLine` — `open_repo`
+   changes it mid-conversation), and a new session's reason. One conversation mixes routine runs, task-API turns and
+   live chat on ONE pi session, so the frozen text must not depend on the run kind (review M2): an owner routine
+   renders the OWNER branch (`piOwnerRun`), the owner line and the 할 일 policy name both cases, and the
+   getting-started pitch is omitted when the first turn is unattended. Capability FACTS that differ by kind (browser,
+   file cards) stay D2-stale; the run-kind note says describe_system is authoritative and a missing tool is refused.
+   Rows frozen by an earlier build of this branch keep their text (unreleased; only dev/e2e instances have them). The pi variant
    adds `piRuntimeSection` (sandbox, work folder, built-in tools, `mcp_call`/`mcp_search`, what is missing, "these
    instructions were fixed at conversation start — check describe_system").
 4. **Input** — preamble + `buildUserPrompt` (history only on a fresh session, cap `PI_FIRST_TURN_HISTORY_LIMITS`
