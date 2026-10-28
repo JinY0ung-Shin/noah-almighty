@@ -56,14 +56,19 @@ export interface PiSkillPlan {
   failures: string[];
 }
 
-type RootKind = "default" | "knowledge" | "group" | "plugin" | "other";
+export type PiPluginRootKind = "default" | "knowledge" | "group" | "plugin" | "other";
 
 function inside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function rootKind(config: AppConfig, root: string): RootKind {
+/**
+ * Where a plugin root lives: the plugins bundled with this Noah build, the
+ * personal or a group knowledge clone, an installed plugin repo, or elsewhere.
+ * Also decides which roots may spawn stdio MCP servers on pi (`mcpProxies.ts`).
+ */
+export function piPluginRootKind(config: AppConfig, root: string): PiPluginRootKind {
   const resolved = path.resolve(root);
   if (config.defaultPluginsDir && inside(path.resolve(config.defaultPluginsDir), resolved)) return "default";
   const data = path.resolve(config.dataDir);
@@ -229,7 +234,7 @@ export function materializePiSkills(input: MaterializeInput): PiSkillPlan {
   const roots: { label: string; source: string; dirs: string[]; local: boolean }[] = [];
   for (const root of pluginRoots) {
     const source = path.resolve(root.path);
-    const kind = rootKind(config, source);
+    const kind = piPluginRootKind(config, source);
     const pluginName = pluginNameOf(source);
     let label = kind === "default" || kind === "knowledge" ? kind : `${kind}-${slug(pluginName ?? path.basename(source))}`;
     for (let n = 2; used.has(label); n += 1) label = `${label.replace(/-\d+$/, "")}-${n}`;

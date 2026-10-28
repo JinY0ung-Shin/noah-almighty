@@ -30,6 +30,8 @@ import { PiAsyncJobs } from "../src/server/agent/pi/asyncJobs.js";
 import type { PiResponseRequest, PiResponsesClient, PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
 import { buildCanvasTools } from "../src/server/agent/canvasTools.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import { knowledgeClonePath } from "../src/server/knowledgeRepo.js";
+import { groupKnowledgeClonePath } from "../src/server/groupKnowledgeRepo.js";
 import { sdkToolLabel } from "../src/shared/sdkToolPresentation.js";
 import { withTempDir } from "./helpers.js";
 
@@ -117,6 +119,7 @@ function setup() {
     dataDir: path.join(dir(), "data"),
     agentRuntime: "pi",
     sessionSecret: "t",
+    defaultPluginsDir: path.join(dir(), "default-plugins"),
     pi: { ...PI, workspacesDir: path.join(dir(), "ws") },
   });
   const { store, config } = services;
@@ -253,19 +256,30 @@ describe("planPiMcpProxies", () => {
   it("routes secrets only to the child that owns them and builds the redaction set", async () => {
     const { config } = setup();
     const fake = writeFakeServer();
+    const bundledRoot = writePluginRoot(path.join(config.defaultPluginsDir, "ops"), {
+      bundled: { command: process.execPath, args: [fake], env: { MODE: "${HOME}" } },
+    });
     const ownedRoot = writePluginRoot(path.join(config.dataDir, "plugins", "u1", "mine"), {
-      own: { command: process.execPath, args: [fake], env: { MODE: "${HOME}" } },
+      own: { command: process.execPath, args: [fake] }, // agent-writable via git_repo push: never spawned
       remote: { type: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer ${API_TOKEN}" } },
       repo: { command: "x" }, // Noah's own server name: sits out
       jira: { command: "x" }, // a shared server's name: sits out
       odd: { type: "http", url: "https://x.example.com", oauth: { clientId: "c" } },
     });
-    const groupRoot = writePluginRoot(path.join(dir(), "group-root"), { team: { command: process.execPath, args: [fake] } });
+    const knowledgeRoot = writePluginRoot(knowledgeClonePath("u1", config), { brainy: { command: process.execPath, args: [fake] } });
+    const groupRoot = writePluginRoot(groupKnowledgeClonePath("g1", config), {
+      team: { command: process.execPath, args: [fake] },
+      teamHttp: { type: "http", url: "https://team.example.com/mcp?k=${API_TOKEN}" },
+    });
+    const otherRoot = writePluginRoot(path.join(dir(), "elsewhere"), { stray: { command: process.execPath, args: [fake] } });
     const plan = await planPiMcpProxies(
       planInput(config, {
         pluginRoots: [
+          { type: "local", path: bundledRoot },
           { type: "local", path: ownedRoot },
+          { type: "local", path: knowledgeRoot },
           { type: "local", path: groupRoot },
+          { type: "local", path: otherRoot },
         ],
         injectableSecretEnv: { API_TOKEN: "tok-123456789" },
         sshActive: true,
@@ -290,10 +304,13 @@ describe("planPiMcpProxies", () => {
     expect(hex.args.join(" ")).not.toContain("KEY");
     expect(hex.env).toMatchObject({ HEX_SSH_ALLOWED_TOOLS: "ssh-read-lines", SSH_PRIVATE_KEY: "-----KEY-----abcdef", REMOTE_SSH_MODE: "safe" });
     expect(hex.allowTool!("remote-ssh")).toBe(false);
-    // Owned stdio server gets the vault; the group root's never does.
-    expect(by("plugins", "own").env.API_TOKEN).toBe("tok-123456789");
-    expect(by("plugins", "own").env.MODE).toBe(process.env.HOME);
-    expect(by("plugins", "team").env.API_TOKEN).toBeUndefined();
+    // Only the bundled root spawns a stdio child, and it never gets the vault.
+    expect(by("plugins", "bundled").env.API_TOKEN).toBeUndefined();
+    expect(by("plugins", "bundled").env.MODE).toBe(process.env.HOME);
+    const stdioChildren = plan.upstreams.filter((u) => u.proxy === "plugins" && !u.handoff).map((u) => u.name);
+    expect(stdioChildren).toEqual(["bundled"]);
+    // A group root's http server is relayed, but never with the owner's vault.
+    expect(JSON.parse(by("plugins", "teamHttp").handoff!.content).vault).toBeUndefined();
     // HTTP plugin server + shared server ride the bridge; the value is only in the handoff file content.
     const remote = by("plugins", "remote");
     expect(remote.args).toContain("--use-system-ca");
@@ -302,13 +319,20 @@ describe("planPiMcpProxies", () => {
     expect(JSON.parse(by("shared", "jira").handoff!.content).headers.Authorization).toBe("Bearer jira-secret-1");
     expect(plan.facts).toEqual({
       hexSsh: true,
-      pluginServers: ["own", "remote", "team"],
+      pluginServers: ["bundled", "remote", "teamHttp"],
       skippedPluginServers: [
+        { name: "own", reason: expect.stringContaining("installed plugin repository") },
         { name: "repo", reason: expect.stringContaining("Noah's own") },
         { name: "jira", reason: expect.stringContaining("shared MCP server") },
         { name: "odd", reason: expect.stringContaining("oauth") },
+        { name: "brainy", reason: expect.stringContaining("knowledge repository, which the agent edits") },
+        { name: "team", reason: expect.stringContaining("group knowledge repository") },
+        { name: "stray", reason: expect.stringContaining("not defined in a plugin bundled with Noah") },
       ],
     });
+    for (const skipped of plan.facts.skippedPluginServers.filter((s) => ["own", "brainy", "team", "stray"].includes(s.name))) {
+      expect(skipped.reason).toContain("stdio plugin servers start only from the plugins bundled with Noah");
+    }
     // The vault reached a process → all of it; header credentials; the SSH key but not SSH_USER.
     expect(plan.redactions).toMatchObject({
       API_TOKEN: "tok-123456789",
@@ -321,11 +345,14 @@ describe("planPiMcpProxies", () => {
 
   it("an unelevated plan carries no vault", async () => {
     const { config } = setup();
-    const ownedRoot = writePluginRoot(path.join(config.dataDir, "plugins", "u1", "p"), { own: { command: "node" } });
+    const ownedRoot = writePluginRoot(path.join(config.dataDir, "plugins", "u1", "p"), {
+      own: { type: "http", url: "https://api.example.com/mcp", headers: { "X-Key": "${A}" } },
+    });
     const plan = await planPiMcpProxies(
       planInput(config, { pluginRoots: [{ type: "local", path: ownedRoot }], secretsAllowed: false, injectableSecretEnv: { A: "value-123456" } }),
     );
     expect(plan.upstreams[0]!.env.A).toBeUndefined();
+    expect(JSON.parse(plan.upstreams[0]!.handoff!.content).vault).toBeUndefined();
     expect(plan.redactions).toEqual({});
   });
 });
@@ -336,7 +363,7 @@ describe("PiMcpProxyPool", () => {
   it("starts children lazily, aggregates names, routes calls, and leaves no process behind", async () => {
     const { config } = setup();
     const fake = writeFakeServer();
-    const root = writePluginRoot(path.join(dir(), "root"), {
+    const root = writePluginRoot(path.join(config.defaultPluginsDir, "root"), {
       alpha: { command: process.execPath, args: [fake] },
       beta: { command: process.execPath, args: [fake], env: { FAKE_TOOLS: "echo" } },
     });
@@ -410,13 +437,18 @@ describe("runPiAgent relays + redaction", () => {
     store.setUserSecret(owner.id, "SITE_PW", "hunter2-browser-pw");
     store.setSecretBrowserPolicy(owner.id, "SITE_PW", { enabled: true, hosts: ["example.com"], passwordOnly: true });
     const fake = writeFakeServer();
-    const root = writePluginRoot(path.join(dir(), "team-root"), { tools: { command: process.execPath, args: [fake] } });
+    const root = writePluginRoot(path.join(config.defaultPluginsDir, "bundled"), { tools: { command: process.execPath, args: [fake] } });
+    // Agent-authored: the knowledge repo's stdio server must never start in Noah.
+    const marker = path.join(dir(), "planted-ran");
+    const knowledgeRoot = writePluginRoot(knowledgeClonePath(owner.id, config), {
+      planted: { command: process.execPath, args: ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "x")`] },
+    });
 
     const registry = new McpRunRegistry();
     const broker = await brokerSide(registry);
     const seen: Record<string, unknown> = {};
     try {
-      const { client } = fakeClient([
+      const { client, requests } = fakeClient([
         async (req) => {
           const token = req.headers![PI_RUN_TOKEN_HEADER]!;
           const shared = await broker.connect("shared", token);
@@ -435,7 +467,10 @@ describe("runPiAgent relays + redaction", () => {
       ]);
       await runPiAgent(
         base({ mcpToolGroups: ["system", "browser", "personal_knowledge"] }),
-        [{ type: "local", path: root }],
+        [
+          { type: "local", path: root },
+          { type: "local", path: knowledgeRoot },
+        ],
         config,
         store,
         { steers: new SteerChannel(), onBrowser: async () => ({ ok: true }) as never },
@@ -443,6 +478,9 @@ describe("runPiAgent relays + redaction", () => {
         { client, registry },
       );
       expect(registry.size).toBe(0);
+      // BOTH surfaces name the left-out server and why.
+      expect(requests[0]!.instructions).toContain("Plugin MCP servers left out");
+      expect(requests[0]!.instructions).toContain("`planted` (it is defined in the knowledge repository");
     } finally {
       await broker.close();
       await remote.close();
@@ -460,6 +498,8 @@ describe("runPiAgent relays + redaction", () => {
     const describeText = JSON.stringify(seen.describe);
     expect(describeText).toContain("mcp__plugins__<server>__<tool>");
     expect(describeText).toContain("`tools` (as mcp__plugins__<server>__<tool>)");
+    expect(describeText).toContain("left out (their tools do not exist here): `planted` (it is defined in the knowledge repository");
+    expect(fs.existsSync(marker)).toBe(false);
     expect(describeText).toContain("mcp__shared__jira__<tool>");
     // The relayed children are gone once the run ended (closing has a grace period).
     await eventually(() => {

@@ -155,7 +155,7 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
 | Broker id | Source | Model-facing name | Child Noah spawns | Secrets |
 |---|---|---|---|---|
 | `hex-ssh` | the owner's SSH key (`sshActive`, same gate as the SDK) | `mcp__hex-ssh__<tool>` (SDK name unchanged) | `scripts/hex-ssh-policy-proxy.mjs` → `HEX_SSH_UPSTREAM_COMMAND` | SSH material in the child's env (Noah spawns it itself: no argv, no wrapper file) |
-| `plugins` | the run's plugin roots' `.mcp.json` (first name wins, load order) | `mcp__plugins__<server>__<tool>` | stdio: the def's command (`${CLAUDE_PLUGIN_ROOT}`/`${VAR}` expanded, cwd = def `cwd` or the root); http/sse: `mcp-http-bridge.mjs` | OWNED roots get the injectable vault (stdio: env, vault wins; http: `${NAME}` refs via the bridge's one-shot 0600 config); group/default roots never |
+| `plugins` | the run's plugin roots' `.mcp.json` (first name wins, load order) | `mcp__plugins__<server>__<tool>` | stdio: the def's command (`${CLAUDE_PLUGIN_ROOT}`/`${VAR}` expanded, cwd = def `cwd` or the root) — **bundled roots only** (see below); http/sse: `mcp-http-bridge.mjs` | OWNED roots' http defs get the injectable vault (`${NAME}` refs via the bridge's one-shot 0600 config); stdio children and group/default roots never |
 | `shared` | admin 공용 MCP servers (`planSharedMcpRun`, owner bindings) | `mcp__shared__<server>__<tool>` | always the bridge (header-less ones too: keeps `--use-system-ca` + error scrubbing) | slot values only in the bridge config file (written right before spawn, deleted by the bridge, `rm` again after) |
 
 - pi's `mcp_call` resolves the SDK form `mcp__<server>__<tool>` by suffix (`resolveAlias` in pi), so skills that
@@ -174,11 +174,31 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`) plus every browser-typeable secret value. Applied
   by the endpoint's `transformResult` to EVERY Noah MCP result of the run (`redactSecretValues`, `[REDACTED:<NAME>]`).
   pi's built-ins need none: the sandbox holds no secrets.
-- **Security note:** plugin stdio servers run in the NOAH container, as they do as CLI children on the SDK path.
-  The knowledge repo is an OWNED plugin root the agent can edit and commit, so its `.mcp.json` is agent-influenced
-  code that Noah spawns with the owner's vault — on pi this is the one remaining route for agent-authored code into
-  the Noah container (#71). Moving plugin servers into the sandbox needs pi's sandbox-MCP support per user (not
-  available without pi changes); until then treat it as an open item.
+- **stdio servers spawn only from bundled plugins (`piStdioRootRefusal`).** A stdio def is a command Noah runs in
+  ITS OWN container (the data volume, every user's state), so on pi only roots no agent can author qualify: the
+  plugins bundled with this Noah build (`DEFAULT_PLUGINS_DIR`, classified by `piPluginRootKind`, `piSkills.ts`).
+  Every other root is agent-writable and its stdio servers sit out, listed with the reason on BOTH surfaces (the
+  frozen prompt's relay sentence and describe_system's relay line):
+
+  | Root | Why it is agent-writable |
+  |---|---|
+  | personal knowledge clone (`dataDir/knowledge/<user>`) | `mcp__repo__*` write + commit, directly on that clone |
+  | group knowledge clone (`dataDir/group-knowledge/<group>`) | any member's agent writes it (`mcp__group_repo__*`) |
+  | installed plugin repo (`dataDir/plugins/<user>/<repo>`) | at one remove: `mcp__git_repo__open_repo` takes any URL and `push` uses the owner's git token, and the next plugin refresh pulls what was pushed (Noah cannot tell which remotes the token can write, so all are refused) |
+  | anything else | unknown provenance, refused (fail closed) |
+
+  http/sse plugin servers are unaffected (the bridge is Noah's own script; the def supplies only a URL and
+  headers), and so are admin 공용 MCP servers. A user who needs a stdio tool on pi gets it bundled into
+  `default-skills`, as an http server, or as a 공용 MCP server. Moving plugin stdio servers INTO the viewer's
+  sandbox would need pi's per-user sandbox MCP (a pi-gateway change, out of scope).
+  **Open item:** an OWNED root's http def may name vault secrets in its URL/headers (`${NAME}`), and the knowledge
+  repo is agent-editable — so an agent-edited def can send those values to a host of its choosing from Noah's
+  network, past the sandbox egress allowlist. The SDK path has the same exposure; not changed here.
+- **The SDK runner is unchanged — the pre-existing #71 posture.** There every plugin stdio server (knowledge
+  repo included, with the owner's vault through the secret wrapper) is a CLI child in the Noah container, next to
+  the agent's own Bash, which already reaches the shared data volume as the same uid; refusing the servers there
+  would close nothing. #71's uid separation (`docs/architecture/secrets-ssh.md` "Same-uid posture") or the pi
+  runtime is the fix.
 
 ## Asynchronous tools (design D8, `agent/pi/asyncJobs.ts`)
 
@@ -241,10 +261,9 @@ New nullable columns `conversations.pi_instructions` / `pi_session_profiles` (NU
 ids and resume points are IGNORED by the pi runner (not nulled — the SDK runner still uses them while both coexist);
 the first pi turn of an old conversation rebuilds context from the text history with the larger cap.
 
-## Seams left for later lanes
+## Presentation
 
-- **I2 (workspace/files/skills/repos):** done — see "Files", "Skills", "Working repositories", "Decks" above.
-- **I3 (proxies/async/presentation):** done — see "Proxied MCP servers" and "Asynchronous tools". Korean labels for
+- Korean labels for
   pi built-ins (`LS` 폴더 보기, `McpSearch` 도구 찾기, `PresentFile`, `RequestAdmin`), `mcp__skills__read`, pi
   `mcp__git_repo__commit`, hex-ssh tools and relayed `mcp__plugins|shared__<server>__<tool>` names
   (`sdkToolLabel`, which the client `humanTool` now shares); the admin 시스템 panel shows `pi-gateway`.

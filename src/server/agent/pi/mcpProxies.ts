@@ -17,6 +17,10 @@
  * pi's `mcp_call` also resolves the SDK form `mcp__<server>__<tool>` (it matches
  * a tool whose name ends in `__<server>__<tool>`), so skills keep working.
  *
+ * A stdio plugin server is a command Noah runs in ITS OWN container, so on pi
+ * only the plugins bundled with this Noah build may spawn one
+ * ({@link piStdioRootRefusal}); every agent-editable root is refused.
+ *
  * Lifecycle: one {@link PiMcpProxyPool} per run. A child starts on the first
  * `tools/list` or `tools/call` that needs it and every child is closed when the
  * run ends (`close`, called from runPiAgent's `finally`).
@@ -44,6 +48,7 @@ import {
   type SharedMcpRunPlan,
 } from "../../sharedMcpServers.js";
 import { knownHostsPath } from "../../sshTrust.js";
+import { piPluginRootKind } from "./piSkills.js";
 import logger from "../../logger.js";
 
 const log = logger.child({ module: "agent", component: "pi-mcp-proxy" });
@@ -112,6 +117,38 @@ export function piProxyBaseEnv(source: NodeJS.ProcessEnv = process.env): Record<
   for (const name of GIT_CREDENTIAL_ENV_NAMES) delete env[name];
   scrubServerOnlySecretEnv(env);
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+const STDIO_ONLY_BUNDLED =
+  "; on this runtime Noah never runs agent-editable code in its own container, so stdio plugin servers start only from the plugins bundled with Noah (an http/sse plugin server or an admin-registered shared MCP server still works)";
+
+/**
+ * Why a root may NOT spawn stdio servers on a pi run, or null when it may.
+ * A stdio def is a command Noah runs in its own container (the data volume,
+ * every user's state), so only roots no agent can author qualify: the plugins
+ * bundled with this Noah build (`config.defaultPluginsDir`). Every other root
+ * is agent-writable, directly or at one remove:
+ *   - the personal knowledge clone: `mcp__repo__*` writes and commits it;
+ *   - a group knowledge clone: members' agents write it (`mcp__group_repo__*`);
+ *   - an installed plugin repo: `mcp__git_repo__*` registers any URL and pushes
+ *     with the owner's git token, and the next plugin refresh pulls it;
+ *   - anything else: unknown provenance, refused (fail closed).
+ * The SDK runner is unchanged: its CLI children (and the agent's Bash) already
+ * share Noah's container (#71). Reasons are model-facing English.
+ */
+export function piStdioRootRefusal(rootPath: string, config: AppConfig): string | null {
+  switch (piPluginRootKind(config, rootPath)) {
+    case "default":
+      return null;
+    case "knowledge":
+      return `it is defined in the knowledge repository, which the agent edits through mcp__repo__*${STDIO_ONLY_BUNDLED}`;
+    case "group":
+      return `it is defined in a group knowledge repository, which members' agents edit through mcp__group_repo__*${STDIO_ONLY_BUNDLED}`;
+    case "plugin":
+      return `it is defined in an installed plugin repository, whose remote an agent can push to with mcp__git_repo__* before the next plugin refresh${STDIO_ONLY_BUNDLED}`;
+    default:
+      return `it is not defined in a plugin bundled with Noah${STDIO_ONLY_BUNDLED}`;
+  }
 }
 
 /** `${VAR}` / `${VAR:-default}` from `env`, as the CLI expands its `--mcp-config`. */
@@ -196,8 +233,9 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
   // Every ENABLED admin server reserves its name, mounted or not (SDK parity).
   for (const state of input.sharedMcpPlan?.states ?? []) sharedNames.add(state.name);
 
-  // Plugin `.mcp.json` servers: first definition of a name wins (load order),
-  // OWNED roots get the vault, other roots never do.
+  // Plugin `.mcp.json` servers: first definition of a name wins (load order).
+  // An http/sse def from an OWNED root may reference the vault; a stdio def
+  // spawns only from a bundled root (piStdioRootRefusal), which never gets it.
   const reserved = new Set(input.reservedNames);
   const seen = new Set<string>();
   for (const root of input.pluginRoots) {
@@ -252,12 +290,15 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
         skip(`unsupported server type '${type}'`);
         continue;
       }
+      const refusal = piStdioRootRefusal(root.path, input.config);
+      if (refusal) {
+        skip(refusal);
+        continue;
+      }
       const defEnv: Record<string, string> = {};
       for (const [key, value] of Object.entries((def.env ?? {}) as Record<string, unknown>)) {
         if (typeof value === "string") defEnv[key] = expandEnvRefs(value, baseEnv);
       }
-      const ownedVault = owned ? vault : {};
-      if (Object.keys(ownedVault).length > 0) vaultExposed = true;
       upstreams.push({
         proxy: PI_PLUGINS_SERVER_NAME,
         name,
@@ -265,8 +306,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
         args: (Array.isArray(def.args) ? def.args : [])
           .filter((arg): arg is string => typeof arg === "string")
           .map((arg) => expandEnvRefs(arg, baseEnv)),
-        // The vault wins over the definition, as mcp-secret-wrapper merges it.
-        env: { ...baseEnv, ...defEnv, ...ownedVault },
+        env: { ...baseEnv, ...defEnv },
         cwd: typeof def.cwd === "string" ? def.cwd : root.path,
       });
       facts.pluginServers.push(name);

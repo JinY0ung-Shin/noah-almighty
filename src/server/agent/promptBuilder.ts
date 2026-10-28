@@ -812,9 +812,13 @@ function piRuntimeSection(request: AgentRequest): string | null {
  */
 function piRelayedMcpSentence(pi: NonNullable<AgentRequest["piRuntime"]>): string {
   const plugins = pi.mcpProxies?.pluginServers ?? [];
+  const skipped = pi.mcpProxies?.skippedPluginServers ?? [];
   return (
     "Remote and third-party MCP tools are relayed by Noah under fixed server names: hex-ssh as `mcp__hex-ssh__<tool>`, a plugin `.mcp.json` server `<name>` as `mcp__plugins__<name>__<tool>`, an admin-registered shared MCP server `<name>` as `mcp__shared__<name>__<tool>` (the `mcp__<name>__<tool>` form a skill may use resolves to the same tool). " +
     (plugins.length ? `Plugin MCP servers in this conversation: ${plugins.map((name) => `\`${name}\``).join(", ")}. ` : "") +
+    (skipped.length
+      ? `Plugin MCP servers left out (their tools do not exist here; say so instead of working around it): ${skipped.map((s) => `\`${s.name}\` (${s.reason})`).join("; ")}. `
+      : "") +
     "Their tool lists are read when your session starts and kept for it: a server or tool connected later appears only in a later session, and one removed since is refused when called. "
   );
 }

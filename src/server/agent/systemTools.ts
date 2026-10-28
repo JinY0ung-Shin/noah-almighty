@@ -625,7 +625,7 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
         : "none"
     }${
       pi.mcpProxies?.skippedPluginServers.length
-        ? `; left out: ${pi.mcpProxies.skippedPluginServers.map((s) => `\`${s.name}\` (${s.reason})`).join(", ")}`
+        ? `; left out (their tools do not exist here): ${pi.mcpProxies.skippedPluginServers.map((s) => `\`${s.name}\` (${s.reason})`).join("; ")}`
         : ""
     }. Their secrets stay in Noah and never enter your sandbox`,
     `- Long-running tools on this runtime: ${
