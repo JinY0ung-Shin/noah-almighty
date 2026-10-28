@@ -49,6 +49,17 @@
   don't reason from CSS source alone — collisions/inherited rules aren't visible in the source.
 
 ## Docker
+- **Layer order is the build-speed contract.** Slow, rarely-changing steps sit ABOVE the app
+  `COPY`: apt → CA → uv → Chromium → pip → hex-ssh → `npm install` → deck converter self-test
+  (~40 s; inputs = the pptx skill tree + `docker/fontconfig` + node_modules — it resolves
+  `playwright-core` from `/app/node_modules`, so it cannot go above `npm install`) →
+  `COPY --exclude=default-skills/skills/pptx . .` → `npm run build` (~6 s). A step whose inputs are
+  the pptx skill, dependencies or pinned tools must not move below that final `COPY`, or every code
+  change re-runs it. apt/pip/npm/node-gyp downloads ride
+  `RUN --mount=type=cache` (never in a layer). Keep the Dockerfile free of a `# syntax=` line —
+  it pulls the frontend from Docker Hub, unreachable on the closed deploy network; the built-in
+  frontend (Docker 23+) already supports `--mount` and `COPY --exclude`. `.dockerignore` keeps
+  `docs/`, `tests/` and `docker/tls/` (deploy-host TLS keys — bind-mounted, never baked) out.
 - `docker build` and `docker run` DO work here. Smoke-test:
   `docker run -d -e SESSION_SECRET=x <img>` then `docker exec <c> curl -fsS --noproxy '*'
   localhost:48787/api/bootstrap` (the unauth health probe + HEALTHCHECK). `SESSION_SECRET`

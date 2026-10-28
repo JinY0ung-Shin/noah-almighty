@@ -35,3 +35,12 @@ scripts/openxml-validator/
 
 # craft-runner sidecar is its own image (docker-compose service craft-runner)
 craft-runner/
+
+# Dev-only trees: never read at runtime or by the build (`npm run build` compiles
+# src/ only). Excluding them keeps a docs- or tests-only commit a full cache hit.
+docs/
+tests/
+# Deploy-host TLS material is bind-mounted at runtime (compose ./docker/tls →
+# /app/tls:ro). It must never be baked into an image layer — a private key would
+# ride every image copy — and a renewed cert would bust the app-layer cache.
+docker/tls/

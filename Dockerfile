@@ -20,8 +20,21 @@ ARG NPM_CONFIG_REGISTRY=
 # supplying Korean fonts so Hangul renders in headless conversions. Decks built
 # by the skill's converter carry their own exact renders (see the converter
 # layers below); LibreOffice previews those only after the .pptx was edited.
+#
+# Build speed: apt, pip and npm downloads go through BuildKit cache mounts
+# (RUN --mount=type=cache), so a rebuilt layer reuses the packages fetched last
+# time instead of pulling them through the mirror again. Mounted dirs never land
+# in the image. No `# syntax=` line on purpose: it would make BuildKit pull the
+# dockerfile frontend from Docker Hub, which a closed network cannot reach — the
+# built-in frontend (Docker 23+) supports --mount and COPY --exclude.
+# Each apt RUN parks the base image's docker-clean (which deletes downloaded .debs)
+# for its own duration so the .debs stay in the cache mount, then restores it, so
+# images built FROM this one (docker/egress/app.Dockerfile) keep the stock behaviour.
 COPY docker/apt_mirror_sources.sh /usr/local/bin/apt_mirror_sources.sh
-RUN sh /usr/local/bin/apt_mirror_sources.sh \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  mv /etc/apt/apt.conf.d/docker-clean /etc/apt/docker-clean.parked \
+  && sh /usr/local/bin/apt_mirror_sources.sh \
   && apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
@@ -40,8 +53,7 @@ RUN sh /usr/local/bin/apt_mirror_sources.sh \
     procps \
     jq \
     tini \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/* \
+  && mv /etc/apt/docker-clean.parked /etc/apt/apt.conf.d/docker-clean \
   && rm -f /usr/local/bin/apt_mirror_sources.sh
 
 # Trust an optional corporate proxy CA so git/curl/node can clone over HTTPS
@@ -102,9 +114,12 @@ RUN case "$TARGETARCH" in \
 # DECK_CONVERTER=0 builds a legacy image without Chromium (and without the self-test):
 # the pptx skill then falls back to python-pptx, and the probe reports why.
 ARG DECK_CONVERTER=1
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  mv /etc/apt/apt.conf.d/docker-clean /etc/apt/docker-clean.parked \
+  && apt-get update \
   && apt-get install -y --no-install-recommends fontconfig $( [ "$DECK_CONVERTER" != "0" ] && echo chromium-headless-shell ) \
-  && apt-get clean && rm -rf /var/lib/apt/lists/* \
+  && mv /etc/apt/docker-clean.parked /etc/apt/apt.conf.d/docker-clean \
   && command -v fc-cache \
   && { [ "$DECK_CONVERTER" = "0" ] || /usr/lib/chromium/chromium-headless-shell --version; }
 
@@ -122,30 +137,16 @@ RUN apt-get update \
 ARG PIP_INDEX_URL=
 ARG PIP_TRUSTED_HOST=
 COPY default-skills/skills/pptx/converter/requirements.txt /tmp/deck-requirements.txt
-RUN if [ -n "$PIP_INDEX_URL" ]; then \
-      pip3 install --break-system-packages --no-cache-dir --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt; \
+RUN --mount=type=cache,target=/root/.cache/pip \
+  if [ -n "$PIP_INDEX_URL" ]; then \
+      pip3 install --break-system-packages --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt; \
     else \
-      pip3 install --break-system-packages --no-cache-dir -r /tmp/deck-requirements.txt; \
+      pip3 install --break-system-packages -r /tmp/deck-requirements.txt; \
     fi \
   && rm -f /tmp/deck-requirements.txt \
   && soffice --version \
   && command -v pdftoppm \
   && python3 -c "import pptx, lxml, PIL, fontTools, defusedxml, openpyxl, xlsxwriter"
-
-# Always use npm install (not npm ci) so the build doesn't fail when the lock
-# file drifts out of sync with package.json, and so a corporate mirror can
-# resolve slightly different dependency versions than the lock file expects.
-# When a custom NPM_CONFIG_REGISTRY is provided we also set strict-ssl=false
-# for HTTP mirrors with self-signed certs and NODE_TLS_REJECT_UNAUTHORIZED=0
-# for node-gyp header downloads.
-COPY package.json package-lock.json* ./
-RUN if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
-      printf 'registry=%s\nstrict-ssl=false\n' "$NPM_CONFIG_REGISTRY" > .npmrc; \
-      NODE_TLS_REJECT_UNAUTHORIZED=0 npm install; \
-    else \
-      npm install; \
-    fi \
-  && rm -f .npmrc
 
 # Install the hex-ssh MCP server (remote-server access tools) into the IMAGE at
 # build time, so the avatar never has to `npx`-download it at runtime — that
@@ -153,10 +154,12 @@ RUN if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
 # unreachable. The build-time mirror (NPM_CONFIG_REGISTRY) IS reachable, so we
 # install through it here, then expose the package's bin under the fixed name
 # `hex-ssh-mcp` (the actual bin key in package.json is resolved at build time, so
-# claudeAgent can spawn a stable command). Kept in its own layer so an upstream
+# claudeAgent can spawn a stable command). Kept in its own layer, BEFORE the app's
+# package.json, so a dependency change does not re-download it and an upstream
 # version bump only rebuilds this step. Pinned for reproducibility.
 ARG HEX_SSH_MCP_VERSION=1.9.2
-RUN if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
+RUN --mount=type=cache,target=/root/.npm \
+  if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
       printf 'registry=%s\nstrict-ssl=false\n' "$NPM_CONFIG_REGISTRY" > /root/.npmrc; \
       NODE_TLS_REJECT_UNAUTHORIZED=0 npm install -g "@levnikolaevich/hex-ssh-mcp@${HEX_SSH_MCP_VERSION}"; \
     else \
@@ -174,10 +177,31 @@ RUN if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
   && test -f "$PKG_DIR/$BIN_REL" \
   && echo "hex-ssh-mcp -> $PKG_DIR/$BIN_REL"
 
-COPY . .
-RUN npm run build
+# Always use npm install (not npm ci) so the build doesn't fail when the lock
+# file drifts out of sync with package.json, and so a corporate mirror can
+# resolve slightly different dependency versions than the lock file expects.
+# When a custom NPM_CONFIG_REGISTRY is provided we also set strict-ssl=false
+# for HTTP mirrors with self-signed certs and NODE_TLS_REJECT_UNAUTHORIZED=0
+# for node-gyp header downloads. The npm cache (tarballs + prebuilt native
+# binaries) and node-gyp's header cache are BuildKit cache mounts, so a
+# dependency change re-fetches only what changed and none of it bloats the layer.
+COPY package.json package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/root/.cache/node-gyp \
+  if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
+      printf 'registry=%s\nstrict-ssl=false\n' "$NPM_CONFIG_REGISTRY" > .npmrc; \
+      NODE_TLS_REJECT_UNAUTHORIZED=0 npm install; \
+    else \
+      npm install; \
+    fi \
+  && rm -f .npmrc
 
-# Deck converter wiring, after COPY so it sees the skill tree (read-only at runtime):
+# Deck converter wiring. It depends ONLY on the pptx skill tree, the fontconfig file, the
+# Chromium/Python layers and node_modules (the converter resolves playwright-core from it) —
+# never on app code — so it runs BEFORE the app COPY: an ordinary code change reuses this
+# cached layer instead of re-running the ~40 s self-test, which re-runs only when the pptx
+# skill or the dependencies changed. The final `COPY . .` excludes default-skills/skills/pptx
+# so the tree is not duplicated into a second layer (read-only at runtime):
 # 1. register the vendored OFL fonts with fontconfig for LibreOffice's fallback previews
 #    (docker/fontconfig/60-noah-deck-fonts.conf: Pretendard, Gothic A1, Selawik — never the
 #    NotoSansKR variable font — plus a 맑은 고딕/Malgun Gothic alias);
@@ -194,8 +218,9 @@ RUN npm run build
 # unprivileged `node` user could later trip over. The converter's locks are abstract UNIX
 # sockets and never touch the filesystem. DECK_CONVERTER=0 writes a "disabled" record.
 ARG DECK_CONVERTER_STRICT_GOLDEN=0
-RUN cp docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/ \
-  && fc-cache -f >/dev/null && fc-list | grep -q Pretendard \
+COPY docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/
+COPY default-skills/skills/pptx ./default-skills/skills/pptx
+RUN fc-cache -f >/dev/null && fc-list | grep -q Pretendard \
   && python3 -m compileall -q default-skills/skills/pptx/converter/tools \
   && mkdir -p /usr/local/share/noah-almighty \
   && if [ "$DECK_CONVERTER" != "0" ]; then \
@@ -209,6 +234,10 @@ RUN cp docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/ \
          > /usr/local/share/noah-almighty/deck-selftest.json; \
      fi \
   && ! ls -A /tmp | grep -Eq '^(noah-pptx|playwright|deck-)'
+
+# The pptx skill tree is already in place (deck converter layer above).
+COPY --exclude=default-skills/skills/pptx . .
+RUN npm run build
 
 # uv was installed into /root during the base layer, then COPIED (not symlinked)
 # to /usr/local/bin/uv so the unprivileged `node` user can execute it — a symlink
