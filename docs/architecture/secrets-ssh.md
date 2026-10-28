@@ -160,7 +160,13 @@
     workspaces/clones/transcripts) is readable and writable by any agent Bash; the native CLI binary is
     readable, so a CLI process's environ (its run's shell-exposed vault secrets and model credentials) is
     readable by other agents; a server git child's environ (one call's auth header) is readable while it
-    runs; non-node MCP servers keep a readable environ. No hook rule can be the boundary.
+    runs; non-node MCP servers keep a readable environ. No hook rule can be the boundary. Plugin stdio MCP
+    servers from agent-editable roots (the knowledge repo, group repos, installed plugin repos) are CLI children
+    in this container too — on the SDK runner that is part of the same posture, not a separate hole.
+  - **The pi runtime sidesteps it** (`AGENT_RUNTIME=pi`, `docs/architecture/pi-runtime.md`): the agent's Bash runs
+    in the viewer's own pi sandbox, Noah never runs git or agent-authored code from a sandbox dir, and a stdio
+    plugin server spawns only from the plugins bundled with Noah (`piStdioRootRefusal`). Runs that fall back to
+    the SDK runner keep the posture above.
 - **Two git tokens, vault-backed, host-routed.** Each user can store TWO git tokens as named
   `user_secrets`: `GIT_TOKEN` (`INTERNAL_GIT_TOKEN_SECRET_NAME`) for the internal `GITHUB_HOST`, and
   `GITHUB_TOKEN` (`EXTERNAL_GIT_TOKEN_SECRET_NAME`) for github.com. `tokenForGitUrl` in

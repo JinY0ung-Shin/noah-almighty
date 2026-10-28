@@ -29,7 +29,9 @@ Durable principles for this layer:
   closes the channel at a task-free, steer-free `result` boundary and again in the whole
   attempt loop's `finally` — never the generator, so a self-heal retry can rebuild the generator and keep
   consuming. A run given no channel simply cannot be steered; that is how headless and external-task-API runs
-  opt out, and `midTurnMessages` reports it on both metacognition surfaces.
+  opt out, and `midTurnMessages` reports it on both metacognition surfaces. The pi runner
+  (`agent/pi/runPiAgent.ts`) uses the SAME channel but has no mid-turn input: it drains every queued
+  steer (and every async `ask_avatar` answer, `asyncJobs.ts`) as ONE follow-up turn after the pi response.
 - **`ownerState.ts` is the metacognition sync point.** `summarizeOwnerState` returns UNFORMATTED self-state
   DATA consumed by BOTH `buildSystemPromptAppend` (English prompt appended to the SDK default system prompt) and `describe_system` (tool text); gating +
   formatting stay at each call site. Add a self-state fact to `OwnerState` and BOTH consumers together.

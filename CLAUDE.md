@@ -99,8 +99,9 @@ These are the invariants the project is built around. New work should reinforce 
   steer at a result boundary ALWAYS becomes a follow-up turn — the run stays OPEN and the segment so far
   persists as its own message (`turn_end`, not `done`). A steer starting with `/` rides
   `client_composed: true` — a raw stdin message IS a CLI slash command (a mid-run `/new` once ran
-  `/clear` and silently emptied the session). Persist at DELIVERY only, local SDK runs only
-  (never external-task-API turns), `midTurnMessages` on BOTH metacognition surfaces.
+  `/clear` and silently emptied the session). Persist at DELIVERY only, local SDK and pi runs only
+  (never external-task-API turns; on pi delivery = the follow-up turn, and async `ask_avatar` answers persist
+  the same way), `midTurnMessages` on BOTH metacognition surfaces.
   Mechanics → `docs/architecture/chat-sse-media.md`.
 - **A rewind cuts HISTORY, never the world.** Editing an earlier message and 다시 생성 share ONE plan →
   apply path: `planConversationRewind` before the turn's first await, `applyConversationRewind` right
@@ -186,9 +187,12 @@ These are the invariants the project is built around. New work should reinforce 
   (`secretPolicy.ts`) from `process.env` right after the config loads — **a new server-only secret joins that list**,
   and a new child-process env starts from the scrubbed `process.env`. Server git passes auth and config only through
   `serverGitEnv` (GIT_CONFIG_* env, hooks + fsmonitor OFF in agent-edited clones), never `-c` in argv (cmdline is
-  world-readable). This is NOT uid isolation: the shared data volume stays reachable by every agent Bash until #71's
-  uid separation lands. Mechanics → `docs/architecture/secrets-ssh.md` ("Same-uid posture (#71)").
-- **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
+  world-readable). This is NOT uid isolation ON THE SDK RUNNER: there the shared data volume stays reachable by every
+  agent Bash (and every CLI-child MCP server) until #71's uid separation lands. A pi run IS isolated — the agent's
+  Bash runs in the viewer's own pi sandbox (egress = the operator's allowlist), and Noah spawns no agent-editable code
+  (see the pi bullet).
+  Mechanics → `docs/architecture/secrets-ssh.md` ("Same-uid posture (#71)").
+- **Tool permissions go through ONE gate (SDK runner):** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
   route without which the CLI hides AskUserQuestion. It confirms only an AskUserQuestion call the hook already
   allowed (a question's answers ride the hook's `updatedInput`, so the tool
@@ -204,10 +208,12 @@ These are the invariants the project is built around. New work should reinforce 
   boundary. The build writes `<stem>.preview/manifest.json` bound to the .pptx's sha256; `onShareFile` attaches
   those renders only when the hash matches the bytes it stored (realpath/roots/magic checks like every workspace
   read), else falls back to LibreOffice with a redirecting note. Toolchain state = ONE probe (`deckRender.ts` →
-  the skill's `deck.mjs probe`), reported on BOTH metacognition surfaces with explicit `converter: INSTALLED` /
+  the skill's `deck.mjs probe`; on pi the operator's `PI_DECK_SANDBOX` flag instead, never a host probe), reported
+  on BOTH metacognition surfaces with explicit `converter: INSTALLED` /
   `converter: NOT INSTALLED` markers the skill keys on. Mechanics → `docs/architecture/pptx-converter.md`.
 - **An image the avatar is SHOWN is also a FILE it can place.** Vision-turn attachments are staged into the
-  conversation scratch workspace (`attachments/`) exactly like text-only turns, every browser screenshot is also saved
+  conversation scratch workspace (`attachments/`; on pi the sandbox folder `/workspace/c/<conv-seg>/`, whose host
+  view `preparePiRunWorkspace` makes the turn's workspace, so every copy below lands there) exactly like text-only turns, every browser screenshot is also saved
   there (`captures/`, written server-side in the relay — `savedPath` never crosses the extension wire), and
   `mcp__confluence__get_attachment {save_to_workspace}` writes into `confluence/` — so a deck or document includes the
   image instead of describing it. Both metacognition surfaces list which of these the run has (and say a read-only run
@@ -217,6 +223,24 @@ These are the invariants the project is built around. New work should reinforce 
   choice: **never add a check that fires because a slide has no image** (user decision 2026-09-30). Text over a picture
   must pass the converter's worst-case `text-on-picture` contrast, which holds for ANY photo, incl. one swapped in
   later in PowerPoint.
+- **`AGENT_RUNTIME=pi` moves the agent loop to a dedicated pi-gateway; Noah stays the BFF and the gatekeeper.**
+  `runAgentStream` asks ONE decision, `piRuntimeSupports(request)`: owner chat/routine/task-API and trusted-colleague
+  turns run on pi; read-only classes (untrusted colleague, consultation, intro/hashtag generators) and
+  conversation-less runs FALL BACK to the SDK runner with one log line (pi has no per-request tool allowlist). The
+  sandbox principal is ALWAYS the viewer (`viewerUserId` — a colleague runs in THEIR sandbox and reaches the owner's
+  repo/brain/skills only through Noah MCP tools). Noah never executes git or agent-authored code from a sandbox dir:
+  a working repo is a sandbox COPY whose working tree `commit` reads back into the canonical clone (git runs there,
+  `serverGitEnv`), and on pi a stdio plugin MCP server spawns only from the plugins bundled with Noah — every
+  agent-editable root (knowledge repo, group repos, installed plugin repos the agent can push to) is skipped and
+  both surfaces say why. Noah's tools reach pi's broker over `/mcp/<server>`, whose ONLY auth is the per-run bearer
+  token (session cookies never count); tools/list is the static catalog, `allowCall` + handler self-gates refuse.
+  **A new server joins `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`) AND `scripts/pi-register-mcp.mjs`**, and the
+  operator re-runs the script. The prompt is FROZEN per conversation (D2, `conversations.pi_instructions`, sent
+  only when a pi session starts; per-turn facts ride the user input; live state is `describe_system`'s job). Every
+  pi degrade is stated on BOTH metacognition surfaces: a steer arrives as the NEXT turn after the current answer
+  (no mid-turn input), a model/effort change starts a new session from history, shell-exposed secrets are
+  unavailable, no WebSearch, relayed tool lists are per session, and `ask_avatar` (interactive chat) / canvas
+  never wait — the answer or submission arrives as a later message. Mechanics → `docs/architecture/pi-runtime.md`.
 - **할 일 is ONE per-user list behind ONE store.** The 할 일 tab, the chat overlay (toggled under the
   composer) and the owner's avatar all write `todo_items` through `store/todos.ts`, validated by the pure
   `src/server/todos.ts` (error CODES, Korean/English maps per channel); wire types, limits and the ONE

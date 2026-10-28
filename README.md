@@ -248,6 +248,59 @@ both as in [docs/egress-policy.md](docs/egress-policy.md), and roll back by re-t
 running `up -d --no-build` with both compose files. The converter needs nothing from the egress
 boundary: its Chromium only talks to loopback, which the egress firewall allows.
 
+## Running on pi-gateway
+
+`AGENT_RUNTIME=pi` moves owner, trusted-colleague, routine and task-API turns to a dedicated pi-gateway
+instance on the SAME host as Noah (read-only run classes stay on the Claude Agent SDK runner). Design and
+mechanics: [docs/architecture/pi-runtime.md](docs/architecture/pi-runtime.md). No pi-gateway code change is
+needed; everything below is instance configuration.
+
+1. **Build the deck-capable sandbox image** from this repository (details and limits:
+   [docker/pi-sandbox/README.md](docker/pi-sandbox/README.md)):
+   `docker build -f docker/pi-sandbox/Dockerfile -t noahpi/sandbox:<tag> .`
+2. **Point pi at it:** in pi-gateway's `.env` set `SANDBOX_IMAGE=noahpi/sandbox:<tag>`, apply with
+   `docker compose up -d sandboxd`, and set `PI_DECK_SANDBOX=true` in Noah's `.env`. Without the image, leave
+   it `false`: the avatar then reports the deck converter as not installed.
+3. **Configure the instance and register Noah's MCP servers** with pi's ADMIN key (read from the environment
+   only, never stored by Noah). `--configure-instance` deploys Noah's system prompt (`scripts/pi-system-prompt.md`,
+   live prompt `noah`) and disables pi's `request_admin` and `present_file` built-ins; the same run creates one
+   broker entry per Noah server (ids = Noah's server names, plus the relays `hex-ssh`, `plugins`, `shared`).
+   The script is idempotent; `--dry-run` previews, `--remove` deletes this Noah's entries.
+
+   ```bash
+   PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs \
+     --gateway http://<pi-gateway>:8080 --noah-url http://<noah-as-seen-from-the-broker>:48787 \
+     --configure-instance
+   ```
+
+   Re-run it after every Noah release that adds an MCP server. Configure pi's LLM servers (the corporate
+   gateway) and turn concurrency limits in pi's own admin/`.env`, and map Noah's model tiers with `PI_MODEL_MAP`.
+4. **Set the sandbox egress allowlist** in pi-gateway's `.env` (`SANDBOX_EGRESS_ALLOW`, then
+   `docker compose up -d egress-proxy`). Keep it empty unless users need an internal host (for example a package
+   mirror): decks need no network, and Noah needs no entry — pi's broker, not the sandbox, calls Noah.
+5. **Mount the sandbox workspaces into Noah** (same host, design D6). Noah stages attachments, captures and
+   Confluence files straight into each user's sandbox folder and reads shared files and deck previews from it,
+   so its container needs pi's `$PI_GATEWAY_HOME/workspaces` read-write, with the same uid (1000) on both sides.
+   For example, in a compose override:
+
+   ```yaml
+   services:
+     noah-almighty:
+       volumes:
+         - /srv/pi-gateway/workspaces:/srv/pi-workspaces
+   ```
+
+   and in Noah's `.env`: `PI_WORKSPACES_DIR=/srv/pi-workspaces`.
+6. **Switch Noah over:** `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_KEY` (pi's service key; server-only),
+   `NOAH_MCP_PUBLIC_URL` (the same base as `--noah-url`), then restart. `/mcp/<server>` accepts only per-run bearer
+   tokens Noah mints itself, so exposing it to the broker grants nothing on its own.
+
+What changes for users on pi (both the prompt and `describe_system` tell the avatar): a message sent while the
+avatar works arrives after the current answer, not between tool calls; changing the model or effort mid-thread
+continues in a new session from the text history; shell-exposed secrets are not available in the sandbox;
+WebSearch is gone; stdio MCP servers from a knowledge repo, group repo or installed plugin repo are not started
+(bundled plugins, http/sse plugin servers and 공용 MCP servers still work).
+
 ## Configuration
 
 | Env | Purpose |
