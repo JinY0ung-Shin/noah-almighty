@@ -324,6 +324,7 @@ describe("checkServerAgent", () => {
     );
     const options = mocks.query.mock.calls[0][0].options;
     expect(options).toMatchObject({ cwd: workdir, tools: [], settingSources: [], strictMcpConfig: true, maxTurns: 1, model: "opus" });
+    expect(options.settings).toEqual({ crossSessionInbound: "refuse" });
     expect(typeof options.spawnClaudeCodeProcess).toBe("function");
     expect(options.env.SESSION_SECRET).toBeUndefined();
     expect(conn.ended).toBe(true);

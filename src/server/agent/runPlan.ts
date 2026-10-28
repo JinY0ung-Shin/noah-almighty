@@ -31,6 +31,7 @@ import type {
 } from "../types.js";
 import type { Store } from "../store.js";
 import { CLAUDE_OAUTH_TOKEN_KEY } from "../store.js";
+import { CROSS_SESSION_SETTINGS } from "./sessionIsolation.js";
 import type { AgentEvents, FileOutputResult } from "./events.js";
 import {
   deckAuthoringStatusFor,
@@ -1863,8 +1864,9 @@ export async function buildAgentRunPlan(
   if (userEffort) {
     options.effort = userEffort;
   }
+  // Every run refuses inbound cross-session messages (sessionIsolation.ts).
   // Override the autocompact trigger window when the operator set one (env
-  // AUTO_COMPACT_WINDOW). It rides the SDK `settings` option — typed
+  // AUTO_COMPACT_WINDOW). Both ride the SDK `settings` option — typed
   // `string | Settings`, where `Settings.autoCompactWindow` is a real field and a
   // bare string means a settings-FILE path, so inline values go as an OBJECT and
   // the SDK serializes it into the CLI `--settings` JSON. It is NOT a top-level
@@ -1874,9 +1876,10 @@ export async function buildAgentRunPlan(
   // and the CLI's settings schema drops out-of-range values, which is why
   // config.ts clamps to 100K–1M. Omitted → the CLI compacts near the model's
   // full context window.
-  if (config.autoCompactWindow) {
-    options.settings = { autoCompactWindow: config.autoCompactWindow };
-  }
+  options.settings = {
+    ...CROSS_SESSION_SETTINGS,
+    ...(config.autoCompactWindow ? { autoCompactWindow: config.autoCompactWindow } : {}),
+  };
   if (streaming) {
     options.includePartialMessages = true;
   }

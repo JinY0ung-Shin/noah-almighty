@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import logger from "../logger.js";
 import type { AppConfig } from "../types.js";
 import { GIT_CREDENTIAL_ENV_NAMES, scrubServerOnlySecretEnv } from "../secretPolicy.js";
+import { CROSS_SESSION_SETTINGS } from "./sessionIsolation.js";
 import type { Store } from "../store.js";
 import type {
   DiscoveredSkill,
@@ -159,6 +160,7 @@ async function runSkillPreflight(config: AppConfig): Promise<DiscoveredSkill[]> 
       plugins: [{ type: "local", path: config.defaultPluginsDir }],
       skills: "all",
       settingSources: [],
+      settings: { ...CROSS_SESSION_SETTINGS },
       strictMcpConfig: true,
       maxTurns: 1,
       abortController: abort,

@@ -147,6 +147,15 @@
     `http.extraHeader` rides `GIT_CONFIG_COUNT/KEY/VALUE` env via `serverGitEnv` (`marketplace.ts`), and
     every server git command also runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false` — the
     clones are agent-edited, so their own hooks must never run in the server's git.
+  - **No cross-session messages (2026-10-28).** Every live CLI registers in
+    `<CLAUDE_CONFIG_DIR>/sessions/<pid>.json` and listens on `<TMPDIR>/cc-socks/<pid>.sock`, so with the shared
+    config dir `ListAgents` listed other users' runs and `SendMessage{to}` (by name or `uds:<path>`) injected a
+    turn into them, unprompted (permission-mode parity) and without Bash. Every Noah-spawned CLI — chat runs,
+    the skill-discovery preflight, server-agent runs and their install check — now passes
+    `settings: CROSS_SESSION_SETTINGS` (`crossSessionInbound: "refuse"`, `agent/sessionIsolation.ts`), and
+    `ListAgents` is in `UNUSED_SDK_BUILTIN_TOOLS`. Splitting config dirs alone would NOT close it (the socket path
+    is predictable); in-run agent teams are unaffected (same CLI process, mailbox, not a peer socket). **A new
+    `query()` call site passes the same settings.**
   - **Still open (needs uid separation, #71):** the shared data volume (SQLite DB, every user's
     workspaces/clones/transcripts) is readable and writable by any agent Bash; the native CLI binary is
     readable, so a CLI process's environ (its run's shell-exposed vault secrets and model credentials) is

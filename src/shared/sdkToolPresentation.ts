@@ -123,6 +123,11 @@ export const UNUSED_SDK_BUILTIN_TOOLS = [
   "ProposeSkills",
   "ProposeGoal",
   "ReadNotifications",
+  // Lists the OTHER live CLI sessions registered in the shared CLAUDE_CONFIG_DIR —
+  // other users' runs. Noah never messages across sessions (see
+  // CROSS_SESSION_INBOUND in runPlan.ts); in-run agent teams address their
+  // teammates by name without it.
+  "ListAgents",
 ] as const;
 
 export const SDK_TOOL_LABELS: Record<string, string> = {

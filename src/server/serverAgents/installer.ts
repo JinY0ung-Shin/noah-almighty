@@ -10,6 +10,7 @@ import {
   type ServerAgentInstallState,
 } from "../../shared/serverAgents.js";
 import { webFetchProxyState } from "../agent/webFetchTools.js";
+import { CROSS_SESSION_SETTINGS } from "../agent/sessionIsolation.js";
 import type { Store } from "../store.js";
 import type { AppConfig } from "../types.js";
 import { openServerConnection, type ServerConnection } from "./connection.js";
@@ -358,6 +359,7 @@ async function pingModel(
         systemPrompt: "You are a connectivity check. Reply with exactly: OK",
         tools: [],
         settingSources: [],
+        settings: { ...CROSS_SESSION_SETTINGS },
         strictMcpConfig: true,
         maxTurns: 1,
         persistSession: false,

@@ -352,6 +352,7 @@ describe("global skill discovery (preflight + cache)", () => {
     const options = sdkMock.calls[0];
     expect(options.skills).toBe("all");
     expect(options.settingSources).toEqual([]);
+    expect(options.settings).toEqual({ crossSessionInbound: "refuse" });
     expect(options.strictMcpConfig).toBe(true);
     expect(options.maxTurns).toBe(1);
     expect(options.cwd).toBe(config.dataDir);

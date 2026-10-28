@@ -18,6 +18,7 @@ import { buildCanUseToolSafetyNet, createHookApprovalLedger } from "../agent/pre
 import { buildPostToolUseHook, redactSecretValues } from "../agent/postToolUseHook.js";
 import { webFetchProxyState } from "../agent/webFetchTools.js";
 import { isMissingResumeSessionError } from "../agent/claudeAgent.js";
+import { CROSS_SESSION_SETTINGS } from "../agent/sessionIsolation.js";
 import { openServerConnection, type ServerConnection } from "./connection.js";
 import {
   REMOTE_EXIT_NO_ENV,
@@ -649,6 +650,9 @@ export async function runServerAgentTask(input: ServerAgentTaskInput): Promise<S
           ...(input.effort ? { effort: input.effort } : {}),
           env: baseEnv,
           settingSources: [],
+          // Several Noah users may register the same server account and so
+          // share its ~/.claude-noah session registry (sessionIsolation.ts).
+          settings: { ...CROSS_SESSION_SETTINGS },
           strictMcpConfig: true,
           mcpServers: {},
           // The base tool set IS the tier (the authority: sdk.d.ts `tools`), and
