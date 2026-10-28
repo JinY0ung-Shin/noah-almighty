@@ -108,12 +108,12 @@
   `HookApprovalLedger`).** Measured 2026-09-27 on CLIs 2.1.185–2.1.283:
   - Without ANY permission-prompt route (the SDK adds `--permission-prompt-tool stdio` only when
     `canUseTool` is set), CLIs from 2.1.220 on (2.1.185 still offered them; no changelog entry) hide
-    AskUserQuestion, EnterPlanMode and ExitPlanMode from a non-interactive session. So the question modal
-    and the plan review were DEAD from v1.1.0 (SDK 0.3.220) until this confirmer existed, and the avatar
+    AskUserQuestion (and plan mode, retired 2026-10-29 and now disallowed) from a non-interactive session.
+    So the question modal was DEAD from v1.1.0 (SDK 0.3.220) until this confirmer existed, and the avatar
     fell back to canvas controls to ask things.
   - The CLI calls `canUseTool` only when its OWN policy still asks after the hook allowed:
-    - ExitPlanMode always asks; unconfirmed, the model stays stuck in plan mode. The confirmer allows
-      exactly the `tool_use_id` the hook allowed, once, recorded at the hook's single `trace()` exit.
+    - The confirmer allows exactly the `tool_use_id` the hook allowed, once, recorded at the hook's single
+      `trace()` exit (ExitPlanMode, which always asked, was the reason it was built).
     - CLI safety checks such as a Write to `.claude/settings.json` also ask. Approving one would really
       write the file, so the confirmer denies them, which is the pre-route outcome.
   - AskUserQuestion does not ask either: the hook ALLOWS it with the modal's answers in
@@ -123,11 +123,10 @@
     anyway, so a CLI that does ask gets the same answers back. The earlier carrier, a deny whose reason
     held the answer, reached the model as `PreToolUse:AskUserQuestion hook error` with `is_error` set;
     it survives only for a payload without usable answers (and a skipped question is still a deny).
-    Ordinary Bash/Write and EnterPlanMode never ask.
+    Ordinary Bash/Write never ask.
   - SDK 0.3.283+ prints a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` process warning on EVERY run for this
     `canUseTool` + bare-`allowedTools` setup. It recommends a PreToolUse hook, which is already the
-    gate, and its tool list is not even accurate: the ExitPlanMode and protected-path asks above still
-    arrive. `processWarnings.ts` drops exactly that code at server start, and every other warning
+    gate, and its tool list is not even accurate: the protected-path asks above still arrive. `processWarnings.ts` drops exactly that code at server start, and every other warning
     still prints.
 
   Auto-approve applies on the `!headless && elevated && autoApprove` path — **`elevated` = owner OR
@@ -160,7 +159,7 @@
   spike verified DENY: a hook deny on a background subagent's Bash reached it as `PreToolUse:Bash hook
   error`. The rewrite STAYS until parked-prompt answers (a question or permission raised after the
   visible turn ended) are verified for background subagents too, then goes deliberately. Agents that
-  run in the background regardless (a SendMessage resume, teammates, remote agents) render correctly:
+  run in the background regardless (remote agents; SendMessage resumes before 2026-10-29) render correctly:
   the spawn's `async_launched`/`remote_launched` tool_result (`tool_use_result.status`) is only a
   LAUNCH RECEIPT, so `handleUserMessage` does not end the card on it, and the agent's
   `task_notification` does. A card gets its 백그라운드 badge (`agent{background:true}`, once per card

@@ -400,7 +400,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   hashes normalize to `#/groups` in `lib/nav.ts` `routeFromHash`.
 - **Agent cards fold only when SEVERAL agents share one tree.** `ActivityTree` decides at the root (≥2
   sub-agents among the rows it renders — per bubble in the background phase) and nested trees inherit
-  the decision. Each sub-agent card that has rows then gets a disclosure header (`@name`, label,
+  the decision. Each sub-agent card that has rows then gets a disclosure header (`@name` on older snapshots, label,
   `도구 N개 · 태스크 M개`, chevron) and shows only its latest tool row (its latest task row when it has no
   tools). A lone agent, a card with no rows yet and the main agent's own rows never fold. Open state is
   the module store `openAgentCards` (`lib/agentCards.ts`), keyed by agent id so the card the viewer

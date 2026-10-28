@@ -18,25 +18,21 @@ export const SDK_TASK_INSPECTION_TOOLS = [
   "TaskList",
 ] as const;
 
-export const SDK_PLAN_TOOLS = ["EnterPlanMode", "ExitPlanMode"] as const;
-
 /**
- * Agent-teams coordination tools (CLI's experimental agent teams, enabled via
- * CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS in `agentSubprocessEnv`): `Agent` with a
- * `name:` spawns an addressable teammate; `SendMessage` messages it. Auto-allowed
- * like the orchestration set but deliberately NOT in SDK_HIDDEN_ACTIVITY_TOOLS —
- * teammate coordination should show as activity rows, not look like dead air.
+ * Orchestration features RETIRED on 2026-10-29 (ahead of the pi-gateway move):
+ * plan mode, Workflow (ultracode) and agent teams. Always disallowed (part of
+ * UNUSED_SDK_BUILTIN_TOOLS) AND denied by the PreToolUse hook, so a CLI that
+ * offered one anyway still could not run it. See UNUSED_SDK_BUILTIN_TOOLS for
+ * why SendMessage is among them.
  */
-export const SDK_TEAM_TOOLS = ["SendMessage"] as const;
-
-/**
- * The "ultracode" dynamic multi-agent orchestration tool. Auto-allowed like
- * SDK_TEAM_TOOLS (its own spawn is meta-work; the agents it spawns still hit
- * the PreToolUse hook individually, modulo the background-subagent hook-bypass
- * caveat — see SUBAGENT_SPAWN_TOOLS in preToolUseHook.ts) and deliberately NOT
- * in SDK_HIDDEN_ACTIVITY_TOOLS so a workflow launch shows as an activity row.
- */
-export const SDK_WORKFLOW_TOOLS = ["Workflow"] as const;
+export const SDK_RETIRED_TOOLS = [
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "Workflow",
+  "TeamCreate",
+  "TeamDelete",
+  "SendMessage",
+] as const;
 
 export const SDK_INTERNAL_HIDDEN_TOOLS = [
   "ToolSearch",
@@ -51,7 +47,6 @@ export const SDK_ORCHESTRATION_TOOLS = [
   ...SDK_TASK_UPDATE_TOOLS,
   ...SDK_TASK_END_TOOLS,
   ...SDK_TASK_INSPECTION_TOOLS,
-  ...SDK_PLAN_TOOLS,
 ] as const;
 
 export const SDK_HIDDEN_ACTIVITY_TOOLS = [
@@ -97,10 +92,12 @@ export const SDK_ELEVATED_BUILTIN_TOOLS = [
  * or are interactive-CLI-only (Monitor / DesignSync / ClaudeDesign /
  * ScheduleWakeup / RemoteTrigger / ReportFindings / SendFeedback / ProposeSkills /
  * ProposeGoal).
- * `SendMessage` and `Workflow` are NOT here: they power agent teams
- * (SDK_TEAM_TOOLS) and ultracode/dynamic-workflow orchestration
- * (SDK_WORKFLOW_TOOLS) respectively, and an admin can turn either off via the
- * togglable-tool policy instead.
+ * Also the RETIRED orchestration features (2026-10-29, ahead of the pi-gateway
+ * move): plan mode (Enter/ExitPlanMode), Workflow (ultracode) and agent teams
+ * (TeamCreate/TeamDelete/SendMessage). SendMessage goes too although the CLI
+ * offers it without the teams runtime: its only other use, continuing a
+ * finished subagent, runs that subagent in the BACKGROUND, which Noah no longer
+ * supports — the prompt says to spawn a new subagent instead.
  * Fed to the SDK `disallowedTools` option so they're dropped from the advertised
  * `tools` array on every request — several kB of tool descriptions. Unknown
  * names are harmless no-ops, so the list can name tools a given CLI version may
@@ -125,9 +122,9 @@ export const UNUSED_SDK_BUILTIN_TOOLS = [
   "ReadNotifications",
   // Lists the OTHER live CLI sessions registered in the shared CLAUDE_CONFIG_DIR —
   // other users' runs. Noah never messages across sessions (see
-  // CROSS_SESSION_INBOUND in runPlan.ts); in-run agent teams address their
-  // teammates by name without it.
+  // sessionIsolation.ts).
   "ListAgents",
+  ...SDK_RETIRED_TOOLS,
 ] as const;
 
 export const SDK_TOOL_LABELS: Record<string, string> = {

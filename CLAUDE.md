@@ -190,8 +190,8 @@ These are the invariants the project is built around. New work should reinforce 
   uid separation lands. Mechanics → `docs/architecture/secrets-ssh.md` ("Same-uid posture (#71)").
 - **Tool permissions go through ONE gate:** the `PreToolUse` hook (`buildPreToolUseHook`). The SDK's
   `canUseTool` is wired ONLY as a CONFIRMER (`buildCanUseToolSafetyNet`). Its presence is the permission-prompt
-  route without which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It confirms only an ExitPlanMode or
-  AskUserQuestion call the hook already allowed (a question's answers ride the hook's `updatedInput`, so the tool
+  route without which the CLI hides AskUserQuestion. It confirms only an AskUserQuestion call the hook already
+  allowed (a question's answers ride the hook's `updatedInput`, so the tool
   returns them as its own result) and denies every other CLI-side ask (e.g. protected-path writes), so it grants
   nothing the hook didn't. `onUserDialog` stays unused. The `mcp__`-prefix auto-allow fires BEFORE the owner
   check, so every in-process MCP server MUST self-gate in its handlers.

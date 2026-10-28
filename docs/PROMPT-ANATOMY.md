@@ -81,10 +81,10 @@ Cron*, Enter/ExitWorktree, ScheduleWakeup, PushNotification, RemoteTrigger;
 they duplicate app features or are interactive-CLI-only). Measured effect (when the list
 also included SendMessage): 72→61 tools, ~74k→33k chars (**~10,200 tokens/request saved**).
 Built-ins kept: Read/Glob/Grep/Bash/Edit/Write/WebFetch/WebSearch/NotebookEdit/
-AskUserQuestion/Skill + Task*/Agent/Enter|ExitPlanMode (the orchestration set).
-Update (2026-08): `SendMessage` was taken OFF this list to enable agent teams
-(`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` — see [`architecture/agent-core.md`](architecture/agent-core.md)); its
-description rides along again, and an admin can re-remove it via the tool policy.
+AskUserQuestion/Skill + Task*/Agent (the orchestration set).
+Update (2026-10-29): plan mode, Workflow and agent teams were retired, so `EnterPlanMode`/`ExitPlanMode`,
+`Workflow`, `TeamCreate`/`TeamDelete` and `SendMessage` are back on this list (see
+[`architecture/agent-core.md`](architecture/agent-core.md)).
 
 ## How to capture the real thing
 

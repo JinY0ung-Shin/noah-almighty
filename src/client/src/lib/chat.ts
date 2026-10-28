@@ -147,10 +147,6 @@ function makePane(
     liveTextBreakPending: false,
     liveThinking: "",
     thinkingActive: false,
-    livePlan: "",
-    planPending: false,
-    planReview: null,
-    planReviewSubmitting: false,
     liveStatus: "",
     liveRunId: null,
     liveAgents: [],
@@ -1649,16 +1645,8 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "agent":
       if (data?.agentId) {
         markTextBreak(paneId);
-        // A named (agent-teams) teammate's addressable identity rides its OWN
-        // field: the task_started behind every spawn re-announces the card with
-        // no name — and with the subagent type a spawn may have omitted — so a
-        // name folded into the label was overwritten within milliseconds. A
-        // re-emit for a known agent (it went to the background) may carry no
+        // A re-emit for a known agent (it went to the background) may carry no
         // naming field at all, and must not rename its card to the placeholder.
-        const name =
-          typeof data.name === "string" && data.name.trim()
-            ? data.name.trim()
-            : undefined;
         const described = [data.subagentType, data.description]
           .filter(Boolean)
           .join(" · ");
@@ -1670,7 +1658,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
           described || undefined,
           "running",
           background,
-          name,
         );
         const node = readState()
           .chatPanes.find((p) => p.id === paneId)
@@ -1826,52 +1813,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         setStatus(paneId, data.attachment.kind === "file" ? "파일을 공유했습니다." : "이미지를 표시했습니다.", true);
       }
       return;
-    case "plan":
-      // Plan mode. EnterPlanMode emits a `planning` signal with no plan yet — show a
-      // "writing plan…" placeholder so the (tool-row-suppressed) planning phase isn't
-      // mistaken for a stalled turn. ExitPlanMode then delivers the real plan, shown
-      // live as a plan card; the persisted `response.plan` takes over once the turn
-      // finishes.
-      if (typeof data?.plan === "string" && data.plan) {
-        markTextBreak(paneId);
-        updatePane(paneId, (pane) => {
-          pane.livePlan = data.plan;
-          pane.planPending = false;
-        });
-        setStatus(paneId, "계획을 제출했습니다.", true);
-      } else if (data?.planning) {
-        markTextBreak(paneId);
-        updatePane(paneId, (pane) => {
-          pane.planPending = true;
-        });
-        setStatus(paneId, "계획을 작성하는 중…", true);
-      } else {
-        // Planning ended without a submitted plan (empty ExitPlanMode): clear the
-        // placeholder now so it resolves into the avatar's answer instead of
-        // lingering until turn end and vanishing with no trace.
-        updatePane(paneId, (pane) => {
-          pane.planPending = false;
-        });
-      }
-      return;
-    case "plan_review":
-      // The avatar proposed a plan (ExitPlanMode) and is awaiting the owner's
-      // approval. Show the plan as a live card (in case the "plan" event was
-      // missed) and surface inline approve/reject controls keyed by requestId.
-      if (data?.requestId && !resolvedRequestIds.has(data.requestId)) {
-        markTextBreak(paneId);
-        updatePane(paneId, (pane) => {
-          if (typeof data.plan === "string" && data.plan) {
-            pane.livePlan = data.plan;
-            pane.planPending = false;
-          }
-          pane.planReview = { requestId: data.requestId, runId: data.runId || "" };
-          pane.planReviewSubmitting = false;
-        });
-        setStatus(paneId, "계획 승인을 기다리는 중…", true);
-        notifyPlanReview(paneId);
-      }
-      return;
     case "prompt_resolved":
       if (data?.requestId) {
         resolvePrompt(data.requestId);
@@ -1882,12 +1823,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             (c) => c.requestId === data.requestId,
           );
           if (canvas) canvas.pending = false;
-          // A plan awaiting approval was resolved (answered elsewhere / timeout /
-          // reconnect): drop the inline controls so they can't 404 on re-submit.
-          if (pane.planReview?.requestId === data.requestId) {
-            pane.planReview = null;
-            pane.planReviewSubmitting = false;
-          }
         });
       }
       return;
@@ -2148,7 +2083,6 @@ function handleCompact(paneId: string, data: any): void {
 }
 
 function taskLabel(data: any): string {
-  if (data?.workflowName) return `워크플로 ${data.workflowName}`;
   if (data?.subagentType) return data.subagentType;
   if (data?.taskType) return String(data.taskType).replace(/_/g, " ");
   // No distinguishing name → leave empty; the row's "태스크" badge already labels
@@ -2176,7 +2110,6 @@ function ensureAgent(
   label?: string,
   status?: "running" | "done" | "failed",
   background = false,
-  name?: string,
 ): void {
   updatePane(paneId, (pane) => {
     if (!pane.liveAgents.some((a) => a.id === "main")) {
@@ -2200,8 +2133,6 @@ function ensureAgent(
         existing.label.endsWith(` · ${label}`) ||
         existing.label.startsWith(`${label} · `);
       if (label && !covered) existing.label = label;
-      // A name, once known, is never cleared: re-announces carry none.
-      if (name) existing.name = name;
       if (status) existing.status = status;
       if (background) existing.background = true;
       return;
@@ -2214,7 +2145,6 @@ function ensureAgent(
       isMain: false,
       // A nested agent belongs to its parent's turn, like the parent's own rows.
       segment: rowSegment(pane, parentId || "main"),
-      ...(name ? { name } : {}),
       ...(background ? { background: true } : {}),
     });
   });
@@ -2260,7 +2190,7 @@ function markTextBreak(paneId: string): void {
   updatePane(paneId, (pane) => {
     if (pane.liveText && !pane.liveText.endsWith("\n"))
       pane.liveTextBreakPending = true;
-    // Tool / agent / task / plan activity interrupts reasoning: stop the pulse.
+    // Tool / agent / task activity interrupts reasoning: stop the pulse.
     pane.thinkingActive = false;
   });
 }
@@ -2286,10 +2216,6 @@ function resetLive(pane: ChatPane): void {
   pane.liveTextBreakPending = false;
   pane.liveThinking = "";
   pane.thinkingActive = false;
-  pane.livePlan = "";
-  pane.planPending = false;
-  pane.planReview = null;
-  pane.planReviewSubmitting = false;
   pane.liveStatus = "";
   pane.liveAgents = [];
   pane.liveTools = [];
@@ -2356,18 +2282,7 @@ function attachActivity(
   if (response && activity) response.activity = activity;
 }
 
-// Keep the plan card on the finished bubble: the server already sets
-// `response.plan` on persisted responses, but a client-built response
-// (stop/error, or a fallback done without `response`) wouldn't carry it — so
-// graft the live plan on when the response is missing one.
-function attachPlan(
-  response: AgentResponse | null,
-  plan: string | undefined,
-): void {
-  if (response && plan && !response.plan) response.plan = plan;
-}
-
-// Same as attachPlan for the reasoning view: the server sets `response.thinking`
+// Keep the reasoning view on the finished bubble: the server sets `response.thinking`
 // on persisted responses, but a client-built response (stop/error, or a fallback
 // done without `response`) wouldn't carry it — graft the live thinking on then.
 function attachThinking(
@@ -2433,7 +2348,6 @@ function finalizeVisibleTurn(
     }
     if (message?.role === "assistant") {
       attachActivity(message.response, activity);
-      attachPlan(message.response, pane.livePlan);
       attachThinking(message.response, pane.liveThinking);
       pane.messages.push(message);
       appended = true;
@@ -2445,7 +2359,6 @@ function finalizeVisibleTurn(
     } else if (pane.liveText || data?.response) {
       const response = data?.response as AgentResponse | undefined;
       attachActivity(response ?? null, activity);
-      attachPlan(response ?? null, pane.livePlan);
       attachThinking(response ?? null, pane.liveThinking);
       pane.messages.push({
         id: newId(),
@@ -2526,7 +2439,6 @@ function finalizeBackgroundTurn(paneId: string, data: any): void {
       message?.role === "assistant" &&
       !(message.id && pane.messages.some((m) => m.id === message.id))
     ) {
-      attachPlan(message.response, pane.livePlan);
       attachThinking(message.response, pane.liveThinking);
       pane.messages.push(message);
       appended = true;
@@ -2549,8 +2461,6 @@ function finalizeBackgroundTurn(paneId: string, data: any): void {
     pane.liveTextBreakPending = false;
     pane.liveThinking = "";
     pane.thinkingActive = false;
-    pane.livePlan = "";
-    pane.planPending = false;
     pane.liveStatus = "백그라운드 작업 진행 중…";
   });
   // The sidebar's background badge should show up the moment the phase starts.
@@ -2664,7 +2574,7 @@ function adoptTerminalMessageId(paneId: string, persisted: unknown): void {
 }
 
 // Build a client-side terminal (stop/error) assistant message: a text
-// AgentResponse carrying the snapshot activity + live plan, push it, then clear the
+// AgentResponse carrying the snapshot activity + live reasoning, push it, then clear the
 // live state. Callers compute their own summary/text/content.
 function pushTerminalMessage(
   pane: ChatPane,
@@ -2677,7 +2587,6 @@ function pushTerminalMessage(
     text,
   };
   attachActivity(response, snapshotActivity(pane));
-  attachPlan(response, pane.livePlan);
   attachThinking(response, pane.liveThinking);
   const id = newId();
   terminalMessageIds.set(pane.id, id);
@@ -3337,18 +3246,6 @@ function notifyPrompt(
   }
 }
 
-// OS notification when the avatar's proposed plan is waiting on the owner's
-// approval. Like the prompt notifications, only meaningful while backgrounded.
-function notifyPlanReview(paneId: string): void {
-  const pane = readState().chatPanes.find((p) => p.id === paneId);
-  const who = pane?.avatar?.alias || pane?.avatar?.displayName || "아바타";
-  osNotify(
-    `${who} · 계획 승인 필요`,
-    "제안한 계획을 검토해 주세요.",
-    `plan-${paneId}`,
-  );
-}
-
 function resolvePrompt(requestId: string): void {
   resolvedRequestIds.add(requestId);
   updateState((state) => {
@@ -3384,54 +3281,6 @@ export async function answerPrompt(
       state.promptQueue = state.promptQueue.filter((p) => p.id !== requestId);
     });
   } catch (err) {
-    notify(`응답을 전송하지 못했습니다: ${(err as Error).message}`, "warn");
-    throw err;
-  }
-}
-
-// Submit the owner's plan-approval decision for the pane's pending ExitPlanMode
-// review. Unlike answerPrompt, a plan review lives on the pane (inline on the
-// plan card), not in the prompt queue. Approve → the avatar implements; reject
-// → the optional feedback is fed back to the model so it revises the plan.
-export async function respondPlanReview(
-  paneId: string,
-  behavior: "approved" | "rejected",
-  feedback?: string,
-): Promise<void> {
-  const pane = readState().chatPanes.find((p) => p.id === paneId);
-  const review = pane?.planReview;
-  if (!review || pane?.planReviewSubmitting) return;
-  updatePane(paneId, (pane) => {
-    pane.planReviewSubmitting = true;
-  });
-  try {
-    await api("/api/chat/respond", {
-      method: "POST",
-      body: JSON.stringify({
-        runId: review.runId,
-        requestId: review.requestId,
-        value:
-          behavior === "approved"
-            ? { behavior: "approved" }
-            : { behavior: "rejected", feedback: feedback?.trim() || undefined },
-      }),
-    });
-    resolvedRequestIds.add(review.requestId);
-    updatePane(paneId, (pane) => {
-      pane.planReview = null;
-      pane.planReviewSubmitting = false;
-    });
-    setStatus(
-      paneId,
-      behavior === "approved"
-        ? "계획을 승인했습니다."
-        : "계획 수정을 요청했습니다.",
-      true,
-    );
-  } catch (err) {
-    updatePane(paneId, (pane) => {
-      pane.planReviewSubmitting = false;
-    });
     notify(`응답을 전송하지 못했습니다: ${(err as Error).message}`, "warn");
     throw err;
   }

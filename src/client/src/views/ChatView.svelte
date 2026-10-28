@@ -21,7 +21,6 @@
     newChat,
     openFileTab,
     regenerate,
-    respondPlanReview,
     selectConversation,
     sendMessage,
     sendSteer,
@@ -77,53 +76,6 @@
   let mcpToolsOpenPaneId = "";
   // Per-pane mobile composer settings disclosure state.
   let composerSettingsOpenPaneId = "";
-  // Plan-approval: which pane is in "수정 요청" (reject-with-feedback) mode, and its draft.
-  let planRejectPaneId = "";
-  let planFeedback = "";
-  let planReviewErrors: Record<string, string> = {};
-
-  function planReviewStatusText(pane: ChatPane): string {
-    if (pane.planReviewSubmitting) return "응답을 전송하는 중입니다.";
-    return planReviewErrors[pane.id] ? `응답 전송 실패: ${planReviewErrors[pane.id]}` : "";
-  }
-  function clearPlanReviewError(paneId: string): void {
-    if (!planReviewErrors[paneId]) return;
-    const next = { ...planReviewErrors };
-    delete next[paneId];
-    planReviewErrors = next;
-  }
-  function setPlanReviewError(paneId: string, message: string): void {
-    planReviewErrors = { ...planReviewErrors, [paneId]: message };
-  }
-
-  async function approvePlan(pane: ChatPane): Promise<void> {
-    clearPlanReviewError(pane.id);
-    try {
-      await respondPlanReview(pane.id, "approved");
-    } catch (err) {
-      setPlanReviewError(pane.id, (err as Error).message);
-    }
-  }
-  function startRejectPlan(pane: ChatPane): void {
-    planRejectPaneId = pane.id;
-    planFeedback = "";
-    clearPlanReviewError(pane.id);
-  }
-  function cancelRejectPlan(): void {
-    planRejectPaneId = "";
-    planFeedback = "";
-  }
-  async function submitRejectPlan(pane: ChatPane): Promise<void> {
-    const feedback = planFeedback;
-    clearPlanReviewError(pane.id);
-    try {
-      await respondPlanReview(pane.id, "rejected", feedback);
-      cancelRejectPlan();
-    } catch (err) {
-      setPlanReviewError(pane.id, (err as Error).message);
-    }
-  }
-
   onMount(async () => {
     try {
       const route = routeFromHash();
@@ -550,7 +502,7 @@
   }
 
   // Scoped to the composer box: the transcript can hold textareas of its own (the
-  // inline 여기서부터 다시 editor, a plan's 수정 요청 field), which come FIRST in the
+  // inline 여기서부터 다시 editor), which come FIRST in the
   // pane's DOM order.
   function blurComposer(paneId: string) {
     const el = document.querySelector<HTMLTextAreaElement>(`[data-pane="${paneId}"] .composer-box textarea`);
@@ -1369,6 +1321,7 @@
                   </details>
                 {/if}
                 {#if message.response?.plan}
+                  <!-- Read-only: plan mode is retired, but an older turn's stored plan still renders. -->
                   <details class="plan-card" open>
                     <summary class="plan-card-head"><span class="tag plan-card-badge">계획</span><span class="plan-card-hint">계획 모드</span></summary>
                     <div class="md plan-card-body" use:enhanceMarkdown={message.response.plan}>{@html renderMarkdownCached(message.response.plan)}</div>
@@ -1505,45 +1458,6 @@
                   </summary>
                   <div class="md thinking-card-body" use:enhanceMarkdown={item.liveThinking}>{@html renderMarkdown(item.liveThinking)}</div>
                 </details>
-              {/if}
-              {#if item.livePlan}
-                <details class="plan-card" open>
-                  <summary class="plan-card-head"><span class="tag plan-card-badge">계획</span><span class="plan-card-hint">{item.planReview ? "승인 대기 중" : "계획 모드"}</span></summary>
-                  <div class="md plan-card-body" use:enhanceMarkdown={item.livePlan}>{@html renderMarkdown(item.livePlan)}</div>
-                  {#if item.planReview}
-                    {@const planStatus = planReviewStatusText(item)}
-                    <div class="plan-actions" aria-busy={item.planReviewSubmitting ? "true" : "false"} aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined}>
-                      {#if planRejectPaneId === item.id}
-                        <textarea
-                          class="plan-feedback"
-                          rows="2"
-                          placeholder="수정할 점을 알려주세요 (선택)"
-                          bind:value={planFeedback}
-                          aria-label="계획 수정 요청 내용"
-                          aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined}
-                          aria-invalid={planReviewErrors[item.id] ? "true" : undefined}
-                          disabled={item.planReviewSubmitting}
-                        ></textarea>
-                        <div class="plan-actions-row">
-                          <button class="btn btn-ghost btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={cancelRejectPlan}>취소</button>
-                          <button class="btn btn-primary btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={() => submitRejectPlan(item)}>수정 요청 보내기</button>
-                        </div>
-                      {:else}
-                        <div class="plan-actions-row">
-                          <button class="btn btn-ghost btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={() => startRejectPlan(item)}>수정 요청</button>
-                          <button class="btn btn-primary btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={() => approvePlan(item)}>승인</button>
-                        </div>
-                      {/if}
-                      {#if planStatus}
-                        <div id={paneDomId("plan-review-status", item.id)} class="plan-review-status" class:invalid={Boolean(planReviewErrors[item.id])} role="status" aria-live="polite">{planStatus}</div>
-                      {/if}
-                    </div>
-                  {/if}
-                </details>
-              {:else if item.planPending}
-                <div class="plan-card plan-card-pending">
-                  <div class="plan-card-head"><span class="tag plan-card-badge">계획</span><span class="plan-card-hint">계획을 작성하는 중…</span><span class="plan-card-spin" aria-hidden="true"></span></div>
-                </div>
               {/if}
               {#each segmentAttachments(item.liveText, item.liveAttachments) as seg, segIndex (segIndex)}
                 {#if seg.text || (seg.tail && item.liveText)}
@@ -2145,9 +2059,8 @@
     justify-content: flex-end;
     gap: var(--s-2);
   }
-  /* Plan-mode plan card (ExitPlanMode). A distinct, collapsible card inside the
-     assistant bubble that surfaces the proposed plan — shown live while the turn
-     streams and persisted on the finished message (response.plan). */
+  /* Plan card (retired plan mode): a distinct, collapsible card inside an OLDER
+     assistant bubble that still carries a stored plan (response.plan). Read-only. */
   .plan-card {
     min-width: 0;
     max-width: 100%;
@@ -2193,57 +2106,6 @@
     padding: 0 var(--s-3) var(--s-2);
     min-width: 0;
     max-width: 100%;
-  }
-  /* Inline approve / reject controls shown on a live plan card while the avatar
-     waits for the owner's approval (interactive plan mode). */
-  .plan-actions {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-    padding: 0 var(--s-3) var(--s-3);
-  }
-  .plan-actions-row {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--s-2);
-  }
-  .plan-feedback {
-    width: 100%;
-    box-sizing: border-box;
-    resize: vertical;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    background: var(--panel);
-    color: var(--text);
-    padding: var(--s-2);
-    font: inherit;
-    font-size: var(--t-sm);
-  }
-  .plan-review-status {
-    align-self: flex-end;
-    color: var(--muted);
-    font-size: var(--t-xs);
-  }
-  .plan-review-status.invalid {
-    color: var(--danger);
-  }
-  /* Placeholder shown between EnterPlanMode and ExitPlanMode: the avatar is
-     composing the plan in the background (tool rows are suppressed for plan
-     tools), so without this the turn looks stalled. */
-  .plan-card-pending .plan-card-head {
-    cursor: default;
-  }
-  /* Self-contained spinner: the base `.spinner` rule is scoped to `.stream-status`,
-     so this placeholder (outside it) must style its own. `spin` is a global keyframe. */
-  .plan-card-spin {
-    margin-left: auto;
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border: 2px solid var(--line);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
   }
   /* Reasoning (extended-thinking) view. Deliberately muted and secondary to the
      answer — collapsed by default on completed bubbles, expanded live so the user

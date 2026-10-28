@@ -62,7 +62,6 @@ function makeEvents(): AgentEvents {
     onAgentStart: vi.fn(),
     onAgentEnd: vi.fn(),
     onBlocked: vi.fn(),
-    onPlan: vi.fn(),
   };
 }
 

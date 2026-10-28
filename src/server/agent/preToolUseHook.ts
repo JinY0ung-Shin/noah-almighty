@@ -12,9 +12,8 @@ import { asString, isRecord, truncate, TOOL_TRACE_ENABLED } from "./agentUtils.j
 import {
   SDK_INTERNAL_HIDDEN_TOOLS,
   SDK_ORCHESTRATION_TOOLS,
+  SDK_RETIRED_TOOLS,
   SDK_SUBAGENT_TOOLS,
-  SDK_TEAM_TOOLS,
-  SDK_WORKFLOW_TOOLS,
 } from "../../shared/sdkToolPresentation.js";
 import {
   DEFAULT_TOOL_SKILL_POLICY,
@@ -31,23 +30,14 @@ const agentLogger = logger.child({ module: "agent" });
 const NO_VISION_READ_BLOCKED = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?|heic|heif|avif|pdf)$/i;
 
 /**
- * SDK orchestration tools that should never trigger the user permission modal.
- * Includes the agent-teams coordination tools (SendMessage): messaging a
- * teammate is meta-work like spawning one (Agent is already here) — the
- * teammate's OWN tool calls still hit this hook individually. Also includes
- * `Workflow` (ultracode): launching a workflow is meta-work too — it always
- * returns `status: "async_launched"` and never blocks on the spawned agents,
- * so there is nothing here to gate. Those agents' OWN tool calls still hit
- * this hook (or, per SUBAGENT_SPAWN_TOOLS below, don't — Workflow has no
- * foreground lever to dodge that gap the way Task/Agent do). The admin
- * disabledTools policy check runs BEFORE the auto-allow, so an admin can still
- * turn team messaging or workflows off.
+ * SDK orchestration tools that should never trigger the user permission modal:
+ * spawning a subagent and the per-run task checklist are meta-work — a
+ * subagent's OWN tool calls still hit this hook individually. Plan mode,
+ * Workflow and agent teams (SendMessage) are retired and always disallowed
+ * (UNUSED_SDK_BUILTIN_TOOLS), so none of them is allowed here.
  */
-export const TASK_ORCHESTRATION_TOOLS: ReadonlySet<string> = new Set([
-  ...SDK_ORCHESTRATION_TOOLS,
-  ...SDK_TEAM_TOOLS,
-  ...SDK_WORKFLOW_TOOLS,
-]);
+export const TASK_ORCHESTRATION_TOOLS: ReadonlySet<string> = new Set(SDK_ORCHESTRATION_TOOLS);
+const RETIRED_TOOLS: ReadonlySet<string> = new Set(SDK_RETIRED_TOOLS);
 const AUTO_ALLOWED_META_TOOLS: ReadonlySet<string> = new Set(["Skill", ...SDK_INTERNAL_HIDDEN_TOOLS]);
 
 /**
@@ -64,8 +54,7 @@ const AUTO_ALLOWED_META_TOOLS: ReadonlySet<string> = new Set(["Skill", ...SDK_IN
  * same bubble, and matches what the prompt promises, while the parked asks (a
  * question or permission raised after the visible turn ended) are still
  * unverified for background subagents. Agents that run in the background anyway
- * (a SendMessage resume, teammates, remote agents) are rendered from their task
- * events in sdkMessageHandlers. Bash keeps `run_in_background`: a running shell
+ * (remote agents) are rendered from their task events in sdkMessageHandlers. Bash keeps `run_in_background`: a running shell
  * makes no further tool calls, so backgrounding it never bypasses the gate.
  */
 const SUBAGENT_SPAWN_TOOLS: ReadonlySet<string> = new Set(SDK_SUBAGENT_TOOLS);
@@ -146,15 +135,13 @@ const hookDeny = (reason: string): HookOutput => ({
 });
 
 /**
- * Tools whose own permission check may still ASK after this hook allowed them:
- * leaving plan mode is an approval built into ExitPlanMode, so the CLI routes
- * it to the SDK's `canUseTool` even on a hook `allow` (measured on the bundled
- * CLI 2.1.283 — unconfirmed, the model stays stuck in plan mode).
- * AskUserQuestion rides along defensively: 2.1.283 runs a hook-allowed call
- * that already carries its `answers` without asking (measured), but a CLI that
- * does ask must get the hook's answers back rather than a deny.
+ * Tools whose own permission check may still ASK after this hook allowed them.
+ * Only AskUserQuestion, defensively: 2.1.283 runs a hook-allowed call that
+ * already carries its `answers` without asking (measured), but a CLI that does
+ * ask must get the hook's answers back rather than a deny. (ExitPlanMode was
+ * the other member until plan mode was retired.)
  */
-const HOOK_CONFIRMED_TOOLS: ReadonlySet<string> = new Set(["ExitPlanMode", "AskUserQuestion"]);
+const HOOK_CONFIRMED_TOOLS: ReadonlySet<string> = new Set(["AskUserQuestion"]);
 
 /**
  * One run's record of the hook's allows that `canUseTool` may be asked to
@@ -192,10 +179,10 @@ type CanUseToolResult =
  * The SDK `canUseTool` callback — a CONFIRMER, never a second gate. Its main
  * job is to EXIST: with it the SDK passes `--permission-prompt-tool stdio`.
  * Without that route the CLI (since somewhere in 2.1.186–2.1.220) hides
- * AskUserQuestion, EnterPlanMode and ExitPlanMode from a non-interactive
- * session. The hook above still decides every call. The CLI lands here only
- * when its OWN policy still asks after the hook allowed. It confirms exactly
- * the ExitPlanMode / AskUserQuestion call the hook allowed and denies everything
+ * AskUserQuestion from a non-interactive session (and plan mode, which Noah no
+ * longer offers). The hook above still decides every call. The CLI lands here
+ * only when its OWN policy still asks after the hook allowed. It confirms
+ * exactly the AskUserQuestion call the hook allowed and denies everything
  * else, which is how those asks ended before this route existed. One example is the CLI's
  * safety check on a write to `.claude/settings.json`; approving that here would
  * bypass the CLI's own guard.
@@ -313,6 +300,17 @@ export function buildPreToolUseHook(
       return out;
     };
 
+    // Retired orchestration tools are disallowed at the CLI; deny them here too
+    // so a CLI that offered one anyway can never run it (an elevated,
+    // auto-approving run would otherwise allow it below).
+    if (RETIRED_TOOLS.has(toolName)) {
+      return trace(
+        hookDeny(
+          `${toolName} is not available in this deployment (plan mode, Workflow and agent teams are not supported). Do the work directly or with a foreground subagent instead.`,
+        ),
+      );
+    }
+
     // AskUserQuestion: surface the question, await the answer, and hand it back
     // by ALLOWING the call with the collected `answers` in updatedInput — the
     // tool then returns them as its own ordinary result ("Your questions have
@@ -337,36 +335,6 @@ export function buildPreToolUseHook(
       }
       const answers = questionAnswers(answer.result);
       return trace(answers ? hookAllow({ ...toolInput, answers }) : hookDeny(formatQuestionAnswer(answer.result)));
-    }
-
-    // ExitPlanMode: the avatar finished planning and proposed a plan. For a PRESENT
-    // owner (interactive, non-auto-approve) we PARK for explicit approval — approve
-    // → allow (the avatar proceeds to implement); reject → deny carrying the user's
-    // feedback, which the model reads as a tool result and uses to revise the plan
-    // before re-proposing. Headless / colleague / auto-approve runs keep the
-    // original display-only behavior (fall through to the auto-allow below). An
-    // empty plan (degenerate ExitPlanMode) has nothing to approve, so it skips too.
-    if (toolName === "ExitPlanMode") {
-      const plan = asString((toolInput as Record<string, unknown>).plan);
-      const canReview =
-        plan && !headless && elevated && !autoApprove && Boolean(events.onPlanReview);
-      if (canReview) {
-        const decision = await events.onPlanReview!({ plan, toolUseId });
-        if (decision.behavior === "approved") {
-          return trace(hookAllow());
-        }
-        const feedback = decision.feedback?.trim();
-        return trace(
-          hookDeny(
-            "The user REJECTED this plan and did NOT approve proceeding." +
-              (feedback
-                ? ` Their feedback: ${feedback}`
-                : " They gave no specific feedback.") +
-              " Revise the plan to address this, then call ExitPlanMode again with the" +
-              " updated plan. Do NOT begin implementing until a plan is approved.",
-          ),
-        );
-      }
     }
 
     let updatedToolInput: Record<string, unknown> | undefined;

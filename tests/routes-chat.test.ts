@@ -959,7 +959,7 @@ describe("canvas submission turns (#50)", () => {
 });
 
 describe("SSE event fan-out", () => {
-  it("forwards every non-blocking event as an SSE frame and persists plan + thinking", async () => {
+  it("forwards every non-blocking event as an SSE frame and persists thinking", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "fanout").expect(201)).body.user.id as string;
@@ -981,8 +981,6 @@ describe("SSE event fan-out", () => {
       events.onAgentStart?.({ agentId: "a1", parentId: "main", subagentType: "explore", description: "sub" });
       events.onAgentEnd?.({ agentId: "a1", ok: true });
       events.onBlocked?.({ toolName: "Bash", agentId: "main", reason: "read-only" });
-      events.onPlan?.({ plan: "", planning: true });
-      events.onPlan?.({ plan: "THE PLAN" });
       await events.onCanvas?.({ artifactId: "c1", title: "T", content: "# hi", contentType: "markdown", awaitInput: false });
       const generatedPath = path.join(agentRequest.cwd!, "generated.png");
       fs.writeFileSync(generatedPath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64"));
@@ -996,17 +994,15 @@ describe("SSE event fan-out", () => {
     const events = frames.map((f) => f.event);
     for (const name of [
       "open", "delta", "thinking", "thinking_reset", "status", "plugin", "tool", "tool_end",
-      "task", "task_update", "task_end", "agent", "agent_end", "blocked", "plan", "canvas", "file", "done",
+      "task", "task_update", "task_end", "agent", "agent_end", "blocked", "canvas", "file", "done",
     ]) {
       expect(events).toContain(name);
     }
-    const planFrames = frames.filter((f) => f.event === "plan");
-    expect(planFrames).toHaveLength(2);
-    expect(planFrames.some((f) => (f.data as { planning?: boolean }).planning === true)).toBe(true);
-    expect(planFrames.some((f) => (f.data as { plan?: string }).plan === "THE PLAN")).toBe(true);
+    // Plan mode is retired: no plan frames, and no plan on the response.
+    expect(events).not.toContain("plan");
 
     const doneData = frames.find((f) => f.event === "done")!.data as { response: AgentResponse };
-    expect(doneData.response.plan).toBe("THE PLAN");
+    expect(doneData.response.plan).toBeUndefined();
     expect(doneData.response.thinking).toBe("final thinking"); // reset dropped the throwaway
     expect(doneData.response.text).toBe("final answer");
     const stored = store.listMessages(ownerId, "conv-fan").find((message) => message.role === "assistant");
@@ -1067,7 +1063,6 @@ describe("interactive prompts answered over /api/chat/respond", () => {
     H.impl = async (_req, _pr, config, _store, events) => {
       const perm = await events.onPermission!({ toolUseId: "tu1", toolName: "Bash", input: { command: "ls" }, agentId: "main" });
       const q = await events.onQuestion!({ dialogKind: "ask", payload: { question: "고를래?" } });
-      const plan = await events.onPlanReview!({ plan: "PLAN TEXT" });
       const canvas = await events.onCanvas!({
         artifactId: "cvpos",
         title: "T",
@@ -1077,7 +1072,7 @@ describe("interactive prompts answered over /api/chat/respond", () => {
         awaitInput: true,
         interaction: "blocking",
       });
-      events.onDelta?.(JSON.stringify({ perm, q, plan, canvas }));
+      events.onDelta?.(JSON.stringify({ perm, q, canvas }));
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "ANSWERED" };
     };
 
@@ -1089,7 +1084,6 @@ describe("interactive prompts answered over /api/chat/respond", () => {
       const { frames } = await streamRaw(port, cookie, "/api/chat/stream", "POST", { avatarId: ownerId, conversationId: "conv-int", message: "가라" }, (frame) => {
         if (frame.event === "permission") answer(frame.data, { behavior: "allow" });
         else if (frame.event === "question") answer(frame.data, { result: { choice: "A" } });
-        else if (frame.event === "plan_review") answer(frame.data, { behavior: "approved" });
         else if (frame.event === "canvas") answer(frame.data, { values: { a: "typed" } });
       });
 
@@ -1098,7 +1092,6 @@ describe("interactive prompts answered over /api/chat/respond", () => {
       expect(JSON.parse(delta.data.text)).toEqual({
         perm: { behavior: "allow" },
         q: { behavior: "completed", result: { choice: "A" } },
-        plan: { behavior: "approved" },
         canvas: { behavior: "submitted", values: { a: "typed" } },
       });
       expect(frames.some((f) => f.event === "done")).toBe(true);
@@ -1107,7 +1100,7 @@ describe("interactive prompts answered over /api/chat/respond", () => {
     });
   }, LIVE);
 
-  it("delivers deny/cancel/reject/delete decisions back to the run", async () => {
+  it("delivers deny/cancel/delete decisions back to the run", async () => {
     const { services, app } = boot();
     const owner = request.agent(app);
     const signupRes = await signup(owner, "interact2").expect(201);
@@ -1117,12 +1110,11 @@ describe("interactive prompts answered over /api/chat/respond", () => {
     H.impl = async (_req, _pr, config, _store, events) => {
       const perm = await events.onPermission!({ toolUseId: "tu1", toolName: "Bash", input: {}, agentId: "main" });
       const q = await events.onQuestion!({ dialogKind: "ask", payload: {} });
-      const plan = await events.onPlanReview!({ plan: "P" });
       const canvasControls = [{ type: "text" as const, id: "a" }];
       // Two canvases: one the user DELETES, one they DISMISS (cancel) — distinct branches.
       const canvasDel = await events.onCanvas!({ artifactId: "cvdel", title: "T", content: "c", contentType: "markdown", controls: canvasControls, awaitInput: true, interaction: "blocking" });
       const canvasCancel = await events.onCanvas!({ artifactId: "cvcancel", title: "T", content: "c", contentType: "markdown", controls: canvasControls, awaitInput: true, interaction: "blocking" });
-      events.onDelta?.(JSON.stringify({ perm, q, plan, canvasDel, canvasCancel }));
+      events.onDelta?.(JSON.stringify({ perm, q, canvasDel, canvasCancel }));
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "done" };
     };
 
@@ -1135,7 +1127,6 @@ describe("interactive prompts answered over /api/chat/respond", () => {
       const { frames } = await streamRaw(port, cookie, "/api/chat/stream", "POST", { avatarId: ownerId, conversationId: "conv-int2", message: "가라" }, (frame) => {
         if (frame.event === "permission") answer(frame.data, { behavior: "deny" });
         else if (frame.event === "question") answer(frame.data, { cancelled: true });
-        else if (frame.event === "plan_review") answer(frame.data, { behavior: "rejected", feedback: "다시" });
         else if (frame.event === "canvas") answer(frame.data, ++canvasSeen === 1 ? { deleteCanvas: true } : { cancelled: true });
       });
 
@@ -1144,7 +1135,6 @@ describe("interactive prompts answered over /api/chat/respond", () => {
       expect(JSON.parse(delta.data.text)).toEqual({
         perm: { behavior: "deny" },
         q: { behavior: "cancelled" },
-        plan: { behavior: "rejected", feedback: "다시" },
         canvasDel: { behavior: "cancelled" },
         canvasCancel: { behavior: "cancelled" },
       });
@@ -1236,30 +1226,29 @@ describe("cancellation + run registry", () => {
     });
   }, LIVE);
 
-  it("cancels the four blocking prompts at once when the run is stopped", async () => {
+  it("cancels the three blocking prompts at once when the run is stopped", async () => {
     const { app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "cancelprompts").expect(201)).body.user.id as string;
 
     H.impl = async (_req, _pr, config, _store, events, ac) => {
-      const [plan, perm, q, canvas] = await Promise.all([
-        events.onPlanReview!({ plan: "p" }),
+      const [perm, q, canvas] = await Promise.all([
         events.onPermission!({ toolUseId: "tu", toolName: "Bash", input: {}, agentId: "main" }),
         events.onQuestion!({ dialogKind: "ask", payload: {} }),
         events.onCanvas!({ artifactId: "cvc", title: "T", content: "c", contentType: "markdown", controls: [{ type: "text", id: "a" }], awaitInput: true, interaction: "blocking" }),
       ]);
-      events.onDelta?.(JSON.stringify({ plan, perm, q, canvas }));
+      events.onDelta?.(JSON.stringify({ perm, q, canvas }));
       if (ac.signal.aborted) throw new Error("aborted");
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "x" };
     };
 
     const streamDone = fireStream(owner, { avatarId: ownerId, conversationId: "conv-cp", message: "질문들" });
-    await waitUntil(async () => ((await activeRun(owner, "conv-cp"))?.pendingCount ?? 0) === 4, "four prompts parked");
+    await waitUntil(async () => ((await activeRun(owner, "conv-cp"))?.pendingCount ?? 0) === 3, "three prompts parked");
     const run = (await activeRun(owner, "conv-cp"))!;
     await owner.post(`/api/chat/runs/${run.runId}/cancel`).send({}).expect(200);
 
     const frames = parseSse((await streamDone).text);
-    for (const name of ["plan_review", "permission", "question", "canvas", "cancelled"]) {
+    for (const name of ["permission", "question", "canvas", "cancelled"]) {
       expect(frames.map((f) => f.event)).toContain(name);
     }
     // The stop resolved the permission prompt WITHOUT an answer — the decision
@@ -1451,14 +1440,13 @@ describe("chat error handling", () => {
     expect(assistant.response).toBeNull(); // plain error keeps the null-response shape
   });
 
-  it("nudges the user to switch models on a retryable failure, keeping the streamed partial + plan + thinking", async () => {
+  it("nudges the user to switch models on a retryable failure, keeping the streamed partial + thinking", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "err2").expect(201)).body.user.id as string;
     H.retryable = true;
     H.impl = async (_req, _pr, _config, _store, events) => {
       events.onDelta?.("부분 결과");
-      events.onPlan?.({ plan: "PLAN" });
       events.onThinking?.("생각");
       throw new Error("overloaded");
     };
@@ -1469,7 +1457,6 @@ describe("chat error handling", () => {
 
     const assistant = store.listMessages(ownerId, "conv-err2").find((m) => m.role === "assistant")!;
     expect(assistant.content.startsWith("부분 결과")).toBe(true);
-    expect(assistant.response?.plan).toBe("PLAN");
     expect(assistant.response?.thinking).toBe("생각");
   });
 });

@@ -470,7 +470,7 @@ describe("ActivityTree", () => {
       expect(toggle.querySelector(".agent-count")!.textContent).toBe("도구 3개 · 태스크 1개");
       expect(args(tester)).toEqual(["npm test"]);
       expect(tester.querySelector(".task-row")).toBeNull();
-      // The teammate's name leads its accessible name as well as its card.
+      // A stored (pre-retirement) teammate name leads its accessible name as well as its card.
       expect(tester.getAttribute("aria-label")).toBe("에이전트 · @tester · general-purpose · 테스트 실행 · 진행 중");
       expect(args(card("Explore · 문서 조사"))).toEqual(["TODO · src"]);
       // The main agent's own rows are never folded.

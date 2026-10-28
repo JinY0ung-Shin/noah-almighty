@@ -466,4 +466,12 @@ describe("avatar task API", () => {
     expect(getRunPrompts("prompts", "other")).toEqual([]);
     closeRun("prompts"); await response;
   });
+
+  it("no longer reports a plan_review as a pending request (plan mode is retired)", async () => {
+    openRun("prompts-plan", "owner");
+    emitRunEvent("prompts-plan", "plan_review", { requestId: "p", plan: "계획" });
+    const response = awaitResponse("prompts-plan", "p");
+    expect(getRunPrompts("prompts-plan", "owner")).toEqual([]);
+    closeRun("prompts-plan"); await response;
+  });
 });

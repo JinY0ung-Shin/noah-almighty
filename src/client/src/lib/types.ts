@@ -172,16 +172,8 @@ export interface ChatPane {
   turnFinalized?: boolean;
   /** The model's reasoning (extended-thinking) text streamed this turn; shown in a collapsible "생각 과정" view until the turn finishes and the persisted `response.thinking` takes over. */
   liveThinking?: string;
-  /** True while reasoning deltas are actively streaming (set on each thinking delta, cleared once answer text / tool / agent / task / plan activity arrives). Drives the live "생각 중…" indicator on the collapsed thinking card. */
+  /** True while reasoning deltas are actively streaming (set on each thinking delta, cleared once answer text / tool / agent / task activity arrives). Drives the live "생각 중…" indicator on the collapsed thinking card. */
   thinkingActive?: boolean;
-  /** Plan submitted via ExitPlanMode this turn (plan mode); shown live as a plan card until the turn finishes and the persisted `response.plan` takes over. */
-  livePlan?: string;
-  /** True between EnterPlanMode and ExitPlanMode: the avatar is composing a plan in the background. Drives a "writing plan…" placeholder card so the turn doesn't look stalled. Cleared once `livePlan` arrives. */
-  planPending?: boolean;
-  /** Set when the avatar proposed a plan (ExitPlanMode) and is awaiting the owner's approval; drives inline approve/reject controls on the live plan card. Holds the ids needed to answer via /api/chat/respond. Cleared once answered/resolved. */
-  planReview?: { requestId: string; runId: string } | null;
-  /** A plan-approval submit (approve/reject) is in flight, to disable the controls. */
-  planReviewSubmitting?: boolean;
   liveStatus: string;
   liveRunId: string | null;
   /** Multi-agent activity tree (root "main" + sub-agents) for the live bubble. */
@@ -314,8 +306,8 @@ export interface LiveAgentNode {
   parentId: string;
   label: string;
   /**
-   * Addressable teammate name (agent-teams `Agent` spawn with `name:`), kept
-   * apart from `label` so a nameless re-announce can never drop it. Persisted.
+   * Addressable teammate name from the retired agent teams. Read-only: only
+   * older stored snapshots carry it; new runs never set it.
    */
   name?: string;
   status: "running" | "done" | "failed";

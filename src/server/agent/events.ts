@@ -213,7 +213,6 @@ export interface TaskEvent {
   toolUseId?: string;
   taskType?: string;
   subagentType?: string;
-  workflowName?: string;
   description?: string;
   prompt?: string;
   /** The sub-agent whose tool call started the task (absent = the main agent's). */
@@ -236,8 +235,6 @@ export interface TaskUpdateEvent {
 /** A subagent was spawned via the Task/Agent tool. `agentId` === its tool_use id. */
 export interface AgentSpawnEvent {
   agentId: string;
-  /** Teammate name for addressable agent-teams spawns (`Agent` with `name:`). */
-  name?: string;
   subagentType?: string;
   description?: string;
   /** The parent agent that spawned it (MAIN_AGENT_ID for top-level spawns). */
@@ -334,39 +331,6 @@ export interface CompactEvent {
   /** SDK English error detail (diagnostic; client shows it as detail, never the row label). */
   error?: string;
 }
-
-/**
- * The model submitted a plan via ExitPlanMode (plan mode). The host forwards the
- * plan markdown to the client to render as a dedicated plan card. This is the
- * DISPLAY signal (always fires); a PRESENT owner additionally gets an interactive
- * approval gate via `onPlanReview` (see below), which BLOCKS the run.
- */
-export interface PlanEvent {
-  /** The plan markdown the model proposed. Empty while still planning. */
-  plan: string;
-  /**
-   * True the moment the model ENTERS plan mode (EnterPlanMode), before any plan
-   * exists. Lets the UI show a "writing plan…" placeholder so the turn doesn't
-   * look stalled during the (tool-row-suppressed) planning phase. The real plan
-   * arrives in a later event with `plan` set and this falsy.
-   */
-  planning?: boolean;
-}
-
-/**
- * The model proposed a plan via ExitPlanMode and the present owner must approve
- * it before the avatar starts implementing. Surfaced to the client as inline
- * approve/reject controls on the plan card; the run blocks on the answer.
- */
-export interface PlanReviewRequest {
-  /** The plan markdown awaiting approval. */
-  plan: string;
-  /** The ExitPlanMode tool_use id, for correlating with the display card. */
-  toolUseId?: string;
-}
-export type PlanReviewDecision =
-  | { behavior: "approved" }
-  | { behavior: "rejected"; feedback?: string };
 
 /**
  * One operation shipped to the VIEWER's own browser through the extension
@@ -717,18 +681,6 @@ export interface AgentEvents {
   onMemory?: (event: MemoryEvent) => void;
   /** A context compaction finished or failed — durable activity-row notice. */
   onCompact?: (event: CompactEvent) => void;
-  /** The model submitted a plan via ExitPlanMode (plan mode) — display card. */
-  onPlan?: (event: PlanEvent) => void;
-
-  /**
-   * BLOCKING: the model finished planning and proposed a plan via ExitPlanMode.
-   * For a present owner (interactive, non-auto-approve) the run PARKS here for an
-   * explicit approval: approve → the avatar proceeds to implement; reject → the
-   * (optional) feedback is fed back to the model so it revises and re-proposes.
-   * If omitted (headless / colleague / auto-approve), the plan tool just
-   * auto-continues and only the display card (`onPlan`) is shown.
-   */
-  onPlanReview?: (request: PlanReviewRequest) => Promise<PlanReviewDecision>;
 
   /**
    * BLOCKING: the model wants a non-pre-approved tool. Resolve with the user's

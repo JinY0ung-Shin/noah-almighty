@@ -915,7 +915,10 @@ export interface AgentActivity {
     id: string;
     parentId: string;
     label: string;
-    /** Addressable teammate name (agent-teams spawn with `name:`); older snapshots fold it into `label`. */
+    /**
+     * Addressable teammate name from the retired agent teams (`Agent` with
+     * `name:`). Read-only: new runs never set it; kept so older snapshots render.
+     */
     name?: string;
     status: "running" | "done" | "failed";
     isMain: boolean;
@@ -962,10 +965,9 @@ export interface AgentResponse {
    */
   canvases?: CanvasArtifact[];
   /**
-   * The plan the avatar submitted via ExitPlanMode this turn (plan mode), kept on
-   * the assistant message so the dedicated plan card rebuilds on reload. The
-   * latest plan of the turn wins. Display-only — autoApprove turns continue
-   * automatically, so there is no accept/reject state to persist.
+   * The plan an avatar submitted via ExitPlanMode on an older turn. Plan mode is
+   * retired, so new turns never write it; kept ONLY so stored responses keep
+   * rendering their read-only plan card.
    */
   plan?: string;
   /**

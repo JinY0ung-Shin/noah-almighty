@@ -153,8 +153,8 @@
     turn into them, unprompted (permission-mode parity) and without Bash. Every Noah-spawned CLI — chat runs,
     the skill-discovery preflight — now passes
     `settings: CROSS_SESSION_SETTINGS` (`crossSessionInbound: "refuse"`, `agent/sessionIsolation.ts`), and
-    `ListAgents` is in `UNUSED_SDK_BUILTIN_TOOLS`. Splitting config dirs alone would NOT close it (the socket path
-    is predictable); in-run agent teams are unaffected (same CLI process, mailbox, not a peer socket). **A new
+    `ListAgents` is in `UNUSED_SDK_BUILTIN_TOOLS` (so is `SendMessage`, since agent teams were retired on
+    2026-10-29). Splitting config dirs alone would NOT close it (the socket path is predictable). **A new
     `query()` call site passes the same settings.**
   - **Still open (needs uid separation, #71):** the shared data volume (SQLite DB, every user's
     workspaces/clones/transcripts) is readable and writable by any agent Bash; the native CLI binary is

@@ -1,7 +1,7 @@
 # Agent core — orchestration, tool policy, MCP servers
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
-> How `claudeAgent.ts` is split, the admin tool/skill on-off policy, agent teams, and the checklist for adding an MCP tool server.
+> How `claudeAgent.ts` is split, the admin tool/skill on-off policy, the retired plan mode/Workflow/agent teams, and the checklist for adding an MCP tool server.
 
 Agent orchestration + in-process MCP tool servers. Companion to the agent-area philosophy in
 [`../../src/server/agent/CLAUDE.md`](../../src/server/agent/CLAUDE.md).
@@ -112,7 +112,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
 
 ## Admin builtin tool/skill on-off policy (`toolSkillPolicy.ts` + `agent/skillDiscovery.ts`)
 - **What it is:** the admin panel (system tab → "내장 도구·스킬 정책") disables SDK BUILT-IN tools
-  (WebFetch/WebSearch/NotebookEdit/Task+Agent/SendMessage — the `TOGGLABLE_BUILTIN_TOOLS` catalog; core
+  (WebFetch/WebSearch/NotebookEdit/Task+Agent — the `TOGGLABLE_BUILTIN_TOOLS` catalog; core
   tools are deliberately NOT togglable and the strict parser rejects them) and individual SKILLS (CLI built-ins
   like code-review/deep-research AND app/plugin skills) deployment-wide. Storage mirrors the hex-ssh
   policy: one JSON blob in `app_config` (`getToolSkillPolicy`/`setToolSkillPolicy` in `store/secrets.ts`,
@@ -144,67 +144,20 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   rest of the file parses as code (surfaced as bizarre TS1443/TS1160 errors far below). Write
   `skills/<dir>/SKILL.md` in block comments; `//` line comments are safe.
 
-## Agent teams (experimental — named subagents + SendMessage)
-- **Enablement is three-legged** (2026-08): `agentSubprocessEnv` sets
-  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; `SendMessage` is exposed via `SDK_TEAM_TOOLS` (removed from
-  `UNUSED_SDK_BUILTIN_TOOLS`) and folded into the hook's `TASK_ORCHESTRATION_TOOLS` auto-allow +
-  `allowedTools`; and ONE admin toggle (`agent_teams` in the togglable-tool catalog) switches the WHOLE
-  feature: it disallows the `SendMessage` tool AND (via `isAgentTeamsDisabled` →
-  `agentSubprocessEnv`'s third arg) forces the CLI flag to "0". **Precedence:** admin toggle (off wins
-  over everything) > operator-set env value in the deploy environment > default-on. The CLI-side gate
-  (`isAgentSwarmsEnabled` in the bundled CLI) also consults a statsig gate that DEFAULTS TRUE offline.
-  Keep the tool-name→feature semantic in `isAgentTeamsDisabled` (next to the catalog), never inline
-  `includes("SendMessage")` at call sites.
-- **Usage shape in CLI ≥2.1.x:** there are NO TeamCreate/TeamDelete tools and `Agent.team_name` is
-  deprecated — a session has ONE implicit team; `Agent` with `name:` spawns an addressable teammate and
-  `SendMessage({to: name})` messages it. Teammates' own tool calls still hit the PreToolUse hook
-  individually, so per-viewer gating is unchanged.
-- **Presentation:** `SendMessage` is deliberately NOT in `SDK_HIDDEN_ACTIVITY_TOOLS` — coordination
-  renders as a visible tool row ("팀원 메시지 전송", detail = `recipient · summary|content` via the
-  `summarizeToolInput` special case; CLI input keys are recipient/content/summary). Teammate lifecycles
-  surface through the existing subagent/task event paths (`SUBAGENT_TOOLS`, `task_started` system
-  events); the teammate's addressable identity rides on `AgentSpawnEvent.name` (from the spawn's
-  `input.name` — `task_started` never carries one; `teammate_name` exists only on hook inputs) and the
-  client keeps it as the card's OWN field (`LiveAgentNode.name`, rendered `@<name>` ahead of the label
-  via `agentTitle` in `lib/agentCards.ts`). It used to be folded into the label, and the `task_started`
-  behind EVERY spawn re-announces the card with no name — and with the `subagent_type` a spawn omitted,
-  defaulted to `general-purpose` — so the name was overwritten within milliseconds. The persisted
-  snapshot carries `name` as well (whitelisted in `sanitizeActivity`); older snapshots keep it inside
-  `label`. Parallel agents fold their tool lists — see `client.md` (Behavior gotchas).
-- **Headless caveat:** `teammateMode` ('auto'|'tmux'|'iterm2'|'in-process') comes from settings files,
-  which Noah never loads (`settingSources: []`) — runs rely on 'auto' resolving to in-process in a
-  TTY-less server. Verified only at the unit level; watch the first live runs on the deploy server.
-
-## Workflow / ultracode (dynamic multi-agent orchestration, enabled 2026-08-30)
-- **Enablement mirrors agent teams' pattern, minus the env-var leg:** `Workflow` is exposed via
-  `SDK_WORKFLOW_TOOLS` (removed from `UNUSED_SDK_BUILTIN_TOOLS`, which used to drop it purely to save the
-  ~4.7k-token tool description) and folded into the hook's `TASK_ORCHESTRATION_TOOLS` auto-allow +
-  `allowedTools`, same as `SDK_TEAM_TOOLS`. One admin toggle (`workflow` in the togglable-tool catalog,
-  `toolSkillPolicy.ts`) can still disable it — the policy's disabledTools check runs BEFORE the
-  auto-allow, so the kill-switch wins regardless. The SDK's own "ultracode" keyword trigger
-  (`workflowKeywordTriggerEnabled`, default true) needed no code change — it was always on; only the
-  advertised `Workflow` tool was missing for it to switch the turn into.
-- **KNOWN LIMITATION — background subagents bypass the permission hook.** A `Workflow` invocation always
-  returns `status: "async_launched"` (per `WorkflowOutput` in `sdk-tools.d.ts`) and its `agent()` calls run
-  as background tasks — there is no foreground/synchronous mode to fall back on, unlike `Task`/`Agent`
-  (which `SUBAGENT_SPAWN_TOOLS` forces foreground specifically to dodge this same gap). The bundled CLI
-  consults neither hooks nor `canUseTool` nor `allowedTools` for a background subagent's own tool calls,
-  and auto-denies every permission-needing one (upstream-acknowledged, claude-code #34692/#27661). In
-  practice: a workflow-spawned agent's read-only work (Read/Grep/WebFetch/…) succeeds and shows normally;
-  any Bash/Write/Edit/etc. it attempts silently fails as if the user refused. Owner-accepted tradeoff
-  (2026-08-30) — re-verify on SDK bumps and drop this caveat once background subagents inherit the
-  parent's permission wiring (same note as `SUBAGENT_SPAWN_TOOLS`). 2026-09-27, CLI 2.1.283: a
-  background SUBAGENT's tool call now reaches the PreToolUse hook (direct spike — see
-  `chat-sse-media.md`); Workflow `agent()` calls were NOT re-tested, so this caveat stands until they are.
-- **Activity-tree nesting:** a workflow's own container `task_started` (system event, `workflow_name` set —
-  a more robust signal than its exact `task_type` literal, which is `local_workflow` today) renders as an
-  AGENT node, not a task row — only an agent can be a `parentId` target in the client's `liveAgents` tree,
-  and a task row can only attach flatly to an `agentId`. `LoopState.activeWorkflowAgentId` tracks the most
-  recently started, still-running workflow's node id; a subsequently spawned agent whose `task_started`
-  matches `AGENT_TASK_TYPES` (`subagent`/`local_agent`/`remote_agent`, or any `subagent_type` present) nests
-  under it instead of flattening to `main`, and the pointer clears when that workflow's own task ends. Last
-  workflow wins on concurrent workflows (rare) — a visual grouping aid, not a correctness guarantee. See
-  `sdkMessageHandlers.ts`'s `handleTaskSystemEvent`.
+## Retired: plan mode, Workflow, agent teams (2026-10-29)
+- Removed ahead of the pi-gateway migration (design §3 G). `EnterPlanMode`, `ExitPlanMode`, `Workflow`,
+  `TeamCreate`, `TeamDelete` and `SendMessage` are in `UNUSED_SDK_BUILTIN_TOOLS` (always disallowed), and
+  `agentSubprocessEnv` pins `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0`. SendMessage goes too although the CLI
+  offers it without the teams runtime (measured on the bundled 2.1.283 against a fake API): its other use,
+  continuing a finished subagent, runs that subagent in the BACKGROUND — the prompt tells the avatar to
+  spawn a new one instead.
+- Gone with them: the plan card + approve/reject (`onPlan`, `onPlanReview`, `plan`/`plan_review` SSE frames,
+  the `plan_review` pending-request kind of the task API's `/respond`), Workflow container nesting in the
+  activity tree, the `@name` teammate identity on new spawns, and the `agent_teams`/`workflow` admin
+  toggles. A stored policy naming `SendMessage`/`Workflow` normalizes them away on read.
+- Kept read-only for OLD rows: a stored `response.plan` renders as a plain plan card (no buttons) and a
+  stored activity snapshot's agent `name` still renders as `@name`.
+- `buildCanUseToolSafetyNet` stays for AskUserQuestion while the SDK runner exists.
 
 ## Adding / changing an MCP tool server
 - **One template per `*Tools.ts`:** `buildXTools` (handler-level owner/elevated guards) + `buildXServer`

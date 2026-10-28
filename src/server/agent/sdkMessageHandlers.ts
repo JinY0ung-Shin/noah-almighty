@@ -4,7 +4,6 @@ import type { AgentUsage } from "../types.js";
 import logger from "../logger.js";
 import { asNumber, asString, isRecord, truncate, TOOL_TRACE_ENABLED } from "./agentUtils.js";
 import {
-  SDK_PLAN_TOOLS,
   SDK_SUBAGENT_TOOLS,
   SDK_TASK_CREATE_TOOLS,
   SDK_TASK_END_TOOLS,
@@ -21,7 +20,6 @@ const SUBAGENT_TOOLS: ReadonlySet<string> = new Set(SDK_SUBAGENT_TOOLS);
 
 /** Tools handled by a dedicated UI (not shown as a generic tool row). */
 const UI_HANDLED_TOOLS: ReadonlySet<string> = new Set(SDK_UI_HANDLED_TOOLS);
-const PLAN_TOOLS: ReadonlySet<string> = new Set(SDK_PLAN_TOOLS);
 const TASK_CREATE_TOOLS: ReadonlySet<string> = new Set(SDK_TASK_CREATE_TOOLS);
 const TASK_UPDATE_TOOLS: ReadonlySet<string> = new Set(SDK_TASK_UPDATE_TOOLS);
 const TASK_END_TOOLS: ReadonlySet<string> = new Set(SDK_TASK_END_TOOLS);
@@ -121,15 +119,7 @@ export function summarizeToolInput(name: string, input: Record<string, unknown>)
   const url = asString(input.url);
   const query = asString(input.query) || asString(input.prompt);
   let summary = "";
-  if (name === "SendMessage") {
-    // Agent-teams coordination: show WHO is being messaged and a content
-    // preview (the CLI's input keys are recipient/content/summary; to/message
-    // kept as fallbacks across CLI versions).
-    const recipient = asString(input.recipient) || asString(input.to);
-    const preview =
-      asString(input.summary) || asString(input.content) || asString(input.message);
-    summary = [recipient, preview].filter(Boolean).join(" · ");
-  } else if (name === "Bash" && cmd) summary = cmd;
+  if (name === "Bash" && cmd) summary = cmd;
   else if (pattern) summary = pattern + (path ? ` · ${path}` : "");
   else if (path) summary = path;
   else if (url) summary = url;
@@ -153,9 +143,8 @@ interface TaskRecord {
 /**
  * `task_started.task_type` values (background-task path, distinct from the
  * inline TaskCreate/TaskUpdate tool family) that mean "this is a spawned
- * agent, not a plain background task": the plain `subagent` label used by
- * agent-teams background teammate spawns, plus the SDK's newer `local_agent`/
- * `remote_agent` local-workflow-script agent-spawn literals (per
+ * agent, not a plain background task": the plain `subagent` label, plus the
+ * SDK's newer `local_agent`/`remote_agent` agent-spawn literals (per
  * sdk-tools.d.ts: is_backgrounded is "Set for local_agent and local_bash
  * tasks"). Kept permissive — an unmatched value simply falls back to a
  * generic task row, never breaks anything.
@@ -183,14 +172,6 @@ export interface LoopState {
   toolAgentIds: Map<string, string>;
   /** Agent cards already flagged as running in the background this run. */
   backgroundAgentIds: Set<string>;
-  /**
-   * uiId of the most recently started, still-running Workflow (ultracode)
-   * container task, if any — so a subagent the workflow spawns nests under it
-   * in the activity tree (agentId chain) instead of flattening to main. Last
-   * workflow wins on concurrent workflows (rare); good enough for a visual
-   * grouping aid, not a correctness guarantee.
-   */
-  activeWorkflowAgentId?: string;
 }
 
 export function createLoopState(): LoopState {
@@ -201,7 +182,6 @@ export function createLoopState(): LoopState {
     backgroundTasks: new Map(),
     toolAgentIds: new Map(),
     backgroundAgentIds: new Set(),
-    activeWorkflowAgentId: undefined,
   };
 }
 
@@ -209,8 +189,7 @@ export function createLoopState(): LoopState {
  * Flag an agent card as running in the BACKGROUND, once per card per run.
  * Three signals land here: the spawn's launch receipt, a mid-run backgrounding
  * (task_updated is_backgrounded), and the agent's id in the live background-task
- * set. The last is the only one a SendMessage resume produces, which since
- * spawns are forced foreground is the usual way an agent runs in the background.
+ * set.
  */
 function flagBackgroundAgent(
   events: AgentEvents,
@@ -314,10 +293,6 @@ function isTaskInspectionTool(name: string): boolean {
   return TASK_INSPECTION_TOOLS.has(name);
 }
 
-function isPlanTool(name: string): boolean {
-  return PLAN_TOOLS.has(name);
-}
-
 function statusIsTerminal(status: string): boolean {
   return ["completed", "failed", "killed", "stopped"].includes(status);
 }
@@ -344,9 +319,6 @@ function emitTaskUpdate(
   const record = taskRecord(state, taskId);
   if (record.kind === "agent") {
     if (statusIsTerminal(update.status || "")) {
-      if (state.activeWorkflowAgentId === record.uiId) {
-        state.activeWorkflowAgentId = undefined;
-      }
       events.onAgentEnd?.({ agentId: record.uiId, ok: taskOk(update.status || "") });
     } else {
       if (update.isBackgrounded === true) {
@@ -384,27 +356,6 @@ function handleTaskToolUse(
   events: AgentEvents,
   state: LoopState,
 ): boolean {
-  if (isPlanTool(name)) {
-    // ExitPlanMode carries the proposed plan markdown in `input.plan`. Surface it
-    // as a dedicated plan card (display-only — autoApprove turns just continue);
-    // without this the plan content was discarded and only a status line showed.
-    if (name === "ExitPlanMode") {
-      const plan = asString(input.plan);
-      // A real plan becomes a card. An empty ExitPlanMode (degenerate output) still
-      // ENDS the planning phase, so signal planning:false to clear the "writing
-      // plan…" placeholder right away instead of letting it linger until the turn's
-      // terminal reset and then vanish with no trace.
-      events.onPlan?.(plan ? { plan } : { plan: "", planning: false });
-      events.onStatus?.(plan ? "계획을 확인하는 중…" : "계획 단계 완료");
-    } else {
-      // EnterPlanMode: no plan exists yet. Signal the UI to show a "writing plan…"
-      // placeholder so the planning phase (which suppresses tool rows) doesn't look
-      // like a stalled/disconnected turn.
-      events.onPlan?.({ plan: "", planning: true });
-      events.onStatus?.("계획 모드로 전환 중…");
-    }
-    return true;
-  }
   if (isTaskInspectionTool(name)) {
     return true;
   }
@@ -423,7 +374,6 @@ function handleTaskToolUse(
       toolUseId,
       taskType: taskType(input) || undefined,
       subagentType: asString(input.subagent_type) || asString(input.agent_type) || undefined,
-      workflowName: asString(input.workflow_name) || undefined,
       description: taskDescription(input) || undefined,
       prompt: asString(input.prompt) || undefined,
     });
@@ -484,10 +434,6 @@ export function handleAssistantMessage(
         events.onAgentStart?.({
           agentId: toolUseId,
           parentId: agentId,
-          // Agent-teams spawn: `name` is the teammate's addressable identity
-          // (SendMessage({to: name})) — surface it so the activity tree can
-          // label the node.
-          name: asString(input.name) || undefined,
           subagentType: asString(input.subagent_type) || undefined,
           description: (asString(input.description) || asString(input.prompt) || "").slice(0, 200) || undefined,
         });
@@ -846,16 +792,7 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
     const toolUseId = asString(message.tool_use_id);
     const existing = state.tasks.get(taskId) || (toolUseId ? state.tasks.get(toolUseId) : undefined);
     const uiId = existing?.uiId || toolUseId || taskId;
-    // A Workflow (ultracode) container task carries workflow_name regardless of
-    // its exact task_type literal ("local_workflow" today) — a more robust
-    // signal than matching the type string. It renders as an agent node too
-    // (not a plain task row) purely so its spawned agents have somewhere in
-    // the liveAgents parentId chain to nest under; TASK rows only ever attach
-    // to an agentId, they can't themselves be a parent.
-    const workflowName = asString(message.workflow_name) || undefined;
-    const isWorkflowContainer = Boolean(workflowName);
     const taskKind: TaskKind =
-      isWorkflowContainer ||
       AGENT_TASK_TYPES.has(asString(message.task_type)) ||
       Boolean(asString(message.subagent_type))
         ? "agent"
@@ -871,28 +808,13 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
     }
     if (taskKind === "agent") {
       state.spawnedAgentIds.add(uiId);
-      // A workflow's own container spawn is top-level; everything else nests
-      // under whichever workflow is currently active, if any (agent-teams
-      // background teammate spawns and Task/Agent's own background_tasks_changed
-      // echoes have no workflow in flight, so they fall back to MAIN_AGENT_ID
-      // exactly as before).
-      const parentId = isWorkflowContainer ? MAIN_AGENT_ID : state.activeWorkflowAgentId || MAIN_AGENT_ID;
-      // No `name`: task_started never carries a teammate's (`teammate_name`
-      // exists only on hook inputs). The card keeps the one its spawn's
-      // tool_use announced.
+      const parentId = MAIN_AGENT_ID;
       events.onAgentStart?.({
         agentId: uiId,
         parentId,
         subagentType: asString(message.subagent_type) || undefined,
-        description:
-          (isWorkflowContainer ? `워크플로 실행: ${workflowName}` : undefined) ||
-          asString(message.description) ||
-          asString(message.prompt) ||
-          undefined,
+        description: asString(message.description) || asString(message.prompt) || undefined,
       });
-      if (isWorkflowContainer) {
-        state.activeWorkflowAgentId = uiId;
-      }
       // The live background set can name the agent before its task_started.
       if (state.backgroundTasks.has(taskId)) {
         flagBackgroundAgent(events, state, uiId, parentId);
@@ -903,7 +825,6 @@ function handleTaskSystemEvent(message: Record<string, unknown>, events: AgentEv
         toolUseId: asString(message.tool_use_id) || undefined,
         taskType: asString(message.task_type) || undefined,
         subagentType: asString(message.subagent_type) || undefined,
-        workflowName: asString(message.workflow_name) || undefined,
         description: asString(message.description) || undefined,
         prompt: asString(message.prompt) || undefined,
         ...(ownerAgentId ? { agentId: ownerAgentId } : {}),

@@ -716,8 +716,8 @@ describe("marketplace helpers", () => {
     expect(env.PATH).toBe("/usr/bin");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-test");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/tmp/agent-sessions");
-    // Agent teams is default-on for every SDK run (named subagents + SendMessage).
-    expect(env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe("1");
+    // Agent teams are retired: the CLI teams runtime is pinned off.
+    expect(env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe("0");
     // SESSION_SECRET is the AES master key for every at-rest secret — it must
     // never reach the subprocess env where the agent's Bash/`env` could read it.
     expect(env.SESSION_SECRET).toBeUndefined();
@@ -728,19 +728,10 @@ describe("marketplace helpers", () => {
     expect(env.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
   });
 
-  it("lets an operator-set agent-teams flag win over the default", () => {
-    const env = agentSubprocessEnv(
-      { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "0" },
-      "/tmp/agent-sessions",
-    );
-    expect(env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe("0");
-  });
-
-  it("lets the admin agent-teams switch win over even an operator-set flag", () => {
+  it("keeps the retired agent-teams runtime off even when the deploy env turns it on", () => {
     const env = agentSubprocessEnv(
       { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" },
       "/tmp/agent-sessions",
-      true,
     );
     expect(env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe("0");
   });
@@ -1906,7 +1897,6 @@ describe("sdk message handlers", () => {
       onAgentEnd: vi.fn(),
       onBlocked: vi.fn(),
       onCompact: vi.fn(),
-      onPlan: vi.fn(),
       onBackgroundTasks: vi.fn(),
       onTurnResult: vi.fn(),
     };
@@ -1925,20 +1915,6 @@ describe("sdk message handlers", () => {
     expect(summarizeToolInput("Ask", { prompt: "x".repeat(200) })).toHaveLength(
       161,
     );
-    // Agent-teams SendMessage: recipient + content preview, summary preferred.
-    expect(
-      summarizeToolInput("SendMessage", {
-        recipient: "reviewer",
-        content: "PR 리뷰를 시작해 주세요",
-      }),
-    ).toBe("reviewer · PR 리뷰를 시작해 주세요");
-    expect(
-      summarizeToolInput("SendMessage", {
-        recipient: "reviewer",
-        summary: "리뷰 요청",
-        content: "긴 본문…",
-      }),
-    ).toBe("reviewer · 리뷰 요청");
     // create_share_link: the expiry, never the opaque attachment id (the
     // shared mcpToolInputSummary the client falls back to as well).
     expect(
@@ -1996,6 +1972,7 @@ describe("sdk message handlers", () => {
               type: "tool_use",
               id: "agent-1",
               name: "Task",
+              // A stray `name` (the retired agent-teams identity) is no longer surfaced.
               input: { subagent_type: "research", prompt: "find", name: "reviewer" },
             },
             {
@@ -2004,8 +1981,7 @@ describe("sdk message handlers", () => {
               name: "TaskCreate",
               input: {
                 task_id: "task-1",
-                task_type: "workflow",
-                workflow_name: "deploy",
+                task_type: "local_bash",
                 task_subject: "Ship it",
                 prompt: "do the work",
               },
@@ -2028,22 +2004,20 @@ describe("sdk message handlers", () => {
     expect(sink.onAgentStart).toHaveBeenCalledWith({
       agentId: "agent-1",
       parentId: "main",
-      name: "reviewer",
       subagentType: "research",
       description: "find",
     });
     expect(sink.onTaskStart).toHaveBeenCalledWith({
       taskId: "task-1",
       toolUseId: "task-tool",
-      taskType: "workflow",
+      taskType: "local_bash",
       subagentType: undefined,
-      workflowName: "deploy",
       description: "Ship it",
       prompt: "do the work",
     });
   });
 
-  it("keeps plan and task inspection tools out of generic activity rows", () => {
+  it("keeps task inspection tools out of generic activity rows", () => {
     const sink = events();
     const state = createLoopState();
 
@@ -2052,18 +2026,6 @@ describe("sdk message handlers", () => {
         type: "assistant",
         message: {
           content: [
-            {
-              type: "tool_use",
-              id: "plan-in",
-              name: "EnterPlanMode",
-              input: {},
-            },
-            {
-              type: "tool_use",
-              id: "plan-out",
-              name: "ExitPlanMode",
-              input: { allowedPrompts: [] },
-            },
             {
               type: "tool_use",
               id: "task-get",
@@ -2086,67 +2048,6 @@ describe("sdk message handlers", () => {
 
     expect(sink.onToolStart).not.toHaveBeenCalled();
     expect(sink.onTaskStart).not.toHaveBeenCalled();
-    expect(sink.onStatus).toHaveBeenCalledWith("계획 모드로 전환 중…");
-    // Empty ExitPlanMode (no plan submitted) ends the planning phase explicitly so
-    // the placeholder clears instead of lingering to the terminal reset.
-    expect(sink.onStatus).toHaveBeenCalledWith("계획 단계 완료");
-    expect(sink.onPlan).toHaveBeenCalledWith({ plan: "", planning: false });
-  });
-
-  it("signals plan-mode entry through the plan event so the UI can show a placeholder", () => {
-    const sink = events();
-    const state = createLoopState();
-
-    handleAssistantMessage(
-      {
-        type: "assistant",
-        message: {
-          content: [
-            {
-              type: "tool_use",
-              id: "plan-in",
-              name: "EnterPlanMode",
-              input: {},
-            },
-          ],
-        },
-      },
-      sink,
-      state,
-    );
-
-    expect(sink.onToolStart).not.toHaveBeenCalled();
-    expect(sink.onPlan).toHaveBeenCalledWith({ plan: "", planning: true });
-    expect(sink.onStatus).toHaveBeenCalledWith("계획 모드로 전환 중…");
-  });
-
-  it("surfaces ExitPlanMode plan text through the plan event", () => {
-    const sink = events();
-    const state = createLoopState();
-
-    handleAssistantMessage(
-      {
-        type: "assistant",
-        message: {
-          content: [
-            {
-              type: "tool_use",
-              id: "plan-out",
-              name: "ExitPlanMode",
-              input: { plan: "1. 확인\n2. 수정\n3. 검증", allowedPrompts: [] },
-            },
-          ],
-        },
-      },
-      sink,
-      state,
-    );
-
-    expect(sink.onToolStart).not.toHaveBeenCalled();
-    expect(sink.onPlan).toHaveBeenCalledWith({
-      plan: "1. 확인\n2. 수정\n3. 검증",
-    });
-    expect(sink.onStatus).toHaveBeenCalledWith("계획을 확인하는 중…");
   });
 
   it("routes tool results back to tools or spawned agents", () => {
@@ -2304,8 +2205,9 @@ describe("sdk message handlers", () => {
     expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "s-1", ok: true });
   });
 
-  // A SendMessage resume sends no launch receipt: the agent's id showing up in
-  // the live background set (measured on 2.1.283) is the one signal there is.
+  // An agent that runs in the background without a launch receipt (a SendMessage
+  // resume, before agent teams were retired) shows up only in the live
+  // background set (measured on 2.1.283).
   it("flags an agent found in the live background set, once, in either event order", () => {
     const sink = events();
     const state = createLoopState();
@@ -2769,7 +2671,6 @@ describe("sdk message handlers", () => {
       toolUseId: "tool-1",
       taskType: "workflow",
       subagentType: undefined,
-      workflowName: undefined,
       description: "Work",
       prompt: undefined,
     });
@@ -2796,80 +2697,28 @@ describe("sdk message handlers", () => {
     });
   });
 
-  it("nests Workflow (ultracode)-spawned agents under the workflow's own agent node", () => {
+  it("no longer nests agents under a workflow container (Workflow is retired)", () => {
     const sink = events();
     const state = createLoopState();
-
-    // The workflow's own container task: workflow_name present is the signal
-    // (task_type may or may not literally be "local_workflow"), so it renders
-    // as an agent node too — a plain task row can't be a parentId target.
+    // A container task carrying workflow_name is just a task row now…
     handleSystemEvent(
-      {
-        subtype: "task_started",
-        task_id: "wf-task",
-        tool_use_id: "wf-tool",
-        task_type: "local_workflow",
-        workflow_name: "spec",
-      },
+      { subtype: "task_started", task_id: "wf-task", tool_use_id: "wf-tool", task_type: "local_workflow", workflow_name: "spec" },
+      sink,
+      state,
+    );
+    expect(sink.onAgentStart).not.toHaveBeenCalled();
+    expect(sink.onTaskStart).toHaveBeenCalledWith(expect.not.objectContaining({ workflowName: expect.anything() }));
+    // …and a later agent spawn sits at the root.
+    handleSystemEvent(
+      { subtype: "task_started", task_id: "a-task", tool_use_id: "a-tool", task_type: "local_agent", subagent_type: "researcher", prompt: "Gather sources" },
       sink,
       state,
     );
     expect(sink.onAgentStart).toHaveBeenCalledWith({
-      agentId: "wf-tool",
+      agentId: "a-tool",
       parentId: "main",
-      name: undefined,
-      subagentType: undefined,
-      description: "워크플로 실행: spec",
-    });
-
-    // A spawned agent from inside that workflow (no workflow_name of its own)
-    // nests under the workflow's agent node instead of flattening to main.
-    handleSystemEvent(
-      {
-        subtype: "task_started",
-        task_id: "wf-agent-1",
-        tool_use_id: "wf-agent-tool-1",
-        task_type: "local_agent",
-        subagent_type: "researcher",
-        prompt: "Gather sources",
-      },
-      sink,
-      state,
-    );
-    expect(sink.onAgentStart).toHaveBeenCalledWith({
-      agentId: "wf-agent-tool-1",
-      parentId: "wf-tool",
-      name: undefined,
       subagentType: "researcher",
       description: "Gather sources",
-    });
-
-    // Once the workflow itself ends, a later spawn (e.g. a plain Task/Agent
-    // tool background echo, unrelated to any workflow) falls back to main
-    // again rather than nesting under the now-finished workflow.
-    handleSystemEvent(
-      { subtype: "task_updated", task_id: "wf-task", patch: { status: "completed" } },
-      sink,
-      state,
-    );
-    expect(sink.onAgentEnd).toHaveBeenCalledWith({ agentId: "wf-tool", ok: true });
-    handleSystemEvent(
-      {
-        subtype: "task_started",
-        task_id: "later-agent",
-        tool_use_id: "later-agent-tool",
-        task_type: "subagent",
-        subagent_type: "writer",
-      },
-      sink,
-      state,
-    );
-    expect(sink.onAgentStart).toHaveBeenCalledWith({
-      agentId: "later-agent-tool",
-      parentId: "main",
-      name: undefined,
-      subagentType: "writer",
-      description: undefined,
     });
   });
 
@@ -5273,14 +5122,6 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
         tool_input: { task_id: "task-1", block: false, timeout: 0 },
       },
       { tool_name: "TaskList", tool_input: {} },
-      { tool_name: "EnterPlanMode", tool_input: {} },
-      { tool_name: "ExitPlanMode", tool_input: { allowedPrompts: [] } },
-      // Agent-teams coordination: messaging a spawned teammate is meta-work
-      // like spawning it, so it must not prompt either.
-      {
-        tool_name: "SendMessage",
-        tool_input: { to: "reviewer", message: "리뷰를 시작해 주세요" },
-      },
     ];
 
     for (const [idx, tool] of tools.entries()) {
@@ -5293,103 +5134,13 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
     expect(prompted).toBe(false);
   });
 
-  it("gates a proposed plan through an interactive plan review for a present owner", async () => {
-    const reviews: string[] = [];
-    const hook = buildPreToolUseHook(
-      {
-        onPlanReview: async (req) => {
-          reviews.push(req.plan);
-          return { behavior: "approved" };
-        },
-      },
-      true, // elevated owner
-      READONLY,
-      false, // headless
-      false, // allowHeadlessTools
-      false, // autoApprove
-    );
+  it("denies ExitPlanMode outright: plan mode (and its review) is retired", async () => {
+    const hook = buildPreToolUseHook({}, true, READONLY, false, false, true);
     const out = await hook(
-      {
-        tool_name: "ExitPlanMode",
-        tool_input: { plan: "## 단계\n1. 구현" },
-        tool_use_id: "plan-1",
-      },
+      { tool_name: "ExitPlanMode", tool_input: { plan: "## 단계\n1. 구현" }, tool_use_id: "plan-1" },
       "plan-1",
     );
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
-    expect(reviews).toEqual(["## 단계\n1. 구현"]);
-  });
-
-  it("denies a rejected plan and feeds the feedback back to the model", async () => {
-    const hook = buildPreToolUseHook(
-      {
-        onPlanReview: async () => ({
-          behavior: "rejected",
-          feedback: "DB 마이그레이션을 먼저 다뤄라",
-        }),
-      },
-      true,
-      READONLY,
-      false,
-      false,
-      false,
-    );
-    const out = await hook(
-      {
-        tool_name: "ExitPlanMode",
-        tool_input: { plan: "계획" },
-        tool_use_id: "plan-2",
-      },
-      "plan-2",
-    );
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain(
-      "DB 마이그레이션을 먼저 다뤄라",
-    );
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain(
-      "ExitPlanMode",
-    );
-  });
-
-  it("skips plan review (auto-allows) on auto-approve runs and empty plans", async () => {
-    const onPlanReview = vi.fn(async () => ({ behavior: "approved" as const }));
-    // Owner who opted into auto-approve: no plan-approval prompt.
-    const autoHook = buildPreToolUseHook(
-      { onPlanReview },
-      true,
-      READONLY,
-      false,
-      false,
-      true, // autoApprove
-    );
-    const auto = await autoHook(
-      {
-        tool_name: "ExitPlanMode",
-        tool_input: { plan: "계획" },
-        tool_use_id: "plan-3",
-      },
-      "plan-3",
-    );
-    expect(auto.hookSpecificOutput.permissionDecision).toBe("allow");
-    // Empty ExitPlanMode (degenerate) has nothing to approve.
-    const emptyHook = buildPreToolUseHook(
-      { onPlanReview },
-      true,
-      READONLY,
-      false,
-      false,
-      false,
-    );
-    const empty = await emptyHook(
-      {
-        tool_name: "ExitPlanMode",
-        tool_input: { plan: "" },
-        tool_use_id: "plan-4",
-      },
-      "plan-4",
-    );
-    expect(empty.hookSpecificOutput.permissionDecision).toBe("allow");
-    expect(onPlanReview).not.toHaveBeenCalled();
   });
 
   // ---- active repo workspace Bash-git integrity policy (#47) ----
@@ -5457,7 +5208,7 @@ describe("buildPreToolUseHook auto-approve safety contract", () => {
 describe("canUseTool safety net (confirmer, never a second gate)", () => {
   const READONLY = ["Read", "Glob", "Grep"];
   // An elevated auto-approve owner — the chat configuration, where the hook
-  // allows ExitPlanMode and Bash/Write outright.
+  // allows Bash/Write outright.
   const ownerHook = (approvals: ReturnType<typeof createHookApprovalLedger>) =>
     buildPreToolUseHook(
       {},
@@ -5474,20 +5225,13 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
       approvals,
     );
 
-  it("confirms exactly the ExitPlanMode call the hook allowed, once", async () => {
+  it("never confirms a retired ExitPlanMode: the hook denies it, so there is nothing to confirm", async () => {
     const approvals = createHookApprovalLedger();
     const canUseTool = buildCanUseToolSafetyNet(approvals);
     const hook = ownerHook(approvals);
     const input = { plan: "1. 구현" };
     const out = await hook({ tool_name: "ExitPlanMode", tool_input: input, tool_use_id: "plan-1" }, "plan-1");
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
-
-    expect(await canUseTool("ExitPlanMode", input, { toolUseID: "plan-other" })).toMatchObject({ behavior: "deny" });
-    expect(await canUseTool("ExitPlanMode", input, { toolUseID: "plan-1" })).toEqual({
-      behavior: "allow",
-      updatedInput: input,
-    });
-    // Single-use: a replayed ask for the same call is not re-confirmed.
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(await canUseTool("ExitPlanMode", input, { toolUseID: "plan-1" })).toMatchObject({ behavior: "deny" });
   });
 
@@ -5509,7 +5253,7 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
 
   const questionHook = (approvals: HookApprovalLedger, onQuestion: AgentEvents["onQuestion"]) =>
     buildPreToolUseHook(
-      { onPlanReview: async () => ({ behavior: "rejected", feedback: "다시" }), onQuestion },
+      { onQuestion },
       true,
       READONLY,
       false,
@@ -5524,12 +5268,10 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
     );
   const QUESTIONS = [{ question: "색은?", header: "색", options: [{ label: "빨강" }, { label: "파랑" }], multiSelect: false }];
 
-  it("has nothing to confirm for a rejected plan or a cancelled question", async () => {
+  it("has nothing to confirm for a cancelled question", async () => {
     const approvals = createHookApprovalLedger();
     const canUseTool = buildCanUseToolSafetyNet(approvals);
     const hook = questionHook(approvals, async () => ({ behavior: "cancelled" }));
-    const plan = await hook({ tool_name: "ExitPlanMode", tool_input: { plan: "계획" }, tool_use_id: "p" }, "p");
-    expect(plan.hookSpecificOutput.permissionDecision).toBe("deny");
     const question = await hook(
       { tool_name: "AskUserQuestion", tool_input: { questions: QUESTIONS }, tool_use_id: "q" },
       "q",
@@ -5538,7 +5280,6 @@ describe("canUseTool safety net (confirmer, never a second gate)", () => {
       permissionDecision: "deny",
       permissionDecisionReason: expect.stringContaining("did not answer"),
     });
-    expect(await canUseTool("ExitPlanMode", {}, { toolUseID: "p" })).toMatchObject({ behavior: "deny" });
     expect(await canUseTool("AskUserQuestion", {}, { toolUseID: "q" })).toMatchObject({ behavior: "deny" });
   });
 

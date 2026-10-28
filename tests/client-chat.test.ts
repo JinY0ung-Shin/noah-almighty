@@ -21,7 +21,6 @@ import {
   openSeededChat,
   PLUGIN_STATUS_LABELS,
   regenerate,
-  respondPlanReview,
   rollbackCanvas,
   selectConversation,
   sendMessage,
@@ -152,10 +151,6 @@ function seedPane(overrides: Partial<ChatPane> = {}): string {
     liveTextBreakPending: false,
     liveThinking: "",
     thinkingActive: false,
-    livePlan: "",
-    planPending: false,
-    planReview: null,
-    planReviewSubmitting: false,
     liveStatus: "",
     liveRunId: null,
     liveAgents: [],
@@ -937,10 +932,10 @@ describe("canvas flows", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* interactive prompts + plan review                                  */
+/* interactive prompts                                                 */
 /* ------------------------------------------------------------------ */
 
-describe("prompts + plan review", () => {
+describe("prompts", () => {
   it("answerPrompt posts the owner's response and dequeues the prompt", async () => {
     updateState((s) => {
       s.promptQueue.push({ id: "rq1", runId: "rn1", paneId: "p", kind: "permission", data: {} });
@@ -973,42 +968,6 @@ describe("prompts + plan review", () => {
     expect(get(toasts).some((t) => t.message.includes("이미 종료됨"))).toBe(true);
   });
 
-  it("respondPlanReview approves and clears the inline review", async () => {
-    const id = seedPane({ planReview: { requestId: "pr1", runId: "rn1" } });
-    let posted: any;
-    useFetch((url, init) => {
-      if (url === "/api/chat/respond") {
-        posted = body(init);
-        return jsonRes({ ok: true });
-      }
-      return undefined;
-    });
-    await respondPlanReview(id, "approved");
-    expect(posted).toMatchObject({ requestId: "pr1", value: { behavior: "approved" } });
-    expect(pane(id).planReview).toBeNull();
-    expect(pane(id).liveStatus).toBe("계획을 승인했습니다.");
-  });
-
-  it("respondPlanReview rejects with trimmed feedback", async () => {
-    const id = seedPane({ planReview: { requestId: "pr2", runId: "rn2" } });
-    let posted: any;
-    useFetch((url, init) => {
-      if (url === "/api/chat/respond") {
-        posted = body(init);
-        return jsonRes({ ok: true });
-      }
-      return undefined;
-    });
-    await respondPlanReview(id, "rejected", "  방향을 바꿔줘  ");
-    expect(posted.value).toMatchObject({ behavior: "rejected", feedback: "방향을 바꿔줘" });
-  });
-
-  it("respondPlanReview is a no-op without a pending review", async () => {
-    const id = seedPane({ planReview: null });
-    const fetchFn = noFetch();
-    await respondPlanReview(id, "approved");
-    expect(fetchFn).not.toHaveBeenCalled();
-  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -1720,41 +1679,21 @@ describe("stream events applied to a pane", () => {
     expect(rows[1].detail).toBeUndefined();
   });
 
-  it("plan mode shows a placeholder while writing, then the submitted plan", async () => {
+  it("ignores the retired plan / plan_review frames: no live plan state, no notification", async () => {
     const id = seedPane();
-    const statuses = trackStatus(id);
-    const pending = trackState((s) => s.chatPanes.find((p) => p.id === id)?.planPending ?? false);
+    const notes = useOsNotifications();
     await driveEvents(id, [
       ["plan", { planning: true }],
       ["plan", { plan: "1. 조사\n2. 구현" }],
+      ["plan_review", { requestId: "pr-live-1", runId: "rn-live-1", plan: "제안된 계획" }],
     ]);
-    expect(pending()).toContain(true);
-    expect(pane(id)).toMatchObject({ livePlan: "1. 조사\n2. 구현", planPending: false });
-    expect(statuses()).toContain("계획을 작성하는 중…");
-    expect(statuses()).toContain("계획을 제출했습니다.");
+    const live = pane(id) as unknown as Record<string, unknown>;
+    expect(live.livePlan).toBeUndefined();
+    expect(live.planReview).toBeUndefined();
+    expect(notes).toEqual([]);
   });
 
-  it("an empty ExitPlanMode clears the writing-plan placeholder", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["plan", { planning: true }],
-      ["plan", {}],
-    ]);
-    expect(pane(id)).toMatchObject({ planPending: false, livePlan: "" });
-  });
-
-  it("plan_review surfaces inline controls and notifies the owner", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    await driveEvents(id, [["plan_review", { requestId: "pr-live-1", runId: "rn-live-1", plan: "제안된 계획" }]]);
-    expect(pane(id).planReview).toEqual({ requestId: "pr-live-1", runId: "rn-live-1" });
-    expect(pane(id)).toMatchObject({ livePlan: "제안된 계획", planPending: false, planReviewSubmitting: false });
-    expect(notes).toEqual([
-      { title: "노아 · 계획 승인 필요", body: "제안한 계획을 검토해 주세요.", tag: `plan-${id}` },
-    ]);
-  });
-
-  it("prompt_resolved locks a parked canvas form and drops the plan controls", async () => {
+  it("prompt_resolved locks a parked canvas form", async () => {
     const id = seedPane();
     await driveEvents(id, [
       [
@@ -1768,14 +1707,10 @@ describe("stream events applied to a pane", () => {
           runId: "rn-live",
         },
       ],
-      ["plan_review", { requestId: "pr-live-2", runId: "rn-live", plan: "계획" }],
       // Resolved server-side (timeout / answered elsewhere / reconnect).
       ["prompt_resolved", { requestId: "rq-live-1" }],
-      ["prompt_resolved", { requestId: "pr-live-2" }],
     ]);
     expect(pane(id).canvases[0]).toMatchObject({ id: "cv-live", pending: false, requestId: "rq-live-1" });
-    expect(pane(id).planReview).toBeNull();
-    expect(pane(id).planReviewSubmitting).toBe(false);
   });
 
   it("a re-shown canvas replaces its entry and bumps the version count", async () => {
@@ -1909,10 +1844,9 @@ describe("stream events applied to a pane", () => {
     expect(p.liveTools[0]).toMatchObject({ detail: "ls", status: "running" });
   });
 
-  it("a server-set plan and reasoning on the finished response win over the live ones", async () => {
+  it("a server-set (legacy) plan and reasoning on the finished response win over the live ones", async () => {
     const id = seedPane();
     await driveEvents(id, [
-      ["plan", { plan: "라이브 계획" }],
       ["thinking", { text: "라이브 추론" }],
       [
         "done",
@@ -1968,7 +1902,7 @@ describe("background phase", () => {
     expect(p.backgroundTasks).toEqual([{ taskId: "bt1", description: "후속 작업" }]);
     // Rows keep updating until bg_end; only the text moved into the bubble.
     expect(p.liveTools).toHaveLength(1);
-    expect(p).toMatchObject({ liveText: "", liveThinking: "", planPending: false });
+    expect(p).toMatchObject({ liveText: "", liveThinking: "" });
     expect(p.usage).toMatchObject({ inputTokens: 5, outputTokens: 2 });
     expect(statuses()).toContain("백그라운드 작업 진행 중…");
     expect(notes.map((n) => n.title)).toContain("노아 · 답변 완료");
@@ -2160,14 +2094,14 @@ describe("background phase", () => {
     ]);
   });
 
-  it("keeps a resumed agent's @name and nests its background shell under its own bubble", async () => {
+  it("nests a resumed agent's background shell under its own bubble", async () => {
     const id = seedPane();
     await driveEvents(id, [
-      ["agent", { agentId: "ag1", parentId: "main", name: "probe", subagentType: "general-purpose", description: "조사" }],
+      ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
       ["agent_end", { agentId: "ag1", ok: true }],
       ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      // SendMessage resume: task_started re-announces the card without the name,
-      // then the background set flags it.
+      // A resume: task_started re-announces the card, then the background set
+      // flags it.
       ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
       ["agent", { agentId: "ag1", parentId: "main", background: true }],
       ["task", { taskId: "sh1", agentId: "ag1", taskType: "local_bash", description: "긴 셸" }],
@@ -2175,7 +2109,6 @@ describe("background phase", () => {
     ]);
     const p = pane(id);
     expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      name: "probe",
       label: "general-purpose · 조사",
       background: true,
       status: "running",
@@ -2187,37 +2120,17 @@ describe("background phase", () => {
     expect(liveSegmentRows(p)).toBeNull();
   });
 
-  it("keeps a teammate's @name when task_started re-announces the card with the type the spawn omitted", async () => {
+  it("ignores a teammate name on an agent frame (agent teams are retired)", async () => {
     const id = seedPane();
     const statuses = trackStatus(id);
     await driveEvents(id, [
-      // A flagless-type spawn: the Agent input named the teammate but omitted
-      // subagent_type, and the task_started right behind it carries the type
-      // the CLI defaulted to — and no name. Before the split this re-announce
-      // overwrote "@tester · 테스트 실행" with "general-purpose · 테스트 실행".
       ["agent", { agentId: "ag1", parentId: "main", name: "tester", description: "테스트 실행" }],
       ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "테스트 실행" }],
-      ["agent", { agentId: "ag2", parentId: "main", name: "reviewer", subagentType: "Explore", description: "코드 리뷰" }],
-      ["agent", { agentId: "ag2", parentId: "main", subagentType: "Explore", description: "코드 리뷰" }],
-      // Reversed arrival: the nameless re-announce lands first.
-      ["agent", { agentId: "ag3", parentId: "main", subagentType: "general-purpose", description: "문서 조사" }],
-      ["agent", { agentId: "ag3", parentId: "main", name: "researcher", description: "문서 조사" }],
     ]);
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      name: "tester",
-      label: "general-purpose · 테스트 실행",
-    });
-    expect(p.liveAgents.find((a) => a.id === "ag2")).toMatchObject({
-      name: "reviewer",
-      label: "Explore · 코드 리뷰",
-    });
-    expect(p.liveAgents.find((a) => a.id === "ag3")).toMatchObject({
-      name: "researcher",
-      label: "general-purpose · 문서 조사",
-    });
-    // The status line names the teammate too, even on the nameless re-announce.
-    expect(statuses()).toContain("에이전트 작업 중: @tester · general-purpose · 테스트 실행");
+    const node = pane(id).liveAgents.find((a) => a.id === "ag1")!;
+    expect(node.name).toBeUndefined();
+    expect(node.label).toBe("general-purpose · 테스트 실행");
+    expect(statuses()).toContain("에이전트 작업 중: general-purpose · 테스트 실행");
   });
 
   it("passes a parent that names neither an agent nor a tool through unchanged", async () => {
@@ -2907,76 +2820,6 @@ describe("interactive prompts raised by a run", () => {
     // resolved id was never shown a second time.
     expect(notes).toHaveLength(1);
   });
-
-  it("respondPlanReview re-enables the controls and rethrows when the submit fails", async () => {
-    const id = seedPane({ planReview: { requestId: "pr-fail", runId: "rn-f" } });
-    useFetch(() => jsonRes({ error: "이미 종료된 실행입니다." }, 500));
-    await expect(respondPlanReview(id, "rejected", "다시 세워줘")).rejects.toThrow("이미 종료된 실행입니다.");
-    // The review stays put so the owner can retry rather than losing the controls.
-    expect(pane(id).planReview).toEqual({ requestId: "pr-fail", runId: "rn-f" });
-    expect(pane(id).planReviewSubmitting).toBe(false);
-    expect(get(toasts).some((t) => t.message.includes("이미 종료된 실행입니다."))).toBe(true);
-  });
-
-  it("respondPlanReview sends a rejection with no feedback at all", async () => {
-    const id = seedPane({ planReview: { requestId: "pr-bare", runId: "rn-bare" } });
-    let posted: any;
-    useFetch((url, init) => {
-      if (url === "/api/chat/respond") {
-        posted = body(init);
-        return jsonRes({ ok: true });
-      }
-      return undefined;
-    });
-    await respondPlanReview(id, "rejected", "   ");
-    expect(posted.value).toEqual({ behavior: "rejected" });
-    expect(pane(id).planReview).toBeNull();
-  });
-
-  it("a plan_review replayed after it was resolved does not come back", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    // A reconnect's plan_review may carry no plan text (the "plan" frame did).
-    await driveEvents(id, [
-      ["plan_review", { requestId: "pr-gone" }],
-      ["prompt_resolved", { requestId: "pr-gone" }],
-      ["plan_review", { requestId: "pr-gone" }],
-    ]);
-    expect(pane(id).planReview).toBeNull();
-    expect(pane(id).livePlan).toBe("");
-    expect(notes).toHaveLength(1);
-  });
-});
-
-/* ------------------------------------------------------------------ */
-/* pane defaults                                                       */
-/* ------------------------------------------------------------------ */
-
-describe("composer defaults on a new pane", () => {
-  it("seeds a native pane from the owner's remembered picks", async () => {
-    replaceState({
-      user: {
-        id: "owner",
-        roles: [],
-        modelDefault: "opus",
-        effortDefault: "low",
-        mcpToolGroupsDefault: ["git_repo"],
-        groupKnowledgeOffDefault: ["g7"],
-      } as any,
-    });
-    useFetch((url) => {
-      if (url === "/api/avatars/owner") return jsonRes({ avatar: { id: "owner", alias: "내 아바타", isOwn: true } });
-      if (url === "/api/conversations") return jsonRes({ conversations: [] });
-      return undefined;
-    });
-    await startNewChat();
-    expect(readState().chatPanes[0]).toMatchObject({
-      modelTier: "opus",
-      effort: "low",
-      mcpToolGroups: ["git_repo"],
-      groupKnowledgeOff: ["g7"],
-    });
-  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -2984,7 +2827,7 @@ describe("composer defaults on a new pane", () => {
 /* ------------------------------------------------------------------ */
 
 describe("activity failures and terminal frames", () => {
-  it("names an addressable teammate and marks failed agents, tools and tasks", async () => {
+  it("marks failed agents, tools and tasks (a stray teammate name is ignored)", async () => {
     const id = seedPane();
     const statuses = trackStatus(id);
     await driveEvents(id, [
@@ -3003,10 +2846,10 @@ describe("activity failures and terminal frames", () => {
       // A tool_end with nothing new to say keeps the detail it started with.
       ["tool", { toolUseId: "t2", name: "Grep", input: { pattern: "TODO" } }],
       ["tool_end", { toolUseId: "t2", ok: true }],
-      ["task", { taskId: "k1", workflowName: "배포" }],
+      ["task", { taskId: "k1", subagentType: "배포" }],
       ["task", { taskId: "k2", taskType: "code_review" }],
       ["task_update", { taskId: "k2" }],
-      ["task_end", { taskId: "k1", workflowName: "배포", ok: false }],
+      ["task_end", { taskId: "k1", subagentType: "배포", ok: false }],
     ]);
     const p = pane(id);
     expect(p.livePlugins).toEqual([
@@ -3014,8 +2857,8 @@ describe("activity failures and terminal frames", () => {
       { name: "pluginB", status: "started" },
     ]);
     expect(p.liveAgents.filter((a) => a.id === "mate")).toHaveLength(1);
+    expect(p.liveAgents.find((a) => a.id === "mate")?.name).toBeUndefined();
     expect(p.liveAgents.find((a) => a.id === "mate")).toMatchObject({
-      name: "reviewer",
       label: "code-review · 2차",
       status: "failed",
       parentId: "main",
@@ -3023,7 +2866,7 @@ describe("activity failures and terminal frames", () => {
     expect(p.liveAgents.find((a) => a.id === "anon")).toMatchObject({ label: "하위 작업", parentId: "mate" });
     expect(p.liveTools[0]).toMatchObject({ status: "failed", detail: "종료 코드 1" });
     expect(p.liveTools[1]).toMatchObject({ status: "done", detail: "TODO" });
-    expect(p.liveTasks.map((t) => t.label)).toEqual(["워크플로 배포", "code review"]);
+    expect(p.liveTasks.map((t) => t.label)).toEqual(["배포", "code review"]);
     expect(p.liveTasks[0].status).toBe("failed");
     expect(statuses()).toContain("태스크가 완료되지 못했습니다.");
     // A task frame with nothing to name it still says something.
@@ -3106,14 +2949,12 @@ describe("activity failures and terminal frames", () => {
       ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
       ["bg_message", { message: { ...BG_MESSAGE, id: "wake-named", content: "보고" } }],
       ["permission", { requestId: `nm-${Date.now()}-1`, toolName: "Bash" }],
-      ["plan_review", { requestId: `nm-${Date.now()}-2`, plan: "계획" }],
     ];
     await driveEvents(named, frames);
     expect(notes.map((n) => n.title)).toEqual([
       "노아 봇 · 답변 완료",
       "노아 봇 · 백그라운드 작업 보고",
       "노아 봇 · 확인 필요",
-      "노아 봇 · 계획 승인 필요",
     ]);
 
     const seen = notes.length;
@@ -3122,13 +2963,11 @@ describe("activity failures and terminal frames", () => {
       ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
       ["bg_message", { message: { ...BG_MESSAGE, id: "wake-anon", content: "보고" } }],
       ["permission", { requestId: `nm-${Date.now()}-3`, toolName: "Bash" }],
-      ["plan_review", { requestId: `nm-${Date.now()}-4`, plan: "계획" }],
     ]);
     expect(notes.slice(seen).map((n) => n.title)).toEqual([
       "아바타 · 답변 완료",
       "아바타 · 백그라운드 작업 보고",
       "아바타 · 확인 필요",
-      "아바타 · 계획 승인 필요",
     ]);
   });
 

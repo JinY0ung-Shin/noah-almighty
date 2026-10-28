@@ -89,7 +89,6 @@ import {
 } from "../../shared/sdkToolPresentation.js";
 import {
   disallowedEntriesForPolicy,
-  isAgentTeamsDisabled,
 } from "../toolSkillPolicy.js";
 import { computeSkillsOption, freshSkillDiscoveryCache } from "./skillDiscovery.js";
 import {
@@ -123,22 +122,16 @@ export function withoutGitCredentialEnv(
 export function agentSubprocessEnv(
   baseEnv: Record<string, string | undefined>,
   agentSessionsDir: string,
-  agentTeamsDisabled = false,
 ): Record<string, string | undefined> {
   const env = withoutGitCredentialEnv(baseEnv);
   scrubServerOnlySecretEnv(env);
   return {
     ...env,
     CLAUDE_CONFIG_DIR: agentSessionsDir,
-    // Agent teams (experimental CLI feature): lets the avatar spawn ADDRESSABLE
-    // subagents (Agent tool with `name:`) and coordinate them via SendMessage.
-    // Default-on. Precedence: the admin's `agent_teams` toggle
-    // (isAgentTeamsDisabled — governance) wins over everything; otherwise an
-    // operator value set in the deploy environment (e.g. "0") wins over the
-    // default.
-    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: agentTeamsDisabled
-      ? "0"
-      : (env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS ?? "1"),
+    // Agent teams (the CLI's experimental addressable `Agent{name}` spawns) are
+    // retired: pinned OFF so a deploy-environment value cannot turn the teams
+    // runtime back on (its SendMessage tool is disallowed regardless).
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "0",
   };
 }
 
@@ -1432,8 +1425,7 @@ export async function buildAgentRunPlan(
     // Drop full-CLI harness tools we never use from the advertised tool list.
     // `allowedTools` only auto-approves; it does NOT restrict what the CLI offers,
     // so these (Monitor/Cron*/Worktree/…) would otherwise ride along on every
-    // request as unused tool descriptions. Workflow is deliberately NOT dropped
-    // here — see UNUSED_SDK_BUILTIN_TOOLS. See the constant.
+    // request as unused tool descriptions. See the constant.
     disallowedTools: Array.from(
       new Set([
         ...UNUSED_SDK_BUILTIN_TOOLS,
@@ -1485,14 +1477,7 @@ export async function buildAgentRunPlan(
   // through the app-managed in-process MCP bridge.
   fs.mkdirSync(config.agentSessionsDir, { recursive: true });
   options.env = {
-    ...agentSubprocessEnv(
-      process.env,
-      config.agentSessionsDir,
-      // The admin `agent_teams` toggle turns off the CLI teams runtime too,
-      // not just the SendMessage tool (read fresh per run like the rest of
-      // the policy).
-      isAgentTeamsDisabled(toolSkillPolicy),
-    ),
+    ...agentSubprocessEnv(process.env, config.agentSessionsDir),
     // Per-key OPT-IN shell exposure (elevated runs only): `$NAME` works in
     // Bash and in anything the CLI spawns. The PostToolUse hook below redacts
     // these values from every tool output before the model sees it, and
@@ -1689,7 +1674,7 @@ export async function buildAgentRunPlan(
           // callback hook after 10 minutes by default, and CLIs before 2.1.218
           // misreport that abort to the model as a USER REJECTION — fatal here,
           // because this hook legitimately parks while the owner answers the
-          // permission/question/plan modal. Pin the budget just above the run
+          // permission/question modal. Pin the budget just above the run
           // registry's PROMPT_TTL_MS so the server always settles the prompt
           // first; the CLI timeout remains only a dead-man's switch.
           timeout: Math.ceil(PROMPT_TTL_MS / 1000) + 60,
@@ -1705,9 +1690,9 @@ export async function buildAgentRunPlan(
     };
     // A confirmer, not a second gate: its presence makes the SDK pass
     // `--permission-prompt-tool stdio`, without which the CLI hides
-    // AskUserQuestion / EnterPlanMode / ExitPlanMode from this non-interactive
-    // session. It confirms only an ExitPlanMode the hook above allowed and
-    // denies every other CLI-side ask (see buildCanUseToolSafetyNet).
+    // AskUserQuestion from this non-interactive session. It confirms only an
+    // AskUserQuestion the hook above allowed and denies every other CLI-side
+    // ask (see buildCanUseToolSafetyNet).
     options.canUseTool = buildCanUseToolSafetyNet(hookApprovals);
   }
 

@@ -1187,10 +1187,6 @@ export async function executeChatTurn(
     // Visual-canvas artifacts (#50) now persist to the dedicated canvas tables as
     // they are shown (see the onCanvas handler), with version history — they no
     // longer ride the assistant message's response JSON.
-    // The latest plan the avatar submitted via ExitPlanMode this turn (plan mode).
-    // Persisted on the assistant response so the plan card rebuilds on reload, and
-    // mirrored on the cancel/error paths like canvases. Latest plan of the turn wins.
-    let latestPlan: string | null = null;
     // Background phase (SDK-native): when the model hands work to a background
     // task/subagent, the SDK holds the session open past the first `result`,
     // wakes the model when a task settles, and streams follow-up turns. We
@@ -1648,7 +1644,6 @@ export async function executeChatTurn(
                   runtime: config.agentRuntime,
                   summary: "Claude Agent SDK 실행이 완료되었습니다.",
                   text: segment.text || STEER_TURN_END_PLACEHOLDER,
-                  ...(latestPlan ? { plan: latestPlan } : {}),
                   ...(thinkingTail ? { thinking: thinkingTail } : {}),
                   ...(segment.usage ? { usage: segment.usage } : {}),
                 };
@@ -1669,9 +1664,6 @@ export async function executeChatTurn(
                 persistedTextOffset = streamedText.length;
                 persistedThinkingOffset = streamedThinking.length;
                 persistedAttachmentsOffset = shownAttachments.length;
-                // The plan belongs to the segment just persisted; the follow-up
-                // turn carries its own (or none).
-                latestPlan = null;
                 return;
               }
               turnFinalized = true;
@@ -1690,7 +1682,6 @@ export async function executeChatTurn(
                 runtime: config.agentRuntime,
                 summary: "Claude Agent SDK 실행이 완료되었습니다.",
                 text: segment.text || BACKGROUND_TURN_PLACEHOLDER,
-                ...(latestPlan ? { plan: latestPlan } : {}),
                 ...(streamedThinking ? { thinking: streamedThinking } : {}),
                 ...(segment.usage ? { usage: segment.usage } : {}),
               };
@@ -1763,41 +1754,6 @@ export async function executeChatTurn(
           // a reattach replays the log and the client dedupes on it.
           onCompact: (event) => {
             emitRunEvent(runId, "compact", { id: crypto.randomUUID(), ...event });
-          },
-          // Plan mode: the avatar submitted a plan via ExitPlanMode. Surface it as
-          // a dedicated plan card (display-only) and keep the latest one to persist
-          // on the assistant response so it rebuilds on reload.
-          onPlan: (event) => {
-            // EnterPlanMode emits an empty-plan "planning" signal; only a real plan
-            // (ExitPlanMode) is worth persisting on the response.
-            if (event.plan) latestPlan = event.plan;
-            emitRunEvent(runId, "plan", {
-              plan: event.plan,
-              planning: event.planning ?? false,
-            });
-          },
-          // Interactive plan approval (owner only). The avatar proposed a plan
-          // via ExitPlanMode; park the run and emit the plan to the client,
-          // which shows approve/reject controls on the plan card. Approve →
-          // the avatar implements; reject → feed the feedback back so it revises.
-          onPlanReview: async (requestData) => {
-            const requestId = crypto.randomUUID();
-            emitRunEvent(runId, "plan_review", {
-              runId,
-              requestId,
-              plan: requestData.plan,
-            });
-            const answer = await awaitResponse(runId, requestId);
-            if (answer === CANCELLED) {
-              // Run ended / cancelled / timed out before an answer: treat as a
-              // rejection (no feedback) so the avatar never barrels ahead with
-              // an unapproved plan.
-              return { behavior: "rejected" };
-            }
-            const reply = answer as { behavior?: string; feedback?: string };
-            return reply?.behavior === "approved"
-              ? { behavior: "approved" }
-              : { behavior: "rejected", feedback: reply?.feedback };
           },
           // Interactive permission prompt (owner only — see claudeAgent).
           onPermission: async (requestData) => {
@@ -2664,11 +2620,6 @@ export async function executeChatTurn(
       // Canvases shown this turn are already persisted to the dedicated tables by
       // the onCanvas handler (with version history); they no longer ride the
       // response JSON. The live panel is driven by the SSE "canvas" events. (#50)
-      // Carry the plan submitted this turn (plan mode) so the plan card persists
-      // and rebuilds on reload.
-      if (latestPlan) {
-        response.plan = latestPlan;
-      }
       // Carry the turn's reasoning so the collapsible "생각 과정" view rebuilds
       // on reload (streaming path only — headless runs emit no onThinking).
       // Only the TAIL since the last persisted boundary: a run whose turn was
@@ -2747,7 +2698,6 @@ export async function executeChatTurn(
           runtime: config.agentRuntime,
           summary: "중지됨",
           text: cancelledText,
-          ...(latestPlan && !turnFinalized ? { plan: latestPlan } : {}),
           ...(cancelledThinking ? { thinking: cancelledThinking } : {}),
         };
         // Skip the insert if the conversation was deleted mid-run (FK would reject).
@@ -2823,25 +2773,23 @@ export async function executeChatTurn(
           ? `${erroredText}\n\n${userFacing}`
           : userFacing;
         // Any canvas shown before the error is already persisted to the canvas
-        // tables by the onCanvas handler. If a plan and/or reasoning was produced,
-        // carry it so the plan/thinking cards survive reload; text=content keeps the
-        // error bubble identical, and a response is attached only when there's
-        // something to carry (plain errors keep their existing null-response shape).
+        // tables by the onCanvas handler. If reasoning was produced, carry it so
+        // the thinking card survives reload; text=content keeps the error bubble
+        // identical, and a response is attached only when there's something to
+        // carry (plain errors keep their existing null-response shape).
         store.addMessage(conversationId, {
           role: "assistant",
           content,
           attachments: shownAttachments.slice(persistedAttachmentsOffset),
-          response:
-            (latestPlan && !turnFinalized) || erroredThinking
-              ? {
-                  kind: "text",
-                  runtime: config.agentRuntime,
-                  summary: "오류",
-                  text: content,
-                  ...(latestPlan && !turnFinalized ? { plan: latestPlan } : {}),
-                  ...(erroredThinking ? { thinking: erroredThinking } : {}),
-                }
-              : undefined,
+          response: erroredThinking
+            ? {
+                kind: "text",
+                runtime: config.agentRuntime,
+                summary: "오류",
+                text: content,
+                thinking: erroredThinking,
+              }
+            : undefined,
         });
       }
       emitRunEvent(runId, "error", {

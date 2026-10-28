@@ -115,6 +115,7 @@ import {
   traceSdkMessage,
 } from "../src/server/agent/sdkMessageHandlers.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
+import { TOOL_SKILL_POLICY_CONFIG_KEY } from "../src/server/toolSkillPolicy.js";
 
 // ---------------------------------------------------------------------------
 // SDK-message + query-handle builders (shapes copied from sdkMessageHandlers /
@@ -235,7 +236,6 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
     onAgentStart: vi.fn(),
     onAgentEnd: vi.fn(),
     onBlocked: vi.fn(),
-    onPlan: vi.fn(),
     ...overrides,
   };
 }
@@ -364,18 +364,16 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(options.cwd).toBe(baseRequest.cwd);
     expect(options.model).toBe(DEFAULT_MODEL_TIER);
     expect(options.disallowedTools).toContain("Monitor");
-    // Agent teams: SendMessage stays advertised (auto-allowed) and the CLI
-    // feature flag rides in the subprocess env.
-    expect(options.disallowedTools).not.toContain("SendMessage");
-    expect(options.allowedTools).toContain("SendMessage");
-    // ultracode: Workflow stays advertised (auto-allowed) too, so the keyword
-    // trigger has a live tool to switch the turn into.
-    expect(options.disallowedTools).not.toContain("Workflow");
-    expect(options.allowedTools).toContain("Workflow");
+    // Retired orchestration (plan mode, Workflow, agent teams): never
+    // advertised, never pre-allowed, and the CLI teams runtime is pinned off.
+    for (const retired of ["EnterPlanMode", "ExitPlanMode", "Workflow", "TeamCreate", "TeamDelete", "SendMessage"]) {
+      expect(options.disallowedTools).toContain(retired);
+      expect(options.allowedTools).not.toContain(retired);
+    }
     expect(
       (options.env as Record<string, string | undefined>)
         .CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
-    ).toBe("1");
+    ).toBe("0");
     // `snapshot: false` keeps the per-turn append live on resumed sessions; the
     // CLI's default would replay the first turn's recorded prompt instead.
     expect(options.systemPrompt).toMatchObject({
@@ -390,7 +388,7 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(Array.isArray(hooks?.PreToolUse)).toBe(true);
     expect(hooks?.PreToolUse).toHaveLength(1);
     // …plus the canUseTool confirmer: the SDK's permission-prompt route, without
-    // which the CLI hides AskUserQuestion / Enter|ExitPlanMode. It must not be
+    // which the CLI hides AskUserQuestion. It must not be
     // combined with permissionPromptToolName (the SDK throws on both).
     expect(typeof options.canUseTool).toBe("function");
     expect(options.permissionPromptToolName).toBeUndefined();
@@ -454,9 +452,14 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(sdkMock.calls[4].options.allowedTools as string[]).not.toContain("Bash");
   });
 
-  it("admin agent-teams toggle turns off the CLI flag AND the SendMessage tool", async () => {
+  it("a stored policy still naming the retired SendMessage/Workflow toggles changes nothing", async () => {
     const { config, store, baseRequest } = setup();
-    store.setToolSkillPolicy({ disabledTools: ["SendMessage"], disabledSkills: [] });
+    // A pre-retirement row: the read path normalizes the retired names away.
+    store.setAppSecret(
+      TOOL_SKILL_POLICY_CONFIG_KEY,
+      JSON.stringify({ disabledTools: ["SendMessage", "Workflow", "WebFetch"], disabledSkills: [] }),
+    );
+    expect(store.getToolSkillPolicy().disabledTools).toEqual(["WebFetch"]);
     const events = makeEvents();
     sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
 
@@ -468,6 +471,7 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
         .CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
     ).toBe("0");
     expect(options.disallowedTools).toContain("SendMessage");
+    expect(options.disallowedTools).toContain("WebFetch");
   });
 
   it("plumbs the model tier, effort, and MCP tool-group selection into the query options", async () => {

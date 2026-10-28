@@ -495,7 +495,7 @@ export function getRunPrompts(runId: string, userId: string): { event: string; d
   const run = runs.get(runId);
   if (!run || run.ended || run.userId !== userId) return [];
   return run.events.filter(frame => {
-    if (!["permission", "question", "plan_review", "canvas"].includes(frame.event)) return false;
+    if (!["permission", "question", "canvas"].includes(frame.event)) return false;
     const data = frame.data as { requestId?: string };
     return typeof data?.requestId === "string" && run.pending.has(data.requestId);
   }).map(({ event, data }) => ({ event, data }));

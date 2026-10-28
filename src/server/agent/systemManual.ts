@@ -252,14 +252,14 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID" \\
 GET /api/v1/avatar/tasks/:id returns {"task":...}. GET /api/v1/avatar/tasks returns the latest 100 as {"tasks":[...]}.
 - queued: waiting to start.
 - running: executing, including background work still settling.
-- waiting_input: inspect pendingRequests and answer the outstanding question/permission/plan/canvas request.
+- waiting_input: inspect pendingRequests and answer the outstanding question/permission/canvas request.
 - succeeded: read result.text and result.summary. result is the task's final response, not the whole conversation transcript.
 - failed: inspect error and the partial response in Noah; work may have partially changed external systems.
 - cancelled: cancelled.
 Poll until a terminal state with a reasonable delay/backoff. Noah also displays the conversation and its live question/approval UI. Background follow-up reports are accumulated into result.text before completion; result.summary is from the final report.
 
 ## 3. Answer a pending request
-Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question, permission, plan_review or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
+Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question, permission or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
 ~~~bash
 curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID/respond" \\
   -H "Authorization: Bearer $NOAH_API_KEY" \\
@@ -269,7 +269,6 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID/respond" \\
 POST /api/v1/avatar/tasks/:id/respond accepts {"requestId":"...","value":...}.
 - Question: value is {"result":...} matching data.dialogKind/data.payload, or {"cancelled":true}. The service example above is illustrative, not a universal question schema.
 - Tool permission: {"behavior":"allow"} or {"behavior":"deny"}.
-- Plan approval: {"behavior":"approved"} or {"behavior":"rejected","feedback":"requested changes"}.
 - Canvas: follow that canvas's input schema; the user may answer in Noah instead.
 Success returns {"ok":true}. An expired/already-answered request returns 409; refresh the task rather than replaying it blindly. Browser work still needs the owner to have the conversation open with the Noah extension connected. API submission does not supply a remote browser. Interactive-only share-link creation is unavailable on this path.
 
@@ -283,7 +282,7 @@ Queued work is cancelled; running work receives an asynchronous stop request. Po
 ## Limits and recovery
 - At most 20 unfinished tasks per user; at most 60 new submissions/minute. 429 includes Retry-After: 60. Respect it.
 - API tasks run one per user and at most four across the server. A busy conversation/repository causes waiting/retry; do not submit duplicates because the queue is slow. A long or stuck task holds its owner's only slot until it finishes, fails, or is cancelled, so that user's later tasks wait — cancel stuck work instead of waiting out the budget.
-- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input and any background phase. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled, a permission request as denied, and a plan review as rejected.
+- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input and any background phase. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled, and a permission request as denied.
 - Queued tasks survive a restart. A task interrupted while running becomes failed, not automatically retried. Review partial effects before submitting again.
 - Deleting its Noah conversation also deletes task history. Do not rely on the task endpoint as permanent archival storage. There is currently no automatic retention cleanup for completed task rows.
 - 400: check the request body/field constraints. 401: check Bearer key validity/revocation and account state. 404: verify the task/conversation id belongs to this owner and still exists. 409: inspect the conflict (idempotency mismatch, expired response or completed task); do not treat every 409 as retryable. 429: back off.

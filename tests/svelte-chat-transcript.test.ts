@@ -113,6 +113,21 @@ beforeEach(() => {
 });
 
 describe("ChatView transcript", () => {
+  it("renders an older turn's stored plan as a read-only card with no approve/reject controls", () => {
+    const message = {
+      ...assistantMessage(),
+      response: { ...assistantMessage().response!, plan: "1. 조사\n2. 구현" },
+    } as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([message])], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const card = container.querySelector(".message.assistant .plan-card");
+    expect(card?.textContent).toContain("조사");
+    expect(container.querySelector(".plan-actions")).toBeNull();
+    expect(container.querySelector(".plan-feedback")).toBeNull();
+    expect(Array.from(container.querySelectorAll("button")).some((b) => b.textContent?.trim() === "승인")).toBe(false);
+  });
+
   it("renders an anchored file card inline at its creation point, not below the text", () => {
     const first = "다이어그램을 만들었습니다.";
     const rest = "이어서 구조를 설명합니다.";

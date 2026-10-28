@@ -10,9 +10,10 @@
  * the dirs does not close it: the socket path is predictable.
  *
  * The fix is receiver-side: every Noah-spawned CLI refuses inbound
- * cross-session messages. In-run agent teams are unaffected — a named
- * subagent lives in the SAME CLI process and is reached through its mailbox,
- * not a peer socket. `ListAgents` is also disallowed
- * (`UNUSED_SDK_BUILTIN_TOOLS`).
+ * cross-session messages. The sending side is closed too: `ListAgents` and
+ * `SendMessage` (with agent teams retired) are both disallowed
+ * (`UNUSED_SDK_BUILTIN_TOOLS`), so a run can neither find nor message a peer —
+ * the refusal stays as the receiver-side guarantee in case a CLI version ever
+ * offers another sender.
  */
 export const CROSS_SESSION_SETTINGS = { crossSessionInbound: "refuse" } as const;

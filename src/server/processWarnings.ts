@@ -7,7 +7,7 @@
  * call. That is exactly this app's design: the hook is the gate and
  * `canUseTool` is only a confirmer (`buildCanUseToolSafetyNet`). Its tool list
  * is not even accurate here, because the CLI still asks the callback about
- * ExitPlanMode and protected-path writes. So the warning is one long stderr
+ * protected-path writes. So the warning is one long stderr
  * line of noise per agent run. Every other warning still reaches Node's
  * default handler untouched.
  */
