@@ -113,7 +113,6 @@ describe("official system manual", () => {
   it("documents the share-link exception to conversation-scoped artifacts without claiming availability", () => {
     const page = readSystemManual("files-canvas").text;
     expect(page).toContain("Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card.");
-    expect(page).toContain("group-agent conversations cannot be link-shared");
     expect(page).toContain("speaker notes included");
     expect(page).toContain("1, 7 or 30 days, 7 by default, fixed at creation");
     // One active link per delivered CARD: a rebuilt deck delivered again is a

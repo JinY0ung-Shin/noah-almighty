@@ -239,8 +239,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   button's content, `aria-label` and `title` once per 1.2 s window and restores them EXACTLY (an attribute
   the button lacked is removed again), so a second click cannot make the check icon permanent and a
   text-named button never keeps "복사됨" as its name; the dialog's 복사 is named `공유 링크 복사`.
-- **Link controls appear on PPTX cards only, never in a group-agent pane** (`avatar.groupAgent` or a
-  `group:` id), and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
+- **Link controls appear on PPTX cards only**, and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
   the server could find; `FileTab` disables its button with a title instead).
 - **`panelSlides` IS the shared `cardSlideAttachments`**: the card's stamped renders when there are any,
   otherwise the legacy unstamped ones — never both (the deck-review loop publishes unstamped hidden canvas

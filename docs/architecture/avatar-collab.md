@@ -239,8 +239,7 @@
 - **Registration:** `skillExchangeActive` (= `avatars` group enabled && `ownerToolAccess`) drives
   `allowedTools` + `mcpServers` byte-identically; every handler ALSO self-gates on `viewerIsOwner`
   (find included — the listing is the OWNER's group view, and a trusted teammate driving this avatar has
-  their own avatar for their view). Group-agent runs are excluded twice over (avatars family forced off +
-  `ownerToolAccess=false`). Owner routines keep the tools.
+  their own avatar for their view). Owner routines keep the tools.
 - **Metacognition:** `OwnerState.learnableSkillCount`/`sharedSkillCount` (lazy getters) feed BOTH the
   standing prompt section (promptBuilder, inside the avatars-group block, re-deriving the registration
   gate) and `describe_system`'s "Skill exchange" line. A LEARNED skill only LOADS on the NEXT

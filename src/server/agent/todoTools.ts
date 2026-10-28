@@ -28,7 +28,7 @@ import { text } from "./mcpTools.js";
  * (the same rows the 할 일 tab, the chat overlay and `/api/me/todos` show).
  * OWNER-DRIVEN runs only — runPlan registers the server for an interactive
  * own-avatar chat, an owner routine and an external-task-API turn, never for a
- * teammate, a group agent or a consultation — and every handler re-checks
+ * teammate or a consultation — and every handler re-checks
  * `viewerIsOwner` because the PreToolUse hook auto-allows `mcp__*` calls before
  * any owner check. Validation is the routes' own (`../todos.ts`); only the
  * message channel differs (English here, Korean there).

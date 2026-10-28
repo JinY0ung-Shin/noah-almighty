@@ -43,7 +43,7 @@ const RETIREMENT_PENDING_KEY = "retired:external_avatars:pending";
 /**
  * An exact, case-sensitive prefix test on an avatar-id column. LIKE would be
  * case-insensitive and treat `_` as a wildcard; ids are server-minted UUIDs or
- * namespaced (`group:`, the retired `personal:`), so only an external id can
+ * namespaced (the retired `group:` / `personal:`), so only an external id can
  * start with this.
  */
 function externalAvatarSql(column: string): string {

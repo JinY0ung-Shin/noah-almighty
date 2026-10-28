@@ -568,7 +568,7 @@ environment (all optional):
   `skill-disabled` when `pptx` or `<plugin.json name>:pptx` (`avatar-defaults:pptx`) is disabled —
   `other:pptx` is not — else `read-only` without elevated tool access, else `allowed`.
 - **The state on BOTH surfaces.** The explicit markers live on `describe_system`'s "Document deck generation
-  (PPTX)" line (owner, group-agent and non-owner branches — one helper, `deckCapabilityLine` in
+  (PPTX)" line (owner and non-owner branches — one helper, `deckCapabilityLine` in
   `agent/systemTools.ts`, so they can never disagree). The prompt's `deckSection` (`agent/promptBuilder.ts`)
   carries no marker: it picks the converter or the legacy standing guidance from the same probe
   (`deckConverterEnabled` wins over `deckRenderingEnabled`). The `share_file` description

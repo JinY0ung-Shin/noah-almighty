@@ -374,80 +374,6 @@ export interface GroupMember {
 export interface AdminGroupSummary extends Group {
   memberCount: number;
   adminCount: number;
-  /** Shared group agents (a group may have several). */
-  agentCount: number;
-  enabledAgentCount: number;
-}
-
-/** Who may CAPTURE (write + commit) to the shared second brain through the group agent. */
-export type GroupAgentCaptureScope = "members" | "admins";
-
-/**
- * Structured, UNFORMATTED self-state for a GROUP SHARED-AGENT run — the group
- * analogue of `OwnerState` (agent/ownerState.ts builds it), with the same
- * metacognition invariant: consumed by BOTH `buildSystemPromptAppend` (group-
- * agent prompt branch) AND `describe_system` (group-agent ctx). Add a fact
- * here and to both consumers together.
- */
-export interface GroupAgentState {
-  groupId: string;
-  agentId: string;
-  /** The agent's display name — with several agents per group, state names WHICH. */
-  displayName: string;
-  groupName: string;
-  enabled: boolean;
-  captureScope: GroupAgentCaptureScope;
-  /**
-   * The acting member's role in the owning group (live, this turn). Null when
-   * they were removed after the turn started — FAIL CLOSED: the state report
-   * must never claim more than the tool gates that re-check membership allow.
-   */
-  viewerRole: GroupRole | null;
-  /** capture_scope resolved against viewerRole — may THIS member capture. */
-  captureAllowed: boolean;
-  knowledgeRepoConfigured: boolean;
-  knowledgeRepo: { repo: string | null; branch: string | null };
-  /** ACTING member's internal git token — capture's commit/push depends on it. */
-  viewerGitTokenSet: boolean;
-  /** Whether a persona/instructions text is currently set on the agent. */
-  personaSet: boolean;
-  /**
-   * May the ACTING member reconfigure this agent (persona/alias/bio/intro) via
-   * `mcp__group_agent__update_profile` — live group-admin role (or system
-   * admin), membership REQUIRED. Fails closed with viewerRole once removed.
-   */
-  selfConfigAllowed: boolean;
-  anthropicModel?: string;
-  modelOverride: string | null;
-}
-
-/**
- * A group's SHARED AGENT (several per group allowed, group-admin managed): a
- * team avatar whose second brain is the group's shared knowledge repository. It
- * is NOT a users row — its public avatar id is `group:<groupId>:<id>` — and it
- * uses group resources only (never personal secrets/tokens/repos). Reachable
- * solely by members of the owning group, independent of the avatar-sharing
- * policy.
- */
-export interface GroupAgent {
-  /** Row id — the agent's identity; its public avatar id is `group:<groupId>:<id>`. */
-  id: string;
-  groupId: string;
-  displayName: string;
-  /** How the agent names itself in chat; empty falls back to displayName. */
-  alias: string;
-  bio: string;
-  intro: string;
-  persona: string;
-  hashtags: string[];
-  hasImage: boolean;
-  /** Disabled blocks the NEXT turn but preserves every member's threads. */
-  enabled: boolean;
-  captureScope: GroupAgentCaptureScope;
-  /** Acting manager who created it (may dangle, like groups.createdBy). */
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string | null;
 }
 
 /** A group the current user belongs to — surfaced on `User` and the roster. */
@@ -610,11 +536,6 @@ export interface AvatarSummary {
    * "같은 그룹" badge + group-priority ordering. Undefined where not computed.
    */
   sharesGroup?: boolean;
-  /**
-   * Set ONLY for group shared agents (avatar id `group:<groupId>`): the kind
-   * tag plus the owning group's name for badges/labels.
-   */
-  groupAgent?: { groupId: string; groupName: string };
 }
 
 export interface AvatarDetail extends AvatarSummary {
@@ -1172,8 +1093,8 @@ export interface SharedMcpServerUserView {
  *    was for a previous address) → not registered;
  *  - `missing_secrets`: a bound secret is gone from the vault → not registered;
  *  - `secrets_unavailable`: the server needs a user's secret and this run kind
- *    never carries one (plain colleague / restricted headless / group-agent
- *    runs) → not registered.
+ *    never carries one (plain colleague / restricted headless runs) → not
+ *    registered.
  * Names (`unboundSlots`, `missingSecrets`) ride owner runs only.
  */
 export interface SharedMcpRunState {
@@ -1250,21 +1171,6 @@ export interface AgentRequest {
   viewerName?: string;
   /** True when the viewer IS the avatar's owner (viewer.id === avatar.id). */
   viewerIsOwner?: boolean;
-  /**
-   * Set ONLY for group shared-agent runs (avatar id `group:<groupId>:<agentId>`):
-   * pins the run to ONE group's resources. The run kind carries capability —
-   * owner-only tools never unlock (there is no owner), built-in access is
-   * elevated-class, and only the group repo/brain servers register, gated per
-   * call on the ACTING member's live membership/role. `captureAllowed` is the
-   * AGENT's capture_scope policy resolved against `viewerRole` at request time.
-   */
-  groupAgent?: {
-    groupId: string;
-    agentId: string;
-    groupName: string;
-    viewerRole: GroupRole;
-    captureAllowed: boolean;
-  };
   /**
    * True when the viewer may use tools at the OWNER's permission level — i.e. the
    * owner themselves OR a designated trusted user. Gates the tool hook (write/Bash
@@ -1445,7 +1351,7 @@ export interface AgentRequest {
    * the user prompt's attached-images tail and describe_system's image-sources
    * line agree on whether an image file can be placed into a deck, document or
    * commit, or only read. Undefined → only what the request proves: the owner's
-   * own run or a group-agent run writes; anything else is treated as read-only.
+   * own run writes; anything else is treated as read-only.
    */
   canWriteFiles?: boolean;
   /**
@@ -1503,7 +1409,7 @@ export interface AgentRequest {
    * This interactive turn can drive the VIEWER's own browser through the
    * extension bridge (`mcp__browser__*`). Requires a system admin talking to
    * their OWN avatar in an interactive turn — so unlike `canvasEnabled` this is
-   * never set for a colleague, a routine, or a group agent.
+   * never set for a colleague or a routine.
    * Mirrored by describe_system (META-COGNITION).
    */
   browserEnabled?: boolean;
@@ -1532,8 +1438,8 @@ export interface AgentRequest {
   /**
    * True only when THIS run registered `mcp__file_output__create_share_link`
    * (runPlan's `shareLinkToolActive`): file output, the host's `onShareLink`,
-   * and an interactive turn of the owner's own avatar — never a group-agent,
-   * consultation, headless or external-task-API run. Stamped by
+   * and an interactive turn of the owner's own avatar — never a consultation,
+   * headless or external-task-API run. Stamped by
    * `runClaudeAgent` from that same boolean, and mirrored by describe_system
    * (`SystemToolsContext.shareLinksEnabled`), so neither metacognition surface
    * offers a tool the run lacks; a run that can deliver files but not make
@@ -1577,13 +1483,6 @@ export interface AgentRequest {
    */
   adminDisabledTools?: string[];
   adminDisabledSkills?: string[];
-  /**
-   * GROUP-AGENT self-state (META-COGNITION), set by `runClaudeAgent` for
-   * group-agent runs only: feeds the group-agent prompt branch the same facts
-   * `describe_system` reports (see {@link GroupAgentState}). Null when the
-   * agent/group vanished mid-run (the branch then renders a minimal identity).
-   */
-  groupAgentState?: GroupAgentState | null;
   avatarApiKeyCount?: number;
   /**
    * The configured wall-clock budget for ONE external task API run

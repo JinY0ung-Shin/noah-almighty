@@ -43,7 +43,7 @@ const RETIREMENT_PENDING_KEY = "retired:personal_agents:pending";
 /**
  * An exact, case-sensitive prefix test on an avatar-id column. LIKE would be
  * case-insensitive and treat `_` as a wildcard; ids are server-minted UUIDs or
- * namespaced (`external:`, `group:`), so only a bot id can start with this.
+ * namespaced (the retired `external:` / `group:`), so only a bot id can start with this.
  */
 function botAvatarSql(column: string): string {
   return `substr(${column}, 1, ${BOT_AVATAR_PREFIX.length}) = '${BOT_AVATAR_PREFIX}'`;

@@ -438,7 +438,6 @@ describe("mcp__todo__* registration", () => {
     const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
     const group = store.createGroup({ name: "팀", createdBy: owner.id });
     store.addGroupMember(group.id, owner.id, "member");
-    const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 에이전트" })!;
     const cwd = path.join(tempDir, dir, "ws");
     fs.mkdirSync(cwd, { recursive: true });
     const baseRequest: AgentRequest = {
@@ -451,7 +450,7 @@ describe("mcp__todo__* registration", () => {
       viewerIsOwner: true,
       autoApprove: true,
     };
-    return { config, store, owner, group, groupAgent, baseRequest };
+    return { config, store, owner, group, baseRequest };
   }
 
   const events = (): AgentEvents => ({ onDelta: vi.fn(), onStatus: vi.fn() });
@@ -531,19 +530,6 @@ describe("mcp__todo__* registration", () => {
       name: "a trusted teammate's chat",
       request: (s) => ({ ...s.baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, elevated: true }),
     },
-    {
-      name: "a group shared-agent run",
-      request: (s) => ({
-        ...s.baseRequest,
-        groupAgent: {
-          groupId: s.group.id,
-          agentId: s.groupAgent.id,
-          groupName: s.group.name,
-          viewerRole: "member",
-          captureAllowed: false,
-        },
-      }),
-    },
     // viewerIsOwner stays true here on purpose: the consultation exclusion must
     // hold on its own, not ride on the viewer flag.
     { name: "an avatar consultation", request: (s) => ({ ...s.baseRequest, avatarConsultation: true }) },
@@ -613,12 +599,6 @@ describe("mcp__todo__* registration", () => {
     const teammateServers = sdkMock.calls[0].options.mcpServers as Record<string, { args?: string[] }>;
     expect(teammateServers.todo?.args).toContain("todoist.js");
     expect(teammateEvents.onStatus).not.toHaveBeenCalledWith(expect.stringContaining("플러그인 경고"));
-  });
-
-  it("tells a group agent it has no personal to-do list", async () => {
-    const s = setup("reg-group-prompt");
-    const run = await registration(s, excluded[2].request(s));
-    expect(run.append).toContain("no 할 일 to-do list");
   });
 
   it("freezes the list into the prompt at the conversation's first turn and replays it byte-for-byte", async () => {

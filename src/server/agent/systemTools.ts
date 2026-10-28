@@ -24,7 +24,6 @@ import {
   gettingStartedGaps,
   rewindTurnState,
   sharedMcpServerLines,
-  summarizeGroupAgentState,
   summarizeOwnerState,
 } from "./ownerState.js";
 import { MCP_TOOL_GROUPS, effectiveMcpToolGroups, type McpToolGroupId } from "../../shared/mcpToolGroups.js";
@@ -176,7 +175,7 @@ export interface SystemToolsContext {
    * Set by runPlan; mirrors `AgentRequest.canWriteFiles`, so the image-sources
    * line and the user prompt's attached-images tail agree on whether an image
    * file can be placed into a deliverable or only read. Undefined → only what
-   * the ctx proves: the owner's own run or a group-agent run writes.
+   * the ctx proves: the owner's own run writes.
    */
   canWriteFiles?: boolean;
   /**
@@ -211,13 +210,6 @@ export interface SystemToolsContext {
    * no-headless gate — so both surfaces report the same turn provenance.
    */
   rewind?: AgentRewindInfo;
-  /**
-   * Set ONLY for GROUP SHARED-AGENT runs: describe_system then reports the
-   * group's self-state (summarizeGroupAgentState — the same facts the prompt
-   * branch gets) instead of an owner block. Management tools keep refusing via
-   * viewerIsOwner (false on these runs).
-   */
-  groupAgent?: { agentId: string; actingUserId: string };
   /**
    * runPlan's `sshActive`: hex-ssh is registered for THIS run. The SSH line
    * reports it instead of secret-name presence. Undefined (older callers/tests)
@@ -396,7 +388,7 @@ function deckPythonInterpreter(t: DeckToolchainState | undefined): string {
 
 /**
  * The describe_system "Document deck generation (PPTX)" line, shared by the
- * owner, group-agent and non-owner branches so they can never disagree. A HEAD
+ * owner and non-owner branches so they can never disagree. A HEAD
  * names the deployment's deck mode — the explicit `converter: INSTALLED` /
  * `converter: NOT INSTALLED` markers are what the bundled pptx skill's
  * preflight keys on (never prose) — and at most ONE TAIL says what THIS run may
@@ -452,19 +444,19 @@ const IMAGE_SOURCES_LINE_PREFIX = "- Images for documents and decks: ";
 /**
  * Whether this run may write files, as the image-sources line states it:
  * runPlan's `canWriteFiles` (elevatedToolAccess) when set, else only what the
- * ctx proves (the owner's own run, or a group-agent run), so an unwired caller
+ * ctx proves (the owner's own run), so an unwired caller
  * never tells a read-only colleague to copy files. The prompt's attached-images
  * tail resolves the SAME flag the same way (`promptBuilder.ts`).
  */
 function canWriteFilesOf(
-  ctx: Pick<SystemToolsContext, "canWriteFiles" | "viewerIsOwner" | "groupAgent">,
+  ctx: Pick<SystemToolsContext, "canWriteFiles" | "viewerIsOwner">,
 ): boolean {
-  return ctx.canWriteFiles ?? (ctx.viewerIsOwner || Boolean(ctx.groupAgent));
+  return ctx.canWriteFiles ?? ctx.viewerIsOwner;
 }
 
 /**
- * describe_system's image-sources line, shared by the owner, group-agent and
- * non-owner branches (like the deck line) so they never disagree: which images
+ * describe_system's image-sources line, shared by the owner and non-owner
+ * branches (like the deck line) so they never disagree: which images
  * this run has as FILES and where they are, and whether it may place them into
  * a deck, document or commit (`canWriteFiles`) or only read them. Each source
  * is keyed on the same run flag the prompt's standing text reads (browser +
@@ -481,7 +473,6 @@ export function imageSourcesLine(
     | "scratchWorkspaceDir"
     | "canWriteFiles"
     | "viewerIsOwner"
-    | "groupAgent"
   >,
 ): string {
   const where = ctx.scratchWorkspaceDir
@@ -555,14 +546,6 @@ function ownerShareLinkLine(store: Store, ctx: SystemToolsContext): string {
 }
 
 /**
- * The group-agent block's share-link line: member threads are private and the
- * team shares through its second brain, so these threads cannot be link-shared
- * at all — no tool, and no 공유 링크 button in the pane either.
- */
-const GROUP_AGENT_SHARE_LINK_LINE =
-  "- Share links: UNAVAILABLE for group-agent conversations — mcp__file_output__create_share_link is not registered here and this pane's file cards have no 공유 링크 button; a member who wants others to see a deck can still download it from its card.";
-
-/**
  * The non-owner branch's share-link line: the avatar cannot make a link for a
  * colleague or teammate, but the person chatting owns THIS conversation, so the
  * card button works for them (the route authorizes the conversation owner).
@@ -579,7 +562,7 @@ function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
 /**
  * describe_system's half of the prompt's per-turn rewind line: the SAME
  * `rewindTurnState` text under the SAME label, printed in every viewer branch
- * (a rewind happens in colleague and group-agent threads too). Empty on every
+ * (a rewind happens in colleague threads too). Empty on every
  * other turn, where the prompt omits its line as well.
  */
 function rewindLines(ctx: SystemToolsContext): string[] {
@@ -628,97 +611,11 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // partial output survives, so the avatar should size a routine's prompt to
           // fit rather than discover the ceiling by being killed.
           `- Routines run headlessly once at a specified KST date/time or recur on a daily, weekly, or interval schedule, work with the same tool permissions as the owner, and leave their results in the routines tab. A routine can also open one registered git repository as its working directory (open_repo) — the selection persists and takes effect from the routine's next scheduled run. Each run has a hard wall-clock limit of ${Math.round(ctx.config.routineRunTimeoutMs / 60_000)} minutes covering the ENTIRE run; when it is hit the run is aborted and only the text produced so far is kept. Scope a routine to fit that budget, and split work that cannot into several routines. Up to ${ctx.config.routineMaxConcurrentRunsPerUser} of the owner's routines run at the same time (${ctx.config.routineMaxConcurrentRuns} across the server) — a manual "지금 실행" run is never refused and can add more; one that falls due while those slots are busy, or while its working repository is open in another conversation, starts on a later check instead of being dropped. Routines due at the same time can therefore run side by side and finish in any order — never rely on one routine's output being ready when another starts.`,
-          "- 할 일: each user keeps ONE personal work to-do list (the 할 일 tab, plus a card toggled by the 할 일 button under the chat's message box). Only that user's own avatar can read or change it (`mcp__todo__*`, in their own chats, routines and task-API runs) — never through a teammate's chat or a group agent.",
+          "- 할 일: each user keeps ONE personal work to-do list (the 할 일 tab, plus a card toggled by the 할 일 button under the chat's message box). Only that user's own avatar can read or change it (`mcp__todo__*`, in their own chats, routines and task-API runs) — never through a teammate's chat.",
           "- Secret values are not exposed; only their names are revealed to the avatar.",
           "- Remote git operations (clone/push, etc.) are performed only through dedicated MCP tools. The shell has no git credentials.",
           "- Background execution: `run_in_background` tasks keep running after the visible reply ends — the session stays alive, the avatar is woken when a task settles, and its follow-up arrives as a NEW chat message (the user sees a live indicator meanwhile). The user cannot send new messages in that conversation until the background work finishes or is cancelled (cancelling kills it).",
         ];
-        // GROUP SHARED-AGENT runs: report the GROUP's self-state (the same
-        // facts the group-agent prompt branch carries — GroupAgentState) and
-        // stop; there is no owner block to build.
-        if (ctx.groupAgent) {
-          const ga = summarizeGroupAgentState(
-            store,
-            ctx.config,
-            ctx.groupAgent.agentId,
-            ctx.groupAgent.actingUserId,
-          );
-          if (!ga) {
-            return text(
-              `${publicGuide.join("\n")}\n\nThis shared group agent's group no longer exists, so no state can be reported.`,
-            );
-          }
-          // FAIL CLOSED on a mid-turn membership loss or disable, matching every
-          // sibling group tool (NOT_A_MEMBER / AGENT_DISABLED). The route
-          // authorized this run at start, but a removal/disable since then must
-          // not keep leaking the group repo name, capture policy, or identity.
-          if (!ga.enabled || ga.viewerRole === null) {
-            return text(
-              [
-                ...publicGuide,
-                "",
-                "Current GROUP SHARED-AGENT state: UNAVAILABLE.",
-                !ga.enabled
-                  ? `- The shared agent '${ga.displayName}' was disabled by a group admin; its group tools now refuse with AGENT_DISABLED.`
-                  : "- You are no longer a member of this agent's group; its group tools now refuse with NOT_A_MEMBER.",
-                "- No group repository, capture policy, or identity can be reported until this is restored.",
-              ].join("\n"),
-            );
-          }
-          // Model/effort/tool-group lines mirror the owner block below (small
-          // deliberate duplication — the owner strings are test-pinned).
-          const gaTier = ctx.selectedModelTier;
-          const gaTierModel = gaTier ? ctx.config.defaultTierModels[gaTier] : undefined;
-          const gaDefaultModel = ctx.config.defaultTierModels[DEFAULT_MODEL_TIER];
-          const gaModelLine = ga.anthropicModel
-            ? `${ga.anthropicModel} (pinned via environment variable)`
-            : gaTier
-              ? `${gaTierModel ? `${gaTierModel} (${gaTier})` : gaTier} (chosen for this conversation in the composer)`
-              : ga.modelOverride
-                ? `${ga.modelOverride} (admin setting)`
-                : `${gaDefaultModel ? `${gaDefaultModel} (${DEFAULT_MODEL_TIER})` : DEFAULT_MODEL_TIER} (default)`;
-          const gaEffort = ctx.selectedEffort;
-          // English label: this is model-facing self-state.
-          const gaEffortLabel = (id: string) => EFFORT_LEVELS.find((e) => e.id === id)?.labelEn;
-          const gaEffortLine = gaEffort
-            ? `${gaEffortLabel(gaEffort) ? `${gaEffort} (${gaEffortLabel(gaEffort)})` : gaEffort} (chosen for this conversation)`
-            : `${gaEffortLabel(DEFAULT_EFFORT_LEVEL) ? `${DEFAULT_EFFORT_LEVEL} (${gaEffortLabel(DEFAULT_EFFORT_LEVEL)})` : DEFAULT_EFFORT_LEVEL} (default)`;
-          const gaEnabled = effectiveMcpToolGroups(ctx.enabledMcpToolGroups);
-          const gaLabels = MCP_TOOL_GROUPS
-            .filter((group) => gaEnabled.includes(group.id))
-            .map((group) => group.labelEn);
-          // Mirrors runPlan's `groupBrainActive` / `groupRepoActive`, which both
-          // require `groupKnowledgeToolsEnabled`: with the group deselected the
-          // team-brain and group-repo servers are not registered this turn, so
-          // the repo fact below must not read as a usable capability.
-          const gaGroupKnowledgeOff = !gaEnabled.includes("group_knowledge");
-          return text(
-            [
-              ...publicGuide,
-              "",
-              "Current GROUP SHARED-AGENT state:",
-              `- Kind: shared agent '${ga.displayName}' of the group '${ga.groupName}' (a team resource, not a personal avatar; the group may have other shared agents)`,
-              `- Enabled: ${ga.enabled ? "yes" : "no — disabled by a group admin"}`,
-              ...rewindLines(ctx),
-              `- Capture policy: ${ga.captureScope === "members" ? "all group members may capture" : "group admins only"}; the member in this conversation (role: ${ga.viewerRole ?? "removed — no longer a group member"}) ${ga.captureAllowed ? "MAY capture (write + commit)" : "may NOT capture (recall/read only)"}`,
-              `- Team second brain (shared knowledge repository): ${ga.knowledgeRepoConfigured ? `${ga.knowledgeRepo.repo}${ga.knowledgeRepo.branch ? ` @ ${ga.knowledgeRepo.branch}` : ""}${gaGroupKnowledgeOff ? " — but the group knowledge tool group is OFF for this conversation, so mcp__group_brain__* and mcp__group_repo__* are not registered this turn (no team-brain recall or capture until it is re-enabled)" : ""}` : `(none — ask a group admin to connect one in group settings)${gaGroupKnowledgeOff ? " — and the group knowledge tool group is OFF for this conversation" : ""}`}`,
-              `- This member's internal Git token (GIT_TOKEN): ${ga.viewerGitTokenSet ? "set" : "not set — capture's commit/push will fail until they register one in Settings"}`,
-              `- Self-configuration: persona/instructions ${ga.personaSet ? "SET" : "NOT set"}; this member ${ga.selfConfigAllowed ? "MAY update the agent's persona/alias/bio/intro via mcp__group_agent__update_profile (applies to every member, from the next turn)" : "may NOT update them — only group admins may (mcp__group_agent__update_profile refuses others)"}`,
-              `- Model in use: ${gaModelLine}`,
-              `- Reasoning effort: ${gaEffortLine}`,
-              `- MCP tool groups enabled for this conversation: ${gaLabels.length ? gaLabels.join(", ") : "(none)"}`,
-              "- Capability boundary: NO personal knowledge repository/brain, secrets, SSH, routines, notifications, 할 일 to-do lists, personal git repositories, or plugins beyond the group repository.",
-              // Deployment-level capability (not group state): every member of
-              // a group-agent run gets the elevated built-ins, so the SAME deck
-              // line the owner block prints applies here.
-              deckCapabilityLine(ctx),
-              imageSourcesLine(ctx),
-              ...sharedMcpLines(ctx),
-              GROUP_AGENT_SHARE_LINK_LINE,
-              "- Group admins manage this agent in the 그룹 (Groups) view on the left rail.",
-            ].join("\n"),
-          );
-        }
         if (!ctx.viewerIsOwner) {
           // Deployment-level facts only (no owner state): a trusted teammate
           // may build a deck through this avatar, a plain colleague may not,

@@ -106,7 +106,7 @@ import {
   SDK_TOOL_LABELS,
   SDK_UI_HANDLED_TOOLS,
 } from "../src/shared/sdkToolPresentation.js";
-import { emptyOwnerState, summarizeOwnerState } from "../src/server/agent/ownerState.js";
+import { summarizeOwnerState } from "../src/server/agent/ownerState.js";
 import { deckAuthoringStatusFor, deckGuidanceFlags } from "../src/server/deckRender.js";
 import type { AgentEvents } from "../src/server/agent/events.js";
 import {
@@ -508,13 +508,13 @@ describe("workspace dirs", () => {
       // The same conversation id resolves under ANY avatar: a colleague's
       // thread lives under the OTHER user's avatar, not the deleter's own.
       const colleagueThread = workspaceDirFor(config, "someone-elses-avatar", "conv-x");
-      const groupAgentThread = workspaceDirFor(config, "group:team:agent", "conv-x");
+      const ownThread = workspaceDirFor(config, "my-avatar", "conv-x");
       const untouched = workspaceDirFor(config, "someone-elses-avatar", "conv-other");
-      for (const dir of [colleagueThread, groupAgentThread, untouched]) seedWorkspace(dir);
+      for (const dir of [colleagueThread, ownThread, untouched]) seedWorkspace(dir);
 
       deleteConversationWorkspaceCopies(config, ["conv-x"]);
 
-      for (const dir of [colleagueThread, groupAgentThread]) {
+      for (const dir of [colleagueThread, ownThread]) {
         for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
           expect(fs.existsSync(path.join(dir, sub)), `${dir}/${sub}`).toBe(false);
         }
@@ -3556,7 +3556,6 @@ describe("buildPrompt", () => {
     { viewerIsOwner: true, resumeSessionId: "existing-session" },
     { viewerIsOwner: true, headless: true, allowHeadlessTools: true },
     { viewerIsOwner: true, externalTaskApi: true },
-    { groupAgent: { groupId: "g", agentId: "a", groupName: "Team", viewerRole: "member" as const, captureAllowed: false } },
   ])("keeps the manual index and lookup trigger in the system layer: %j", (over) => {
     const request = req(over);
     const system = buildSystemPromptAppend(request);
@@ -3837,7 +3836,7 @@ describe("buildPrompt", () => {
     expect(p).not.toContain(GETTING_STARTED);
   });
 
-  it("keeps getting-started OUT of colleague, teammate, routine, and group-agent turns", () => {
+  it("keeps getting-started OUT of colleague, teammate and routine turns", () => {
     const colleague = buildPrompt(
       req({ ...setupGaps, viewerIsOwner: false, viewerName: "동료" }),
       0,
@@ -3859,22 +3858,6 @@ describe("buildPrompt", () => {
       0,
     );
     expect(restricted).not.toContain(GETTING_STARTED);
-    // A group shared agent has no owner setup to offer at all.
-    const groupAgent = buildPrompt(
-      req({
-        ...setupGaps,
-        viewerName: "멤버",
-        groupAgent: {
-          groupId: "g",
-          agentId: "a",
-          groupName: "팀",
-          viewerRole: "member" as const,
-          captureAllowed: true,
-        },
-      }),
-      0,
-    );
-    expect(groupAgent).not.toContain(GETTING_STARTED);
   });
 
   it("stops offering setup once the conversation is no longer young", () => {
@@ -4216,10 +4199,6 @@ describe("buildPrompt", () => {
     for (const over of [
       { viewerIsOwner: true, rewind },
       { viewerIsOwner: false, viewerName: "동료", rewind },
-      {
-        groupAgent: { groupId: "g", agentId: "a", groupName: "Team", viewerRole: "member" as const, captureAllowed: false },
-        rewind,
-      },
     ]) {
       expect(buildSystemPromptAppend(req(over))).toContain(
         "Conversation rewind (this turn): The user went back to an earlier point",
@@ -4386,14 +4365,9 @@ describe("buildPrompt", () => {
     // runPlan's flag decides whenever it is stamped — even against the viewer class.
     expect(tail({ viewerIsOwner: false, canWriteFiles: true })).toContain(PLACE);
     expect(tail({ viewerIsOwner: true, canWriteFiles: false })).toContain(READ_ONLY);
-    // Unstamped: only what the request proves writes — the owner's own run or a
-    // group-agent run — so a colleague is never told to copy files.
+    // Unstamped: only what the request proves writes — the owner's own run —
+    // so a colleague is never told to copy files.
     expect(tail({ viewerIsOwner: true })).toContain(PLACE);
-    expect(
-      tail({
-        groupAgent: { groupId: "g", agentId: "a", groupName: "팀", viewerRole: "member", captureAllowed: false },
-      }),
-    ).toContain(PLACE);
     const colleague = tail({ viewerIsOwner: false, viewerName: "동료" });
     expect(colleague).toContain(READ_ONLY);
     expect(colleague).not.toContain(PLACE);
@@ -5857,11 +5831,6 @@ describe("summarizeOwnerState lazy counts", () => {
     ]);
     // Policy only — the value never rides the snapshot the prompt is built from.
     expect(JSON.stringify(state.browserSecrets)).not.toContain("hunter2");
-  });
-
-  it("emptyOwnerState reports no browser-input secrets (group-agent runs have no owner vault)", () => {
-    const { store, config } = setup("owner-state-browser-empty");
-    expect(emptyOwnerState(store, config).browserSecrets).toEqual([]);
   });
 });
 

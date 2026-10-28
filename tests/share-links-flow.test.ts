@@ -16,7 +16,7 @@ import { callTool, shareGroup, signup, withTempDir } from "./helpers.js";
 //     the slide and the .pptx flow through viewer-bound tickets;
 //  3. the card button's create call reuses the avatar's link (one per card);
 //     revoke → every recipient call is the one 404, never a 401;
-//  4. group-agent and colleague turns through the SAME route: no tool and
+//  4. a colleague turn through the SAME route: no tool and
 //     the prompt's redirect instead (the route's supply predicate and runPlan's
 //     registration gate agree);
 //  5. a rebuilt deck re-delivered is a NEW card: its link is a new one, the
@@ -92,7 +92,6 @@ const FIXTURE_DECK = path.join(__dirname, "fixtures", "deck-preview", "mini");
 const TOOL_LINE = "Share links: `create_share_link`, ONLY if the user asks for a link.";
 const REDIRECT =
   "Share links for a PPTX card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card.";
-const GROUP_REDIRECT = "Share links cannot be created for a group-agent conversation";
 
 function boot() {
   const services = createServices({
@@ -246,19 +245,17 @@ describe("share links end to end (chat route → runPlan → tool → recipient)
     }
   });
 
-  it("offers no tool on group-agent and colleague turns — the prompt redirects instead", { timeout: 30_000 }, async () => {
-    const { app, store } = boot();
+  it("offers no tool on a colleague turn — the prompt redirects instead", { timeout: 30_000 }, async () => {
+    const { app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "gateowner").expect(201)).body.user.id as string;
     const colleague = request.agent(app);
     await signup(colleague, "gatecolleague").expect(201);
     // Co-members: the colleague reaches (and is trusted by) the owner's avatar.
-    const groupId = await shareGroup(owner, ["gateowner", "gatecolleague"]);
-    const groupAgent = store.createGroupAgent(groupId, { displayName: "팀 비서" })!;
+    await shareGroup(owner, ["gateowner", "gatecolleague"]);
 
     const turns: Array<[string, ReturnType<typeof request.agent>, string]> = [
       ["own", owner, ownerId],
-      ["group", owner, `group:${groupId}:${groupAgent.id}`],
       ["colleague", colleague, ownerId],
     ];
     for (const [conversation, agent, avatarId] of turns) {
@@ -269,17 +266,12 @@ describe("share links end to end (chat route → runPlan → tool → recipient)
     }
     expect(S.calls).toHaveLength(turns.length);
 
-    const [own, groupRun, colleagueRun] = turns.map((_, i) => offeredTo(i));
+    const [own, colleagueRun] = turns.map((_, i) => offeredTo(i));
     expect(own).toMatchObject({ allowed: true, registered: true });
     expect(own.append).toContain(TOOL_LINE);
-    for (const run of [groupRun, colleagueRun]) {
-      expect(run).toMatchObject({ allowed: false, registered: false });
-      expect(run.append).not.toContain(TOOL_LINE);
-    }
+    expect(colleagueRun).toMatchObject({ allowed: false, registered: false });
+    expect(colleagueRun.append).not.toContain(TOOL_LINE);
     expect(colleagueRun.append).toContain(REDIRECT);
-    // A group-agent pane has no 공유 링크 button, so the avatar must not point at one.
-    expect(groupRun.append).toContain(GROUP_REDIRECT);
-    expect(groupRun.append).not.toContain(REDIRECT);
   });
 
   it("a rebuilt deck re-delivered is a NEW card: the avatar learns the earlier link still serves the old file", { timeout: 30_000 }, async () => {

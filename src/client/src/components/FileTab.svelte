@@ -28,9 +28,8 @@
   $: attachment = file.attachment;
   $: slides = file.slides ?? [];
   $: name = attachment.name || "파일";
-  // 공유 링크: PPTX decks only, and never from a group agent's thread (member
-  // threads are private; the group shares through its second brain).
-  $: shareable = isPptxCard(attachment) && !pane.avatar.groupAgent && !pane.avatar.id.startsWith("group:");
+  // 공유 링크: PPTX decks only.
+  $: shareable = isPptxCard(attachment);
   // A card still streaming has no persisted message the server can find yet.
   $: shareLive = Boolean(pane.streaming && (pane.liveAttachments ?? []).some((att) => att.id === attachment.id));
 

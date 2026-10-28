@@ -77,7 +77,7 @@ export function humanTool(name: string | undefined): string {
   if (!name) return "도구";
   if (TOOL_LABELS[name]) return TOOL_LABELS[name];
   // Keep in lockstep with sdkToolLabel (src/shared/sdkToolPresentation.ts):
-  // server segments may contain underscores (git_repo, group_agent).
+  // server segments may contain underscores (git_repo, group_repo).
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   return (mcp ? mcp[2] : name).replace(/_/g, " ");
 }

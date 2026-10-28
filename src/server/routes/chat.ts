@@ -4,14 +4,10 @@ import { Router, type Response } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import {
-  groupKnowledgeRepoSkillSources,
   listSkillsInRoots,
   loadAgentPluginRoots,
-  loadGroupAgentKnowledgeMemory,
-  loadGroupAgentPluginRoots,
   loadKnowledgeRepoMemory,
 } from "../plugins.js";
-import { groupKnowledgeRepoContextFor } from "../groupKnowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
 import { resolveActiveWorkspaceRepo } from "../activeRepoResolve.js";
 import { kstDateWithWeekday } from "../routineSchedule.js";
@@ -104,13 +100,6 @@ import {
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import {
-  findChattableGroupAgent,
-  groupAgentAvatarDetail,
-  groupAgentCaptureAllowed,
-  listGroupAgentAvatarSummaries,
-  type ChattableGroupAgent,
-} from "../groupAgents.js";
 import {
   isModelTier,
   modelTierLabel,
@@ -480,7 +469,6 @@ function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
 
 /** The avatar a chat turn actually targets, after every reach gate ran. */
 export interface ChatTarget {
-  groupAgentHit: ChattableGroupAgent | null;
   avatar: { id: string; displayName: string; alias: string; persona: string };
   viewerIsOwner: boolean;
 }
@@ -668,8 +656,7 @@ export function formatDurationKo(ms: number): string {
 
 /**
  * Resolve who a chat turn is talking to and refuse every unreachable target,
- * in the ORDER the checks have always run (group agent → native row →
- * owner-only command).
+ * in the ORDER the checks have always run (avatar row → owner-only command).
  */
 export function resolveChatTarget(args: {
   store: Store;
@@ -679,21 +666,7 @@ export function resolveChatTarget(args: {
   ownerOnlyCommand: boolean;
 }): { ok: true; target: ChatTarget } | { ok: false; refusal: ChatTurnRefusal } {
   const { store, viewerUserId, avatarId } = args;
-  // Group shared agent: member-only reach; a member-visible DISABLED agent
-  // gets its own 403 (they already know it exists — no leak), everything
-  // else collapses into the generic 403 below.
-  const groupAgentHit = findChattableGroupAgent(store, viewerUserId, avatarId, {
-    includeDisabled: true,
-  });
-  if (groupAgentHit && !groupAgentHit.agent.enabled) {
-    return {
-      ok: false,
-      refusal: { status: 403, message: "그룹 에이전트가 비활성화되어 있습니다. 그룹 관리자에게 문의해 주세요." },
-    };
-  }
-  const avatar = groupAgentHit
-    ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-    : store.resolveChatAvatar(viewerUserId, avatarId);
+  const avatar = store.resolveChatAvatar(viewerUserId, avatarId);
   if (!avatar) {
     return {
       ok: false,
@@ -713,11 +686,10 @@ export function resolveChatTarget(args: {
       refusal: { status: 403, message: "이 명령은 내 아바타와의 대화에서만 사용할 수 있습니다." },
     };
   }
-  const viewerIsOwner = !groupAgentHit && viewerUserId === avatar.id;
+  const viewerIsOwner = viewerUserId === avatar.id;
   return {
     ok: true,
     target: {
-      groupAgentHit,
       avatar,
       viewerIsOwner,
     },
@@ -887,7 +859,7 @@ export async function executeChatTurn(
   // A regenerate re-derives both from the STORED row it re-runs (see the rewind
   // plan below); every other turn keeps what the HTTP prelude derived.
   let { agentMessage, displayMessage } = ctx;
-  const { groupAgentHit, avatar, viewerIsOwner } = ctx.target;
+  const { avatar, viewerIsOwner } = ctx.target;
   const decodedImages = ctx.images;
   // Absent (a server-started turn) reads as "keep whatever is stored", which is
   // the same null the HTTP prelude produces when the client sends nothing.
@@ -1039,68 +1011,62 @@ export async function executeChatTurn(
   // belt-and-suspenders — open_repo is itself elevated-only — in case trust
   // changed since the repo was opened.
   const elevatedViewer =
-    !groupAgentHit &&
-    (viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id));
+    viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id);
   /**
    * `onShareLink` (the avatar's create_share_link) is supplied ONLY on an
-   * interactive turn of the owner's OWN avatar: never a group-agent member
-   * thread (shared only via the group second brain), a colleague's thread, a
-   * turn an external system submitted through the task API, or any unattended (deadlined) run. A link is a bearer URL every signed-in
+   * interactive turn of the owner's OWN avatar: never a colleague's thread, a
+   * turn an external system submitted through the task API, or any unattended
+   * (deadlined) run. A link is a bearer URL every signed-in
    * user can open, so the owner must be the one asking — runPlan's
    * registration gate is the second lock, the callback's own re-check the third.
    */
   const shareLinkTurn =
     viewerIsOwner &&
     ownerUserId === avatar.id &&
-    !groupAgentHit &&
     !ctx.externalTaskId &&
     ctx.unattendedDeadlineMs === undefined;
   let activeRepoCwd: string | null = null;
   let activeRepoName: string | null = null;
   let releaseActiveRepoLock: (() => void) | null = null;
-  // Group-agent runs skip the whole block: no isTrustedFor on a synthetic
-  // id, no personal work-repo workspace (the run kind carries capability).
-  if (!groupAgentHit) {
-    const repoResolution = await resolveActiveWorkspaceRepo({
-      store,
-      config,
-      avatar: {
-        id: avatar.id,
-        displayName: avatar.displayName,
-        alias: avatar.alias,
-      },
-      conversationId,
-      elevated: elevatedViewer,
-      gitRepoToolsEnabled,
-    });
-    if (repoResolution.kind === "error") {
-      return {
-        ok: false,
-        refusal:
-          repoResolution.reason === "not_found"
+  const repoResolution = await resolveActiveWorkspaceRepo({
+    store,
+    config,
+    avatar: {
+      id: avatar.id,
+      displayName: avatar.displayName,
+      alias: avatar.alias,
+    },
+    conversationId,
+    elevated: elevatedViewer,
+    gitRepoToolsEnabled,
+  });
+  if (repoResolution.kind === "error") {
+    return {
+      ok: false,
+      refusal:
+        repoResolution.reason === "not_found"
+          ? {
+              status: 400,
+              message:
+                "등록된 저장소를 찾을 수 없습니다. 먼저 저장소를 등록해 주세요.",
+            }
+          : repoResolution.reason === "locked"
             ? {
-                status: 400,
+                status: 409,
                 message:
-                  "등록된 저장소를 찾을 수 없습니다. 먼저 저장소를 등록해 주세요.",
+                  "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
               }
-            : repoResolution.reason === "locked"
-              ? {
-                  status: 409,
-                  message:
-                    "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
-                }
-              : {
-                  status: 502,
-                  message: `저장소 작업공간을 열지 못했습니다: ${repoResolution.detail ?? ""}`,
-                },
-      };
-    }
-    if (repoResolution.kind === "ok") {
-      activeRepoCwd = repoResolution.cwd;
-      activeRepoName = repoResolution.repoName;
-      // Frees the per-clone serialization lock; called once when the run ends.
-      releaseActiveRepoLock = repoResolution.release;
-    }
+            : {
+                status: 502,
+                message: `저장소 작업공간을 열지 못했습니다: ${repoResolution.detail ?? ""}`,
+              },
+    };
+  }
+  if (repoResolution.kind === "ok") {
+    activeRepoCwd = repoResolution.cwd;
+    activeRepoName = repoResolution.repoName;
+    // Frees the per-clone serialization lock; called once when the run ends.
+    releaseActiveRepoLock = repoResolution.release;
   }
 
   try {
@@ -1585,34 +1551,18 @@ export async function executeChatTurn(
         requestedEffort === null
           ? store.getConversationEffort(ownerUserId, conversationId)
           : requestedEffort || null;
-      // Group-agent runs load ONLY the owning group's repo (with the acting
-      // member's tokens) + defaults; native runs load the avatar's full set.
-      const pluginRoots = groupAgentHit
-        ? await loadGroupAgentPluginRoots(
-            store,
-            groupAgentHit.groupId,
-            ownerUserId,
-            config,
-            (warn) => pluginWarnings.push(warn),
-          )
-        : await loadAgentPluginRoots(
-            store,
-            avatar.id,
-            config,
-            (warn) => pluginWarnings.push(warn),
-            { disabledGroupIds },
-          );
+      const pluginRoots = await loadAgentPluginRoots(
+        store,
+        avatar.id,
+        config,
+        (warn) => pluginWarnings.push(warn),
+        { disabledGroupIds },
+      );
       // Standing CLAUDE.md memory (personal repo always; group repos gated by the
       // toggle). Read after plugin roots ensured the clones for this turn.
-      const knowledgeMemory = groupAgentHit
-        ? await loadGroupAgentKnowledgeMemory(
-            store,
-            groupAgentHit.groupId,
-            config,
-          )
-        : await loadKnowledgeRepoMemory(store, avatar.id, config, {
-            disabledGroupIds,
-          });
+      const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config, {
+        disabledGroupIds,
+      });
 
       for (const warn of pluginWarnings) {
         emitRunEvent(runId, "status", { label: `플러그인 경고: ${warn}` });
@@ -1662,28 +1612,13 @@ export async function executeChatTurn(
           knowledgeMemory,
           // Elevated tool permissions for the owner OR a trusted user. The tool
           // gate denies everyone else, so auto-approving the elevated path is safe.
-          // (Group-agent runs carry capability via `groupAgent` instead.)
           elevated: elevatedViewer,
           // WHY a non-owner viewer is elevated, when group co-membership is the
           // source: the shared group names surface in the prompt (META-COGNITION).
           trustedViaGroups:
-            groupAgentHit || ownerUserId === avatar.id
+            ownerUserId === avatar.id
               ? []
               : store.sharedGroupNames(ownerUserId, avatar.id),
-          // Group shared-agent run kind: pins the run to ONE group's
-          // resources and carries the acting member's role/capture right.
-          groupAgent: groupAgentHit
-            ? {
-                groupId: groupAgentHit.groupId,
-                agentId: groupAgentHit.agent.id,
-                groupName: groupAgentHit.groupName,
-                viewerRole: groupAgentHit.viewerRole,
-                captureAllowed: groupAgentCaptureAllowed(
-                  groupAgentHit.agent,
-                  groupAgentHit.viewerRole,
-                ),
-              }
-            : undefined,
           autoApprove: true,
           // Unattended work (the task API) falls down the tier chain on a
           // transient model failure, exactly like a routine — there is no live
@@ -3075,12 +3010,9 @@ export function createChatRouter({
     "/api/avatars",
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
-      const avatars = [
-        ...store.listPublishedAvatars(req.user!.id),
-        // Shared group agents of the viewer's groups (enabled only) — reach is
-        // membership-scoped by the store query, like the native list above.
-        ...listGroupAgentAvatarSummaries(store, req.user!.id),
-      ].sort((a, b) => a.displayName.localeCompare(b.displayName));
+      const avatars = store
+        .listPublishedAvatars(req.user!.id)
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
       res.json({ avatars });
     },
   );
@@ -3089,10 +3021,7 @@ export function createChatRouter({
     "/api/avatars/:id",
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
-      const groupAgentHit = findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const avatar = groupAgentHit
-        ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-        : store.getAvatar(req.user!.id, req.params.id);
+      const avatar = store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
         return;
@@ -3109,10 +3038,7 @@ export function createChatRouter({
     "/api/avatars/:id/skills",
     requireAuth(store),
     async (req: AuthenticatedRequest, res) => {
-      const groupAgentHit = findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const avatar = groupAgentHit
-        ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-        : store.getAvatar(req.user!.id, req.params.id);
+      const avatar = store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
         return;
@@ -3120,20 +3046,6 @@ export function createChatRouter({
       // The local runtime loads no plugins/skills, so there's nothing to list.
       if (config.agentRuntime === "local") {
         res.json({ skills: [] });
-        return;
-      }
-      if (groupAgentHit) {
-        // A group agent's skills come from the owning group's shared repo only,
-        // cloned with the VIEWER's tokens (the standing group-repo pattern).
-        const ctx = groupKnowledgeRepoContextFor(
-          store,
-          groupAgentHit.groupId,
-          req.user!.id,
-          config,
-          groupAgentHit.groupName,
-        );
-        const sources = await groupKnowledgeRepoSkillSources(ctx ? [ctx] : []);
-        res.json({ skills: await listSkillsInRoots(sources) });
         return;
       }
       const { sourced } = await resolveAvatarSkillSources(

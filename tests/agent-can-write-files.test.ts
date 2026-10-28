@@ -9,7 +9,7 @@ import { withTempDir } from "./helpers.js";
 // it to describe_system's ctx, and runClaudeAgent stamps it onto the prompt
 // request. Both metacognition surfaces must then tell each viewer class the
 // same thing about the images it has as files. A missing stamp is silent: the
-// prompt falls back to "owner or group agent writes", so a trusted teammate
+// prompt falls back to "only the owner writes", so a trusted teammate
 // would hear read-only from the prompt and place-the-file from describe_system.
 // Partial SDK mock (agent-run.test.ts pattern), recording the prompt too.
 // ---------------------------------------------------------------------------

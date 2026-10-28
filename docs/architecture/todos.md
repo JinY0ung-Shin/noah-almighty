@@ -103,9 +103,9 @@
   prompt carries no TODAY date — the frozen snapshot's timestamp is worded as not today's (see below) —
   so this header — plus the date the `/todo` expansion
   writes into its own user message — is what lets the model resolve "내일까지"/"다음 주 금요일".
-- **Gate (runPlan):** `todoToolsActive = systemToolsEnabled && ownerToolAccess && !groupAgentRun &&
+- **Gate (runPlan):** `todoToolsActive = systemToolsEnabled && ownerToolAccess &&
   !consultationRun` — an interactive own-avatar chat, an owner routine (headless with tools opted in) and
-  an external-task-API turn; never a teammate's chat, a group agent, a consultation or a generic headless
+  an external-task-API turn; never a teammate's chat, a consultation or a generic headless
   run (intro/hashtag generation). It rides the always-on `system` family rather than a tool group, so a
   saved tool-group selection (`selected_*` / `*_default` store explicit lists) or a group's
   `allowed_mcp_tool_groups` policy can never silently drop it. `todoDeleteActive = todoToolsActive &&
@@ -157,7 +157,7 @@
   prompt position such text can reach); never memos, tags or closed items — then "…and N more". A
   snapshot stored before statuses existed lacks `status`/`inProgress` and parses as `todo`/0 — exact,
   since nothing could be in progress then — so it renders byte-identical to before. Same gate as the tools
-  (`todoToolsActive`), so a teammate's, group-agent or consultation run neither takes nor sees it. No
+  (`todoToolsActive`), so a teammate's or consultation run neither takes nor sees it. No
   block when the row is missing (the chat route and the task-API submit create it before the run and a
   routine's exists from its creation, but a routine whose thread was deleted re-creates it only AFTER
   its next run, so that one run goes without), when the stored value is unreadable (the parse is strict:
@@ -175,7 +175,7 @@
   `/todo` → add now and confirm in one line; a clear action item the OWNER owns → offer ONCE at the end
   of the reply, batched, add only what is accepted; no offers for ideas, casual mentions or others'
   tasks, none again after a decline; unattended runs add as instructed and report; check for
-  near-duplicates first; the status rule above. The group-agent branch states it has no to-do list, and colleague/teammate
+  near-duplicates first; the status rule above. Colleague/teammate
   runs get one static line: the viewer's 할 일 can only be changed by their OWN avatar — point them to
   the 할 일 tab or a chat with their own avatar (`/todo`), never TodoWrite/TaskCreate,
   never claim it was added.

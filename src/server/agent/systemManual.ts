@@ -29,7 +29,7 @@ DM is human-to-human UI functionality. DM content and contact lists are not adde
     title: "Shared server outbound network policy",
     summary: "Domain blocking, proxy denials, browser scope and deployment setup.",
     body: `## Scope
-An optional deployment overlay applies one outbound policy to ALL local avatars, group agents, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. Remote hosts need their own policy for requests they originate.
+An optional deployment overlay applies one outbound policy to ALL local avatars, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. Remote hosts need their own policy for requests they originate.
 
 ## Behavior
 The container bootstrap installs IPv4/IPv6 firewall rules before Noah starts, then drops root and all capabilities. Only loopback, replies to incoming connections and TCP to the dedicated HTTP proxy (3128) and its admin-session-protected policy controller (3129) are allowed. Destination DNS resolution happens at the proxy. Programs that ignore HTTP_PROXY/HTTPS_PROXY fail closed; raw SSH and other direct protocols are unavailable. HTTP requests and HTTPS CONNECT destination domains are checked against the same list. HTTPS paths are encrypted and are not filtered. IP-literal proxy destinations are denied.
@@ -55,7 +55,7 @@ Noah Almighty gives each user a main avatar with a profile/persona, skills, plug
 - 대화: revisit conversation history and continue work.
 - 할 일: your work to-do list; in a chat, the 할 일 button under the message box shows it as a card. Read todos.
 - 예약 작업: create, edit, pause and run scheduled work and read its results.
-- 그룹: membership, shared repositories and group-agent settings.
+- 그룹: membership and shared repositories.
 - 스킬 배우기: browse and learn shared teammate skills.
 - 지식 그래프: explore the second brain's notes and relationships.
 - 알림: review notifications and pending information requests.
@@ -112,7 +112,6 @@ Personal avatar visibility is group or private, not public-to-everyone. Peer dis
 - Your main avatar can use owner tools on your behalf, subject to enabled tool groups and deployment policy.
 - A trusted teammate may have elevated file/command access with interactive approvals, but that does not make them the owner. System settings and personal integrations remain owner-controlled.
 - A plain non-owner run is read-only except for the specific public or scoped MCP capabilities its handlers allow.
-- Group shared agents use group resources and their group's capture policy. They do not inherit personal secrets, repositories or plugins.
 
 ## Shared accounts
 The shared/communal account toggle is in the profile settings. It lets trusted teammates write and commit the account's PERSONAL knowledge repository as well as read it. Repository creation/connection remains owner-only. Turn it on only when this account's knowledge is intentionally maintained by the team.
@@ -160,13 +159,10 @@ Check plugin enabled state, sync errors, selected content, permissions, and whet
   {
     id: "groups-avatars",
     title: "Groups and avatar collaboration",
-    summary: "Team knowledge, group agents, teammate discovery and one-shot consultation.",
+    summary: "Team knowledge, teammate discovery and one-shot consultation.",
     body: `## Team setup
 System administrators create groups and assign group administrators. Manage group membership and the shared knowledge repository in the group settings. The avatar-sharing switch controls peer discovery/trust; shared repository knowledge still works when that switch is off.
-Group knowledge uses mcp__group_brain__search/get_note for recall and mcp__group_repo__* for repository operations. Group-admin and capture-policy checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
-
-## Shared group agents
-A group can have several shared agents. Members chat with them in PRIVATE per-member conversations; shared knowledge lives in the group repository, not in a shared transcript. These agents have group-scoped memory and tools, without personal secrets, personal plugins or personal repositories. Group administrators configure persona/profile and capture scope. Do not promise a personal-avatar action from a group agent's thread.
+Group knowledge uses mcp__group_brain__search/get_note for recall and mcp__group_repo__* for repository operations. Group-admin checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
@@ -209,7 +205,7 @@ Every item is 시작 전 (todo), 진행 중 (in_progress), 완료 (done) or 드�
 Only the title is required (up to 200 characters). Optional: a memo (markdown, up to 4000 characters), a due date (a KST calendar DATE — no time of day), priority 높음/보통/낮음 (default 보통) and up to 5 tags. Overdue means due before today in KST. A user may keep up to 500 open items, and reopening a closed item counts toward that; the newest 200 완료 and the newest 200 드랍 items stay listed until 완료 항목 비우기 / 드랍 항목 비우기 removes them.
 
 ## Avatar tools (mcp__todo__*)
-Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar, a group agent or an avatar consultation. These tools are NOT TodoWrite/TaskCreate, which are the avatar's private per-run checklist and disappear when the turn ends.
+Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar or an avatar consultation. These tools are NOT TodoWrite/TaskCreate, which are the avatar's private per-run checklist and disappear when the turn ends.
 - list_todos: status open (default, = todo + in_progress) | todo | in_progress | done | dropped | all, dueBefore (YYYY-MM-DD, exclusive), tag, query, includeNotes.
 - add_todos: 1-20 items per call, all-or-nothing; each {title, note?, dueDate?, priority?: high|normal|low, tags?, status?: todo|in_progress}.
 - update_todo: {id, ...fields, status?: todo|in_progress|done|dropped}; dueDate null or "" clears it, tags [] clears them. The avatar changes a status only on the owner's word, and marks an item the owner abandons as dropped instead of deleting it.
@@ -227,7 +223,7 @@ Example: "/todo 금요일까지 3분기 보고서 초안, 우선순위 높음 #�
     title: "External Task API integration",
     summary: "Bearer keys, curl, submit/poll/respond/cancel, idempotency and errors.",
     body: `## Purpose and prerequisites
-An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user or a group agent. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
+An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user's avatar. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
 
 ## Issue a key
 In 내 아바타 → 권한·연결 → 외부 작업 API, issue a named personal key. The raw key is shown only once; at most 10 may be active per user. Store it in the calling system's secret store/environment, never in a chat message or committed source file. NOAH_URL below is the actual externally reachable Noah origin, not the avatar's localhost; NOAH_API_KEY is the secret environment variable. Use HTTPS for a real deployment.
@@ -373,7 +369,7 @@ No tools: check key presence, SSH group selection, current role and deployment p
     summary: "Download cards, previews, charts/diagrams, slide decks and notification delivery.",
     body: `## Files and previews
 Ask for a downloadable artifact explicitly, for example "분석 결과를 XLSX로 만들어줘". The avatar creates the file and publishes it with the available file-output tools. show_file displays supported previews and share_file provides a download card. Use the returned Noah URL/card; a local filesystem path or file:// link is not browser-accessible.
-Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card. The conversation's owner makes one with the 공유 링크 button next to the card, or by asking their own avatar for a link in a chat with it; group-agent conversations cannot be link-shared. Anyone signed in to Noah who has the link (where self-service sign-up is open, that includes anyone who can reach Noah) can view the slide renders and download the .pptx, speaker notes included, until it expires — 1, 7 or 30 days, 7 by default, fixed at creation. Each delivered deck card has at most one active link, and a link keeps opening the file it was made for: a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked. It is a human-initiated export, like downloading the file and forwarding it — not a way to share the conversation, and not avatar access or trust. The owner revokes links in 내 아바타 → 권한·연결 → 공유 링크. Whether the avatar can create one in this run is a runtime fact reported by describe_system.
+Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card. The conversation's owner makes one with the 공유 링크 button next to the card, or by asking their own avatar for a link in a chat with it. Anyone signed in to Noah who has the link (where self-service sign-up is open, that includes anyone who can reach Noah) can view the slide renders and download the .pptx, speaker notes included, until it expires — 1, 7 or 30 days, 7 by default, fixed at creation. Each delivered deck card has at most one active link, and a link keeps opening the file it was made for: a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked. It is a human-initiated export, like downloading the file and forwarding it — not a way to share the conversation, and not avatar access or trust. The owner revokes links in 내 아바타 → 권한·연결 → 공유 링크. Whether the avatar can create one in this run is a runtime fact reported by describe_system.
 Do not assume a local temporary file will become visible without publication. If file output is unavailable in this run, explain that before promising a downloadable result.
 
 ## Canvas

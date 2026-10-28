@@ -19,7 +19,7 @@
 // the PreToolUse hook auto-allows every mcp__* call): a server with slots
 // registers ONLY on runs that may carry the owner's vault (the elevated line the
 // plugin-MCP injection draws — never a plain colleague, a restricted headless
-// run, a group agent or a consultation) and only when every slot is bound for
+// run or a consultation) and only when every slot is bound for
 // the current origin to a secret that still exists; otherwise it is left out of
 // that run and both metacognition surfaces say why.
 
@@ -64,7 +64,6 @@ const RESERVED_SERVER_NAMES: ReadonlySet<string> = new Set([
   "confluence",
   "file_output",
   "git_repo",
-  "group_agent",
   "group_brain",
   "group_repo",
   "hex-ssh",
@@ -385,7 +384,7 @@ export interface SharedMcpRunPlan {
  * Resolve the admin list for ONE run. `bindings` are the run OWNER's own;
  * `secrets` is the owner's INJECTABLE vault (reserved git/SSH names already
  * removed); `secretsAllowed` is the run's permission to carry it (elevated, not
- * a consultation, not a group agent). Pure — runPlan writes the bridge files.
+ * a consultation). Pure — runPlan writes the bridge files.
  */
 export function planSharedMcpRun(
   servers: SharedMcpServer[],

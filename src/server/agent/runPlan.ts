@@ -6,7 +6,7 @@
  * setup half declares NO `let` at all — so it lives here as one function that
  * returns the plan the loop consumes. Split behind unchanged exports:
  * `claudeAgent.ts` re-exports every helper that moved with it, so existing
- * import paths (app.ts, the agent-core/agent-tools/group-agent/infra/store
+ * import paths (app.ts, the agent-core/agent-tools/infra/store
  * suites) resolve against that module unchanged.
  *
  * ONE thing flows backwards. File-output and browser-screenshot attachments are
@@ -68,11 +68,7 @@ import {
   planSharedMcpRun,
   type McpHttpBridgeConfig,
 } from "../sharedMcpServers.js";
-import {
-  emptyOwnerState,
-  summarizeGroupAgentState,
-  summarizeOwnerState,
-} from "./ownerState.js";
+import { summarizeOwnerState } from "./ownerState.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
   buildCanUseToolSafetyNet,
@@ -249,23 +245,6 @@ export function deriveAgentToolAccess(request: AgentRequest): AgentToolAccess {
   // A headless run is tool-restricted UNLESS it explicitly opted in (scheduled
   // owner routines do). `!headlessRestricted` === `(!headless || allowHeadlessTools)`.
   const headlessRestricted = headless && !allowHeadlessTools;
-  // GROUP SHARED-AGENT class, checked FIRST: there is no owner to compare
-  // against, so the run kind itself carries capability. Owner-only tools never
-  // unlock; every member gets the elevated built-in class (workspace Bash/Edit
-  // work — nothing personal is registered for these runs); hex-ssh stays at the
-  // least-privileged viewer class (its servers never register here anyway).
-  if (request.groupAgent) {
-    return {
-      viewerIsOwner: false,
-      headless,
-      allowHeadlessTools,
-      ownerToolAccess: false,
-      elevatedToolAccess: !headlessRestricted,
-      elevated: true,
-      autoApprove: Boolean(request.autoApprove),
-      hexSshViewerClass: "colleague",
-    };
-  }
   const ownerToolAccess = viewerIsOwner && !headlessRestricted;
   const elevatedToolAccess =
     (viewerIsOwner || Boolean(request.elevated)) && !headlessRestricted;
@@ -292,14 +271,11 @@ export function deriveAgentToolAccess(request: AgentRequest): AgentToolAccess {
 
 /**
  * Which MCP tool-group FAMILIES a run registers, from the composer/admin
- * selection + the run kind. A group shared-agent run forces every
- * personal-scoped family off (capability containment); `registered` — not the
- * raw selection — is what the prompt and describe_system must report, or the
- * avatar advertises tools that don't exist (meta-cognition invariant).
- * `runKindBlocked` joins the admin-blocked prompt exclusion so the "user
- * deselected" note can't misattribute the forcing to the member's own choice.
- * Pure and unit-pinned like deriveAgentToolAccess: the run assembly consumes
- * THESE booleans for server registration, so report and reality can't drift.
+ * selection; `registered` — not the raw selection — is what the prompt and
+ * describe_system must report, or the avatar advertises tools that don't exist
+ * (meta-cognition invariant). Pure like deriveAgentToolAccess: the run
+ * assembly consumes THESE booleans for server registration, so report and
+ * reality can't drift.
  */
 export interface McpToolFamilyPlan {
   personalKnowledge: boolean;
@@ -313,29 +289,20 @@ export interface McpToolFamilyPlan {
   browser: boolean;
   system: boolean;
   registered: McpToolGroupId[];
-  runKindBlocked: McpToolGroupId[];
 }
 
-export function planMcpToolFamilies(
-  enabled: McpToolGroupId[],
-  groupAgentRun: boolean,
-): McpToolFamilyPlan {
+export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPlan {
   const has = (id: McpToolGroupId) => enabled.includes(id);
   const byId: Record<McpToolGroupId, boolean> = {
-    personal_knowledge: has("personal_knowledge") && !groupAgentRun,
+    personal_knowledge: has("personal_knowledge"),
     group_knowledge: has("group_knowledge"),
-    git_repo: has("git_repo") && !groupAgentRun,
-    confluence: has("confluence") && !groupAgentRun,
+    git_repo: has("git_repo"),
+    confluence: has("confluence"),
     web: has("web"),
-    ssh: has("ssh") && !groupAgentRun,
-    avatars: has("avatars") && !groupAgentRun,
-    canvas: has("canvas") && !groupAgentRun,
-    // Browser control drives the VIEWER's own logged-in browser. Blocked for a
-    // group agent (configured by the team, not by the person whose session
-    // would be acted with). Stripping it HERE — rather than only at the
-    // handler — keeps `registered` honest, so the avatar never advertises a
-    // tool it cannot call.
-    browser: has("browser") && !groupAgentRun,
+    ssh: has("ssh"),
+    avatars: has("avatars"),
+    canvas: has("canvas"),
+    browser: has("browser"),
     system: true,
   };
   const registered = effectiveMcpToolGroups(enabled).filter((id) => byId[id]);
@@ -351,7 +318,6 @@ export function planMcpToolFamilies(
     browser: byId.browser,
     system: byId.system,
     registered,
-    runKindBlocked: enabled.filter((id) => !registered.includes(id)),
   };
 }
 
@@ -359,7 +325,7 @@ export function planMcpToolFamilies(
  * The run's CONVERSATION scratch workspace: where tools that hand the model a
  * file of its own (get_attachment's `save_to_workspace`) write, and the path
  * describe_system names. Every run kind that has one sets it the same way —
- * the chat route's executeChatTurn (own-avatar, teammate, group-agent and
+ * the chat route's executeChatTurn (own-avatar, teammate and
  * external-task-API turns) and the owner-routine scheduler both pass
  * `cwd: activeRepoCwd ?? workspaceDir` with
  * `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined`, and set
@@ -465,30 +431,16 @@ export async function buildAgentRunPlan(
   } = await import("./skillExchangeTools.js");
   const { buildGitRepoServer, GIT_REPO_SERVER_NAME, GIT_REPO_TOOL_NAMES } =
     await import("./gitRepoTools.js");
-  const {
-    buildGroupRepoServer,
-    buildGroupAgentRepoServer,
-    GROUP_REPO_SERVER_NAME,
-    GROUP_REPO_TOOL_NAMES,
-    GROUP_AGENT_REPO_TOOL_NAMES,
-  } = await import("./groupRepoTools.js");
+  const { buildGroupRepoServer, GROUP_REPO_SERVER_NAME, GROUP_REPO_TOOL_NAMES } =
+    await import("./groupRepoTools.js");
   const { buildBrowserServer, BROWSER_SERVER_NAME, BROWSER_TOOL_NAMES } =
     await import("./browserTools.js");
   const { buildCanvasServer, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES } =
     await import("./canvasTools.js");
   const { buildBrainServer, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } =
     await import("./brainTools.js");
-  const {
-    buildGroupBrainServer,
-    buildGroupAgentBrainServer,
-    GROUP_BRAIN_SERVER_NAME,
-    GROUP_BRAIN_TOOL_NAMES,
-  } = await import("./groupBrainTools.js");
-  const {
-    buildGroupAgentProfileServer,
-    GROUP_AGENT_PROFILE_SERVER_NAME,
-    GROUP_AGENT_PROFILE_TOOL_NAMES,
-  } = await import("./groupAgentProfileTools.js");
+  const { buildGroupBrainServer, GROUP_BRAIN_SERVER_NAME, GROUP_BRAIN_TOOL_NAMES } =
+    await import("./groupBrainTools.js");
   const {
     buildTodoServer,
     TODO_SERVER_NAME,
@@ -548,15 +500,10 @@ export async function buildAgentRunPlan(
         (id) => id !== "system" && !adminAllowedMcpToolGroups.includes(id),
       )
     : [];
-  // GROUP SHARED-AGENT run: a hard capability boundary on top of the composer's
-  // tool-group picks — every PERSONAL-scoped server family is forced off so it
-  // never registers (personal repo/brain, inbox, ssh, git repos, confluence,
-  // avatars directory, canvas). What remains: system, web, and the OWNING
-  // group's repo/brain via the pinned group-agent factories below. The plan is
-  // the SINGLE source for the family booleans AND for `registered` — the set
-  // the prompt and describe_system report — so report and reality can't drift.
-  const groupAgentRun = request.groupAgent ?? null;
-  const familyPlan = planMcpToolFamilies(enabledMcpToolGroups, Boolean(groupAgentRun));
+  // The plan is the SINGLE source for the family booleans AND for `registered`
+  // — the set the prompt and describe_system report — so report and reality
+  // can't drift.
+  const familyPlan = planMcpToolFamilies(enabledMcpToolGroups);
   const personalKnowledgeToolsEnabled = familyPlan.personalKnowledge;
   const groupKnowledgeToolsEnabled = familyPlan.groupKnowledge;
   const gitRepoToolsEnabled = familyPlan.gitRepo;
@@ -568,7 +515,6 @@ export async function buildAgentRunPlan(
   const browserToolsEnabled = familyPlan.browser;
   const systemToolsEnabled = familyPlan.system;
   const registeredMcpToolGroups = familyPlan.registered;
-  const runKindBlockedMcpToolGroups = familyPlan.runKindBlocked;
   // Effective model: an env-pinned ANTHROPIC_MODEL wins (mirrors the API-key vs.
   // subscription rule) and is a HARD lock; otherwise the user's per-conversation
   // tier pick (a Claude alias, resolved to a concrete model by the operator's
@@ -650,31 +596,8 @@ export async function buildAgentRunPlan(
   // The avatar's live system self-state, read once from store+config (the same
   // facts the describe_system tool reports — see ownerState.ts). buildPrompt's
   // owner/routine self-state fields below are sourced from this so the two
-  // call sites can't drift in WHAT they read. A group-agent run has NO owner:
-  // it gets the inert OwnerState (nothing personal can leak into a gate) and
-  // its real self-state comes from summarizeGroupAgentState instead.
-  const ownerState = groupAgentRun
-    ? emptyOwnerState(store, config)
-    : summarizeOwnerState(store, config, request.avatar.id);
-  const groupAgentState = groupAgentRun
-    ? summarizeGroupAgentState(
-        store,
-        config,
-        groupAgentRun.agentId,
-        request.viewerUserId ?? "",
-      )
-    : null;
-  // The ACTING member behind a group-agent run: commit identity, token source,
-  // audit actor for the pinned group tools (groups own no credentials).
-  const actingMemberRow =
-    groupAgentRun && request.viewerUserId
-      ? store.getUserById(request.viewerUserId)
-      : null;
-  const actingMember = {
-    id: request.viewerUserId ?? "",
-    username: actingMemberRow?.username ?? "",
-    displayName: request.viewerName ?? actingMemberRow?.displayName ?? "",
-  };
+  // call sites can't drift in WHAT they read.
+  const ownerState = summarizeOwnerState(store, config, request.avatar.id);
   // Computed once and reused for the prompt (below). The repo-creation tool is
   // exposed ONLY for an owner-driven, non-headless chat with NO repo yet — once
   // one is connected, hiding it keeps the unused tool out of every prompt.
@@ -758,9 +681,8 @@ export async function buildAgentRunPlan(
   // URL that reaches OUTSIDE this conversation, so unlike show_file/share_file
   // it needs a PERSON who asked for it in a chat with their OWN avatar. Every
   // run kind that can execute with nobody watching — or on someone else's
-  // instructions — is excluded: group agents (member threads are private;
-  // sharing is the group second brain's job), consultations, routines and
-  // external-task API turns (not headless, so they need their own exclusion).
+  // instructions — is excluded: consultations, routines and external-task API
+  // turns (not headless, so they need their own exclusion).
   // The chat route supplies `onShareLink` only on those same interactive
   // own-avatar turns and re-checks that per call. Computed HERE, before
   // buildSystemServer, so describe_system reports the same boolean the tool,
@@ -769,7 +691,6 @@ export async function buildAgentRunPlan(
     fileOutputActive &&
     Boolean(events?.onShareLink) &&
     ownerToolAccess &&
-    !groupAgentRun &&
     !consultationRun &&
     !request.headless &&
     !request.externalTaskApi;
@@ -782,8 +703,8 @@ export async function buildAgentRunPlan(
   const canvasActive = canvasToolsEnabled && Boolean(events?.onCanvas);
   // 할 일 (the owner's persistent work to-do list, `mcp__todo__*`): OWNER-DRIVEN
   // runs only — an interactive own-avatar chat, an owner routine, an
-  // external-task-API turn. Never a teammate's chat, a group agent (no owner)
-  // or a consultation (another avatar's question). It rides the always-on
+  // external-task-API turn. Never a teammate's chat or a consultation
+  // (another avatar's question). It rides the always-on
   // system family rather than a tool group of its own, so a saved tool-group
   // selection or a group's MCP policy can never silently drop it. delete_todo
   // is withheld from API turns: their message is machine-authored, so this is a
@@ -793,12 +714,12 @@ export async function buildAgentRunPlan(
   // describe_system reports the SAME booleans the server build, allowedTools
   // and the prompt stamp key on.
   const todoToolsActive =
-    systemToolsEnabled && ownerToolAccess && !groupAgentRun && !consultationRun;
+    systemToolsEnabled && ownerToolAccess && !consultationRun;
   const todoDeleteActive = todoToolsActive && !request.externalTaskApi;
   // The 할 일 list as the prompt states it: FROZEN per conversation at its first
   // to-do-capable turn and only read back afterwards (agent/todoSnapshot.ts —
   // a write-once store call, so a re-plan or retry reads the same snapshot).
-  // Same gate as the tools: a teammate's, group-agent or consultation run never
+  // Same gate as the tools: a teammate's or consultation run never
   // takes or sees the owner's list.
   const todoSnapshot =
     todoToolsActive && request.conversationId
@@ -824,12 +745,9 @@ export async function buildAgentRunPlan(
   // owner's avatar still operates with the owner's credentials. The values are
   // decrypted only here and handed to the MCP subprocess as env, so they never
   // surface to the agent (Bash/`env` runs in a different process) nor to `toUser`.
-  // A group agent has NO owner and must never carry personal secrets — the
-  // empty object is explicit (the synthetic id would yield none anyway). Read
-  // ahead of describe_system's ctx, which reports what the Confluence PAT allows.
-  const ownerSecrets = groupAgentRun
-    ? {}
-    : store.getUserSecrets(request.avatar.id);
+  // Read ahead of describe_system's ctx, which reports what the Confluence PAT
+  // allows.
+  const ownerSecrets = store.getUserSecrets(request.avatar.id);
   // The run's conversation scratch workspace (conversationScratchDir) — where
   // get_attachment's save_to_workspace writes, and the path describe_system names.
   const scratchWorkspaceDir = conversationScratchDir(request);
@@ -860,7 +778,7 @@ export async function buildAgentRunPlan(
   // registration below and the prompt stamp read ONE derivation. A server's
   // credential slots fill from the secrets the OWNER bound to them (for the
   // server's current origin) — only on runs that may carry the vault, the
-  // plugin-MCP injection line (elevated, never a group agent); otherwise, or
+  // plugin-MCP injection line (elevated); otherwise, or
   // with a slot unbound, the server sits this run out (user decision
   // 2026-10-26). A consultation run gets no external servers at all, exactly
   // like plugin servers, and neither does a restricted headless run (intro /
@@ -868,9 +786,9 @@ export async function buildAgentRunPlan(
   const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools)
     ? null
     : planSharedMcpRun(store.getSharedMcpServers(), {
-        bindings: groupAgentRun ? [] : store.listSharedMcpBindings(request.avatar.id),
+        bindings: store.listSharedMcpBindings(request.avatar.id),
         secrets: mcpInjectableSecretEnv(ownerSecrets),
-        secretsAllowed: elevatedToolAccess && !groupAgentRun,
+        secretsAllowed: elevatedToolAccess,
       });
   // Slot and secret NAMES are owner self-state (the prompt's secret-name list
   // rides owner runs only): any other viewer hears THAT one is missing.
@@ -884,15 +802,8 @@ export async function buildAgentRunPlan(
     config,
     selectedModelTier: userModelTier,
     selectedEffort: userEffort,
-    // The REGISTERED set (not the raw selection): a group-agent run's forced-off
-    // personal families must not show as "enabled for this conversation".
+    // The REGISTERED set (not the raw selection).
     enabledMcpToolGroups: registeredMcpToolGroups,
-    // Group-agent runs: describe_system answers with the GROUP's self-state
-    // (summarizeGroupAgentState) instead of an owner block; management tools
-    // keep refusing via viewerIsOwner.
-    groupAgent: groupAgentRun
-      ? { agentId: groupAgentRun.agentId, actingUserId: actingMember.id }
-      : undefined,
     // The working repo opened for this conversation (NAME only — the clone path is
     // never surfaced). Mirrors buildPrompt's activeRepoSection in describe_system.
     activeRepoName: request.activeRepoName,
@@ -985,9 +896,8 @@ export async function buildAgentRunPlan(
   // Rides the `avatars` tool group (it is cross-avatar discovery) and is
   // OWNER-ONLY end to end: learning writes the owner's repo, and the listing
   // is the OWNER's group view — a trusted teammate driving this avatar must
-  // not browse it (their own avatar serves their view). Group-agent runs are
-  // excluded via ownerToolAccess=false (no personal repo). skillExchangeActive
-  // is the SINGLE boolean used byte-identically in allowedTools + mcpServers.
+  // not browse it (their own avatar serves their view). skillExchangeActive is
+  // the SINGLE boolean used byte-identically in allowedTools + mcpServers.
   const skillExchangeActive = avatarDirectoryToolsEnabled && ownerToolAccess;
   const skillExchangeServer = buildSkillExchangeServer(store, {
     avatarUserId: request.avatar.id,
@@ -1014,34 +924,20 @@ export async function buildAgentRunPlan(
   // reads, admin writes). Registered only for an owner-driven turn where the
   // owner actually belongs to ≥1 group, to keep the tools out of other prompts.
   const ownerGroups = ownerState.groups;
-  // GROUP-AGENT runs register the same server NAME through the pinned factory
-  // (no group argument; read = member, write = the group's capture policy).
-  // Native runs keep the owner-only factory. Both stay a single `active`
-  // boolean + a single server value so allowedTools/mcpServers can't drift.
+  // A single `active` boolean + a single server value so allowedTools/mcpServers
+  // can't drift.
   const groupRepoActive =
-    groupKnowledgeToolsEnabled &&
-    (groupAgentRun
-      ? true
-      : ownerToolAccess && ownerGroups.length > 0);
+    groupKnowledgeToolsEnabled && ownerToolAccess && ownerGroups.length > 0;
   // Group second-brain capture notice, mirroring the personal repo's onMemory.
   const onGroupMemory = (e: { action: "add" | "update"; path: string; groupName: string }) =>
     events?.onMemory?.({ ...e, scope: "group" });
-  const groupRepoServer = groupAgentRun
-    ? buildGroupAgentRepoServer(store, {
-        groupId: groupAgentRun.groupId,
-        agentId: groupAgentRun.agentId,
-        groupName: groupAgentRun.groupName,
-        actingUser: actingMember,
-        config,
-        onMemory: onGroupMemory,
-      })
-    : buildGroupRepoServer(store, {
-        avatarUserId: request.avatar.id,
-        owner,
-        viewerIsOwner: ownerToolAccess,
-        config,
-        onMemory: onGroupMemory,
-      });
+  const groupRepoServer = buildGroupRepoServer(store, {
+    avatarUserId: request.avatar.id,
+    owner,
+    viewerIsOwner: ownerToolAccess,
+    config,
+    onMemory: onGroupMemory,
+  });
   // Group (team) second brain: read-only `wiki/` recall over a group's shared
   // repo, scoped per-group to the OWNER's memberships inside the tools. Owner-only
   // at registration (like the group repo tools), active when the owner is in ≥1
@@ -1049,37 +945,13 @@ export async function buildAgentRunPlan(
   // used byte-identically in allowedTools + mcpServers below.
   const groupBrainActive =
     groupKnowledgeToolsEnabled &&
-    (groupAgentRun
-      ? Boolean(groupAgentState?.knowledgeRepoConfigured)
-      : ownerToolAccess &&
-        ownerGroups.some((g) => g.knowledgeRepoConfigured));
-  const groupBrainServer = groupAgentRun
-    ? buildGroupAgentBrainServer(store, {
-        groupId: groupAgentRun.groupId,
-        agentId: groupAgentRun.agentId,
-        groupName: groupAgentRun.groupName,
-        actingUserId: actingMember.id,
-        config,
-      })
-    : buildGroupBrainServer(store, {
-        avatarUserId: request.avatar.id,
-        viewerIsOwner: ownerToolAccess,
-        config,
-      });
-  // Self-configuration (update_profile): group-agent runs only — the agent
-  // edits its OWN persona/profile. Registration is not the boundary (mcp__
-  // auto-allow): the handler re-gates per call on the acting member's LIVE
-  // group-admin role. Single boolean used byte-identically in allowedTools +
-  // mcpServers below.
-  const groupAgentProfileActive = Boolean(groupAgentRun);
-  const groupAgentProfileServer = groupAgentRun
-    ? buildGroupAgentProfileServer(store, {
-        groupId: groupAgentRun.groupId,
-        agentId: groupAgentRun.agentId,
-        groupName: groupAgentRun.groupName,
-        actingUser: actingMember,
-      })
-    : null;
+    ownerToolAccess &&
+    ownerGroups.some((g) => g.knowledgeRepoConfigured);
+  const groupBrainServer = buildGroupBrainServer(store, {
+    avatarUserId: request.avatar.id,
+    viewerIsOwner: ownerToolAccess,
+    config,
+  });
   // To-do server (todoToolsActive above). The handlers re-check viewerIsOwner
   // — registration is not the boundary under the mcp__ auto-allow — and stamp
   // each new item with WHO added it and the conversation it came from.
@@ -1483,9 +1355,6 @@ export async function buildAgentRunPlan(
     ...(groupBrainActive
       ? { [GROUP_BRAIN_SERVER_NAME]: groupBrainServer }
       : {}),
-    ...(groupAgentProfileServer
-      ? { [GROUP_AGENT_PROFILE_SERVER_NAME]: groupAgentProfileServer }
-      : {}),
     ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
     ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
     ...(fileOutputServer
@@ -1537,15 +1406,9 @@ export async function buildAgentRunPlan(
       ...(skillExchangeActive ? SKILL_EXCHANGE_TOOL_NAMES : []),
       ...(sshToolsEnabled ? SSH_IDENTITY_TOOL_NAMES : []),
       ...(gitRepoToolsEnabled ? GIT_REPO_TOOL_NAMES : []),
-      // Group-agent runs expose the pinned subset (no list_groups/create_repo).
-      ...(groupRepoActive
-        ? groupAgentRun
-          ? GROUP_AGENT_REPO_TOOL_NAMES
-          : GROUP_REPO_TOOL_NAMES
-        : []),
+      ...(groupRepoActive ? GROUP_REPO_TOOL_NAMES : []),
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
       ...(groupBrainActive ? GROUP_BRAIN_TOOL_NAMES : []),
-      ...(groupAgentProfileActive ? GROUP_AGENT_PROFILE_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),
       ...(fileOutputActive ? FILE_OUTPUT_TOOL_NAMES : []),
@@ -1866,7 +1729,6 @@ export async function buildAgentRunPlan(
     ownerState,
     ownerGroups,
     ownerSecrets,
-    groupAgentState,
     effectiveModel,
     modelChain,
     runVisionEnabled,
@@ -1876,7 +1738,6 @@ export async function buildAgentRunPlan(
     toolSkillPolicy,
     registeredMcpToolGroups,
     adminBlockedMcpToolGroups,
-    runKindBlockedMcpToolGroups,
     browserActive,
     canvasActive,
     fileOutputActive,

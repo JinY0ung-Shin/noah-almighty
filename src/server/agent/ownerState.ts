@@ -1,11 +1,9 @@
 import type {
   AgentRewindInfo,
   AppConfig,
-  GroupAgentState,
   SharedMcpRunState,
   UserGroupMembership,
 } from "../types.js";
-import { groupAgentCaptureAllowed } from "../groupAgents.js";
 import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
@@ -176,83 +174,6 @@ export function gettingStartedGaps(
     gaps.push("gitToken");
   }
   return gaps;
-}
-
-/**
- * Inert OwnerState for runs that have NO owner (group shared agents): every
- * user-scoped fact reads empty/false, so no personal capability can leak into
- * a gate or prompt even by accident — the group-agent run derives its actual
- * state from `summarizeGroupAgentState` below, never from this. Config-scoped
- * model facts stay real (they aren't personal).
- */
-export function emptyOwnerState(store: Store, config: AppConfig): OwnerState {
-  return {
-    avatarApiKeyCount: 0,
-    knowledgeRepoConfigured: false,
-    knowledgeRepo: { repo: null, branch: null },
-    gitTokenSet: false,
-    secretNames: [],
-    shellExposedSecretNames: [],
-    browserSecrets: [],
-    groups: [],
-    gitRepoCount: 0,
-    openRequestCount: 0,
-    learnableSkillCount: 0,
-    sharedSkillCount: 0,
-    sharedSkillLearnTotal: 0,
-    anthropicModel: config.anthropicModel,
-    modelOverride: store.getModelOverride(),
-    experimentalFeatures: [],
-    sharedAccount: false,
-    todos: { todayKst: kstDateString(), counts: { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0 } },
-  };
-}
-
-/** Read the group agent's current self-state (`GroupAgentState`, types.ts — the
- *  group analogue of OwnerState with the same both-consumers invariant: it feeds
- *  BOTH the group-agent prompt branch AND describe_system's group ctx). Repo
- *  facts come from the GROUP row; the git token is the ACTING member's (groups
- *  own no credentials — capture pushes borrow it). Null when the agent/group is
- *  gone. */
-export function summarizeGroupAgentState(
-  store: Store,
-  config: AppConfig,
-  agentId: string,
-  actingUserId: string,
-): GroupAgentState | null {
-  const agent = store.getGroupAgentById(agentId);
-  const group = agent ? store.getGroup(agent.groupId) : null;
-  if (!agent || !group) {
-    return null;
-  }
-  const groupId = agent.groupId;
-  // Live role — null once the member has been removed mid-turn. FAIL CLOSED
-  // (never default to "member"): describe_system must not report capture as
-  // allowed while the group-repo tools are already refusing the same user.
-  const viewerRole = store.groupRoleFor(actingUserId, groupId);
-  const repo = store.getGroupKnowledgeRepo(groupId);
-  return {
-    groupId,
-    agentId: agent.id,
-    displayName: agent.displayName,
-    groupName: group.name,
-    enabled: agent.enabled,
-    captureScope: agent.captureScope,
-    viewerRole,
-    captureAllowed:
-      viewerRole !== null && groupAgentCaptureAllowed(agent, viewerRole),
-    knowledgeRepoConfigured: Boolean(repo.repo),
-    knowledgeRepo: { repo: repo.repo, branch: repo.branch },
-    viewerGitTokenSet: Boolean(store.getGitToken(actingUserId)),
-    personaSet: Boolean(agent.persona.trim()),
-    // Live membership REQUIRED even for system admins (every in-run group tool
-    // fails closed on removal); the update_profile handler applies the same gate.
-    selfConfigAllowed:
-      viewerRole !== null &&
-      (viewerRole === "admin" || store.isAdmin(actingUserId)),
-    anthropicModel: config.anthropicModel,
-    modelOverride: store.getModelOverride(),
-  };
 }
 
 /**

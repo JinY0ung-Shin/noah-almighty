@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -56,6 +57,16 @@ function repoTokens(ctx: GroupKnowledgeRepoContext): GitTokenSet {
 /** On-disk clone path for a group's shared knowledge-repo working tree. */
 export function groupKnowledgeClonePath(groupId: string, config: AppConfig): string {
   return path.join(config.dataDir, "group-knowledge", sanitizeName(groupId));
+}
+
+/**
+ * Remove a DELETED group's knowledge clone (possibly a private repo's full
+ * clone), called by the admin route AFTER `store.deleteGroup`'s transaction.
+ * A concurrent run holding the repo lock surfaces a tool error and re-clones
+ * nothing — the group row is already gone. Throws on failure; the caller logs.
+ */
+export function removeGroupKnowledgeClone(config: AppConfig, groupId: string): void {
+  rmSync(groupKnowledgeClonePath(groupId, config), { recursive: true, force: true });
 }
 
 /**

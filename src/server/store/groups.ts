@@ -19,7 +19,6 @@ import {
   effectiveMcpToolGroups,
   type McpToolGroupId,
 } from "../../shared/mcpToolGroups.js";
-import { groupAgentAvatarId } from "../groupAgents.js";
 
 /**
  * Stored group tool policy → typed allowlist. NULL/blank/malformed = no
@@ -89,14 +88,6 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
             "SELECT COUNT(*) AS c FROM group_members WHERE group_id = ? AND role = 'admin'",
             row.id,
           ),
-          agentCount: this.count(
-            "SELECT COUNT(*) AS c FROM group_agents WHERE group_id = ?",
-            row.id,
-          ),
-          enabledAgentCount: this.count(
-            "SELECT COUNT(*) AS c FROM group_agents WHERE group_id = ? AND enabled = 1",
-            row.id,
-          ),
         };
       });
     }
@@ -149,43 +140,16 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     /**
-     * Delete a group, its memberships, its shared-skill channel blocks, and its
-     * shared agent (row + every member's conversations with it — manual
-     * cascade, no ON DELETE CASCADE).
-     * On-disk leftovers (group-knowledge clone, agent image, workspaces) are
-     * the route's job: see cleanupGroupDataDirs in ../groupAgents.ts.
+     * Delete a group, its memberships and its shared-skill channel blocks
+     * (manual cascade, no ON DELETE CASCADE). The on-disk group-knowledge
+     * clone is the route's job (`removeGroupKnowledgeClone`).
      * Returns false if it didn't exist.
      */
     deleteGroup(id: string): boolean {
       if (!this.groupRowById(id)) {
         return false;
       }
-      // EVERY shared agent's avatar id (a group may have several).
-      const agentAvatarIds = (
-        this.db
-          .prepare("SELECT id FROM group_agents WHERE group_id = ?")
-          .all(id) as { id: string }[]
-      ).map((row) => groupAgentAvatarId(id, row.id));
       const tx = this.db.transaction(() => {
-        const convStmt = this.db.prepare(
-          "SELECT id FROM conversations WHERE avatar_user_id = ?",
-        );
-        const delMsgs = this.db.prepare(
-          "DELETE FROM messages WHERE conversation_id = ?",
-        );
-        const delConvs = this.db.prepare(
-          "DELETE FROM conversations WHERE avatar_user_id = ?",
-        );
-        for (const agentAvatarId of agentAvatarIds) {
-          const convRows = convStmt.all(agentAvatarId) as { id: string }[];
-          for (const c of convRows) {
-            this.deleteCanvasArtifactsForConversation(c.id);
-            this.deleteShareLinksForConversation(c.id);
-            delMsgs.run(c.id);
-          }
-          delConvs.run(agentAvatarId);
-        }
-        this.db.prepare("DELETE FROM group_agents WHERE group_id = ?").run(id);
         this.db.prepare("DELETE FROM group_members WHERE group_id = ?").run(id);
         // This group's shared-skill channel blocks: they only ever meant
         // "not through THIS group", so they die with it (a surviving row would

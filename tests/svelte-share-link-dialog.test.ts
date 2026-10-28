@@ -435,14 +435,9 @@ describe("FileTab 공유 링크", () => {
     expect((screen.getByRole("button", { name: "공유 링크" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("is absent for other file types and in a group agent's thread", async () => {
+  it("is absent for other file types", () => {
     const pdf: MessageAttachment = { id: "file-2", kind: "file", mediaType: "application/pdf", name: "보고.pdf" };
-    const view = render(FileTab, { props: tabProps(pdf) });
-    expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
-    const groupPane = paneWith(DECK, {
-      avatar: { id: "group:g1:a1", username: "team", displayName: "팀 에이전트", groupAgent: { groupId: "g1", groupName: "팀" } } as any,
-    });
-    await view.rerender({ pane: groupPane, file: { attachment: DECK, slides: [] } });
+    render(FileTab, { props: tabProps(pdf) });
     expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
   });
 });

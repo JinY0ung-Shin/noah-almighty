@@ -216,7 +216,7 @@ function serializePending(next: Set<string>): string | null {
  * Leftovers found by NAME, on every boot that runs: profile images and
  * workspace trees. Only an external id carries these prefixes: user ids are
  * UUIDs (a UUID can never start with `external`) and every other namespaced
- * avatar uses its own (`group:`, the retired `personal:`). A link is unlinked,
+ * avatar uses its own (the retired `group:` / `personal:`). A link is unlinked,
  * never followed.
  */
 function sweepPrefixedLeftovers(config: AppConfig, sweep: SweepTally): void {

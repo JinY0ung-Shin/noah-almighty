@@ -1,7 +1,7 @@
 # Groups, visibility, and trust
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
-> Avatar visibility, the `isTrustedFor`/`shareAnyGroup` choke point, groups, and group shared agents.
+> Avatar visibility, the `isTrustedFor`/`shareAnyGroup` choke point, and groups.
 
 ## Avatar visibility (2-state) — mechanics
 - `users.visibility` = `group` | `private` (the `public` state is RETIRED — avatars never reach beyond
@@ -73,61 +73,11 @@
   promptBuilder, describe_system — 3 hand-synced sites) require `groups.some(g => g.avatarSharing)`.
   Flipping it off fails the NEXT chat turn closed (history preserved), like leaving the group.
 
-## Group shared agents (그룹 에이전트)
-- **Several per group** (`group_agents`, uuid `id` PK + `group_id` index), team avatars that are NOT
-  users rows: public avatar id `group:<groupId>:<agentId>` (a namespaced id —
-  `conversations.avatar_user_id` has no FK; conversation summaries COALESCE the display name via a
-  `group_agents` LEFT JOIN on the composite id). Pre-multi DBs (`group_id` PK, one agent, avatar id
-  `group:<groupId>`) are rebuilt by `migrateGroupAgentsMulti` (store/internal.ts — fresh uuid per row +
-  conversation-binding rewrite in one transaction) plus `migrateGroupAgentDiskArtifacts` at boot
-  (renames the legacy-named image file/workspace tree; idempotent). Managed by `canManageGroup` via
-  `POST/PATCH/DELETE /api/me/groups/:id/agents(/:agentId)` (+`/image`); GET `/api/me/groups` carries
-  `agents` (disabled included); discovery concatenates `listGroupAgentsForUser` (enabled only) into
-  `GET /api/avatars` with the `AvatarSummary.groupAgent` kind tag (`runtime` stays `"native"` — the
-  full local SDK stack). Per-agent DELETE cascades THAT agent's conversations (+ disk sweep: image,
-  workspace tree, chat image/file dirs from a pre-cascade snapshot); disable stays the
-  thread-preserving alternative. `deleteGroup` cascades every agent the same way.
-- **Reach = owning-group membership ONLY** through `findChattableGroupAgent` (the single gate used by
-  detail/skills/chat): independent of `avatar_sharing` (a knowledge-only group still reaches its
-  agent), no sysadmin bypass, fail-closed 403/404 shapes; a member-visible DISABLED agent gets a
-  dedicated 403. Each member's threads are PRIVATE (`owner_user_id` = viewer) — the team shares via the
-  SECOND BRAIN, never the conversation stream. For the same reason **group-agent threads cannot be
-  link-shared** (PPT share links, phase 1): the share route 404s them, `shareableThread` fails any row
-  that points into one, the client shows no 공유 링크 control in a group-agent pane, and
-  `create_share_link` never registers on a group-agent run ([`share-links.md`](share-links.md)). A share
-  link is an export, never a trust source — it does not touch `isTrustedFor`.
-- **Run kind carries capability** (`AgentRequest.groupAgent {groupId, agentId, groupName, viewerRole,
-  captureAllowed}`): `deriveAgentToolAccess` returns the pinned class (ownerToolAccess false, elevated
-  built-ins, hex-ssh `colleague`); `claudeAgent` forces every personal-scoped family off
-  (`&& !groupAgentRun` on the tool-group booleans), swaps `ownerState` for `emptyOwnerState` +
-  `summarizeGroupAgentState` (BOTH consumers: the group-agent prompt branch AND `describe_system`'s
-  `groupAgent` ctx — the metacognition invariant), empties `ownerSecrets` explicitly, and loads only
-  default + owning-group plugin roots/memory (`loadGroupAgentPluginRoots`/`loadGroupAgentKnowledgeMemory`).
-- **Group tools come from SEPARATE pinned factories** (`buildGroupAgentRepoServer/BrainServer`, same
-  server names, no `group` arg, no `list_groups`/`create_repo`; allowedTools uses
-  `GROUP_AGENT_REPO_TOOL_NAMES`). Handlers re-check LIVE per call: agent enabled → acting member's
-  membership → (writes) `groupAgentCaptureAllowed` = `capture_scope` (`'members'` default | `'admins'`)
-  vs role → repo exists. Commits push with the ACTING member's token and identity, audited with a
-  `(via group agent)` marker — direct `mcp__group_repo__` writes from personal runs stay admin-only,
-  unchanged. The personal-avatar factories are byte-untouched (test-pinned strings).
-- **Self-configuration tool** (`agent/groupAgentProfileTools.ts`, server `group_agent`): group-agent
-  runs also register `mcp__group_agent__update_profile` — the agent patches its OWN
-  persona/alias/bio/intro through `store.updateGroupAgent` (never displayName/enabled/captureScope;
-  caps alias 64 / bio 200 / intro 2k / persona 8k). Live per-call gate mirrors the settings route's
-  `canManageGroup` (group-admin role OR system admin) **but membership stays REQUIRED even for
-  sysadmins** (every in-run group tool fails closed on removal); audited as `group_agent_update`
-  (`self-config via update_profile`). Changes bind at the NEXT turn (the prompt is assembled at run
-  start) and hit EVERY member's conversations — the prompt branch instructs the agent to confirm that
-  before calling. State facts (`GroupAgentState.personaSet`/`selfConfigAllowed`, ownerState.ts) feed
-  BOTH the prompt branch and `describe_system` (the metacognition invariant).
-- **`capture_scope` is an MCP-LAYER policy, not a filesystem boundary.** The group-knowledge clone is
-  one shared tree (`dataDir/group-knowledge/<groupId>`) that any elevated run's Bash/file tools can
-  touch, `ensureGroupClone` fast-forwards without hard-reset, and `commitAndPushClone` does
-  `git add -A` (locally planted changes can ride along on the next authorized capture). Remote push
-  still requires an MCP commit + a member token — but don't describe the capture policy as airtight
-  below the tool layer.
-- **Group-agent elevation is a DELIBERATE carve-out outside `isTrustedFor`.** Every member of the
-  owning group runs the elevated built-in class (auto-approved workspace Bash/Edit) regardless of the
-  group's `avatar_sharing` policy — membership itself is the gate (`findChattableGroupAgent`), and the
-  practical delta over the member's own always-elevated avatar is small. Keep it justified here rather
-  than routed through `isTrustedFor` (which stays the single choke point for PEER trust).
+## Retired: group shared agents (2026-10-29)
+Team avatars that were not users rows (`group_agents`, avatar id `group:<groupId>:<agentId>`) are
+removed. A boot purge (`src/server/retireGroupAgents.ts` + `store/retiredGroupAgents.ts`) deletes every
+member's thread with one and the files it left, then drops the table; the `group:` avatar-id prefix and
+the table names are reserved forever (details in [`server-core.md`](server-core.md)). Groups, their
+members, the `avatar_sharing` policy, group knowledge repos and the personal-run
+`mcp__group_repo__*`/`mcp__group_brain__*` tools are unaffected. `isTrustedFor` is the only elevation
+source left — there is no membership-gated carve-out any more.

@@ -704,11 +704,10 @@
     return att.name ? `${base}?name=${encodeURIComponent(att.name)}` : base;
   }
 
-  // 공유 링크 beside a deck card: PPTX decks only, never in a group agent's
-  // thread (member threads are private; the group shares through its second
-  // brain). Reads only its arguments, so the template stays reactive.
-  function canShareCard(item: ChatPane, att: MessageAttachment): boolean {
-    return isPptxCard(att) && !item.avatar.groupAgent && !item.avatar.id.startsWith("group:");
+  // 공유 링크 beside a deck card: PPTX decks only. Reads only its argument,
+  // so the template stays reactive.
+  function canShareCard(att: MessageAttachment): boolean {
+    return isPptxCard(att);
   }
 
   // The card whose share-link dialog is open; null = closed. The dialog
@@ -1260,7 +1259,7 @@
       {#if att.kind === "file"}
         <!-- A LIVE card has no persisted message the server could find yet, so
              the link control appears once the turn is stored. -->
-        {#if source !== item.liveAttachments && canShareCard(item, att)}
+        {#if source !== item.liveAttachments && canShareCard(att)}
           <!-- One flex item: the card is itself a <button>, so the control is
                a sibling, and the wrapper keeps the pair together on a wrap. -->
           <div class="msg-file-share">
@@ -1315,9 +1314,8 @@
             {#if own}
               <!-- The owner's own avatar gets guided tours instead of generic
                    chips: a first-time owner needs to see what the avatar can do,
-                   not a prompt they still have to judge. Colleague and
-                   group-agent panes keep the chips (isOwn is false for both,
-                   group agents included). -->
+                   not a prompt they still have to judge. Colleague panes
+                   keep the chips (isOwn is false there). -->
               <div class="starter-prompts tour-cards" role="group" aria-label="체험 시나리오">
                 <p class="tour-caption">처음이라면 이 중 하나로 시작해 보세요. 카드를 누르면 입력창에 준비됩니다.</p>
                 {#each tourScenarios as scenario (scenario.slug)}

@@ -11,7 +11,6 @@ import {
 import {
   ensureGroupClone,
   groupKnowledgeClonePath,
-  groupKnowledgeRepoContextFor,
   groupKnowledgeRepoContextsForUser,
   type GroupKnowledgeRepoContext,
 } from "./groupKnowledgeRepo.js";
@@ -911,55 +910,6 @@ export async function groupKnowledgeRepoSkillSources(
   contexts: GroupKnowledgeRepoContext[],
 ): Promise<{ path: string; source: string }[]> {
   return resolveKnowledgeRepoSources(groupKnowledgeRepoJobs(contexts));
-}
-
-/**
- * Plugin roots for a GROUP-AGENT run: the bundled defaults + ONLY the owning
- * group's shared repo, cloned with the ACTING member's tokens (groups own no
- * credentials). Deliberately no personal plugins, no personal knowledge repo,
- * no other groups — the shared agent's capability boundary is group resources.
- */
-export async function loadGroupAgentPluginRoots(
-  store: Store,
-  groupId: string,
-  actingUserId: string,
-  config: AppConfig,
-  onWarn?: (message: string) => void,
-): Promise<PluginRoot[]> {
-  if (config.agentRuntime === "local") {
-    return [];
-  }
-  const ctx = groupKnowledgeRepoContextFor(
-    store,
-    groupId,
-    actingUserId,
-    config,
-    store.getGroup(groupId)?.name,
-  );
-  return [
-    ...(await loadDefaultPluginRoots(config, onWarn)),
-    ...(await loadGroupKnowledgeRepoRoots(ctx ? [ctx] : [], onWarn)),
-  ];
-}
-
-/** Standing CLAUDE.md memory for a GROUP-AGENT run: the owning group's only. */
-export async function loadGroupAgentKnowledgeMemory(
-  store: Store,
-  groupId: string,
-  config: AppConfig,
-): Promise<KnowledgeRepoMemory> {
-  if (config.agentRuntime === "local") {
-    return { personal: null, groups: [] };
-  }
-  const group = store.getGroup(groupId);
-  if (!group?.knowledgeRepo) {
-    return { personal: null, groups: [] };
-  }
-  const content = await readRepoClaudeMd(
-    groupKnowledgeClonePath(groupId, config),
-    GROUP_CLAUDE_MD_CAP,
-  );
-  return { personal: null, groups: content ? [{ name: group.name, content }] : [] };
 }
 
 /**

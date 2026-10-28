@@ -281,8 +281,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
           .run(id);
         this.db.prepare("DELETE FROM canvas_artifacts WHERE owner_user_id = ?").run(id);
         // Audit rows are RETAINED by design: the trail must outlive the account
-        // (actor_user_id/actor_name dangle, like groups.created_by and
-        // group_agents.created_by).
+        // (actor_user_id/actor_name dangle, like groups.created_by).
         this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
       });
       tx();

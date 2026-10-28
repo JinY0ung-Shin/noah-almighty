@@ -97,7 +97,6 @@ import {
 } from "../src/server/agent/webFetchTools.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../src/server/chatFiles.js";
 import type { DeckToolchainState } from "../src/server/deckRender.js";
-import { groupAgentAvatarId } from "../src/server/groupAgents.js";
 import { rewindTurnState } from "../src/server/agent/ownerState.js";
 import type { AgentRequest, AgentResponse, AppConfig } from "../src/server/types.js";
 
@@ -2143,21 +2142,6 @@ describe("system tools (avatar system management)", () => {
     expect(colleague).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
     expect(colleague).toContain("Deployment capabilities for this run:");
 
-    const group = s.store.createGroup({ name: "팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
-    const avatarId = groupAgentAvatarId(group.id, agent.id);
-    const groupBody = await describeSystem({
-      avatarUserId: avatarId,
-      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-      viewerIsOwner: false,
-      config: s.config,
-      groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
-      rewind,
-    });
-    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
-    expect(groupBody).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
-
     // An unattended run never reports one — the prompt line's own gate.
     expect(await describeSystem({ ...s.baseCtx, viewerIsOwner: true, headless: true, rewind })).not.toContain(
       "Conversation rewind",
@@ -2310,7 +2294,7 @@ describe("system tools (avatar system management)", () => {
     );
   });
 
-  it("describe_system prints the images line on the non-owner and group-agent branches too", async () => {
+  it("describe_system prints the images line on the non-owner branch too", async () => {
     const s = setup("st-images-branches");
     const PLACE = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
     const READ_ONLY =
@@ -2348,27 +2332,6 @@ describe("system tools (avatar system management)", () => {
     expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false, headless: true }))).toContain(
       "an unattended run receives no user attachments",
     );
-
-    // Group shared agent: attachments reach its threads; Confluence and the
-    // browser never register on that run kind.
-    const group = s.store.createGroup({ name: "팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
-    const avatarId = groupAgentAvatarId(group.id, agent.id);
-    const groupBody = await describeText(s, {
-      avatarUserId: avatarId,
-      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-      viewerIsOwner: false,
-      config: s.config,
-      groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
-    });
-    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
-    const groupLine = imagesLineOf(groupBody);
-    expect(groupLine).toContain("`attachments/`");
-    expect(groupLine).not.toContain("captures/");
-    expect(groupLine).not.toContain("save_to_workspace");
-    // Every member of a group-agent run gets the elevated built-ins: it writes.
-    expect(groupLine).toContain(PLACE);
   });
 
   it("describe_system carries the browser read-cost contract on the CONNECTED branch", async () => {
@@ -2731,7 +2694,7 @@ describe("system tools (avatar system management)", () => {
     expect(failed).not.toContain("converter: INSTALLED");
   });
 
-  it("describe_system shows the deck line on the group-agent AND non-owner branches too", async () => {
+  it("describe_system shows the deck line on the non-owner branch too", async () => {
     const s = setup("st-deck-branches");
     s.store.setGitToken(s.owner.id, "ghp_secretvalue");
     // Non-owner: a trusted teammate may build through this avatar, a plain
@@ -2774,38 +2737,6 @@ describe("system tools (avatar system management)", () => {
     expect(deckLineOf((await callTool(toolsFor(s, false), "describe_system", {})).content[0].text ?? "")).toContain(
       "UNAVAILABLE",
     );
-
-    // Group shared agent: every member gets the elevated built-ins, so the SAME
-    // deck line as the owner block, inside the GROUP state block.
-    const group = s.store.createGroup({ name: "팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
-    const avatarId = groupAgentAvatarId(group.id, agent.id);
-    const groupBody = (
-      await callTool(
-        buildSystemTools(s.store, {
-          avatarUserId: avatarId,
-          owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-          viewerIsOwner: false,
-          config: s.config,
-          groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
-          deckToolchain: deckState({ selftest: "drift" }),
-          deckAuthoring: "allowed",
-          fileOutputEnabled: true,
-        }),
-        "describe_system",
-        {},
-      )
-    ).content[0].text ?? "";
-    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
-    const groupLine = deckLineOf(groupBody);
-    expect(groupLine).toContain("converter: INSTALLED");
-    expect(groupLine).toContain("self-test: reference-render drift was recorded at image build");
-    expect(groupLine).toContain("`mcp__file_output__share_file` the built .pptx IN PLACE");
-    // It sits inside the group block (after the capability boundary), once.
-    expect(groupBody.indexOf("Capability boundary")).toBeLessThan(groupBody.indexOf(DECK_PREFIX));
-    expect(groupBody.split(DECK_PREFIX)).toHaveLength(2);
-    expect(groupBody).not.toContain("Current avatar state:");
   });
 
   it("describe_system reports the drawio viewer with file-output gating", async () => {
@@ -3617,27 +3548,6 @@ describe("system tools (avatar system management)", () => {
     )).content[0].text ?? "";
     expect(groupOff).toContain("Team second brain: OFF for this conversation (group knowledge tool group deselected)");
     expect(groupOff).not.toContain("group(s) expose `mcp__group_brain__search`");
-  });
-
-  it("describe_system fails closed when a shared group agent's group is gone", async () => {
-    // The route authorized the run at start; a group deleted since then must not
-    // fall through to the owner block (which would report the owner's own repo,
-    // secrets, and routines to every member of a vanished group).
-    const s = setup("st-groupagent-missing");
-    const tools = buildSystemTools(s.store, {
-      ...s.baseCtx,
-      viewerIsOwner: false,
-      groupAgent: { agentId: "group:ghost:agent", actingUserId: s.owner.id },
-    });
-    s.store.setKnowledgeRepo(s.owner.id, "owner/knowledge", "main");
-
-    const res = await callTool(tools, "describe_system", {});
-    expect(res.isError).toBeFalsy();
-    const body = res.content[0].text ?? "";
-    expect(body).toContain("Noah Almighty avatar-chat system summary");
-    expect(body).toContain("group no longer exists");
-    expect(body).not.toContain("Current avatar state:");
-    expect(body).not.toContain("owner/knowledge");
   });
 });
 

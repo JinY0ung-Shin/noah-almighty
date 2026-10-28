@@ -16,7 +16,6 @@ export type {
   AvatarVisibility,
   CanvasArtifact,
   ConversationSummary,
-  GroupAgent,
   GroupMember,
   GroupSharedSkill,
   ImageMediaType,

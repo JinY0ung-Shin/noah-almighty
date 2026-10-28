@@ -15,10 +15,8 @@
   bytes still resolve as a `.pptx` on disk (`resolveShareableDeck`).
 - **The creator is the CONVERSATION owner** (`conversationOwner(cid) === user.id`) — of an own-avatar
   thread (external-task-API threads included) or a colleague's own thread with someone else's avatar
-  (only while that avatar stays reachable for them). **Group-agent member threads
-  (`group:<gid>:<aid>`) cannot be link-shared in phase 1**: member threads are private and the team
-  shares through its second brain, so the route refuses them, the client shows no button in a group-agent
-  pane, and the group-agent prompt branch + describe_system say links are unavailable there.
+  (only while that avatar stays reachable for them). Any namespaced avatar id (the retired `group:`,
+  `external:`, `personal:` threads) fails `shareableThread` closed.
 - **One active link per (owner, conversation, file)**: creating again returns the active one
   (`created:false`). Expiry is **1, 7 (default) or 30 days, fixed at creation** — a different expiry means
   revoke, then create. Revoke = delete (active and expired rows alike). The key is the CARD: every
@@ -144,8 +142,8 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 - Create-or-reuse, the cap and the insert run in ONE transaction.
 - **Cascades are manual and sit next to EVERY `deleteCanvasArtifactsForConversation` call**
   (`deleteShareLinksForConversation`, declared on `StoreBase`): single and bulk conversation delete,
-  `deleteUser` (its own threads AND other people's threads with its avatar), group-agent and group
-  deletes. `deleteUser` also drops every row the user created (`owner_user_id`). A rewind/regenerate
+  `deleteUser` (its own threads AND other people's threads with its avatar), and the boot retirements
+  of removed avatar kinds. `deleteUser` also drops every row the user created (`owner_user_id`). A rewind/regenerate
   (`applyConversationRewind`) drops the links of the dropped rows' file cards (`deleteShareLinksForFiles`),
   next to the route's disk sweep. **A new conversation-deleting path must add the share-link cascade next to
   the canvas one — and a new message-truncating path the per-card one.** A routine thread's message prune (`pruneRoutineMessages`) keeps the files, so its links keep
@@ -156,11 +154,11 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 ## The avatar path (`mcp__file_output__create_share_link`)
 - **Three locks, all keyed on an interactive turn of the owner's OWN avatar:**
   1. `executeChatTurn` supplies `onShareLink` only when `viewerIsOwner && ownerUserId === avatar.id &&
-     !groupAgentHit && !ctx.externalTaskId && ctx.unattendedDeadlineMs === undefined`
-     (`shareLinkTurn`) — never a group-agent or colleague thread, an external-task-API turn or any
+     !ctx.externalTaskId && ctx.unattendedDeadlineMs === undefined`
+     (`shareLinkTurn`) — never a colleague thread, an external-task-API turn or any
      deadlined run.
   2. runPlan registers the tool only when `shareLinkToolActive` = `fileOutputActive && events.onShareLink
-     && ownerToolAccess && !groupAgentRun && !consultationRun && !request.headless &&
+     && ownerToolAccess && !consultationRun && !request.headless &&
      !request.externalTaskApi`, computed before `buildSystemServer`. That ONE boolean drives the tool build,
      its own `allowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately NOT in
      `FILE_OUTPUT_TOOL_NAMES`), `SystemToolsContext.shareLinksEnabled` and `AgentRequest.shareLinksEnabled`
@@ -197,10 +195,10 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 - **Metacognition, both surfaces from the same boolean**: the prompt carries ONE short tool line when enabled
   (the flag-maximal config in `tests/system-manual.test.ts` is budgeted under 18,000 characters; always-on and
   data-driven owner sections are not budgeted), else — on any run with file output — a redirect to the card's
-  공유 링크 button (group-agent runs: no button, threads cannot be link-shared). describe_system has an owner line
+  공유 링크 button. describe_system has an owner line
   (available + audience/expiry/revoke facts, the one-link rule scoped to a delivered CARD — a rebuild
   re-delivered with share_file is a new card and an earlier link keeps serving the earlier file — and the
-  sign-up caveat, or not available + why + the button redirect), a group-agent line, and a non-owner line (the
+  sign-up caveat, or not available + why + the button redirect) and a non-owner line (the
   person owns this conversation, so the button works for them). The `files-canvas` manual topic carries the
   exception to "artifacts are scoped to their conversation", with the same card-scoped rule.
 - The activity row shows the expiry (`7일`), never the opaque id: `mcpToolInputSummary`
@@ -208,7 +206,7 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
   client's fallback; label `공유 링크 만들기`.
 
 ## Client
-- **Entry points** (PPTX cards only; never in a group-agent pane): the `공유 링크` button next to 다운로드
+- **Entry points** (PPTX cards only): the `공유 링크` button next to 다운로드
   in the deck's side-panel tab (`FileTab`; disabled with `응답이 끝난 뒤 만들 수 있습니다.` while the card is
   still live on a streaming turn), and a sibling `link` icon button beside a PERSISTED chat card (`ChatView`
   `attachmentCards`; the card is itself a button, so the pair is one flex item) — the only path in split
@@ -266,7 +264,7 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 `tests/share-links.test.ts` (routes, salted tokens/tickets and what a secret plus a logged id cannot mint,
 download names incl. the owner's download route, late send failures and 416/412, validity matrix, cascades,
 log hygiene), `tests/share-links-flow.test.ts` (end to end: the real chat route → runPlan → tool text →
-recipient HTTP, the gate agreement across group-agent/colleague turns, and a rebuilt deck's new link
+recipient HTTP, the gate agreement across colleague turns, and a rebuilt deck's new link
 naming the earlier one), `tests/chat-files.test.ts` (`sanitizeDownloadName` / `withDownloadExtension`, the
 card-name cap), `tests/routes-chat.test.ts` (`onShareLink` supply predicate, card lookup, error mapping,
 the background refusal vs a delivered steer, `otherActiveLinks` on created and reused results, the

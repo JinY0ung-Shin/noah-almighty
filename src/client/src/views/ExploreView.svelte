@@ -57,7 +57,7 @@
   function rank(av: AvatarSummary) {
     if (av.id === $appState.user?.id) return 0;
     // Group shared agents sort with same-group teammates (both are group-scoped).
-    if (av.sharesGroup || av.groupAgent) return 1;
+    if (av.sharesGroup) return 1;
     return 2;
   }
 
@@ -312,8 +312,6 @@
                 <strong>{av.displayName}</strong>
                 {#if av.id === $appState.user?.id}
                   <span class="tag accent">나</span>
-                {:else if av.groupAgent}
-                  <span class="tag write">그룹 에이전트 · {av.groupAgent.groupName}</span>
                 {:else if av.sharesGroup}
                   <span class="tag write">같은 그룹</span>
                 {/if}

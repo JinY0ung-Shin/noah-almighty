@@ -713,19 +713,6 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
     expect(container.querySelector(".msg-images > .msg-file-card")?.textContent).toContain("보고.pdf");
   });
 
-  it("offers no control in a group agent's thread", () => {
-    const groupPane = pane([deckMessage()]);
-    groupPane.avatar = {
-      ...avatar,
-      id: "group:g1:a1",
-      isOwn: false,
-      groupAgent: { groupId: "g1", groupName: "팀" },
-    } as unknown as AvatarDetail;
-    replaceState({ avatars: [], chatPanes: [groupPane], activePaneId: "pane-1" });
-    render(ChatView);
-    expect(screen.queryByRole("button", { name: /^공유 링크/ })).toBeNull();
-  });
-
   it("keeps the control in split view, where the card click downloads instead", () => {
     const second = { ...pane([]), id: "pane-2", conversationId: "conv-2" } as ChatPane;
     replaceState({ avatars: [], chatPanes: [pane([deckMessage()]), second], activePaneId: "pane-1" });

@@ -191,7 +191,7 @@ commits). What the flag changes:
 ## Metacognition (both surfaces, from one fact)
 `OwnerState.avatarApiKeyCount` (`agent/ownerState.ts`, eager like its neighbours — the list is capped
 per owner, so one read beats a getter that re-queried on every access and hid itself from `{...state}`
-spreads) is stamped onto the request in `claudeAgent.ts` for owner, non-group-agent runs only, and
+spreads) is stamped onto the request in `claudeAgent.ts` for owner runs only, and
 read by BOTH `promptBuilder.ts`'s standing paragraph and `systemTools.ts`'s `describe_system` line
 (the per-turn half — whether THIS turn arrived that way — is the provenance section above). Both name
 the settings path (내 아바타 → 권한·연결 → 외부 작업 API), state that the API is independent of scheduled
@@ -199,8 +199,8 @@ routines, and end with **never ask the owner to paste an API key into chat**. Ad
 or neither.
 
 The run budget is the second fact, and it is CONFIG, not store: `runClaudeAgent` stamps
-`config.avatarTaskRunTimeoutMs` as `AgentRequest.avatarTaskRunTimeoutMs` under the same owner,
-non-group-agent gate, and `describe_system` reads `ctx.config.avatarTaskRunTimeoutMs` directly, so
+`config.avatarTaskRunTimeoutMs` as `AgentRequest.avatarTaskRunTimeoutMs` under the same owner
+gate, and `describe_system` reads `ctx.config.avatarTaskRunTimeoutMs` directly, so
 both state the operator's `AVATAR_TASK_TIMEOUT_MINUTES`, never the default. The standing line says how
 long ANY task may run (inserted before the routines sentence, so it still ends on the key warning); an
 API run additionally hears THIS run's budget in the provenance paragraph / the `This turn's origin:`

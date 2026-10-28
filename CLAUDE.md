@@ -32,19 +32,11 @@ These are the invariants the project is built around. New work should reinforce 
   `avatar_sharing` policy gates visibility AND trust TOGETHER (one SQL fragment, `SHARING_TEAMMATES`);
   off = knowledge-sharing-only group (repo/brain/tool-policy unaffected). Visibility (`private` opt-out)
   and trust remain separate axes: a teammate reaches your `group` avatar but never your `private` one.
-- **Group shared agents = team avatars that are NOT users rows** (`group_agents`, several per group
-  allowed, avatar id `group:<groupId>:<agentId>` — the pre-multi `group:<groupId>` form was migrated
-  away). Reach = owning-group membership only (`findChattableGroupAgent`), independent of
-  `avatar_sharing`; per-member threads are private and sharing happens ONLY via the group second brain.
-  The run kind (`AgentRequest.groupAgent`) carries capability: group resources only — never personal
-  secrets/tokens/repos; capture (write+commit) follows the group's `capture_scope` policy with the
-  ACTING member's git token/identity. Group-agent runs grant elevated built-ins to EVERY member BY
-  DESIGN — a deliberate membership-gated carve-out OUTSIDE `isTrustedFor` (which stays the choke point
-  for PEER trust only); `capture_scope` is enforced at the MCP tool layer, not the filesystem.
-  Group agents SELF-CONFIGURE persona/alias/bio/intro mid-chat via `mcp__group_agent__update_profile`
-  (live group-admin gate, membership required even for sysadmins, audited as `group_agent_update`,
-  applies to every member from the NEXT turn); its state rides `GroupAgentState.personaSet`/
-  `selfConfigAllowed` into BOTH the prompt branch and `describe_system`.
+- **Group shared agents are RETIRED (2026-10-29).** Team avatars that were not users rows are gone; a
+  boot purge (`retireGroupAgents.ts`) deletes every `group:` thread and its files and drops `group_agents`.
+  The `group:` avatar-id prefix, the `group-` workspace prefix and the table names are reserved FOREVER —
+  never mint an avatar id under them again. Groups, their knowledge repos and the personal-run
+  `mcp__group_repo__*`/`mcp__group_brain__*` tools stay. Mechanics → `docs/architecture/server-core.md`.
 - **Skill sharing rides the avatar-discovery boundary — never wider.** A shared skill (metadata row in
   `shared_skills`; content stays in the owner's knowledge repo) is browsable/learnable EXACTLY where the
   owner's avatar is visible in 탐색 (`SHARING_TEAMMATES`; private/suspended owners drop out). Learning
@@ -73,15 +65,14 @@ These are the invariants the project is built around. New work should reinforce 
   Login-required (any signed-in, non-suspended user holding it), expiring (1/7/30 d, fixed at creation),
   revocable, PPTX-only: the .pptx card plus the renders STAMPED with its id (`shareSlideAttachments` — strict
   `parentId`, the ONLY selector links use; unstamped hidden images never leave the thread). Deliberately NOT
-  group-bounded, yet it never touches `isTrustedFor`, visibility or tool access, and group-agent member threads
-  cannot be link-shared (phase 1). Only the SHA-256 of a per-row-salted HMAC token is stored; the token rides the
+  group-bounded, yet it never touches `isTrustedFor`, visibility or tool access. Only the SHA-256 of a per-row-salted HMAC token is stored; the token rides the
   URL FRAGMENT and a POST body (never a path), bytes flow through short-lived tickets MACed over the viewer AND
   that salt (a leaked SESSION_SECRET plus a logged link id mints neither), the served name always ends in .pptx, and
   every recipient call re-runs the full validity — every invalid state is ONE 404, never a 401 (the client logs a
   signed-in user out on any 401). The avatar mints one (`mcp__file_output__create_share_link`) only on an explicit
   user request in an interactive own-avatar chat, behind three locks: the chat route supplies `onShareLink` only on
   those turns, runPlan's `shareLinkToolActive` registers the tool (gated on BOTH `headless` and `externalTaskApi`,
-  never group agents/consultations), and the callback re-checks per call; both metacognition surfaces read
+  never consultations), and the callback re-checks per call; both metacognition surfaces read
   `shareLinksEnabled` and send every other run to the card's 공유 링크 button. **A new conversation-deleting path
   cascades `deleteShareLinksForConversation` next to the canvas cascade.** Mechanics →
   `docs/architecture/share-links.md`.
@@ -186,7 +177,7 @@ These are the invariants the project is built around. New work should reinforce 
   user decision 2026-10-26). Anything with headers runs through `scripts/mcp-http-bridge.mjs` on a one-shot 0600
   file (the SDK puts `mcpServers` in CLI argv), rewritten before EVERY query attempt. Registration IS the gate
   (third-party servers cannot self-gate under the `mcp__` auto-allow): a slotted server mounts only on elevated,
-  non-group-agent, non-consultation runs with every slot bound, else it sits the run out and BOTH metacognition
+  non-consultation runs with every slot bound, else it sits the run out and BOTH metacognition
   surfaces say why. Mechanics → `docs/architecture/secrets-ssh.md`.
 - **Same-uid hardening (#71 phase 0): the server process is non-dumpable, server-only secrets never reach a child,
   and nothing secret rides argv.** The image makes node and tini EXECUTE-ONLY (`chmod 0711`) so their environ/memory
@@ -231,7 +222,7 @@ These are the invariants the project is built around. New work should reinforce 
   `src/server/todos.ts` (error CODES, Korean/English maps per channel); wire types, limits and the ONE
   display order are the import-free `src/shared/todos.ts`, and due dates are optional KST calendar
   dates (date only) from `routineSchedule.ts`. The `mcp__todo__*` tools exist ONLY on owner runs
-  (interactive own-avatar chat, owner routine, external task API — never colleague, group-agent or
+  (interactive own-avatar chat, owner routine, external task API — never colleague or
   consultation runs), ride the always-on `system` group so no saved tool selection or group policy can
   drop them, and an API-submitted run cannot delete. They edit the owner's PERSISTENT list; the built-in
   TodoWrite/TaskCreate are the avatar's private per-run checklist, and the tool text plus the prompt keep

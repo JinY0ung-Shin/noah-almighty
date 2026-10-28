@@ -664,7 +664,6 @@ function groupProps(role: "admin" | "member"): SettingsGroup {
     knowledgeSelected: null,
     allowedMcpToolGroups: null,
     avatarSharing: true,
-    agents: [],
     members: [
       {
         userId: "mate-1",

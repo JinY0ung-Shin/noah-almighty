@@ -106,8 +106,8 @@ function seedLegacyDeployment(config: AppConfig) {
   const other = store.createUser({ username: "other", displayName: "Other", password: "password123" });
   const group = store.createGroup({ name: "Team" });
   store.addGroupMember(group.id, owner.id, "member");
-  const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-  const groupAvatar = `group:${group.id}:${groupAgent.id}`;
+  // A retired group-agent id: a different namespace this retirement must not touch.
+  const groupAvatar = `group:${group.id}:agent-1`;
   const external = "external:research";
 
   // Controls.

@@ -72,7 +72,6 @@ import {
 import { buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { readSystemManual } from "../src/server/agent/systemManual.js";
 import { buildSystemTools, type SystemToolsContext } from "../src/server/agent/systemTools.js";
-import { groupAgentAvatarId } from "../src/server/groupAgents.js";
 import { mcpToolInputSummary, sdkToolLabel } from "../src/shared/sdkToolPresentation.js";
 
 let tempDir: string;
@@ -85,8 +84,6 @@ const getTempDir = withTempDir("agent-share-link", () => {
 const TOOL_LINE = "Share links: `create_share_link`, ONLY if the user asks for a link.";
 const REDIRECT =
   "Share links for a PPTX card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card.";
-const GROUP_REDIRECT =
-  "Share links cannot be created for a group-agent conversation, and its file cards have no 공유 링크 button";
 const SHARE_LINE_PREFIX = "- Share links (mcp__file_output__create_share_link): ";
 const DECK_PREFIX = "- Document deck generation (PPTX): ";
 
@@ -121,7 +118,7 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
   };
 }
 
-/** Fresh services + an ADMIN owner (the first user) with a group agent. */
+/** Fresh services + an ADMIN owner (the first user) in a group. */
 function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   const { config, store } = createServices({
     dataDir: path.join(tempDir, dir),
@@ -134,7 +131,6 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
   const group = store.createGroup({ name: "팀", createdBy: owner.id });
   store.addGroupMember(group.id, owner.id, "member");
-  const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 에이전트" })!;
   const cwd = path.join(tempDir, dir, "ws");
   fs.mkdirSync(cwd, { recursive: true });
   const baseRequest: AgentRequest = {
@@ -147,7 +143,7 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
     viewerIsOwner: true,
     autoApprove: true,
   };
-  return { config, store, owner, group, groupAgent, baseRequest };
+  return { config, store, owner, group, baseRequest };
 }
 
 /** What run #i registered: the allowedTools entry, the server's own tool, and the prompt. */
@@ -217,7 +213,7 @@ describe("create_share_link registration", () => {
     name: string;
     request: (s: ReturnType<typeof setup>) => AgentRequest;
     events?: () => AgentEvents;
-    prompt: "redirect" | "group" | "none";
+    prompt: "redirect" | "none";
   }> = [
     {
       name: "a scheduled routine (headless, owner tool access)",
@@ -228,20 +224,6 @@ describe("create_share_link registration", () => {
       name: "an external-task-API turn",
       request: (s) => ({ ...s.baseRequest, externalTaskApi: true }),
       prompt: "redirect",
-    },
-    {
-      name: "a group shared-agent turn",
-      request: (s) => ({
-        ...s.baseRequest,
-        groupAgent: {
-          groupId: s.group.id,
-          agentId: s.groupAgent.id,
-          groupName: s.group.name,
-          viewerRole: "member",
-          captureAllowed: false,
-        },
-      }),
-      prompt: "group",
     },
     {
       name: "an avatar consultation",
@@ -282,10 +264,6 @@ describe("create_share_link registration", () => {
     expect(run.append).not.toContain(TOOL_LINE);
     if (c.prompt === "redirect") {
       expect(run.append).toContain(REDIRECT);
-    } else if (c.prompt === "group") {
-      expect(run.append).toContain(GROUP_REDIRECT);
-      // No button in a group-agent pane, so the avatar must not point at one.
-      expect(run.append).not.toContain(REDIRECT);
     } else {
       expect(run.append).not.toContain("Share links");
     }
@@ -584,17 +562,6 @@ describe("share-link standing prompt", () => {
     expect(prompt).not.toContain(TOOL_LINE);
   });
 
-  it("tells a group agent that its threads cannot be link-shared at all", () => {
-    const prompt = promptFor({
-      viewerIsOwner: false,
-      fileOutputEnabled: true,
-      groupAgent: { groupId: "g1", agentId: "ga1", groupName: "팀", viewerRole: "member", captureAllowed: false },
-    });
-    expect(prompt).toContain(GROUP_REDIRECT);
-    expect(prompt).not.toContain(REDIRECT);
-    expect(prompt).not.toContain(TOOL_LINE);
-  });
-
   it("says nothing on a run that cannot deliver files", () => {
     expect(promptFor({})).not.toContain("Share links");
     expect(promptFor({ headless: true, allowHeadlessTools: true })).not.toContain("Share links");
@@ -661,28 +628,6 @@ describe("describe_system share-link line", () => {
       expect(line).not.toContain("AVAILABLE in this run —");
     },
   );
-
-  it("group-agent branch: unavailable for group-agent threads, after the capability boundary and the single deck line", async () => {
-    const s = describeSetup("desc-group");
-    const avatarId = groupAgentAvatarId(s.group.id, s.groupAgent.id);
-    const body = await s.describeWith({
-      avatarUserId: avatarId,
-      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-      viewerIsOwner: false,
-      groupAgent: { agentId: s.groupAgent.id, actingUserId: s.owner.id },
-      fileOutputEnabled: true,
-    });
-    expect(body).toContain("Current GROUP SHARED-AGENT state:");
-    const line = "- Share links: UNAVAILABLE for group-agent conversations";
-    expect(body).toContain(line);
-    expect(body).toContain("this pane's file cards have no 공유 링크 button");
-    // The existing ordering pins still hold: boundary → one deck line → share line.
-    expect(body.indexOf("Capability boundary")).toBeLessThan(body.indexOf(DECK_PREFIX));
-    expect(body.split(DECK_PREFIX)).toHaveLength(2);
-    expect(body.indexOf(DECK_PREFIX)).toBeLessThan(body.indexOf(line));
-    expect(body).not.toContain(SHARE_LINE_PREFIX);
-    expect(body).not.toContain("Current avatar state:");
-  });
 
   it("non-owner branch: not the avatar's to make, but the person owns this conversation's cards", async () => {
     const s = describeSetup("desc-non-owner");

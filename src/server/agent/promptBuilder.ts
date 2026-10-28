@@ -464,8 +464,7 @@ function fileOutputSection(request: AgentRequest): string | null {
  *   result, and the maximal owner prompt has only ~70 characters left for this
  *   (tests/system-manual.test.ts budgets it).
  * - REDIRECT: every other run that can deliver files, so the avatar neither
- *   denies the feature nor improvises one — the 공유 링크 button on the card,
- *   except in group-agent threads, which cannot be link-shared at all.
+ *   denies the feature nor improvises one — the 공유 링크 button on the card.
  * Mirrored by describe_system's share-link line (both read the same boolean).
  */
 function shareLinkSection(request: AgentRequest): string | null {
@@ -473,9 +472,6 @@ function shareLinkSection(request: AgentRequest): string | null {
     return "Share links: `create_share_link`, ONLY if the user asks for a link.";
   }
   if (!request.fileOutputEnabled) return null;
-  if (request.groupAgent) {
-    return "Share links cannot be created for a group-agent conversation, and its file cards have no 공유 링크 button; the member can still download a deck from its card.";
-  }
   return "Share links for a PPTX card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card.";
 }
 
@@ -688,7 +684,7 @@ const GETTING_STARTED_HISTORY_LIMIT = 6;
  * hears that their avatar has no memory — it simply, silently, has none.
  *
  * Owner-INTERACTIVE personal-avatar turns only: the only caller sits in the
- * `viewerIsOwner` branch, which the group-agent / consultation / headless
+ * `viewerIsOwner` branch, which the consultation / headless
  * branches above have already claimed. So a scheduled routine never pauses its
  * work to pitch setup, and no colleague is shown the owner's setup state.
  *
@@ -937,8 +933,7 @@ export function buildSystemPromptAppend(
     }
     // Standing skill-exchange guidance (#skill-share), OWNER-DRIVEN turns only —
     // the same derivation as claudeAgent's `skillExchangeActive` registration
-    // gate (avatars family is already forced off for group-agent runs, so
-    // being inside this block plus owner access mirrors it exactly).
+    // gate (being inside this block plus owner access mirrors it exactly).
     const skillExchangeEnabled =
       Boolean(request.viewerIsOwner) &&
       !(Boolean(request.headless) && !request.allowHeadlessTools);
@@ -1015,57 +1010,7 @@ export function buildSystemPromptAppend(
   // knowledge-backfill skill): the owner reviews gaps, colleagues create them.
   // A headless run has NO ONE on the other side: never claim the owner is
   // present and state read-only.
-  if (request.groupAgent) {
-    // GROUP SHARED-AGENT run: a team resource with NO owner. Its identity,
-    // privacy rule, and second-brain triggers all come from the run kind +
-    // GroupAgentState (the describe_system group ctx reports the same facts).
-    const ga = request.groupAgent;
-    const gaState = request.groupAgentState ?? null;
-    lines.push(
-      `You are the SHARED agent of the group '${ga.groupName}' — a team resource, not a personal avatar. The person you are talking to is group member "${request.viewerName ?? ""}" (role: ${ga.viewerRole === "admin" ? "admin" : "member"}).`,
-    );
-    lines.push(
-      "Each member's conversation with you is PRIVATE to that member. What the team shares is the group's SECOND BRAIN (the shared knowledge repository) — never assume another member can read this conversation; share knowledge by capturing it there.",
-    );
-    if (mcpToolGroupEnabled(request, "group_knowledge")) {
-      if (gaState?.knowledgeRepoConfigured) {
-        lines.push(
-          `Team second brain: '${gaState.knowledgeRepo.repo}'${gaState.knowledgeRepo.branch ? ` @ ${gaState.knowledgeRepo.branch}` : ""} is connected. BEFORE answering questions about team rules, decisions, runbooks, or shared context, recall with \`mcp__group_brain__search\`/\`get_note\` (wiki/ notes); use \`mcp__group_repo__list_files\`/\`read_file\` for other files.`,
-        );
-        if (ga.captureAllowed) {
-          lines.push(
-            "When the member shares a durable, team-relevant fact/decision/lesson (or asks you to remember something), CAPTURE it: write it with `mcp__group_repo__write_file`/`edit_file` following the second-brain convention (raw/ for quick captures, wiki/ for consolidated notes), then push with `mcp__group_repo__commit` — uncommitted changes are NOT persisted or shared." +
-              (gaState.viewerGitTokenSet
-                ? ""
-                : " Note: this member has no internal Git token (GIT_TOKEN) registered, so commit will fail — stage the note if useful, but tell them to register a token in Settings to persist it."),
-          );
-        } else {
-          lines.push(
-            "Under this group's capture policy only group ADMINS may write to the shared repository. You can search/read for this member; when they want something recorded, draft the note text in chat and point them to a group admin.",
-          );
-        }
-      } else {
-        lines.push(
-          "This group has NO shared knowledge repository connected, so team-brain recall/capture is unavailable. Ask a group admin to connect one in group settings.",
-        );
-      }
-      lines.push(GIT_MCP_ONLY_GUIDANCE);
-    }
-    // Self-configuration trigger — the admin/member split mirrors the tool's
-    // live gate (GroupAgentState.selfConfigAllowed; request-time role fallback).
-    if (gaState?.selfConfigAllowed ?? ga.viewerRole === "admin") {
-      lines.push(
-        "Self-configuration: this member is a group ADMIN. When they ask you to change your role, persona, or profile (alias/bio/intro), CONFIRM that the change applies to EVERY member's conversations with you, then apply it with `mcp__group_agent__update_profile`. It takes effect from the next turn.",
-      );
-    } else {
-      lines.push(
-        "Self-configuration: only group ADMINS may change your persona/profile (`mcp__group_agent__update_profile` refuses everyone else). If this member asks you to change your role or persona, draft the wording they want and point them to a group admin.",
-      );
-    }
-    lines.push(
-      "You have NO personal-avatar capabilities: no personal knowledge repository or second brain, no secrets, no SSH, no scheduled routines, no notifications, no 할 일 to-do list, and no plugins beyond the group repository. If asked about those, explain that a member's personal avatar handles them.",
-    );
-  } else if (request.headless && request.avatarConsultation) {
+  if (request.headless && request.avatarConsultation) {
     // Avatar-to-avatar consultation (#ask-avatar): a one-shot headless turn
     // another avatar started on its owner's behalf. Framed as a TEAMMATE
     // exchange — the asker passed the same-group trust gate (avatarAsk.ts) and
@@ -1452,11 +1397,11 @@ export function buildSystemPromptAppend(
 /**
  * Whether this run may write files: runPlan's `canWriteFiles`
  * (elevatedToolAccess) when stamped, else only what the request proves — the
- * owner's own run or a group-agent run. The same resolution as describe_system's
+ * owner's own run. The same resolution as describe_system's
  * image-sources line (`systemTools.ts`), so both surfaces agree.
  */
 function canWriteFiles(request: AgentRequest): boolean {
-  return request.canWriteFiles ?? Boolean(request.viewerIsOwner || request.groupAgent);
+  return request.canWriteFiles ?? Boolean(request.viewerIsOwner);
 }
 
 export function buildUserPrompt(request: AgentRequest): string {

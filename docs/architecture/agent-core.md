@@ -21,8 +21,8 @@ moved symbols so importers keep their paths:
   checks the prompt with `toContain`/`not.toContain` substrings, NOT byte-for-byte** — ADDING a section is
   safe; only changing an EXISTING string (or its presence per viewer class) breaks a test.
   The append's one PROACTIVE section is `gettingStartedSection` (setup gaps from `ownerState.ts`'s
-  `gettingStartedGaps`, mirrored by `describe_system`): interactive-owner branch only — so routines,
-  colleagues, and group agents are excluded structurally — and it drops out past ~6 stored messages
+  `gettingStartedGaps`, mirrored by `describe_system`): interactive-owner branch only — so routines and
+  colleagues are excluded structurally — and it drops out past ~6 stored messages
   (`conversationHistory.length`, the free conversation-youth signal) so the offer can only be an early one.
 - `sdkMessageHandlers.ts` — SDK-message→`AgentEvents` translation (`handle*` + Task helpers + `LoopState`
   + `interpretResult`/`resultErrorMessage`).
@@ -216,7 +216,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   gets its own `allowedTools` entry keyed on the SAME boolean as its build.
 - **`create_share_link` gate (`mcp__file_output__create_share_link`).** It lives on the `file_output` server
   but registers only when runPlan's `shareLinkToolActive` holds: `fileOutputActive && events.onShareLink &&
-  ownerToolAccess && !groupAgentRun && !consultationRun && !request.headless &&
+  ownerToolAccess && !consultationRun && !request.headless &&
   !request.externalTaskApi`, computed right after `fileOutputActive`, before `buildSystemServer`. That one
   boolean drives the tool build (`shareLinkEnabled`/`createShareLink`/`signupOpen` on
   `FileOutputToolsContext`), its own `allowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately
@@ -226,10 +226,9 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   current segment — a pure wake-up turn still refuses); the handler refuses without the callback. Prompt: one
   short tool line when enabled (the flag-maximal config in `tests/system-manual.test.ts` is budgeted under
   18,000 characters; always-on and data-driven owner sections are not budgeted, so the cap is a tripwire, not a
-  bound on real owner prompts), else — on any run with file output — the 공유 링크-button redirect (group-agent
-  runs: no button, their threads cannot be link-shared). describe_system mirrors it with an owner line
-  (available + facts + live sign-up caveat, or not available + why), a group-agent line and a non-owner line.
-  The one-link rule is per delivered CARD on all three agent surfaces (tool description, describe_system, the
+  bound on real owner prompts), else — on any run with file output — the 공유 링크-button redirect. describe_system
+  mirrors it with an owner line (available + facts + live sign-up caveat, or not available + why) and a
+  non-owner line. The one-link rule is per delivered CARD on all three agent surfaces (tool description, describe_system, the
   `files-canvas` manual topic) — the store's key: a rebuild re-delivered with share_file is a NEW card, so an
   earlier link keeps serving the earlier file — and the result names the conversation's other active links
   (`ShareLinkResult.otherActiveLinks`: names + KST expiry, never their URLs) so the avatar tells the user.
@@ -274,7 +273,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   every local turn, see [`chat-sse-media.md`](chat-sse-media.md)), browser screenshots in `captures/`
   ([`browser-bridge/contract.md`](browser-bridge/contract.md)), and Confluence attachments saved with
   `save_to_workspace` in `confluence/` (next bullet). describe_system prints `- Images for documents and
-  decks: …` from ONE helper, `imageSourcesLine`, in the owner, group-agent and non-owner branches (the
+  decks: …` from ONE helper, `imageSourcesLine`, in the owner and non-owner branches (the
   `deckCapabilityLine` pattern). It names the absolute path when `SystemToolsContext.scratchWorkspaceDir`
   is set. It lists attachments unless the run is `headless`, captures only when `browserEnabled` and vision
   is on (at most 30 per RUN), and Confluence only when `confluenceSaveToWorkspace` holds, and it always
@@ -285,7 +284,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   run) is told it can read the files but not place them here (the owner or a trusted teammate can, the
   deck line's wording), so it is never steered toward writes its hook denies. The vision user-prompt tail
   in `buildUserPrompt` branches on the same flag. Undefined (an unwired caller) resolves conservatively,
-  on both surfaces alike: only the owner's own run or a group-agent run counts as writable. The prompt
+  on both surfaces alike: only the owner's own run counts as writable. The prompt
   mirrors the same flags in three short places: `imageFilesSection` (vision on AND a deck flag — a
   text-only run is shown no images, and `noVisionSection` already covers its files; the deck flags already
   imply an author, so no read-only branch is needed there), the browser paragraph's screenshot sentence
@@ -320,7 +319,7 @@ are NOT top-level options: they ride `options.settings` (the CLI `--settings` JS
   `ConfluenceToolsContext.isConversationLive` (runPlan: the conversation row still exists — ids are never reused) is
   checked after the write. Target = `ConfluenceToolsContext.workspaceDir` = runPlan's pure
   `conversationScratchDir(request)`. Every run with a conversation workspace (chat route `executeChatTurn`
-  for own-avatar, teammate, group-agent and task-API turns; the owner-routine scheduler) passes
+  for own-avatar, teammate and task-API turns; the owner-routine scheduler) passes
   `cwd: activeRepoCwd ?? workspaceDir` + `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined` with
   `activeRepoName` set alongside the clone, so an open working repo moves the scratch to
   `additionalDirs[0]` (never the clone). No `conversationId` (profile generators, consultations) →

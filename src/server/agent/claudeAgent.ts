@@ -256,7 +256,6 @@ export async function runClaudeAgent(
     ownerState,
     ownerGroups,
     ownerSecrets,
-    groupAgentState,
     effectiveModel,
     modelChain,
     runVisionEnabled,
@@ -266,7 +265,6 @@ export async function runClaudeAgent(
     toolSkillPolicy,
     registeredMcpToolGroups,
     adminBlockedMcpToolGroups,
-    runKindBlockedMcpToolGroups,
     browserActive,
     canvasActive,
     fileOutputActive,
@@ -370,12 +368,7 @@ export async function runClaudeAgent(
     // Rides to the prompt ONLY so admin-blocked groups are excluded from the
     // "user deselected" standing note — the avatar is deliberately NOT told
     // that a policy exists or what it blocks (it only knows its enabled set).
-    // Run-kind-stripped families (group-agent forcing) are excluded the same
-    // way: absent, but never misattributed to the member's composer choice.
-    adminBlockedMcpToolGroups: [
-      ...adminBlockedMcpToolGroups,
-      ...runKindBlockedMcpToolGroups,
-    ],
+    adminBlockedMcpToolGroups,
     // Canvas standing guidance fires for ALL viewer classes of a canvas-enabled
     // turn (colleagues see canvases too). Experimental-feature self-state is
     // owner-driven only (META-COGNITION), matching describe_system's gating.
@@ -406,16 +399,13 @@ export async function runClaudeAgent(
     // it. Mirrored by describe_system.
     adminDisabledTools: toolSkillPolicy.disabledTools,
     adminDisabledSkills: toolSkillPolicy.disabledSkills,
-    // Group-agent self-state for the prompt branch (same facts as
-    // describe_system's group ctx — the GroupAgentState invariant).
-    groupAgentState,
-    // External task API self-state, owner (non-group-agent) runs only: the live
+    // External task API self-state, owner runs only: the live
     // key count, plus the CONFIGURED per-run budget — config, not store, so an
     // operator's AVATAR_TASK_TIMEOUT_MINUTES is what the avatar states, never
     // the manual's default. An API run is an owner run, so the same gate covers
     // its provenance paragraph; describe_system reads the same config value.
-    avatarApiKeyCount: request.viewerIsOwner && !request.groupAgent ? ownerState.avatarApiKeyCount : undefined,
-    avatarTaskRunTimeoutMs: request.viewerIsOwner && !request.groupAgent ? config.avatarTaskRunTimeoutMs : undefined,
+    avatarApiKeyCount: request.viewerIsOwner ? ownerState.avatarApiKeyCount : undefined,
+    avatarTaskRunTimeoutMs: request.viewerIsOwner ? config.avatarTaskRunTimeoutMs : undefined,
     // Mid-turn messages (steers) — META-COGNITION only, no capability change:
     // this run has a live steer channel, so the viewer can keep typing while it
     // works. Same boolean describe_system reports (runPlan's system ctx).

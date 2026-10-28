@@ -1430,30 +1430,6 @@ describe("conversation delete sweeps the server-written workspace copies", () =>
     expectCopiesSwept(mateThread);
     expectCopiesKept(ownerThread);
   });
-
-  it("an admin's group delete leaves none of a group agent's thread copies", async () => {
-    const { app, config, store } = boot();
-    const admin = request.agent(app);
-    await signup(admin, "wsdel-gadmin").expect(201); // the first account is the admin
-    const member = request.agent(app);
-    const memberId = (await signup(member, "wsdel-gmember").expect(201)).body.user.id as string;
-    const group = store.createGroup({ name: "wsdel-team" });
-    store.addGroupMember(group.id, memberId);
-    const agent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-    const avatarId = `group:${group.id}:${agent.id}`;
-    await sendImage(member, avatarId, "conv-ga-del");
-    const workspace = workspaceDirFor(config, avatarId, "conv-ga-del");
-    expect(fs.readdirSync(path.join(workspace, "attachments"))).toHaveLength(1);
-    seedCopies(workspace);
-
-    await admin.delete(`/api/admin/groups/${group.id}`).expect(200);
-
-    for (const sub of SERVER_WORKSPACE_COPY_DIRS) {
-      expect(fs.existsSync(path.join(workspace, sub)), sub).toBe(false);
-    }
-    // The agent's whole tree goes with its group, as before.
-    expect(fs.existsSync(workspace)).toBe(false);
-  });
 });
 
 describe("chat error handling", () => {
@@ -3238,23 +3214,23 @@ describe("context compaction notices", () => {
   });
 });
 
-describe("group shared agents in the chat routes", () => {
-  it("lists a group agent's skills from the group repo only, and hides it from non-members", async () => {
+describe("retired group shared-agent ids", () => {
+  it("reach nothing: no avatar detail, no skills, no chat turn", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "gaowner").expect(201)).body.user.id as string;
     const group = store.createGroup({ name: "플랫폼" });
     store.addGroupMember(group.id, ownerId);
-    const agent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-    const avatarId = `group:${group.id}:${agent.id}`;
+    const avatarId = `group:${group.id}:agent-1`;
 
-    // The group has no shared repo yet, so there is nothing to list — the
-    // viewer's OWN avatar skills must not leak into a group-agent panel.
-    await owner.get(`/api/avatars/${avatarId}/skills`).expect(200).expect({ skills: [] });
-
-    const outsider = request.agent(app);
-    await signup(outsider, "gaoutsider").expect(201);
-    await outsider.get(`/api/avatars/${avatarId}/skills`).expect(404);
+    await owner.get(`/api/avatars/${avatarId}`).expect(404);
+    await owner.get(`/api/avatars/${avatarId}/skills`).expect(404);
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId, conversationId: "conv-ga", message: "안녕" })
+      .expect(403);
+    expect(H.requests).toHaveLength(0);
+    expect((await owner.get("/api/avatars").expect(200)).body.avatars.map((a: { id: string }) => a.id)).not.toContain(avatarId);
   });
 });
 
@@ -3278,36 +3254,6 @@ describe("knowledge-repo load failures degrade to a status frame", () => {
     // The failure costs the avatar its standing memory, not the turn.
     expect(H.requests).toHaveLength(1);
     expect(H.requests[0].knowledgeMemory).toMatchObject({ personal: null });
-  });
-
-  it("reports a failed group repo on a group shared-agent turn", async () => {
-    const { store, app } = boot();
-    const owner = request.agent(app);
-    const ownerId = (await signup(owner, "gawarn").expect(201)).body.user.id as string;
-    const group = store.createGroup({ name: "플랫폼" });
-    store.addGroupMember(group.id, ownerId);
-    store.setGroupKnowledgeRepo(group.id, path.join(tempDir, "missing", "group.git"), null);
-    const agent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-
-    const res = await owner
-      .post("/api/chat/stream")
-      .send({ avatarId: `group:${group.id}:${agent.id}`, conversationId: "conv-gawarn", message: "안녕" })
-      .expect(200);
-
-    const warnings = parseSse(res.text).filter(
-      (f) => f.event === "status" && String((f.data as { label: string }).label).startsWith("플러그인 경고"),
-    );
-    expect(warnings).toHaveLength(1);
-    expect((warnings[0].data as { label: string }).label).toContain("불러오기 실패");
-    // The run still carries the group-agent kind (group resources only).
-    expect(H.requests[0].groupAgent).toMatchObject({
-      groupId: group.id,
-      agentId: agent.id,
-      groupName: "플랫폼",
-    });
-    // A group-agent run never resolves a personal working repo or trust list.
-    expect(H.requests[0].trustedViaGroups).toEqual([]);
-    expect(H.requests[0].activeRepoName).toBeUndefined();
   });
 });
 
@@ -3470,7 +3416,6 @@ describe("create_share_link host callback (onShareLink)", () => {
     const group = store.createGroup({ name: "팀" });
     store.addGroupMember(group.id, ownerId);
     store.addGroupMember(group.id, colleagueId);
-    const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
 
     const supplied = new Map<string, boolean>();
     H.impl = async (agentRequest, _pr, cfg, _store, events) => {
@@ -3481,7 +3426,6 @@ describe("create_share_link host callback (onShareLink)", () => {
       agent.post("/api/chat/stream").send({ avatarId, conversationId, message: "안녕" }).expect(200);
 
     await turn(owner, ownerId, "conv-own");
-    await turn(owner, `group:${group.id}:${groupAgent.id}`, "conv-group");
     await turn(colleague, ownerId, "conv-colleague");
 
     // Server-started turns of the owner's own avatar: an external-task-API turn
@@ -3515,7 +3459,6 @@ describe("create_share_link host callback (onShareLink)", () => {
 
     expect(Object.fromEntries(supplied)).toEqual({
       "conv-own": true,
-      "conv-group": false,
       "conv-colleague": false,
       "conv-task": false,
       "conv-unattended": false,

@@ -103,8 +103,30 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   row exists or the `external_avatar_images` table re-appears (an older release booted after the stamp),
   which re-runs the full purge — so the `external:` prefix, that table name and the registry key stay
   reserved FOREVER. A still-set `EXTERNAL_AGENTS_JSON` is ignored with one boot warning. Tests:
-  `tests/retire-external-avatars.test.ts`. The no-follow removal / listing / failure-tally primitives both
-  retirements use live in `src/server/retiredFiles.ts`.
+  `tests/retire-external-avatars.test.ts`. The no-follow removal / listing / failure-tally primitives every
+  retirement uses live in `src/server/retiredFiles.ts`.
+- **The retired group shared agents (removed 2026-10-29) are purged at boot the same way.**
+  `retireGroupAgents` (`src/server/retireGroupAgents.ts` + the `store/retiredGroupAgents.ts` mixin, called
+  from `index.ts` right after `retireExternalAvatars`) deletes ALL group-agent history (decision D4): every
+  conversation whose avatar id starts with `group:` (`group:<groupId>:<agentId>`, or the pre-multi
+  `group:<groupId>`) gets `deleteConversation`'s cascade (messages, canvases, share links, `avatar_tasks`,
+  notifications, routine rows pointing into it), plus any other row keyed by a `group:` avatar id
+  (`routine_jobs`, `avatar_notifications`, `knowledge_requests`); each thread's `chat-images/`/`chat-files/`
+  media, its server-written workspace copies and its SDK session artifacts (matched by session id); every
+  `avatars/group:*` profile image, `workspaces/group-*` tree and SDK project folder of a
+  `<workspaces>/group-…` cwd (both spellings of the workspaces root, found by NAME prefix). The same purge
+  transaction `DROP`s `group_agents`, `group_agents_legacy` and `idx_group_agents_group`. Row-keyed failures
+  are kept PENDING (`retired:group_agents:pending`, the personal-bot document shape) and retried every boot;
+  a pass with ZERO failures stamps `retired:group_agents` (read by EXISTENCE). A marked boot returns at once
+  unless a pending row exists or a retired table re-appears (an older release booted after the stamp), which
+  re-runs the full purge — so the `group:` avatar-id prefix, the `group-` workspace prefix, the two table
+  names, the index name and both marker keys stay reserved FOREVER. Groups, members, knowledge repos and
+  audit rows are untouched; AdminView keeps the `group_agent_create/delete/update/image` labels for retained
+  audit rows. The row-keyed helpers (pending document, session-artifact sweep, name-prefix sweep) are shared
+  with the personal-bot retirement in `src/server/retiredSessionFiles.ts`. `migrateGroupAgentsMulti` and the
+  boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its
+  group-knowledge clone (`removeGroupKnowledgeClone`, `groupKnowledgeRepo.ts`). Tests:
+  `tests/retire-group-agents.test.ts`.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

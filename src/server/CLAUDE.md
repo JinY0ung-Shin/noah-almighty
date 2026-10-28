@@ -4,7 +4,7 @@ Server-area direction. Read with the **root [`CLAUDE.md`](../../CLAUDE.md)** (ar
 language-split, deploy topology) and agent specifics in [`agent/CLAUDE.md`](agent/CLAUDE.md). The
 detailed, change-prone mechanics live in **[`../../docs/architecture/`](../../docs/architecture/)** —
 [`server-core.md`](../../docs/architecture/server-core.md) (route homes, store mixins, settings pattern),
-[`groups-trust.md`](../../docs/architecture/groups-trust.md) (visibility, trust, group agents),
+[`groups-trust.md`](../../docs/architecture/groups-trust.md) (visibility, trust),
 [`repo-knowledge.md`](../../docs/architecture/repo-knowledge.md) (repo plumbing, capture),
 [`secrets-ssh.md`](../../docs/architecture/secrets-ssh.md) (vault, git credentials, CA wiring),
 [`routines.md`](../../docs/architecture/routines.md) (schedule decode). Index:

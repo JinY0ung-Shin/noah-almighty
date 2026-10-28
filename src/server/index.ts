@@ -8,6 +8,7 @@ import { startAvatarTaskDispatcher } from "./avatarTaskRunner.js";
 import { startRoutineScheduler } from "./scheduler.js";
 import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { retireExternalAvatars } from "./retireExternalAvatars.js";
+import { retireGroupAgents } from "./retireGroupAgents.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
@@ -38,6 +39,11 @@ retirePersonalAgents(services);
 // history, registry and images — user decision D4) before anything can serve
 // it. A no-op once done; a failed purge throws and stops the boot.
 retireExternalAvatars(services);
+// Delete what the removed group shared agents left (every member's thread with
+// them, their files and SDK transcripts, the agent table — decision D4) before
+// anything can serve it. Groups and their knowledge repos stay. A no-op once
+// done; a failed purge throws and stops the boot.
+retireGroupAgents(services);
 // The removed Craft apps left only a retry queue on disk; drop it (best effort).
 retireCraftApps(services.config);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git

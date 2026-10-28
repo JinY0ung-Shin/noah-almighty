@@ -175,8 +175,8 @@ function seedLegacyDeployment(config: AppConfig) {
   const colleague = store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
   const group = store.createGroup({ name: "Team" });
   store.addGroupMember(group.id, owner.id, "member");
-  const groupAgent = store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-  const groupAvatar = `group:${group.id}:${groupAgent.id}`;
+  // A retired group-agent id: a different namespace this retirement must not touch.
+  const groupAvatar = `group:${group.id}:agent-1`;
   const botA = `personal:${owner.id}:agent-a`;
   const botB = `personal:${owner.id}:agent-b`;
   const botGone = `personal:${owner.id}:agent-gone`;
@@ -415,7 +415,6 @@ describe("retirePersonalAgents", () => {
     // Controls survive untouched.
     const remaining = store.listConversations(seed.owner.id);
     expect(remaining.map((c) => c.id).sort()).toEqual(["group-chat", "own-chat"]);
-    expect(remaining.find((c) => c.id === "group-chat")?.avatarDisplayName).toBe("팀 비서");
     expect(store.listMessages(seed.owner.id, "own-chat")).toHaveLength(2);
     expect(store.listMessages(seed.owner.id, "group-chat")).toHaveLength(1);
     expect(countRows(config, "SELECT COUNT(*) AS c FROM canvas_artifacts WHERE conversation_id = 'own-chat'")).toBe(1);

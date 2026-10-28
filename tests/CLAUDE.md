@@ -1,7 +1,7 @@
 # tests — Claude notes
 
 ~38 vitest files by area (`agent-*`, `client-*`, `svelte-*`, `store`, `infra`, `app`, `routes-*`,
-`chat-*`, `group-agent`, `retire-*`) plus `helpers.ts`, `setup-dom.ts`, and Playwright
+`chat-*`, `retire-*`) plus `helpers.ts`, `setup-dom.ts`, and Playwright
 `visual/*.spec.ts`. Verification gate + one-file recipe live in the root
 **[`CLAUDE.md`](../CLAUDE.md)** §Verification gate.
 

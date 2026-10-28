@@ -121,7 +121,7 @@
   and on no read-only one (plain teammate, consultation), because the avatar also
   edits `wiki/` directly with the repo tools, where a skill-only rule would never reach.
 - **Capture notice ("기억" chip):** a SUCCESSFUL `write_file`/`edit_file` under `wiki/` (personal or
-  group repo, incl. group-agent runs) fires `AgentEvents.onMemory` (`MemoryEvent`, gated in the tool
+  group repo) fires `AgentEvents.onMemory` (`MemoryEvent`, gated in the tool
   handlers via `isBrainNotePath`) → SSE `memory` (server-minted `id` so reattach replays dedupe) → a
   `kind:"memory"` activity row (label "기억/그룹 기억 추가·갱신됨", detail = note path) that persists
   through the normal activity snapshot. **Rendering is summary-line-only:** `ActivityTree` EXCLUDES

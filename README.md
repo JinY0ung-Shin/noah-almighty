@@ -50,7 +50,7 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   link in a chat with it. Anyone signed in to Noah who has the link can page through the slide renders,
   present them full screen and download the `.pptx` (speaker notes included) until the link expires:
   1, 7 (default) or 30 days, fixed at creation. Links are revocable any time under **내 아바타 → 권한·연결
-  → 공유 링크**; group-agent conversations cannot be link-shared. A link exports one file — it grants no
+  → 공유 링크**. A link exports one file — it grants no
   access to the conversation or the avatar. Mechanics:
   [`docs/architecture/share-links.md`](docs/architecture/share-links.md).
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,

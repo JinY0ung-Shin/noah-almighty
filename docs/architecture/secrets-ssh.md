@@ -50,7 +50,7 @@
   The admin connection check spawns the SAME bridge with the CHECKING admin's own bindings. **Per run**
   `planSharedMcpRun` (in runPlan, before describe_system's ctx) resolves each enabled server from the OWNER's
   bindings + injectable vault: `active` / `needs_binding` (+`hostChanged`) / `missing_secrets` /
-  `secrets_unavailable` — a slotted server registers ONLY on `elevatedToolAccess && !groupAgent` runs with every
+  `secrets_unavailable` — a slotted server registers ONLY on `elevatedToolAccess` runs with every
   slot bound for the current origin to a secret that still exists (trimmed; a value with a line break counts
   as missing); consultation and restricted headless (intro/hashtag) runs get none. Slot/secret names
   ride owner runs only. A server with no headers at all registers natively (`{type, url}`); anything else runs

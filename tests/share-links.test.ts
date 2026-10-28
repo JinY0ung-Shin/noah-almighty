@@ -815,14 +815,14 @@ describe("share links — download names", () => {
 });
 
 describe("share links — which threads can share", () => {
-  it("refuses group-agent member threads, and never serves a row that points into one", async () => {
+  it("refuses a thread bound to a namespaced (retired) avatar id, and never serves a row that points into one", async () => {
     const t = boot();
     const member = await newUser(t.app, "member");
     const viewer = await newUser(t.app, "viewer");
     const group = t.store.createGroup({ name: "플랫폼" });
     t.store.addGroupMember(group.id, member.id);
-    const agent = t.store.createGroupAgent(group.id, { displayName: "팀 비서" })!;
-    const deck = seedDeck(t, member.id, "conv-ga", { avatarId: `group:${group.id}:${agent.id}` });
+    // A retired group shared-agent id (purged at boot; the namespace stays dark).
+    const deck = seedDeck(t, member.id, "conv-ga", { avatarId: `group:${group.id}:agent-1` });
     const res = await create(member.agent, "conv-ga", deck.card.id).expect(404);
     expect(res.body.error).toBe("파일을 찾을 수 없습니다.");
 
@@ -935,28 +935,6 @@ describe("share links — cascades", () => {
     expect(rowCount(t.store, "conversation_id = ?", "conv-with-doomed")).toBe(0);
     expect(rowCount(t.store)).toBe(1);
     expect(rowCount(t.store, "owner_user_id = ?", bystander.id)).toBe(1);
-  });
-
-  it("group-agent and group deletes drop the links of their threads", async () => {
-    const t = boot();
-    const owner = await newUser(t.app, "owner");
-    const group = t.store.createGroup({ name: "플랫폼" });
-    t.store.addGroupMember(group.id, owner.id);
-    const agentA = t.store.createGroupAgent(group.id, { displayName: "비서 A" })!;
-    const agentB = t.store.createGroupAgent(group.id, { displayName: "비서 B" })!;
-    t.store.touchConversation(owner.id, "conv-ga-a", `group:${group.id}:${agentA.id}`, "안녕");
-    t.store.touchConversation(owner.id, "conv-ga-b", `group:${group.id}:${agentB.id}`, "안녕");
-    rawLink(t.store, owner.id, "conv-ga-a");
-    rawLink(t.store, owner.id, "conv-ga-b");
-    const kept = seedDeck(t, owner.id, "conv-kept");
-    await create(owner.agent, "conv-kept", kept.card.id).expect(201);
-
-    expect(t.store.deleteGroupAgent(agentA.id)).toBe(true);
-    expect(rowCount(t.store, "conversation_id = ?", "conv-ga-a")).toBe(0);
-    expect(rowCount(t.store, "conversation_id = ?", "conv-ga-b")).toBe(1);
-    expect(t.store.deleteGroup(group.id)).toBe(true);
-    expect(rowCount(t.store, "conversation_id = ?", "conv-ga-b")).toBe(0);
-    expect(rowCount(t.store)).toBe(1);
   });
 
   it("regenerate drops the links of the replaced turn's decks", async () => {

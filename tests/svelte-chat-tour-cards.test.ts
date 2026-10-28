@@ -2,7 +2,7 @@
 // what the avatar can do, so their own pane trades the generic starter chips for
 // the shared tour contract's scenarios. Three things are easy to get wrong and
 // are pinned here: WHO gets the cards (only the owner's personal avatar —
-// `isOwn` is false for colleague and group-agent panes alike), that a
+// `isOwn` is false for colleague panes), that a
 // browser tour turns its own prerequisite on in the same click, and that a card
 // SEEDS the composer rather than sending (the owner reviews and presses send).
 //
@@ -129,11 +129,10 @@ describe("chat empty state — guided tour cards", () => {
     expect(chipTexts(container)).toEqual([]);
   });
 
-  it("leaves a group agent on the old chips — a team avatar is not the owner's own", async () => {
-    // group_agents are not users rows; their avatar id is group:<groupId>:<agentId>
-    // and isOwn is false, so isOwnPane already answers false. Members DO run
-    // elevated there, so the elevated chip branch is the one that must show.
-    mount(paneOf(avatarOf({ id: "group:g1:a1", isOwn: false, elevated: true })));
+  it("leaves a trusted teammate's avatar on the elevated chips — it is not the owner's own", async () => {
+    // isOwn is false, so isOwnPane answers false; a co-member runs elevated
+    // there, so the elevated chip branch is the one that must show.
+    mount(paneOf(avatarOf({ id: "mate", isOwn: false, elevated: true })));
     const { container } = render(ChatView);
 
     await waitFor(() => expect(container.querySelector(".starter-prompts")).toBeTruthy());

@@ -3,7 +3,8 @@ import path from "node:path";
 
 /**
  * Disk primitives shared by the boot-time retirements of removed features
- * (`retirePersonalAgents.ts`, `retireExternalAvatars.ts`): remove a retired
+ * (`retirePersonalAgents.ts`, `retireExternalAvatars.ts`, `retireGroupAgents.ts`,
+ * `retiredSessionFiles.ts`): remove a retired
  * file or tree without ever following a link, list a folder, and tally every
  * failure so a retirement can withhold its completion marker until a clean
  * pass. Nothing here throws.

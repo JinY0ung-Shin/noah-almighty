@@ -150,16 +150,14 @@ describe("AvatarCapabilitiesModal", () => {
     expect(screen.queryByText("플러그인")).toBeNull();
   });
 
-  it("notes the group-agent scope and dispatches close from the 닫기 button", async () => {
+  it("dispatches close from the 닫기 button", async () => {
     mockFetch({ detail: () => ok({ avatar: detail }), skills: () => ok({ skills: [] }) });
     const onClose = vi.fn();
-    const groupAgent = { groupId: "g-1", groupName: "플랫폼팀" };
     render(AvatarCapabilitiesModal, {
-      props: { avatar: { ...avatar, groupAgent } },
+      props: { avatar },
       events: { close: onClose },
     });
 
-    expect(screen.getByText(/그룹 에이전트 · 플랫폼팀/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText("사용 가능한 스킬이 없습니다.")).toBeTruthy());
 
     await fireEvent.click(screen.getByRole("button", { name: "닫기" }));

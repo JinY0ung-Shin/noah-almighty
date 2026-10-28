@@ -366,9 +366,8 @@
   (one probe per folder for a single delete, one listing per folder for a bulk one). It never follows a
   link: a symlinked avatar or workspace folder is skipped, and a link or file named like a copy folder is
   unlinked, never recursed into. Best-effort, like `deleteConversationImages`. The rest of the workspace
-  (the agent's own work files) stays until its avatar's whole tree is removed (user or group-agent
-  deletion). Sweeping it with the conversation is a separate decision for the user. A group-agent delete
-  already removes that agent's whole tree.
+  (the agent's own work files) stays until its avatar's whole tree is removed (user deletion).
+  Sweeping it with the conversation is a separate decision for the user.
 
 ## Generated-file delivery + PPTX deck pipeline (`share_file`, hidden publishes)
 - **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (there is deliberately NO

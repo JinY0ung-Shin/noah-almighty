@@ -1,10 +1,5 @@
-import fs from "node:fs";
 import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
-import { GROUP_AGENT_FIELD_CAPS } from "../agent/groupAgentProfileTools.js";
-import { deleteConversationImages } from "../chatImages.js";
-import { deleteConversationFiles } from "../chatFiles.js";
-import logger from "../logger.js";
 import { inspectRepoContents } from "../plugins.js";
 import { scrubGitError } from "../marketplace.js";
 import { isInternalGitSource } from "../gitCredentials.js";
@@ -19,18 +14,11 @@ import { buildKnowledgeGraph, isVaultNotePath } from "../knowledgeGraph.js";
 import type { Response } from "express";
 import {
   apiError,
-  decodeAvatarImage,
-  deleteAvatarImageFile,
   looksLikeRepo,
   respondNoteFsError,
   safeString,
-  saveAvatarImageFile,
   type RouterDeps,
 } from "./_shared.js";
-import {
-  groupAgentAvatarId,
-  groupAgentWorkspaceParent,
-} from "../groupAgents.js";
 
 /**
  * ensureGroupClone → inspectRepoContents → res.json, shared by the group repo's
@@ -68,8 +56,6 @@ export function createGroupsRouter({ config, store, auditAs }: RouterDeps): Rout
 
   // The current user's groups, each with its member roster — members discover &
   // chat with teammates' avatars (now auto-trusted via group co-membership).
-  // `agents` carries the group's shared agents (several allowed), disabled
-  // included, so managers can re-enable them and members see their status.
   router.get("/api/me/groups", requireAuth(store), (req: AuthenticatedRequest, res) => {
     const groups = store.listUserGroups(req.user!.id).map((g) => {
       const repo = store.getGroupKnowledgeRepo(g.id);
@@ -79,191 +65,9 @@ export function createGroupsRouter({ config, store, auditAs }: RouterDeps): Rout
         knowledgeBranch: repo.branch,
         knowledgeSelected: repo.selected,
         members: store.listGroupMembers(g.id),
-        agents: store.listGroupAgents(g.id),
       };
     });
     res.json({ groups });
-  });
-
-  /** The agent, only when it belongs to THIS group (404-shape otherwise). */
-  const agentInGroup = (groupId: string, agentId: string) => {
-    const agent = store.getGroupAgentById(agentId);
-    return agent && agent.groupId === groupId ? agent : null;
-  };
-  /** Shared manage gate for the agent endpoints (group missing → 404 first). */
-  const requireAgentManager = (
-    req: AuthenticatedRequest,
-    res: Response,
-    groupId: string,
-  ): boolean => {
-    if (!store.getGroup(groupId)) {
-      apiError(res, 404, "그룹을 찾을 수 없습니다.");
-      return false;
-    }
-    if (!canManageGroup(req.user!.id, groupId)) {
-      apiError(res, 403, "그룹 관리자만 그룹 에이전트를 관리할 수 있습니다.");
-      return false;
-    }
-    return true;
-  };
-  const validCaptureScope = (
-    raw: unknown,
-    res: Response,
-  ): raw is "members" | "admins" | undefined => {
-    if (raw === undefined || raw === "members" || raw === "admins") return true;
-    apiError(res, 400, "captureScope는 'members' 또는 'admins'여야 합니다.");
-    return false;
-  };
-  const agentBodyFields = (body: any) => ({
-    alias: typeof body?.alias === "string" ? body.alias : undefined,
-    bio: typeof body?.bio === "string" ? body.bio : undefined,
-    intro: typeof body?.intro === "string" ? body.intro : undefined,
-    persona: typeof body?.persona === "string" ? body.persona : undefined,
-    hashtags: Array.isArray(body?.hashtags)
-      ? (body.hashtags as unknown[]).filter(
-          (t): t is string => typeof t === "string",
-        )
-      : undefined,
-    enabled: typeof body?.enabled === "boolean" ? body.enabled : undefined,
-  });
-  // Enforce the SAME length caps as the MCP self-config tool on the HTTP path
-  // (otherwise a multi-MB persona/bio rides into every member's prompt). Returns
-  // false + 400 on the first over-cap field. displayName is bounded at 64 too.
-  const checkAgentFieldCaps = (body: any, res: Response): boolean => {
-    const caps: Record<string, number> = { ...GROUP_AGENT_FIELD_CAPS, displayName: 64 };
-    for (const [field, cap] of Object.entries(caps)) {
-      const value = body?.[field];
-      if (typeof value === "string" && value.length > cap) {
-        apiError(res, 400, `${field}은(는) 최대 ${cap}자까지 입력할 수 있습니다.`);
-        return false;
-      }
-    }
-    return true;
-  };
-
-  // Create a NEW shared agent (group admin or system admin). A group may have
-  // several; each is addressed as `group:<groupId>:<agentId>`.
-  router.post("/api/me/groups/:id/agents", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const groupId = req.params.id;
-    if (!requireAgentManager(req, res, groupId)) return;
-    const displayName = safeString(req.body?.displayName);
-    if (!displayName) {
-      apiError(res, 400, "에이전트 이름(displayName)이 필요합니다.");
-      return;
-    }
-    if (!checkAgentFieldCaps(req.body, res)) return;
-    if (!validCaptureScope(req.body?.captureScope, res)) return;
-    const agent = store.createGroupAgent(groupId, {
-      displayName,
-      ...agentBodyFields(req.body),
-      captureScope: req.body?.captureScope,
-      createdBy: req.user!.id,
-    });
-    if (!agent) {
-      apiError(res, 404, "그룹을 찾을 수 없습니다.");
-      return;
-    }
-    auditAs(req, "group_agent_create", `group=${groupId} agent=${agent.id} (${displayName})`);
-    res.json({ agent });
-  });
-
-  // Update one agent (fields incl. enabled — disabling blocks the next turn
-  // but preserves every member's threads).
-  router.patch("/api/me/groups/:id/agents/:agentId", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const groupId = req.params.id;
-    if (!requireAgentManager(req, res, groupId)) return;
-    if (!agentInGroup(groupId, req.params.agentId)) {
-      apiError(res, 404, "그룹 에이전트를 찾을 수 없습니다.");
-      return;
-    }
-    const displayNameRaw = req.body?.displayName;
-    if (displayNameRaw !== undefined && !safeString(displayNameRaw)) {
-      apiError(res, 400, "에이전트 이름(displayName)은 비울 수 없습니다.");
-      return;
-    }
-    if (!checkAgentFieldCaps(req.body, res)) return;
-    if (!validCaptureScope(req.body?.captureScope, res)) return;
-    const agent = store.updateGroupAgent(req.params.agentId, {
-      displayName:
-        displayNameRaw !== undefined ? safeString(displayNameRaw) : undefined,
-      ...agentBodyFields(req.body),
-      captureScope: req.body?.captureScope,
-    });
-    auditAs(req, "group_agent_update", `group=${groupId} agent=${req.params.agentId}`);
-    res.json({ agent });
-  });
-
-  // Delete one agent: cascades ITS conversations for every member (the
-  // thread-preserving alternative is disabling). Chat image/file dirs and the
-  // workspace tree are swept from the pre-cascade snapshot.
-  router.delete("/api/me/groups/:id/agents/:agentId", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const groupId = req.params.id;
-    if (!requireAgentManager(req, res, groupId)) return;
-    const agent = agentInGroup(groupId, req.params.agentId);
-    if (!agent) {
-      apiError(res, 404, "그룹 에이전트를 찾을 수 없습니다.");
-      return;
-    }
-    const avatarId = groupAgentAvatarId(groupId, agent.id);
-    const conversationIds = store.listConversationIdsForAvatar(avatarId);
-    const imageExt = store.getGroupAgentImageExtByAvatarId(avatarId);
-    store.deleteGroupAgent(agent.id);
-    try {
-      deleteAvatarImageFile(config, avatarId, imageExt);
-      fs.rmSync(groupAgentWorkspaceParent(config, avatarId), {
-        recursive: true,
-        force: true,
-      });
-      for (const conversationId of conversationIds) {
-        deleteConversationImages(config, conversationId);
-        deleteConversationFiles(config, conversationId);
-      }
-    } catch (err) {
-      logger.warn({ err, groupId, agentId: agent.id }, "group-agent delete disk cleanup failed");
-    }
-    auditAs(req, "group_agent_delete", `group=${groupId} agent=${agent.id} (${agent.displayName})`);
-    res.json({ ok: true });
-  });
-
-  // Group agent profile image (group admin or system admin) — the users
-  // avatar-image pattern with the namespaced id; bytes on disk, ext on the row.
-  router.put("/api/me/groups/:id/agents/:agentId/image", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const groupId = req.params.id;
-    if (!requireAgentManager(req, res, groupId)) return;
-    const agent = agentInGroup(groupId, req.params.agentId);
-    if (!agent) {
-      apiError(res, 404, "그룹 에이전트를 찾을 수 없습니다.");
-      return;
-    }
-    const decoded = decodeAvatarImage(req.body?.image);
-    if ("error" in decoded) {
-      apiError(res, 400, decoded.error);
-      return;
-    }
-    const avatarId = groupAgentAvatarId(groupId, agent.id);
-    saveAvatarImageFile(config, avatarId, decoded.ext, decoded.buffer);
-    store.setGroupAgentImageExt(agent.id, decoded.ext);
-    auditAs(req, "group_agent_image", `group=${groupId} agent=${agent.id}`);
-    res.json({ ok: true, hasImage: true });
-  });
-
-  router.delete("/api/me/groups/:id/agents/:agentId/image", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const groupId = req.params.id;
-    if (!requireAgentManager(req, res, groupId)) return;
-    const agent = agentInGroup(groupId, req.params.agentId);
-    if (!agent) {
-      apiError(res, 404, "그룹 에이전트를 찾을 수 없습니다.");
-      return;
-    }
-    const avatarId = groupAgentAvatarId(groupId, agent.id);
-    deleteAvatarImageFile(
-      config,
-      avatarId,
-      store.getGroupAgentImageExtByAvatarId(avatarId),
-    );
-    store.setGroupAgentImageExt(agent.id, null);
-    auditAs(req, "group_agent_image", `group=${groupId} agent=${agent.id} image removed`);
-    res.json({ ok: true, hasImage: false });
   });
 
   // Group admin (or system admin) adds a member by username.
