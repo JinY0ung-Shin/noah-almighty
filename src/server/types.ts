@@ -196,6 +196,28 @@ export interface PiRuntimeFacts {
    * its shell (no sandbox env yet — design P4). Empty on non-owner runs.
    */
   shellSecretsUnavailable: string[];
+  /**
+   * The run's skill index (docs/architecture/pi-runtime.md "Skills"): skills
+   * copied into the sandbox (`via: "file"`, read their SKILL.md) or served by
+   * `mcp__skills__read` (`via: "mcp"`, a colleague reading the owner's skills).
+   * Admin-disabled skills are never in it.
+   */
+  skills?: PiSkillIndexEntry[];
+  /** Sandbox path of the open working repo's COPY (`/workspace/repos/<owner>/<name>`, design D1). */
+  activeRepoDir?: string;
+}
+
+/** One skill a pi run can use (see {@link PiRuntimeFacts.skills}). */
+export interface PiSkillIndexEntry {
+  /** `<root>` folder under `/workspace/.noah/skills` (also the mcp__skills__read prefix). */
+  root: string;
+  /** The skill's directory name. */
+  dir: string;
+  name: string;
+  description: string;
+  via: "file" | "mcp";
+  /** Sandbox path of its SKILL.md (`via: "file"`). */
+  skillMd?: string;
 }
 
 export interface PiRuntimeConfig {

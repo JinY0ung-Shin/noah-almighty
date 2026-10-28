@@ -6,6 +6,8 @@ import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
 import { sanitizeName } from "../marketplace.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
+import { deletePiUserWorkspace } from "../agent/pi/piWorkspace.js";
+import { piRepoCopyStateDir } from "../agent/pi/piRepoCopy.js";
 import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
@@ -226,6 +228,11 @@ export function createAdminRouter(deps: RouterDeps): Router {
           force: true,
         });
         fs.rmSync(path.dirname(knownHostsPath(req.params.id, config)), { recursive: true, force: true });
+        // pi runtime: the user's whole sandbox workspace (<PI_WORKSPACES_DIR>/u-<key>,
+        // their /workspace — conversation folders, skill and repo copies) and
+        // Noah's records of their repo copies.
+        deletePiUserWorkspace(config, req.params.id);
+        fs.rmSync(piRepoCopyStateDir(config, req.params.id), { recursive: true, force: true });
         const avatarsDir = avatarDir(config);
         if (fs.existsSync(avatarsDir)) {
           for (const f of fs.readdirSync(avatarsDir)) {

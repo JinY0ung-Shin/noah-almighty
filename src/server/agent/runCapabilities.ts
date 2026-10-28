@@ -28,9 +28,14 @@ import type { AgentEvents, FileOutputResult } from "./events.js";
 import {
   deckAuthoringStatusFor,
   deckGuidanceFlags,
+  piSandboxDeckToolchain,
   probeDeckRendering,
   probeDeckToolchain,
 } from "../deckRender.js";
+import { piSandboxPath, piToolPathToHost, type PiWorkspace } from "./pi/piWorkspace.js";
+import type { PiSkillPlan } from "./pi/piSkills.js";
+import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
+import { normalizeGitRepoName } from "../gitRepos.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { readWorkspaceImage } from "../chatImages.js";
 import {
@@ -120,7 +125,9 @@ export interface AgentToolAccess {
  * silently grant headless intro/hashtag-generation runs full owner repo-write
  * access — so the four viewer classes are pinned in tests.
  */
-export function deriveAgentToolAccess(request: AgentRequest): AgentToolAccess {
+export function deriveAgentToolAccess(
+  request: Partial<Omit<AgentRequest, "avatar">>,
+): AgentToolAccess {
   const viewerIsOwner = Boolean(request.viewerIsOwner);
   const headless = Boolean(request.headless);
   const allowHeadlessTools = Boolean(request.allowHeadlessTools);
@@ -252,6 +259,15 @@ export interface RunCapabilityOptions {
   runtime?: Extract<AgentRuntime, "claude" | "pi">;
   /** pi runs: the sandbox path of this conversation's work folder (`/workspace/c/<seg>`). */
   piConversationDir?: string;
+  /**
+   * pi runs: the viewer's sandbox workspace (host + sandbox views). Every
+   * path the model hands a Noah tool is a sandbox path and is mapped to the
+   * host here (show_file, share_file, copy_image); every path Noah hands back
+   * (browser captures, Confluence saves) is mapped to the sandbox.
+   */
+  piWorkspace?: PiWorkspace;
+  /** pi runs: the skills materialized into the sandbox / served by mcp__skills__read (`pi/piSkills.ts`). */
+  piSkills?: PiSkillPlan;
 }
 
 /**
@@ -315,8 +331,14 @@ export async function buildRunCapabilities(
     SKILL_EXCHANGE_SERVER_NAME,
     SKILL_EXCHANGE_TOOL_NAMES,
   } = await import("./skillExchangeTools.js");
-  const { buildGitRepoServer, GIT_REPO_SERVER_NAME, GIT_REPO_TOOL_NAMES } =
-    await import("./gitRepoTools.js");
+  const {
+    buildGitRepoServer,
+    GIT_REPO_SERVER_NAME,
+    GIT_REPO_TOOL_NAMES,
+    GIT_REPO_PI_COMMIT_TOOL_NAME,
+  } = await import("./gitRepoTools.js");
+  const { buildSkillsServer, SKILLS_SERVER_NAME, SKILLS_TOOL_NAMES } =
+    await import("./skillsTools.js");
   const { buildGroupRepoServer, GROUP_REPO_SERVER_NAME, GROUP_REPO_TOOL_NAMES } =
     await import("./groupRepoTools.js");
   const { buildBrowserServer, BROWSER_SERVER_NAME, BROWSER_TOOL_NAMES } =
@@ -620,8 +642,11 @@ export async function buildRunCapabilities(
   // preview/download path) and a viewer who may author one: deckAuthoring is
   // the admin skill policy (the hook's exact `pptx` / `<plugin>:pptx` rule),
   // then the same elevated-tools gate the PreToolUse hook applies to Bash.
-  const deckRenderingAvailable = probeDeckRendering();
-  const deckToolchain = probeDeckToolchain(config);
+  // A pi run builds decks INSIDE the user's sandbox: its toolchain is the
+  // sandbox image's (PI_DECK_SANDBOX), never the host probe, and the sandbox
+  // has no LibreOffice for the legacy render path.
+  const deckRenderingAvailable = piRun ? false : probeDeckRendering();
+  const deckToolchain = piRun ? piSandboxDeckToolchain(config) : probeDeckToolchain(config);
   const deckAuthoring = deckAuthoringStatusFor({
     elevatedToolAccess,
     disabledSkills: toolSkillPolicy.disabledSkills,
@@ -637,7 +662,14 @@ export async function buildRunCapabilities(
   const ownerSecrets = store.getUserSecrets(request.avatar.id);
   // The run's conversation scratch workspace (conversationScratchDir) — where
   // get_attachment's save_to_workspace writes, and the path describe_system names.
-  const scratchWorkspaceDir = conversationScratchDir(request);
+  // A pi run's scratch IS its sandbox conversation folder (host view here;
+  // every path handed back to the model is mapped to the sandbox view).
+  const piWorkspace = piRun ? runOptions.piWorkspace : undefined;
+  const scratchWorkspaceDir = piRun
+    ? (piWorkspace?.hostConversationDir ?? conversationScratchDir(request))
+    : conversationScratchDir(request);
+  const toSandboxPath = (hostPath: string): string =>
+    (piWorkspace && piSandboxPath(piWorkspace, hostPath)) ?? hostPath;
   // save_to_workspace can LAND this run: the Confluence family is registered,
   // the viewer passes the tools' own `elevated` gate, the run has a scratch
   // workspace, and URL + owner PAT pass the tools' own credential check. ONE
@@ -695,6 +727,12 @@ export async function buildRunCapabilities(
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),
         // Owner self-state (the names), like the prompt's secret list.
         shellSecretsUnavailable: ownerToolAccess ? ownerState.shellExposedSecretNames : [],
+        // The skill index (materialized files, or mcp__skills__read entries).
+        skills: (runOptions.piSkills?.entries ?? []).map((entry) => ({ ...entry })),
+        // The open working repo's SANDBOX copy (design D1) — where the model works.
+        ...(request.activeRepoName && gitRepoToolsEnabled
+          ? { activeRepoDir: piRepoCopySandboxPath(request.avatar.id, normalizeGitRepoName(request.activeRepoName)) }
+          : {}),
       }
     : undefined;
   const systemServer = buildSystemServer(store, {
@@ -825,7 +863,14 @@ export async function buildRunCapabilities(
     elevated: elevatedToolAccess,
     config,
     conversationId: request.conversationId,
+    // pi: the model works on a sandbox COPY (design D1); `commit` reads it back.
+    ...(piRun ? { runtime: "pi" as const, ...(piWorkspace ? { piWorkspace } : {}) } : {}),
   });
+  // mcp__skills__read: a pi run whose skill index lists skills that were NOT
+  // copied into this sandbox (a trusted colleague reading the owner's skills).
+  const piSkillSources = piRun ? runOptions.piSkills?.mcpSources : undefined;
+  const skillsReadActive = Boolean(piSkillSources && piSkillSources.size > 0);
+  const skillsServer = skillsReadActive ? buildSkillsServer({ sources: piSkillSources }) : null;
   // Group knowledge-repo tools (per group the OWNER belongs to). OWNER-ONLY like
   // the personal repo tools — a group admin edits their group repo through their
   // own avatar; each tool then checks the owner's role in the named group (member
@@ -896,6 +941,10 @@ export async function buildRunCapabilities(
         // in the bubble, so only the visible card needs one.
         execute: async (request) => {
           const result = await events!.onBrowser!(request);
+          // pi: the capture was saved in the sandbox folder; name its sandbox path.
+          if (result.behavior === "ok" && result.savedPath && piWorkspace) {
+            result.savedPath = toSandboxPath(result.savedPath);
+          }
           if (result.behavior === "ok" && result.sharedAttachments) {
             for (const attachment of result.sharedAttachments) {
               if (!attachment.hidden && attachment.anchor === undefined) {
@@ -933,10 +982,14 @@ export async function buildRunCapabilities(
         stageClipboardImage:
           request.appOrigin && stagingUserId
             ? async (workspacePath) => {
-                const roots = [request.cwd, ...(request.additionalDirs ?? [])].filter(
-                  (dir): dir is string => Boolean(dir),
-                );
-                const read = readWorkspaceImage(roots, workspacePath);
+                // pi: the model's path is a SANDBOX path, readable only in the
+                // viewer's own sandbox workspace.
+                const mapped = piWorkspace ? piToolPathToHost(piWorkspace, workspacePath) : null;
+                if (mapped && "error" in mapped) throw new Error(mapped.error);
+                const roots = piWorkspace?.hostRoot
+                  ? [piWorkspace.hostRoot]
+                  : [request.cwd, ...(request.additionalDirs ?? [])].filter((dir): dir is string => Boolean(dir));
+                const read = readWorkspaceImage(roots, mapped ? mapped.hostPath : workspacePath);
                 if ("error" in read) {
                   const messages = {
                     OUTSIDE_WORKSPACE:
@@ -983,11 +1036,27 @@ export async function buildRunCapabilities(
     }
     return result;
   };
+  // pi: the model names SANDBOX paths; the host sink reads the host file under
+  // the viewer's workspace (the route's roots on a pi turn), so map first and
+  // refuse a path Noah cannot reach with a redirect the model can act on.
+  const toHostRequest = <T extends { path: string }>(request: T): T | { error: string } => {
+    if (!piWorkspace) return request;
+    const mapped = piToolPathToHost(piWorkspace, request.path);
+    return "error" in mapped ? mapped : { ...request, path: mapped.hostPath };
+  };
   const fileOutputServer = fileOutputActive
     ? buildFileOutputServer({
-        showFile: async (request) => stampAttachmentAnchor(await events!.onFile!(request)),
+        showFile: async (request) => {
+          const mapped = toHostRequest(request);
+          if ("error" in mapped) return { behavior: "error" as const, message: mapped.error };
+          return stampAttachmentAnchor(await events!.onFile!(mapped));
+        },
         shareFile: events!.onShareFile
-          ? async (request) => stampAttachmentAnchor(await events!.onShareFile!(request))
+          ? async (request) => {
+              const mapped = toHostRequest(request);
+              if ("error" in mapped) return { behavior: "error" as const, message: mapped.error };
+              return stampAttachmentAnchor(await events!.onShareFile!(mapped));
+            }
           : async () => ({
               behavior: "error" as const,
               message: "File sharing is unavailable in this run.",
@@ -1037,6 +1106,8 @@ export async function buildRunCapabilities(
     // get_attachment's save_to_workspace target: the conversation scratch
     // workspace, never an open repo clone (undefined → the option refuses).
     workspaceDir: scratchWorkspaceDir,
+    // pi: the saved file's path as the model sees it (its sandbox path).
+    ...(piWorkspace ? { displayPath: toSandboxPath } : {}),
     // A save that lands after the conversation was deleted (its copy sweep
     // already ran) is undone: conversation ids are never reused, so "the row
     // still exists" is the whole liveness test.
@@ -1075,6 +1146,7 @@ export async function buildRunCapabilities(
       ? { [SSH_IDENTITY_SERVER_NAME]: sshIdentityServer }
       : {}),
     ...(gitRepoToolsEnabled ? { [GIT_REPO_SERVER_NAME]: gitRepoServer } : {}),
+    ...(skillsServer ? { [SKILLS_SERVER_NAME]: skillsServer } : {}),
     ...(groupRepoActive ? { [GROUP_REPO_SERVER_NAME]: groupRepoServer } : {}),
     ...(brainActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
     ...(groupBrainActive
@@ -1108,6 +1180,9 @@ export async function buildRunCapabilities(
       ...(skillExchangeActive ? SKILL_EXCHANGE_TOOL_NAMES : []),
       ...(sshToolsEnabled ? SSH_IDENTITY_TOOL_NAMES : []),
       ...(gitRepoToolsEnabled ? GIT_REPO_TOOL_NAMES : []),
+      // pi only: the sandbox copy's commit (registered by the pi git_repo build).
+      ...(gitRepoToolsEnabled && piRun ? [GIT_REPO_PI_COMMIT_TOOL_NAME] : []),
+      ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
       ...(groupRepoActive ? GROUP_REPO_TOOL_NAMES : []),
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
       ...(groupBrainActive ? GROUP_BRAIN_TOOL_NAMES : []),

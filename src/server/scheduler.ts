@@ -6,6 +6,7 @@ import logger from "./logger.js";
 import type { PluginRoot, RoutineJob } from "./types.js";
 import { workspaceDirFor } from "./workspace.js";
 import { resolveActiveWorkspaceRepo } from "./activeRepoResolve.js";
+import { piRunWorkspace, preparePiRunWorkspace, type PiRunClass } from "./agent/pi/piRuntime.js";
 import { getActiveRunForConversation } from "./agent/runRegistry.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../shared/mcpToolGroups.js";
 import {
@@ -124,11 +125,26 @@ async function runRoutineJobNow(
     // here. Resolve it the SAME way the chat route does (shared resolver).
     // Resolved FIRST, before any plugin or knowledge loading, so a job waiting
     // on a locked repo costs one lock lookup per tick rather than a git fetch.
+    // pi runtime: the routine runs in the owner's sandbox, so its server-written
+    // copies (Confluence saves) and its working-repo copy live there (same
+    // decision runAgentStream makes, from the same fields).
+    const piRunClass: PiRunClass = {
+      avatar: { id: avatar.id },
+      conversationId: job.conversationId,
+      viewerUserId: avatar.id,
+      viewerIsOwner: true,
+      elevated: true,
+      headless: true,
+      allowHeadlessTools: true,
+      autoApprove: true,
+    };
+    const piWorkspace = piRunWorkspace(config, piRunClass);
     const repoResolution = await resolveActiveWorkspaceRepo({
       store,
       config,
       avatar: { id: avatar.id, displayName: avatar.displayName, alias: avatar.alias },
       conversationId: job.conversationId,
+      ...(piWorkspace ? { piWorkspace } : {}),
       elevated: true,
       // Routines have no composer, so every tool group is on — capped by the
       // admin per-group tool policy for the owner (claudeAgent clamps the run
@@ -174,7 +190,9 @@ async function runRoutineJobNow(
     // per-conversation toggle UI, so every group is included (no disabled set).
     const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config);
 
-    const workspaceDir = workspaceDirFor(config, avatar.id, job.conversationId);
+    const legacyWorkspaceDir = workspaceDirFor(config, avatar.id, job.conversationId);
+    const piPrepared = piWorkspace ? preparePiRunWorkspace(config, piRunClass, legacyWorkspaceDir) : null;
+    const workspaceDir = piPrepared?.hostConversationDir ?? legacyWorkspaceDir;
     fs.mkdirSync(workspaceDir, { recursive: true });
 
     const response = await runAgentStream(
@@ -186,8 +204,8 @@ async function runRoutineJobNow(
         conversationId: job.conversationId,
         // Working repository: the opened repo's clone becomes the cwd; the scratch
         // dir stays exposed as an additional writable dir (mirrors the chat route).
-        cwd: activeRepoCwd ?? workspaceDir,
-        additionalDirs: activeRepoCwd ? [workspaceDir] : undefined,
+        cwd: piPrepared ? workspaceDir : (activeRepoCwd ?? workspaceDir),
+        additionalDirs: activeRepoCwd && !piPrepared ? [workspaceDir] : undefined,
         activeRepoName: activeRepoName ?? undefined,
         viewerUserId: avatar.id,
         viewerName: avatar.displayName,

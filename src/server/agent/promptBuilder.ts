@@ -664,6 +664,15 @@ function activeRepoSection(request: AgentRequest): string | null {
   if (!name) {
     return null;
   }
+  const piCopy = request.piRuntime?.activeRepoDir;
+  if (piCopy) {
+    // pi (design D1): a sandbox COPY; Noah commits from its working tree.
+    return (
+      `**Working repository**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it. ` +
+      `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
+      "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no network and no git credentials, so never fetch, pull or push from it."
+    );
+  }
   return (
     `**Working repository**: your current working directory IS the local clone of the registered git repository '${name}' (you opened it with \`open_repo\`). ` +
     "Work on its files directly with the native tools — `Read`/`Edit`/`Write`, run tests and `rg`/search, and use local git via Bash for inspection and commit workflow (`git status`/`diff`/`log`/`show`/`rev-parse`/`ls-files`/`grep`/`blame`, plus `git add` and `git commit`). " +
@@ -795,6 +804,32 @@ function piRuntimeSection(request: AgentRequest): string | null {
 }
 
 /**
+ * The pi skill index (docs/architecture/pi-runtime.md "Skills"): pi does not
+ * load Claude Code plugins, so Noah copies the run's skills into the sandbox
+ * (or, for a colleague, serves the owner's through mcp__skills__read) and the
+ * model reads a skill's SKILL.md before following it. Frozen with the rest of
+ * the pi instructions — a skill learned later loads from the next conversation.
+ */
+function piSkillsSection(request: AgentRequest): string | null {
+  const skills = request.piRuntime?.skills;
+  if (!skills?.length) return null;
+  const files = skills.filter((skill) => skill.via === "file" && skill.skillMd);
+  const served = skills.filter((skill) => skill.via === "mcp");
+  const line = (skill: (typeof skills)[number], where: string) =>
+    `- ${skill.name}${skill.description ? ` — ${skill.description}` : ""} (${where})`;
+  return [
+    "**Skills**: before a task one of these covers, READ its SKILL.md first and follow it (paths in it are already sandbox paths; a skill's own files are next to its SKILL.md). Do not edit files under /workspace/.noah/skills — Noah keeps them in sync and overwrites changes.",
+    ...files.map((skill) => line(skill, `\`${skill.skillMd}\``)),
+    ...(served.length
+      ? [
+          "The avatar owner's own skills below are not in your sandbox: read them with `mcp__skills__read` (`skill` = the id given, then the files its SKILL.md names).",
+          ...served.map((skill) => line(skill, `mcp__skills__read skill \`${skill.root}/${skill.dir}\``)),
+        ]
+      : []),
+  ].join("\n");
+}
+
+/**
  * Turn PROVENANCE of an external-task-API turn (META-COGNITION): this run IS
  * the owner's (full capability, owner tools), but nobody typed the message. It
  * is NOT headless — questions still park — so the routine branch's "never ask"
@@ -849,6 +884,10 @@ export function buildSystemPromptAppend(
   const piBlock = piRuntimeSection(request);
   if (piBlock) {
     lines.push(piBlock);
+  }
+  const piSkillsBlock = piSkillsSection(request);
+  if (piSkillsBlock) {
+    lines.push(piSkillsBlock);
   }
   lines.push(DIRECT_MESSAGE_STATE);
   lines.push(

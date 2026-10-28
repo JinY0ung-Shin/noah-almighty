@@ -47,6 +47,7 @@ import { resultErrorMessage } from "../sdkMessageHandlers.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog } from "./mcpCatalog.js";
 import { PI_RUN_TOKEN_HEADER, piRuntimeSupports, piServicesFor } from "./piRuntime.js";
 import { ensurePiConversationDir, piWorkspaceFor, stagePiAttachmentFiles } from "./piWorkspace.js";
+import { materializePiSkills } from "./piSkills.js";
 import { PiTurnFailedError, runPiTurn, type PiRunResult } from "./eventAdapter.js";
 import {
   PiGatewayError,
@@ -128,6 +129,19 @@ export async function runPiAgent(
   const signal = abortController?.signal;
   const workspace = piWorkspaceFor(config, principal, conversationId);
   ensurePiConversationDir(workspace);
+  // Skills as sandbox files (owner runs: every root; a colleague: the bundled
+  // ones, plus the owner's through mcp__skills__read). Re-synced each turn by
+  // a stat fingerprint; the index rides the frozen instructions.
+  const piSkills = materializePiSkills({
+    config,
+    workspace,
+    pluginRoots,
+    ownerRun: principal === request.avatar.id,
+    disabledSkills: store.getToolSkillPolicy().disabledSkills,
+  });
+  if (piSkills.failures.length) {
+    agentLogger.warn({ conversationId, failures: piSkills.failures }, "pi runtime: some skill roots could not be copied into the sandbox");
+  }
 
   // Answer text of the CURRENT segment since the last fold — the attachment
   // anchor (see runCapabilities' currentTextAnchor). Reset on a fold and at a
@@ -141,7 +155,7 @@ export async function runPiAgent(
     events,
     abortController,
     () => anchorText.length,
-    { runtime: "pi", piConversationDir: workspace.conversationDir },
+    { runtime: "pi", piConversationDir: workspace.conversationDir, piWorkspace: workspace, piSkills },
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
   const effort = piEffortFor(capabilities.userEffort);

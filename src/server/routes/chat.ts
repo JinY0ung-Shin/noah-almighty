@@ -123,6 +123,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
+import { piRunWorkspace, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
@@ -946,6 +947,20 @@ export async function executeChatTurn(
     ownerUserId === avatar.id &&
     !ctx.externalTaskId &&
     ctx.unattendedDeadlineMs === undefined;
+  // pi runtime: whether THIS turn runs in the viewer's pi sandbox (the same
+  // decision runAgentStream makes, from the same fields). Every server-written
+  // copy — staged attachments, browser captures, Confluence saves — then lands
+  // in the sandbox conversation folder, and the file-output tools resolve the
+  // model's `/workspace/...` paths against the user's sandbox workspace.
+  const piRunClass: PiRunClass = {
+    avatar: { id: avatar.id },
+    conversationId,
+    viewerUserId: ownerUserId,
+    viewerIsOwner,
+    elevated: elevatedViewer,
+    autoApprove: true,
+  };
+  const piWorkspace = piRunWorkspace(config, piRunClass);
   let activeRepoCwd: string | null = null;
   let activeRepoName: string | null = null;
   let releaseActiveRepoLock: (() => void) | null = null;
@@ -960,6 +975,7 @@ export async function executeChatTurn(
     conversationId,
     elevated: elevatedViewer,
     gitRepoToolsEnabled,
+    ...(piWorkspace ? { piWorkspace } : {}),
   });
   if (repoResolution.kind === "error") {
     return {
@@ -1046,13 +1062,23 @@ export async function executeChatTurn(
     // Per-conversation workspace: each chat session gets an isolated cwd, scoped
     // under the avatar so sessions cannot mix files by accident. Created here
     // (before the message persist) because the image staging writes into it.
-    const workspaceDir = workspaceDirFor(config, avatar.id, conversationId);
+    // On pi the conversation's workspace IS its sandbox folder
+    // (`/workspace/c/<conv>`); its first pi turn moves the SDK-era scratch
+    // files in (design D3).
+    const legacyWorkspaceDir = workspaceDirFor(config, avatar.id, conversationId);
+    const piPrepared = piWorkspace ? preparePiRunWorkspace(config, piRunClass, legacyWorkspaceDir) : null;
+    const workspaceDir = piPrepared?.hostConversationDir ?? legacyWorkspaceDir;
     fs.mkdirSync(workspaceDir, { recursive: true });
     // The run's explicit output roots — the active repo clone first (the run
     // cwd) when one is open, then the conversation scratch workspace. show_file,
     // share_file and share_file's deck-preview sidecar lookup all resolve
-    // against exactly this list, so they cannot disagree on containment.
-    const outputRoots = [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])];
+    // against exactly this list, so they cannot disagree on containment. A pi
+    // run's root is the user's whole sandbox workspace: the model hands
+    // `/workspace/...` paths, which runCapabilities maps to host paths there
+    // (its working-repo copy lives in it too), and Noah's own clone is never a root.
+    const outputRoots = piPrepared?.hostRoot
+      ? [piPrepared.hostRoot]
+      : [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])];
     store.touchConversation(
       ownerUserId,
       conversationId,
@@ -1471,8 +1497,10 @@ export async function executeChatTurn(
           conversationId,
           // Working repository: the opened repo's clone becomes the cwd and the
           // per-conversation scratch dir is exposed as an additional writable dir.
-          cwd: activeRepoCwd ?? workspaceDir,
-          additionalDirs: activeRepoCwd ? [workspaceDir] : undefined,
+          // (pi: the sandbox conversation folder — the model works on its
+          // sandbox COPY of an open repo, never on Noah's clone.)
+          cwd: piPrepared ? workspaceDir : (activeRepoCwd ?? workspaceDir),
+          additionalDirs: activeRepoCwd && !piPrepared ? [workspaceDir] : undefined,
           // Noah's own public origin, so copy_image can hand the agent an
           // absolute clipboard-staging URL to open with new_tab. Derived
           // from THIS request to match the origin the user's browser is on.

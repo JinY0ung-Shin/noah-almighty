@@ -28,7 +28,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentOwner, AppConfig } from "../../types.js";
 import type { Store } from "../../store.js";
-import { probeDeckToolchain } from "../../deckRender.js";
+import { piSandboxDeckToolchain } from "../../deckRender.js";
 import { buildFileOutputServer, FILE_OUTPUT_SERVER_NAME } from "../fileOutputTools.js";
 
 /**
@@ -54,6 +54,7 @@ export const PI_MCP_SERVER_NAMES = [
   "browser",
   "file_output",
   "ssh_trust",
+  "skills",
 ] as const;
 
 export type PiMcpServerName = (typeof PI_MCP_SERVER_NAMES)[number];
@@ -84,6 +85,7 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     { buildCanvasServer },
     { buildBrowserServer },
     { buildSshTrustServer },
+    { buildSkillsServer },
   ] = await Promise.all([
     import("../knowledgeTools.js"),
     import("../repoTools.js"),
@@ -101,6 +103,7 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     import("../canvasTools.js"),
     import("../browserTools.js"),
     import("../sshTrustTools.js"),
+    import("../skillsTools.js"),
   ]);
   const base = { avatarUserId: "", owner: INERT_OWNER, viewerIsOwner: false, config };
   return {
@@ -117,7 +120,8 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     }),
     skill_exchange: buildSkillExchangeServer(store, base),
     ssh_identity: buildSshIdentityServer(store, base),
-    git_repo: buildGitRepoServer(store, { ...base, elevated: false }),
+    // The pi wording (sandbox copy + `commit`): this catalog only ever serves pi runs.
+    git_repo: buildGitRepoServer(store, { ...base, elevated: false, runtime: "pi" }),
     group_repo: buildGroupRepoServer(store, base),
     brain: buildBrainServer(store, base),
     group_brain: buildGroupBrainServer(store, base),
@@ -132,11 +136,13 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     [FILE_OUTPUT_SERVER_NAME]: buildFileOutputServer({
       showFile: refuse,
       shareFile: refuse,
-      deckConverterInstalled: probeDeckToolchain(config).converter,
+      // pi decks build in the sandbox: the operator's flag, not the host probe.
+      deckConverterInstalled: piSandboxDeckToolchain(config).converter,
       shareLinkEnabled: true,
       createShareLink: refuse,
     }),
     ssh_trust: buildSshTrustServer({ avatarUserId: "", config }),
+    skills: buildSkillsServer({}),
   } as Record<PiMcpServerName, { instance: McpServer }>;
 }
 

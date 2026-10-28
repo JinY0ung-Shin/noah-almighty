@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig } from "./types.js";
+import { deletePiConversationCopies } from "./agent/pi/piWorkspace.js";
 
 function safeSegment(value: string, fallback: string): string {
   const raw = value.trim() || fallback;
@@ -66,12 +67,18 @@ function removeWithoutFollowing(target: string): void {
  * avatar or workspace folder is skipped, and a symlink (or file) carrying one of
  * the copy folders' names is unlinked, never recursed into. Best-effort like
  * `deleteConversationImages`; it never throws.
+ *
+ * pi runs (`AGENT_RUNTIME=pi`) stage the same copies in the user's SANDBOX
+ * conversation folder (`<PI_WORKSPACES_DIR>/u-<key>/c/<conv>`), so the sweep
+ * covers those too — every conversation-deleting path that calls this stays
+ * complete on both runtimes.
  */
 export function deleteConversationWorkspaceCopies(
   config: AppConfig,
   conversationIds: readonly string[],
 ): void {
   if (conversationIds.length === 0) return;
+  deletePiConversationCopies(config.pi?.workspacesDir, conversationIds, SERVER_WORKSPACE_COPY_DIRS);
   const root = path.join(config.dataDir, "workspaces");
   let avatarDirs: fs.Dirent[];
   try {

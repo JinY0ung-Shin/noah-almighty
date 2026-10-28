@@ -49,6 +49,7 @@ export const NOAH_MCP_SERVER_NAMES = [
   "browser",
   "file_output",
   "ssh_trust",
+  "skills",
 ];
 
 const BROKER_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/;

@@ -732,6 +732,59 @@ export function __setDeckToolchainForTests(state: DeckToolchainState | null): vo
   toolchainMemo = state ? { state, attemptedAt: Number.NEGATIVE_INFINITY } : null;
 }
 
+/**
+ * The converter's caps as the deck-capable pi sandbox image (docker/pi-sandbox)
+ * reports them — the same converter as the main image, with ONE build slot per
+ * sandbox (`NOAH_PPTX_MAX_CONCURRENT=1`, see its README "Concurrency").
+ */
+export const PI_SANDBOX_DECK_LIMITS: DeckConverterLimits = Object.freeze({
+  maxSlides: 60,
+  maxSeconds: 540,
+  maxSlideHtmlBytes: 2_097_152,
+  maxDomElements: 2_500,
+  maxAssetBytes: 20_971_520,
+  maxDeckInputBytes: 104_857_600,
+  maxConcurrent: 1,
+  slotWaitSeconds: 150,
+});
+
+/**
+ * The deck toolchain of a pi run. Decks build INSIDE the user's pi sandbox, so
+ * the host probe says nothing about them: availability is the operator's
+ * `PI_DECK_SANDBOX` flag, which states that `SANDBOX_IMAGE` is the
+ * deck-capable image (whose build ran the converter self-test, and which also
+ * carries python-pptx). LibreOffice is not in that image; `libreOffice` keeps
+ * the HOST's value because share_file's approximate previews of edited decks
+ * still render Noah-side. Both metacognition surfaces read this state on pi.
+ */
+export function piSandboxDeckToolchain(
+  config: Pick<AppConfig, "defaultPluginsDir" | "pi">,
+): DeckToolchainState {
+  const enabled = Boolean(config.pi?.deckSandbox);
+  return freezeState({
+    pythonPptx: enabled,
+    pythonPptxCommand: enabled ? "python3" : undefined,
+    libreOffice: probeDocumentPreviews(),
+    converter: enabled,
+    ...(enabled
+      ? {
+          profiles: ["embedded", "malgun"] as DeckFontProfile[],
+          limits: { ...PI_SANDBOX_DECK_LIMITS },
+          selftest: "pass" as const,
+          converterMissing: [],
+        }
+      : {
+          profiles: [],
+          selftest: "not-recorded" as const,
+          converterMissing: [
+            "the pi sandbox image is not marked deck-capable (PI_DECK_SANDBOX is off): an administrator must set pi-gateway's SANDBOX_IMAGE to the docker/pi-sandbox image and PI_DECK_SANDBOX=true",
+          ],
+        }),
+    pptxSkillNames: pptxSkillNamesFor(config.defaultPluginsDir),
+    definitive: true,
+  });
+}
+
 /** Whether THIS run may author a deck: the `pptx` skill's policy, then Bash/Write access. */
 export type DeckAuthoringStatus = "allowed" | "read-only" | "skill-disabled";
 

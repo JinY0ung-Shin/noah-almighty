@@ -50,6 +50,12 @@ export interface ConfluenceToolsContext {
    */
   workspaceDir?: string;
   /**
+   * How a saved file's path is NAMED to the model (`savedPath`). pi runs write
+   * into the sandbox conversation folder through its host path and hand the
+   * model the sandbox path (`/workspace/...`); unset → the host path as is.
+   */
+  displayPath?: (hostPath: string) => string;
+  /**
    * Whether the conversation this run saves for still exists. Checked AFTER a
    * save lands: deleting a conversation sweeps its `confluence/` copies
    * (`deleteConversationWorkspaceCopies`) but cannot stop a download already in
@@ -1031,7 +1037,7 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
             await fs.promises.unlink(saved.savedPath).catch(() => {});
             payload.saveError =
               "The conversation was deleted while the attachment was being saved, so the saved copy was removed.";
-          } else if (saved.ok) payload.savedPath = saved.savedPath;
+          } else if (saved.ok) payload.savedPath = ctx.displayPath ? ctx.displayPath(saved.savedPath) : saved.savedPath;
           else payload.saveError = saved.message;
         }
         const savedNote = payload.savedPath

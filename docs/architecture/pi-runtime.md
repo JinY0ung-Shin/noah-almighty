@@ -41,8 +41,9 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
    adds `piRuntimeSection` (sandbox, work folder, built-in tools, `mcp_call`/`mcp_search`, what is missing, "these
    instructions were fixed at conversation start — check describe_system").
 4. **Input** — preamble + `buildUserPrompt` (history only on a fresh session, cap `PI_FIRST_TURN_HISTORY_LIMITS`
-   120 msgs / 60k chars instead of 24 / 12k) + image blocks as `input_image` data URLs. Attachment files are copied
-   into `/workspace/c/<seg>/attachments/` and listed by sandbox path (`stagePiAttachmentFiles`, minimal — see I2).
+   120 msgs / 60k chars instead of 24 / 12k) + image blocks as `input_image` data URLs. Attachment files are staged
+   by the route straight into `/workspace/c/<seg>/attachments/` and listed by sandbox path (`stagePiAttachmentFiles`
+   maps host → sandbox; it copies only a file staged elsewhere). Skills are synced first (see "Skills").
 5. **Session** — `previous_response_id` = `resumeSessionAt ?? resumeSessionId` when it is a `resp_…` id; anything
    else (an SDK session id from before the switch) means a new session from the text history. An image turn
    (the route resets resume for the SDK) continues the stored session unless it is a rewind. Every committed turn
@@ -65,6 +66,81 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 | no per-session cwd (P1) | the model is told to work in `/workspace/c/<seg>/` with absolute paths (prompt + describe_system + refusal redirects); Noah creates the folder 0700 | both |
 | no WebSearch, no hex-ssh / plugin / 공용 MCP on pi | not registered; stated | both |
 | date fixed at session creation | KST date/time line prepended to every input | turn input |
+
+## Files: the sandbox conversation folder (`agent/pi/piWorkspace.ts`)
+
+The chat route and the scheduler decide BEFORE building the request whether the turn runs on pi
+(`piRunWorkspace` — the same `piRuntimeSupports` decision `runAgentStream` makes) and then use
+`preparePiRunWorkspace`: the turn's workspace dir IS the host view of `/workspace/c/<conv-seg>/`
+(`<PI_WORKSPACES_DIR>/u-<sha256(viewer)[:24]>/c/<seg>`, 0700). So every server-written copy lands there with no
+second copy: staged attachments (`attachments/`), browser captures (`captures/`), Confluence `save_to_workspace`
+(`confluence/`). The request's `cwd` is that folder (never Noah's repo clone), and the file-output roots are the
+user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`, e.g. a working-repo copy).
+
+| Direction | Where | Rule |
+|---|---|---|
+| model → Noah (`show_file`, `share_file`, `copy_image`) | `runCapabilities` wrappers → `piToolPathToHost` | absolute under `/workspace`, or relative = relative to `/workspace` (pi's shell start); anything else (`/tmp/…`, a planted link out of the root) is refused with an English redirect BEFORE the sink; the publishers' own realpath containment runs on top |
+| Noah → model (capture `savedPath`, Confluence `savedPath`) | `toSandboxPath` (`piSandboxPath`) | host path under the user's root → `/workspace/…` |
+| deck previews | `share_file` → `loadConverterPreviews(allowedRoots = [user root])` | the hash-bound `<stem>.preview/` sidecar is read through the host path, like today |
+
+- **D3 (first pi turn of an old conversation):** `moveLegacyConversationWorkspace` moves `dataDir/workspaces/<avatar>/<conv>`
+  into the sandbox folder — links/specials never followed (left behind), an existing sandbox file never overwritten,
+  capped (256 MB / 10 000 entries / depth 16; past the cap the rest stays and the next turn continues), moved files
+  removed from the old folder, and a `.noah-moved-to-pi` marker there makes later turns skip it.
+- **Cascades:** `deleteConversationWorkspaceCopies` also sweeps `attachments/`, `captures/`, `confluence/` of the
+  conversation's folder under EVERY `u-*` (`deletePiConversationCopies`), so every conversation-deleting path stays
+  complete on both runtimes; like the SDK scratch, the agent's own files in the folder stay. Rewind's dropped-attachment
+  cleanup works unchanged (its workspace dir is the sandbox folder). Account deletion removes the user's whole
+  `u-<key>` workspace and Noah's repo-copy records (`routes/admin.ts`).
+
+## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)
+
+pi does not load Claude Code plugin roots. Each pi turn `materializePiSkills` syncs the run's `pluginRoots` into
+`/workspace/.noah/skills/<root>/<skill>/` (`<root>` = `default`, `knowledge`, `group-<plugin name>`, `plugin-<plugin name>`) and
+returns the index the prompt (`piSkillsSection`, frozen with the instructions — a skill added later loads from the
+next conversation) and describe_system (`piRunLines`, live) both state (`PiRuntimeFacts.skills`).
+
+- **Owner runs** (chat, routine, task API) copy every root. A **trusted colleague** runs in their OWN sandbox: only
+  the bundled default-skills are copied there; the owner's personal/plugin/group skills are listed `via: "mcp"` and
+  read through `mcp__skills__read` (`skills` server — registered only on such runs; files never land in the
+  colleague's sandbox; links and paths out of the skill are refused).
+- **Admin skill policy** by omission: a disabled skill (bare name or `<plugin>:<name>`) is not copied, listed or readable.
+- **Rewrites** in copied `.md` files: `${CLAUDE_SKILL_DIR}` → the skill's sandbox path; `timeout: 600000` (Claude
+  Code ms) → `timeout: 600` (pi seconds, max 86 400). Served skills read `${CLAUDE_SKILL_DIR}` as `skill:<root>/<dir>`.
+- **Re-sync** is a stat-only fingerprint (path, size, mtime) of the source root AND of what was written, kept in
+  `.noah/skills/.noah-sync.json`; a root is rewritten only when either side changed (so an edit in the sandbox copy
+  heals). Noah owns `.noah/skills` wholesale (stale roots removed), never anything outside it. `__pycache__`,
+  `.build`, `.git`, `node_modules` and links are skipped; caps 5 000 files / 128 MB per root, 32 MB per file.
+
+## Working repositories (design D1, `agent/pi/piRepoCopy.ts`)
+
+The canonical clone (`dataDir/git-repos/<owner>/<name>`) stays Noah-side and is the ONLY `.git` Noah runs git in
+(`serverGitEnv`). A pi run works on a COPY in the viewer's sandbox, `/workspace/repos/<owner-seg>/<name>/` —
+tracked + untracked-not-ignored files and `.git`, plain files, links never copied (caps 50 000 files / 512 MB).
+
+| Tool (pi wording in the static catalog) | Behavior |
+|---|---|
+| `open_repo` | ensures the clone + identity, makes/keeps the copy (`keep`: an existing copy made from the current HEAD stays, edits and all; a stale one moves to `<name>.prev`), returns the sandbox path — usable THIS turn |
+| `commit` (pi only, `GIT_REPO_PI_COMMIT_TOOL_NAME`) | reads the copy's WORKING TREE back (lstat walk, `.git` skipped at every level, links/specials skipped and reported, ignore rules from the CANONICAL clone via `git check-ignore`, tracked files under ignored folders still compared; caps 100 000 entries / 20 000 changed files / 256 MB / 64 MB per file), writes changed files into the clone (never through a tracked link or onto a folder), deletes files gone from the copy, `git add -A` + `git commit` there, then replaces the copy's `.git` with a fresh copy of the clone's (sandbox `git status` is clean again) |
+| `sync_repo` | refused while the copy has uncommitted changes; else syncs the clone and refreshes the copy |
+| `push` | pushes the clone (= what `commit` saved; sandbox-local git commits are never read) and notes uncommitted copy changes |
+| `remove_repo` / `close_repo` | remove the viewer's copy + record / keep the copy |
+
+Each copy's BASE commit is recorded Noah-side (`dataDir/pi-repo-copies/<user-key>/<owner-seg>--<name>.json`, never
+in the sandbox). `commit` over a moved base (another conversation or a colleague committed, a sync pulled) is
+refused with a redirect to re-open (last writer wins, never silently over a newer base). Turn start
+(`resolveActiveWorkspaceRepo` with `piWorkspace`) only creates a MISSING copy and takes no per-clone run lock (Noah's
+git ops are serialized per operation by `withRepoLock`, so two pi conversations can work on their copies at once).
+A trusted colleague gets their own copy in their sandbox. Both surfaces: the prompt's working-repo section and
+describe_system's working-repo line name the copy path and the commit → push flow (`PiRuntimeFacts.activeRepoDir`).
+
+## Decks
+
+On pi the deck toolchain is `piSandboxDeckToolchain(config)` (`deckRender.ts`), never the host probe:
+`PI_DECK_SANDBOX=true` = converter INSTALLED with the sandbox image's facts (profiles embedded + malgun, one build
+slot per sandbox, python-pptx present); off = `converter: NOT INSTALLED` with the operator fix named. The legacy
+render path is off (no LibreOffice in the sandbox); `libreOffice` keeps the host value because share_file's approximate
+previews still render Noah-side. Both metacognition surfaces and the static catalog's share_file wording read it.
 
 ## The `/mcp` endpoint (`mcpHttp/endpoint.ts`)
 
@@ -102,12 +178,7 @@ the first pi turn of an old conversation rebuilds context from the text history 
 
 ## Seams left for later lanes
 
-- **I2 (workspace/files/skills/repos):** `agent/pi/piWorkspace.ts` is the one host↔sandbox mapping
-  (`piWorkspaceFor`, `piHostPath` with realpath containment, `piSandboxPath`, `ensurePiConversationDir`).
-  Still SDK-shaped on pi: `show_file`/`share_file`/`copy_image` resolve against the host scratch dir (`request.cwd`),
-  browser captures and Confluence `save_to_workspace` write there, `stagePiAttachmentFiles` copies after the route
-  staged, deck availability comes from the host probe (should be `PI_DECK_SANDBOX`), no skills are materialized,
-  `open_repo` changes nothing on pi, and conversation-delete/rewind cascades do not touch the sandbox folder.
+- **I2 (workspace/files/skills/repos):** done — see "Files", "Skills", "Working repositories", "Decks" above.
 - **I3 (proxies/async/presentation):** hex-ssh, plugin `.mcp.json` and 공용 MCP servers are absent on pi
   (`sshActive=false`, `sharedMcpPlan=null` under `runtime: "pi"`); re-export them on the run endpoint (register
   stable names, add them to `PI_MCP_SERVER_NAMES` + the script) and lift those two lines. No `transformResult`
@@ -115,6 +186,8 @@ the first pi turn of an old conversation rebuilds context from the text history 
 
 ## Verify
 
+- `tests/pi-workspace.test.ts` — path mapping, D3 move, cascades, skill sync + `mcp__skills__read`, the repo-copy
+  round trip against a local bare remote (incl. a colleague's copy and a moved-base refusal), deck state, catalog.
 - `tests/pi-runner.test.ts` — runner against a scripted fake client (frozen prompt, continuation, model switch,
   rewind, 404 heal, question, steers, fallback, the endpoint as the broker sees it), `piRuntimeSupports`, config,
   the `/mcp` mount, the script's server list.
