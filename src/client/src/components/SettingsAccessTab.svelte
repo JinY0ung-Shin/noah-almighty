@@ -317,7 +317,9 @@
 
   async function loadSharedMcpServers(): Promise<void> {
     try {
-      sharedMcpServers = (await api<{ servers: SharedMcpServerUserView[] }>("/api/me/shared-mcp-servers")).servers;
+      // A reply without the list (an older server, a stubbed fetch) reads as
+      // "no servers" — never `undefined`, which the slotted filter would throw on.
+      sharedMcpServers = (await api<{ servers?: SharedMcpServerUserView[] }>("/api/me/shared-mcp-servers")).servers ?? [];
     } catch {
       // Informational only: the card works without the list.
       sharedMcpServers = [];
@@ -336,11 +338,11 @@
     sharedMcpBusy = { ...sharedMcpBusy, [key]: true };
     try {
       const path = `/api/me/shared-mcp-servers/${encodeURIComponent(server.name)}/slots/${encodeURIComponent(slotId)}`;
-      const result = await api<{ servers: SharedMcpServerUserView[] }>(
+      const result = await api<{ servers?: SharedMcpServerUserView[] }>(
         path,
         secretName ? { method: "PUT", body: JSON.stringify({ secretName }) } : { method: "DELETE" },
       );
-      sharedMcpServers = result.servers;
+      sharedMcpServers = result.servers ?? sharedMcpServers;
       notify(
         secretName
           ? `${secretName} 시크릿을 ${server.label}에 연결했습니다. 다음 메시지부터 ${server.origin}로 전송됩니다.`
