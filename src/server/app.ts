@@ -23,6 +23,8 @@ import { createAdminRouter } from "./routes/admin.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
+import { createMcpHttpRouter } from "./mcpHttp/endpoint.js";
+import { piServicesFor } from "./agent/pi/piRuntime.js";
 
 export type { AppServices };
 export { expandChatSlashCommand };
@@ -139,6 +141,13 @@ export function createApp(services = createServices()) {
     });
     next();
   });
+
+  // Noah's HTTP MCP endpoint for pi-gateway's broker (docs/architecture/pi-runtime.md).
+  // Its ONLY auth is the per-run bearer token, and only under /mcp/: no session
+  // cookie is read there (a cookie alone gets the same 401 as no token), and no
+  // other router sees these paths. Mounted on every runtime — without a pi run
+  // no token exists, so every request is a 401.
+  app.use(createMcpHttpRouter({ registry: piServicesFor(store, config).registry, basePath: "/mcp" }));
 
   // Per-domain routers (split from the original monolithic createApp closure).
   // Mounted in the SAME order the routes were registered before so relative

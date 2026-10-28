@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentRuntime, AppConfig } from "./types.js";
+import type { AgentRuntime, AppConfig, PiModelMapping, PiRuntimeConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { MODEL_TIER_IDS } from "./modelTiers.js";
 
@@ -8,7 +8,80 @@ function env(name: string, fallback = ""): string {
 }
 
 function parseRuntime(value: string): AgentRuntime {
-  return value === "local" ? "local" : "claude";
+  return value === "local" ? "local" : value === "pi" ? "pi" : "claude";
+}
+
+/**
+ * `PI_MODEL_MAP`: a JSON object from a composer tier (or a concrete model id an
+ * admin override pins) to the pi model a NEW pi session uses — a model id
+ * string, or `{ "model": "<id>", "contextWindow": <tokens> }`. A typo here would
+ * silently run every session on pi's default model, so anything malformed
+ * stops the boot instead of being dropped.
+ */
+export function parsePiModelMap(value: string): Record<string, PiModelMapping> {
+  if (!value) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("PI_MODEL_MAP must be a JSON object (tier → pi model id).");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("PI_MODEL_MAP must be a JSON object (tier → pi model id).");
+  }
+  const map: Record<string, PiModelMapping> = {};
+  for (const [key, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    const tier = key.trim();
+    if (!tier) throw new Error("PI_MODEL_MAP has an empty key.");
+    if (typeof entry === "string" && entry.trim()) {
+      map[tier] = { model: entry.trim() };
+      continue;
+    }
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      const { model, contextWindow } = entry as { model?: unknown; contextWindow?: unknown };
+      const windowOk =
+        contextWindow === undefined ||
+        (typeof contextWindow === "number" && Number.isInteger(contextWindow) && contextWindow > 0);
+      if (typeof model === "string" && model.trim() && windowOk) {
+        map[tier] = {
+          model: model.trim(),
+          ...(typeof contextWindow === "number" ? { contextWindow } : {}),
+        };
+        continue;
+      }
+    }
+    throw new Error(
+      `PI_MODEL_MAP["${tier}"] must be a model id string or {"model": "<id>", "contextWindow": <positive integer>}.`,
+    );
+  }
+  return map;
+}
+
+/**
+ * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL and
+ * service key are REQUIRED there: without them every owner turn would fail, so
+ * the boot refuses rather than silently running the SDK.
+ */
+function loadPiRuntimeConfig(): PiRuntimeConfig {
+  const gatewayUrl = env("PI_GATEWAY_URL");
+  const apiKey = env("PI_GATEWAY_API_KEY");
+  if (!gatewayUrl || !apiKey) {
+    throw new Error("AGENT_RUNTIME=pi requires PI_GATEWAY_URL and PI_GATEWAY_API_KEY.");
+  }
+  try {
+    new URL(gatewayUrl);
+  } catch {
+    throw new Error("PI_GATEWAY_URL must be an absolute URL (e.g. http://pi-gateway:8080).");
+  }
+  const workspacesDir = env("PI_WORKSPACES_DIR");
+  return {
+    gatewayUrl,
+    apiKey,
+    ...(workspacesDir ? { workspacesDir: path.resolve(workspacesDir) } : {}),
+    ...(env("NOAH_MCP_PUBLIC_URL") ? { mcpPublicUrl: env("NOAH_MCP_PUBLIC_URL") } : {}),
+    modelMap: parsePiModelMap(env("PI_MODEL_MAP")),
+    deckSandbox: ["true", "1", "on"].includes(env("PI_DECK_SANDBOX").toLowerCase()),
+  };
 }
 
 // Bounds the CLI's settings schema accepts for `autoCompactWindow`. Out-of-range
@@ -56,6 +129,8 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     throw new Error("SESSION_SECRET is required in production.");
   }
 
+  const agentRuntime = overrides.agentRuntime ?? parseRuntime(env("AGENT_RUNTIME", "claude"));
+
   const readOnlyTools = env("READONLY_TOOLS", "Read,Glob,Grep")
     .split(",")
     .map((tool) => tool.trim())
@@ -81,7 +156,9 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     dataDir,
     dbPath: path.join(dataDir, "noah-almighty.db"),
     sessionSecret,
-    agentRuntime: parseRuntime(env("AGENT_RUNTIME", "claude")),
+    agentRuntime,
+    // An override (tests) supplies its own pi block; only the env path validates.
+    ...(agentRuntime === "pi" && !overrides.pi ? { pi: loadPiRuntimeConfig() } : {}),
     anthropicApiKey: env("ANTHROPIC_API_KEY") || undefined,
     anthropicModel: env("ANTHROPIC_MODEL") || undefined,
     defaultTierModels,

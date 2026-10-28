@@ -38,11 +38,12 @@ moved symbols so importers keep their paths:
 - `runCapabilities.ts` — **the backend-agnostic half of `runPlan.ts`** (2026-10-29, design N1):
   `buildRunCapabilities` (tool access, families, the in-process MCP servers, model chain, describe_system's
   ctx, `mcpAllowedTools`) and `stampPromptRequest` (the request as both prompt builders see it), shared by
-  every runner so their gates cannot drift. `buildAgentRunPlan` =
+  the SDK runner and the pi runner (`pi/runPiAgent.ts`) so their gates cannot drift. `buildAgentRunPlan` =
   capabilities + the SDK-only half (options bag, hooks, CLI-spawned hex-ssh / plugin / 공용 MCP servers and
   their secret handoff). The pure helpers moved here and are re-exported from `runPlan.ts` (and
   `claudeAgent.ts`). A NEW tool still updates BOTH lists, now `inProcessMcpServers` + `mcpAllowedTools`
-  here.
+  here; the pi endpoint gates calls with the same `mcpAllowedTools`. pi specifics:
+  [pi-runtime.md](pi-runtime.md).
 Keep the re-export set in `claudeAgent.ts` minimal to the original public surface.
 
 ### Official product manual

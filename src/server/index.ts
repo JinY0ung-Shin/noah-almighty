@@ -72,6 +72,19 @@ server.listen(services.config.port, () => {
     { dataDir: services.config.dataDir, agentRuntime: services.config.agentRuntime },
     "server started",
   );
+  if (services.config.pi) {
+    // Never the service key — only where pi is and where its broker should reach us.
+    logger.info(
+      {
+        gatewayUrl: services.config.pi.gatewayUrl,
+        workspacesDir: services.config.pi.workspacesDir ?? null,
+        mcpPublicUrl: services.config.pi.mcpPublicUrl ?? null,
+        modelMap: Object.fromEntries(Object.entries(services.config.pi.modelMap).map(([tier, m]) => [tier, m.model])),
+        deckSandbox: services.config.pi.deckSandbox,
+      },
+      "pi runtime configured (register the broker entries with scripts/pi-register-mcp.mjs)",
+    );
+  }
 });
 
 // Fire owner-scheduled routine jobs in the background.

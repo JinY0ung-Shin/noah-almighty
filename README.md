@@ -254,7 +254,12 @@ boundary: its Chromium only talks to loopback, which the egress firewall allows.
 | --- | --- |
 | `SESSION_SECRET` | Session token hashing secret (required in production). |
 | `SECURE_COOKIES` | `true` to mark the session cookie `Secure` (HTTPS-only). Leave unset for plain-HTTP deployments (e.g. local docker-compose) or the cookie is never sent back and login fails. |
-| `AGENT_RUNTIME` | `claude` (default) or `local` (offline stub, no plugin execution). |
+| `AGENT_RUNTIME` | `claude` (default), `local` (offline stub, no plugin execution) or `pi` (owner / trusted-colleague / routine / task-API turns run on a pi-gateway instance; read-only run classes stay on the SDK — see `docs/architecture/pi-runtime.md`). |
+| `PI_GATEWAY_URL` / `PI_GATEWAY_API_KEY` | `AGENT_RUNTIME=pi` only, both **required** there: the pi-gateway origin and its service key. The key is server-only (scrubbed from the process env after boot — it can run turns as any user). |
+| `PI_WORKSPACES_DIR` | `AGENT_RUNTIME=pi`: host path of pi's `$PI_GATEWAY_HOME/workspaces` (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. |
+| `NOAH_MCP_PUBLIC_URL` | `AGENT_RUNTIME=pi`: the base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (used by `scripts/pi-register-mcp.mjs`, logged at boot). |
+| `PI_MODEL_MAP` | `AGENT_RUNTIME=pi`: JSON, composer tier (or model id) → pi model id, or `{"model": "...", "contextWindow": N}` (the window feeds the context badge). Malformed → the boot stops. Unmapped → pi's default model. |
+| `PI_DECK_SANDBOX` | `AGENT_RUNTIME=pi`: `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). |
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
 | `ANTHROPIC_API_KEY` | Optional; absent → SDK uses subscription token (admin UI) or local Claude Code auth. |
 | `ANTHROPIC_MODEL` | Optional. Pin the Claude model (e.g. `claude-opus-4-8`). When set it's a **hard lock**: the per-conversation model picker is hidden. Absent → the resolution chain below (defaulting to Opus). |

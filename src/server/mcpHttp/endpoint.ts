@@ -28,8 +28,9 @@
  * `transformResult` post-processes every tool result (redaction) before it
  * leaves Noah. Handlers must still self-gate — the gate is defense in depth.
  *
- * This module only exports the registry and an Express router factory; mounting
- * it (and choosing its listener) is integration work.
+ * This module only exports the registry and an Express router factory;
+ * `createApp` mounts the router at `/mcp` (bearer-only: no session cookie or
+ * other app auth applies under it).
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import express, { Router, type Request, type Response } from "express";
@@ -44,6 +45,7 @@ import {
   type CallToolResult,
   type JSONRPCMessage,
   type RequestId,
+  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import logger from "../logger.js";
 
@@ -65,6 +67,18 @@ export type McpServerSource = McpServer | { instance: McpServer } | (() => McpSe
 export interface McpRunGates {
   /** False hides the tool from `tools/list` and refuses `tools/call`. */
   allowTool?: (server: string, tool: string) => boolean;
+  /**
+   * Answer `tools/list` from this STATIC list instead of asking the server
+   * (`undefined` → ask it). pi fetches a session's tool list once, when the
+   * session is built, and keeps it while later turns — each with its OWN run
+   * token and capabilities — reuse the session. So the pi runner lists every
+   * tool of every Noah server and gates per call with `allowCall`.
+   */
+  listTools?: (server: string) => Tool[] | undefined;
+  /** False refuses `tools/call` (the listing is untouched — pair with `listTools`). */
+  allowCall?: (server: string, tool: string) => boolean;
+  /** Model-facing text of a refused call (default: "not available in this run"). */
+  refusalMessage?: (server: string, tool: string) => string;
   /** Post-process a tool result before it is sent (e.g. secret redaction). */
   transformResult?: (server: string, tool: string, result: CallToolResult) => CallToolResult | Promise<CallToolResult>;
 }
@@ -231,9 +245,9 @@ async function closeSession(slot: ServerSlot, session: Session): Promise<void> {
   if (isFactory(slot.source)) await session.server.close().catch(() => undefined);
 }
 
-function refusedToolResult(tool: string): CallToolResult {
+function refusedToolResult(tool: string, message?: string): CallToolResult {
   return {
-    content: [{ type: "text", text: `Tool '${tool}' is not available in this run.` }],
+    content: [{ type: "text", text: message ?? `Tool '${tool}' is not available in this run.` }],
     isError: true,
   };
 }
@@ -254,13 +268,25 @@ function installGates(session: Session, serverName: string, gates: McpRunGates):
     if (isJSONRPCRequest(message)) {
       session.inflight.add(message.id);
       if (message.method === "tools/list") {
+        const listed = gates.listTools?.(serverName);
+        if (listed) {
+          session.inflight.delete(message.id);
+          void send({ jsonrpc: "2.0", id: message.id, result: { tools: listed } }, { relatedRequestId: message.id }).catch(
+            (error: unknown) => log.warn({ err: error, server: serverName }, "mcp-http: tool list send failed"),
+          );
+          return;
+        }
         listRequests.add(message.id);
       } else if (message.method === "tools/call") {
         const tool = typeof message.params?.name === "string" ? message.params.name : "";
-        if (gates.allowTool && !gates.allowTool(serverName, tool)) {
+        if (
+          (gates.allowTool && !gates.allowTool(serverName, tool)) ||
+          (gates.allowCall && !gates.allowCall(serverName, tool))
+        ) {
           session.inflight.delete(message.id);
+          const result = refusedToolResult(tool, gates.refusalMessage?.(serverName, tool));
           void send(
-            { jsonrpc: "2.0", id: message.id, result: refusedToolResult(tool) as Record<string, unknown> },
+            { jsonrpc: "2.0", id: message.id, result: result as Record<string, unknown> },
             { relatedRequestId: message.id },
           ).catch((error: unknown) => log.warn({ err: error, server: serverName }, "mcp-http: refusal send failed"));
           return;
@@ -375,8 +401,8 @@ export interface McpHttpRouterOptions {
 }
 
 /**
- * Express router for the endpoint. Not mounted by `createApp` yet — integration
- * decides the listener (the broker reaches Noah over the internal network only).
+ * Express router for the endpoint, mounted by `createApp` at `/mcp` (the broker
+ * reaches Noah over the internal network; the run token is the only auth).
  */
 export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
   const { registry } = options;

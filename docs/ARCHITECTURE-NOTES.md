@@ -39,6 +39,8 @@ Companion to the server-area philosophy in [`../src/server/CLAUDE.md`](../src/se
 | [direct-messages.md](architecture/direct-messages.md) | Touching human-to-human DM (사용자 간 DM): the `/api/dm` routes and their session-only auth, the `direct_messages` schema and idempotent nonce send, the presence window shared with the admin panel, the read-ack scoping, the bottom-right 메시지 dock, and why DM stays outside every avatar tool. |
 | [todos.md](architecture/todos.md) | Touching 할 일 (the per-user work to-do list): its statuses (진행 중/드랍; open vs closed), the `todo_items` schema (status + the `done` rollback mirror, the boot reconcile) and its open cap, the shared contract (`src/shared/todos.ts` order/limits, `src/server/todos.ts` validation codes), `/api/me/todos`, the owner-only `mcp__todo__*` tools and their gating, both metacognition surfaces, and the client's 할 일 tab + chat overlay sharing one store slice. |
 
+| [pi-runtime.md](architecture/pi-runtime.md) | Touching `AGENT_RUNTIME=pi` (the pi-gateway runner): which run classes go to pi (`piRuntimeSupports`), the run-token MCP endpoint at `/mcp` and its static catalog, the frozen per-conversation prompt, sessions/resume/rewind over `previous_response_id`, the S1 degrades (steers, model switch, shell secrets, cwd), env vars, operator setup (`scripts/pi-register-mcp.mjs`) and the seams lanes I2/I3 fill. |
+
 ## Agent & MCP tools (`src/server/agent/`)
 
 Companion to the agent-area philosophy in [`../src/server/agent/CLAUDE.md`](../src/server/agent/CLAUDE.md).

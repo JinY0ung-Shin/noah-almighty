@@ -3,6 +3,9 @@ import type { Store } from "../store.js";
 import { runClaudeAgent } from "./claudeAgent.js";
 import { runLocalAgent } from "./localRunner.js";
 import type { AgentEvents } from "./events.js";
+import logger from "../logger.js";
+import { piRuntimeSupports } from "./pi/piRuntime.js";
+import { runPiAgent } from "./pi/runPiAgent.js";
 
 export { isRetryableModelError } from "./claudeAgent.js";
 
@@ -22,7 +25,8 @@ function streamLocalText(text: string, events: AgentEvents): void {
 /**
  * Streaming agent run. local runtime → replay the deterministic stub through
  * onDelta; claude runtime → forward the events sink to the SDK for token-level
- * streaming. Always read-only.
+ * streaming; pi runtime → pi-gateway for the run classes it supports
+ * (`piRuntimeSupports`), the SDK runner for the read-only rest.
  */
 export async function runAgentStream(
   request: AgentRequest,
@@ -37,6 +41,16 @@ export async function runAgentStream(
     const response = runLocalAgent(request);
     streamLocalText(response.text, events);
     return response;
+  }
+  if (config.agentRuntime === "pi") {
+    const decision = piRuntimeSupports(request);
+    if (decision.supported) {
+      return runPiAgent(request, pluginRoots, config, store, events, abortController);
+    }
+    logger.info(
+      { module: "agent", avatarId: request.avatar.id, conversationId: request.conversationId ?? null, reason: decision.reason },
+      "pi runtime: this run stays on the Claude Agent SDK runner",
+    );
   }
   return runClaudeAgent(request, pluginRoots, config, store, events, abortController);
 }

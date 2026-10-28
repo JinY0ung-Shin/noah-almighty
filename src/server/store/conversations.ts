@@ -64,6 +64,25 @@ interface CanvasVersionRow {
  * PLAN, computed before the turn's first await and applied only once the run
  * is reserved, so a turn refused in between leaves the conversation untouched.
  */
+
+/** Sessions whose model/effort profile a conversation remembers (oldest dropped). */
+const PI_SESSION_PROFILE_CAP = 32;
+
+function parsePiSessionProfiles(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
 export interface ConversationRewindPlan {
   /** The USER row the rewind is anchored at. */
   anchor: StoredMessage;
@@ -299,6 +318,63 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           .prepare("UPDATE conversations SET todo_snapshot = ? WHERE id = ? AND owner_user_id = ?")
           .run(snapshot, conversationId, ownerId);
         return snapshot;
+      }).immediate();
+    }
+
+    /**
+     * The system prompt this conversation's pi sessions are created with,
+     * frozen at its FIRST pi turn (design D2: pi fixes `instructions` per
+     * session and Noah reuses the same text for every later session of the
+     * conversation — a model switch or a lost session re-sends it verbatim).
+     * Same write-once, take-under-the-lock contract as the to-do snapshot above.
+     */
+    ensureConversationPiInstructions(ownerId: string, conversationId: string, take: () => string): string | null {
+      const read = () =>
+        this.db
+          .prepare("SELECT pi_instructions FROM conversations WHERE id = ? AND owner_user_id = ?")
+          .get(conversationId, ownerId) as { pi_instructions: string | null } | undefined;
+      const stored = read();
+      if (!stored) return null;
+      if (stored.pi_instructions !== null) return stored.pi_instructions;
+      return this.db.transaction((): string | null => {
+        const row = read();
+        if (!row) return null;
+        if (row.pi_instructions !== null) return row.pi_instructions;
+        const instructions = take();
+        this.db
+          .prepare("UPDATE conversations SET pi_instructions = ? WHERE id = ? AND owner_user_id = ?")
+          .run(instructions, conversationId, ownerId);
+        return instructions;
+      }).immediate();
+    }
+
+    /**
+     * The model/effort profile a pi SESSION of this conversation was created
+     * with (pi fixes both per session — design P3), keyed by the session id
+     * inside its response ids (`resp_<session>_<turn>`). A rewind can resume an
+     * older session, so it is a small map, not one value. Null when unknown.
+     */
+    getConversationPiSessionProfile(ownerId: string, conversationId: string, sessionKey: string): string | null {
+      const row = this.db
+        .prepare("SELECT pi_session_profiles FROM conversations WHERE id = ? AND owner_user_id = ?")
+        .get(conversationId, ownerId) as { pi_session_profiles: string | null } | undefined;
+      return parsePiSessionProfiles(row?.pi_session_profiles ?? null)[sessionKey] ?? null;
+    }
+
+    setConversationPiSessionProfile(ownerId: string, conversationId: string, sessionKey: string, profile: string): void {
+      this.db.transaction(() => {
+        const row = this.db
+          .prepare("SELECT pi_session_profiles FROM conversations WHERE id = ? AND owner_user_id = ?")
+          .get(conversationId, ownerId) as { pi_session_profiles: string | null } | undefined;
+        if (!row) return;
+        const profiles = parsePiSessionProfiles(row.pi_session_profiles);
+        delete profiles[sessionKey];
+        profiles[sessionKey] = profile;
+        // Newest last; old sessions can only be reached by a deep rewind.
+        const kept = Object.entries(profiles).slice(-PI_SESSION_PROFILE_CAP);
+        this.db
+          .prepare("UPDATE conversations SET pi_session_profiles = ? WHERE id = ? AND owner_user_id = ?")
+          .run(JSON.stringify(Object.fromEntries(kept)), conversationId, ownerId);
       }).immediate();
     }
 

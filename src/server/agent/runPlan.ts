@@ -11,7 +11,7 @@
  *
  * The backend-agnostic half — tool access, the in-process MCP servers, the
  * self-state both metacognition surfaces report — lives in
- * `runCapabilities.ts` (design N1); this module adds
+ * `runCapabilities.ts` (shared with the pi runner, design N1); this module adds
  * only what the SDK/CLI needs on top: the `options` bag, hooks, CLI-spawned MCP
  * subprocesses (hex-ssh, plugin `.mcp.json`, 공용 MCP) and their secret handoff.
  * Its helpers are re-exported here so import paths stay stable.
@@ -60,7 +60,10 @@ import {
   disallowedEntriesForPolicy,
 } from "../toolSkillPolicy.js";
 import { computeSkillsOption, freshSkillDiscoveryCache } from "./skillDiscovery.js";
-import { buildRunCapabilities } from "./runCapabilities.js";
+import {
+  buildRunCapabilities,
+  type RunCapabilityOptions,
+} from "./runCapabilities.js";
 
 // The pure helpers moved with the backend-agnostic half; re-exported so every
 // importer of this module keeps resolving them here.
@@ -180,6 +183,7 @@ export async function buildAgentRunPlan(
   events: AgentEvents | undefined,
   abortController: AbortController | undefined,
   currentTextAnchor: () => number,
+  runOptions: RunCapabilityOptions = {},
 ) {
   const sdk = (await import("@anthropic-ai/claude-agent-sdk")) as {
     // `query()` returns an AsyncIterable PLUS control methods. We use
@@ -201,6 +205,7 @@ export async function buildAgentRunPlan(
     events,
     abortController,
     currentTextAnchor,
+    runOptions,
   );
   const {
     streaming,

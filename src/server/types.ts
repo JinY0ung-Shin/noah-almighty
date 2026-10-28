@@ -3,7 +3,7 @@ import type { McpToolGroupId } from "../shared/mcpToolGroups.js";
 import type { OpenTodoStatus, TodoPriority, TodoSource } from "../shared/todos.js";
 import type { BrowserSecretPolicy } from "./secretPolicy.js";
 
-export type AgentRuntime = "claude" | "local";
+export type AgentRuntime = "claude" | "local" | "pi";
 
 /**
  * Minimal avatar-owner descriptor the in-process MCP tool servers
@@ -164,6 +164,61 @@ export interface AppConfig {
    * on a closed network. Override via `HEX_SSH_COMMAND` for local dev.
    */
   hexSshCommand: string;
+  /**
+   * pi-gateway runtime settings (`AGENT_RUNTIME=pi`, docs/architecture/pi-runtime.md).
+   * Undefined on the other runtimes. Owner/trusted/routine/task-API turns run on
+   * pi; read-only run classes keep the SDK runner (`piRuntimeSupports`).
+   */
+  pi?: PiRuntimeConfig;
+}
+
+/** One composer tier (or concrete model id) → the pi model a NEW pi session uses. */
+export interface PiModelMapping {
+  model: string;
+  /** Context window for the usage badge (pi does not report it yet — design P5). */
+  contextWindow?: number;
+}
+
+/**
+ * What a run on pi-gateway really has, stamped by the capability plan onto BOTH
+ * metacognition surfaces (`AgentRequest.piRuntime` → the prompt's pi section,
+ * `SystemToolsContext.piRuntime` → describe_system). Its presence alone says
+ * "this run executes in the user's pi sandbox": a mid-turn message arrives only
+ * after the current answer, a model/effort switch starts a new session from the
+ * stored text history, and there are no CLI-only servers (hex-ssh, plugin and
+ * 공용 MCP).
+ */
+export interface PiRuntimeFacts {
+  /** Sandbox path of this conversation's work folder (`/workspace/c/<seg>`), when known. */
+  conversationDir?: string;
+  /**
+   * The owner's shell-exposed secret names, which a pi run CANNOT export into
+   * its shell (no sandbox env yet — design P4). Empty on non-owner runs.
+   */
+  shellSecretsUnavailable: string[];
+}
+
+export interface PiRuntimeConfig {
+  /** Gateway origin, e.g. `http://pi-gateway:8080` (env `PI_GATEWAY_URL`). */
+  gatewayUrl: string;
+  /** Service key (env `PI_GATEWAY_API_KEY`; server-only, scrubbed from process.env). */
+  apiKey: string;
+  /**
+   * Host path of the gateway's `$PI_GATEWAY_HOME/workspaces` (env
+   * `PI_WORKSPACES_DIR`): Noah stages files into `u-<sha256(user)[:24]>/…`.
+   * Unset → Noah writes nothing into sandboxes (the model still gets the paths).
+   */
+  workspacesDir?: string;
+  /**
+   * The base URL pi's MCP broker uses to reach THIS Noah's `/mcp/<server>`
+   * (env `NOAH_MCP_PUBLIC_URL`). Informational for Noah (the broker entries are
+   * registered by `scripts/pi-register-mcp.mjs`); logged at boot.
+   */
+  mcpPublicUrl?: string;
+  /** Tier / model id → pi model (env `PI_MODEL_MAP`, JSON). Unmapped → pi's default model. */
+  modelMap: Record<string, PiModelMapping>;
+  /** The sandbox image carries the deck toolchain (env `PI_DECK_SANDBOX`). */
+  deckSandbox: boolean;
 }
 
 /**
@@ -944,7 +999,7 @@ export interface AgentActivity {
 
 export interface AgentResponse {
   kind: "text";
-  runtime: "local" | "claude";
+  runtime: "local" | "claude" | "pi";
   summary: string;
   text: string;
   /**
@@ -1225,6 +1280,11 @@ export interface AgentRequest {
    * headless / external-task-API runs.
    */
   midTurnMessages?: boolean;
+  /**
+   * Set when this run executes on pi-gateway (capability plan stamp). Both
+   * metacognition surfaces branch on it; see {@link PiRuntimeFacts}.
+   */
+  piRuntime?: PiRuntimeFacts;
   /**
    * Auto-approve tool use: skip the interactive permission prompt and run
    * non-read-only tools without asking. Honored on the elevated, non-headless

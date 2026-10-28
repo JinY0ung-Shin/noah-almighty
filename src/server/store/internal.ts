@@ -801,6 +801,13 @@ export class StoreBase {
     // a conversation from before this column takes its snapshot on its next
     // owner turn.
     this.addColumnIfMissing("conversations", "todo_snapshot", "TEXT");
+    // pi runtime (docs/architecture/pi-runtime.md): the system prompt frozen at
+    // the conversation's FIRST pi turn (design D2), and the model/effort
+    // profile per pi session (JSON map, design P3). NULL = no pi turn yet — an
+    // existing conversation renders its prompt on its first pi turn and
+    // rebuilds context from the stored text history.
+    this.addColumnIfMissing("conversations", "pi_instructions", "TEXT");
+    this.addColumnIfMissing("conversations", "pi_session_profiles", "TEXT");
     // Per-group ADMIN tool policy: which MCP tool groups this group's members
     // may use in chats they drive. NULL = no restriction; a JSON array
     // (including []) is an allowlist validated against src/shared/mcpToolGroups.ts.

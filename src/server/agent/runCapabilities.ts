@@ -2,9 +2,9 @@
  * The backend-agnostic half of a run plan (design N1): who may do what, which
  * in-process MCP servers this run builds, the model chain, and the self-state
  * BOTH metacognition surfaces report. The Claude Agent SDK runner wraps it into
- * its `options` bag (`runPlan.ts` → `buildAgentRunPlan`); a second runner that
- * serves the same servers another way reuses it unchanged, so the gates of the
- * two cannot drift.
+ * its `options` bag (`runPlan.ts` → `buildAgentRunPlan`); the pi runner
+ * (`pi/runPiAgent.ts`) serves the same servers over the HTTP MCP endpoint. One
+ * derivation for both runners keeps their gates from drifting.
  *
  * ONE thing flows backwards. File-output and browser-screenshot attachments are
  * stamped with the length of the assistant text accumulated when the tool ran,
@@ -19,6 +19,8 @@ import type {
   AppConfig,
   AgentRequest,
   AgentOwner,
+  AgentRuntime,
+  PiRuntimeFacts,
   PluginRoot,
 } from "../types.js";
 import type { Store } from "../store.js";
@@ -239,6 +241,19 @@ export function buildModelFallbackChain(primary: string): string[] {
   );
 }
 
+/** Which runner consumes the plan — it decides what the run REALLY has. */
+export interface RunCapabilityOptions {
+  /**
+   * `pi`: the run executes on pi-gateway (docs/architecture/pi-runtime.md).
+   * Servers that only exist as CLI subprocesses (hex-ssh, plugin `.mcp.json`,
+   * admin 공용 MCP) are not proxied onto the HTTP MCP endpoint yet, so they are
+   * withheld here and BOTH metacognition surfaces report them absent.
+   */
+  runtime?: Extract<AgentRuntime, "claude" | "pi">;
+  /** pi runs: the sandbox path of this conversation's work folder (`/workspace/c/<seg>`). */
+  piConversationDir?: string;
+}
+
 /**
  * Derive everything a run needs before its stream opens, for either runner:
  * tool access, the in-process MCP servers, the model chain and the
@@ -253,7 +268,10 @@ export async function buildRunCapabilities(
   events: AgentEvents | undefined,
   abortController: AbortController | undefined,
   currentTextAnchor: () => number,
+  runOptions: RunCapabilityOptions = {},
 ) {
+  const runtime = runOptions.runtime ?? "claude";
+  const piRun = runtime === "pi";
   const { buildKnowledgeServer, KNOWLEDGE_SERVER_NAME, KNOWLEDGE_TOOL_NAMES } =
     await import("./knowledgeTools.js");
   const {
@@ -423,6 +441,7 @@ export async function buildRunCapabilities(
   agentLogger.info(
     {
       avatarId: request.avatar.id,
+      runtime,
       viewerUserId: request.viewerUserId,
       headless,
       allowHeadlessTools,
@@ -638,7 +657,10 @@ export async function buildRunCapabilities(
   const canWriteFiles = elevatedToolAccess;
   // hex-ssh registration (the server itself is built further down). Computed
   // HERE so describe_system's SSH line reports this boolean, not secret names.
+  // hex-ssh is a CLI-spawned stdio server: a pi run has no route to it until
+  // Noah proxies it onto the HTTP MCP endpoint (docs/architecture/pi-runtime.md).
   const sshActive =
+    !piRun &&
     sshToolsEnabled &&
     Boolean(ownerSecrets.SSH_PRIVATE_KEY && hexSshAllowedTools.length > 0);
   // 공용 MCP 서버 (admin-registered external HTTP MCP servers,
@@ -651,7 +673,10 @@ export async function buildRunCapabilities(
   // 2026-10-26). A consultation run gets no external servers at all, exactly
   // like plugin servers, and neither does a restricted headless run (intro /
   // hashtag generation) — it has no use for third-party tools.
-  const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools)
+  // A pi run gets none either, for now: admin servers are CLI-registered
+  // (natively or through the stdio bridge) and not yet proxied onto the HTTP
+  // MCP endpoint (docs/architecture/pi-runtime.md).
+  const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools) || piRun
     ? null
     : planSharedMcpRun(store.getSharedMcpServers(), {
         bindings: store.listSharedMcpBindings(request.avatar.id),
@@ -663,6 +688,15 @@ export async function buildRunCapabilities(
   const sharedMcpStates = sharedMcpPlan?.states.map((state) =>
     ownerToolAccess ? state : { ...state, unboundSlots: [], missingSecrets: [] },
   );
+  // pi self-state, ONE value for both metacognition surfaces (describe_system
+  // here, the prompt through stampPromptRequest).
+  const piRuntimeFacts: PiRuntimeFacts | undefined = piRun
+    ? {
+        ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),
+        // Owner self-state (the names), like the prompt's secret list.
+        shellSecretsUnavailable: ownerToolAccess ? ownerState.shellExposedSecretNames : [],
+      }
+    : undefined;
   const systemServer = buildSystemServer(store, {
     avatarUserId: request.avatar.id,
     owner,
@@ -707,12 +741,18 @@ export async function buildRunCapabilities(
     // Images for documents and decks: the scratch workspace path to name,
     // whether get_attachment's save_to_workspace may be offered, and whether
     // this run may place those files at all.
-    scratchWorkspaceDir,
+    // A pi run names its SANDBOX folder (the host scratch path means nothing
+    // to a model in the sandbox; lane I2 moves the staged copies there too).
+    scratchWorkspaceDir: piRun ? (runOptions.piConversationDir ?? scratchWorkspaceDir) : scratchWorkspaceDir,
     confluenceSaveToWorkspace,
     canWriteFiles,
     // SSH self-state from the SAME boolean the registration below uses.
     sshEnabled: sshActive,
     sharedMcpServers: sharedMcpStates,
+    // pi-gateway runs: what this runtime really has (sandbox folder, steer
+    // timing, shell secrets, model switches) — mirrored by the prompt's pi
+    // section (promptBuilder piRuntimeSection).
+    ...(piRuntimeFacts ? { piRuntime: piRuntimeFacts } : {}),
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -1051,8 +1091,8 @@ export async function buildRunCapabilities(
     ...(sshActive ? { [SSH_TRUST_SERVER_NAME]: sshTrustServer } : {}),
   };
 
-  // The MCP half of the SDK's `allowedTools`: exactly the tools the servers
-  // above register for THIS run.
+  // The MCP half of the SDK's `allowedTools`, and the pi endpoint's per-call
+  // gate: exactly the tools the servers above register for THIS run.
   const mcpAllowedTools: string[] = [
       ...(personalKnowledgeToolsEnabled ? KNOWLEDGE_TOOL_NAMES : []),
       ...(personalKnowledgeToolsEnabled ? REPO_TOOL_NAMES : []),
@@ -1080,6 +1120,7 @@ export async function buildRunCapabilities(
   ];
 
   return {
+    runtime,
     streaming,
     headless,
     allowHeadlessTools,
@@ -1131,6 +1172,7 @@ export async function buildRunCapabilities(
     sharedMcpStates,
     inProcessMcpServers,
     mcpAllowedTools,
+    piRuntimeFacts,
   };
 }
 
@@ -1140,8 +1182,8 @@ export type RunCapabilities = Awaited<ReturnType<typeof buildRunCapabilities>>;
  * The request as BOTH prompt builders see it: the run's capability booleans
  * and self-state stamped on, each through the SAME gate as its tool
  * registration (so the prompt never advertises a tool the run lacks, and
- * describe_system — built from the same plan — agrees). Shared by every
- * runner.
+ * describe_system — built from the same plan — agrees). Shared by the SDK and
+ * pi runners.
  */
 export function stampPromptRequest(
   request: AgentRequest,
@@ -1286,5 +1328,7 @@ export function stampPromptRequest(
     // Every viewer class hears which servers are mounted; only the owner's
     // branches name missing secrets (the prompt section gates that).
     sharedMcpServers: sharedMcpStates,
+    // pi runs: the runtime's real shape (both surfaces; see piRuntimeFacts).
+    ...(capabilities.piRuntimeFacts ? { piRuntime: capabilities.piRuntimeFacts } : {}),
   };
 }

@@ -14,6 +14,7 @@
  */
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
@@ -25,6 +26,10 @@ import type { AgentEvents } from "../src/server/agent/events.js";
 import { runPiTurn } from "../src/server/agent/pi/eventAdapter.js";
 import { PiGatewayError, createPiResponsesClient } from "../src/server/agent/pi/responsesClient.js";
 import { McpRunRegistry, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
+import { createServices } from "../src/server/app.js";
+import type { AgentRequest } from "../src/server/types.js";
+import { SteerChannel } from "../src/server/agent/steerChannel.js";
+import { runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 
 // Either `source env.sh`, or point PI_E2E_DIR at the instance dir and the keys are read from its secrets.
 function fromDir(): Record<string, string | undefined> {
@@ -42,6 +47,7 @@ function fromDir(): Record<string, string | undefined> {
     FAKE_LLM_URL: "http://10.213.0.3:18091",
     PI_E2E_API_KEY: read("secrets/gateway/api_key"),
     PI_E2E_ADMIN_KEY: read("secrets/gateway/admin_api_key"),
+    PI_E2E_WORKSPACES: path.join(dir, "home", "workspaces"),
   };
 }
 const env = { ...fromDir(), ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("PI_E2E_") || k === "FAKE_LLM_URL")) };
@@ -226,5 +232,124 @@ describe.skipIf(!LIVE)("pi-gateway live (e2e instance)", () => {
     });
     expect(result.text).toBe("ok");
     expect(ends).toEqual([false]);
+  });
+});
+
+// ---- runPiAgent end to end (lane I1) --------------------------------------------------------------
+// Noah's real runner against the real gateway: frozen instructions, continuation, an effort change
+// starting a new session from the text history, and steers delivered as a follow-up turn. MCP calls
+// through the broker are covered by the harness (~/.noah-work/pi-e2e/noah-harness, S08): the broker's
+// Noah server ids point at the harness Noah, not at this test process.
+describe.skipIf(!LIVE)("runPiAgent live (e2e instance)", () => {
+  let services: ReturnType<typeof createServices>;
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "noah-pi-live-"));
+    services = createServices({
+      dataDir: tmp,
+      agentRuntime: "pi",
+      sessionSecret: "t",
+      pi: {
+        gatewayUrl: env.PI_E2E_URL!,
+        apiKey: env.PI_E2E_API_KEY!,
+        ...(env.PI_E2E_WORKSPACES ? { workspacesDir: env.PI_E2E_WORKSPACES } : {}),
+        modelMap: { opus: { model: "fake-model", contextWindow: 131072 } },
+        deckSandbox: false,
+      },
+    });
+  });
+  afterAll(() => {
+    services?.store.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  async function llmRequests(key: string): Promise<{ body: { messages: { role: string; content: unknown }[] } }[]> {
+    const r = (await (await fetch(`${env.FAKE_LLM_URL}/_fake/requests?key=${key}&limit=20`)).json()) as unknown;
+    return (Array.isArray(r) ? r : (r as { requests: unknown[] }).requests) as never;
+  }
+  const textOf = (content: unknown) =>
+    typeof content === "string" ? content : JSON.stringify(content);
+
+  it("frozen instructions, continuation, an effort change, then steers as one follow-up turn", async () => {
+    const { store, config } = services;
+    const user = store.createUser({ username: `live-${randomUUID().slice(0, 6)}`, displayName: "Live", password: "password123" });
+    const conversationId = randomUUID();
+    store.touchConversation(user.id, conversationId, user.id, "live");
+    const key = `pilane-i1-${randomUUID().slice(0, 8)}`;
+    await fake("/_fake/enqueue", {
+      key,
+      turns: [{ text: "first" }, { text: "second" }, { text: "third" }, { text: "fourth", delayMs: 1500 }, { text: "fifth" }],
+    });
+    const base: AgentRequest = {
+      message: `hello [[fake:${key}]]`,
+      avatar: { id: user.id, displayName: "Live", alias: "", persona: "" },
+      conversationId,
+      viewerUserId: user.id,
+      viewerIsOwner: true,
+      elevated: true,
+      autoApprove: true,
+      effort: "low",
+    };
+    const sessions: string[] = [];
+    const events = (): AgentEvents => ({ onSessionId: (id) => sessions.push(id) });
+    const r1 = await runPiAgent(base, [], config, store, events(), undefined);
+    expect(r1.text).toBe("first");
+    const r2 = await runPiAgent({ ...base, message: "next", resumeSessionId: sessions.at(-1) }, [], config, store, events(), undefined);
+    expect(r2.text).toBe("second");
+    const r3 = await runPiAgent(
+      {
+        ...base,
+        message: "now think harder",
+        effort: "high",
+        resumeSessionId: sessions.at(-1),
+        conversationHistory: [
+          { role: "user", content: `hello [[fake:${key}]]` },
+          { role: "assistant", content: "first" },
+          { role: "user", content: "next" },
+          { role: "assistant", content: "second" },
+        ],
+      },
+      [],
+      config,
+      store,
+      events(),
+      undefined,
+    );
+    expect(r3.text).toBe("third");
+    const steers = new SteerChannel();
+    const turnResults: unknown[] = [];
+    const r4 = await runPiAgent(
+      { ...base, message: "long one", effort: "high", resumeSessionId: sessions.at(-1) },
+      [],
+      config,
+      store,
+      {
+        ...events(),
+        steers,
+        onDelta: () => undefined,
+        onStatus: (label) => {
+          if (label === "응답 생성 중…" && steers.records().length === 0) steers.push("steered text");
+        },
+        onTurnResult: (segment) => turnResults.push(segment),
+      },
+      undefined,
+    );
+    expect(r4.text).toBe("fifth");
+    expect(turnResults).toEqual([
+      expect.objectContaining({ text: "fourth", steerPending: true }),
+      expect.objectContaining({ text: "fifth", steerPending: false }),
+    ]);
+    const reqs = await llmRequests(key);
+    expect(reqs).toHaveLength(5);
+    const system = (i: number) => textOf(reqs[i]!.body.messages[0]!.content);
+    expect(system(0)).toContain("Runtime: your own pi sandbox");
+    expect(system(2)).toBe(system(0)); // the frozen prompt reused by the new session
+    // Turn 2 continued the session; turn 3 (effort changed) started a new one from the text history.
+    expect(reqs[1]!.body.messages.some((m) => m.role === "assistant" && textOf(m.content).includes("first"))).toBe(true);
+    const third = reqs[2]!.body.messages;
+    expect(third.filter((m) => m.role === "assistant")).toHaveLength(0);
+    expect(textOf(third.at(-1)!.content)).toContain("Session note: the model or reasoning effort changed");
+    expect(textOf(reqs[4]!.body.messages.at(-1)!.content)).toContain("steered text");
+    await fake("/_fake/reset", { key });
   });
 });

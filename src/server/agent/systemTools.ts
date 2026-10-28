@@ -12,6 +12,7 @@ import type {
   AgentOwner,
   AgentRewindInfo,
   AppConfig,
+  PiRuntimeFacts,
   Plugin,
   RoutineJob,
   RoutineSchedulePatch,
@@ -222,6 +223,12 @@ export interface SystemToolsContext {
    * callers) → the line is omitted.
    */
   sharedMcpServers?: SharedMcpRunState[];
+  /**
+   * Set on runs that execute on pi-gateway (`AgentRequest.piRuntime`, the same
+   * capability-plan value): the runtime/steer/shell-secret/model lines then
+   * describe the pi sandbox instead of the Claude Code CLI.
+   */
+  piRuntime?: PiRuntimeFacts;
 }
 
 /** MCP server name; tools surface to the model as `mcp__system__<tool>`. */
@@ -560,6 +567,31 @@ function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
 }
 
 /**
+ * The runtime line. A pi run states what that runtime really is (the user's own
+ * sandbox, pi's built-in tools, what is missing there); under AGENT_RUNTIME=pi a
+ * run WITHOUT pi facts is a read-only class the SDK runner kept
+ * (`piRuntimeSupports`), and must not claim the sandbox.
+ */
+function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): string {
+  const pi = ctx.piRuntime;
+  if (!pi) {
+    return ctx.config.agentRuntime === "pi"
+      ? "claude (this read-only run stays on the Claude Agent SDK runner; the deployment otherwise runs on pi-gateway)"
+      : ctx.config.agentRuntime;
+  }
+  return (
+    "pi (pi-gateway). You run in THIS user's own Linux sandbox: no network, no sudo, files persist per user. " +
+    (pi.conversationDir
+      ? `Work in this conversation's folder \`${pi.conversationDir}\` and pass ABSOLUTE paths (the shell starts in /workspace, not there). `
+      : "Use absolute paths under /workspace. ") +
+    "Built-in tools: read/write/edit/ls/find/grep/bash; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
+    "No WebSearch (use mcp__web__fetch for a known URL). Not available on this runtime: hex-ssh remote tools, plugin `.mcp.json` servers and the admin 공용 MCP servers. " +
+    "A model or reasoning-effort change starts a NEW session that continues from the saved text history (earlier tool results are not carried over). " +
+    "The system prompt is fixed when the conversation starts, so this tool is the source of CURRENT state"
+  );
+}
+
+/**
  * describe_system's half of the prompt's per-turn rewind line: the SAME
  * `rewindTurnState` text under the SAME label, printed in every viewer branch
  * (a rewind happens in colleague threads too). Empty on every
@@ -719,9 +751,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // the run either has a live steer channel or it does not, and the
           // avatar must not promise a viewer it can be interrupted when it
           // cannot (or ignore a message that arrives when it can).
-          `- Mid-turn user messages: ${ctx.midTurnMessages ? "ENABLED — the person can send more messages while you work; each arrives as a user message between your tool calls (or starts the next turn if you had already finished). Read it when it appears and let the newest instruction win when it conflicts with an earlier one" : "not available in this run"}`,
+          `- Mid-turn user messages: ${!ctx.midTurnMessages ? "not available in this run" : ctx.piRuntime ? "ENABLED, but on this runtime a message the person sends while you work is NOT shown to you between tool calls: it is delivered as the NEXT turn, right after your current answer finishes. Finish the current answer, then read it and let the newest instruction win when it conflicts with an earlier one" : "ENABLED — the person can send more messages while you work; each arrives as a user message between your tool calls (or starts the next turn if you had already finished). Read it when it appears and let the newest instruction win when it conflicts with an earlier one"}`,
           ...rewindLines(ctx),
-          `- runtime: ${ctx.config.agentRuntime}`,
+          `- runtime: ${runtimeLine(ctx)}`,
           ...(webProxy.egressPolicy === "domain-proxy"
             ? ["- Server egress: bootstrap reports shared domain-proxy policy for all local avatars, server tools and shell commands; direct outbound connections and external DNS blocked. User-PC browser traffic is outside this boundary. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials."]
             : []),
@@ -761,7 +793,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Internal Git token (GIT_TOKEN): ${state.gitTokenSet ? "set" : "not set"}`,
           `- Getting started: ${gettingStartedLine}`,
           `- Secret names: ${secretNames.length ? secretNames.map((name) => `\`${name}\``).join(", ") + " (custom secrets are injected as env into MCP servers from your own plugins/knowledge repo; git/SSH credentials go only to their dedicated tools)" : "(none)"}`,
-          `- Shell-exposed secrets: ${state.shellExposedSecretNames.length ? state.shellExposedSecretNames.map((name) => `\`${name}\``).join(", ") + " — usable as `$NAME` in Bash on elevated runs; values are redacted from tool outputs (per-secret 셸 노출 toggle in Settings)" : "(none — every secret stays out of the agent shell; enable per-secret with the 셸 노출 toggle in Settings)"}`,
+          `- Shell-exposed secrets: ${ctx.piRuntime ? (state.shellExposedSecretNames.length ? `UNAVAILABLE on this runtime — ${state.shellExposedSecretNames.map((name) => `\`${name}\``).join(", ")} are set to 셸 노출, but the pi sandbox shell receives no secrets, so \`$NAME\` is empty in bash; use the dedicated MCP tools, or tell the owner the task needs a secret this runtime cannot hand to the shell` : "(none — and on this runtime the pi sandbox shell receives no secrets at all)") : state.shellExposedSecretNames.length ? state.shellExposedSecretNames.map((name) => `\`${name}\``).join(", ") + " — usable as `$NAME` in Bash on elevated runs; values are redacted from tool outputs (per-secret 셸 노출 toggle in Settings)" : "(none — every secret stays out of the agent shell; enable per-secret with the 셸 노출 toggle in Settings)"}`,
           // Browser input is the SECOND per-key exposure the owner can grant, so
           // it sits next to the shell one. It branches on whether the bridge is
           // reachable in THIS run: the policies exist either way, but with no
