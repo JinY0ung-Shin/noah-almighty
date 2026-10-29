@@ -32,7 +32,6 @@ export type {
   SharedSkillManifest,
   SignupMode,
   SkillInfo,
-  SteerDelivery,
   StoredMessage,
   User,
 } from "../../../server/types.js";
@@ -184,18 +183,11 @@ export interface ChatPane {
   thinkingActive?: boolean;
   liveStatus: string;
   liveRunId: string | null;
-  /**
-   * When THIS run hands the model a message typed while it answers (the `open`
-   * frame's `steerDelivery`): the composer's steer wording follows it. Belongs to
-   * the run like `liveRunId`, so a `turn_end` follow-up keeps it; undefined until
-   * the frame arrives (the wording then falls back to the SDK's mid-turn delivery).
-   */
-  liveSteerDelivery?: import("../../../server/types.js").SteerDelivery;
   /** Multi-agent activity tree (root "main" + sub-agents) for the live bubble. */
   liveAgents: LiveAgentNode[];
   /** Tool / blocked rows, each owned by an agent in liveAgents. */
   liveTools: LiveToolRow[];
-  /** SDK task rows, tracked separately from normal tool calls. */
+  /** Task rows, tracked separately from normal tool calls. */
   liveTasks: LiveTaskRow[];
   /** Plugin-load chips (name + status). */
   livePlugins: LivePluginChip[];
@@ -205,22 +197,6 @@ export interface ChatPane {
   liveStatusPinSource?: string;
   /** The newest server status that arrived while the pin held: shown once the pin lapses (setStatus). */
   liveStatusHeld?: string;
-  /** True between done{background:true} and bg_end/cancelled: the visible turn is finalized but the SDK session is still running background work. Drives the background chip + keeps the live activity tree mounted. */
-  backgroundPhase?: boolean;
-  /** Live background tasks (SDK level signal, REPLACE semantics). */
-  backgroundTasks?: BackgroundTaskChip[];
-  /** Persisted message id of the finalized turn, so the final activity snapshot lands on it at bg_end/cancel. */
-  backgroundMessageId?: string | null;
-  /**
-   * The activity segment new rows are stamped with: 0 for the visible turn,
-   * k for the k-th background wake-up turn (see lib/activitySegments.ts).
-   */
-  liveSegment?: number;
-  /**
-   * Persisted message id per segment, in order: [finalized turn, wake-up 1, …].
-   * The in-flight segment has no entry until its bg_message lands.
-   */
-  segmentMessageIds?: string[];
   groupKnowledgeOff: string[];
   /** Installed skills for this pane's avatar, lazily fetched the first time the slash menu opens (#slash-skills). Drives skill entries in the "/" menu. */
   skills?: import("../../../server/types.js").SkillInfo[];
@@ -331,10 +307,6 @@ export interface LiveAgentNode {
   name?: string;
   status: "running" | "done" | "failed";
   isMain: boolean;
-  /** The sub-agent runs (or ran) in the background; its card says so. */
-  background?: boolean;
-  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
-  segment?: number;
 }
 
 /** A tool/blocked/memory/compact row in the activity tree, owned by an agent. */
@@ -345,19 +317,15 @@ export interface LiveToolRow {
   label: string;
   detail?: string;
   status: "running" | "done" | "failed" | "blocked";
-  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
-  segment?: number;
 }
 
-/** A non-subagent SDK task row in the activity tree. */
+/** A non-subagent task row in the activity tree. */
 export interface LiveTaskRow {
   id: string;
   agentId: string;
   label: string;
   detail?: string;
   status: "running" | "done" | "failed";
-  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
-  segment?: number;
 }
 
 export interface LivePluginChip {
@@ -365,19 +333,12 @@ export interface LivePluginChip {
   status: string;
 }
 
-/** One live background task (SDK level signal), for the background-phase chip. */
-export interface BackgroundTaskChip {
-  taskId: string;
-  taskType?: string;
-  description?: string;
-}
-
-/** An interactive prompt (permission / AskUserQuestion) awaiting the owner. */
+/** An interactive prompt (AskUserQuestion) awaiting the owner. */
 export interface PromptRequest {
   id: string;
   runId: string;
   paneId: string;
-  kind: "permission" | "question";
+  kind: "question";
   data: any;
 }
 
@@ -393,24 +354,22 @@ export interface BootstrapInfo {
    */
   visionEnabled?: boolean;
   /**
-   * Per-conversation model picker config: selectable tiers + whether an env-pinned
-   * ANTHROPIC_MODEL locks the choice (then the composer hides the picker). Optional
-   * for forward-compat with an older server that omits it.
+   * Per-conversation model picker config: the selectable tiers. Optional for
+   * forward-compat with an older server that omits it.
    */
   modelSelection?: {
-    /** Each tier + the concrete model id it resolves to (null when not env-pinned). */
+    /** Each tier + the pi model id it maps to (`PI_MODEL_MAP`; null under the local stub). */
     tiers: (import("../../../server/modelTiers").ModelTier & {
       model: string | null;
       /** Whether this tier's model accepts image input (admin per-tier policy). */
       vision?: boolean;
     })[];
-    locked: boolean;
-    /** Vision of the model used when the user picked no tier (pin/override/default). */
+    /** Vision of the model used when the user picked no tier (admin override/default). */
     defaultVision?: boolean;
   };
   /**
    * Per-conversation reasoning effort picker config: selectable levels + the
-   * default level applied when unset. Independent of the model pin (no lock).
+   * default level applied when unset.
    * Optional for forward-compat with an older server that omits it.
    */
   effortSelection?: {

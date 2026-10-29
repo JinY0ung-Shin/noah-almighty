@@ -23,16 +23,11 @@ function json(body: unknown, status = 200): Response {
 // and DEFAULT_HEX_SSH_TOOL_POLICY allows tools, so on first load the saved
 // policy key never matches the unseeded (empty) checkbox matrix.
 const system = {
-  agentRuntime: "claude",
-  configuredModel: "claude-opus-4-8",
-  modelOverride: "claude-opus-4-8",
+  agentRuntime: "pi",
+  piModelMap: { fable: "pi-fable", opus: "pi-opus", sonnet: "pi-sonnet", haiku: "pi-haiku" },
+  modelOverride: "opus",
   observedModel: null,
-  authMode: "api_key",
-  readOnlyTools: [],
   confluenceConfigured: false,
-  subscriptionConnected: false,
-  apiKeyOverride: false,
-  modelEnvLocked: false,
   visionDefault: true,
   modelVisionPolicy: {},
   hexSshTools: [
@@ -46,7 +41,7 @@ const system = {
   },
   togglableBuiltinTools: [],
   toolSkillPolicy: { disabledTools: [], disabledSkills: [] },
-  skillDiscovery: null,
+  skillDiscovery: { fetchedAt: "2026-10-29T00:00:00.000Z", skills: [{ name: "pptx", description: "덱 만들기" }] },
   signupMode: "open",
 };
 
@@ -95,8 +90,33 @@ describe("admin 시스템 tab seeding", () => {
 
     // The saved model override seeds the input — an empty input here offers a
     // "기본값 사용" save that would silently delete the stored override.
-    const modelInput = screen.getByPlaceholderText("claude-opus-4-8 (비우면 기본값)") as HTMLInputElement;
-    expect(modelInput.value).toBe("claude-opus-4-8");
+    const modelInput = screen.getByPlaceholderText("opus (비우면 기본 티어)") as HTMLInputElement;
+    expect(modelInput.value).toBe("opus");
+  });
+
+  it("shows the pi runtime and its tier → model map, and nothing of the retired SDK setup", async () => {
+    await openSystemTab();
+
+    expect(screen.getByText("pi-gateway")).toBeTruthy();
+    expect(screen.getByText("모델 매핑")).toBeTruthy();
+    expect(screen.getByTitle("Opus 티어 → pi 모델").textContent).toContain("pi-opus");
+    // The per-tier vision rows name the mapped pi model too.
+    expect(screen.getAllByText("pi-haiku").length).toBeGreaterThan(0);
+    expect(screen.getByText("기본 스킬 플러그인에서 찾은 스킬 1개입니다.")).toBeTruthy();
+    const text = document.body.textContent || "";
+    for (const retired of ["구독 로그인", "setup-token", "인증 방식", "읽기 전용 도구", "ANTHROPIC", "SDK", "CLI v"]) {
+      expect(text).not.toContain(retired);
+    }
+    // The retired env-pinned model row (the vision card's prose also says "설정된 모델").
+    expect(screen.queryByText("설정된 모델")).toBeNull();
+    expect(calls.some((c) => c.url.includes("/api/admin/claude-token"))).toBe(false);
+  });
+
+  it("says when there is no model map (the local stub)", async () => {
+    stubAdminFetch({ agentRuntime: "local", piModelMap: {} });
+    await openSystemTab();
+    expect(screen.getByText("로컬 스텁")).toBeTruthy();
+    expect(screen.getByText("없음 (로컬 스텁)")).toBeTruthy();
   });
 
   it("keeps unsaved policy edits across a manual 새로고침", async () => {

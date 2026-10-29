@@ -50,10 +50,9 @@
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
   import { hasSideTabs } from "../lib/sidePanel";
-  import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
-  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, SteerDelivery, StoredMessage } from "../lib/types";
+  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
   import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
   import {
@@ -219,10 +218,6 @@
 
   function hasModelPicker(): boolean {
     return Boolean($appState.bootstrap?.modelSelection?.tiers.length);
-  }
-
-  function canPickModel(): boolean {
-    return Boolean(hasModelPicker() && !$appState.bootstrap?.modelSelection?.locked);
   }
 
   function currentModelTier(item: ChatPane): string {
@@ -538,12 +533,12 @@
 
   // Vision support for the model THIS pane would use: pane pick > my saved
   // default > deployment default. Mirrors the server's resolution (which also
-  // enforces it on upload); env-pinned deployments fall back to the global flag.
+  // enforces it on upload); a server without a picker falls back to the global flag.
   function paneVisionEnabled(item: ChatPane, state: ReturnType<typeof readState> = readState()): boolean {
     const boot = state.bootstrap;
     if (!boot) return true;
     const sel = boot.modelSelection;
-    if (!sel || sel.locked) return boot.visionEnabled !== false;
+    if (!sel) return boot.visionEnabled !== false;
     const tier = item.modelTier || state.user?.modelDefault || "";
     const entry = tier ? sel.tiers.find((t) => t.id === tier) : undefined;
     if (entry) return entry.vision !== false;
@@ -837,13 +832,10 @@
   }
 
   /**
-   * When a message sent now reaches the avatar, as the composer says it: between
-   * its next two actions (the SDK runner), or only once the current answer is
-   * done (a pi run — the run's `open` frame says which).
+   * When a message sent now reaches the avatar, as the composer says it: always
+   * once the current answer is done (a follow-up turn on the same run).
    */
-  function steerWhen(delivery: SteerDelivery | undefined): string {
-    return delivery === "after_answer" ? "지금 답변이 끝난 뒤 이어서 전달됩니다" : "다음 작업 사이에 전달됩니다";
-  }
+  const STEER_WHEN = "지금 답변이 끝난 뒤 이어서 전달됩니다";
 
   /**
    * The mid-turn send button's tooltip. A control disabled with no stated
@@ -852,19 +844,19 @@
    */
   function steerSendTitle(item: ChatPane): string {
     return item.draft.trim()
-      ? `응답 중 메시지 보내기 (${steerWhen(item.liveSteerDelivery)})`
+      ? `응답 중 메시지 보내기 (${STEER_WHEN})`
       : "메시지를 입력하면 응답 중에도 보낼 수 있어요";
   }
 
   /**
    * The composer's placeholder while a turn is streaming: when a message sent now
-   * is delivered (`steerWhen`), and the gesture that actually sends on this
+   * is delivered (`STEER_WHEN`), and the gesture that actually sends on this
    * device — Enter only sends where a physical keyboard was detected.
    */
-  function streamingPlaceholder(sends: boolean, delivery: SteerDelivery | undefined): string {
+  function streamingPlaceholder(sends: boolean): string {
     return sends
-      ? `응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 ${steerWhen(delivery)}`
-      : `응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 ${steerWhen(delivery)}`;
+      ? `응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 ${STEER_WHEN}`
+      : `응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 ${STEER_WHEN}`;
   }
 
   function onComposerInput(event: Event, item: ChatPane) {
@@ -1104,7 +1096,8 @@
     if (agentCount) parts.push(`에이전트 ${agentCount}개`);
     return parts.length ? `${parts.join(" · ")} ${suffix}` : emptyLabel;
   }
-  function rowsRunning(rows: SegmentRows): boolean {
+  type ActivityRows = { agents: LiveAgentNode[]; tools: LiveToolRow[]; tasks: LiveTaskRow[] };
+  function rowsRunning(rows: ActivityRows): boolean {
     return (
       rows.agents.some((a) => !a.isMain && a.status === "running") ||
       rows.tools.some((t) => t.status === "running") ||
@@ -1114,35 +1107,18 @@
   // The in-flight turn's rows: "진행 중" only while one of them runs — between
   // actions (the model is writing, or a pi run waits on a consulted avatar) the
   // rows are finished, so "사용함".
-  function activitySummary(rows: SegmentRows): string {
+  function activitySummary(rows: ActivityRows): string {
     const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
     const taskCount = rows.tasks.length;
     const agentCount = rows.agents.filter((a) => !a.isMain).length;
     return activityCountLabel(toolCount, taskCount, agentCount, rowsRunning(rows) ? "진행 중" : "사용함", "작업 중…");
-  }
-  // A finished turn's live rows during the background phase (its background
-  // agents may still be at work): "진행 중" while anything runs, else "사용함".
-  function segmentActivityLabel(rows: SegmentRows): string {
-    const running = rowsRunning(rows);
-    const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
-    const taskCount = rows.tasks.length + rows.tools.filter((t) => t.kind === "task").length;
-    const agentCount = rows.agents.filter((a) => !a.isMain).length;
-    return activityCountLabel(toolCount, taskCount, agentCount, running ? "진행 중" : "사용함", "작업 내역");
-  }
-  // One-line description list for the background-phase note ("빌드 실행, 리포 조사").
-  function bgTaskSummary(item: ChatPane): string {
-    return (item.backgroundTasks || [])
-      .map((t) => t.description || t.taskType || t.taskId)
-      .filter(Boolean)
-      .join(", ");
   }
 
   // Activity-tree snapshot kept on a COMPLETED assistant message, so the tool/agent
   // runs stay visible after the response finishes (collapsed by default).
   function completedActivity(message: StoredMessage) {
     const activity = message.response?.activity;
-    // A sealed background segment can hold only an agent card (a background
-    // agent that ran no tool yet): that is still worth showing.
+    // An agent card with no tool rows of its own is still worth showing.
     return activity &&
       (activity.tools.length || activity.tasks?.length || activity.agents.some((a) => !a.isMain))
       ? activity
@@ -1377,25 +1353,6 @@
                       </div>
                     {/if}
                   </details>
-                {:else}
-                  {@const segRows = messageSegmentRows(item, message.id)}
-                  <!-- Background phase: THIS bubble's live rows (its background agents
-                       may still be running) render under it, not in the trailing live
-                       bubble, until bg_end seals them onto this message. -->
-                  {#if segRows}
-                    {@const segMemChip = memoryChip(segRows.tools)}
-                    {@const segCmpChip = compactChip(segRows.tools)}
-                    <details class="activity-live" open>
-                      <summary>
-                        <span class="activity-summary-text">{segmentActivityLabel(segRows)}</span>
-                        {#if segMemChip}<span class="activity-memory-chip" title={segMemChip.title}><span aria-hidden="true">🧠</span>{segMemChip.label}</span>{/if}
-                        {#if segCmpChip}<span class="activity-memory-chip" title={segCmpChip.title}><span aria-hidden="true">{segCmpChip.icon}</span>{segCmpChip.label}</span>{/if}
-                      </summary>
-                      <div class="agent-activity">
-                        <ActivityTree agentId="main" agents={segRows.agents} tools={segRows.tools} tasks={segRows.tasks} />
-                      </div>
-                    </details>
-                  {/if}
                 {/if}
               {:else}
                 {#if visibleAttachments(message.attachments).length}
@@ -1498,35 +1455,19 @@
                    the bubble's edge instead, which is exactly what autoscroll
                    already follows. -->
               {#if item.liveAgents.length}
-                {@const liveRows = liveSegmentRows(item)}
-                <!-- The in-flight turn's rows only: in the background phase the
-                     finished bubbles above show their own (lib/activitySegments). -->
-                {#if liveRows}
-                  {@const liveMemChip = memoryChip(liveRows.tools)}
-                  {@const liveCmpChip = compactChip(liveRows.tools)}
-                  <details class="activity-live" open>
-                    <summary>
-                      <span class="activity-summary-text">{activitySummary(liveRows)}</span>
-                      {#if liveMemChip}<span class="activity-memory-chip" title={liveMemChip.title}><span aria-hidden="true">🧠</span>{liveMemChip.label}</span>{/if}
-                      {#if liveCmpChip}<span class="activity-memory-chip" title={liveCmpChip.title}><span aria-hidden="true">{liveCmpChip.icon}</span>{liveCmpChip.label}</span>{/if}
-                    </summary>
-                    <div class="agent-activity">
-                      <ActivityTree agentId="main" agents={liveRows.agents} tools={liveRows.tools} tasks={liveRows.tasks} />
-                    </div>
-                  </details>
-                {/if}
-              {/if}
-              {#if item.backgroundPhase}
-                <!-- The visible turn is finalized (bubble above), but SDK background
-                     tasks keep the session alive; the stop button cancels them. -->
-                <div class="bg-task-note" role="status">
-                  <span class="bg-task-dot" aria-hidden="true"></span>
-                  <span class="bg-task-text">
-                    {item.backgroundTasks?.length
-                      ? `백그라운드 작업 ${item.backgroundTasks.length}개 진행 중 · ${bgTaskSummary(item)}`
-                      : "백그라운드 작업 마무리 중…"}
-                  </span>
-                </div>
+                {@const liveRows = { agents: item.liveAgents, tools: item.liveTools, tasks: item.liveTasks }}
+                {@const liveMemChip = memoryChip(liveRows.tools)}
+                {@const liveCmpChip = compactChip(liveRows.tools)}
+                <details class="activity-live" open>
+                  <summary>
+                    <span class="activity-summary-text">{activitySummary(liveRows)}</span>
+                    {#if liveMemChip}<span class="activity-memory-chip" title={liveMemChip.title}><span aria-hidden="true">🧠</span>{liveMemChip.label}</span>{/if}
+                    {#if liveCmpChip}<span class="activity-memory-chip" title={liveCmpChip.title}><span aria-hidden="true">{liveCmpChip.icon}</span>{liveCmpChip.label}</span>{/if}
+                  </summary>
+                  <div class="agent-activity">
+                    <ActivityTree agentId="main" agents={liveRows.agents} tools={liveRows.tools} tasks={liveRows.tasks} />
+                  </div>
+                </details>
               {/if}
               <div class="stream-status">
                 <span class="spinner"></span>
@@ -1628,7 +1569,7 @@
                running turn (see `canSteer`). -->
           <textarea
             rows="1"
-            placeholder={item.streaming ? streamingPlaceholder(enterSends, item.liveSteerDelivery) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
+            placeholder={item.streaming ? streamingPlaceholder(enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
             value={item.draft}
             aria-label={`${item.avatar.alias || item.avatar.displayName}에게 보낼 메시지`}
             aria-describedby={paneDomId("composer-hint", item.id)}
@@ -1721,9 +1662,8 @@
                     <select
                       class="composer-model-select"
                       aria-label="이 대화에 사용할 모델"
-                      title={canPickModel() ? "이 대화에서 다음 메시지부터 사용할 모델을 고릅니다" : "서버 설정으로 모델이 고정되어 있습니다"}
+                      title="이 대화에서 다음 메시지부터 사용할 모델을 고릅니다"
                       value={currentModelTier(item)}
-                      disabled={!canPickModel()}
                       on:change={(event) => setModelTier(item, event.currentTarget.value)}
                     >
                       {#each $appState.bootstrap.modelSelection.tiers as tier (tier.id)}

@@ -29,13 +29,6 @@ import {
   sdkToolLabel,
 } from "../../../shared/sdkToolPresentation";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../../../shared/mcpToolGroups";
-import {
-  hasRows,
-  rowSegment,
-  segmentRows,
-  segmentSealTargets,
-  type SegmentRows,
-} from "./activitySegments";
 import type {
   AgentActivity,
   AgentResponse,
@@ -544,10 +537,10 @@ export function consultationLabel(message: StoredMessage): string {
 /**
  * The badge on a delivered mid-turn message (`kind: "steer"`), from WHERE it sits
  * — the persisted rows carry no runtime, and position is what says when the
- * model got it. Folded in between tool calls, it is persisted before that turn's
- * answer, so it follows the turn's opener: "응답 중 전달". Delivered only after
- * an answer finished (every steer on pi; an SDK steer that missed the result
- * boundary), it follows that answer's sealed segment: "답변 뒤 전달". Steers and
+ * model got it. Folded in between tool calls (older runs of the retired SDK
+ * runtime), it was persisted before that turn's answer, so it follows the turn's
+ * opener: "응답 중 전달". Delivered only after an answer finished (every steer
+ * today), it follows that answer's sealed segment: "답변 뒤 전달". Steers and
  * consultation answers queued together are skipped over, so each of a batch
  * reads the same.
  */
@@ -738,7 +731,7 @@ export async function submitRewindEdit(paneId: string): Promise<void> {
 
 /**
  * 다시 생성: re-run the LAST ordinary user turn. Every row after it goes — each
- * answer segment, steer and background report of that turn, not just the final
+ * answer segment and steer of that turn, not just the final
  * row (the server drops the same set, so a reload shows what the screen shows).
  */
 export function regenerate(paneId: string): void {
@@ -1073,8 +1066,6 @@ export async function sendMessage(
     // canvas/stop paths). Drop it here so this send's failure handling can tell
     // "our run opened, reconnect to it" from "the send never got off the ground".
     target.liveRunId = null;
-    // Run-scoped like the id: this send's `open` frame says it again.
-    target.liveSteerDelivery = undefined;
     target.streaming = true;
     // A send is an explicit "follow the response" intent, so re-arm auto-scroll
     // even if a prior turn (or a stray scroll) had detached it — otherwise the
@@ -1088,7 +1079,7 @@ export async function sendMessage(
     target.abortController = controller;
   });
 
-  // A terminal frame (done / bg_end / cancelled / error) was read for this send's
+  // A terminal frame (done / cancelled / error) was read for this send's
   // run — the server persists each of those rows BEFORE it emits the frame.
   let runEnded = false;
   try {
@@ -1278,8 +1269,6 @@ export async function attachRun(
     resetLive(target);
     target.streaming = true;
     target.liveRunId = runId;
-    // The replayed `open` frame restores it (a server-started run has none).
-    target.liveSteerDelivery = undefined;
     target.liveStatus = REATTACH_STATUS;
     target.abortController = controller;
     // What the run logged before this pane attached is history to it: the
@@ -1302,15 +1291,13 @@ export async function attachRun(
 
 /* ---------- run streams: terminal-aware reading + auto-reconnect ---------- */
 
-// A run's SSE is legitimately OVER only after one of these frames. `done` with
-// `background:true` is NOT terminal — the SDK keeps working past the visible turn
-// and the stream stays open for bg_tasks / bg_message / bg_end. Anything else that
+// A run's SSE is legitimately OVER only after one of these frames (`turn_end`
+// is not one: a follow-up turn continues on the same run). Anything else that
 // ends the stream is a dropped CONNECTION (laptop sleep, network switch, proxy
 // lifetime) while the run itself lives on in the server's registry.
 function isTerminalFrame(frame: SseFrame): boolean {
-  if (frame.event === "done") return frame.data?.background !== true;
   return (
-    frame.event === "bg_end" ||
+    frame.event === "done" ||
     frame.event === "cancelled" ||
     frame.event === "error"
   );
@@ -1399,7 +1386,7 @@ async function streamRunEvents(
 /**
  * Follow a run to its END, reconnecting whenever the connection drops first.
  * A drop must NOT tear the live region down: the pane stays `streaming` (which is
- * what keeps the background-phase indicator and its wake-up bubbles mounted) and
+ * what keeps the live bubble and its activity rows mounted) and
  * the run's event log is re-read with capped backoff until the run really
  * finishes, the server forgets it, or the viewer stops it.
  */
@@ -1651,8 +1638,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       updatePane(paneId, (pane) => {
         if (data?.conversationId) pane.conversationId = data.conversationId;
         if (data?.runId) pane.liveRunId = data.runId;
-        if (data?.steerDelivery === "mid_turn" || data?.steerDelivery === "after_answer")
-          pane.liveSteerDelivery = data.steerDelivery;
         pane.liveStatus = "응답 준비 중…";
         adoptUserMessageId(pane, optimisticId, data?.userMessageId);
       });
@@ -1683,29 +1668,23 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "agent":
       if (data?.agentId) {
         markTextBreak(paneId);
-        // A re-emit for a known agent (it went to the background) may carry no
-        // naming field at all, and must not rename its card to the placeholder.
+        // A re-emit for a known agent may carry no naming field at all, and
+        // must not rename its card to the placeholder.
         const described = [data.subagentType, data.description]
           .filter(Boolean)
           .join(" · ");
-        const background = data.background === true;
         ensureAgent(
           paneId,
           data.agentId,
           data.parentId || "main",
           described || undefined,
           "running",
-          background,
         );
         const node = readState()
           .chatPanes.find((p) => p.id === paneId)
           ?.liveAgents.find((a) => a.id === data.agentId);
         const label = (node && agentTitle(node)) || "하위 작업";
-        setStatus(
-          paneId,
-          background ? `백그라운드에서 에이전트 실행 중: ${label}` : `에이전트 작업 중: ${label}`,
-          true,
-        );
+        setStatus(paneId, `에이전트 작업 중: ${label}`, true);
       }
       return;
     case "agent_end":
@@ -1802,9 +1781,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "compact":
       handleCompact(paneId, data);
       return;
-    case "permission":
-      enqueuePrompt(paneId, "permission", data);
-      return;
     case "question":
       enqueuePrompt(paneId, "question", data);
       return;
@@ -1864,20 +1840,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         });
       }
       return;
-    case "bg_tasks":
-      // Live background-task set (REPLACE semantics): swap, never merge.
-      updatePane(paneId, (pane) => {
-        pane.backgroundTasks = Array.isArray(data?.tasks) ? data.tasks : [];
-      });
-      return;
-    case "bg_message":
-      // A background wake-up turn was persisted server-side → its own bubble.
-      if (data?.message?.role === "assistant")
-        appendBackgroundMessage(paneId, data.message as StoredMessage);
-      return;
-    case "bg_end":
-      finalizeBackgroundPhase(paneId, "done");
-      return;
     case "steer":
       // One frame per state change, journaled server-side and replayed on
       // reattach — every branch below has to be idempotent. The persisted user
@@ -1896,22 +1858,13 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
     case "done":
       finalizeDone(paneId, data);
       return;
-    case "cancelled": {
-      // A stop during the background phase KILLS the pending background work:
-      // seal the tree with "failed" rows (and persist that) before the normal
-      // stopped-bubble handling.
-      const pane = readState().chatPanes.find((p) => p.id === paneId);
-      if (pane?.backgroundPhase) finalizeBackgroundPhase(paneId, "failed");
+    case "cancelled":
       finalizePane(paneId, "중지됨", true);
       adoptTerminalMessageId(paneId, data?.message);
       return;
-    }
-    case "error": {
-      const pane = readState().chatPanes.find((p) => p.id === paneId);
-      if (pane?.backgroundPhase) finalizeBackgroundPhase(paneId, "failed");
+    case "error":
       finalizeError(paneId, data?.error || "오류가 발생했습니다.");
       return;
-    }
     default:
       return;
   }
@@ -2056,7 +2009,6 @@ function handleBlocked(paneId: string, data: any): void {
       label: humanTool(data.toolName),
       detail: reason,
       status: "blocked",
-      segment: rowSegment(pane, data.agentId || "main"),
     });
   });
 }
@@ -2080,7 +2032,6 @@ function handleMemory(paneId: string, data: any): void {
       label,
       detail,
       status: "done",
-      segment: rowSegment(pane, "main"),
     });
   });
 }
@@ -2121,7 +2072,6 @@ function handleCompact(paneId: string, data: any): void {
       label: failed ? "맥락 정리에 실패했습니다" : "대화 맥락이 요약되었습니다",
       detail: detail || undefined,
       status: failed ? "failed" : "done",
-      segment: rowSegment(pane, "main"),
     });
   });
 }
@@ -2153,7 +2103,6 @@ function ensureAgent(
   parentId = "main",
   label?: string,
   status?: "running" | "done" | "failed",
-  background = false,
 ): void {
   updatePane(paneId, (pane) => {
     if (!pane.liveAgents.some((a) => a.id === "main")) {
@@ -2178,7 +2127,6 @@ function ensureAgent(
         existing.label.startsWith(`${label} · `);
       if (label && !covered) existing.label = label;
       if (status) existing.status = status;
-      if (background) existing.background = true;
       return;
     }
     pane.liveAgents.push({
@@ -2187,15 +2135,10 @@ function ensureAgent(
       label: label || "하위 작업",
       status: status || "running",
       isMain: false,
-      // A nested agent belongs to its parent's turn, like the parent's own rows.
-      segment: rowSegment(pane, parentId || "main"),
-      ...(background ? { background: true } : {}),
     });
   });
 }
 
-// Rows are stamped with their segment once, at creation: a later update (a
-// background shell settling during a wake-up turn) keeps the turn it started in.
 function upsertTool(paneId: string, row: LiveToolRow): void {
   updatePane(paneId, (pane) => {
     const existing = pane.liveTools.find((t) => t.id === row.id);
@@ -2205,7 +2148,7 @@ function upsertTool(paneId: string, row: LiveToolRow): void {
       existing.status = row.status;
       existing.kind = row.kind;
     } else {
-      pane.liveTools.push({ ...row, segment: rowSegment(pane, row.agentId) });
+      pane.liveTools.push({ ...row });
     }
   });
 }
@@ -2222,7 +2165,7 @@ function upsertTask(paneId: string, row: LiveTaskRow): void {
       existing.status = row.status;
       existing.agentId = row.agentId;
     } else {
-      pane.liveTasks.push({ ...row, segment: rowSegment(pane, row.agentId) });
+      pane.liveTasks.push({ ...row });
     }
   });
 }
@@ -2316,11 +2259,6 @@ function resetLive(pane: ChatPane): void {
   pane.liveStatusStickyUntil = 0;
   pane.liveStatusPinSource = undefined;
   pane.liveStatusHeld = undefined;
-  pane.backgroundPhase = false;
-  pane.backgroundTasks = [];
-  pane.backgroundMessageId = null;
-  pane.liveSegment = 0;
-  pane.segmentMessageIds = [];
   // Pending steers belong to the LIVE turn: a reattach replays every `steer`
   // frame, so the list is rebuilt from the log rather than carried across.
   pane.steers = [];
@@ -2331,40 +2269,21 @@ function resetLive(pane: ChatPane): void {
 
 // Snapshot the live activity tree so the COMPLETED bubble keeps showing what ran
 // (otherwise the tree vanishes the instant the run finishes). Normalize any still
-// "running" node to the terminal status so it doesn't render a perpetual spinner:
-// "done" on a natural finish, "failed" when the run was killed with background
-// work still in flight (those tasks really died — "done" would be a lie).
-function snapshotActivity(
-  pane: ChatPane,
-  terminal: "done" | "failed" = "done",
-): AgentActivity | undefined {
+// "running" node to "done" so it doesn't render a perpetual spinner.
+function snapshotActivity(pane: ChatPane): AgentActivity | undefined {
   if (!pane.liveTools.length && !pane.liveTasks.length) return undefined;
-  return sealRows(
-    { agents: pane.liveAgents, tools: pane.liveTools, tasks: pane.liveTasks },
-    terminal,
-  );
-}
-
-/** A persisted copy of a live row: the segment stamp is live-only bookkeeping. */
-function unstamped<T extends { segment?: number }>(row: T): T {
-  const copy = { ...row };
-  delete copy.segment;
-  return copy;
-}
-
-function sealRows(rows: SegmentRows, terminal: "done" | "failed"): AgentActivity {
   return {
-    agents: rows.agents.map((a) => ({
-      ...unstamped(a),
-      status: a.status === "running" ? terminal : a.status,
+    agents: pane.liveAgents.map((a) => ({
+      ...a,
+      status: a.status === "running" ? "done" : a.status,
     })),
-    tools: rows.tools.map((t) => ({
-      ...unstamped(t),
-      status: t.status === "running" ? terminal : t.status,
+    tools: pane.liveTools.map((t) => ({
+      ...t,
+      status: t.status === "running" ? "done" : t.status,
     })),
-    tasks: rows.tasks.map((t) => ({
-      ...unstamped(t),
-      status: t.status === "running" ? terminal : t.status,
+    tasks: pane.liveTasks.map((t) => ({
+      ...t,
+      status: t.status === "running" ? "done" : t.status,
     })),
   };
 }
@@ -2387,12 +2306,6 @@ function attachThinking(
 }
 
 function finalizeDone(paneId: string, data: any): void {
-  // done{background:true}: the SDK session keeps running background work past
-  // this point — finalize the bubble but keep the live tree until bg_end.
-  if (data?.background) {
-    finalizeBackgroundTurn(paneId, data);
-    return;
-  }
   // Only a turn that actually landed is announced: a reconnect replays the whole
   // event log, and the deduped frame must not re-fire the notification.
   if (finalizeVisibleTurn(paneId, data, false)) notifyTurnComplete(paneId);
@@ -2519,135 +2432,6 @@ function notifyTurnComplete(paneId: string): void {
   );
 }
 
-/* ---------- background phase (SDK keeps running after the visible turn) ---------- */
-
-// done{background:true}: push the finalized turn's message, keep the live
-// activity tree mounted (its rows keep updating until bg_end), and flip the
-// pane into its background phase — the chip renders and the send button stays
-// a stop button (killing the run kills the background work).
-function finalizeBackgroundTurn(paneId: string, data: any): void {
-  let appended = false;
-  updatePane(paneId, (pane) => {
-    const message = data?.message as StoredMessage | undefined;
-    if (
-      message?.role === "assistant" &&
-      !(message.id && pane.messages.some((m) => m.id === message.id))
-    ) {
-      attachThinking(message.response, pane.liveThinking);
-      pane.messages.push(message);
-      appended = true;
-      pane.usage = message.response?.usage ?? pane.usage;
-    }
-    pane.backgroundMessageId = message?.id || null;
-    // The finalized turn is segment 0: rows created from here on belong to the
-    // first wake-up turn, unless a segment-0 agent owns them. Only on ENTERING
-    // the phase — a reattach replays this frame after a resetLive, never twice.
-    if (!pane.backgroundPhase) {
-      pane.segmentMessageIds = [message?.id || ""];
-      pane.liveSegment = 1;
-    }
-    pane.backgroundPhase = true;
-    if (Array.isArray(data?.tasks)) pane.backgroundTasks = data.tasks;
-    // Clear only the text-ish live state (it moved into the pushed message);
-    // agents/tools/tasks/plugins stay so the running rows remain visible.
-    pane.liveText = "";
-    pane.liveAttachments = [];
-    pane.liveTextBreakPending = false;
-    pane.liveThinking = "";
-    pane.thinkingActive = false;
-    pane.liveStatus = "백그라운드 작업 진행 중…";
-  });
-  // The sidebar's background badge should show up the moment the phase starts.
-  // Best effort, like the activity PUT: a failed refresh is not the viewer's
-  // problem and must not surface as an error on a turn that worked.
-  loadConversations().catch(() => {});
-  // A reconnect replays this frame; announcing a turn the viewer was already told
-  // about would re-fire the notification on every reconnect.
-  if (appended) notifyTurnComplete(paneId);
-}
-
-// A background wake-up turn was persisted server-side: append it as its own
-// assistant bubble. Dedupe by id — a reattach replays the whole event log.
-function appendBackgroundMessage(paneId: string, message: StoredMessage): void {
-  let appended = false;
-  updatePane(paneId, (pane) => {
-    // This wake-up turn's rows now have a bubble of their own; later rows start
-    // the next segment. Before the dedupe below: a reattach replays the frame
-    // onto a transcript that already holds the message, and the segment still
-    // has to close.
-    const ids = pane.segmentMessageIds ?? [];
-    if (pane.backgroundPhase && message.id && !ids.includes(message.id)) {
-      const segment = pane.liveSegment ?? ids.length;
-      ids[segment] = message.id;
-      pane.segmentMessageIds = ids;
-      pane.liveSegment = segment + 1;
-    }
-    if (message.id && pane.messages.some((m) => m.id === message.id)) return;
-    pane.messages.push(message);
-    pane.usage = message.response?.usage ?? pane.usage;
-    // The wake-up turn's streamed tail (text/thinking/attachments) is embodied
-    // in the pushed message — reset the live state for the next wake-up so the
-    // same content doesn't render twice (live cards + message cards).
-    pane.liveText = "";
-    pane.liveTextBreakPending = false;
-    pane.liveThinking = "";
-    pane.thinkingActive = false;
-    pane.liveAttachments = [];
-    appended = true;
-  });
-  if (!appended) return;
-  const pane = readState().chatPanes.find((p) => p.id === paneId);
-  const name = pane?.avatar?.alias || pane?.avatar?.displayName || "아바타";
-  const text = (message.content || "").replace(/\s+/g, " ").trim();
-  osNotify(
-    `${name} · 백그라운드 작업 보고`,
-    text ? (text.length > 140 ? `${text.slice(0, 140)}…` : text) : "백그라운드 작업이 완료되었습니다.",
-    `bg-${paneId}`,
-  );
-}
-
-// The background phase ended — naturally (bg_end → terminal "done") or by a
-// kill (cancelled/error → "failed"). Seal the live tree with that terminal
-// status, persist the snapshots, and drop the live rows. Each bubble gets ITS
-// OWN rows (lib/activitySegments.ts): the finalized turn keeps its work,
-// background agents' late calls included, and every wake-up turn keeps the
-// tools it ran — they used to all land on the finalized turn. A kill keeps the
-// streamed text tail: the caller's finalizePane / finalizeError persists it as
-// the terminal bubble right after this.
-function finalizeBackgroundPhase(
-  paneId: string,
-  terminal: "done" | "failed",
-): void {
-  const patches: { id: string; activity: AgentActivity }[] = [];
-  updatePane(paneId, (pane) => {
-    if (!pane.backgroundPhase) return;
-    for (const [id, segments] of segmentSealTargets(pane)) {
-      const rows = segmentRows(pane, segments);
-      if (!hasRows(rows)) continue;
-      const activity = sealRows(rows, terminal);
-      const target = pane.messages.find((m) => m.id === id);
-      if (target?.response) target.response.activity = activity;
-      patches.push({ id, activity });
-    }
-    pane.backgroundPhase = false;
-    pane.backgroundTasks = [];
-    pane.backgroundMessageId = null;
-    pane.liveAgents = [];
-    pane.liveTools = [];
-    pane.liveTasks = [];
-    pane.livePlugins = [];
-    if (terminal === "done") clearLive(pane);
-  });
-  for (const patch of patches) {
-    // Best effort, like finalizeDone: display already works without it — this
-    // only adds reload durability for the sealed trees.
-    api(`/api/messages/${encodeURIComponent(patch.id)}/activity`, {
-      method: "PUT",
-      body: JSON.stringify({ activity: patch.activity }),
-    }).catch(() => {});
-  }
-}
-
 /**
  * Per pane, the client-minted id of the last stopped/error bubble. A `cancelled`
  * frame carries the row the server persisted for that stop; adopting its id keeps
@@ -2676,7 +2460,7 @@ function pushTerminalMessage(
 ): void {
   const response: AgentResponse = {
     kind: "text",
-    runtime: "claude",
+    runtime: "pi",
     summary,
     text,
   };
@@ -3285,14 +3069,14 @@ export async function rollbackCanvas(
   }
 }
 
-/* ---------- interactive prompts (permission / question) ---------- */
+/* ---------- interactive prompts (question) ---------- */
 
 // requestIds already resolved server-side (replay/prompt_resolved) — skip showing.
 const resolvedRequestIds = new Set<string>();
 
 function enqueuePrompt(
   paneId: string,
-  kind: "permission" | "question",
+  kind: "question",
   data: any,
 ): void {
   const requestId = data?.requestId;
@@ -3308,36 +3092,23 @@ function enqueuePrompt(
       data,
     });
   });
-  notifyPrompt(paneId, kind, data);
+  notifyPrompt(paneId, data);
 }
 
-// OS notification when the avatar needs the owner's input (an AskUserQuestion-style
-// question or a permission request). Like answer-complete, this only fires while the
-// app is backgrounded; in the foreground the prompt modal itself is visible.
-function notifyPrompt(
-  paneId: string,
-  kind: "permission" | "question",
-  data: any,
-): void {
+// OS notification when the avatar asks the owner a question (AskUserQuestion).
+// Like answer-complete, this only fires while the app is backgrounded; in the
+// foreground the prompt modal itself is visible.
+function notifyPrompt(paneId: string, data: any): void {
   const pane = readState().chatPanes.find((p) => p.id === paneId);
   const who = pane?.avatar?.alias || pane?.avatar?.displayName || "아바타";
-  if (kind === "question") {
-    const questions = Array.isArray(data?.payload?.questions)
-      ? data.payload.questions
-      : null;
-    const first =
-      questions?.[0]?.question ||
-      questions?.[0]?.header ||
-      "확인이 필요한 질문이 있습니다.";
-    osNotify(`${who} · 질문`, String(first), `prompt-${data.requestId}`);
-  } else {
-    const tool = humanTool(data?.toolName);
-    osNotify(
-      `${who} · 확인 필요`,
-      `"${tool}" 실행을 승인해 주세요.`,
-      `prompt-${data.requestId}`,
-    );
-  }
+  const questions = Array.isArray(data?.payload?.questions)
+    ? data.payload.questions
+    : null;
+  const first =
+    questions?.[0]?.question ||
+    questions?.[0]?.header ||
+    "확인이 필요한 질문이 있습니다.";
+  osNotify(`${who} · 질문`, String(first), `prompt-${data.requestId}`);
 }
 
 function resolvePrompt(requestId: string): void {

@@ -81,7 +81,6 @@ async function mockApp(page: Page): Promise<void> {
         confluenceConfigured: false,
         modelSelection: {
           tiers: [{ id: "default", label: "기본", description: "균형", model: null }],
-          locked: false,
         },
         effortSelection: {
           levels: [{ id: "high", label: "높음", description: "기본 강도" }],

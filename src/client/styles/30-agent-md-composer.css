@@ -324,19 +324,6 @@
   font-size: var(--t-2xs);
   line-height: 1;
 }
-/* A sub-agent running in the background: its spawn returned at once, so the
-   card (not the turn) is where the user sees it is still at work. Outlined
-   like .task-badge so it reads as a qualifier of the solid 에이전트 badge. */
-.agent-bg-badge {
-  flex: none;
-  border: 1px solid var(--accent-soft-strong);
-  border-radius: var(--r-pill);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  padding: 0 var(--s-1-5);
-  font-size: var(--t-2xs);
-  font-weight: 700;
-}
 .agent-label {
   font-weight: 600;
   /* min-width:0 so the automatic content-based flex minimum doesn't keep an
@@ -695,12 +682,6 @@
 .prompt-card[aria-busy="true"] {
   cursor: progress;
 }
-.prompt-card.permission {
-  border-color: var(--warn-line);
-  background:
-    linear-gradient(var(--warn-soft), var(--warn-soft)),
-    linear-gradient(var(--bg-elevated), var(--bg-elevated)) var(--bg);
-}
 .prompt-card.question {
   border-color: var(--info-line);
   background:
@@ -733,35 +714,6 @@
 }
 .prompt-error {
   margin-top: var(--s-1);
-}
-.prompt-title {
-  font-size: var(--t-base);
-  font-weight: 600;
-  color: var(--text);
-}
-.prompt-tool {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-2);
-  font-size: var(--t-sm);
-  min-width: 0;
-}
-.prompt-tool code {
-  font-family: var(--font-mono);
-  background: var(--panel-strong);
-  border-radius: var(--r-sm);
-  padding: 1px var(--s-1-5);
-  flex: none;
-}
-.prompt-arg {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.prompt-desc {
-  font-size: var(--t-sm);
-  color: var(--text-soft);
 }
 .prompt-input {
   font-size: var(--t-xs);

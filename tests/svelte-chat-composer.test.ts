@@ -76,7 +76,6 @@ function seed(modelTier: string): void {
     bootstrap: {
       visionEnabled: true,
       modelSelection: {
-        locked: false,
         defaultVision: true,
         tiers: [
           { id: "seeing", label: "Seeing", description: "", model: "m-1", vision: true },
@@ -171,6 +170,19 @@ describe("composer image attach in file mode", () => {
   });
 });
 
+describe("composer model picker", () => {
+  it("is always pickable and names each tier's mapped model (there is no server lock)", () => {
+    seed("seeing");
+    const { container } = render(ChatView);
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    expect(select).toBeTruthy();
+    expect(select.disabled).toBe(false);
+    expect(select.title).toBe("이 대화에서 다음 메시지부터 사용할 모델을 고릅니다");
+    expect([...select.options].map((o) => o.textContent?.trim())).toEqual(["Seeing · m-1", "Blind · m-2"]);
+    expect(container.textContent).not.toContain("고정되어 있습니다");
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /* mid-turn messages ("steers")                                        */
 /* ------------------------------------------------------------------ */
@@ -202,7 +214,7 @@ describe("composer mid-turn messages", () => {
     expect(steerButton).toBeTruthy();
     expect(steerButton!.getAttribute("aria-label")).toBe("응답 중 메시지 보내기");
     expect(steerButton!.disabled).toBe(false);
-    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (다음 작업 사이에 전달됩니다)");
+    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (지금 답변이 끝난 뒤 이어서 전달됩니다)");
     // The stop button is untouched — killing the run and messaging it are two acts.
     expect(container.querySelector(".send-button.is-stop")).toBeTruthy();
     // And the extra column is declared, or the button would wrap onto its own row.
@@ -226,23 +238,13 @@ describe("composer mid-turn messages", () => {
     expect(container.querySelector(".composer-box.with-steer")).toBeTruthy();
   });
 
-  it("says a message can be sent mid-answer", () => {
+  it("says a message sent mid-answer arrives after the answer, never between actions", () => {
     seedStreaming();
-    const { container } = render(ChatView);
-    expect(composerTextarea(container).placeholder).toBe(
-      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다",
-    );
-  });
-
-  it("says a message sent on a pi run arrives after the answer, not between actions", () => {
-    seedStreaming({ liveSteerDelivery: "after_answer" });
     const { container } = render(ChatView);
     expect(composerTextarea(container).placeholder).toBe(
       "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 지금 답변이 끝난 뒤 이어서 전달됩니다",
     );
-    expect(container.querySelector<HTMLButtonElement>(".send-button.steer-send")!.title).toBe(
-      "응답 중 메시지 보내기 (지금 답변이 끝난 뒤 이어서 전달됩니다)",
-    );
+    expect(container.textContent).not.toContain("다음 작업 사이");
   });
 
   it("refuses to steer while an image is staged, and says when it can go", async () => {

@@ -74,7 +74,7 @@ export interface ClientState {
   /** Live "who's here now" for the admin-only rail badge; null until first poll. */
   adminPresence: AdminPresence | null;
   audit: AuditEvent[];
-  /** Interactive permission/question prompts awaiting the owner (one shown at a time). */
+  /** Interactive question prompts awaiting the owner (one shown at a time). */
   promptQueue: PromptRequest[];
   /**
    * One-shot deep link from the what's-new dialog: the 권한·연결 tab opens the

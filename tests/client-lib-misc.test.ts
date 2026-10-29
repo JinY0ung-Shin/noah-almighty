@@ -699,7 +699,7 @@ describe("recordKnowledgeViaAvatar", () => {
     expect(calls).toContain("PATCH /api/conversations/kc1");
   });
 
-  it("auto-denies an unexpected permission prompt and cancels a question", async () => {
+  it("cancels a question and ignores a retired permission frame", async () => {
     replaceState({ user: { id: "owner2" } as any });
     const responded: any[] = [];
     useFetch((url, init) => {
@@ -719,8 +719,7 @@ describe("recordKnowledgeViaAvatar", () => {
     });
     const res = await recordKnowledgeViaAvatar(request, "내용");
     expect(res.ok).toBe(true);
-    expect(responded).toContainEqual(expect.objectContaining({ requestId: "perm1", value: { behavior: "deny" } }));
-    expect(responded).toContainEqual(expect.objectContaining({ requestId: "q1", value: { cancelled: true } }));
+    expect(responded).toEqual([expect.objectContaining({ requestId: "q1", value: { cancelled: true } })]);
   });
 
   it("returns the error carried by an SSE error frame", async () => {

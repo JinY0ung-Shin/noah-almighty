@@ -40,7 +40,6 @@ import {
 } from "../src/client/src/lib/chat.js";
 import { resolveSideTab } from "../src/client/src/lib/sidePanel.js";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
-import { liveSegmentRows, messageSegmentRows } from "../src/client/src/lib/activitySegments.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { DRAWIO_MEDIA_TYPE } from "../src/client/src/lib/drawioViewer.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
@@ -938,7 +937,7 @@ describe("canvas flows", () => {
 describe("prompts", () => {
   it("answerPrompt posts the owner's response and dequeues the prompt", async () => {
     updateState((s) => {
-      s.promptQueue.push({ id: "rq1", runId: "rn1", paneId: "p", kind: "permission", data: {} });
+      s.promptQueue.push({ id: "rq1", runId: "rn1", paneId: "p", kind: "question", data: {} });
     });
     let posted: any;
     useFetch((url, init) => {
@@ -948,8 +947,8 @@ describe("prompts", () => {
       }
       return undefined;
     });
-    await answerPrompt("rq1", { behavior: "allow" });
-    expect(posted).toMatchObject({ runId: "rn1", requestId: "rq1", value: { behavior: "allow" } });
+    await answerPrompt("rq1", { cancelled: true });
+    expect(posted).toMatchObject({ runId: "rn1", requestId: "rq1", value: { cancelled: true } });
     expect(readState().promptQueue).toHaveLength(0);
   });
 
@@ -1486,7 +1485,7 @@ describe("the status pin after a tool frame", () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const id = seedPane();
     const release = useHeldRun("held-run-1", [
-      ["open", { runId: "held-run-1", steerDelivery: "after_answer" }],
+      ["open", { runId: "held-run-1" }],
       ["tool", { toolUseId: "t-ask", name: "Bash", input: { command: "ask mate" } }],
       // The tool's own progress echo while it runs: says less than the pin, dropped.
       ["status", { label: "실행 중: 명령 실행" }],
@@ -1496,7 +1495,6 @@ describe("the status pin after a tool frame", () => {
     ]);
     const attached = attachRun(id, "held-run-1");
     await step(0);
-    expect(pane(id).liveSteerDelivery).toBe("after_answer");
     expect(pane(id).liveStatus).toBe("명령 실행 · ask mate");
     await step(1400);
     expect(pane(id).liveStatus).toBe("명령 실행 · ask mate");
@@ -1521,8 +1519,6 @@ describe("the status pin after a tool frame", () => {
     ]);
     const attached = attachRun(id, "held-run-2");
     await step(0);
-    // No delivery said: the composer keeps the SDK wording.
-    expect(pane(id).liveSteerDelivery).toBeUndefined();
     expect(pane(id).liveStatus).toBe("명령 실행 · sleep 6");
     await step(2000);
     // Neither the older held status nor the running tool's echo replaces it.
@@ -1894,7 +1890,6 @@ describe("stream events applied to a pane", () => {
       ["canvas", {}],
       ["file", { attachment: {} }],
       ["prompt_resolved", {}],
-      ["bg_end", {}],
     ]);
     const p = pane(id);
     // A partial frame must not mint a phantom row or move the conversation.
@@ -1952,255 +1947,82 @@ describe("stream events applied to a pane", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* background phase (the SDK keeps working past the visible turn)      */
+/* finalized turns and agent rows                                      */
 /* ------------------------------------------------------------------ */
 
-const BG_MESSAGE = {
-  id: "bg-msg-1",
+const TURN_MESSAGE = {
+  id: "turn-msg-1",
   role: "assistant",
   content: "먼저 답합니다",
   conversationId: "conv-x",
   createdAt: "t",
   response: {
     kind: "text",
-    runtime: "claude",
+    runtime: "pi",
     text: "먼저 답합니다",
     usage: { inputTokens: 5, outputTokens: 2 },
   },
 };
 
-describe("background phase", () => {
-  it("done{background} finalizes the bubble but keeps the activity tree mounted", async () => {
-    const id = seedPane();
-    const statuses = trackStatus(id);
-    const notes = useOsNotifications();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "npm test" } }],
-      ["delta", { text: "먼저 답합니다" }],
-      ["done", { background: true, message: BG_MESSAGE, tasks: [{ taskId: "bt1", description: "후속 작업" }] }],
-    ]);
-    const p = pane(id);
-    expect(p.messages.at(-1)).toMatchObject({ id: "bg-msg-1", role: "assistant" });
-    expect(p).toMatchObject({ backgroundPhase: true, backgroundMessageId: "bg-msg-1" });
-    expect(p.backgroundTasks).toEqual([{ taskId: "bt1", description: "후속 작업" }]);
-    // Rows keep updating until bg_end; only the text moved into the bubble.
-    expect(p.liveTools).toHaveLength(1);
-    expect(p).toMatchObject({ liveText: "", liveThinking: "" });
-    expect(p.usage).toMatchObject({ inputTokens: 5, outputTokens: 2 });
-    expect(statuses()).toContain("백그라운드 작업 진행 중…");
-    expect(notes.map((n) => n.title)).toContain("노아 · 답변 완료");
-  });
-
-  it("bg_tasks replaces the live task set rather than merging into it", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["done", { background: true, message: BG_MESSAGE }],
-      ["bg_tasks", { tasks: [{ taskId: "a" }, { taskId: "b" }] }],
-      ["bg_tasks", { tasks: [{ taskId: "c" }] }],
-    ]);
-    expect(pane(id).backgroundTasks).toEqual([{ taskId: "c" }]);
-  });
-
-  it("bg_end seals the tree onto the finalized turn and persists the snapshot", async () => {
+describe("finalized turns and agent rows", () => {
+  it("done is terminal: it seals the live tree onto the bubble and persists the snapshot", async () => {
     const id = seedPane();
     const { calls } = await driveEvents(id, [
       ["tool", { toolUseId: "t1", name: "Bash", input: { command: "npm test" } }],
       ["task", { taskId: "k9", subagentType: "worker" }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_end", {}],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
     ]);
     const p = pane(id);
-    expect(p).toMatchObject({ backgroundPhase: false, backgroundMessageId: null });
-    expect(p.backgroundTasks).toEqual([]);
     expect(p.liveTools).toEqual([]);
     expect(p.liveTasks).toEqual([]);
     // A row still "running" at the end would render a perpetual spinner.
     const sealed = (p.messages.at(-1)!.response as any).activity;
     expect(sealed.tools[0]).toMatchObject({ id: "t1", status: "done" });
     expect(sealed.tasks[0]).toMatchObject({ id: "k9", status: "done" });
-    const put = calls.find((c) => c.url.includes("/api/messages/bg-msg-1/activity"));
+    const put = calls.find((c) => c.url.includes("/api/messages/turn-msg-1/activity"));
     expect(put?.init.method).toBe("PUT");
     expect(body(put!.init).activity.tools[0].status).toBe("done");
+    expect(p.usage).toMatchObject({ inputTokens: 5, outputTokens: 2 });
   });
 
-  it("bg_end with no activity to seal just ends the phase", async () => {
-    const id = seedPane();
-    const { calls } = await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_end", {}],
-    ]);
-    expect(pane(id).backgroundPhase).toBe(false);
-    expect(calls.some((c) => c.url.includes("/activity"))).toBe(false);
-  });
-
-  it("a background wake-up turn gets its own bubble, once per message id", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    const wake = {
-      id: "bg-wake-1",
-      role: "assistant",
-      content: "백그라운드 결과입니다",
-      conversationId: "conv-x",
-      createdAt: "t",
-      response: { kind: "text", runtime: "claude", text: "백그라운드 결과입니다" },
-    };
-    await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["delta", { text: "스트리밍 꼬리" }],
-      ["bg_message", { message: wake }],
-      ["bg_message", { message: wake }],
-      // Only the avatar's own wake-up turns become bubbles.
-      ["bg_message", { message: { ...wake, id: "bg-wake-2", role: "user" } }],
-    ]);
-    const p = pane(id);
-    expect(p.messages.filter((m) => m.id === "bg-wake-1")).toHaveLength(1);
-    expect(p.messages.some((m) => m.id === "bg-wake-2")).toBe(false);
-    // The streamed tail is embodied in the pushed bubble — it must not render twice.
-    expect(p.liveText).toBe("");
-    expect(notes.filter((n) => n.title.includes("백그라운드 작업 보고"))).toEqual([
-      { title: "노아 · 백그라운드 작업 보고", body: "백그라운드 결과입니다", tag: `bg-${id}` },
-    ]);
-  });
-
-  it("stopping during the background phase seals the tree as failed and keeps the tail", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "sleep 60" } }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["delta", { text: "중단 직전 텍스트" }],
-      ["cancelled", {}],
-    ]);
-    const p = pane(id);
-    // Those tasks really died — reporting "done" would be a lie.
-    const sealed = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(sealed.tools[0]).toMatchObject({ id: "t1", status: "failed" });
-    expect(p.backgroundPhase).toBe(false);
-    expect(p.messages.at(-1)).toMatchObject({ content: "중단 직전 텍스트" });
-    expect(p.messages.at(-1)!.response).toMatchObject({ summary: "중지됨" });
-  });
-
-  it("an error during the background phase fails the tree and reports the error", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "sleep 60" } }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["error", { error: "모델이 응답하지 못했습니다." }],
-    ]);
-    const p = pane(id);
-    const sealed = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(sealed.tools[0].status).toBe("failed");
-    expect(p.messages.at(-1)).toMatchObject({ content: "모델이 응답하지 못했습니다." });
-    expect(p.messages.at(-1)!.response).toMatchObject({ summary: "오류" });
-    expect(get(toasts).some((t) => t.message.includes("모델이 응답하지 못했습니다."))).toBe(true);
-  });
-
-  // One live tree, several bubbles: the finished turn keeps its own work (its
-  // background agent's late calls included) and the wake-up turn keeps the tool
-  // it ran. Everything used to seal onto the finished turn.
-  const WAKE_ONE = { ...BG_MESSAGE, id: "wake-1", content: "결과 보고", response: { ...BG_MESSAGE.response, text: "결과 보고" } };
-  const SPLIT_FRAMES: Array<[string, unknown]> = [
-    ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
-    // The spawn came back as a launch receipt: same card, now flagged, label kept.
-    ["agent", { agentId: "ag1", parentId: "main", background: true }],
-    ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
-    ["tool_end", { toolUseId: "t1", ok: true }],
-    ["done", { background: true, message: BG_MESSAGE }],
-    ["tool", { toolUseId: "ag1-read", name: "Read", agentId: "ag1", input: { file_path: "a.md" } }],
-    ["agent_end", { agentId: "ag1", ok: true }],
-    ["tool", { toolUseId: "w1", name: "Grep", input: { pattern: "needle" } }],
-    ["tool_end", { toolUseId: "w1", ok: true }],
-    ["bg_message", { message: WAKE_ONE }],
-  ];
-
-  it("splits the live rows per bubble while the background phase runs", async () => {
-    const id = seedPane();
-    await driveEvents(id, structuredClone(SPLIT_FRAMES));
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      label: "general-purpose · 조사",
-      background: true,
-      status: "done",
-    });
-    expect(messageSegmentRows(p, "bg-msg-1")!.tools.map((t) => t.id)).toEqual(["t1", "ag1-read"]);
-    expect(messageSegmentRows(p, "bg-msg-1")!.agents.map((a) => a.id)).toEqual(["main", "ag1"]);
-    expect(messageSegmentRows(p, "wake-1")!.tools.map((t) => t.id)).toEqual(["w1"]);
-    expect(messageSegmentRows(p, "wake-1")!.agents.map((a) => a.id)).toEqual(["main"]);
-    // No wake-up turn in flight: the trailing live bubble has no tree of its own.
-    expect(liveSegmentRows(p)).toBeNull();
-  });
-
-  it("bg_end seals each bubble's own rows and never persists the segment stamps", async () => {
-    const id = seedPane();
-    const { calls } = await driveEvents(id, [...structuredClone(SPLIT_FRAMES), ["bg_end", {}]]);
-    const p = pane(id);
-    const turn = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(turn.tools.map((t: any) => t.id)).toEqual(["t1", "ag1-read"]);
-    expect(turn.agents.find((a: any) => a.id === "ag1")).toMatchObject({ background: true, status: "done" });
-    const wake = (p.messages.find((m) => m.id === "wake-1")!.response as any).activity;
-    expect(wake.tools.map((t: any) => t.id)).toEqual(["w1"]);
-    const puts = calls.filter((c) => c.url.includes("/activity"));
-    expect(puts.map((c) => c.url)).toEqual(["/api/messages/bg-msg-1/activity", "/api/messages/wake-1/activity"]);
-    expect(JSON.stringify(puts.map((c) => body(c.init)))).not.toContain("segment");
-    expect(p).toMatchObject({ backgroundPhase: false, liveTools: [], liveAgents: [] });
-  });
-
-  it("a reattach replays the same split onto the already-loaded transcript", async () => {
-    const id = seedPane();
-    await driveEvents(id, structuredClone(SPLIT_FRAMES));
-    // Reattach: resetLive, then the whole log again — both bubbles are already
-    // in the transcript, so every message frame dedupes but its segment closes.
-    await driveEvents(id, structuredClone(SPLIT_FRAMES));
-    const p = pane(id);
-    expect(p.messages.filter((m) => m.id === "wake-1")).toHaveLength(1);
-    expect(p.segmentMessageIds).toEqual(["bg-msg-1", "wake-1"]);
-    expect(messageSegmentRows(p, "wake-1")!.tools.map((t) => t.id)).toEqual(["w1"]);
-  });
-
-  it("a kill mid-wake-up seals the in-flight turn's rows onto the newest bubble", async () => {
+  it("ignores the retired background frames and a done{background} flag", async () => {
     const id = seedPane();
     await driveEvents(id, [
       ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["tool", { toolUseId: "w1", name: "Bash", input: { command: "sleep 60" } }],
-      ["bg_message", { message: structuredClone(WAKE_ONE) }],
-      // The second wake-up turn is still running when the user stops the run.
-      ["tool", { toolUseId: "w2", name: "Bash", input: { command: "sleep 90" } }],
-      ["cancelled", {}],
+      ["bg_tasks", { tasks: [{ taskId: "a" }] }],
+      ["done", { background: true, message: structuredClone(TURN_MESSAGE) }],
+      ["bg_message", { message: { ...structuredClone(TURN_MESSAGE), id: "wake-1" } }],
+      ["bg_end", {}],
     ]);
     const p = pane(id);
-    const turn = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(turn.tools.map((t: any) => t.id)).toEqual(["t1"]);
-    const wake = (p.messages.find((m) => m.id === "wake-1")!.response as any).activity;
-    expect(wake.tools.map((t: any) => [t.id, t.status])).toEqual([
-      ["w1", "failed"],
-      ["w2", "failed"],
-    ]);
+    // The flag no longer holds the tree open: done is the turn's end.
+    expect(p.messages.map((m) => m.id)).toEqual(["turn-msg-1"]);
+    expect(p.liveTools).toEqual([]);
+    expect(p).not.toHaveProperty("backgroundPhase");
+    expect(p).not.toHaveProperty("backgroundTasks");
   });
 
-  it("nests a resumed agent's background shell under its own bubble", async () => {
+  it("a replayed done frame does not duplicate the finalized bubble", async () => {
     const id = seedPane();
     await driveEvents(id, [
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
+    ]);
+    expect(pane(id).messages.filter((m) => m.id === "turn-msg-1")).toHaveLength(1);
+  });
+
+  it("an agent frame never marks the card as a background agent", async () => {
+    const id = seedPane();
+    const statuses = trackStatus(id);
+    await driveEvents(id, [
       ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
-      ["agent_end", { agentId: "ag1", ok: true }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      // A resume: task_started re-announces the card, then the background set
-      // flags it.
-      ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
+      // A re-emit with no naming field keeps the card's label.
       ["agent", { agentId: "ag1", parentId: "main", background: true }],
-      ["task", { taskId: "sh1", agentId: "ag1", taskType: "local_bash", description: "긴 셸" }],
-      ["task_end", { taskId: "sh1", agentId: "ag1", ok: true }],
     ]);
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      label: "general-purpose · 조사",
-      background: true,
-      status: "running",
-    });
-    // The shell is the resumed agent's, so it sits under the finished bubble with it.
-    expect(messageSegmentRows(p, "bg-msg-1")!.tasks).toEqual([
-      expect.objectContaining({ id: "sh1", agentId: "ag1", status: "done" }),
-    ]);
-    expect(liveSegmentRows(p)).toBeNull();
+    const node = pane(id).liveAgents.find((a) => a.id === "ag1")!;
+    expect(node).toMatchObject({ label: "general-purpose · 조사", status: "running" });
+    expect(node).not.toHaveProperty("background");
+    expect(statuses().every((s) => !s.includes("백그라운드"))).toBe(true);
   });
 
   it("ignores a teammate name on an agent frame (agent teams are retired)", async () => {
@@ -2222,12 +2044,17 @@ describe("background phase", () => {
     expect(pane(id).liveAgents.find((a) => a.id === "orphan")).toMatchObject({ parentId: "toolu_unknown" });
   });
 
-  it("a visible turn keeps the whole live tree in the live bubble", async () => {
+  it("live rows carry no segment stamp, so the persisted snapshot has none", async () => {
     const id = seedPane();
-    await driveEvents(id, [["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }]]);
-    const p = pane(id);
-    expect(liveSegmentRows(p)!.tools.map((t) => t.id)).toEqual(["t1"]);
-    expect(messageSegmentRows(p, "anything")).toBeNull();
+    const { calls } = await driveEvents(id, [
+      ["agent", { agentId: "ag1", parentId: "main", description: "조사" }],
+      ["tool", { toolUseId: "t1", name: "Bash", agentId: "ag1", input: { command: "ls" } }],
+      ["task", { taskId: "k1", agentId: "ag1", taskType: "local_bash", description: "셸" }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
+    ]);
+    const put = calls.find((c) => c.url.includes("/activity"));
+    expect(JSON.stringify(body(put!.init))).not.toContain("segment");
+    expect(pane(id).liveAgents).toEqual([]);
   });
 });
 
@@ -2457,15 +2284,6 @@ describe("mid-turn messages (steers)", () => {
 describe("auto-reconnect", () => {
   const RECONNECTING = "연결이 끊겨 다시 연결하는 중…";
 
-  const WAKE_MESSAGE = {
-    id: "bg-wake-r",
-    role: "assistant",
-    content: "백그라운드 보고",
-    conversationId: "conv-x",
-    createdAt: "t",
-    response: { kind: "text", runtime: "claude", text: "백그라운드 보고" },
-  };
-
   /**
    * An events endpoint whose Nth attempt gets `frames(n)`. The stream simply ends
    * after them, which is exactly what a dropped connection looks like from here.
@@ -2487,33 +2305,34 @@ describe("auto-reconnect", () => {
 
   it("holds the live region open when the stream dies with the run still working", async () => {
     const id = seedPane();
+    const FOLLOW_UP = { ...structuredClone(TURN_MESSAGE), id: "follow-up-r", content: "이어서 답합니다" };
     const attempts = useRunEvents("run-drop", (n) => {
       const frames: Array<[string, unknown]> = [
         ["tool", { toolUseId: "t1", name: "Bash", input: { command: "npm test" } }],
-        ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
+        // A steer was pending: the turn so far is sealed, the run goes on.
+        ["turn_end", { message: structuredClone(TURN_MESSAGE) }],
       ];
       // The reattach replays the whole log, and this time carries it to the end.
-      if (n > 1) frames.push(["bg_message", { message: WAKE_MESSAGE }], ["bg_end", {}]);
+      if (n > 1) frames.push(["done", { message: FOLLOW_UP }]);
       return frames;
     });
 
     const running = attachRun(id, "run-drop");
-    // Nothing is torn down: the background indicator and its turn stay mounted.
+    // Nothing is torn down: the sealed turn and the live run stay mounted.
     await waitFor(() => pane(id).liveStatus === RECONNECTING);
-    expect(pane(id)).toMatchObject({ streaming: true, backgroundPhase: true });
-    expect(pane(id).messages.at(-1)).toMatchObject({ id: "bg-msg-1" });
+    expect(pane(id)).toMatchObject({ streaming: true });
+    expect(pane(id).messages.at(-1)).toMatchObject({ id: "turn-msg-1" });
 
     // A returning tab retries immediately instead of waiting the backoff out.
     document.dispatchEvent(new Event("visibilitychange"));
     await running;
 
     expect(attempts()).toBe(2);
-    // The replay rebuilt the turn without duplicating it, and the wake-up landed.
-    expect(pane(id).messages.filter((m) => m.id === "bg-msg-1")).toHaveLength(1);
-    expect(pane(id).messages.at(-1)).toMatchObject({ id: "bg-wake-r" });
+    // The replay rebuilt the turn without duplicating it, and the follow-up landed.
+    expect(pane(id).messages.filter((m) => m.id === "turn-msg-1")).toHaveLength(1);
+    expect(pane(id).messages.at(-1)).toMatchObject({ id: "follow-up-r" });
     expect(pane(id)).toMatchObject({
       streaming: false,
-      backgroundPhase: false,
       liveStatus: "",
       abortController: null,
     });
@@ -2595,10 +2414,12 @@ describe("auto-reconnect", () => {
     const id = seedPane();
     const notes = useOsNotifications();
     const attempts = useRunEvents("run-note", (n) => {
+      // The first read dies after a sealed turn; the replay ends the run
+      // with that SAME message, which is already on screen.
       const frames: Array<[string, unknown]> = [
-        ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
+        ["turn_end", { message: structuredClone(TURN_MESSAGE) }],
       ];
-      if (n > 1) frames.push(["bg_end", {}]);
+      if (n > 1) frames.push(["done", { message: structuredClone(TURN_MESSAGE) }]);
       return frames;
     });
 
@@ -2608,8 +2429,8 @@ describe("auto-reconnect", () => {
     await running;
 
     expect(attempts()).toBe(2);
-    // The replayed done{background} deduped, so it must stay silent.
-    expect(notes.filter((n) => n.title.includes("답변 완료"))).toHaveLength(1);
+    // The replayed message deduped, so the done must stay silent.
+    expect(notes.filter((n) => n.title.includes("답변 완료"))).toHaveLength(0);
   });
 
   it("a send whose own stream dies follows the run instead of ending the turn", async () => {
@@ -2681,13 +2502,6 @@ describe("auto-reconnect", () => {
     expect(pane(id).messages.at(-1)).toMatchObject({ role: "assistant", content: "다시 찾은 답변" });
   });
 
-  it("entering the background phase refreshes the sidebar's conversation list", async () => {
-    const id = seedPane();
-    const { calls } = await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-    ]);
-    expect(calls.some((c) => c.url === "/api/conversations")).toBe(true);
-  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -2883,20 +2697,20 @@ describe("browser-bridge relay: stored-secret input", () => {
 /* ------------------------------------------------------------------ */
 
 describe("interactive prompts raised by a run", () => {
-  it("queues permission and question prompts and notifies the owner", async () => {
+  it("queues question prompts and notifies the owner; a retired permission frame raises nothing", async () => {
     const id = seedPane();
     const notes = useOsNotifications();
     const queued = trackState((s) => s.promptQueue.map((p) => `${p.kind}:${p.id}`).join(","));
     await driveEvents(id, [
       ["permission", { requestId: "pm-1", runId: "rn-p", toolName: "Bash" }],
-      ["permission", { requestId: "pm-1", runId: "rn-p", toolName: "Bash" }],
       ["question", { requestId: "qs-1", runId: "rn-p", payload: { questions: [{ question: "어느 쪽으로 갈까요?" }] } }],
-      ["permission", { runId: "rn-p", toolName: "Bash" }],
+      ["question", { requestId: "qs-1", runId: "rn-p", payload: { questions: [{ question: "어느 쪽으로 갈까요?" }] } }],
+      ["question", { runId: "rn-p", payload: {} }],
     ]);
-    expect(queued()).toContain("permission:pm-1,question:qs-1");
-    // One notification each: the duplicate and the id-less frame raised nothing.
+    expect(queued()).toContain("question:qs-1");
+    expect(queued()).not.toContain("permission");
+    // One notification: the duplicate, the id-less frame and the permission frame raised nothing.
     expect(notes).toEqual([
-      { title: "노아 · 확인 필요", body: '"명령 실행" 실행을 승인해 주세요.', tag: "prompt-pm-1" },
       { title: "노아 · 질문", body: "어느 쪽으로 갈까요?", tag: "prompt-qs-1" },
     ]);
     // The queue is dropped with the run so nothing can be answered into a dead run.
@@ -2918,9 +2732,9 @@ describe("interactive prompts raised by a run", () => {
     const notes = useOsNotifications();
     const queued = trackState((s) => s.promptQueue.map((p) => p.id).join(","));
     await driveEvents(id, [
-      ["permission", { requestId: "pm-2", runId: "rn-r", toolName: "Bash" }],
+      ["question", { requestId: "pm-2", runId: "rn-r", payload: {} }],
       ["prompt_resolved", { requestId: "pm-2" }],
-      ["permission", { requestId: "pm-2", runId: "rn-r", toolName: "Bash" }],
+      ["question", { requestId: "pm-2", runId: "rn-r", payload: {} }],
     ]);
     expect(queued()).toContain("pm-2");
     expect(queued().at(-1)).toBe("");
@@ -2981,7 +2795,7 @@ describe("activity failures and terminal frames", () => {
     expect(statuses()).toContain("태스크 진행 중");
   });
 
-  it("a cancelled frame outside the background phase stops the turn and keeps what it shared", async () => {
+  it("a cancelled frame stops the turn and keeps what it shared", async () => {
     const id = seedPane();
     const attachment = { id: "f1", kind: "file", mediaType: "text/plain", name: "메모.txt" };
     await driveEvents(id, [
@@ -2995,7 +2809,7 @@ describe("activity failures and terminal frames", () => {
     expect(last.attachments).toEqual([{ ...attachment, anchor: 0 }]);
   });
 
-  it("an error frame outside the background phase reports the error", async () => {
+  it("an error frame reports the error", async () => {
     const id = seedPane();
     await driveEvents(id, [["error", { error: "도구 실행이 실패했습니다." }]]);
     expect(pane(id).messages.at(-1)).toMatchObject({ content: "도구 실행이 실패했습니다." });
@@ -3025,85 +2839,51 @@ describe("activity failures and terminal frames", () => {
     const notes = useOsNotifications();
     const long = "가".repeat(200);
     await driveEvents(id, [
-      ["done", { message: { ...BG_MESSAGE, id: "long-1", content: `  ${long}  ` } }],
-      ["done", { message: { ...BG_MESSAGE, id: "empty-1", content: "" } }],
+      ["done", { message: { ...TURN_MESSAGE, id: "long-1", content: `  ${long}  ` } }],
+      ["done", { message: { ...TURN_MESSAGE, id: "empty-1", content: "" } }],
     ]);
     expect(notes[0].body).toBe(`${"가".repeat(140)}…`);
     expect(notes[1].body).toBe("응답이 완료되었습니다.");
-  });
-
-  it("a background report notification is trimmed the same way", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    const long = "나".repeat(200);
-    await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-long", content: long } }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-empty", content: "" } }],
-      // A bg_tasks frame with no task list clears the chips.
-      ["bg_tasks", {}],
-    ]);
-    expect(notes.map((n) => n.body).slice(-2)).toEqual([
-      `${"나".repeat(140)}…`,
-      "백그라운드 작업이 완료되었습니다.",
-    ]);
-    expect(pane(id).backgroundTasks).toEqual([]);
   });
 
   it("notifications name the avatar by alias, then display name, then a generic fallback", async () => {
     const notes = useOsNotifications();
     const named = seedPane({ avatar: { id: "av2", displayName: "노아 봇" } as any });
     const frames: Array<[string, unknown]> = [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-named", content: "보고" } }],
-      ["permission", { requestId: `nm-${Date.now()}-1`, toolName: "Bash" }],
+      ["question", { requestId: `nm-${Date.now()}-1`, payload: {} }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
     ];
     await driveEvents(named, frames);
     expect(notes.map((n) => n.title)).toEqual([
+      "노아 봇 · 질문",
       "노아 봇 · 답변 완료",
-      "노아 봇 · 백그라운드 작업 보고",
-      "노아 봇 · 확인 필요",
     ]);
 
     const seen = notes.length;
     const anon = seedPane({ avatar: {} as any });
     await driveEvents(anon, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-anon", content: "보고" } }],
-      ["permission", { requestId: `nm-${Date.now()}-3`, toolName: "Bash" }],
+      ["question", { requestId: `nm-${Date.now()}-3`, payload: {} }],
+      ["done", { message: { ...structuredClone(TURN_MESSAGE), id: "anon-1" } }],
     ]);
     expect(notes.slice(seen).map((n) => n.title)).toEqual([
+      "아바타 · 질문",
       "아바타 · 답변 완료",
-      "아바타 · 백그라운드 작업 보고",
-      "아바타 · 확인 필요",
     ]);
   });
 
-  it("a replayed done{background} frame does not duplicate the finalized bubble", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-    ]);
-    expect(pane(id).messages.filter((m) => m.id === "bg-msg-1")).toHaveLength(1);
-    expect(pane(id).backgroundPhase).toBe(true);
-  });
-
-  it("a background turn with no usage, no response and no message at all still holds together", async () => {
+  it("a turn with no usage, no response and no message at all still holds together", async () => {
     const bare = seedPane();
     const { calls } = await driveEvents(bare, [
       ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
-      ["done", { background: true, message: { id: "bg-thin", role: "assistant", content: "얇은 답변", response: null } }],
-      ["bg_end", {}],
+      ["done", { message: { id: "thin-1", role: "assistant", content: "얇은 답변", response: null } }],
     ]);
     expect(pane(bare).usage).toBeNull();
     // Nothing to graft onto in memory, but the snapshot is still persisted.
     expect(pane(bare).messages.at(-1)!.response).toBeNull();
-    expect(calls.some((c) => c.url.includes("/api/messages/bg-thin/activity"))).toBe(true);
+    expect(calls.some((c) => c.url.includes("/api/messages/thin-1/activity"))).toBe(true);
 
     const none = seedPane();
-    await driveEvents(none, [["done", { background: true }]]);
-    expect(pane(none)).toMatchObject({ backgroundPhase: true, backgroundMessageId: null });
+    await driveEvents(none, [["done", {}]]);
     expect(pane(none).messages).toEqual([]);
   });
 
@@ -3116,8 +2896,7 @@ describe("activity failures and terminal frames", () => {
       [
         ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
         ["browser", { requestId: "br-fail-1", runId: "rn-fail", op: "click", uid: "u1" }],
-        ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-        ["bg_end", {}],
+        ["done", { message: structuredClone(TURN_MESSAGE) }],
       ],
       failEverythingElse,
     );
@@ -3136,7 +2915,7 @@ describe("activity failures and terminal frames", () => {
       plain,
       [
         ["tool", { toolUseId: "t2", name: "Bash", input: { command: "ls" } }],
-        ["done", { message: { ...structuredClone(BG_MESSAGE), id: "done-fail-1" } }],
+        ["done", { message: { ...structuredClone(TURN_MESSAGE), id: "done-fail-1" } }],
       ],
       failEverythingElse,
     );

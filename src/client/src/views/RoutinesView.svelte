@@ -421,7 +421,7 @@
   // headless run (POST /api/me/routines/:id/run). A headless run streams to
   // nobody and only persists its messages when it finishes, so the old behavior
   // left the owner watching a spinner for as long as the run took, with no
-  // output, no activity tree, and no way to answer a permission prompt. Seeded
+  // output, no activity tree, and no way to answer a question prompt. Seeded
   // and NOT sent, so the prompt can be edited for this one-off run first.
   async function runFromButton(routine: RoutineJob) {
     if (busyRoutineId) return;

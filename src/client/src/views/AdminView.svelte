@@ -1,12 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Icon from "../components/Icon.svelte";
-  import RevealableInput from "../components/RevealableInput.svelte";
   import AdminUserRow from "../components/AdminUserRow.svelte";
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
   import { api } from "../lib/api";
-  import { confirmAction } from "../lib/confirm";
   import { loadAdminOverview } from "../lib/loaders";
   import { goView } from "../lib/nav";
   import { appState, notify, replaceState, updateState } from "../lib/state";
@@ -26,12 +24,9 @@
 
   // system tab field state
   let modelInput = "";
-  let claudeToken = "";
-  let subBusy = false;
   let modelBusy = false;
   let hexBusy = false;
   let signupBusy = false;
-  let tokenError = "";
   let modelError = "";
   let signupError = "";
   let hexError = "";
@@ -48,7 +43,6 @@
   // audit action filter
   let auditAction = "";
   const signupStatusId = "admin-signup-status";
-  const tokenStatusId = "admin-token-status";
   const modelStatusId = "admin-model-status";
   const hexStatusId = "admin-hex-policy-status";
   const toolSkillStatusId = "admin-tool-skill-status";
@@ -214,21 +208,10 @@
       : modelDirty
         ? modelValueTrimmed
           ? "저장하지 않은 모델 변경 사항이 있습니다."
-          : "저장하면 SDK 기본값으로 되돌립니다."
+          : "저장하면 기본 티어로 되돌립니다."
         : savedModelOverride
           ? "저장됨"
-          : "SDK 기본값 사용 중";
-  $: claudeTokenTrimmed = claudeToken.trim();
-  $: tokenCanSave = Boolean(!subBusy && claudeTokenTrimmed);
-  $: tokenStatus = subBusy
-    ? "저장 중…"
-    : tokenError
-      ? `저장 실패: ${tokenError}`
-      : claudeTokenTrimmed
-        ? "저장할 준비가 됐습니다."
-        : sys.subscriptionConnected
-          ? "새 토큰을 붙여넣으면 기존 토큰을 교체합니다."
-          : "토큰을 붙여넣어 주세요.";
+          : "기본 티어 사용 중";
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
@@ -406,11 +389,15 @@
   let visionPolicyDraft: Record<string, "default" | "on" | "off"> = {};
   let visionBusy = false;
   $: visionDefaultLabel = sys.visionDefault === false ? "미지원" : "지원";
-  // Concrete model id each tier maps to (ANTHROPIC_DEFAULT_<TIER>_MODEL), from
-  // the bootstrap payload the composer picker already uses. Null = unmapped
-  // (the SDK resolves the alias to the account default).
-  $: tierModelById = new Map(
-    ($appState.bootstrap?.modelSelection?.tiers ?? []).map((tier) => [tier.id, tier.model]),
+  // The pi model each tier maps to (PI_MODEL_MAP): the admin payload's
+  // `piModelMap`, else the bootstrap tiers the composer picker already uses.
+  // Missing = unmapped (the local stub has no models).
+  $: piModelMap = (sys.piModelMap && typeof sys.piModelMap === "object" ? sys.piModelMap : {}) as Record<string, string>;
+  $: tierModelById = new Map<string, string | null>(
+    MODEL_TIERS.map((tier) => [
+      tier.id,
+      piModelMap[tier.id] || $appState.bootstrap?.modelSelection?.tiers.find((t) => t.id === tier.id)?.model || null,
+    ]),
   );
 
   function syncVisionPolicyFromSys() {
@@ -447,7 +434,7 @@
   async function saveModel() {
     if (modelBusy || !modelDirty) return;
     const value = modelValueTrimmed;
-    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. SDK 기본값을 사용합니다.";
+    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. 기본 티어를 사용합니다.";
     modelBusy = true;
     modelError = "";
     try {
@@ -467,59 +454,6 @@
       notify(`모델 설정은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
       modelBusy = false;
-    }
-  }
-
-  // ---- system: subscription ----
-  async function saveToken() {
-    if (subBusy) return;
-    const token = claudeTokenTrimmed;
-    if (!token) {
-      tokenError = "토큰을 붙여넣어 주세요.";
-      notify("토큰을 붙여넣어 주세요.", "warn");
-      return;
-    }
-    subBusy = true;
-    tokenError = "";
-    try {
-      await api("/api/admin/claude-token", { method: "PUT", body: JSON.stringify({ token }) });
-    } catch (err) {
-      subBusy = false;
-      tokenError = (err as Error).message;
-      notify(`저장 실패: ${tokenError}`);
-      return;
-    }
-    claudeToken = "";
-    try {
-      await loadAdminOverview();
-      notify("구독 토큰을 저장했습니다.", "ok");
-    } catch (err) {
-      notify(`구독 토큰은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      subBusy = false;
-    }
-  }
-
-  async function disconnectToken() {
-    if (subBusy) return;
-    if (!(await confirmAction("저장된 구독 토큰을 삭제할까요?"))) return;
-    subBusy = true;
-    tokenError = "";
-    try {
-      await api("/api/admin/claude-token", { method: "DELETE" });
-    } catch (err) {
-      subBusy = false;
-      tokenError = (err as Error).message;
-      notify(`해제 실패: ${tokenError}`);
-      return;
-    }
-    try {
-      await loadAdminOverview();
-      notify("구독 토큰 연결을 해제했습니다.", "ok");
-    } catch (err) {
-      notify(`구독 토큰은 삭제했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      subBusy = false;
     }
   }
 
@@ -633,7 +567,7 @@
     disabledToolChecks = toolChecks;
     disabledSkillChecks = skillChecks;
     // Saved names the discovery list doesn't cover (typed by an admin, or from
-    // an older CLI) stay visible/removable so the dirty-compare stays honest.
+    // an older skill list) stay visible/removable so the dirty-compare stays honest.
     customDisabledSkills = savedSkills.filter((name) => !discoveredNames.has(name));
   }
 
@@ -860,12 +794,16 @@
               <div class="sys-grid">
                 <div class="sys-row">
                   <span class="sys-key muted">런타임</span>
-                  <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "claude" ? "Claude Agent SDK" : sys.agentRuntime === "pi" ? "pi-gateway" : "로컬 스텁"}</span></span>
+                  <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "pi" ? "pi-gateway" : "로컬 스텁"}</span></span>
                 </div>
                 <div class="sys-row">
-                  <span class="sys-key muted">설정된 모델</span>
+                  <span class="sys-key muted">모델 매핑</span>
                   <span class="sys-val">
-                    {#if sys.configuredModel}<span class="tag mono">{sys.configuredModel}</span>{:else}<span class="muted">미설정 (SDK 기본값)</span>{/if}
+                    {#if Object.keys(piModelMap).length}
+                      {#each MODEL_TIERS as tier (tier.id)}
+                        {#if piModelMap[tier.id]}<span class="tag mono" title={`${tier.label} 티어 → pi 모델`}>{tier.label} → {piModelMap[tier.id]}</span>{" "}{/if}
+                      {/each}
+                    {:else}<span class="muted">없음 (로컬 스텁)</span>{/if}
                   </span>
                 </div>
                 <div class="sys-row">
@@ -873,14 +811,6 @@
                   <span class="sys-val">
                     {#if sys.observedModel}<span class="tag mono accent">{sys.observedModel}</span>{:else}<span class="muted">아직 확인되지 않음 (첫 대화 후 표시)</span>{/if}
                   </span>
-                </div>
-                <div class="sys-row">
-                  <span class="sys-key muted">인증 방식</span>
-                  <span class="sys-val"><span class="tag">{sys.authMode === "api_key" ? "API 키" : "구독 로그인"}</span></span>
-                </div>
-                <div class="sys-row">
-                  <span class="sys-key muted">읽기 전용 도구</span>
-                  <span class="sys-val"><span class="muted">{(sys.readOnlyTools || []).join(", ") || "없음"}</span></span>
                 </div>
                 <div class="sys-row">
                   <span class="sys-key muted">Confluence</span>
@@ -891,70 +821,21 @@
               </div>
             </div>
 
-            <!-- subscription -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>구독 로그인</h3>
-                  <p class="muted">Claude 구독으로 아바타를 구동합니다. ① 내 PC에서 claude setup-token 실행 → ② 출력된 sk-ant-oat… 토큰을 아래에 붙여넣고 저장하세요. 토큰은 암호화되어 저장되며 다시 표시되지 않습니다.</p>
-                </div>
-              </div>
-              <div class="sys-grid">
-                <div class="sys-row">
-                  <span class="sys-key muted">구독 연결</span>
-                  <span class="sys-val">
-                    <span class={sys.subscriptionConnected ? "tag accent" : "muted"}>{sys.subscriptionConnected ? "● 연결됨" : "○ 미연결"}</span>
-                  </span>
-                </div>
-              </div>
-              {#if sys.apiKeyOverride}
-                <p class="muted">.env의 ANTHROPIC_API_KEY가 설정되어 있어 API 키가 구독 토큰보다 우선합니다. 구독 토큰을 사용하려면 API 키를 비우세요.</p>
-              {/if}
-              {#if sys.subscriptionConnected}
-                <div class="ar-actions">
-                  <button class="ghost-sm danger" type="button" disabled={subBusy} on:click={disconnectToken}>연결 해제</button>
-                </div>
-              {/if}
-              <form class="settings-form" on:submit|preventDefault={saveToken}>
-                <label class="field">
-                  <span>{sys.subscriptionConnected ? "토큰 교체" : "Claude 구독 토큰"}</span>
-                  <RevealableInput
-                    bind:value={claudeToken}
-                    name="token"
-                    placeholder="sk-ant-oat01-…"
-                    ariaLabel={sys.subscriptionConnected ? "Claude 구독 토큰 교체" : "Claude 구독 토큰"}
-                    ariaDescribedby={tokenStatusId}
-                    ariaInvalid={Boolean(tokenError)}
-                    revealLabel="토큰"
-                    disabled={subBusy}
-                    onInput={() => (tokenError = "")}
-                  />
-                </label>
-                <div class="settings-save-row">
-                  <span id={tokenStatusId} class="settings-save-status" class:dirty={Boolean(claudeTokenTrimmed && !subBusy && !tokenError)} class:pending={subBusy} class:invalid={Boolean(tokenError)} role="status" aria-live="polite">{tokenStatus}</span>
-                  <button class="primary" type="submit" disabled={!tokenCanSave}>{subBusy ? "저장 중…" : sys.subscriptionConnected ? "교체 저장" : "저장"}</button>
-                </div>
-              </form>
-            </section>
-
             <!-- model override -->
             <section class="settings-card">
               <div class="panel-section-head">
                 <div>
                   <h3>아바타 모델</h3>
-                  <p class="muted">아바타 대화에 사용할 모델을 지정합니다. 비워 두면 SDK 기본값을 사용합니다. 예: claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5-20251001.</p>
+                  <p class="muted">대화에서 모델을 고르지 않았을 때 사용할 모델을 지정합니다. 비워 두면 기본 티어를 사용합니다. 티어 이름(예: opus, sonnet, haiku) 또는 PI_MODEL_MAP에 등록된 키를 입력하면 PI_MODEL_MAP을 거쳐 pi 모델로 연결됩니다.</p>
                 </div>
               </div>
-              {#if sys.modelEnvLocked}
-                <p class="muted">.env의 ANTHROPIC_MODEL이 설정되어 있어 환경 변수가 우선합니다. 아래 설정은 환경 변수가 없을 때만 적용됩니다.</p>
-              {/if}
               <form class="settings-form" on:submit|preventDefault={saveModel}>
                 <label class="field">
                   <span>모델 이름</span>
                   <input
                     name="model"
                     bind:value={modelInput}
-                    placeholder="claude-opus-4-8 (비우면 기본값)"
+                    placeholder="opus (비우면 기본 티어)"
                     autocomplete="off"
                     aria-describedby={modelStatusId}
                     aria-invalid={modelError ? "true" : undefined}
@@ -988,7 +869,7 @@
                       {#if tierModelById.get(tier.id)}
                         <span class="muted mono">{tierModelById.get(tier.id)}</span>
                       {:else}
-                        <span class="muted">(매핑 없음 — ANTHROPIC_DEFAULT_{tier.id.toUpperCase()}_MODEL 미설정, SDK 기본값 사용)</span>
+                        <span class="muted">(매핑 없음 — PI_MODEL_MAP에 이 티어가 없습니다)</span>
                       {/if}
                     </span>
                     <select bind:value={visionPolicyDraft[tier.id]} disabled={visionBusy} aria-label={`${tier.label} 이미지 입력 지원`}>
@@ -1055,12 +936,13 @@
               <div class="panel-section-head">
                 <div>
                   <h3>내장 도구·스킬 정책</h3>
-                  <p class="muted">체크한 항목은 모든 아바타에서 비활성화됩니다. 도구는 대화에서 완전히 제거되고, 스킬은 목록에서 숨겨지거나 실행이 차단됩니다.</p>
+                  <p class="muted">체크한 항목은 모든 아바타에서 비활성화됩니다. 스킬은 목록에서 숨겨지거나 실행이 차단됩니다.</p>
                 </div>
               </div>
               <form class="settings-form" on:submit|preventDefault={saveToolSkillPolicy}>
                 <div class="field">
                   <span>내장 도구 비활성화</span>
+                  <small class="muted">pi 런타임에는 내장 도구를 막는 도구 게이트가 없어, 비활성화한 도구는 강제로 차단되지 않고 아바타에게 사용하지 말라는 안내로 전달됩니다.</small>
                   <div class="policy-option-picker" role="group" aria-label="내장 도구 비활성화" aria-describedby={toolSkillStatusId}>
                     {#each togglableTools as entry (entry.id)}
                       <label class="policy-option">
@@ -1073,7 +955,7 @@
                 <div class="field">
                   <span>스킬 비활성화</span>
                   {#if sys.skillDiscovery}
-                    <p class="muted">CLI v{sys.skillDiscovery.cliVersion} 기준으로 발견한 스킬/커맨드 {discoveredSkills.length}개입니다.</p>
+                    <p class="muted">기본 스킬 플러그인에서 찾은 스킬 {discoveredSkills.length}개입니다.</p>
                     <div class="policy-option-picker" role="group" aria-label="스킬 비활성화" aria-describedby={toolSkillStatusId}>
                       {#each discoveredSkills as skill (skill.name)}
                         <label class="policy-option">

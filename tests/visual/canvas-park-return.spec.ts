@@ -147,8 +147,6 @@ async function mockApp(page: Page): Promise<void> {
                 eventCount: 3,
                 pendingCount: 1,
                 cancelled: false,
-                background: false,
-                backgroundTasks: 0,
               },
             }
           : { run: null };
