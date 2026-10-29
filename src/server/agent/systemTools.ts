@@ -582,7 +582,7 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
       : ctx.config.agentRuntime;
   }
   return (
-    "pi (pi-gateway). You run in THIS user's own Linux sandbox: no network, no sudo, files persist per user. " +
+    "pi (pi-gateway). You run in THIS user's own Linux sandbox: no sudo, files persist per user; no direct network — the shell's HTTP(S) leaves only through pi-gateway's egress proxy to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW`, empty = everything blocked; a refusal is `407 Request rejected by proxy`), and Noah's own tools keep Noah's network. " +
     (pi.conversationDir
       ? `Work in this conversation's folder \`${pi.conversationDir}\` and pass ABSOLUTE paths (the shell starts in /workspace, not there). `
       : "Use absolute paths under /workspace. ") +
@@ -811,7 +811,12 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- runtime: ${runtimeLine(ctx)}`,
           ...piRunLines(ctx),
           ...(webProxy.egressPolicy === "domain-proxy"
-            ? ["- Server egress: bootstrap reports shared domain-proxy policy for all local avatars, server tools and shell commands; direct outbound connections and external DNS blocked. User-PC browser traffic is outside this boundary. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials."]
+            ? [
+                ctx.piRuntime
+                  ? // pi: the shell runs in the pi sandbox, outside Noah's proxy.
+                    "- Server egress: bootstrap reports shared domain-proxy policy for Noah's server and the tools running there (mcp__web__fetch, repo/git, Confluence and other mcp__* tools, relayed hex-ssh/plugin/shared MCP servers); direct outbound connections and external DNS blocked there. NOT your sandbox shell on this runtime: bash/curl/Python go only through pi-gateway's own egress proxy and its operator allowlist (SANDBOX_EGRESS_ALLOW on the pi-gateway instance, see the runtime line); Noah's 외부 통신 차단 blocklist never applies to them. User-PC browser traffic is outside both boundaries. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials."
+                  : "- Server egress: bootstrap reports shared domain-proxy policy for all local avatars, server tools and shell commands; direct outbound connections and external DNS blocked. User-PC browser traffic is outside this boundary. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials.",
+              ]
             : []),
           `- Model in use: ${modelLine}`,
           `- Reasoning effort: ${effortLine}`,

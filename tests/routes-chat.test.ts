@@ -1168,6 +1168,77 @@ describe("cancellation + run registry", () => {
     expect(assistant.response?.summary).toBe("중지됨");
   }, LIVE);
 
+  it("after a stop, keeps a pi turn pi committed as the session (the next turn continues it) — never the SDK's", async () => {
+    const { store, app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "picancel").expect(201)).body.user.id as string;
+    // committed: the runner reports a response id only for a turn pi committed.
+    const parkWith = (committed: string | null, followUp = false): RunImpl =>
+      async (_req, _pr, cfg, _store, events, ac) => {
+        if (committed) events.onSessionId?.(committed);
+        // A follow-up turn for a queued steer: its own input is not committed yet.
+        if (followUp) events.onTurnResult?.({ text: "첫 답", backgroundTasks: [], steerPending: true });
+        events.onDelta?.("부분 답변");
+        await new Promise<never>((_resolve, reject) => {
+          if (ac.signal.aborted) return reject(new Error("aborted"));
+          ac.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+        return { kind: "text", runtime: cfg.agentRuntime, summary: "x", text: "x" };
+      };
+    const stopTurn = async (conversationId: string) => {
+      const streamDone = fireStream(owner, { avatarId: ownerId, conversationId, message: "느린 요청" });
+      await waitUntil(async () => (await activeRun(owner, conversationId)) !== null, "run active");
+      const run = (await activeRun(owner, conversationId))!;
+      await owner.post(`/api/chat/runs/${run.runId}/cancel`).send({}).expect(200);
+      expect(parseSse((await streamDone).text).some((f) => f.event === "cancelled")).toBe(true);
+    };
+
+    // SDK: the aborted transcript is incomplete — rebuild from history (chat-02).
+    H.impl = parkWith("sess-sdk");
+    await stopTurn("conv-sdk-stop");
+    expect(store.getAgentSessionId(ownerId, "conv-sdk-stop")).toBeNull();
+
+    config.agentRuntime = "pi";
+    // pi committed the stopped turn (`incomplete`): continue it.
+    H.impl = parkWith("resp_s1_2");
+    await stopTurn("conv-pi-stop");
+    expect(store.getAgentSessionId(ownerId, "conv-pi-stop")).toBe("resp_s1_2");
+    // The next turn continues it, and is handed what the user saw of the stopped answer.
+    H.impl = null;
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-pi-stop", message: "이어서" }).expect(200);
+    expect(H.requests.at(-1)).toMatchObject({ resumeSessionId: "resp_s1_2", stoppedAnswer: "부분 답변" });
+    // …only right after the stop: the turn after that has no stopped row behind it.
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-pi-stop", message: "또" }).expect(200);
+    expect(H.requests.at(-1)!.stoppedAnswer).toBeUndefined();
+    // Stopped before pi committed anything: nothing to continue.
+    H.impl = parkWith(null);
+    await stopTurn("conv-pi-early");
+    expect(store.getAgentSessionId(ownerId, "conv-pi-early")).toBeNull();
+    // Stopped during the follow-up turn for a queued steer, before its commit:
+    // the steer is in Noah's rows, not in pi — rebuild from history.
+    H.impl = parkWith("resp_s2_1", true);
+    await stopTurn("conv-pi-followup");
+    expect(store.getAgentSessionId(ownerId, "conv-pi-followup")).toBeNull();
+  }, LIVE);
+
+  it("after a pi failure, keeps only a committed turn as the session", async () => {
+    const { store, app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "pifail").expect(201)).body.user.id as string;
+    config.agentRuntime = "pi";
+    const failWith = (committed: string | null): RunImpl => async (_req, _pr, _cfg, _store, events) => {
+      if (committed) events.onSessionId?.(committed);
+      throw new Error("boom");
+    };
+    H.impl = failWith("resp_f1_1");
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-pi-fail-late", message: "안녕" }).expect(200);
+    expect(store.getAgentSessionId(ownerId, "conv-pi-fail-late")).toBe("resp_f1_1");
+    // A failed pi response is never committed (no id reported): rebuild from history.
+    H.impl = failWith(null);
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-pi-fail", message: "안녕" }).expect(200);
+    expect(store.getAgentSessionId(ownerId, "conv-pi-fail")).toBeNull();
+  });
+
   it("persists the post-fold block with its head intact when stopped", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);

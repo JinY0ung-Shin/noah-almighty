@@ -3484,6 +3484,28 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
+  it("on a pi run, reports the sandbox shell outside Noah's egress proxy, behind pi's allowlist", async () => {
+    const s = setup("st-egress-pi");
+    vi.stubEnv("NOAH_EGRESS_POLICY", "domain-proxy");
+    try {
+      const tools = buildSystemTools(s.store, {
+        ...s.baseCtx,
+        viewerIsOwner: true,
+        piRuntime: { conversationDir: "/workspace/c/x", shellSecretsUnavailable: [] },
+      });
+      const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
+      expect(body).toContain("NOT your sandbox shell on this runtime");
+      expect(body).toContain("SANDBOX_EGRESS_ALLOW");
+      expect(body).not.toContain("policy for all local avatars, server tools and shell commands");
+      expect(body).not.toContain("no network, no sudo");
+      const manual = (await callTool(tools, "read_manual", { topic: "network-policy" })).content[0].text ?? "";
+      expect(manual).toContain("## pi runtime (AGENT_RUNTIME=pi)");
+      expect(manual).toContain("`SANDBOX_EGRESS_ALLOW`");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("describe_system reports an env model pin as outranking the composer pick", async () => {
     const s = setup("st-env-pin");
     const tools = buildSystemTools(s.store, {

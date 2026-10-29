@@ -208,6 +208,44 @@ describe("runPiAgent", () => {
     expect(inputText(legacy.requests[0]!)).toContain("earlier answer");
   });
 
+  it("restates a stopped answer only when the turn continues its session (pi does not feed it back)", async () => {
+    const { store, config, base } = setup();
+    const history = [
+      { role: "user" as const, content: "긴 답변을 써 줘" },
+      { role: "assistant" as const, content: "chunk0 chunk1" },
+    ];
+    const continued = fakeClient([() => textTurn("resp_s1_3", "again")]);
+    await runPiAgent(
+      base({ resumeSessionId: "resp_s1_2", conversationHistory: history, stoppedAnswer: "chunk0 chunk1" }),
+      [],
+      config,
+      store,
+      undefined,
+      undefined,
+      { client: continued.client },
+    );
+    expect(continued.requests[0]).toMatchObject({ previousResponseId: "resp_s1_2" });
+    expect(inputText(continued.requests[0]!)).toContain("the user STOPPED your previous answer partway");
+    expect(inputText(continued.requests[0]!)).toContain("<stopped_answer>\nchunk0 chunk1\n</stopped_answer>");
+
+    // Nothing had streamed: say so, quote nothing.
+    const empty = fakeClient([() => textTurn("resp_s1_4", "again")]);
+    await runPiAgent(base({ resumeSessionId: "resp_s1_3", stoppedAnswer: "" }), [], config, store, undefined, undefined, {
+      client: empty.client,
+    });
+    expect(inputText(empty.requests[0]!)).toContain("nothing of it had reached the user yet");
+    expect(inputText(empty.requests[0]!)).not.toContain("<stopped_answer>");
+
+    // A fresh session carries the stopped row in its text history already.
+    const fresh = fakeClient([() => textTurn("resp_s5_1", "fresh")]);
+    await runPiAgent(base({ conversationHistory: history, stoppedAnswer: "chunk0 chunk1" }), [], config, store, undefined, undefined, {
+      client: fresh.client,
+    });
+    expect(fresh.requests[0]!.previousResponseId).toBeUndefined();
+    expect(inputText(fresh.requests[0]!)).not.toContain("STOPPED your previous answer");
+    expect(inputText(fresh.requests[0]!)).toContain("chunk0 chunk1");
+  });
+
   it("reuses the frozen prompt for every new session, even after the self-state changed", async () => {
     const { store, config, base } = setup();
     const one = fakeClient([() => textTurn("resp_a_1", "one")]);

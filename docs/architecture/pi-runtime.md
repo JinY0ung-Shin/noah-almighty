@@ -66,6 +66,15 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
    `isLostPiSession`) → once, a new session from history (status-free, the model is told
    in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). A model
    fallback chain (routines, task API: `modelFallback`) gives each attempt a fresh session.
+7. **Stop / failure** — a stop `cancel`s the live response, so pi COMMITS the partial turn (`incomplete`) and the runner
+   reports its id. The chat route's cancel and error paths keep that id as `agent_session_id` (`sessionAfterAbort`):
+   the next turn continues it, and the stopped row already shows the same partial. They clear it (history rebuild, as
+   on the SDK — chat-02) when the run's LATEST input never committed: stopped before pi created the response, a failed
+   response, or a steer follow-up turn stopped before its own commit (its steer is in Noah's rows, not in pi).
+   pi keeps the stopped turn but does NOT feed its partial text back to the model (seen live in S05: the continued
+   request carries the stopped prompt, no assistant message), so the route hands the stopped row's text as
+   `AgentRequest.stoppedAnswer` and a CONTINUED turn's input restates it (`Stopped answer: …<stopped_answer>`, tail
+   4 000 chars; `buildPiTurnPreamble`). A fresh session needs no note — its text history ends with that row.
 
 ## S1 degrades (pi changes P1–P6 are out of scope)
 
@@ -309,6 +318,10 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   pi enforces no placeholder, the template keeps `{{WORKSPACE}}`, `{{LANGUAGE}}`, `{{DATETIME}}`).
 - Other instance config stays in pi's own admin/`.env`: LLM servers, `SANDBOX_IMAGE` (`docker/pi-sandbox` for decks →
   set `PI_DECK_SANDBOX=true` here), `SANDBOX_EGRESS_ALLOW`, turn concurrency limits.
+  `SANDBOX_EGRESS_ALLOW` is the sandbox shell's ONLY way out (HTTP(S) via pi's egress proxy; empty = all blocked, a
+  refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own
+  tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual
+  topic say exactly that on pi; SDK runs keep their wording.
 
 ## Env (config.ts → `AppConfig.pi`)
 

@@ -240,7 +240,12 @@ export async function runPiAgent(
   const userRequest: AgentRequest = { ...promptRequest, imageFiles: stagedFiles.length ? stagedFiles : undefined };
   const firstInputText = (fresh: boolean): string =>
     [
-      buildPiTurnPreamble(promptRequest, { now: now(), ...(fresh && newSessionReason ? { newSessionReason } : {}) }),
+      buildPiTurnPreamble(promptRequest, {
+        now: now(),
+        ...(fresh && newSessionReason ? { newSessionReason } : {}),
+        // A fresh session's text history already ends with the stopped row.
+        ...(fresh ? {} : { continuedAfterStop: true }),
+      }),
       buildUserPrompt(
         // A fresh session carries the stored text history; a continued one has it.
         { ...userRequest, resumeSessionId: fresh ? undefined : (previous ?? "pi") },

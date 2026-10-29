@@ -1369,6 +1369,15 @@ export interface AgentRequest {
    */
   piRuntime?: PiRuntimeFacts;
   /**
+   * pi only: the conversation's latest row is an answer the user STOPPED, and
+   * this is the text they saw of it ("" when none streamed). A stop keeps the
+   * pi session (the next turn continues the committed `incomplete` turn), but
+   * pi does not feed the partial answer back to the model, so a continued
+   * turn's input restates it (`buildPiTurnPreamble`). A fresh session needs no
+   * note: its text history already ends with that row.
+   */
+  stoppedAnswer?: string;
+  /**
    * Auto-approve tool use: skip the interactive permission prompt and run
    * non-read-only tools without asking. Honored on the elevated, non-headless
    * path (`elevated && !headless`) for owner AND trusted users alike — the tool

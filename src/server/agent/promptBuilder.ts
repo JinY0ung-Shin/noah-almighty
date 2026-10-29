@@ -711,7 +711,7 @@ function piActiveRepoTurnLine(request: AgentRequest): string | null {
   return (
     `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it. ` +
     `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
-    "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no network and no git credentials, so never fetch, pull or push from it."
+    "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no git credentials (and no network beyond the pi operator's allowlist), so never fetch, pull or push from it."
   );
 }
 
@@ -827,7 +827,8 @@ function piRuntimeSection(request: AgentRequest): string | null {
     ? `Work in this conversation's folder \`${pi.conversationDir}\`: create files there and always pass ABSOLUTE paths to every tool — the shell starts in /workspace, not in that folder. The user's attached files, your browser captures and saved Confluence attachments land in its \`attachments/\`, \`captures/\` and \`confluence/\` subfolders. `
     : "Use absolute paths under /workspace. ";
   return (
-    "**Runtime: your own pi sandbox.** You run inside THIS user's Linux sandbox (no network, no sudo; its files persist for this user across conversations). " +
+    "**Runtime: your own pi sandbox.** You run inside THIS user's Linux sandbox (no sudo; its files persist for this user across conversations). " +
+    "It has no direct network: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), and only to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance; empty by default, which blocks everything). Direct TCP/UDP, DNS and raw SSH always fail, and a destination off the list answers `407 Request rejected by proxy` — report it as that operator's policy, never work around it. Noah's own tools (`mcp__web__fetch` and the rest) do not run in the sandbox and keep Noah's network. " +
     folder +
     "Built-in tools: `read` (files and images), `write` (new files or complete rewrites), `edit` (exact replacements), `ls`/`find`/`grep` (explore), `bash` (run programs; its `timeout` is in SECONDS). " +
     "Noah's own tools — every `mcp__<server>__<tool>` name in these instructions, skills and the manual — are called through `mcp_call` with `{name, arguments}`; if you are unsure of a tool's arguments, look it up with `mcp_search` first. A refused call says why: do not retry it or look for a shell workaround. " +
@@ -1028,7 +1029,13 @@ export function buildSystemPromptAppend(
   // Web fetch standing guidance (META-COGNITION): which proxy path external
   // URLs take is deployment state the avatar cannot infer, so state it. The
   // proxy snapshot is redacted to scheme://host:port (webFetchProxyState).
-  if (request.webFetchProxy?.egressPolicy === "domain-proxy") {
+  if (request.webFetchProxy?.egressPolicy === "domain-proxy" && request.piRuntime) {
+    // pi: the shell is not in Noah's container, so Noah's proxy is not its
+    // boundary — pi's own egress proxy and allowlist are (piRuntimeSection).
+    lines.push(
+      "Server egress: the deployment bootstrap reports a shared domain-blocking proxy policy for Noah's server and the tools that run there — `mcp__web__fetch`, the repo/git, Confluence and other `mcp__*` tools, and the relayed MCP servers (hex-ssh, plugin and shared servers): direct outbound connections and external DNS are blocked there and only proxied HTTP(S) is available. It does NOT govern your sandbox shell on this runtime — `bash`/curl/Python leave only through the pi sandbox's own egress proxy (see the runtime paragraph), and Noah's admin blocklist never applies to them. The user's browser bridge is outside both boundaries. A proxy denial on either side is an administrator policy, not a transient fetch error; report it instead of trying alternate IPs or tunnels. Read `mcp__system__read_manual` topic `network-policy` for scope and operator setup. This report does not independently audit the firewall or reveal the current blocklist.",
+    );
+  } else if (request.webFetchProxy?.egressPolicy === "domain-proxy") {
     lines.push(
       "Server egress: the deployment bootstrap reports a shared domain-blocking proxy policy for ALL local avatars and server tools, including Bash/curl/Python. Direct outbound connections and external DNS are blocked; only proxied HTTP(S) is available. The user's browser bridge is outside this network boundary. A proxy denial is an administrator policy, not a transient fetch error; report it instead of trying alternate IPs or tunnels. Read `mcp__system__read_manual` topic `network-policy` for scope and operator setup. This report does not independently audit the firewall or reveal the current blocklist.",
     );
@@ -1686,9 +1693,17 @@ export function buildPrompt(
  * with the guidance that depends on it), the open working repo, and a new
  * session's reason. Prepended to the turn's user input.
  */
+/** How much of a stopped answer a continued pi turn restates (its tail — what the user read last). */
+const STOPPED_ANSWER_MAX_CHARS = 4_000;
+
 export function buildPiTurnPreamble(
   request: AgentRequest,
-  options: { now?: Date; newSessionReason?: "model_changed" | "session_lost" } = {},
+  options: {
+    now?: Date;
+    newSessionReason?: "model_changed" | "session_lost";
+    /** The turn continues the session of an answer the user stopped (`AgentRequest.stoppedAnswer`). */
+    continuedAfterStop?: boolean;
+  } = {},
 ): string {
   const lines = [`[Current date and time: ${kstDateTimeString(options.now ?? new Date())} KST]`];
   lines.push(piRunKindParagraph(request));
@@ -1698,6 +1713,15 @@ export function buildPiTurnPreamble(
   const activeRepoLine = piActiveRepoTurnLine(request);
   if (activeRepoLine) {
     lines.push(activeRepoLine);
+  }
+  if (options.continuedAfterStop && request.stoppedAnswer !== undefined) {
+    const seen = request.stoppedAnswer.trim();
+    lines.push(
+      "Stopped answer: the user STOPPED your previous answer partway. This session keeps that turn but not the text you had written, " +
+        (seen
+          ? `so here is what the user saw of it before the stop (do not repeat it unless asked):\n<stopped_answer>\n${seen.length > STOPPED_ANSWER_MAX_CHARS ? `…${seen.slice(-STOPPED_ANSWER_MAX_CHARS)}` : seen}\n</stopped_answer>`
+          : "and nothing of it had reached the user yet."),
+    );
   }
   if (options.newSessionReason) {
     lines.push(

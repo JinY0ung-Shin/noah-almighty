@@ -990,10 +990,10 @@ export async function executeChatTurn(
     autoApprove: true,
   };
   const piWorkspace = piRunWorkspace(config, piRunClass);
+  const runsOnPi = config.agentRuntime === "pi" && piRuntimeSupports(piRunClass).supported;
   // The same decision tells the composer when a mid-turn message reaches the
   // model: pi takes no mid-turn input, so there it lands after the answer.
-  const steerDelivery: SteerDelivery =
-    config.agentRuntime === "pi" && piRuntimeSupports(piRunClass).supported ? "after_answer" : "mid_turn";
+  const steerDelivery: SteerDelivery = runsOnPi ? "after_answer" : "mid_turn";
   let activeRepoCwd: string | null = null;
   let activeRepoName: string | null = null;
   let releaseActiveRepoLock: (() => void) | null = null;
@@ -1078,11 +1078,16 @@ export async function executeChatTurn(
     // id, so without this every later turn would resume a context-less session.
     // (chat-01 / lifecycle-02) A rewind carries only the rows it KEEPS — never
     // the ones it is about to delete, nor its anchor (re-sent as `message`).
-    const conversationHistory = conversationHistoryForPrompt(
-      rewindPlan
-        ? rewindPlan.keep
-        : store.listMessages(ownerUserId, conversationId),
-    );
+    const historyRows = rewindPlan ? rewindPlan.keep : store.listMessages(ownerUserId, conversationId);
+    const conversationHistory = conversationHistoryForPrompt(historyRows);
+    // pi keeps a stopped turn's session but not its partial text (see
+    // AgentRequest.stoppedAnswer). The new user row is not written yet, so the
+    // last row is the previous turn's end.
+    const lastRow = historyRows.at(-1);
+    const stoppedAnswer =
+      runsOnPi && !rewindPlan && lastRow?.role === "assistant" && lastRow.response?.summary === "중지됨"
+        ? (lastRow.response.text ?? "")
+        : undefined;
     // Images fed to the model THIS turn. For a fresh send we save the uploads to
     // disk + record them on the user message; a rewind/regenerate brings no new
     // uploads, so it re-reads its anchor row's stored attachments instead.
@@ -1215,6 +1220,20 @@ export async function executeChatTurn(
     // The SDK session id this run reports (init event); persisted on success so
     // the next turn can resume it.
     let runSessionId: string | null = null;
+    // pi only: whether the run's LATEST input is committed in pi — the runner
+    // reports a response id (onSessionId) only for a turn pi committed, a
+    // cancelled one included (`incomplete`), and a follow-up turn for queued
+    // steers is a new, not-yet-committed input until its own id arrives.
+    let piLatestInputCommitted = false;
+    // What a cancelled or failed run leaves as the conversation's session. The
+    // SDK's aborted transcript is incomplete, so the next turn rebuilds from the
+    // stored messages (which now include this turn's user row + partial). A pi
+    // turn pi already COMMITTED (a stop → `incomplete`) holds the same partial
+    // the stopped row shows, so the next turn continues that response instead
+    // of starting a new session; an input pi never committed is not in it, so
+    // that run rebuilds from history like the SDK. (chat-02)
+    const sessionAfterAbort = (): string | null =>
+      runsOnPi && piLatestInputCommitted && runSessionId ? runSessionId : null;
     // The LATEST main-chain assistant entry of this run's transcript (local SDK
     // runs only — see AgentEvents.onResumePoint). Stamped on every assistant row
     // a success boundary persists, so a later rewind onto the next user row can
@@ -1557,6 +1576,7 @@ export async function executeChatTurn(
           // A rewind onto a recorded point: resume only up to it, forked.
           ...(resumeSessionAt ? { resumeSessionAt } : {}),
           conversationHistory,
+          ...(stoppedAnswer !== undefined ? { stoppedAnswer } : {}),
           images: requestImages.length ? requestImages : undefined,
           // Every local image turn: the staged file PATHS, listed in the user
           // prompt — the only form on a text-only turn, next to the image
@@ -1644,6 +1664,7 @@ export async function executeChatTurn(
           onSessionId: (sessionId) => {
             runSessionId = sessionId;
             runResumePoint = null;
+            piLatestInputCommitted = true;
           },
           onResumePoint: (point) => {
             runResumePoint = point;
@@ -1709,6 +1730,8 @@ export async function executeChatTurn(
                     runSessionId,
                   );
                 }
+                // pi sends the queued messages as a new input right after this.
+                piLatestInputCommitted = false;
                 const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
                 const attachmentsTail = shownAttachments.slice(persistedAttachmentsOffset);
                 const segResponse: AgentResponse = {
@@ -2753,8 +2776,9 @@ export async function executeChatTurn(
         // Clear the persisted SDK session: the aborted run's transcript is
         // incomplete, so the NEXT turn rebuilds context from stored messages
         // (which now include this cancelled turn's user message + partial)
-        // instead of resuming a half-written session that omits it. (chat-02)
-        store.setAgentSessionId(ownerUserId, conversationId, null);
+        // instead of resuming a half-written session that omits it. A pi turn
+        // pi committed is kept instead (sessionAfterAbort). (chat-02)
+        store.setAgentSessionId(ownerUserId, conversationId, sessionAfterAbort());
         // Keep whatever the model already streamed before the stop. The client's
         // finalizeStopped keeps it on screen, so the persisted record must carry
         // it too — otherwise the visible answer is gone on the next reload/revisit.
@@ -2831,10 +2855,11 @@ export async function executeChatTurn(
             ? `응답 생성 중 오류가 발생했습니다: ${detail}`
             : "응답 생성 중 오류가 발생했습니다.";
       if (store.conversationOwner(conversationId) === ownerUserId) {
-        // Clear the session for the same reason as the cancel path (chat-02), and
+        // Clear the session for the same reason as the cancel path (chat-02;
+        // a pi input pi committed is kept), and
         // don't discard the partial the user already watched stream — keep it
         // alongside the error so a reload shows what the live view showed.
-        store.setAgentSessionId(ownerUserId, conversationId, null);
+        store.setAgentSessionId(ownerUserId, conversationId, sessionAfterAbort());
         // Background phase: earlier segments are already stored messages, so
         // only the tail since the last result boundary rides the error bubble.
         const erroredText = streamedText.slice(

@@ -3444,6 +3444,20 @@ describe("buildPrompt", () => {
     expect(system).toContain("does not independently audit the firewall");
   });
 
+  it("says Noah's egress proxy does not govern the sandbox shell on a pi run", () => {
+    const webFetchProxy = { httpsProxy: "http://172.30.247.2:3128", egressPolicy: "domain-proxy" as const };
+    const pi = buildSystemPromptAppend(req({ webFetchProxy, piRuntime: { conversationDir: "/workspace/c/x", shellSecretsUnavailable: [] } }));
+    expect(pi).toContain("It does NOT govern your sandbox shell on this runtime");
+    expect(pi).toContain("`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance");
+    expect(pi).toContain("407 Request rejected by proxy");
+    expect(pi).not.toContain("including Bash/curl/Python");
+    expect(pi).not.toContain("(no network, no sudo");
+    // The SDK wording is unchanged.
+    const sdk = buildSystemPromptAppend(req({ webFetchProxy }));
+    expect(sdk).toContain("ALL local avatars and server tools, including Bash/curl/Python");
+    expect(sdk).not.toContain("SANDBOX_EGRESS_ALLOW");
+  });
+
   it("omits prompt guidance for disabled MCP tool groups", () => {
     const p = buildPrompt(
       req({
