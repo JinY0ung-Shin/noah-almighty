@@ -18,7 +18,12 @@
   the `src/client/src/lib/types.ts` re-export barrel — import server types through it.
 - `rtk proxy npx vitest run tests/<file>.test.ts` — run ONE test file (full suite is ~16s); the
   suites are split agent-core/agent-tools/store/infra/app/chat-history.
-- `docker compose config` — validate compose/env wiring before Docker changes.
+- `docker compose config` — validate compose/env wiring before Docker changes. The stack INCLUDES
+  pi-gateway's compose from `${PI_GATEWAY_DIR:-../pi-gateway}` (README "Deployment"), so `config` needs a
+  pi-gateway checkout (a `git -C ~/pi-gateway archive <pin> | tar -x -C <dir>` export works), a Noah `.env`
+  (the `env_file` must exist) and pi's required vars (`PI_GATEWAY_HOME`, `DOCKER_GID`). Run it from a scratch
+  COPY of the compose files (`docker-compose.yml`, `docker/`), never against the repo's real `.env`.
+  `config` has no daemon side effects; `build`/`up` do — see "Combined-stack boot test" below.
 - `CA_CERT_FILE=docker/tls-fullchain.crt docker compose build` — build with a local on-prem CA file.
 - **Release = version bump + tag + GitHub release** (since v1.0.0, 2026-07-29; the full procedure
   is encoded as the project **`/release` skill** in `.claude/skills/release/SKILL.md` — keep the two
@@ -50,22 +55,46 @@
 
 ## Docker
 - **Layer order is the build-speed contract.** Slow, rarely-changing steps sit ABOVE the app
-  `COPY`: apt → CA → uv → Chromium → pip → hex-ssh → `npm install` → deck converter self-test
-  (~40 s; inputs = the pptx skill tree + `docker/fontconfig` + node_modules — it resolves
-  `playwright-core` from `/app/node_modules`, so it cannot go above `npm install`) →
-  `COPY --exclude=default-skills/skills/pptx . .` → `npm run build` (~6 s). A step whose inputs are
-  the pptx skill, dependencies or pinned tools must not move below that final `COPY`, or every code
-  change re-runs it. apt/pip/npm/node-gyp downloads ride
-  `RUN --mount=type=cache` (never in a layer). Keep the Dockerfile free of a `# syntax=` line —
-  it pulls the frontend from Docker Hub, unreachable on the closed deploy network; the built-in
-  frontend (Docker 23+) already supports `--mount` and `COPY --exclude`. `.dockerignore` keeps
-  `docs/`, `tests/` and `docker/tls/` (deploy-host TLS keys — bind-mounted, never baked) out.
-- `docker build` and `docker run` DO work here. Smoke-test:
-  `docker run -d -e SESSION_SECRET=x <img>` then `docker exec <c> curl -fsS --noproxy '*'
-  localhost:48787/api/bootstrap` (the unauth health probe + HEALTHCHECK). `SESSION_SECRET`
-  is REQUIRED to boot (`NODE_ENV=production`), the image runs as non-root `node` (so `uv` /
-  global bins must be world-accessible, NOT symlinked into `/root`), and `docker stop` should
-  exit in <1s via the SIGTERM handler in `index.ts`.
+  `COPY`: apt (+ its soffice/pdftoppm/python self-check) → CA → hex-ssh → `npm install` → deck-font
+  registration (`COPY` of the pptx skill tree + `fc-cache`; inputs = that tree + `docker/fontconfig`) →
+  `COPY --exclude=default-skills/skills/pptx . .` → `npm run build` (~6 s). A step whose inputs are the
+  pptx skill, dependencies or pinned tools must not move below that final `COPY`, or every code change
+  re-runs it. apt/npm/node-gyp downloads ride `RUN --mount=type=cache` (never in a layer). Keep the
+  Dockerfile free of a `# syntax=` line — it pulls the frontend from Docker Hub, unreachable on the closed
+  deploy network; the built-in frontend (Docker 23+) already supports `--mount` and `COPY --exclude`.
+  `.dockerignore` keeps `docs/`, `tests/` and `docker/tls/` (deploy-host TLS keys — bind-mounted, never
+  baked) out; `docker/pi/` must stay IN (the `pi-setup` service runs `docker/pi/pi-setup.sh` from the image).
+- **No agent runs in the Noah image** (pi-gateway runs every turn): no Chromium, pip set, uv, ripgrep or
+  converter self-test there — those live in the deck sandbox image (`docker/pi-sandbox`, its own
+  `verify.sh`). `tests/deck-packaging.test.ts` pins both halves.
+- **The stack is one compose project with pi-gateway's services included** (`include:` +
+  `docker/pi/compose.override.yml`; `tests/infra-compose.test.ts` pins it). Two compose facts it relies on,
+  both verified with `docker compose config`: (1) the INCLUDING project's `.env`/shell wins over the included
+  project's `.env` inside the included file — hence the shared-keys list in `.env.example`; (2) a service of
+  the same name in a later `-f` file MERGES into the included one silently — never reuse a pi service name
+  (`gateway`, `sandboxd`, `mcp-broker`, `egress-proxy`, `sandbox-image`) in an overlay.
+- **Combined-stack boot test — NEVER on the host daemon** (the user's own pi-gateway runs there; a second
+  sandboxd adopts/removes its sandboxes and the egress socket volume name is fixed). Use a private
+  privileged `docker:29-dind` on its own network, the way the 2026-10-29 verification did:
+  `docker network create --subnet 10.217.0.0/24 noahcompose-net`, `docker run -d --name noahcompose-dind
+  --privileged --network noahcompose-net -e DOCKER_TLS_CERTDIR= -v <dir>:<dir> docker:29-dind dockerd
+  --host=unix:///var/run/docker.sock --default-address-pool base=10.218.0.0/16,size=24`, with `<dir>` holding a
+  `git archive` of HEAD + the working compose files, a pi-gateway export at the pin, a `home/` (workspaces 0700,
+  plugins 0777) and `secrets/` made by hand (files 0444 so uid 10001 reads them without root; Noah's copy 0400),
+  `DOCKER_GID` = the dind socket's gid. Then inside it `docker compose build` (~10 min cold) and `up -d`, and
+  check: `pi-setup` logs one `PUT` per server then `ok … (unchanged)` on a re-run; `/api/bootstrap` answers;
+  from `mcp-broker` `POST http://noah-almighty:48787/mcp/repo` → **401**, from `gateway` and from the published
+  port → **403**; Noah `GET http://gateway:8080/v1/models` with the mounted key → 200; and pi's
+  `scripts/security-check/run.mjs` (run in `sandboxd`, `--internal noah-almighty:48787` plus each Noah IP) →
+  all PASS, sandboxes `noah-almighty/pi-sandbox:latest` with network `none`. Tear the dind and its volume down
+  afterwards; leave `noahpi-dind` (the pi e2e instance) alone.
+- `docker build` and `docker run` DO work here (plain `docker build -t <unique tag> .` of the Noah image only —
+  never `docker compose build` on the host: pi's `sandbox-image` service would retag `pi-gateway/sandbox:latest`).
+  Smoke-test: `docker run -d -e SESSION_SECRET=x -e AGENT_RUNTIME=local <img>` then `docker exec <c> curl -fsS
+  --noproxy '*' localhost:48787/api/bootstrap` (the unauth health probe + HEALTHCHECK). `SESSION_SECRET` is
+  REQUIRED to boot (`NODE_ENV=production`), the image runs as non-root `node` (so global bins must be
+  world-accessible, NOT symlinked into `/root`), and `docker stop` should exit in <1s via the SIGTERM handler
+  in `index.ts`.
 - **Native HTTPS mode:** `TLS_CERT_FILE`+`TLS_KEY_FILE` (both, or the boot refuses — never a
   silent HTTP fallback) switch `createAppServer` to `https.createServer`; TLS ends in the app, so
   no proxy read-timeout/buffering sits in front of agent SSE. compose mounts `./docker/tls` →
@@ -88,9 +117,10 @@
 
 ## Deck converter
 The pptx skill's HTML→PPTX converter (mechanics: [`pptx-converter.md`](pptx-converter.md)) needs a
-Chromium and a Python with the pinned set. The image has both; a dev box borrows Playwright's cached
-Chromium and a venv.
-- **Dev venv** (Python 3.11 = the image's): `uv venv ~/.venvs/noah-pptx --python 3.11 && uv pip install
+Chromium and a Python with the pinned set. In a deployment it runs inside each user's pi sandbox, whose
+image (`docker/pi-sandbox`, Python 3.12, trixie Chromium) has both; the Noah image has neither. A dev box
+borrows Playwright's cached Chromium and a venv.
+- **Dev venv** (any CPython the pins have wheels for; the sandbox image is 3.12): `uv venv ~/.venvs/noah-pptx --python 3.11 && uv pip install
   --python ~/.venvs/noah-pptx/bin/python -r default-skills/skills/pptx/converter/requirements.txt`.
 - **Dev `.env`** (the server's boot probe and the agent shell both read it):
   `NOAH_PPTX_PYTHON=/home/<you>/.venvs/noah-pptx/bin/python` — ABSOLUTE, `.env` values are not
@@ -104,24 +134,14 @@ Chromium and a venv.
   npx vitest run tests/deck-converter.test.ts tests/deck-contract.test.ts` — expect no skips. Also
   `bash default-skills/skills/pptx/scripts/deck.sh selftest --fail-on-drift` (both decks, both profiles),
   and `git status` must show no `__pycache__` or `.build` under `default-skills/`.
-- **Baseline image = a FRESH build of `main`,** never an old local tag:
-  `git worktree add /tmp/noah-main main && docker build -t noah-almighty:baseline-main /tmp/noah-main`,
-  then `git worktree remove /tmp/noah-main`. Compare sizes with `docker image inspect -f '{{.Size}}' <img>`
-  (expect ≈ +0.21 GB compressed content / +0.54 GB uncompressed for the converter).
-- **Docker smoke:** `docker build -t noah-almighty:deck-verify .` (the log must show
-  `deck converter selftest: PASS`; `--progress=plain` prints it), then
-  `scripts/deck-docker-smoke.sh --image noah-almighty:deck-verify --baseline-image noah-almighty:baseline-main
-  --require-validator` (add `--validator-dll <dir>/Validator.dll` to reuse a built validator, `--keep <dir>`
-  to keep the decks and logs). It runs every conversion under `--network none --cap-drop ALL
-  --security-opt no-new-privileges:true -u node --init`; its steps (a)–(j) are listed in the script header.
-  Without `--validator-dll` it builds `scripts/openxml-validator/` with `mcr.microsoft.com/dotnet/sdk:8.0`
-  (needs NuGet; build recipe in that directory's README) and SKIPs the validation with a warning when it
-  cannot — `--require-validator` turns that into a FAIL. Run the smoke whenever the converter or the
-  Dockerfile changed.
-- **Legacy variant:** `docker build --build-arg DECK_CONVERTER=0 -t noah-almighty:deck-legacy .` must
-  build; `docker run --rm noah-almighty:deck-legacy bash /app/default-skills/skills/pptx/scripts/deck.sh
-  probe --json` → `"converter": false`, exit 4, and `missing` names "the image was built without the
-  converter (DECK_CONVERTER=0)"; the boot log's probe line shows mode `legacy`.
-- **One Dockerfile fragment** (the apt or pip layer, the fontconfig registration) can be tried without a
-  full build in a throwaway container, as above; the self-test fragment needs the whole app tree, so test it
-  through a real build.
+- **Sandbox image:** `docker compose build pi-sandbox-image` inside the dind of "Combined-stack boot test"
+  (never on the host — it builds pi's `sandbox-image` first), or plain `docker build -f
+  docker/pi-sandbox/Dockerfile -t noahpi/sandbox:<tag> .` FROM an existing pi sandbox image. The build log
+  must show `deck converter selftest: PASS`; then `docker/pi-sandbox/verify.sh --image <tag>` runs every
+  conversion under sandboxd's flags (`--runsc` adds a gVisor run). Run it whenever the converter, its pins
+  or `docker/pi-sandbox` changed.
+- **`scripts/deck-docker-smoke.sh` targets the pre-pi Noah image** (a converter inside the app container);
+  it no longer applies to the Noah image of this branch.
+- **One Dockerfile fragment** (an apt layer, the fontconfig registration) can be tried without a full build in
+  a throwaway container, as above; the sandbox image's self-test needs the skill tree, so test it through a
+  real build.
