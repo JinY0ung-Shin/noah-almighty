@@ -51,8 +51,8 @@ Zero new MCP servers. Ships via SKILL.md + a `writeRepoTemplate` refactor.
   Explicit `NO_VAULT` sentinel when neither `wiki/` nor `raw/` exists (distinct from zero matches).
 - `src/server/agent/brainTools.ts` (new): `mcp__brain__{search,get_note}`. Resolve repo ONLY
   from `ctx.avatarUserId` (the owner), never the viewer. Gate reads on `ctx.elevated`. No write tool.
-- `claudeAgent.ts`: `const brainActive = knowledgeRepoConfigured && elevatedToolAccess;` — same
-  boolean in BOTH `allowedTools` and `mcpServers` spreads.
+- `claudeAgent.ts` (now `runCapabilities.ts`): `const brainActive = knowledgeRepoConfigured && elevatedToolAccess;`
+  — same boolean in BOTH the allowed-tools and server spreads (today `mcpAllowedTools` + `inProcessMcpServers`).
 - `promptBuilder.ts`: `brainSection(request)` gated on `knowledgeRepoConfigured !== false`
   (owner + elevated teammate + owner-routine self-state).
 
@@ -61,7 +61,7 @@ Zero new MCP servers. Ships via SKILL.md + a `writeRepoTemplate` refactor.
 - `src/server/agent/systemTools.ts`: add owner-only `mcp__system__{list_recent_conversations,read_conversation}`
   to `SYSTEM_TOOL_NAMES` + server. Self-gate on `ctx.viewerIsOwner`; scope to `store.listMessages(ctx.avatarUserId, …)`
   (the `ownsConversation` guard returns `[]` for non-owned ids — NEVER add a guard-bypassing variant).
-  Register in BOTH lists in `claudeAgent.ts`, gated on `ownerToolAccess`.
+  Register in BOTH lists in `claudeAgent.ts` (now `runCapabilities.ts`), gated on `ownerToolAccess`.
 - `brain-reflect` SKILL.md: extend the **personal** branch with the conversation-read block;
   GROUP branch keeps "never read conversations".
 - Nightly reflection ships as a skill the owner can schedule — NOT an auto-created routine.
@@ -72,7 +72,7 @@ Zero new MCP servers. Ships via SKILL.md + a `writeRepoTemplate` refactor.
   `groupRepoTools.ts`. **CRITICAL:** resolve group via `resolveGroup` over `listUserGroups(ctx.avatarUserId)`
   FIRST (→ `NO_SUCH_GROUP`), only THEN `groupKnowledgeRepoContextFor` — calling it directly on a
   model-supplied id = cross-tenant read of another team's repo. Member-read; no admin check for reads.
-- `claudeAgent.ts`: `const groupBrainActive = ownerToolAccess && ownerGroups.some(g => g.knowledgeRepoConfigured);`
+- `claudeAgent.ts` (now `runCapabilities.ts`): `const groupBrainActive = ownerToolAccess && ownerGroups.some(g => g.knowledgeRepoConfigured);`
 - `promptBuilder.ts`: extend `groupsSection()` with the team-brain trigger.
 - `systemTools.ts` `describe_system`: brain-state lines from existing `state.knowledgeRepoConfigured` + `state.groups`
   (no new OwnerState field — keeps buildPrompt/describe_system parity), checked AFTER the per-conversation

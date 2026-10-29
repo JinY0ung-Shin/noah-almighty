@@ -199,7 +199,8 @@
   `inputValue` DOES expose the plaintext and is why it must never be rendered (snapshots.md). On the way
   back the chat route redacts the reply before anything reads it and the browser tools redact their own
   result, so a page that echoed the value into its own DOM comes back `[REDACTED:<NAME>]`; the run's
-  PostToolUse hook carries the same value for every OTHER tool for the rest of the turn (agent-core.md).
+  redaction set (`piRedactions`, applied by the `/mcp` endpoint) carries the same value for every OTHER Noah MCP
+  result of the run (agent-core.md).
   Audit rows record `secret=NAME` / `secrets=[N1,N2]` and nothing else.
   Refusals are all RETRY-PROOF and worded to redirect: an unknown name lists what IS enabled and the
   settings path, a host mismatch names the allowed sites and the current host, and a declined consent is

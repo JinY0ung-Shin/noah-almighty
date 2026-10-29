@@ -1,107 +1,39 @@
-# Agent prompt & tools anatomy — what actually reaches the API
+# Agent prompt & tools anatomy — what reaches the model
 
-How the avatar's request to the Anthropic API is composed, with **measured** sizes
-(captured 2026-06, claude CLI v2.1.185 / claude-agent-sdk 0.3.185). Use the capture
-script (`scripts/capture-agent-prompt.ts`) to re-measure after SDK/CLI bumps — the
-numbers drift.
+How an avatar run's request is composed on pi-gateway, the only agent runtime since the Claude Agent SDK
+runner was removed (U8, 2026-10-29). Mechanics live in
+[`architecture/pi-runtime.md`](architecture/pi-runtime.md); this page is the size-and-layers view.
 
-The API request body has these top-level keys:
-`model, messages, system, tools, metadata, max_tokens, thinking, context_management, output_config, stream`.
-The two that hold all the "instructions" are **`system`** and **`tools`** — and they
-are SEPARATE. Tool descriptions are NOT in the system prompt.
+## Layers
 
-## `system` = preset + append
-
-Set in `claudeAgent.ts` (`setSystemPrompt`, ~L824):
-
-```js
-options.systemPrompt = {
-  type: "preset", preset: "claude_code",
-  append: buildSystemPromptAppend(promptRequest),
-  excludeDynamicSections: true,   // drops the preset's cwd / memory / git-status sections
-  snapshot: false,                // render fresh every request (CLI 2.1.267+ replays the first turn's prompt otherwise)
-};
-```
-
-Final `system` = **Claude Code preset (minus dynamic sections) + the app's append**, in order.
-
-| part | source | ~chars | ~tokens |
+| Layer | Source | When it is sent | Notes |
 |---|---|---|---|
-| preset (`claude_code`, dynamic excluded) | compiled into the native `claude` binary | ~2,960 | ~750 |
-| append (`buildSystemPromptAppend`, owner + all MCP groups) | this codebase | ~9,900 | ~2,475 |
+| pi system prompt | `scripts/pi-system-prompt.md`, deployed to the instance as the live prompt `noah` by `scripts/pi-register-mcp.mjs --configure-instance` | pi adds it to every request | ~3.2k chars. Sandbox/environment rules, built-in tool conventions (read/edit/write/grep/find/ls/bash), how to reach Noah tools (`mcp_search`/`mcp_call`), AskUserQuestion, reply language. pi fills `{{WORKSPACE}}`, `{{LANGUAGE}}`, `{{DATETIME}}` |
+| Noah `instructions` | `buildSystemPromptAppend` (`agent/promptBuilder.ts`) with `piRuntime` set | rendered at the conversation's FIRST pi turn, frozen in `conversations.pi_instructions`, sent only when a pi session starts (D2) | the standing app guidance + self-state as of conversation start, `piRuntimeSection`, `piSkillsSection`, `piKnownToolsSection` (≈3.4k chars for all Noah tools). A run without a conversation renders it for that run only |
+| turn input | `buildPiTurnPreamble` + `buildUserPrompt` | every turn | KST date/time, run kind, rewind provenance, the open repo copy, a new session's reason; then the stored-history fallback (fresh session only, cap `PI_FIRST_TURN_HISTORY_LIMITS`) and the `User message:` / `Task instruction:` |
+| tools | pi built-ins + `mcp_search`/`mcp_call` | every request (pi's own) | Noah's ~100 MCP tools are NOT advertised one by one: the model finds them with pi's BM25 `mcp_search` or calls a known name with `mcp_call` ("Tool discovery" in pi-runtime.md) |
 
-- The preset opens `You are Claude Code, ... running within the Claude Agent SDK.`
-  then security policy, `# Harness`, `# Environment`, `# Context management`.
-  `excludeDynamicSections: true` is why cwd/memory/git-status are absent (the app
-  supplies its own self-state in the append instead).
-- The preset body lives inside the native binary
-  (`~/.local/share/claude/versions/<v>`) as a fragmented string table — `strings`
-  shows pieces, but the **capture script is the clean way to see the resolved whole**.
-- The append is built from ~17 `\n\n`-joined blocks, almost all **conditional** on
-  viewer class (owner / trusted / colleague / headless) and which MCP tool groups
-  are enabled. The owner + all-groups branch is the maximum; a colleague/read-only
-  turn or fewer groups is much shorter. Biggest single block: the **canvas** block
-  (~1,950 chars) — and it **duplicates** the `mcp__canvas__show` tool description.
+Consequences:
 
-The **user prompt is a separate layer** (`buildUserPrompt`, NOT in `system`):
-stored-history fallback (only when there is no `resume` session) + the turn's
-`User message:` / `Task instruction:`.
+- **The `instructions` are D2-stale by design.** Live state is `describe_system`'s job, and the append says so.
+  A volatile value in the append is frozen wrong for the rest of the thread — keep per-turn facts in the
+  turn input (`src/server/agent/CLAUDE.md`, "Prompt assembly").
+- **Tool descriptions cost nothing until searched.** The static catalog's compact descriptions
+  (`pi/catalogText.ts`) and the noun-only broker descriptions (`SERVER_DESCRIPTIONS` in
+  `scripts/pi-register-mcp.mjs`) are tuned for search recall, not for per-request size.
+- **Size guard:** `tests/system-manual.test.ts` keeps the owner + all-groups append under 18 000 characters
+  (with and without the vision branch).
 
-### Manual-based prompt reduction (2026-09)
+## Manual-based prompt reduction (2026-09, still in force)
 
-The measurements above describe the older capture, not the current append. Local avatars now
-always have the system MCP group. Their append carries a compact manual topic index, live state,
-role/secret/security boundaries and action triggers. Full browser/clipboard, canvas and working-Git
-procedures are retrieved with `mcp__system__read_manual` before using those capabilities; usage
-and integration questions also trigger lookup. See [agent-core](architecture/agent-core.md#official-product-manual).
-This reduces the standing APP APPEND only: the SDK preset and tool schemas/descriptions remain
-separate costs, and a retrieved guide consumes context on the turns that need it.
+Local avatars always have the system MCP group. Their append carries a compact manual topic index, live
+state, role/secret/security boundaries and action triggers. Full browser/clipboard, canvas and working-Git
+procedures are retrieved with `mcp__system__read_manual` before using those capabilities; usage and
+integration questions also trigger lookup. See [agent-core](architecture/agent-core.md#official-product-manual).
 
-## `tools` = the real token weight
+## History
 
-Every tool (built-in AND `mcp__*`) is advertised as one `{name, description, input_schema}`
-entry in the request `tools` array — sent on **every** request, cacheable like `system`.
-
-- **MCP tool descriptions come from the 2nd arg of `tool(name, description, schema, handler)`**
-  in `src/server/agent/*Tools.ts`. They appear ONLY when the server is registered via
-  `options.mcpServers`, which is gated by the enabled MCP tool groups. No registration
-  → the tool is absent from `tools` entirely (verified).
-- Real `runClaudeAgent` path, owner + all groups: **72 tools = 31 built-in + 41 `mcp__`**,
-  tool-description total **~74,000 chars ≈ ~18,500 tokens** — i.e. `tools` dwarfs
-  `system` (preset+append together are ~1/5 of it). `Workflow` alone was ~18,800 chars.
-- **`allowedTools` does NOT restrict what is advertised** — it is only an auto-approve
-  list for the PreToolUse gate. To drop a tool from the advertised set you need
-  **`disallowedTools`** (verified: listed tools vanish from `tools`).
-
-### Applied finding (2026-06)
-
-`UNUSED_SDK_BUILTIN_TOOLS` (`src/shared/sdkToolPresentation.ts`) → `options.disallowedTools`
-removes full-CLI harness tools the avatar never uses (Workflow, Monitor, DesignSync,
-Cron*, Enter/ExitWorktree, ScheduleWakeup, PushNotification, RemoteTrigger;
-they duplicate app features or are interactive-CLI-only). Measured effect (when the list
-also included SendMessage): 72→61 tools, ~74k→33k chars (**~10,200 tokens/request saved**).
-Built-ins kept: Read/Glob/Grep/Bash/Edit/Write/WebFetch/WebSearch/NotebookEdit/
-AskUserQuestion/Skill + Task*/Agent (the orchestration set).
-Update (2026-10-29): plan mode, Workflow and agent teams were retired, so `EnterPlanMode`/`ExitPlanMode`,
-`Workflow`, `TeamCreate`/`TeamDelete` and `SendMessage` are back on this list (see
-[`architecture/agent-core.md`](architecture/agent-core.md)).
-
-## How to capture the real thing
-
-`scripts/capture-agent-prompt.ts` points `ANTHROPIC_BASE_URL` at a local HTTP server,
-runs ONE turn with a dummy key, returns HTTP 529 to end fast, and dumps the outgoing
-request's `system` + `tools`. Two gotchas it handles:
-
-1. The SDK fires a **session-title** side request first (different, tiny system:
-   `You are a Claude agent...`). Filter for the MAIN turn by requiring the system text
-   to contain a marker from the append (`Noah Almighty (avatar-chat)`).
-2. `real` mode builds a real `Store` + `AppConfig` and calls `runClaudeAgent` (the true
-   option assembly, incl. `mcpServers`/`disallowedTools`); `preset` mode runs a bare
-   `query()` with just the preset + a given append (no MCP tools) — faster, for diffing
-   the preset/append split.
-
-```
-npx tsx scripts/capture-agent-prompt.ts real     # full app path (default)
-npx tsx scripts/capture-agent-prompt.ts preset    # preset + append only
-```
-Outputs are written to a temp dir whose path is printed. No real API call leaves the box.
+The 2026-06 measurements on this page described the Claude Code preset + append and the SDK's
+per-request `tools` array (72 tools ≈ 18.5k tokens before `disallowedTools` trimming), captured with a
+`scripts/capture-agent-prompt.ts` proxy. Both the preset and that script were removed with the SDK runner;
+git history keeps the old page.

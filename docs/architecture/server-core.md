@@ -130,6 +130,14 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its
   group-knowledge clone (`removeGroupKnowledgeClone`, `groupKnowledgeRepo.ts`). Tests:
   `tests/retire-group-agents.test.ts`.
+- **The retired Claude Agent SDK runtime (removed 2026-10-29, decision U8) leaves CLI state behind.** Through
+  `retirementGate()` (DB backup first): the `claude_oauth_token` app_config key (the old `claude setup-token`
+  subscription token) and the skill-discovery cache key (`skill_discovery_cache`) are deleted and both names are
+  reserved forever; `<dataDir>/agent-sessions` (the CLI transcripts, `config.agentSessionsDir` — kept only as the
+  path this step reads) is QUARANTINED to `<dataDir>/retired/<stamp>/agent-sessions` by a boot step, never
+  deleted, and a clean pass stamps `retired:agent_sessions`. Old CLI session ids and resume points in
+  `conversations.agent_session_id` / `messages.sdk_*` are left as they are: the pi runner ignores any value that is
+  not a `resp_…` id and starts a new session from the text history.
 - **Retirement backup and quarantine (user decision 2026-10-29): no retirement ever deletes a FILE, and
   none deletes a ROW before the whole DB is backed up.** One per-boot gate in `StoreBase`
   (`retirementGate()`, helpers in `src/server/store/retirementBackup.ts`) carries a UTC stamp
@@ -169,8 +177,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     static route reaches `dataDir`, no code lists `dataDir` itself, account deletion sweeps only its named
     per-user namespaces — so a deleted user's data in either folder stays until the operator removes it).
     Both hold FULL user data — conversations, encrypted secrets (readable with the deployment's
-    SESSION_SECRET), files — and, like the live DB, are reachable by same-uid agent Bash until #71's uid
-    separation lands. Restore: stop Noah, replace `noah-almighty.db` (and delete its `-wal`/`-shm`) with the
+    SESSION_SECRET), files — so keep the data volume's permissions owner-only (agent shells run in pi
+    sandboxes, which never mount `dataDir`). Restore: stop Noah, replace `noah-almighty.db` (and delete its `-wal`/`-shm`) with the
     backup, move the wanted items from `retired/<stamp>/` back to the same relative paths, start an OLDER
     release (this one would retire them again). Delete when satisfied: `rm -rf <dataDir>/retired/<stamp>
     <dataDir>/backups/pre-retire-<stamp>.db` (a read-only tree inside may need `chmod -R u+w` first).
@@ -207,7 +215,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   defaults (`users.model_default` / `effort_default` / `mcp_tool_groups_default`), mirroring
   `group_knowledge_off_default`. The setter `store.setChatDefaults` + `PUT /api/me/chat-defaults` write
   them; `toUser` exposes `modelDefault`/`effortDefault`/`mcpToolGroupsDefault` (null = never chosen →
-  fall back to the hardcoded server/SDK default; for MCP, `[]` = explicitly all-off as a remembered
+  fall back to the hardcoded server default; for MCP, `[]` = explicitly all-off as a remembered
   choice). The client seeds new panes from these in `makePane`; the per-conversation `selected_*` value
   still overrides them when resuming an existing thread.
 - **What's-new (release notes) notice (#whats-new):** `src/server/releaseNotes.ts` is the shared registry

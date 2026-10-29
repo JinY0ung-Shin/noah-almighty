@@ -30,8 +30,9 @@ Durable principles for this layer:
   in sync. (1) DB rows: a new user-scoped table needs a matching `DELETE` (both directions where the user
   can be owner AND subject — e.g. `knowledge_requests` by `avatar_user_id` OR `asker_user_id`) or it orphans
   rows past "permanent deletion." (2) On-disk namespaces: any new `dataDir/<ns>/<userId>` tree
-  (`plugins/`, `workspaces/`, the knowledge clone, ssh-trust dir, avatar image, per-conversation media)
-  needs a matching best-effort sweep in the `routes/admin.ts` delete handler. Audit rows are RETAINED by
+  (`plugins/`, `workspaces/`, `pi-repo-copies/`, the knowledge clone, ssh-trust dir, avatar image,
+  per-conversation media) — and the user's pi sandbox workspace (`<PI_WORKSPACES_DIR>/u-<key>`) — needs a
+  matching best-effort sweep in the `routes/admin.ts` delete handler. Audit rows are RETAINED by
   design (`actor_*` dangle, like `groups.created_by`).
 - **`migrate()` runs on EVERY `new Store()`, so a value-guarded backfill is NOT one-time.** An
   `UPDATE … WHERE col IS NULL` re-fires each boot and clobbers rows the APP later creates NULL on purpose

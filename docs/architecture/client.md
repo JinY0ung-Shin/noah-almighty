@@ -79,8 +79,9 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 - `<svelte:window>` cannot live inside `{#if}`/blocks — must be top-level. A `use:action` taking a
   parameter must declare a 2nd arg `(node, param?)` or svelte-check errors "Expected 1 arguments, but got
   2". `role="dialog"`/`"tablist"` on a `<nav>`/`<div>` trips an a11y warning — put the role on the right
-  element. `AgentResponse.runtime` is only `"local"|"claude"` (errors/blocked surface via `summary`, NOT
-  runtime — don't compare runtime to `"error"`).
+  element. `AgentResponse.runtime` is only a runtime tag (`"local"`/`"pi"`, plus `"claude"` on rows stored before
+  the SDK runner was removed; errors/blocked surface via `summary`, NOT runtime — don't compare runtime to
+  `"error"`).
 
 ## Svelte 5 runtime gotchas (svelte-check does NOT catch these)
 - **A green svelte-check does NOT mean the behavior is correct — for interaction/layout/timing changes,
@@ -306,7 +307,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `routes/chat.ts`, which `tsconfig.client.json` must never include (it reaches express and
   better-sqlite3 through its imports) — so the interface is declared twice and nothing type-checks across
   the gap. Fields: `id`, `text`, `state` (`queued|delivered|completed|dropped`), `createdAt`, `followUp`
-  (the model got it only AFTER a result boundary, so it starts its own turn in the same run), and
+  (the model gets it only AFTER the current answer, as its own follow-up turn in the same run — every steer
+  on pi), and
   `message` — the persisted `kind:"steer"` user row, present ONLY on the `delivered` frame and `null`
   when the conversation was deleted mid-run. `PendingSteer` (`pane.steers`) has no server counterpart and
   is LIVE-only: `resetLive` clears it and a reattach rebuilds it from the replayed frames.
@@ -316,7 +318,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   and the run loop's `finally` close the channel before the terminal path emits, so the viewer is told why
   the text came back before being told the run stopped. `turn_end {message, response}` carries the same payload shape as `done` but
   is deliberately absent from `isTerminalFrame` (`lib/chat.ts`), so the reader keeps reading: the visible
-  turn was sealed only because a steer is pending and the follow-up turn continues on the SAME run.
+  turn was sealed only because a steer is pending and the follow-up turn continues on the SAME run. The
+  `open` frame carries no delivery mode: the composer's hint is always "지금 답변이 끝난 뒤 이어서 전달됩니다", and a
+  delivered row's badge comes from its position (`steerBadgeLabel` — "답변 뒤 전달"; SDK-era rows folded mid-turn
+  keep "응답 중 전달").
   `finalizeVisibleTurn` appends the bubble for both, and `endLiveTurn(pane, true)` keeps
   `streaming`/`liveRunId`/`abortController` where `clearLive` would drop them. Both frames ride the
   replayed event log, so **every handler has to be re-appliable**: messages dedupe by id, and a bounded
@@ -340,8 +345,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `/api/messages/:id/activity`, and `sanitizeActivity` (`routes/chat.ts`) rebuilds every agent/tool/task
   row from an explicit field list. A field added to `LiveAgentNode`/`LiveToolRow`/`LiveTaskRow` but not
   there works live and silently vanishes on reload — add it to `AgentActivity` (`server/types.ts`) and the
-  sanitizer together, with a round-trip assertion in `tests/routes-chat.test.ts` (`background` and
-  `name` are the worked examples).
+  sanitizer together, with a round-trip assertion in `tests/routes-chat.test.ts` (`name` is the
+  worked example).
 - **Admin presence badge: the client poll interval bounds the server window from BELOW.**
   `users.last_seen_at` is stamped by EVERY authenticated request, and `startKnowledgeWatch`
   (`lib/loaders.ts`) is what keeps it warm for an idle-but-open tab — it polls once a minute and ONLY while
@@ -399,7 +404,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   management that used to be the admin view's 그룹 tab; legacy `#/settings/groups`·`#/admin/groups`
   hashes normalize to `#/groups` in `lib/nav.ts` `routeFromHash`.
 - **Agent cards fold only when SEVERAL agents share one tree.** `ActivityTree` decides at the root (≥2
-  sub-agents among the rows it renders — per bubble in the background phase) and nested trees inherit
+  sub-agents among the rows it renders) and nested trees inherit
   the decision. Each sub-agent card that has rows then gets a disclosure header (`@name` on older snapshots, label,
   `도구 N개 · 태스크 M개`, chevron) and shows only its latest tool row (its latest task row when it has no
   tools). A lone agent, a card with no rows yet and the main agent's own rows never fold. Open state is
@@ -453,9 +458,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **테마 반응성:** `lib/theme.ts`의 `theme` 스토어는 `applyTheme()`만 발행하는 single-writer.
   캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasTab의 Vega/mermaid)는 이 스토어를
   구독해 재스타일한다 — `data-theme`을 init에서 한 번만 읽는 패턴으로 되돌리면 토글 시 색이 낡는다.
-- **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어
-  `decision_reason`, SDK/진단용). 클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는
-  영어 텍스트를 한국어로 바꾸지 말 것(반대도 금지) — `preToolUseHook.ts`가 레퍼런스.
+- **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어, 진단용).
+  클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는 영어 텍스트를 한국어로 바꾸지 말 것(반대도 금지).
+  이 이벤트를 내던 SDK PreToolUse hook은 없어졌고, pi 런타임에는 아직 내는 곳이 없다 — 다시 쓸 때도 이 분리를 지킨다.
 - **audit log의 status는 `success`/`error` 외에 `ok`도 존재**(`agent/sshIdentityTools.ts`).
   클라이언트 라벨 매핑(`AdminView.svelte`)은 세 값 모두 처리한다.
 - **아이콘 경로의 단일 출처는 `lib/icons.ts`** (`ICON_PATHS` + `iconSvg`) — `Icon.svelte`와

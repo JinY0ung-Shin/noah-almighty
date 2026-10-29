@@ -103,7 +103,7 @@
   prompt carries no TODAY date — the frozen snapshot's timestamp is worded as not today's (see below) —
   so this header — plus the date the `/todo` expansion
   writes into its own user message — is what lets the model resolve "내일까지"/"다음 주 금요일".
-- **Gate (runPlan):** `todoToolsActive = systemToolsEnabled && ownerToolAccess &&
+- **Gate (`buildRunCapabilities`, `agent/runCapabilities.ts`):** `todoToolsActive = systemToolsEnabled && ownerToolAccess &&
   !consultationRun` — an interactive own-avatar chat, an owner routine (headless with tools opted in) and
   an external-task-API turn; never a teammate's chat, a consultation or a generic headless
   run (intro/hashtag generation). It rides the always-on `system` family rather than a tool group, so a
@@ -112,9 +112,9 @@
   !externalTaskApi`: an API-submitted turn is machine-authored, so withholding delete is a SPEED BUMP
   against an injected, irreversible removal of items — not a full boundary: `update_todo` stays
   available (it can still rewrite titles and memos), and per CLAUDE.md a leaked key IS the owner's
-  session. `delete_todo` is then left out of the server, has its OWN `allowedTools` entry on the same boolean
-  (the `create_share_link` precedent), and its handler refuses anyway. Every handler re-checks
-  `viewerIsOwner` (the `mcp__` auto-allow fires before any owner check).
+  session. `delete_todo` is then left out of the server, has its OWN `mcpAllowedTools` entry on the same boolean
+  (the `create_share_link` precedent; the `/mcp` endpoint refuses a call outside that list), and its handler
+  refuses anyway. Every handler re-checks `viewerIsOwner` (handlers self-gate whatever the endpoint admits).
 - `list_todos` marks titles and memos as stored DATA, never instructions — items a routine or the task
   API added can carry machine-authored text into later, more capable interactive runs.
 - **Status changes follow the owner's word** (the update_todo description, the prompt's standing
@@ -125,22 +125,23 @@
   (`mcpToolInputSummary`: 진행 중으로 표시 / 완료로 표시 / 드랍으로 표시 / 시작 전으로 표시).
 - **Server-name collisions are reported, not silent.** A plugin `.mcp.json` server whose name an app
   server takes in a run (e.g. a plugin `todo` server on an owner run) is still overridden by the app
-  server, but runPlan reports it — `agentLogger.warn` plus a `플러그인 경고: …` status line; runs where
+  server, but the run plan reports it — `agentLogger.warn` plus a `플러그인 경고: …` status line; runs where
   that app server is inactive still register the plugin's. This covers every app server name.
 - Created items are stamped `source` = `api` (external task API) / `routine` (headless) / `avatar`, and
   linked to the run's conversation. Writes are audited as `todo_tool_add|update|delete` with ids/counts
   only — never titles.
-- **Not TodoWrite.** The built-in TodoWrite/TaskCreate are the avatar's private per-run checklist that
-  vanishes after the turn; every tool description and the prompt section say so, and TodoWrite's
-  activity label is "작업 체크리스트 갱신" so the status line never reads as the user's 할 일.
+- **Not a private checklist.** pi has no TodoWrite/TaskCreate (its built-ins are
+  read/write/edit/ls/find/grep/bash), so the prompt section says a working note the avatar keeps for itself
+  is never the owner's list, and every tool description keeps the "never a private per-run checklist"
+  wording. TodoWrite's activity label ("작업 체크리스트 갱신") stays only so SDK-era activity rows render.
 
 ## Metacognition and guidance
-- **The prompt never reads the LIVE list — it states a snapshot FROZEN per conversation.** The append
-  is re-rendered every turn (`snapshot: false`) and any change to it invalidates the cached prompt
-  prefix, so a count that moved between turns (an add, a checkbox, a routine) or KST midnight would
-  re-bill the whole history at cache-write rates. The list therefore rides as
+- **The prompt never reads the LIVE list — it states a snapshot FROZEN per conversation.** The pi prompt
+  is itself frozen per conversation (`conversations.pi_instructions`, rendered at the first pi turn), and the
+  snapshot predates that rule: a count that moved between turns (an add, a checkbox, a routine) or KST
+  midnight must never change the stable prompt prefix the model caches. The list therefore rides as
   `conversations.todo_snapshot` (a column, so it dies with the conversation — no cascade): taken ONCE at
-  the conversation's first to-do-capable turn (runPlan → `resolveConversationTodoSnapshot`,
+  the conversation's first to-do-capable turn (`buildRunCapabilities` → `resolveConversationTodoSnapshot`,
   `agent/todoSnapshot.ts`; `ensureConversationTodoSnapshot` reads first and takes the write lock —
   IMMEDIATE, re-check, `take` inside — only while the column is NULL) and read back verbatim afterwards —
   never refreshed, not after an idle gap, a KST day change or a rewind (user decision 2026-10-10, chosen
@@ -168,9 +169,9 @@
   deleting the conversation is the purge. The LIVE state lives where caching does not care:
   `describe_system` (counts incl. in progress/dropped + date from `summarizeOwnerState`'s lazy `todos`
   snapshot, read once per call, plus the status rule) and every tool result's header. Both surfaces read the SAME `todoToolsEnabled` /
-  `todoDeleteEnabled` booleans the server build and `allowedTools` key on.
+  `todoDeleteEnabled` booleans the server build and `mcpAllowedTools` key on.
 - The prompt's `todoSection` (owner + routine branches, only on runs that have the tools) states the
-  tools, the TodoWrite distinction, delete availability, and the STANDING policy the user asked to be
+  tools, the private-checklist distinction, delete availability, and the STANDING policy the user asked to be
   situational ("유동적", 2026-10-09): an explicit request or
   `/todo` → add now and confirm in one line; a clear action item the OWNER owns → offer ONCE at the end
   of the reply, batched, add only what is accepted; no offers for ideas, casual mentions or others'

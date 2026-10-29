@@ -39,7 +39,7 @@
 | Storage (`withShareLinks`, composed outermost) | `src/server/store/shareLinks.ts`; the table in `StoreBase.migrate()` (`store/internal.ts`) |
 | Card lookup over persisted messages | `store.listMessageAttachments` / `store.findCardMessageAttachments` (`store/conversations.ts`) |
 | Avatar host callback | `onShareLink` in `executeChatTurn` (`routes/chat.ts`) |
-| Avatar tool + gates + metacognition | `agent/fileOutputTools.ts` (`create_share_link`), `agent/runPlan.ts` (`shareLinkToolActive`), `agent/promptBuilder.ts` (`shareLinkSection`), `agent/systemTools.ts` (describe_system lines), `agent/systemManual.ts` (`files-canvas` topic) |
+| Avatar tool + gates + metacognition | `agent/fileOutputTools.ts` (`create_share_link`), `agent/runCapabilities.ts` (`shareLinkToolActive`), `agent/promptBuilder.ts` (`shareLinkSection`), `agent/systemTools.ts` (describe_system lines), `agent/systemManual.ts` (`files-canvas` topic) |
 | Client | `lib/shareLinks.ts`, `views/ShareView.svelte`, `components/{SlidePresenter,ShareLinkDialog,SettingsShareLinks}.svelte`, entry points in `FileTab.svelte` (the deck's side-panel tab) / `ChatView.svelte` |
 
 ## Token, link, viewer tickets
@@ -157,20 +157,19 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
      !ctx.externalTaskId && ctx.unattendedDeadlineMs === undefined`
      (`shareLinkTurn`) — never a colleague thread, an external-task-API turn or any
      deadlined run.
-  2. runPlan registers the tool only when `shareLinkToolActive` = `fileOutputActive && events.onShareLink
+  2. `buildRunCapabilities` (`agent/runCapabilities.ts`) registers the tool only when `shareLinkToolActive` = `fileOutputActive && events.onShareLink
      && ownerToolAccess && !consultationRun && !request.headless &&
      !request.externalTaskApi`, computed before `buildSystemServer`. That ONE boolean drives the tool build,
-     its own `allowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately NOT in
-     `FILE_OUTPUT_TOOL_NAMES`), `SystemToolsContext.shareLinksEnabled` and `AgentRequest.shareLinksEnabled`
-     (stamped in `runClaudeAgent`).
-  3. The callback re-asserts the predicate and conversation ownership per call, and refuses in a
-     background / wake-up segment that no message from the owner started (`turnFinalized &&
-     !ownerSteeredSinceBoundary`), with a redirect to the card button. After the visible turn is finalized
-     the owner can still steer the run, and a steer DELIVERED since the last result boundary proves they are
-     there: the steer `delivered` listener sets `ownerSteeredSinceBoundary` (only once the turn is
-     finalized) and every later result boundary clears it, so a pure task-notification wake-up still
-     refuses, and so does a steer that is only queued. The handler itself refuses when the callback is
-     absent.
+     its own `mcpAllowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately NOT in
+     `FILE_OUTPUT_TOOL_NAMES` — the `/mcp` endpoint admits the call only through that entry),
+     `SystemToolsContext.shareLinksEnabled` and `AgentRequest.shareLinksEnabled` (stamped by
+     `stampPromptRequest`).
+  3. The callback re-asserts the predicate and conversation ownership per call, and refuses a segment of
+     the run that no message from the owner started, with a redirect to the card button. That case was the
+     SDK runner's background phase (a wake-up turn after the visible turn was finalized); on pi a run's only
+     later segments are steer follow-up turns, which the owner's own message starts and which never finalize
+     the visible turn early, so this lock no longer fires in practice. The handler itself refuses when the
+     callback is absent.
 - **Card lookup** (`pickShareLinkCard`): batches run newest first — this turn's `shownAttachments`, then
   each persisted message. `attachmentId` (SAFE_ID-checked) picks that card; omitted → the most recent
   batch holding a deck decides (the same deck re-shared there → its latest card; several DIFFERENT decks
@@ -263,11 +262,11 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 ## Tests
 `tests/share-links.test.ts` (routes, salted tokens/tickets and what a secret plus a logged id cannot mint,
 download names incl. the owner's download route, late send failures and 416/412, validity matrix, cascades,
-log hygiene), `tests/share-links-flow.test.ts` (end to end: the real chat route → runPlan → tool text →
+log hygiene), `tests/share-links-flow.test.ts` (end to end: the real chat route → run capabilities → tool text →
 recipient HTTP, the gate agreement across colleague turns, and a rebuilt deck's new link
 naming the earlier one), `tests/chat-files.test.ts` (`sanitizeDownloadName` / `withDownloadExtension`, the
 card-name cap), `tests/routes-chat.test.ts` (`onShareLink` supply predicate, card lookup, error mapping,
-the background refusal vs a delivered steer, `otherActiveLinks` on created and reused results, the
+`otherActiveLinks` on created and reused results, the
 hidden-cap change), `tests/store.test.ts`
 (migration, corrupt snapshot), `tests/agent-share-link.test.ts` (registration matrix, both lists, handler,
 prompt, describe_system, presentation), `tests/system-manual.test.ts` (prompt budget),

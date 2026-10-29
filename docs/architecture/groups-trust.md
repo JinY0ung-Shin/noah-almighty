@@ -30,7 +30,7 @@
 - **Shared (communal) account (공용 계정)** — `users.shared_account` (per-user settings pattern: column →
   `toUser`/`updateProfile` → `User.sharedAccount` → `PATCH /api/me` → 프로필 탭 공개 설정 카드 토글). When ON,
   trusted same-group teammates chatting with that avatar also get the personal knowledge-repo WRITE
-  tools: claudeAgent computes `repoWriteAccess = ownerToolAccess || (sharedAccount && elevatedToolAccess)`
+  tools: `buildRunCapabilities` computes `repoWriteAccess = ownerToolAccess || (sharedAccount && elevatedToolAccess)`
   and passes it as `RepoToolsContext.writeAccess` (defaults to `viewerIsOwner`; still headless-gated).
   Scope is DELIBERATELY narrow: `create_repo`, repo connect/disconnect settings (`knowledgeTools`), group
   repo tools, and every other owner-only tool are untouched; a plain (non-group) viewer stays read-only.
@@ -69,7 +69,7 @@
   policy (`allowedMcpToolGroupsForUser`), and rosters are untouched. Set via
   `PUT /api/me/groups/:id/avatar-sharing` (`canManageGroup`); echoed on `Group`/`UserGroupMembership`
   (`avatarSharing`). Meta-cognition rides the membership list: groupsSection/describe_system append an
-  ", avatar sharing off" marker per group, and the ask_avatar gates (`claudeAgent` `avatarAskActive`,
+  ", avatar sharing off" marker per group, and the ask_avatar gates (`runCapabilities` `avatarAskActive`,
   promptBuilder, describe_system — 3 hand-synced sites) require `groups.some(g => g.avatarSharing)`.
   Flipping it off fails the NEXT chat turn closed (history preserved), like leaving the group.
 

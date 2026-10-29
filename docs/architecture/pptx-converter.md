@@ -18,14 +18,13 @@
   PNGs) → `build_pptx.py` (python-pptx) → the gates, in parallel → fidelity (the IR against the written
   objects) → `previews.py` → deliverable + preview sidecar. It is the proof of concept ported behind two
   roots; the PoC's evidence is preserved under [`../pptx-converter/`](../pptx-converter/README.md).
-- **Shell-side on purpose, never an MCP tool.** The `mcp__` auto-allow in the PreToolUse hook fires BEFORE any
-  owner check, so an MCP converter would need its own gate; an in-process tool would run a `--no-sandbox`
-  Chromium on agent-authored HTML inside the server process, which holds `SESSION_SECRET` and the git tokens
-  (they are stripped only from the SUBPROCESS env, `agentSubprocessEnv` in `agent/runPlan.ts`). A Bash call
-  runs as the same uid and gains nothing new, and it stays behind the ONE PreToolUse gate: plain colleagues
-  and restricted headless runs are read-only. Elevated viewers run it **without a prompt** — every chat turn
-  and routine passes `autoApprove: true` — so **the converter's own guards are the boundary**: lints, CSP,
-  network block, budgets and locks. The same path works unchanged in routines and the external task API.
+- **Shell-side on purpose, never an MCP tool.** An in-process tool would run a `--no-sandbox` Chromium on
+  agent-authored HTML inside the server process, which holds `SESSION_SECRET`, the DB and every user's git tokens.
+  The build is ONE foreground `bash` call in the run principal's own pi sandbox (the `docker/pi-sandbox` image,
+  network-less but for pi's egress allowlist), which holds none of that and gains nothing new. There is no
+  approval prompt (pi has no per-call permission step), so **the converter's own guards are the boundary** inside
+  the sandbox: lints, CSP, network block, budgets and locks. The same path works unchanged in routines and the
+  external task API.
 - **Existing decks stay python-pptx.** Editing a `.pptx` in place or using a user's own template/master goes
   through `reference/python-pptx.md` (+ `scripts/render_deck.sh` for LibreOffice renders). A converted deck is
   changed by editing its HTML and rebuilding — a python-pptx edit breaks the hash binding (below), which the
@@ -192,7 +191,7 @@ Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in p
   is still open: 테마 (the three best-fitting themes, the recommended one first with `(추천)`), 분량, 용도 (보고서형 /
   발표형). An outline for a large request goes into the chat text right before it, with a one-line confirm replacing
   one of the questions. Never where nobody can answer now (routines and automated tasks), nor on an
-  external-task-API turn, where the hook does NOT deny the dialog and it would park the task — so the skill keys
+  external-task-API turn, where nothing refuses the dialog and it would park the task — so the skill keys
   that exclusion on the prompt's verbatim `This turn was submitted by an **EXTERNAL SYSTEM**` marker (a test asserts
   it is still in `promptBuilder.ts`: reword both together). Skill-only, no prompt change.
 - **Review rounds (SKILL §11).** Every build that exits 0 is delivered first (`share_file` IN PLACE); then its
@@ -387,10 +386,10 @@ environment (all optional):
   | renderer V8 heap | 512 MB (`--js-flags=--max-old-space-size=512`) | — |
   | built `.pptx` | 30 MB, the `share_file` cap (gate `pptx-too-large`, exit 3) | — |
 
-- **Why 540 s.** The bundled agent CLI moves a foreground Bash command that outlives its 600 s ceiling to the
-  BACKGROUND, and a background task delivers its follow-up as a NEW chat message while blocking the user's input
-  until it settles. A converter that always ends first never trips that path; the SKILL still says what to do if
-  it happens (wait for the notice, never start another run of that deck — a second run exits 5 anyway).
+- **Why 540 s.** The skill runs `deck.sh` as one foreground bash call with a 600 s timeout (the skill sync rewrites
+  the Claude Code `timeout: 600000` ms value to pi's `timeout: 600` seconds — [`pi-runtime.md`](pi-runtime.md)
+  "Skills"). A converter that always ends first is never cut off by the shell; a second run of the same deck while
+  one is still going exits 5 anyway.
   Per-stage deadlines = remaining budget minus a reserve for the stages after it (extract reserves 90 s in
   `build`, 30 s in `check`, where only the overview sheet follows; build_pptx ≤ 180 s, reserve 45 s; each gate
   ≤ 120 s, reserve 15 s; previews ≤ 60 s); a miss kills the stage and exits 6 (a stage whose deadline is already
@@ -564,9 +563,14 @@ environment (all optional):
   fonts per profile, the limits, and the build-time self-test record (`not-recorded` on dev boxes). `missing` is
   English FACTS for an administrator, never commands.
 - **States** (`deckModeOf`): `converter` → `legacy` (python-pptx + LibreOffice + pdftoppm) → `unavailable`.
-  Authoring status (`deckAuthoringStatusFor`, the exact rule of the PreToolUse hook's skill check):
+  Authoring status (`deckAuthoringStatusFor`, the admin skill policy's rule):
   `skill-disabled` when `pptx` or `<plugin.json name>:pptx` (`avatar-defaults:pptx`) is disabled —
   `other:pptx` is not — else `read-only` without elevated tool access, else `allowed`.
+- **On pi (every run) the surfaces read the SANDBOX, not this host probe:** `piSandboxDeckToolchain(config)`
+  (`deckRender.ts`) reports `converter` with the sandbox image's facts (both profiles, its limits, self-test pass,
+  python-pptx) when the operator set `PI_DECK_SANDBOX=true`, else `converter: NOT INSTALLED` with the operator fix
+  named. Only `libreOffice` keeps the host value, because share_file's approximate previews still render Noah-side.
+  The host probe still runs at boot for the log line below. Details → [`pi-runtime.md`](pi-runtime.md) "Decks".
 - **The state on BOTH surfaces.** The explicit markers live on `describe_system`'s "Document deck generation
   (PPTX)" line (owner and non-owner branches — one helper, `deckCapabilityLine` in
   `agent/systemTools.ts`, so they can never disagree). The prompt's `deckSection` (`agent/promptBuilder.ts`)
@@ -727,11 +731,9 @@ environment (all optional):
   The HTML render and previews show the author's hint, not PowerPoint's prompt.
 - LibreOffice previews (edited decks, docx/xlsx/pdf) stay approximate; malgun previews use the stand-in font,
   and the result note says so.
-- ≤ 60 slides per build (split bigger decks); no background (`run_in_background`) conversions; no converter
+- ≤ 60 slides per build (split bigger decks); no background conversions; no converter
   support for user templates/masters (the python-pptx path covers them); in-deck Korean metadata (layout names
   표지/본문, placeholder prompts, alt text, `계열 N`) is not localized; no MicroType Express compression; no
   Hanja-only NotoSansKR subset; LibreOffice ≥ 25.8 is not targeted.
-- The admin skill list shows the old `pptx` description until the CLI version changes (the skill-discovery cache
-  key in `skillDiscovery.ts`) — cosmetic.
 - Deferred client polish and the open production questions (concurrency sizing, mirror coverage, disk) are in
   [`../REFACTORING-BACKLOG.md`](../REFACTORING-BACKLOG.md#pptx-converter-2026-09--deferred-follow-ups).

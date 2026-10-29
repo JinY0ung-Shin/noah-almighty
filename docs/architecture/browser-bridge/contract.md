@@ -63,8 +63,8 @@
   `panelSlides` (`bubbleSegments.ts`) uses to scope panel slides to their own card. MIME comes from byte
   sniffing, never the extension's claim. Outcome rides `BrowserResult.shareNote`/`sharedAttachments`
   (SERVER-INTERNAL fields — not part of the five-layer wire contract): browserTools appends the note to
-  the report so the model knows whether the user saw the capture, and claudeAgent's execute wrapper
-  stamps the text anchor exactly like the file-output wrappers. Own per-turn budget
+  the report so the model knows whether the user saw the capture, and the execute wrapper in
+  `runCapabilities.ts` stamps the text anchor exactly like the file-output wrappers. Own per-turn budget
   (`MAX_SHARED_SCREENSHOTS_PER_MESSAGE`) so a browsing loop can't exhaust the share_file cap; past it
   (or on publish failure) the MODEL still gets the image — only the user-facing card is skipped, and the
   note says so. Best-effort BY DESIGN: publish failure never fails the tool call.
@@ -72,19 +72,19 @@
   In the same onBrowser continuation `routes/chat.ts` calls `saveBrowserCapture` (`chatFiles.ts`) with the
   SAME bytes: `<workspaceDir>/captures/<YYYYMMDD-HHMMSS>-<6 hex>.<ext>`, a KST wall clock plus a random
   suffix, with the extension from the same byte sniffing `publishBrowserScreenshot` uses. `<workspaceDir>`
-  is the conversation SCRATCH workspace even while a working repo is open (the clone is the run's cwd
-  then, the scratch its additional dir), which is why the prompt says "the scratch workspace's
-  `captures/`". The folder must be a real directory (`workspaceSubdirForWrite`, since the workspace is
-  agent-writable), the file is created `wx`, so it never overwrites and never writes through a planted
-  link, and the written file must realpath to exactly `realpath(workspace)/captures/<name>`
-  (`keepIfContained`) or it is removed: a folder swapped for a link mid-save cannot leave bytes elsewhere (against a single swap: a link swapped in AND
-  back out inside the write window can still leave the bytes at its target — harmless while the agent shell runs as
-  the server's own uid, a wording limit to revisit if the shell is ever sandboxed).
+  is the host view of the conversation's sandbox folder `/workspace/c/<conv-seg>/` even while a working repo is
+  open (the repo is a separate copy under `/workspace/repos/`), which is why the prompt says "the scratch
+  workspace's `captures/`". The whole folder is agent-writable, so the write is anchored at the user's sandbox
+  root (`workspaceAnchor`) and goes through the descriptor-pinned helpers (no-follow folders, `wx`-style exclusive
+  create through that descriptor — never overwrites, never writes through a planted link;
+  [`../pi-runtime.md`](../pi-runtime.md) "Host-side filesystem discipline"); a name collision draws a fresh
+  suffix, and if the pinned folder's real path moved since it was pinned the file is removed.
   A write that fails part-way (ENOSPC) removes its partial file. It has its own per-RUN budget (one
-  `executeChatTurn`, steer follow-ups and background wake-ups included; the constant keeps its name),
+  `executeChatTurn`, steer follow-up turns included; the constant keeps its name),
   `MAX_SAVED_CAPTURES_PER_TURN` (30), independent of the share cap in both directions. It is skipped when
   the conversation was deleted mid-run, and any other failure is reported, never fatal. The outcome rides
-  two more SERVER-INTERNAL `BrowserResult` fields, `savedPath` (absolute) or `saveSkipped`: `limit`,
+  two more SERVER-INTERNAL `BrowserResult` fields, `savedPath` (the host path; the model is shown its sandbox
+  view, `toSandboxPath`) or `saveSkipped`: `limit`,
   `conversation_gone`, `not_an_image` (empty or unsniffable bytes), or `save_failed` (no usable
   `captures/`, a failed or partial write, or a file that did not stay inside the folder). The
   `save_failed` note says only that the save did not complete, never that the workspace is unwritable.

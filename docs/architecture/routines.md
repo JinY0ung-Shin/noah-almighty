@@ -23,22 +23,23 @@
   error maps + `RoutineJob` (types.ts) + the `addColumnIfMissing` migration.
 - **Routines load the same skills as chat** via the shared `loadAgentPluginRoots` (plugins.ts): default
   + avatar plugins + personal & group knowledge-repo roots. Both `routes/chat.ts` and `scheduler.ts` call
-  it, so they can't drift; `local` runtime returns `[]`.
+  it, so they can't drift; `local` runtime returns `[]`. On pi the runner syncs those roots into the owner's
+  sandbox (`materializePiSkills`, [`pi-runtime.md`](pi-runtime.md) "Skills").
 - **Routines fall back down the model tier chain on transient failures.** The scheduler sets
   `AgentRequest.modelFallback: true` (routines ONLY — headless, no live stream; chat never sets it).
-  `runClaudeAgent` builds a chain from the resolved model DOWN the tier order (`buildModelFallbackChain`:
-  opus→sonnet→haiku; a concrete admin-override id → [id, sonnet, haiku]) and retries the next model when
-  the attempt THROWS a transient model/server error (`isRetryableModelError`: overload/429/5xx/network —
-  NOT `error_max_turns`/auth/bad-request, NOT on abort). An env-pinned `ANTHROPIC_MODEL` is a hard lock →
-  no fallback. In-band error *results* (e.g. max_turns) don't fall back. The completed-run log carries
+  `buildRunCapabilities` builds a chain from the resolved model DOWN the tier order (`buildModelFallbackChain`:
+  opus→sonnet→haiku; a concrete admin-override id → [id, sonnet, haiku]), each tier mapped to a pi model
+  through `PI_MODEL_MAP`, and `runPiAgent` moves to the next entry — in a FRESH pi session (a routine has no
+  history to lose) — when the attempt fails transiently (a failed pi response other than a 500, or a
+  retryable gateway error; never on abort; a busy gateway at stream open is retried with backoff first).
+  In-band error *results* (e.g. `error_max_turns`) don't fall back. The completed-run log carries
   `model` + `modelFellBack`.
 - **A routine has a HARD wall-clock deadline (default 30 min), and it is the budget for the WHOLE run** —
   `config.routineRunTimeoutMs` (env `ROUTINE_RUN_TIMEOUT_MINUTES`, clamped to a 1-minute floor; `0` does
   NOT disable it, unlike `PLUGIN_AUTO_REFRESH_MINUTES`), armed by one `AbortController` created per run
-  OUTSIDE `runClaudeAgent`. So all model-fallback attempts (opus→sonnet→haiku) plus the resume self-heal
-  retry SHARE that budget; a slow first attempt starves the rest of the chain. Note the mismatch with
-  `maxTurns` (default 1000) — the turn budget is far larger than the wall-clock one, so a work-heavy
-  routine hits the deadline, not max_turns.
+  OUTSIDE the runner. So all model-fallback attempts (opus→sonnet→haiku) plus the lost-session heal SHARE
+  that budget; a slow first attempt starves the rest of the chain. There is no Noah-side turn cap any more
+  (`MAX_TURNS` left with the SDK runner); pi's own tool-call limit ends a turn as `error_max_turns`.
 - **The deadline doubles as the max hang of the manual-run HTTP request.** `POST /api/me/routines/:id/run`
   (`routes/routines.ts`) `await`s the entire run and the "지금 실행" button awaits that fetch
   (`RoutinesView.svelte`), so the practical ceiling on `ROUTINE_RUN_TIMEOUT_MINUTES` is whatever read
@@ -70,16 +71,16 @@
   With the parallel scheduler that is up to `routineMaxConcurrentRuns` (plus manual runs) per restart
   instead of one. Recording them as failed on shutdown (the task API's `AVATAR_TASK_RESTART_ERROR`
   precedent) would make it at-most-once instead; that is a product decision, not yet taken.
-- **Never surface the SDK's abort message to the owner.** The SDK labels EVERY abort
-  `"Claude Code process aborted by user"` (it only checks `signal.aborted`), so storing it verbatim blamed
-  a user for a run nothing but the deadline touched — routines have no cancel route and are NOT in the run
-  registry, so `cancelAllRuns()` on shutdown can't reach them either; that message could ONLY have meant a
-  timeout. The scheduler now tracks its own `timedOut` flag and substitutes a Korean
-  `routineTimeoutMessage()` (derived from `RUN_TIMEOUT_MS` so they can't drift). When adding another abort
-  trigger, give it its own flag + message rather than letting the SDK text through.
+- **Never surface the runner's generic abort text to the owner.** An abort reaches the scheduler as a bare
+  "aborted" error whatever caused it (the SDK used to say `"Claude Code process aborted by user"`), but
+  routines have no cancel route and are NOT in the run registry, so `cancelAllRuns()` on shutdown can't reach
+  them either — an abort there can ONLY mean the deadline. The scheduler tracks its own `timedOut` flag and
+  substitutes a Korean `routineTimeoutMessage()` (derived from the configured timeout so they can't drift).
+  When adding another abort trigger, give it its own flag + message rather than letting the runner text
+  through.
 - **A failed routine persists its PARTIAL output into the thread.** The catch path accumulates `onDelta`
   into `streamedText` (the only reason routines pass an events sink at all — they still take no
-  `onQuestion`/`onPermission`) and writes `partial + "\n\n" + cause` as the assistant turn, mirroring the
+  `onQuestion`, so an AskUserQuestion gets the fixed "cannot ask" answer) and writes `partial + "\n\n" + cause` as the assistant turn, mirroring the
   chat route's cancel/error paths. Before this, a failed run wrote NOTHING to its conversation and the
   sole trace was the one-line `last_error` in the routines list. The persist is best-effort and wrapped so
   it can never mask the original failure. `response.text` is NOT usable here — it never arrives on abort.

@@ -1,30 +1,44 @@
-# pi-gateway runtime (`AGENT_RUNTIME=pi`)
+# pi-gateway runtime (the only agent runtime)
 
 Noah as a BFF over a dedicated pi-gateway instance (design: `~/.noah-work/pi-migration-2026-10-29/design.md`).
-The agent loop runs in pi (`POST /v1/responses`, service key + `user`); files and commands run in the
-viewer's own pi sandbox; Noah's in-process MCP tools are served to pi's broker over HTTP with a per-run token.
-The SDK runner stays the default and the fallback; no pi-gateway code is changed — everything pi lacks is a
-Noah-side degrade, stated on BOTH metacognition surfaces.
+The agent loop runs in pi (`POST /v1/responses`, service key + `user`); files and commands run in the run
+principal's own pi sandbox; Noah's in-process MCP tools are served to pi's broker over HTTP with a per-run token.
+The Claude Agent SDK runner was removed (U8, 2026-10-29); `AGENT_RUNTIME` is `pi` (default) or `local` (the
+deterministic stub for tests and the e2e harness), and any other value (`claude` included) stops the boot. No
+pi-gateway code is changed — everything pi lacks is a Noah-side degrade, stated on BOTH metacognition surfaces.
 
-## Which runs go to pi
+## Run classes and the sandbox principal
 
-`runAgentStream` (`agent/index.ts`) → `piRuntimeSupports(request)` (`agent/pi/piRuntime.ts`, unit-pinned):
+`runAgentStream` (`agent/index.ts`) sends every non-`local` run to `runPiAgent`. The sandbox principal is
+`piRunPrincipal(request)` (`agent/pi/piRuntime.ts`, unit-pinned) = `viewerUserId ?? avatar.id`, whoever the run
+executes AS:
 
-| Run class | Runtime | Why |
+| Run class | Principal (sandbox) | Owner data |
 |---|---|---|
-| owner chat, owner routine, task-API turn | pi | |
-| trusted (group) colleague chat | pi, principal = the colleague (U4) | |
-| untrusted colleague, avatar consultation, intro/hashtag generators | **SDK** (one log line with the reason) | must stay read-only; pi has no per-request tool allowlist (P1) |
-| any run without a conversation | SDK | prompt + sessions are per conversation |
+| owner chat, owner routine, task-API turn | the owner | own |
+| trusted (group) colleague chat | the colleague (U4) | owner repo/brain/skills only through Noah MCP tools |
+| untrusted colleague chat | the colleague | the read-only MCP set only (`mcpAllowedTools`) |
+| avatar consultation (the consulted avatar's run) | the ASKER | read-only MCP toward the consulted owner |
+| intro/hashtag generators, any run without a conversation | the owner | own |
 
-The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_system's runtime line says
-`claude (this read-only run stays on the Claude Agent SDK runner …)` for a fallback run.
+pi has no per-request tool allowlist (P1), so EVERY class gets the full built-ins (read/write/edit/bash/ls/find/grep)
+— including the classes that used to be read-only — always in its principal's OWN sandbox, never the owner's files.
+What a run may do to anyone else's data is decided only by the `/mcp` gate (`allowCall` over this run's
+`mcpAllowedTools`) and the handlers' self-gates. Both metacognition surfaces say what the run has and whose
+sandbox it is: `PiRuntimeFacts.sandboxOwner` (`owner` / `viewer` / `asker`, set by the capability plan) renders ONE
+sentence, `piSandboxOwnerSentence` (`ownerState.ts`), in the prompt's runtime section and describe_system's
+runtime line. An admin built-in toggle is advisory on pi (describe_system names it as such); a
+disabled SKILL is enforced by omission (see "Skills").
+
+**A run without a conversation** (consultations, the generators) works in an ephemeral folder
+`/workspace/c/<piEphemeralRunKey>/` in the principal's sandbox (`run-ask-<consulted avatar>` for a consultation,
+`run-<feature>` — `run-intro`, `run-hashtags` — for a generator): no stored pi session and no `pi_instructions` row (the prompt is rendered for that run only).
 
 ## One run (`agent/pi/runPiAgent.ts`)
 
 1. **Capabilities** — `buildRunCapabilities(…, { runtime: "pi", piConversationDir })` (`agent/runCapabilities.ts`),
-   the SAME plan the SDK runner wraps into its options bag (hex-ssh, 공용 MCP and plugin servers included — Noah
-   relays them, see "Proxied MCP servers"), and stamps `PiRuntimeFacts` onto describe_system's ctx and (via
+   the ONE capability plan (hex-ssh, 공용 MCP and plugin servers included — Noah relays them, see "Proxied MCP
+   servers"), and stamps `PiRuntimeFacts` onto describe_system's ctx and (via
    `stampPromptRequest`) the prompt.
 2. **Run token** — `McpRunRegistry.register` with EVERY name in `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`):
    Noah's own servers (`PI_NOAH_SERVER_NAMES`; built ones serve calls, unbuilt ones are tool-less stubs) and the three
@@ -56,8 +70,8 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
    by the route straight into `/workspace/c/<seg>/attachments/` and listed by sandbox path (`stagePiAttachmentFiles`
    maps host → sandbox; it copies only a file staged elsewhere). Skills are synced first (see "Skills").
 5. **Session** — `previous_response_id` = `resumeSessionAt ?? resumeSessionId` when it is a `resp_…` id; anything
-   else (an SDK session id from before the switch) means a new session from the text history. An image turn
-   (the route resets resume for the SDK) continues the stored session unless it is a rewind. Every committed turn
+   else (a CLI session id from the retired SDK runner) means a new session from the text history. An image turn
+   continues the stored session unless it is a rewind. Every committed turn
    reports its response id via `onSessionId` AND `onResumePoint({sessionId: id, uuid: id})`, so the chat route
    persists it as `agent_session_id` and stamps it on the assistant row; a rewind onto that row forks from it
    (pi branches on an older `previous_response_id`; no fork flag).
@@ -68,8 +82,8 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
    fallback chain (routines, task API: `modelFallback`) gives each attempt a fresh session.
 7. **Stop / failure** — a stop `cancel`s the live response, so pi COMMITS the partial turn (`incomplete`) and the runner
    reports its id. The chat route's cancel and error paths keep that id as `agent_session_id` (`sessionAfterAbort`):
-   the next turn continues it, and the stopped row already shows the same partial. They clear it (history rebuild, as
-   on the SDK — chat-02) when the run's LATEST input never committed: stopped before pi created the response, a failed
+   the next turn continues it, and the stopped row already shows the same partial. They clear it (history rebuild —
+   chat-02) when the run's LATEST input never committed: stopped before pi created the response, a failed
    response, or a steer follow-up turn stopped before its own commit (its steer is in Noah's rows, not in pi).
    pi keeps the stopped turn but does NOT feed its partial text back to the model (seen live in S05: the continued
    request carries the stopped prompt, no assistant message), so the route hands the stopped row's text as
@@ -80,7 +94,7 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 
 | Gap | Noah-side behavior | Surfaces |
 |---|---|---|
-| no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the chat `open` frame carries `steerDelivery: "after_answer"` (per run, from `piRuntimeSupports`), so the composer says "지금 답변이 끝난 뒤 이어서 전달됩니다" and the delivered row's badge reads "답변 뒤 전달" |
+| no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the composer always says "지금 답변이 끝난 뒤 이어서 전달됩니다" (the `open` frame carries no delivery mode); the delivered row's badge is position-based (`steerBadgeLabel`: "답변 뒤 전달" after an assistant row — the retired CLI runner's mid-turn rows still read "응답 중 전달") |
 | model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
 | no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
 | context window (P5) | from `PI_MODEL_MAP[tier].contextWindow`; no compaction chip | — |
@@ -93,10 +107,9 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 
 ## Files: the sandbox conversation folder (`agent/pi/piWorkspace.ts`)
 
-The chat route and the scheduler decide BEFORE building the request whether the turn runs on pi
-(`piRunWorkspace` — the same `piRuntimeSupports` decision `runAgentStream` makes) and then use
-`preparePiRunWorkspace`: the turn's workspace dir IS the host view of `/workspace/c/<conv-seg>/`
-(`<PI_WORKSPACES_DIR>/u-<sha256(viewer)[:24]>/c/<seg>`, 0700). So every server-written copy lands there with no
+The chat route and the scheduler resolve the run's sandbox folder BEFORE building the request (`piRunWorkspace`,
+from the same `piRunPrincipal` the runner uses) and then use `preparePiRunWorkspace`: the turn's workspace dir IS
+the host view of `/workspace/c/<conv-seg>/` (`<PI_WORKSPACES_DIR>/u-<sha256(principal)[:24]>/c/<seg>`, 0700). So every server-written copy lands there with no
 second copy: staged attachments (`attachments/`), browser captures (`captures/`), Confluence `save_to_workspace`
 (`confluence/`). The request's `cwd` is that folder (never Noah's repo clone), and the file-output roots are the
 user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`, e.g. a working-repo copy).
@@ -113,7 +126,7 @@ user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`,
   removed from the old folder, and a `.noah-moved-to-pi` marker there makes later turns skip it.
 - **Cascades:** `deleteConversationWorkspaceCopies` also sweeps `attachments/`, `captures/`, `confluence/` of the
   conversation's folder under EVERY `u-*` (`deletePiConversationCopies`), so every conversation-deleting path stays
-  complete on both runtimes; like the SDK scratch, the agent's own files in the folder stay. Rewind's dropped-attachment
+  complete; the agent's own files in the folder stay. Rewind's dropped-attachment
   cleanup works unchanged (its workspace dir is the sandbox folder). Account deletion removes the user's whole
   `u-<key>` workspace and Noah's repo-copy records (`routes/admin.ts`).
 
@@ -142,11 +155,12 @@ component by NAME:
   / `stagePiAttachmentFiles`), browser captures, Confluence `save_to_workspace` (`workspaceAnchor` = the user
   root), the rewind cascade (`deleteStagedAttachmentCopies`), repo copies + `.prev` + the commit's `.git` refresh,
   conversation and account deletion. The generic writers take an `anchor` (the deepest folder the agent cannot
-  replace) — the pi user root on pi runs, the scratch workspace itself on the SDK path.
+  replace) — the pi user root, or the scratch workspace itself when Noah cannot reach the sandbox workspaces (no
+  `PI_WORKSPACES_DIR`: the route stages into Noah's own `dataDir/workspaces` folder, which the sandbox cannot see).
 - **Residual (documented, not closable from Node):** a missing folder created on the way can be raced only into a
   refusal; and a file's CONTENT is the agent's after Noah wrote it. Without `/proc/self/fd` there is no pinning
   (entries would be addressed by name, check-then-act), so `AGENT_RUNTIME=pi` REFUSES TO BOOT there
-  (`assertProcFdPinning` in `loadPiRuntimeConfig`); only the SDK path's scratch writers run in that fallback. **A new host-side operation below a sandbox root MUST go through `piSandboxDir` /
+  (`assertProcFdPinning` in `loadPiRuntimeConfig`). **A new host-side operation below a sandbox root MUST go through `piSandboxDir` /
   `PinnedDir`** — `removeNoFollow` and by-name `fs.*` calls are only for paths whose every ancestor is Noah's.
 
 ## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)
@@ -156,10 +170,11 @@ pi does not load Claude Code plugin roots. Each pi turn `materializePiSkills` sy
 returns the index the prompt (`piSkillsSection`, frozen with the instructions — a skill added later loads from the
 next conversation) and describe_system (`piRunLines`, live) both state (`PiRuntimeFacts.skills`).
 
-- **Owner runs** (chat, routine, task API) copy every root. A **trusted colleague** runs in their OWN sandbox: only
-  the bundled default-skills are copied there; the owner's personal/plugin/group skills are listed `via: "mcp"` and
-  read through `mcp__skills__read` (`skills` server — registered only on such runs; files never land in the
-  colleague's sandbox; links and paths out of the skill are refused).
+- **Owner runs** (chat, routine, task API, generators — principal = the avatar's owner) copy every root. A
+  **non-owner run** (a colleague, a consultation's asker) runs in its OWN sandbox: only the bundled default-skills are
+  copied there; the owner's personal/plugin/group skills are listed `via: "mcp"` and read through `mcp__skills__read`
+  (`skills` server — registered only on such runs, when such skills exist; files never land in the
+  other user's sandbox; links and paths out of the skill are refused).
 - **Admin skill policy** by omission: a disabled skill (bare name or `<plugin>:<name>`) is not copied, listed or readable.
 - **Rewrites** in copied `.md` files: `${CLAUDE_SKILL_DIR}` → the skill's sandbox path; `timeout: 600000` (Claude
   Code ms) → `timeout: 600` (pi seconds, max 86 400). Served skills read `${CLAUDE_SKILL_DIR}` as `skill:<root>/<dir>`.
@@ -205,13 +220,13 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
 
 | Broker id | Source | Model-facing name | Child Noah spawns | Secrets |
 |---|---|---|---|---|
-| `hex-ssh` | the owner's SSH key (`sshActive`, same gate as the SDK) | `mcp__hex-ssh__<tool>` (SDK name unchanged) | `scripts/hex-ssh-policy-proxy.mjs` → `HEX_SSH_UPSTREAM_COMMAND` | SSH material in the child's env (Noah spawns it itself: no argv, no wrapper file) |
+| `hex-ssh` | the owner's SSH key (`sshActive`) | `mcp__hex-ssh__<tool>` (the pre-pi name, unchanged) | `scripts/hex-ssh-policy-proxy.mjs` → `HEX_SSH_UPSTREAM_COMMAND` | SSH material in the child's env (Noah spawns it itself: no argv, no wrapper file) |
 | `plugins` | the run's plugin roots' `.mcp.json` (first name wins, load order) | `mcp__plugins__<server>__<tool>` | stdio: the def's command (`${CLAUDE_PLUGIN_ROOT}`/`${VAR}` expanded, cwd = def `cwd` or the root) — **bundled roots only** (see below); http/sse: `mcp-http-bridge.mjs` | NO plugin def gets the vault on pi. An http/sse def outside the bundled roots that names ANY `${…}` placeholder sits out (`piPlaceholderRefusal`); bundled defs keep `${VAR}` expansion from Noah's scrubbed env |
 | `shared` | admin 공용 MCP servers (`planSharedMcpRun`, owner bindings) | `mcp__shared__<server>__<tool>` | always the bridge (header-less ones too: keeps `--use-system-ca` + error scrubbing) | slot values only in the bridge config file (written right before spawn, deleted by the bridge, `rm` again after) |
 
-- pi's `mcp_call` resolves the SDK form `mcp__<server>__<tool>` by suffix (`resolveAlias` in pi), so skills that
-  name a plugin/shared tool the SDK way keep working. A plugin server named like a Noah server or an enabled shared
-  server sits out (SDK parity) and both surfaces list it with the reason; so does an http def with fields the bridge
+- pi's `mcp_call` resolves the plain form `mcp__<server>__<tool>` by suffix (`resolveAlias` in pi), so skills that
+  name a plugin/shared tool without the relay prefix keep working. A plugin server named like a Noah server or an
+  enabled shared server sits out and both surfaces list it with the reason; so does an http def with fields the bridge
   cannot carry (`oauth`, `headersHelper`, …).
 - hex-ssh's per-viewer-class allowlist holds three times: the policy proxy (env `HEX_SSH_ALLOWED_TOOLS`), the
   pool (`allowTool` filters `tools/list` AND refuses `tools/call`), and the endpoint's `allowCall`.
@@ -221,7 +236,7 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   SIGKILL; the policy proxy now also exits on stdin EOF) with a 0.5 s grace before the run returns; the close keeps
   going after. A closed pool refuses calls instead of respawning. Tests prove no process outlives it.
 - **Redaction (`piRedactions`)**: the relays' secrets (the whole injectable vault once any of it reached a child,
-  credential-looking bridge headers + their bare tokens via `mcpBridgeRedactions` — shared with the SDK plan, the
+  credential-looking bridge headers + their bare tokens via `mcpBridgeRedactions`, the
   SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`) plus every browser-typeable secret value. Applied
   by the endpoint's `transformResult` to EVERY Noah MCP result of the run (`redactSecretValues`, `[REDACTED:<NAME>]`).
   pi's built-ins need none: the sandbox holds no secrets.
@@ -247,13 +262,9 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   could send it to a host of its choosing from Noah's network, past the sandbox egress allowlist. On pi such a def
   sits out with a reason (`piPlaceholderRefusal`; both metacognition surfaces list it, and the prompt's secret
   section plus describe_system's secret line say no plugin def receives a secret here); one without placeholders
-  relays verbatim. A user's secret reaches an external server only through a 공용 MCP slot binding. The SDK path
-  keeps vault substitution for OWNED roots — its agent Bash already shares the container (#71).
-- **The SDK runner is unchanged — the pre-existing #71 posture.** There every plugin stdio server (knowledge
-  repo included, with the owner's vault through the secret wrapper) is a CLI child in the Noah container, next to
-  the agent's own Bash, which already reaches the shared data volume as the same uid; refusing the servers there
-  would close nothing. #71's uid separation (`docs/architecture/secrets-ssh.md` "Same-uid posture") or the pi
-  runtime is the fix.
+  relays verbatim. A user's secret reaches an external server only through a 공용 MCP slot binding. (The retired SDK
+  runner substituted the vault into OWNED roots' defs through a secret wrapper; with it gone no plugin def anywhere
+  receives a vault value.)
 
 ## Asynchronous tools (design D8, `agent/pi/asyncJobs.ts`)
 
@@ -262,7 +273,7 @@ holds it:
 
 - **`mcp__avatars__ask_avatar`, interactive chat** (a run with a steer channel): the handler runs the synchronous
   gates (`preflightAvatarAsk` — unknown/self/untrusted refuse at once) and returns `Consultation ask-<id> … started in
-  the background`. The consultation (still on the SDK runner, `piRuntimeSupports`) runs as a `PiAsyncJobs` job; its
+  the background`. The consultation (a pi run in the asker's sandbox) runs as a `PiAsyncJobs` job; its
   result is pushed into the run's SteerChannel with BOTH texts (`askOutcomeDelivery`: English with provenance for the
   model, a Korean bubble carrying the answer for the chat — `SteerRecord.displayText` — plus WHO answered,
   `SteerRecord.source`). The route persists it as a `kind: "consultation"` user row with that source
@@ -281,7 +292,7 @@ holds it:
   240 s ≥ the 3 min consultation budget).
 - **Canvas**: on pi `neverWait` — controls always render non-blocking (the existing `wait:false` path) and the
   submission arrives as the user's next message. Known edge: while a run is still open (waiting for a consultation)
-  the client does not submit an async canvas (`submitCanvas` returns while streaming), as on the SDK path.
+  the client does not submit an async canvas (`submitCanvas` returns while streaming).
 - Tool descriptions (static catalog: `askRuntime: "pi"`, `neverWait`), the prompt (`piAsyncToolsSentence`) and
   describe_system ("Long-running tools on this runtime") state this.
 
@@ -296,10 +307,10 @@ Measured without a model, then mitigated Noah-side:
 | **Known Noah tool names** in the frozen prompt | `piKnownTools` (`mcpCatalog.ts`) → `PiRuntimeFacts.knownTools` → `piKnownToolsSection` | Built only while the conversation has no `pi_instructions` (its first pi turn): every tool of THIS run (`mcpAllowedTools` ∩ catalog), one line `mcp__<server>__<tool>(<required args>)`, catalog order (servers as `PI_NOAH_SERVER_NAMES`, tools in registration order), then relayed tools read from the run's proxy pool (`listToolsReport`, pi's name sanitizing, sorted; a source that did not answer is flagged). Frozen with the rest (D2): a later tool is found with `mcp_search`, a listed one may be refused (describe_system is authoritative). ≈3.4k chars for all 99 Noah tools |
 | Query line | `MCP_SEARCH_QUERY_LINE` (`piRuntimeSection`) | English, service id + action — tool text is English and keyword-matched |
 | Callable-now mirror | describe_system `piRunLines` ← `PiRuntimeFacts.callableNoahTools` (set after `mcpAllowedTools`) | live list of exact names |
-| Full sibling names | prompt, manual, skills, tool descriptions, errors (shared with the SDK, pinned in `tests/sdk-pin.test.ts`) | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs group_repo vs git_repo) |
-| Compact descriptions + discovery sentences | `pi/catalogText.ts`, applied by `piCatalogTool` in the STATIC catalog only (the SDK declares the builders' text) | a compact entry names the sha256 of the builder text it replaces; a changed builder text is served instead (warn) and the test fails until the entry is revisited. Sentences were kept because the held-out query set did not regress |
+| Full sibling names | prompt, manual, skills, tool descriptions, errors | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs group_repo vs git_repo) |
+| Compact descriptions + discovery sentences | `pi/catalogText.ts`, applied by `piCatalogTool` in the STATIC catalog only (the builders keep the full text) | a compact entry names the sha256 of the builder text it replaces; a changed builder text is served instead (warn) and the test fails until the entry is revisited. Sentences were kept because the held-out query set did not regress |
 | Noun-only broker descriptions | `SERVER_DESCRIPTIONS` in `scripts/pi-register-mcp.mjs` | pi shows the first line in the always-visible service list AND appends it to every tool document of that server, so verbs there match every tool (measured: verbs cost held-out recall) |
-| Unknown argument names refused | `checkArguments` gate + `unknownArgumentProblem` (`mcpHttp/endpoint.ts`), wired by `runPiAgent` for Noah's own servers | the McpServer's zod objects STRIP unknown keys (MCP SDK 1.29 `z.object`), and the catalog schemas have no `additionalProperties:false`, so `list_todos {state}` used to list everything; now the call is refused with the valid names (nested objects/arrays of objects checked; `anyOf` branches and open objects not). Relayed servers are not judged. The SDK path never goes through `/mcp` |
+| Unknown argument names refused | `checkArguments` gate + `unknownArgumentProblem` (`mcpHttp/endpoint.ts`), wired by `runPiAgent` for Noah's own servers | the McpServer's zod objects STRIP unknown keys (MCP SDK 1.29 `z.object`), and the catalog schemas have no `additionalProperties:false`, so `list_todos {state}` used to list everything; now the call is refused with the valid names (nested objects/arrays of objects checked; `anyOf` branches and open objects not). Relayed servers are not judged |
 
 ## The `/mcp` endpoint (`mcpHttp/endpoint.ts`)
 
@@ -339,18 +350,33 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   `SANDBOX_EGRESS_ALLOW` is the sandbox shell's ONLY way out (HTTP(S) via pi's egress proxy; empty = all blocked, a
   refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own
   tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual
-  topic say exactly that on pi; SDK runs keep their wording.
+  topic say exactly that.
 
 ## Env (config.ts → `AppConfig.pi`)
 
-`AGENT_RUNTIME=pi`, `PI_GATEWAY_URL` + `PI_GATEWAY_API_KEY` (required; the key is in `SERVER_ONLY_SECRET_ENV_NAMES`),
-`PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional `/mcp` peer allowlist), `PI_MODEL_MAP` (validated JSON; malformed stops the boot), `PI_DECK_SANDBOX`.
+`AGENT_RUNTIME` (`pi` default, `local` stub; anything else stops the boot), `PI_GATEWAY_URL` + `PI_GATEWAY_API_KEY`
+(required; the key is in `SERVER_ONLY_SECRET_ENV_NAMES`), `PI_MODEL_MAP` (required, validated JSON that must map every
+composer tier — fable/opus/sonnet/haiku; it is the ONLY tier→model source, and model fallback chains map through it;
+malformed or incomplete stops the boot), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional
+`/mcp` peer allowlist), `PI_DECK_SANDBOX`.
+
+Removed with the SDK runner: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (the old hard lock — the composer's models endpoint
+has no `locked` any more and reports each tier's pi model id), `ANTHROPIC_DEFAULT_*_MODEL`, `AUTO_COMPACT_WINDOW`,
+`MAX_TURNS`, `READONLY_TOOLS`. Model credentials live in pi-gateway only (D7). The admin 시스템 panel
+(`GET /api/admin/system`) shows `piModelMap` (tier → pi model id) and a `skillDiscovery` list read from the bundled
+default-skills root (`listPluginRootSkills`, `agent/skillCatalog.ts`); `PUT/DELETE /api/admin/claude-token` are gone.
 
 ## Existing deployments
 
-New nullable columns `conversations.pi_instructions` / `pi_session_profiles` (NULL = no pi turn yet). Old SDK session
-ids and resume points are IGNORED by the pi runner (not nulled — the SDK runner still uses them while both coexist);
-the first pi turn of an old conversation rebuilds context from the text history with the larger cap.
+New nullable columns `conversations.pi_instructions` / `pi_session_profiles` (NULL = no pi turn yet). Old CLI session
+ids and resume points (anything not `resp_…`) are IGNORED by the pi runner, never resumed: the first pi turn of an old
+conversation rebuilds context from the text history with the larger cap, and a rewind onto a pre-pi row does the same.
+
+The retired runner's state goes through `retirementGate()` (DB backup first, files quarantined, never deleted): the
+`claude_oauth_token` app_config key (the old `claude setup-token` login) and the skill-discovery cache key are deleted
+and reserved forever, and `<dataDir>/agent-sessions` (the CLI transcripts) is moved to
+`<dataDir>/retired/<stamp>/agent-sessions` by a boot step that stamps `retired:agent_sessions` after a clean pass.
+`config.agentSessionsDir` survives only as the path that step reads.
 
 ## Presentation
 
@@ -369,9 +395,9 @@ the first pi turn of an old conversation rebuilds context from the text history 
   ask_avatar as a follow-up turn, the never-waiting canvas, labels.
 - `tests/pi-tool-discovery.test.ts` — the known-tools list (only this run's tools, deterministic, relays), the query line,
   describe_system's callable line, compact descriptions (hash-bound, safety rules kept), broker descriptions, unknown
-  argument names refused at the endpoint. `tests/sdk-pin.test.ts` pins the SDK side byte for byte.
+  argument names refused at the endpoint. 
 - `tests/pi-runner.test.ts` — runner against a scripted fake client (frozen prompt, continuation, model switch,
-  rewind, 404 heal, question, steers, fallback, the endpoint as the broker sees it), `piRuntimeSupports`, config,
+  rewind, 404 heal, question, steers, fallback, the endpoint as the broker sees it), `piRunPrincipal`, config,
   the `/mcp` mount, the script's server list.
 - `PI_E2E_LIVE=1 PI_E2E_DIR=~/.noah-work/pi-e2e npx vitest run tests/pi-gateway-live.test.ts` — includes
   `runPiAgent` against the real e2e gateway.
