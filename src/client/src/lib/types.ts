@@ -32,6 +32,7 @@ export type {
   SharedSkillManifest,
   SignupMode,
   SkillInfo,
+  SteerDelivery,
   StoredMessage,
   User,
 } from "../../../server/types.js";
@@ -183,6 +184,13 @@ export interface ChatPane {
   thinkingActive?: boolean;
   liveStatus: string;
   liveRunId: string | null;
+  /**
+   * When THIS run hands the model a message typed while it answers (the `open`
+   * frame's `steerDelivery`): the composer's steer wording follows it. Belongs to
+   * the run like `liveRunId`, so a `turn_end` follow-up keeps it; undefined until
+   * the frame arrives (the wording then falls back to the SDK's mid-turn delivery).
+   */
+  liveSteerDelivery?: import("../../../server/types.js").SteerDelivery;
   /** Multi-agent activity tree (root "main" + sub-agents) for the live bubble. */
   liveAgents: LiveAgentNode[];
   /** Tool / blocked rows, each owned by an agent in liveAgents. */
@@ -193,6 +201,10 @@ export interface ChatPane {
   livePlugins: LivePluginChip[];
   /** ms timestamp until which a sticky status label resists a generic overwrite. */
   liveStatusStickyUntil?: number;
+  /** The tool whose frame set the current pin: its own progress echo is dropped while it runs. */
+  liveStatusPinSource?: string;
+  /** The newest server status that arrived while the pin held: shown once the pin lapses (setStatus). */
+  liveStatusHeld?: string;
   /** True between done{background:true} and bg_end/cancelled: the visible turn is finalized but the SDK session is still running background work. Drives the background chip + keeps the live activity tree mounted. */
   backgroundPhase?: boolean;
   /** Live background tasks (SDK level signal, REPLACE semantics). */

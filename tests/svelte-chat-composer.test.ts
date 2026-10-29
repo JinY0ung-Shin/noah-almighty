@@ -234,6 +234,17 @@ describe("composer mid-turn messages", () => {
     );
   });
 
+  it("says a message sent on a pi run arrives after the answer, not between actions", () => {
+    seedStreaming({ liveSteerDelivery: "after_answer" });
+    const { container } = render(ChatView);
+    expect(composerTextarea(container).placeholder).toBe(
+      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 지금 답변이 끝난 뒤 이어서 전달됩니다",
+    );
+    expect(container.querySelector<HTMLButtonElement>(".send-button.steer-send")!.title).toBe(
+      "응답 중 메시지 보내기 (지금 답변이 끝난 뒤 이어서 전달됩니다)",
+    );
+  });
+
   it("refuses to steer while an image is staged, and says when it can go", async () => {
     seedStreaming({
       pendingImages: [{ id: "img-1", dataUrl: "data:image/png;base64,AA", name: "shot.png", mediaType: "image/png" }],

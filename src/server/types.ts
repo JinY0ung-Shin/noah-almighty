@@ -747,8 +747,9 @@ export interface StoredMessage {
    * `"steer"` marks a USER message the viewer sent WHILE the avatar's previous
    * turn was still running (a mid-turn message, delivered to the model between
    * tool calls or as the head of the follow-up turn). Absent on ordinary rows.
-   * Persisted in `messages.kind`; the client renders these with a small
-   * "응답 중 전달" badge. Only ever set on `role: "user"` rows.
+   * Persisted in `messages.kind`; the client renders these with a small badge —
+   * "응답 중 전달", or "답변 뒤 전달" when the row follows an answer's sealed
+   * segment (`steerBadgeLabel`). Only ever set on `role: "user"` rows.
    *
    * `"queued"` marks a USER row persisted while ANOTHER run was still active on
    * the conversation (a routine's answer landing while the owner is mid-turn in
@@ -772,6 +773,18 @@ export interface StoredMessage {
   response: AgentResponse | null;
   createdAt: string;
 }
+
+/**
+ * When a run hands the model a message the viewer sent while it was answering
+ * (a steer), carried on the run's `open` SSE frame so the composer can say it
+ * truthfully. `"mid_turn"`: between the avatar's next two actions (the SDK
+ * runner's streaming input). `"after_answer"`: only once the current answer has
+ * finished, as the follow-up turn of the same run (the pi runtime has no
+ * mid-turn input, docs/architecture/pi-runtime.md). Per RUN, not per
+ * deployment: under `AGENT_RUNTIME=pi` a read-only run class still runs on the
+ * SDK runner.
+ */
+export type SteerDelivery = "mid_turn" | "after_answer";
 
 /**
  * One image fed to the model as an `ImageBlockParam` on a chat turn (base64,

@@ -534,10 +534,30 @@ function isTurnOpener(message: StoredMessage | undefined): boolean {
  */
 export function consultationLabel(message: StoredMessage): string {
   const source = message.consultation;
-  const who = source?.username
-    ? `@${source.username}${source.displayName ? ` (${source.displayName})` : ""}`
-    : "팀원";
+  const name = source?.displayName?.trim();
+  // A display name that only repeats the username adds nothing: "@carol", not "@carol (carol)".
+  const distinct = name && name !== source?.username ? name : "";
+  const who = source?.username ? `@${source.username}${distinct ? ` (${distinct})` : ""}` : "팀원";
   return `${who} 아바타의 답변`;
+}
+
+/**
+ * The badge on a delivered mid-turn message (`kind: "steer"`), from WHERE it sits
+ * — the persisted rows carry no runtime, and position is what says when the
+ * model got it. Folded in between tool calls, it is persisted before that turn's
+ * answer, so it follows the turn's opener: "응답 중 전달". Delivered only after
+ * an answer finished (every steer on pi; an SDK steer that missed the result
+ * boundary), it follows that answer's sealed segment: "답변 뒤 전달". Steers and
+ * consultation answers queued together are skipped over, so each of a batch
+ * reads the same.
+ */
+export function steerBadgeLabel(messages: StoredMessage[], index: number): string {
+  for (let i = index - 1; i >= 0; i--) {
+    const row = messages[i];
+    if (row.role === "user" && (row.kind === "steer" || row.kind === "consultation")) continue;
+    return row.role === "assistant" ? "답변 뒤 전달" : "응답 중 전달";
+  }
+  return "응답 중 전달";
 }
 
 /**
@@ -1053,6 +1073,8 @@ export async function sendMessage(
     // canvas/stop paths). Drop it here so this send's failure handling can tell
     // "our run opened, reconnect to it" from "the send never got off the ground".
     target.liveRunId = null;
+    // Run-scoped like the id: this send's `open` frame says it again.
+    target.liveSteerDelivery = undefined;
     target.streaming = true;
     // A send is an explicit "follow the response" intent, so re-arm auto-scroll
     // even if a prior turn (or a stray scroll) had detached it — otherwise the
@@ -1256,6 +1278,8 @@ export async function attachRun(
     resetLive(target);
     target.streaming = true;
     target.liveRunId = runId;
+    // The replayed `open` frame restores it (a server-started run has none).
+    target.liveSteerDelivery = undefined;
     target.liveStatus = REATTACH_STATUS;
     target.abortController = controller;
     // What the run logged before this pane attached is history to it: the
@@ -1627,6 +1651,8 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       updatePane(paneId, (pane) => {
         if (data?.conversationId) pane.conversationId = data.conversationId;
         if (data?.runId) pane.liveRunId = data.runId;
+        if (data?.steerDelivery === "mid_turn" || data?.steerDelivery === "after_answer")
+          pane.liveSteerDelivery = data.steerDelivery;
         pane.liveStatus = "응답 준비 중…";
         adoptUserMessageId(pane, optimisticId, data?.userMessageId);
       });
@@ -1714,7 +1740,7 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         detail,
         status: "running",
       });
-      setStatus(paneId, `${label}${detail ? ` · ${detail}` : ""}`, true);
+      setStatus(paneId, `${label}${detail ? ` · ${detail}` : ""}`, true, data.toolUseId);
       return;
     }
     case "tool_end":
@@ -2213,18 +2239,66 @@ function markTextBreak(paneId: string): void {
   });
 }
 
-function setStatus(paneId: string, label: string, sticky: boolean): void {
+const STATUS_PIN_MS = 1500;
+/** One pending "pin lapsed" check per pane (setStatus's held status). */
+const heldStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Show a status line. A `sticky` label (a tool/agent/task frame's specific one)
+ * is PINNED for 1.5 s so the generic progress echo that follows it ("실행 중: …")
+ * cannot erase it. A plain status arriving during the pin is either:
+ *  - dropped, when the tool that set the pin is still running — that is its own
+ *    echo, saying less than the pin; or
+ *  - HELD, and shown once the pin lapses — it is the server's newer phase (e.g.
+ *    a pi run waiting on a consulted avatar right after its tool returned), and
+ *    may be the last status the run sends for a long while.
+ * A later pin supersedes whatever was held.
+ */
+function setStatus(paneId: string, label: string, sticky: boolean, pinSource?: string): void {
+  let holdMs = 0;
   updatePane(paneId, (pane) => {
     const now = Date.now();
-    if (
-      !sticky &&
-      pane.liveStatusStickyUntil &&
-      now < pane.liveStatusStickyUntil
-    )
+    if (!sticky && pane.liveStatusStickyUntil && now < pane.liveStatusStickyUntil) {
+      const source = pane.liveStatusPinSource;
+      if (source && pane.liveTools.some((t) => t.id === source && t.status === "running")) return;
+      pane.liveStatusHeld = label;
+      holdMs = pane.liveStatusStickyUntil - now;
       return;
+    }
     pane.liveStatus = label;
-    pane.liveStatusStickyUntil = sticky ? now + 1500 : 0;
+    pane.liveStatusStickyUntil = sticky ? now + STATUS_PIN_MS : 0;
+    pane.liveStatusPinSource = sticky ? pinSource : undefined;
+    pane.liveStatusHeld = undefined;
   });
+  if (holdMs > 0) scheduleHeldStatus(paneId, holdMs);
+}
+
+function scheduleHeldStatus(paneId: string, delayMs: number): void {
+  clearTimeout(heldStatusTimers.get(paneId));
+  heldStatusTimers.set(
+    paneId,
+    setTimeout(() => {
+      heldStatusTimers.delete(paneId);
+      let remaining = 0;
+      updatePane(paneId, (pane) => {
+        if (pane.liveStatusHeld === undefined) return;
+        if (!pane.streaming) {
+          pane.liveStatusHeld = undefined;
+          return;
+        }
+        const now = Date.now();
+        if (pane.liveStatusStickyUntil && now < pane.liveStatusStickyUntil) {
+          remaining = pane.liveStatusStickyUntil - now;
+          return;
+        }
+        pane.liveStatus = pane.liveStatusHeld;
+        pane.liveStatusHeld = undefined;
+        pane.liveStatusStickyUntil = 0;
+        pane.liveStatusPinSource = undefined;
+      });
+      if (remaining > 0) scheduleHeldStatus(paneId, remaining);
+    }, delayMs),
+  );
 }
 
 function resetLive(pane: ChatPane): void {
@@ -2240,6 +2314,8 @@ function resetLive(pane: ChatPane): void {
   pane.liveTasks = [];
   pane.livePlugins = [];
   pane.liveStatusStickyUntil = 0;
+  pane.liveStatusPinSource = undefined;
+  pane.liveStatusHeld = undefined;
   pane.backgroundPhase = false;
   pane.backgroundTasks = [];
   pane.backgroundMessageId = null;

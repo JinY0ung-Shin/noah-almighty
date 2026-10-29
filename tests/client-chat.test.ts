@@ -1449,6 +1449,89 @@ describe("sendMessage: slash literals, staged images, failure modes", () => {
 /* stream events applied to a pane                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A run whose stream delivers `frames`, then stays OPEN until `release()` and
+ * ends with a `done` frame — state that only lives while a run streams (the
+ * status pin) can be stepped through with fake timers.
+ */
+function useHeldRun(runId: string, frames: Array<[string, unknown]>): () => void {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const enc = new TextEncoder();
+  const chunks = frames.map(sseFrame);
+  let i = 0;
+  useFetch((url) => {
+    if (!url.includes(`/api/chat/runs/${runId}/events`)) return jsonRes({ ok: true });
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (i < chunks.length) return controller.enqueue(enc.encode(chunks[i++]));
+        await gate;
+        controller.enqueue(enc.encode(sseFrame(["done", {}])));
+        controller.close();
+      },
+    });
+    return { ok: true, status: 200, body, json: async () => ({}) };
+  });
+  return release;
+}
+
+describe("the status pin after a tool frame", () => {
+  afterEach(() => vi.useRealTimers());
+
+  async function step(ms: number): Promise<void> {
+    await vi.advanceTimersByTimeAsync(ms);
+  }
+
+  it("shows a status that landed during the pin once it lapses (pi waiting on a consulted avatar)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const id = seedPane();
+    const release = useHeldRun("held-run-1", [
+      ["open", { runId: "held-run-1", steerDelivery: "after_answer" }],
+      ["tool", { toolUseId: "t-ask", name: "Bash", input: { command: "ask mate" } }],
+      // The tool's own progress echo while it runs: says less than the pin, dropped.
+      ["status", { label: "실행 중: 명령 실행" }],
+      ["tool_end", { toolUseId: "t-ask", ok: true }],
+      // The run's next phase, inside the same 1.5 s — and its last status for a while.
+      ["status", { label: "팀원 아바타의 답변을 기다리는 중…" }],
+    ]);
+    const attached = attachRun(id, "held-run-1");
+    await step(0);
+    expect(pane(id).liveSteerDelivery).toBe("after_answer");
+    expect(pane(id).liveStatus).toBe("명령 실행 · ask mate");
+    await step(1400);
+    expect(pane(id).liveStatus).toBe("명령 실행 · ask mate");
+    await step(200);
+    expect(pane(id).liveStatus).toBe("팀원 아바타의 답변을 기다리는 중…");
+    release();
+    await attached;
+    expect(pane(id).streaming).toBe(false);
+  });
+
+  it("drops the running tool's own echo for good, and lets a newer pin supersede a held status", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const id = seedPane();
+    const release = useHeldRun("held-run-2", [
+      ["open", { runId: "held-run-2" }],
+      ["tool", { toolUseId: "t-1", name: "Bash", input: { command: "ls" } }],
+      ["status", { label: "실행 중: 명령 실행" }],
+      ["tool_end", { toolUseId: "t-1", ok: true }],
+      ["status", { label: "응답 생성 중…" }],
+      ["tool", { toolUseId: "t-2", name: "Bash", input: { command: "sleep 6" } }],
+      ["status", { label: "실행 중: 명령 실행" }],
+    ]);
+    const attached = attachRun(id, "held-run-2");
+    await step(0);
+    // No delivery said: the composer keeps the SDK wording.
+    expect(pane(id).liveSteerDelivery).toBeUndefined();
+    expect(pane(id).liveStatus).toBe("명령 실행 · sleep 6");
+    await step(2000);
+    // Neither the older held status nor the running tool's echo replaces it.
+    expect(pane(id).liveStatus).toBe("명령 실행 · sleep 6");
+    release();
+    await attached;
+  });
+});
+
 describe("stream events applied to a pane", () => {
   it("starts a new paragraph when activity interrupts the text stream", async () => {
     const id = seedPane();

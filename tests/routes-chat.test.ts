@@ -2881,6 +2881,21 @@ describe("mid-turn user messages (steers)", () => {
     expect(long.body.error).toBe("메시지가 너무 깁니다.");
   });
 
+  it("tells the composer on the open frame when this run hands a mid-turn message to the model", async () => {
+    const { app, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "steerwhen").expect(201)).body.user.id as string;
+    const openOf = async (conversationId: string) => {
+      const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId, message: "안녕" }).expect(200);
+      return parseSse(res.text).find((f) => f.event === "open")!.data as { steerDelivery?: string };
+    };
+    // The SDK runner folds it in between the avatar's next two actions…
+    expect((await openOf("conv-steer-sdk")).steerDelivery).toBe("mid_turn");
+    // …pi takes no mid-turn input: an owner turn there gets it after the answer.
+    config.agentRuntime = "pi";
+    expect((await openOf("conv-steer-pi")).steerDelivery).toBe("after_answer");
+  });
+
   it("accepts a message mid-run, persists it on DELIVERY, and reports both states over SSE", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);

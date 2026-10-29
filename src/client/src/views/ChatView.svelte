@@ -18,6 +18,7 @@
     hasVisibleImages,
     isRewindAnchor,
     consultationLabel,
+    steerBadgeLabel,
     messageKey,
     newChat,
     openFileTab,
@@ -52,7 +53,7 @@
   import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
-  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
+  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, SteerDelivery, StoredMessage } from "../lib/types";
   import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
   import {
@@ -836,26 +837,34 @@
   }
 
   /**
+   * When a message sent now reaches the avatar, as the composer says it: between
+   * its next two actions (the SDK runner), or only once the current answer is
+   * done (a pi run — the run's `open` frame says which).
+   */
+  function steerWhen(delivery: SteerDelivery | undefined): string {
+    return delivery === "after_answer" ? "지금 답변이 끝난 뒤 이어서 전달됩니다" : "다음 작업 사이에 전달됩니다";
+  }
+
+  /**
    * The mid-turn send button's tooltip. A control disabled with no stated
    * prerequisite reads as broken, so the empty-draft state names what would make
    * it work rather than just greying out.
    */
   function steerSendTitle(item: ChatPane): string {
     return item.draft.trim()
-      ? "응답 중 메시지 보내기 (다음 작업 사이에 전달됩니다)"
+      ? `응답 중 메시지 보내기 (${steerWhen(item.liveSteerDelivery)})`
       : "메시지를 입력하면 응답 중에도 보낼 수 있어요";
   }
 
   /**
-   * The composer's placeholder while a turn is streaming: a message sent now is
-   * delivered between the avatar's next two actions, and the text names the
-   * gesture that actually sends on this device — Enter only sends where a
-   * physical keyboard was detected.
+   * The composer's placeholder while a turn is streaming: when a message sent now
+   * is delivered (`steerWhen`), and the gesture that actually sends on this
+   * device — Enter only sends where a physical keyboard was detected.
    */
-  function streamingPlaceholder(sends: boolean): string {
+  function streamingPlaceholder(sends: boolean, delivery: SteerDelivery | undefined): string {
     return sends
-      ? "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다"
-      : "응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 다음 작업 사이에 전달됩니다";
+      ? `응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 ${steerWhen(delivery)}`
+      : `응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 ${steerWhen(delivery)}`;
   }
 
   function onComposerInput(event: Event, item: ChatPane) {
@@ -1095,19 +1104,26 @@
     if (agentCount) parts.push(`에이전트 ${agentCount}개`);
     return parts.length ? `${parts.join(" · ")} ${suffix}` : emptyLabel;
   }
+  function rowsRunning(rows: SegmentRows): boolean {
+    return (
+      rows.agents.some((a) => !a.isMain && a.status === "running") ||
+      rows.tools.some((t) => t.status === "running") ||
+      rows.tasks.some((t) => t.status === "running")
+    );
+  }
+  // The in-flight turn's rows: "진행 중" only while one of them runs — between
+  // actions (the model is writing, or a pi run waits on a consulted avatar) the
+  // rows are finished, so "사용함".
   function activitySummary(rows: SegmentRows): string {
     const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
     const taskCount = rows.tasks.length;
     const agentCount = rows.agents.filter((a) => !a.isMain).length;
-    return activityCountLabel(toolCount, taskCount, agentCount, "진행 중", "작업 중…");
+    return activityCountLabel(toolCount, taskCount, agentCount, rowsRunning(rows) ? "진행 중" : "사용함", "작업 중…");
   }
   // A finished turn's live rows during the background phase (its background
   // agents may still be at work): "진행 중" while anything runs, else "사용함".
   function segmentActivityLabel(rows: SegmentRows): string {
-    const running =
-      rows.agents.some((a) => !a.isMain && a.status === "running") ||
-      rows.tools.some((t) => t.status === "running") ||
-      rows.tasks.some((t) => t.status === "running");
+    const running = rowsRunning(rows);
     const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
     const taskCount = rows.tasks.length + rows.tools.filter((t) => t.kind === "task").length;
     const agentCount = rows.agents.filter((a) => !a.isMain).length;
@@ -1306,9 +1322,9 @@
               <span>{consultation ? consultationLabel(message) : message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>
               {#if consultation}<span class="tag steer-badge">팀원 상담 결과</span>{/if}
               <!-- A message the viewer sent WHILE the avatar was answering. The
-                   badge is what tells it apart from an ordinary turn: it landed
-                   between the previous turn's tool calls, not after it. -->
-              {#if message.role === "user" && message.kind === "steer"}<span class="tag steer-badge">응답 중 전달</span>{/if}
+                   badge is what tells it apart from an ordinary turn, and says
+                   when the model got it: between tool calls, or after the answer. -->
+              {#if message.role === "user" && message.kind === "steer"}<span class="tag steer-badge">{steerBadgeLabel(item.messages, index)}</span>{/if}
               {#if message.createdAt}<time class="msg-time" datetime={message.createdAt}>{timeLabel(message.createdAt)}</time>{/if}
             </div>
             <div class={`bubble ${message.response?.summary === "오류" ? "errored" : ""}`} class:rewind-editing={editing}>
@@ -1612,7 +1628,7 @@
                running turn (see `canSteer`). -->
           <textarea
             rows="1"
-            placeholder={item.streaming ? streamingPlaceholder(enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
+            placeholder={item.streaming ? streamingPlaceholder(enterSends, item.liveSteerDelivery) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
             value={item.draft}
             aria-label={`${item.avatar.alias || item.avatar.displayName}에게 보낼 메시지`}
             aria-describedby={paneDomId("composer-hint", item.id)}

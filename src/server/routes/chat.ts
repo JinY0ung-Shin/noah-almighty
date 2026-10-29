@@ -22,6 +22,7 @@ import type {
   MessageAttachment,
   MessageConsultationSource,
   SdkResumePoint,
+  SteerDelivery,
   StoredMessage,
 } from "../types.js";
 import type { ConversationRewindPlan } from "../store/conversations.js";
@@ -125,7 +126,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
-import { piRunWorkspace, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
+import { piRunWorkspace, piRuntimeSupports, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
@@ -793,9 +794,10 @@ export interface ChatTurnHooks {
    * you); throwing is also safe. `info.userMessageId` is the persisted USER row
    * this run answers (the new row of a send or an edit-rewind, the re-run row of
    * a regenerate); absent when there is none (a re-queued task whose row an
-   * earlier attempt stored).
+   * earlier attempt stored). `info.steerDelivery` says when this run hands the
+   * model a mid-turn message (`SteerDelivery`).
    */
-  onRunOpen(runId: string, info?: { userMessageId?: string }): boolean;
+  onRunOpen(runId: string, info?: { userMessageId?: string; steerDelivery?: SteerDelivery }): boolean;
 }
 
 export type ChatTurnOutcome =
@@ -988,6 +990,10 @@ export async function executeChatTurn(
     autoApprove: true,
   };
   const piWorkspace = piRunWorkspace(config, piRunClass);
+  // The same decision tells the composer when a mid-turn message reaches the
+  // model: pi takes no mid-turn input, so there it lands after the answer.
+  const steerDelivery: SteerDelivery =
+    config.agentRuntime === "pi" && piRuntimeSupports(piRunClass).supported ? "after_answer" : "mid_turn";
   let activeRepoCwd: string | null = null;
   let activeRepoName: string | null = null;
   let releaseActiveRepoLock: (() => void) | null = null;
@@ -1453,7 +1459,7 @@ export async function executeChatTurn(
       // The HTTP caller switches its response to SSE and attaches here; a
       // server-started turn just returns true (the registry journals every
       // event for a viewer who attaches later).
-      if (!hooks.onRunOpen(runId, { userMessageId })) {
+      if (!hooks.onRunOpen(runId, { userMessageId, steerDelivery })) {
         closeRun(runId);
         return { ok: true };
       }
@@ -3441,6 +3447,9 @@ export function createChatRouter({
               // The persisted row this run answers: the client adopts it as its
               // optimistic bubble's id (a later rewind names rows by server id).
               ...(info?.userMessageId ? { userMessageId: info.userMessageId } : {}),
+              // When a message typed during this run reaches the model (the
+              // composer's wording follows it; see SteerDelivery).
+              ...(info?.steerDelivery ? { steerDelivery: info.steerDelivery } : {}),
             });
             return true;
           },

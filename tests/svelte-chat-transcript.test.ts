@@ -256,6 +256,28 @@ describe("ChatView transcript", () => {
       "and stays above the stream status line",
     ).toBe(true);
   });
+
+  it("says the live rows are 진행 중 only while one of them runs", async () => {
+    const live = pane([]);
+    (live as unknown as Record<string, unknown>).streaming = true;
+    live.liveAgents = [{ id: "main", parentId: "", label: "main", status: "running", isMain: true }] as never;
+    live.liveTools = [
+      { id: "t-live", agentId: "main", kind: "tool", label: "아바타에게 질문", detail: "mate", status: "done" },
+    ] as never;
+    replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const summary = () => container.querySelector("details.activity-live .activity-summary-text")?.textContent;
+    // The tool returned and the run waits (the model writes, or a pi run waits on
+    // the consulted avatar): nothing is in progress.
+    expect(summary()).toBe("도구 1개 사용함");
+
+    updateState((state) => {
+      state.chatPanes[0].liveTools.push({ id: "t-2", agentId: "main", kind: "tool", label: "명령 실행", detail: "ls", status: "running" } as never);
+    });
+    await tick();
+    expect(summary()).toBe("도구 2개 진행 중");
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -349,6 +371,23 @@ describe("ChatView transcript · mid-turn messages", () => {
     expect(rows[1].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
   });
 
+  it("says a steer delivered only after an answer finished arrived after it (pi, or a missed boundary)", () => {
+    const at = "2026-07-26T01:00:00.000Z";
+    const opener = { id: "u-open", conversationId: "conv-1", role: "user", content: "질문", createdAt: at, response: null };
+    const folded = { ...opener, id: "u-folded", content: "중간에 끼어든 말", kind: "steer" };
+    // The run's sealed segment (turn_end), then the batch delivered as the follow-up turn.
+    const segment = { ...opener, id: "a-seg", role: "assistant", content: "첫 답", response: { kind: "text", runtime: "pi", summary: "s", text: "첫 답" } };
+    const after1 = { ...opener, id: "u-after1", content: "답 뒤 한마디", kind: "steer" };
+    const consult = { ...opener, id: "u-consult", content: "@mate 아바타의 답변", kind: "consultation", consultation: { id: "ask-1", username: "mate" } };
+    const after2 = { ...opener, id: "u-after2", content: "하나 더", kind: "steer" };
+    const messages = [opener, folded, segment, after1, consult, after2] as unknown as StoredMessage[];
+    replaceState({ avatars: [], chatPanes: [pane(messages)], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const badges = Array.from(container.querySelectorAll(".message.user .steer-badge")).map((b) => b.textContent);
+    expect(badges).toEqual(["응답 중 전달", "답변 뒤 전달", "답변 뒤 전달"]);
+  });
+
   it("renders a consulted avatar's answer under THAT avatar's name, never as 나, with no 편집", () => {
     const question = {
       id: "u-ask",
@@ -366,19 +405,26 @@ describe("ChatView transcript · mid-turn messages", () => {
       consultation: { id: "ask-0123abcd", username: "mate", displayName: "Mate" },
     } as unknown as StoredMessage;
     const anonymous = { ...answer, id: "u-anon", consultation: { id: "" } } as unknown as StoredMessage;
-    replaceState({ avatars: [], chatPanes: [pane([question, answer, anonymous])], activePaneId: "pane-1" });
+    // A display name that only repeats the username is said once.
+    const sameName = {
+      ...answer,
+      id: "u-same",
+      consultation: { id: "ask-4567abcd", username: "carol", displayName: "carol" },
+    } as unknown as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([question, answer, anonymous, sameName])], activePaneId: "pane-1" });
 
     const { container } = render(ChatView);
     // Only the owner's own question is a "나" row.
     expect(container.querySelectorAll(".message.user")).toHaveLength(1);
     const rows = Array.from(container.querySelectorAll(".message.consultation"));
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     const role = rows[0].querySelector(".msg-role")!.textContent!;
     expect(role).toContain("@mate (Mate) 아바타의 답변");
     expect(role).not.toContain("나");
     expect(rows[0].querySelector(".steer-badge")?.textContent).toBe("팀원 상담 결과");
     expect(rows[0].querySelector(".bubble")?.textContent).toContain("금요일에 배포해요");
     expect(rows[1].querySelector(".msg-role")!.textContent).toContain("팀원 아바타의 답변");
+    expect(rows[2].querySelector(".msg-role span:not(.role-dot)")!.textContent).toBe("@carol 아바타의 답변");
     expect(rows.every((r) => !r.querySelector('button[aria-label="편집"]'))).toBe(true);
   });
 });

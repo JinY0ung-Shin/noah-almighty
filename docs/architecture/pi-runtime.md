@@ -71,7 +71,7 @@ The sandbox principal is `viewerUserId` (whoever the run executes AS). describe_
 
 | Gap | Noah-side behavior | Surfaces |
 |---|---|---|
-| no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer" |
+| no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the chat `open` frame carries `steerDelivery: "after_answer"` (per run, from `piRuntimeSupports`), so the composer says "지금 답변이 끝난 뒤 이어서 전달됩니다" and the delivered row's badge reads "답변 뒤 전달" |
 | model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
 | no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
 | context window (P5) | from `PI_MODEL_MAP[tier].contextWindow`; no compaction chip | — |
