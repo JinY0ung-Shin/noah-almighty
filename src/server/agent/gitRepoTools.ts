@@ -48,14 +48,12 @@ export interface GitRepoToolsContext {
    */
   conversationId?: string;
   /**
-   * `pi`: the run executes in a pi sandbox (docs/architecture/pi-runtime.md,
-   * design D1). The model works on a sandbox COPY of the repo, so open_repo
-   * makes that copy, `commit` (pi only) reads the copy's working tree back into
-   * Noah's clone and commits there, and the descriptions say so. The static pi
-   * tool catalog is built with this flag (no workspace) for the wording.
+   * The VIEWER's sandbox workspace the repo copy lives in (docs/architecture/pi-runtime.md,
+   * design D1): the model works on a sandbox COPY, so open_repo makes that copy and
+   * `commit` reads its working tree back into Noah's clone and commits there. Unset
+   * (the static tool catalog, a run without the workspace mount) → the copy tools
+   * refuse with NO_PI_WORKSPACE.
    */
-  runtime?: "pi";
-  /** pi runs: the VIEWER's sandbox workspace the copy lives in. */
   piWorkspace?: PiWorkspace;
 }
 
@@ -73,7 +71,7 @@ export const GIT_REPO_TOOL_NAMES = [
   "mcp__git_repo__push",
 ] as const;
 
-/** pi runs only: commit the sandbox copy's working tree into Noah's clone. */
+/** Commit the sandbox copy's working tree into Noah's clone. */
 export const GIT_REPO_PI_COMMIT_TOOL_NAME = "mcp__git_repo__commit";
 
 const OWNER_ONLY = "This tool can only be used in a conversation the avatar owner is taking part in.";
@@ -117,8 +115,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     }
     return null;
   };
-  const pi = ctx.runtime === "pi";
-  // The viewer's copy of one of the OWNER's repos (pi runs).
+  // The viewer's copy of one of the OWNER's repos.
   const copyRef = (name: string): PiRepoCopyRef | null =>
     ctx.piWorkspace
       ? {
@@ -183,16 +180,14 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "sync_repo",
-      pi
-        ? "Fetch a registered git repository into Noah's clone, rebasing its commits onto the upstream, then refresh your sandbox copy to the result. Refused while your sandbox copy has changes that are not committed yet (commit them first with `mcp__git_repo__commit`), so nothing you wrote is overwritten. A public repo attempts this without a token. If Noah's commits genuinely conflict with the remote the rebase is rolled back and this errors. (owner / trusted user only)"
-        : "Fetch a registered git repository and update it by rebasing local commits onto the upstream (uncommitted changes are auto-stashed and restored). A public repo attempts this without a token. If the local commits genuinely conflict with the remote the rebase is rolled back (the clone is left untouched) and this errors — reconcile and sync again. (owner / trusted user only)",
+      "Fetch a registered git repository into Noah's clone, rebasing its commits onto the upstream, then refresh your sandbox copy to the result. Refused while your sandbox copy has changes that are not committed yet (commit them first with `mcp__git_repo__commit`), so nothing you wrote is overwritten. A public repo attempts this without a token. If Noah's commits genuinely conflict with the remote the rebase is rolled back and this errors. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = elevatedGuard();
         if (denied) return denied;
         try {
           const repoCtx = ownerRepoContext(args.name);
-          const ref = pi ? copyRef(repoCtx.name) : null;
+          const ref = copyRef(repoCtx.name);
           if (ref) {
             const status = await piRepoCopyStatus(ref);
             if (status.kind === "ok" && (status.changes.writes.length > 0 || status.changes.deletes.length > 0)) {
@@ -237,43 +232,9 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         }
       },
     ),
-    pi
-      ? tool(
-          "open_repo",
-          "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy, but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state is moved aside to `<name>.prev` and replaced. The selection persists for this conversation (later turns are told the path) until close_repo. (owner / trusted user only)",
-          { name: z.string().describe("Registered repo name") },
-          async (args) => {
-            const denied = elevatedGuard();
-            if (denied) return denied;
-            if (!ctx.conversationId) {
-              return text("Cannot open a working repository in this run (no conversation context).", true);
-            }
-            try {
-              const repoCtx = ownerRepoContext(args.name);
-              const ref = copyRef(repoCtx.name);
-              if (!ref) return text(NO_PI_WORKSPACE, true);
-              await ensureGitRepoClone(repoCtx);
-              await configureGitRepoIdentity(repoCtx, commitIdentityFor(store, ctx.owner));
-              const copy = await ensurePiRepoCopy(ref, "keep");
-              setWorkspaceRepo(store, ctx.conversationId, repoCtx.name);
-              return text(
-                `Opened '${repoCtx.name}'. Your working copy is at ${copy.sandboxPath} (${copy.outcome === "kept" ? "your existing copy was kept — it is current" : "a fresh copy of the current state"}).` +
-                  (copy.previousPath
-                    ? ` Your previous copy was made from an older state and was moved to ${copy.previousPath}; re-apply any edits you still need from there.`
-                    : "") +
-                  ` Work there with absolute paths; save with mcp__git_repo__commit (name='${repoCtx.name}', message), then mcp__git_repo__push.`,
-              );
-            } catch (error) {
-              return text(
-                `Failed to open the working repository: ${errorMessage(error)}\nCheck the repo is registered (list_repos) and reachable. Do not work around this with git in the sandbox — it has no credentials and no network.`,
-                true,
-              );
-            }
-          },
-        )
-      : tool(
+    tool(
       "open_repo",
-      "Open a registered git repository as THIS conversation's working directory so you can read, edit, and test it with native tools (Read/Edit/Write/Bash). The change takes effect from the NEXT turn — the next message in a chat, or (in a scheduled routine) this routine's next scheduled run — because the working directory is fixed when a turn/run starts and cannot be repointed mid-turn; the selection persists for this conversation until close_repo. So after calling this, in a chat tell the user it is ready and continue on their next message; in a routine, finish this run and the repo applies on the next one. From then on, work the repo natively in the working directory: read/edit files, run tests, and use local git (`git status`/`diff`/`log`/`add`/`commit`); then `mcp__git_repo__push` the result and `mcp__git_repo__sync_repo` to pull updates (those need server-side credentials, so they stay MCP-only). Only one repo is open at a time per conversation — opening another replaces it. (owner / trusted user only)",
+      "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy, but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state is moved aside to `<name>.prev` and replaced. The selection persists for this conversation (later turns are told the path) until close_repo. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = elevatedGuard();
@@ -283,16 +244,22 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         }
         try {
           const repoCtx = ownerRepoContext(args.name);
-          // Make sure the clone exists now so a bad-repo/access error surfaces
-          // immediately — WITHOUT syncing (a fetch/checkout could clobber edits).
+          const ref = copyRef(repoCtx.name);
+          if (!ref) return text(NO_PI_WORKSPACE, true);
           await ensureGitRepoClone(repoCtx);
+          await configureGitRepoIdentity(repoCtx, commitIdentityFor(store, ctx.owner));
+          const copy = await ensurePiRepoCopy(ref, "keep");
           setWorkspaceRepo(store, ctx.conversationId, repoCtx.name);
           return text(
-            `Opened '${repoCtx.name}' as this conversation's working directory. It becomes your working directory from the NEXT turn — the next message in a chat, or this routine's next scheduled run — so let the user know it is ready and continue from there; then edit/test it with native tools and use \`push\`/\`sync_repo\` for remote git. The selection persists for this conversation until you \`close_repo\`.`,
+            `Opened '${repoCtx.name}'. Your working copy is at ${copy.sandboxPath} (${copy.outcome === "kept" ? "your existing copy was kept — it is current" : "a fresh copy of the current state"}).` +
+              (copy.previousPath
+                ? ` Your previous copy was made from an older state and was moved to ${copy.previousPath}; re-apply any edits you still need from there.`
+                : "") +
+              ` Work there with absolute paths; save with mcp__git_repo__commit (name='${repoCtx.name}', message), then mcp__git_repo__push.`,
           );
         } catch (error) {
           return text(
-            `Failed to open the working repository: ${errorMessage(error)}\nCheck the repo is registered (list_repos) and reachable. Do not work around this with Bash git — the shell has no git credentials.`,
+            `Failed to open the working repository: ${errorMessage(error)}\nCheck the repo is registered (list_repos) and reachable. Do not work around this with git in the sandbox — it has no credentials and no network.`,
             true,
           );
         }
@@ -300,26 +267,18 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "close_repo",
-      pi
-        ? "Close the working repository opened for this conversation, so later turns are no longer pointed at its sandbox copy. The copy itself stays in your sandbox (uncommitted edits in it are NOT saved — commit first). (owner / trusted user only)"
-        : "Close the working repository opened for this conversation so later turns run in the default scratch workspace again. Takes effect from the next message. (owner / trusted user only)",
+      "Close the working repository opened for this conversation, so later turns are no longer pointed at its sandbox copy. The copy itself stays in your sandbox (uncommitted edits in it are NOT saved — commit first). (owner / trusted user only)",
       {},
       async () => {
         const denied = elevatedGuard();
         if (denied) return denied;
         if (ctx.conversationId) setWorkspaceRepo(store, ctx.conversationId, null);
-        return text(
-          pi
-            ? "Closed the working repository for this conversation. Its sandbox copy stays where it was; open_repo brings it back."
-            : "Closed the working repository. From the next turn this conversation runs in the default scratch workspace.",
-        );
+        return text("Closed the working repository for this conversation. Its sandbox copy stays where it was; open_repo brings it back.");
       },
     ),
     tool(
       "push",
-      (pi
-        ? "On this runtime push sends Noah's clone — what `mcp__git_repo__commit` saved from your sandbox copy — NOT git commits you made inside the sandbox; call `mcp__git_repo__commit` first. "
-        : "") +
+      "On this runtime push sends Noah's clone — what `mcp__git_repo__commit` saved from your sandbox copy — NOT git commits you made inside the sandbox; call `mcp__git_repo__commit` first. " +
         "Push the registered git repository's current HEAD to the target branch on origin. The target is the branch saved in register_repo; if branch is empty, it's the current/default branch. Not limited to main, AND if the target branch does not exist on origin yet, push CREATES it (this — not register_repo — is how a new remote branch is made). To push to a branch other than the one currently registered, set that name via register_repo's `branch` first (the setting persists even if register's checkout step errors on a not-yet-existing branch), then push. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
@@ -328,7 +287,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         try {
           const repoCtx = ownerRepoContext(args.name);
           const branch = await pushGitRepo(repoCtx);
-          const ref = pi ? copyRef(repoCtx.name) : null;
+          const ref = copyRef(repoCtx.name);
           const status = ref ? await piRepoCopyStatus(ref).catch(() => null) : null;
           const pending =
             status?.kind === "ok" ? status.changes.writes.length + status.changes.deletes.length : 0;
@@ -347,7 +306,6 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
       },
     ),
   ];
-  if (!pi) return tools;
   return [
     ...tools,
       tool(

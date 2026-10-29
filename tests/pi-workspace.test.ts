@@ -268,7 +268,6 @@ describe("working-repo copy (D1)", () => {
         elevated: true,
         config: s.config,
         conversationId,
-        runtime: "pi",
         piWorkspace: piWorkspaceFor(s.config, viewer.id, conversationId),
       });
     return { ...s, remote, g, tools };

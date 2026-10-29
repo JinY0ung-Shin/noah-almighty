@@ -886,7 +886,6 @@ export async function buildRunCapabilities(
             : {}),
         }
       : {}),
-    askRuntime: "pi" as const,
   });
   // Skill exchange (#skill-share): search skills teammates' avatars shared,
   // learn one into the owner's knowledge repo, (un)share own repo skills.
@@ -915,7 +914,6 @@ export async function buildRunCapabilities(
     config,
     conversationId: request.conversationId,
     // The model works on a sandbox COPY (design D1); `commit` reads it back.
-    runtime: "pi" as const,
     ...(piWorkspace ? { piWorkspace } : {}),
   });
   // mcp__skills__read: a run whose skill index lists skills that were NOT
@@ -972,9 +970,7 @@ export async function buildRunCapabilities(
     : null;
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
-  const canvasServer = canvasActive
-    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, neverWait: true })
-    : null;
+  const canvasServer = canvasActive ? buildCanvasServer({ emitCanvas: events!.onCanvas! }) : null;
   // The handler self-gates on `allowed` in addition to `browserActive`:
   // registration is not the only gate (pi's catalog is static), and a
   // colleague must never drive their own logged-in session through someone

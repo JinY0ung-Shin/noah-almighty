@@ -36,7 +36,7 @@ disabled SKILL is enforced by omission (see "Skills").
 
 ## One run (`agent/pi/runPiAgent.ts`)
 
-1. **Capabilities** — `buildRunCapabilities(…, { runtime: "pi", piConversationDir })` (`agent/runCapabilities.ts`),
+1. **Capabilities** — `buildRunCapabilities(…, { piConversationDir, … })` (`agent/runCapabilities.ts`),
    the ONE capability plan (hex-ssh, 공용 MCP and plugin servers included — Noah relays them, see "Proxied MCP
    servers"), and stamps `PiRuntimeFacts` onto describe_system's ctx and (via
    `stampPromptRequest`) the prompt.
@@ -290,10 +290,11 @@ holds it:
   the run as cancelled (`PiGatewayError("aborted")`), never as `done`.
 - **Unattended pi runs** (routines, task API — no steer channel) keep the waiting call (`avatars` broker timeout
   240 s ≥ the 3 min consultation budget).
-- **Canvas**: on pi `neverWait` — controls always render non-blocking (the existing `wait:false` path) and the
-  submission arrives as the user's next message. Known edge: while a run is still open (waiting for a consultation)
+- **Canvas**: never waits (`canvasTools.ts` has no blocking mode any more) — controls always render non-blocking
+  (`awaitInput: false`, `interaction: "async"`) and the submission arrives as the user's next message. Known edge: while a run is still open (waiting for a consultation)
   the client does not submit an async canvas (`submitCanvas` returns while streaming).
-- Tool descriptions (static catalog: `askRuntime: "pi"`, `neverWait`), the prompt (`piAsyncToolsSentence`) and
+- Tool descriptions (`ask_avatar`'s two-mode sentence and the canvas never-wait sentence, the same text in the static
+  catalog and on every run), the prompt (`piAsyncToolsSentence`) and
   describe_system ("Long-running tools on this runtime") state this.
 
 ## Tool discovery (usability report §6.5)

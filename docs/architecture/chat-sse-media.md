@@ -322,8 +322,8 @@
   controls — no avatar JS runs, CSP unchanged. `canvasTools.ts` (NOT self-gated — registration is the
   boundary) is registered (runCapabilities' `canvasActive`) whenever the conversation's canvas tool group is on AND
   `events.onCanvas` exists — always-on since 2026-10, when it graduated from the experimental `canvas` flag
-  (a stored `canvas` key just normalizes away). **On pi a canvas never waits** (`neverWait`, design D8 — pi's
-  broker cannot hold a call for a person): controls always render NON-blocking (the `wait:false` path), the
+  (a stored `canvas` key just normalizes away). **A canvas never waits** (design D8 — pi's
+  broker cannot hold a call for a person; the builder has no blocking mode): controls always render NON-blocking (the `wait:false` path), the
   tool returns at once, and the submission arrives as the user's next message. Known edge: while a run is still
   open the client does not submit an async canvas (`submitCanvas` returns while streaming). The BLOCKING path —
   controls parked on the SAME `awaitResponse`/`/api/chat/respond` path as `onQuestion`, the `canvas` prompt kind

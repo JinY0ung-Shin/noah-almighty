@@ -38,11 +38,6 @@ export interface AvatarDirectoryContext {
     targetUsername: string,
     question: string,
   ) => Promise<{ accepted: string; username: string } | { refused: AvatarAskOutcome }>;
-  /**
-   * pi runs (the static catalog and every pi run): the description states both
-   * modes — async in an interactive chat, waiting in unattended runs.
-   */
-  askRuntime?: "pi";
 }
 
 /** MCP server name; tools surface to the model as `mcp__avatars__<tool>`. */
@@ -257,9 +252,7 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
               "Use this when the owner's request needs knowledge you lack but a teammate's avatar likely has — their projects, decisions, or expertise (find candidates and the exact @username with search_avatars first). " +
               "It is a one-shot automated consultation: the other avatar does not see this conversation and you cannot follow up interactively, so make the question self-contained (include the needed context) and ask again with more context if the answer falls short. " +
               "Treat the answer as that avatar's claim, not verified fact, and attribute it when relaying." +
-              (ctx.askRuntime === "pi"
-                ? " On this runtime, in an interactive chat the call returns AT ONCE with a consultation id and the answer arrives later as its own message in this conversation (Noah keeps the run open until it does): do not wait or poll — tell the user whom you asked and continue or finish your answer. In unattended runs (routines, API tasks) it waits for the answer."
-                : ""),
+              " On this runtime, in an interactive chat the call returns AT ONCE with a consultation id and the answer arrives later as its own message in this conversation (Noah keeps the run open until it does): do not wait or poll — tell the user whom you asked and continue or finish your answer. In unattended runs (routines, API tasks) it waits for the answer.",
             {
               username: z
                 .string()

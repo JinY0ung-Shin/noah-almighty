@@ -29,20 +29,15 @@ export const MAX_CANVAS_CONTROLS = 12;
  * the SSE/`awaitResponse` plumbing; this tool just shapes the request/result.
  * Visual canvas (#50) — the avatar NEVER ships executable JS; the client renders
  * sanitized content + real form controls (CSP-safe).
+ *
+ * The tool never parks the run on the user (design D8): a call pi's broker made
+ * cannot wait minutes for a form, so controls always render non-blocking and the
+ * submission arrives as the user's next message. The description says so.
  */
 export interface CanvasToolsContext {
   emitCanvas: (request: CanvasRequest) => Promise<CanvasResult>;
-  /**
-   * pi runs (design D8): the tool never parks the run on the user. A call pi's
-   * broker made cannot wait minutes for a form, so controls always render
-   * non-blocking and the submission arrives as the user's next message (the
-   * existing `wait:false` path). The description says so.
-   */
-  neverWait?: boolean;
 }
 
-const WAIT_SENTENCE =
-  "By default (wait=true) the tool WAITS and returns the user's submission; with `wait:false` it shows the controls but returns immediately and the user's later answer arrives as a NEW user message referencing this canvas. With no controls it just displays and returns immediately. ";
 const NEVER_WAIT_SENTENCE =
   "On this runtime the tool NEVER waits: it shows the controls and returns at once, and the user's submission arrives as their NEXT message referencing this canvas — so after showing a form, finish your answer (say what you are waiting for) instead of waiting; `wait` is ignored. ";
 
@@ -132,7 +127,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         "Never include scripts or executable JS in content; it is sanitized away. " +
         "To collect a decision ANCHORED TO the artifact on screen (choosing between the mockups shown, tuning a value against the chart, marking up the content), pass `controls`: 'buttons' (a few choices as cards, single or multiSelect), 'select' (a dropdown when there are many options), 'slider'/'number' (a numeric value, with min/max/step), 'date' (a calendar date), and/or 'text' inputs. Each control is required by default — set `required:false` to make it optional. " +
         "For a plain question or a simple choice with no visual content to show, use the built-in AskUserQuestion tool instead — never open a canvas just to ask something. " +
-        (ctx.neverWait ? NEVER_WAIT_SENTENCE : WAIT_SENTENCE) +
+        NEVER_WAIT_SENTENCE +
         "The client renders real form controls, so when a canvas IS the right surface, do not ask the user to type their choice into chat when controls can capture it. " +
         "Set `editable:true` (best with markdown) to let the user edit or annotate the content and send the edited version back as a new message. " +
         "To REFINE an artifact together with the user, call show again with the SAME `canvasId` (returned to you when you first showed it): it UPDATES that canvas in place (keeping a version the user can roll back to) instead of stacking a new one — don't re-show a slightly changed copy under a new id.",
@@ -151,9 +146,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
           .boolean()
           .optional()
           .describe(
-            ctx.neverWait
-              ? "Ignored on this runtime: the canvas never blocks, and the user's submission arrives as their next message referencing this canvas."
-              : "When true (default) and controls are present, BLOCK and return the user's submission. When false, show the controls but return immediately; the user's later submission arrives as a new user message referencing this canvas.",
+            "Ignored on this runtime: the canvas never blocks, and the user's submission arrives as their next message referencing this canvas.",
           ),
         editable: z
           .boolean()
@@ -205,12 +198,9 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
             return text(mermaidSyntaxError(check.error), true);
           }
         }
-        // BLOCKING only when controls exist AND wait isn't disabled. Async/editable
-        // canvases (wait:false) display and return immediately; the user's answer
+        // Never blocking (design D8): controls render async and the user's answer
         // arrives later as a new chat turn.
-        const awaitInput = !ctx.neverWait && controls.length > 0 && (args.wait ?? true);
-        const interaction: "blocking" | "async" | undefined =
-          controls.length > 0 ? (awaitInput ? "blocking" : "async") : undefined;
+        const interaction: "async" | undefined = controls.length > 0 ? "async" : undefined;
         const editable = Boolean(args.editable);
         const artifactId = args.canvasId?.trim() || crypto.randomUUID();
         const result = await ctx.emitCanvas({
@@ -220,7 +210,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
           contentType: args.contentType,
           // Pass controls WHENEVER present so async forms render too (not just blocking).
           controls: controls.length > 0 ? controls : undefined,
-          awaitInput,
+          awaitInput: false,
           interaction,
           editable,
         });
@@ -235,7 +225,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         // user's later response will arrive so it doesn't wait on this call.
         if (interaction === "async" || editable) {
           return text(
-            ctx.neverWait && controls.length > 0
+            controls.length > 0
               ? `The canvas was shown with its controls. On this runtime it does not wait: the user's submission arrives as their NEXT message referencing this canvas, so finish your answer now (tell the user what to fill in) instead of waiting.${idNote}`
               : `The canvas was shown with interactive elements but is NOT blocking. The user may submit or edit later; their response will arrive as a new user message referencing this canvas.${idNote}`,
           );

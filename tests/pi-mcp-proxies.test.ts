@@ -679,7 +679,6 @@ describe("asynchronous tools on pi", () => {
         emitted.push({ awaitInput: request.awaitInput, interaction: request.interaction });
         return { behavior: "displayed" } as never;
       },
-      neverWait: true,
     });
     const tool = show as unknown as { description: string; handler: (args: unknown, extra: unknown) => Promise<{ content: { text: string }[] }> };
     expect(tool.description).toContain("On this runtime the tool NEVER waits");

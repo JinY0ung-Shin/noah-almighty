@@ -29,6 +29,7 @@ import {
 } from "../src/server/agent/runRegistry.js";
 import { resultErrorMessage } from "../src/server/agent/runErrors.js";
 import { EMPTY_PI_RESPONSE_MESSAGE } from "../src/server/agent/pi/runPiAgent.js";
+import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import {
   commitAndPush,
   ensureClone,
@@ -1656,7 +1657,13 @@ describe("repo tools (knowledge-repo management)", () => {
 describe("git repo tools (general git repository management)", () => {
   function setup(dir: string) {
     const dataDir = path.join(tempDir, dir);
-    const { store, config } = createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    // The sandbox workspace mount the repo copies land in (open_repo / commit).
+    const { store, config } = createServices({
+      dataDir,
+      agentRuntime: "local",
+      sessionSecret: "t",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false, workspacesDir: path.join(tempDir, dir, "ws") },
+    });
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
     const seed = path.join(tempDir, dir, "seed");
@@ -1680,13 +1687,13 @@ describe("git repo tools (general git repository management)", () => {
       elevated: opts.elevated ?? true,
       config: s.config,
       conversationId: opts.conversationId ?? "conv-1",
+      piWorkspace: piWorkspaceFor(s.config, s.ownerId, opts.conversationId ?? "conv-1"),
     });
   }
 
-  // Under the single-surface model the avatar edits an OPENED working repo with
-  // NATIVE tools (Read/Edit/Bash), not MCP file tools. Tests mimic that by
-  // writing + committing directly in the server-side clone — exactly what the
-  // avatar's local Bash git does in the cwd before an MCP push.
+  // The avatar edits a sandbox COPY and `commit` saves it into Noah's clone (covered
+  // end to end in pi-workspace.test.ts). Tests that only exercise register/push
+  // stand in for that by committing directly in the server-side clone.
   function nativeCommit(clonePath: string, relPath: string, content: string, message: string) {
     const abs = path.join(clonePath, relPath);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -1709,6 +1716,7 @@ describe("git repo tools (general git repository management)", () => {
       "open_repo",
       "close_repo",
       "push",
+      "commit",
     ]);
   });
 
@@ -1725,13 +1733,15 @@ describe("git repo tools (general git repository management)", () => {
     expect(sync.isError).toBeFalsy();
     const open = await callTool(trustedTools, "open_repo", { name: "app" });
     expect(open.isError).toBeFalsy();
-    expect(open.content[0].text).toContain("working directory");
+    expect(open.content[0].text).toContain("Your working copy is at /workspace/repos/");
+    const untrusted = tools(s, { viewerIsOwner: false, elevated: false, conversationId: "conv-auth" });
+    expect((await callTool(untrusted, "open_repo", { name: "app" })).content[0].text).toContain("owner or a trusted user");
 
     const deniedRemove = await callTool(trustedTools, "remove_repo", { name: "app" });
     expect(deniedRemove.isError).toBe(true);
   });
 
-  it("registers, opens, pushes a native commit, and removes a general git repo", async () => {
+  it("registers, opens a sandbox copy, commits it, pushes, and removes a general git repo", async () => {
     const s = setup("gr-flow");
     // open_repo persists the working-repo selection on the conversation row, which
     // always exists in production before the model can call open_repo (chat touches
@@ -1744,15 +1754,22 @@ describe("git repo tools (general git repository management)", () => {
     expect(register.content[0].text).toContain("work");
     expect(s.store.listGitRepos(s.ownerId)).toHaveLength(1);
 
-    // Open the repo as the conversation's working directory (the avatar's entry point).
+    // Open the repo for this conversation: Noah copies it into the sandbox.
     const open = await callTool(ownerTools, "open_repo", { name: "work" });
     expect(open.isError).toBeFalsy();
-    expect(open.content[0].text).toContain("working directory");
+    const sandboxPath = /working copy is at (\S+) /.exec(open.content[0].text ?? "")?.[1] ?? "";
+    expect(sandboxPath).toMatch(/^\/workspace\/repos\/.+\/work$/);
     expect(getWorkspaceRepo(s.store, "conv-flow")).toBe("work");
 
-    // The avatar edits + commits natively in the opened working directory; push is MCP.
+    // The avatar edits the copy; commit saves it into Noah's clone; push is MCP.
+    const hostRoot = piWorkspaceFor(s.config, s.ownerId, "conv-flow").hostRoot!;
+    const copyDir = path.join(hostRoot, path.posix.relative("/workspace", sandboxPath));
+    fs.mkdirSync(path.join(copyDir, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(copyDir, "docs/runbook.md"), "# Runbook\n");
+    const commit = await callTool(ownerTools, "commit", { name: "work", message: "add runbook" });
+    expect(commit.isError).toBeFalsy();
+    expect(commit.content[0].text).toContain("1 file(s) written");
     const clonePath = gitRepoClonePath(s.ownerId, "work", s.config);
-    nativeCommit(clonePath, "docs/runbook.md", "# Runbook\n", "add runbook");
 
     const push = await callTool(ownerTools, "push", { name: "work" });
     expect(push.isError).toBeFalsy();
@@ -4252,11 +4269,12 @@ describe("canvas tools (#50)", () => {
     expect(called).toBe(true);
   });
 
-  it("awaits input and reports the submission when controls are declared", async () => {
+  it("never awaits input: declared controls render async and the submission is the next message", async () => {
+    let captured: CanvasRequest | null = null;
     const tools = buildCanvasTools({
       emitCanvas: async (req): Promise<CanvasResult> => {
-        expect(req.awaitInput).toBe(true);
-        return { behavior: "submitted", values: { pick: "A" } };
+        captured = req;
+        return { behavior: "shown" };
       },
     });
     const res = await callTool(tools, "show", {
@@ -4264,9 +4282,12 @@ describe("canvas tools (#50)", () => {
       content: "고르세요",
       contentType: "markdown",
       controls: [{ type: "buttons", id: "pick", options: [{ label: "A" }, { label: "B" }] }],
+      wait: true,
     });
     expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain("pick: A");
+    expect(captured!.awaitInput).toBe(false);
+    expect(captured!.interaction).toBe("async");
+    expect(res.content[0].text).toContain("arrives as their NEXT message");
   });
 
   it("reports a cancellation", async () => {

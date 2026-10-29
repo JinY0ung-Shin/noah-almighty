@@ -129,18 +129,14 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
       avatarUserId: "",
       viewerUserId: "",
       askAvatar: refuse,
-      // Both modes: async in an interactive chat, waiting in unattended runs (design D8).
-      askRuntime: "pi",
     }),
     skill_exchange: buildSkillExchangeServer(store, base),
     ssh_identity: buildSshIdentityServer(store, base),
-    // The pi wording (sandbox copy + `commit`): this catalog only ever serves pi runs.
-    git_repo: buildGitRepoServer(store, { ...base, elevated: false, runtime: "pi" }),
+    git_repo: buildGitRepoServer(store, { ...base, elevated: false }),
     group_repo: buildGroupRepoServer(store, base),
     brain: buildBrainServer(store, base),
     group_brain: buildGroupBrainServer(store, base),
-    // pi canvases never wait (design D8): the submission is the next user turn.
-    canvas: buildCanvasServer({ emitCanvas: refuse, neverWait: true }),
+    canvas: buildCanvasServer({ emitCanvas: refuse }),
     browser: buildBrowserServer({
       execute: refuse,
       allowed: false,
