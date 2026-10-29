@@ -4669,7 +4669,7 @@ describe("buildPrompt", () => {
       0,
     );
     expect(withBrowser).toContain("`LOGIN_PW` is ALSO enabled for BROWSER INPUT");
-    expect(withBrowser).toContain("`mcp__browser__type`/`fill_form`");
+    expect(withBrowser).toContain("`mcp__browser__type`/`mcp__browser__fill_form`");
 
     const plain = buildPrompt(req(owner), 0);
     expect(plain).toContain("Environment-variable names registered");

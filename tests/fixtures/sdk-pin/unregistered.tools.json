@@ -2,7 +2,7 @@
  "brain": [
   {
    "name": "search",
-   "description": "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `get_note` or `mcp__repo__read_file`. (owner or trusted same-group teammates; read-only)",
+   "description": "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `mcp__brain__get_note` or `mcp__repo__read_file`. (owner or trusted same-group teammates; read-only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -28,7 +28,7 @@
   },
   {
    "name": "get_note",
-   "description": "Read a full note from your second brain by its `wiki/` path (as returned by `search`). A thin, wiki-scoped convenience over `read_file`: the path must live under `wiki/`. Use it to pull the complete note after `search` surfaces a relevant hit. (owner or trusted same-group teammates; read-only)",
+   "description": "Read a full note from your second brain by its `wiki/` path (as returned by `mcp__brain__search`). A thin, wiki-scoped convenience over `mcp__repo__read_file`: the path must live under `wiki/`. Use it to pull the complete note after `mcp__brain__search` surfaces a relevant hit. (owner or trusted same-group teammates; read-only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -81,7 +81,7 @@
   },
   {
    "name": "get_note",
-   "description": "Read one full note from a group's shared TEAM BRAIN by its repository-relative path (e.g. `wiki/deploy-runbook.md`), usually a path returned by `search`. The path must live under `wiki/`. Returns the note's full markdown including its frontmatter. (group member only)",
+   "description": "Read one full note from a group's shared TEAM BRAIN by its repository-relative path (e.g. `wiki/deploy-runbook.md`), usually a path returned by `mcp__group_brain__search`. The path must live under `wiki/`. Returns the note's full markdown including its frontmatter. (group member only)",
    "inputSchema": {
     "type": "object",
     "properties": {

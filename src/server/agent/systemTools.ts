@@ -630,6 +630,13 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
         ? `; left out (their tools do not exist here): ${pi.mcpProxies.skippedPluginServers.map((s) => `\`${s.name}\` (${s.reason})`).join("; ")}`
         : ""
     }. Their secrets stay in Noah and never enter your sandbox`,
+    ...(pi.callableNoahTools
+      ? [
+          `- Noah tools callable in this run (call any of them directly with mcp_call by this exact name; mcp_search is only for a tool not named here or in your instructions, with an English query of service id + action): ${
+            pi.callableNoahTools.length ? pi.callableNoahTools.join(", ") : "none"
+          }. Relayed hex-ssh/plugin/shared tools are on the relayed-servers line`,
+        ]
+      : []),
     `- Long-running tools on this runtime: ${
       pi.asyncAskAvatar
         ? "mcp__avatars__ask_avatar returns at once with a consultation id and its answer arrives as its own message after your current answer (the run stays open for it)"

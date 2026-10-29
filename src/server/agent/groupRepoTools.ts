@@ -87,7 +87,7 @@ const NO_SUCH_GROUP =
 const ADMIN_ONLY =
   "Only a group admin can modify this group's shared knowledge repository. (Members can only read.)";
 const NO_REPO =
-  "This group does not have a shared knowledge repository connected yet. If you are a group admin, create a new one with `create_repo`, or connect an existing repository from group management in settings.";
+  "This group does not have a shared knowledge repository connected yet. If you are a group admin, create a new one with `mcp__group_repo__create_repo`, or connect an existing repository from group management in settings.";
 
 function githubHostDescription(host: string): string {
   const normalized = normalizeGithubHost(host);
@@ -200,7 +200,7 @@ export function buildGroupRepoTools(
           cloneResolved,
           writeRepoFile,
           args,
-          (path) => `Saved the file ${path}. (Not committed yet — push it with commit.)`,
+          (path) => `Saved the file ${path}. (Not committed yet — push it with mcp__group_repo__commit.)`,
         );
         if (!out.isError && isBrainNotePath(args.path)) {
           ctx.onMemory?.({
@@ -214,7 +214,7 @@ export function buildGroupRepoTools(
     ),
     tool(
       "edit_file",
-      "Modify an EXISTING file in the specified group's shared knowledge repository by replacing an exact text snippet. **Prefer this over write_file when changing a file that already exists** — you send only the part that changes, not the whole file. `old_string` must match the file exactly (including whitespace/indentation) and be unique, unless you set `replace_all`. Applies only to the working tree until commit. (group admin only)",
+      "Modify an EXISTING file in the specified group's shared knowledge repository by replacing an exact text snippet. **Prefer this over mcp__group_repo__write_file when changing a file that already exists** — you send only the part that changes, not the whole file. `old_string` must match the file exactly (including whitespace/indentation) and be unique, unless you set `replace_all`. Applies only to the working tree until commit. (group admin only)",
       {
         group: z.string().describe("Group name or ID"),
         path: z.string().describe("Path relative to the repository root"),
@@ -232,7 +232,7 @@ export function buildGroupRepoTools(
           editRepoFile,
           args,
           (path, count) =>
-            `Edited ${path} (${count} replacement${count === 1 ? "" : "s"}). (Not committed yet — push it with commit.)`,
+            `Edited ${path} (${count} replacement${count === 1 ? "" : "s"}). (Not committed yet — push it with mcp__group_repo__commit.)`,
         );
         if (!out.isError && isBrainNotePath(args.path)) {
           ctx.onMemory?.({
@@ -257,7 +257,7 @@ export function buildGroupRepoTools(
           cloneResolved,
           deleteRepoFile,
           args.path,
-          (path) => `Deleted ${path}. (Not committed yet — push it with commit.)`,
+          (path) => `Deleted ${path}. (Not committed yet — push it with mcp__group_repo__commit.)`,
         ),
     ),
     tool(
@@ -274,12 +274,12 @@ export function buildGroupRepoTools(
           cloneResolved,
           moveRepoFile,
           args,
-          (from, to) => `Moved ${from} → ${to}. (Not committed yet — push it with commit.)`,
+          (from, to) => `Moved ${from} → ${to}. (Not committed yet — push it with mcp__group_repo__commit.)`,
         ),
     ),
     tool(
       "scaffold_skill",
-      "Create a new skill (skills/<name>/SKILL.md + marketplace registration) in the specified group's shared knowledge repository. After that, fill it in with write_file and push with commit, and the avatars of all group members can use that skill. (group admin only)",
+      "Create a new skill (skills/<name>/SKILL.md + marketplace registration) in the specified group's shared knowledge repository. After that, fill it in with mcp__group_repo__write_file and push with mcp__group_repo__commit, and the avatars of all group members can use that skill. (group admin only)",
       {
         group: z.string().describe("Group name or ID"),
         name: z.string().describe("Skill name (e.g. team-runbook)"),

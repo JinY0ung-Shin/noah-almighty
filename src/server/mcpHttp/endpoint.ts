@@ -80,6 +80,13 @@ export interface McpRunGates {
   allowCall?: (server: string, tool: string) => boolean;
   /** Model-facing text of a refused call (default: "not available in this run"). */
   refusalMessage?: (server: string, tool: string) => string;
+  /**
+   * Check a call's arguments before the server sees them: a string refuses the
+   * call with that model-facing text (`isError`), `null` lets it through. The
+   * McpServer's own zod objects STRIP unknown keys, so a misnamed argument is
+   * otherwise dropped silently (the pi runner uses it — {@link unknownArgumentProblem}).
+   */
+  checkArguments?: (server: string, tool: string, args: Record<string, unknown>) => string | null;
   /** Post-process a tool result before it is sent (e.g. secret redaction). */
   transformResult?: (server: string, tool: string, result: CallToolResult) => CallToolResult | Promise<CallToolResult>;
 }
@@ -292,6 +299,20 @@ function installGates(session: Session, serverName: string, gates: McpRunGates):
           ).catch((error: unknown) => log.warn({ err: error, server: serverName }, "mcp-http: refusal send failed"));
           return;
         }
+        const args = message.params?.arguments;
+        const problem = gates.checkArguments?.(
+          serverName,
+          tool,
+          args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {},
+        );
+        if (problem) {
+          session.inflight.delete(message.id);
+          void send(
+            { jsonrpc: "2.0", id: message.id, result: refusedToolResult(tool, problem) as Record<string, unknown> },
+            { relatedRequestId: message.id },
+          ).catch((error: unknown) => log.warn({ err: error, server: serverName }, "mcp-http: argument refusal send failed"));
+          return;
+        }
         callRequests.set(message.id, tool);
       }
     } else if ("method" in message && message.method === "notifications/cancelled") {
@@ -328,6 +349,71 @@ function installGates(session: Session, serverName: string, gates: McpRunGates):
     }
     return send(outgoing, options);
   };
+}
+
+type JsonSchemaNode = {
+  type?: unknown;
+  properties?: Record<string, JsonSchemaNode>;
+  additionalProperties?: unknown;
+  items?: JsonSchemaNode | JsonSchemaNode[];
+};
+
+/** Argument names an object schema declares, or null when it accepts any (no `properties`, or extra keys allowed). */
+function closedPropertyNames(schema: JsonSchemaNode | undefined): string[] | null {
+  if (!schema || typeof schema !== "object" || !schema.properties || typeof schema.properties !== "object") return null;
+  if (schema.additionalProperties !== undefined && schema.additionalProperties !== false) return null;
+  return Object.keys(schema.properties);
+}
+
+function unknownKeysIn(schema: JsonSchemaNode | undefined, value: unknown, at: string, out: { path: string; valid: string[] }[]): void {
+  if (out.length >= 8 || !schema || typeof schema !== "object") return;
+  if (Array.isArray(value)) {
+    const item = Array.isArray(schema.items) ? undefined : schema.items;
+    value.forEach((entry, index) => unknownKeysIn(item, entry, `${at}[${index}]`, out));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const valid = closedPropertyNames(schema);
+  if (!valid) return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const path = at ? `${at}.${key}` : key;
+    if (!valid.includes(key)) out.push({ path, valid });
+    else unknownKeysIn(schema.properties![key], child, path, out);
+  }
+}
+
+/**
+ * The model-facing refusal for argument NAMES a tool's JSON schema does not
+ * declare (nested objects and arrays of objects included; `anyOf` branches and
+ * open objects are not judged), or null when every name is known. Names only:
+ * types, enums and required fields stay the client's and the server's checks.
+ */
+export function unknownArgumentProblem(
+  fullName: string,
+  inputSchema: Tool["inputSchema"] | undefined,
+  args: Record<string, unknown>,
+): string | null {
+  const found: { path: string; valid: string[] }[] = [];
+  unknownKeysIn(inputSchema as JsonSchemaNode | undefined, args, "", found);
+  if (found.length === 0) return null;
+  const required = new Set(((inputSchema as { required?: unknown })?.required as string[] | undefined) ?? []);
+  const groups = new Map<string, { paths: string[]; valid: string[] }>();
+  for (const hit of found) {
+    const parent = hit.path.includes(".") ? hit.path.slice(0, hit.path.lastIndexOf(".")) : "";
+    const group = groups.get(parent) ?? { paths: [], valid: hit.valid };
+    group.paths.push(hit.path);
+    groups.set(parent, group);
+  }
+  const parts = [...groups.entries()].map(([parent, group]) => {
+    const names = group.valid.length
+      ? group.valid.map((name) => (parent === "" && required.has(name) ? `${name} (required)` : name)).join(", ")
+      : "none (call it with {})";
+    return `${group.paths.map((p) => `\`${p}\``).join(", ")} ${group.paths.length === 1 ? "is" : "are"} not ${parent ? `a field of \`${parent}\`` : "an argument of this tool"}; valid: ${names}`;
+  });
+  return (
+    `Unknown argument name for ${fullName}: ${parts.join(". ")}. ` +
+    "Nothing was run. Call it again using only these names (unknown names are never ignored silently); check the full schema with mcp_search if unsure."
+  );
 }
 
 function jsonRpcError(res: Response, status: number, code: number, message: string, headers: Record<string, string> = {}) {

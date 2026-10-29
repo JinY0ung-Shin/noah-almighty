@@ -17,17 +17,19 @@ visible. Owner conversations can expose BOTH personal `mcp__repo__*` tools and g
 personal repo is the right target.
 
 - **Personal brain requested / no group named:** operate on the personal repo with
-  `mcp__repo__list_files`/`read_file`/`write_file`/`commit`.
+  `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
 - **Group / team brain requested:** first call `mcp__group_repo__list_groups`, choose the named
   group (or ask which group if ambiguous), then operate ONLY on that group's shared repo with
-  `mcp__group_repo__list_files`/`read_file`/`write_file`/`commit`.
+  `mcp__group_repo__list_files`/`mcp__group_repo__read_file`/`mcp__group_repo__write_file`/`mcp__group_repo__commit`.
 - Group writes are admin-only; if a write is denied, report which files are missing and tell the
   user a group admin must run this.
 
 Decide scope once, up front. Never mix personal and group tools in the same migration.
 
 ## Procedure (create-if-absent only — NEVER overwrite)
-1. **List the current tree** with `list_files`. Do not assume.
+1. **List the current tree** with the scope's list tool (`mcp__repo__list_files`, or `mcp__group_repo__list_files`
+   for a group). Do not assume. Every tool below is the SAME scope's: call its full `mcp__repo__…` or
+   `mcp__group_repo__…` name, never a bare `read_file`/`write_file`.
 2. For EACH path below, write it ONLY if it is absent; skip silently if present:
    - `raw/.gitkeep`
    - `wiki/sources/.gitkeep`, `wiki/entities/.gitkeep`, `wiki/concepts/.gitkeep`, `wiki/synthesis/.gitkeep`
@@ -36,9 +38,9 @@ Decide scope once, up front. Never mix personal and group tools in the same migr
    - `wiki/_template.md` — the note template (title, date, source, tags, aliases, then body).
 3. **Root `CLAUDE.md`:**
    - If absent, seed it with the second-brain philosophy block.
-   - If present, `read_file` it. If it ALREADY contains the marker `<!-- brain:philosophy -->`,
-     do nothing (already migrated). Otherwise read the FULL file, then `write_file` the ORIGINAL
-     content verbatim followed by this block appended at the end (`write_file` is a full-file
+   - If present, read it (`mcp__repo__read_file` / `mcp__group_repo__read_file`). If it ALREADY contains the marker `<!-- brain:philosophy -->`,
+     do nothing (already migrated). Otherwise read the FULL file, then write (`mcp__repo__write_file` / `mcp__group_repo__write_file`) the ORIGINAL
+     content verbatim followed by this block appended at the end (a write is a full-file
      overwrite, so you MUST include the original text or you will erase it):
 
      ```
@@ -55,5 +57,5 @@ Decide scope once, up front. Never mix personal and group tools in the same migr
 ## Safety
 - Use the MCP repo tools ONLY. Never run `git` via Bash (the shell has no credentials; remote
   git is MCP-only by design).
-- `write_file` overwrites the whole file. To "append" to `CLAUDE.md` you MUST read it first and
+- `mcp__repo__write_file` (and `mcp__group_repo__write_file`) overwrites the whole file. To "append" to `CLAUDE.md` you MUST read it first and
   write back original + block. Never truncate or drop existing content.

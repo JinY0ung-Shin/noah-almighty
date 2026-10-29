@@ -145,10 +145,10 @@ function knowledgeRepoSection(
   if (knowledgeRepoConfigured) {
     // The owner can have the avatar manage its connected knowledge repo.
     return (
-      "You can directly manage your own **knowledge repository** (an owner-only personal repo): `mcp__repo__list_files`/`read_file`/`write_file`/`edit_file`/`delete_file`/`move_file`/`scaffold_skill`/`commit`. " +
-      "To change part of a file that already exists, use `edit_file` (a targeted text replacement) rather than rewriting the whole file with `write_file`. " +
-      "If you organize work knowledge and skills here, you will use them starting from the next conversation; use `delete_file` to remove outdated knowledge/skills (a file or a whole skill folder) and `move_file` to rename/relocate them. " +
-      "write_file/edit_file/delete_file/move_file/scaffold_skill changes are **not pushed until you commit**, so commit when a unit of work is finished or the owner asks."
+      "You can directly manage your own **knowledge repository** (an owner-only personal repo): `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__edit_file`/`mcp__repo__delete_file`/`mcp__repo__move_file`/`mcp__repo__scaffold_skill`/`mcp__repo__commit`. " +
+      "To change part of a file that already exists, use `mcp__repo__edit_file` (a targeted text replacement) rather than rewriting the whole file with `mcp__repo__write_file`. " +
+      "If you organize work knowledge and skills here, you will use them starting from the next conversation; use `mcp__repo__delete_file` to remove outdated knowledge/skills (a file or a whole skill folder) and `mcp__repo__move_file` to rename/relocate them. " +
+      "Changes from these write tools are **not pushed until you call `mcp__repo__commit`**, so commit when a unit of work is finished or the owner asks."
     );
   }
   // No repo yet → the `create_repo` tool IS available (exposed only in this
@@ -157,8 +157,8 @@ function knowledgeRepoSection(
   // giving manual setup steps or calling scaffold_skill first (which fails
   // without a connected repo, and previously misled the avatar).
   return request.gitTokenSet
-    ? `You do not have a knowledge repository yet. **You have the \`mcp__repo__create_repo\` tool.** The internal GitHub host where repositories are currently created is \`${githubHost}\`. When the owner asks you to create or connect a repository — do not walk them through manual steps — just take a repository name and create and connect a private repo directly with \`create_repo\` (\`GIT_TOKEN\` is already set). \`scaffold_skill\`/\`write_file\`/\`commit\` fail before a repository is connected, so you MUST call \`create_repo\` **first**.`
-    : "You do not have a knowledge repository yet, and `GIT_TOKEN` is not set either. If the owner wants to create a repository, first guide them to register an internal Git token (the `GIT_TOKEN` secret) under Settings → **Git credentials** (once registered, you can create one directly with `mcp__repo__create_repo`). `scaffold_skill`/`write_file`/`commit` fail before a repository is connected.";
+    ? `You do not have a knowledge repository yet. **You have the \`mcp__repo__create_repo\` tool.** The internal GitHub host where repositories are currently created is \`${githubHost}\`. When the owner asks you to create or connect a repository — do not walk them through manual steps — just take a repository name and create and connect a private repo directly with \`mcp__repo__create_repo\` (\`GIT_TOKEN\` is already set). \`mcp__repo__scaffold_skill\`/\`mcp__repo__write_file\`/\`mcp__repo__commit\` fail before a repository is connected, so you MUST call \`mcp__repo__create_repo\` **first**.`
+    : "You do not have a knowledge repository yet, and `GIT_TOKEN` is not set either. If the owner wants to create a repository, first guide them to register an internal Git token (the `GIT_TOKEN` secret) under Settings → **Git credentials** (once registered, you can create one directly with `mcp__repo__create_repo`). `mcp__repo__scaffold_skill`/`mcp__repo__write_file`/`mcp__repo__commit` fail before a repository is connected.";
 }
 
 /**
@@ -250,7 +250,7 @@ function brainSection(
     " Brain edits are not pushed until you commit.";
   const conv =
     mode === "routine" && mcpToolGroupEnabled(request, "system")
-      ? " For a consolidation task you may review the owner's OWN recent conversations with `mcp__system__list_recent_conversations`/`read_conversation` (owner-scoped) to find durable facts to capture; never read anyone else's conversations."
+      ? " For a consolidation task you may review the owner's OWN recent conversations with `mcp__system__list_recent_conversations`/`mcp__system__read_conversation` (owner-scoped) to find durable facts to capture; never read anyone else's conversations."
       : "";
   return `${base}${capture}${migrate}${conv}`;
 }
@@ -283,7 +283,7 @@ function groupsSection(request: AgentRequest): string | null {
   const groupLines = [
     `The owner belongs to the following groups: ${groups.map(describe).join(", ")}. ` +
       trustSentence,
-    "Each group may have a **shared knowledge repository**, handled with the `mcp__group_repo__*` tools: use `list_groups` to check groups/roles; all group members can `list_files`/`read_file`, while only **group admins** can `write_file`/`edit_file`/`delete_file`/`move_file`/`scaffold_skill`/`commit`. Skills organized in a group's shared repository are used by every group member's avatar starting from the next conversation.",
+    "Each group may have a **shared knowledge repository**, handled with the `mcp__group_repo__*` tools: use `mcp__group_repo__list_groups` to check groups/roles; all group members can `mcp__group_repo__list_files`/`mcp__group_repo__read_file`, while only **group admins** can `mcp__group_repo__write_file`/`mcp__group_repo__edit_file`/`mcp__group_repo__delete_file`/`mcp__group_repo__move_file`/`mcp__group_repo__scaffold_skill`/`mcp__group_repo__commit`. Skills organized in a group's shared repository are used by every group member's avatar starting from the next conversation.",
   ];
   if (adminNoRepo.length > 0) {
     groupLines.push(
@@ -292,7 +292,7 @@ function groupsSection(request: AgentRequest): string | null {
   }
   if (groups.some((g) => g.knowledgeRepoConfigured)) {
     groupLines.push(
-      "When a group has a shared knowledge repository, you can also SEARCH its **team brain** with `mcp__group_brain__search`/`mcp__group_brain__get_note` (scoped to one group; any group member may read) to surface team-shared rules, decisions, and context any member captured. To ADD to a team brain, ingest a note with `mcp__group_repo__write_file` then `commit` — writes are group-admin only, so a member who wants to contribute should ask an admin.",
+      "When a group has a shared knowledge repository, you can also SEARCH its **team brain** with `mcp__group_brain__search`/`mcp__group_brain__get_note` (scoped to one group; any group member may read) to surface team-shared rules, decisions, and context any member captured. To ADD to a team brain, ingest a note with `mcp__group_repo__write_file` then `mcp__group_repo__commit` — writes are group-admin only, so a member who wants to contribute should ask an admin.",
     );
   }
   return groupLines.join(" ");
@@ -351,7 +351,7 @@ function secretsSection(
   );
   const browserNote =
     browserExposed.length > 0
-      ? ` ${browserExposed.map((policy) => `\`${policy.name}\``).join(", ")} ${browserExposed.length === 1 ? "is" : "are"} ALSO enabled for BROWSER INPUT (per-secret opt-in under 설정 → 권한·연결 → 시크릿 → 브라우저 입력): on the sites the owner listed you enter one by passing its NAME as \`secretName\` to \`mcp__browser__type\`/\`fill_form\` — the bridge types the value, you never see it, and typing such a credential literally is never correct. This works ONLY in an interactive chat where the browser bridge is connected (the browser tools are present); in a run without them nothing can type these secrets.`
+      ? ` ${browserExposed.map((policy) => `\`${policy.name}\``).join(", ")} ${browserExposed.length === 1 ? "is" : "are"} ALSO enabled for BROWSER INPUT (per-secret opt-in under 설정 → 권한·연결 → 시크릿 → 브라우저 입력): on the sites the owner listed you enter one by passing its NAME as \`secretName\` to \`mcp__browser__type\`/\`mcp__browser__fill_form\` — the bridge types the value, you never see it, and typing such a credential literally is never correct. This works ONLY in an interactive chat where the browser bridge is connected (the browser tools are present); in a run without them nothing can type these secrets.`
       : "";
   const shellNote = piRuntime
     ? shellExposed.length > 0
@@ -831,13 +831,49 @@ function piRuntimeSection(request: AgentRequest): string | null {
     "It has no direct network: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), and only to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance; empty by default, which blocks everything). Direct TCP/UDP, DNS and raw SSH always fail, and a destination off the list answers `407 Request rejected by proxy` — report it as that operator's policy, never work around it. Noah's own tools (`mcp__web__fetch` and the rest) do not run in the sandbox and keep Noah's network. " +
     folder +
     "Built-in tools: `read` (files and images), `write` (new files or complete rewrites), `edit` (exact replacements), `ls`/`find`/`grep` (explore), `bash` (run programs; its `timeout` is in SECONDS). " +
-    "Noah's own tools — every `mcp__<server>__<tool>` name in these instructions, skills and the manual — are called through `mcp_call` with `{name, arguments}`; if you are unsure of a tool's arguments, look it up with `mcp_search` first. A refused call says why: do not retry it or look for a shell workaround. " +
+    "Noah's own tools — every `mcp__<server>__<tool>` name in these instructions, skills and the manual — are called through `mcp_call` with `{name, arguments}`" +
+    (pi.knownTools
+      ? "; call a tool from the Known Noah tool names list below directly, without searching first, and use `mcp_search` only for a tool that list does not name. "
+      : "; if you are unsure of a tool's arguments, look it up with `mcp_search` first. ") +
+    MCP_SEARCH_QUERY_LINE +
+    "A refused call says why: do not retry it or look for a shell workaround. " +
     "The user cannot see files in the sandbox, so put the content in your reply or publish the file with the file-output tools when they are available. " +
     "Not available on this runtime: WebSearch (fetch a known URL with `mcp__web__fetch`). " +
     piRelayedMcpSentence(pi) +
     piAsyncToolsSentence(request) +
     "These instructions were fixed when this conversation started; settings, connections and tools may have changed since, so check `mcp__system__describe_system` before relying on any of that. Each user message starts with the current date and time."
   );
+}
+
+/** pi's `mcp_search` ranks English tool text by keywords (BM25): a query in another language, or without the service, finds little. */
+const MCP_SEARCH_QUERY_LINE =
+  "Write `mcp_search` queries in English as the service id plus the action (for example `browser click`, `todo add`, `repo commit`, `confluence search`): the tool descriptions are English and matched by keyword, so a query in another language finds little. ";
+
+/**
+ * pi only: the exact names of the tools this run registered (design D2 —
+ * frozen with the rest, from the conversation's first pi turn), so the model
+ * calls them by name instead of searching. One line per tool with its
+ * REQUIRED argument names; the full schema comes back with any failed call
+ * and from mcp_search. Same order as the catalog for prompt-cache stability.
+ */
+function piKnownToolsSection(request: AgentRequest): string | null {
+  const known = request.piRuntime?.knownTools;
+  if (!known || known.noah.length + known.relayed.length === 0) return null;
+  const line = (tool: { name: string; required: string[] }) => `${tool.name}(${tool.required.join(", ")})`;
+  return [
+    "**Known Noah tool names** — the tools this conversation had when it started, with their REQUIRED arguments in parentheses (optional ones are in each tool's schema). " +
+      "Call them directly with `mcp_call` `{name: \"<exact name below>\", arguments: {…}}` — no `mcp_search` needed; a call with a missing or wrong argument comes back with the tool's full schema, so fix it from there. " +
+      "A tool not listed here may have been enabled since: find it with `mcp_search`. A listed tool can still be refused on a turn that lacks it (`mcp__system__describe_system` is authoritative).",
+    ...known.noah.map(line),
+    ...(known.relayed.length || known.relayedIncomplete
+      ? [
+          "Relayed tools (hex-ssh, plugin and shared MCP servers) as listed when this conversation started" +
+            (known.relayedIncomplete ? " — at least one server did not answer in time, so search for its tools" : "") +
+            "; a server or tool connected later is not here, so find it with `mcp_search`:",
+          ...known.relayed.map(line),
+        ]
+      : []),
+  ].join("\n");
 }
 
 /**
@@ -955,6 +991,10 @@ export function buildSystemPromptAppend(
   if (piBlock) {
     lines.push(piBlock);
   }
+  const piKnownToolsBlock = piKnownToolsSection(request);
+  if (piKnownToolsBlock) {
+    lines.push(piKnownToolsBlock);
+  }
   const piSkillsBlock = piSkillsSection(request);
   if (piSkillsBlock) {
     lines.push(piSkillsBlock);
@@ -1011,7 +1051,7 @@ export function buildSystemPromptAppend(
           // bridge is actually live this run; promising it otherwise sends the
           // model looking for tools it does not have.
           (request.browserEnabled
-            ? "To CREATE or EDIT a page, use the user's browser via `mcp__browser__navigate`/`new_tab`. Tell them what will change before saving. Read manual topic `browser-operations` first for text/image paste and verify the editor committed the change. A blocked host is not retryable through another route."
+            ? "To CREATE or EDIT a page, use the user's browser via `mcp__browser__navigate`/`mcp__browser__new_tab`. Tell them what will change before saving. Read manual topic `browser-operations` first for text/image paste and verify the editor committed the change. A blocked host is not retryable through another route."
             : "If the user asks you to write a page, say so plainly and offer what you can — draft the content in the chat, or hand it over as a file with `mcp__file_output__share_file`. Editing Confluence directly would need browser control (the `browser` tool group, in a chat with their own avatar, with the Noah extension installed)."),
       );
     } else {
@@ -1215,7 +1255,7 @@ export function buildSystemPromptAppend(
       "Tool access in this consultation is READ-ONLY" +
         (mcpToolGroupEnabled(request, "personal_knowledge") &&
         request.knowledgeRepoConfigured !== false
-          ? ": recall what you know with `mcp__brain__search`/`get_note` and `mcp__repo__list_files`/`read_file`."
+          ? ": recall what you know with `mcp__brain__search`/`mcp__brain__get_note` and `mcp__repo__list_files`/`mcp__repo__read_file`."
           : ".") +
         " File editing, command execution, and repository writes are unavailable here — do not attempt them.",
     );
@@ -1249,9 +1289,9 @@ export function buildSystemPromptAppend(
       if (mcpToolGroupEnabled(request, "personal_knowledge")) {
         routineState.push(
           request.knowledgeRepoConfigured !== false
-            ? "Personal knowledge repository: connected — `mcp__repo__list_files`/`read_file`/`write_file`/`edit_file`/`delete_file`/`move_file`/`scaffold_skill`/`commit` are available (changes must be committed to be pushed)."
+            ? "Personal knowledge repository: connected — `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__edit_file`/`mcp__repo__delete_file`/`mcp__repo__move_file`/`mcp__repo__scaffold_skill`/`mcp__repo__commit` are available (changes must be committed to be pushed)."
             : request.gitTokenSet
-              ? "Personal knowledge repository: none — if a task needs a repository, create and connect one first with `mcp__repo__create_repo` (`scaffold_skill`/`write_file`/`commit` fail before one is connected)."
+              ? "Personal knowledge repository: none — if a task needs a repository, create and connect one first with `mcp__repo__create_repo` (`mcp__repo__scaffold_skill`/`mcp__repo__write_file`/`mcp__repo__commit` fail before one is connected)."
               : "Personal knowledge repository: none, and `GIT_TOKEN` is also not set — you cannot do tasks that need a repository, so note in your result report that a token needs to be registered.",
         );
       }
@@ -1263,7 +1303,7 @@ export function buildSystemPromptAppend(
         const teamBrainNote = routineGroups.some(
           (g) => g.knowledgeRepoConfigured,
         )
-          ? " You can also SEARCH a group's team brain with `mcp__group_brain__search`/`get_note` (scoped to one group; members read)."
+          ? " You can also SEARCH a group's team brain with `mcp__group_brain__search`/`mcp__group_brain__get_note` (scoped to one group; members read)."
           : "";
         // Mirror groupsSection()'s admin-with-no-repo nudge so a routine knows it
         // can stand up a group's shared repo with mcp__group_repo__create_repo.
@@ -1382,7 +1422,7 @@ export function buildSystemPromptAppend(
     }
     if (mcpToolGroupEnabled(request, "system")) {
       lines.push(
-        "When the owner asks about this system itself or requests configuration changes, check the current state with `mcp__system__describe_system`, then directly use `mcp__system__create_routine`/`update_routine`/`delete_routine` or `mcp__system__add_plugin`/`set_plugin_enabled` as appropriate. " +
+        "When the owner asks about this system itself or requests configuration changes, check the current state with `mcp__system__describe_system`, then directly use `mcp__system__create_routine`/`mcp__system__update_routine`/`mcp__system__delete_routine` or `mcp__system__add_plugin`/`mcp__system__set_plugin_enabled` as appropriate. " +
           "For an important result or required action the user should be told about separately, leave an app notification with `mcp__system__notify_user`. Routine times are based on KST `HH:MM`, and plugin add/enable changes usually load starting from the next conversation.",
       );
     }
@@ -1539,8 +1579,8 @@ export function buildSystemPromptAppend(
         // (standing per-turn guidance + tool-description trigger, per CLAUDE.md).
         lines.push(
           request.sharedAccount
-            ? "This avatar is a **shared (communal) account**: this trusted teammate may not only read but also **update the owner's personal knowledge repository** — `mcp__repo__list_files`/`read_file`/`write_file`/`edit_file`/`delete_file`/`move_file`/`scaffold_skill`/`commit`. When they ask you to record knowledge or skills, apply the change and push it with `commit` (changes are not pushed until you commit). Creating/connecting the repository itself stays owner-only."
-            : "You may **read** the owner's personal **knowledge repository** with `mcp__repo__list_files`/`read_file` to draw on the owner's accumulated knowledge and skills when helping this teammate. Modifying it (write/edit/delete/move/scaffold/commit) is owner-only, so do not attempt those.",
+            ? "This avatar is a **shared (communal) account**: this trusted teammate may not only read but also **update the owner's personal knowledge repository** — `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__edit_file`/`mcp__repo__delete_file`/`mcp__repo__move_file`/`mcp__repo__scaffold_skill`/`mcp__repo__commit`. When they ask you to record knowledge or skills, apply the change and push it with `mcp__repo__commit` (changes are not pushed until you commit). Creating/connecting the repository itself stays owner-only."
+            : "You may **read** the owner's personal **knowledge repository** with `mcp__repo__list_files`/`mcp__repo__read_file` to draw on the owner's accumulated knowledge and skills when helping this teammate. Modifying it (write/edit/delete/move/scaffold/commit) is owner-only, so do not attempt those.",
         );
         const teammateBrainBlock = brainSection(request, "teammate");
         if (teammateBrainBlock) {

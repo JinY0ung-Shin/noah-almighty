@@ -469,6 +469,11 @@ export class PiMcpProxyPool {
 
   /** `tools/list` of one proxy server: every source in parallel, a slow or failed one left out. */
   async listTools(proxy: PiProxyServerName): Promise<Tool[]> {
+    return (await this.listToolsReport(proxy)).tools;
+  }
+
+  /** {@link listTools} plus how many sources were left out (the frozen prompt says its list is partial). */
+  async listToolsReport(proxy: PiProxyServerName): Promise<{ tools: Tool[]; failedSources: number }> {
     const sources = this.sources(proxy);
     const listed = await Promise.allSettled(
       sources.map((upstream) =>
@@ -479,9 +484,11 @@ export class PiMcpProxyPool {
       ),
     );
     const out: Tool[] = [];
+    let failedSources = 0;
     listed.forEach((result, index) => {
       const upstream = sources[index]!;
       if (result.status === "rejected") {
+        failedSources += 1;
         log.warn({ proxy, server: upstream.name, err: String(result.reason) }, "pi mcp proxy: tools/list failed; source skipped");
         return;
       }
@@ -489,7 +496,7 @@ export class PiMcpProxyPool {
         out.push(proxy === HEX_SSH_SERVER_NAME ? tool : { ...tool, name: `${upstream.name}${SEPARATOR}${tool.name}` });
       }
     });
-    return out;
+    return { tools: out, failedSources };
   }
 
   async callTool(

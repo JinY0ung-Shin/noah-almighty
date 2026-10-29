@@ -96,7 +96,7 @@ export function buildGroupBrainTools(store: Store, ctx: GroupBrainToolsContext) 
     ),
     tool(
       "get_note",
-      "Read one full note from a group's shared TEAM BRAIN by its repository-relative path (e.g. `wiki/deploy-runbook.md`), usually a path returned by `search`. The path must live under `wiki/`. Returns the note's full markdown including its frontmatter. (group member only)",
+      "Read one full note from a group's shared TEAM BRAIN by its repository-relative path (e.g. `wiki/deploy-runbook.md`), usually a path returned by `mcp__group_brain__search`. The path must live under `wiki/`. Returns the note's full markdown including its frontmatter. (group member only)",
       {
         group: z.string().describe("Group name or ID"),
         path: z.string().describe("Repository-relative path under wiki/ (e.g. wiki/concepts/deploy.md)"),

@@ -27,7 +27,8 @@
  * `mcp__<id>__<tool>` names equal the names Noah's prompts and skills use; the
  * last three ids are servers Noah RELAYS as an MCP client (`hex-ssh`, and the
  * `plugins` / `shared` aggregates). Each entry forwards the run token:
- * `Authorization: Bearer {{ctx.header:x-noah-run-token}}`.
+ * `Authorization: Bearer {{ctx.header:x-noah-run-token}}`, and a noun-only `description` (SERVER_DESCRIPTIONS)
+ * that pi's mcp_search lists and matches.
  *
  * Timeouts: 120 s unless a server's own work takes longer (SERVER_TIMEOUT_SEC).
  * The two tools that used to hold a call for minutes no longer do on pi (design
@@ -63,6 +64,37 @@ export const NOAH_MCP_SERVER_NAMES = [
   "plugins",
   "shared",
 ];
+
+/**
+ * The broker entry's `description` per id: what the service IS, in NOUNS only. pi shows its first line in
+ * `mcp_search`'s always-visible "Connected services" list AND appends it to the search text of EVERY tool of
+ * that server — so a verb here would match every tool of the server and push the right one down (measured:
+ * a verb list cost held-out recall, nouns kept it and raised rank 1; usability report §6.5, 2026-10-29).
+ * Keep each under pi's 1000-character cap.
+ */
+export const SERVER_DESCRIPTIONS = {
+  knowledge: "Questions relayed to the owner.",
+  repo: "Personal knowledge repository (git) of notes, skills and the second-brain wiki.",
+  system: "Noah itself: current capabilities and settings, the product manual, routines (scheduled tasks), notifications, plugins, conversations.",
+  todo: "Persistent to-do list (할 일) of tasks.",
+  confluence: "Confluence wiki pages and attachments.",
+  web: "Web pages and URLs fetched by the server.",
+  avatars: "Colleagues' avatars.",
+  skill_exchange: "Skill sharing between teammates' avatars.",
+  ssh_identity: "The owner's SSH key pair.",
+  git_repo: "General git code repositories (GitHub projects) of the owner.",
+  group_repo: "Group (team) shared knowledge repository.",
+  brain: "Second brain: the owner's curated wiki notes, memory of past decisions, people and projects.",
+  group_brain: "Team brain: a group's shared wiki notes.",
+  canvas: "Visual canvas side panel: diagrams, mockups, charts, HTML previews.",
+  browser: "The user's own web browser (Chrome extension): pages, tabs, forms.",
+  file_output: "Files for the user: images in the chat, download cards, share links.",
+  ssh_trust: "Trusted SSH host keys (known_hosts).",
+  skills: "The avatar owner's skills (SKILL.md instructions) for a colleague's run.",
+  "hex-ssh": "Remote servers over SSH: shell commands and remote files.",
+  plugins: "MCP servers of the owner's installed plugins.",
+  shared: "Admin-registered shared MCP servers (공용 MCP).",
+};
 
 const DEFAULT_TIMEOUT_SEC = 120;
 /** Per-server broker timeouts (s) where the server's own work can outlast the default. */
@@ -121,6 +153,7 @@ export function brokerEntry(name, noahUrl, timeoutSec) {
   return {
     runIn: "broker",
     displayName: `Noah ${name}`,
+    ...(SERVER_DESCRIPTIONS[name] ? { description: SERVER_DESCRIPTIONS[name] } : {}),
     transport: {
       type: "http",
       url: `${noahUrl.replace(/\/+$/, "")}/mcp/${name}`,
@@ -135,6 +168,7 @@ function sameEntry(have, want) {
     have?.transport?.url === want.transport.url &&
     have?.transport?.headers?.Authorization === want.transport.headers.Authorization &&
     have?.timeoutSec === want.timeoutSec &&
+    (have?.description ?? "") === (want.description ?? "") &&
     have?.enabled !== false
   );
 }

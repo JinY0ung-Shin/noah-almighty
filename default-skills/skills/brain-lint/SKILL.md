@@ -9,12 +9,12 @@ Check `wiki/` for hygiene problems and (when asked) fix them. Run on demand or a
 brain-reflect pass.
 
 ## Scope
-- **Personal repo:** read with `mcp__repo__list_files`/`read_file`; fix with
+- **Personal repo:** read with `mcp__repo__list_files`/`mcp__repo__read_file`; fix with
   `mcp__repo__edit_file` (exact-snippet replacement — the default for every fix),
-  `move_file`/`delete_file`, and `write_file` ONLY when rewriting a whole note; then
-  `mcp__repo__commit`. `write_file` overwrites the entire file, so never use it to trim a passage.
+  `mcp__repo__move_file`/`mcp__repo__delete_file`, and `mcp__repo__write_file` ONLY when rewriting a whole note; then
+  `mcp__repo__commit`. `mcp__repo__write_file` overwrites the entire file, so never use it to trim a passage.
 - **Group repo:** read with `mcp__group_repo__*` and fix with the same-named
-  `mcp__group_repo__edit_file`/`move_file`/`delete_file` + `commit`. Writes are admin-only; if you
+  `mcp__group_repo__edit_file`/`mcp__group_repo__move_file`/`mcp__group_repo__delete_file` + `mcp__group_repo__commit`. Writes are admin-only; if you
   are a member, REPORT findings only — never Bash git.
 - **`raw/` is read-only for this skill.** It is the original-capture archive: read it to judge
   what is current, never edit or delete anything in it. Lint edits land in `wiki/` only.
@@ -40,7 +40,7 @@ brain-reflect pass.
    - The frontmatter `date` field is note metadata, not history — leave it.
 
 ## Output
-Report findings grouped by check. If asked to fix, apply minimal edits (`edit_file`), keep the
+Report findings grouped by check. If asked to fix, apply minimal edits (`mcp__repo__edit_file`, or `mcp__group_repo__edit_file` in group scope), keep the
 index in sync, then **commit once**. Removing history noise is a hygiene edit and needs no
 per-item confirmation once the owner asked for fixes; anything that changes what a note actually
 CLAIMS (a merge, deleting a whole note, a rewritten current value) still needs confirmation first.

@@ -152,10 +152,10 @@ export function writeFileErrorMessage(error: unknown): string {
 export function editFileErrorMessage(error: unknown): string {
   const detail = scrubGitError(error);
   if (detail === "NOT_FOUND") {
-    return "The file does not exist yet. Use write_file to create it (or check the path with list_files/read_file).";
+    return "The file does not exist yet. Use the write_file tool of the same server (mcp__repo__write_file / mcp__group_repo__write_file) to create it, or check the path with mcp__repo__list_files / mcp__group_repo__list_files.";
   }
   if (detail === "STRING_NOT_FOUND") {
-    return "old_string was not found in the file. Read the current file with read_file and copy the exact text to replace, including whitespace and indentation.";
+    return "old_string was not found in the file. Read the current file with the same server's read_file (mcp__repo__read_file / mcp__group_repo__read_file) and copy the exact text to replace, including whitespace and indentation.";
   }
   if (detail === "STRING_NOT_UNIQUE") {
     return "old_string matches more than one place in the file. Include enough surrounding context to make it unique, or pass replace_all: true to replace every occurrence.";
@@ -365,7 +365,7 @@ export async function runScaffoldSkill<C>(
     const repoRoot = await ensureClone(resolved.repo);
     const filePath = await scaffoldSkill(repoRoot, args.name, args.description ?? "");
     return text(
-      `Created a new skill: ${filePath} (fill in the content with write_file, then push with commit.)`,
+      `Created a new skill: ${filePath} (fill in the content with the same server's write_file, then push with its commit — mcp__repo__write_file + mcp__repo__commit, or the mcp__group_repo__ pair.)`,
     );
   } catch (error) {
     return text(scaffoldErrorMessage(error), true);

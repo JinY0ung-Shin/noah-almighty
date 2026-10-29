@@ -41,7 +41,7 @@ import type { Store } from "../../store.js";
 import type { AgentEvents } from "../events.js";
 import logger from "../../logger.js";
 import { isEffortLevel } from "../../effortLevels.js";
-import type { McpRunRegistry, McpServerSource } from "../../mcpHttp/endpoint.js";
+import { unknownArgumentProblem, type McpRunRegistry, type McpServerSource } from "../../mcpHttp/endpoint.js";
 import { buildRunCapabilities, stampPromptRequest } from "../runCapabilities.js";
 import {
   PI_FIRST_TURN_HISTORY_LIMITS,
@@ -50,7 +50,7 @@ import {
   buildUserPrompt,
 } from "../promptBuilder.js";
 import { resultErrorMessage } from "../sdkMessageHandlers.js";
-import { PI_MCP_SERVER_NAMES, noahMcpCatalog } from "./mcpCatalog.js";
+import { PI_MCP_SERVER_NAMES, noahMcpCatalog, piKnownTools } from "./mcpCatalog.js";
 import { PI_RUN_TOKEN_HEADER, piRuntimeSupports, piServicesFor } from "./piRuntime.js";
 import { ensurePiConversationDir, piWorkspaceFor, stagePiAttachmentFiles } from "./piWorkspace.js";
 import { materializePiSkills } from "./piSkills.js";
@@ -231,10 +231,6 @@ export async function runPiAgent(
       events?.onStatus?.("모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…");
     }
   }
-  const frozenInstructions = (): string =>
-    store.ensureConversationPiInstructions(principal, conversationId, () => buildSystemPromptAppend(promptRequest)) ??
-    buildSystemPromptAppend(promptRequest);
-
   // ---- input --------------------------------------------------------------
   const stagedFiles = request.imageFiles?.length ? stagePiAttachmentFiles(workspace, request.imageFiles) : [];
   const userRequest: AgentRequest = { ...promptRequest, imageFiles: stagedFiles.length ? stagedFiles : undefined };
@@ -267,6 +263,20 @@ export async function runPiAgent(
       ? proxies.serverFor(name as (typeof PI_PROXY_SERVER_NAMES)[number])
       : (built[name] ?? stubServer(name));
   }
+  // The frozen prompt's tool list (design D2): rendered only while the
+  // conversation has no instructions yet. Relayed lists are read now (pi reads
+  // them at session build anyway), bounded by the pool's own deadline.
+  const knownTools = store.hasConversationPiInstructions(principal, conversationId)
+    ? undefined
+    : await piKnownTools(catalog, allowedTools, proxies, capabilities.piMcpProxies?.upstreams ?? []);
+  const frozenRequest: AgentRequest =
+    knownTools && promptRequest.piRuntime ? { ...promptRequest, piRuntime: { ...promptRequest.piRuntime, knownTools } } : promptRequest;
+  const frozenInstructions = (): string =>
+    store.ensureConversationPiInstructions(principal, conversationId, () => buildSystemPromptAppend(frozenRequest)) ??
+    buildSystemPromptAppend(frozenRequest);
+  const catalogTools = new Map(
+    Object.entries(catalog).flatMap(([server, tools]) => tools.map((tool) => [`${server}/${tool.name}`, tool] as const)),
+  );
   const redactions = capabilities.piRedactions ?? {};
   const tokenAbort = new AbortController();
   const token = registry.register({
@@ -278,6 +288,15 @@ export async function runPiAgent(
       allowCall: (server, tool) =>
         proxyNames.has(server) ? proxies.allowsCall(server, tool) : allowedTools.has(`mcp__${server}__${tool}`),
       refusalMessage,
+      // A misnamed argument would be stripped by the server's zod object and
+      // the call would run as if it were absent (`list_todos {state}` listing
+      // everything): refuse it with the valid names instead. Noah's own
+      // servers only — a relayed server's schema is its own business.
+      checkArguments: (server, tool, args) => {
+        if (proxyNames.has(server)) return null;
+        const listed = catalogTools.get(`${server}/${tool}`);
+        return listed ? unknownArgumentProblem(`mcp__${server}__${tool}`, listed.inputSchema, args) : null;
+      },
       // Every result leaves Noah redacted: a relayed server echoing a vault
       // value or a header, a page echoing a browser-typed password.
       transformResult: (_server, _tool, result) =>

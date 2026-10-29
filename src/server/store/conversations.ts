@@ -329,6 +329,14 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
      * conversation — a model switch or a lost session re-sends it verbatim).
      * Same write-once, take-under-the-lock contract as the to-do snapshot above.
      */
+    /** True once the conversation's pi instructions are frozen (its first pi turn has run). */
+    hasConversationPiInstructions(ownerId: string, conversationId: string): boolean {
+      const row = this.db
+        .prepare("SELECT pi_instructions IS NOT NULL AS frozen FROM conversations WHERE id = ? AND owner_user_id = ?")
+        .get(conversationId, ownerId) as { frozen: number } | undefined;
+      return Boolean(row?.frozen);
+    }
+
     ensureConversationPiInstructions(ownerId: string, conversationId: string, take: () => string): string | null {
       const read = () =>
         this.db

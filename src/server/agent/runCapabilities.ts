@@ -1263,6 +1263,9 @@ export async function buildRunCapabilities(
       ...(shareLinkToolActive ? [FILE_OUTPUT_SHARE_LINK_TOOL_NAME] : []),
       ...(sshActive ? SSH_TRUST_TOOL_NAMES : []),
   ];
+  // describe_system reads the pi facts when it is CALLED, so the registered
+  // set lands on the same object its ctx already holds.
+  if (piRuntimeFacts) piRuntimeFacts.callableNoahTools = [...mcpAllowedTools];
 
   return {
     runtime,

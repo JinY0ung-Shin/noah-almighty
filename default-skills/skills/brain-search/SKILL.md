@@ -27,7 +27,7 @@ recurring topic. Prefer recalling what is already written down over re-asking th
    then tags, then body.
 2. If the first query is thin, retry with synonyms or an alternate name (a person's role, a project
    alias) and raise `limit` (up to 20).
-3. `get_note` the most relevant hit to read it in full, then follow any linked notes / `[[references]]`
+3. Read the most relevant hit in full with `mcp__brain__get_note` (team brain: `mcp__group_brain__get_note`), then follow any linked notes / `[[references]]`
    it points to — the best context is often one hop away in `synthesis/`.
 4. Cite what you found by note path so the user can trace it; never fabricate a fact the notes don't
    support, and don't present a `raw/` capture as settled — `wiki/` is the curated layer.

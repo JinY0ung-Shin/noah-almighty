@@ -733,6 +733,7 @@ describe("scripts/pi-register-mcp.mjs", () => {
     expect(script.brokerEntry("repo", "http://10.0.0.1:48787/", 600)).toEqual({
       runIn: "broker",
       displayName: "Noah repo",
+      description: "Personal knowledge repository (git) of notes, skills and the second-brain wiki.",
       transport: {
         type: "http",
         url: "http://10.0.0.1:48787/mcp/repo",

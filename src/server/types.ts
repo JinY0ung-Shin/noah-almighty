@@ -214,6 +214,33 @@ export interface PiRuntimeFacts {
    * runs keep the waiting call.
    */
   asyncAskAvatar?: boolean;
+  /**
+   * The Noah MCP tools THIS run registered (`mcpAllowedTools`), full names —
+   * describe_system's live "callable now" line. Set by the capability plan.
+   */
+  callableNoahTools?: string[];
+  /**
+   * The frozen prompt's "Known Noah tool names" list (runPiAgent, the
+   * conversation's FIRST pi turn): every tool this run registered and allowed,
+   * Noah's own in catalog order, then the relayed ones whose lists were known
+   * at that turn. Frozen with the rest of the instructions (design D2).
+   */
+  knownTools?: PiKnownTools;
+}
+
+/** See {@link PiRuntimeFacts.knownTools}. */
+export interface PiKnownTools {
+  /** Noah's own tools: the exact pi name (`mcp__<server>__<tool>`) and its required argument names. */
+  noah: PiKnownTool[];
+  /** Relayed tools (hex-ssh, plugins, shared) listed at the first turn; empty when the run relays none. */
+  relayed: PiKnownTool[];
+  /** A relay source this run has that could not be listed in time (its tools are searchable later). */
+  relayedIncomplete: boolean;
+}
+
+export interface PiKnownTool {
+  name: string;
+  required: string[];
 }
 
 /** What both metacognition surfaces say about a pi run's relayed MCP servers. */

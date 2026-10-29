@@ -26,11 +26,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { AgentOwner, AppConfig } from "../../types.js";
+import type { AgentOwner, AppConfig, PiKnownTool, PiKnownTools } from "../../types.js";
 import type { Store } from "../../store.js";
 import { piSandboxDeckToolchain } from "../../deckRender.js";
 import { buildFileOutputServer, FILE_OUTPUT_SERVER_NAME } from "../fileOutputTools.js";
-import { PI_PROXY_SERVER_NAMES } from "./mcpProxies.js";
+import { createHash } from "node:crypto";
+import logger from "../../logger.js";
+import { PI_PROXY_SERVER_NAMES, type PiMcpProxyPool, type PiMcpUpstream } from "./mcpProxies.js";
+import { PI_COMPACT_DESCRIPTIONS, PI_DISCOVERY_SENTENCES } from "./catalogText.js";
 
 /**
  * Every in-process MCP server a Noah run can build (runCapabilities.ts), in
@@ -179,6 +182,30 @@ export async function listServerTools(server: McpServer): Promise<Tool[]> {
   }
 }
 
+/** The 16-hex sha256 a compact description names as the builder text it replaces. */
+export function piDescriptionHash(description: string): string {
+  return createHash("sha256").update(description, "utf8").digest("hex").slice(0, 16);
+}
+
+/**
+ * The pi wording of one listed tool (`catalogText.ts`): a compact description
+ * for a very long one — only while the builder text is the one it was written
+ * for — and a discovery sentence for a tool common requests miss. Schemas are
+ * untouched.
+ */
+export function piCatalogTool(server: string, tool: Tool): Tool {
+  const key = `${server}/${tool.name}`;
+  let description = tool.description ?? "";
+  const compact = PI_COMPACT_DESCRIPTIONS[key];
+  if (compact) {
+    if (piDescriptionHash(description) === compact.replaces) description = compact.text;
+    else logger.warn({ tool: key }, "pi catalog: builder description changed; serving it instead of the stale compact text");
+  }
+  const sentence = PI_DISCOVERY_SENTENCES[key];
+  if (sentence) description = `${description} ${sentence}`;
+  return description === tool.description ? tool : { ...tool, description };
+}
+
 const catalogs = new WeakMap<Store, Promise<NoahMcpCatalog>>();
 
 /** The process's catalog (per Store, built once on the first pi run). */
@@ -188,7 +215,9 @@ export function noahMcpCatalog(store: Store, config: AppConfig): Promise<NoahMcp
     catalog = (async () => {
       const servers = await buildCatalogServers(store, config);
       const entries = await Promise.all(
-        PI_NOAH_SERVER_NAMES.map(async (name) => [name, await listServerTools(servers[name].instance)] as const),
+        PI_NOAH_SERVER_NAMES.map(
+          async (name) => [name, (await listServerTools(servers[name].instance)).map((tool) => piCatalogTool(name, tool))] as const,
+        ),
       );
       return Object.fromEntries(entries) as NoahMcpCatalog;
     })();
@@ -197,4 +226,45 @@ export function noahMcpCatalog(store: Store, config: AppConfig): Promise<NoahMcp
     catalogs.set(store, catalog);
   }
   return catalog;
+}
+
+/** pi's model-facing name of a broker tool (`mcp-client/proxy.ts`: characters outside `[A-Za-z0-9_-]` become `_`). */
+export function piToolName(server: string, tool: string): string {
+  return `mcp__${server}__${tool.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+function requiredOf(tool: Tool): string[] {
+  const required = (tool.inputSchema as { required?: unknown }).required;
+  return Array.isArray(required) ? required.filter((name): name is string => typeof name === "string") : [];
+}
+
+/**
+ * The frozen prompt's "Known Noah tool names" (PiRuntimeFacts.knownTools):
+ * every tool THIS run registered and allowed — Noah's own in catalog order
+ * (servers as listed to pi, tools in registration order), then the relayed
+ * ones sorted by name — so the text is the same for the same capabilities.
+ */
+export async function piKnownTools(
+  catalog: NoahMcpCatalog,
+  allowedTools: ReadonlySet<string>,
+  proxies: Pick<PiMcpProxyPool, "listToolsReport">,
+  upstreams: readonly Pick<PiMcpUpstream, "proxy">[],
+): Promise<PiKnownTools> {
+  const noah: PiKnownTool[] = [];
+  for (const server of PI_NOAH_SERVER_NAMES) {
+    for (const tool of catalog[server] ?? []) {
+      const name = `mcp__${server}__${tool.name}`;
+      if (allowedTools.has(name)) noah.push({ name, required: requiredOf(tool) });
+    }
+  }
+  const relayed: PiKnownTool[] = [];
+  let relayedIncomplete = false;
+  for (const proxy of PI_PROXY_SERVER_NAMES) {
+    if (!upstreams.some((upstream) => upstream.proxy === proxy)) continue;
+    const report = await proxies.listToolsReport(proxy).catch(() => ({ tools: [] as Tool[], failedSources: 1 }));
+    if (report.failedSources > 0) relayedIncomplete = true;
+    for (const tool of report.tools) relayed.push({ name: piToolName(proxy, tool.name), required: requiredOf(tool) });
+  }
+  relayed.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return { noah, relayed, relayedIncomplete };
 }

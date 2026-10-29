@@ -1302,7 +1302,7 @@
  "git_repo": [
   {
    "name": "register_repo",
-   "description": "Register a general git repository in this avatar owner's repo list and create a local working clone. repo accepts owner/repo, an https URL, a git URL, or a local bare repo path. If branch is specified, subsequent sync/commit/push target that branch; if left empty, the repository's default branch is used. NEW-BRANCH NOTE: a branch that does NOT yet exist on origin cannot be cloned/checked out here, so this call ERRORS (e.g. \"'origin/<branch>' is not a commit\") — but creating a remote branch is the job of `push`, not this tool. The branch you pass is still saved on an ALREADY-registered repo even when this checkout step errors (only a brand-new registration is rolled back on failure), so the normal flow to start a new branch is: set the new branch name here, ignore the checkout error, then `commit` your local HEAD and `push` — push creates the branch on origin. (Alternatively, create the branch on the remote first, then register.) Public repo clone/sync is attempted without a token, and a token is only used if one exists for the configured internal host or github.com. (owner only)",
+   "description": "Register a general git repository in this avatar owner's repo list and create a local working clone. repo accepts owner/repo, an https URL, a git URL, or a local bare repo path. If branch is specified, subsequent sync/commit/push target that branch; if left empty, the repository's default branch is used. NEW-BRANCH NOTE: a branch that does NOT yet exist on origin cannot be cloned/checked out here, so this call ERRORS (e.g. \"'origin/<branch>' is not a commit\") — but creating a remote branch is the job of `mcp__git_repo__push`, not this tool. The branch you pass is still saved on an ALREADY-registered repo even when this checkout step errors (only a brand-new registration is rolled back on failure), so the normal flow to start a new branch is: set the new branch name here, ignore the checkout error, then commit your local HEAD and `mcp__git_repo__push` — push creates the branch on origin. (Alternatively, create the branch on the remote first, then register.) Public repo clone/sync is attempted without a token, and a token is only used if one exists for the configured internal host or github.com. (owner only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1315,7 +1315,7 @@
       "type": "string"
      },
      "branch": {
-      "description": "The branch to use. Not limited to main; if empty, the repository's default branch is used. A branch that does not exist on origin yet cannot be checked out here (this call errors), but `push` will create it on origin — so for a new branch, set the name here and then commit + push.",
+      "description": "The branch to use. Not limited to main; if empty, the repository's default branch is used. A branch that does not exist on origin yet cannot be checked out here (this call errors), but `mcp__git_repo__push` will create it on origin — so for a new branch, set the name here and then commit + push.",
       "type": "string"
      }
     },
@@ -1382,7 +1382,7 @@
   },
   {
    "name": "open_repo",
-   "description": "Open a registered git repository as THIS conversation's working directory so you can read, edit, and test it with native tools (Read/Edit/Write/Bash). The change takes effect from the NEXT turn — the next message in a chat, or (in a scheduled routine) this routine's next scheduled run — because the working directory is fixed when a turn/run starts and cannot be repointed mid-turn; the selection persists for this conversation until close_repo. So after calling this, in a chat tell the user it is ready and continue on their next message; in a routine, finish this run and the repo applies on the next one. From then on, work the repo natively in the working directory: read/edit files, run tests, and use local git (`git status`/`diff`/`log`/`add`/`commit`); then `push` the result and `sync_repo` to pull updates (those need server-side credentials, so they stay MCP-only). Only one repo is open at a time per conversation — opening another replaces it. (owner / trusted user only)",
+   "description": "Open a registered git repository as THIS conversation's working directory so you can read, edit, and test it with native tools (Read/Edit/Write/Bash). The change takes effect from the NEXT turn — the next message in a chat, or (in a scheduled routine) this routine's next scheduled run — because the working directory is fixed when a turn/run starts and cannot be repointed mid-turn; the selection persists for this conversation until close_repo. So after calling this, in a chat tell the user it is ready and continue on their next message; in a routine, finish this run and the repo applies on the next one. From then on, work the repo natively in the working directory: read/edit files, run tests, and use local git (`git status`/`diff`/`log`/`add`/`commit`); then `mcp__git_repo__push` the result and `mcp__git_repo__sync_repo` to pull updates (those need server-side credentials, so they stay MCP-only). Only one repo is open at a time per conversation — opening another replaces it. (owner / trusted user only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1523,7 +1523,7 @@
   },
   {
    "name": "edit_file",
-   "description": "Modify an EXISTING file in the specified group's shared knowledge repository by replacing an exact text snippet. **Prefer this over write_file when changing a file that already exists** — you send only the part that changes, not the whole file. `old_string` must match the file exactly (including whitespace/indentation) and be unique, unless you set `replace_all`. Applies only to the working tree until commit. (group admin only)",
+   "description": "Modify an EXISTING file in the specified group's shared knowledge repository by replacing an exact text snippet. **Prefer this over mcp__group_repo__write_file when changing a file that already exists** — you send only the part that changes, not the whole file. `old_string` must match the file exactly (including whitespace/indentation) and be unique, unless you set `replace_all`. Applies only to the working tree until commit. (group admin only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1617,7 +1617,7 @@
   },
   {
    "name": "scaffold_skill",
-   "description": "Create a new skill (skills/<name>/SKILL.md + marketplace registration) in the specified group's shared knowledge repository. After that, fill it in with write_file and push with commit, and the avatars of all group members can use that skill. (group admin only)",
+   "description": "Create a new skill (skills/<name>/SKILL.md + marketplace registration) in the specified group's shared knowledge repository. After that, fill it in with mcp__group_repo__write_file and push with mcp__group_repo__commit, and the avatars of all group members can use that skill. (group admin only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1828,7 +1828,7 @@
   },
   {
    "name": "write_file",
-   "description": "Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. (owner only)",
+   "description": "Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. (owner only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1853,7 +1853,7 @@
   },
   {
    "name": "edit_file",
-   "description": "Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. `old_string` must match the file exactly (including whitespace/indentation) and be unique, unless you set `replace_all`. Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. (owner only)",
+   "description": "Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over mcp__repo__write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. `old_string` must match the file exactly (including whitespace/indentation) and be unique, unless you set `replace_all`. Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. (owner only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1887,7 +1887,7 @@
   },
   {
    "name": "delete_file",
-   "description": "Delete a file OR a whole directory (e.g. an entire skill folder `skills/<name>`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with the commit tool it is not removed from the remote** and may reappear on the next sync. (owner only)",
+   "description": "Delete a file OR a whole directory (e.g. an entire skill folder `skills/<name>`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with mcp__repo__commit it is not removed from the remote** and may reappear on the next sync. (owner only)",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1932,7 +1932,7 @@
   },
   {
    "name": "scaffold_skill",
-   "description": "Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with write_file and push with commit, and from the next conversation the avatar can use that skill. (owner only)",
+   "description": "Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with mcp__repo__write_file and push with mcp__repo__commit, and from the next conversation the avatar can use that skill. (owner only)",
    "inputSchema": {
     "type": "object",
     "properties": {

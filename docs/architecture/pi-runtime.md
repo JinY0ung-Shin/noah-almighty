@@ -285,6 +285,22 @@ holds it:
 - Tool descriptions (static catalog: `askRuntime: "pi"`, `neverWait`), the prompt (`piAsyncToolsSentence`) and
   describe_system ("Long-running tools on this runtime") state this.
 
+## Tool discovery (usability report §6.5)
+
+On pi the model sees only `mcp_search`/`mcp_call`; every Noah tool is found by pi's BM25 search (tool name, description,
+argument names/descriptions and the broker entry's displayName/description; results carry the whole description + schema).
+Measured without a model, then mitigated Noah-side:
+
+| Mitigation | Where | Notes |
+|---|---|---|
+| **Known Noah tool names** in the frozen prompt | `piKnownTools` (`mcpCatalog.ts`) → `PiRuntimeFacts.knownTools` → `piKnownToolsSection` | Built only while the conversation has no `pi_instructions` (its first pi turn): every tool of THIS run (`mcpAllowedTools` ∩ catalog), one line `mcp__<server>__<tool>(<required args>)`, catalog order (servers as `PI_NOAH_SERVER_NAMES`, tools in registration order), then relayed tools read from the run's proxy pool (`listToolsReport`, pi's name sanitizing, sorted; a source that did not answer is flagged). Frozen with the rest (D2): a later tool is found with `mcp_search`, a listed one may be refused (describe_system is authoritative). ≈3.4k chars for all 99 Noah tools |
+| Query line | `MCP_SEARCH_QUERY_LINE` (`piRuntimeSection`) | English, service id + action — tool text is English and keyword-matched |
+| Callable-now mirror | describe_system `piRunLines` ← `PiRuntimeFacts.callableNoahTools` (set after `mcpAllowedTools`) | live list of exact names |
+| Full sibling names | prompt, manual, skills, tool descriptions, errors (shared with the SDK, pinned in `tests/sdk-pin.test.ts`) | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs group_repo vs git_repo) |
+| Compact descriptions + discovery sentences | `pi/catalogText.ts`, applied by `piCatalogTool` in the STATIC catalog only (the SDK declares the builders' text) | a compact entry names the sha256 of the builder text it replaces; a changed builder text is served instead (warn) and the test fails until the entry is revisited. Sentences were kept because the held-out query set did not regress |
+| Noun-only broker descriptions | `SERVER_DESCRIPTIONS` in `scripts/pi-register-mcp.mjs` | pi shows the first line in the always-visible service list AND appends it to every tool document of that server, so verbs there match every tool (measured: verbs cost held-out recall) |
+| Unknown argument names refused | `checkArguments` gate + `unknownArgumentProblem` (`mcpHttp/endpoint.ts`), wired by `runPiAgent` for Noah's own servers | the McpServer's zod objects STRIP unknown keys (MCP SDK 1.29 `z.object`), and the catalog schemas have no `additionalProperties:false`, so `list_todos {state}` used to list everything; now the call is refused with the valid names (nested objects/arrays of objects checked; `anyOf` branches and open objects not). Relayed servers are not judged. The SDK path never goes through `/mcp` |
+
 ## The `/mcp` endpoint (`mcpHttp/endpoint.ts`)
 
 Mounted by `createApp` at `/mcp/:server` on every runtime (no token exists without a pi run → always 401). Its only
@@ -305,6 +321,8 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   --noah-url http://<host-as-seen-from-the-broker>:48787 --configure-instance   # idempotent; --dry-run / --remove
 ```
 
+- Each entry carries a noun-only `description` (`SERVER_DESCRIPTIONS`, see "Tool discovery"); re-running the script
+  converges it.
 - Registers one broker entry per `PI_MCP_SERVER_NAMES` name (ids = Noah server names, so pi's `mcp__<id>__<tool>`
   equals every `mcp__repo__commit`-style name in prompts/skills/manual, plus the relays `hex-ssh`/`plugins`/`shared`),
   header `Authorization: Bearer {{ctx.header:x-noah-run-token}}`. `timeoutSec` 120 by default; longer only where the
@@ -349,6 +367,9 @@ the first pi turn of an old conversation rebuilds context from the text history 
   stdio fixture (lazy start, names, no leaked process), hex-ssh's allowlist through the real policy proxy, a run
   through the endpoint (shared server via the real bridge, plugin server, redaction incl. a browser secret), async
   ask_avatar as a follow-up turn, the never-waiting canvas, labels.
+- `tests/pi-tool-discovery.test.ts` — the known-tools list (only this run's tools, deterministic, relays), the query line,
+  describe_system's callable line, compact descriptions (hash-bound, safety rules kept), broker descriptions, unknown
+  argument names refused at the endpoint. `tests/sdk-pin.test.ts` pins the SDK side byte for byte.
 - `tests/pi-runner.test.ts` — runner against a scripted fake client (frozen prompt, continuation, model switch,
   rewind, 404 heal, question, steers, fallback, the endpoint as the broker sees it), `piRuntimeSupports`, config,
   the `/mcp` mount, the script's server list.

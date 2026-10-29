@@ -129,7 +129,7 @@ Connect one personal knowledge repository through 내 아바타's knowledge cont
 1. Tell the avatar what to remember, for example "이 장애 원인과 재발 방지 절차를 기억해줘". The /remember command is also a capture shortcut in interactive chat.
 2. It writes quick source material under raw/ and organized notes under wiki/, using repository tools. Durable reusable procedures can become skills/<name>/SKILL.md.
 3. It must commit/push with mcp__repo__commit. Uncommitted local files are not persisted to the remote repository or shared with later clones.
-4. On later questions, mcp__brain__search and get_note recall wiki/ notes. Use repository list/read tools for other files. A conversation's history and the second brain are separate: merely saying something in chat is not proof that it was saved to the repository.
+4. On later questions, mcp__brain__search and mcp__brain__get_note recall wiki/ notes. Use repository list/read tools for other files. A conversation's history and the second brain are separate: merely saying something in chat is not proof that it was saved to the repository.
 
 ## Knowledge gaps
 When a teammate asks something the avatar cannot answer, it can create an information request. The owner opens 알림, provides an answer to the information request and has the avatar capture it and resolve the request. Do not invent missing owner knowledge.
@@ -162,7 +162,7 @@ Check plugin enabled state, sync errors, selected content, permissions, and whet
     summary: "Team knowledge, teammate discovery and one-shot consultation.",
     body: `## Team setup
 System administrators create groups and assign group administrators. Manage group membership and the shared knowledge repository in the group settings. The avatar-sharing switch controls peer discovery/trust; shared repository knowledge still works when that switch is off.
-Group knowledge uses mcp__group_brain__search/get_note for recall and mcp__group_repo__* for repository operations. Group-admin checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
+Group knowledge uses mcp__group_brain__search/mcp__group_brain__get_note for recall and mcp__group_repo__* for repository operations. Group-admin checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.

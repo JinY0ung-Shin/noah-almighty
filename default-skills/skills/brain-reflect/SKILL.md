@@ -15,9 +15,9 @@ asked to "tidy up / consolidate my notes".
   conversations would violate their privacy — read ONLY the group repo's `raw/` and `wiki/`.
 
 ## Scope
-- **Personal repo:** `mcp__repo__list_files`/`read_file`/`write_file`/`commit`.
+- **Personal repo:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
 - **Group repo:** pick the group with `mcp__group_repo__list_groups`; read with
-  `mcp__group_repo__read_file`/`list_files`. Write/commit require group ADMIN role; if you are only
+  `mcp__group_repo__read_file`/`mcp__group_repo__list_files`. Write/commit require group ADMIN role; if you are only
   a member, summarize proposed changes for an admin instead of writing.
 
 ## Personal scope only — optional conversation pull
