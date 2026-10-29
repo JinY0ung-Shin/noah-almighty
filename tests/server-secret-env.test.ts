@@ -46,7 +46,7 @@ describe("server-only secret env", () => {
     const app = base.slice(base.indexOf("  noah-almighty:"), base.indexOf("\nvolumes:"));
     expect(app).toMatch(/^\s+init: false$/m);
     const egress = fs.readFileSync(path.join(__dirname, "../docker-compose.egress.yml"), "utf8");
-    const egressApp = egress.slice(egress.indexOf("  noah-almighty:"), egress.indexOf("  egress-proxy:"));
+    const egressApp = egress.slice(egress.indexOf("  noah-almighty:"), egress.indexOf("  noah-egress-proxy:"));
     expect(egressApp).toMatch(/^\s+init: true$/m);
   });
 });

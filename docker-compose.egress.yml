@@ -20,9 +20,11 @@ services:
     environment:
       NOAH_EGRESS_PROXY_IP: ${NOAH_EGRESS_PROXY_IP:-172.30.247.2}
     depends_on:
-      - egress-proxy
+      - noah-egress-proxy
 
-  egress-proxy:
+  # Not `egress-proxy`: docker-compose.yml includes pi-gateway's compose, which has a service of that
+  # name, and a same-named service in this -f overlay would silently MERGE into pi's.
+  noah-egress-proxy:
     build:
       context: .
       dockerfile: docker/egress/proxy.Dockerfile
