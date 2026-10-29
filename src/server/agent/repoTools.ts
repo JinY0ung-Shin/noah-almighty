@@ -540,7 +540,7 @@ export function buildRepoTools(
   }
   const createTool = tool(
     "create_repo",
-    `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with scaffold_skill → write_file → commit. (owner only)`,
+    `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try mcp__repo__scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with mcp__repo__scaffold_skill → mcp__repo__write_file → mcp__repo__commit. (owner only)`,
     {
       name: z.string().describe("New repository name (letters/digits and - _ . only, e.g. my-knowledge)"),
       org: z.string().optional().describe("GitHub organization to create the repo under (e.g. acme). Omit to create under the owner's personal account."),
@@ -610,8 +610,8 @@ export function buildRepoTools(
         const kind = result.isPrivate ? "private" : "public";
         return text(
           seeded
-            ? `Created the ${kind} knowledge repository \`${result.fullName}\` and initialized it with the default template (Claude plugin marketplace: \`.claude-plugin/marketplace.json\` + README + a root \`CLAUDE.md\` that is injected as standing guidance every conversation). Edit \`CLAUDE.md\` for always-apply rules, add your first skill with \`scaffold_skill\`, and push with \`commit\`.`
-            : `Created and connected the ${kind} knowledge repository \`${result.fullName}\`.${seedNote} Create your first skill with \`scaffold_skill\`, then push with \`commit\`.`,
+            ? `Created the ${kind} knowledge repository \`${result.fullName}\` and initialized it with the default template (Claude plugin marketplace: \`.claude-plugin/marketplace.json\` + README + a root \`CLAUDE.md\` that is injected as standing guidance every conversation). Edit \`CLAUDE.md\` for always-apply rules, add your first skill with \`mcp__repo__scaffold_skill\`, and push with \`mcp__repo__commit\`.`
+            : `Created and connected the ${kind} knowledge repository \`${result.fullName}\`.${seedNote} Create your first skill with \`mcp__repo__scaffold_skill\`, then push with \`mcp__repo__commit\`.`,
         );
       } catch (error) {
         return text(createRepoCatchMessage(targetHost, error), true);

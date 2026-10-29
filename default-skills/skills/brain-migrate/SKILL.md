@@ -29,7 +29,7 @@ Decide scope once, up front. Never mix personal and group tools in the same migr
 ## Procedure (create-if-absent only — NEVER overwrite)
 1. **List the current tree** with the scope's list tool (`mcp__repo__list_files`, or `mcp__group_repo__list_files`
    for a group). Do not assume. Every tool below is the SAME scope's: call its full `mcp__repo__…` or
-   `mcp__group_repo__…` name, never a bare `read_file`/`write_file`.
+   `mcp__group_repo__…` name, never a bare tool name.
 2. For EACH path below, write it ONLY if it is absent; skip silently if present:
    - `raw/.gitkeep`
    - `wiki/sources/.gitkeep`, `wiki/entities/.gitkeep`, `wiki/concepts/.gitkeep`, `wiki/synthesis/.gitkeep`
