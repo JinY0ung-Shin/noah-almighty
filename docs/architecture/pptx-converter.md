@@ -287,7 +287,7 @@ environment (all optional):
 - `check` renders and lints the build profile only (`--profile both` compares the wrap behavior of both) and
   never touches deliverables; it writes its IR, renders and report even when it exits 1, so the agent can inspect
   them. `build` includes the full check. `--out` takes only a bare `^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.pptx$`
-  written in `<deck>`. `--strict` blocks on drift too (examples, tests, the smoke).
+  written in `<deck>`. `--strict` blocks on drift too (examples, tests, `verify.sh`).
 - Output: a human summary on stdout (≤ ~60 lines, paths relative to cwd, at most 30 lint lines — except the build's
   `Share it IN PLACE: mcp__file_output__share_file path="…"` line, which names the ABSOLUTE .pptx path: share_file
   resolves a relative path against the run's working directory, not the shell's current one, and the Bash tool keeps
@@ -695,7 +695,7 @@ environment (all optional):
   keeps the 1.0.0 IR) feeds `generator` = `noah-pptx-converter/<VERSION>`; bump it whenever the output changes, and
   regenerate the goldens only after a PowerPoint spot-check.
 
-## Tests and the smoke
+## Tests and the image check
 | file | covers |
 |---|---|
 | `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner, the photo-slot prompt rule and its rule docs/Next: sections (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map, photo slots (a two-slide family with a lifted footer: idx 13/14 on the slides, the layout's union with fresh ids and prompts, office-rules PH-01/SLD-02/SLD-03, the slide/layout parts against pml.xsd — plus the Open XML SDK validator when `NOAH_OPENXML_VALIDATOR_DLL` and `dotnet` exist —, the fidelity gate's `object` / `placeholder` negative controls; the prompt colour on a dark slide, on a dark photo well and, for a frame lifted into its layout, in the layout; document-order slots under mixed positioning; `placeholder-layout`; the gate's colour negative controls — an uncoloured prompt, a prompt run in a slide slot, a layout colour without a lifted frame) and the slot lints (`placeholder-size`, `placeholder-layout` and the hint children the CSS lints skip, the slot itself still linted); `text-on-picture` (always-run unit cases over the pure worst-case math — scrim opacity, weakest gradient corner, partial coverage, opaque card, photo slot, svg icon, large-text threshold, translucent text, the 0.72 standard across the six themes' brand-950, a translucent photo slot, hue-shifting and over-a-layer ramps, the per-channel box search against brute force, the certified grid bound, slab strictness against an independent point model, the forced work-bound tiers and their message, the per-element floor (a light caption after a slide-exhausting text stays exact) and `boundBy` — plus an e2e check) |
@@ -703,21 +703,25 @@ environment (all optional):
 | `tests/theme-derive.test.ts` | `theme-check.mjs --derive` / `--from-pptx`: a brand sweep over both bases at 0 FAIL / 0 WARN, the ≥ 45° brand/accent hue gap, exact vs matched brand-600 (the exact colour over hue-matched series for dark brands, the fell-back note naming its check), other-base tips only when verified, grey and dull brands' stepped series, the structure (one `:root`, classic's token order, midnight's slots), the CLI contract (exit codes, empty stdout on failure, `#`-less / RGB / `--flag=value` forms), the read-only `mini.pptx` fixture and synthetic templates (trailing bytes after the zip directory), hostile XML read in linear time (< 1 s at the part caps) with the caps' refusals, and the zip refusals |
 | `tests/deck-preview.test.ts` (+ `routes-chat`, `chat-files`, `chat-images`) | the sidecar loader's edge cases, the `share_file` branches and texts |
 | `tests/deck-toolchain.test.ts` (+ `agent-core`, `agent-tools`, `system-manual`) | the probe (injected spawn/clock), memo + async retry, env allowlist, modes, authoring status; prompt/describe_system/manual branches and size caps |
-| `tests/deck-packaging.test.ts` | the static Dockerfile / compose / fontconfig / npm + Python pins / `.env.example` / ignore-file / README-anchor / smoke contract |
+| `tests/deck-packaging.test.ts` | the static Dockerfile / compose / fontconfig / npm + Python pins / `.env.example` / ignore-file / README-anchor contract and the sandbox image check (`verify.sh` parses, sandboxd flags) |
 | `tests/deck-contract.test.ts` (+ `tests/fixtures/deck-preview/mini/`) | a converter-made one-slide malgun fixture accepted by the server loader (plus stale / altered-render / copied-deck rejections); the real `probe --json` through the server's parser; the describe_system markers and tails (owner and non-owner) against SKILL.md's quotes of them; the `--help` block above; `previews.py`'s size caps = the server's; opt-in e2e: the real probe → the INSTALLED marker, photo-heavy previews fitted into the 32 MiB budget and loaded, and a copy of `examples/business-review` built and shared through the loader |
 
 - The toolchain e2e suites run only with `NOAH_PPTX_E2E=1` AND a probe that reports the converter; on a dev box
   also set `NOAH_PPTX_PYTHON=<venv python>` and `NOAH_PPTX_DEV=1`. Everywhere else they skip. Recipe:
   [`build-run-verify.md`](build-run-verify.md#deck-converter).
-- **`scripts/deck-docker-smoke.sh`** drives a built image the way production runs it (`--network none --cap-drop
-  ALL --security-opt no-new-privileges:true -u node --init`): (a) `/tmp` hygiene + the record says `pass`,
-  (b) probe → converter true, (c) `selftest --fail-on-drift`, (d) every `examples/*` deck × both profiles with
-  `--strict`, and every other theme over `business-review`, `layouts` and `talk` (embedded, `--strict`), (e) two concurrent checks → exactly one exit 5 "already running", (f) SIGKILL `deck.mjs` mid-build →
-  no Chromium/Python after 10 s, the re-run is not refused and leaves `/tmp` clean, (g) the Open XML SDK 3.3.0
-  validator (Microsoft365, dev/CI-only source in `scripts/openxml-validator/`) over every produced deck — 0
-  errors, (h) server boot (`/api/bootstrap` 200 + the probe log line), (i) with `--baseline-image`, an upgrade
-  rehearsal on a data volume the baseline created, (j) a summary table. Run it whenever the converter or the
-  Dockerfile changed.
+- **`docker/pi-sandbox/verify.sh`** drives a built SANDBOX image (decks build there, never in the Noah image) under
+  the flags pi's sandboxd applies (read-only rootfs, `--cap-drop ALL`, no-new-privileges, `--network none`, the
+  256 MiB `/tmp`, 1 GiB, 256 pids, `--init`, uid 1000, the skill synced into `/workspace/.noah/skills/pptx` and once
+  from a read-only `/opt/plugins` mount): probe, selftest, every `examples/*` deck × both profiles with `--strict`,
+  a 60-slide worst case, concurrent builds, optionally one gVisor run (`--runsc`); per scenario it reports exit
+  code, wall time, memory/pids/`/tmp` peaks and OOM. Run it whenever the converter, its pins or
+  `docker/pi-sandbox` changed (recipe: `build-run-verify.md`).
+- **`scripts/deck-docker-smoke.sh` is retired** (2026-10-29): it drove the pre-pi Noah image, whose converter is
+  gone. Two of its steps have no counterpart in `verify.sh` yet — SIGKILL of `deck.mjs` mid-build (no orphaned
+  Chromium/Python, kernel-released lock, clean `/tmp`) and the Open XML SDK 3.3.0 validator over every produced
+  deck (`scripts/openxml-validator/`; the opt-in e2e still runs it when `NOAH_OPENXML_VALIDATOR_DLL` is set) —
+  see `REFACTORING-BACKLOG.md` PC3. Its server-boot and upgrade-rehearsal steps belong to the compose stack's
+  boot test (`build-run-verify.md`, "Combined-stack boot test").
 
 ## Known limitations
 - PowerPoint itself was only spot-checked by the user (desktop, Windows); the gates are checkers modelled on

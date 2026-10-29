@@ -3,8 +3,9 @@
 A small console program around Microsoft's Open XML SDK `OpenXmlValidator`
 (`DocumentFormat.OpenXml` **3.3.0**, `FileFormatVersions.Microsoft365`, .NET 8). It validates a `.pptx`
 against the schemas and semantic constraints the SDK models — a validation error is a repair-prompt
-risk in PowerPoint. The deck Docker smoke (`scripts/deck-docker-smoke.sh`, step g) runs it over every
-deck the image produced, the self-test decks included.
+risk in PowerPoint. The converter's opt-in e2e (`tests/deck-converter.test.ts`) runs it over the photo-slot
+decks when `NOAH_OPENXML_VALIDATOR_DLL` and `dotnet` exist; the retired Noah-image Docker smoke used to run it
+over every produced deck (porting that to `docker/pi-sandbox/verify.sh` is backlog PC3).
 
 It is **not** part of the Noah image (there is no .NET in it) and never runs at request time; the
 converter's runtime gates are the Python checks under `default-skills/skills/pptx/converter/tools/gates/`.
@@ -42,6 +43,4 @@ docker run --rm --network none -u "$(id -u):$(id -g)" -e HOME=/tmp -e DOTNET_CLI
   dotnet /validator/Validator.dll /work/path/to/deck.pptx
 ```
 
-The restore step needs NuGet (`api.nuget.org`, or a NuGet mirror configured for the SDK image). The smoke
-does exactly this when it is given no `--validator-dll`; when the build or the SDK image is unavailable it
-SKIPs step (g) with a warning — or FAILs it under `--require-validator`, which release verification uses.
+The restore step needs NuGet (`api.nuget.org`, or a NuGet mirror configured for the SDK image).

@@ -200,13 +200,15 @@ built:
   needs the 540 s budget and the 600 s Bash ceiling revisited); the what's-new entry (drafted, added only by
   the release step after the wording is approved).
 
-### PC3 — Run the deck Docker smoke in the release checklist
+### PC3 — Run the sandbox image check in the release checklist (and finish porting the old smoke)
 - **Files:** `.claude/skills/release/SKILL.md` (+ `architecture/build-run-verify.md`'s release bullet, kept in
-  sync with it).
-- **What:** when a release contains converter or Dockerfile changes, run
-  `scripts/deck-docker-smoke.sh --image <fresh build> --baseline-image <fresh build of the previous release>
-  --require-validator` before tagging. Nothing but this smoke exercises the image's Chromium, the pinned Python
-  set and the container hardening together.
+  sync with it), `docker/pi-sandbox/verify.sh`.
+- **What:** when a release contains converter or `docker/pi-sandbox` changes, run
+  `docker/pi-sandbox/verify.sh --image <fresh build>` before tagging — nothing else exercises the sandbox
+  image's Chromium, the pinned Python set and sandboxd's hardening together. The retired Noah-image smoke
+  (`scripts/deck-docker-smoke.sh`, removed 2026-10-29) had two steps `verify.sh` lacks: SIGKILL `deck.mjs`
+  mid-build (no Chromium/Python left after 10 s, the re-run not refused, `/tmp` clean) and the Open XML SDK
+  validator over every produced deck (`--require-validator` for releases). Port both.
 - **risk:** low · **effort:** S · **breaking:** no
 
 ### PC4 — Move the converter locks to `flock` if the agent Bash ever gets its own network namespace

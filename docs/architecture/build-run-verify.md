@@ -140,8 +140,9 @@ borrows Playwright's cached Chromium and a venv.
   must show `deck converter selftest: PASS`; then `docker/pi-sandbox/verify.sh --image <tag>` runs every
   conversion under sandboxd's flags (`--runsc` adds a gVisor run). Run it whenever the converter, its pins
   or `docker/pi-sandbox` changed.
-- **`scripts/deck-docker-smoke.sh` targets the pre-pi Noah image** (a converter inside the app container);
-  it no longer applies to the Noah image of this branch.
+- **`scripts/deck-docker-smoke.sh` is retired** (it drove the pre-pi Noah image's converter, which is gone);
+  `docker/pi-sandbox/verify.sh` is the deck image check. Its two uncovered steps (SIGKILL mid-build, Open XML
+  validation) are backlog PC3.
 - **One Dockerfile fragment** (an apt layer, the fontconfig registration) can be tried without a full build in
   a throwaway container, as above; the sandbox image's self-test needs the skill tree, so test it through a
   real build.

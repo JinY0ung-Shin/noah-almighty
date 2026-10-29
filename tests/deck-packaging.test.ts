@@ -2,11 +2,11 @@
 // Dockerfile keeps (fonts for LibreOffice previews) and no longer carries (decks build in the pi
 // sandbox image, docker/pi-sandbox), the compose wiring of that image, the fontconfig
 // registration, the npm and Python pins, .env.example, the ignore files, the README maintenance
-// anchors and the Docker smoke script.
-// Nothing here builds an image — the real `docker build` and scripts/deck-docker-smoke.sh run at
+// anchors and the sandbox image check (docker/pi-sandbox/verify.sh).
+// Nothing here builds an image — the real `docker build` and docker/pi-sandbox/verify.sh run at
 // release verification (docs/architecture/build-run-verify.md). The "converter tree" block reads
 // files that live under default-skills/skills/pptx/converter/ and is green once that tree exists.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,7 +14,6 @@ import { describe, expect, it } from "vitest";
 const ROOT = process.cwd();
 const KIT = "default-skills/skills/pptx/converter";
 const RECORD = "/usr/local/share/noah-almighty/deck-selftest.json";
-const SMOKE = "scripts/deck-docker-smoke.sh";
 
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -325,52 +324,19 @@ describe("README maintenance anchors", () => {
   });
 });
 
-describe("scripts/deck-docker-smoke.sh", () => {
-  const smoke = read(SMOKE);
-
-  it("parses (bash -n) and is executable", () => {
-    execFileSync("bash", ["-n", SMOKE], { cwd: ROOT });
-    expect(fs.statSync(path.join(ROOT, SMOKE)).mode & 0o111).not.toBe(0);
+describe("docker/pi-sandbox/verify.sh (the deck image check)", () => {
+  const VERIFY = "docker/pi-sandbox/verify.sh";
+  it("parses, is executable, and runs every conversion under sandboxd's flags", () => {
+    execFileSync("bash", ["-n", VERIFY], { cwd: ROOT });
+    expect(fs.statSync(path.join(ROOT, VERIFY)).mode & 0o111).not.toBe(0);
+    const verify = read(VERIFY);
+    expect(verify).toContain("--read-only --cap-drop ALL --security-opt no-new-privileges:true --network none");
+    expect(verify).toContain("--init --user 1000:1000");
   });
 
-  it("answers --help with 0 and an unknown flag with 2, before touching docker", () => {
-    const help = spawnSync("bash", [SMOKE, "--help"], { cwd: ROOT, encoding: "utf8" });
-    expect(help.status).toBe(0);
-    for (const flag of [
-      "--image",
-      "--build",
-      "--baseline-image",
-      "--validator-dll",
-      "--require-validator",
-      "--keep",
-    ]) {
-      expect(help.stdout).toContain(flag);
-    }
-    const bad = spawnSync("bash", [SMOKE, "--no-such-flag"], { cwd: ROOT, encoding: "utf8" });
-    expect(bad.status).toBe(2);
-  });
-
-  it("runs every conversion in one container with the production-hardening flags", () => {
-    expect(smoke).toContain(
-      "CONV_FLAGS=(--network none --cap-drop ALL --security-opt no-new-privileges:true -u node --init)",
-    );
-    expect(smoke).toContain('docker run -d --name "$C_SMOKE" "${CONV_FLAGS[@]}" "$IMAGE" sleep infinity');
-    const deckCalls = smoke.split("\n").filter((line) => line.includes('bash "$DECK_SH"'));
-    expect(deckCalls.length).toBeGreaterThanOrEqual(6);
-    for (const line of deckCalls) {
-      expect(line).toMatch(/docker exec "\$C_SMOKE" bash "\$DECK_SH" (probe|selftest|build|check) /);
-    }
-  });
-
-  it("checks what the plan's smoke steps require", () => {
-    expect(smoke).toContain(`RECORD=${RECORD}`);
-    expect(smoke).toContain("LEAK_RE='^(noah-pptx|playwright|deck-)'");
-    expect(smoke).toContain("selftest --fail-on-drift --keep /tmp/w/selftest --json");
-    expect(smoke).toContain('--profile "$profile" --strict --json');
-    expect(smoke).toContain("grep -q 'already running'");
-    expect(smoke).toContain("pkill -KILL -f 'deck[.]mjs'");
-    expect(smoke).toContain('"msg":"deck toolchain probe"');
-    expect(smoke).toContain("-e SESSION_SECRET=smoke");
+  it("replaces the retired Noah-image smoke (no converter in the Noah image any more)", () => {
+    expect(fs.existsSync(path.join(ROOT, "scripts/deck-docker-smoke.sh"))).toBe(false);
+    expect(read(".dockerignore")).not.toContain("deck-docker-smoke");
   });
 });
 

@@ -27,10 +27,8 @@ npm-debug.log*
 # next to the .csproj even when publishing elsewhere).
 scripts/openxml-validator/bin/
 scripts/openxml-validator/obj/
-# The deck-converter Docker smoke and the validator source are dev/CI-only: the
-# smoke drives a built image from the host (it copies the validator source from
-# the host checkout), so neither belongs inside the image.
-scripts/deck-docker-smoke.sh
+# The Open XML SDK validator source is dev/CI-only (run from the host checkout
+# against produced decks), so it never belongs inside the image.
 scripts/openxml-validator/
 
 # Dev-only trees: never read at runtime or by the build (`npm run build` compiles
