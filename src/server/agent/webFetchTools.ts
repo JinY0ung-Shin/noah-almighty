@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import type { WebFetchProxyState } from "../types.js";

@@ -8,8 +8,8 @@ import { callTool, signup, withTempDir, type ToolResult } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Partial SDK mock (agent-share-link.test.ts pattern): tool() stays REAL so the
-// handlers run, `query` snapshots each run's options, and createSdkMcpServer
-// records which tool names every in-process server was REALLY built with — the
+// handlers run, `query` snapshots each run's options, and Noah's
+// createSdkMcpServer (agent/mcpServer.ts) records which tool names every in-process server was REALLY built with — the
 // half of "both lists" that allowedTools alone cannot prove.
 // ---------------------------------------------------------------------------
 type QueryArgs = { prompt: unknown; options: Record<string, unknown> };
@@ -24,7 +24,7 @@ const sdkMock = vi.hoisted(() => ({
   }[],
 }));
 
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
+vi.mock("../src/server/agent/mcpServer.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const createSdkMcpServer = actual.createSdkMcpServer as (opts: {
     name: string;
@@ -45,6 +45,13 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
       });
       return server;
     },
+  };
+});
+
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
     query: (args: QueryArgs) => {
       sdkMock.calls.push({ options: { ...args.options } });
       async function* gen() {

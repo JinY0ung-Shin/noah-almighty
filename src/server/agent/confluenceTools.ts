@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { AppConfig } from "../types.js";
 import { PinnedDir, segmentsBelow } from "../pinnedFs.js";

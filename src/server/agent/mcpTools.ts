@@ -55,3 +55,13 @@ export function decodeExecError(
     exitCode: typeof err.code === "number" ? err.code : undefined,
   };
 }
+
+export {
+  createSdkMcpServer,
+  tool,
+  type InProcessMcpServer,
+  type McpToolArgs,
+  type McpToolDefinition,
+  type McpToolExtra,
+  type McpToolShape,
+} from "./mcpServer.js";

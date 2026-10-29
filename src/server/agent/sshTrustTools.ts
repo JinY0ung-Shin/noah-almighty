@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { AppConfig } from "../types.js";
 import { addTrustedHost, listTrustedHosts, removeTrustedHost } from "../sshTrust.js";

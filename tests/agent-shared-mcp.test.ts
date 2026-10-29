@@ -21,7 +21,7 @@ const sdkMock = vi.hoisted(() => ({
   }[],
 }));
 
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
+vi.mock("../src/server/agent/mcpServer.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const createSdkMcpServer = actual.createSdkMcpServer as (opts: Record<string, unknown>) => unknown;
   return {
@@ -30,6 +30,13 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
       sdkMock.servers.push({ name: opts.name, tools: opts.tools ?? [] });
       return createSdkMcpServer(opts);
     },
+  };
+});
+
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
     query: (args: QueryArgs) => {
       sdkMock.calls.push({ prompt: args.prompt, options: { ...args.options } });
       sdkMock.impl?.();

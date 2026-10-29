@@ -1,5 +1,5 @@
 import { DIRECT_MESSAGE_STATE } from "./ownerState.js";
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import {
   isFutureOnceSchedule,

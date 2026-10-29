@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { CanvasControl } from "../types.js";
 import type { CanvasRequest, CanvasResult } from "./events.js";
