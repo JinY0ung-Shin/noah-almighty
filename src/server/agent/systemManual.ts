@@ -205,7 +205,7 @@ Every item is 시작 전 (todo), 진행 중 (in_progress), 완료 (done) or 드�
 Only the title is required (up to 200 characters). Optional: a memo (markdown, up to 4000 characters), a due date (a KST calendar DATE — no time of day), priority 높음/보통/낮음 (default 보통) and up to 5 tags. Overdue means due before today in KST. A user may keep up to 500 open items, and reopening a closed item counts toward that; the newest 200 완료 and the newest 200 드랍 items stay listed until 완료 항목 비우기 / 드랍 항목 비우기 removes them.
 
 ## Avatar tools (mcp__todo__*)
-Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar or an avatar consultation. These tools are NOT TodoWrite/TaskCreate, which are the avatar's private per-run checklist and disappear when the turn ends.
+Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar or an avatar consultation. It is the owner's persistent list, separate from any working note the avatar keeps for itself (this runtime has no TodoWrite/TaskCreate).
 - list_todos: status open (default, = todo + in_progress) | todo | in_progress | done | dropped | all, dueBefore (YYYY-MM-DD, exclusive), tag, query, includeNotes.
 - add_todos: 1-20 items per call, all-or-nothing; each {title, note?, dueDate?, priority?: high|normal|low, tags?, status?: todo|in_progress}.
 - update_todo: {id, ...fields, status?: todo|in_progress|done|dropped}; dueDate null or "" clears it, tags [] clears them. The avatar changes a status only on the owner's word, and marks an item the owner abandons as dropped instead of deleting it.

@@ -641,18 +641,25 @@ describe("runPiAgent", () => {
     ).rejects.toMatchObject({ code: "empty_response" });
     expect(shown.requests).toHaveLength(1);
 
-    // …or while a steer is queued (it is the user's next turn, not a replay).
+    // A steer queued during the empty turn does not stop the retry: it waits
+    // and follows as its own turn on the retried answer (review-2 L2).
     const steers = new SteerChannel();
     const steered = fakeClient([
       () => {
         steers.push("are you there?");
         return empty("resp_e_2");
       },
+      () => textTurn("resp_e_3", "Here it is"),
+      () => textTurn("resp_e_4", "Yes, still here"),
     ]);
-    await expect(
-      runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, recorder({ steers }).events, undefined, { client: steered.client }),
-    ).rejects.toMatchObject({ code: "empty_response" });
-    expect(steered.requests).toHaveLength(1);
+    const steeredRun = await runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, recorder({ steers }).events, undefined, {
+      client: steered.client,
+    });
+    expect(steeredRun.text).toBe("Yes, still here");
+    expect(steered.requests.map((r) => r.previousResponseId)).toEqual(["resp_e_1", "resp_e_1", "resp_e_3"]);
+    expect(inputText(steered.requests[1]!)).toBe(inputText(steered.requests[0]!));
+    expect(inputText(steered.requests[2]!)).toContain("are you there?");
+    expect(steers.records().map((r) => r.state)).toEqual(["completed"]);
 
     // …or for a steer follow-up turn.
     const followSteers = new SteerChannel();

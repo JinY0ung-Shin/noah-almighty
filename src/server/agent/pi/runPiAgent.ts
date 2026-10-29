@@ -26,9 +26,9 @@
  *     session id and the row's resume point, so a rewind forks from it.
  *  4. A lost session (404/409) self-heals once from the text history; 503/429
  *     at stream open retry with backoff; an empty turn (`empty_response`, not
- *     committed by pi) is re-sent once while nothing was shown and no steer is
- *     queued; a model fallback chain (routines, the task API) gives each
- *     attempt a fresh session.
+ *     committed by pi) is re-sent once while nothing was shown (a queued steer
+ *     waits and follows as its own turn); a model fallback chain (routines,
+ *     the task API) gives each attempt a fresh session.
  *  5. pi has no mid-turn input (design P2): steers queue, and once the current
  *     pi response completes they are delivered TOGETHER as a follow-up turn on
  *     the same run (the route's `turn_end` contract).
@@ -433,14 +433,15 @@ async function runPiAgentAs(
           // `empty_response` and does NOT commit it, so the same request (same
           // previous_response_id, or the same fresh session) runs once more — the
           // retired SDK runner's one empty-turn retry. Never once the user saw
-          // output or a steer is queued (that becomes its own turn), and never for
-          // a follow-up turn (`input`, refused above).
+          // output, and never for a follow-up turn (`input`, refused above). A
+          // steer queued meanwhile simply stays queued: once the retried turn
+          // completes it is delivered as the follow-up turn below, as it would
+          // have been after a non-empty answer (review-2 L2).
           if (
             !emptyRetried &&
             error instanceof PiTurnFailedError &&
             error.code === "empty_response" &&
-            !attemptShowedOutput &&
-            (steers?.undelivered().length ?? 0) === 0
+            !attemptShowedOutput
           ) {
             emptyRetried = true;
             agentLogger.warn({ conversationId, previous: previous ?? null }, "pi returned an empty turn; retrying once");

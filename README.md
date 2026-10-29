@@ -319,7 +319,12 @@ included.
 4. `docker compose up -d --build`, then configure the LLM in pi (First boot step 5).
 5. **Rollback** to the SDK-era release: `git checkout` that release, re-tag the old image as `latest`, and
    `docker compose up -d --no-build noah-almighty`. pi's services keep running until
-   `docker compose down` from the new checkout; nothing of Noah's data volume depends on them.
+   `docker compose down` from the new checkout; nothing of Noah's data volume depends on them. The first pi boot
+   did change two things the old release reads, though: it DELETED the stored Claude subscription token
+   (`claude_oauth_token` — paste it again in the old admin UI, or restore it from
+   `APP_DATA_DIR/backups/pre-retire-<stamp>.db`) and MOVED the CLI transcripts (`agent-sessions`) to
+   `APP_DATA_DIR/retired/<stamp>/` — move them back, or older conversations continue from their text history
+   only. Turns taken on pi have no CLI transcript either way.
 
 The optional egress overlay ([docs/egress-policy.md](docs/egress-policy.md)) is not yet supported together
 with the bundled pi-gateway: its firewall admits only its own proxy, so Noah cannot reach pi's gateway.

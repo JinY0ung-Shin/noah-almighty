@@ -133,6 +133,12 @@
   - **Still open:** a server git child's environ (one call's auth header) is readable by same-uid processes
     while it runs, and non-node children keep a readable environ — both only matter if something agent-authored
     ran in the container, which the bundled-only stdio rule exists to prevent.
+  - **Not covered: secret FILES.** "Server-only secrets never reach a child" holds for the ENVIRONMENT only. pi's
+    service-key file (`PI_GATEWAY_API_KEY_FILE` → `/run/secrets/pi_gateway_api_key`, uid 1000, 0400 — see "Model
+    credentials live in pi-gateway only" below) is readable by EVERY uid-1000 process in Noah's container: hex-ssh, the bundled
+    stdio plugin servers, `mcp-http-bridge.mjs`, git, LibreOffice. That key runs turns AS ANY user, so a child
+    that read it is the whole deployment. Marginal today (the same children already reach the rw workspaces bind
+    mount and the data volume — this is not uid isolation), and closed only by #71's uid separation.
 - **Two git tokens, vault-backed, host-routed.** Each user can store TWO git tokens as named
   `user_secrets`: `GIT_TOKEN` (`INTERNAL_GIT_TOKEN_SECRET_NAME`) for the internal `GITHUB_HOST`, and
   `GITHUB_TOKEN` (`EXTERNAL_GIT_TOKEN_SECRET_NAME`) for github.com. `tokenForGitUrl` in

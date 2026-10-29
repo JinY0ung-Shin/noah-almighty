@@ -376,7 +376,9 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
 - **Service key** — Noah's OWN 0400 uid-1000 copy of pi's service key (`docker/pi/setup-host.sh` copies it to
   `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key`), mounted as a compose secret and read through
   `PI_GATEWAY_API_KEY_FILE=/run/secrets/pi_gateway_api_key` (see "Env"); never in `.env` (an inline
-  `PI_GATEWAY_API_KEY` there stops the boot). Same-uid caveat: `secrets-ssh.md`.
+  `PI_GATEWAY_API_KEY` there stops the boot). Same-uid caveat (#71): the file is readable by every uid-1000 child
+  Noah spawns (hex-ssh, bundled stdio plugin servers, the HTTP bridge, git, LibreOffice) — the env scrub does not
+  cover files; see `secrets-ssh.md` ("Same-uid posture (#71)").
 - **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
   fixed), uid 1000 on both sides.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means

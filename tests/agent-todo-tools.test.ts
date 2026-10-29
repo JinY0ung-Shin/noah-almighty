@@ -982,7 +982,8 @@ describe("to-do metacognition and presentation", () => {
     expect(systemManualIndex()).toContain("- todos: Work to-do list (할 일)");
     const page = readSystemManual("todos");
     expect(page.isError).toBe(false);
-    expect(page.text).toContain("NOT TodoWrite/TaskCreate");
+    expect(page.text).toContain("this runtime has no TodoWrite/TaskCreate");
+    expect(page.text).not.toContain("private per-run checklist");
     expect(page.text).toContain("delete_todo: only on an explicit request; not available on external Task API runs");
     expect(page.text).toContain("Every item is 시작 전 (todo), 진행 중 (in_progress), 완료 (done) or 드랍 (dropped");
     expect(page.text).toContain("오늘 / 예정 / 마감 지남 / 진행 중 / 전체 / 완료 / 드랍");

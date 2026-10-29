@@ -196,7 +196,8 @@ These are the invariants the project is built around. New work should reinforce 
   volume as Noah's uid) is closed structurally. What Noah still spawns is its OWN code — the hex-ssh policy
   proxy, `mcp-http-bridge.mjs`, stdio MCP servers of the plugins bundled with this build — never a command
   from an agent-editable root. The phase-0 hardening stays: the server process is non-dumpable, server-only
-  secrets never reach a child, and nothing secret rides argv. The image makes node and tini EXECUTE-ONLY
+  secrets never reach a child through its ENV, and nothing secret rides argv — a secret FILE is not covered: pi's
+  service-key file (`PI_GATEWAY_API_KEY_FILE`, uid 1000, 0400) stays readable to every same-uid child. The image makes node and tini EXECUTE-ONLY
   (`chmod 0711`) so their environ/memory are unreadable to other same-uid processes — PID 1 is that tini,
   started via `docker-entrypoint.sh`'s exec, so compose `init: true` must stay OFF on the base service (a
   runtime-started PID 1 stays readable); `index.ts` drops `SERVER_ONLY_SECRET_ENV_NAMES` (`secretPolicy.ts`)
