@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { AgentRuntime, AppConfig, PiModelMapping, PiRuntimeConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
@@ -85,15 +86,45 @@ export function parsePiModelMap(value: string): Record<string, PiModelMapping> {
 }
 
 /**
+ * pi's service key: inline in `PI_GATEWAY_API_KEY`, or read from the file
+ * `PI_GATEWAY_API_KEY_FILE` names (the bundled compose stack mounts a compose
+ * secret at /run/secrets/pi_gateway_api_key and never puts the key in .env).
+ * Both set is ambiguous, and an unreadable or empty file would only fail every
+ * run later, so each stops the boot. The key read from a file is never written
+ * to process.env, and no message here ever carries it.
+ */
+function readPiGatewayApiKey(): string {
+  const inline = env("PI_GATEWAY_API_KEY");
+  const file = env("PI_GATEWAY_API_KEY_FILE");
+  if (inline && file) {
+    throw new Error("Set PI_GATEWAY_API_KEY or PI_GATEWAY_API_KEY_FILE, not both.");
+  }
+  if (!file) return inline;
+  let key: string;
+  try {
+    key = fs.readFileSync(file, "utf8").trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "read error";
+    throw new Error(`PI_GATEWAY_API_KEY_FILE (${file}) cannot be read (${code}).`);
+  }
+  if (!key) throw new Error(`PI_GATEWAY_API_KEY_FILE (${file}) is empty.`);
+  // It becomes an Authorization header value: a second line or inner blank is a wrong file.
+  if (/\s/.test(key)) throw new Error(`PI_GATEWAY_API_KEY_FILE (${file}) must hold the key alone on one line.`);
+  return key;
+}
+
+/**
  * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL,
  * service key and model map are REQUIRED there: without them every run would
  * fail, so the boot refuses instead.
  */
 function loadPiRuntimeConfig(): PiRuntimeConfig {
   const gatewayUrl = env("PI_GATEWAY_URL");
-  const apiKey = env("PI_GATEWAY_API_KEY");
+  const apiKey = readPiGatewayApiKey();
   if (!gatewayUrl || !apiKey) {
-    throw new Error("AGENT_RUNTIME=pi requires PI_GATEWAY_URL and PI_GATEWAY_API_KEY.");
+    throw new Error(
+      "AGENT_RUNTIME=pi requires PI_GATEWAY_URL and PI_GATEWAY_API_KEY (or PI_GATEWAY_API_KEY_FILE).",
+    );
   }
   try {
     new URL(gatewayUrl);

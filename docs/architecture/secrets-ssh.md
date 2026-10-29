@@ -164,8 +164,13 @@
 - **Model credentials live in pi-gateway only** (design D7). Noah holds no LLM key: `ANTHROPIC_API_KEY` and the
   admin-pasted `claude setup-token` subscription token are gone (`PUT/DELETE /api/admin/claude-token` → 404). The
   stored `claude_oauth_token` app_config key is deleted on existing deployments through `retirementGate()` (DB
-  backup first) and the name stays reserved forever. Noah's only gateway secret is `PI_GATEWAY_API_KEY` (a
-  server-only secret).
+  backup first) and the name stays reserved forever. Noah's only gateway secret is pi's service key (a
+  server-only secret): inline `PI_GATEWAY_API_KEY`, or the file `PI_GATEWAY_API_KEY_FILE` names
+  (`readPiGatewayApiKey`, `config.ts` — both set, unreadable or empty stops the boot; a file's key never enters
+  `process.env`). The bundled compose stack uses ONLY the file: Noah's own uid-1000 0400 copy
+  (`docker/pi/setup-host.sh`) mounted as the compose secret `/run/secrets/pi_gateway_api_key`. Same-uid caveat
+  (#71): unlike the scrubbed env, that file stays readable to every uid-1000 process in Noah's container, the
+  relayed MCP children (owner plugins, 공용 MCP stdio side, hex-ssh) included — until uid separation lands.
 
 ## On-prem GitHub CA
 - **One var `GITHUB_CA_CERT`** (PEM path, `applyCustomGithubCa` in `tlsCa.ts`, called from `index.ts`).

@@ -814,6 +814,70 @@ describe("pi config", () => {
   });
 });
 
+describe("PI_GATEWAY_API_KEY_FILE", () => {
+  const MAP = '{"fable":"f","opus":"o","sonnet":"s","haiku":"h"}';
+  function withPiEnv(vars: Record<string, string | undefined>, fn: () => void) {
+    const saved = { ...process.env };
+    try {
+      process.env.AGENT_RUNTIME = "pi";
+      process.env.PI_GATEWAY_URL = "http://gateway:8080";
+      process.env.PI_MODEL_MAP = MAP;
+      delete process.env.PI_GATEWAY_API_KEY;
+      delete process.env.PI_GATEWAY_API_KEY_FILE;
+      for (const [name, value] of Object.entries(vars)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      fn();
+    } finally {
+      process.env = saved;
+    }
+  }
+
+  it("reads and trims the key from the file and never puts it in process.env", () => {
+    const keyFile = path.join(dir(), "pi_gateway_api_key");
+    fs.writeFileSync(keyFile, "  sk-from-file\n", { mode: 0o400 });
+    withPiEnv({ PI_GATEWAY_API_KEY_FILE: keyFile }, () => {
+      const config = loadConfig({ dataDir: dir() });
+      expect(config.pi?.apiKey).toBe("sk-from-file");
+      expect(process.env.PI_GATEWAY_API_KEY).toBeUndefined();
+      expect(Object.values(process.env)).not.toContain("sk-from-file");
+    });
+  });
+
+  it("stops the boot when both are set, or the file is unreadable, empty or not one line — without the key in the message", () => {
+    const keyFile = path.join(dir(), "key");
+    fs.writeFileSync(keyFile, "sk-secret-value");
+    withPiEnv({ PI_GATEWAY_API_KEY: "inline", PI_GATEWAY_API_KEY_FILE: keyFile }, () => {
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/PI_GATEWAY_API_KEY or PI_GATEWAY_API_KEY_FILE, not both/);
+    });
+    const missing = path.join(dir(), "nope");
+    withPiEnv({ PI_GATEWAY_API_KEY_FILE: missing }, () => {
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/cannot be read \(ENOENT\)/);
+    });
+    withPiEnv({ PI_GATEWAY_API_KEY_FILE: dir() }, () => {
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/cannot be read \(EISDIR\)/);
+    });
+    const empty = path.join(dir(), "empty");
+    fs.writeFileSync(empty, " \n\n");
+    withPiEnv({ PI_GATEWAY_API_KEY_FILE: empty }, () => {
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/PI_GATEWAY_API_KEY_FILE \(.*\) is empty/);
+    });
+    const twoLines = path.join(dir(), "two");
+    fs.writeFileSync(twoLines, "sk-secret-value\nsecond\n");
+    withPiEnv({ PI_GATEWAY_API_KEY_FILE: twoLines }, () => {
+      let message = "";
+      try {
+        loadConfig({ dataDir: dir() });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/alone on one line/);
+      expect(message).not.toContain("sk-secret-value");
+    });
+  });
+});
+
 describe("/mcp mount", () => {
   it("only a run token authenticates: a session cookie alone is a 401", async () => {
     const svc = createServices({ dataDir: path.join(dir(), "app"), agentRuntime: "local", sessionSecret: "t" });

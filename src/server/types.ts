@@ -249,7 +249,7 @@ export interface PiSkillIndexEntry {
 export interface PiRuntimeConfig {
   /** Gateway origin, e.g. `http://pi-gateway:8080` (env `PI_GATEWAY_URL`). */
   gatewayUrl: string;
-  /** Service key (env `PI_GATEWAY_API_KEY`; server-only, scrubbed from process.env). */
+  /** Service key (env `PI_GATEWAY_API_KEY` or the file `PI_GATEWAY_API_KEY_FILE`; server-only, never left in process.env). */
   apiKey: string;
   /**
    * Host path of the gateway's `$PI_GATEWAY_HOME/workspaces` (env

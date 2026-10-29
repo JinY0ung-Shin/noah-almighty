@@ -354,8 +354,10 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 
 ## Env (config.ts → `AppConfig.pi`)
 
-`AGENT_RUNTIME` (`pi` default, `local` stub; anything else stops the boot), `PI_GATEWAY_URL` + `PI_GATEWAY_API_KEY`
-(required; the key is in `SERVER_ONLY_SECRET_ENV_NAMES`), `PI_MODEL_MAP` (required, validated JSON that must map every
+`AGENT_RUNTIME` (`pi` default, `local` stub; anything else stops the boot), `PI_GATEWAY_URL` + the service key
+(required): inline `PI_GATEWAY_API_KEY` (in `SERVER_ONLY_SECRET_ENV_NAMES`) OR `PI_GATEWAY_API_KEY_FILE` (read and
+trimmed by `readPiGatewayApiKey`; both set, an unreadable or empty file, or a second line stops the boot; the key never
+enters `process.env` — the bundled compose stack sets only the file), `PI_MODEL_MAP` (required, validated JSON that must map every
 composer tier — fable/opus/sonnet/haiku; it is the ONLY tier→model source, and model fallback chains map through it;
 malformed or incomplete stops the boot), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional
 `/mcp` peer allowlist), `PI_DECK_SANDBOX`.
