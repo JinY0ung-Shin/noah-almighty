@@ -144,7 +144,8 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   `create_share_link`) gets its own `mcpAllowedTools` entry keyed on the SAME boolean as its build.
 - **A new SERVER also reaches pi's broker:** its name joins `PI_NOAH_SERVER_NAMES` + the static catalog build
   (`pi/mcpCatalog.ts`) AND `NOAH_MCP_SERVER_NAMES` in `scripts/pi-register-mcp.mjs` (a test keeps them equal), and
-  the operator re-runs the script. tools/list is answered from that static catalog (pi lists a session's tools
+  the bundled `pi-setup` service re-runs the script on the next `docker compose up` (a native setup runs it by
+  hand). tools/list is answered from that static catalog (pi lists a session's tools
   once), so a tool's registration never hides it from the model — the per-call gate and the handler do the
   refusing. Details → [pi-runtime.md](pi-runtime.md).
 - **`create_share_link` gate (`mcp__file_output__create_share_link`).** It lives on the `file_output` server

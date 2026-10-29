@@ -47,9 +47,9 @@ Durable principles for this layer:
 - **A new SERVER also reaches pi's broker** (`docs/architecture/pi-runtime.md`): add its name to
   `PI_NOAH_SERVER_NAMES` + the static catalog build (`pi/mcpCatalog.ts`) AND to `NOAH_MCP_SERVER_NAMES` in
   `scripts/pi-register-mcp.mjs` (a test keeps the two equal); broker ids are GLOBAL per pi instance, so the
-  operator re-runs the script. A third-party/process server is never its own id — it rides Noah's relays
-  (`pi/mcpProxies.ts`: `hex-ssh`, `plugins`, `shared`). Servers are built with `createMcpToolServer`
-  (`mcpServer.ts`), and a child Noah spawns for a relay starts from `piProxyBaseEnv` (`pi/mcpProxies.ts`).
+  script must run again — the bundled `pi-setup` service does on every `docker compose up`. A
+  third-party/process server is never its own id — it rides Noah's relays (`pi/mcpProxies.ts`: `hex-ssh`,
+  `plugins`, `shared`). Servers are built with `createMcpToolServer` (`mcpServer.ts`), and a child Noah spawns for a relay starts from `piProxyBaseEnv` (`pi/mcpProxies.ts`).
 - **A browser op is a bigger commitment than an MCP tool.** Adding one to `browserTools.ts` also means
   `BROWSER_TOOL_NAMES`, `events.ts` (`BrowserRequest`/`BrowserResult`), the `routes/chat.ts` relay +
   audit row, the client `BridgeOperation`/`BridgeReply` (+ its Korean progress label), and

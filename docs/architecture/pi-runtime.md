@@ -1,6 +1,7 @@
 # pi-gateway runtime (the only agent runtime)
 
-Noah as a BFF over a dedicated pi-gateway instance (design: `~/.noah-work/pi-migration-2026-10-29/design.md`).
+Noah as a BFF over a dedicated pi-gateway instance, deployed WITH Noah as one compose stack (see "Deployment"; design:
+`~/.noah-work/pi-migration-2026-10-29/design.md`).
 The agent loop runs in pi (`POST /v1/responses`, service key + `user`); files and commands run in the run
 principal's own pi sandbox; Noah's in-process MCP tools are served to pi's broker over HTTP with a per-run token.
 The Claude Agent SDK runner was removed (U8, 2026-10-29); `AGENT_RUNTIME` is `pi` (default) or `local` (the
@@ -327,9 +328,43 @@ It is mounted BEFORE the global `express.json({limit: "50mb"})`, so its own 16 M
 secrecy is the only barrier for an off-network caller. Either bind/firewall the port to the broker's network, or set
 `NOAH_MCP_ALLOWED_CIDRS` (`mcpHttp/networkAcl.ts`, `net.BlockList`): only those TCP peers (never `X-Forwarded-For`;
 `::ffff:` IPv4 peers are mapped) pass, everyone else gets 403 before the body is parsed or the token is read. Default
-open; an invalid entry stops the boot.
+open; an invalid entry stops the boot. The bundled compose stack sets it to the broker's pinned `/32` (next section).
 
-## Operator setup (our dedicated instance, D5)
+## Deployment: the bundled compose stack (U9; the dedicated instance of D5)
+
+Noah and its pi-gateway are ONE `docker compose up -d --build` (operator steps: README "Deployment"; the dind
+boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is edited or copied:
+
+- **`include:`** — `docker-compose.yml` includes `${PI_GATEWAY_DIR:-../pi-gateway}/docker-compose.yml`, an operator
+  checkout PINNED at `1b2ccc2` (`1b2ccc23419e…`, the commit this branch is verified against; README names it),
+  together with `docker/pi/compose.override.yml` — Noah's instance configuration merged onto pi's services
+  (sandboxd's `SANDBOX_IMAGE=noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG}`, built by the build-only
+  `pi-sandbox-image` service FROM pi's own `sandbox-image`; the broker's `noah-mcp` address). A pi-gateway bump
+  re-pins the commit in the README and re-runs the boot test.
+- **`pi-setup`** — a one-shot service (`FROM` Noah's image, uid 10001 = the owner of pi's `admin_api_key` secret,
+  read-only, caps dropped) that runs `docker/pi/pi-setup.sh` → `scripts/pi-register-mcp.mjs --configure-instance`
+  once the gateway is healthy. It is idempotent and re-runs on every `up`; `noah-almighty` starts only after it
+  exits 0 (`service_completed_successfully`). The admin key reaches the script through its env, never argv.
+- **Networks** — Noah joins pi's `edge` network to call `http://gateway:8080` (`PI_GATEWAY_URL`, fixed by compose).
+  pi's broker calls Noah's `/mcp/<server>` over `noah-mcp`, an INTERNAL network only the broker and Noah are on,
+  from a pinned address (`NOAH_MCP_BROKER_IP`, default `172.30.248.10` in `NOAH_MCP_SUBNET` `172.30.248.0/24`);
+  `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that `/32`, so the network gateway (where published-port traffic can
+  appear from) and every other pi service get 403. Sandboxes keep `network_mode: none` and gain no route.
+- **Service key** — Noah's OWN 0400 uid-1000 copy of pi's service key (`docker/pi/setup-host.sh` copies it to
+  `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key`), mounted as a compose secret and read through
+  `PI_GATEWAY_API_KEY_FILE=/run/secrets/pi_gateway_api_key` (see "Env"); never in `.env` (an inline
+  `PI_GATEWAY_API_KEY` there stops the boot). Same-uid caveat: `secrets-ssh.md`.
+- **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
+  fixed), uid 1000 on both sides.
+- **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
+  the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
+  Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `LOG_LEVEL`,
+  `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`.
+- **Not supported with the bundle:** the egress overlay (`docker-compose.egress.yml`, `docs/egress-policy.md` —
+  its firewall admits only its own proxy, so Noah cannot reach pi's gateway), and a second pi-gateway on the same
+  Docker daemon (pi's sandboxd adopts and reaps every `pi-gateway.instance=default` sandbox there).
+
+Run the registration by hand only for a native (non-compose) Noah:
 
 ```bash
 PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-gateway:8080 \
@@ -349,8 +384,8 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 - `--configure-instance` also disables pi's `request_admin` and `present_file` built-ins (Noah has its own) and deploys
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;
   pi enforces no placeholder, the template keeps `{{WORKSPACE}}`, `{{LANGUAGE}}`, `{{DATETIME}}`).
-- Other instance config stays in pi's own admin/`.env`: LLM servers, `SANDBOX_IMAGE` (`docker/pi-sandbox` for decks →
-  set `PI_DECK_SANDBOX=true` here), `SANDBOX_EGRESS_ALLOW`, turn concurrency limits.
+- Other instance config stays in pi's own admin/`.env`: LLM servers, `SANDBOX_EGRESS_ALLOW`, turn concurrency limits.
+  (`SANDBOX_IMAGE` and `PI_DECK_SANDBOX=true` are fixed by the bundle; a native setup sets both itself.)
   `SANDBOX_EGRESS_ALLOW` is the sandbox shell's ONLY way out (HTTP(S) via pi's egress proxy; empty = all blocked, a
   refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own
   tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual

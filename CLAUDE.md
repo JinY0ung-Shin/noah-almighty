@@ -240,7 +240,8 @@ These are the invariants the project is built around. New work should reinforce 
   later in PowerPoint.
 - **pi-gateway is the ONLY agent runtime; Noah stays the BFF and the gatekeeper.** The Claude Agent SDK / Claude
   Code CLI runner is RETIRED (U8, 2026-10-29): `AGENT_RUNTIME` is `pi` (default; `PI_GATEWAY_URL`,
-  `PI_GATEWAY_API_KEY` and a `PI_MODEL_MAP` covering every composer tier are required — it is the ONLY
+  the service key (`PI_GATEWAY_API_KEY`, or `PI_GATEWAY_API_KEY_FILE` — never both) and a `PI_MODEL_MAP` covering
+  every composer tier are required — it is the ONLY
   tier→model source) or `local` (the deterministic stub for tests and the e2e harness); anything else stops the
   boot. Every run goes to `runPiAgent` in ONE sandbox principal, `piRunPrincipal` = whoever the run executes AS
   (`viewerUserId ?? avatar.id`: the viewer of a colleague chat, the ASKER of a consultation, the owner of a
@@ -253,8 +254,8 @@ These are the invariants the project is built around. New work should reinforce 
   MCP server spawns only from the plugins bundled with Noah — every agent-editable root (knowledge repo, group
   repos, installed plugin repos the agent can push to) is skipped and both surfaces say why. Noah's tools reach
   pi's broker over `/mcp/<server>`, whose ONLY auth is the per-run bearer token (session cookies never count).
-  **A new server joins `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`) AND `scripts/pi-register-mcp.mjs`**, and
-  the operator re-runs the script. The prompt is FROZEN per conversation (D2, `conversations.pi_instructions`,
+  **A new server joins `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`) AND `scripts/pi-register-mcp.mjs`**; the
+  bundled one-shot `pi-setup` service re-runs the script on every `docker compose up`. The prompt is FROZEN per conversation (D2, `conversations.pi_instructions`,
   sent only when a pi session starts; per-turn facts ride the user input). Every gap pi has is stated on BOTH
   metacognition surfaces: a model/effort change starts a new session from history, shell-exposed secrets are
   unavailable, no WebSearch, relayed tool lists are per session, and `ask_avatar` (interactive chat) / canvas
@@ -329,6 +330,20 @@ These are the invariants the project is built around. New work should reinforce 
 - **Coding happens on this WSL2 box; deployment is a SEPARATE internal corporate server** — `localhost`
   here is NOT the deploy env, and there's no local DB. Schema/UID/volume/`SESSION_SECRET` changes need an
   EXISTING-deployment migration path, not just fresh-install behavior.
+- **Noah ships WITH its pi-gateway as ONE compose stack (U9).** `docker-compose.yml` `include:`s pi-gateway's
+  own compose file from an operator checkout (`${PI_GATEWAY_DIR:-../pi-gateway}`, pinned at `1b2ccc2` in README
+  "Deployment"; pi's code and compose file are never edited) plus `docker/pi/compose.override.yml` (Noah's
+  instance config: sandboxd runs `noah-almighty/pi-sandbox`, the broker's pinned address). Facts that fail in
+  the field, not in CI: a one-shot `pi-setup` service (uid 10001, pi's admin-key secret) registers Noah's MCP
+  servers and Noah's prompt on every `up`, and Noah starts only after it exits 0; pi's broker reaches `/mcp` over
+  the internal `noah-mcp` network from `172.30.248.10` (`NOAH_MCP_BROKER_IP`), and `NOAH_MCP_ALLOWED_CIDRS`
+  defaults to exactly that /32; Noah gets pi's service key ONLY as its own compose secret
+  (`PI_GATEWAY_API_KEY_FILE=/run/secrets/pi_gateway_api_key`, uid 1000 0400 copy by `docker/pi/setup-host.sh`
+  — a `PI_GATEWAY_API_KEY` in `.env` next to it stops the boot); `.env` wins inside pi's compose file too, so a
+  shared key means the same on both sides — `NODE_EXTRA_CA_CERTS` is a HOST path (mounted read-only into
+  Noah); ONE pi-gateway per Docker daemon (sandboxd reaps every `pi-gateway.instance=default` sandbox); the
+  egress overlay (`docker-compose.egress.yml`) is NOT supported with the bundle (its firewall blocks pi's
+  gateway). A pi-gateway bump re-pins the commit and re-runs the dind boot test (`build-run-verify.md`).
 - **Project name diverges by layer:** display "Noah Almighty", code slug `noah-almighty`, working dir
   `avatar-chat`. Grep both old/new slugs when auditing names.
 - **The user fleet is Windows/Linux only — no macOS.** Platform-dependent decisions (browser-bridge
