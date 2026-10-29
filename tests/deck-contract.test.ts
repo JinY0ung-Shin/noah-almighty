@@ -226,14 +226,11 @@ describe("real `deck.mjs probe --json` parsed by the server probe", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("the Dockerfile's DECK_CONVERTER=0 record -> converter:false naming the opt-out, selftest disabled", () => {
-    // The EXACT record the Dockerfile writes for a legacy image (so a drift between the image build and the
-    // probe's record reader fails here, not in the field).
-    const dockerfile = fs.readFileSync(path.join(REPO, "Dockerfile"), "utf8");
-    const printed = dockerfile.match(/printf '(\{"format":"noah-deck-selftest-record"[^']*\})\\n'/);
-    expect(printed, "the Dockerfile's disabled-record printf").not.toBeNull();
+  it("a 'disabled' self-test record -> converter:false naming the opt-out, selftest disabled", () => {
+    // The record a converter-less image build writes (the pre-pi Noah image's DECK_CONVERTER=0); no
+    // Dockerfile of this repository writes it any more, but the probe's record reader still honours it.
     const record = path.join(tmp("record"), "deck-selftest.json");
-    fs.writeFileSync(record, `${printed![1]}\n`);
+    fs.writeFileSync(record, '{"format":"noah-deck-selftest-record","version":1,"status":"disabled"}\n');
     vi.stubEnv("NOAH_PPTX_SELFTEST_RECORD", record);
     const state = probeDeckToolchain({ defaultPluginsDir: PLUGINS }, { spawnSync });
     expect(state.definitive).toBe(true);

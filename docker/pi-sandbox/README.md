@@ -32,13 +32,16 @@ docker build -f docker/pi-sandbox/Dockerfile -t noahpi/sandbox:<tag> .
 docker/pi-sandbox/verify.sh --image noahpi/sandbox:<tag>      # optional: --runsc, --keep DIR, --quick
 ```
 
-Build args (all optional): `SANDBOX_BASE_IMAGE` (default `pi-gateway/sandbox:latest`), `PIP_INDEX_URL` /
+In the bundled stack compose runs that build itself (Operator below). Build args (all optional):
+`SANDBOX_BASE_IMAGE` (default `pi-gateway/sandbox:latest`; compose passes the named context
+`pi-sandbox-base` = pi's `sandbox-image` service), `PIP_INDEX_URL` /
 `PIP_TRUSTED_HOST` / `NPM_CONFIG_REGISTRY` (mirrors; apt follows the mirror the BASE image was built with),
 `CA_CERT_FILE` (build-context path of an extra CA, as in the main image), `UV_VERSION`,
 `PLAYWRIGHT_CORE_VERSION`, `DECK_CONVERTER_STRICT_GOLDEN=1` (golden drift fails the build),
 `DECK_MAX_CONCURRENT` (default 1). The build runs the converter's self-test from a read-only bind mount
 of the skill tree (nothing of it lands in the image) and fails on any integrity failure; on this box it
-passed with Chromium 156 with **no golden drift** (`maxDelta 0`).
+passed with Chromium 156 with **no golden drift** (`maxDelta 0`); rebuilt by the bundled compose stack on pi-gateway
+`1b2ccc2` (2026-10-29: Python 3.12.16, Chromium 156.0.8078.73) it passed again with a golden match.
 
 Rebuild when the base image is rebuilt, when `package.json`'s `playwright-core` pin or
 `converter/requirements.txt` changes, or when the converter's fonts change (`tests/pi-sandbox-image.test.ts`
@@ -46,14 +49,20 @@ fails on a pin or font mismatch).
 
 ## Operator (pi-gateway)
 
-1. Build or load the image on the pi-gateway host, then set it in pi-gateway's `.env`:
-   `SANDBOX_IMAGE=noahpi/sandbox:<tag>` and apply it with `docker compose up -d sandboxd`.
-2. Running sandboxes keep their old image until removed (OPERATIONS.md §3.5; workspaces survive).
+1. **Nothing to do by hand in the bundled stack:** Noah's `docker-compose.yml` builds this image as
+   `noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}` (service `pi-sandbox-image`, FROM pi's own
+   `sandbox-image` build through a named build context) and sets it as pi's `SANDBOX_IMAGE`
+   (`docker/pi/compose.override.yml`); `PI_DECK_SANDBOX=true` is fixed there too (README "Deployment").
+   Outside that stack: build or load the image on the pi-gateway host, set `SANDBOX_IMAGE=noahpi/sandbox:<tag>`
+   in pi-gateway's `.env`, apply with `docker compose up -d sandboxd`, and set `PI_DECK_SANDBOX=true` for Noah.
+2. Running sandboxes keep their old image until removed (OPERATIONS.md §3.5; workspaces survive):
+   `docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)`.
 3. Limits: the defaults (`SANDBOX_MEMORY=1g`, 1 CPU, `SANDBOX_PIDS_LIMIT=256`, `/tmp` 256m) are enough
    under **runc** — see "Measured". Under **gVisor** (`SANDBOX_RUNTIME=runsc`) set
-   `SANDBOX_PIDS_LIMIT=1024`: the gVisor sentry's own threads count against the host pids cgroup, and a
-   build at 256 kills the sandbox (`urpc method "containerManager.WaitPID" failed: EOF`); host peaks of
-   340–550 were measured, so 512 is not safe either.
+   `SANDBOX_PIDS_LIMIT` to at least 1024 (pi-gateway's OPERATIONS.md §7 starts at 4096): the gVisor
+   sentry's own threads count against the host pids cgroup, and a build at 256 kills the sandbox
+   (`urpc method "containerManager.WaitPID" failed: EOF`); host peaks of 340–550 were measured, so 512 is
+   not safe either.
 4. No egress rule is needed: the converter never touches the network (it blocks every request itself).
 
 ## Measured

@@ -1,6 +1,8 @@
-// Static packaging contract of the pptx skill's HTML→editable-PPTX converter: the Dockerfile
-// layers, the compose build args, the fontconfig registration, the npm and Python pins,
-// .env.example, the ignore files, the README maintenance anchors and the Docker smoke script.
+// Static packaging contract of the pptx skill's HTML→editable-PPTX converter: what the Noah
+// Dockerfile keeps (fonts for LibreOffice previews) and no longer carries (decks build in the pi
+// sandbox image, docker/pi-sandbox), the compose wiring of that image, the fontconfig
+// registration, the npm and Python pins, .env.example, the ignore files, the README maintenance
+// anchors and the Docker smoke script.
 // Nothing here builds an image — the real `docker build` and scripts/deck-docker-smoke.sh run at
 // release verification (docs/architecture/build-run-verify.md). The "converter tree" block reads
 // files that live under default-skills/skills/pptx/converter/ and is green once that tree exists.
@@ -44,127 +46,77 @@ function dockerInstructions(text: string): string[] {
 const dockerfile = dockerInstructions(read("Dockerfile"));
 const indexOf = (re: RegExp): number => dockerfile.findIndex((instruction) => re.test(instruction));
 
-describe("Dockerfile — converter layers", () => {
-  const uv = indexOf(/^RUN .*uv --version/);
-  const aptConverter = indexOf(/^RUN .*apt-get update .*chromium-headless-shell/);
-  const copyRequirements = dockerfile.indexOf(
-    `COPY ${KIT}/requirements.txt /tmp/deck-requirements.txt`,
-  );
-  const pip = indexOf(/^RUN .*pip3 install .*-r \/tmp\/deck-requirements\.txt/);
+describe("Dockerfile — the Noah image carries no deck converter", () => {
+  // Decks build inside the user's pi sandbox (docker/pi-sandbox, pinned by
+  // tests/pi-sandbox-image.test.ts). The Noah image keeps only what the SERVER runs:
+  // LibreOffice + poppler for share_file's approximate previews and the fonts they use.
+  const baseApt = indexOf(/^RUN .*apt-get install -y --no-install-recommends build-essential /);
   const npmCopy = dockerfile.indexOf("COPY package.json package-lock.json* ./");
   const npmInstall = indexOf(/^RUN .*npm install;/);
   const copyFontconf = dockerfile.indexOf("COPY docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/");
   const copyPptx = dockerfile.indexOf("COPY default-skills/skills/pptx ./default-skills/skills/pptx");
-  // The app COPY leaves out the pptx tree: the converter layer already put it in place.
+  // The app COPY leaves out the pptx tree: the font layer already put it in place.
   const copyAll = dockerfile.indexOf("COPY --exclude=default-skills/skills/pptx . .");
   const npmBuild = dockerfile.indexOf("RUN npm run build");
-  const selftest = indexOf(/^RUN .*deck\.mjs selftest/);
+  const fonts = indexOf(/^RUN fc-cache /);
 
-  it("is a single-stage build whose runtime user is set only after the self-test", () => {
+  it("is a single-stage build whose runtime user is set only after every build step", () => {
     expect(dockerfile.filter((i) => /^FROM /.test(i))).toHaveLength(1);
     const users = dockerfile.flatMap((i, n) => (/^USER /.test(i) ? [n] : []));
     expect(users).toEqual([dockerfile.lastIndexOf("USER node")]);
-    expect(users[0]).toBeGreaterThan(selftest);
+    expect(users[0]).toBeGreaterThan(npmBuild);
   });
 
-  it("installs fontconfig unconditionally and the headless shell unless DECK_CONVERTER=0, in its own layer after uv", () => {
-    expect(uv).toBeGreaterThan(-1);
-    expect(aptConverter).toBeGreaterThan(uv);
-    const argDeck = dockerfile.indexOf("ARG DECK_CONVERTER=1");
-    expect(argDeck).toBeGreaterThan(uv);
-    expect(argDeck).toBeLessThan(aptConverter);
-    const apt = dockerfile[aptConverter];
-    expect(apt).toContain(
-      'apt-get install -y --no-install-recommends fontconfig $( [ "$DECK_CONVERTER" != "0" ] && echo chromium-headless-shell )',
-    );
+  it("installs no Chromium, no pip set, no uv and runs no converter self-test", () => {
+    const text = dockerfile.join("\n");
+    expect(text).not.toMatch(/chromium/i);
+    expect(text).not.toMatch(/pip3? install|python3-pip|requirements\.txt/);
+    expect(text).not.toMatch(/\buvx?\b/);
+    expect(text).not.toMatch(/deck\.mjs|selftest|DECK_CONVERTER/);
+    // The agent shell's tools moved to the sandbox image with the agent.
+    expect(text).not.toMatch(/\b(ripgrep|jq|procps)\b/);
+  });
+
+  it("installs what the server itself runs and checks it in the same layer", () => {
+    expect(baseApt).toBeGreaterThan(-1);
+    const apt = dockerfile[baseApt];
+    for (const pkg of [
+      "fontconfig",
+      "fonts-nanum",
+      "git",
+      "gh",
+      "libreoffice-impress",
+      "poppler-utils",
+      "python3",
+      "python3-cryptography",
+      "python3-paramiko",
+      "tini",
+    ]) {
+      expect(apt, pkg).toMatch(new RegExp(` ${escapeRe(pkg)} `));
+    }
+    expect(apt).toContain("&& soffice --version");
+    expect(apt).toContain("&& command -v pdftoppm fc-cache");
+    expect(apt).toContain('&& python3 -c "import cryptography, paramiko"');
     // Downloads ride a BuildKit cache mount; docker-clean is parked for the RUN and restored, so
     // images built FROM this one keep stock apt behaviour.
     expect(apt).toMatch(
       /^RUN --mount=type=cache,target=\/var\/cache\/apt,sharing=locked --mount=type=cache,target=\/var\/lib\/apt\/lists,sharing=locked mv \/etc\/apt\/apt\.conf\.d\/docker-clean \/etc\/apt\/docker-clean\.parked /,
     );
     expect(apt).toContain("&& mv /etc/apt/docker-clean.parked /etc/apt/apt.conf.d/docker-clean");
-    expect(apt).toContain("command -v fc-cache");
-    expect(apt).toContain(
-      '{ [ "$DECK_CONVERTER" = "0" ] || /usr/lib/chromium/chromium-headless-shell --version; }',
-    );
-    // The full `chromium` package (GTK3/dbus/systemd, ~155 MB more) is never installed.
-    expect(dockerfile.join("\n")).not.toMatch(/install[^&;]*\schromium(\s|$)/);
   });
 
-  it("installs the PINNED Python set with pip -r (both mirror branches) and removes the temp copy", () => {
-    expect(copyRequirements).toBeGreaterThan(aptConverter);
-    expect(pip).toBe(copyRequirements + 1);
-    expect(pip).toBeLessThan(npmCopy);
-    const run = dockerfile[pip];
-    // pip's own cache is a BuildKit cache mount (never in the layer), hence no --no-cache-dir.
-    expect(run).toMatch(/^RUN --mount=type=cache,target=\/root\/\.cache\/pip /);
-    expect(run).toContain(
-      'pip3 install --break-system-packages --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt;',
-    );
-    expect(run).toContain("else pip3 install --break-system-packages -r /tmp/deck-requirements.txt;");
-    expect(run).toContain("&& rm -f /tmp/deck-requirements.txt");
-    // No unpinned package survives next to the requirements file.
-    expect(dockerfile.filter((i) => /pip3? install/.test(i))).toEqual([run]);
-    expect(run).not.toMatch(/install[^;&]*\bpython-pptx\b/);
-    // apt's python3-fonttools drags in ~664 MB of scipy & co.
-    expect(dockerfile.join("\n")).not.toContain("python3-fonttools");
-  });
-
-  it("self-tests soffice, pdftoppm and every module the skill imports", () => {
-    const run = dockerfile[pip];
-    expect(run).toContain("&& soffice --version");
-    expect(run).toContain("&& command -v pdftoppm");
-    expect(run).toContain(
-      '&& python3 -c "import pptx, lxml, PIL, fontTools, defusedxml, openpyxl, xlsxwriter"',
-    );
-  });
-
-  it("registers the fonts and self-tests the converter after npm install but BEFORE the app COPY", () => {
-    // The converter needs node_modules (playwright-core) and nothing from the app code, so a
-    // code-only rebuild reuses this layer instead of re-running the ~40 s self-test.
+  it("registers the deck fonts after npm install but BEFORE the app COPY", () => {
+    // Its inputs are the pptx skill tree and the fontconfig file only, so a code-only rebuild
+    // reuses the layer.
     expect(npmInstall).toBe(npmCopy + 1);
     expect(copyFontconf).toBeGreaterThan(npmInstall);
     expect(copyPptx).toBe(copyFontconf + 1);
-    expect(selftest).toBe(copyPptx + 1);
-    expect(copyAll).toBeGreaterThan(selftest);
+    expect(fonts).toBe(copyPptx + 1);
+    expect(dockerfile[fonts]).toBe("RUN fc-cache -f >/dev/null && fc-list | grep -q Pretendard");
+    expect(copyAll).toBe(fonts + 1);
     expect(npmBuild).toBe(copyAll + 1);
     // Exactly one app COPY, and it is the excluding one.
     expect(dockerfile.filter((i) => /^COPY (--\S+ )*\. \.$/.test(i))).toEqual([dockerfile[copyAll]]);
-    const run = dockerfile[selftest];
-    expect(run).toMatch(/^RUN fc-cache -f >\/dev\/null && fc-list \| grep -q Pretendard /);
-    expect(run).toContain(`&& python3 -m compileall -q ${KIT}/tools`);
-    expect(run).toContain("&& mkdir -p /usr/local/share/noah-almighty");
-  });
-
-  it("runs the self-test in a throwaway TMPDIR/HOME with --record and the strict-golden mapping", () => {
-    const argStrict = dockerfile.indexOf("ARG DECK_CONVERTER_STRICT_GOLDEN=0");
-    expect(argStrict).toBeGreaterThan(npmInstall);
-    expect(argStrict).toBeLessThan(selftest);
-    const run = dockerfile[selftest];
-    expect(run).toContain('if [ "$DECK_CONVERTER" != "0" ]; then T="$(mktemp -d)";');
-    expect(run).toContain(
-      `TMPDIR="$T" HOME="$T" node ${KIT}/tools/deck.mjs selftest --record ${RECORD} $( [ "$DECK_CONVERTER_STRICT_GOLDEN" = "1" ] && echo --fail-on-drift ); rc=$?;`,
-    );
-    // The throwaway dir goes whatever the verdict, THEN the verdict decides the build.
-    expect(run).toContain('rc=$?; rm -rf "$T"; [ "$rc" -eq 0 ]; else');
-  });
-
-  it("writes a well-formed 'disabled' record when DECK_CONVERTER=0", () => {
-    const run = dockerfile[selftest];
-    const disabled = run.match(/else printf '(\{[^']*\})\\n' > (\S+); fi/);
-    expect(disabled).not.toBeNull();
-    expect(disabled?.[2]).toBe(RECORD);
-    expect(JSON.parse(disabled?.[1] ?? "null")).toEqual({
-      format: "noah-deck-selftest-record",
-      version: 1,
-      status: "disabled",
-    });
-  });
-
-  it("fails the build when anything leaked into /tmp", () => {
-    expect(dockerfile[selftest]).toMatch(
-      /fi && ! ls -A \/tmp \| grep -Eq '\^\(noah-pptx\|playwright\|deck-\)'$/,
-    );
   });
 
   it("sets the image's working directory the fontconfig <dir> is relative to", () => {
@@ -174,18 +126,34 @@ describe("Dockerfile — converter layers", () => {
 });
 
 describe("docker-compose.yml", () => {
-  it("passes both converter build args (with the Dockerfile defaults) to the app image", () => {
-    const compose = read("docker-compose.yml");
-    const app = compose.slice(compose.indexOf("  noah-almighty:"), compose.indexOf("    ports:"));
-    expect(app).toContain("args:");
-    expect(app).toMatch(/^ {8}DECK_CONVERTER: \$\{DECK_CONVERTER:-1\}$/m);
-    expect(app).toMatch(/^ {8}DECK_CONVERTER_STRICT_GOLDEN: \$\{DECK_CONVERTER_STRICT_GOLDEN:-0\}$/m);
-    // No runtime knob is needed: the image's own tini (ENTRYPOINT, so compose
-    // `init` stays false — #71) reaps Chromium children, Playwright passes
-    // --disable-dev-shm-usage, so no shm_size / cap_add for the converter.
-    const service = compose.slice(compose.indexOf("  noah-almighty:"), compose.indexOf("\nvolumes:"));
-    expect(service).toMatch(/^ {4}init: false$/m);
-    expect(service).not.toMatch(/shm_size|cap_add/);
+  const compose = read("docker-compose.yml");
+  const service = (name: string): string => {
+    const start = compose.indexOf(`\n  ${name}:\n`);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = compose.slice(start + 1);
+    const end = rest.slice(1).search(/\n(  [a-z][\w-]*:|[a-z][\w-]*:)\n/);
+    return end < 0 ? rest : rest.slice(0, end + 2);
+  };
+
+  it("builds the deck-capable sandbox image FROM pi's own sandbox build, strict-golden mapped", () => {
+    const sbx = service("pi-sandbox-image");
+    expect(sbx).toContain("image: noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}");
+    expect(sbx).toContain("dockerfile: docker/pi-sandbox/Dockerfile");
+    expect(sbx).toMatch(/^ {8}pi-sandbox-base: service:sandbox-image$/m);
+    expect(sbx).toMatch(/^ {8}SANDBOX_BASE_IMAGE: pi-sandbox-base$/m);
+    expect(sbx).toMatch(/^ {8}DECK_CONVERTER_STRICT_GOLDEN: \$\{DECK_CONVERTER_STRICT_GOLDEN:-0\}$/m);
+    expect(sbx).toMatch(/^ {4}network_mode: none$/m);
+    // pi's sandboxd runs exactly that image.
+    expect(read("docker/pi/compose.override.yml")).toContain(
+      "SANDBOX_IMAGE: noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}",
+    );
+  });
+
+  it("keeps the Noah service free of converter knobs, with compose init off (#71)", () => {
+    const app = service("noah-almighty");
+    expect(compose).not.toMatch(/DECK_CONVERTER:/);
+    expect(app).toMatch(/^ {4}init: false$/m);
+    expect(app).not.toMatch(/shm_size|cap_add/);
   });
 });
 
@@ -252,7 +220,7 @@ describe(".env.example", () => {
   const env = read(".env.example");
   const documented = (name: string): boolean => new RegExp(`^#?\\s*${name}=`, "m").test(env);
 
-  it("documents every converter runtime variable and both build args", () => {
+  it("documents every converter runtime variable and the strict-golden build arg", () => {
     for (const name of [
       "NOAH_PPTX_CHROMIUM",
       "NOAH_PPTX_DEV",
@@ -263,11 +231,12 @@ describe(".env.example", () => {
       "NOAH_PPTX_MAX_SLIDES",
       "NOAH_PPTX_LOCK_NAMESPACE",
       "NOAH_PPTX_SELFTEST_RECORD",
-      "DECK_CONVERTER",
       "DECK_CONVERTER_STRICT_GOLDEN",
     ]) {
       expect(documented(name), name).toBe(true);
     }
+    // The Noah image has no converter any more, so no DECK_CONVERTER switch.
+    expect(documented("DECK_CONVERTER")).toBe(false);
     // A tests-only switch has no place in a deployment env file.
     expect(documented("NOAH_PPTX_E2E")).toBe(false);
   });
@@ -279,7 +248,6 @@ describe(".env.example", () => {
       "# NOAH_PPTX_MAX_SECONDS=540",
       "# NOAH_PPTX_MAX_SLIDES=60",
       `# NOAH_PPTX_SELFTEST_RECORD=${RECORD}`,
-      "# DECK_CONVERTER=1",
       "# DECK_CONVERTER_STRICT_GOLDEN=0",
     ]) {
       expect(env).toMatch(new RegExp(`^${escapeRe(line)}$`, "m"));
@@ -340,18 +308,20 @@ describe("README maintenance anchors", () => {
     expect(anchors.has("deck-converter-rollback")).toBe(true);
   });
 
-  it("spells out the pre-deck tag and the rollback exactly as rehearsed", () => {
-    expect(readme).toContain('IMG="$(docker compose config --images noah-almighty)"');
-    expect(readme).toContain('docker image tag "$IMG:latest" "$IMG:pre-deck"');
-    expect(readme).toContain(
-      'docker image tag "$IMG:pre-deck" "$IMG:latest" && docker compose up -d --no-build noah-almighty',
-    );
+  it("spells out the pre-upgrade tags of both images and the rollback", () => {
+    expect(readme).toContain('NOAH_IMG="$(docker compose config --images noah-almighty)"');
+    expect(readme).toContain('docker image tag "$NOAH_IMG:latest" "$NOAH_IMG:pre-upgrade"');
+    expect(readme).toContain("docker image tag noah-almighty/pi-sandbox:latest noah-almighty/pi-sandbox:pre-upgrade");
+    expect(readme).toContain('docker image tag "$NOAH_IMG:pre-upgrade" "$NOAH_IMG:latest"');
+    expect(readme).toContain("docker image tag noah-almighty/pi-sandbox:pre-upgrade noah-almighty/pi-sandbox:latest");
+    // A sandbox keeps its image until it is recreated.
+    expect(readme).toContain("docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)");
   });
 
-  it("documents both build args and the update-golden procedure", () => {
-    expect(readme).toContain("DECK_CONVERTER=0");
+  it("documents the strict-golden build arg and the update-golden procedure", () => {
     expect(readme).toContain("DECK_CONVERTER_STRICT_GOLDEN=1");
     expect(readme).toContain("deck.sh selftest --update-golden");
+    expect(readme).not.toContain("DECK_CONVERTER=0");
   });
 });
 
