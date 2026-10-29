@@ -1,6 +1,7 @@
 import type {
   AgentRewindInfo,
   AppConfig,
+  PiSandboxOwner,
   SharedMcpRunState,
   UserGroupMembership,
 } from "../types.js";
@@ -12,7 +13,7 @@ import type { TodoSnapshot } from "../../shared/todos.js";
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
  *
- * The root CLAUDE.md mandates that buildPrompt's owner self-state (claudeAgent.ts)
+ * The root CLAUDE.md mandates that buildPrompt's owner self-state (promptBuilder.ts)
  * and the `describe_system` tool (systemTools.ts) report the SAME runtime facts.
  * This is the single place that reads those facts from the live `store` + `config`
  * so the two call sites can't drift in WHAT they read; each caller still FORMATS
@@ -31,10 +32,10 @@ import type { TodoSnapshot } from "../../shared/todos.js";
  * `secretNames` only and leaves the Confluence derivation to each caller, so
  * neither output changes.
  *
- * NOTE on model: this exposes the raw resolution inputs (`anthropicModel` env pin,
- * `modelOverride` admin setting) — env pin > admin override > SDK default — not a
- * formatted label, since describe_system renders its own label and buildPrompt
- * does not surface the model at all.
+ * NOTE on model: this exposes the raw resolution input (`modelOverride` admin
+ * setting) — user tier > admin override > default tier — not a formatted
+ * label, since describe_system renders its own label and buildPrompt does not
+ * surface the model at all.
  */
 export interface OwnerState {
   /** Active personal keys for the external task API (POST /api/v1/avatar/tasks). */
@@ -69,9 +70,7 @@ export interface OwnerState {
   sharedSkillCount: number;
   /** Total times teammates learned this owner's skills (전수된 횟수, all skills). */
   sharedSkillLearnTotal: number;
-  /** Env-pinned model (`ANTHROPIC_MODEL`); wins over the admin override. */
-  anthropicModel?: string;
-  /** Admin-selected model override; used when no env pin is set. */
+  /** Admin-selected model override; used when the conversation picked no tier. */
   modelOverride: string | null;
   /** Experimental (beta) feature keys the owner enabled for this avatar (#50). */
   experimentalFeatures: string[];
@@ -113,7 +112,7 @@ export function summarizeOwnerState(
     shellExposedSecretNames: store.listShellExposedSecretNames(avatarUserId),
     browserSecrets: store.listBrowserSecretPolicies(avatarUserId),
     groups: store.listUserGroups(avatarUserId),
-    // Lazy: only describe_system reads these; the buildPrompt/runClaudeAgent path
+    // Lazy: only describe_system reads these; the prompt (buildSystemPromptAppend) path
     // never accesses them, so defer the store queries until a consumer reads them.
     get gitRepoCount() {
       return store.listGitRepos(avatarUserId).length;
@@ -132,7 +131,6 @@ export function summarizeOwnerState(
     get sharedSkillLearnTotal() {
       return store.countSkillLearnsForOwner(avatarUserId);
     },
-    anthropicModel: config.anthropicModel,
     modelOverride: store.getModelOverride(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),
     sharedAccount: store.isSharedAccount(avatarUserId),
@@ -177,15 +175,31 @@ export function gettingStartedGaps(
 }
 
 /**
- * pi: what the admin built-in-tool disables mean on this runtime (review L6).
- * The policy names Claude Agent SDK tools; pi has none of WebFetch/WebSearch/
- * NotebookEdit, and its own subagent tool (`Agent`) cannot be switched off
- * per request (design P1), so the subagent toggle is the model's to honor.
+ * What the admin built-in-tool disables mean on pi (review L6). pi has none of
+ * WebFetch/WebSearch/NotebookEdit, and its own subagent tool (`Agent`) cannot
+ * be switched off per request (design P1), so the subagent toggle is the
+ * model's to honor.
  * Mirrored by describe_system's admin-disabled line.
  */
 export function piAdminDisabledToolsNote(disabledTools: readonly string[]): string {
   if (!disabledTools.some((name) => name === "Agent" || name === "Task")) return "";
   return " On this runtime that subagent switch is NOT enforced by a tool gate (pi's own `Agent` tool stays callable), so honor it yourself: never spawn a subagent with `Agent`; do the work in this run.";
+}
+
+/**
+ * Whose sandbox a run's built-in tools work in (`PiRuntimeFacts.sandboxOwner`),
+ * ONE text for both metacognition surfaces (the prompt's runtime section and
+ * describe_system's runtime line). Empty for the owner's own runs: "this
+ * user's sandbox" already says it.
+ */
+export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): string {
+  if (owner === "viewer") {
+    return "This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner: your built-in tools (read/write/edit/ls/find/grep/bash) work only on that colleague's own files, never on the owner's, and anything you build there is theirs. The owner's knowledge and repositories are reachable only through the Noah tools this run lists, which refuse anything reserved for the owner.";
+  }
+  if (owner === "asker") {
+    return "This consultation runs in the sandbox of the teammate who asked — NOT your owner's: your built-in tools see only that teammate's files, and nothing you write there reaches the answer. Answer from your owner's knowledge through the Noah recall tools this run lists.";
+  }
+  return "";
 }
 
 /**
@@ -224,16 +238,15 @@ export function rewindTurnState(rewind: AgentRewindInfo): string {
 export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in users across groups via the 메시지 dock at the bottom-right corner of the screen (a collapsible chat window available on every view). It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";
 
 /**
- * 공용 MCP 서버 lines (runPlan's `planSharedMcpRun` states) — ONE wording for
- * both metacognition surfaces: the prompt's standing section and
- * describe_system. Slot/secret names ride only owner runs (runPlan strips them
- * for everyone else, like the prompt's secret-name list), so a teammate hears
- * that something is missing, never which.
+ * 공용 MCP 서버 lines (`planSharedMcpRun` states) — ONE wording for both
+ * metacognition surfaces: the prompt's standing section and describe_system.
+ * Slot/secret names ride only owner runs (the plan strips them for everyone
+ * else, like the prompt's secret-name list), so a teammate hears that
+ * something is missing, never which. Noah relays every active one under the
+ * `shared` broker id (`mcp__shared__<name>__<tool>`).
  */
 export function sharedMcpServerLines(
   states: SharedMcpRunState[],
-  /** pi runs: Noah relays them under the `shared` broker id (`mcp__shared__<name>__<tool>`). */
-  opts: { piRelay?: boolean } = {},
 ): string[] {
   const fix =
     "If the user wants it, tell them to open Settings → 권한·연결 → 시크릿, find this server under 공용 MCP 서버 and pick which of their own secrets to connect (adding the secret first if needed); it applies from their next message.";
@@ -243,9 +256,7 @@ export function sharedMcpServerLines(
     const head = `\`${state.name}\`${label}${about}`;
     switch (state.status) {
       case "active":
-        return opts.piRelay
-          ? `${head}: available in this run as \`mcp__shared__${state.name}__<tool>\` (relayed by Noah).`
-          : `${head}: available in this run as \`mcp__${state.name}__*\`.`;
+        return `${head}: available in this run as \`mcp__shared__${state.name}__<tool>\` (relayed by Noah).`;
       case "needs_binding":
         if (state.unboundSlots.length === 0) {
           return `${head}: NOT available in this conversation — the avatar owner has not connected a secret to it.`;

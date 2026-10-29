@@ -34,7 +34,7 @@ export type ActiveRepoResolution =
 
 /**
  * Resolve the working repo a conversation opened (via `mcp__git_repo__open_repo`)
- * into an SDK cwd, mirroring exactly what the chat route needs at turn start AND
+ * into a run cwd (`local`) or a sandbox copy (pi), mirroring exactly what the chat route needs at turn start AND
  * what the routine scheduler needs before a headless run — kept in ONE place so
  * the two can't drift (clone, per-clone lock, commit identity).
  *

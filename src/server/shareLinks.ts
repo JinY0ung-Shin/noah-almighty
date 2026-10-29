@@ -415,13 +415,6 @@ export function resolveShareSlide(
 // ---- The avatar's path (create_share_link → the chat route's onShareLink) ----
 // Model-facing English, like every other tool result.
 
-/**
- * A background / wake-up segment that no message from the user started (a task
- * settled): nobody may be watching. A segment driven by the owner's own
- * mid-turn message is allowed (the chat route's `ownerSteeredSinceBoundary`).
- */
-export const SHARE_LINK_UNWATCHED_ERROR =
-  "No message from the user started this background segment, so they may not be watching; tell them to use the 공유 링크 button next to the deck's file card, or to ask you for the link again.";
 /** Reuse of an active link whose token can no longer be recomputed (SESSION_SECRET changed). */
 export const SHARE_LINK_UNSHOWABLE_ERROR =
   "An active link for this deck exists but can no longer be shown; ask the user to revoke it (내 아바타 → 권한·연결 → 공유 링크), then create a new one.";

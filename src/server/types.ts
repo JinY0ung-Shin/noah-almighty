@@ -3,7 +3,8 @@ import type { McpToolGroupId } from "../shared/mcpToolGroups.js";
 import type { OpenTodoStatus, TodoPriority, TodoSource } from "../shared/todos.js";
 import type { BrowserSecretPolicy } from "./secretPolicy.js";
 
-export type AgentRuntime = "claude" | "local" | "pi";
+/** `pi`: pi-gateway, the only agent runtime. `local`: the deterministic stub (tests, e2e harness). */
+export type AgentRuntime = "local" | "pi";
 
 /**
  * Minimal avatar-owner descriptor the in-process MCP tool servers
@@ -34,25 +35,11 @@ export interface AppConfig {
   dbPath: string;
   sessionSecret: string;
   agentRuntime: AgentRuntime;
-  anthropicApiKey?: string;
-  /** Pins the Claude model the agent runs (SDK `model` option). Unset → SDK default. */
-  anthropicModel?: string;
-  /**
-   * Concrete model id each composer TIER alias maps to, from the operator's
-   * `ANTHROPIC_DEFAULT_<TIER>_MODEL` env, keyed by the modelTiers alias
-   * (`fable`/`opus`/`sonnet`/`haiku`). A tier with no env mapping is omitted (the
-   * SDK then resolves the alias to the account default, which the app can't know).
-   * Surfaced to the chat composer + describe_system so the user/avatar sees the
-   * real model.
-   */
-  defaultTierModels: Record<string, string>;
-  readOnlyTools: string[];
   /**
    * Whether the ACTIVE model accepts image input (vision). Env `MODEL_VISION`
    * ("off" disables; default on). When false: chat image uploads are rejected,
-   * `Read` on image/PDF files is denied by the PreToolUse hook, Confluence
-   * tools stop returning MCP image blocks, and the avatar is told via the
-   * standing prompt + describe_system (META-COGNITION).
+   * Confluence tools stop returning MCP image blocks, and the avatar is told via
+   * the standing prompt + describe_system (META-COGNITION).
    */
   visionEnabled: boolean;
   /**
@@ -95,25 +82,18 @@ export interface AppConfig {
    */
   pluginAutoRefreshIntervalMs: number;
   /**
-   * Where the SDK persists per-conversation session transcripts (its
-   * `CLAUDE_CONFIG_DIR`). Lives under `dataDir` so resumable sessions survive a
-   * server/container restart, instead of the SDK's default `~/.claude`.
+   * `<dataDir>/agent-sessions`: where the removed Claude Agent SDK runner kept
+   * its CLI transcripts (`CLAUDE_CONFIG_DIR`). RETIRED — nothing writes it; read
+   * only by the boot retirements, which quarantine it (`retireAgentSessions.ts`).
    */
   agentSessionsDir: string;
   /**
-   * Max agent turns (model inferences) per chat reply. Each tool call consumes a
-   * turn, so tool/skill/subagent-heavy replies need plenty of headroom — too low
-   * and the SDK aborts mid-task with `error_max_turns`. Defaults to 1000 (env
-   * `MAX_TURNS`).
-   */
-  maxTurns: number;
-  /**
    * Hard wall-clock deadline for ONE unattended routine run (env
    * `ROUTINE_RUN_TIMEOUT_MINUTES`, default 30 minutes, floor 1 minute — the
-   * deadline can't be disabled, or a hung SDK call would wedge the job forever).
+   * deadline can't be disabled, or a hung pi call would wedge the job forever).
    *
-   * This is the budget for the WHOLE run, `maxTurns` notwithstanding: every
-   * model-fallback attempt and the resume self-heal retry share it. It is also
+   * This is the budget for the WHOLE run: every model-fallback attempt and the
+   * lost-session self-heal retry share it. It is also
    * how long `POST /api/me/routines/:id/run` ("지금 실행") can hold its HTTP
    * request open, so raising it past a fronting proxy's read timeout makes the
    * manual-run button fail even while the run itself keeps going.
@@ -139,24 +119,13 @@ export interface AppConfig {
    * `AVATAR_TASK_TIMEOUT_MINUTES`, default 300 minutes = 5 hours, floor 1 minute,
    * same "cannot be disabled" reasoning as {@link AppConfig.routineRunTimeoutMs};
    * capped at setTimeout's ~24.8-day maximum). Covers the whole turn, time
-   * parked on a question and the background phase included.
+   * parked on a question included.
    *
    * API runs have their own dispatcher (one per owner, four process-wide), which
    * is their own stall surface: a long or hung run holds its owner's only slot,
    * and one of the four, for up to this budget — the cancel route frees it.
    */
   avatarTaskRunTimeoutMs: number;
-  /**
-   * Optional override for the autocompact trigger: the working context window
-   * (in tokens) the agent compacts near the top of. Maps to the CLI settings key
-   * `autoCompactWindow`, carried by the SDK `settings` option as JSON — NOT a
-   * top-level SDK option (no such field exists; see `runPlan.ts`). Unset (the
-   * default) → the CLI uses the model's full context window. Env
-   * `AUTO_COMPACT_WINDOW`; clamped to the CLI's 100K–1M range, non-numeric/≤0
-   * ignored. Lower it to compact earlier (keeps each turn cheaper at the cost of
-   * more frequent summarization).
-   */
-  autoCompactWindow?: number;
   /**
    * Command that launches the upstream hex-ssh MCP server behind the app's
    * policy proxy. The image installs the package at build time and exposes it as
@@ -166,8 +135,8 @@ export interface AppConfig {
   hexSshCommand: string;
   /**
    * pi-gateway runtime settings (`AGENT_RUNTIME=pi`, docs/architecture/pi-runtime.md).
-   * Undefined on the other runtimes. Owner/trusted/routine/task-API turns run on
-   * pi; read-only run classes keep the SDK runner (`piRuntimeSupports`).
+   * Undefined on the `local` stub. Every run executes on pi, in the sandbox of
+   * the user it runs AS (`piRunPrincipal`).
    */
   pi?: PiRuntimeConfig;
 }
@@ -186,12 +155,20 @@ export interface PiModelMapping {
  * "this run executes in the user's pi sandbox": a mid-turn message arrives only
  * after the current answer, a model/effort switch starts a new session from the
  * stored text history, and hex-ssh, plugin `.mcp.json` and 공용 MCP servers are
- * relayed by Noah as an MCP client (`mcpProxies`, `agent/pi/mcpProxies.ts`)
- * instead of being CLI children.
+ * relayed by Noah as an MCP client (`mcpProxies`, `agent/pi/mcpProxies.ts`).
  */
 export interface PiRuntimeFacts {
   /** Sandbox path of this conversation's work folder (`/workspace/c/<seg>`), when known. */
   conversationDir?: string;
+  /**
+   * Whose sandbox the run's built-ins work in (`piRunPrincipal`): the avatar
+   * `owner` (own chat, routine, task API, profile generators), the `viewer`
+   * (a colleague chatting with someone else's avatar, trusted or not), or the
+   * `asker` (an avatar consultation runs in the asking user's sandbox). Both
+   * surfaces state it (`piSandboxOwnerSentence`), so a non-owner run never
+   * mistakes those files for the owner's.
+   */
+  sandboxOwner?: PiSandboxOwner;
   /**
    * The owner's shell-exposed secret names, which a pi run CANNOT export into
    * its shell (no sandbox env yet — design P4). Empty on non-owner runs.
@@ -227,6 +204,9 @@ export interface PiRuntimeFacts {
    */
   knownTools?: PiKnownTools;
 }
+
+/** See {@link PiRuntimeFacts.sandboxOwner}. */
+export type PiSandboxOwner = "owner" | "viewer" | "asker";
 
 /** See {@link PiRuntimeFacts.knownTools}. */
 export interface PiKnownTools {
@@ -351,7 +331,7 @@ export interface User {
   /**
    * The owner's remembered chat-composer defaults, seeding every NEW conversation
    * so the picker's last choice persists across conversations. `null` = never
-   * chosen → a new conversation falls back to the hardcoded server/SDK default.
+   * chosen → a new conversation falls back to the hardcoded server default.
    * `modelDefault` is a model-tier alias; `effortDefault` a reasoning-effort level;
    * `mcpToolGroupsDefault` the enabled MCP tool groups (`null` = every group on,
    * `[]` = explicitly all off). The per-conversation `selected_*` value still
@@ -364,7 +344,7 @@ export interface User {
    * EFFECTIVE system-admin tool policy for this user: the INTERSECTION of
    * `Group.allowedMcpToolGroups` across every policy-bearing group they belong
    * to (`null` = unrestricted). The composer disables blocked groups from this
-   * field; enforcement is server-side (every run is clamped in claudeAgent).
+   * field; enforcement is server-side (every run is clamped in `runCapabilities.ts`).
    */
   allowedMcpToolGroups: McpToolGroupId[] | null;
   /**
@@ -692,10 +672,9 @@ export interface ConversationSummary {
   /**
    * Live run for this conversation, attached per request by GET /api/conversations
    * from the in-memory run registry — never a stored column, so the store's own
-   * summaries omit it. null = idle; `background` true means the visible turn is
-   * finalized while SDK background work keeps the session alive.
+   * summaries omit it. null = idle; `{}` = a run is answering.
    */
-  activeRun?: { background: boolean } | null;
+  activeRun?: Record<string, never> | null;
 }
 
 /**
@@ -802,22 +781,10 @@ export interface StoredMessage {
 }
 
 /**
- * When a run hands the model a message the viewer sent while it was answering
- * (a steer), carried on the run's `open` SSE frame so the composer can say it
- * truthfully. `"mid_turn"`: between the avatar's next two actions (the SDK
- * runner's streaming input). `"after_answer"`: only once the current answer has
- * finished, as the follow-up turn of the same run (the pi runtime has no
- * mid-turn input, docs/architecture/pi-runtime.md). Per RUN, not per
- * deployment: under `AGENT_RUNTIME=pi` a read-only run class still runs on the
- * SDK runner.
- */
-export type SteerDelivery = "mid_turn" | "after_answer";
-
-/**
  * One image fed to the model as an `ImageBlockParam` on a chat turn (base64,
  * no `data:` prefix). The server decodes the uploaded data URL / reads the
- * stored file into this shape; {@link runClaudeAgent} turns it into a
- * structured SDK user message (text + image blocks) instead of a plain string.
+ * stored file into this shape; the pi runner sends it as an `input_image`
+ * (data URL) next to the turn's text.
  */
 export interface AgentImageInput {
   mediaType: ImageMediaType;
@@ -843,14 +810,16 @@ export interface AgentConversationMessage {
 }
 
 /**
- * Where a persisted assistant row's segment ended in the LOCAL SDK transcript —
- * the point a later rewind resumes AT (SDK `resume` + `resumeSessionAt`).
+ * Where a persisted assistant row's segment ended — the point a later rewind
+ * resumes AT. On pi both fields are the committed turn's `resp_…` response id
+ * (a rewind continues from it as `previous_response_id`); a CLI session id/uuid
+ * recorded by the removed SDK runner is ignored (new session from text history).
  * Server-only (`messages.sdk_session_id` / `sdk_uuid`); never sent to clients.
  */
 export interface SdkResumePoint {
-  /** Session whose transcript holds `uuid` (the run's own session; a fork reports its NEW id). */
+  /** Session the point belongs to (on pi the `resp_…` response id itself). */
   sessionId: string;
-  /** The last MAIN-chain assistant message uuid of that segment. */
+  /** The point to continue from (on pi the same `resp_…` id as `sessionId`). */
   uuid: string;
 }
 
@@ -947,11 +916,10 @@ export interface AdminUserDetail extends AdminUserSummary {
 /** Token usage for a single chat turn, surfaced to the client for display. */
 export interface AgentUsage {
   /**
-   * Live context-window occupancy at the end of the turn — the SDK's
-   * authoritative `getContextUsage().totalTokens` when available, else the final
-   * request's prompt-size snapshot (input + cache read + cache creation, see
-   * `mainAssistantContextTokens`). A snapshot, NOT the cumulative sum across the
-   * turn's requests, so `inputTokens / contextWindow` is a meaningful fill %.
+   * Live context-window occupancy at the end of the turn — pi's
+   * `usage.input_tokens_details.context_tokens` (see the pi event adapter). A
+   * snapshot, NOT the cumulative sum across the turn's requests, so
+   * `inputTokens / contextWindow` is a meaningful fill %.
    * 0 marks a turn with no honest occupancy figure (the badge then shows
    * output-only).
    */
@@ -960,7 +928,7 @@ export interface AgentUsage {
   outputTokens: number;
   /**
    * Of `outputTokens`, the portion spent on internal reasoning (extended
-   * thinking), when the SDK reports it. Lets the badge separate reasoning from
+   * thinking), when pi reports it (`output_tokens_details.reasoning_tokens`). Lets the badge separate reasoning from
    * the visible reply so a short answer with heavy thinking doesn't read as a
    * bogus "출력" count. Omitted/0 when the turn did no reasoning.
    */
@@ -1072,8 +1040,8 @@ export interface CanvasVersion {
  * during a turn, kept on the assistant message so the COMPLETED bubble still shows
  * what the avatar did — otherwise the live activity tree vanishes the instant the
  * run finishes. Structurally mirrors the client's activity rows. `tools.kind ===
- * "task"` is kept for old stored snapshots; new clients store SDK tasks in
- * `tasks` instead.
+ * "task"` and `tasks` are kept for old stored snapshots (background tasks of
+ * the removed SDK runner); pi runs never produce them.
  */
 export interface AgentActivity {
   agents: {
@@ -1087,7 +1055,11 @@ export interface AgentActivity {
     name?: string;
     status: "running" | "done" | "failed";
     isMain: boolean;
-    /** The sub-agent ran in the BACKGROUND (a launch receipt, not its answer, came back to the spawn). */
+    /**
+     * The sub-agent ran in the BACKGROUND (a launch receipt, not its answer, came
+     * back to the spawn). Old snapshots only: pi runs never set it (the removed
+     * SDK runner's background subagents).
+     */
     background?: boolean;
   }[];
   tools: {
@@ -1113,14 +1085,15 @@ export interface AgentResponse {
   summary: string;
   text: string;
   /**
-   * SDK result error subtype (e.g. `error_max_turns`) when the run ended in an
+   * Result error subtype (e.g. `error_max_turns`, mapped from pi's
+   * `incomplete_details.reason`) when the run ended in an
    * in-band error instead of throwing — `text` then carries a Korean fallback
    * message, NOT model output. Programmatic consumers (avatar consultation)
    * check this to fail instead of relaying the fallback as an answer; the chat
    * route keeps rendering `text` unchanged.
    */
   resultError?: string;
-  /** Per-turn token usage (Claude runtime only; omitted for local runs). */
+  /** Per-turn token usage (pi runtime only; omitted for local runs). */
   usage?: AgentUsage;
   /**
    * LEGACY: visual-canvas artifacts shown this turn. Canvas artifacts now persist
@@ -1200,12 +1173,12 @@ export interface SharedMcpSecretSlot {
  * 공용 MCP 서버 — an EXTERNAL HTTP MCP server a system admin registered for
  * every avatar (`app_config` key `shared_mcp_servers`, encrypted like every app
  * secret). Credentials ride `secretSlots` filled from each run OWNER's own
- * bound secrets, through the stdio↔HTTP bridge, so no value ever sits in the
- * CLI's `--mcp-config` argv. See `src/server/sharedMcpServers.ts` and
+ * bound secrets; Noah relays the server as an MCP client (`agent/pi/mcpProxies.ts`,
+ * through the stdio↔HTTP bridge), so no value ever sits in any argv. See `src/server/sharedMcpServers.ts` and
  * docs/architecture/secrets-ssh.md.
  */
 export interface SharedMcpServer {
-  /** The MCP server name — the CLI exposes its tools as `mcp__<name>__<tool>`. */
+  /** The MCP server name — its tools are named `mcp__<name>__<tool>` (relayed under pi's `shared` id). */
   name: string;
   /** Display label (user-facing). */
   label: string;
@@ -1252,8 +1225,8 @@ export interface SharedMcpServerUserView {
 }
 
 /**
- * One enabled shared MCP server as THIS run resolved it (runPlan's
- * `planSharedMcpRun`) — the ONE derivation both metacognition surfaces read:
+ * One enabled shared MCP server as THIS run resolved it (`planSharedMcpRun`,
+ * called by `runCapabilities.ts`) — the ONE derivation both metacognition surfaces read:
  *  - `active`: registered for this run;
  *  - `needs_binding`: the owner has not bound a secret to `unboundSlots`
  *    (labels) for the server's current origin (`hostChanged` = an old binding
@@ -1307,30 +1280,34 @@ export interface AgentRequest {
    * repo selection (repoWorkspace.ts) the chat route reads on the next turn.
    */
   conversationId?: string;
-  /** Per-avatar working directory the SDK runs in (filesystem isolation). */
+  /**
+   * Host directory of the run's work folder: on pi the host view of the
+   * principal's sandbox conversation folder (`/workspace/c/<seg>/`), which every
+   * server-written copy (attachments, captures, Confluence saves) lands in.
+   */
   cwd?: string;
   /**
-   * SDK session id to resume (the prior turn's session for THIS conversation).
-   * When set, the SDK reloads that session's transcript so the model keeps the
-   * conversation's context instead of starting fresh. Unset → a new session.
+   * Session to continue (the prior turn's stored `agent_session_id` for THIS
+   * conversation). On pi a `resp_…` id becomes `previous_response_id`, so the
+   * model keeps the conversation's context; anything else (a CLI session id
+   * left by the removed SDK runner) or unset → a new session from the text history.
    */
   resumeSessionId?: string;
   /**
-   * With `resumeSessionId`: resume only up to AND including this transcript
-   * entry (the SDK message uuid a kept assistant row recorded — see
-   * `SdkResumePoint`), forking into a NEW session so the source transcript is
-   * never rewritten (runPlan sets SDK `resumeSessionAt` + `forkSession: true`).
-   * Set only by a rewind/regenerate turn whose kept history ends at an
-   * assistant row with a recorded resume point. A target the CLI can no longer
-   * find (compaction dropped it, the transcript was swept) self-heals exactly
-   * like a missing session: the run retries without `resume`, with
-   * `conversationHistory` injected.
+   * With `resumeSessionId`: continue from this kept assistant row's recorded
+   * resume point instead (see `SdkResumePoint`; on pi a `resp_…` id that wins
+   * over `resumeSessionId` as `previous_response_id`, so pi branches from that
+   * older turn and the later turns are never rewritten). Set only by a
+   * rewind/regenerate turn whose kept history ends at an assistant row with a
+   * recorded resume point. A target pi can no longer find (404/409, or its model
+   * was removed) self-heals exactly like a lost session: one retry on a new
+   * session with `conversationHistory` injected.
    */
   resumeSessionAt?: string;
   /**
-   * Stored transcript fallback used only when no SDK session id is available.
-   * Normal conversations continue through SDK `resume`; this keeps first-turn
-   * cancellations or expired SDK transcripts from losing the visible context.
+   * Stored text history, sent only when the run starts a NEW pi session.
+   * Normal conversations continue their pi session; this keeps first-turn
+   * cancellations, lost sessions and model switches from losing the visible context.
    */
   conversationHistory?: AgentConversationMessage[];
   /** The user currently chatting (may differ from the avatar's owner). */
@@ -1340,12 +1317,13 @@ export interface AgentRequest {
   viewerIsOwner?: boolean;
   /**
    * True when the viewer may use tools at the OWNER's permission level — i.e. the
-   * owner themselves OR a designated trusted user. Gates the tool hook (write/Bash
-   * run instead of read-only). DISTINCT from viewerIsOwner: the owner-only knowledge
+   * owner themselves OR a designated trusted user. Gates the elevated MCP tools
+   * (`deriveAgentToolAccess` → `mcpAllowedTools` + the handlers' self-gates); pi
+   * built-ins run in the principal's own sandbox either way. DISTINCT from viewerIsOwner: the owner-only knowledge
    * inbox (pending_requests) still keys off viewerIsOwner, so a trusted user gets
    * elevated tools WITHOUT the owner's gap inbox.
-   * Headless runs normally stay read-only; owner-scheduled routines opt into
-   * owner-level tools through `allowHeadlessTools`.
+   * Headless runs normally get no owner-level MCP tools; owner-scheduled
+   * routines opt into them through `allowHeadlessTools`.
    */
   elevated?: boolean;
   /**
@@ -1355,9 +1333,10 @@ export interface AgentRequest {
    */
   allowHeadlessTools?: boolean;
   /**
-   * True for unattended runs (scheduled routines): no human is present, so the
-   * agent must not ask questions, interactive permission prompts are denied,
-   * and knowledge writes are blocked — the run is strictly read-only.
+   * True for unattended runs (scheduled routines, profile generators): no human
+   * is present, so the agent must not ask questions, and owner-level MCP tools
+   * (knowledge writes included) are withheld unless `allowHeadlessTools` opts in.
+   * pi built-ins still run, in the principal's own sandbox.
    */
   headless?: boolean;
   /**
@@ -1366,7 +1345,7 @@ export interface AgentRequest {
    * owner. Provenance for the prompt/describe_system and for the
    * interactive-only gates (`create_share_link` is registered only for turns
    * a person is having with their own avatar): the run itself keeps the
-   * owner's full capability, and questions/permission prompts still park for an
+   * owner's full capability, and questions still park for an
    * answer through the task API or the Noah UI.
    */
   externalTaskApi?: boolean;
@@ -1405,28 +1384,25 @@ export interface AgentRequest {
    */
   stoppedAnswer?: string;
   /**
-   * Auto-approve tool use: skip the interactive permission prompt and run
-   * non-read-only tools without asking. Honored on the elevated, non-headless
-   * path (`elevated && !headless`) for owner AND trusted users alike — the tool
-   * gate (read-only deny for non-elevated viewers) is the real safety boundary,
-   * so auto-approve is safe to apply broadly. A headless routine or a plain
-   * colleague chat stays read-only regardless.
+   * Auto-approve tool use. A leftover of the removed SDK runner's permission
+   * prompt: pi has no permission prompts, so the flag only rides the run's
+   * capability log line. The real boundary is the MCP gate (`mcpAllowedTools`
+   * + handler self-gates) and the principal's own sandbox.
    */
   autoApprove?: boolean;
   /**
    * User-chosen model TIER (alias `opus`/`sonnet`/`haiku`) for this conversation,
-   * from the chat composer. Resolved against env pin / admin override in
-   * claudeAgent (env pin wins, then this tier, then the admin override). The alias
-   * is passed straight to the SDK; the concrete model is the operator's call via
-   * ANTHROPIC_DEFAULT_*_MODEL. Unset → server default resolution. (See modelTiers.ts.)
+   * from the chat composer. Resolved in `runCapabilities.ts` (this tier, then the
+   * admin override, then the default tier); the concrete pi model is the
+   * operator's call via PI_MODEL_MAP. Unset → server default resolution. (See modelTiers.ts.)
    */
   modelTier?: string;
   /**
    * User-chosen reasoning EFFORT level (`low`/`medium`/`high`/`xhigh`/`max`) for
-   * this conversation, from the chat composer. Passed straight to the SDK as
-   * `options.effort`; the SDK silently downgrades levels the selected model does
-   * not support. Independent of the model pin. Unknown/unset → SDK default
-   * (`high`). (See effortLevels.ts.)
+   * this conversation, from the chat composer. Passed to pi as the response's
+   * `reasoningEffort`; pi fixes it per session, so a change starts a new session
+   * from the text history. Independent of the model tier. Unknown/unset → no
+   * effort is sent and pi applies its own default. (See effortLevels.ts.)
    */
   effort?: string;
   /**
@@ -1475,7 +1451,7 @@ export interface AgentRequest {
   browserSecrets?: BrowserSecretPolicy[];
   /**
    * Whether the avatar owner has connected a personal knowledge repo. Filled by
-   * the server before building the Claude prompt; undefined means "unknown" for
+   * the server before building the prompt; undefined means "unknown" for
    * direct unit calls.
    */
   knowledgeRepoConfigured?: boolean;
@@ -1509,16 +1485,16 @@ export interface AgentRequest {
    * conversation scratch workspace in THIS run (`save_to_workspace: true` →
    * `confluence/`): the Confluence tools are registered, the viewer is elevated
    * (the tools' own gate), CONFLUENCE_URL and the owner's PAT are configured,
-   * and the run has a scratch workspace. Stamped by `runClaudeAgent` from
-   * runPlan's value, the SAME boolean `SystemToolsContext.confluenceSaveToWorkspace`
+   * and the run has a scratch workspace. Stamped by `stampPromptRequest` from
+   * the capability plan's value, the SAME boolean `SystemToolsContext.confluenceSaveToWorkspace`
    * carries, so the prompt's Confluence line and describe_system offer the save
    * option together. Undefined → the prompt does not mention it.
    */
   confluenceSaveToWorkspace?: boolean;
   /**
-   * Whether THIS run's tools may write files (runPlan's `elevatedToolAccess`:
-   * Bash/Write/Edit pass the PreToolUse hook). Stamped by `runClaudeAgent` from
-   * the plan — the SAME value `SystemToolsContext.canWriteFiles` carries — so
+   * Whether THIS run's tools may write files (`runCapabilities.ts`'s
+   * `canWriteFiles` — always true on pi, whose built-ins write in the
+   * principal's own sandbox). Stamped by `stampPromptRequest` from the plan — the SAME value `SystemToolsContext.canWriteFiles` carries — so
    * the user prompt's attached-images tail and describe_system's image-sources
    * line agree on whether an image file can be placed into a deck, document or
    * commit, or only read. Undefined → only what the request proves: the owner's
@@ -1527,7 +1503,7 @@ export interface AgentRequest {
   canWriteFiles?: boolean;
   /**
    * Redacted proxy env self-state for `mcp__web__fetch` guidance (set by
-   * `runClaudeAgent` from the live env). Undefined means "unknown" for direct
+   * `stampPromptRequest` from the live env). Undefined means "unknown" for direct
    * unit calls — the prompt then omits the proxy detail sentence.
    */
   webFetchProxy?: WebFetchProxyState;
@@ -1608,10 +1584,10 @@ export interface AgentRequest {
   fileOutputEnabled?: boolean;
   /**
    * True only when THIS run registered `mcp__file_output__create_share_link`
-   * (runPlan's `shareLinkToolActive`): file output, the host's `onShareLink`,
-   * and an interactive turn of the owner's own avatar — never a consultation,
-   * headless or external-task-API run. Stamped by
-   * `runClaudeAgent` from that same boolean, and mirrored by describe_system
+   * (`runCapabilities.ts`'s `shareLinkToolActive`): file output, the host's
+   * `onShareLink`, and an interactive turn of the owner's own avatar — never a
+   * consultation, headless or external-task-API run. Stamped by
+   * `stampPromptRequest` from that same boolean, and mirrored by describe_system
    * (`SystemToolsContext.shareLinksEnabled`), so neither metacognition surface
    * offers a tool the run lacks; a run that can deliver files but not make
    * links gets the 공유 링크-button redirect instead.
@@ -1648,9 +1624,10 @@ export interface AgentRequest {
   /**
    * Admin tool/skill policy self-state (META-COGNITION): built-in tools /
    * skills the system administrator disabled deployment-wide. Set by
-   * `runClaudeAgent` for every viewer class — a disabled skill can still
-   * appear in the CLI's skill listing (stale discovery cache), so the standing
-   * prompt note keeps the avatar from attempting or suggesting it.
+   * `stampPromptRequest` for every viewer class. On pi a disabled skill is
+   * omitted from the sandbox skill copy and a built-in toggle is advisory (pi
+   * has no per-request allowlist), so the standing prompt note keeps the avatar
+   * from attempting or suggesting either.
    */
   adminDisabledTools?: string[];
   adminDisabledSkills?: string[];
@@ -1658,18 +1635,18 @@ export interface AgentRequest {
   /**
    * The configured wall-clock budget for ONE external task API run
    * (`config.avatarTaskRunTimeoutMs`, META-COGNITION), stamped by
-   * `runClaudeAgent` so the prompt can state it: on an API run
+   * `stampPromptRequest` so the prompt can state it: on an API run
    * (`externalTaskApi`) it is THIS run's budget, and the standing External task
    * API line tells the owner how long a task may run. describe_system reads
    * the same config value directly.
    */
   avatarTaskRunTimeoutMs?: number;
   /**
-   * The owner's 할 일 capability (META-COGNITION), stamped by `runClaudeAgent`
-   * ONLY on runs that registered the `mcp__todo__*` tools (runPlan's
+   * The owner's 할 일 capability (META-COGNITION), stamped by `stampPromptRequest`
+   * ONLY on runs that registered the `mcp__todo__*` tools (`runCapabilities.ts`'s
    * `todoToolsActive`: an interactive own-avatar chat, an owner routine, an
    * external-task-API turn) — so the standing guidance never offers a tool the
-   * run lacks. `deleteEnabled` mirrors runPlan's `todoDeleteActive` (false on
+   * run lacks. `deleteEnabled` mirrors its `todoDeleteActive` (false on
    * external-task-API turns). Mirrored by describe_system
    * (`SystemToolsContext.todoToolsEnabled` / `todoDeleteEnabled`). `snapshot` is
    * the list FROZEN at this conversation's first to-do-capable turn (see
@@ -1681,24 +1658,24 @@ export interface AgentRequest {
   todoState?: { deleteEnabled: boolean; snapshot?: TodoPromptSnapshot | null };
   /**
    * The registered git repo the avatar opened as this conversation's **working
-   * repository** (`mcp__git_repo__open_repo`): the repo's registered name. Its
-   * clone is the SDK cwd, so the avatar edits/tests and commits locally with
-   * native tools while remote git (push/sync) still flows through
-   * `mcp__git_repo__*`. Drives the working-repo prompt guidance + the Bash-git
-   * integrity policy.
+   * repository** (`mcp__git_repo__open_repo`): the repo's registered name. On
+   * pi the avatar edits/tests its sandbox COPY of the repo
+   * (`piRuntime.activeRepoDir`) with the built-in tools, and saving (commit) and
+   * remote git (push/sync) flow through `mcp__git_repo__*`. Drives the
+   * working-repo turn line (`piActiveRepoTurnLine`).
    */
   activeRepoName?: string;
   /**
-   * Extra writable directories to expose to the SDK beyond the plugin roots —
-   * e.g. the per-conversation scratch workspace when the cwd has been repointed
-   * at the opened working-repo clone.
+   * Extra writable directories beside `cwd` — only the `local` stub uses it (the
+   * per-conversation scratch workspace when its cwd was repointed at the opened
+   * working-repo clone); a pi run's `cwd` is always the sandbox folder.
    */
   additionalDirs?: string[];
   /**
    * Images attached to THIS turn's user message, fed to the model as image
-   * content blocks. When present (and non-empty), `runClaudeAgent` sends a
-   * structured SDK user message (the prompt text + these image blocks) instead
-   * of a plain string prompt; empty/unset keeps the plain-string path unchanged.
+   * content blocks. When present (and non-empty), the pi runner sends them as
+   * `input_image` data URLs next to the prompt text; empty/unset keeps a
+   * text-only input.
    * Unused for headless turns.
    */
   images?: AgentImageInput[];
@@ -1726,7 +1703,7 @@ export interface AgentRequest {
   avatarConsultation?: boolean;
   /**
    * 공용 MCP 서버 (admin-registered external HTTP MCP servers) as this run
-   * resolved them — runPlan's `planSharedMcpRun`, the SAME states describe_system
+   * resolved them — `planSharedMcpRun` (via `runCapabilities.ts`), the SAME states describe_system
    * gets (`SystemToolsContext.sharedMcpServers`). Stable between turns unless the
    * admin edits the list or the owner changes a secret. Absent on consultation runs.
    */

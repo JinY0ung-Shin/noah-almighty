@@ -4,8 +4,7 @@
  * `mcp_search` result (whole description + schema per hit, five hits by
  * default) ranked by BM25 over that same text. So the static catalog may
  * carry a COMPACT description for a few very long tools, and one extra
- * discovery sentence for tools that common requests miss. The SDK runner
- * declares the builders' own text and never reads this file.
+ * discovery sentence for tools that common requests miss.
  *
  * Each compact entry names the 16-hex sha256 of the builder description it
  * replaces: when the builder text changes, the catalog keeps the NEW builder

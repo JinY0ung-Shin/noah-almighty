@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner } from "../types.js";
@@ -92,7 +92,7 @@ export function buildSshIdentityTools(store: Store, ctx: SshIdentityToolsContext
 }
 
 export function buildSshIdentityServer(store: Store, ctx: SshIdentityToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: SSH_IDENTITY_SERVER_NAME,
     version: "0.1.0",
     tools: buildSshIdentityTools(store, ctx),

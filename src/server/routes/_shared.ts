@@ -23,7 +23,7 @@ export interface AppServices {
   config: AppConfig;
   store: Store;
   /**
-   * The model the SDK last reported, shared by everything that can start a run
+   * The model pi last reported, shared by everything that can start a run
    * (the chat router writes it, the admin system overview reads it). It lives
    * on the services rather than inside `createApp` so the server-started paths
    * — the routine scheduler, the external task API dispatcher — can reach it too.
@@ -83,7 +83,7 @@ export function viewerPlatformFromUserAgent(
   return undefined;
 }
 
-/** A small mutable holder for the model the SDK last reported (chat → admin). */
+/** A small mutable holder for the model pi last reported (chat → admin). */
 export interface ObservedModelHolder {
   get(): string | null;
   set(model: string): void;
@@ -339,7 +339,8 @@ type HeadlessAvatarResult =
   | { ok: false };
 
 /**
- * Run a headless, read-only, owner-scoped agent turn for the avatar's OWN
+ * Run a headless, owner-scoped agent turn (no owner-level MCP tools; pi
+ * built-ins in the owner's own sandbox, ephemeral work folder) for the avatar's OWN
  * profile generators (intro/hashtags). Sets up the per-feature workspace, a
  * 2-minute abort deadline, and returns the raw reply text (`response.text ||
  * response.summary || ""`) on success, or `{ ok: false }` on a thrown run (the

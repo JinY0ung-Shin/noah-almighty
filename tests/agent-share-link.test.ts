@@ -11,35 +11,15 @@ import type { AgentRequest, AppConfig } from "../src/server/types.js";
 import { callTool, withTempDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
-// Partial SDK mock (agent-run.test.ts pattern): tool()/createSdkMcpServer() stay
-// REAL so the in-process servers build, and only `query` is replaced by a fake
-// that snapshots each call's `options` (the run loop mutates that object).
+// The capability plan is called the way runPiAgent calls it (the principal's
+// sandbox workspace for this conversation, or the run's ephemeral folder), and
+// the prompt is the append the plan's stamps produce — what pi receives as the
+// conversation's frozen `instructions`.
 // ---------------------------------------------------------------------------
-type QueryArgs = { prompt: unknown; options: Record<string, unknown> };
-
-const sdkMock = vi.hoisted(() => ({
-  calls: [] as { options: Record<string, unknown> }[],
-}));
-
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    query: (args: QueryArgs) => {
-      sdkMock.calls.push({ options: { ...args.options } });
-      async function* gen() {
-        yield { type: "system", subtype: "init", session_id: "s1", model: "opus" };
-        yield { type: "result", subtype: "success", result: "ok" };
-      }
-      return gen();
-    },
-  };
-});
-
-// The "both lists" half that allowedTools alone cannot prove: WHICH tools the
-// file_output server registered in mcpServers actually carries. Every server the
-// plan builds is recorded with the tool names the REAL builder put in it, and
-// matched back by identity against options.mcpServers.file_output.
+// The "both lists" half that mcpAllowedTools alone cannot prove: WHICH tools the
+// file_output server the plan built actually carries. Every server the plan
+// builds is recorded with the tool names the REAL builder put in it, and
+// matched back by identity against inProcessMcpServers.file_output.
 const fileOutputBuilds = vi.hoisted(() => ({
   servers: [] as {
     server: unknown;
@@ -63,7 +43,9 @@ vi.mock("../src/server/agent/fileOutputTools.js", async (importOriginal) => {
 });
 
 import { createServices } from "../src/server/app.js";
-import { runAgentStream } from "../src/server/agent/index.js";
+import { buildRunCapabilities, stampPromptRequest } from "../src/server/agent/runCapabilities.js";
+import { piEphemeralRunKey, piRunPrincipal } from "../src/server/agent/pi/piRuntime.js";
+import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import {
   buildFileOutputTools,
   FILE_OUTPUT_SHARE_LINK_TOOL_NAME,
@@ -77,7 +59,6 @@ import { mcpToolInputSummary, sdkToolLabel } from "../src/shared/sdkToolPresenta
 let tempDir: string;
 const getTempDir = withTempDir("agent-share-link", () => {
   tempDir = getTempDir();
-  sdkMock.calls.length = 0;
   fileOutputBuilds.servers.length = 0;
 });
 
@@ -122,10 +103,15 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
 function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   const { config, store } = createServices({
     dataDir: path.join(tempDir, dir),
-    agentRuntime: "claude",
+    agentRuntime: "pi",
     sessionSecret: "test",
-    anthropicModel: undefined,
-    anthropicApiKey: undefined,
+    pi: {
+      gatewayUrl: "http://pi.invalid",
+      apiKey: "k",
+      modelMap: {},
+      deckSandbox: false,
+      workspacesDir: path.join(tempDir, dir, "pi-ws"),
+    },
     ...configOverrides,
   });
   const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
@@ -146,21 +132,27 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   return { config, store, owner, group, baseRequest };
 }
 
-/** What run #i registered: the allowedTools entry, the server's own tool, and the prompt. */
-function registrationOf(i: number) {
-  const { options } = sdkMock.calls[i];
-  const fileOutput = (options.mcpServers as Record<string, unknown>).file_output;
+/** What one run registers (the plan as runPiAgent builds it): the gate entry, the server's own tool, the prompt. */
+async function planRun(s: ReturnType<typeof setup>, request: AgentRequest, events: AgentEvents) {
+  const workspace = piWorkspaceFor(s.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+  const caps = await buildRunCapabilities(request, [], s.config, s.store, events, undefined, () => 0, {
+    piConversationDir: workspace.conversationDir,
+    piWorkspace: workspace,
+  });
+  const fileOutput = caps.inProcessMcpServers.file_output;
   const built = fileOutputBuilds.servers.find((entry) => entry.server === fileOutput);
   return {
-    allowed: (options.allowedTools as string[]).includes(FILE_OUTPUT_SHARE_LINK_TOOL_NAME),
+    caps,
+    built,
+    allowed: caps.mcpAllowedTools.includes(FILE_OUTPUT_SHARE_LINK_TOOL_NAME),
     registered: Boolean(built?.toolNames.includes("create_share_link")),
     fileOutput: Boolean(fileOutput),
-    append: (options.systemPrompt as { append: string }).append,
+    append: buildSystemPromptAppend(stampPromptRequest(request, caps, s.config, events)),
   };
 }
 
 // ===========================================================================
-// Registration matrix (runPlan's shareLinkToolActive) + the two hand-synced lists
+// Registration matrix (the plan's shareLinkToolActive) + the two hand-synced lists
 // ===========================================================================
 describe("create_share_link registration", () => {
   it("pins the tool name outside the always-on file_output list", () => {
@@ -174,29 +166,25 @@ describe("create_share_link registration", () => {
   });
 
   it("registers it on an interactive turn of the owner's own avatar — in BOTH lists — and stamps the prompt", async () => {
-    const { config, store, baseRequest } = setup("reg-owner");
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
+    const s = setup("reg-owner");
+    const run = await planRun(s, s.baseRequest, makeEvents());
 
-    const run = registrationOf(0);
     expect(run.fileOutput).toBe(true);
     expect(run.allowed).toBe(true);
     expect(run.registered).toBe(true);
     // show_file/share_file are untouched by the extra tool.
-    const allowed = sdkMock.calls[0].options.allowedTools as string[];
-    expect(allowed).toContain("mcp__file_output__show_file");
-    expect(allowed).toContain("mcp__file_output__share_file");
-    // Standing prompt == registration (claudeAgent stamps shareLinksEnabled).
+    expect(run.caps.mcpAllowedTools).toContain("mcp__file_output__show_file");
+    expect(run.caps.mcpAllowedTools).toContain("mcp__file_output__share_file");
+    // Standing prompt == registration (stampPromptRequest stamps shareLinksEnabled).
     expect(run.append).toContain(TOOL_LINE);
     expect(run.append).not.toContain(REDIRECT);
   });
 
   it("wires the host's onShareLink and the LIVE sign-up mode into the tool it registers", async () => {
-    const { config, store, baseRequest } = setup("reg-wiring");
+    const s = setup("reg-wiring");
+    const { store } = s;
     const events = makeEvents();
-    await runAgentStream(baseRequest, [], config, store, events);
-    const built = fileOutputBuilds.servers.find(
-      (entry) => entry.server === (sdkMock.calls[0].options.mcpServers as Record<string, unknown>).file_output,
-    )!;
+    const built = (await planRun(s, s.baseRequest, events)).built!;
 
     // A fresh deployment signs anyone up, so the result carries the caveat...
     const open = await callTool(built.tools, "create_share_link", { expiresInDays: 30 });
@@ -256,9 +244,8 @@ describe("create_share_link registration", () => {
 
   it.each(excluded)("withholds it from $name, keeping both lists and the prompt in sync", async (c) => {
     const s = setup("reg-excluded");
-    await runAgentStream(c.request(s), [], s.config, s.store, (c.events ?? makeEvents)());
+    const run = await planRun(s, c.request(s), (c.events ?? makeEvents)());
 
-    const run = registrationOf(0);
     expect(run.allowed).toBe(false);
     expect(run.registered).toBe(false);
     expect(run.append).not.toContain(TOOL_LINE);
@@ -269,17 +256,17 @@ describe("create_share_link registration", () => {
     }
   });
 
-  it("the file_output server carries the tool exactly when allowedTools lists it", async () => {
+  it("the file_output server carries the tool exactly when mcpAllowedTools lists it", async () => {
     const s = setup("reg-sync");
     const cases: AgentRequest[] = [
       s.baseRequest,
       { ...s.baseRequest, externalTaskApi: true },
       { ...s.baseRequest, viewerUserId: "x", viewerIsOwner: false, elevated: true },
     ];
+    const runs = [];
     for (const request of cases) {
-      await runAgentStream(request, [], s.config, s.store, makeEvents());
+      runs.push(await planRun(s, request, makeEvents()));
     }
-    const runs = cases.map((_, i) => registrationOf(i));
     for (const run of runs) {
       expect(run.fileOutput).toBe(true);
       expect(run.registered).toBe(run.allowed);
@@ -667,14 +654,12 @@ describe("describe_system share-link line", () => {
 });
 
 // ===========================================================================
-// Another plan boolean on the same path: runPlan → claudeAgent's prompt stamp
+// Another plan boolean on the same path: the plan → stampPromptRequest → the append
 // ===========================================================================
 describe("confluenceSaveToWorkspace prompt stamp", () => {
   const SAVE_SENTENCE =
     "`mcp__confluence__get_attachment` with `save_to_workspace: true` also saves the file to the scratch workspace's `confluence/`";
-  const appendOf = (i: number) => (sdkMock.calls[i].options.systemPrompt as { append: string }).append;
-
-  it("reaches options.systemPrompt.append from the plan, on exactly the runs where a save can land", async () => {
+  it("reaches the prompt append from the plan, on exactly the runs where a save can land", async () => {
     const s = setup("stamp-confluence", { confluenceUrl: "https://wiki.example.com" });
     s.store.setUserSecret(s.owner.id, "CONFLUENCE_PAT", "pat-for-tests");
     const runs: Array<{ label: string; request: AgentRequest; saves: boolean }> = [
@@ -690,16 +675,21 @@ describe("confluenceSaveToWorkspace prompt stamp", () => {
         saves: false,
       },
       {
-        label: "a run without a conversation workspace",
+        // pi gives every run a folder: a conversation-less run saves into its
+        // ephemeral `/workspace/c/run-…` folder (docs/architecture/pi-runtime.md).
+        label: "a run without a conversation (its ephemeral sandbox folder)",
         request: { ...s.baseRequest, conversationId: undefined },
-        saves: false,
+        saves: true,
       },
     ];
+    const appends: string[] = [];
     for (const run of runs) {
-      await runAgentStream(run.request, [], s.config, s.store, makeEvents());
+      const planned = await planRun(s, run.request, makeEvents());
+      expect(planned.caps.confluenceSaveToWorkspace, run.label).toBe(run.saves);
+      appends.push(planned.append);
     }
     runs.forEach((run, i) => {
-      const append = appendOf(i);
+      const append = appends[i]!;
       // Every one of these runs carries the Confluence paragraph…
       expect(append, run.label).toContain("The shared Confluence tools are enabled.");
       // …and only the plan's boolean decides the save sentence inside it.
@@ -708,8 +698,9 @@ describe("confluenceSaveToWorkspace prompt stamp", () => {
 
     // Without the owner's PAT no save can authenticate, so none is offered.
     const noPat = setup("stamp-confluence-nopat", { confluenceUrl: "https://wiki.example.com" });
-    await runAgentStream(noPat.baseRequest, [], noPat.config, noPat.store, makeEvents());
-    expect(appendOf(runs.length)).not.toContain(SAVE_SENTENCE);
+    const noPatRun = await planRun(noPat, noPat.baseRequest, makeEvents());
+    expect(noPatRun.caps.confluenceSaveToWorkspace).toBe(false);
+    expect(noPatRun.append).not.toContain(SAVE_SENTENCE);
   });
 });
 

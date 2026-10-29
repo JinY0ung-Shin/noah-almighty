@@ -11,8 +11,8 @@ import { retireExternalAvatars } from "./retireExternalAvatars.js";
 import { retireGroupAgents } from "./retireGroupAgents.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
-import { filterAdvisoryProcessWarnings } from "./processWarnings.js";
 import { retireCraftApps } from "./retireCraftApps.js";
+import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import {
   deckToolchainLogFields,
@@ -20,13 +20,10 @@ import {
   probeDeckToolchain,
 } from "./deckRender.js";
 
-// Before any agent run: drop the SDK's per-run canUseTool-shadowed advisory
-// (our PreToolUse hook is the gate it recommends). Other warnings still print.
-filterAdvisoryProcessWarnings();
 const services = createServices();
 // The config has now read every server-only secret (SESSION_SECRET). Drop them
 // from process.env so no process this server starts from here on — git,
-// converters, agent CLIs — inherits them (#71). The
+// converters, MCP relay children — inherits them (#71). The
 // image also makes the node binary execute-only, so this process itself is
 // non-dumpable and its initial environment unreadable to other processes.
 scrubServerOnlySecretEnv(process.env);
@@ -45,12 +42,16 @@ retirePersonalAgents(services);
 // it. A no-op once done; a failed purge throws and stops the boot.
 retireExternalAvatars(services);
 // Delete what the removed group shared agents left (every member's thread with
-// them, their files and SDK transcripts, the agent table — decision D4) before
+// them, their files and CLI transcripts, the agent table — decision D4) before
 // anything can serve it. Groups and their knowledge repos stay. A no-op once
 // done; a failed purge throws and stops the boot.
 retireGroupAgents(services);
 // The removed Craft apps left only a retry queue on disk; quarantine it (best effort).
 retireCraftApps(services);
+// The removed Claude Agent SDK runner's CLI transcripts (<dataDir>/agent-sessions):
+// quarantine the whole folder once, after the retirements above took their own
+// transcripts out of it (best effort; a marker ends it).
+retireAgentSessions(services);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);

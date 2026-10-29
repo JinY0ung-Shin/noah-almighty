@@ -8,15 +8,15 @@
 // THEIR OWN vault secrets to each slot (`user_shared_mcp_bindings`) — the bind
 // is the consent, and it is tied to the server's ORIGIN: an admin who moves the
 // server to another host silently loses every binding until each user rebinds
-// (user decision 2026-10-26). The resolved values never ride the server
-// definition: the SDK serializes `mcpServers` into the CLI's `--mcp-config` ARGV
-// (readable via /proc/<pid>/cmdline by the agent's own Bash), so a server with
-// headers runs through `scripts/mcp-http-bridge.mjs` — a stdio↔HTTP relay that
-// reads its URL and headers from a one-shot 0600 file and deletes it. Only the
-// file PATH is in argv.
+// (user decision 2026-10-26). The resolved values never ride any argv (cmdline
+// is world-readable): Noah relays every server as an MCP client
+// (`agent/pi/mcpProxies.ts`, pi broker id `shared`) through
+// `scripts/mcp-http-bridge.mjs` — a stdio↔HTTP relay that reads its URL and
+// headers from a one-shot 0600 file and deletes it. Only the file PATH is in argv.
 //
-// Registration is the gate (a third-party server cannot self-gate per viewer and
-// the PreToolUse hook auto-allows every mcp__* call): a server with slots
+// Registration is the gate (a third-party server cannot self-gate per viewer,
+// and the `/mcp` endpoint admits a relayed tool exactly when THIS run relays its
+// server): a server with slots
 // registers ONLY on runs that may carry the owner's vault (the elevated line the
 // plugin-MCP injection draws — never a plain colleague, a restricted headless
 // run or a consultation) and only when every slot is bound for
@@ -54,7 +54,7 @@ const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 /**
  * Names an admin may not take: every in-process app server (they would win the
  * collision anyway and silently hide the shared one), the app-managed hex-ssh,
- * and the generic words the CLI or the app use for their own namespaces.
+ * and generic words of the agent harness or the app's own namespaces.
  */
 const RESERVED_SERVER_NAMES: ReadonlySet<string> = new Set([
   "avatars",
@@ -349,7 +349,8 @@ export interface McpHttpBridgeConfig {
   /**
    * Plugin `.mcp.json` entries only (admin servers arrive fully resolved):
    * `${NAME}` in url/headers is filled in ONE pass — from `vault` when the name
-   * is there, else (with `expandEnv`) from the bridge's env, as the CLI would.
+   * is there, else (with `expandEnv`) from the bridge's env (the `.mcp.json`
+   * `${VAR}` convention).
    */
   vault?: Record<string, string>;
   expandEnv?: boolean;
@@ -372,7 +373,7 @@ const AUTH_SCHEME_RE = /^(?:bearer|basic|token|apikey|digest)\s+(\S.*)$/i;
  * `<server>:<header>` so the marker names what was hidden, never the value.
  * The bridge's own redact list (the exact — trimmed — secret values it sends)
  * rides along: a vault value stored with a trailing newline would otherwise
- * slip past the vault-value match. Shared by the SDK run plan and the pi proxies.
+ * slip past the vault-value match. Used by the pi proxies (`agent/pi/mcpProxies.ts`).
  */
 export function mcpBridgeRedactions(
   files: { name: string; config: Pick<McpHttpBridgeConfig, "headers" | "redact"> }[],
@@ -415,7 +416,7 @@ export function mcpHttpBridgeServerDef(
 export interface SharedMcpRunPlan {
   /** Every ENABLED server, resolved for this run (both metacognition surfaces). */
   states: SharedMcpRunState[];
-  /** Servers to register: a native CLI def (no headers at all) or a bridge config. */
+  /** Servers to relay: a native def (no headers at all — pi still relays it through the bridge) or a bridge config. */
   registrations: Array<
     | { name: string; kind: "native"; def: { type: SharedMcpTransport; url: string } }
     | { name: string; kind: "bridge"; config: McpHttpBridgeConfig }
@@ -426,7 +427,8 @@ export interface SharedMcpRunPlan {
  * Resolve the admin list for ONE run. `bindings` are the run OWNER's own;
  * `secrets` is the owner's INJECTABLE vault (reserved git/SSH names already
  * removed); `secretsAllowed` is the run's permission to carry it (elevated, not
- * a consultation). Pure — runPlan writes the bridge files.
+ * a consultation). Pure — the pi proxy pool (`agent/pi/mcpProxies.ts`) writes
+ * the bridge files.
  */
 export function planSharedMcpRun(
   servers: SharedMcpServer[],

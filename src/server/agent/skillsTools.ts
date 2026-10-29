@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import { text } from "./mcpTools.js";
 
@@ -111,5 +111,5 @@ export function buildSkillsTools(ctx: SkillsToolsContext) {
 }
 
 export function buildSkillsServer(ctx: SkillsToolsContext) {
-  return createSdkMcpServer({ name: SKILLS_SERVER_NAME, version: "0.1.0", tools: buildSkillsTools(ctx) });
+  return createMcpToolServer({ name: SKILLS_SERVER_NAME, version: "0.1.0", tools: buildSkillsTools(ctx) });
 }

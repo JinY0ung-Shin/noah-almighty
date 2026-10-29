@@ -35,9 +35,9 @@ export const SSH_MCP_SECRET_ENV_NAMES = [
  * AES-256-GCM master key for every user's at-rest secrets; PI_GATEWAY_API_KEY is
  * the pi-gateway service key, which lets its holder run turns AS any user
  * (`user` is trusted on a service-key request). No agent-adjacent
- * process may ever hold them: `agentSubprocessEnv` strips them per spawn, and the server
- * deletes them from its own `process.env` once the config has read them, so no
- * child process it starts afterwards (git, converters, CLIs) inherits them (#71).
+ * process may ever hold them: `piProxyBaseEnv` strips them per relay spawn, and the
+ * server deletes them from its own `process.env` once the config has read them, so
+ * no child process it starts afterwards (git, converters, MCP relays) inherits them (#71).
  */
 export const SERVER_ONLY_SECRET_ENV_NAMES = ["SESSION_SECRET", "PI_GATEWAY_API_KEY"] as const;
 

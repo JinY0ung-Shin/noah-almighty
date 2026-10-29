@@ -449,7 +449,7 @@ description: ${desc}
 Describe what this skill does and when the avatar should use it.
 `;
   await writeFile(repoRoot, `${skillRel}/SKILL.md`, skillMd);
-  // The plugin manifest the SDK looks for inside each marketplace plugin dir.
+  // The plugin manifest Noah's plugin loader (`plugins.ts`) looks for inside each marketplace plugin dir.
   await writeFile(
     repoRoot,
     `${skillRel}/.claude-plugin/plugin.json`,

@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig, UserGroupMembership } from "../types.js";
@@ -67,7 +67,7 @@ export interface GroupRepoToolsContext {
 /** MCP server name; tools surface to the model as `mcp__group_repo__<tool>`. */
 export const GROUP_REPO_SERVER_NAME = "group_repo";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const GROUP_REPO_TOOL_NAMES = [
   "mcp__group_repo__list_groups",
   "mcp__group_repo__list_files",
@@ -407,7 +407,7 @@ export function buildGroupRepoTools(
 
 /** Build the in-process MCP server exposing the group knowledge-repo tools. */
 export function buildGroupRepoServer(store: Store, ctx: GroupRepoToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: GROUP_REPO_SERVER_NAME,
     version: "0.1.0",
     tools: buildGroupRepoTools(store, ctx),

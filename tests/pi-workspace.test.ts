@@ -90,13 +90,14 @@ describe("sandbox path mapping", () => {
     expect("error" in piToolPathToHost(ws, "/workspace/escape/passwd")).toBe(true);
   });
 
-  it("the run's workspace is decided from the run class (owner + trusted colleague yes, read-only classes no)", () => {
+  it("the run's workspace is the principal's: owner, or the colleague (trusted or not) chatting", () => {
     const { config, owner, mate } = setup();
-    const base = { avatar: { id: owner.id }, conversationId: "conv-1", autoApprove: true };
-    expect(piRunWorkspace(config, { ...base, viewerUserId: owner.id, viewerIsOwner: true })?.principal).toBe(owner.id);
-    expect(piRunWorkspace(config, { ...base, viewerUserId: mate.id, viewerIsOwner: false, elevated: true })?.principal).toBe(mate.id);
-    expect(piRunWorkspace(config, { ...base, viewerUserId: mate.id, viewerIsOwner: false })).toBeNull();
-    expect(piRunWorkspace({ ...config, agentRuntime: "claude" }, { ...base, viewerUserId: owner.id, viewerIsOwner: true })).toBeNull();
+    const base = { avatar: { id: owner.id }, conversationId: "conv-1" };
+    expect(piRunWorkspace(config, { ...base, viewerUserId: owner.id })?.principal).toBe(owner.id);
+    // Every colleague runs on pi in their OWN sandbox (U8) — no read-only fallback.
+    expect(piRunWorkspace(config, { ...base, viewerUserId: mate.id })?.principal).toBe(mate.id);
+    expect(piRunWorkspace(config, { ...base, viewerUserId: mate.id, conversationId: undefined })).toBeNull();
+    expect(piRunWorkspace({ ...config, agentRuntime: "local" }, { ...base, viewerUserId: owner.id })).toBeNull();
   });
 
   it("staged attachments in the conversation folder are listed by sandbox path without a copy", () => {
@@ -386,7 +387,6 @@ describe("run capabilities on pi", () => {
       },
     };
     const caps = await buildRunCapabilities(request(owner, { cwd: ws.hostConversationDir }), [], config, store, events, undefined, () => 0, {
-      runtime: "pi",
       piConversationDir: ws.conversationDir,
       piWorkspace: ws,
     });
@@ -408,7 +408,6 @@ describe("run capabilities on pi", () => {
     const interactive = (): AgentEvents => ({ steers: new SteerChannel() });
     const build = async () => {
       const caps = await buildRunCapabilities(request(owner), [], config, store, interactive(), undefined, () => 0, {
-        runtime: "pi",
         piAsyncJobs: new PiAsyncJobs(() => true),
       });
       const describe = (await callServerTool(caps.inProcessMcpServers.system, "describe_system", {})).content[0]!.text;
@@ -435,9 +434,9 @@ describe("run capabilities on pi", () => {
     expect(lonely.describe).not.toContain("removed deployment-wide");
 
     // No plugin .mcp.json def receives a vault secret on pi (5a).
-    expect(lonely.prompt).toContain("on this runtime NO plugin or knowledge-repo `.mcp.json` server receives them");
+    expect(lonely.prompt).toContain("NO plugin or knowledge-repo `.mcp.json` server receives them");
     expect(lonely.prompt).not.toContain("custom secrets are provided as environment variables");
-    expect(lonely.describe).toContain("on this runtime no plugin/knowledge-repo .mcp.json server receives them");
+    expect(lonely.describe).toContain("no plugin/knowledge-repo .mcp.json server receives them");
 
     // With a reachable teammate the tool exists, and so does its background mode.
     const group = store.createGroup({ name: "team", createdBy: owner.id });
@@ -454,7 +453,6 @@ describe("run capabilities on pi", () => {
   it("deck state comes from PI_DECK_SANDBOX on BOTH surfaces, and git_repo commit / skills read are gated per run", async () => {
     const off = setup();
     const offCaps = await buildRunCapabilities(request(off.owner), [], off.config, off.store, undefined, undefined, () => 0, {
-      runtime: "pi",
     });
     expect(offCaps.deckToolchain.converter).toBe(false);
     expect(deckCapabilityLine({ deckToolchain: offCaps.deckToolchain, deckAuthoring: "allowed", fileOutputEnabled: true })).toContain(
@@ -475,7 +473,6 @@ describe("run capabilities on pi", () => {
       undefined,
       () => 0,
       {
-        runtime: "pi",
         piSkills: { entries: [], mcpSources: new Map([["knowledge/mine", dir()]]), failures: [] },
       },
     );

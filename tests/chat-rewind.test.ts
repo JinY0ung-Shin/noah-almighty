@@ -90,8 +90,17 @@ const PNG = Buffer.from(
   "base64",
 );
 
+// pi is the only real runtime; no `workspacesDir`, so staging stays in the
+// host scratch workspace.
+const PI_CONFIG: NonNullable<AppConfig["pi"]> = {
+  gatewayUrl: "http://pi.invalid",
+  apiKey: "test-key",
+  modelMap: {},
+  deckSandbox: false,
+};
+
 function boot() {
-  const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+  const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
   return { app: createApp(services), store: services.store, config: services.config };
 }
 type Booted = ReturnType<typeof boot>;
@@ -446,7 +455,7 @@ describe("rewind — edit an earlier message", () => {
     ]);
   });
 
-  it("keeps the anchor's images on the replacement row and starts a vision re-feed fresh", async () => {
+  it("keeps the anchor's images on the replacement row and branches the vision re-feed from the kept answer's point", async () => {
     const t = boot();
     const owner = await newOwner(t);
     const [, , u2] = seed(t.store, owner.id, "e3", [
@@ -466,8 +475,10 @@ describe("rewind — edit an earlier message", () => {
 
     const sent = H.requests[0];
     expect(sent.images).toHaveLength(1);
-    // Image blocks and `resume` don't mix (the chat route's image-turn rule).
-    expect(sent.resumeSessionId).toBeUndefined();
+    // pi continues a session with image input, so an image anchor is no reason
+    // to start fresh: the re-feed branches from the previous answer's point.
+    expect(sent.resumeSessionId).toBe("sess-a");
+    expect(sent.resumeSessionAt).toBe("uuid-a1");
     const rows = t.store.listMessages(owner.id, "e3");
     expect(rows[2]).toMatchObject({ role: "user", content: "", attachments: [image("photo")] });
     expect(fs.existsSync(photo)).toBe(true);
@@ -687,17 +698,18 @@ describe("regenerate", () => {
 });
 
 describe("resume points and queued rows", () => {
-  it("stamps the latest main-chain point on turn_end, background and wake-up rows", async () => {
+  it("stamps the latest point on every turn_end row and on the run's done row", async () => {
     const t = boot();
     const owner = await newOwner(t);
     H.script.push((_req, events) => {
       events.onSessionId?.("sess-x");
       events.onResumePoint?.({ sessionId: "sess-x", uuid: "p1" });
-      events.onTurnResult?.({ text: "첫 구간", backgroundTasks: [], steerPending: true });
+      events.onTurnResult?.({ text: "첫 구간", steerPending: true });
       events.onResumePoint?.({ sessionId: "sess-x", uuid: "p2" });
-      events.onTurnResult?.({ text: "본 답변", backgroundTasks: [{ taskId: "bg-1" }], steerPending: false });
+      events.onTurnResult?.({ text: "둘째 구간", steerPending: true });
       events.onResumePoint?.({ sessionId: "sess-x", uuid: "p3" });
-      events.onTurnResult?.({ text: "백그라운드 보고", backgroundTasks: [], steerPending: false });
+      // The steer-free boundary: the post-await done path persists this one.
+      events.onTurnResult?.({ text: "끝", steerPending: false });
     });
 
     await owner.agent
@@ -706,7 +718,7 @@ describe("resume points and queued rows", () => {
       .expect(200);
 
     const rows = t.store.listMessages(owner.id, "r1");
-    expect(rows.map((m) => m.content)).toEqual(["일 시작", "첫 구간", "본 답변", "백그라운드 보고"]);
+    expect(rows.map((m) => m.content)).toEqual(["일 시작", "첫 구간", "둘째 구간", "[mock] 일 시작"]);
     expect(resumePointOf(t.store, rows[0].id)).toEqual({ sessionId: null, uuid: null });
     expect(resumePointOf(t.store, rows[1].id)).toEqual({ sessionId: "sess-x", uuid: "p1" });
     expect(resumePointOf(t.store, rows[2].id)).toEqual({ sessionId: "sess-x", uuid: "p2" });
@@ -813,9 +825,9 @@ describe("rewind — routines and error boundaries", () => {
     H.script.push((_req, events) => {
       events.onSessionId?.("sess-e");
       events.onResumePoint?.({ sessionId: "sess-e", uuid: "tool-use" });
-      events.onTurnResult?.({ text: "중간", backgroundTasks: [], steerPending: true, errorSubtype: "error_max_turns" });
+      events.onTurnResult?.({ text: "중간", steerPending: true, errorSubtype: "error_max_turns" });
       events.onResumePoint?.({ sessionId: "sess-e", uuid: "later" });
-      events.onTurnResult?.({ text: "끝", backgroundTasks: [], errorSubtype: "error_max_turns" });
+      events.onTurnResult?.({ text: "끝", errorSubtype: "error_max_turns" });
     });
     await owner.agent
       .post("/api/chat/stream")
@@ -830,7 +842,7 @@ describe("rewind — routines and error boundaries", () => {
     H.script.push((_req, events) => {
       events.onSessionId?.("sess-f");
       events.onResumePoint?.({ sessionId: "sess-f", uuid: "clean" });
-      events.onTurnResult?.({ text: "끝", backgroundTasks: [] });
+      events.onTurnResult?.({ text: "끝" });
     });
     await owner.agent
       .post("/api/chat/stream")
@@ -842,24 +854,24 @@ describe("rewind — routines and error boundaries", () => {
     });
   });
 
-  it("stamps no point on background rows whose boundary carried an in-band error", async () => {
+  it("skips only the turn_end rows whose own boundary erred; a later clean boundary in the run stamps again", async () => {
     const t = boot();
     const owner = await newOwner(t);
     H.script.push((_req, events) => {
       events.onSessionId?.("sess-b");
       events.onResumePoint?.({ sessionId: "sess-b", uuid: "b1" });
-      events.onTurnResult?.({ text: "본 답변", backgroundTasks: [{ taskId: "bg" }], errorSubtype: "error_max_turns" });
+      events.onTurnResult?.({ text: "본 답변", steerPending: true, errorSubtype: "error_max_turns" });
       events.onResumePoint?.({ sessionId: "sess-b", uuid: "b2" });
-      events.onTurnResult?.({ text: "보고", backgroundTasks: [], errorSubtype: "error_during_execution" });
+      events.onTurnResult?.({ text: "보고", steerPending: true, errorSubtype: "error_during_execution" });
       events.onResumePoint?.({ sessionId: "sess-b", uuid: "b3" });
-      events.onTurnResult?.({ text: "마지막 보고", backgroundTasks: [] });
+      events.onTurnResult?.({ text: "마지막 보고" });
     });
     await owner.agent
       .post("/api/chat/stream")
-      .send({ avatarId: owner.id, conversationId: "err-2", message: "백그라운드로" })
+      .send({ avatarId: owner.id, conversationId: "err-2", message: "이어서 해줘" })
       .expect(200);
     const rows = t.store.listMessages(owner.id, "err-2");
-    expect(rows.map((m) => m.content)).toEqual(["백그라운드로", "본 답변", "보고", "마지막 보고"]);
+    expect(rows.map((m) => m.content)).toEqual(["이어서 해줘", "본 답변", "보고", "[mock] 이어서 해줘"]);
     expect(resumePointOf(t.store, rows[1].id)).toEqual({ sessionId: null, uuid: null });
     expect(resumePointOf(t.store, rows[2].id)).toEqual({ sessionId: null, uuid: null });
     expect(resumePointOf(t.store, rows[3].id)).toEqual({ sessionId: "sess-b", uuid: "b3" });

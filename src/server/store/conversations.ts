@@ -98,7 +98,8 @@ export interface ConversationRewindPlan {
   /**
    * Resume point of the row IMMEDIATELY before the anchor, when that row is an
    * assistant row that recorded one — the kept history then ends exactly there
-   * in the SDK transcript. Null → the re-run rebuilds context from `keep`.
+   * (the re-run branches from that pi response). Null → the re-run rebuilds
+   * context from `keep`.
    */
   resumeAt: SdkResumePoint | null;
   /**
@@ -274,7 +275,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         );
     }
 
-    /** The SDK session to resume for this conversation's next turn (null if none). */
+    /** The session to continue on this conversation's next turn (pi: a `resp_…` id; null if none). */
     getAgentSessionId(ownerId: string, conversationId: string): string | null {
       const row = this.db
         .prepare("SELECT agent_session_id FROM conversations WHERE id = ? AND owner_user_id = ?")
@@ -283,7 +284,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Record (or clear, when sessionId is null) the SDK session id produced by this
+     * Record (or clear, when sessionId is null) the session id (pi response id) produced by this
      * conversation's latest turn. Owner-scoped so a guessed conversation id can't
      * point another owner's conversation at a different session.
      */
@@ -471,7 +472,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
 
     /**
      * The user-chosen reasoning EFFORT level for this conversation, or null when
-     * none was picked (use the SDK default). Owner-scoped, mirroring the model
+     * none was picked (use the runtime default). Owner-scoped, mirroring the model
      * tier above.
      */
     getConversationEffort(ownerId: string, conversationId: string): string | null {
@@ -676,8 +677,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         /** Who answered — stored only with `kind: "consultation"`. */
         consultation?: MessageConsultationSource;
         /**
-         * Where this ASSISTANT row's segment ended in the local SDK transcript —
-         * what a later rewind onto the next user row resumes at. Server-only:
+         * Where this ASSISTANT row's segment ended (its pi response id) — what a
+         * later rewind onto the next user row branches from. Server-only:
          * written to its own columns, never part of the returned message.
          */
         resumePoint?: SdkResumePoint;
@@ -1130,7 +1131,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       };
     }
 
-    /** The recorded SDK resume point of one row, or null when it has none. */
+    /** The recorded resume point of one row, or null when it has none. */
     private messageResumePoint(messageId: string): SdkResumePoint | null {
       const row = this.db
         .prepare("SELECT sdk_session_id, sdk_uuid FROM messages WHERE id = ?")
@@ -1144,9 +1145,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
      * Apply a rewind plan in ONE transaction: delete exactly the planned rows
      * (by id, so a row appended after planning survives), the share links of
      * their deck cards, and the canvas state they produced; then clear the
-     * conversation's SDK session, whose
-     * transcript still holds the discarded turns (the re-run records its fork's
-     * own id on success). The on-disk attachment bytes are the caller's sweep.
+     * conversation's session, which still holds the discarded turns (the
+     * re-run records the id of the response it branched into on success). The on-disk attachment bytes are the caller's sweep.
      * False when the conversation is not the owner's.
      */
     applyConversationRewind(

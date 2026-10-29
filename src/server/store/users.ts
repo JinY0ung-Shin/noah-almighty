@@ -56,7 +56,7 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         groupKnowledgeOffDefault:
           parseNameList(row.group_knowledge_off_default) ?? [],
         // Remembered composer defaults seeding new conversations (null = unset →
-        // fall back to the hardcoded server/SDK default).
+        // fall back to the hardcoded server default).
         modelDefault: row.model_default?.trim() || null,
         effortDefault: row.effort_default?.trim() || null,
         mcpToolGroupsDefault: (() => {

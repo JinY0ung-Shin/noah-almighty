@@ -19,22 +19,6 @@ export const SDK_TASK_INSPECTION_TOOLS = [
   "TaskList",
 ] as const;
 
-/**
- * Orchestration features RETIRED on 2026-10-29 (ahead of the pi-gateway move):
- * plan mode, Workflow (ultracode) and agent teams. Always disallowed (part of
- * UNUSED_SDK_BUILTIN_TOOLS) AND denied by the PreToolUse hook, so a CLI that
- * offered one anyway still could not run it. See UNUSED_SDK_BUILTIN_TOOLS for
- * why SendMessage is among them.
- */
-export const SDK_RETIRED_TOOLS = [
-  "EnterPlanMode",
-  "ExitPlanMode",
-  "Workflow",
-  "TeamCreate",
-  "TeamDelete",
-  "SendMessage",
-] as const;
-
 export const SDK_INTERNAL_HIDDEN_TOOLS = [
   "ToolSearch",
   "TodoWrite",
@@ -53,83 +37,6 @@ export const SDK_ORCHESTRATION_TOOLS = [
 export const SDK_HIDDEN_ACTIVITY_TOOLS = [
   ...SDK_INTERNAL_HIDDEN_TOOLS,
   ...SDK_ORCHESTRATION_TOOLS,
-] as const;
-
-/**
- * The permission-gated built-ins an ELEVATED viewer may use — the tools the
- * PreToolUse hook blanket-allows once `elevated && autoApprove` holds, i.e.
- * every live chat and owner routine today. Named here so runPlan can ALSO list
- * them in `allowedTools` for exactly those runs: the bundled CLI (2.1.222)
- * cancels an in-flight permission evaluation when queued input (typically a
- * background <task-notification>) entered the same turn and reports the
- * cancellation as a USER REFUSAL ("The user doesn't want to take this action
- * right now" / toolDenialKind: "cancelled") — the flaky silent auto-deny.
- * Rule-allowed tools never enter that cancellable ask path, and a hook DENY
- * still overrides an allowedTools rule, so the hook's guards (admin policy,
- * active-repo git, read-only viewers) keep working. Unknown
- * names are harmless no-ops (same contract as UNUSED_SDK_BUILTIN_TOOLS).
- * AskUserQuestion stays OFF this list:
- * the hook intercepts it with a deny-carrying-answer, which must stay ahead
- * of any rule. The background-shell companions (BashOutput/KillShell/KillBash)
- * left the list when background tasks were disabled — there is no background
- * shell to read or kill.
- */
-export const SDK_ELEVATED_BUILTIN_TOOLS = [
-  "Bash",
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "NotebookEdit",
-  "WebFetch",
-  "WebSearch",
-] as const;
-
-/**
- * Full-CLI harness tools the SDK/CLI advertises by default but that Noah Almighty
- * does NOT use: they're absent from `allowedTools`, duplicate an app feature
- * (Cron* vs. `mcp__system__*_routine`, PushNotification/ReadNotifications vs.
- * `mcp__system__notify_user`, Enter/ExitWorktree vs. `mcp__git_repo__open_repo`),
- * or are interactive-CLI-only (Monitor / DesignSync / ClaudeDesign /
- * ScheduleWakeup / RemoteTrigger / ReportFindings / SendFeedback / ProposeSkills /
- * ProposeGoal).
- * Also the RETIRED orchestration features (2026-10-29, ahead of the pi-gateway
- * move): plan mode (Enter/ExitPlanMode), Workflow (ultracode) and agent teams
- * (TeamCreate/TeamDelete/SendMessage). SendMessage goes too although the CLI
- * offers it without the teams runtime: its only other use, continuing a
- * finished subagent, runs that subagent in the BACKGROUND, which Noah no longer
- * supports — the prompt says to spawn a new subagent instead.
- * Fed to the SDK `disallowedTools` option so they're dropped from the advertised
- * `tools` array on every request — several kB of tool descriptions. Unknown
- * names are harmless no-ops, so the list can name tools a given CLI version may
- * not ship.
- */
-export const UNUSED_SDK_BUILTIN_TOOLS = [
-  "Monitor",
-  "DesignSync",
-  "CronCreate",
-  "CronDelete",
-  "CronList",
-  "EnterWorktree",
-  "ExitWorktree",
-  "ScheduleWakeup",
-  "PushNotification",
-  "RemoteTrigger",
-  "ReportFindings",
-  "SendFeedback",
-  "ClaudeDesign",
-  "ProposeSkills",
-  "ProposeGoal",
-  "ReadNotifications",
-  // Lists the OTHER live CLI sessions registered in the shared CLAUDE_CONFIG_DIR —
-  // other users' runs. Noah never messages across sessions (see
-  // sessionIsolation.ts).
-  "ListAgents",
-  ...SDK_RETIRED_TOOLS,
-  // Background-task controls: background tasks are disabled
-  // (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS), yet the bundled 2.1.283 still
-  // offers TaskStop (measured), so there is nothing for them to act on.
-  "TaskStop",
-  "TaskOutput",
 ] as const;
 
 export const SDK_TOOL_LABELS: Record<string, string> = {
@@ -190,7 +97,7 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   TaskStatus: "태스크 상태",
   TaskStop: "태스크 중지",
   TaskUpdate: "태스크 업데이트",
-  // The CLI's private per-run checklist, NOT the owner's 할 일 list
+  // The agent's private per-run checklist (a stored-activity label), NOT the owner's 할 일 list
   // (mcp__todo__*) — so it must never read as "할 일".
   TodoWrite: "작업 체크리스트 갱신",
   WebFetch: "웹 페이지 읽기",
@@ -201,8 +108,9 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
 
 /**
  * Labels for Noah's own in-process MCP tools (user-facing, so Korean). Kept in
- * the SHARED layer so the server status line ("실행 중: <label>" from
- * tool_progress in sdkMessageHandlers) and the client activity row (humanTool)
+ * the SHARED layer so the server status line ("실행 중: <label>", pi event
+ * adapter) and the
+ * client activity row (humanTool)
  * can never disagree about the same tool — mcp__canvas__show once showed
  * "캔버스 표시" in the activity row but a raw "show" in the status line.
  */
@@ -232,7 +140,7 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__todo__list_todos: "할 일 조회",
   mcp__todo__update_todo: "할 일 수정",
   mcp__web__fetch: "웹 페이지 읽기",
-  // hex-ssh (relayed by Noah on pi, a CLI server on the SDK path): the admin panel's labels.
+  // hex-ssh (relayed by Noah, `agent/pi/mcpProxies.ts`): the admin panel's labels.
   ...Object.fromEntries(HEX_SSH_TOOL_INFOS.map((info) => [`mcp__${HEX_SSH_SERVER_NAME}__${info.name}`, info.label])),
 };
 

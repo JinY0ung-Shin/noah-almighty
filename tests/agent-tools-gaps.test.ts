@@ -50,7 +50,7 @@ vi.mock("../src/server/sshTrust.js", async (importActual) => {
   return { ...actual, addTrustedHost: vi.fn() };
 });
 import { addTrustedHost } from "../src/server/sshTrust.js";
-// The run-plan tests record the ctx buildAgentRunPlan hands the Confluence and
+// The run-plan tests record the ctx buildRunCapabilities hands the Confluence and
 // system servers. Both factories are wrapped in spies that still build the real
 // servers, so every other test here sees the real modules.
 vi.mock("../src/server/agent/confluenceTools.js", async (importActual) => {
@@ -62,7 +62,7 @@ vi.mock("../src/server/agent/systemTools.js", async (importActual) => {
   return { ...actual, buildSystemServer: vi.fn(actual.buildSystemServer) };
 });
 import { buildSystemServer } from "../src/server/agent/systemTools.js";
-import { buildAgentRunPlan, conversationScratchDir } from "../src/server/agent/runPlan.js";
+import { buildRunCapabilities, conversationScratchDir, type RunCapabilityOptions } from "../src/server/agent/runCapabilities.js";
 
 let tempDir: string;
 
@@ -848,7 +848,7 @@ describe("confluence tools — request + attachment plumbing", () => {
 });
 
 // ---------------------------------------------------------------------------
-// runPlan.ts — which workspace the Confluence save targets, and the ONE
+// runCapabilities.ts — which workspace the Confluence save targets, and the ONE
 // boolean both metacognition surfaces offer it on
 // ---------------------------------------------------------------------------
 
@@ -897,10 +897,10 @@ describe("run plan — the Confluence save target", () => {
     };
   }
 
-  async function plan(s: ReturnType<typeof setup>, req: AgentRequest) {
+  async function plan(s: ReturnType<typeof setup>, req: AgentRequest, runOptions: RunCapabilityOptions = {}) {
     vi.mocked(buildConfluenceServer).mockClear();
     vi.mocked(buildSystemServer).mockClear();
-    const result = await buildAgentRunPlan(req, [], s.config, s.store, undefined, undefined, () => 0);
+    const result = await buildRunCapabilities(req, [], s.config, s.store, undefined, undefined, () => 0, runOptions);
     return {
       result,
       confluenceCtx: vi.mocked(buildConfluenceServer).mock.calls[0][0],
@@ -909,6 +909,7 @@ describe("run plan — the Confluence save target", () => {
         scratchWorkspaceDir?: string;
         confluenceSaveToWorkspace?: boolean;
         canWriteFiles?: boolean;
+        piRuntime?: { sandboxOwner?: string };
       },
     };
   }
@@ -919,7 +920,7 @@ describe("run plan — the Confluence save target", () => {
     expect(plain.confluenceCtx.workspaceDir).toBe(s.scratch);
     expect(plain.systemCtx.scratchWorkspaceDir).toBe(s.scratch);
     // The path rides describe_system's ctx only; the plan returns just the
-    // boolean runClaudeAgent stamps onto the prompt.
+    // boolean stampPromptRequest stamps onto the prompt.
     expect(Object.keys(plain.result)).not.toContain("scratchWorkspaceDir");
     expect(plain.result.confluenceSaveToWorkspace).toBe(true);
     expect(plain.systemCtx.confluenceSaveToWorkspace).toBe(true);
@@ -934,6 +935,26 @@ describe("run plan — the Confluence save target", () => {
     expect(withRepo.confluenceCtx.workspaceDir).toBe(s.scratch);
     expect(withRepo.systemCtx.scratchWorkspaceDir).toBe(s.scratch);
     expect(withRepo.result.confluenceSaveToWorkspace).toBe(true);
+  });
+
+  it("on a pi workspace saves into the host conversation folder and names the SANDBOX path", async () => {
+    const s = setup("plan-pi-target", { confluenceUrl: "https://confluence.internal", pat: true });
+    const hostRoot = path.join(tempDir, "plan-pi-target", "pi-workspaces", "u-owner");
+    const hostConversationDir = path.join(hostRoot, "c", "conv-1");
+    fs.mkdirSync(hostConversationDir, { recursive: true });
+    const piWorkspace = {
+      principal: s.owner.id,
+      conversationDir: "/workspace/c/conv-1",
+      hostRoot,
+      hostConversationDir,
+    };
+    const pi = await plan(s, request(s), { piWorkspace, piConversationDir: "/workspace/c/conv-1" });
+    // The tool writes on the host side of the sandbox mount…
+    expect(pi.confluenceCtx.workspaceDir).toBe(hostConversationDir);
+    // …and describe_system names the folder the model actually sees.
+    expect(pi.systemCtx.scratchWorkspaceDir).toBe("/workspace/c/conv-1");
+    expect(pi.result.confluenceSaveToWorkspace).toBe(true);
+    expect(pi.result.piRuntimeFacts.conversationDir).toBe("/workspace/c/conv-1");
   });
 
   it("offers the save only where it can land: registered, elevated, a workspace, and credentials", async () => {
@@ -958,20 +979,35 @@ describe("run plan — the Confluence save target", () => {
     expect((await plan(noUrl, request(noUrl))).systemCtx.confluenceSaveToWorkspace).toBe(false);
   });
 
-  it("canWriteFiles follows the elevated built-in gate, on describe_system's ctx and the plan alike", async () => {
+  it("canWriteFiles is true for every run class, each in its own principal's sandbox", async () => {
+    // pi has no per-request built-in allowlist: every run writes files with its
+    // built-ins, in the sandbox of the user it runs AS (piRunPrincipal) — so
+    // both surfaces say it can, and name WHOSE sandbox it is.
     const s = setup("plan-can-write");
     const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
-    const cases: { label: string; over: Partial<AgentRequest>; expected: boolean }[] = [
-      { label: "owner chat", over: {}, expected: true },
-      { label: "read-only colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, expected: false },
-      // Profile generators: headless without the opt-in stay tool-restricted.
-      { label: "restricted headless", over: { headless: true, conversationId: undefined }, expected: false },
-      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, expected: true },
+    const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string }[] = [
+      { label: "owner chat", over: {}, sandboxOwner: "owner" },
+      { label: "untrusted colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, sandboxOwner: "viewer" },
+      {
+        label: "avatar consultation",
+        over: { viewerUserId: colleague.id, viewerIsOwner: false, avatarConsultation: true, conversationId: undefined },
+        sandboxOwner: "asker",
+      },
+      // Profile generators: headless, no viewer, no conversation — the owner's sandbox.
+      {
+        label: "restricted headless",
+        over: { headless: true, conversationId: undefined, viewerUserId: undefined },
+        sandboxOwner: "owner",
+      },
+      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, sandboxOwner: "owner" },
     ];
     for (const c of cases) {
       const { result, systemCtx } = await plan(s, request(s, c.over));
-      expect(systemCtx.canWriteFiles, c.label).toBe(c.expected);
-      expect(result.canWriteFiles, c.label).toBe(c.expected);
+      expect(systemCtx.canWriteFiles, c.label).toBe(true);
+      expect(result.canWriteFiles, c.label).toBe(true);
+      expect(result.piRuntimeFacts.sandboxOwner, c.label).toBe(c.sandboxOwner);
+      // describe_system reads the SAME facts object the prompt is stamped from.
+      expect(systemCtx.piRuntime?.sandboxOwner, c.label).toBe(c.sandboxOwner);
     }
   });
 });

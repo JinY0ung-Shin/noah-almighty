@@ -29,7 +29,7 @@ DM is human-to-human UI functionality. DM content and contact lists are not adde
     title: "Shared server outbound network policy",
     summary: "Domain blocking, proxy denials, browser scope, the pi sandbox allowlist and deployment setup.",
     body: `## Scope
-An optional deployment overlay applies one outbound policy to ALL local avatars, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. Remote hosts need their own policy for requests they originate. On the pi runtime the avatar's shell is outside it too (see "pi runtime" below).
+An optional deployment overlay applies one outbound policy to Noah's server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. Remote hosts need their own policy for requests they originate. The avatar's shell is outside it too (see "The avatar's sandbox shell" below).
 
 ## Behavior
 The container bootstrap installs IPv4/IPv6 firewall rules before Noah starts, then drops root and all capabilities. Only loopback, replies to incoming connections and TCP to the dedicated HTTP proxy (3128) and its admin-session-protected policy controller (3129) are allowed. Destination DNS resolution happens at the proxy. Programs that ignore HTTP_PROXY/HTTPS_PROXY fail closed; raw SSH and other direct protocols are unavailable. HTTP requests and HTTPS CONNECT destination domains are checked against the same list. HTTPS paths are encrypted and are not filtered. IP-literal proxy destinations are denied.
@@ -42,8 +42,8 @@ The isolated controller rechecks the caller's live administrator browser session
 ## Handling denials
 Report the blocked destination and ask the deployment administrator to review the policy. Do not retry with IP literals, alternate proxies or tunnels. Do not claim a timeout proves a policy denial: it can also indicate an unavailable proxy or an unsupported client. A domain denylist cannot identify the same service under every alias or prevent relaying through arbitrary allowed sites. If an operator needs stronger isolation, use an allowlist and review allowed proxy/tunnel services.
 
-## pi runtime (AGENT_RUNTIME=pi)
-When describe_system's runtime line says pi, the avatar's shell (\`bash\`, curl, Python, pip, npm, git) runs in the user's pi-gateway sandbox, NOT in the Noah container, so the policy above does not reach it and the 외부 통신 차단 panel does not change what it can reach. The sandbox has no network of its own: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), which opens only the destinations listed in \`SANDBOX_EGRESS_ALLOW\` in the pi-gateway instance's \`.env\` (exact domain names, IPs or CIDRs, optionally with a port; empty blocks everything). Direct TCP/UDP, DNS and raw SSH always fail; a refused destination answers \`407 Request rejected by proxy\`. The list belongs to the pi-gateway operator: there is no Noah screen or avatar tool to change it — name the destination and ask that operator. Noah's own tools (\`mcp__web__fetch\`, repo/git, Confluence and the relayed hex-ssh, plugin and shared MCP servers) still run in the Noah container under the policy above. Read-only run classes that stay on the Claude Agent SDK runner (untrusted colleague, avatar consultation) keep the Noah-container rules.`,
+## The avatar's sandbox shell (pi runtime)
+The avatar's shell (\`bash\`, curl, Python, pip, npm, git) runs in the user's pi-gateway sandbox, NOT in the Noah container, so the policy above does not reach it and the 외부 통신 차단 panel does not change what it can reach. The sandbox has no network of its own: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), which opens only the destinations listed in \`SANDBOX_EGRESS_ALLOW\` in the pi-gateway instance's \`.env\` (exact domain names, IPs or CIDRs, optionally with a port; empty blocks everything). Direct TCP/UDP, DNS and raw SSH always fail; a refused destination answers \`407 Request rejected by proxy\`. The list belongs to the pi-gateway operator: there is no Noah screen or avatar tool to change it — name the destination and ask that operator. Noah's own tools (\`mcp__web__fetch\`, repo/git, Confluence and the relayed hex-ssh, plugin and shared MCP servers) still run in the Noah container under the policy above.`,
   },
   {
     id: "getting-started",
@@ -91,7 +91,7 @@ The composer can select a model tier (Opus/Sonnet/Haiku), reasoning effort and M
 The system tool group is always on for local avatars, including when all optional groups are off or an administrator restricts them. Its manual and state tools remain available; management tools still enforce owner/group permissions. Other tool groups follow composer selection and administrator policy. Turning on a group does not grant owner privileges. Changes affecting an existing run may require the next turn or a new conversation; plugin load changes normally require a new conversation.
 
 ## Questions and approvals
-Respond to question, permission, plan or canvas cards in Noah to let a waiting run continue. A submitted task or accepted plan is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
+Respond to question or canvas cards in Noah to let a waiting run continue. A submitted task is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
 
 ## Attachments
 Attach supported files with the composer. Image understanding depends on the selected model; a text-only model receives image file paths rather than visible images. Generated files arrive as file cards; local filesystem paths are not download links. Read files-canvas for previews and exports.
@@ -166,7 +166,7 @@ Group knowledge uses mcp__group_brain__search/mcp__group_brain__get_note for rec
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
-Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited and read-only, not a general background delegation channel.
+Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited (it answers from that avatar's knowledge, in your own sandbox), not a general background delegation channel.
 
 Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question.`,
   },
@@ -227,7 +227,7 @@ An external server can submit arbitrary text instructions to the API-key owner's
 
 ## Issue a key
 In 내 아바타 → 권한·연결 → 외부 작업 API, issue a named personal key. The raw key is shown only once; at most 10 may be active per user. Store it in the calling system's secret store/environment, never in a chat message or committed source file. NOAH_URL below is the actual externally reachable Noah origin, not the avatar's localhost; NOAH_API_KEY is the secret environment variable. Use HTTPS for a real deployment.
-The key acts with the owner's full task capabilities and can answer permission requests. It authenticates ONLY this task API, not session or administrator endpoints. Login cookies are not accepted here. Any active key of the same owner can read/respond to/cancel that owner's tasks. Revocation prevents new requests and queued work accepted under that key; already-running work needs explicit cancellation. Suspended users' keys cannot be used.
+The key acts with the owner's full task capabilities and can answer the run's questions. It authenticates ONLY this task API, not session or administrator endpoints. Login cookies are not accepted here. Any active key of the same owner can read/respond to/cancel that owner's tasks. Revocation prevents new requests and queued work accepted under that key; already-running work needs explicit cancellation. Suspended users' keys cannot be used.
 
 ## 1. Submit
 ~~~bash
@@ -252,14 +252,14 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID" \\
 GET /api/v1/avatar/tasks/:id returns {"task":...}. GET /api/v1/avatar/tasks returns the latest 100 as {"tasks":[...]}.
 - queued: waiting to start.
 - running: executing.
-- waiting_input: inspect pendingRequests and answer the outstanding question/permission/canvas request.
+- waiting_input: inspect pendingRequests and answer the outstanding question/canvas request.
 - succeeded: read result.text and result.summary. result is the task's final response, not the whole conversation transcript.
 - failed: inspect error and the partial response in Noah; work may have partially changed external systems.
 - cancelled: cancelled.
 Poll until a terminal state with a reasonable delay/backoff. Noah also displays the conversation and its live question/approval UI.
 
 ## 3. Answer a pending request
-Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question, permission or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
+Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
 ~~~bash
 curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID/respond" \\
   -H "Authorization: Bearer $NOAH_API_KEY" \\
@@ -268,7 +268,6 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID/respond" \\
 ~~~
 POST /api/v1/avatar/tasks/:id/respond accepts {"requestId":"...","value":...}.
 - Question: value is {"result":...} matching data.dialogKind/data.payload, or {"cancelled":true}. The service example above is illustrative, not a universal question schema.
-- Tool permission: {"behavior":"allow"} or {"behavior":"deny"}.
 - Canvas: follow that canvas's input schema; the user may answer in Noah instead.
 Success returns {"ok":true}. An expired/already-answered request returns 409; refresh the task rather than replaying it blindly. Browser work still needs the owner to have the conversation open with the Noah extension connected. API submission does not supply a remote browser. Interactive-only share-link creation is unavailable on this path.
 
@@ -282,7 +281,7 @@ Queued work is cancelled; running work receives an asynchronous stop request. Po
 ## Limits and recovery
 - At most 20 unfinished tasks per user; at most 60 new submissions/minute. 429 includes Retry-After: 60. Respect it.
 - API tasks run one per user and at most four across the server. A busy conversation/repository causes waiting/retry; do not submit duplicates because the queue is slow. A long or stuck task holds its owner's only slot until it finishes, fails, or is cancelled, so that user's later tasks wait — cancel stuck work instead of waiting out the budget.
-- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled, and a permission request as denied.
+- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled.
 - Queued tasks survive a restart. A task interrupted while running becomes failed, not automatically retried. Review partial effects before submitting again.
 - Deleting its Noah conversation also deletes task history. Do not rely on the task endpoint as permanent archival storage. There is currently no automatic retention cleanup for completed task rows.
 - 400: check the request body/field constraints. 401: check Bearer key validity/revocation and account state. 404: verify the task/conversation id belongs to this owner and still exists. 409: inspect the conflict (idempotency mismatch, expired response or completed task); do not treat every 409 as retryable. 429: back off.
@@ -348,7 +347,7 @@ Confluence requires deployment URL configuration and the owner's configured PAT.
 Use 내 아바타 → 권한·연결 to manage credentials rather than pasting values into chat. System state exposes configured NAMES and capabilities, not secret values. Internal GIT_TOKEN and external GITHUB_TOKEN are used server-side by dedicated Git tools. Custom secrets can be supplied to the owner's plugin MCP servers.
 
 ## Shared MCP servers (공용 MCP 서버)
-A system admin can register external HTTP MCP servers for every avatar (관리자 → 공용 MCP). Their tools appear as mcp__<server>__<tool>. A server that needs per-user authentication declares credential slots (which header, in what format) — the admin never chooses or sees anyone's secret. Each user connects one of their OWN secrets to each slot (내 아바타 → 권한·연결 → 시크릿 → 공용 MCP 서버에 연결할 시크릿, which also shows the host the value is sent to); the server fills it in server-side, so the value never reaches the avatar, the shell or the chat. Until every slot is connected the server is left out of that user's runs (connecting applies from the next message). A connection is tied to the server's host: if the admin moves the server to another host, every connection resets and must be made again. Connected secrets are only used in the owner's own conversations and trusted group teammates' chats; plain colleague chats and avatar consultations never get a slotted shared server. In the owner's own plugin/knowledge-repository .mcp.json, http/sse entries may reference vault secrets as \${NAME} in their headers/URL instead — on the Claude Agent SDK runtime only: on the pi runtime no plugin or knowledge-repository .mcp.json entry receives a secret (one outside the plugins bundled with Noah that names a \${NAME} placeholder is left out of the run), so a shared MCP server slot is the way there. describe_system lists each shared server and whether this run has it.
+A system admin can register external HTTP MCP servers for every avatar (관리자 → 공용 MCP). Their tools appear as mcp__shared__<server>__<tool> (the mcp__<server>__<tool> form resolves too). A server that needs per-user authentication declares credential slots (which header, in what format) — the admin never chooses or sees anyone's secret. Each user connects one of their OWN secrets to each slot (내 아바타 → 권한·연결 → 시크릿 → 공용 MCP 서버에 연결할 시크릿, which also shows the host the value is sent to); the server fills it in server-side, so the value never reaches the avatar, the shell or the chat. Until every slot is connected the server is left out of that user's runs (connecting applies from the next message). A connection is tied to the server's host: if the admin moves the server to another host, every connection resets and must be made again. Connected secrets are only used in the owner's own conversations and trusted group teammates' chats; plain colleague chats and avatar consultations never get a slotted shared server. No plugin or knowledge-repository .mcp.json entry receives a secret (one outside the plugins bundled with Noah that names a \${NAME} placeholder is left out of the run), so a shared MCP server slot is the way there. describe_system lists each shared server and whether this run has it.
 
 ## Explicit exposure options
 Shell exposure is a per-secret opt-in: enabled custom secrets can be used as environment variables by elevated shell work, with output redaction. Browser input is a separate opt-in with exact allowed hosts and an optional password-field-only rule. The avatar passes secretName to browser type/fill_form; the server resolves the value. Reserved Git/SSH credentials are not general-purpose browser/shell secrets. Never print or save credentials merely to verify configuration.

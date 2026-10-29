@@ -1,17 +1,14 @@
 /**
  * Registry of model TIERS a user can pick per conversation in the chat composer.
  *
- * Each tier `id` is a Claude model ALIAS (`fable`/`opus`/`sonnet`/`haiku`) passed
- * straight to the SDK as `options.model`. Which concrete model an alias resolves to
- * is the OPERATOR's call, controlled via the `ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,
- * HAIKU}_MODEL` environment variables (forwarded into the SDK subprocess by
- * `agentSubprocessEnv`, since it starts from `process.env`). So the picker offers
- * tiers; the deployment pins the versions. An unset alias falls back to the
- * account/tier default.
+ * Each tier `id` (`fable`/`opus`/`sonnet`/`haiku`) is a stable alias. Which
+ * concrete pi model a tier runs is the OPERATOR's call: `PI_MODEL_MAP` maps
+ * every tier (and any concrete model id an admin override names) to a pi model
+ * id, read by `parsePiModelMap` (config.ts) — the only tier → model source. So
+ * the picker offers tiers; the deployment pins the models.
  *
- * Precedence in `claudeAgent.ts`: env pin (`ANTHROPIC_MODEL`) > user tier (this) >
- * admin override > SDK default. The env pin is a HARD lock — when set, the
- * per-conversation choice is ignored (and the client hides the picker).
+ * Precedence (`runCapabilities.ts`): user tier (this) > admin override > the
+ * DEFAULT tier.
  *
  * `label`/`description` are shown to the user, so they are KOREAN (the language
  * split: user-facing strings are Korean); the `id` aliases are stable identifiers
@@ -21,7 +18,7 @@
  * / `routineSchedule.ts` — the composer renders the same registry, avoiding drift.
  */
 export interface ModelTier {
-  /** Claude model alias passed to the SDK as `options.model`. */
+  /** Tier alias, mapped to a pi model by `PI_MODEL_MAP`. */
   id: string;
   /** User-facing tier name (a proper noun; kept as-is). */
   label: string;
@@ -56,8 +53,8 @@ export const MODEL_TIERS: ModelTier[] = [
 export const MODEL_TIER_IDS: string[] = MODEL_TIERS.map((t) => t.id);
 
 /**
- * The tier used when no more-specific choice applies (env pin / user pick / admin
- * override all absent). The composer has no "default" option — every conversation
+ * The tier used when no more-specific choice applies (user pick / admin
+ * override both absent). The composer has no "default" option — every conversation
  * resolves to a concrete tier, and this is the floor.
  */
 export const DEFAULT_MODEL_TIER = "opus";

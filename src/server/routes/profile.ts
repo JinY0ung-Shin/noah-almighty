@@ -192,16 +192,17 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
-  // One intro/hashtags generation per user at a time: each spawns a ~2-minute
-  // SDK subprocess and they share one workspace dir (workspaceDirFor(…, "intro"/
-  // "hashtags")), so concurrent runs would stomp each other AND let one user fan
-  // out unbounded subprocesses. A per-user in-flight set gates re-entry with 409.
+  // One intro/hashtags generation per user at a time: each is a ~2-minute pi
+  // run and they share one work folder (workspaceDirFor(…, "intro"/"hashtags")
+  // → the ephemeral sandbox folder `piEphemeralRunKey` derives from it), so
+  // concurrent runs would stomp each other AND let one user fan out unbounded runs. A per-user in-flight set gates re-entry with 409.
   const generateInFlight = new Set<string>();
 
   // Generate a first-person self-introduction for the owner's avatar. The
   // avatar inspects its own persona + skills and writes a short blurb the owner
   // then reviews/edits before saving (this endpoint does NOT persist it). Runs
-  // headless and read-only, like a routine — no human is mid-conversation.
+  // headless (no owner-level MCP tools; pi built-ins in the owner's own sandbox)
+  // — no human is mid-conversation.
   router.post(
     "/api/me/intro/generate",
     requireAuth(store),
@@ -280,7 +281,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
   // Generate capability hashtags (역량 해시태그) for the owner's avatar, mirroring
   // intro/generate: the avatar inspects its persona + skills and proposes a short
   // set of searchable tags the owner reviews/edits before saving (NOT persisted
-  // here). Runs headless + read-only, like a routine.
+  // here). Runs headless, like intro/generate.
   router.post(
     "/api/me/hashtags/generate",
     requireAuth(store),

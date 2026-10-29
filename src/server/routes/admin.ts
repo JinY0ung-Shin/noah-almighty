@@ -11,7 +11,6 @@ import { piRepoCopyStateDir } from "../agent/pi/piRepoCopy.js";
 import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
-import { CLAUDE_OAUTH_TOKEN_KEY } from "../store.js";
 import { HEX_SSH_TOOL_INFOS, parseHexSshToolPolicy } from "../hexSshPolicy.js";
 import { TOGGLABLE_BUILTIN_TOOLS, parseToolSkillPolicy } from "../toolSkillPolicy.js";
 import { parseModelVisionPolicy } from "../modelVisionPolicy.js";
@@ -20,7 +19,9 @@ import {
   normalizeMcpToolGroups,
   type McpToolGroupId,
 } from "../../shared/mcpToolGroups.js";
-import { discoverGlobalSkills } from "../agent/skillDiscovery.js";
+import { listPluginRootSkills } from "../agent/skillCatalog.js";
+import { loadDefaultPluginRoots } from "../plugins.js";
+import { MODEL_TIER_IDS } from "../modelTiers.js";
 import {
   apiError,
   avatarDir,
@@ -39,37 +40,32 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   registerAdminEgressRoutes(router, deps);
 
-  // System/runtime info: which model the agent is pinned to (config) vs. which
-  // one the SDK actually reported on its last run (observed), plus the auth mode
-  // and the read-only tool allowlist. Read-only; admin-gated.
+  // System/runtime info: the runtime, the tier → pi model mapping (PI_MODEL_MAP),
+  // the model the last run reported (observed), and the policy catalogs.
+  // Read-only; admin-gated.
   router.get("/api/admin/system", requireAuth(store), requireAdmin, async (_req, res) => {
-    // Global skill list for the tool/skill policy card. Cached per bundled CLI
-    // version; a cache miss runs the SDK preflight inline (~0.3s measured). A
-    // broken CLI surfaces as skillDiscovery: null so the panel still loads —
-    // the admin can keep editing via the free-form skill input. The `local`
-    // (offline/test) runtime never spawns the CLI: cache-only.
-    let skillDiscovery = store.getSkillDiscoveryCache();
-    if (config.agentRuntime === "claude") {
-      try {
-        skillDiscovery = await discoverGlobalSkills(store, config);
-      } catch (error) {
-        logger.warn({ err: error }, "skill discovery preflight failed");
-      }
+    // Global skill list for the tool/skill policy card: the bundled
+    // default-skills root, read from disk (cheap: SKILL.md frontmatter only).
+    // A root that cannot be loaded lists nothing — the admin can still type a
+    // skill name into the free-form input.
+    let rootPaths: string[] = [];
+    try {
+      rootPaths = (await loadDefaultPluginRoots(config)).map((root) => root.path);
+    } catch (error) {
+      logger.warn({ err: error }, "default plugin roots could not be listed for the skill policy");
+    }
+    const skillDiscovery = { fetchedAt: new Date().toISOString(), skills: listPluginRootSkills(rootPaths) };
+    const piModelMap: Record<string, string> = {};
+    for (const tier of MODEL_TIER_IDS) {
+      const mapped = config.pi?.modelMap[tier]?.model;
+      if (mapped) piModelMap[tier] = mapped;
     }
     res.json({
       system: {
         agentRuntime: config.agentRuntime,
-        configuredModel: config.anthropicModel ?? null,
+        // Tier → pi model id (PI_MODEL_MAP); empty on the `local` stub.
+        piModelMap,
         observedModel: observedModel.get(),
-        authMode: config.anthropicApiKey ? "api_key" : "subscription",
-        // Whether a subscription OAuth token (claude setup-token) is stored. The
-        // raw token is never returned — only whether one is present.
-        subscriptionConnected: Boolean(store.getAppSecret(CLAUDE_OAUTH_TOKEN_KEY)),
-        // When an ANTHROPIC_API_KEY is set in .env it takes precedence over the
-        // stored subscription token; the UI surfaces this so the admin isn't
-        // surprised that pasting a token has no effect.
-        apiKeyOverride: Boolean(config.anthropicApiKey),
-        readOnlyTools: config.readOnlyTools,
         confluenceConfigured: Boolean(config.confluenceUrl),
         hexSshTools: HEX_SSH_TOOL_INFOS,
         hexSshToolPolicy: store.getHexSshToolPolicy(),
@@ -80,10 +76,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
-        // Admin-selected model override + whether an env ANTHROPIC_MODEL shadows it
-        // (env wins, mirroring the API-key-vs-subscription precedence).
+        // Admin-selected model override (a tier or a PI_MODEL_MAP key).
         modelOverride: store.getModelOverride(),
-        modelEnvLocked: Boolean(config.anthropicModel),
         // Per-model-tier vision policy (+ the deployment default an unset tier
         // inherits) — the panel renders one selector per tier.
         modelVisionPolicy: store.getModelVisionPolicy(),
@@ -122,33 +116,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
     );
     logger.warn({ actorId: req.user!.id, policy: saved }, "builtin tool/skill policy changed");
     res.json({ policy: saved });
-  });
-
-  // Store/replace the Claude subscription token (`claude setup-token` output).
-  // Encrypted at rest in app_config; injected as CLAUDE_CODE_OAUTH_TOKEN into the
-  // agent subprocess when no ANTHROPIC_API_KEY is configured (see claudeAgent.ts).
-  // Write-only: the token is never echoed back.
-  router.put("/api/admin/claude-token", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
-    if (!token) {
-      apiError(res, 400, "토큰을 입력해 주세요.");
-      return;
-    }
-    if (!token.startsWith("sk-ant-")) {
-      apiError(res, 400, "`claude setup-token`이 출력한 토큰(sk-ant-…)을 붙여넣어 주세요.");
-      return;
-    }
-    store.setAppSecret(CLAUDE_OAUTH_TOKEN_KEY, token);
-    auditAs(req, "set_claude_token", "subscription OAuth token stored");
-    logger.info({ actorId: req.user!.id }, "claude subscription token set");
-    res.json({ ok: true });
-  });
-
-  router.delete("/api/admin/claude-token", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    store.deleteAppSecret(CLAUDE_OAUTH_TOKEN_KEY);
-    auditAs(req, "clear_claude_token", "subscription OAuth token cleared");
-    logger.info({ actorId: req.user!.id }, "claude subscription token cleared");
-    res.json({ ok: true });
   });
 
   router.get("/api/admin/stats", requireAuth(store), requireAdmin, (_req, res) => {
@@ -434,7 +401,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   // SYSTEM-ADMIN-ONLY per-group tool policy: which MCP tool groups this group's
   // members may use in chats they drive. The composer disables the rest and
-  // every run is clamped server-side (claudeAgent intersects policies across
+  // every run is clamped server-side (runCapabilities intersects policies across
   // the user's groups). Body `{ allowed: string[] | null }` — null clears the
   // policy, [] blocks every optional MCP tool group. Unknown ids are rejected
   // (not silently dropped) so an admin typo can't change the policy's meaning.
@@ -560,8 +527,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
     res.json({ signupMode: mode });
   });
 
-  // Admin-selected agent model. An env ANTHROPIC_MODEL still wins at runtime
-  // (claudeAgent.ts) — the UI surfaces that so the admin isn't surprised.
+  // Admin-selected agent model: used when a conversation picked no tier
+  // (runCapabilities.ts), mapped to a pi model through PI_MODEL_MAP.
   router.put("/api/admin/model", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
     const model = safeString(req.body?.model);
     if (!model) {

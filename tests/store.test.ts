@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServices } from "../src/server/app.js";
 import { normalizeExperimentalFeatures } from "../src/server/experimentalFeatures.js";
 import { normalizeHashtags } from "../src/server/store.js";
 import { CURRENT_RELEASE_ID } from "../src/server/releaseNotes.js";
-import {
-  buildImageQueryPrompt,
-} from "../src/server/agent/claudeAgent.js";
 import { executeRoutineJob, startRoutineScheduler } from "../src/server/scheduler.js";
 import {
   formatMinuteOfDay,
@@ -16,7 +14,6 @@ import {
   parseRoutineSchedule,
   parseTimeToMinute,
 } from "../src/server/routineSchedule.js";
-import type { AgentImageInput } from "../src/server/types.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
   type HexSshToolPolicy,
@@ -177,34 +174,34 @@ describe("store app config (app-wide secrets)", () => {
 
   it("round-trips and upserts an encrypted app-wide value", () => {
     const store = makeStore();
-    expect(store.getAppSecret("claude_oauth_token")).toBeNull();
-    store.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
-    expect(store.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
-    store.setAppSecret("claude_oauth_token", "sk-ant-oat01-def");
-    expect(store.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-def");
+    expect(store.getAppSecret("test_app_value")).toBeNull();
+    store.setAppSecret("test_app_value", "v-abc");
+    expect(store.getAppSecret("test_app_value")).toBe("v-abc");
+    store.setAppSecret("test_app_value", "v-def");
+    expect(store.getAppSecret("test_app_value")).toBe("v-def");
   });
 
   it("deletes an app-wide value", () => {
     const store = makeStore();
-    store.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
-    store.deleteAppSecret("claude_oauth_token");
-    expect(store.getAppSecret("claude_oauth_token")).toBeNull();
+    store.setAppSecret("test_app_value", "v-abc");
+    store.deleteAppSecret("test_app_value");
+    expect(store.getAppSecret("test_app_value")).toBeNull();
   });
 
   it("returns null when the value can't decrypt (e.g. SESSION_SECRET changed)", () => {
-    makeStore("secretA").setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    makeStore("secretA").setAppSecret("test_app_value", "v-abc");
     // Re-open the same DB with a different secret: the stored value can't decrypt.
-    expect(makeStore("secretB").getAppSecret("claude_oauth_token")).toBeNull();
+    expect(makeStore("secretB").getAppSecret("test_app_value")).toBeNull();
   });
 
   it("drops the retired speech-to-text override on reopen and keeps other keys", () => {
     const first = makeStore();
     first.setAppSecret("stt_override", JSON.stringify({ url: "http://stt:8000/v1", model: null, language: null }));
-    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.setAppSecret("test_app_value", "v-abc");
     first.close();
     const second = makeStore();
     expect(second.getAppSecret("stt_override")).toBeNull();
-    expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+    expect(second.getAppSecret("test_app_value")).toBe("v-abc");
   });
 
   it("drops the retired server-agent tables and app config on reopen", () => {
@@ -219,7 +216,7 @@ describe("store app config (app-wide secrets)", () => {
     `);
     first.setAppSecret("server_agents_enabled", "on");
     first.setAppSecret("server_agent_deployment_id", "0123456789abcdef");
-    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.setAppSecret("test_app_value", "v-abc");
     first.close();
     const second = makeStore();
     const leftovers = dbOf(second)
@@ -228,17 +225,84 @@ describe("store app config (app-wide secrets)", () => {
     expect(leftovers).toEqual([]);
     expect(second.getAppSecret("server_agents_enabled")).toBeNull();
     expect(second.getAppSecret("server_agent_deployment_id")).toBeNull();
-    expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+    expect(second.getAppSecret("test_app_value")).toBe("v-abc");
   });
 
   it("drops the retired Craft apps switch on reopen", () => {
     const first = makeStore();
     first.setAppSecret("craft_apps_enabled", "on");
-    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.setAppSecret("test_app_value", "v-abc");
     first.close();
     const second = makeStore();
     expect(second.getAppSecret("craft_apps_enabled")).toBeNull();
-    expect(second.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+    expect(second.getAppSecret("test_app_value")).toBe("v-abc");
+  });
+
+  it("drops the retired claude setup-token and skill-discovery cache on reopen, after a DB backup", () => {
+    const dataDir = path.join(tempDir, "appconfig");
+    const backupDir = path.join(dataDir, "backups");
+    const first = makeStore();
+    // A fresh DB holds nothing retired, so its open takes no backup.
+    expect(first.retirementGate()).toMatchObject({ allowed: true, backupPath: null });
+    expect(fs.existsSync(backupDir)).toBe(false);
+    // What the retired Claude Agent SDK runner left: the admin-stored
+    // `claude setup-token` and the SDK preflight's skill-discovery cache.
+    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.setAppSecret(
+      "skill_discovery_cache",
+      JSON.stringify({ cliVersion: "2.1.283", fetchedAt: "t", skills: [{ name: "code-review", description: "" }] }),
+    );
+    first.setAppSecret("test_app_value", "v-abc");
+    first.close();
+
+    const second = makeStore();
+    expect(second.getAppSecret("claude_oauth_token")).toBeNull();
+    expect(second.getAppSecret("skill_discovery_cache")).toBeNull();
+    expect(second.getAppSecret("test_app_value")).toBe("v-abc");
+    // The deletes ran only behind the pre-retirement backup, which still holds both rows.
+    const gate = second.retirementGate();
+    expect(gate.allowed).toBe(true);
+    expect(gate.backupPath).toBe(path.join(backupDir, `pre-retire-${gate.stamp}.db`));
+    const raw = new Database(gate.backupPath!, { readonly: true });
+    try {
+      const keys = (
+        raw
+          .prepare("SELECT key FROM app_config WHERE key IN ('claude_oauth_token', 'skill_discovery_cache') ORDER BY key")
+          .all() as { key: string }[]
+      ).map((row) => row.key);
+      expect(keys).toEqual(["claude_oauth_token", "skill_discovery_cache"]);
+    } finally {
+      raw.close();
+    }
+    second.close();
+
+    // Fully retired now: the next open finds nothing and takes no second backup.
+    const third = makeStore();
+    expect(third.retirementGate()).toMatchObject({ allowed: true, backupPath: null });
+    expect(fs.readdirSync(backupDir)).toHaveLength(1);
+  });
+
+  it("keeps the retired SDK keys on a boot whose pre-retirement backup failed, and retires them on the next", () => {
+    const dataDir = path.join(tempDir, "appconfig");
+    const first = makeStore();
+    first.setAppSecret("claude_oauth_token", "sk-ant-oat01-abc");
+    first.setAppSecret("skill_discovery_cache", "{}");
+    first.close();
+    // A regular file where the backups folder belongs: the backup cannot be written.
+    const blocker = path.join(dataDir, "backups");
+    fs.writeFileSync(blocker, "not a folder");
+
+    const held = makeStore();
+    expect(held.retirementGate()).toMatchObject({ allowed: false, backupPath: null });
+    expect(held.getAppSecret("claude_oauth_token")).toBe("sk-ant-oat01-abc");
+    expect(held.getAppSecret("skill_discovery_cache")).toBe("{}");
+    held.close();
+
+    fs.rmSync(blocker);
+    const retried = makeStore();
+    expect(retried.retirementGate().backupPath).not.toBeNull();
+    expect(retried.getAppSecret("claude_oauth_token")).toBeNull();
+    expect(retried.getAppSecret("skill_discovery_cache")).toBeNull();
   });
 
   it("reads stored tool-group selections naming the retired craft_* groups without them", () => {
@@ -271,7 +335,7 @@ describe("store app config (app-wide secrets)", () => {
     expect(store.getHexSshToolPolicy()).toEqual(policy);
   });
 
-  it("stores the builtin tool/skill policy and discovery cache as app config", () => {
+  it("stores the builtin tool/skill policy as app config", () => {
     const store = makeStore();
     expect(store.getToolSkillPolicy()).toEqual({ disabledTools: [], disabledSkills: [] });
     // The lenient normalizer drops unknown tool names and malformed skill names.
@@ -284,15 +348,6 @@ describe("store app config (app-wide secrets)", () => {
       disabledSkills: ["code-review"],
     });
     expect(store.getToolSkillPolicy()).toEqual(saved);
-
-    expect(store.getSkillDiscoveryCache()).toBeNull();
-    const cache = {
-      cliVersion: "9.9.9",
-      fetchedAt: "2026-07-14T00:00:00.000Z",
-      skills: [{ name: "code-review", description: "review" }],
-    };
-    store.setSkillDiscoveryCache(cache);
-    expect(store.getSkillDiscoveryCache()).toEqual(cache);
   });
 });
 
@@ -524,33 +579,6 @@ describe("store agent session resume", () => {
     expect(store.markReleaseSeen(ownerId).lastSeenRelease).toBe(CURRENT_RELEASE_ID);
   });
 });
-
-describe("agent image prompt", () => {
-  it("builds a single SDK user message with text and image content blocks", async () => {
-    const image: AgentImageInput = { mediaType: "image/png", data: "iVBORw0KGgo=" };
-    const messages: Record<string, any>[] = [];
-    for await (const message of buildImageQueryPrompt("이 이미지 봐줘", [image])) {
-      messages.push(message);
-    }
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0].type).toBe("user");
-    expect(messages[0].parent_tool_use_id).toBeNull();
-    expect(messages[0].shouldQuery).toBe(true);
-    expect(messages[0].uuid).toEqual(expect.any(String));
-    expect(messages[0].message).toEqual({
-      role: "user",
-      content: [
-        { type: "text", text: "이 이미지 봐줘" },
-        {
-          type: "image",
-          source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
-        },
-      ],
-    });
-  });
-});
-
 
 describe("routineSchedule", () => {
   // Fixed UTC+9 KST math, no DST.

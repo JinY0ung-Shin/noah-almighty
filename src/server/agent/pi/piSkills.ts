@@ -14,7 +14,7 @@
  *    skills are listed with `via: "mcp"` and read through the read-only
  *    `mcp__skills__read` tool — their files never land in someone else's sandbox.
  *  - The admin skill policy is enforced by omission: a disabled skill (bare
- *    name or `<plugin>:<name>`, the same rule the SDK hook applies) is neither
+ *    name or `<plugin>:<name>`) is neither
  *    copied nor listed nor readable.
  *
  * Claude Code specifics are rewritten in the copied Markdown: `${CLAUDE_SKILL_DIR}`
@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig, PiSkillIndexEntry, PluginRoot } from "../../types.js";
-import { skillMdMeta } from "../skillDiscovery.js";
+import { skillMdMeta } from "../skillCatalog.js";
 import type { PinnedDir } from "../../pinnedFs.js";
 import { PI_SANDBOX_ROOT, piSandboxDir, type PiWorkspace } from "./piWorkspace.js";
 

@@ -1,5 +1,9 @@
-// Admin-managed on/off policy for SDK BUILT-IN tools and skills (the built-in
-// counterpart of the hex-ssh tool policy). Stored as one JSON blob in
+// Admin-managed on/off policy for BUILT-IN tools and skills (the built-in
+// counterpart of the hex-ssh tool policy). Skills are enforced by omission: a
+// disabled skill is never copied into a pi sandbox, listed or served
+// (`pi/piSkills.ts`). pi has no per-request built-in tool gate, so a disabled
+// built-in is ADVISORY — both metacognition surfaces ask the model not to use
+// it (`piAdminDisabledToolsNote`). Stored as one JSON blob in
 // `app_config` (encrypted like every app secret); read fresh on every agent
 // run. The DEFAULT (empty) policy must always be safe: a SESSION_SECRET
 // rotation makes the stored blob unreadable, which silently falls back to
@@ -8,14 +12,14 @@
 export const TOOL_SKILL_POLICY_CONFIG_KEY = "builtin_tool_skill_policy";
 
 /**
- * One admin-panel toggle for built-in SDK tools. A toggle may map to SEVERAL
- * tool names (Task/Agent are the same capability under two names across CLI
- * versions), so the POLICY stores raw tool names while the UI renders toggles.
+ * One admin-panel toggle for built-in tools. A toggle may map to SEVERAL tool
+ * names (Task/Agent are the same capability under two names), so the POLICY
+ * stores raw tool names while the UI renders toggles.
  */
 export interface TogglableBuiltinTool {
   /** Stable toggle id (UI state key). */
   id: string;
-  /** SDK tool names this toggle disables (fed to `disallowedTools` verbatim). */
+  /** Tool names this toggle disables. */
   names: string[];
   /** Admin UI label (Korean — user-facing). */
   labelKo: string;
@@ -27,12 +31,10 @@ export interface TogglableBuiltinTool {
  * Built-in tools an admin MAY disable. Deliberately EXCLUDES the core tools an
  * avatar cannot function without (Read/Glob/Grep/Bash/Edit/Write/Skill/
  * AskUserQuestion/TodoWrite) — the strict parser rejects anything outside this
- * catalog so a panel bug can never brick every avatar.
- * `UNUSED_SDK_BUILTIN_TOOLS` (always disallowed) is separate from and additive
- * to this policy. The retired `agent_teams` (SendMessage) and `workflow`
- * (Workflow) toggles are gone with the features: those tools are now always
- * disallowed, and a stored policy still naming them normalizes them away on
- * read (uniqueKnownTools).
+ * catalog so a panel bug can never brick every avatar. The retired
+ * `agent_teams` (SendMessage) and `workflow` (Workflow) toggles are gone with
+ * the features: a stored policy still naming them normalizes them away on read
+ * (uniqueKnownTools).
  */
 export const TOGGLABLE_BUILTIN_TOOLS: TogglableBuiltinTool[] = [
   {
@@ -66,16 +68,14 @@ const TOGGLABLE_TOOL_NAME_SET = new Set<string>(
 );
 
 /**
- * Skill names as the CLI accepts them: SKILL.md `name`, a directory name, or a
- * plugin-qualified `plugin:skill`. The shape also guards the `Skill(<name>)`
- * disallow specifier this policy is compiled into — parentheses/commas would
- * corrupt the specifier list, so the charset excludes them.
+ * Skill names: SKILL.md `name`, a directory name, or a plugin-qualified
+ * `plugin:skill`.
  */
 const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_DISABLED_SKILLS = 200;
 
 export interface ToolSkillPolicy {
-  /** Disabled SDK built-in tool names (each ∈ TOGGLABLE_BUILTIN_TOOLS names). */
+  /** Disabled built-in tool names (each ∈ TOGGLABLE_BUILTIN_TOOLS names). */
   disabledTools: string[];
   /** Disabled skill names (discovered or admin-typed; SKILL_NAME_RE shape). */
   disabledSkills: string[];
@@ -170,62 +170,27 @@ export function parseToolSkillPolicy(value: unknown): ToolSkillPolicy | null {
   };
 }
 
+// ---- Global skill list (admin panel) ---------------------------------------
+
 /**
- * Compile the policy into `disallowedTools` entries: bare tool names remove
- * the tool from the model's context entirely; `Skill(<name>)` specifiers deny
- * that one skill's invocation without removing the Skill tool or other skills
- * (verified against the bundled CLI's permission matcher — a content-carrying
- * deny never strips the tool itself).
+ * `app_config` key of the RETIRED skill-discovery cache (the Claude Agent SDK
+ * preflight's `supportedCommands()` result, keyed by the bundled CLI version).
+ * Deleted on existing deployments by the store migration; reserved forever.
  */
-export function disallowedEntriesForPolicy(policy: ToolSkillPolicy): string[] {
-  return [
-    ...policy.disabledTools,
-    ...policy.disabledSkills.map((name) => `Skill(${name})`),
-  ];
-}
-
-// ---- Skill discovery cache (preflight supportedCommands result) ------------
-
 export const SKILL_DISCOVERY_CACHE_KEY = "skill_discovery_cache";
 
-/** One skill/command the CLI reported via `supportedCommands()`. */
+/** One skill a plugin root ships (`<root>/skills/<dir>/SKILL.md`). */
 export interface DiscoveredSkill {
   name: string;
   description: string;
 }
 
 /**
- * Cached global skill/command list from ONE preflight SDK session (CLI
- * built-in plugin skills + the app's default-skills). Keyed by the bundled
- * CLI version so an SDK upgrade invalidates it; per-avatar plugin skills are
- * NOT here — they are enumerated per run from the avatar's plugin roots.
+ * The global skill list the admin tool/skill policy renders: the bundled
+ * default-skills root, listed from disk on each request (`skillCatalog.ts`).
+ * Per-avatar plugin skills are not here — they differ per avatar.
  */
-export interface SkillDiscoveryCache {
-  cliVersion: string;
+export interface SkillCatalog {
   fetchedAt: string;
   skills: DiscoveredSkill[];
-}
-
-/** Lenient reader for the stored cache: anything malformed → null (re-discover). */
-export function normalizeSkillDiscoveryCache(value: unknown): SkillDiscoveryCache | null {
-  if (!isRecord(value) || typeof value.cliVersion !== "string" || !value.cliVersion) {
-    return null;
-  }
-  if (!Array.isArray(value.skills)) {
-    return null;
-  }
-  const skills: DiscoveredSkill[] = [];
-  for (const entry of value.skills) {
-    if (isRecord(entry) && typeof entry.name === "string" && entry.name) {
-      skills.push({
-        name: entry.name,
-        description: typeof entry.description === "string" ? entry.description : "",
-      });
-    }
-  }
-  return {
-    cliVersion: value.cliVersion,
-    fetchedAt: typeof value.fetchedAt === "string" ? value.fetchedAt : "",
-    skills,
-  };
 }

@@ -1,17 +1,15 @@
 /**
- * The backend-agnostic half of a run plan (design N1): who may do what, which
- * in-process MCP servers this run builds, the model chain, and the self-state
- * BOTH metacognition surfaces report. The Claude Agent SDK runner wraps it into
- * its `options` bag (`runPlan.ts` → `buildAgentRunPlan`); the pi runner
- * (`pi/runPiAgent.ts`) serves the same servers over the HTTP MCP endpoint. One
- * derivation for both runners keeps their gates from drifting.
+ * The setup half of a run (design N1): who may do what, which in-process MCP
+ * servers this run builds, the model chain, and the self-state BOTH
+ * metacognition surfaces report. The pi runner (`pi/runPiAgent.ts`) serves
+ * the servers over the HTTP MCP endpoint and gates every call with
+ * `mcpAllowedTools`; the handlers self-gate on top.
  *
  * ONE thing flows backwards. File-output and browser-screenshot attachments are
  * stamped with the length of the assistant text accumulated when the tool ran,
- * and that accumulator lives in the run loop AND is REASSIGNED there on the
- * empty-turn retry. So it arrives as `currentTextAnchor()` — an accessor read
- * at call time. Passing the array itself would silently stamp against a stale
- * binding after a retry.
+ * and that accumulator lives in the run loop AND is RESET there at every fold
+ * and follow-up turn. So it arrives as `currentTextAnchor()` — an accessor read
+ * at call time. Passing the value itself would silently stamp a stale one.
  *
  * The setup half declares NO `let` (agent/CLAUDE.md) — keep it that way.
  */
@@ -19,7 +17,6 @@ import type {
   AppConfig,
   AgentRequest,
   AgentOwner,
-  AgentRuntime,
   PiRuntimeFacts,
   PluginRoot,
 } from "../types.js";
@@ -76,7 +73,7 @@ import {
   FILE_OUTPUT_TOOL_NAMES,
 } from "./fileOutputTools.js";
 
-// Same `{ module: "agent" }` tag claudeAgent.ts logs under: the plan is one
+// Same `{ module: "agent" }` tag runPiAgent.ts logs under: the plan is one
 // half of a single run, so its lines must stay indistinguishable in the log.
 const agentLogger = logger.child({ module: "agent" });
 
@@ -114,7 +111,7 @@ export interface AgentToolAccess {
   ownerToolAccess: boolean;
   /** Elevated (owner OR trusted) tool access, with the same headless gating. */
   elevatedToolAccess: boolean;
-  /** Owner OR trusted, IGNORING headless — gates the auto-approve path. */
+  /** Owner OR trusted, IGNORING headless (logged with the run's capabilities). */
   elevated: boolean;
   autoApprove: boolean;
   hexSshViewerClass: HexSshViewerClass;
@@ -122,9 +119,10 @@ export interface AgentToolAccess {
 
 /**
  * Derive a run's tool-permission level from the request. Pure and exported so it
- * can be unit-tested directly: because the PreToolUse hook auto-allows every
- * `mcp__*` tool, these booleans are the REAL gate between a run and the owner-only
- * tools. A regression that, e.g., passed raw `viewerIsOwner` through would
+ * can be unit-tested directly: these booleans decide which MCP tools a run
+ * builds and may call (`mcpAllowedTools`, the pi endpoint's per-call gate) and
+ * what each handler's self-gate sees, so they are the REAL gate between a run
+ * and the owner-only tools. A regression that, e.g., passed raw `viewerIsOwner` through would
  * silently grant headless intro/hashtag-generation runs full owner repo-write
  * access — so the four viewer classes are pinned in tests.
  */
@@ -218,12 +216,11 @@ export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPla
  * file of its own (get_attachment's `save_to_workspace`) write, and the path
  * describe_system names. Every run kind that has one sets it the same way —
  * the chat route's executeChatTurn (own-avatar, teammate and
- * external-task-API turns) and the owner-routine scheduler both pass
- * `cwd: activeRepoCwd ?? workspaceDir` with
- * `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined`, and set
- * `activeRepoName` together with that clone cwd. So an open working repo (#47)
- * moved the scratch into `additionalDirs` — the clone is the cwd, never the
- * scratch — and otherwise the scratch IS the cwd. A run with no conversation
+ * external-task-API turns) and the owner-routine scheduler. On pi `cwd` is
+ * always the sandbox conversation folder, so the scratch IS the cwd. Only the
+ * `local` stub passes `cwd: activeRepoCwd ?? workspaceDir` with
+ * `additionalDirs: activeRepoCwd ? [workspaceDir] : undefined` (an open
+ * working repo (#47) moved the scratch into `additionalDirs` there). A run with no conversation
  * (profile generators, avatar consultations) has a per-feature cwd, not a
  * conversation workspace: undefined. Pure and exported so the rule is pinned.
  */
@@ -251,16 +248,14 @@ export function buildModelFallbackChain(primary: string): string[] {
   );
 }
 
-/** Which runner consumes the plan — it decides what the run REALLY has. */
+/**
+ * What the pi runner hands the plan (docs/architecture/pi-runtime.md). Servers
+ * that exist only as processes or remote endpoints (hex-ssh, plugin
+ * `.mcp.json`, admin 공용 MCP) are relayed by Noah as an MCP client
+ * (`piMcpProxies`, served under the stable ids `hex-ssh`/`plugins`/`shared`).
+ */
 export interface RunCapabilityOptions {
-  /**
-   * `pi`: the run executes on pi-gateway (docs/architecture/pi-runtime.md).
-   * Servers that exist only as processes or remote endpoints (hex-ssh, plugin
-   * `.mcp.json`, admin 공용 MCP) are relayed by Noah as an MCP client
-   * (`piMcpProxies`, served under the stable ids `hex-ssh`/`plugins`/`shared`).
-   */
-  runtime?: Extract<AgentRuntime, "claude" | "pi">;
-  /** pi runs: the sandbox path of this conversation's work folder (`/workspace/c/<seg>`). */
+  /** The sandbox path of this run's work folder (`/workspace/c/<seg>`). */
   piConversationDir?: string;
   /**
    * pi runs: the viewer's sandbox workspace (host + sandbox views). Every
@@ -280,9 +275,8 @@ export interface RunCapabilityOptions {
 }
 
 /**
- * Derive everything a run needs before its stream opens, for either runner:
- * tool access, the in-process MCP servers, the model chain and the
- * prompt/self-state inputs. Pure with respect to the run loop — it reads
+ * Derive everything a run needs before its stream opens: tool access, the
+ * in-process MCP servers, the model chain and the prompt/self-state inputs. Pure with respect to the run loop — it reads
  * store/config and builds servers, but touches none of the loop's accumulators.
  */
 export async function buildRunCapabilities(
@@ -295,8 +289,6 @@ export async function buildRunCapabilities(
   currentTextAnchor: () => number,
   runOptions: RunCapabilityOptions = {},
 ) {
-  const runtime = runOptions.runtime ?? "claude";
-  const piRun = runtime === "pi";
   const { buildKnowledgeServer, KNOWLEDGE_SERVER_NAME, KNOWLEDGE_TOOL_NAMES } =
     await import("./knowledgeTools.js");
   const {
@@ -367,9 +359,8 @@ export async function buildRunCapabilities(
 
   const streaming = Boolean(events);
   // Tool-access derivation lives in deriveAgentToolAccess (a pure, unit-tested
-  // helper): because the PreToolUse hook auto-allows every mcp__* tool, these
-  // booleans are the real gate between a headless/colleague run and owner-only
-  // tools, so the logic must be testable in isolation.
+  // helper): these booleans are the real gate between a headless/colleague run
+  // and owner-only tools, so the logic must be testable in isolation.
   const {
     headless,
     allowHeadlessTools,
@@ -392,10 +383,9 @@ export async function buildRunCapabilities(
   );
   // Admin-managed built-in tool/skill on-off policy — read fresh per run like
   // the hex-ssh policy, so a panel change applies from the next turn without a
-  // restart. Enforced three ways below: disallowedTools (removes built-ins
-  // from context / denies Skill(<name>) at the CLI), the skills allowlist
-  // (hides disabled skills from the listing), and the PreToolUse hook (our own
-  // gate — the hook otherwise auto-allows every Skill call).
+  // restart. A disabled skill is never copied, listed or served (the runner's
+  // skill sync, pi/piSkills.ts); a disabled built-in is ADVISORY on pi — both
+  // surfaces ask the model not to use it (piAdminDisabledToolsNote).
   const toolSkillPolicy = store.getToolSkillPolicy();
   // Admin per-group tool policy (enforcement + META-COGNITION): the driving
   // user's allowed MCP tool groups is the INTERSECTION across their
@@ -432,36 +422,29 @@ export async function buildRunCapabilities(
   const browserToolsEnabled = familyPlan.browser;
   const systemToolsEnabled = familyPlan.system;
   const registeredMcpToolGroups = familyPlan.registered;
-  // Effective model: an env-pinned ANTHROPIC_MODEL wins (mirrors the API-key vs.
-  // subscription rule) and is a HARD lock; otherwise the user's per-conversation
-  // tier pick (a Claude alias, resolved to a concrete model by the operator's
-  // ANTHROPIC_DEFAULT_*_MODEL env), otherwise the admin-selected override,
-  // otherwise the DEFAULT tier (opus). Unknown tiers are ignored so a stale/garbage
-  // value can never reach the SDK as a model id.
+  // Effective model: the user's per-conversation tier pick (mapped to a pi model
+  // by the operator's PI_MODEL_MAP), otherwise the admin-selected override,
+  // otherwise the DEFAULT tier (opus). Unknown tiers are ignored so a
+  // stale/garbage value can never become a model id.
   const userModelTier = isModelTier(request.modelTier)
     ? request.modelTier
     : undefined;
-  // User-chosen reasoning effort for this conversation. Unknown/unset → leave
-  // `options.effort` off so the SDK applies its own default (`high`). Independent
-  // of the model pin: effort still applies when ANTHROPIC_MODEL locks the model.
+  // User-chosen reasoning effort for this conversation. Unknown/unset → no
+  // effort is sent, so pi applies its own default.
   const userEffort = isEffortLevel(request.effort) ? request.effort : undefined;
   const effectiveModel =
-    config.anthropicModel ??
     userModelTier ??
     store.getModelOverride() ??
     DEFAULT_MODEL_TIER;
-  // Model fallback chain (scheduled routines only — `request.modelFallback`): on a
+  // Model fallback chain (unattended runs — `request.modelFallback`): on a
   // transient model/server error, retry down the tier order from the resolved
-  // model. An env-pinned ANTHROPIC_MODEL is a HARD lock, so it never falls back.
-  // Otherwise the chain is just the single resolved model (chat behavior).
-  const modelChain =
-    request.modelFallback && !config.anthropicModel
-      ? buildModelFallbackChain(effectiveModel)
-      : [effectiveModel];
+  // model, each tier through PI_MODEL_MAP and on a fresh pi session. Otherwise
+  // the chain is just the single resolved model (chat behavior).
+  const modelChain = request.modelFallback ? buildModelFallbackChain(effectiveModel) : [effectiveModel];
   // Effective vision for the model THIS run resolved to: the admin per-tier
   // policy for tier aliases, the deployment default (MODEL_VISION) otherwise.
-  // Drives the hook's image-Read block, the no-vision prompt section, the
-  // Confluence image-block gate, and describe_system.
+  // Drives the no-vision prompt section, the Confluence image-block gate, and
+  // describe_system.
   const runVisionEnabled = visionForModel(
     effectiveModel,
     store.getModelVisionPolicy(),
@@ -472,7 +455,7 @@ export async function buildRunCapabilities(
   agentLogger.info(
     {
       avatarId: request.avatar.id,
-      runtime,
+      runtime: "pi",
       viewerUserId: request.viewerUserId,
       headless,
       allowHeadlessTools,
@@ -561,7 +544,7 @@ export async function buildRunCapabilities(
   // repo + read access (owner OR trusted teammate, like `mcp__repo__read_file`).
   // The repo is resolved from the OWNER (avatar.id) inside the tools, never the
   // viewer, so a teammate's search hits the owner's vault. brainActive is the
-  // SINGLE boolean used byte-identically in allowedTools + mcpServers below.
+  // SINGLE boolean used byte-identically in mcpAllowedTools + inProcessMcpServers below.
   const brainActive =
     personalKnowledgeToolsEnabled &&
     knowledgeRepoConfigured &&
@@ -571,9 +554,9 @@ export async function buildRunCapabilities(
   // HERE (ahead of the server build below) because describe_system's context is
   // assembled first and must report the same capability as the prompt.
   //
-  // The identity half is kept separate because the handler restates it: the
-  // `mcp__` auto-allow means the tool callback is the last line of defence if
-  // registration ever drifts. Owner-only — anyone chatting with someone else's
+  // The identity half is kept separate because the handler restates it: pi
+  // lists a STATIC tool catalog, so the tool callback is the last line of
+  // defence if registration ever drifts. Owner-only — anyone chatting with someone else's
   // avatar must not let that owner's instructions drive their own logged-in
   // browser.
   const browserViewerAllowed = ownerToolAccess;
@@ -581,7 +564,7 @@ export async function buildRunCapabilities(
     browserToolsEnabled && Boolean(events?.onBrowser) && browserViewerAllowed;
   // Stored secrets the owner opted into BROWSER INPUT. Derived here (next to the
   // bridge gates) because three places downstream need the SAME list: the browser
-  // server's ctx, the redaction set below, and — via claudeAgent's request stamp
+  // server's ctx, the redaction set below, and — via stampPromptRequest
   // — both metacognition surfaces. Never on a consultation run: that turn is
   // driven by ANOTHER avatar's question, and a credential must not be typed on
   // someone else's prompt. Empty whenever the bridge itself is off, so a run with
@@ -604,7 +587,7 @@ export async function buildRunCapabilities(
   // The chat route supplies `onShareLink` only on those same interactive
   // own-avatar turns and re-checks that per call. Computed HERE, before
   // buildSystemServer, so describe_system reports the same boolean the tool,
-  // allowedTools and the prompt stamp all key on.
+  // mcpAllowedTools and the prompt stamp all key on.
   const shareLinkToolActive =
     fileOutputActive &&
     Boolean(events?.onShareLink) &&
@@ -629,7 +612,7 @@ export async function buildRunCapabilities(
   // speed bump against an injected, irreversible removal of items — not a full
   // boundary (update_todo stays, and a leaked key IS the owner's session per
   // CLAUDE.md). Computed before buildSystemServer so
-  // describe_system reports the SAME booleans the server build, allowedTools
+  // describe_system reports the SAME booleans the server build, mcpAllowedTools
   // and the prompt stamp key on.
   const todoToolsActive =
     systemToolsEnabled && ownerToolAccess && !consultationRun;
@@ -649,15 +632,22 @@ export async function buildRunCapabilities(
   // describe_system with the `converter: INSTALLED` / `NOT INSTALLED` markers.
   // Deck guidance additionally needs a turn that can publish files (the
   // preview/download path) and a viewer who may author one: deckAuthoring is
-  // the admin skill policy (the hook's exact `pptx` / `<plugin>:pptx` rule),
-  // then the same elevated-tools gate the PreToolUse hook applies to Bash.
+  // the admin skill policy (an exact `pptx` / `<plugin>:pptx` disable), then
+  // whether the run can write files (canWriteFiles below — every pi run can,
+  // in its principal's own sandbox).
   // A pi run builds decks INSIDE the user's sandbox: its toolchain is the
   // sandbox image's (PI_DECK_SANDBOX), never the host probe, and the sandbox
   // has no LibreOffice for the legacy render path.
-  const deckRenderingAvailable = piRun ? false : probeDeckRendering();
-  const deckToolchain = piRun ? piSandboxDeckToolchain(config) : probeDeckToolchain(config);
+  const deckRenderingAvailable = false;
+  const deckToolchain = piSandboxDeckToolchain(config);
+  // Whether this run can write files at all. Every pi run can: its built-ins
+  // (write/edit/bash) work in the sandbox of the user it runs AS — the
+  // viewer's own on a colleague chat, the asker's on a consultation — never
+  // the owner's. ONE flag for both metacognition surfaces: describe_system's
+  // ctx below, and the prompt through the returned plan.
+  const canWriteFiles = true;
   const deckAuthoring = deckAuthoringStatusFor({
-    elevatedToolAccess,
+    elevatedToolAccess: canWriteFiles,
     disabledSkills: toolSkillPolicy.disabledSkills,
     pptxSkillNames: deckToolchain.pptxSkillNames,
   });
@@ -673,10 +663,8 @@ export async function buildRunCapabilities(
   // get_attachment's save_to_workspace writes, and the path describe_system names.
   // A pi run's scratch IS its sandbox conversation folder (host view here;
   // every path handed back to the model is mapped to the sandbox view).
-  const piWorkspace = piRun ? runOptions.piWorkspace : undefined;
-  const scratchWorkspaceDir = piRun
-    ? (piWorkspace?.hostConversationDir ?? conversationScratchDir(request))
-    : conversationScratchDir(request);
+  const piWorkspace = runOptions.piWorkspace;
+  const scratchWorkspaceDir = piWorkspace?.hostConversationDir ?? conversationScratchDir(request);
   const toSandboxPath = (hostPath: string): string =>
     (piWorkspace && piSandboxPath(piWorkspace, hostPath)) ?? hostPath;
   // save_to_workspace can LAND this run: the Confluence family is registered,
@@ -689,17 +677,10 @@ export async function buildRunCapabilities(
     elevatedToolAccess &&
     Boolean(scratchWorkspaceDir) &&
     confluenceCredentialsConfigured(config, ownerSecrets);
-  // Whether this run can write files at all: the elevated built-in class
-  // (Write/Edit/Bash) the PreToolUse hook gates — the same gate deckAuthoring
-  // uses. A read-only run is told the conversation's files exist and can be
-  // read, but cannot be placed into anything it produces. ONE flag for both
-  // metacognition surfaces: describe_system's ctx below, and the prompt
-  // through the returned plan.
-  const canWriteFiles = elevatedToolAccess;
   // hex-ssh registration (the server itself is built further down). Computed
   // HERE so describe_system's SSH line reports this boolean, not secret names.
-  // The SDK registers it as a CLI stdio server; a pi run reaches it through
-  // Noah's relay (`piMcpProxies` below) — the key never enters the sandbox.
+  // The run reaches it through Noah's relay (`piMcpProxies` below) — the key
+  // never enters the sandbox.
   const sshActive =
     sshToolsEnabled &&
     Boolean(ownerSecrets.SSH_PRIVATE_KEY && hexSshAllowedTools.length > 0);
@@ -713,8 +694,8 @@ export async function buildRunCapabilities(
   // 2026-10-26). A consultation run gets no external servers at all, exactly
   // like plugin servers, and neither does a restricted headless run (intro /
   // hashtag generation) — it has no use for third-party tools.
-  // A pi run gets the same plan; Noah relays the mounted servers itself
-  // (`piMcpProxies` below, tools as `mcp__shared__<name>__<tool>`).
+  // Noah relays the mounted servers itself (`piMcpProxies` below, tools as
+  // `mcp__shared__<name>__<tool>`).
   const sharedMcpPlan = consultationRun || (headless && !allowHeadlessTools)
     ? null
     : planSharedMcpRun(store.getSharedMcpServers(), {
@@ -727,12 +708,11 @@ export async function buildRunCapabilities(
   const sharedMcpStates = sharedMcpPlan?.states.map((state) =>
     ownerToolAccess ? state : { ...state, unboundSlots: [], missingSecrets: [] },
   );
-  // pi: the servers Noah relays as an MCP client (hex-ssh, plugin `.mcp.json`,
+  // The servers Noah relays as an MCP client (hex-ssh, plugin `.mcp.json`,
   // 공용 MCP) and the values the endpoint redacts from every result. Planned
   // HERE (nothing is spawned yet — the pool starts children lazily) so both
   // metacognition surfaces name the same servers the endpoint serves.
-  const piMcpProxies: PiMcpProxyPlan | undefined = piRun
-    ? await planPiMcpProxies({
+  const piMcpProxies: PiMcpProxyPlan = await planPiMcpProxies({
         config,
         avatarUserId: request.avatar.id,
         pluginRoots: consultationRun ? [] : pluginRoots,
@@ -747,8 +727,7 @@ export async function buildRunCapabilities(
         hexSshAllowedTools,
         sharedMcpPlan,
         reservedNames: PI_NOAH_SERVER_NAMES,
-      })
-    : undefined;
+      });
   // pi + an interactive chat (a live steer channel): ask_avatar runs in the
   // background and its answer arrives as a follow-up message (design D8).
   // Unattended pi runs (routines, the task API) keep the waiting call.
@@ -757,7 +736,7 @@ export async function buildRunCapabilities(
   // routines) may ask a same-group teammate's avatar one question.
   // `avatarConsultation` is the depth guard — a consultation run never
   // re-registers the tool, so ask chains cannot nest. avatarAskActive is the
-  // SINGLE boolean used byte-identically in allowedTools + the ctx injection
+  // SINGLE boolean used byte-identically in mcpAllowedTools + the ctx injection
   // below (the executor's absence unregisters the tool; the handler still
   // self-gates on viewerIsOwner).
   const avatarAskActive =
@@ -769,12 +748,17 @@ export async function buildRunCapabilities(
     // visibility nor trust), so keep the tool out of the prompt entirely.
     ownerState.groups.some((g) => g.avatarSharing);
   // Only a run that HAS ask_avatar can describe its background mode (review L4).
-  const piAsyncAsk = piRun && avatarAskActive && Boolean(events?.steers) && Boolean(runOptions.piAsyncJobs);
+  const piAsyncAsk = avatarAskActive && Boolean(events?.steers) && Boolean(runOptions.piAsyncJobs);
   // pi self-state, ONE value for both metacognition surfaces (describe_system
   // here, the prompt through stampPromptRequest).
-  const piRuntimeFacts: PiRuntimeFacts | undefined = piRun
-    ? {
-        ...(piMcpProxies ? { mcpProxies: piMcpProxies.facts } : {}),
+  const piRuntimeFacts: PiRuntimeFacts = {
+        // Whose sandbox this is (piRunPrincipal: viewerUserId ?? avatar.id).
+        sandboxOwner: consultationRun
+          ? "asker"
+          : (request.viewerUserId ?? request.avatar.id) === request.avatar.id
+            ? "owner"
+            : "viewer",
+        mcpProxies: piMcpProxies.facts,
         asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),
         // Owner self-state (the names), like the prompt's secret list.
@@ -785,8 +769,7 @@ export async function buildRunCapabilities(
         ...(request.activeRepoName && gitRepoToolsEnabled
           ? { activeRepoDir: piRepoCopySandboxPath(request.avatar.id, normalizeGitRepoName(request.activeRepoName)) }
           : {}),
-      }
-    : undefined;
+      };
   const systemServer = buildSystemServer(store, {
     avatarUserId: request.avatar.id,
     owner,
@@ -831,18 +814,18 @@ export async function buildRunCapabilities(
     // Images for documents and decks: the scratch workspace path to name,
     // whether get_attachment's save_to_workspace may be offered, and whether
     // this run may place those files at all.
-    // A pi run names its SANDBOX folder (the host scratch path means nothing
-    // to a model in the sandbox; lane I2 moves the staged copies there too).
-    scratchWorkspaceDir: piRun ? (runOptions.piConversationDir ?? scratchWorkspaceDir) : scratchWorkspaceDir,
+    // The run names its SANDBOX folder (the host scratch path means nothing to
+    // a model in the sandbox; the staged copies live there too).
+    scratchWorkspaceDir: runOptions.piConversationDir ?? scratchWorkspaceDir,
     confluenceSaveToWorkspace,
     canWriteFiles,
     // SSH self-state from the SAME boolean the registration below uses.
     sshEnabled: sshActive,
     sharedMcpServers: sharedMcpStates,
-    // pi-gateway runs: what this runtime really has (sandbox folder, steer
-    // timing, shell secrets, model switches) — mirrored by the prompt's pi
-    // section (promptBuilder piRuntimeSection).
-    ...(piRuntimeFacts ? { piRuntime: piRuntimeFacts } : {}),
+    // What this runtime really has (sandbox folder, steer timing, shell
+    // secrets, model switches) — mirrored by the prompt's pi section
+    // (promptBuilder piRuntimeSection).
+    piRuntime: piRuntimeFacts,
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -903,7 +886,7 @@ export async function buildRunCapabilities(
             : {}),
         }
       : {}),
-    ...(piRun ? { askRuntime: "pi" as const } : {}),
+    askRuntime: "pi" as const,
   });
   // Skill exchange (#skill-share): search skills teammates' avatars shared,
   // learn one into the owner's knowledge repo, (un)share own repo skills.
@@ -911,7 +894,7 @@ export async function buildRunCapabilities(
   // OWNER-ONLY end to end: learning writes the owner's repo, and the listing
   // is the OWNER's group view — a trusted teammate driving this avatar must
   // not browse it (their own avatar serves their view). skillExchangeActive is
-  // the SINGLE boolean used byte-identically in allowedTools + mcpServers.
+  // the SINGLE boolean used byte-identically in mcpAllowedTools + inProcessMcpServers.
   const skillExchangeActive = avatarDirectoryToolsEnabled && ownerToolAccess;
   const skillExchangeServer = buildSkillExchangeServer(store, {
     avatarUserId: request.avatar.id,
@@ -931,12 +914,13 @@ export async function buildRunCapabilities(
     elevated: elevatedToolAccess,
     config,
     conversationId: request.conversationId,
-    // pi: the model works on a sandbox COPY (design D1); `commit` reads it back.
-    ...(piRun ? { runtime: "pi" as const, ...(piWorkspace ? { piWorkspace } : {}) } : {}),
+    // The model works on a sandbox COPY (design D1); `commit` reads it back.
+    runtime: "pi" as const,
+    ...(piWorkspace ? { piWorkspace } : {}),
   });
-  // mcp__skills__read: a pi run whose skill index lists skills that were NOT
-  // copied into this sandbox (a trusted colleague reading the owner's skills).
-  const piSkillSources = piRun ? runOptions.piSkills?.mcpSources : undefined;
+  // mcp__skills__read: a run whose skill index lists skills that were NOT
+  // copied into this sandbox (a colleague reading the owner's skills).
+  const piSkillSources = runOptions.piSkills?.mcpSources;
   const skillsReadActive = Boolean(piSkillSources && piSkillSources.size > 0);
   const skillsServer = skillsReadActive ? buildSkillsServer({ sources: piSkillSources }) : null;
   // Group knowledge-repo tools (per group the OWNER belongs to). OWNER-ONLY like
@@ -945,7 +929,7 @@ export async function buildRunCapabilities(
   // reads, admin writes). Registered only for an owner-driven turn where the
   // owner actually belongs to ≥1 group, to keep the tools out of other prompts.
   const ownerGroups = ownerState.groups;
-  // A single `active` boolean + a single server value so allowedTools/mcpServers
+  // A single `active` boolean + a single server value so mcpAllowedTools/inProcessMcpServers
   // can't drift.
   const groupRepoActive =
     groupKnowledgeToolsEnabled && ownerToolAccess && ownerGroups.length > 0;
@@ -963,7 +947,7 @@ export async function buildRunCapabilities(
   // repo, scoped per-group to the OWNER's memberships inside the tools. Owner-only
   // at registration (like the group repo tools), active when the owner is in ≥1
   // group with a connected shared repo. groupBrainActive is the SINGLE boolean
-  // used byte-identically in allowedTools + mcpServers below.
+  // used byte-identically in mcpAllowedTools + inProcessMcpServers below.
   const groupBrainActive =
     groupKnowledgeToolsEnabled &&
     ownerToolAccess &&
@@ -974,7 +958,7 @@ export async function buildRunCapabilities(
     config,
   });
   // To-do server (todoToolsActive above). The handlers re-check viewerIsOwner
-  // — registration is not the boundary under the mcp__ auto-allow — and stamp
+  // — registration is not the boundary under the static catalog — and stamp
   // each new item with WHO added it and the conversation it came from.
   const todoServer = todoToolsActive
     ? buildTodoServer(store, {
@@ -989,11 +973,11 @@ export async function buildRunCapabilities(
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
   const canvasServer = canvasActive
-    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, ...(piRun ? { neverWait: true } : {}) })
+    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, neverWait: true })
     : null;
-  // The handler self-gates on `allowed` in addition to `browserActive`: the
-  // `mcp__` auto-allow in the PreToolUse hook fires before any owner check, and
-  // a colleague must never drive their own logged-in session through someone
+  // The handler self-gates on `allowed` in addition to `browserActive`:
+  // registration is not the only gate (pi's catalog is static), and a
+  // colleague must never drive their own logged-in session through someone
   // else's avatar prompt.
   // copy_image staging binds the held bytes to a user, and the staging page is
   // opened by the VIEWER's browser (the bridge relays into the browser of the
@@ -1132,9 +1116,9 @@ export async function buildRunCapabilities(
         // share_file's description names the converter's in-place/exact-render
         // workflow only when the deployment actually has the converter.
         deckConverterInstalled: deckToolchain.converter,
-        // create_share_link is built from the SAME boolean as its allowedTools
-        // entry below, describe_system's ctx above and claudeAgent's prompt
-        // stamp, so the four can't drift. The handler still refuses without
+        // create_share_link is built from the SAME boolean as its mcpAllowedTools
+        // entry below, describe_system's ctx above and stampPromptRequest's
+        // prompt stamp, so the four can't drift. The handler still refuses without
         // the host callback.
         ...(shareLinkToolActive
           ? {
@@ -1159,8 +1143,7 @@ export async function buildRunCapabilities(
   });
 
   // The owner's vault minus the reserved git/SSH names: what the browser
-  // server's secret input resolves from, and what the SDK half hands its
-  // MCP subprocesses / redaction set.
+  // server's secret input resolves from, and the relays' redaction set.
   const injectableSecretEnv = mcpInjectableSecretEnv(ownerSecrets);
   // Conversation ids are never reused, so "the row still exists" is the whole
   // liveness test of the Confluence save path.
@@ -1186,11 +1169,12 @@ export async function buildRunCapabilities(
       : undefined,
   });
   // Generic web fetch (intranet + internet, proxy-aware). Registration follows
-  // the tool-group picker; the HANDLER gates on `elevated` — the PreToolUse
-  // hook auto-allows every mcp__* call, so registration alone is not the gate.
+  // the tool-group picker; the HANDLER gates on `elevated`, so registration
+  // alone is not the gate.
   const webFetchServer = buildWebFetchServer({ elevated: elevatedToolAccess });
-  // App in-process MCP servers this run registers (the SDK half adds hex-ssh
-  // and reports any plugin server of the same name — these always override it).
+  // App in-process MCP servers this run registers (hex-ssh, plugin and 공용
+  // servers ride the relays, `piMcpProxies`; a plugin server named like one of
+  // these sits out).
   const inProcessMcpServers: Record<string, unknown> = {
     ...(personalKnowledgeToolsEnabled
       ? { [KNOWLEDGE_SERVER_NAME]: knowledgeServer }
@@ -1233,8 +1217,8 @@ export async function buildRunCapabilities(
     ...(sshActive ? { [SSH_TRUST_SERVER_NAME]: sshTrustServer } : {}),
   };
 
-  // The MCP half of the SDK's `allowedTools`, and the pi endpoint's per-call
-  // gate: exactly the tools the servers above register for THIS run.
+  // The pi endpoint's per-call gate (and describe_system's "callable now"
+  // list): exactly the tools the servers above register for THIS run.
   const mcpAllowedTools: string[] = [
       ...(personalKnowledgeToolsEnabled ? KNOWLEDGE_TOOL_NAMES : []),
       ...(personalKnowledgeToolsEnabled ? REPO_TOOL_NAMES : []),
@@ -1250,8 +1234,8 @@ export async function buildRunCapabilities(
       ...(skillExchangeActive ? SKILL_EXCHANGE_TOOL_NAMES : []),
       ...(sshToolsEnabled ? SSH_IDENTITY_TOOL_NAMES : []),
       ...(gitRepoToolsEnabled ? GIT_REPO_TOOL_NAMES : []),
-      // pi only: the sandbox copy's commit (registered by the pi git_repo build).
-      ...(gitRepoToolsEnabled && piRun ? [GIT_REPO_PI_COMMIT_TOOL_NAME] : []),
+      // The sandbox copy's commit (registered by the pi git_repo build).
+      ...(gitRepoToolsEnabled ? [GIT_REPO_PI_COMMIT_TOOL_NAME] : []),
       ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
       ...(groupRepoActive ? GROUP_REPO_TOOL_NAMES : []),
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
@@ -1265,10 +1249,9 @@ export async function buildRunCapabilities(
   ];
   // describe_system reads the pi facts when it is CALLED, so the registered
   // set lands on the same object its ctx already holds.
-  if (piRuntimeFacts) piRuntimeFacts.callableNoahTools = [...mcpAllowedTools];
+  piRuntimeFacts.callableNoahTools = [...mcpAllowedTools];
 
   return {
-    runtime,
     streaming,
     headless,
     allowHeadlessTools,
@@ -1322,20 +1305,17 @@ export async function buildRunCapabilities(
     mcpAllowedTools,
     piRuntimeFacts,
     piMcpProxies,
-    // pi: what the endpoint redacts from EVERY Noah MCP result of the run —
-    // the relayed servers' secrets (piMcpProxies) plus the browser-typeable
-    // values (a page can echo a typed password into a later snapshot or fetch).
-    // The SDK half builds its PostToolUse set itself (runPlan).
-    piRedactions: piRun
-      ? {
-          ...piMcpProxies?.redactions,
-          ...Object.fromEntries(
-            browserSecretPolicies.flatMap((policy) =>
-              injectableSecretEnv[policy.name] !== undefined ? [[policy.name, injectableSecretEnv[policy.name]!] as const] : [],
-            ),
-          ),
-        }
-      : undefined,
+    // What the endpoint redacts from EVERY Noah MCP result of the run — the
+    // relayed servers' secrets (piMcpProxies) plus the browser-typeable values
+    // (a page can echo a typed password into a later snapshot or fetch).
+    piRedactions: {
+      ...piMcpProxies.redactions,
+      ...Object.fromEntries(
+        browserSecretPolicies.flatMap((policy) =>
+          injectableSecretEnv[policy.name] !== undefined ? [[policy.name, injectableSecretEnv[policy.name]!] as const] : [],
+        ),
+      ),
+    } as Record<string, string>,
   };
 }
 
@@ -1345,8 +1325,7 @@ export type RunCapabilities = Awaited<ReturnType<typeof buildRunCapabilities>>;
  * The request as BOTH prompt builders see it: the run's capability booleans
  * and self-state stamped on, each through the SAME gate as its tool
  * registration (so the prompt never advertises a tool the run lacks, and
- * describe_system — built from the same plan — agrees). Shared by the SDK and
- * pi runners.
+ * describe_system — built from the same plan — agrees).
  */
 export function stampPromptRequest(
   request: AgentRequest,
@@ -1384,8 +1363,8 @@ export function stampPromptRequest(
   // Deck standing guidance: the deployment toolchain (legacy and/or the pptx
   // skill's converter) AND a turn that can publish files (preview embeds + the
   // download card) AND a viewer allowed to author — deckAuthoring, the SAME
-  // status describe_system's deck line branches on, so a read-only colleague or
-  // an admin-disabled `pptx` skill gets no deck guidance on either surface.
+  // status describe_system's deck line branches on, so an admin-disabled `pptx`
+  // skill gets no deck guidance on either surface.
   const deckGuidance = deckGuidanceFlags({
     deckRenderingAvailable,
     deckConverterInstalled: deckToolchain.converter,
@@ -1420,12 +1399,12 @@ export function stampPromptRequest(
       ownerSecrets.CONFLUENCE_PAT ||
       ownerSecrets.CONFLUENCE_PERSONAL_ACCESS_TOKEN,
     ),
-    // get_attachment's save_to_workspace can land this run — runPlan's ONE
-    // derivation, the same boolean describe_system's ctx got.
+    // get_attachment's save_to_workspace can land this run — ONE derivation,
+    // the same boolean describe_system's ctx got.
     confluenceSaveToWorkspace,
-    // This run's tools may write files (runPlan's elevatedToolAccess) — the
-    // same boolean describe_system's ctx got, so the vision listing's "place the
-    // file" tail and the image-sources line agree for every viewer class.
+    // This run's built-ins may write files (always, in the principal's own
+    // sandbox) — the same boolean describe_system's ctx got, so the vision
+    // listing's "place the file" tail and the image-sources line agree.
     canWriteFiles,
     // Web-fetch proxy self-state (META-COGNITION): redacted HTTP(S)_PROXY/
     // NO_PROXY snapshot so the avatar knows whether external sites are
@@ -1458,7 +1437,7 @@ export function stampPromptRequest(
     // button redirect instead. Same boolean describe_system reports.
     shareLinksEnabled: shareLinkToolActive,
     // 할 일 capability: rides ONLY runs that registered the to-do tools
-    // (runPlan's todoToolsActive — the skillExchangeActive precedent), with the
+    // (todoToolsActive — the skillExchangeActive precedent), with the
     // list FROZEN at this conversation's first such turn. No live counts: they
     // would change the per-turn append and break prompt caching.
     todoState: todoToolsActive ? { deleteEnabled: todoDeleteActive, snapshot: todoSnapshot } : undefined,
@@ -1471,9 +1450,8 @@ export function stampPromptRequest(
       ? ownerState.experimentalFeatures
       : [],
     // Admin tool/skill policy self-state (META-COGNITION): all viewer classes —
-    // a disabled skill may still show in the CLI's listing (stale discovery
-    // cache), so the standing note stops the avatar from attempting/suggesting
-    // it. Mirrored by describe_system.
+    // a disabled built-in is advisory on pi, so the standing note stops the
+    // avatar from attempting/suggesting it. Mirrored by describe_system.
     adminDisabledTools: toolSkillPolicy.disabledTools,
     adminDisabledSkills: toolSkillPolicy.disabledSkills,
     // External task API self-state, owner runs only: the live
@@ -1485,13 +1463,13 @@ export function stampPromptRequest(
     avatarTaskRunTimeoutMs: request.viewerIsOwner ? config.avatarTaskRunTimeoutMs : undefined,
     // Mid-turn messages (steers) — META-COGNITION only, no capability change:
     // this run has a live steer channel, so the viewer can keep typing while it
-    // works. Same boolean describe_system reports (runPlan's system ctx).
+    // works. Same boolean describe_system reports (the system server's ctx).
     midTurnMessages: Boolean(events?.steers),
-    // 공용 MCP 서버: runPlan's ONE derivation (the states describe_system got).
+    // 공용 MCP 서버: ONE derivation (the states describe_system got).
     // Every viewer class hears which servers are mounted; only the owner's
     // branches name missing secrets (the prompt section gates that).
     sharedMcpServers: sharedMcpStates,
-    // pi runs: the runtime's real shape (both surfaces; see piRuntimeFacts).
-    ...(capabilities.piRuntimeFacts ? { piRuntime: capabilities.piRuntimeFacts } : {}),
+    // The runtime's real shape (both surfaces; see piRuntimeFacts).
+    piRuntime: capabilities.piRuntimeFacts,
   };
 }

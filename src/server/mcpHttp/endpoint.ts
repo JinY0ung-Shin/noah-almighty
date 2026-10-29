@@ -12,7 +12,7 @@
  * rather than the SDK's stateless mode: an `McpServer` is one `Protocol`, and a
  * Protocol connects to exactly ONE transport ("Already connected" otherwise).
  * Stateless mode needs a fresh transport per HTTP request — so a fresh server per
- * request — but Noah's servers are built per run by `createSdkMcpServer` as one
+ * request — but Noah's servers are built per run by `createMcpToolServer` as one
  * instance each, and pi may run tool calls of one session concurrently. A
  * stateful session keeps one long-lived transport per broker connection: it
  * multiplexes concurrent requests, carries progress notifications, honors
@@ -61,7 +61,7 @@ const BODY_LIMIT = "16mb";
 
 /**
  * What a run exposes per server name: an McpServer, the `{ instance }` shape
- * `createSdkMcpServer` returns, or a factory (a fresh server per MCP session).
+ * `createMcpToolServer` returns, or a factory (a fresh server per MCP session).
  */
 export type McpServerSource = McpServer | { instance: McpServer } | (() => McpServer);
 

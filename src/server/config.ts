@@ -9,19 +9,40 @@ function env(name: string, fallback = ""): string {
   return process.env[name]?.trim() || fallback;
 }
 
+/**
+ * `AGENT_RUNTIME`: `pi` (default — pi-gateway is the only agent runtime) or
+ * `local` (the deterministic stub the tests and the e2e harness use). The
+ * Claude Agent SDK runner is removed: `claude` (and anything else) stops the
+ * boot with the fix named, instead of silently running something else.
+ */
 function parseRuntime(value: string): AgentRuntime {
-  return value === "local" ? "local" : value === "pi" ? "pi" : "claude";
+  const runtime = value.trim().toLowerCase();
+  if (runtime === "" || runtime === "pi") return "pi";
+  if (runtime === "local") return "local";
+  if (runtime === "claude") {
+    throw new Error(
+      "AGENT_RUNTIME=claude is no longer supported: the Claude Agent SDK runner was removed and pi-gateway is the only agent runtime. " +
+        "Set AGENT_RUNTIME=pi (or remove it) and configure PI_GATEWAY_URL, PI_GATEWAY_API_KEY and PI_MODEL_MAP (docs/architecture/pi-runtime.md).",
+    );
+  }
+  throw new Error(`AGENT_RUNTIME must be "pi" or "local" (got "${value}").`);
 }
 
 /**
  * `PI_MODEL_MAP`: a JSON object from a composer tier (or a concrete model id an
  * admin override pins) to the pi model a NEW pi session uses — a model id
- * string, or `{ "model": "<id>", "contextWindow": <tokens> }`. A typo here would
- * silently run every session on pi's default model, so anything malformed
- * stops the boot instead of being dropped.
+ * string, or `{ "model": "<id>", "contextWindow": <tokens> }`. It is the ONLY
+ * tier → model source (a routine's fallback chain walks the tiers through it
+ * too), so it is REQUIRED and must map every composer tier; a typo or a gap
+ * would silently run sessions on pi's default model, so anything malformed or
+ * missing stops the boot instead of being dropped.
  */
 export function parsePiModelMap(value: string): Record<string, PiModelMapping> {
-  if (!value) return {};
+  if (!value) {
+    throw new Error(
+      `AGENT_RUNTIME=pi requires PI_MODEL_MAP: a JSON object mapping every composer tier (${MODEL_TIER_IDS.join(", ")}) to a pi model id, e.g. {"opus":"anthropic/claude-opus-5-5",…}.`,
+    );
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -56,13 +77,17 @@ export function parsePiModelMap(value: string): Record<string, PiModelMapping> {
       `PI_MODEL_MAP["${tier}"] must be a model id string or {"model": "<id>", "contextWindow": <positive integer>}.`,
     );
   }
+  const missing = MODEL_TIER_IDS.filter((tier) => !map[tier]);
+  if (missing.length > 0) {
+    throw new Error(`PI_MODEL_MAP must map every composer tier; missing: ${missing.join(", ")}.`);
+  }
   return map;
 }
 
 /**
- * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL and
- * service key are REQUIRED there: without them every owner turn would fail, so
- * the boot refuses rather than silently running the SDK.
+ * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL,
+ * service key and model map are REQUIRED there: without them every run would
+ * fail, so the boot refuses instead.
  */
 function loadPiRuntimeConfig(): PiRuntimeConfig {
   const gatewayUrl = env("PI_GATEWAY_URL");
@@ -89,19 +114,6 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
     modelMap: parsePiModelMap(env("PI_MODEL_MAP")),
     deckSandbox: ["true", "1", "on"].includes(env("PI_DECK_SANDBOX").toLowerCase()),
   };
-}
-
-// Bounds the CLI's settings schema accepts for `autoCompactWindow`. Out-of-range
-// values are SILENTLY DROPPED there (`.catch(undefined)`), not rejected, so we
-// clamp into range rather than pass through, and ignore non-numeric/≤0.
-const AUTO_COMPACT_WINDOW_MIN = 100_000;
-const AUTO_COMPACT_WINDOW_MAX = 1_000_000;
-
-function parseAutoCompactWindow(value: string): number | undefined {
-  if (!value) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return Math.min(AUTO_COMPACT_WINDOW_MAX, Math.max(AUTO_COMPACT_WINDOW_MIN, Math.round(n)));
 }
 
 function parseMinutes(value: string, fallbackMinutes: number): number {
@@ -136,23 +148,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     throw new Error("SESSION_SECRET is required in production.");
   }
 
-  const agentRuntime = overrides.agentRuntime ?? parseRuntime(env("AGENT_RUNTIME", "claude"));
-
-  const readOnlyTools = env("READONLY_TOOLS", "Read,Glob,Grep")
-    .split(",")
-    .map((tool) => tool.trim())
-    .filter(Boolean);
-
-  // Concrete model id each composer TIER maps to, from the operator's
-  // ANTHROPIC_DEFAULT_<TIER>_MODEL env (e.g. ANTHROPIC_DEFAULT_OPUS_MODEL). Keyed
-  // by the modelTiers alias so it stays in sync with the registry. A tier with no
-  // env mapping is omitted — the SDK then resolves the alias to the account/tier
-  // default, which the app can't know, so we surface only what's explicitly pinned.
-  const defaultTierModels: Record<string, string> = {};
-  for (const id of MODEL_TIER_IDS) {
-    const value = env(`ANTHROPIC_DEFAULT_${id.toUpperCase()}_MODEL`);
-    if (value) defaultTierModels[id] = value;
-  }
+  const agentRuntime = overrides.agentRuntime ?? parseRuntime(process.env.AGENT_RUNTIME ?? "");
 
   return {
     // `|| 48787` guards a typo'd PORT (NaN would ERR_SOCKET_BAD_PORT at boot).
@@ -166,10 +162,6 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     agentRuntime,
     // An override (tests) supplies its own pi block; only the env path validates.
     ...(agentRuntime === "pi" && !overrides.pi ? { pi: loadPiRuntimeConfig() } : {}),
-    anthropicApiKey: env("ANTHROPIC_API_KEY") || undefined,
-    anthropicModel: env("ANTHROPIC_MODEL") || undefined,
-    defaultTierModels,
-    readOnlyTools,
     githubHost,
     confluenceUrl: env("CONFLUENCE_URL") || undefined,
     // Default browser-control allowlist, seeded into browsers whose extension
@@ -190,12 +182,9 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // Avoid stale avatar plugins on long-lived server processes while keeping
     // chat startup from fetching on every turn. Set 0 to disable automatic refresh.
     pluginAutoRefreshIntervalMs: parseMinutes(env("PLUGIN_AUTO_REFRESH_MINUTES"), 10),
-    // SDK session transcripts (the subprocess's CLAUDE_CONFIG_DIR). Under dataDir
-    // so a conversation's resumable session survives a server/container restart.
+    // The removed SDK runner's CLI transcripts — read only by the boot
+    // retirement that quarantines them (retireAgentSessions.ts).
     agentSessionsDir: path.join(dataDir, "agent-sessions"),
-    // Generous default: tool/skill/subagent-heavy replies blow past a handful of
-    // turns. Override via MAX_TURNS; values <1 fall back to the default.
-    maxTurns: Math.max(1, Number(env("MAX_TURNS", "1000")) || 1000),
     // Whole-run budget for an unattended routine (see AppConfig). Clamped to >=1
     // minute: parseMinutes maps "0" to 0ms, which here would abort every run
     // instantly instead of meaning "no deadline" as it does for plugin refresh.
@@ -211,16 +200,12 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       MAX_TIMER_MS,
       Math.max(60_000, parseMinutes(env("AVATAR_TASK_TIMEOUT_MINUTES"), 300)),
     ),
-    // Optional: compact the conversation near this many context tokens instead
-    // of waiting for the model's full window. Unset → SDK/CLI default.
-    autoCompactWindow: parseAutoCompactWindow(env("AUTO_COMPACT_WINDOW")),
     // Upstream command used by the app's hex-ssh policy proxy. Installed into
     // the image at build time and exposed under this fixed name (see Dockerfile).
     // Override with HEX_SSH_COMMAND when the global bin isn't available.
     hexSshCommand: env("HEX_SSH_COMMAND", "hex-ssh-mcp"),
-    // MODEL_VISION=off marks the serving backend as text-only: image uploads,
-    // image/PDF Read, and Confluence image blocks are all cut off BEFORE they
-    // can 400 a whole turn at the API layer.
+    // MODEL_VISION=off marks the serving backend as text-only: image uploads and
+    // Confluence image blocks are cut off BEFORE they can 400 a whole turn.
     visionEnabled: env("MODEL_VISION", "on").trim().toLowerCase() !== "off",
     // Corp-policy line in the browser-bridge install guide pointing the unzip
     // step at the upload-approved "Multimedia" folder. Hidden unless the

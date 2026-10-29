@@ -1,19 +1,17 @@
 // Noah's builder for the in-process MCP tool servers (`agent/*Tools.ts`), on
-// top of `@modelcontextprotocol/sdk`. It replaces the Claude Agent SDK's
-// `tool()` / `createSdkMcpServer()` with the same call-site signatures and the
-// same semantics (sdk.mjs 0.3.283): the zod raw shape is handed to
-// `McpServer.registerTool` as-is, `annotations`/`_meta` ride the registration,
-// and the handler is registered directly — so it receives the MCP request
-// `extra` untouched (`extra.signal`, `extra._meta`, …), a thrown error becomes
-// McpServer's own `{ isError: true }` text result and an argument that fails
-// the schema is McpServer's "Input validation error" result. The returned
-// `{ type: "sdk", name, instance }` shape is what the pi endpoint and the SDK
-// runner's `mcpServers` option both consume.
+// top of `@modelcontextprotocol/sdk`: `tool()` declares one tool and
+// `createMcpToolServer()` registers them on a live `McpServer`. The zod raw
+// shape is handed to `McpServer.registerTool` as-is, `annotations`/`_meta`
+// ride the registration, and the handler is registered directly — so it
+// receives the MCP request `extra` untouched (`extra.signal`, `extra._meta`,
+// …), a thrown error becomes McpServer's own `{ isError: true }` text result
+// and an argument that fails the schema is McpServer's "Input validation
+// error" result. The returned `{ type: "in_process", name, instance }` is what
+// the pi run endpoint (`mcpHttp/endpoint.ts`) serves and the static catalog
+// (`pi/mcpCatalog.ts`) lists.
 //
-// The SDK additionally copied each zod field's `.description` into its bundled
-// zod's global registry; zod 4 keeps ONE registry on `globalThis`
-// (`__zod_globalRegistry`) and `.description` reads from it, so that copy is a
-// no-op here and is left out.
+// zod 4 keeps ONE description registry on `globalThis`, so each field's
+// `.description` reaches the listed JSON schema with no copying here.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
@@ -34,7 +32,7 @@ export type McpToolShape = z.ZodRawShape;
 /** The parsed arguments a handler receives for a shape. */
 export type McpToolArgs<Schema extends McpToolShape> = z.infer<z.ZodObject<Schema>>;
 
-/** One tool, built by `tool()` and registered by `createSdkMcpServer()`. */
+/** One tool, built by `tool()` and registered by `createMcpToolServer()`. */
 export type McpToolDefinition<Schema extends McpToolShape = McpToolShape> = {
   name: string;
   description: string;
@@ -46,7 +44,7 @@ export type McpToolDefinition<Schema extends McpToolShape = McpToolShape> = {
 
 /** An in-process MCP server: a live `McpServer` plus the name it is mounted under. */
 export type InProcessMcpServer = {
-  type: "sdk";
+  type: "in_process";
   name: string;
   instance: McpServer;
   timeout?: number;
@@ -72,7 +70,7 @@ export function tool<Schema extends McpToolShape>(
   };
 }
 
-export function createSdkMcpServer(options: {
+export function createMcpToolServer(options: {
   name: string;
   version?: string;
   instructions?: string;
@@ -101,5 +99,5 @@ export function createSdkMcpServer(options: {
     typeof options.timeout === "number" && Number.isInteger(options.timeout) && options.timeout > 0
       ? options.timeout
       : undefined;
-  return { type: "sdk", name: options.name, instance: server, ...(timeout !== undefined && { timeout }) };
+  return { type: "in_process", name: options.name, instance: server, ...(timeout !== undefined && { timeout }) };
 }

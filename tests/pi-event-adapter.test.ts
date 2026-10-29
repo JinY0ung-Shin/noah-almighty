@@ -142,8 +142,8 @@ describe("PiEventAdapter on captured transcripts", () => {
     expect(adapter.answerText(true)).toBe(deltas);
     expect(only(calls, "model")).toEqual([["model", "fake-model"]]);
     expect(only(calls, "session")).toEqual([["session", outcome!.status === "completed" ? outcome!.responseId : ""]]);
-    const turn = only(calls, "turnResult")[0]![1] as { usage?: { inputTokens: number; contextWindow?: number }; backgroundTasks: unknown[] };
-    expect(turn.backgroundTasks).toEqual([]);
+    const turn = only(calls, "turnResult")[0]![1] as { usage?: { inputTokens: number; contextWindow?: number } };
+    expect(turn).not.toHaveProperty("backgroundTasks");
     if (outcome?.status === "completed" && outcome.usage) {
       expect(outcome.usage.inputTokens).toBeGreaterThanOrEqual(0);
     }

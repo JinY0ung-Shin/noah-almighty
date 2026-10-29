@@ -1,7 +1,7 @@
 /**
  * pi-gateway `/v1/responses` SSE → Noah `AgentEvents` (design §6 N3).
  *
- * The SDK path (`sdkMessageHandlers.ts`) defines the semantics this mirrors:
+ * The `AgentEvents` contract (kept from the removed SDK runner) this adapter fulfils:
  * - `onDelta` carries MAIN-agent answer text only; reasoning goes to `onThinking`.
  * - Text FOLD: during an agentic turn the model narrates between tool calls; only
  *   the LAST text block is the answer, earlier blocks are demoted to the reasoning
@@ -20,8 +20,7 @@
  * - MCP tools are called through `mcp_call {name, arguments}` (discovered with
  *   `mcp_search`); the real `mcp__<server>__<tool>` name lives in `input.name`.
  *   `response.tool_use_started` only has the proxy name, so rows start on the
- *   full `response.tool_use` (as the SDK path starts them on the assembled
- *   assistant message).
+ *   full `response.tool_use`.
  * - pi retries a failed model attempt internally and closes that attempt's open
  *   items with status `incomplete` (the deltas were already streamed). An
  *   `incomplete` message item that is NOT immediately followed by the terminal
@@ -120,8 +119,8 @@ export function resolvePiTool(name: string, input: unknown): ResolvedPiTool {
 }
 
 /**
- * One-line input summary for the activity UI — the same rules as the SDK path's
- * `summarizeToolInput` (kept local: that module goes away with the SDK runner).
+ * One-line input summary for the activity UI (the removed SDK runner's
+ * `summarizeToolInput` rules, ported).
  * pi built-ins key their path as `path` (read/write/edit/ls/find/grep).
  */
 export function summarizePiToolInput(name: string, input: Record<string, unknown>): string {
@@ -170,7 +169,7 @@ export type PiTurnOutcome =
   | { status: "requires_action"; responseId: string; question: PiPendingQuestion; usage?: AgentUsage }
   | { status: "failed"; responseId?: string; error: { code: string; message: string } };
 
-/** pi `incomplete_details.reason` → the SDK-style result error subtype Noah's fallbacks key on. */
+/** pi `incomplete_details.reason` → the result error subtype Noah's fallbacks key on (names kept from the SDK era). */
 export function incompleteErrorSubtype(reason: string | undefined): string | undefined {
   if (reason === "max_tool_calls") return "error_max_turns";
   if (reason === "max_output_tokens") return "error_max_output_tokens";
@@ -351,7 +350,6 @@ export class PiEventAdapter {
       text: this.answerText(false),
       ...(usage ? { usage } : {}),
       ...(errorSubtype ? { errorSubtype } : {}),
-      backgroundTasks: [],
     });
   }
 
@@ -540,7 +538,7 @@ export class PiEventAdapter {
 
 /**
  * Noah's question answer → the `function_call_output` text (model-facing English;
- * pi prefixes it with "User responded: "). Mirrors the SDK hook's wording.
+ * pi prefixes it with "User responded: "). Keeps the removed SDK runner's wording.
  */
 export function formatPiQuestionAnswer(answer: QuestionAnswer | null): string {
   if (!answer || answer.behavior !== "completed") {
@@ -592,7 +590,7 @@ export interface PiRunResult {
   text: string;
   usage?: AgentUsage;
   incompleteReason?: string;
-  /** SDK-style subtype for an incomplete turn (`error_max_turns`, …). */
+  /** Result error subtype for an incomplete turn (`error_max_turns`, …). */
   errorSubtype?: string;
 }
 
@@ -626,8 +624,7 @@ function sumUsage(previous: AgentUsage | undefined, next: AgentUsage | undefined
 
 /**
  * Drive one Noah run over pi: stream the turn, answer AskUserQuestion pauses
- * through `events.onQuestion` (headless runs get the SDK hook's "cannot ask"
- * answer), and return the final text. Abort → `cancel` the live response so pi
+ * through `events.onQuestion` (headless runs get a "cannot ask" answer), and return the final text. Abort → `cancel` the live response so pi
  * KEEPS the partial turn (a dropped connection would discard it), wait briefly
  * for its `incomplete`, then cut the stream and throw `PiGatewayError("aborted")`.
  * A `requires_action` response id is never reported via `onSessionId`: if the run

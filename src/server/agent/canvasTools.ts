@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { CanvasControl } from "../types.js";
 import type { CanvasRequest, CanvasResult } from "./events.js";
@@ -9,12 +9,12 @@ import { text } from "./mcpTools.js";
 /** MCP server name; the tool surfaces to the model as `mcp__canvas__show`. */
 export const CANVAS_SERVER_NAME = "canvas";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const CANVAS_TOOL_NAMES = ["mcp__canvas__show"] as const;
 
 /**
- * Caps on a single canvas artifact. The content rides the SDK session transcript,
- * which is replayed on every `resume` turn, AND the chat SSE/persistence payload —
+ * Caps on a single canvas artifact. The content rides the pi session's history,
+ * which every continued turn carries as context, AND the chat SSE/persistence payload —
  * so an oversized artifact silently inflates the token cost of EVERY later turn.
  * Over-limit is rejected with an actionable (agent-facing) error so the model can
  * compact or split and retry, rather than being silently truncated.
@@ -119,7 +119,7 @@ export function mermaidSyntaxError(detail: string): string {
  * Build the canvas tool. INTENTIONALLY NOT self-gated (unlike the owner-only MCP
  * servers): showing UI grants no elevation, the panel is read-only display + form
  * input, and the server only REGISTERS this server when the conversation's canvas
- * tool group is on AND an interactive `events.onCanvas` sink exists (runPlan.ts)
+ * tool group is on AND an interactive `events.onCanvas` sink exists (runCapabilities.ts)
  * — that registration gate is the boundary. Same posture as the deliberately
  * ungated avatarDirectory/sshTrust servers; don't add a viewer gate here.
  */
@@ -248,7 +248,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
 
 /** Build the in-process MCP server exposing the canvas tool for one run. */
 export function buildCanvasServer(ctx: CanvasToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: CANVAS_SERVER_NAME,
     version: "0.1.0",
     tools: buildCanvasTools(ctx),

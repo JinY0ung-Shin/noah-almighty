@@ -3,7 +3,7 @@ import type { AppConfig, PluginRoot } from "../types.js";
 import type { Store } from "../store.js";
 import type { AgentEvents } from "./events.js";
 import { runAgentStream } from "./index.js";
-import { EMPTY_SDK_RESPONSE_MESSAGE } from "./claudeAgent.js";
+import { EMPTY_PI_RESPONSE_MESSAGE } from "./pi/runPiAgent.js";
 import {
   AVATAR_ASK_ANSWER_CAP,
   AVATAR_ASK_TIMEOUT_MS,
@@ -197,7 +197,7 @@ export async function askAvatar(
         detail: `the target run ended with ${response.resultError}`,
       };
     }
-    const raw = response.text === EMPTY_SDK_RESPONSE_MESSAGE ? "" : response.text;
+    const raw = response.text === EMPTY_PI_RESPONSE_MESSAGE ? "" : response.text;
     const { answer, truncated } = capAnswer(raw);
     if (!answer) {
       return { ok: false, reason: "empty", username, displayName: target.displayName };
@@ -215,7 +215,7 @@ export async function askAvatar(
         partialAnswer: answer || undefined,
       };
     }
-    // The SDK labels EVERY abort "aborted by user" (see the routine scheduler
+    // An abort surfaces as a generic cancellation (see the routine scheduler
     // note) — when the ASKING turn was cancelled, name the real cause instead.
     if (input.parentSignal?.aborted) {
       return {

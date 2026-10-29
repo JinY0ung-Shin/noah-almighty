@@ -20,7 +20,6 @@ import { createApp, createServices } from "../src/server/app.js";
 import { __avatarTaskRetryStateForTests, dispatchAvatarTasks, startAvatarTaskDispatcher } from "../src/server/avatarTaskRunner.js";
 import { cancelAllRuns, openRun, closeRun, awaitResponse, emitRunEvent, getActiveRunForConversation, getRunPrompts } from "../src/server/agent/runRegistry.js";
 import { Store } from "../src/server/store.js";
-import { BACKGROUND_TURN_PLACEHOLDER } from "../src/server/routes/chat.js";
 import { AVATAR_TASK_RESTART_ERROR } from "../src/server/store.js";
 import { readSystemManual } from "../src/server/agent/systemManual.js";
 
@@ -185,7 +184,7 @@ describe("avatar task API", () => {
     await call("post", `${endpoint}/${task.id}/respond`).send({ requestId: pending.pendingRequests[0].data.requestId, value: {} }).expect(409);
   });
 
-  it("records SDK failures and deadline expiry as failures, not successful acceptance", async () => {
+  it("records run failures and deadline expiry as failures, not successful acceptance", async () => {
     const { call, services, user } = await boot();
     H.script.push(() => { throw new Error("test failure"); });
     const task = (await call("post", endpoint).send({ message: "fail" }).expect(202)).body.task;
@@ -210,21 +209,22 @@ describe("avatar task API", () => {
     expect(H.requests).toHaveLength(0);
   });
 
-  it("keeps permission checks interactive and can cancel a waiting run", async () => {
+  it("can cancel a run parked on a question, releasing the prompt as cancelled", async () => {
     const { call, services, user } = await boot();
     let answer: unknown;
     H.script.push(async events => {
-      answer = await events.onPermission?.({ agentId: "owner", toolUseId: "tool-1", toolName: "Bash", input: { command: "echo test" } });
+      answer = await events.onQuestion?.({ dialogKind: "question", payload: { question: "진행할까요?" } });
     });
-    const task = (await call("post", endpoint).send({ message: "도구를 사용해 줘" }).expect(202)).body.task;
+    const task = (await call("post", endpoint).send({ message: "물어보고 진행해 줘" }).expect(202)).body.task;
     dispatchAvatarTasks(services);
     await vi.waitFor(async () => {
       const pending = (await call("get", `${endpoint}/${task.id}`)).body.task;
-      expect(pending.pendingRequests[0]?.event).toBe("permission");
+      expect(pending.status).toBe("waiting_input");
+      expect(pending.pendingRequests[0]?.event).toBe("question");
     });
     await call("post", `${endpoint}/${task.id}/cancel`).expect(200);
     await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, task.id)?.status).toBe("cancelled"));
-    expect(answer).toEqual({ behavior: "deny", unanswered: true });
+    expect(answer).toEqual({ behavior: "cancelled" });
   });
 
   it("releases unanswered questions when the execution deadline expires", async () => {
@@ -339,38 +339,23 @@ describe("avatar task API", () => {
     expect(services.store.listMessages(user.id, task.conversationId).map(m => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("returns the whole background phase, not the placeholder the visible turn ended on", async () => {
+  it("returns the done response as the result, with no aggregation over earlier boundaries", async () => {
     const { call, services, user } = await boot();
-    // First result boundary with live background tasks finalizes the visible turn
-    // (done + background:true); the second is a wake-up report (bg_message).
+    // A steer-free result boundary is not persisted on its own: the run's `done`
+    // response is the whole answer and rides through to the result untouched.
     H.script.push(events => {
-      events.onTurnResult?.({ text: "우선 조사를 시작합니다", backgroundTasks: [{ taskId: "t1", taskType: "subagent", description: "조사" }] });
-      events.onTurnResult?.({ text: "조사 결과를 보고합니다", backgroundTasks: [] });
+      events.onTurnResult?.({ text: "중간 경계" });
     });
-    const task = (await call("post", endpoint).send({ message: "오래 걸리는 조사" }).expect(202)).body.task;
+    const task = (await call("post", endpoint).send({ message: "조사해 줘" }).expect(202)).body.task;
     dispatchAvatarTasks(services);
     await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, task.id)?.status).toBe("succeeded"));
     const done = (await call("get", `${endpoint}/${task.id}`).expect(200)).body.task;
-    expect(done.result.text).toContain("우선 조사를 시작합니다");
-    expect(done.result.text).toContain("조사 결과를 보고합니다");
-    expect(done.result.summary).toBe("백그라운드 작업 보고");
-    expect(services.store.listMessages(user.id, task.conversationId).map(m => m.role)).toEqual(["user", "assistant", "assistant"]);
-  });
-
-  it("drops the background placeholder when the visible segment streamed nothing", async () => {
-    const { call, services, user } = await boot();
-    // An empty first segment makes chat.ts fall back to BACKGROUND_TURN_PLACEHOLDER
-    // for the visible reply; the stored result must be the report alone.
-    H.script.push(events => {
-      events.onTurnResult?.({ text: "", backgroundTasks: [{ taskId: "t1", taskType: "subagent", description: "조사" }] });
-      events.onTurnResult?.({ text: "최종 보고", backgroundTasks: [] });
-    });
-    const task = (await call("post", endpoint).send({ message: "조용한 조사" }).expect(202)).body.task;
-    dispatchAvatarTasks(services);
-    await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, task.id)?.status).toBe("succeeded"));
-    const done = (await call("get", `${endpoint}/${task.id}`).expect(200)).body.task;
-    expect(done.result.text).toBe("최종 보고");
-    expect(done.result.text).not.toContain(BACKGROUND_TURN_PLACEHOLDER);
+    expect(done.result).toMatchObject({ text: "작업 결과", summary: "완료" });
+    expect(done.result.text).not.toContain("중간 경계");
+    expect(done.result).not.toHaveProperty("background");
+    const rows = services.store.listMessages(user.id, task.conversationId);
+    expect(rows.map(m => m.role)).toEqual(["user", "assistant"]);
+    expect(rows[1].content).toBe("작업 결과");
   });
 
   it("stops re-queuing a task the thread never frees, and reports the refusal", async () => {
@@ -465,6 +450,14 @@ describe("avatar task API", () => {
     expect(getRunPrompts("prompts", "owner")).toHaveLength(1);
     expect(getRunPrompts("prompts", "other")).toEqual([]);
     closeRun("prompts"); await response;
+  });
+
+  it("no longer reports a permission prompt as a pending request (pi has none)", async () => {
+    openRun("prompts-perm", "owner");
+    emitRunEvent("prompts-perm", "permission", { requestId: "p", toolName: "Bash" });
+    const response = awaitResponse("prompts-perm", "p");
+    expect(getRunPrompts("prompts-perm", "owner")).toEqual([]);
+    closeRun("prompts-perm"); await response;
   });
 
   it("no longer reports a plan_review as a pending request (plan mode is retired)", async () => {

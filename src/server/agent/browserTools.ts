@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type {
   BrowserRequest,
@@ -8,13 +8,13 @@ import type {
 import { browserSecretHostAllowed, type BrowserSecretPolicy } from "../secretPolicy.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../chatFiles.js";
 import { text } from "./mcpTools.js";
-import { redactSecretValues } from "./postToolUseHook.js";
+import { redactSecretValues } from "./secretRedaction.js";
 import { jpegDimensions, visionFitSize, visionFits } from "./visionImage.js";
 
 /** MCP server name; tools surface to the model as `mcp__browser__<tool>`. */
 export const BROWSER_SERVER_NAME = "browser";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const BROWSER_TOOL_NAMES = [
   "mcp__browser__snapshot",
   "mcp__browser__read_text",
@@ -49,8 +49,8 @@ export const BROWSER_TOOL_NAMES = [
  * CDP calls. This module only shapes the request/result and the model-facing
  * prose.
  *
- * `allowed` is the self-gate. The PreToolUse hook auto-allows every `mcp__*`
- * call BEFORE any owner check, so an uncleared viewer must be refused HERE.
+ * `allowed` is the self-gate. pi lists a STATIC tool catalog and keeps a
+ * session's tool list across turns, so an uncleared viewer must be refused HERE.
  * The caller sets it to "owner of this avatar": the tools act with the
  * VIEWER's own live logins, and nobody must let SOMEONE ELSE's avatar
  * instructions drive their own logged-in browser.
@@ -106,7 +106,7 @@ export interface BrowserToolsContext {
    * not-enabled name gets, never a silent literal type.
    *
    * The model only ever names a secret; `value` resolves it server-side so the
-   * plaintext never enters the model context. Wired by runPlan from the owner's
+   * plaintext never enters the model context. Wired by runCapabilities from the owner's
    * self-state + the run's injectable secret env.
    */
   browserSecrets?: {
@@ -2018,7 +2018,7 @@ export function buildBrowserTools(context: BrowserToolsContext) {
 
 /** Build the in-process MCP server exposing the browser bridge for one run. */
 export function buildBrowserServer(ctx: BrowserToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: BROWSER_SERVER_NAME,
     version: "0.1.0",
     tools: buildBrowserTools(ctx),

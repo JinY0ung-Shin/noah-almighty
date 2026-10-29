@@ -424,8 +424,8 @@ describe("admin: model override", () => {
     expect(services.store.getModelOverride()).toBe("claude-test-model");
     let sys = await admin.agent.get("/api/admin/system").expect(200);
     expect(sys.body.system.modelOverride).toBe("claude-test-model");
-    // No env ANTHROPIC_MODEL is set in the test config, so it isn't env-locked.
-    expect(sys.body.system.modelEnvLocked).toBe(false);
+    // The env hard lock (ANTHROPIC_MODEL) is gone with the SDK runner.
+    expect(sys.body.system).not.toHaveProperty("modelEnvLocked");
 
     await admin.agent.delete("/api/admin/model").expect(200);
     expect(services.store.getModelOverride()).toBeNull();

@@ -45,6 +45,8 @@ const RETIRED_APP_CONFIG_KEYS = [
   "server_agent_deployment_id",
   "craft_apps_enabled",
   "stt_override",
+  "claude_oauth_token",
+  "skill_discovery_cache",
   "external_agents_registry_v1",
   "retired:personal_agents:pending",
   "retired:external_avatars:pending",

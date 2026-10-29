@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AppConfig } from "../types.js";
@@ -30,7 +30,7 @@ export interface BrainToolsContext {
 /** MCP server name; tools surface to the model as `mcp__brain__<tool>`. */
 export const BRAIN_SERVER_NAME = "brain";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const BRAIN_TOOL_NAMES = ["mcp__brain__search", "mcp__brain__get_note"] as const;
 
 const NO_REPO =
@@ -109,7 +109,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
 
 /** Build the in-process MCP server exposing the personal second-brain tools. */
 export function buildBrainServer(store: Store, ctx: BrainToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: BRAIN_SERVER_NAME,
     version: "0.1.0",
     tools: buildBrainTools(store, ctx),

@@ -1,30 +1,33 @@
 /**
  * One Noah run on pi-gateway (`AGENT_RUNTIME=pi`, design §6 N3,
- * docs/architecture/pi-runtime.md). Dispatched by `runAgentStream` for the run
- * classes `piRuntimeSupports` accepts; everything else stays on the SDK runner.
+ * docs/architecture/pi-runtime.md) — the only agent runtime: `runAgentStream`
+ * sends every non-`local` run here, in the sandbox of the user it runs AS
+ * (`piRunPrincipal`). A run without a conversation (an avatar consultation, a
+ * profile generator) uses an ephemeral work folder (`piEphemeralRunKey`) and
+ * always a fresh pi session: nothing is stored for it.
  *
- * The run shares the capability plan with the SDK runner (`runCapabilities.ts`)
- * — the same gates, the same in-process MCP servers, the same self-state on
- * both metacognition surfaces — and differs only in how it reaches the model:
+ * The capability plan (`runCapabilities.ts`) decides the gates, the in-process
+ * MCP servers and the self-state both metacognition surfaces report; this
+ * runner decides how the run reaches the model:
  *
  *  1. A run TOKEN is registered with the HTTP MCP endpoint for every Noah
  *     server (built ones serve their calls, the rest are refusing stubs), the
  *     tool list being the static catalog (pi freezes it per session). pi's
  *     broker calls `/mcp/<server>` with it; it is revoked when the run ends.
- *  2. The system prompt is the SDK append rendered with the pi flag and FROZEN
+ *  2. The system prompt is Noah's append (`buildSystemPromptAppend`), FROZEN
  *     per conversation (design D2): sent as `instructions` only on a session's
  *     first turn. Per-turn facts (date, rewind, task-API provenance) ride the
  *     user input instead.
- *  3. `previous_response_id` = the stored resume point (a `resp_…` id; an SDK
- *     session id from before the switch is ignored → a new session from the
- *     text history). Each committed turn reports its response id as both the
+ *  3. `previous_response_id` = the stored resume point (a `resp_…` id; a CLI
+ *     session id left by the removed SDK runner is ignored → a new session
+ *     from the text history). Each committed turn reports its response id as both the
  *     session id and the row's resume point, so a rewind forks from it.
  *  4. A lost session (404/409) self-heals once from the text history; 503/429
  *     at stream open retry with backoff; a model fallback chain (routines, the
  *     task API) gives each attempt a fresh session.
  *  5. pi has no mid-turn input (design P2): steers queue, and once the current
  *     pi response completes they are delivered TOGETHER as a follow-up turn on
- *     the same run (the SDK path's "undelivered steer → turn_end" contract).
+ *     the same run (the route's `turn_end` contract).
  *  6. A model/effort change starts a new session from the text history (pi
  *     fixes both per session, design P3); the user hears it on the status line.
  *  7. hex-ssh, plugin `.mcp.json` and 공용 MCP servers are relayed by Noah as an
@@ -49,15 +52,15 @@ import {
   buildSystemPromptAppend,
   buildUserPrompt,
 } from "../promptBuilder.js";
-import { resultErrorMessage } from "../sdkMessageHandlers.js";
+import { resultErrorMessage } from "../runErrors.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog, piKnownTools } from "./mcpCatalog.js";
-import { PI_RUN_TOKEN_HEADER, piRuntimeSupports, piServicesFor } from "./piRuntime.js";
+import { PI_RUN_TOKEN_HEADER, piEphemeralRunKey, piRunPrincipal, piServicesFor } from "./piRuntime.js";
 import { ensurePiConversationDir, piWorkspaceFor, stagePiAttachmentFiles } from "./piWorkspace.js";
 import { materializePiSkills } from "./piSkills.js";
 import { PiTurnFailedError, runPiTurn, type PiRunResult } from "./eventAdapter.js";
 import { PI_PROXY_SERVER_NAMES, PiMcpProxyPool } from "./mcpProxies.js";
 import { PiAsyncJobs } from "./asyncJobs.js";
-import { redactSecretValues } from "../postToolUseHook.js";
+import { redactSecretValues } from "../secretRedaction.js";
 import { AVATAR_ASK_TIMEOUT_MS } from "../avatarAskShared.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -146,19 +149,18 @@ export async function runPiAgent(
   abortController: AbortController | undefined,
   deps: RunPiAgentDeps = {},
 ): Promise<AgentResponse> {
-  const decision = piRuntimeSupports(request);
-  if (!decision.supported) {
-    throw new Error(`runPiAgent called for a run pi does not support: ${decision.reason}`);
-  }
-  const principal = decision.principal;
-  const conversationId = request.conversationId!;
+  const principal = piRunPrincipal(request);
+  // Undefined for a run without a conversation: an ephemeral folder, a fresh
+  // session every time, no stored profile, instructions or resume point.
+  const conversationId = request.conversationId;
+  const workKey = conversationId ?? piEphemeralRunKey(request);
   const services = piServicesFor(store, config);
   const client = deps.client ?? services.client;
   if (!client) throw new Error("pi-gateway is not configured (PI_GATEWAY_URL / PI_GATEWAY_API_KEY).");
   const registry = deps.registry ?? services.registry;
   const now = deps.now ?? (() => new Date());
   const signal = abortController?.signal;
-  const workspace = piWorkspaceFor(config, principal, conversationId);
+  const workspace = piWorkspaceFor(config, principal, workKey);
   ensurePiConversationDir(workspace);
   // Skills as sandbox files (owner runs: every root; a colleague: the bundled
   // ones, plus the owner's through mcp__skills__read). Re-synced each turn by
@@ -176,7 +178,7 @@ export async function runPiAgent(
 
   // Answer text of the CURRENT segment since the last fold — the attachment
   // anchor (see runCapabilities' currentTextAnchor). Reset on a fold and at a
-  // steer boundary, exactly where the SDK loop moves its fold index.
+  // steer boundary.
   let anchorText = "";
   // Background jobs of this run (ask_avatar in an interactive chat): a result
   // rides the steer channel — the model text (with its provenance) + the Korean
@@ -197,7 +199,6 @@ export async function runPiAgent(
     abortController,
     () => anchorText.length,
     {
-      runtime: "pi",
       piConversationDir: workspace.conversationDir,
       piWorkspace: workspace,
       piSkills,
@@ -206,7 +207,7 @@ export async function runPiAgent(
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
   const effort = piEffortFor(capabilities.userEffort);
-  // The model chain is the SDK's tier chain (one entry unless the run opted
+  // The model chain is the capability plan's tier chain (one entry unless the run opted
   // into fallback); each entry maps to the pi model a FRESH session uses.
   const chain = capabilities.modelChain.map((model) => ({ noah: model, ...piModelFor(config, model) }));
   let attempt = 0;
@@ -215,15 +216,8 @@ export async function runPiAgent(
   // ---- session ------------------------------------------------------------
   const resumeCandidate = request.resumeSessionAt ?? request.resumeSessionId;
   let previous: string | undefined = isPiResponseId(resumeCandidate) ? resumeCandidate : undefined;
-  // The chat route starts image turns fresh (an SDK streaming-input limit);
-  // pi takes images on a continued session, so continue the stored one —
-  // unless this is a rewind, whose resume point the route already chose.
-  if (!previous && !request.rewind && request.images?.length) {
-    const stored = store.getAgentSessionId(principal, conversationId);
-    if (isPiResponseId(stored)) previous = stored;
-  }
   let newSessionReason: "model_changed" | "session_lost" | undefined;
-  if (previous) {
+  if (conversationId && previous) {
     const known = store.getConversationPiSessionProfile(principal, conversationId, piSessionKey(previous));
     if (known !== null && known !== profileOf(0)) {
       previous = undefined;
@@ -266,14 +260,15 @@ export async function runPiAgent(
   // The frozen prompt's tool list (design D2): rendered only while the
   // conversation has no instructions yet. Relayed lists are read now (pi reads
   // them at session build anyway), bounded by the pool's own deadline.
-  const knownTools = store.hasConversationPiInstructions(principal, conversationId)
+  const knownTools = conversationId && store.hasConversationPiInstructions(principal, conversationId)
     ? undefined
     : await piKnownTools(catalog, allowedTools, proxies, capabilities.piMcpProxies?.upstreams ?? []);
   const frozenRequest: AgentRequest =
     knownTools && promptRequest.piRuntime ? { ...promptRequest, piRuntime: { ...promptRequest.piRuntime, knownTools } } : promptRequest;
   const frozenInstructions = (): string =>
-    store.ensureConversationPiInstructions(principal, conversationId, () => buildSystemPromptAppend(frozenRequest)) ??
-    buildSystemPromptAppend(frozenRequest);
+    (conversationId
+      ? store.ensureConversationPiInstructions(principal, conversationId, () => buildSystemPromptAppend(frozenRequest))
+      : null) ?? buildSystemPromptAppend(frozenRequest);
   const catalogTools = new Map(
     Object.entries(catalog).flatMap(([server, tools]) => tools.map((tool) => [`${server}/${tool.name}`, tool] as const)),
   );
@@ -303,8 +298,8 @@ export async function runPiAgent(
         Object.keys(redactions).length > 0 ? (redactSecretValues(result, redactions).value as CallToolResult) : result,
     },
     signal: tokenAbort.signal,
-    context: { conversationId, principal },
-    label: conversationId,
+    context: { conversationId: conversationId ?? null, principal },
+    label: workKey,
   });
 
   const steers = events?.steers;
@@ -369,7 +364,7 @@ export async function runPiAgent(
             },
             ...(contextWindow ? { contextWindow } : {}),
           });
-          if (fresh) {
+          if (fresh && conversationId) {
             store.setConversationPiSessionProfile(principal, conversationId, piSessionKey(result.responseId), profileOf(attempt));
           }
           break;
@@ -442,7 +437,6 @@ export async function runPiAgent(
         text: result.text,
         ...(result.usage ? { usage: result.usage } : {}),
         ...(result.errorSubtype ? { errorSubtype: result.errorSubtype } : {}),
-        backgroundTasks: [],
         steerPending: true,
       });
       anchorText = "";
@@ -478,7 +472,6 @@ export async function runPiAgent(
     text: final.text,
     ...(final.usage ? { usage: final.usage } : {}),
     ...(final.errorSubtype ? { errorSubtype: final.errorSubtype } : {}),
-    backgroundTasks: [],
     steerPending: false,
   });
   const text = final.text || (final.errorSubtype ? resultErrorMessage(final.errorSubtype) : EMPTY_PI_RESPONSE_MESSAGE);

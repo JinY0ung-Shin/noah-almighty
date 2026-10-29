@@ -20,7 +20,7 @@ import type { AgentEvents } from "../src/server/agent/events.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
 import { McpRunRegistry, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
 import { PI_MCP_SERVER_NAMES } from "../src/server/agent/pi/mcpCatalog.js";
-import { PI_RUN_TOKEN_HEADER, piRuntimeSupports } from "../src/server/agent/pi/piRuntime.js";
+import { PI_RUN_TOKEN_HEADER, piEphemeralRunKey, piRunPrincipal, piRunWorkspace } from "../src/server/agent/pi/piRuntime.js";
 import { isPiResponseId, piSessionKey, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import { piConversationSegment, piHostPath, piUserKey, piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { PiGatewayError, type PiResponseRequest, type PiResponsesClient, type PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
@@ -141,6 +141,82 @@ const of = (calls: [string, unknown][], name: string) => calls.filter(([n]) => n
 const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req.input.text : "");
 
 // ---- runPiAgent ---------------------------------------------------------------------------
+
+describe("runPiAgent: formerly read-only run classes (U8)", () => {
+  it("runs an avatar consultation in the ASKER's sandbox: ephemeral folder, fresh session, nothing stored", async () => {
+    const { store, config, owner, base } = setup();
+    const asker = store.createUser({ username: "asker", displayName: "Asker", password: "password123" });
+    const { client, requests } = fakeClient([() => textTurn("resp_c1_1", "One answer"), () => textTurn("resp_c2_1", "Again")]);
+    const consult = base({
+      conversationId: undefined,
+      viewerUserId: asker.id,
+      viewerName: "Asker",
+      viewerIsOwner: false,
+      elevated: true,
+      headless: true,
+      allowHeadlessTools: true,
+      avatarConsultation: true,
+      cwd: path.join(dir(), "ws-host", `avatar-ask-${asker.id}`),
+    });
+    const first = await runPiAgent(consult, [], config, store, {}, undefined, { client });
+    expect(first.text).toBe("One answer");
+    const [req] = requests;
+    expect(req!.user).toBe(asker.id);
+    expect(req!.previousResponseId).toBeUndefined();
+    expect(req!.instructions).toContain(`/workspace/c/run-ask-${owner.id}`);
+    expect(req!.instructions).toContain("sandbox of the teammate who asked");
+    expect(inputText(req!)).toContain("Run kind (this turn): an automated avatar-to-avatar consultation");
+    // The folder exists in the asker's sandbox, not the owner's.
+    const ws = piWorkspaceFor(config, asker.id, `run-ask-${owner.id}`);
+    expect(fs.statSync(ws.hostConversationDir!).isDirectory()).toBe(true);
+    expect(fs.existsSync(piWorkspaceFor(config, owner.id, `run-ask-${owner.id}`).hostConversationDir!)).toBe(false);
+    // No conversation: every run is a new session with freshly rendered instructions.
+    await runPiAgent(consult, [], config, store, {}, undefined, { client });
+    expect(requests[1]!.previousResponseId).toBeUndefined();
+    expect(requests[1]!.instructions).toBe(req!.instructions);
+  });
+
+  it("runs an untrusted colleague chat in the colleague's own sandbox and says so", async () => {
+    const { store, config, base } = setup();
+    const mate = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    store.touchConversation(mate.id, "conv-m", base().avatar.id, "hi");
+    const { client, requests } = fakeClient([() => textTurn("resp_m1_1", "Hi")]);
+    await runPiAgent(
+      base({ conversationId: "conv-m", viewerUserId: mate.id, viewerName: "Mate", viewerIsOwner: false, elevated: false }),
+      [],
+      config,
+      store,
+      { steers: new SteerChannel() },
+      undefined,
+      { client },
+    );
+    const [req] = requests;
+    expect(req!.user).toBe(mate.id);
+    expect(req!.instructions).toContain("This sandbox belongs to the person you are talking to, a colleague");
+    expect(req!.instructions).toContain("their files, never the owner's");
+    expect(req!.instructions).not.toContain("READ-ONLY");
+    expect(store.getConversationPiSessionProfile(mate.id, "conv-m", "m1")).toBe("m-opus|");
+  });
+
+  it("runs a profile generator in the owner's sandbox with the one-shot run kind", async () => {
+    const { store, config, owner, base } = setup();
+    const { client, requests } = fakeClient([() => textTurn("resp_g1_1", "#tag")]);
+    await runPiAgent(
+      base({ conversationId: undefined, headless: true, cwd: path.join(dir(), "ws-host", "hashtags") }),
+      [],
+      config,
+      store,
+      {},
+      undefined,
+      { client },
+    );
+    const [req] = requests;
+    expect(req!.user).toBe(owner.id);
+    expect(req!.instructions).toContain("/workspace/c/run-hashtags");
+    expect(req!.instructions).toContain("do not create files or run commands");
+    expect(inputText(req!)).toContain("Run kind (this turn): an automated one-shot task");
+  });
+});
 
 describe("runPiAgent", () => {
   it("first turn: frozen instructions, model + context window from PI_MODEL_MAP, session id doubles as the resume point", async () => {
@@ -424,7 +500,7 @@ describe("runPiAgent", () => {
 
     expect(response.text).toBe("Follow-up answer");
     expect(of(calls, "turnResult")).toEqual([
-      expect.objectContaining({ text: "First answer", steerPending: true, backgroundTasks: [] }),
+      expect.objectContaining({ text: "First answer", steerPending: true }),
       expect.objectContaining({ text: "Follow-up answer", steerPending: false }),
     ]);
     expect(requests[1]!.previousResponseId).toBe("resp_t_1");
@@ -514,7 +590,7 @@ describe("runPiAgent", () => {
 
 // ---- decisions, paths, prompt --------------------------------------------------------------
 
-describe("piRuntimeSupports", () => {
+describe("piRunPrincipal", () => {
   const base: AgentRequest = {
     message: "m",
     avatar: { id: "owner-1", displayName: "O", alias: "", persona: "" },
@@ -522,19 +598,35 @@ describe("piRuntimeSupports", () => {
     viewerUserId: "owner-1",
     viewerIsOwner: true,
   };
+  // Every run class runs on pi now (U8): the sandbox is whoever the run executes AS.
   it.each([
-    ["owner chat", base, true],
-    ["trusted colleague (principal = viewer)", { ...base, viewerUserId: "mate-1", viewerIsOwner: false, elevated: true }, true],
-    ["owner routine", { ...base, headless: true, allowHeadlessTools: true }, true],
-    ["task API turn", { ...base, externalTaskApi: true }, true],
-    ["untrusted colleague", { ...base, viewerUserId: "x", viewerIsOwner: false }, false],
-    ["consultation", { ...base, headless: true, avatarConsultation: true, viewerIsOwner: false, elevated: true }, false],
-    ["intro/hashtag generator", { ...base, headless: true }, false],
-    ["no conversation", { ...base, conversationId: undefined }, false],
-  ] as [string, AgentRequest, boolean][])("%s", (_label, req, supported) => {
-    const decision = piRuntimeSupports(req);
-    expect(decision.supported).toBe(supported);
-    if (decision.supported) expect(decision.principal).toBe(req.viewerUserId);
+    ["owner chat", base, "owner-1"],
+    ["trusted colleague (principal = viewer)", { ...base, viewerUserId: "mate-1", viewerIsOwner: false, elevated: true }, "mate-1"],
+    ["owner routine", { ...base, headless: true, allowHeadlessTools: true }, "owner-1"],
+    ["task API turn", { ...base, externalTaskApi: true }, "owner-1"],
+    ["untrusted colleague (principal = viewer)", { ...base, viewerUserId: "x", viewerIsOwner: false }, "x"],
+    ["consultation (principal = asker)", { ...base, viewerUserId: "asker-1", headless: true, avatarConsultation: true, viewerIsOwner: false, elevated: true }, "asker-1"],
+    ["intro/hashtag generator (owner)", { ...base, headless: true }, "owner-1"],
+    ["no viewer → the avatar", { ...base, viewerUserId: undefined }, "owner-1"],
+  ] as [string, AgentRequest, string][])("%s", (_label, req, principal) => {
+    expect(piRunPrincipal(req)).toBe(principal);
+  });
+
+  it("refuses an id pi-gateway would reject", () => {
+    expect(() => piRunPrincipal({ ...base, viewerUserId: "bad id/../" })).toThrow(/not accepted by pi-gateway/);
+  });
+
+  it("keys a conversation-less run's folder by its kind", () => {
+    expect(piEphemeralRunKey({ ...base, avatarConsultation: true, cwd: "/data/ws/target/avatar-ask-asker" })).toBe("run-ask-owner-1");
+    expect(piEphemeralRunKey({ ...base, cwd: "/data/ws/owner-1/intro" })).toBe("run-intro");
+    expect(piEphemeralRunKey({ ...base })).toBe("run-headless");
+  });
+
+  it("gives a conversation run a workspace only on pi with a workspaces dir", () => {
+    const pi = loadConfig({ dataDir: dir(), agentRuntime: "pi", pi: { ...PI, workspacesDir: path.join(dir(), "ws") } });
+    expect(piRunWorkspace(pi, base)?.conversationDir).toBe("/workspace/c/c");
+    expect(piRunWorkspace(pi, { ...base, conversationId: undefined })).toBeNull();
+    expect(piRunWorkspace(loadConfig({ dataDir: dir(), agentRuntime: "local" }), base)).toBeNull();
   });
 });
 
@@ -652,12 +744,12 @@ describe("pi prompt variant", () => {
     expect(buildPiTurnPreamble({ ...chat, activeRepoName: undefined }, { now })).not.toContain("Working repository");
   });
 
-  it("leaves the SDK append unchanged", () => {
-    const sdk = buildSystemPromptAppend(owner);
-    expect(sdk).not.toContain("Runtime: your own pi sandbox");
-    expect(sdk).toContain("Conversation rewind (this turn)");
-    expect(sdk).toContain("submitted by an **EXTERNAL SYSTEM**");
-    expect(sdk).toContain("ALSO exported into your Bash shell");
+  it("keeps per-turn facts out of the append even without stamped pi facts (no SDK variant)", () => {
+    const unstamped = buildSystemPromptAppend(owner);
+    expect(unstamped).not.toContain("Conversation rewind (this turn)");
+    expect(unstamped).not.toContain("submitted by an **EXTERNAL SYSTEM**");
+    expect(unstamped).toContain("sandbox shell receives NO secrets");
+    expect(unstamped).not.toContain("exported into your Bash shell");
   });
 });
 
@@ -665,11 +757,18 @@ describe("pi prompt variant", () => {
 
 describe("pi config", () => {
   it("parses and validates PI_MODEL_MAP", () => {
-    expect(parsePiModelMap('{"opus":"m1","sonnet":{"model":"m2","contextWindow":1000}}')).toEqual({
+    expect(
+      parsePiModelMap('{"fable":"m0","opus":"m1","sonnet":{"model":"m2","contextWindow":1000},"haiku":"m3","pinned-id":"m4"}'),
+    ).toEqual({
+      fable: { model: "m0" },
       opus: { model: "m1" },
       sonnet: { model: "m2", contextWindow: 1000 },
+      haiku: { model: "m3" },
+      "pinned-id": { model: "m4" },
     });
-    expect(parsePiModelMap("")).toEqual({});
+    // Required, and the ONLY tier → model source: every composer tier must be mapped.
+    expect(() => parsePiModelMap("")).toThrow(/requires PI_MODEL_MAP/);
+    expect(() => parsePiModelMap('{"opus":"m1"}')).toThrow(/missing: fable, sonnet, haiku/);
     expect(() => parsePiModelMap("[1]")).toThrow(/JSON object/);
     expect(() => parsePiModelMap("{oops")).toThrow(/JSON object/);
     expect(() => parsePiModelMap('{"opus":{"model":"m","contextWindow":-1}}')).toThrow(/PI_MODEL_MAP\["opus"\]/);
@@ -687,18 +786,28 @@ describe("pi config", () => {
       process.env.PI_GATEWAY_API_KEY = "k";
       process.env.PI_WORKSPACES_DIR = "/srv/pi/workspaces";
       process.env.PI_DECK_SANDBOX = "true";
-      process.env.PI_MODEL_MAP = '{"opus":"anthropic/claude-opus"}';
+      delete process.env.PI_MODEL_MAP;
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/requires PI_MODEL_MAP/);
+      process.env.PI_MODEL_MAP = '{"fable":"f","opus":"anthropic/claude-opus","sonnet":"s","haiku":"h"}';
       const config = loadConfig({ dataDir: dir() });
       expect(config.agentRuntime).toBe("pi");
       expect(config.pi).toEqual({
         gatewayUrl: "http://pi:8080",
         apiKey: "k",
         workspacesDir: "/srv/pi/workspaces",
-        modelMap: { opus: { model: "anthropic/claude-opus" } },
+        modelMap: { fable: { model: "f" }, opus: { model: "anthropic/claude-opus" }, sonnet: { model: "s" }, haiku: { model: "h" } },
         deckSandbox: true,
       });
-      process.env.AGENT_RUNTIME = "claude";
+      // pi is the default runtime.
+      delete process.env.AGENT_RUNTIME;
+      expect(loadConfig({ dataDir: dir() }).agentRuntime).toBe("pi");
+      process.env.AGENT_RUNTIME = "local";
       expect(loadConfig({ dataDir: dir() }).pi).toBeUndefined();
+      // The SDK runner is gone: `claude` stops the boot with the fix named.
+      process.env.AGENT_RUNTIME = "claude";
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/AGENT_RUNTIME=claude is no longer supported.*AGENT_RUNTIME=pi/);
+      process.env.AGENT_RUNTIME = "sdk";
+      expect(() => loadConfig({ dataDir: dir() })).toThrow(/must be "pi" or "local"/);
     } finally {
       process.env = saved;
     }

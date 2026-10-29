@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AppConfig, UserGroupMembership } from "../types.js";
@@ -31,7 +31,7 @@ export interface GroupBrainToolsContext {
 /** MCP server name; tools surface to the model as `mcp__group_brain__<tool>`. */
 export const GROUP_BRAIN_SERVER_NAME = "group_brain";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const GROUP_BRAIN_TOOL_NAMES = ["mcp__group_brain__search", "mcp__group_brain__get_note"] as const;
 
 const NO_SUCH_GROUP =
@@ -121,7 +121,7 @@ export function buildGroupBrainTools(store: Store, ctx: GroupBrainToolsContext) 
 
 /** Build the in-process MCP server exposing the group second-brain tools. */
 export function buildGroupBrainServer(store: Store, ctx: GroupBrainToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: GROUP_BRAIN_SERVER_NAME,
     version: "0.1.0",
     tools: buildGroupBrainTools(store, ctx),

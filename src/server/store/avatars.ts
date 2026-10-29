@@ -340,7 +340,8 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     // Trust (elevated tool access) is derived PURELY from group co-membership:
     // members of the same group are mutually + symmetrically elevated. A trusted
     // viewer chats with someone else's avatar at the OWNER's tool-permission level
-    // (write/Bash run, not just read-only) — but it does NOT grant the owner-only
+    // (the elevated MCP tools, not just the read-only set; pi built-ins run in the
+    // viewer's own sandbox either way) — but it does NOT grant the owner-only
     // knowledge inbox.
 
     /**

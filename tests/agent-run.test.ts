@@ -1,99 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Response } from "express";
-import type {
-  AgentEvents,
-} from "../src/server/agent/events.js";
-import type { AgentRequest, AppConfig } from "../src/server/types.js";
+import type { AgentEvents } from "../src/server/agent/events.js";
+import type { AgentRequest, AppConfig, PluginRoot } from "../src/server/types.js";
 import { withTempDir } from "./helpers.js";
 
-// ---------------------------------------------------------------------------
-// Partially mock the Claude Agent SDK: keep tool()/createSdkMcpServer() and
-// everything else REAL (the in-process MCP servers build against them at
-// registration time), replacing only `query` with a per-test scriptable fake.
-// The fake records a SNAPSHOT of each call's `options` — the real run loop
-// mutates the single `options` object in place across attempts (resume/model),
-// so a live reference would read the post-mutation state.
-// ---------------------------------------------------------------------------
-type QueryArgs = { prompt: unknown; options: Record<string, unknown> };
-type QueryHandle = AsyncIterable<unknown> & {
-  getContextUsage?: () => Promise<{ totalTokens?: number; maxTokens?: number } | undefined>;
-};
-
-const sdkMock = vi.hoisted(() => ({
-  impl: null as null | ((args: QueryArgs) => QueryHandle),
-  calls: [] as { prompt: unknown; options: Record<string, unknown> }[],
-}));
-
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    query: (args: QueryArgs) => {
-      sdkMock.calls.push({ prompt: args.prompt, options: { ...args.options } });
-      if (!sdkMock.impl) {
-        throw new Error("sdkMock.impl not programmed for this test");
-      }
-      return sdkMock.impl(args);
-    },
-  };
-});
-
-// ---------------------------------------------------------------------------
-// Turn ON the opt-in SDK tool-call trace for this file. `TOOL_TRACE_ENABLED`
-// (agentUtils) reads AGENT_TOOL_TRACE ONCE at module load, so the flag has to be
-// set before any import — hence vi.hoisted. Every run-loop test in this file
-// then exercises the trace path with real message shapes, and the tracing suite
-// below asserts what it emits. Cleared in afterAll so the flag can't ride along
-// into another test file sharing this worker process.
-// ---------------------------------------------------------------------------
-vi.hoisted(() => {
-  process.env.AGENT_TOOL_TRACE = "1";
-});
-afterAll(() => {
-  delete process.env.AGENT_TOOL_TRACE;
-});
-
-// The trace's only observable output is its logger, so capture the ONE child
-// logger sdkMessageHandlers binds (`trace: "tool"`). Every other child — the
-// PreToolUse hook's included — stays the real, test-silent pino instance.
-const traceLog = vi.hoisted(() => {
-  const entries: { payload: Record<string, unknown>; msg: string }[] = [];
-  const record = (payload?: unknown, msg?: string) => {
-    entries.push({
-      payload: (typeof payload === "object" && payload ? payload : {}) as Record<string, unknown>,
-      msg: typeof payload === "string" ? payload : (msg ?? ""),
-    });
-  };
-  const child: Record<string, unknown> = { child: () => child };
-  for (const level of ["trace", "debug", "info", "warn", "error", "fatal"]) {
-    child[level] = record;
-  }
-  return { entries, child };
-});
-
-vi.mock("../src/server/logger.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  const real = actual.default as { child: (bindings: Record<string, unknown>) => unknown };
-  const realChild = real.child.bind(real);
-  return {
-    ...actual,
-    default: Object.assign(Object.create(real as object), {
-      child: (bindings: Record<string, unknown>) =>
-        bindings?.trace === "tool" ? traceLog.child : realChild(bindings),
-    }),
-  };
-});
-
 import { createServices } from "../src/server/app.js";
-import { CLAUDE_OAUTH_TOKEN_KEY } from "../src/server/store.js";
-import { runAgentStream } from "../src/server/agent/index.js";
 import {
-  buildImageQueryPrompt,
-  runClaudeAgent,
-  resultErrorMessage,
-} from "../src/server/agent/claudeAgent.js";
+  buildModelFallbackChain,
+  buildRunCapabilities,
+  stampPromptRequest,
+} from "../src/server/agent/runCapabilities.js";
+import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import { piEphemeralRunKey, piRunPrincipal } from "../src/server/agent/pi/piRuntime.js";
+import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
+import { EMPTY_PI_RESPONSE_MESSAGE, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
+import {
+  PiGatewayError,
+  type PiResponseRequest,
+  type PiResponsesClient,
+  type PiStreamEvent,
+} from "../src/server/agent/pi/responsesClient.js";
+import { resultErrorMessage } from "../src/server/agent/runErrors.js";
+import { redactSecretValues } from "../src/server/agent/secretRedaction.js";
 import { DEFAULT_MODEL_TIER } from "../src/server/modelTiers.js";
 import {
   attachRunClient,
@@ -105,118 +35,20 @@ import {
   emitRunEvent,
   getActiveRun,
   getActiveRunForConversation,
+  getRunPrompts,
   isRunCancelled,
   openRun,
+  pushRunSteer,
   submitResponse,
 } from "../src/server/agent/runRegistry.js";
-import {
-  createLoopState,
-  dispatchSdkMessage,
-  traceSdkMessage,
-} from "../src/server/agent/sdkMessageHandlers.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
 import { TOOL_SKILL_POLICY_CONFIG_KEY } from "../src/server/toolSkillPolicy.js";
 
 // ---------------------------------------------------------------------------
-// SDK-message + query-handle builders (shapes copied from sdkMessageHandlers /
-// agent-core fixtures).
+// One run = the capability plan (`buildRunCapabilities` + `stampPromptRequest`,
+// called here exactly as runPiAgent calls them) and the pi run loop (driven
+// against a scripted fake gateway client). Everything Noah-side is real.
 // ---------------------------------------------------------------------------
-const initMsg = (sessionId = "sess-1", model = "opus") => ({
-  type: "system",
-  subtype: "init",
-  session_id: sessionId,
-  model,
-});
-const startMsg = (usage: Record<string, number>) => ({
-  type: "stream_event",
-  parent_tool_use_id: null,
-  event: { type: "message_start", message: { usage } },
-});
-const deltaMsg = (text: string) => ({
-  type: "stream_event",
-  parent_tool_use_id: null,
-  event: { type: "content_block_delta", delta: { type: "text_delta", text } },
-});
-const thinkingMsg = (thinking: string) => ({
-  type: "stream_event",
-  parent_tool_use_id: null,
-  event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking } },
-});
-const textBlock = (text: string) => ({ type: "text", text });
-const toolUseBlock = (id: string, name: string, input: Record<string, unknown> = {}) => ({
-  type: "tool_use",
-  id,
-  name,
-  input,
-});
-const assistantMsg = (content: unknown[], usage?: Record<string, number>) => ({
-  type: "assistant",
-  parent_tool_use_id: null,
-  message: { content, ...(usage ? { usage } : {}) },
-});
-const toolResultMsg = (toolUseId: string, isError = false) => ({
-  type: "user",
-  parent_tool_use_id: null,
-  message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: isError }] },
-});
-const successResult = (result: string, extra: Record<string, unknown> = {}) => ({
-  type: "result",
-  subtype: "success",
-  result,
-  ...extra,
-});
-/**
- * The CLI's report on a mid-turn message we wrote to its stdin. `started` is
- * the ONLY delivery signal — a folded steer is never echoed back as a stream
- * `user` message.
- */
-const lifecycleMsg = (commandUuid: string, state: string) => ({
-  type: "command_lifecycle",
-  command_uuid: commandUuid,
-  state,
-});
-
-/** A query handle that yields a fixed message list, optionally with a getContextUsage control method. */
-function handleFrom(
-  messages: unknown[],
-  opts: { getContextUsage?: QueryHandle["getContextUsage"] } = {},
-): QueryHandle {
-  async function* gen() {
-    for (const message of messages) {
-      yield message;
-    }
-  }
-  const handle = gen() as QueryHandle;
-  if (opts.getContextUsage) {
-    handle.getContextUsage = opts.getContextUsage;
-  }
-  return handle;
-}
-
-/**
- * Read the single user message's text block off a generator prompt (streaming
- * turns pass the held-open generator; safe to consume after the run — its gate
- * is released on attempt exit, and the mock never consumes the prompt itself).
- */
-async function promptTextOf(prompt: unknown): Promise<string> {
-  const gen = prompt as AsyncGenerator<Record<string, unknown>>;
-  const first = await gen.next();
-  const message = (
-    first.value as { message?: { content?: Array<{ type?: string; text?: string }> } }
-  ).message;
-  return message?.content?.find((block) => block.type === "text")?.text ?? "";
-}
-
-/** A query handle that throws on iteration (optionally aborting a controller first). */
-function throwingHandle(error: unknown, opts: { abort?: AbortController } = {}): QueryHandle {
-  async function* gen() {
-    if (opts.abort) {
-      opts.abort.abort();
-    }
-    throw error;
-  }
-  return gen() as QueryHandle;
-}
 
 /** Events sink of vi.fn spies; pass overrides to add optional callbacks (e.g. onCanvas). */
 function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
@@ -227,15 +59,10 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
     onStatus: vi.fn(),
     onModel: vi.fn(),
     onSessionId: vi.fn(),
-    onPlugin: vi.fn(),
     onToolStart: vi.fn(),
     onToolEnd: vi.fn(),
-    onTaskStart: vi.fn(),
-    onTaskUpdate: vi.fn(),
-    onTaskEnd: vi.fn(),
     onAgentStart: vi.fn(),
     onAgentEnd: vi.fn(),
-    onBlocked: vi.fn(),
     ...overrides,
   };
 }
@@ -243,20 +70,22 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
 let tempDir: string;
 const getTempDir = withTempDir("agent-run", () => {
   tempDir = getTempDir();
-  sdkMock.calls.length = 0;
-  sdkMock.impl = null;
 });
 
 /** Fresh services + an owner user + a realistic owner AgentRequest, over the per-test temp dir. */
 function setup(configOverrides: Partial<AppConfig> = {}) {
   const { config, store } = createServices({
     dataDir: tempDir,
-    agentRuntime: "claude",
+    agentRuntime: "pi",
     sessionSecret: "test",
-    // Neutralize any ANTHROPIC_MODEL/API key from the dev machine's env so model
-    // resolution is deterministic (env pin would otherwise win over the tier).
-    anthropicModel: undefined,
-    anthropicApiKey: undefined,
+    defaultPluginsDir: path.join(tempDir, "default-plugins"),
+    pi: {
+      gatewayUrl: "http://pi.invalid",
+      apiKey: "k",
+      modelMap: { opus: { model: "m-opus" }, sonnet: { model: "m-sonnet" }, haiku: { model: "m-haiku" } },
+      deckSandbox: false,
+      workspacesDir: path.join(tempDir, "pi-ws"),
+    },
     ...configOverrides,
   });
   const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
@@ -275,419 +104,266 @@ function setup(configOverrides: Partial<AppConfig> = {}) {
   return { config, store, owner, baseRequest };
 }
 
+type Env = ReturnType<typeof setup>;
+
+/** The plan as runPiAgent builds it, plus the frozen append and this turn's preamble its stamps produce. */
+async function plan(env: Env, request: AgentRequest, events: AgentEvents | undefined = makeEvents(), pluginRoots: PluginRoot[] = []) {
+  const workspace = piWorkspaceFor(env.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+  const caps = await buildRunCapabilities(request, pluginRoots, env.config, env.store, events, undefined, () => 0, {
+    piConversationDir: workspace.conversationDir,
+    piWorkspace: workspace,
+  });
+  const stamped = stampPromptRequest(request, caps, env.config, events);
+  return {
+    caps,
+    stamped,
+    servers: Object.keys(caps.inProcessMcpServers),
+    allowed: caps.mcpAllowedTools,
+    append: buildSystemPromptAppend(stamped),
+    turn: buildPiTurnPreamble(stamped, { now: new Date("2026-10-29T00:00:00Z") }),
+  };
+}
+
+// ---- fake pi gateway --------------------------------------------------------------------
+
+const ev = (type: string, data: Record<string, unknown>): PiStreamEvent => ({ type, data });
+
+function textTurn(id: string, text: string): PiStreamEvent[] {
+  return [
+    ev("response.created", { response: { id, model: "fake-model", status: "in_progress" } }),
+    ...(text
+      ? [
+          ev("response.output_item.added", { item: { type: "message", id: `${id}-m` } }),
+          ev("response.output_text.delta", { delta: text }),
+          ev("response.output_item.done", { item: { type: "message", id: `${id}-m`, status: "completed" } }),
+        ]
+      : []),
+    ev("response.completed", { response: { id, status: "completed", usage: { output_tokens: 3 } } }),
+  ];
+}
+
+type Step = (req: PiResponseRequest) => PiStreamEvent[] | Error;
+
+function fakeClient(steps: Step[]) {
+  const requests: PiResponseRequest[] = [];
+  let index = 0;
+  const client: PiResponsesClient = {
+    async *stream(req) {
+      requests.push(structuredClone(req));
+      const step = steps[index++];
+      if (!step) throw new Error(`unexpected pi request #${index}`);
+      const out = step(req);
+      if (out instanceof Error) throw out;
+      for (const event of out) yield event;
+    },
+    async cancel() {
+      return { status: "cancelled" };
+    },
+    async listModels() {
+      return [];
+    },
+    async fileContent() {
+      throw new Error("not used");
+    },
+  };
+  return { client, requests };
+}
+
+const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req.input.text : "");
+
 // ===========================================================================
-// runClaudeAgent orchestration (real run loop against the scripted SDK)
+// The capability plan: which Noah servers and tools a run class gets
 // ===========================================================================
-describe("runClaudeAgent orchestration (SDK mocked)", () => {
+describe("run capability plan", () => {
   it("retains system tools when an old admin policy blocks every optional group", async () => {
-    const { config, store, baseRequest } = setup();
-    vi.spyOn(store, "allowedMcpToolGroupsForUser").mockReturnValue([]);
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-    const { options } = sdkMock.calls[0];
-    const servers = options.mcpServers as Record<string, unknown>;
-    expect(servers.system).toBeDefined();
-    expect(servers.web).toBeUndefined();
-    expect(servers.git_repo).toBeUndefined();
-    expect(options.allowedTools).toContain("mcp__system__read_manual");
-    expect(options.allowedTools).toContain("mcp__system__describe_system");
-    expect((options.systemPrompt as { append: string }).append).toContain("System tools are always available");
+    const env = setup();
+    vi.spyOn(env.store, "allowedMcpToolGroupsForUser").mockReturnValue([]);
+    const run = await plan(env, env.baseRequest);
+    expect(run.servers).toContain("system");
+    expect(run.servers).not.toContain("web");
+    expect(run.servers).not.toContain("git_repo");
+    expect(run.allowed).toContain("mcp__system__read_manual");
+    expect(run.allowed).toContain("mcp__system__describe_system");
+    expect(run.append).toContain("System tools are always available");
+    // The pi endpoint's gate and describe_system's "callable now" list are the same set.
+    expect(run.caps.piRuntimeFacts.callableNoahTools).toEqual(run.allowed);
   });
 
   it.each([true, false])("always registers system tools regardless of saved selection (selected=%s)", async (enabled) => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-    await runAgentStream({ ...baseRequest, mcpToolGroups: enabled ? ["system"] : [] }, [], config, store, makeEvents());
-    const { options } = sdkMock.calls[0];
-    const allowed = options.allowedTools as string[];
-    const servers = options.mcpServers as Record<string, unknown>;
-    const prompt = options.systemPrompt as { append: string };
-    expect(allowed).toContain("mcp__system__read_manual");
-    expect(servers.system).toBeDefined();
-    expect(prompt.append).toContain("mcp__system__read_manual");
-    expect(prompt.append).toContain("external-tasks: External Task API integration");
+    const env = setup();
+    const run = await plan(env, { ...env.baseRequest, mcpToolGroups: enabled ? ["system"] : [] });
+    expect(run.allowed).toContain("mcp__system__read_manual");
+    expect(run.servers).toContain("system");
+    expect(run.append).toContain("mcp__system__read_manual");
+    expect(run.append).toContain("external-tasks: External Task API integration");
   });
 
-  it("streams session id, model, and deltas, then maps the result + getContextUsage occupancy", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () =>
-      handleFrom(
-        [
-          initMsg("sess-happy", "claude-opus-4-8"),
-          startMsg({ input_tokens: 1000, cache_read_input_tokens: 2000 }),
-          deltaMsg("Hello "),
-          deltaMsg("world"),
-          assistantMsg([textBlock("Hello world")], { input_tokens: 10, output_tokens: 5 }),
-          successResult("Hello world", {
-            usage: { input_tokens: 500, output_tokens: 20, cache_read_input_tokens: 3000 },
-            modelUsage: { "claude-opus-4-8": { contextWindow: 200000 } },
-          }),
-        ],
-        { getContextUsage: async () => ({ totalTokens: 4200, maxTokens: 200000 }) },
-      );
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(events.onSessionId).toHaveBeenCalledWith("sess-happy");
-    expect(events.onModel).toHaveBeenCalledWith("claude-opus-4-8");
-    expect(events.onDelta).toHaveBeenCalledWith("Hello ");
-    expect(events.onDelta).toHaveBeenCalledWith("world");
-
-    expect(response.kind).toBe("text");
-    expect(response.runtime).toBe("claude");
-    expect(response.summary).toBe("Claude Agent SDK 실행이 완료되었습니다.");
-    // Assistant text block wins over the terminal result string (identical here).
-    expect(response.text).toBe("Hello world");
-    // getContextUsage supersedes the scraped snapshot AND the cumulative result input.
-    expect(response.usage).toEqual({
-      inputTokens: 4200,
-      outputTokens: 20,
-      contextWindow: 200000,
-    });
-    expect(sdkMock.calls).toHaveLength(1);
-  });
-
-  it("wires the SDK options: preset system prompt, hook, strict MCP, disallowed tools, default model", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    const { options } = sdkMock.calls[0];
-    expect(options.permissionMode).toBe("default");
-    expect(options.strictMcpConfig).toBe(true);
-    expect(options.skills).toBe("all");
-    expect(options.settingSources).toEqual([]);
-    expect(options.maxTurns).toBe(config.maxTurns);
-    expect(options.cwd).toBe(baseRequest.cwd);
-    expect(options.model).toBe(DEFAULT_MODEL_TIER);
-    expect(options.disallowedTools).toContain("Monitor");
-    // Retired orchestration (plan mode, Workflow, agent teams): never
-    // advertised, never pre-allowed, and the CLI teams runtime is pinned off.
-    for (const retired of ["EnterPlanMode", "ExitPlanMode", "Workflow", "TeamCreate", "TeamDelete", "SendMessage"]) {
-      expect(options.disallowedTools).toContain(retired);
-      expect(options.allowedTools).not.toContain(retired);
+  it("registers the default families for a plain owner, and no server it has no sink or setup for", async () => {
+    const env = setup();
+    const run = await plan(env, env.baseRequest);
+    expect(run.caps.effectiveModel).toBe(DEFAULT_MODEL_TIER);
+    expect(run.caps.modelChain).toEqual([DEFAULT_MODEL_TIER]);
+    expect(run.servers).toEqual(
+      expect.arrayContaining(["knowledge", "repo", "system", "todo", "confluence", "avatars", "git_repo"]),
+    );
+    for (const absent of ["canvas", "brain", "group_repo", "group_brain", "ssh_trust", "browser", "file_output"]) {
+      expect(run.servers).not.toContain(absent);
     }
-    expect(
-      (options.env as Record<string, string | undefined>)
-        .CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
-    ).toBe("0");
-    // Background tasks are disabled, and their controls are neither offered
-    // nor pre-allowed.
-    expect(
-      (options.env as Record<string, string | undefined>)
-        .CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,
-    ).toBe("1");
-    expect(options.disallowedTools).toEqual(expect.arrayContaining(["TaskStop", "TaskOutput"]));
-    for (const shellControl of ["BashOutput", "KillShell", "KillBash"]) {
-      expect(options.allowedTools).not.toContain(shellControl);
-    }
-    // `snapshot: false` keeps the per-turn append live on resumed sessions; the
-    // CLI's default would replay the first turn's recorded prompt instead.
-    expect(options.systemPrompt).toMatchObject({
-      type: "preset",
-      preset: "claude_code",
-      excludeDynamicSections: true,
-      snapshot: false,
-    });
-    expect(typeof (options.systemPrompt as { append?: unknown }).append).toBe("string");
-    // Events present → the PreToolUse hook is registered (the real permission gate).
-    const hooks = options.hooks as { PreToolUse?: unknown[] } | undefined;
-    expect(Array.isArray(hooks?.PreToolUse)).toBe(true);
-    expect(hooks?.PreToolUse).toHaveLength(1);
-    // …plus the canUseTool confirmer: the SDK's permission-prompt route, without
-    // which the CLI hides AskUserQuestion. It must not be
-    // combined with permissionPromptToolName (the SDK throws on both).
-    expect(typeof options.canUseTool).toBe("function");
-    expect(options.permissionPromptToolName).toBeUndefined();
-    // All tool groups on (default) for a plain owner with no repo/groups/ssh/canvas.
-    const serverNames = Object.keys(options.mcpServers as Record<string, unknown>);
-    expect(serverNames).toEqual(
-      expect.arrayContaining(["knowledge", "repo", "system", "confluence", "avatars", "git_repo"]),
-    );
-    expect(serverNames).not.toContain("canvas");
-    expect(serverNames).not.toContain("brain");
-    expect(serverNames).not.toContain("group_repo");
-    expect(serverNames).not.toContain("ssh_trust");
-    // No extra writable dirs (empty plugin roots, no additionalDirs).
-    expect(options.additionalDirectories).toBeUndefined();
-  });
-
-  it("pre-allows the gated built-ins by rule exactly when the hook would blanket-allow them", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    // Owner live chat (elevated + autoApprove): the gated built-ins ride
-    // allowedTools so they never enter the CLI's cancellable ask path — 2.1.222
-    // cancels it in turns where a queued task-notification arrived and words
-    // the cancellation as a user refusal (the silent auto-deny flake).
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-    const allowed = sdkMock.calls[0].options.allowedTools as string[];
-    expect(allowed).toEqual(
-      expect.arrayContaining(["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"]),
-    );
-    // The hook intercepts AskUserQuestion (deny-carrying-answer) — a rule
-    // allowing it would still be overridden, but it must never be listed.
-    expect(allowed).not.toContain("AskUserQuestion");
-
-    // Colleague (not elevated): the hook denies these tools, so no rule may allow them.
-    await runAgentStream(
-      { ...baseRequest, viewerUserId: "someone-else", viewerIsOwner: false },
-      [],
-      config,
-      store,
-      makeEvents(),
-    );
-    expect(sdkMock.calls[1].options.allowedTools as string[]).not.toContain("Bash");
-
-    // Restricted headless run (no allowHeadlessTools): read-only, same rule.
-    await runAgentStream({ ...baseRequest, headless: true }, [], config, store, makeEvents());
-    expect(sdkMock.calls[2].options.allowedTools as string[]).not.toContain("Bash");
-
-    // Owner routine that opted into headless tools (scheduler: autoApprove) keeps the rule.
-    await runAgentStream(
-      { ...baseRequest, headless: true, allowHeadlessTools: true },
-      [],
-      config,
-      store,
-      makeEvents(),
-    );
-    expect(sdkMock.calls[3].options.allowedTools as string[]).toContain("Bash");
-
-    // Elevated but NOT autoApprove: the interactive permission prompt is the
-    // gate, so the ask path must stay live and no rule may pre-allow.
-    await runAgentStream({ ...baseRequest, autoApprove: false }, [], config, store, makeEvents());
-    expect(sdkMock.calls[4].options.allowedTools as string[]).not.toContain("Bash");
+    // Every built server is one pi's broker knows; nothing is relayed for this run.
+    expect(run.caps.piMcpProxies.upstreams).toEqual([]);
+    expect(run.caps.canWriteFiles).toBe(true);
+    expect(run.caps.piRuntimeFacts.sandboxOwner).toBe("owner");
   });
 
   it("a stored policy still naming the retired SendMessage/Workflow toggles changes nothing", async () => {
-    const { config, store, baseRequest } = setup();
+    const env = setup();
     // A pre-retirement row: the read path normalizes the retired names away.
-    store.setAppSecret(
+    env.store.setAppSecret(
       TOOL_SKILL_POLICY_CONFIG_KEY,
       JSON.stringify({ disabledTools: ["SendMessage", "Workflow", "WebFetch"], disabledSkills: [] }),
     );
-    expect(store.getToolSkillPolicy().disabledTools).toEqual(["WebFetch"]);
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    const { options } = sdkMock.calls[0];
-    expect(
-      (options.env as Record<string, string | undefined>)
-        .CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
-    ).toBe("0");
-    expect(options.disallowedTools).toContain("SendMessage");
-    expect(options.disallowedTools).toContain("WebFetch");
+    expect(env.store.getToolSkillPolicy().disabledTools).toEqual(["WebFetch"]);
+    const run = await plan(env, env.baseRequest);
+    // Both surfaces read the normalized list (advisory on pi).
+    expect(run.caps.toolSkillPolicy.disabledTools).toEqual(["WebFetch"]);
+    expect(run.stamped.adminDisabledTools).toEqual(["WebFetch"]);
   });
 
-  it("plumbs the model tier, effort, and MCP tool-group selection into the query options", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg("s", "sonnet"), successResult("ok")]);
-
-    await runAgentStream(
-      { ...baseRequest, modelTier: "sonnet", effort: "high", mcpToolGroups: ["system"] },
-      [],
-      config,
-      store,
-      events,
-    );
-
-    const { options } = sdkMock.calls[0];
-    expect(options.model).toBe("sonnet");
-    expect(options.effort).toBe("high");
+  it("plumbs the model tier, effort, and MCP tool-group selection into the run", async () => {
+    const env = setup();
+    const request: AgentRequest = { ...env.baseRequest, modelTier: "sonnet", effort: "high", mcpToolGroups: ["system"] };
+    const run = await plan(env, request);
+    expect(run.caps.effectiveModel).toBe("sonnet");
+    expect(run.caps.userEffort).toBe("high");
     // Only the `system` group enabled → only the system family is registered:
     // the system server plus, on this owner run, the to-do server riding it.
-    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual(["system", "todo"]);
+    expect(run.servers).toEqual(["system", "todo"]);
+
+    // …and the gateway receives the tier's mapped pi model and the effort.
+    const { client, requests } = fakeClient([() => textTurn("resp_t_1", "ok")]);
+    await runPiAgent(request, [], env.config, env.store, makeEvents(), undefined, { client });
+    expect(requests[0]).toMatchObject({ model: "m-sonnet", reasoningEffort: "high" });
   });
 
   it("keeps a turn the external task API submitted a full owner run", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
+    const env = setup();
     // Control: the same owner run, typed in the chat.
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-    const interactive = sdkMock.calls[0].options;
-
+    const interactive = await plan(env, env.baseRequest);
     // An external system's instruction is still a FULL owner run: provenance
-    // changes what the prompt says, never which owner servers register.
-    await runAgentStream(
-      { ...baseRequest, externalTaskApi: true },
-      [],
-      config,
-      store,
-      makeEvents(),
-    );
-    const external = sdkMock.calls[1].options;
-    const externalServers = Object.keys(
-      external.mcpServers as Record<string, unknown>,
-    );
-    expect(externalServers).toContain("system");
-    expect(externalServers).toContain("repo");
-
-    // The prompt states the provenance on that run alone.
-    expect(JSON.stringify(external.systemPrompt)).toContain("EXTERNAL SYSTEM");
-    expect(JSON.stringify(interactive.systemPrompt)).not.toContain(
-      "EXTERNAL SYSTEM",
-    );
+    // changes what the turn input says, never which owner servers register.
+    const external = await plan(env, { ...env.baseRequest, externalTaskApi: true });
+    expect(external.servers).toContain("system");
+    expect(external.servers).toContain("repo");
+    expect(external.caps.ownerToolAccess).toBe(true);
+    // The provenance rides THAT turn's input, never the frozen append.
+    expect(external.turn).toContain("EXTERNAL SYSTEM");
+    expect(interactive.turn).not.toContain("EXTERNAL SYSTEM");
+    expect(external.append).not.toContain("submitted by an **EXTERNAL SYSTEM**");
   });
 
-  it("stamps the configured task API budget into an owner run's prompt", async () => {
+  it("stamps the configured task API budget into an owner run", async () => {
     // 90, not the 300-minute default: the stamp must carry the live config.
-    const { config, store, baseRequest } = setup({ avatarTaskRunTimeoutMs: 90 * 60_000 });
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-    const appendOf = (i: number) =>
-      (sdkMock.calls[i].options.systemPrompt as { append: string }).append;
-
-    await runAgentStream({ ...baseRequest, externalTaskApi: true }, [], config, store, makeEvents());
-    expect(appendOf(0)).toContain("This run has a hard wall-clock budget of 90 minutes");
-    expect(appendOf(0)).toContain("Each task may run for up to 90 minutes");
+    const env = setup({ avatarTaskRunTimeoutMs: 90 * 60_000 });
+    const api = await plan(env, { ...env.baseRequest, externalTaskApi: true });
+    expect(api.turn).toContain("This run has a hard wall-clock budget of 90 minutes");
+    expect(api.append).toContain("Each task may run for up to 90 minutes");
 
     // An interactive owner run hears the standing fact, never the per-run one.
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-    expect(appendOf(1)).toContain("Each task may run for up to 90 minutes");
-    expect(appendOf(1)).not.toContain("hard wall-clock budget");
+    const chat = await plan(env, env.baseRequest);
+    expect(chat.append).toContain("Each task may run for up to 90 minutes");
+    expect(chat.turn).not.toContain("hard wall-clock budget");
   });
 
   it("registers the brain + canvas servers when a repo is connected and a canvas sink exists", async () => {
-    const { config, store, baseRequest, owner } = setup();
-    store.setKnowledgeRepo(owner.id, "owner/kb", "main");
+    const env = setup();
+    env.store.setKnowledgeRepo(env.owner.id, "owner/kb", "main");
     // No opt-in: the canvas graduated from the experimental flag.
     const events = makeEvents({ onCanvas: vi.fn(async () => ({ behavior: "shown" as const })) });
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    const serverNames = Object.keys(sdkMock.calls[0].options.mcpServers as Record<string, unknown>);
+    const run = await plan(env, env.baseRequest, events);
     // repoConfigured + elevated → second brain; canvas tool group + onCanvas sink → canvas.
-    expect(serverNames).toContain("brain");
-    expect(serverNames).toContain("canvas");
-    expect(serverNames).toContain("repo");
+    expect(run.servers).toEqual(expect.arrayContaining(["brain", "canvas", "repo"]));
+    expect(run.allowed).toContain("mcp__canvas__show");
   });
 
   it("registers file_output only when an interactive file sink is present", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    const env = setup();
     const onFile = vi.fn(async () => ({
       behavior: "shown" as const,
       attachment: { id: "out-1", kind: "image" as const, mediaType: "image/png" as const },
       url: "/api/conversations/c1/images/out-1",
     }));
-
-    await runAgentStream(baseRequest, [], config, store, makeEvents({ onFile }));
-
-    const options = sdkMock.calls[0].options;
-    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toContain("file_output");
-    expect(options.allowedTools as string[]).toContain("mcp__file_output__show_file");
-    expect(options.allowedTools as string[]).toContain("mcp__file_output__share_file");
-    expect(JSON.stringify(options.systemPrompt)).toContain("mcp__file_output__show_file");
+    const run = await plan(env, env.baseRequest, makeEvents({ onFile }));
+    expect(run.servers).toContain("file_output");
+    expect(run.allowed).toContain("mcp__file_output__show_file");
+    expect(run.allowed).toContain("mcp__file_output__share_file");
+    expect(run.append).toContain("mcp__file_output__show_file");
     // A file sink alone never brings create_share_link: that needs the host's
     // onShareLink too (tests/agent-share-link.test.ts has the full matrix).
-    expect(options.allowedTools as string[]).not.toContain("mcp__file_output__create_share_link");
+    expect(run.allowed).not.toContain("mcp__file_output__create_share_link");
   });
 
   it("registers the group repo + group brain servers when the owner belongs to a group with a shared repo", async () => {
-    const { config, store, baseRequest, owner } = setup();
-    const group = store.createGroup({ name: "팀" });
-    store.addGroupMember(group.id, owner.id, "admin");
-    store.setGroupKnowledgeRepo(group.id, "team/kb", "main");
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    const serverNames = Object.keys(sdkMock.calls[0].options.mcpServers as Record<string, unknown>);
+    const env = setup();
+    const group = env.store.createGroup({ name: "팀" });
+    env.store.addGroupMember(group.id, env.owner.id, "admin");
+    env.store.setGroupKnowledgeRepo(group.id, "team/kb", "main");
+    const run = await plan(env, env.baseRequest);
     // owner in ≥1 group → group_repo; the group has a connected repo → group_brain.
-    expect(serverNames).toContain("group_repo");
-    expect(serverNames).toContain("group_brain");
+    expect(run.servers).toContain("group_repo");
+    expect(run.servers).toContain("group_brain");
   });
 
   it("allows ask_avatar ONLY on owner-driven runs and never inside a consultation", async () => {
-    const { config, store, baseRequest, owner } = setup();
-    const group = store.createGroup({ name: "팀" });
-    store.addGroupMember(group.id, owner.id, "member");
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    const env = setup();
+    const group = env.store.createGroup({ name: "팀" });
+    env.store.addGroupMember(group.id, env.owner.id, "member");
+    const ASK = "mcp__avatars__ask_avatar";
 
     // Owner chat with a group → the consultation tool is allow-listed.
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-    expect(sdkMock.calls[0].options.allowedTools as string[]).toContain(
-      "mcp__avatars__ask_avatar",
-    );
-
+    expect((await plan(env, env.baseRequest)).allowed).toContain(ASK);
     // A consultation run must never re-register it (the depth guard)...
-    await runAgentStream(
-      { ...baseRequest, avatarConsultation: true },
-      [],
-      config,
-      store,
-      makeEvents(),
-    );
-    expect(sdkMock.calls[1].options.allowedTools as string[]).not.toContain(
-      "mcp__avatars__ask_avatar",
-    );
-
+    expect((await plan(env, { ...env.baseRequest, avatarConsultation: true })).allowed).not.toContain(ASK);
     // ...nor a teammate turn (not owner-driven)...
-    await runAgentStream(
-      { ...baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, elevated: true },
-      [],
-      config,
-      store,
-      makeEvents(),
-    );
-    expect(sdkMock.calls[2].options.allowedTools as string[]).not.toContain(
-      "mcp__avatars__ask_avatar",
-    );
-
+    expect(
+      (await plan(env, { ...env.baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, elevated: true })).allowed,
+    ).not.toContain(ASK);
     // ...nor a restricted headless run (intro/hashtag generation).
-    await runAgentStream(
-      { ...baseRequest, headless: true },
-      [],
-      config,
-      store,
-      makeEvents(),
-    );
-    expect(sdkMock.calls[3].options.allowedTools as string[]).not.toContain(
-      "mcp__avatars__ask_avatar",
-    );
+    expect((await plan(env, { ...env.baseRequest, headless: true })).allowed).not.toContain(ASK);
+    // An owner routine keeps it, and waits for the answer (no live steer channel).
+    const routine = await plan(env, { ...env.baseRequest, headless: true, allowHeadlessTools: true });
+    expect(routine.allowed).toContain(ASK);
+    expect(routine.caps.piRuntimeFacts.asyncAskAvatar).toBe(false);
   });
 
   it("keeps ask_avatar out when the owner belongs to no group (no reachable target)", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-
-    const allowedTools = sdkMock.calls[0].options.allowedTools as string[];
-    expect(allowedTools).not.toContain("mcp__avatars__ask_avatar");
+    const env = setup();
+    const run = await plan(env, env.baseRequest);
+    expect(run.allowed).not.toContain("mcp__avatars__ask_avatar");
     // The discovery tool itself stays available.
-    expect(allowedTools).toContain("mcp__avatars__search_avatars");
+    expect(run.allowed).toContain("mcp__avatars__search_avatars");
   });
 
-  it("suppresses plugin MCP servers for consultation runs (registration is their only gate)", async () => {
-    const { config, store, baseRequest } = setup();
-    const rootDir = path.join(tempDir, "consult-plugin-root");
+  it("relays no plugin MCP server on a consultation run (registration is its only gate)", async () => {
+    const env = setup();
+    // A plugin bundled with Noah: the one root whose stdio servers a pi run may start.
+    const rootDir = path.join(env.config.defaultPluginsDir, "consult-plugin");
     fs.mkdirSync(rootDir, { recursive: true });
     fs.writeFileSync(
       path.join(rootDir, ".mcp.json"),
       JSON.stringify({ mcpServers: { corp: { command: "node", args: ["server.js"] } } }),
     );
-    const roots = [{ type: "local" as const, path: rootDir }];
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
+    const roots: PluginRoot[] = [{ type: "local", path: rootDir }];
 
-    // Control: a normal owner run lifts the plugin server.
-    await runAgentStream(baseRequest, roots, config, store, makeEvents());
-    expect(
-      Object.keys(sdkMock.calls[0].options.mcpServers as Record<string, unknown>),
-    ).toContain("corp");
+    // Control: a normal owner run relays the plugin server.
+    const owner = await plan(env, env.baseRequest, makeEvents(), roots);
+    expect(owner.caps.piMcpProxies.facts.pluginServers).toEqual(["corp"]);
+    expect(owner.caps.piMcpProxies.upstreams.map((u) => `${u.proxy}/${u.name}`)).toEqual(["plugins/corp"]);
 
-    // A consultation run (trusted-colleague viewer class) gets NO plugin servers.
-    await runAgentStream(
+    // A consultation run (trusted-colleague viewer class) relays NO plugin servers.
+    const consultation = await plan(
+      env,
       {
-        ...baseRequest,
+        ...env.baseRequest,
         avatarConsultation: true,
         viewerUserId: "asker-id",
         viewerIsOwner: false,
@@ -695,806 +371,27 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
         headless: true,
         allowHeadlessTools: true,
       },
-      roots,
-      config,
-      store,
       makeEvents(),
+      roots,
     );
-    expect(
-      Object.keys(sdkMock.calls[1].options.mcpServers as Record<string, unknown>),
-    ).not.toContain("corp");
+    expect(consultation.caps.piMcpProxies.facts.pluginServers).toEqual([]);
+    expect(consultation.caps.piMcpProxies.upstreams).toEqual([]);
+    expect(consultation.caps.piRuntimeFacts.sandboxOwner).toBe("asker");
   });
 
-  it("emits tool / progress / blocked activity events across the run loop", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg(),
-        assistantMsg([toolUseBlock("t1", "Bash", { command: "ls" })]),
-        { type: "tool_progress", tool_name: "Bash" },
-        toolResultMsg("t1"),
-        {
-          type: "system",
-          subtype: "permission_denied",
-          tool_name: "Edit",
-          tool_use_id: "t2",
-          agent_id: "main",
-          decision_reason: "read-only",
-        },
-        assistantMsg([textBlock("done")]),
-        successResult("done"),
-      ]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(events.onToolStart).toHaveBeenCalledWith(
-      expect.objectContaining({ toolUseId: "t1", name: "Bash", agentId: "main", inputSummary: "ls" }),
-    );
-    expect(events.onToolEnd).toHaveBeenCalledWith({ toolUseId: "t1", ok: true });
-    expect(events.onStatus).toHaveBeenCalledWith(expect.stringContaining("실행 중"));
-    expect(events.onBlocked).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "Edit", toolUseId: "t2", reason: "read-only" }),
-    );
-    expect(response.text).toBe("done");
-  });
-
-  it("falls back to the scraped context snapshot when getContextUsage throws", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () =>
-      handleFrom(
-        [
-          initMsg(),
-          startMsg({ input_tokens: 3000, cache_read_input_tokens: 1000 }), // snapshot = 4000
-          deltaMsg("x"),
-          assistantMsg([textBlock("x")]), // no usage → does not override the snapshot
-          successResult("x", {
-            usage: { input_tokens: 100, output_tokens: 10 },
-            modelUsage: { opus: { contextWindow: 200000 } },
-          }),
-        ],
-        {
-          getContextUsage: async () => {
-            throw new Error("session closing");
-          },
-        },
-      );
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(response.usage).toEqual({ inputTokens: 4000, outputTokens: 10, contextWindow: 200000 });
-  });
-
-  // A tool round between two text blocks is the shape that used to grow the
-  // bubble without bound: the narration before the tool call is now demoted to
-  // the reasoning view and only the LAST block stays the answer.
-  const foldStream = [
-    initMsg(),
-    deltaMsg("A"),
-    assistantMsg([textBlock("A"), toolUseBlock("t1", "Read", { file_path: "a.ts" })]),
-    toolResultMsg("t1"),
-    deltaMsg("B"),
-    assistantMsg([textBlock("B")]),
-    successResult("B"),
-  ];
-
-  it("folds the superseded text block into onTextFold and answers with the last one", async () => {
-    const { config, store, baseRequest } = setup();
-    const onTextFold = vi.fn();
-    const events = makeEvents({ onTextFold });
-    sdkMock.impl = () => handleFrom(foldStream);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    // The first block's own deltas must not re-fold it; only block B's first delta does.
-    expect(onTextFold.mock.calls).toEqual([["A"]]);
-    expect(response.text).toBe("B");
-  });
-
-  it("emits the fold BEFORE the new block's first delta", async () => {
-    const { config, store, baseRequest } = setup();
-    // Wire order the chat-route/client sinks assume: `text_fold` arrives ahead
-    // of the new block's first chunk. Folding after dispatch put the fold
-    // BEHIND that chunk, so the sinks (foldedTextOffset / liveText → thinking)
-    // swept it into the reasoning view and clipped the head off every
-    // post-fold block — live and, on the cancel/error paths, persisted.
-    const order: string[] = [];
-    const events = makeEvents({
-      onDelta: (text) => order.push(`delta:${text}`),
-      onTextFold: (text) => order.push(`fold:${text}`),
-    });
-    sdkMock.impl = () => handleFrom(foldStream);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(order).toEqual(["delta:A", "fold:A", "delta:B"]);
-    expect(response.text).toBe("B");
-  });
-
-  it("keeps the legacy full join when the run has no onTextFold sink", async () => {
-    const { config, store, baseRequest } = setup();
-    // Same stream, sink without onTextFold → the documented no-sink contract:
-    // headless runs behave exactly as before the fold existed.
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom(foldStream);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(response.text).toBe("A\n\nB");
-  });
-
-  it("sweeps at the result boundary for a backend that streams no text deltas", async () => {
-    const { config, store, baseRequest } = setup();
-    const onTextFold = vi.fn();
-    const onTurnResult = vi.fn();
-    const events = makeEvents({ onTextFold, onTurnResult });
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg(),
-        assistantMsg([textBlock("첫 설명")]),
-        assistantMsg([textBlock("두번째 설명")]),
-        assistantMsg([textBlock("최종")]),
-        successResult("최종"),
-      ]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    // No delta ever arrived, so the keepLast sweep is what folds — in one call,
-    // and the boundary segment carries the tail only.
-    expect(onTextFold.mock.calls).toEqual([["첫 설명\n\n두번째 설명"]]);
-    expect(onTurnResult).toHaveBeenCalledWith(expect.objectContaining({ text: "최종" }));
-    expect(response.text).toBe("최종");
-  });
-
-  it("runs non-streaming (no events) via extractMainAssistantText + the finalizeTurnUsage fallback", async () => {
-    const { config, store, baseRequest } = setup();
-    // No getContextUsage attached, and no events sink → control method never called.
-    sdkMock.impl = () =>
-      handleFrom([
-        assistantMsg([textBlock("direct answer")], { input_tokens: 1000, cache_read_input_tokens: 500 }),
-        successResult("direct answer", {
-          usage: { input_tokens: 2000, output_tokens: 50, cache_read_input_tokens: 8000 },
-          modelUsage: { opus: { contextWindow: 200000 } },
-        }),
-      ]);
-
-    const response = await runClaudeAgent(baseRequest, [], config, store);
-
-    expect(response.text).toBe("direct answer");
-    // Snapshot (1500) replaces the cumulative result input (10000); output preserved.
-    expect(response.usage).toEqual({ inputTokens: 1500, outputTokens: 50, contextWindow: 200000 });
-    // No hook without an events sink, so no canUseTool confirmer either.
-    expect(sdkMock.calls[0].options.hooks).toBeUndefined();
-    expect(sdkMock.calls[0].options.canUseTool).toBeUndefined();
-  });
-
-  it("self-heals a missing resume session by re-running without resume and injecting stored history", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    const request: AgentRequest = {
-      ...baseRequest,
-      resumeSessionId: "sess-old",
-      conversationHistory: [
-        { role: "user", content: "이전 질문" },
-        { role: "assistant", content: "이전 답변" },
-      ],
-    };
-    let call = 0;
-    sdkMock.impl = () => {
-      call += 1;
-      if (call === 1) {
-        return throwingHandle(new Error("No conversation found with session ID sess-old"));
-      }
-      return handleFrom([initMsg("sess-new"), successResult("resumed ok")]);
-    };
-
-    const response = await runAgentStream(request, [], config, store, events);
-
-    expect(sdkMock.calls).toHaveLength(2);
-    // First attempt carried resume; the self-heal dropped it for the retry.
-    expect(sdkMock.calls[0].options.resume).toBe("sess-old");
-    expect(sdkMock.calls[1].options.resume).toBeUndefined();
-    // The retry's prompt (streaming → held-open generator) now carries the
-    // stored history in its single user message.
-    const retryPrompt = await promptTextOf(sdkMock.calls[1].prompt);
-    expect(retryPrompt).toContain("Earlier conversation history");
-    expect(retryPrompt).toContain("이전 질문");
-    expect(response.text).toBe("resumed ok");
-  });
-
-  it("does NOT self-heal a missing resume when the run was aborted (propagates the error)", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    const abort = new AbortController();
-    const request: AgentRequest = { ...baseRequest, resumeSessionId: "sess-old" };
-    sdkMock.impl = () =>
-      throwingHandle(new Error("No conversation found with session ID sess-old"), { abort });
-
-    await expect(runAgentStream(request, [], config, store, events, abort)).rejects.toThrow(
-      /no conversation found/i,
-    );
-    expect(sdkMock.calls).toHaveLength(1);
-  });
-
-  it("retries down the model fallback chain on a transient error (scheduled routine)", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    const request: AgentRequest = {
-      ...baseRequest,
-      headless: true,
-      allowHeadlessTools: true,
-      modelFallback: true,
-      modelTier: "opus",
-    };
-    let call = 0;
-    sdkMock.impl = () => {
-      call += 1;
-      if (call === 1) {
-        // Anthropic-style numeric status → retryable via the status branch.
-        return throwingHandle(Object.assign(new Error("upstream hiccup"), { status: 503 }));
-      }
-      return handleFrom([initMsg("s2", "sonnet"), successResult("fell back")]);
-    };
-
-    const response = await runAgentStream(request, [], config, store, events);
-
-    expect(sdkMock.calls).toHaveLength(2);
-    expect(sdkMock.calls[0].options.model).toBe("opus");
-    expect(sdkMock.calls[1].options.model).toBe("sonnet");
-    expect(events.onStatus).toHaveBeenCalledWith(expect.stringContaining("sonnet"));
-    expect(response.text).toBe("fell back");
-  });
-
-  it("falls back from an admin-override (non-tier) model on a transient message-matched error", async () => {
-    const { config, store, baseRequest } = setup();
-    store.setModelOverride("noah-custom-model"); // concrete id, not a tier alias
-    const events = makeEvents();
-    const request: AgentRequest = {
-      ...baseRequest,
-      headless: true,
-      allowHeadlessTools: true,
-      modelFallback: true,
-    };
-    let call = 0;
-    sdkMock.impl = () => {
-      call += 1;
-      if (call === 1) {
-        return throwingHandle(new Error("Error: overloaded_error, please retry"));
-      }
-      return handleFrom([initMsg("s2", "sonnet"), successResult("recovered on sonnet")]);
-    };
-
-    const response = await runAgentStream(request, [], config, store, events);
-
-    // Non-tier primary → chain is [primary, sonnet, haiku]; first retry lands on sonnet.
-    expect(sdkMock.calls[0].options.model).toBe("noah-custom-model");
-    expect(sdkMock.calls[1].options.model).toBe("sonnet");
-    expect(response.text).toBe("recovered on sonnet");
-  });
-
-  it("does NOT fall back on a non-retryable error even when the chain has more tiers", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    const request: AgentRequest = {
-      ...baseRequest,
-      headless: true,
-      allowHeadlessTools: true,
-      modelFallback: true,
-      modelTier: "opus",
-    };
-    sdkMock.impl = () => throwingHandle(new Error("invalid_request: model does not exist"));
-
-    await expect(runAgentStream(request, [], config, store, events)).rejects.toThrow(/invalid_request/);
-    expect(sdkMock.calls).toHaveLength(1);
-  });
-
-  it("propagates a transient error when there is no fallback chain (chat behavior)", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => throwingHandle(new Error("overloaded"));
-
-    await expect(runAgentStream(baseRequest, [], config, store, events)).rejects.toThrow("overloaded");
-    expect(sdkMock.calls).toHaveLength(1);
-  });
-
-  it("keeps the streamed partial text on an error_max_turns result (not the raw error)", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg(),
-        deltaMsg("partial answer"),
-        { type: "result", subtype: "error_max_turns", errors: ["Reached maximum number of turns (6)"] },
-      ]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(response.text).toBe("partial answer");
-    expect(response.usage).toBeUndefined();
-  });
-
-  it("returns the friendly Korean error message on an error result with no text anywhere", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), { type: "result", subtype: "error_max_turns" }]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    // Error subtype present → the empty-turn retry is suppressed; friendly text shown.
-    expect(response.text).toBe(resultErrorMessage("error_max_turns"));
-    expect(response.text).toContain("최대 처리 단계");
-    expect(sdkMock.calls).toHaveLength(1);
-  });
-
-  it("retries once on an empty (thinking-only) turn and keeps the recovered answer", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    let call = 0;
-    sdkMock.impl = () => {
-      call += 1;
-      if (call === 1) {
-        return handleFrom([initMsg(), thinkingMsg("just reasoning, no answer"), successResult("")]);
-      }
-      return handleFrom([successResult("recovered")]);
-    };
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(sdkMock.calls).toHaveLength(2);
-    expect(events.onThinkingReset).toHaveBeenCalledTimes(1);
-    // The retry prompt carries the empty-turn nudge.
-    expect(await promptTextOf(sdkMock.calls[1].prompt)).toContain("internal reasoning only");
-    expect(response.text).toBe("recovered");
-  });
-
-  it("falls back to the empty-response message when the retry is still empty", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("")]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    // First empty turn triggers exactly one retry; the second empty turn gives up.
-    expect(sdkMock.calls).toHaveLength(2);
-    expect(events.onThinkingReset).toHaveBeenCalledTimes(1);
-    expect(response.text).toBe("Claude Agent SDK 응답이 비어 있습니다.");
-  });
-
-  it("suppresses the empty-turn retry when the run was aborted mid-stream", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    const abort = new AbortController();
-    sdkMock.impl = () => {
-      async function* gen() {
-        yield initMsg("sess-abort");
-        abort.abort();
-        yield successResult("");
-      }
-      return gen() as QueryHandle;
-    };
-
-    const response = await runAgentStream(baseRequest, [], config, store, events, abort);
-
-    // Aborted → no retry despite an empty turn.
-    expect(sdkMock.calls).toHaveLength(1);
-    expect(response.text).toBe("Claude Agent SDK 응답이 비어 있습니다.");
-  });
-
-  it("builds a streaming-input prompt (image blocks) when the turn carries images", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("saw the image")]);
-
-    const response = await runAgentStream(
-      { ...baseRequest, images: [{ mediaType: "image/png", data: "AAAA" }] },
-      [],
-      config,
-      store,
-      events,
-    );
-
-    // Image turns pass an async-iterable prompt instead of a plain string.
-    const prompt = sdkMock.calls[0].prompt as { [Symbol.asyncIterator]?: unknown };
-    expect(typeof prompt[Symbol.asyncIterator]).toBe("function");
-    expect(response.text).toBe("saw the image");
-  });
-
-  it("feeds streaming turns through a held-open generator released at a task-free result", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-    expect(response.text).toBe("ok");
-
-    // Text-only streaming turns now ALSO pass an async-iterable prompt: a string
-    // prompt makes the SDK close the CLI's stdin at the first result
-    // (isSingleUserTurn), which kills still-running background tasks with the
-    // process. Same wire format either way — one stream-json user message.
-    const prompt = sdkMock.calls[0].prompt as AsyncGenerator<Record<string, unknown>>;
-    expect(typeof prompt[Symbol.asyncIterator]).toBe("function");
-    const first = await prompt.next();
-    const content = (
-      first.value as { message: { content: Array<{ type: string; text?: string }> } }
-    ).message.content;
-    expect(content.find((block) => block.type === "text")?.text).toContain("안녕하세요");
-    // …and the generator COMPLETES: the task-free result released the hold. An
-    // unreleased gate would park this `next()` forever (and, live, would hold
-    // the CLI's stdin open past the turn).
-    const second = await prompt.next();
-    expect(second.done).toBe(true);
-  });
-
-  it("holds the input open across a result with live background tasks, releasing on settle", async () => {
-    const { config, store, baseRequest } = setup();
-    const onTurnResult = vi.fn();
-    const events = makeEvents({ onTurnResult });
-    const bgChanged = (tasks: Array<{ task_id: string }>) => ({
-      type: "system",
-      subtype: "background_tasks_changed",
-      tasks,
-    });
-    // Consume the held-open prompt like the real SDK does, recording when it
-    // completes relative to the scripted stream.
-    let promptCompleted = false;
-    let completedBeforeWake: boolean | null = null;
-    sdkMock.impl = (args) => {
-      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
-      void (async () => {
-        await prompt.next(); // the user message
-        await prompt.next(); // parks on the gate
-        promptCompleted = true;
-      })();
-      async function* messages() {
-        yield initMsg();
-        yield bgChanged([{ task_id: "t1" }]);
-        yield assistantMsg([textBlock("접수")]);
-        yield successResult("접수");
-        // A result with a LIVE task must NOT release the gate — give a released
-        // gate's microtasks a beat to land before sampling, so a regression here
-        // cannot pass on scheduling luck.
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        completedBeforeWake = promptCompleted;
-        yield bgChanged([]);
-        yield assistantMsg([textBlock("완료 보고")]);
-        yield successResult("완료 보고");
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      return messages() as QueryHandle;
-    };
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    // No onTextFold sink in this test → legacy full join of both segments.
-    expect(response.text).toBe("접수\n\n완료 보고");
-    // Held through the background phase, released at the task-free boundary.
-    expect(completedBeforeWake).toBe(false);
-    expect(promptCompleted).toBe(true);
-    expect(onTurnResult).toHaveBeenCalledTimes(2);
-    expect(onTurnResult.mock.calls[0][0].backgroundTasks).toHaveLength(1);
-    expect(onTurnResult.mock.calls[1][0].backgroundTasks).toHaveLength(0);
-  });
-
-  // -------------------------------------------------------------------------
-  // Mid-turn user messages ("steers"). The channel is the seam between the
-  // held-open prompt generator (which writes them to the CLI's stdin) and the
-  // CLI's command_lifecycle frames (the only delivery signal).
-  // -------------------------------------------------------------------------
-
-  it("yields a mid-turn message into the live prompt and marks it delivered inside the turn", async () => {
-    const { config, store, baseRequest } = setup();
-    const steers = new SteerChannel();
-    const onTurnResult = vi.fn();
-    const events = makeEvents({ steers, onTurnResult });
-
-    const yielded: Record<string, unknown>[] = [];
-    let promptCompleted = false;
-    let steerId = "";
-    sdkMock.impl = (args) => {
-      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
-      void (async () => {
-        for await (const message of prompt) {
-          yielded.push(message);
-        }
-        promptCompleted = true;
-      })();
-      async function* messages() {
-        yield initMsg();
-        // Mid-turn: the model is between tool calls when the viewer types.
-        yield assistantMsg([toolUseBlock("tu-1", "Read", { file_path: "a.ts" })]);
-        yield toolResultMsg("tu-1");
-        steerId = steers.push("사실 b.ts부터 봐줘")!.id;
-        // Let the prompt generator pick it up the way the CLI's stdin would.
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        yield lifecycleMsg(steerId, "queued");
-        yield lifecycleMsg(steerId, "started");
-        yield assistantMsg([textBlock("b.ts로 바꿔서 확인했습니다")]);
-        yield successResult("b.ts로 바꿔서 확인했습니다");
-      }
-      return messages() as QueryHandle;
-    };
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-    expect(response.text).toBe("b.ts로 바꿔서 확인했습니다");
-
-    // The steer rode the SAME held-open generator as the turn's first prompt,
-    // as its second item, keyed by the record id the CLI echoes back.
-    expect(yielded).toHaveLength(2);
-    expect(yielded[1].uuid).toBe(steerId);
-    expect(yielded[1].parent_tool_use_id).toBeNull();
-    expect(
-      (yielded[1].message as { content: { text: string }[] }).content[0].text,
-    ).toBe("사실 b.ts부터 봐줘");
-
-    // Folded INTO the running turn: delivered before the result, so it never
-    // becomes a follow-up.
-    const record = steers.records()[0];
-    expect(record.state).toBe("delivered");
-    expect(record.followUp).toBe(false);
-    expect(onTurnResult).toHaveBeenCalledTimes(1);
-    expect(onTurnResult.mock.calls[0][0].steerPending).toBe(false);
-
-    // Task-free, steer-free boundary → the gate released and the channel closed.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(promptCompleted).toBe(true);
-    expect(steers.closed).toBe(true);
-  });
-
-  it("keeps the run open for a steer the turn ended before, and segments the follow-up turn", async () => {
-    const { config, store, baseRequest } = setup();
-    const steers = new SteerChannel();
-    const onTurnResult = vi.fn();
-    const onTextFold = vi.fn();
-    const events = makeEvents({ steers, onTurnResult, onTextFold });
-
-    let promptCompleted = false;
-    let completedBeforeFollowUp: boolean | null = null;
-    let steerId = "";
-    sdkMock.impl = (args) => {
-      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
-      void (async () => {
-        for await (const _message of prompt) {
-          /* drain */
-        }
-        promptCompleted = true;
-      })();
-      async function* messages() {
-        yield initMsg();
-        yield deltaMsg("첫 답변");
-        yield assistantMsg([textBlock("첫 답변")]);
-        // The viewer types just as the turn wraps up: the CLI has it queued but
-        // has not handed it to the model, so this result is NOT the run's end.
-        steerId = steers.push("한 가지 더 확인해줘")!.id;
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        yield successResult("첫 답변");
-        // A released gate's microtasks get a beat to land before sampling, so a
-        // regression cannot pass on scheduling luck.
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        completedBeforeFollowUp = promptCompleted;
-        // The CLI starts it as its OWN turn in the same session.
-        yield lifecycleMsg(steerId, "started");
-        yield initMsg("sess-1", "opus");
-        yield deltaMsg("추가 확인 결과");
-        yield assistantMsg([textBlock("추가 확인 결과")]);
-        yield successResult("추가 확인 결과");
-      }
-      return messages() as QueryHandle;
-    };
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(onTurnResult).toHaveBeenCalledTimes(2);
-    expect(onTurnResult.mock.calls[0][0]).toMatchObject({
-      text: "첫 답변",
-      backgroundTasks: [],
-      steerPending: true,
-    });
-    expect(onTurnResult.mock.calls[1][0]).toMatchObject({
-      text: "추가 확인 결과",
-      steerPending: false,
-    });
-
-    // The gate stayed shut across the first result (the CLI still had to run
-    // the steer) and opened at the second.
-    expect(completedBeforeFollowUp).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(promptCompleted).toBe(true);
-    expect(steers.closed).toBe(true);
-
-    const record = steers.records()[0];
-    expect(record.state).toBe("delivered");
-    expect(record.followUp).toBe(true);
-
-    // The first segment was already handed to the host as its own message, so
-    // the run's final text is the FOLLOW-UP turn only, and the first segment is
-    // never folded into the reasoning view behind it.
-    expect(response.text).toBe("추가 확인 결과");
-    expect(onTextFold).not.toHaveBeenCalledWith("첫 답변");
-    expect(onTextFold).not.toHaveBeenCalled();
-  });
-
-  it("tells the model it can be interrupted only when the run really has a channel", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, makeEvents({ steers: new SteerChannel() }));
-    const withChannel = (sdkMock.calls[0].options.systemPrompt as { append: string }).append;
-    expect(withChannel).toContain(
-      "The user may send additional messages while you are working",
-    );
-
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-    await runAgentStream(baseRequest, [], config, store, makeEvents());
-    const without = (sdkMock.calls[1].options.systemPrompt as { append: string }).append;
-    expect(without).not.toContain(
-      "The user may send additional messages while you are working",
-    );
-  });
-
-  it("drops a still-queued mid-turn message when the run is aborted", async () => {
-    const { config, store, baseRequest } = setup();
-    const steers = new SteerChannel();
-    const abort = new AbortController();
-    sdkMock.impl = () => {
-      async function* messages() {
-        yield initMsg();
-        steers.push("중간에 보낸 메시지");
-        abort.abort();
-        throw new Error("aborted");
-      }
-      return messages() as QueryHandle;
-    };
-
-    await expect(
-      runAgentStream(baseRequest, [], config, store, makeEvents({ steers }), abort),
-    ).rejects.toThrow("aborted");
-
-    // The model never saw it, so it must not look delivered — and the channel
-    // is closed, which is what stops the route from persisting it.
-    expect(steers.closed).toBe(true);
-    expect(steers.records().map((r) => r.state)).toEqual(["dropped"]);
-    expect(steers.hasUndelivered()).toBe(false);
-  });
-
-  it("keeps the plain string prompt on headless runs (single-turn teardown)", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    const response = await runClaudeAgent(baseRequest, [], config, store);
-
-    expect(response.text).toBe("ok");
-    expect(typeof sdkMock.calls[0].prompt).toBe("string");
-  });
-
-  it("injects the stored subscription OAuth token, applies autoCompactWindow, and skips non-record messages", async () => {
-    const { config, store, baseRequest } = setup({ autoCompactWindow: 150_000 });
-    store.setAppSecret(CLAUDE_OAUTH_TOKEN_KEY, "oauth-tok");
-    const events = makeEvents();
-    sdkMock.impl = () =>
-      // A stray non-record message the run loop must skip without throwing.
-      handleFrom([null, initMsg(), successResult("ok")]);
-
-    const response = await runAgentStream(baseRequest, [], config, store, events);
-
-    const { options } = sdkMock.calls[0];
-    // The window rides the SDK `settings` option (serialized by the SDK into the
-    // CLI `--settings` JSON), not a top-level SDK option: the pinned SDK's Options
-    // has no such field and would drop it silently.
-    expect(options.settings).toEqual({ crossSessionInbound: "refuse", autoCompactWindow: 150_000 });
-    expect(options.autoCompactWindow).toBeUndefined();
-    const env = options.env as Record<string, string | undefined>;
-    // No API key configured → the OAuth token is injected and any empty API key dropped.
-    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-tok");
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(response.text).toBe("ok");
-  });
-
-  it("refuses cross-session messages and hides ListAgents on every run, with no autoCompactWindow", async () => {
-    const { config, store, baseRequest } = setup();
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    // Another live CLI must never deliver a turn into this one (sessionIsolation.ts).
-    expect(sdkMock.calls[0].options.settings).toEqual({ crossSessionInbound: "refuse" });
-    expect(sdkMock.calls[0].options.disallowedTools).toContain("ListAgents");
-  });
-
-  it("lifts plugin-defined MCP servers and exposes plugin roots as writable directories", async () => {
-    const { config, store, baseRequest } = setup();
-    const pluginDir = path.join(tempDir, "plugin-root");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, ".mcp.json"),
-      JSON.stringify({ corp: { command: "node", args: ["server.js"] } }),
-    );
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(
-      baseRequest,
-      [{ type: "local", path: pluginDir }],
-      config,
-      store,
-      events,
-    );
-
-    const { options } = sdkMock.calls[0];
-    // The plugin's .mcp.json server is registered by the app (strictMcpConfig).
-    expect(Object.keys(options.mcpServers as Record<string, unknown>)).toContain("corp");
-    // The plugin root is exposed as an additional writable dir.
-    expect(options.additionalDirectories).toEqual([pluginDir]);
-  });
-
-  it("shell-exposes an owner secret into env and injects it into an OWNED plugin MCP server", async () => {
-    const { config, store, baseRequest, owner } = setup();
-    // An owner secret opted into shell exposure (a non-reserved, injectable name).
-    store.setUserSecret(owner.id, "MY_API_KEY", "vault-value-123");
-    store.setSecretShellExpose(owner.id, "MY_API_KEY", true);
-    // An OWNED plugin (under dataDir/plugins/<uid>/…) with a stdio MCP server, so
-    // the secret rides in via the one-shot secret-file wrapper.
-    const pluginDir = path.join(config.dataDir, "plugins", owner.id, "repo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, ".mcp.json"),
-      JSON.stringify({ corp: { command: "node", args: ["server.js"] } }),
-    );
-    const events = makeEvents();
-    const secretsDir = path.join(config.dataDir, "runtime", "mcp-secrets");
-    let filesAtSpawn: string[] = [];
-    sdkMock.impl = () => {
-      filesAtSpawn = fs.readdirSync(secretsDir);
-      return handleFrom([initMsg(), successResult("ok")]);
-    };
-
-    await runAgentStream(baseRequest, [{ type: "local", path: pluginDir }], config, store, events);
-
-    const { options } = sdkMock.calls[0];
-    // Shell-exposed value reaches the CLI subprocess env on this elevated run.
-    expect((options.env as Record<string, string>).MY_API_KEY).toBe("vault-value-123");
-    // The owned stdio server was rewritten through the secret-file wrapper (value
-    // never in argv), and the secret-value redaction PostToolUse hook is registered.
-    const corp = (options.mcpServers as Record<string, { args?: string[] }>).corp;
-    expect(corp.args).toContain("--secrets");
-    const hooks = options.hooks as { PostToolUse?: unknown[] };
-    expect(Array.isArray(hooks.PostToolUse)).toBe(true);
-    // The one-shot secret file was on disk when the CLI spawned (the wrapper
-    // consumes it at runtime), and nothing unconsumed outlives the run.
-    expect(filesAtSpawn.length).toBeGreaterThan(0);
-    expect(fs.readdirSync(secretsDir)).toEqual([]);
-  });
-
-  it("registers the redaction hook for a BROWSER-typeable secret, and only for the opted-in names", async () => {
+  it("redacts a BROWSER-typeable secret from every result, and only the opted-in names", async () => {
     // Browser input is its own exposure path: the value reaches the user's
-    // browser, so it must be redactable from every OTHER tool output for the
-    // rest of the turn. Without this the run would register no PostToolUse hook
-    // at all (no shell exposure, no plugin server) and a page echoing the
-    // password back would print it in the next snapshot.
-    const { config, store, baseRequest, owner } = setup();
-    store.setUserSecret(owner.id, "LOGIN_PW", "hunter2-corp-secret");
-    store.setUserSecret(owner.id, "OTHER_KEY", "unrelated-vault-value");
-    store.setSecretBrowserPolicy(owner.id, "LOGIN_PW", {
-      enabled: true,
-      hosts: ["jira.corp.com"],
-      passwordOnly: true,
-    });
-    const events = makeEvents({ onBrowser: vi.fn() });
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    const { options } = sdkMock.calls[0];
-    const hooks = options.hooks as {
-      PostToolUse?: { hooks: ((input: unknown) => Promise<unknown>)[] }[];
-    };
-    expect(hooks.PostToolUse?.length).toBe(1);
-    const hook = hooks.PostToolUse![0].hooks[0];
-    const leaked = (await hook({
-      tool_response: { stdout: "log line: hunter2-corp-secret / unrelated-vault-value" },
-    })) as { hookSpecificOutput?: { updatedToolOutput?: { stdout: string } } };
-    const out = leaked.hookSpecificOutput!.updatedToolOutput!.stdout;
+    // browser, so a page echoing it back must not print it in the next
+    // snapshot — the endpoint redacts `piRedactions` from every Noah result.
+    const env = setup();
+    env.store.setUserSecret(env.owner.id, "LOGIN_PW", "hunter2-corp-secret");
+    env.store.setUserSecret(env.owner.id, "OTHER_KEY", "unrelated-vault-value");
+    env.store.setSecretBrowserPolicy(env.owner.id, "LOGIN_PW", { enabled: true, hosts: ["jira.corp.com"], passwordOnly: true });
+    const run = await plan(env, env.baseRequest, makeEvents({ onBrowser: vi.fn() }));
+    expect(run.caps.browserActive).toBe(true);
+    expect(run.caps.piRedactions).toEqual({ LOGIN_PW: "hunter2-corp-secret" });
+    const leaked = { content: [{ type: "text", text: "log line: hunter2-corp-secret / unrelated-vault-value" }] };
+    const out = JSON.stringify(redactSecretValues(leaked, run.caps.piRedactions).value);
     expect(out).toContain("[REDACTED:LOGIN_PW]");
     expect(out).not.toContain("hunter2-corp-secret");
     // A vault secret the owner did NOT opt into browser input stays out of the
@@ -1503,450 +400,177 @@ describe("runClaudeAgent orchestration (SDK mocked)", () => {
     expect(out).toContain("unrelated-vault-value");
   });
 
-  it("registers no redaction hook for a browser secret when the bridge is not in this run", async () => {
+  it("redacts no browser secret when the bridge is not in this run", async () => {
     // The policy exists, but with no browser sink there is nothing to type it
     // into — so nothing is exposed and nothing needs redacting.
-    const { config, store, baseRequest, owner } = setup();
-    store.setUserSecret(owner.id, "LOGIN_PW", "hunter2-corp-secret");
-    store.setSecretBrowserPolicy(owner.id, "LOGIN_PW", {
-      enabled: true,
-      hosts: ["jira.corp.com"],
-      passwordOnly: true,
-    });
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    const hooks = sdkMock.calls[0].options.hooks as { PostToolUse?: unknown[] };
-    expect(hooks.PostToolUse).toBeUndefined();
-  });
-
-  it("sweeps stale one-shot MCP secret files older than the max age", async () => {
-    const { config, store, baseRequest } = setup();
-    const secretsDir = path.join(config.dataDir, "runtime", "mcp-secrets");
-    fs.mkdirSync(secretsDir, { recursive: true });
-    const staleFile = path.join(secretsDir, "plugin-old.json");
-    fs.writeFileSync(staleFile, "{}");
-    // Backdate it two hours (the sweep threshold is one hour).
-    const old = Date.now() - 2 * 60 * 60 * 1000;
-    fs.utimesSync(staleFile, old / 1000, old / 1000);
-    const events = makeEvents();
-    sdkMock.impl = () => handleFrom([initMsg(), successResult("ok")]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(fs.existsSync(staleFile)).toBe(false);
+    const env = setup();
+    env.store.setUserSecret(env.owner.id, "LOGIN_PW", "hunter2-corp-secret");
+    env.store.setSecretBrowserPolicy(env.owner.id, "LOGIN_PW", { enabled: true, hosts: ["jira.corp.com"], passwordOnly: true });
+    const run = await plan(env, env.baseRequest);
+    expect(run.caps.browserActive).toBe(false);
+    expect(run.caps.piRedactions).toEqual({});
   });
 });
 
 // ===========================================================================
-// Conversation rewind: resume points out, resumeSessionAt + fork in, and the
-// self-heal when the recorded point is no longer reachable.
+// The pi run loop: fallback, self-heal, empty and failed turns, image turns
+// (the rest — sessions, rewinds, steers, the endpoint — lives in pi-runner.test.ts)
 // ===========================================================================
-describe("rewind resume points + resumeSessionAt (SDK mocked)", () => {
-  /**
-   * The RETRY attempt's query handle, consuming its held-open prompt the way the
-   * SDK does. Records whether the steer channel is still OPEN when the retry
-   * starts, and whether the prompt generator stays PARKED after the prompt (it
-   * must: returning there closes the CLI's stdin — every mid-turn POST would
-   * 410 and a background task would die at the retry's first result) until
-   * the retry's OWN result releases it. Then streams `messages`.
-   */
-  function observedRetryHandle(
-    args: QueryArgs,
-    steers: SteerChannel,
-    messages: unknown[],
-    observed: Record<string, unknown>,
-  ): QueryHandle {
-    const settled = (next: Promise<IteratorResult<unknown>>, ms: number) =>
-      Promise.race([
-        next.then((r) => (r.done ? "returned" : "yielded")),
-        new Promise((resolve) => setTimeout(() => resolve("parked"), ms)),
-      ]);
-    async function* gen() {
-      observed.closedAtRetryStart = steers.closed;
-      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
-      const first = await prompt.next();
-      const content = (first.value as { message?: { content?: Array<{ type?: string; text?: string }> } })
-        .message?.content;
-      observed.promptText = content?.find((block) => block.type === "text")?.text ?? "";
-      const next = prompt.next();
-      observed.beforeOwnResult = await settled(next, 30);
-      for (const message of messages) {
-        yield message;
-      }
-      observed.afterOwnResult = await settled(next, 500);
-    }
-    return gen() as QueryHandle;
-  }
+describe("pi run loop (fake gateway)", () => {
+  const routine = (env: Env): AgentRequest => ({
+    ...env.baseRequest,
+    headless: true,
+    allowHeadlessTools: true,
+    modelFallback: true,
+    modelTier: "opus",
+  });
 
-  it("emits a resume point for every MAIN-chain assistant message, with the session that holds it", async () => {
-    const { config, store, baseRequest } = setup();
-    const onResumePoint = vi.fn();
-    const events = makeEvents({ onResumePoint });
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg("sess-r"),
-        // Stream events, tool results and results carry uuids too — none is a cut point.
-        { ...startMsg({ input_tokens: 10 }), uuid: "se-1", session_id: "sess-r" },
-        { ...assistantMsg([toolUseBlock("tu-1", "Bash", { command: "ls" })]), uuid: "a-1", session_id: "sess-r" },
-        { ...toolResultMsg("tu-1"), uuid: "u-1", session_id: "sess-r" },
-        // A subagent's assistant message lives in ITS sidechain, never the main chain.
-        { ...assistantMsg([textBlock("sub answer")]), parent_tool_use_id: "tu-1", uuid: "sub-1", session_id: "sess-r" },
-        // No session_id on the message → the attempt's init session.
-        { ...assistantMsg([textBlock("almost")]), uuid: "a-2" },
-        // The message's own session wins (a fork reports its NEW id there).
-        { ...assistantMsg([textBlock("done")]), uuid: "a-3", session_id: "sess-fork" },
-        // No uuid → nothing to resume at.
-        assistantMsg([textBlock("tail")]),
-        { ...successResult("done"), uuid: "res-1", session_id: "sess-r" },
-      ]);
-
-    await runAgentStream(baseRequest, [], config, store, events);
-
-    expect(onResumePoint.mock.calls.map(([point]) => point)).toEqual([
-      { sessionId: "sess-r", uuid: "a-1" },
-      { sessionId: "sess-r", uuid: "a-2" },
-      { sessionId: "sess-fork", uuid: "a-3" },
+  it("falls back down the chain on a transient error, says so, and resets the reasoning view", async () => {
+    const env = setup();
+    const events = makeEvents();
+    const { client, requests } = fakeClient([
+      () => new PiGatewayError("unavailable", { status: 503, retryable: true }),
+      () => textTurn("resp_fb_1", "fell back"),
     ]);
-  });
-
-  it("forks at the recorded entry only when BOTH the session and the entry are given", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () => handleFrom([initMsg("sess-new"), successResult("ok")]);
-
-    await runAgentStream(
-      { ...baseRequest, resumeSessionId: "sess-src", resumeSessionAt: "uuid-kept" },
-      [], config, store, makeEvents(),
-    );
-    await runAgentStream({ ...baseRequest, resumeSessionId: "sess-src" }, [], config, store, makeEvents());
-    await runAgentStream({ ...baseRequest, resumeSessionAt: "uuid-orphan" }, [], config, store, makeEvents());
-
-    const [rewind, plain, orphan] = sdkMock.calls.map((call) => call.options);
-    expect(rewind).toMatchObject({ resume: "sess-src", resumeSessionAt: "uuid-kept", forkSession: true });
-    // The one-turn guard would refuse a multi-turn rewind — never sent.
-    expect(rewind.resumeDropsTurn).toBeUndefined();
-    expect(plain.resume).toBe("sess-src");
-    expect(plain.resumeSessionAt).toBeUndefined();
-    expect(plain.forkSession).toBeUndefined();
-    // A cut point without a session to cut is meaningless — a plain fresh run.
-    expect(orphan.resume).toBeUndefined();
-    expect(orphan.resumeSessionAt).toBeUndefined();
-    expect(orphan.forkSession).toBeUndefined();
-  });
-
-  it("self-heals an unreachable rewind point: drops resume, cut and fork, and injects the kept history", async () => {
-    const { config, store, baseRequest } = setup();
-    const onResumePoint = vi.fn();
-    const onTurnResult = vi.fn();
-    const steers = new SteerChannel();
-    const events = makeEvents({ onResumePoint, onTurnResult, steers });
-    const observed: Record<string, unknown> = {};
-    const request: AgentRequest = {
-      ...baseRequest,
-      resumeSessionId: "sess-src",
-      resumeSessionAt: "uuid-compacted",
-      rewind: { kind: "edit", discardedMessages: 2 },
-      conversationHistory: [
-        { role: "user", content: "남긴 질문" },
-        { role: "assistant", content: "남긴 답변" },
-      ],
-    };
-    const uuidError = "No message found with message.uuid of: uuid-compacted";
-    let call = 0;
-    sdkMock.impl = (args) => {
-      call += 1;
-      if (call === 1) {
-        // Spike-verified shape (CLI 2.1.283): an error_during_execution result
-        // first, then the iterator throws the same text.
-        async function* gen() {
-          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [uuidError] };
-          throw new Error(`Claude Code returned an error result: ${uuidError}`);
-        }
-        return gen() as QueryHandle;
-      }
-      return observedRetryHandle(args, steers, [
-        initMsg("sess-fresh"),
-        { ...assistantMsg([textBlock("다시 시작한 답")]), uuid: "a-fresh" },
-        successResult("다시 시작한 답"),
-      ], observed);
-    };
-
-    const response = await runAgentStream(request, [], config, store, events);
-
-    expect(sdkMock.calls).toHaveLength(2);
-    expect(sdkMock.calls[0].options).toMatchObject({
-      resume: "sess-src",
-      resumeSessionAt: "uuid-compacted",
-      forkSession: true,
+    const response = await runPiAgent(routine(env), [], env.config, env.store, events, undefined, {
+      client,
+      retry: { attempts: 1 },
     });
-    const retry = sdkMock.calls[1].options;
-    expect(retry.resume).toBeUndefined();
-    expect(retry.resumeSessionAt).toBeUndefined();
-    expect(retry.forkSession).toBeUndefined();
-    expect(observed.promptText).toContain("Earlier conversation history");
-    expect(observed.promptText).toContain("남긴 질문");
-    // Still a rewound turn — only the context source changed.
-    expect((retry.systemPrompt as { append: string }).append).toContain("Conversation rewind (this turn)");
-    expect(response.text).toBe("다시 시작한 답");
+    expect(requests.map((r) => r.model)).toEqual(["m-opus", "m-sonnet"]);
+    expect(events.onStatus).toHaveBeenCalledWith("모델을 sonnet(으)로 전환해 다시 시도 중…");
+    expect(events.onThinkingReset).toHaveBeenCalledTimes(1);
+    expect(response.text).toBe("fell back");
+  });
+
+  it("an admin-override (non-tier) primary falls back onto the tiers", () => {
+    expect(buildModelFallbackChain("noah-custom-model")).toEqual(["noah-custom-model", "sonnet", "haiku"]);
+    expect(buildModelFallbackChain("opus")).toEqual(["opus", "sonnet", "haiku"]);
+    expect(buildModelFallbackChain("haiku")).toEqual(["haiku"]);
+  });
+
+  it("uses the admin override as the run's model and chains from it", async () => {
+    const env = setup();
+    env.store.setModelOverride("noah-custom-model");
+    const run = await plan(env, { ...routine(env), modelTier: undefined });
+    expect(run.caps.effectiveModel).toBe("noah-custom-model");
+    expect(run.caps.modelChain).toEqual(["noah-custom-model", "sonnet", "haiku"]);
+  });
+
+  it("does NOT fall back on a non-retryable error even when the chain has more tiers", async () => {
+    const env = setup();
+    const { client, requests } = fakeClient([() => new PiGatewayError("bad_request", { status: 400, code: "invalid_input" })]);
+    await expect(
+      runPiAgent(routine(env), [], env.config, env.store, makeEvents(), undefined, { client, retry: { attempts: 1 } }),
+    ).rejects.toMatchObject({ kind: "bad_request" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("propagates a transient error when there is no fallback chain (chat behavior)", async () => {
+    const env = setup();
+    const { client, requests } = fakeClient([() => new PiGatewayError("unavailable", { status: 503, retryable: true })]);
+    await expect(
+      runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents(), undefined, { client, retry: { attempts: 1 } }),
+    ).rejects.toMatchObject({ kind: "unavailable" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("does NOT self-heal a lost session when the run was aborted (propagates the error)", async () => {
+    const env = setup();
+    const abort = new AbortController();
+    const { client, requests } = fakeClient([
+      () => {
+        abort.abort();
+        return new PiGatewayError("not_found", { status: 404 });
+      },
+    ]);
+    await expect(
+      runPiAgent(
+        { ...env.baseRequest, resumeSessionId: "resp_old_1", conversationHistory: [{ role: "user", content: "q" }] },
+        [],
+        env.config,
+        env.store,
+        makeEvents(),
+        abort,
+        { client },
+      ),
+    ).rejects.toMatchObject({ kind: "aborted" });
+    // No second, history-carrying request: the stopped run stays stopped.
+    expect(requests).toHaveLength(1);
+  });
+
+  it("answers with the empty-response message when pi returns no text", async () => {
+    const env = setup();
+    const { client } = fakeClient([() => textTurn("resp_e_1", "")]);
+    const response = await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents(), undefined, { client });
+    expect(response.text).toBe(EMPTY_PI_RESPONSE_MESSAGE);
     expect(response.resultError).toBeUndefined();
-    // The failed attempt emitted nothing; the fresh session is the one to record.
-    expect(onResumePoint.mock.calls.map(([point]) => point)).toEqual([
-      { sessionId: "sess-fresh", uuid: "a-fresh" },
-    ]);
-    // The failed attempt's error result was NOT a turn boundary: the retry
-    // started with the viewer's steer channel open and its input held…
-    expect(observed.closedAtRetryStart).toBe(false);
-    expect(observed.beforeOwnResult).toBe("parked");
-    // …released only by the retry's own result, the one boundary the host saw.
-    expect(observed.afterOwnResult).toBe("returned");
-    expect(onTurnResult).toHaveBeenCalledTimes(1);
-    expect(onTurnResult.mock.calls[0][0].errorSubtype).toBeUndefined();
-    expect(steers.closed).toBe(true);
   });
 
-  it("keeps the steer channel and held input across a plain missing-session self-heal too", async () => {
-    const { config, store, baseRequest } = setup();
-    const onTurnResult = vi.fn();
-    const steers = new SteerChannel();
-    const events = makeEvents({ onTurnResult, steers });
-    const observed: Record<string, unknown> = {};
-    const missing = "No conversation found with session ID: sess-gone";
-    let call = 0;
-    sdkMock.impl = (args) => {
-      call += 1;
-      if (call === 1) {
-        async function* gen() {
-          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [missing] };
-          throw new Error(`Claude Code returned an error result: ${missing}`);
-        }
-        return gen() as QueryHandle;
-      }
-      return observedRetryHandle(args, steers, [initMsg("sess-fresh"), successResult("ok")], observed);
-    };
+  it("keeps the streamed partial text on an incomplete turn, and the friendly Korean error without any text", async () => {
+    const env = setup();
+    const incomplete = (id: string, text: string): PiStreamEvent[] => [
+      ev("response.created", { response: { id, model: "fake-model" } }),
+      ...(text
+        ? [
+            ev("response.output_item.added", { item: { type: "message", id: `${id}-m` } }),
+            ev("response.output_text.delta", { delta: text }),
+          ]
+        : []),
+      ev("response.incomplete", { response: { id, status: "incomplete", incomplete_details: { reason: "max_tool_calls" } } }),
+    ];
+    const partial = fakeClient([() => incomplete("resp_i_1", "partial answer")]);
+    const kept = await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents(), undefined, { client: partial.client });
+    expect(kept.text).toBe("partial answer");
+    expect(kept.resultError).toBeUndefined();
 
-    const response = await runAgentStream(
-      { ...baseRequest, resumeSessionId: "sess-gone" },
-      [], config, store, events,
+    const bare = fakeClient([() => incomplete("resp_i_2", "")]);
+    const friendly = await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents(), undefined, { client: bare.client });
+    expect(friendly.text).toBe(resultErrorMessage("error_max_turns"));
+    expect(friendly.text).toContain("최대 처리 단계");
+    expect(friendly.resultError).toBe("error_max_turns");
+  });
+
+  it("sends a turn's images with its first input", async () => {
+    const env = setup();
+    const { client, requests } = fakeClient([() => textTurn("resp_img_1", "saw the image")]);
+    const response = await runPiAgent(
+      { ...env.baseRequest, images: [{ mediaType: "image/png", data: "AAAA" }] },
+      [],
+      env.config,
+      env.store,
+      makeEvents(),
+      undefined,
+      { client },
     );
-
-    expect(sdkMock.calls).toHaveLength(2);
-    expect(sdkMock.calls[1].options.resume).toBeUndefined();
-    expect(observed).toMatchObject({
-      closedAtRetryStart: false,
-      beforeOwnResult: "parked",
-      afterOwnResult: "returned",
-    });
-    expect(onTurnResult).toHaveBeenCalledTimes(1);
-    expect(response.text).toBe("ok");
+    expect(requests[0]!.input).toMatchObject({ kind: "prompt", images: [{ mediaType: "image/png", data: "AAAA" }] });
+    expect(inputText(requests[0]!)).toContain("User message:\n안녕하세요");
+    expect(response.text).toBe("saw the image");
   });
 
-  it("re-forks from the same entry on an empty-turn retry (the throwaway attempt is discarded)", async () => {
-    const { config, store, baseRequest } = setup();
-    const steers = new SteerChannel();
-    const observed: Record<string, unknown> = {};
-    let call = 0;
-    sdkMock.impl = (args) => {
-      call += 1;
-      return call === 1
-        ? handleFrom([initMsg("sess-fork-1"), thinkingMsg("reasoning only"), successResult("")])
-        : observedRetryHandle(args, steers, [initMsg("sess-fork-2"), successResult("recovered")], observed);
-    };
-
-    const response = await runAgentStream(
-      { ...baseRequest, resumeSessionId: "sess-src", resumeSessionAt: "uuid-kept" },
-      [], config, store, makeEvents({ steers }),
-    );
-
-    expect(sdkMock.calls).toHaveLength(2);
-    for (const { options } of sdkMock.calls) {
-      expect(options).toMatchObject({ resume: "sess-src", resumeSessionAt: "uuid-kept", forkSession: true });
-    }
-    expect(response.text).toBe("recovered");
-    // The empty turn's boundary released stdin (so that attempt could end) but
-    // left the channel open for the retry's fresh generator to keep consuming.
-    expect(observed).toMatchObject({
-      closedAtRetryStart: false,
-      beforeOwnResult: "parked",
-      afterOwnResult: "returned",
+  it("tells the model it can be interrupted only when the run really has a channel", async () => {
+    const env = setup();
+    const NEXT_TURN = "arrives as the NEXT user turn";
+    const withChannel = fakeClient([() => textTurn("resp_c_1", "ok")]);
+    await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents({ steers: new SteerChannel() }), undefined, {
+      client: withChannel.client,
     });
+    expect(inputText(withChannel.requests[0]!)).toContain(NEXT_TURN);
+
+    env.store.touchConversation(env.owner.id, "conv-2", env.owner.id, "x");
+    const without = fakeClient([() => textTurn("resp_c_2", "ok")]);
+    await runPiAgent({ ...env.baseRequest, conversationId: "conv-2" }, [], env.config, env.store, makeEvents(), undefined, {
+      client: without.client,
+    });
+    expect(inputText(without.requests[0]!)).not.toContain(NEXT_TURN);
+  });
+
+  it("closes the steer channel at a steer-free boundary, so a late message is refused", async () => {
+    const env = setup();
+    const steers = new SteerChannel();
+    const { client } = fakeClient([() => textTurn("resp_s_1", "done")]);
+    await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents({ steers }), undefined, { client });
     expect(steers.closed).toBe(true);
-  });
-
-  it("re-sends a steer the dying first attempt already took, and the retry delivers it", async () => {
-    const { config, store, baseRequest } = setup();
-    const onTurnResult = vi.fn();
-    const steers = new SteerChannel();
-    const events = makeEvents({ onTurnResult, steers });
-    const uuidError = "No message found with message.uuid of: uuid-compacted";
-    // A box: a `let` assigned inside the mock would stay narrowed to null here.
-    const sent: { steer: ReturnType<SteerChannel["push"]> } = { steer: null };
-    const retryInput: Record<string, unknown>[] = [];
-    let call = 0;
-    sdkMock.impl = (args) => {
-      call += 1;
-      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
-      if (call === 1) {
-        async function* dying() {
-          await prompt.next(); // the SDK's input pump took the prompt…
-          sent.steer = steers.push("방금 보낸 추가 요청"); // …the viewer sent a steer at once…
-          await prompt.next(); // …and the pump wrote it into this CLI's stdin — which then died at boot.
-          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [uuidError] };
-          throw new Error(`Claude Code returned an error result: ${uuidError}`);
-        }
-        return dying() as QueryHandle;
-      }
-      async function* fresh() {
-        // Like the SDK pump, the fresh process receives the prompt AND the re-sent steer at boot.
-        retryInput.push((await prompt.next()).value ?? {});
-        retryInput.push((await prompt.next()).value ?? {});
-        const id = sent.steer!.id;
-        yield initMsg("sess-fresh");
-        yield lifecycleMsg(id, "started");
-        yield { ...assistantMsg([textBlock("추가 요청까지 반영했습니다")]), uuid: "a-fresh" };
-        yield lifecycleMsg(id, "completed");
-        yield successResult("추가 요청까지 반영했습니다");
-      }
-      return fresh() as QueryHandle;
-    };
-
-    const outcome = await Promise.race([
-      runAgentStream(
-        { ...baseRequest, resumeSessionId: "sess-src", resumeSessionAt: "uuid-compacted" },
-        [], config, store, events,
-      ).then(() => "ended"),
-      new Promise((resolve) => setTimeout(() => resolve("hung"), 2000)),
-    ]);
-
-    expect(outcome).toBe("ended");
-    expect(sdkMock.calls).toHaveLength(2);
-    // The SAME uuid the dying process swallowed — the fresh one never saw it.
-    expect(retryInput[1]).toMatchObject({ type: "user", uuid: sent.steer!.id });
-    expect(JSON.stringify(retryInput[1])).toContain("방금 보낸 추가 요청");
-    expect(sent.steer!.state).toBe("completed");
-    // One real boundary, nothing left pending — so the held input was released.
-    expect(onTurnResult).toHaveBeenCalledTimes(1);
-    expect(onTurnResult.mock.calls[0][0].steerPending).toBe(false);
-  });
-
-  it("treats a matching error result AFTER init as a real boundary, never a pseudo one", async () => {
-    const { config, store, baseRequest } = setup();
-    const onTurnResult = vi.fn();
-    const steers = new SteerChannel();
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg("sess-live"),
-        assistantMsg([textBlock("작업 중")]),
-        // This session really started, so its result is its boundary whatever the text says.
-        {
-          type: "result",
-          subtype: "error_during_execution",
-          is_error: true,
-          errors: ["No conversation found with session ID: sess-other"],
-        },
-      ]);
-
-    await runAgentStream(
-      { ...baseRequest, resumeSessionId: "sess-live" },
-      [], config, store, makeEvents({ onTurnResult, steers }),
-    );
-
-    expect(sdkMock.calls).toHaveLength(1);
-    expect(onTurnResult).toHaveBeenCalledTimes(1);
-    expect(onTurnResult.mock.calls[0][0].errorSubtype).toBe("error_during_execution");
-    expect(steers.closed).toBe(true);
-  });
-
-  it("still never re-runs an empty turn once a steer was accepted (the re-run would lose it)", async () => {
-    const { config, store, baseRequest } = setup();
-    const steers = new SteerChannel();
-    sdkMock.impl = (args) => {
-      const prompt = args.prompt as AsyncGenerator<Record<string, unknown>>;
-      async function* gen() {
-        await prompt.next();
-        const steer = steers.push("중간에 보낸 말")!;
-        await prompt.next();
-        yield initMsg("sess-1");
-        yield lifecycleMsg(steer.id, "started");
-        yield thinkingMsg("reasoning only");
-        yield lifecycleMsg(steer.id, "completed");
-        yield successResult("");
-      }
-      return gen() as QueryHandle;
-    };
-
-    const response = await runAgentStream(baseRequest, [], config, store, makeEvents({ steers }));
-
-    expect(sdkMock.calls).toHaveLength(1);
-    expect(response.text).toBe("Claude Agent SDK 응답이 비어 있습니다.");
-    expect(steers.closed).toBe(true);
-  });
-});
-
-// ===========================================================================
-// Resume points around an automatic compaction (the manual /compact is gone)
-// ===========================================================================
-describe("resume points across a compaction (SDK mocked)", () => {
-  it("never records a compact boundary or a user message as a cut point", async () => {
-    const { config, store, baseRequest } = setup();
-    const points = vi.fn();
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg("sess-n"),
-        {
-          type: "system",
-          subtype: "compact_boundary",
-          uuid: "cb-auto",
-          session_id: "sess-n",
-          compact_metadata: { trigger: "auto", pre_tokens: 18_049, post_tokens: 1_378 },
-        },
-        {
-          type: "user",
-          parent_tool_use_id: null,
-          uuid: "u-auto",
-          session_id: "sess-n",
-          message: { role: "user", content: "summary" },
-        },
-        { ...assistantMsg([textBlock("계속합니다")]), uuid: "a-1", session_id: "sess-n" },
-        successResult("계속합니다"),
-      ]);
-    await runAgentStream(baseRequest, [], config, store, makeEvents({ onResumePoint: points }));
-    expect(points.mock.calls.map(([point]) => point)).toEqual([
-      { sessionId: "sess-n", uuid: "a-1" },
-    ]);
-  });
-});
-
-// ===========================================================================
-// buildImageQueryPrompt (direct — the run loop never consumes it under the mock)
-// ===========================================================================
-describe("buildImageQueryPrompt", () => {
-  it("yields exactly one SDK user message with the prompt text followed by image blocks", async () => {
-    const gen = buildImageQueryPrompt("look at these", [
-      { mediaType: "image/png", data: "AAAA" },
-      { mediaType: "image/jpeg", data: "BBBB" },
-    ]);
-    const first = await gen.next();
-    expect(first.done).toBe(false);
-    const message = first.value as {
-      type: string;
-      parent_tool_use_id: unknown;
-      message: { role: string; content: Record<string, unknown>[] };
-    };
-    expect(message.type).toBe("user");
-    expect(message.parent_tool_use_id).toBeNull();
-    expect(message.message.role).toBe("user");
-    expect(message.message.content[0]).toEqual({ type: "text", text: "look at these" });
-    expect(message.message.content[1]).toEqual({
-      type: "image",
-      source: { type: "base64", media_type: "image/png", data: "AAAA" },
-    });
-    expect(message.message.content[2]).toMatchObject({
-      source: { media_type: "image/jpeg", data: "BBBB" },
-    });
-    // The stream closes after the single message (one turn).
-    expect((await gen.next()).done).toBe(true);
+    expect(steers.push("too late")).toBeFalsy();
   });
 });
 
@@ -2039,8 +663,8 @@ describe("runRegistry (additional coverage)", () => {
     const parked = awaitResponse("sr-1", "req"); // sets the auto-cancel timeout
     expect(submitResponse("sr-1", "req", "intruder", {})).toBe(false); // wrong user
     expect(submitResponse("sr-1", "other-req", "u", {})).toBe(false); // no such pending
-    expect(submitResponse("sr-1", "req", "u", { behavior: "allow" })).toBe(true);
-    await expect(parked).resolves.toEqual({ behavior: "allow" });
+    expect(submitResponse("sr-1", "req", "u", { answers: { "Color?": "Blue" } })).toBe(true);
+    await expect(parked).resolves.toEqual({ answers: { "Color?": "Blue" } });
     closeRun("sr-1");
   });
 
@@ -2210,166 +834,51 @@ describe("runRegistry (additional coverage)", () => {
     closeRun("gc-1");
     expect(getActiveRunForConversation("u", "c-gc")).toBeNull();
   });
-});
 
-// ===========================================================================
-// AGENT_TOOL_TRACE — the opt-in diagnostic trace of one turn's tool lifecycle
-// ===========================================================================
-describe("SDK tool-call tracing (AGENT_TOOL_TRACE)", () => {
-  beforeEach(() => {
-    traceLog.entries.length = 0;
+  it("pushRunSteer queues a mid-turn message and refuses every state the route maps to a status", () => {
+    expect(pushRunSteer("ghost", "u", "hi")).toEqual({ ok: false, reason: "not_found" });
+    // A run without a channel (an external-task-API turn) cannot be steered.
+    openRun("ps-0", "u");
+    expect(pushRunSteer("ps-0", "u", "hi")).toEqual({ ok: false, reason: "unsupported" });
+    closeRun("ps-0");
+
+    const steers = new SteerChannel();
+    openRun("ps-1", "u", { steers });
+    expect(pushRunSteer("ps-1", "intruder", "hi")).toEqual({ ok: false, reason: "not_found" });
+    const pushed = pushRunSteer("ps-1", "u", "also check the logs");
+    expect(pushed).toMatchObject({ ok: true, steer: { text: "also check the logs" } });
+    expect(steers.undelivered().map((s) => s.text)).toEqual(["also check the logs"]);
+    // Past the cap of undelivered messages the next one is refused.
+    let last: ReturnType<typeof pushRunSteer> = pushed;
+    for (let i = 0; i < 50 && last.ok; i += 1) last = pushRunSteer("ps-1", "u", `more ${i}`);
+    expect(last).toEqual({ ok: false, reason: "too_many" });
+    // A closed channel (the turn is wrapping up) refuses too.
+    steers.close();
+    expect(pushRunSteer("ps-1", "u", "late")).toEqual({ ok: false, reason: "closed" });
+    closeRun("ps-1");
+
+    // A cancelled run refuses even while its channel is open.
+    openRun("ps-2", "u", { steers: new SteerChannel() });
+    cancelRun("ps-2", "u");
+    expect(pushRunSteer("ps-2", "u", "late")).toEqual({ ok: false, reason: "closed" });
+    closeRun("ps-2");
   });
 
-  /** The payloads of every trace line whose message matches `msg`. */
-  function traced(msg: string): Record<string, unknown>[] {
-    return traceLog.entries.filter((e) => e.msg === msg).map((e) => e.payload);
-  }
-
-  it("traces the streaming tool_use block lifecycle and the turn's stop_reason", () => {
-    // The documented stall signature is a "tool_use block start" with no matching
-    // "content_block stop": the backend opened a tool call and never closed its
-    // input JSON. Both halves have to be traced with the same index for that
-    // comparison to be possible at all.
-    const state = createLoopState();
-    const events = makeEvents();
-    const stream = (event: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
-      dispatchSdkMessage({ type: "stream_event", ...extra, event }, events, state);
-
-    stream({ type: "message_start", message: { usage: { input_tokens: 10 } } });
-    stream({
-      type: "content_block_start",
-      index: 1,
-      content_block: { type: "tool_use", id: "toolu_1", name: "Bash" },
-    });
-    // A text block start is NOT a tool call and must not be traced as one.
-    stream({ type: "content_block_start", index: 2, content_block: { type: "text" } });
-    stream({ type: "content_block_stop", index: 1 });
-    stream({ type: "message_delta", delta: { stop_reason: "tool_use" } });
-    // A delta with no stop_reason yet is silent (it fires on every chunk).
-    stream({ type: "message_delta", delta: {} });
-    stream({ type: "message_stop" }, { parent_tool_use_id: "agent-7" });
-
-    expect(traced("trace: tool_use block start")).toEqual([
-      { agentId: "main", index: 1, toolName: "Bash", toolUseId: "toolu_1" },
-    ]);
-    expect(traced("trace: content_block stop")).toEqual([{ agentId: "main", index: 1 }]);
-    expect(traced("trace: message_delta stop_reason")).toEqual([
-      { agentId: "main", stopReason: "tool_use" },
-    ]);
-    // Subagent streams are attributed to their spawning tool_use id, not "main".
-    expect(traced("trace: stream lifecycle")).toEqual([
-      { agentId: "main", eventType: "message_start" },
-      { agentId: "agent-7", eventType: "message_stop" },
-    ]);
-  });
-
-  it("traces the assembled assistant tool calls, every tool_result, and the result subtype", () => {
-    // The other documented stall signature: stop_reason "tool_use" + an assistant
-    // tool call, but no tool_result — the SDK never dispatched the announced call.
-    const state = createLoopState();
-    const events = makeEvents();
-    dispatchSdkMessage(
-      {
-        type: "assistant",
-        message: {
-          stop_reason: "tool_use",
-          content: [
-            { type: "text", text: "확인해 볼게요" },
-            { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } },
-            { type: "tool_use", id: "toolu_2", name: "Read", input: { file_path: "a.ts" } },
-          ],
-        },
-      },
-      events,
-      state,
-    );
-    expect(traced("trace: assistant message assembled")).toEqual([
-      {
-        agentId: "main",
-        stopReason: "tool_use",
-        blockTypes: ["text", "tool_use", "tool_use"],
-        toolCalls: [
-          { name: "Bash", toolUseId: "toolu_1" },
-          { name: "Read", toolUseId: "toolu_2" },
-        ],
-      },
-    ]);
-
-    dispatchSdkMessage(
-      {
-        type: "user",
-        message: {
-          content: [
-            { type: "tool_result", tool_use_id: "toolu_1", is_error: true },
-            { type: "tool_result", tool_use_id: "toolu_2" },
-          ],
-        },
-      },
-      events,
-      state,
-    );
-    // A user turn with no tool_result blocks stays out of the trace entirely.
-    dispatchSdkMessage(
-      { type: "user", message: { content: [{ type: "text", text: "다음은?" }] } },
-      events,
-      state,
-    );
-    expect(traced("trace: tool_result(s) returned")).toEqual([
-      {
-        agentId: "main",
-        results: [
-          { toolUseId: "toolu_1", isError: true },
-          { toolUseId: "toolu_2", isError: false },
-        ],
-      },
-    ]);
-
-    dispatchSdkMessage({ type: "result", subtype: "error_max_turns" }, events, state);
-    expect(traced("trace: result")).toEqual([{ agentId: "main", subtype: "error_max_turns" }]);
-  });
-
-  it("stays silent for envelopes it does not model, and never throws into the run loop", () => {
-    const state = createLoopState();
-    dispatchSdkMessage({ type: "tool_progress", tool_name: "Bash" }, makeEvents(), state);
-    dispatchSdkMessage({ type: "system", subtype: "init" }, makeEvents(), state);
-    expect(traceLog.entries).toEqual([]);
-
-    // Tracing is best-effort diagnostics: a hostile/exotic envelope must not take
-    // the turn down with it.
-    const hostile = {
-      get type(): string {
-        throw new Error("boom");
-      },
-    } as unknown as Record<string, unknown>;
-    expect(() => traceSdkMessage(hostile)).not.toThrow();
-    expect(traceLog.entries).toEqual([]);
-  });
-
-  it("traces a real streamed turn end to end through runClaudeAgent", async () => {
-    const { config, store, baseRequest } = setup();
-    sdkMock.impl = () =>
-      handleFrom([
-        initMsg(),
-        startMsg({ input_tokens: 100 }),
-        deltaMsg("답변"),
-        assistantMsg([textBlock("답변"), toolUseBlock("toolu_run", "Read", { file_path: "a.ts" })]),
-        toolResultMsg("toolu_run"),
-        successResult("답변"),
-      ]);
-    const res = await runClaudeAgent(baseRequest, [], config, store, makeEvents());
-    expect(res.text).toBe("답변");
-
-    // The whole lifecycle is visible in order from a single run, which is the
-    // point of the flag: assistant tool call → its result → the terminal result.
-    expect(traced("trace: stream lifecycle")).toEqual([
-      { agentId: "main", eventType: "message_start" },
-    ]);
-    expect(traced("trace: assistant message assembled")[0]).toMatchObject({
-      toolCalls: [{ name: "Read", toolUseId: "toolu_run" }],
-    });
-    expect(traced("trace: tool_result(s) returned")[0]).toMatchObject({
-      results: [{ toolUseId: "toolu_run", isError: false }],
-    });
-    expect(traced("trace: result")).toEqual([{ agentId: "main", subtype: "success" }]);
+  it("getRunPrompts returns only the still-pending question and canvas prompts, scoped to the owner", () => {
+    openRun("gp-1", "u");
+    const question = awaitResponse("gp-1", "q-1");
+    void awaitResponse("gp-1", "c-1");
+    emitRunEvent("gp-1", "question", { requestId: "q-1", questions: [] });
+    emitRunEvent("gp-1", "canvas", { requestId: "c-1", title: "보드" });
+    emitRunEvent("gp-1", "status", { label: "x", requestId: "q-1" });
+    emitRunEvent("gp-1", "question", { requestId: "never-parked" });
+    expect(getRunPrompts("gp-1", "u").map((p) => p.event)).toEqual(["question", "canvas"]);
+    expect(getRunPrompts("gp-1", "intruder")).toEqual([]);
+    // An answered prompt drops out.
+    expect(submitResponse("gp-1", "q-1", "u", { answers: {} })).toBe(true);
+    expect(getRunPrompts("gp-1", "u")).toEqual([{ event: "canvas", data: { requestId: "c-1", title: "보드" } }]);
+    void question;
+    closeRun("gp-1");
+    expect(getRunPrompts("gp-1", "u")).toEqual([]);
   });
 });

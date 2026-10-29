@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import { DRAWIO_MEDIA_TYPE } from "../chatFiles.js";
 import {
@@ -21,7 +21,7 @@ export const FILE_OUTPUT_TOOL_NAMES = [
   "mcp__file_output__share_file",
 ] as const;
 /**
- * Registered on the SAME server but only for runs that pass runPlan's
+ * Registered on the SAME server but only for runs that pass runCapabilities'
  * `shareLinkToolActive` gate — so it is NOT part of FILE_OUTPUT_TOOL_NAMES,
  * which rides every run with file output (the create_repo precedent).
  */
@@ -32,13 +32,13 @@ export interface FileOutputToolsContext {
   shareFile: (request: ShareFileRequest) => Promise<FileOutputResult>;
   /**
    * The `pptx` skill's HTML→PPTX converter is installed in this deployment
-   * (the deck toolchain probe, passed by runPlan). Switches share_file's PPTX
+   * (the deck toolchain probe, passed by runCapabilities). Switches share_file's PPTX
    * sentence to the converter wording and enables the "no converter renders"
    * result note; absent/false keeps today's LibreOffice-only wording.
    */
   deckConverterInstalled?: boolean;
   /**
-   * Build `create_share_link` (runPlan's `shareLinkToolActive`: an interactive
+   * Build `create_share_link` (runCapabilities' `shareLinkToolActive`: an interactive
    * turn of the owner's own avatar whose host supplied `onShareLink`). Absent/
    * false = the tool does not exist in this run, and show_file/share_file are
    * unchanged either way.
@@ -252,7 +252,8 @@ function shareLinkResultText(
 
 // show_file/share_file are INTENTIONALLY NOT self-gated (like canvasTools):
 // REGISTRATION is the boundary — the server is only built when fileOutputActive
-// (request.cwd + events.onFile, see runPlan.ts), and outputs flow only to the
+// (request.cwd + events.onFile, see runCapabilities.ts; an unbuilt server is a
+// refusing stub on pi), and outputs flow only to the
 // run's own viewer. create_share_link is the exception: its URL reaches OUTSIDE
 // the conversation, so its handler refuses without the host callback, and the
 // host re-checks the run kind and conversation ownership on every call.
@@ -337,8 +338,8 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
             },
             async (args) => {
               // The last line of defence if registration ever drifts (the
-              // mcp__ auto-allow runs before any owner check): no host
-              // callback, no link — and never a made-up one.
+              // tool list is a static catalog, so only this handler sees the
+              // live run): no host callback, no link — and never a made-up one.
               const createShareLink = ctx.createShareLink;
               if (!createShareLink) {
                 return text(`Share links are unavailable in this run. ${SHARE_LINK_BUTTON_REDIRECT}`, true);
@@ -383,7 +384,7 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
 }
 
 export function buildFileOutputServer(ctx: FileOutputToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: FILE_OUTPUT_SERVER_NAME,
     version: "1.0.0",
     tools: buildFileOutputTools(ctx),

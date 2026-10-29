@@ -107,11 +107,11 @@ describe("McpRunRegistry + /mcp/:server", () => {
     expect(probe.authExtra).toEqual({ run: { conversationId: "c1" }, server: "repo" });
   });
 
-  it("accepts the createSdkMcpServer `{ instance }` shape and factories", async () => {
+  it("accepts the createMcpToolServer `{ instance }` shape and factories", async () => {
     const probe: Probe = { aborted: false, started: false, authExtra: undefined };
     const token = registry.register({
       servers: {
-        repo: { type: "sdk", name: "repo", instance: buildServer(probe) } as unknown as { instance: McpServer },
+        repo: { type: "in_process", name: "repo", instance: buildServer(probe) } as unknown as { instance: McpServer },
         todo: () => buildServer(probe),
       },
     });

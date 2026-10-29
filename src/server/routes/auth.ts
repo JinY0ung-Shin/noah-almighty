@@ -156,34 +156,30 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       confluenceConfigured: Boolean(config.confluenceUrl),
       // Deployment default for image input (MODEL_VISION). Per-TIER support
       // rides on modelSelection.tiers[].vision below; this global remains the
-      // fallback for locked/unresolvable cases.
+      // fallback when no tier resolves.
       visionEnabled: config.visionEnabled,
-      // Per-conversation model picker: the selectable tiers + whether the choice
-      // is locked by an env-pinned ANTHROPIC_MODEL (then the composer hides the
-      // picker). The concrete model each tier maps to is the operator's call via
-      // ANTHROPIC_DEFAULT_*_MODEL (see modelTiers.ts).
+      // Per-conversation model picker: the selectable tiers. The pi model each
+      // tier runs is the operator's call via PI_MODEL_MAP (see modelTiers.ts).
       modelSelection: {
-        // Each tier carries the concrete model id it resolves to when the operator
-        // pinned one via ANTHROPIC_DEFAULT_<TIER>_MODEL (null otherwise — the SDK
-        // then uses the account default, which the app can't name), plus whether
-        // that tier accepts image input (admin per-tier policy ∘ MODEL_VISION).
+        // Each tier carries the pi model id PI_MODEL_MAP maps it to (null on the
+        // `local` stub), plus whether that tier accepts image input (admin
+        // per-tier policy ∘ MODEL_VISION).
         tiers: MODEL_TIERS.map((tier) => ({
           ...tier,
-          model: config.defaultTierModels[tier.id] ?? null,
+          model: config.pi?.modelMap[tier.id]?.model ?? null,
           vision: visionForModel(tier.id, store.getModelVisionPolicy(), config.visionEnabled),
         })),
-        locked: Boolean(config.anthropicModel),
         // Vision of the model a conversation gets when the user picked nothing:
-        // env pin > admin override > default tier (mirrors claudeAgent).
+        // admin override > default tier (mirrors runCapabilities).
         defaultVision: visionForModel(
-          config.anthropicModel ?? store.getModelOverride() ?? DEFAULT_MODEL_TIER,
+          store.getModelOverride() ?? DEFAULT_MODEL_TIER,
           store.getModelVisionPolicy(),
           config.visionEnabled,
         ),
       },
-      // Per-conversation reasoning effort picker. Independent of the model pin
-      // (effort still applies when ANTHROPIC_MODEL locks the model), so there is
-      // no `locked` flag here. The SDK downgrades unsupported levels per model.
+      // Per-conversation reasoning effort picker. A change mid-conversation
+      // starts a new pi session from the text history (pi fixes effort per
+      // session).
       effortSelection: {
         levels: EFFORT_LEVELS,
         default: DEFAULT_EFFORT_LEVEL,

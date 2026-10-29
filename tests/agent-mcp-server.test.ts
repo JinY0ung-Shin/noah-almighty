@@ -1,6 +1,6 @@
 /**
  * Noah's in-process MCP server builder (`agent/mcpServer.ts`), which replaced
- * the Claude Agent SDK's `tool()` / `createSdkMcpServer()`: the listing, the
+ * the Claude Agent SDK's `tool()` / `createMcpToolServer()`: the listing, the
  * call path, thrown errors, schema refusals, the abort signal and the request
  * `_meta` must behave exactly as the SDK's did (the listing bytes themselves
  * are pinned by sdk-pin.test.ts).
@@ -10,7 +10,7 @@ import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createSdkMcpServer, text, tool, type McpToolExtra } from "../src/server/agent/mcpTools.js";
+import { createMcpToolServer, text, tool, type McpToolExtra } from "../src/server/agent/mcpTools.js";
 
 let client: Client | undefined;
 afterEach(async () => {
@@ -18,7 +18,7 @@ afterEach(async () => {
   client = undefined;
 });
 
-async function connect(server: ReturnType<typeof createSdkMcpServer>): Promise<Client> {
+async function connect(server: ReturnType<typeof createMcpToolServer>): Promise<Client> {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.instance.connect(serverSide);
   client = new Client({ name: "test", version: "1" });
@@ -27,7 +27,7 @@ async function connect(server: ReturnType<typeof createSdkMcpServer>): Promise<C
 }
 
 function build(seen: { extra?: McpToolExtra; aborted?: () => void } = {}) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: "demo",
     version: "0.1.0",
     tools: [
@@ -66,12 +66,12 @@ function build(seen: { extra?: McpToolExtra; aborted?: () => void } = {}) {
 describe("in-process MCP server builder", () => {
   it("returns the shape the pi endpoint and the SDK runner consume", () => {
     const server = build();
-    expect(server.type).toBe("sdk");
+    expect(server.type).toBe("in_process");
     expect(server.name).toBe("demo");
     expect(server).not.toHaveProperty("timeout");
-    const timed = createSdkMcpServer({ name: "t", tools: [], timeout: 5000 });
+    const timed = createMcpToolServer({ name: "t", tools: [], timeout: 5000 });
     expect(timed.timeout).toBe(5000);
-    for (const bad of [0, -1, 1.5]) expect(createSdkMcpServer({ name: "t", timeout: bad })).not.toHaveProperty("timeout");
+    for (const bad of [0, -1, 1.5]) expect(createMcpToolServer({ name: "t", timeout: bad })).not.toHaveProperty("timeout");
   });
 
   it("tool() keeps annotations and maps the extras onto _meta", () => {
@@ -108,7 +108,7 @@ describe("in-process MCP server builder", () => {
 
   it("server-level alwaysLoad marks every tool, merged under the tool's own _meta", async () => {
     const c = await connect(
-      createSdkMcpServer({
+      createMcpToolServer({
         name: "eager",
         alwaysLoad: true,
         tools: [tool("x", "X.", {}, async () => text("ok")), tool("y", "Y.", {}, async () => text("ok"), { searchHint: "why" })],

@@ -987,7 +987,7 @@ describe("noah-almighty platform", () => {
     const app = createApp(
       createServices({
         dataDir: tempDir,
-        agentRuntime: "claude",
+        agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false },
         sessionSecret: "test",
         defaultPluginsDir: pluginsDir,
       }),
@@ -1074,52 +1074,15 @@ describe("noah-almighty platform", () => {
     ]);
   });
 
-  it("stores/clears a subscription token and reflects it in system status", async () => {
-    const app = testApp(); // no ANTHROPIC_API_KEY → subscription mode
-    const { agent: admin } = await newUser(app, "boss"); // first → admin
-
-    // Initially disconnected, subscription auth mode (no API key in test config).
-    let sys = (await admin.get("/api/admin/system").expect(200)).body.system;
-    expect(sys.subscriptionConnected).toBe(false);
-    expect(sys.apiKeyOverride).toBe(false);
-    expect(sys.authMode).toBe("subscription");
-
-    // Reject empty / malformed tokens.
-    await admin
-      .put("/api/admin/claude-token")
-      .send({ token: "  " })
-      .expect(400);
-    await admin
-      .put("/api/admin/claude-token")
-      .send({ token: "nope" })
-      .expect(400);
-
-    // Store a valid-looking token; it must never be echoed back.
-    const put = await admin
-      .put("/api/admin/claude-token")
-      .send({ token: "sk-ant-oat01-secret" })
-      .expect(200);
-    expect(put.body).toEqual({ ok: true });
-    expect(JSON.stringify(put.body)).not.toContain("secret");
-
-    sys = (await admin.get("/api/admin/system").expect(200)).body.system;
-    expect(sys.subscriptionConnected).toBe(true);
-
-    // Clearing it returns to disconnected.
-    await admin.delete("/api/admin/claude-token").expect(200);
-    sys = (await admin.get("/api/admin/system").expect(200)).body.system;
-    expect(sys.subscriptionConnected).toBe(false);
-  });
-
-  it("forbids the subscription-token endpoints for members (403)", async () => {
+  it("no longer serves the removed claude setup-token endpoints", async () => {
     const app = testApp();
-    await newUser(app, "boss"); // first → admin
-    const { agent: member } = await newUser(app, "peon");
-    await member
-      .put("/api/admin/claude-token")
-      .send({ token: "sk-ant-oat01-x" })
-      .expect(403);
-    await member.delete("/api/admin/claude-token").expect(403);
+    const { agent: admin } = await newUser(app, "boss"); // first → admin
+    await admin.put("/api/admin/claude-token").send({ token: "sk-ant-oat01-x" }).expect(404);
+    await admin.delete("/api/admin/claude-token").expect(404);
+    const sys = (await admin.get("/api/admin/system").expect(200)).body.system;
+    for (const gone of ["subscriptionConnected", "apiKeyOverride", "authMode", "readOnlyTools", "configuredModel", "modelEnvLocked"]) {
+      expect(sys).not.toHaveProperty(gone);
+    }
   });
 
   it("exposes system/runtime info to admins, gated from members", async () => {
@@ -1127,7 +1090,6 @@ describe("noah-almighty platform", () => {
       dataDir: tempDir,
       agentRuntime: "local",
       sessionSecret: "test",
-      anthropicModel: "claude-opus-4-8",
     });
     const app = createApp(services);
 
@@ -1135,11 +1097,9 @@ describe("noah-almighty platform", () => {
     await signup(admin, "boss").expect(201);
     const res = await admin.get("/api/admin/system").expect(200);
     expect(res.body.system.agentRuntime).toBe("local");
-    expect(res.body.system.configuredModel).toBe("claude-opus-4-8");
-    // No Claude run has reported a model yet (local runtime never does).
+    // The local stub maps no tier to a pi model, and never reports one.
+    expect(res.body.system.piModelMap).toEqual({});
     expect(res.body.system.observedModel).toBeNull();
-    expect(res.body.system.authMode).toBe("subscription");
-    expect(Array.isArray(res.body.system.readOnlyTools)).toBe(true);
     expect(
       res.body.system.hexSshTools.map((t: { name: string }) => t.name),
     ).toContain("remote-ssh");
@@ -1192,8 +1152,9 @@ describe("noah-almighty platform", () => {
     expect(
       before.body.system.togglableBuiltinTools.flatMap((t: { names: string[] }) => t.names),
     ).toEqual(expect.arrayContaining(["WebFetch", "WebSearch"]));
-    // Offline (`local`) runtime never spawns the CLI preflight: cache-only, absent here.
-    expect(before.body.system.skillDiscovery).toBeNull();
+    // The global skill list is read from the bundled default-skills root (no CLI preflight).
+    expect(Array.isArray(before.body.system.skillDiscovery.skills)).toBe(true);
+    expect(before.body.system.skillDiscovery).not.toHaveProperty("cliVersion");
 
     const policy = { disabledTools: ["WebFetch", "WebSearch"], disabledSkills: ["code-review"] };
     const saved = await admin.put("/api/admin/tool-skill-policy").send({ policy }).expect(200);
@@ -1219,12 +1180,25 @@ describe("noah-almighty platform", () => {
     await member.put("/api/admin/tool-skill-policy").send({ policy }).expect(403);
   });
 
-  it("reports configuredModel as null when ANTHROPIC_MODEL is unset", async () => {
-    const app = testApp();
-    const admin = request.agent(app);
+  it("reports the tier → pi model map from PI_MODEL_MAP", async () => {
+    const services = createServices({
+      dataDir: tempDir,
+      agentRuntime: "pi",
+      sessionSecret: "test",
+      pi: {
+        gatewayUrl: "http://pi.invalid",
+        apiKey: "k",
+        modelMap: { fable: { model: "f" }, opus: { model: "o", contextWindow: 1000 }, sonnet: { model: "s" }, haiku: { model: "h" }, "pin-x": { model: "x" } },
+        deckSandbox: false,
+      },
+    });
+    const admin = request.agent(createApp(services));
     await signup(admin, "boss").expect(201);
     const res = await admin.get("/api/admin/system").expect(200);
-    expect(res.body.system.configuredModel).toBeNull();
+    expect(res.body.system.agentRuntime).toBe("pi");
+    // Tiers only — a concrete-id key is an admin-override target, not a tier row.
+    expect(res.body.system.piModelMap).toEqual({ fable: "f", opus: "o", sonnet: "s", haiku: "h" });
+    services.store.close();
   });
 
   // ---- Input validation -------------------------------------------------

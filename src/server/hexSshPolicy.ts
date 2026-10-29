@@ -126,29 +126,3 @@ export function viewerClassForAgentRequest(input: {
   return "colleague";
 }
 
-export function extractHexSshToolName(toolName: string): HexSshTool | null {
-  // The server is registered under HEX_SSH_SERVER_NAME ("hex-ssh"), so the SDK
-  // emits `mcp__hex-ssh__*`. The underscore form has no producer in src/ today,
-  // but it is kept as a defensive fallback at this final permission gate in case
-  // the SDK ever normalizes the dashed server name to underscores — dropping it
-  // would silently let such a tool name bypass the policy check.
-  const prefixes = [`mcp__${HEX_SSH_SERVER_NAME}__`, "mcp__hex_ssh__"];
-  const matched = prefixes.find((prefix) => toolName.startsWith(prefix));
-  if (!matched) {
-    return null;
-  }
-  const name = toolName.slice(matched.length);
-  return TOOL_SET.has(name) ? (name as HexSshTool) : null;
-}
-
-export function isHexSshToolAllowed(
-  toolName: string,
-  viewerClass: HexSshViewerClass,
-  policy: HexSshToolPolicy,
-): boolean {
-  const hexTool = extractHexSshToolName(toolName);
-  if (!hexTool) {
-    return true;
-  }
-  return new Set(allowedHexSshToolsForViewer(policy, viewerClass)).has(hexTool);
-}

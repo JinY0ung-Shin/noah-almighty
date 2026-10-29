@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { AppConfig } from "../types.js";
 import { PinnedDir, segmentsBelow } from "../pinnedFs.js";
@@ -40,7 +40,7 @@ export interface ConfluenceToolsContext {
    */
   elevated: boolean;
   /**
-   * The run's CONVERSATION scratch workspace (absolute — runPlan's
+   * The run's CONVERSATION scratch workspace (absolute — runCapabilities'
    * `conversationScratchDir`). `get_attachment` with `save_to_workspace` writes
    * the downloaded file under its `confluence/` folder, so a page's image or
    * diagram becomes a file the run can place (a deck's `assets/`, a document, a
@@ -299,7 +299,7 @@ function credentials(ctx: Pick<ConfluenceToolsContext, "config" | "ownerSecrets"
 /**
  * Whether these tools can authenticate for this owner: CONFLUENCE_URL set and
  * well-formed, plus the owner's PAT — the exact check every request makes.
- * runPlan folds it into `confluenceSaveToWorkspace`, so the metacognition
+ * runCapabilities folds it into `confluenceSaveToWorkspace`, so the metacognition
  * surfaces offer `save_to_workspace` only on a run where a save can land.
  */
 export function confluenceCredentialsConfigured(
@@ -1179,7 +1179,7 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
 }
 
 export function buildConfluenceServer(ctx: ConfluenceToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: CONFLUENCE_SERVER_NAME,
     version: "0.1.0",
     tools: buildConfluenceTools(ctx),

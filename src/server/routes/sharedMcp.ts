@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
-import { agentSubprocessEnv } from "../agent/runPlan.js";
+import { piProxyBaseEnv } from "../agent/pi/mcpProxies.js";
 import {
   MAX_SHARED_MCP_SERVERS,
   isBindableSecretName,
@@ -210,7 +210,6 @@ export function createSharedMcpRouter({ config, store, auditAs }: RouterDeps): R
           Object.entries(store.getUserSecrets(req.user!.id)).filter(([secretName]) => isBindableSecretName(secretName)),
         ),
         config.dataDir,
-        config.agentSessionsDir,
       );
       auditAs(req, "shared_mcp_check", `shared mcp ${server.name}: ${result.ok ? "ok" : "failed"}`);
       res.json(result);
@@ -226,7 +225,6 @@ export async function checkSharedMcpServer(
   bindings: SharedMcpBinding[],
   secrets: Record<string, string>,
   dataDir: string,
-  agentSessionsDir: string,
 ): Promise<SharedMcpCheckResult> {
   const plan = planSharedMcpRun([server], { bindings, secrets, secretsAllowed: true });
   const state = plan.states[0];
@@ -262,11 +260,9 @@ export async function checkSharedMcpServer(
   fs.writeFileSync(configFile, JSON.stringify(bridgeConfig), { mode: 0o600 });
   const def = mcpHttpBridgeServerDef(path.join(process.cwd(), "scripts", "mcp-http-bridge.mjs"), configFile);
   let stderr = "";
-  const env = Object.fromEntries(
-    Object.entries(agentSubprocessEnv(process.env, agentSessionsDir)).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
+  // The same env a run's relayed child starts from (no git credentials, no
+  // server-only secrets).
+  const env = piProxyBaseEnv();
   const transport = new StdioClientTransport({ command: def.command, args: def.args, env, stderr: "pipe" });
   transport.stderr?.on("data", (chunk) => {
     if (stderr.length < 4000) stderr += String(chunk);
@@ -286,7 +282,7 @@ export async function checkSharedMcpServer(
     return { ok: true, tools: listed.tools.map((tool) => tool.name), missingSecrets: [], error: null };
   } catch (error) {
     // The bridge already scrubbed what it wrote; the client-side message is
-    // scrubbed again here in case a value rode an SDK error of its own.
+    // scrubbed again here in case a value rode an MCP SDK client error of its own.
     const bridgeLine = stderr
       .split("\n")
       .map((line) => line.trim())

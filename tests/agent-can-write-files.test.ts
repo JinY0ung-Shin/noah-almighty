@@ -5,32 +5,14 @@ import type { AgentRequest } from "../src/server/types.js";
 import { withTempDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
-// canWriteFiles end to end: runPlan derives it ONCE (elevatedToolAccess), hands
-// it to describe_system's ctx, and runClaudeAgent stamps it onto the prompt
+// canWriteFiles end to end: buildRunCapabilities derives it ONCE (every pi run
+// writes in its principal's own sandbox, so it is always true), hands it to
+// describe_system's ctx, and stampPromptRequest stamps it onto the prompt
 // request. Both metacognition surfaces must then tell each viewer class the
 // same thing about the images it has as files. A missing stamp is silent: the
-// prompt falls back to "only the owner writes", so a trusted teammate
-// would hear read-only from the prompt and place-the-file from describe_system.
-// Partial SDK mock (agent-run.test.ts pattern), recording the prompt too.
+// prompt falls back to "only the owner writes", so a colleague would hear
+// read-only from the prompt and place-the-file from describe_system.
 // ---------------------------------------------------------------------------
-const sdkMock = vi.hoisted(() => ({
-  calls: [] as { prompt: unknown }[],
-}));
-
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    query: (args: { prompt: unknown; options: Record<string, unknown> }) => {
-      sdkMock.calls.push({ prompt: args.prompt });
-      async function* gen() {
-        yield { type: "system", subtype: "init", session_id: "s1", model: "opus" };
-        yield { type: "result", subtype: "success", result: "ok" };
-      }
-      return gen();
-    },
-  };
-});
 
 // The REAL server, with its ctx recorded: describe_system's half of the pair.
 vi.mock("../src/server/agent/systemTools.js", async (importOriginal) => {
@@ -39,39 +21,29 @@ vi.mock("../src/server/agent/systemTools.js", async (importOriginal) => {
 });
 
 import { createServices } from "../src/server/app.js";
-import { runAgentStream } from "../src/server/agent/index.js";
+import { buildRunCapabilities, stampPromptRequest } from "../src/server/agent/runCapabilities.js";
+import { buildUserPrompt } from "../src/server/agent/promptBuilder.js";
 import { buildSystemServer, imageSourcesLine } from "../src/server/agent/systemTools.js";
 
 let tempDir: string;
 const getTempDir = withTempDir("agent-can-write-files", () => {
   tempDir = getTempDir();
-  sdkMock.calls.length = 0;
   vi.mocked(buildSystemServer).mockClear();
 });
-
-/** The text of the user message run #i sent (the image turn's single message). */
-async function userPromptOf(i: number): Promise<string> {
-  const prompt = sdkMock.calls[i].prompt;
-  if (typeof prompt === "string") return prompt;
-  for await (const message of prompt as AsyncIterable<{ message?: { content?: unknown } }>) {
-    const content = message.message?.content;
-    if (!Array.isArray(content)) return String(content ?? "");
-    return content
-      .filter((block: { type?: string }) => block.type === "text")
-      .map((block: { text?: string }) => block.text ?? "")
-      .join("\n");
-  }
-  return "";
-}
 
 describe("canWriteFiles reaches both metacognition surfaces", () => {
   it("tells the owner, a trusted teammate and a plain colleague the same thing on each", async () => {
     const { config, store } = createServices({
       dataDir: path.join(tempDir, "data"),
-      agentRuntime: "claude",
+      agentRuntime: "pi",
       sessionSecret: "test",
-      anthropicModel: undefined,
-      anthropicApiKey: undefined,
+      pi: {
+        gatewayUrl: "http://pi.invalid",
+        apiKey: "k",
+        modelMap: {},
+        deckSandbox: false,
+        workspacesDir: path.join(tempDir, "pi-ws"),
+      },
     });
     const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
     const cwd = path.join(tempDir, "ws");
@@ -90,38 +62,58 @@ describe("canWriteFiles reaches both metacognition surfaces", () => {
       images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
       imageFiles: [{ path: path.join(cwd, "attachments", "a.png"), mediaType: "image/png" }],
     };
-    const cases: Array<{ label: string; request: AgentRequest; writes: boolean }> = [
-      { label: "owner", request: base, writes: true },
+    const cases: Array<{ label: string; request: AgentRequest }> = [
+      { label: "owner", request: base },
       {
         label: "trusted teammate",
         request: { ...base, viewerUserId: "mate", viewerName: "동료", viewerIsOwner: false, elevated: true },
-        writes: true,
       },
       {
         label: "plain colleague",
         request: { ...base, viewerUserId: "colleague", viewerName: "동료", viewerIsOwner: false, elevated: false },
-        writes: false,
       },
     ];
-    const events = { onDelta: vi.fn(), onStatus: vi.fn(), onToolStart: vi.fn(), onToolEnd: vi.fn() };
-    for (const c of cases) {
-      await runAgentStream(c.request, [], config, store, events);
-    }
 
     for (const [i, c] of cases.entries()) {
+      const caps = await buildRunCapabilities(c.request, [], config, store, undefined, undefined, () => 0);
+      expect(caps.canWriteFiles, c.label).toBe(true);
       const ctx = vi.mocked(buildSystemServer).mock.calls[i][1] as Parameters<typeof imageSourcesLine>[0];
-      expect(ctx.canWriteFiles, c.label).toBe(c.writes);
+      expect(ctx.canWriteFiles, c.label).toBe(true);
+      const stamped = stampPromptRequest(c.request, caps, config, undefined);
+      expect(stamped.canWriteFiles, c.label).toBe(true);
+
       const line = imageSourcesLine(ctx);
-      const userPrompt = await userPromptOf(i);
-      expect(userPrompt, c.label).toContain("ALSO saved as files in the conversation scratch workspace");
-      if (c.writes) {
-        expect(line, c.label).toContain("copy that FILE (e.g. into the deck's `assets/`)");
-        expect(userPrompt, c.label).toContain("place the FILE itself instead of describing or redrawing it");
-      } else {
-        expect(line, c.label).toContain("This conversation cannot write files, so you can read them here");
-        expect(userPrompt, c.label).toContain("This conversation cannot write files, so you can read these files here");
-        expect(userPrompt, c.label).not.toContain("place the FILE itself");
-      }
+      const userPrompt = buildUserPrompt(stamped);
+      expect(userPrompt, c.label).toContain("ALSO saved as files in the conversation folder");
+      expect(line, c.label).toContain("copy that FILE (e.g. into the deck's `assets/`)");
+      expect(userPrompt, c.label).toContain("place the FILE itself instead of describing or redrawing it");
+      expect(userPrompt, c.label).not.toContain("This conversation cannot write files");
     }
+    store.close();
+  });
+
+  it("the stamp is load-bearing: an UNSTAMPED colleague request falls back to read-only on both surfaces", () => {
+    const colleague: AgentRequest = {
+      message: "m",
+      avatar: { id: "owner", displayName: "오너", alias: "", persona: "" },
+      viewerUserId: "colleague",
+      viewerIsOwner: false,
+      images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
+      imageFiles: [{ path: "/x/attachments/a.png", mediaType: "image/png" }],
+    };
+    expect(buildUserPrompt(colleague)).toContain(
+      "This conversation cannot write files, so you can read these files here",
+    );
+    expect(buildUserPrompt(colleague)).not.toContain("place the FILE itself");
+    expect(imageSourcesLine({ headless: false, viewerIsOwner: false })).toContain(
+      "This conversation cannot write files, so you can read them here",
+    );
+    // A text-only turn (no image blocks) uses the same flag for its own tail.
+    expect(buildUserPrompt({ ...colleague, images: undefined })).toContain(
+      "This conversation cannot write files: show one to the user with mcp__file_output__show_file",
+    );
+    expect(buildUserPrompt({ ...colleague, images: undefined, canWriteFiles: true })).toContain(
+      "Handle them as files: show one to the user with mcp__file_output__show_file",
+    );
   });
 });

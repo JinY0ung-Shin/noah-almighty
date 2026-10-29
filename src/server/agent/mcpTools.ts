@@ -57,7 +57,7 @@ export function decodeExecError(
 }
 
 export {
-  createSdkMcpServer,
+  createMcpToolServer,
   tool,
   type InProcessMcpServer,
   type McpToolArgs,

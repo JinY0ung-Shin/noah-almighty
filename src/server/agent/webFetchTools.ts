@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import type { WebFetchProxyState } from "../types.js";
@@ -6,23 +6,21 @@ import { text } from "./mcpTools.js";
 
 export const WEB_FETCH_SERVER_NAME = "web";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const WEB_FETCH_TOOL_NAMES = ["mcp__web__fetch"] as const;
 
 /**
- * Why this exists next to the SDK's built-in WebFetch: the built-in tool runs in
- * the CLI subprocess and force-upgrades `http://` to `https://` (verified on the
- * bundled binary), so plain-HTTP intranet pages can never work there. This tool
- * fetches from the APP process instead: `http://` is fetched as-is, corporate
- * proxy env (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) applies via undici's
- * `EnvHttpProxyAgent`, and `NODE_EXTRA_CA_CERTS` (private corporate CA) is
- * honored natively by node. The built-in tool's own description tells the model
- * to prefer an MCP-provided web fetch tool, so the two coexist safely.
+ * Why this exists: pi has no web-fetch built-in and the sandbox has no network
+ * beyond the pi operator's allowlist. This tool fetches from the APP process
+ * instead: `http://` is fetched as-is (plain-HTTP intranet pages work),
+ * corporate proxy env (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) applies via
+ * undici's `EnvHttpProxyAgent`, and `NODE_EXTRA_CA_CERTS` (private corporate CA)
+ * is honored natively by node.
  */
 export interface WebFetchToolsContext {
   /**
-   * True for owner/trusted-user turns. Gates the fetch: `mcp__*` calls are
-   * auto-allowed by the PreToolUse hook (no permission prompt), and this tool
+   * True for owner/trusted-user turns. Gates the fetch: the handler is the
+   * check that sees the live caller (MCP calls never prompt), and this tool
    * can reach arbitrary intranet hosts from inside the corporate network, so a
    * non-trusted colleague must not drive it — the same line Confluence draws.
    */
@@ -79,7 +77,7 @@ function redactProxyUrl(raw: string): string {
 
 /**
  * Deployment proxy self-state for web fetch (META-COGNITION). Single source read
- * by BOTH prompt-append (`AgentRequest.webFetchProxy`, set in `runClaudeAgent`)
+ * by BOTH prompt-append (`AgentRequest.webFetchProxy`, set in `stampPromptRequest`)
  * and `describe_system` — the Confluence-style sync where a deployment-env fact
  * is derived by one helper instead of the ownerState module. Values are redacted
  * to scheme://host:port so proxy credentials never enter a prompt.
@@ -136,8 +134,7 @@ function ipv4Octets(hostname: string): number[] | null {
  * this tool's purpose. The WHATWG URL parser already canonicalizes numeric
  * hosts (`0x7f000001`/`2130706433` → `127.0.0.1`), so the dotted-quad check
  * sees the normalized form. Hostname-that-resolves-to-loopback is NOT resolved
- * here: elevated viewers already hold Bash/curl, so this guard is
- * defense-in-depth for the auto-allowed MCP path, not a hard boundary.
+ * here, so this guard is defense-in-depth, not a hard boundary.
  */
 function blockedHostReason(hostname: string): string | null {
   const host = hostname.toLowerCase().replace(/\.$/, "");
@@ -524,7 +521,7 @@ export function buildWebFetchTools(ctx: WebFetchToolsContext) {
 }
 
 export function buildWebFetchServer(ctx: WebFetchToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: WEB_FETCH_SERVER_NAME,
     version: "0.1.0",
     tools: buildWebFetchTools(ctx),

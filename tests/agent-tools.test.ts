@@ -27,10 +27,8 @@ import {
 import {
   PROMPT_TTL_MS,
 } from "../src/server/agent/runRegistry.js";
-import {
-  EMPTY_SDK_RESPONSE_MESSAGE,
-  resultErrorMessage,
-} from "../src/server/agent/claudeAgent.js";
+import { resultErrorMessage } from "../src/server/agent/runErrors.js";
+import { EMPTY_PI_RESPONSE_MESSAGE } from "../src/server/agent/pi/runPiAgent.js";
 import {
   commitAndPush,
   ensureClone,
@@ -97,7 +95,7 @@ import {
 } from "../src/server/agent/webFetchTools.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../src/server/chatFiles.js";
 import type { DeckToolchainState } from "../src/server/deckRender.js";
-import { rewindTurnState } from "../src/server/agent/ownerState.js";
+import { piSandboxOwnerSentence, rewindTurnState } from "../src/server/agent/ownerState.js";
 import type { AgentRequest, AgentResponse, AppConfig } from "../src/server/types.js";
 
 import { gitInit, makeBareRemote, callTool } from "./helpers.js";
@@ -846,56 +844,6 @@ describe("web fetch tools", () => {
 });
 
 
-describe("mcp-secret-wrapper script", () => {
-  const wrapperPath = path.join(process.cwd(), "scripts", "mcp-secret-wrapper.mjs");
-
-  it("injects the secrets file into the child env, deletes the file, and passes stdio through", () => {
-    const dir = path.join(tempDir, "wrap1");
-    fs.mkdirSync(dir, { recursive: true });
-    const secretsFile = path.join(dir, "s.json");
-    fs.writeFileSync(secretsFile, JSON.stringify({ MY_API_KEY: "vault-value" }));
-    const out = execFileSync(process.execPath, [
-      wrapperPath,
-      "--secrets",
-      secretsFile,
-      "--",
-      process.execPath,
-      "-e",
-      "console.log(process.env.MY_API_KEY)",
-    ]).toString();
-    expect(out.trim()).toBe("vault-value");
-    // One-shot handoff: the plaintext file is consumed on read.
-    expect(fs.existsSync(secretsFile)).toBe(false);
-  });
-
-  it("fails loudly (instead of starting secret-less) when the secrets file is missing", () => {
-    expect(() =>
-      execFileSync(
-        process.execPath,
-        [wrapperPath, "--secrets", path.join(tempDir, "nope.json"), "--", process.execPath, "-e", "0"],
-        { stdio: "pipe" },
-      ),
-    ).toThrow();
-  });
-
-  it("propagates the child's exit code", () => {
-    const dir = path.join(tempDir, "wrap2");
-    fs.mkdirSync(dir, { recursive: true });
-    const secretsFile = path.join(dir, "s.json");
-    fs.writeFileSync(secretsFile, "{}");
-    try {
-      execFileSync(
-        process.execPath,
-        [wrapperPath, "--secrets", secretsFile, "--", process.execPath, "-e", "process.exit(7)"],
-        { stdio: "pipe" },
-      );
-      throw new Error("expected the wrapper to exit non-zero");
-    } catch (error) {
-      expect((error as { status?: number }).status).toBe(7);
-    }
-  });
-});
-
 describe("repo tools (knowledge-repo management)", () => {
   // A store + owner pointed at a local bare git remote, so commit/push works
   // offline. Returns the config so tools can resolve the clone path.
@@ -1080,7 +1028,7 @@ describe("repo tools (knowledge-repo management)", () => {
 
   it("shared account: an elevated teammate can WRITE + commit; create_repo stays owner-only", async () => {
     const s = setup("rt1c");
-    // The owner marks the account as shared (공용 계정) → claudeAgent passes
+    // The owner marks the account as shared (공용 계정) → runCapabilities passes
     // writeAccess = ownerToolAccess || (sharedAccount && elevatedToolAccess).
     s.store.updateProfile(s.ownerId, { sharedAccount: true });
     const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
@@ -2005,6 +1953,20 @@ describe("system tools (avatar system management)", () => {
     return buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner });
   }
 
+  /** The config of a pi deployment whose PI_MODEL_MAP maps `models` (tier/key → pi model id). */
+  function piConfig(config: AppConfig, models: Record<string, string> = {}): AppConfig {
+    return {
+      ...config,
+      agentRuntime: "pi",
+      pi: {
+        gatewayUrl: "http://pi-gateway.internal:8080",
+        apiKey: "pi-key",
+        modelMap: Object.fromEntries(Object.entries(models).map(([key, model]) => [key, { model }])),
+        deckSandbox: false,
+      },
+    };
+  }
+
   it("exposes the documented server + tool names", () => {
     const s = setup("st0");
     expect(SYSTEM_SERVER_NAME).toBe("system");
@@ -2121,9 +2083,11 @@ describe("system tools (avatar system management)", () => {
       {},
     )).content[0].text ?? "";
     expect(on).toContain("Mid-turn user messages: ENABLED");
-    // Mirrors buildSystemPromptAppend's standing line: same two instructions,
-    // so the avatar cannot read one surface and act against the other.
-    expect(on).toContain("between your tool calls");
+    // Mirrors the prompt's per-turn run-kind line (piRunKindParagraph): pi has
+    // no mid-turn input, so a message sent while the avatar works arrives as
+    // the NEXT turn — the avatar must never promise to read it mid-answer.
+    expect(on).toContain("NOT shown to you between tool calls");
+    expect(on).toContain("it is delivered as the NEXT turn, right after your current answer finishes");
     expect(on).toContain("let the newest instruction win");
     expect(on).not.toContain("Mid-turn user messages: not available");
   });
@@ -2165,12 +2129,12 @@ describe("system tools (avatar system management)", () => {
 
     expect(routine).toContain("This turn's origin: an UNATTENDED run");
     expect(routine).not.toContain("This turn's origin: interactive chat");
-    // buildSystemPromptAppend emits the task-API self-state ONLY from its owner
-    // branch, which a headless run never reaches — so this surface must skip it
-    // too, or the two disagree about the same run.
-    expect(routine).not.toContain("External task API:");
+    // The owner branch of buildSystemPromptAppend is the FROZEN prompt of every
+    // run kind of an owner conversation (a routine included), so it states the
+    // task-API self-state on a routine too — and this surface must agree.
+    expect(routine).toContain("External task API:");
 
-    // Control: the interactive run keeps it.
+    // …and so does the interactive run.
     const interactive = (await callTool(toolsFor(s), "describe_system", {}))
       .content[0].text ?? "";
     expect(interactive).toContain("External task API:");
@@ -2200,7 +2164,7 @@ describe("system tools (avatar system management)", () => {
       "the calling system gets an error instead of your result",
     );
     expect(external).toContain(
-      `A single pending question or permission request also expires after ${ttlMinutes} minutes without an answer`,
+      `A single pending question also expires after ${ttlMinutes} minutes without an answer`,
     );
     expect(external).toContain(
       "do the most important part first and say in your result what remains",
@@ -2219,8 +2183,13 @@ describe("system tools (avatar system management)", () => {
       "Each task may run for up to 90 minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES)",
     );
     expect(interactive).toContain(
-      `a single pending question or permission request expires after ${ttlMinutes} minutes without an answer`,
+      `a single pending question expires after ${ttlMinutes} minutes without an answer`,
     );
+    // pi has no permission prompts: neither line may promise one.
+    for (const body of [external, interactive]) {
+      expect(body).not.toContain("permission request");
+      expect(body).not.toContain("permission prompt");
+    }
     // Not an API run: the per-run budget stays out of the origin line.
     expect(interactive).toContain("This turn's origin: interactive chat");
     expect(interactive).not.toContain("This run has a hard wall-clock budget");
@@ -2263,7 +2232,7 @@ describe("system tools (avatar system management)", () => {
         "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it",
     );
 
-    // The absolute path, once runPlan hands it over.
+    // The absolute path, once runCapabilities hands it over.
     expect(imagesLineOf(await owner({ scratchWorkspaceDir: "/data/workspaces/a/c" }))).toContain(
       "files in the conversation scratch workspace (`/data/workspaces/a/c`) — ",
     );
@@ -2275,7 +2244,7 @@ describe("system tools (avatar system management)", () => {
     expect(imagesLineOf(await owner({ browserEnabled: true, visionEnabled: false }))).not.toContain("captures/");
     expect(imagesLineOf(await owner())).not.toContain("captures/");
 
-    // Confluence follows runPlan's ONE boolean (tools registered, viewer
+    // Confluence follows runCapabilities' ONE boolean (tools registered, viewer
     // elevated, URL + PAT, a workspace) — never re-derived here.
     const confluence =
       "mcp__confluence__get_attachment with `save_to_workspace: true` saves an attachment into `confluence/` (the result's `savedPath`)";
@@ -2302,7 +2271,7 @@ describe("system tools (avatar system management)", () => {
     const PLACE = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
     const READ_ONLY =
       "This conversation cannot write files, so you can read them here but not place them into a deck, document or commit — the owner or a trusted teammate can";
-    // A trusted teammate's run (runPlan: canWriteFiles) can save Confluence
+    // A trusted teammate's run (the ctx's canWriteFiles) can save Confluence
     // attachments and place files; a plain colleague's can do neither — and
     // neither ever has captures.
     const trusted = imagesLineOf(
@@ -2416,7 +2385,7 @@ describe("system tools (avatar system management)", () => {
   });
 
   it("describe_system reports canvas availability and the AskUserQuestion redirect", async () => {
-    // Mirrors runPlan's canvasActive: the runtime surface must not offer a
+    // Mirrors runCapabilities' canvasActive: the runtime surface must not offer a
     // canvas the run didn't register, and when it IS available it must carry
     // the same plain-question redirect the prompt guidance states.
     const s = setup("st-canvas");
@@ -3036,8 +3005,8 @@ describe("system tools (avatar system management)", () => {
   });
 
   it("refuses EVERY read/write tool for a non-owner viewer", async () => {
-    // Handler-level owner gating is the safety boundary (the SDK still sees the
-    // names), so each tool must refuse on its own — a missing guard on one tool
+    // Handler-level owner gating is the safety boundary (pi's static tools/list still
+    // shows the names), so each tool must refuse on its own — a missing guard on one tool
     // would leak the owner's conversations, routines, or plugin list.
     const s = setup("st-deny-all");
     s.store.touchConversation(s.owner.id, "c-secret", s.owner.id, "비밀 대화");
@@ -3342,13 +3311,8 @@ describe("system tools (avatar system management)", () => {
     });
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: {
-        ...s.config,
-        autoCompactWindow: 120_000,
-        // ANTHROPIC_DEFAULT_OPUS_MODEL is set on this deployment, so the tier
-        // alias resolves to a concrete model the avatar can actually name.
-        defaultTierModels: { ...s.config.defaultTierModels, opus: "claude-opus-5" },
-      },
+      // PI_MODEL_MAP maps the tier, so the avatar can name the pi model it runs on.
+      config: piConfig(s.config, { opus: "pi-opus-5" }),
       viewerIsOwner: true,
       selectedModelTier: "opus",
       selectedEffort: "low",
@@ -3358,13 +3322,16 @@ describe("system tools (avatar system management)", () => {
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
 
     expect(body).toContain(
-      "Model in use: claude-opus-5 (opus) (chosen for this conversation in the composer)",
+      "Model in use: pi-opus-5 (opus) (chosen for this conversation in the composer)",
     );
     expect(body).not.toContain("claude-admin-default");
     expect(body).toContain("Reasoning effort: low (");
     expect(body).toContain("(chosen for this conversation)");
     expect(body).toContain("MCP tool groups enabled for this conversation: system management");
-    expect(body).toContain("Autocompact window: 120000 tokens (AUTO_COMPACT_WINDOW)");
+    // pi compacts on its own; the retired SDK knobs are never reported.
+    expect(body).toContain("Context compaction: automatic (pi-gateway summarizes the session");
+    expect(body).not.toContain("AUTO_COMPACT_WINDOW");
+    expect(body).not.toContain("MAX_TURNS");
     expect(body).toContain("Name: 노아");
     expect(body).toContain("Profile visibility: private (owner only)");
     expect(body).toContain("Shared (communal) account: yes");
@@ -3395,20 +3362,20 @@ describe("system tools (avatar system management)", () => {
 
   it("describe_system names the default tier's model, a bare tier alias, and an unknown effort", async () => {
     const s = setup("st-model-fallbacks");
-    // No env pin, no composer pick, no admin override → the default tier, named
-    // through the operator's ANTHROPIC_DEFAULT_OPUS_MODEL.
+    // No composer pick, no admin override → the default tier, named through
+    // the operator's PI_MODEL_MAP.
     const defaults = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: { ...s.config, defaultTierModels: { ...s.config.defaultTierModels, opus: "claude-opus-5" } },
+      config: piConfig(s.config, { opus: "pi-opus-5" }),
       viewerIsOwner: true,
     });
     expect((await callTool(defaults, "describe_system", {})).content[0].text).toContain(
-      "Model in use: claude-opus-5 (opus) (default)",
+      "Model in use: pi-opus-5 (opus) (default)",
     );
 
-    // A tier the operator pinned no concrete model for is reported as the alias
-    // alone (the SDK resolves it to an account default the app cannot name), and
-    // an effort id with no known label is echoed verbatim rather than dropped.
+    // A tier with no PI_MODEL_MAP entry (the `local` stub has no map at all) is
+    // reported as the alias alone, and an effort id with no known label is
+    // echoed verbatim rather than dropped.
     const bare = buildSystemTools(s.store, {
       ...s.baseCtx,
       viewerIsOwner: true,
@@ -3466,6 +3433,53 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
+  it("describe_system's runtime line is always pi on a pi deployment, naming whose sandbox it is", async () => {
+    const s = setup("st-runtime-pi");
+    const config = piConfig(s.config, { opus: "pi-opus-5" });
+    const describe = async (ctx: SystemToolsContext) =>
+      (await callTool(buildSystemTools(s.store, ctx), "describe_system", {})).content[0].text ?? "";
+    const runtime = (body: string) => body.split("\n").find((line) => line.startsWith("- runtime: ")) ?? "";
+
+    // The owner's own run: pi, the owner's sandbox, no foreign-sandbox sentence.
+    const owner = runtime(await describe({
+      ...s.baseCtx,
+      config,
+      viewerIsOwner: true,
+      piRuntime: { sandboxOwner: "owner", conversationDir: "/workspace/c/conv-1", shellSecretsUnavailable: [] },
+    }));
+    expect(owner).toContain("- runtime: pi (pi-gateway). You run in THIS user's own Linux sandbox");
+    expect(owner).toContain("Work in this conversation's folder `/workspace/c/conv-1`");
+    expect(owner).toContain("Built-in tools: read/write/edit/ls/find/grep/bash");
+    expect(owner).not.toContain("NOT to the avatar owner");
+    expect(owner).not.toContain("teammate who asked");
+
+    // A colleague's chat: the non-owner branch carries the SAME runtime line, and
+    // it says the sandbox is the colleague's own (piSandboxOwnerSentence).
+    const colleague = runtime(await describe({
+      ...s.baseCtx,
+      config,
+      viewerIsOwner: false,
+      piRuntime: { sandboxOwner: "viewer", conversationDir: "/workspace/c/conv-2", shellSecretsUnavailable: [] },
+    }));
+    expect(colleague).toContain("- runtime: pi (pi-gateway)");
+    expect(colleague).toContain(piSandboxOwnerSentence("viewer"));
+
+    // A consultation: the ASKER's sandbox, in an ephemeral run folder.
+    const asker = runtime(await describe({
+      ...s.baseCtx,
+      config,
+      viewerIsOwner: false,
+      piRuntime: { sandboxOwner: "asker", conversationDir: "/workspace/c/run-ask-u1", shellSecretsUnavailable: [] },
+    }));
+    expect(asker).toContain(piSandboxOwnerSentence("asker"));
+    expect(asker).toContain("Work in this run's folder `/workspace/c/run-ask-u1`");
+
+    // No Claude CLI / SDK wording survives on either branch.
+    for (const line of [owner, colleague, asker]) {
+      expect(line).not.toMatch(/Claude Agent SDK|Claude Code CLI|runtime: claude/);
+    }
+  });
+
   it("reports shared egress scope even when the web tool group is off", async () => {
     const s = setup("st-egress");
     vi.stubEnv("NOAH_EGRESS_POLICY", "domain-proxy");
@@ -3476,8 +3490,8 @@ describe("system tools (avatar system management)", () => {
         enabledMcpToolGroups: [],
       });
       const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-      expect(body).toContain("shared domain-proxy policy for all local avatars");
-      expect(body).toContain("User-PC browser traffic is outside this boundary");
+      expect(body).toContain("shared domain-proxy policy for Noah's server and the tools running there");
+      expect(body).toContain("User-PC browser traffic is outside both boundaries");
       expect(body).toContain("not independently audited");
     } finally {
       vi.unstubAllEnvs();
@@ -3494,31 +3508,38 @@ describe("system tools (avatar system management)", () => {
         piRuntime: { conversationDir: "/workspace/c/x", shellSecretsUnavailable: [] },
       });
       const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-      expect(body).toContain("NOT your sandbox shell on this runtime");
+      expect(body).toContain("NOT your sandbox shell: bash/curl/Python go only through pi-gateway's own egress proxy");
       expect(body).toContain("SANDBOX_EGRESS_ALLOW");
       expect(body).not.toContain("policy for all local avatars, server tools and shell commands");
       expect(body).not.toContain("no network, no sudo");
       const manual = (await callTool(tools, "read_manual", { topic: "network-policy" })).content[0].text ?? "";
-      expect(manual).toContain("## pi runtime (AGENT_RUNTIME=pi)");
+      expect(manual).toContain("## The avatar's sandbox shell (pi runtime)");
+      expect(manual).not.toContain("AGENT_RUNTIME=pi");
       expect(manual).toContain("`SANDBOX_EGRESS_ALLOW`");
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it("describe_system reports an env model pin as outranking the composer pick", async () => {
-    const s = setup("st-env-pin");
+  it("describe_system names the admin model override (a PI_MODEL_MAP key) when the composer picked none", async () => {
+    // There is no env model hard lock any more (ANTHROPIC_MODEL is retired):
+    // without a composer pick the admin override decides, named through PI_MODEL_MAP.
+    const s = setup("st-admin-model");
+    s.store.setModelOverride("big-context");
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: { ...s.config, anthropicModel: "claude-env-pinned", confluenceUrl: "https://confluence.internal" },
+      config: {
+        ...piConfig(s.config, { opus: "pi-opus-5", "big-context": "pi-long-1m" }),
+        confluenceUrl: "https://confluence.internal",
+      },
       viewerIsOwner: true,
-      selectedModelTier: "sonnet",
     });
     s.store.setUserSecret(s.owner.id, "CONFLUENCE_PERSONAL_ACCESS_TOKEN", "pat");
 
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-    expect(body).toContain("Model in use: claude-env-pinned (pinned via environment variable)");
+    expect(body).toContain("Model in use: pi-long-1m (big-context) (admin setting)");
     expect(body).not.toContain("chosen for this conversation in the composer");
+    expect(body).not.toContain("pinned via environment variable");
     expect(body).toContain("Confluence host: set (mcp__confluence__* is READ-ONLY");
     // No browser this run → the write route is named as unavailable, not offered.
     expect(body).toContain("writing would need browser control, which is unavailable in this run");
@@ -3538,10 +3559,15 @@ describe("system tools (avatar system management)", () => {
     const body = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
     expect(body).toContain("intro set");
     expect(body).toContain("#쿠버네티스 #관측성");
-    expect(body).toContain("Shell-exposed secrets: `GRAFANA_TOKEN`");
+    // The pi sandbox shell receives no secrets: a 셸 노출 secret is named, but
+    // reported UNAVAILABLE rather than promised as `$NAME`.
+    expect(body).toContain("Shell-exposed secrets: UNAVAILABLE on this runtime — `GRAFANA_TOKEN` are set to 셸 노출");
+    expect(body).toContain("`$NAME` is empty in bash");
     // The non-exposed secret is still NAMED in the secret list but never in the
     // shell line, and no value ever appears.
     expect(body).toContain("`VAULT_ONLY`");
+    const shellLine = body.split("\n").find((line) => line.startsWith("- Shell-exposed secrets:")) ?? "";
+    expect(shellLine).not.toContain("VAULT_ONLY");
     expect(body).not.toContain("shell-secret-value");
     expect(body).not.toContain("never-in-shell");
   });
@@ -3563,7 +3589,7 @@ describe("system tools (avatar system management)", () => {
     expect(after).toContain("지식전용팀(member, shared repository none)");
 
     // The per-conversation tool group wins over the repo count: deselecting
-    // 그룹 지식 makes runPlan skip mcp__group_brain__*/mcp__group_repo__*, so the
+    // 그룹 지식 makes runCapabilities skip mcp__group_brain__*/mcp__group_repo__*, so the
     // report must not keep advertising a search tool this turn cannot call.
     // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
     const groupOff = (await callTool(
@@ -3907,14 +3933,14 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
       store,
       config,
       { askerUserId: askerId, askerName: "질문자", targetUsername: "peer", question: "q" },
-      { run: async () => respond(EMPTY_SDK_RESPONSE_MESSAGE) },
+      { run: async () => respond(EMPTY_PI_RESPONSE_MESSAGE) },
     );
     expect(outcome).toMatchObject({ ok: false, reason: "empty" });
   });
 
   it("maps an in-band error result to failed instead of relaying the fallback text", async () => {
-    // error_max_turns doesn't throw — runClaudeAgent substitutes a Korean
-    // fallback into `text` and sets `resultError`. That must never come back
+    // An in-band error result doesn't throw — runPiAgent substitutes a Korean
+    // fallback (resultErrorMessage) into `text` and sets `resultError`. That must never come back
     // to the asker as the teammate's "answer".
     const { store, config, askerId } = setup("ask-error-result");
     const outcome = await askAvatar(
@@ -4499,7 +4525,7 @@ describe("system conversation-read tools + brain self-state", () => {
     expect(on.content[0].text).toContain("Second brain (personal): active");
 
     // A connected repo is NOT enough: with the 개인 지식 tool group deselected
-    // runPlan's `brainActive` is false, so no brain recall/capture tool is
+    // runCapabilities' `brainActive` is false, so no brain recall/capture tool is
     // registered and the report must say OFF rather than active.
     // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
     const groupOff = await callTool(
@@ -4828,7 +4854,7 @@ describe("resolveOwnerGroup scoping via a group tool", () => {
 
 /**
  * A browser tool's zod shape. `callTool` invokes the handler directly and never
- * runs the SDK's schema pass, so a cap that lives only in the schema has to be
+ * runs the MCP server's schema pass, so a cap that lives only in the schema has to be
  * asserted on the schema itself.
  */
 function browserSchema(
@@ -5035,7 +5061,7 @@ describe("browser bridge tools", () => {
   });
 
   it("bounds the snapshot scope arguments in the schema, where the model is actually stopped", async () => {
-    // callTool invokes the handler directly, bypassing the SDK's zod pass, so
+    // callTool invokes the handler directly, bypassing the MCP server's zod pass, so
     // these caps are only ever enforced by the schema — assert them there.
     const schema = browserSchema(buildBrowserTools({ execute: ok(), allowed: true }), "snapshot");
     expect(schema.maxChars.safeParse(100).success).toBe(false);

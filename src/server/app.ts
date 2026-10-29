@@ -33,9 +33,9 @@ export { expandChatSlashCommand };
 export function createServices(configOverrides: Partial<AppConfig> = {}): AppServices {
   const config = loadConfig(configOverrides);
   const store = new Store(config);
-  // The model the SDK last reported via its `init` event. Null until the first
-  // Claude run reports one; the admin "system info" view surfaces it alongside
-  // the configured model so an operator can confirm what actually ran. Held in a
+  // The model pi last reported (`response.created`, AgentEvents.onModel). Null
+  // until the first run reports one; the admin "system info" view surfaces it
+  // alongside the PI_MODEL_MAP so an operator can confirm what actually ran. Held in a
   // small mutable box so every run path can write it and the admin router read it.
   let observedModelValue: string | null = null;
   const observedModel: ObservedModelHolder = {

@@ -43,7 +43,7 @@ const deckLogger = logger.child({ module: "deck-render" });
  * JSON): that result is NOT definitive and is re-probed in the background at
  * most every 5 minutes, never blocking a turn. This is deliberately NOT owner
  * state (`ownerState.ts`) — it is a per-deployment fact, threaded per run like
- * `fileOutputEnabled` (see `runPlan.ts` / `claudeAgent.ts`).
+ * `fileOutputEnabled` (see `agent/runCapabilities.ts`).
  */
 
 const PROBE_TIMEOUT_MS = 5_000;
@@ -239,9 +239,8 @@ const MAX_FACT_CHARS = 300;
 
 /**
  * The ONLY environment the probe process sees: an allowlist, so no server
- * secret (SESSION_SECRET, git tokens, the Claude credentials, …) can ever
- * reach it — the opposite of the agent subprocess's strip-list, which is also
- * why this module needs nothing from `runPlan.ts`.
+ * secret (SESSION_SECRET, git tokens, the pi-gateway key, …) can ever
+ * reach it — so this module needs nothing from the agent's env handling.
  */
 const DECK_PROBE_ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "NODE_ENV"] as const;
 
@@ -261,7 +260,7 @@ function deckProbeEnv(base: NodeJS.ProcessEnv = process.env): Record<string, str
 /**
  * The names under which an admin policy can disable the bundled `pptx` skill:
  * its bare name and its plugin-qualified name — exactly the two spellings the
- * PreToolUse hook blocks for it (`other:pptx` is a DIFFERENT skill).
+ * pi skill sync omits for it (`piSkills.ts`; `other:pptx` is a DIFFERENT skill).
  */
 function pptxSkillNamesFor(defaultPluginsDir: string): string[] {
   try {
@@ -702,8 +701,8 @@ export function probeDeckToolchain(
 
 /**
  * Test-environment state: the converter half is fixed ("not probed"), the
- * legacy half mirrors whatever the legacy memo already holds (runPlan probes it
- * first) WITHOUT spawning, and the skill names come from plugin.json (a file
+ * legacy half mirrors whatever the legacy memo already holds (the capability
+ * plan probes it first) WITHOUT spawning, and the skill names come from plugin.json (a file
  * read, not a spawn) so admin-disabled-skill gating stays real. Not memoized.
  */
 function notProbedState(config: Pick<AppConfig, "defaultPluginsDir">): DeckToolchainState {
@@ -790,10 +789,10 @@ export type DeckAuthoringStatus = "allowed" | "read-only" | "skill-disabled";
 
 /**
  * Mirrors the two gates a deck build actually passes: the admin skill policy
- * (the PreToolUse hook blocks `pptx` and `<plugin>:pptx`, so `other:pptx`
- * does NOT disable the bundled skill) and the elevated built-in tools the
- * converter's Bash command needs (a plain colleague or a restricted headless
- * run is read-only).
+ * (the pi skill sync omits `pptx` and `<plugin>:pptx`, so `other:pptx`
+ * does NOT disable the bundled skill) and the built-in tools the converter's
+ * Bash command needs (always present on pi — runCapabilities passes
+ * `canWriteFiles`, which is true for every run class).
  */
 export function deckAuthoringStatusFor(input: {
   elevatedToolAccess: boolean;

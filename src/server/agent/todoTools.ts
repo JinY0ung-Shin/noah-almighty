@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import {
   MAX_LISTED_CLOSED_TODOS,
@@ -26,11 +26,11 @@ import { text } from "./mcpTools.js";
 /**
  * 할 일 tools: the avatar reads and edits its OWNER's persistent work to-do list
  * (the same rows the 할 일 tab, the chat overlay and `/api/me/todos` show).
- * OWNER-DRIVEN runs only — runPlan registers the server for an interactive
+ * OWNER-DRIVEN runs only — runCapabilities registers the server for an interactive
  * own-avatar chat, an owner routine and an external-task-API turn, never for a
  * teammate or a consultation — and every handler re-checks
- * `viewerIsOwner` because the PreToolUse hook auto-allows `mcp__*` calls before
- * any owner check. Validation is the routes' own (`../todos.ts`); only the
+ * `viewerIsOwner` because the tool list is a static catalog (pi keeps a
+ * session's list across turns), so only the handler sees the live caller. Validation is the routes' own (`../todos.ts`); only the
  * message channel differs (English here, Korean there).
  */
 export interface TodoToolsContext {
@@ -38,14 +38,14 @@ export interface TodoToolsContext {
   avatarUserId: string;
   /** The avatar owner, for audit attribution. */
   owner: AgentOwner;
-  /** runPlan's `ownerToolAccess`: the owner's chat or an owner-level unattended run. */
+  /** runCapabilities' `ownerToolAccess`: the owner's chat or an owner-level unattended run. */
   viewerIsOwner: boolean;
   /** Stamped on created items: interactive chat, routine, or external-task-API run. */
   source: Exclude<TodoSource, "user">;
   /** The conversation this run belongs to, linked from the items it adds. */
   conversationId?: string;
   /**
-   * Whether `delete_todo` is registered (runPlan's `todoDeleteActive`). False on
+   * Whether `delete_todo` is registered (runCapabilities' `todoDeleteActive`). False on
    * external-task-API turns, where the message is machine-authored: withholding
    * delete is a speed bump against an injected, irreversible removal of items —
    * not a full boundary. update_todo stays available there (it can still rewrite
@@ -58,7 +58,7 @@ export interface TodoToolsContext {
 /** MCP server name; tools surface to the model as `mcp__todo__<tool>`. */
 export const TODO_SERVER_NAME = "todo";
 
-/** Tool names in `allowedTools` form — every run that registers the server. */
+/** Tool names in `mcpAllowedTools` form — every run that registers the server. */
 export const TODO_TOOL_NAMES = [
   "mcp__todo__list_todos",
   "mcp__todo__add_todos",
@@ -67,7 +67,7 @@ export const TODO_TOOL_NAMES = [
 
 /**
  * Registered and allowed only on runs where `deleteEnabled` holds — its own
- * `allowedTools` entry keyed on the SAME boolean as its registration (the
+ * `mcpAllowedTools` entry keyed on the SAME boolean as its registration (the
  * create_share_link precedent), so it is deliberately NOT in TODO_TOOL_NAMES.
  */
 export const TODO_DELETE_TOOL_NAME = "mcp__todo__delete_todo";
@@ -349,7 +349,7 @@ export function buildTodoTools(store: Store, ctx: TodoToolsContext) {
  * refuses as well, so a registration slip cannot open it).
  */
 export function buildTodoServer(store: Store, ctx: TodoToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: TODO_SERVER_NAME,
     version: "0.1.0",
     tools: buildTodoTools(store, ctx).filter((t) => ctx.deleteEnabled || t.name !== "delete_todo"),

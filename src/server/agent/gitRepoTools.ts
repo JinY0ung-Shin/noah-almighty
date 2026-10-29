@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig } from "../types.js";
@@ -62,7 +62,7 @@ export interface GitRepoToolsContext {
 /** MCP server name; tools surface to the model as `mcp__git_repo__<tool>`. */
 export const GIT_REPO_SERVER_NAME = "git_repo";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const GIT_REPO_TOOL_NAMES = [
   "mcp__git_repo__register_repo",
   "mcp__git_repo__list_repos",
@@ -402,7 +402,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
 }
 
 export function buildGitRepoServer(store: Store, ctx: GitRepoToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: GIT_REPO_SERVER_NAME,
     version: "0.1.0",
     tools: buildGitRepoTools(store, ctx),

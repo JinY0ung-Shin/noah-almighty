@@ -4,8 +4,8 @@
  * discipline").
  *
  * A pi sandbox workspace (`PI_WORKSPACES_DIR/u-<key>`, the sandbox's
- * `/workspace`) and the SDK scratch workspace are agent-writable at Noah's own
- * uid: the agent can turn any folder Noah later walks into (`.noah/skills`,
+ * `/workspace`) is agent-writable at Noah's own uid (as the removed SDK
+ * runner's scratch workspace was): the agent can turn any folder Noah later walks into (`.noah/skills`,
  * `c/<conv>`, `repos/<owner>`, `attachments/`) into a symlink, and a host path
  * that crosses it follows the link out of the workspace — `ln -s ../..
  * .noah/skills` once made the skill sync list `PI_WORKSPACES_DIR` and delete
@@ -28,8 +28,8 @@
  * wrote it; and without `/proc/self/fd` (non-Linux dev hosts) entries are
  * addressed by name under the pinned folder's original path, i.e.
  * check-then-act — which is why `AGENT_RUNTIME=pi` refuses to boot there
- * ({@link assertProcFdPinning}); only the SDK path's scratch writers ever run
- * in that mode.
+ * ({@link assertProcFdPinning}); only the `local` stub's scratch writers ever
+ * run in that mode.
  */
 import fs from "node:fs";
 import path from "node:path";

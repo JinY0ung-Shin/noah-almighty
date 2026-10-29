@@ -109,7 +109,7 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
      * may use in chats they drive. `null` clears the policy (no restriction);
      * `[]` blocks every optional MCP tool group. Ids are normalized against the
      * shared catalog. Enforcement is the run-time intersection in
-     * `allowedMcpToolGroupsForUser` — claudeAgent clamps every run with it.
+     * `allowedMcpToolGroupsForUser` — runCapabilities clamps every run with it.
      */
     setGroupAllowedMcpToolGroups(id: string, allowed: McpToolGroupId[] | null): Group | null {
       if (!this.groupRowById(id)) {
@@ -301,7 +301,7 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
      * `null` = unrestricted (no group of theirs sets a policy). Groups WITHOUT
      * a policy never narrow the result — membership alone doesn't restrict —
      * and conflicting policies fail CLOSED (only ids every policy allows
-     * survive). Consumed by claudeAgent (run clamp), toUser (composer state),
+     * survive). Consumed by runCapabilities (run clamp), toUser (composer state),
      * and the chat/scheduler git-repo gating.
      */
     allowedMcpToolGroupsForUser(userId: string): McpToolGroupId[] | null {

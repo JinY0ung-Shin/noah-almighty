@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AvatarSummary, MessageConsultationSource } from "../types.js";
@@ -20,10 +20,10 @@ export interface AvatarDirectoryContext {
   /** True when this run has OWNER tool access (`ownerToolAccess`) — `ask_avatar` self-gates on it. */
   viewerIsOwner?: boolean;
   /**
-   * Consultation executor, injected by claudeAgent ONLY when `ask_avatar` is
+   * Consultation executor, injected by runCapabilities ONLY when `ask_avatar` is
    * active for this run (owner-driven + `avatars` group enabled + not itself a
    * consultation). Its absence keeps the tool unregistered AND the handler
-   * refusing — registration alone is never the gate (mcp__ auto-allow).
+   * refusing — registration alone is never the gate (the tool list is a static catalog).
    */
   askAvatar?: (targetUsername: string, question: string) => Promise<AvatarAskOutcome>;
   /** Whether to append the brain-ingest capture nudge to successful answers. */
@@ -48,12 +48,12 @@ export interface AvatarDirectoryContext {
 /** MCP server name; tools surface to the model as `mcp__avatars__<tool>`. */
 export const AVATAR_DIRECTORY_SERVER_NAME = "avatars";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const AVATAR_DIRECTORY_TOOL_NAMES = ["mcp__avatars__search_avatars"] as const;
 
 /**
  * Consultation tool name, allow-listed SEPARATELY: it registers only for
- * owner-driven, non-consultation runs (see `avatarAskActive` in claudeAgent.ts).
+ * owner-driven, non-consultation runs (see `avatarAskActive` in runCapabilities.ts).
  */
 export const AVATAR_ASK_TOOL_NAME = "mcp__avatars__ask_avatar";
 
@@ -132,7 +132,7 @@ export function askOutcomeDelivery(
 
 /**
  * A stored `kind: "consultation"` row as the MODEL reads it whenever context is
- * rebuilt from the text history (a fresh pi/SDK session, `read_conversation`):
+ * rebuilt from the text history (a fresh pi session, `read_conversation`):
  * the row is a `role: "user"` entry, so without this frame another avatar's
  * answer would re-enter as the owner's own words. The marker brackets the
  * stored Korean bubble on BOTH sides — history compaction keeps a message's
@@ -273,7 +273,7 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
                 ),
             },
             async (args) => {
-              // Self-gate (the hook auto-allows every mcp__* call): owner-driven
+              // Self-gate (the tool list is a static catalog): owner-driven
               // runs only, and only when the run actually injected an executor.
               if (!ctx.viewerIsOwner || !ctx.askAvatar) {
                 return text(ASK_OWNER_ONLY, true);
@@ -283,7 +283,7 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
                 return text("Provide a non-empty, self-contained question.", true);
               }
               // Each consultation is a full agent run for the target (its own
-              // subprocess + model calls) — bound how many one turn may start.
+              // pi run + model calls) — bound how many one turn may start.
               if (consultationsThisTurn >= AVATAR_ASK_MAX_PER_TURN) {
                 return text(
                   `Consultation limit reached for this turn (${AVATAR_ASK_MAX_PER_TURN}). Work with the answers you already have, or continue in the user's next message.`,
@@ -316,7 +316,7 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
  * single conversation's store + context.
  */
 export function buildAvatarDirectoryServer(store: Store, ctx: AvatarDirectoryContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: AVATAR_DIRECTORY_SERVER_NAME,
     version: "0.1.0",
     tools: buildAvatarDirectoryTools(store, ctx),

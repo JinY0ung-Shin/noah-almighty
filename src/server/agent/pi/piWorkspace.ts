@@ -349,8 +349,8 @@ export function moveLegacyConversationWorkspace(legacyDir: string, workspace: Pi
  * Remove the SERVER-WRITTEN copies (`copyDirs`) of deleted conversations from
  * every user's sandbox workspace — the pi half of
  * `deleteConversationWorkspaceCopies`. A conversation's sandbox principal is
- * whoever ran it, so each id is resolved under EVERY `u-*` folder (like the SDK
- * half resolves it under every avatar folder). No link is ever followed: a
+ * whoever ran it, so each id is resolved under EVERY `u-*` folder (like the
+ * legacy `dataDir/workspaces` half resolves it under every avatar folder). No link is ever followed: a
  * linked user/`c`/conversation folder is skipped and a link named like a copy
  * folder is unlinked — every step through a pinned descriptor, so a link
  * swapped in mid-sweep is never descended. Best effort; never throws.

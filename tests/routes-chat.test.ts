@@ -39,7 +39,6 @@ import {
   newShareTokenSalt,
   SHARE_LINK_CAP_ERROR,
   SHARE_LINK_UNSHOWABLE_ERROR,
-  SHARE_LINK_UNWATCHED_ERROR,
 } from "../src/server/shareLinks.js";
 import { PPTX_MEDIA_TYPE, type ShareViewPayload } from "../src/shared/shareLinks.js";
 
@@ -115,8 +114,18 @@ const getTempDir = withTempDir("routes-chat", () => {
   H.previewPages = [];
 });
 
+// pi is the only real runtime. No `workspacesDir`: Noah cannot reach the
+// sandboxes, so every server-written copy lands in the host scratch workspace
+// (`workspaceDirFor`) the staging tests read back.
+const PI_CONFIG: NonNullable<AppConfig["pi"]> = {
+  gatewayUrl: "http://pi.invalid",
+  apiKey: "test-key",
+  modelMap: {},
+  deckSandbox: false,
+};
+
 function boot() {
-  const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+  const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
   return { services, app: createApp(services), store: services.store, config: services.config };
 }
 
@@ -150,11 +159,9 @@ const LIVE = 20_000;
 async function activeRun(
   agent: ReturnType<typeof request.agent>,
   conversationId: string,
-): Promise<{ runId: string; pendingCount: number; background?: boolean } | null> {
+): Promise<{ runId: string; pendingCount: number } | null> {
   const res = await agent.get(`/api/chat/runs?conversationId=${conversationId}`);
-  return (
-    (res.body.run as { runId: string; pendingCount: number; background?: boolean } | null) ?? null
-  );
+  return (res.body.run as { runId: string; pendingCount: number } | null) ?? null;
 }
 
 /** Dispatch a chat-stream POST in the background; resolves when the run closes. */
@@ -340,7 +347,7 @@ async function runWithBridge(
   return { frames, relayed };
 }
 
-/** A fake turn that streams a partial then parks until the SDK is aborted. */
+/** A fake turn that streams a partial then parks until the run is aborted. */
 const parkUntilAborted: RunImpl = async (_req, _pr, config, _store, events, ac) => {
   events.onSessionId?.("sess-parked");
   events.onDelta?.("부분 답변");
@@ -588,7 +595,8 @@ describe("chat-stream request validation", () => {
   it("stages image uploads as workspace FILES when the deployment model has no vision", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "claude",
+      agentRuntime: "pi",
+      pi: PI_CONFIG,
       sessionSecret: "test",
       visionEnabled: false,
     });
@@ -630,7 +638,8 @@ describe("chat-stream request validation", () => {
   it("picks image content blocks vs staged files by the per-tier vision policy of this turn's model", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "claude",
+      agentRuntime: "pi",
+      pi: PI_CONFIG,
       sessionSecret: "test",
     });
     services.store.setModelVisionPolicy({ sonnet: false });
@@ -673,7 +682,7 @@ describe("chat-stream request validation", () => {
   });
 
   it("stages the anchor's images as files on a vision re-feed too (regenerate and edit-rewind)", async () => {
-    const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+    const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
     services.store.setModelVisionPolicy({ sonnet: false });
     const app = createApp(services);
     const owner = request.agent(app);
@@ -885,7 +894,7 @@ describe("per-conversation preferences persist + feed the agent", () => {
     store.addMessage("conv-sys", {
       role: "assistant",
       content: "이전 답변",
-      response: { kind: "text", runtime: "claude", summary: "", text: "이전 답변" },
+      response: { kind: "text", runtime: "pi", summary: "", text: "이전 답변" },
     });
 
     await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-sys", message: "이어서" }).expect(200);
@@ -972,15 +981,10 @@ describe("SSE event fan-out", () => {
       events.onThinking?.("throwaway");
       events.onThinkingReset?.();
       events.onThinking?.("final thinking");
-      events.onPlugin?.({ status: "installed", name: "p1" });
       events.onToolStart?.({ toolUseId: "t1", name: "Read", agentId: "main", inputSummary: "file.ts" });
       events.onToolEnd?.({ toolUseId: "t1", ok: true });
-      events.onTaskStart?.({ taskId: "k1", description: "task" });
-      events.onTaskUpdate?.({ taskId: "k1", status: "running" });
-      events.onTaskEnd?.({ taskId: "k1", ok: true, status: "done" });
       events.onAgentStart?.({ agentId: "a1", parentId: "main", subagentType: "explore", description: "sub" });
       events.onAgentEnd?.({ agentId: "a1", ok: true });
-      events.onBlocked?.({ toolName: "Bash", agentId: "main", reason: "read-only" });
       await events.onCanvas?.({ artifactId: "c1", title: "T", content: "# hi", contentType: "markdown", awaitInput: false });
       const generatedPath = path.join(agentRequest.cwd!, "generated.png");
       fs.writeFileSync(generatedPath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64"));
@@ -993,15 +997,26 @@ describe("SSE event fan-out", () => {
     const frames = parseSse(res.text);
     const events = frames.map((f) => f.event);
     for (const name of [
-      "open", "delta", "thinking", "thinking_reset", "status", "plugin", "tool", "tool_end",
-      "task", "task_update", "task_end", "agent", "agent_end", "blocked", "canvas", "file", "done",
+      "open", "delta", "thinking", "thinking_reset", "status", "tool", "tool_end",
+      "agent", "agent_end", "canvas", "file", "done",
     ]) {
       expect(events).toContain(name);
+    }
+    // The SDK-only frames are retired with the SDK runner (pi has no plugin
+    // install notices, task list, hook blocks, compaction events, permission
+    // prompts or background phase).
+    for (const retired of [
+      "plugin", "task", "task_update", "task_end", "blocked", "compact", "permission",
+      "bg_tasks", "bg_message", "bg_end",
+    ]) {
+      expect(events).not.toContain(retired);
     }
     // Plan mode is retired: no plan frames, and no plan on the response.
     expect(events).not.toContain("plan");
 
     const doneData = frames.find((f) => f.event === "done")!.data as { response: AgentResponse };
+    // `done` is always terminal now: no background-phase flag rides it.
+    expect(doneData).not.toHaveProperty("background");
     expect(doneData.response.plan).toBeUndefined();
     expect(doneData.response.thinking).toBe("final thinking"); // reset dropped the throwaway
     expect(doneData.response.text).toBe("final answer");
@@ -1053,7 +1068,7 @@ describe("SSE event fan-out", () => {
 });
 
 describe("interactive prompts answered over /api/chat/respond", () => {
-  it("delivers approve/allow/answer/submit decisions back to the run", async () => {
+  it("delivers answer/submit decisions back to the run", async () => {
     const { services, app } = boot();
     const owner = request.agent(app);
     const signupRes = await signup(owner, "interact").expect(201);
@@ -1061,7 +1076,6 @@ describe("interactive prompts answered over /api/chat/respond", () => {
     const cookie = cookieOf(signupRes);
 
     H.impl = async (_req, _pr, config, _store, events) => {
-      const perm = await events.onPermission!({ toolUseId: "tu1", toolName: "Bash", input: { command: "ls" }, agentId: "main" });
       const q = await events.onQuestion!({ dialogKind: "ask", payload: { question: "고를래?" } });
       const canvas = await events.onCanvas!({
         artifactId: "cvpos",
@@ -1072,7 +1086,7 @@ describe("interactive prompts answered over /api/chat/respond", () => {
         awaitInput: true,
         interaction: "blocking",
       });
-      events.onDelta?.(JSON.stringify({ perm, q, canvas }));
+      events.onDelta?.(JSON.stringify({ q, canvas }));
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "ANSWERED" };
     };
 
@@ -1082,25 +1096,25 @@ describe("interactive prompts answered over /api/chat/respond", () => {
         responses.push(postJson(port, cookie, "/api/chat/respond", { runId: d.runId, requestId: d.requestId, value }));
 
       const { frames } = await streamRaw(port, cookie, "/api/chat/stream", "POST", { avatarId: ownerId, conversationId: "conv-int", message: "가라" }, (frame) => {
-        if (frame.event === "permission") answer(frame.data, { behavior: "allow" });
-        else if (frame.event === "question") answer(frame.data, { result: { choice: "A" } });
+        if (frame.event === "question") answer(frame.data, { result: { choice: "A" } });
         else if (frame.event === "canvas") answer(frame.data, { values: { a: "typed" } });
       });
 
       for (const r of await Promise.all(responses)) expect(r.status).toBe(200);
       const delta = frames.find((f) => f.event === "delta")!;
       expect(JSON.parse(delta.data.text)).toEqual({
-        perm: { behavior: "allow" },
         q: { behavior: "completed", result: { choice: "A" } },
         canvas: { behavior: "submitted", values: { a: "typed" } },
       });
       expect(frames.some((f) => f.event === "done")).toBe(true);
       // The submitted canvas persisted with the user's values.
       expect(services.store.getCanvasArtifact(ownerId, "cvpos")?.submittedValues).toEqual({ a: "typed" });
+      // pi has no permission prompt: the run never parks one.
+      expect(frames.some((f) => f.event === "permission")).toBe(false);
     });
   }, LIVE);
 
-  it("delivers deny/cancel/delete decisions back to the run", async () => {
+  it("delivers cancel/delete decisions back to the run", async () => {
     const { services, app } = boot();
     const owner = request.agent(app);
     const signupRes = await signup(owner, "interact2").expect(201);
@@ -1108,13 +1122,12 @@ describe("interactive prompts answered over /api/chat/respond", () => {
     const cookie = cookieOf(signupRes);
 
     H.impl = async (_req, _pr, config, _store, events) => {
-      const perm = await events.onPermission!({ toolUseId: "tu1", toolName: "Bash", input: {}, agentId: "main" });
       const q = await events.onQuestion!({ dialogKind: "ask", payload: {} });
       const canvasControls = [{ type: "text" as const, id: "a" }];
       // Two canvases: one the user DELETES, one they DISMISS (cancel) — distinct branches.
       const canvasDel = await events.onCanvas!({ artifactId: "cvdel", title: "T", content: "c", contentType: "markdown", controls: canvasControls, awaitInput: true, interaction: "blocking" });
       const canvasCancel = await events.onCanvas!({ artifactId: "cvcancel", title: "T", content: "c", contentType: "markdown", controls: canvasControls, awaitInput: true, interaction: "blocking" });
-      events.onDelta?.(JSON.stringify({ perm, q, canvasDel, canvasCancel }));
+      events.onDelta?.(JSON.stringify({ q, canvasDel, canvasCancel }));
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "done" };
     };
 
@@ -1125,15 +1138,13 @@ describe("interactive prompts answered over /api/chat/respond", () => {
       let canvasSeen = 0;
 
       const { frames } = await streamRaw(port, cookie, "/api/chat/stream", "POST", { avatarId: ownerId, conversationId: "conv-int2", message: "가라" }, (frame) => {
-        if (frame.event === "permission") answer(frame.data, { behavior: "deny" });
-        else if (frame.event === "question") answer(frame.data, { cancelled: true });
+        if (frame.event === "question") answer(frame.data, { cancelled: true });
         else if (frame.event === "canvas") answer(frame.data, ++canvasSeen === 1 ? { deleteCanvas: true } : { cancelled: true });
       });
 
       await Promise.all(responses);
       const delta = frames.find((f) => f.event === "delta")!;
       expect(JSON.parse(delta.data.text)).toEqual({
-        perm: { behavior: "deny" },
         q: { behavior: "cancelled" },
         canvasDel: { behavior: "cancelled" },
         canvasCancel: { behavior: "cancelled" },
@@ -1161,15 +1172,17 @@ describe("cancellation + run registry", () => {
     await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-cancel", message: "동시 요청" }).expect(409);
     await owner.post(`/api/chat/runs/${run.runId}/cancel`).send({}).expect(200).expect({ ok: true });
 
-    expect(parseSse((await streamDone).text).some((f) => f.event === "cancelled")).toBe(true);
+    const cancelled = parseSse((await streamDone).text).find((f) => f.event === "cancelled");
+    expect(cancelled).toBeDefined();
+    expect(cancelled!.data).not.toHaveProperty("background");
     // The partial the user watched is persisted (not an empty stub).
     const assistant = store.listMessages(ownerId, "conv-cancel").find((m) => m.role === "assistant")!;
     expect(assistant.content).toBe("부분 답변");
     expect(assistant.response?.summary).toBe("중지됨");
   }, LIVE);
 
-  it("after a stop, keeps a pi turn pi committed as the session (the next turn continues it) — never the SDK's", async () => {
-    const { store, app, config } = boot();
+  it("after a stop, keeps a pi turn pi committed as the session (the next turn continues it)", async () => {
+    const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "picancel").expect(201)).body.user.id as string;
     // committed: the runner reports a response id only for a turn pi committed.
@@ -1177,7 +1190,7 @@ describe("cancellation + run registry", () => {
       async (_req, _pr, cfg, _store, events, ac) => {
         if (committed) events.onSessionId?.(committed);
         // A follow-up turn for a queued steer: its own input is not committed yet.
-        if (followUp) events.onTurnResult?.({ text: "첫 답", backgroundTasks: [], steerPending: true });
+        if (followUp) events.onTurnResult?.({ text: "첫 답", steerPending: true });
         events.onDelta?.("부분 답변");
         await new Promise<never>((_resolve, reject) => {
           if (ac.signal.aborted) return reject(new Error("aborted"));
@@ -1193,12 +1206,6 @@ describe("cancellation + run registry", () => {
       expect(parseSse((await streamDone).text).some((f) => f.event === "cancelled")).toBe(true);
     };
 
-    // SDK: the aborted transcript is incomplete — rebuild from history (chat-02).
-    H.impl = parkWith("sess-sdk");
-    await stopTurn("conv-sdk-stop");
-    expect(store.getAgentSessionId(ownerId, "conv-sdk-stop")).toBeNull();
-
-    config.agentRuntime = "pi";
     // pi committed the stopped turn (`incomplete`): continue it.
     H.impl = parkWith("resp_s1_2");
     await stopTurn("conv-pi-stop");
@@ -1222,10 +1229,9 @@ describe("cancellation + run registry", () => {
   }, LIVE);
 
   it("after a pi failure, keeps only a committed turn as the session", async () => {
-    const { store, app, config } = boot();
+    const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "pifail").expect(201)).body.user.id as string;
-    config.agentRuntime = "pi";
     const failWith = (committed: string | null): RunImpl => async (_req, _pr, _cfg, _store, events) => {
       if (committed) events.onSessionId?.(committed);
       throw new Error("boom");
@@ -1297,35 +1303,33 @@ describe("cancellation + run registry", () => {
     });
   }, LIVE);
 
-  it("cancels the three blocking prompts at once when the run is stopped", async () => {
+  it("cancels both blocking prompts at once when the run is stopped", async () => {
     const { app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "cancelprompts").expect(201)).body.user.id as string;
 
     H.impl = async (_req, _pr, config, _store, events, ac) => {
-      const [perm, q, canvas] = await Promise.all([
-        events.onPermission!({ toolUseId: "tu", toolName: "Bash", input: {}, agentId: "main" }),
+      const [q, canvas] = await Promise.all([
         events.onQuestion!({ dialogKind: "ask", payload: {} }),
         events.onCanvas!({ artifactId: "cvc", title: "T", content: "c", contentType: "markdown", controls: [{ type: "text", id: "a" }], awaitInput: true, interaction: "blocking" }),
       ]);
-      events.onDelta?.(JSON.stringify({ perm, q, canvas }));
+      events.onDelta?.(JSON.stringify({ q, canvas }));
       if (ac.signal.aborted) throw new Error("aborted");
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "x" };
     };
 
     const streamDone = fireStream(owner, { avatarId: ownerId, conversationId: "conv-cp", message: "질문들" });
-    await waitUntil(async () => ((await activeRun(owner, "conv-cp"))?.pendingCount ?? 0) === 3, "three prompts parked");
+    await waitUntil(async () => ((await activeRun(owner, "conv-cp"))?.pendingCount ?? 0) === 2, "two prompts parked");
     const run = (await activeRun(owner, "conv-cp"))!;
     await owner.post(`/api/chat/runs/${run.runId}/cancel`).send({}).expect(200);
 
     const frames = parseSse((await streamDone).text);
-    for (const name of ["permission", "question", "canvas", "cancelled"]) {
+    for (const name of ["question", "canvas", "cancelled"]) {
       expect(frames.map((f) => f.event)).toContain(name);
     }
-    // The stop resolved the permission prompt WITHOUT an answer — the decision
-    // must say so (unanswered), not read as an explicit user refusal.
+    // The stop resolved both parked prompts as cancelled, so the run unwinds.
     const delta = frames.find((f) => f.event === "delta")!.data as { text: string };
-    expect(JSON.parse(delta.text).perm).toEqual({ behavior: "deny", unanswered: true });
+    expect(JSON.parse(delta.text)).toEqual({ q: { behavior: "cancelled" }, canvas: { behavior: "cancelled" } });
   }, LIVE);
 
   it("cancels the in-flight run when its conversation is deleted", async () => {
@@ -1505,6 +1509,7 @@ describe("chat error handling", () => {
     const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-err1", message: "가라" }).expect(200);
     const errData = parseSse(res.text).find((f) => f.event === "error")!.data as { error: string };
     expect(errData.error).toContain("boom failure");
+    expect(errData).not.toHaveProperty("background");
 
     const assistant = store.listMessages(ownerId, "conv-err1").find((m) => m.role === "assistant")!;
     expect(assistant.content).toContain("boom failure");
@@ -1524,7 +1529,7 @@ describe("chat error handling", () => {
 
     const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-err2", message: "가라" }).expect(200);
     const errData = parseSse(res.text).find((f) => f.event === "error")!.data as { error: string };
-    expect(errData.error).toContain("일시적으로"); // Korean model-switch nudge, not the raw SDK error
+    expect(errData.error).toContain("일시적으로"); // Korean model-switch nudge, not the raw runner error
 
     const assistant = store.listMessages(ownerId, "conv-err2").find((m) => m.role === "assistant")!;
     expect(assistant.content.startsWith("부분 결과")).toBe(true);
@@ -2833,94 +2838,6 @@ describe("share_file deck previews from the converter's hash-bound sidecar", () 
   });
 });
 
-describe("SDK-native background phase", () => {
-  it("finalizes the visible turn at the first background boundary and delivers wake-ups as new messages", async () => {
-    const { store, app } = boot();
-    const owner = request.agent(app);
-    const ownerId = (await signup(owner, "bgphase").expect(201)).body.user.id as string;
-
-    const tasks = [{ taskId: "t1", taskType: "local_bash", description: "빌드 실행" }];
-    let releaseBackground!: () => void;
-    const backgroundParked = new Promise<void>((resolve) => {
-      releaseBackground = resolve;
-    });
-
-    H.impl = async (_req, _pr, config, _store, events) => {
-      events.onSessionId?.("sess-bg");
-      events.onDelta?.("바로 보이는 답변");
-      events.onThinking?.("첫 생각");
-      // A boundary with NO live background tasks is an ordinary turn — the
-      // post-await done path owns it, so nothing is persisted here.
-      events.onTurnResult?.({ text: "바로 보이는 답변", backgroundTasks: [] });
-
-      events.onBackgroundTasks?.({ tasks });
-      events.onTurnResult?.({
-        text: "바로 보이는 답변",
-        backgroundTasks: tasks,
-        usage: { inputTokens: 10, outputTokens: 20 },
-      });
-
-      await backgroundParked;
-
-      // Background phase: the live set empties, one pure bookkeeping boundary
-      // passes (no text, no attachments → no message), then a real wake-up turn.
-      events.onBackgroundTasks?.({ tasks: [] });
-      events.onTurnResult?.({ text: "   ", backgroundTasks: [] });
-      events.onDelta?.("빌드가 끝났습니다");
-      events.onThinking?.("두번째 생각");
-      events.onTurnResult?.({ text: "빌드가 끝났습니다", backgroundTasks: [] });
-      return { kind: "text", runtime: config.agentRuntime, summary: "집계", text: "집계 응답" };
-    };
-
-    const streamDone = fireStream(owner, {
-      avatarId: ownerId,
-      conversationId: "conv-bg",
-      message: "빌드 돌려줘",
-    });
-    await waitUntil(
-      async () => (await activeRun(owner, "conv-bg"))?.background === true,
-      "run marked as background",
-    );
-
-    // The visible turn is already persisted, so a new typed message is refused
-    // with the background-specific reason (not the generic "생성 중").
-    const conflict = await owner
-      .post("/api/chat/stream")
-      .send({ avatarId: ownerId, conversationId: "conv-bg", message: "하나 더" })
-      .expect(409);
-    expect(conflict.body.error).toContain("백그라운드 작업");
-    expect(conflict.body.error).toContain("중지 버튼");
-
-    // The session id is persisted at the finalize boundary — the phase can
-    // outlive the tab, and the next turn must resume this transcript.
-    expect(store.getAgentSessionId(ownerId, "conv-bg")).toBe("sess-bg");
-
-    releaseBackground();
-    const frames = parseSse((await streamDone).text);
-
-    const done = frames.filter((f) => f.event === "done");
-    expect(done).toHaveLength(1); // the aggregate response is NOT re-persisted
-    expect(frameData(done[0]).background).toBe(true);
-    expect(frameData(done[0]).tasks).toEqual(tasks);
-    expect(frameData(done[0]).response).toMatchObject({
-      text: "바로 보이는 답변",
-      thinking: "첫 생각",
-      usage: { inputTokens: 10, outputTokens: 20 },
-    });
-    expect(frames.filter((f) => f.event === "bg_tasks").map((f) => frameData(f).tasks)).toEqual([tasks, []]);
-    const bgMessages = frames.filter((f) => f.event === "bg_message");
-    expect(bgMessages).toHaveLength(1); // the bookkeeping boundary produced none
-    expect(frameData(bgMessages[0]).message.content).toBe("빌드가 끝났습니다");
-    expect(frames.some((f) => f.event === "bg_end")).toBe(true);
-
-    const assistants = store.listMessages(ownerId, "conv-bg").filter((m) => m.role === "assistant");
-    expect(assistants.map((m) => m.content)).toEqual(["바로 보이는 답변", "빌드가 끝났습니다"]);
-    expect(assistants[0].response?.summary).toBe("Claude Agent SDK 실행이 완료되었습니다.");
-    // Each report carries only ITS OWN tail of the streamed reasoning.
-    expect(assistants[1].response).toMatchObject({ summary: "백그라운드 작업 보고", thinking: "두번째 생각" });
-  }, LIVE);
-});
-
 describe("mid-turn user messages (steers)", () => {
   it("404s a message for a run that does not exist", async () => {
     const { app } = boot();
@@ -2952,19 +2869,17 @@ describe("mid-turn user messages (steers)", () => {
     expect(long.body.error).toBe("메시지가 너무 깁니다.");
   });
 
-  it("tells the composer on the open frame when this run hands a mid-turn message to the model", async () => {
-    const { app, config } = boot();
+  it("sends no steer-delivery mode on the open frame (pi always hands a steer over after the answer)", async () => {
+    const { app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "steerwhen").expect(201)).body.user.id as string;
-    const openOf = async (conversationId: string) => {
-      const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId, message: "안녕" }).expect(200);
-      return parseSse(res.text).find((f) => f.event === "open")!.data as { steerDelivery?: string };
-    };
-    // The SDK runner folds it in between the avatar's next two actions…
-    expect((await openOf("conv-steer-sdk")).steerDelivery).toBe("mid_turn");
-    // …pi takes no mid-turn input: an owner turn there gets it after the answer.
-    config.agentRuntime = "pi";
-    expect((await openOf("conv-steer-pi")).steerDelivery).toBe("after_answer");
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-steer-open", message: "안녕" })
+      .expect(200);
+    const open = parseSse(res.text).find((f) => f.event === "open")!.data as Record<string, unknown>;
+    expect(open).toMatchObject({ conversationId: "conv-steer-open", avatarId: ownerId, runId: expect.any(String) });
+    expect(open).not.toHaveProperty("steerDelivery");
   });
 
   it("accepts a message mid-run, persists it on DELIVERY, and reports both states over SSE", async () => {
@@ -3110,13 +3025,13 @@ describe("mid-turn user messages (steers)", () => {
       await events.onFile!({ path: "shot.png", caption: "첫 장면" });
       // The viewer's message arrived too late to fold in: the run stays open
       // and the CLI runs it as a follow-up turn.
-      events.onTurnResult?.({ text: "첫 답변", backgroundTasks: [], steerPending: true });
+      events.onTurnResult?.({ text: "첫 답변", steerPending: true });
       // Still live for the client — no `done` yet.
       sawActiveAfterTurnEnd = getActiveRunForConversation(ownerId, "conv-turnend") !== null;
       events.onDelta?.("이어서 답변");
       events.onThinking?.("두번째 생각");
       await events.onFile!({ path: "shot.png", caption: "두번째 장면" });
-      events.onTurnResult?.({ text: "이어서 답변", backgroundTasks: [], steerPending: false });
+      events.onTurnResult?.({ text: "이어서 답변", steerPending: false });
       return { kind: "text", runtime: config.agentRuntime, summary: "완료", text: "이어서 답변" };
     };
 
@@ -3246,44 +3161,12 @@ describe("conversation list live-run state", () => {
 
     const live = await activeRunRows(owner);
     expect(live.get("conv-idle")).toBeNull();
-    expect(live.get("conv-live")).toEqual({ background: false });
+    // A plain marker now: the SDK background phase (and its flag) is gone.
+    expect(live.get("conv-live")).toEqual({});
 
     release();
     await streamDone;
     expect((await activeRunRows(owner)).get("conv-live")).toBeNull();
-  }, LIVE);
-
-  it("flags a row whose run has entered the background phase", async () => {
-    const { app } = boot();
-    const owner = request.agent(app);
-    const ownerId = (await signup(owner, "convbgrun").expect(201)).body.user.id as string;
-
-    const tasks = [{ taskId: "t1", taskType: "local_bash", description: "빌드 실행" }];
-    let release!: () => void;
-    const parked = new Promise<void>((resolve) => (release = resolve));
-    H.impl = async (_req, _pr, config, _store, events) => {
-      events.onDelta?.("바로 보이는 답변");
-      events.onBackgroundTasks?.({ tasks });
-      events.onTurnResult?.({ text: "바로 보이는 답변", backgroundTasks: tasks });
-      await parked;
-      events.onBackgroundTasks?.({ tasks: [] });
-      return { kind: "text", runtime: config.agentRuntime, summary: "집계", text: "집계 응답" };
-    };
-
-    const streamDone = fireStream(owner, {
-      avatarId: ownerId,
-      conversationId: "conv-bgrow",
-      message: "빌드 돌려줘",
-    });
-    await waitUntil(
-      async () => (await activeRun(owner, "conv-bgrow"))?.background === true,
-      "run marked as background",
-    );
-
-    expect((await activeRunRows(owner)).get("conv-bgrow")).toEqual({ background: true });
-
-    release();
-    await streamDone;
   }, LIVE);
 });
 
@@ -3311,32 +3194,6 @@ describe("second-brain memory notices", () => {
     // The client dedupes replayed rows by this id, so the two must differ.
     expect(frameData(memory[0]).id).toEqual(expect.any(String));
     expect(frameData(memory[0]).id).not.toBe(frameData(memory[1]).id);
-  });
-});
-
-describe("context compaction notices", () => {
-  it("relays a completed and a failed compaction, each with a replay-stable id", async () => {
-    const { app } = boot();
-    const owner = request.agent(app);
-    const ownerId = (await signup(owner, "compactnote").expect(201)).body.user.id as string;
-
-    H.impl = async (_req, _pr, config, _store, events) => {
-      events.onCompact?.({ ok: true, trigger: "auto", preTokens: 152_000 });
-      events.onCompact?.({ ok: false, error: "summary request failed" });
-      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "계속합니다" };
-    };
-
-    const res = await owner
-      .post("/api/chat/stream")
-      .send({ avatarId: ownerId, conversationId: "conv-compact", message: "긴 대화" })
-      .expect(200);
-
-    const compact = parseSse(res.text).filter((f) => f.event === "compact");
-    expect(compact).toHaveLength(2);
-    expect(compact[0].data).toMatchObject({ ok: true, trigger: "auto", preTokens: 152_000 });
-    expect(compact[1].data).toMatchObject({ ok: false, error: "summary request failed" });
-    expect(frameData(compact[0]).id).toEqual(expect.any(String));
-    expect(frameData(compact[0]).id).not.toBe(frameData(compact[1]).id);
   });
 });
 
@@ -3719,68 +3576,6 @@ describe("create_share_link host callback (onShareLink)", () => {
     expect(store.listShareLinks(otherId)).toEqual([]);
     expect(store.listAudit(ownerId, true).filter((a) => a.action === "share_link_create")).toEqual([]);
   });
-
-  it("refuses in a background segment no owner message started, and allows one the owner's delivered steer drives", async () => {
-    const { store, app } = boot();
-    const owner = request.agent(app);
-    const ownerId = (await signup(owner, "bgshare").expect(201)).body.user.id as string;
-
-    const results: Record<string, ShareLinkResult> = {};
-    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
-      const deck = path.join(agentRequest.cwd!, "deck.pptx");
-      fs.writeFileSync(deck, PPTX_BYTES);
-      await events.onShareFile!({ path: "deck.pptx", name: "분기 보고" });
-      results.visible = await events.onShareLink!({});
-      // The first boundary with a live background task finalizes the visible turn.
-      events.onTurnResult?.({
-        text: "빌드를 백그라운드로 이어서 합니다.",
-        backgroundTasks: [{ taskId: "t1", taskType: "local_bash", description: "빌드" }],
-      });
-      // A pure wake-up segment (a task settled): nobody may be watching.
-      results.wakeUp = await events.onShareLink!({});
-      // The owner types during the background phase ("다시 빌드해서 링크 줘").
-      const steer = await events.steers!.next();
-      if (!steer) throw new Error("the steer channel closed before the owner's message arrived");
-      // Accepted but not yet handed to the model: still nobody's request.
-      results.queued = await events.onShareLink!({});
-      events.steers!.noteLifecycle(steer.id, "started");
-      // The segment the owner's message drives: rebuild, re-deliver, link.
-      fs.writeFileSync(deck, Buffer.concat([PPTX_BYTES, Buffer.from("rebuilt")]));
-      await events.onShareFile!({ path: "deck.pptx", name: "분기 보고" });
-      results.steered = await events.onShareLink!({});
-      // That segment ends; the next one is a wake-up again until another steer lands.
-      events.onTurnResult?.({ text: "새 링크를 만들었습니다.", backgroundTasks: [] });
-      results.afterBoundary = await events.onShareLink!({});
-      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: "끝" };
-    };
-
-    const streamDone = fireStream(owner, {
-      avatarId: ownerId,
-      conversationId: "conv-bgshare",
-      message: "덱 만들고 빌드 돌려줘",
-    });
-    await waitUntil(async () => (await activeRun(owner, "conv-bgshare"))?.background === true, "background phase");
-    const run = (await activeRun(owner, "conv-bgshare"))!;
-    await owner.post(`/api/chat/runs/${run.runId}/message`).send({ message: "다시 빌드해서 링크 줘" }).expect(200);
-    await streamDone;
-
-    const visible = ok(results.visible);
-    expect(visible.created).toBe(true);
-    for (const refused of [results.wakeUp, results.queued, results.afterBoundary]) {
-      expect(refused).toEqual({ ok: false, error: SHARE_LINK_UNWATCHED_ERROR });
-    }
-    // The rebuilt deck is a NEW card: a new link, and the earlier one is named.
-    expect(ok(results.steered)).toMatchObject({
-      created: true,
-      fileName: "분기 보고.pptx",
-      otherActiveLinks: [{ fileName: "분기 보고.pptx", expiresAt: visible.expiresAt }],
-    });
-    expect(store.listShareLinks(ownerId)).toHaveLength(2);
-    // The steer that drove it is in the transcript (persisted on delivery).
-    expect(store.listMessages(ownerId, "conv-bgshare").filter((m) => m.kind === "steer").map((m) => m.content)).toEqual([
-      "다시 빌드해서 링크 줘",
-    ]);
-  }, LIVE);
 
   it("keeps every card's link on its own file, and names the conversation's other active links on each result", async () => {
     const { store, app } = boot();

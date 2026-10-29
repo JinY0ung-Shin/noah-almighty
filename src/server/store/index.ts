@@ -23,7 +23,6 @@ import { withTodos } from "./todos.js";
 export {
   normalizeHashtags,
   MAX_HASHTAGS,
-  CLAUDE_OAUTH_TOKEN_KEY,
   SIGNUP_MODE_KEY,
   MODEL_OVERRIDE_KEY,
 } from "./internal.js";

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig } from "../types.js";
@@ -105,7 +105,7 @@ export interface RepoToolsContext {
 /** MCP server name; tools surface to the model as `mcp__repo__<tool>`. */
 export const REPO_SERVER_NAME = "repo";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const REPO_TOOL_NAMES = [
   "mcp__repo__list_files",
   "mcp__repo__read_file",
@@ -631,7 +631,7 @@ export function buildRepoServer(
   ctx: RepoToolsContext,
   opts: { allowCreate?: boolean } = {},
 ) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: REPO_SERVER_NAME,
     version: "0.1.0",
     tools: buildRepoTools(store, ctx, opts),

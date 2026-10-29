@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "./mcpServer.js";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import { text } from "./mcpTools.js";
@@ -17,7 +17,7 @@ export interface KnowledgeToolsContext {
 /** MCP server name; tools surface to the model as `mcp__knowledge__<tool>`. */
 export const KNOWLEDGE_SERVER_NAME = "knowledge";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const KNOWLEDGE_TOOL_NAMES = [
   "mcp__knowledge__request_info",
   "mcp__knowledge__pending_requests",
@@ -98,7 +98,7 @@ export function buildKnowledgeTools(store: Store, ctx: KnowledgeToolsContext) {
  * to a single conversation's store + context.
  */
 export function buildKnowledgeServer(store: Store, ctx: KnowledgeToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: KNOWLEDGE_SERVER_NAME,
     version: "0.1.0",
     tools: buildKnowledgeTools(store, ctx),

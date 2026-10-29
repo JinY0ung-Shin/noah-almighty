@@ -24,9 +24,10 @@ const DEFAULT_TICK_MS = 30_000;
 /**
  * User-facing note stored on a timed-out routine.
  *
- * The SDK labels EVERY abort as "Claude Code process aborted by user" regardless of
- * cause (it just checks `signal.aborted`), so storing its message verbatim told the
- * owner a user cancelled a run that nothing but this deadline touched — routines have
+ * An abort surfaces as a generic stop/abort error whatever its cause (the removed
+ * SDK runner even said "Claude Code process aborted by user"), so storing it
+ * verbatim would tell the owner a user cancelled a run that nothing but this
+ * deadline touched — routines have
  * no cancel route and are not in the run registry, so `cancelAllRuns()` can't reach
  * them either. Derived from the SAME config value that armed the deadline so the two
  * can't drift.
@@ -37,7 +38,7 @@ function routineTimeoutMessage(timeoutMs: number): string {
 
 /**
  * Korean-lead a non-timeout routine failure. The cause is usually a raw English
- * SDK/git error, and this text is persisted BOTH as the assistant message in the
+ * pi/git error, and this text is persisted BOTH as the assistant message in the
  * routine thread and as `lastError` (rendered verbatim in RoutinesView).
  */
 function routineFailureMessage(error: unknown): string {
@@ -91,16 +92,16 @@ async function runRoutineJobNow(
 ): Promise<RoutineRunResult> {
   const { config, store } = services;
   const abortController = new AbortController();
-  // Hard deadline per unattended run: a hung SDK call must not wedge the job forever
+  // Hard deadline per unattended run: a hung pi call must not wedge the job forever
   // (nothing else can reach it — routines have no cancel route).
   //
   // NOTE this is a budget for the WHOLE run, including every model-fallback attempt
-  // (`modelFallback: true` retries opus→sonnet→haiku INSIDE runClaudeAgent) and the
-  // resume self-heal retry — the controller is created here, outside that loop. A
-  // slow first attempt therefore starves the rest of the chain.
+  // (`modelFallback: true` retries opus→sonnet→haiku INSIDE runPiAgent) and the
+  // lost-session self-heal retry — the controller is created here, outside that
+  // loop. A slow first attempt therefore starves the rest of the chain.
   const timeoutMs = config.routineRunTimeoutMs;
   // Distinguishes OUR deadline from any other abort, so the catch below can replace
-  // the SDK's misleading "aborted by user" with the real cause.
+  // a generic "aborted" with the real cause.
   let timedOut = false;
   const deadline = setTimeout(() => {
     timedOut = true;
@@ -125,18 +126,12 @@ async function runRoutineJobNow(
     // here. Resolve it the SAME way the chat route does (shared resolver).
     // Resolved FIRST, before any plugin or knowledge loading, so a job waiting
     // on a locked repo costs one lock lookup per tick rather than a git fetch.
-    // pi runtime: the routine runs in the owner's sandbox, so its server-written
-    // copies (Confluence saves) and its working-repo copy live there (same
-    // decision runAgentStream makes, from the same fields).
+    // The routine runs in the owner's pi sandbox, so its server-written copies
+    // (Confluence saves) and its working-repo copy live there.
     const piRunClass: PiRunClass = {
       avatar: { id: avatar.id },
       conversationId: job.conversationId,
       viewerUserId: avatar.id,
-      viewerIsOwner: true,
-      elevated: true,
-      headless: true,
-      allowHeadlessTools: true,
-      autoApprove: true,
     };
     const piWorkspace = piRunWorkspace(config, piRunClass);
     const repoResolution = await resolveActiveWorkspaceRepo({
@@ -147,7 +142,7 @@ async function runRoutineJobNow(
       ...(piWorkspace ? { piWorkspace } : {}),
       elevated: true,
       // Routines have no composer, so every tool group is on — capped by the
-      // admin per-group tool policy for the owner (claudeAgent clamps the run
+      // admin per-group tool policy for the owner (runCapabilities clamps the run
       // itself the same way; this gate mirrors the chat route's repo gating).
       gitRepoToolsEnabled: (
         store.allowedMcpToolGroupsForUser(avatar.id) ?? DEFAULT_MCP_TOOL_GROUPS
@@ -203,8 +198,9 @@ async function runRoutineJobNow(
         // Lets in-process tools (open_repo/close_repo) key the working-repo
         // selection to this routine's conversation, persisted for the next run.
         conversationId: job.conversationId,
-        // Working repository: the opened repo's clone becomes the cwd; the scratch
-        // dir stays exposed as an additional writable dir (mirrors the chat route).
+        // pi: the cwd is the sandbox conversation folder (an open repo is the
+        // sandbox copy). `local` stub only: the opened repo's clone becomes the
+        // cwd and the scratch dir an additional writable dir (mirrors the chat route).
         cwd: piPrepared ? workspaceDir : (activeRepoCwd ?? workspaceDir),
         additionalDirs: activeRepoCwd && !piPrepared ? [workspaceDir] : undefined,
         activeRepoName: activeRepoName ?? undefined,
@@ -224,8 +220,7 @@ async function runRoutineJobNow(
       pluginRoots,
       config,
       store,
-      // Headless runs cannot ask questions or wait for approvals, so there is no
-      // onQuestion/onPermission here. onDelta is purely an accumulator: it keeps the
+      // Headless runs cannot ask questions, so there is no onQuestion here. onDelta is purely an accumulator: it keeps the
       // partial answer so a timed-out/failed run can still persist what it produced
       // (the success path uses `response.text`, which never arrives on abort).
       {
@@ -254,8 +249,8 @@ async function runRoutineJobNow(
     });
     return { ok: true };
   } catch (error) {
-    // Our deadline wins the message: the SDK's abort text names a "user" that was
-    // never involved in an unattended run.
+    // Our deadline wins the message: a generic abort text would blame a stop
+    // nobody pressed in an unattended run.
     const detail = timedOut
       ? routineTimeoutMessage(timeoutMs)
       : routineFailureMessage(error);
@@ -313,7 +308,7 @@ export async function executeRoutineJob(
   }
   // A routine and an interactive chat share ONE conversation id (a routine's thread
   // is openable in the client). If the owner is mid-turn there, skip this tick: both
-  // runs would point the SDK cwd at the SAME working-repo clone / scratch dir and
+  // runs would work in the SAME sandbox conversation folder / working-repo copy and
   // stomp each other (activeRepoLock is re-entrant by conversation id, so it won't
   // catch this). It retries on the next tick once the chat turn is done.
   if (getActiveRunForConversation(job.avatarUserId, job.conversationId)) {

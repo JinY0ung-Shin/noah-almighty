@@ -1,13 +1,13 @@
 import type { AppServices } from "./app.js";
 import type { AvatarTask, AvatarTaskStatus } from "../shared/avatarTasks.js";
 import { getActiveRunForConversation } from "./agent/runRegistry.js";
-import { BACKGROUND_TURN_PLACEHOLDER, executeChatTurn, resolveChatTarget } from "./routes/chat.js";
+import { executeChatTurn, resolveChatTarget } from "./routes/chat.js";
 import { AVATAR_TASK_RESTART_ERROR } from "./store.js";
 import logger from "./logger.js";
 
-/** The `response` shape the chat turn puts on `done`/`bg_message` — read only for
- *  its text/summary, the rest rides through to the API result untouched. */
-type PhaseResponse = { text?: string; summary?: string } & Record<string, unknown>;
+/** The `response` shape the chat turn puts on `done` — it rides through to the
+ *  API result untouched. */
+type TurnResponse = { text?: string; summary?: string } & Record<string, unknown>;
 
 interface DispatcherState {
   owners: Set<string>;
@@ -75,21 +75,8 @@ async function runTask(services: AppServices, task: AvatarTask, attempts: number
       requestedMcpToolGroups: storedGroups === null ? owner.mcpToolGroupsDefault : null,
     };
     // Keep completion separate from HTTP acceptance: executeChatTurn also returns
-    // ok after persisting an SDK failure/cancellation. Its terminal events decide.
+    // ok after persisting a run failure/cancellation. Its terminal events decide.
     const terminal: { status: AvatarTaskStatus; result?: unknown; error?: string } = { status: "failed", error: "작업이 결과 없이 종료되었습니다." };
-    // A turn that hands work to background tasks/subagents finalizes the VISIBLE
-    // reply early: `done` carries `background: true` and usually a placeholder
-    // text, each wake-up report arrives as `bg_message`, and `bg_end` closes the
-    // phase (executeChatTurn resolves only then). Collect the whole phase so the
-    // API's `result.text` is the real output rather than the placeholder.
-    let firstResponse: PhaseResponse | undefined;
-    let latestResponse: PhaseResponse | undefined;
-    const phaseTexts: string[] = [];
-    // The early `done` carries a PLACEHOLDER when the visible segment streamed no
-    // text of its own; it must never lead (or be) the stored result.
-    const pushPhaseText = (text: string | undefined) => {
-      if (text && text !== BACKGROUND_TURN_PLACEHOLDER) phaseTexts.push(text);
-    };
     // A cancel that lands in the claimed-but-not-opened window (status already
     // `running`, run_id still NULL, so the route has no run to cancel) writes the
     // terminal status itself; onRunOpen below is where the turn notices.
@@ -115,23 +102,9 @@ async function runTask(services: AppServices, task: AvatarTask, attempts: number
         return true;
       },
       onEvent: (event, data) => {
-        const payload = data as { response?: PhaseResponse; error?: string; background?: boolean;
-          message?: { content?: string; response?: PhaseResponse | null } };
+        const payload = data as { response?: TurnResponse; error?: string };
         if (event === "done") {
           terminal.status = "succeeded"; terminal.result = payload.response; terminal.error = undefined;
-          // Provisional: the reply is on screen but the SDK is still working.
-          if (payload.background === true) {
-            firstResponse = payload.response;
-            pushPhaseText(payload.response?.text);
-          }
-        } else if (event === "bg_message") {
-          if (payload.message?.response) latestResponse = payload.message.response;
-          pushPhaseText(payload.message?.content ?? payload.message?.response?.text);
-        } else if (event === "bg_end") {
-          // `text` is the whole phase; the rest (summary, usage, …) comes from the
-          // LAST report, which is what actually answered the instruction.
-          const base = latestResponse ?? firstResponse;
-          terminal.result = { ...base, text: phaseTexts.join("\n\n") || base?.text || "" };
         } else if (event === "error" || event === "cancelled") {
           // A shutdown cancel is a RESTART, not an operator cancel: the API
           // contract promises `failed` for an interrupted run, exactly like the

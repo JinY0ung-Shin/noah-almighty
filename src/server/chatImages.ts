@@ -225,7 +225,7 @@ function imageFromBytes(buffer: Buffer, sourcePath: string): ReadWorkspaceImageR
  * its bytes, detecting MIME from CONTENT (never the caller-supplied extension).
  * The containment discipline (realpath both sides, `isInside`, size cap) is
  * shared with {@link publishWorkspaceImage} and the clipboard-staging wiring
- * (runPlan → browserClipboard) so they can't drift on path safety.
+ * (runCapabilities → browserClipboard) so they can't drift on path safety.
  */
 export function readWorkspaceImage(
   allowedRoots: string[],
@@ -530,7 +530,7 @@ export function deleteStagedAttachmentCopies(
 
 /**
  * Read stored attachment files back into model-facing image blocks — used on
- * regenerate (a fresh SDK session that must re-feed the prior turn's images).
+ * regenerate (a new pi session branch that must re-feed the prior turn's images).
  * Silently skips any attachment whose file is missing.
  */
 export function readChatImages(

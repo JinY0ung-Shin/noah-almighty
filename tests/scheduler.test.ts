@@ -79,7 +79,7 @@ function failOnAbort(abortController?: AbortController): Promise<never> {
 function boot(label: string) {
   const services = createServices({
     dataDir: path.join(tempDir, label),
-    agentRuntime: "claude",
+    agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false },
     sessionSecret: "t",
     routineRunTimeoutMs: RUN_TIMEOUT_MS,
   });

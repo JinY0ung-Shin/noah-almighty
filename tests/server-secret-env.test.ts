@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { SERVER_ONLY_SECRET_ENV_NAMES, scrubServerOnlySecretEnv } from "../src/server/secretPolicy.js";
-import { agentSubprocessEnv } from "../src/server/agent/runPlan.js";
+import { piProxyBaseEnv } from "../src/server/agent/pi/mcpProxies.js";
 
 // #71: server-only secrets never reach a process the server starts, and the
 // server process itself is non-dumpable in the image.
@@ -15,9 +15,9 @@ describe("server-only secret env", () => {
     expect(env).toEqual({ PATH: "/usr/bin", ANTHROPIC_API_KEY: "model" });
   });
 
-  it("keeps them out of the agent subprocess env even from an unscrubbed base", () => {
-    const base: Record<string, string | undefined> = { SESSION_SECRET: "s", HOME: "/home/node" };
-    const env = agentSubprocessEnv(base, "/data/agent-sessions");
+  it("keeps them out of a relayed MCP child's env even from an unscrubbed base", () => {
+    const base: NodeJS.ProcessEnv = { SESSION_SECRET: "s", HOME: "/home/node" };
+    const env = piProxyBaseEnv(base);
     expect(env).not.toHaveProperty("SESSION_SECRET");
     expect(env.HOME).toBe("/home/node");
   });

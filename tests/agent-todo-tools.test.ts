@@ -7,15 +7,13 @@ import request from "supertest";
 import { callTool, signup, withTempDir, type ToolResult } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
-// Partial SDK mock (agent-share-link.test.ts pattern): tool() stays REAL so the
-// handlers run, `query` snapshots each run's options, and Noah's
-// createSdkMcpServer (agent/mcpServer.ts) records which tool names every in-process server was REALLY built with — the
-// half of "both lists" that allowedTools alone cannot prove.
+// Noah's createMcpToolServer (agent/mcpServer.ts) records which tool names
+// every in-process server was REALLY built with — the half of "both lists"
+// that mcpAllowedTools alone cannot prove. The capability plan is called the
+// way runPiAgent calls it; the chat-route test at the bottom drives a scripted
+// pi gateway (the fake client below).
 // ---------------------------------------------------------------------------
-type QueryArgs = { prompt: unknown; options: Record<string, unknown> };
-
-const sdkMock = vi.hoisted(() => ({
-  calls: [] as { options: Record<string, unknown> }[],
+const built = vi.hoisted(() => ({
   servers: [] as {
     name: string;
     toolNames: string[];
@@ -26,18 +24,18 @@ const sdkMock = vi.hoisted(() => ({
 
 vi.mock("../src/server/agent/mcpServer.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  const createSdkMcpServer = actual.createSdkMcpServer as (opts: {
+  const createMcpToolServer = actual.createMcpToolServer as (opts: {
     name: string;
     tools?: { name: string }[];
   }) => unknown;
   return {
     ...actual,
-    createSdkMcpServer: (opts: {
+    createMcpToolServer: (opts: {
       name: string;
       tools?: { name: string; handler: (args: unknown, extra: unknown) => unknown }[];
     }) => {
-      const server = createSdkMcpServer(opts);
-      sdkMock.servers.push({
+      const server = createMcpToolServer(opts);
+      built.servers.push({
         name: opts.name,
         toolNames: (opts.tools ?? []).map((t) => t.name),
         server,
@@ -48,23 +46,46 @@ vi.mock("../src/server/agent/mcpServer.js", async (importOriginal) => {
   };
 });
 
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+/** The scripted pi gateway of the chat-route test: one step per stream() call. */
+const pi = vi.hoisted(() => ({
+  requests: [] as import("../src/server/agent/pi/responsesClient.js").PiResponseRequest[],
+  steps: [] as Array<"ok" | "lost">,
+}));
+
+vi.mock("../src/server/agent/pi/responsesClient.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/server/agent/pi/responsesClient.js")>();
+  let turn = 0;
   return {
     ...actual,
-    query: (args: QueryArgs) => {
-      sdkMock.calls.push({ options: { ...args.options } });
-      async function* gen() {
-        yield { type: "system", subtype: "init", session_id: "s1", model: "opus" };
-        yield { type: "result", subtype: "success", result: "ok" };
-      }
-      return gen();
-    },
+    createPiResponsesClient: (): import("../src/server/agent/pi/responsesClient.js").PiResponsesClient => ({
+      async *stream(req) {
+        pi.requests.push(structuredClone(req));
+        if (pi.steps.shift() === "lost") throw new actual.PiGatewayError("not_found", { status: 404 });
+        const id = `resp_todo${++turn}_1`;
+        const ev = (type: string, data: Record<string, unknown>) => ({ type, data });
+        yield ev("response.created", { response: { id, model: "fake-model", status: "in_progress" } });
+        yield ev("response.output_item.added", { item: { type: "message", id: `${id}-m` } });
+        yield ev("response.output_text.delta", { delta: "ok" });
+        yield ev("response.output_item.done", { item: { type: "message", id: `${id}-m`, status: "completed" } });
+        yield ev("response.completed", { response: { id, status: "completed" } });
+      },
+      async cancel() {
+        return { status: "cancelled" };
+      },
+      async listModels() {
+        return [];
+      },
+      async fileContent() {
+        throw new Error("not used");
+      },
+    }),
   };
 });
 
 import { createApp, createServices, expandChatSlashCommand } from "../src/server/app.js";
-import { runAgentStream } from "../src/server/agent/index.js";
+import { buildRunCapabilities, stampPromptRequest } from "../src/server/agent/runCapabilities.js";
+import { piEphemeralRunKey, piRunPrincipal } from "../src/server/agent/pi/piRuntime.js";
+import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import {
   buildTodoTools,
   ENGLISH_TODO_ERROR,
@@ -89,18 +110,36 @@ import { mcpToolInputSummary, sdkToolLabel } from "../src/shared/sdkToolPresenta
 let tempDir: string;
 const getTempDir = withTempDir("agent-todo-tools", () => {
   tempDir = getTempDir();
-  sdkMock.calls.length = 0;
-  sdkMock.servers.length = 0;
+  built.servers.length = 0;
+  pi.requests.length = 0;
+  pi.steps.length = 0;
+});
+
+const PI_CONFIG = (dir: string): Partial<AppConfig> => ({
+  agentRuntime: "pi",
+  pi: {
+    gatewayUrl: "http://pi.invalid",
+    apiKey: "k",
+    modelMap: {},
+    deckSandbox: false,
+    workspacesDir: path.join(tempDir, dir, "pi-ws"),
+  },
 });
 
 // 2026-10-09 12:00 KST, a Friday — pinned so the header line is exact.
 const NOW = new Date("2026-10-09T03:00:00.000Z");
 const HEADER_PREFIX = "Today (KST): 2026-10-09 (Fri) · ";
 const PROMPT_HEAD = "할 일 (the owner's persistent work to-do list in Noah";
-const DISAMBIGUATION = "`TodoWrite`/`TaskCreate` are your private per-run checklist and vanish after this turn";
+// pi has no private checklist tool, so the section says a self-kept note is never the owner's list.
+const DISAMBIGUATION =
+  "this runtime has no private checklist tool (no `TodoWrite`/`TaskCreate`), so a working note you keep for yourself is never the owner's list.";
 const OFFER_ONCE = "offer ONCE at the end of your reply, batched, and add only what they accept";
-const UNATTENDED = "This turn is not a live conversation: add or complete items as the instruction asks, without offering";
-const NO_DELETE = "(`delete_todo` is not available in this run).";
+// pi freezes ONE append for every run kind of a conversation (routine, task API,
+// live chat), so the section states BOTH policies and the turn input says which applies.
+const LIVE = "In a live chat: When the owner asks to add or track something (or sends /todo), add it and confirm in one line.";
+const UNATTENDED =
+  "On a turn that is not a live conversation (a routine or a task-API submission — the turn's input says so): add or complete items as the instruction asks, without offering";
+const NO_DELETE = "(`delete_todo` is not available on a task-API turn).";
 const SNAPSHOT_HEAD = "The owner's 할 일 list as of ";
 const SNAPSHOT_FROZEN = "KST, frozen for this conversation (never refreshed; that is not today's date — to-do tool results carry today's)";
 const LEGEND = "([ ] todo, [~] in progress, [x] done, [-] dropped)";
@@ -436,12 +475,7 @@ describe("mcp__todo__* handlers", () => {
 // ===========================================================================
 describe("mcp__todo__* registration", () => {
   function setup(dir: string) {
-    const { config, store } = services(dir, {
-      agentRuntime: "claude",
-      sessionSecret: "test",
-      anthropicModel: undefined,
-      anthropicApiKey: undefined,
-    });
+    const { config, store } = services(dir, { ...PI_CONFIG(dir), sessionSecret: "test" });
     const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
     const group = store.createGroup({ name: "팀", createdBy: owner.id });
     store.addGroupMember(group.id, owner.id, "member");
@@ -462,21 +496,35 @@ describe("mcp__todo__* registration", () => {
 
   const events = (): AgentEvents => ({ onDelta: vi.fn(), onStatus: vi.fn() });
 
+  /** The capability plan as runPiAgent builds it, plus the append its stamps produce. */
+  async function plan(
+    s: ReturnType<typeof setup>,
+    request: AgentRequest,
+    runEvents: AgentEvents = events(),
+    pluginRoots: { type: "local"; path: string }[] = [],
+  ) {
+    built.servers.length = 0;
+    const workspace = piWorkspaceFor(s.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+    const caps = await buildRunCapabilities(request, pluginRoots, s.config, s.store, runEvents, undefined, () => 0, {
+      piConversationDir: workspace.conversationDir,
+      piWorkspace: workspace,
+    });
+    const append = buildSystemPromptAppend(stampPromptRequest(request, caps, s.config, runEvents));
+    return { caps, append };
+  }
+
   async function registration(s: ReturnType<typeof setup>, request: AgentRequest) {
-    sdkMock.calls.length = 0;
-    sdkMock.servers.length = 0;
-    await runAgentStream(request, [], s.config, s.store, events());
-    const { options } = sdkMock.calls[0];
-    const mounted = (options.mcpServers as Record<string, unknown>)[TODO_SERVER_NAME];
-    const built = sdkMock.servers.find((entry) => entry.server === mounted);
-    const allowed = options.allowedTools as string[];
+    const { caps, append } = await plan(s, request);
+    const mounted = (caps.inProcessMcpServers as Record<string, unknown>)[TODO_SERVER_NAME];
+    const server = built.servers.find((entry) => entry.server === mounted);
+    const allowed = caps.mcpAllowedTools;
     return {
       mounted: Boolean(mounted),
-      toolNames: built?.toolNames ?? [],
+      toolNames: server?.toolNames ?? [],
       allowedAll: TODO_TOOL_NAMES.every((name) => allowed.includes(name)),
       allowedAny: allowed.some((name) => name.startsWith("mcp__todo__")),
       allowedDelete: allowed.includes(TODO_DELETE_TOOL_NAME),
-      append: (options.systemPrompt as { append: string }).append,
+      append,
     };
   }
 
@@ -495,9 +543,10 @@ describe("mcp__todo__* registration", () => {
     expect(run.append).not.toContain("open 1 (in progress 0), overdue 1");
     expect(run.append).not.toContain(SNAPSHOT_HEAD);
     expect(run.append).toContain(DISAMBIGUATION);
+    expect(run.append).toContain(LIVE);
     expect(run.append).toContain(OFFER_ONCE);
-    expect(run.append).toContain(`${STATUS_RULE} (they started, finished or are dropping it, or you finished a task they gave you), never on a guess, and mark an abandoned item \`dropped\` rather than deleting it unless they explicitly ask to delete.`);
-    expect(run.append).not.toContain(NO_DELETE);
+    expect(run.append).toContain(UNATTENDED);
+    expect(run.append).toContain(`${STATUS_RULE} (they started, finished or are dropping it, or you finished a task they gave you), never on a guess, and mark an abandoned item \`dropped\` rather than deleting it unless they explicitly ask to delete ${NO_DELETE}`);
   });
 
   it("registers it on an owner routine with the unattended policy", async () => {
@@ -506,8 +555,13 @@ describe("mcp__todo__* registration", () => {
     expect(run.mounted).toBe(true);
     expect(run.allowedAll && run.allowedDelete).toBe(true);
     expect(run.append).toContain(PROMPT_HEAD);
+    // The SAME section as a live chat's (one frozen prompt per conversation);
+    // the routine's own rule rides the turn input's run-kind note.
     expect(run.append).toContain(UNATTENDED);
-    expect(run.append).not.toContain(OFFER_ONCE);
+    expect(run.append).toContain(OFFER_ONCE);
+    const section = (append: string) => append.slice(append.indexOf(PROMPT_HEAD)).split("\n")[0];
+    const chat = await registration(s, s.baseRequest);
+    expect(section(run.append)).toBe(section(chat.append));
   });
 
   it("withholds ONLY delete_todo from an external-task-API turn — server, allowedTools and prompt agree", async () => {
@@ -519,7 +573,9 @@ describe("mcp__todo__* registration", () => {
     expect(run.allowedDelete).toBe(false);
     expect(run.append).toContain(UNATTENDED);
     expect(run.append).toContain(STATUS_RULE);
-    expect(run.append).toContain(`rather than deleting it ${NO_DELETE}`);
+    // The frozen prompt names the task-API limit statically; the live
+    // availability rides describe_system (below) and the run's gate.
+    expect(run.append).toContain(`unless they explicitly ask to delete ${NO_DELETE}`);
   });
 
   it("rides the always-on system family: an empty tool-group pick or a group policy cannot drop it", async () => {
@@ -548,17 +604,15 @@ describe("mcp__todo__* registration", () => {
     expect(run.mounted).toBe(false);
     expect(run.allowedAny).toBe(false);
     expect(run.append).not.toContain(PROMPT_HEAD);
-    expect(sdkMock.servers.some((entry) => entry.name === TODO_SERVER_NAME)).toBe(false);
+    expect(built.servers.some((entry) => entry.name === TODO_SERVER_NAME)).toBe(false);
   });
 
-  // describe_system as the run ACTUALLY mounts it: if runPlan stopped passing
+  // describe_system as the run ACTUALLY mounts it: if the plan stopped passing
   // todoToolsEnabled/todoDeleteEnabled into the system ctx, only this notices.
   async function mountedDescribe(s: ReturnType<typeof setup>, request: AgentRequest): Promise<string> {
-    sdkMock.calls.length = 0;
-    sdkMock.servers.length = 0;
-    await runAgentStream(request, [], s.config, s.store, events());
-    const mounted = (sdkMock.calls[0].options.mcpServers as Record<string, unknown>)[SYSTEM_SERVER_NAME];
-    const system = sdkMock.servers.find((entry) => entry.server === mounted);
+    const { caps } = await plan(s, request);
+    const mounted = (caps.inProcessMcpServers as Record<string, unknown>)[SYSTEM_SERVER_NAME];
+    const system = built.servers.find((entry) => entry.server === mounted);
     const describeTool = system?.tools.find((t) => t.name === "describe_system");
     expect(describeTool).toBeDefined();
     return textOf((await describeTool!.handler({}, {})) as ToolResult);
@@ -577,35 +631,39 @@ describe("mcp__todo__* registration", () => {
     const run = await registration(s, excluded[1].request(s));
     expect(run.mounted).toBe(false);
     expect(run.append).toContain("This person's 할 일 (their own Noah work to-do list) can only be changed by THEIR OWN avatar");
-    expect(run.append).toContain("never use TodoWrite/TaskCreate for it and never claim it was added");
+    expect(run.append).toContain("never treat a note you keep for yourself as that list and never claim it was added");
     const owner = await registration(s, s.baseRequest);
     expect(owner.append).not.toContain("This person's 할 일");
   });
 
-  it("reports a plugin MCP server the app's todo server shadows, and keeps it where the app's is off", async () => {
+  it("reports a plugin MCP server named like the app's todo server as left out, on every run class", async () => {
     const s = setup("reg-plugin-collision");
     const pluginDir = path.join(tempDir, "reg-plugin-collision", "plugin");
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, ".mcp.json"), JSON.stringify({ todo: { command: "node", args: ["todoist.js"] } }));
     const roots = [{ type: "local" as const, path: pluginDir }];
+    const LEFT_OUT = { name: "todo", reason: "one of Noah's own tool servers has the same name" };
 
-    const ownerEvents = events();
-    sdkMock.calls.length = 0;
-    sdkMock.servers.length = 0;
-    await runAgentStream(s.baseRequest, roots, s.config, s.store, ownerEvents);
-    const ownerServers = sdkMock.calls[0].options.mcpServers as Record<string, unknown>;
     // The app server stays authoritative…
-    expect(sdkMock.servers.find((entry) => entry.server === ownerServers.todo)?.name).toBe(TODO_SERVER_NAME);
-    // …but the replaced plugin server is announced, not dropped silently.
-    expect(ownerEvents.onStatus).toHaveBeenCalledWith(expect.stringContaining('플러그인 경고: MCP 서버 "todo"'));
+    const owner = await plan(s, s.baseRequest, events(), roots);
+    const ownerTodo = (owner.caps.inProcessMcpServers as Record<string, unknown>).todo;
+    expect(built.servers.find((entry) => entry.server === ownerTodo)?.name).toBe(TODO_SERVER_NAME);
+    // …and the plugin's server is never relayed, but announced on BOTH surfaces.
+    expect(owner.caps.piMcpProxies.upstreams).toEqual([]);
+    expect(owner.caps.piMcpProxies.facts.skippedPluginServers).toEqual([LEFT_OUT]);
+    expect(owner.append).toContain(
+      "Plugin MCP servers left out (their tools do not exist here; say so instead of working around it): `todo` (one of Noah's own tool servers has the same name)",
+    );
+    const system = built.servers.find((entry) => entry.server === (owner.caps.inProcessMcpServers as Record<string, unknown>).system);
+    const describe = textOf((await system!.tools.find((t) => t.name === "describe_system")!.handler({}, {})) as ToolResult);
+    expect(describe).toContain("left out (their tools do not exist here): `todo` (one of Noah's own tool servers has the same name)");
 
-    // A teammate's run has no app todo server: the plugin's own registers, unannounced.
-    const teammateEvents = events();
-    sdkMock.calls.length = 0;
-    await runAgentStream(excluded[1].request(s), roots, s.config, s.store, teammateEvents);
-    const teammateServers = sdkMock.calls[0].options.mcpServers as Record<string, { args?: string[] }>;
-    expect(teammateServers.todo?.args).toContain("todoist.js");
-    expect(teammateEvents.onStatus).not.toHaveBeenCalledWith(expect.stringContaining("플러그인 경고"));
+    // Broker ids are global, so the name stays Noah's even on a run that has no
+    // app todo server (a teammate's): the plugin's sits out there too.
+    const teammate = await plan(s, excluded[1].request(s), events(), roots);
+    expect((teammate.caps.inProcessMcpServers as Record<string, unknown>).todo).toBeUndefined();
+    expect(teammate.caps.piMcpProxies.upstreams).toEqual([]);
+    expect(teammate.caps.piMcpProxies.facts.skippedPluginServers).toEqual([LEFT_OUT]);
   });
 
   it("freezes the list into the prompt at the conversation's first turn and replays it byte-for-byte", async () => {
@@ -686,7 +744,7 @@ describe("to-do metacognition and presentation", () => {
       `${line} list_todos/add_todos/update_todo are available, and delete_todo; update_todo moves an item between the statuses todo, in_progress, done and dropped (the owner decided not to do it) — on the owner's word only.`,
     );
     expect(full).toContain("(in-progress items on top; its checkbox completes)");
-    expect(full).toContain("separate from your private per-run TodoWrite/TaskCreate checklist");
+    expect(full).toContain("separate from any working note you keep for yourself (this runtime has no TodoWrite/TaskCreate)");
     const api = textOf(await callTool(buildSystemTools(s.store, systemCtx(s, { todoToolsEnabled: true, todoDeleteEnabled: false, externalTaskApi: true })), "describe_system", {}));
     expect(api).toContain("delete_todo is NOT available in this run (an external system submitted it — mark items done or dropped instead)");
     const off = textOf(await callTool(buildSystemTools(s.store, systemCtx(s)), "describe_system", {}));
@@ -728,8 +786,11 @@ describe("to-do metacognition and presentation", () => {
     expect(before).toContain("call `list_todos` for the current state");
     expect(before).not.toMatch(/open \d+, overdue \d+/);
     expect(before).not.toContain("2026-10-");
+    // Nor does delete availability move it: one frozen prompt serves every
+    // run kind of the conversation, and it states the task-API limit statically.
     const apiTurn = buildSystemPromptAppend({ ...request, todoState: { deleteEnabled: false } });
-    expect(apiTurn).toContain("`delete_todo` is not available in this run");
+    expect(apiTurn).toBe(before);
+    expect(apiTurn).toContain(NO_DELETE);
   });
 
   const ownerRequest = (s: ReturnType<typeof ownerSetup>) => ({
@@ -987,30 +1048,32 @@ describe("to-do metacognition and presentation", () => {
 // would lose turn 1's block and freeze a different list on turn 2).
 // ===========================================================================
 describe("to-do snapshot through the chat route", () => {
-  it("freezes the list on turn 1 and replays it unchanged on turn 2", { timeout: 30_000 }, async () => {
+  it("freezes the list on turn 1 and replays it unchanged when a later turn starts a new pi session", { timeout: 30_000 }, async () => {
     const services = createServices({
       dataDir: path.join(tempDir, "route"),
-      agentRuntime: "claude",
       sessionSecret: "route-secret",
-      anthropicModel: undefined,
-      anthropicApiKey: undefined,
+      ...PI_CONFIG("route"),
     });
     const owner = request.agent(createApp(services));
     const ownerId = (await signup(owner, "todoowner").expect(201)).body.user.id as string;
     services.store.createTodos(ownerId, [{ title: "보고서 초안", note: "", priority: "high", dueDate: null, tags: [], status: "todo" }], { source: "user" });
-    const chatTurns = () =>
-      sdkMock.calls
-        .map((call) => (call.options.systemPrompt as { append?: string } | undefined)?.append ?? "")
-        .filter((append) => append.includes(PROMPT_HEAD));
 
     await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-route", message: "안녕" }).expect(200);
     services.store.createTodos(ownerId, [{ title: "새로 생긴 일", note: "", priority: "normal", dueDate: null, tags: [], status: "todo" }], { source: "user" });
+    // Turn 2's session is lost (404), so it self-heals into a NEW session —
+    // which carries the conversation's instructions again.
+    pi.steps.push("lost", "ok");
     await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-route", message: "계속" }).expect(200);
 
-    const [first, second] = chatTurns();
-    expect(chatTurns()).toHaveLength(2);
-    expect(first).toContain('- "보고서 초안" · priority high');
-    expect(second).toBe(first);
-    expect(second).not.toContain("새로 생긴 일");
+    expect(pi.requests).toHaveLength(3);
+    const [first, lost, healed] = pi.requests;
+    expect(first!.instructions).toContain(PROMPT_HEAD);
+    expect(first!.instructions).toContain('- "보고서 초안" · priority high');
+    expect(lost!.previousResponseId).toBe("resp_todo1_1");
+    expect(lost!.instructions).toBeUndefined();
+    expect(healed!.previousResponseId).toBeUndefined();
+    expect(healed!.instructions).toBe(first!.instructions);
+    expect(healed!.instructions).not.toContain("새로 생긴 일");
+    services.store.close();
   });
 });

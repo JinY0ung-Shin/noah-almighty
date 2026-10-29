@@ -11,10 +11,10 @@
  *
  * pi lists a session's tools ONCE and broker ids are global, so each source
  * kind is ONE stable broker id whose tool list is per run token:
- *   - `hex-ssh` → `mcp__hex-ssh__<tool>` (the SDK name, unchanged)
+ *   - `hex-ssh` → `mcp__hex-ssh__<tool>` (the historical tool name, unchanged)
  *   - `plugins` → `mcp__plugins__<server>__<tool>`
  *   - `shared`  → `mcp__shared__<server>__<tool>`
- * pi's `mcp_call` also resolves the SDK form `mcp__<server>__<tool>` (it matches
+ * pi's `mcp_call` also resolves the short form `mcp__<server>__<tool>` (it matches
  * a tool whose name ends in `__<server>__<tool>`), so skills keep working.
  *
  * A stdio plugin server is a command Noah runs in ITS OWN container, so on pi
@@ -109,7 +109,7 @@ export interface PiMcpProxyInput {
   sshSecrets: Record<string, string>;
   hexSshAllowedTools: readonly string[];
   sharedMcpPlan: SharedMcpRunPlan | null;
-  /** Names Noah's own servers take this run (a plugin server of that name sits out, as on the SDK path). */
+  /** Names Noah's own servers take this run (a plugin server of that name sits out). */
   reservedNames: readonly string[];
   /** Per-run unique id for handoff file names. */
   runId?: string;
@@ -137,8 +137,7 @@ const STDIO_ONLY_BUNDLED =
  *   - an installed plugin repo: `mcp__git_repo__*` registers any URL and pushes
  *     with the owner's git token, and the next plugin refresh pulls it;
  *   - anything else: unknown provenance, refused (fail closed).
- * The SDK runner is unchanged: its CLI children (and the agent's Bash) already
- * share Noah's container (#71). Reasons are model-facing English.
+ * Reasons are model-facing English.
  */
 export function piStdioRootRefusal(rootPath: string, config: AppConfig): string | null {
   switch (piPluginRootKind(config, rootPath)) {
@@ -155,7 +154,7 @@ export function piStdioRootRefusal(rootPath: string, config: AppConfig): string 
   }
 }
 
-/** `${VAR}` / `${VAR:-default}` from `env`, as the CLI expands its `--mcp-config`. */
+/** `${VAR}` / `${VAR:-default}` from `env` — the expansion forms a plugin `.mcp.json` uses. */
 function expandEnvRefs(value: string, env: Record<string, string>): string {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_whole, name: string, fallback?: string) => {
     const v = env[name];
@@ -206,21 +205,47 @@ function bridgeUpstream(
 }
 
 /**
+ * Backstop for the one-shot bridge config files: the bridge deletes its file
+ * on read and the pool removes it again after spawn, so anything older than an
+ * hour is a crash leftover (a process that died between the write and the
+ * spawn) — remove it. Never throws (a missing dir is the normal first run).
+ */
+const BRIDGE_FILE_MAX_AGE_MS = 60 * 60 * 1000;
+export function sweepStaleBridgeFiles(dir: string, now: number = Date.now()): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const file = path.join(dir, entry);
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isFile() && now - stat.mtimeMs > BRIDGE_FILE_MAX_AGE_MS) fs.unlinkSync(file);
+    } catch {
+      /* raced with the bridge's own unlink */
+    }
+  }
+}
+
+/**
  * Resolve this run's proxied servers. Pure apart from reading the plugin roots'
- * `.mcp.json` files; nothing is spawned here.
+ * `.mcp.json` files and sweeping stale bridge files; nothing is spawned here.
  */
 export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpProxyPlan> {
   const runId = input.runId ?? randomUUID();
   const secretsDir = path.join(input.config.dataDir, "runtime", "mcp-secrets");
+  sweepStaleBridgeFiles(secretsDir);
   const baseEnv = piProxyBaseEnv();
   const upstreams: PiMcpUpstream[] = [];
   const facts: PiProxiedMcpFacts = { hexSsh: false, pluginServers: [], skippedPluginServers: [] };
   let vaultExposed = false;
   const bridges: { name: string; config: McpHttpBridgeConfig }[] = [];
 
-  // hex-ssh: the same policy proxy + env the SDK path registers; the SSH
+  // hex-ssh: the app's policy proxy in front of the upstream server; the SSH
   // material goes straight into the child's env (no argv, no file — Noah spawns
-  // it itself, so the CLI's `--mcp-config` exposure that needed the wrapper is gone).
+  // it itself).
   if (input.sshActive) {
     const allowed = new Set(input.hexSshAllowedTools);
     upstreams.push({
@@ -242,7 +267,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
   }
 
   // 공용 MCP servers: always through the bridge (a header-less one too), so the
-  // corporate CA and the bridge's error scrubbing apply exactly as on the SDK path.
+  // corporate CA and the bridge's error scrubbing always apply.
   const sharedNames = new Set<string>();
   for (const registration of input.sharedMcpPlan?.registrations ?? []) {
     sharedNames.add(registration.name);
@@ -254,7 +279,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
     bridges.push({ name: registration.name, config });
     upstreams.push(bridgeUpstream(PI_SHARED_SERVER_NAME, registration.name, config, secretsDir, runId, baseEnv));
   }
-  // Every ENABLED admin server reserves its name, mounted or not (SDK parity).
+  // Every ENABLED admin server reserves its name, mounted or not.
   for (const state of input.sharedMcpPlan?.states ?? []) sharedNames.add(state.name);
 
   // Plugin `.mcp.json` servers: first definition of a name wins (load order).
@@ -265,11 +290,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
   const seen = new Set<string>();
   for (const root of input.pluginRoots) {
     const bundled = piPluginRootKind(input.config, root.path) === "default";
-    const { servers } = await liftPluginMcpServers([root.path], {
-      avatarUserId: input.avatarUserId,
-      config: input.config,
-      secretWrapper: null,
-    });
+    const { servers } = await liftPluginMcpServers([root.path]);
     for (const [name, def] of Object.entries(servers)) {
       if (seen.has(name)) continue;
       seen.add(name);
@@ -298,7 +319,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
           skip(placeholderRefusal);
           continue;
         }
-        // A bundled def keeps the CLI's `${VAR}` expansion from Noah's (scrubbed)
+        // A bundled def keeps its `${VAR}` expansion from Noah's (scrubbed)
         // env; any other def has no placeholders left to expand.
         const config: McpHttpBridgeConfig = { url: def.url, transport: type, headers, redact: [], ...(bundled ? { expandEnv: true } : {}) };
         bridges.push({ name, config });

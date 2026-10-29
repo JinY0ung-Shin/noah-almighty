@@ -251,17 +251,9 @@ export interface RoutineJobRow {
   created_at: string;
 }
 
-/**
- * app_config key under which the Claude subscription OAuth token (from
- * `claude setup-token`) is stored. Injected as CLAUDE_CODE_OAUTH_TOKEN into the
- * agent subprocess when no ANTHROPIC_API_KEY is configured (see claudeAgent.ts).
- */
-export const CLAUDE_OAUTH_TOKEN_KEY = "claude_oauth_token";
-
 /** app_config key: how self-service signups are gated ("open" | "closed" | "approval"). */
 export const SIGNUP_MODE_KEY = "signup_mode";
-/** app_config key: admin-selected agent model, overriding nothing when an env
- *  ANTHROPIC_MODEL is set (env wins, mirroring the API-key/subscription rule). */
+/** app_config key: admin-selected agent model (a composer tier or a `PI_MODEL_MAP` key). */
 export const MODEL_OVERRIDE_KEY = "agent_model_override";
 
 /**
@@ -664,9 +656,10 @@ export class StoreBase {
     // consulted in the background): JSON `MessageConsultationSource`. NULL on
     // every other row.
     this.addColumnIfMissing("messages", "consultation_json", "TEXT");
-    // Where an assistant row's segment ended in the LOCAL SDK transcript (the
-    // session id + last main-chain assistant uuid), so a later rewind can
-    // resume exactly there (SDK resume + resumeSessionAt, forked). NULL on user
+    // Where an assistant row's segment ended (on pi both columns hold the
+    // committed turn's `resp_…` response id), so a later rewind can branch
+    // exactly there (`previous_response_id`). Rows the removed SDK runner wrote
+    // hold a CLI session id + uuid, which pi ignores (text history). NULL on user
     // rows, cancel/error rows and every legacy row — a
     // rewind onto one of those falls back to the stored text history.
     // Server-only: never mapped onto StoredMessage.
@@ -700,7 +693,7 @@ export class StoreBase {
     this.addColumnIfMissing("users", "group_knowledge_off_default", "TEXT");
     // The owner's remembered chat-composer defaults, seeding every NEW conversation
     // (the picker's last choice persists across conversations). NULL = never chosen,
-    // so a new conversation falls back to the hardcoded server/SDK default. Mirrors
+    // so a new conversation falls back to the hardcoded server default. Mirrors
     // the per-conversation `conversations.selected_*` columns, but at the user level:
     // the composer pickers write here so the choice carries to the next conversation.
     this.addColumnIfMissing("users", "model_default", "TEXT");
@@ -720,10 +713,10 @@ export class StoreBase {
     // repo (write/delete/move/scaffold/commit). Repo creation/connection settings
     // stay owner-only. Widens ONLY the repo-write tool gate (repoTools.ts).
     this.addColumnIfMissing("users", "shared_account", "INTEGER DEFAULT 0");
-    // Per-secret shell exposure opt-in: when 1, this secret is ALSO exported
-    // into the agent shell env on elevated runs (values are redacted from tool
-    // outputs by the PostToolUse hook). OFF by default; reserved git/SSH names
-    // never ship regardless (secretPolicy.ts).
+    // Per-secret shell exposure opt-in. pi sandboxes get no secrets (design P4),
+    // so a flagged secret is NOT exported: both metacognition surfaces name it as
+    // UNAVAILABLE. Values are still redacted from MCP results (secretRedaction.ts).
+    // OFF by default; reserved git/SSH names never qualify (secretPolicy.ts).
     this.addColumnIfMissing("user_secrets", "shell_expose", "INTEGER DEFAULT 0");
     // Per-secret BROWSER-INPUT opt-in (브라우저 입력): when 1, the avatar may name
     // this secret (`secretName`) in `mcp__browser__type` / `fill_form` and the
@@ -748,8 +741,9 @@ export class StoreBase {
     // should get the one-time notice on their first load after a deploy. New
     // signups are seeded with the current release at creation instead (createUser).
     this.addColumnIfMissing("users", "last_seen_release", "TEXT");
-    // SDK session id of the conversation's last turn, used to resume context on
-    // the next turn (see claudeAgent resume). Null until the first turn completes.
+    // Session of the conversation's last turn (on pi its latest `resp_…`
+    // response id, continued as `previous_response_id`). Null until the first
+    // turn completes; a CLI session id left by the removed SDK runner is ignored.
     this.addColumnIfMissing("conversations", "agent_session_id", "TEXT");
     // The registered git-repo NAME this conversation opened as its working dir via
     // `mcp__git_repo__open_repo` (repoWorkspace.ts); NULL = scratch workspace. Made
@@ -797,16 +791,14 @@ export class StoreBase {
     // touching existing rows. Only meaningful for the owner's own conversations;
     // colleague conversations always load all groups (no toggle).
     this.addColumnIfMissing("conversations", "group_knowledge_off", "TEXT");
-    // Per-conversation model TIER chosen by the user in the chat composer: a Claude
-    // model alias (`opus`/`sonnet`/`haiku`) or NULL = use the server default
-    // resolution. The alias resolves to a concrete model via the operator's
-    // ANTHROPIC_DEFAULT_*_MODEL env (see modelTiers.ts). Ignored when ANTHROPIC_MODEL
-    // pins a model (the env pin is a hard lock).
+    // Per-conversation model TIER chosen by the user in the chat composer: a
+    // tier alias (`opus`/`sonnet`/`haiku`) or NULL = use the server default
+    // resolution. The tier resolves to a concrete pi model via the operator's
+    // PI_MODEL_MAP (see modelTiers.ts).
     this.addColumnIfMissing("conversations", "selected_model", "TEXT");
     // Per-conversation reasoning EFFORT level chosen in the composer
-    // (`low`/`medium`/`high`/`xhigh`/`max`) or NULL = SDK default (`high`). Passed
-    // to the SDK as `options.effort`; independent of the model pin (see
-    // effortLevels.ts).
+    // (`low`/`medium`/`high`/`xhigh`/`max`) or NULL = pi's default. Passed to pi
+    // as `reasoningEffort`; independent of the model tier (see effortLevels.ts).
     this.addColumnIfMissing("conversations", "selected_effort", "TEXT");
     // Per-conversation MCP tool group selection from the chat composer. NULL means
     // every default group is enabled; a JSON array (including []) is an explicit
@@ -895,6 +887,14 @@ export class StoreBase {
     // switch. Nothing writes this key any more, so the delete can only match a
     // row left by an older build — keep the key name reserved.
     this.db.prepare("DELETE FROM app_config WHERE key = ?").run("craft_apps_enabled");
+    // The Claude Agent SDK runner is removed (pi-gateway is the only runtime):
+    // drop the admin-stored `claude setup-token` subscription token the CLI
+    // authenticated with, and the SDK preflight's skill-discovery cache. Nothing
+    // reads or writes either key any more, so this can only match what an older
+    // release left — keep both names reserved.
+    this.db
+      .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
+      .run("claude_oauth_token", "skill_discovery_cache");
   }
 
   /** One-time backfill of canvas artifacts that pre-date the dedicated tables:
