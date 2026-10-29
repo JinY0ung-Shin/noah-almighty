@@ -33,10 +33,18 @@ These are the invariants the project is built around. New work should reinforce 
   off = knowledge-sharing-only group (repo/brain/tool-policy unaffected). Visibility (`private` opt-out)
   and trust remain separate axes: a teammate reaches your `group` avatar but never your `private` one.
 - **Group shared agents are RETIRED (2026-10-29).** Team avatars that were not users rows are gone; a
-  boot purge (`retireGroupAgents.ts`) deletes every `group:` thread and its files and drops `group_agents`.
-  The `group:` avatar-id prefix, the `group-` workspace prefix and the table names are reserved FOREVER —
-  never mint an avatar id under them again. Groups, their knowledge repos and the personal-run
-  `mcp__group_repo__*`/`mcp__group_brain__*` tools stay. Mechanics → `docs/architecture/server-core.md`.
+  boot purge (`retireGroupAgents.ts`) deletes every `group:` thread and quarantines its files, and drops
+  `group_agents`. The `group:` avatar-id prefix, the `group-` workspace prefix and the table names are
+  reserved FOREVER — never mint an avatar id under them again. Groups, their knowledge repos and the
+  personal-run `mcp__group_repo__*`/`mcp__group_brain__*` tools stay. Mechanics →
+  `docs/architecture/server-core.md`.
+- **A retirement never destroys data without a way back.** Every retirement step (boot purges and the
+  ungated retired drops in `migrate()`) runs behind `retirementGate()`: when anything retired is present,
+  the whole DB is first copied to `<dataDir>/backups/pre-retire-<stamp>.db` (0600), and if that backup
+  fails EVERY destructive step is held until a later boot. Files are never deleted, only renamed
+  no-follow into `<dataDir>/retired/<stamp>/` (`quarantineRetired`; EXDEV stays pending, never
+  copy+delete). Noah never prunes either folder — cleanup is the operator's (user decision 2026-10-29).
+  **A new retirement goes through the same gate and quarantine helpers.**
 - **Skill sharing rides the avatar-discovery boundary — never wider.** A shared skill (metadata row in
   `shared_skills`; content stays in the owner's knowledge repo) is browsable/learnable EXACTLY where the
   owner's avatar is visible in 탐색 (`SHARING_TEAMMATES`; private/suspended owners drop out). Learning
