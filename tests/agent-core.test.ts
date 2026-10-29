@@ -2563,34 +2563,21 @@ describe("buildPrompt", () => {
     expect(buildUserPrompt(req({ viewerIsOwner: true, images }))).not.toContain("Attached image files");
   });
 
-  it("tells only a run that can write files to place an attached image — the canWriteFiles flag", () => {
+  it("tells every run class to place an attached image: each one writes in its own sandbox", () => {
     const imageFiles = [{ path: "/x/attachments/a.png", mediaType: "image/png" as const }];
     const images = [{ mediaType: "image/png" as const, data: "QQ==" }];
     const PLACE = "place the FILE itself instead of describing or redrawing it";
-    const READ_ONLY =
-      "This conversation cannot write files, so you can read these files here but not place them into a deck, document or commit.";
     const tail = (over: Record<string, unknown>) => buildUserPrompt(req({ images, imageFiles, ...over }));
-
-    // The capability plan's flag decides whenever it is stamped — even against the viewer class.
-    expect(tail({ viewerIsOwner: false, canWriteFiles: true })).toContain(PLACE);
-    expect(tail({ viewerIsOwner: true, canWriteFiles: false })).toContain(READ_ONLY);
-    // Unstamped: only what the request proves writes — the owner's own run —
-    // so a colleague is never told to copy files.
-    expect(tail({ viewerIsOwner: true })).toContain(PLACE);
-    const colleague = tail({ viewerIsOwner: false, viewerName: "동료" });
-    expect(colleague).toContain(READ_ONLY);
-    expect(colleague).not.toContain(PLACE);
-    // Either way the files are listed: a read-only run can still read them.
-    expect(colleague).toContain("- /x/attachments/a.png (image/png)");
-
-    // The text-only listing follows the same flag: a run that cannot write is
-    // never told to convert with bash or commit what it cannot write.
-    const textOnly = (over: Record<string, unknown>) => buildUserPrompt(req({ imageFiles, ...over }));
-    expect(textOnly({ viewerIsOwner: true })).toContain("inspect or convert with `bash`, commit via the repo tools");
-    const readOnlyText = textOnly({ viewerIsOwner: false, canWriteFiles: false });
-    expect(readOnlyText).toContain("This conversation cannot write files: show one to the user with mcp__file_output__show_file");
-    expect(readOnlyText).not.toContain("inspect or convert with `bash`");
-    expect(readOnlyText).toContain("- /x/attachments/a.png (image/png)");
+    for (const viewerIsOwner of [true, false]) {
+      const prompt = tail({ viewerIsOwner, viewerName: "동료" });
+      expect(prompt).toContain(PLACE);
+      expect(prompt).not.toContain("cannot write files");
+      expect(prompt).toContain("- /x/attachments/a.png (image/png)");
+      // The text-only listing: handled as files, never "read-only".
+      const textOnly = buildUserPrompt(req({ imageFiles, viewerIsOwner }));
+      expect(textOnly).toContain("inspect or convert with `bash`, commit via the repo tools");
+      expect(textOnly).not.toContain("cannot write files");
+    }
   });
 
   it("tells a vision deck run that the images it is shown are placeable files, per run flags", () => {
@@ -3096,14 +3083,13 @@ describe("buildPrompt", () => {
     expect(neither).not.toContain("edit its HTML");
   });
 
-  it("gives deck guidance only to a viewer who may author: not a plain colleague, not an admin-disabled pptx", () => {
+  it("gives deck guidance to every viewer class, but never with an admin-disabled pptx", () => {
     // The runtime computes the prompt flags exactly this way (runCapabilities
-    // via deckGuidanceFlags), from the same tool-access derivation.
+    // via deckGuidanceFlags): every pi run builds in its own sandbox, so only
+    // the admin skill policy decides.
     const pptxSkillNames = ["pptx", "avatar-defaults:pptx"];
     const promptFor = (over: Partial<AgentRequest>, disabledSkills: string[] = []) => {
-      const request: AgentRequest = { message: "PPT 만들어줘", avatar: avatar(), ...over };
-      const { elevatedToolAccess } = deriveAgentToolAccess(request);
-      const deckAuthoring = deckAuthoringStatusFor({ elevatedToolAccess, disabledSkills, pptxSkillNames });
+      const deckAuthoring = deckAuthoringStatusFor({ disabledSkills, pptxSkillNames });
       const flags = deckGuidanceFlags({
         deckRenderingAvailable: true,
         deckConverterInstalled: true,
@@ -3122,10 +3108,10 @@ describe("buildPrompt", () => {
     expect(trusted.deckAuthoring).toBe("allowed");
     expect(trusted.prompt).toContain("PowerPoint decks");
 
-    // A plain colleague is read-only: no deck section in either branch.
+    // A plain colleague builds in their own sandbox too.
     const colleague = promptFor({ viewerIsOwner: false });
-    expect(colleague.deckAuthoring).toBe("read-only");
-    expect(colleague.prompt).not.toContain("PowerPoint decks");
+    expect(colleague.deckAuthoring).toBe("allowed");
+    expect(colleague.prompt).toContain("PowerPoint decks");
 
     // An admin-disabled pptx skill (bare or plugin-qualified) silences it too…
     for (const disabled of [["pptx"], ["avatar-defaults:pptx"]]) {

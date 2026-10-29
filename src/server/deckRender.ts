@@ -784,25 +784,20 @@ export function piSandboxDeckToolchain(
   });
 }
 
-/** Whether THIS run may author a deck: the `pptx` skill's policy, then Bash/Write access. */
-export type DeckAuthoringStatus = "allowed" | "read-only" | "skill-disabled";
+/** Whether THIS run may author a deck: the `pptx` skill's admin policy. */
+export type DeckAuthoringStatus = "allowed" | "skill-disabled";
 
 /**
- * Mirrors the two gates a deck build actually passes: the admin skill policy
- * (the pi skill sync omits `pptx` and `<plugin>:pptx`, so `other:pptx`
- * does NOT disable the bundled skill) and the built-in tools the converter's
- * Bash command needs (always present on pi — runCapabilities passes
- * `canWriteFiles`, which is true for every run class).
+ * Mirrors the gate a deck build actually passes: the admin skill policy (the
+ * pi skill sync omits `pptx` and `<plugin>:pptx`, so `other:pptx` does NOT
+ * disable the bundled skill). The built-in tools the converter's Bash command
+ * needs are always present: every pi run writes files in its own sandbox.
  */
 export function deckAuthoringStatusFor(input: {
-  elevatedToolAccess: boolean;
   disabledSkills: string[];
   pptxSkillNames: string[];
 }): DeckAuthoringStatus {
-  if (input.disabledSkills.some((name) => input.pptxSkillNames.includes(name))) {
-    return "skill-disabled";
-  }
-  return input.elevatedToolAccess ? "allowed" : "read-only";
+  return input.disabledSkills.some((name) => input.pptxSkillNames.includes(name)) ? "skill-disabled" : "allowed";
 }
 
 /**

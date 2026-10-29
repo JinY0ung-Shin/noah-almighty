@@ -908,7 +908,7 @@ describe("run plan — the Confluence save target", () => {
       systemCtx: vi.mocked(buildSystemServer).mock.calls[0][1] as unknown as {
         scratchWorkspaceDir?: string;
         confluenceSaveToWorkspace?: boolean;
-        canWriteFiles?: boolean;
+        deckAuthoring?: string;
         piRuntime?: { sandboxOwner?: string };
       },
     };
@@ -924,7 +924,6 @@ describe("run plan — the Confluence save target", () => {
     expect(Object.keys(plain.result)).not.toContain("scratchWorkspaceDir");
     expect(plain.result.confluenceSaveToWorkspace).toBe(true);
     expect(plain.systemCtx.confluenceSaveToWorkspace).toBe(true);
-    expect(plain.systemCtx.canWriteFiles).toBe(true);
 
     const clone = path.join(tempDir, "plan-target", "clones", "repo");
     fs.mkdirSync(clone, { recursive: true });
@@ -979,10 +978,11 @@ describe("run plan — the Confluence save target", () => {
     expect((await plan(noUrl, request(noUrl))).systemCtx.confluenceSaveToWorkspace).toBe(false);
   });
 
-  it("canWriteFiles is true for every run class, each in its own principal's sandbox", async () => {
+  it("every run class may author (deckAuthoring allowed), each in its own principal's sandbox", async () => {
     // pi has no per-request built-in allowlist: every run writes files with its
     // built-ins, in the sandbox of the user it runs AS (piRunPrincipal) — so
-    // both surfaces say it can, and name WHOSE sandbox it is.
+    // only the admin skill policy gates decks, and both surfaces name WHOSE
+    // sandbox it is.
     const s = setup("plan-can-write");
     const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
     const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string }[] = [
@@ -1003,8 +1003,8 @@ describe("run plan — the Confluence save target", () => {
     ];
     for (const c of cases) {
       const { result, systemCtx } = await plan(s, request(s, c.over));
-      expect(systemCtx.canWriteFiles, c.label).toBe(true);
-      expect(result.canWriteFiles, c.label).toBe(true);
+      expect(systemCtx.deckAuthoring, c.label).toBe("allowed");
+      expect(result.deckAuthoring, c.label).toBe("allowed");
       expect(result.piRuntimeFacts.sandboxOwner, c.label).toBe(c.sandboxOwner);
       // describe_system reads the SAME facts object the prompt is stamped from.
       expect(systemCtx.piRuntime?.sandboxOwner, c.label).toBe(c.sandboxOwner);

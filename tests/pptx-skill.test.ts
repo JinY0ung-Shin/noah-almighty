@@ -156,7 +156,6 @@ describe("pptx SKILL.md body", () => {
       "`converter: NOT INSTALLED`",
       "`toolchain available`",
       "`UNAVAILABLE`",
-      "`read-only`",
       "``administrator disabled the `pptx` skill``",
       "`preview/download need an interactive chat turn`",
     ]) {

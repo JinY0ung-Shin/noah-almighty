@@ -1416,17 +1416,6 @@ export function buildSystemPromptAppend(
   return lines.join("\n\n");
 }
 
-/**
- * Whether this run may write files: the capability plan's `canWriteFiles`
- * (every pi run can, in its principal's sandbox) when stamped, else only what
- * the request proves — the owner's own run. The same resolution as
- * describe_system's image-sources line (`systemTools.ts`), so both surfaces
- * agree.
- */
-function canWriteFiles(request: AgentRequest): boolean {
-  return request.canWriteFiles ?? Boolean(request.viewerIsOwner);
-}
-
 export function buildUserPrompt(
   request: AgentRequest,
   options: { historyLimits?: HistoryLimits } = {},
@@ -1462,19 +1451,14 @@ export function buildUserPrompt(
             (shownCount === request.imageFiles.length ? ", in the same order" : "") +
             ":\n" +
             listing +
-            // Placing a file needs a run that may write files — the SAME flag
-            // (and fallback) describe_system's image-sources line reads.
-            (canWriteFiles(request)
-              ? "\nWhen the user wants an attached image IN something you produce (a deck's `assets/`, a document, a commit), place the FILE itself instead of describing or redrawing it."
-              : "\nThis conversation cannot write files, so you can read these files here but not place them into a deck, document or commit.")
+            // Every pi run writes files in its own sandbox, so it can place one
+            // (describe_system's image-sources line says the same).
+            "\nWhen the user wants an attached image IN something you produce (a deck's `assets/`, a document, a commit), place the FILE itself instead of describing or redrawing it."
         : "Attached image files: the user attached image file(s) to this message. " +
             "The active model cannot view image content, so they are staged as FILES in the conversation folder instead of being shown to you:\n" +
             listing +
             "\nYou cannot see their pixels: never open them with `read`. " +
-            // The same write flag as the vision tail: a read-only run can only show them.
-            (canWriteFiles(request)
-              ? "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with `bash`, commit via the repo tools, or place one into a web page with mcp__browser__copy_image."
-              : "This conversation cannot write files: show one to the user with mcp__file_output__show_file if they need to see it."),
+            "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with `bash`, commit via the repo tools, or place one into a web page with mcp__browser__copy_image.",
     );
   }
   return lines.join("\n\n");

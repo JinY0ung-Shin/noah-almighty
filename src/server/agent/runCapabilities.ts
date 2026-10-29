@@ -632,22 +632,18 @@ export async function buildRunCapabilities(
   // describe_system with the `converter: INSTALLED` / `NOT INSTALLED` markers.
   // Deck guidance additionally needs a turn that can publish files (the
   // preview/download path) and a viewer who may author one: deckAuthoring is
-  // the admin skill policy (an exact `pptx` / `<plugin>:pptx` disable), then
-  // whether the run can write files (canWriteFiles below — every pi run can,
-  // in its principal's own sandbox).
+  // the admin skill policy (an exact `pptx` / `<plugin>:pptx` disable) — every
+  // pi run can write files, in its principal's own sandbox.
   // A pi run builds decks INSIDE the user's sandbox: its toolchain is the
   // sandbox image's (PI_DECK_SANDBOX), never the host probe, and the sandbox
   // has no LibreOffice for the legacy render path.
   const deckRenderingAvailable = false;
   const deckToolchain = piSandboxDeckToolchain(config);
-  // Whether this run can write files at all. Every pi run can: its built-ins
-  // (write/edit/bash) work in the sandbox of the user it runs AS — the
-  // viewer's own on a colleague chat, a fresh empty one on a consultation —
-  // never the owner's. ONE flag for both metacognition surfaces: describe_system's
-  // ctx below, and the prompt through the returned plan.
-  const canWriteFiles = true;
+  // Every pi run can write files: its built-ins (write/edit/bash) work in the
+  // sandbox of the user it runs AS — the viewer's own on a colleague chat, a
+  // fresh empty one on a consultation — never the owner's. So both surfaces
+  // always offer placing a file, and only the admin skill policy gates decks.
   const deckAuthoring = deckAuthoringStatusFor({
-    elevatedToolAccess: canWriteFiles,
     disabledSkills: toolSkillPolicy.disabledSkills,
     pptxSkillNames: deckToolchain.pptxSkillNames,
   });
@@ -819,7 +815,6 @@ export async function buildRunCapabilities(
     // a model in the sandbox; the staged copies live there too).
     scratchWorkspaceDir: runOptions.piConversationDir ?? scratchWorkspaceDir,
     confluenceSaveToWorkspace,
-    canWriteFiles,
     // SSH self-state from the SAME boolean the registration below uses.
     sshEnabled: sshActive,
     sharedMcpServers: sharedMcpStates,
@@ -1292,7 +1287,6 @@ export async function buildRunCapabilities(
     // describe_system's ctx got above. (The scratch path itself rides
     // describe_system's ctx only.)
     confluenceSaveToWorkspace,
-    canWriteFiles,
     sshActive,
     sharedMcpPlan,
     // 공용 MCP self-state for the prompt stamp (the SAME states describe_system
@@ -1354,7 +1348,6 @@ export function stampPromptRequest(
     deckToolchain,
     deckAuthoring,
     confluenceSaveToWorkspace,
-    canWriteFiles,
     sharedMcpStates,
   } = capabilities;
   // Deck standing guidance: the deployment toolchain (legacy and/or the pptx
@@ -1399,10 +1392,6 @@ export function stampPromptRequest(
     // get_attachment's save_to_workspace can land this run — ONE derivation,
     // the same boolean describe_system's ctx got.
     confluenceSaveToWorkspace,
-    // This run's built-ins may write files (always, in the principal's own
-    // sandbox) — the same boolean describe_system's ctx got, so the vision
-    // listing's "place the file" tail and the image-sources line agree.
-    canWriteFiles,
     // Web-fetch proxy self-state (META-COGNITION): redacted HTTP(S)_PROXY/
     // NO_PROXY snapshot so the avatar knows whether external sites are
     // reachable through the corporate proxy. Mirrored by describe_system.

@@ -209,14 +209,11 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   `deckCapabilityLine` pattern). It names the folder's sandbox path when `SystemToolsContext.scratchWorkspaceDir`
   is set. It lists attachments unless the run is `headless`, captures only when `browserEnabled` and vision
   is on (at most 30 per RUN), and Confluence only when `confluenceSaveToWorkspace` holds, and it always
-  says `mcp__web__fetch` returns text only. It ends with what the run may DO with those files, from ONE
-  flag both surfaces read: `canWriteFiles` (`SystemToolsContext` and `AgentRequest`) = `elevatedToolAccess`
-  (owner or trusted teammate). A run in that class is told to copy the FILE into the deliverable. Any other run
-  (a plain colleague, a restricted headless run) is told it can read the files but not place them for the owner
-  (the deck line's wording): its pi built-ins write only into its OWN principal's sandbox, and the owner-side
-  write tools refuse it. The vision user-prompt tail
-  in `buildUserPrompt` branches on the same flag. Undefined (an unwired caller) resolves conservatively,
-  on both surfaces alike: only the owner's own run counts as writable. The prompt
+  says `mcp__web__fetch` returns text only. It ends by telling the run to copy the FILE into the deliverable:
+  every pi run writes files with its built-ins in its OWN principal's sandbox (the owner-side write tools still
+  refuse a non-owner), so there is no read-only variant on either surface — the `canWriteFiles` flag and the
+  deck line's `read-only` tail that fed one were removed as dead (review-2 L5). The vision user-prompt tail in
+  `buildUserPrompt` says the same. The prompt
   mirrors the same flags in three short places: `imageFilesSection` (vision on AND a deck flag — a
   text-only run is shown no images, and `noVisionSection` already covers its files; the deck flags already
   imply an author, so no read-only branch is needed there), the browser paragraph's screenshot sentence
@@ -256,9 +253,9 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   available in this run."). `buildRunCapabilities` derives ONE boolean, `confluenceSaveToWorkspace` = Confluence group
   registered && `elevatedToolAccess` && scratch dir && `confluenceCredentialsConfigured` (the tools' own
   `credentials()` check over the decrypted vault, which is why `ownerSecrets` is now read before
-  `buildSystemServer`). It hands that boolean, with `scratchWorkspaceDir` and `canWriteFiles`, to
-  `SystemToolsContext`, and returns the two booleans (not the path, which only describe_system names) on
-  the capabilities for the prompt stamps (`AgentRequest.confluenceSaveToWorkspace`, `AgentRequest.canWriteFiles`).
+  `buildSystemServer`). It hands that boolean, with `scratchWorkspaceDir`, to `SystemToolsContext`, and returns
+  the boolean (not the path, which only describe_system names) on the capabilities for the prompt stamp
+  (`AgentRequest.confluenceSaveToWorkspace`).
 - **The `/mcp` gate is per CALL, not per viewer**, so every tool MUST self-gate in its handler. The endpoint's
   `allowCall` admits only this run's `mcpAllowedTools`, but pi lists a session's tools once from the static
   catalog and one conversation can carry runs of different classes (and live state changes mid-session); the

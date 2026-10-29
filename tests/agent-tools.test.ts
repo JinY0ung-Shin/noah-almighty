@@ -2286,16 +2286,13 @@ describe("system tools (avatar system management)", () => {
   it("describe_system prints the images line on the non-owner branch too", async () => {
     const s = setup("st-images-branches");
     const PLACE = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
-    const READ_ONLY =
-      "This conversation cannot write files, so you can read them here but not place them into a deck, document or commit — the owner or a trusted teammate can";
-    // A trusted teammate's run (the ctx's canWriteFiles) can save Confluence
-    // attachments and place files; a plain colleague's can do neither — and
+    // Every run places files in its own sandbox; a trusted teammate's run can
+    // also save Confluence attachments, a plain colleague's cannot — and
     // neither ever has captures.
     const trusted = imagesLineOf(
       await describeText(s, {
         ...s.baseCtx,
         viewerIsOwner: false,
-        canWriteFiles: true,
         confluenceSaveToWorkspace: true,
         scratchWorkspaceDir: "/w/t",
       }),
@@ -2304,18 +2301,14 @@ describe("system tools (avatar system management)", () => {
     expect(trusted).toContain("`attachments/`");
     expect(trusted).toContain("`confluence/`");
     expect(trusted).toContain(PLACE);
-    const colleague = await describeText(s, { ...s.baseCtx, viewerIsOwner: false, canWriteFiles: false });
+    const colleague = await describeText(s, { ...s.baseCtx, viewerIsOwner: false });
     expect(colleague).toContain("Deployment capabilities for this run:");
     const colleagueLine = imagesLineOf(colleague);
     expect(colleagueLine).not.toContain("save_to_workspace");
     expect(colleagueLine).not.toContain("captures/");
-    // A read-only run is told the files exist and can be READ — never to copy them.
     expect(colleagueLine).toContain("images the user attaches to a message are staged in `attachments/`");
-    expect(colleagueLine).toContain(READ_ONLY);
-    expect(colleagueLine).not.toContain("copy that FILE");
-    // Unwired (no flag): a non-owner is not proven to write, so the same wording.
-    expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false }))).toContain(READ_ONLY);
-    // The owner's own run writes by construction; the flag still wins if stamped.
+    expect(colleagueLine).toContain(PLACE);
+    expect(colleagueLine).not.toContain("cannot write files");
     expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: true }))).toContain(PLACE);
     // A consultation is headless and non-owner.
     expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false, headless: true }))).toContain(
@@ -2547,12 +2540,10 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
-  it("describe_system picks ONE tail: skill-disabled > read-only > no file output > allowed", async () => {
+  it("describe_system picks ONE tail: skill-disabled > no file output > allowed", async () => {
     const s = setup("st-deck-tails");
     const SKILL_OFF =
       "; the administrator disabled the `pptx` skill in this deployment, so do not build decks — say so if asked";
-    const READ_ONLY =
-      "; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can";
     const NO_OUTPUT = "; preview/download need an interactive chat turn";
     for (const toolchain of [deckState(), legacyDeckState()]) {
       const head = deckLineOf(await describeAs(s, { deckToolchain: toolchain, fileOutputEnabled: true }))
@@ -2561,11 +2552,9 @@ describe("system tools (avatar system management)", () => {
         deckLineOf(await describeAs(s, { deckToolchain: toolchain, ...ctx }));
 
       expect(await lineFor({ deckAuthoring: "skill-disabled", fileOutputEnabled: true })).toBe(`${head}${SKILL_OFF}`);
-      expect(await lineFor({ deckAuthoring: "read-only", fileOutputEnabled: true })).toBe(`${head}${READ_ONLY}`);
       expect(await lineFor({ deckAuthoring: "allowed", fileOutputEnabled: false })).toBe(`${head}${NO_OUTPUT}`);
       // Precedence among the tails.
       expect(await lineFor({ deckAuthoring: "skill-disabled", fileOutputEnabled: false })).toBe(`${head}${SKILL_OFF}`);
-      expect(await lineFor({ deckAuthoring: "read-only", fileOutputEnabled: false })).toBe(`${head}${READ_ONLY}`);
       // No file output never promises the skill workflow (the I10 pin).
       expect(await lineFor({ fileOutputEnabled: false })).not.toContain("`pptx` skill");
       // Undefined authoring = allowed.
@@ -2637,14 +2626,14 @@ describe("system tools (avatar system management)", () => {
     }
 
     // A tail that replaces the allowed guidance says nothing about interpreters: nothing runs here.
-    const readOnly = deckLineOf(
+    const skillOff = deckLineOf(
       await describeAs(s, {
         deckToolchain: deckState({ pythonPptxCommand: VENV }),
         fileOutputEnabled: true,
-        deckAuthoring: "read-only",
+        deckAuthoring: "skill-disabled",
       }),
     );
-    expect(readOnly).not.toContain(VENV);
+    expect(skillOff).not.toContain(VENV);
   });
 
   it("describe_system reports UNAVAILABLE with the NOT INSTALLED marker and no tail", async () => {
@@ -2658,7 +2647,6 @@ describe("system tools (avatar system management)", () => {
     for (const ctx of [
       { fileOutputEnabled: true },
       { fileOutputEnabled: false },
-      { deckAuthoring: "read-only" as const, fileOutputEnabled: true },
       { deckAuthoring: "skill-disabled" as const, fileOutputEnabled: true },
     ]) {
       expect(deckLineOf(await describeAs(s, { deckToolchain: state, ...ctx })), JSON.stringify(ctx)).toBe(expected);
@@ -2686,15 +2674,15 @@ describe("system tools (avatar system management)", () => {
   it("describe_system shows the deck line on the non-owner branch too", async () => {
     const s = setup("st-deck-branches");
     s.store.setGitToken(s.owner.id, "ghp_secretvalue");
-    // Non-owner: a trusted teammate may build through this avatar, a plain
-    // colleague may not — the tail says which, and no owner state leaks.
+    // Non-owner: any colleague builds in their own sandbox unless the admin
+    // disabled the skill — the tail says which, and no owner state leaks.
     const colleague = (
       await callTool(
         buildSystemTools(s.store, {
           ...s.baseCtx,
           viewerIsOwner: false,
           deckToolchain: deckState(),
-          deckAuthoring: "read-only",
+          deckAuthoring: "skill-disabled",
           fileOutputEnabled: true,
         }),
         "describe_system",
@@ -2704,7 +2692,7 @@ describe("system tools (avatar system management)", () => {
     expect(colleague).toContain("conversation partner is not the owner");
     expect(colleague).toContain("Deployment capabilities for this run:");
     expect(deckLineOf(colleague)).toBe(
-      `${DECK_PREFIX}${CONVERTER_HEAD}; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can`,
+      `${DECK_PREFIX}${CONVERTER_HEAD}; the administrator disabled the \`pptx\` skill in this deployment, so do not build decks — say so if asked`,
     );
     expect(colleague).not.toContain("Current avatar state:");
     expect(colleague).not.toContain("ghp_secretvalue");

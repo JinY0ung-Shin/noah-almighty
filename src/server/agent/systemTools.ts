@@ -145,9 +145,8 @@ export interface SystemToolsContext {
   deckToolchain?: DeckToolchainState;
   /**
    * Whether THIS run may author a deck (`deckAuthoringStatusFor`: the `pptx`
-   * skill not admin-disabled, then Bash/Write access) — picks the deck line's
-   * TAIL, so a read-only colleague or an admin-disabled skill is never told to
-   * build. Undefined → "allowed".
+   * skill not admin-disabled) — picks the deck line's TAIL, so an
+   * admin-disabled skill is never told to build. Undefined → "allowed".
    */
   deckAuthoring?: DeckAuthoringStatus;
   /**
@@ -173,14 +172,6 @@ export interface SystemToolsContext {
    * and describe_system offer the save option together.
    */
   confluenceSaveToWorkspace?: boolean;
-  /**
-   * Whether THIS run's tools may write files (runCapabilities' `canWriteFiles`,
-   * always true on pi). Set by runCapabilities; mirrors `AgentRequest.canWriteFiles`, so the image-sources
-   * line and the user prompt's attached-images tail agree on whether an image
-   * file can be placed into a deliverable or only read. Undefined → only what
-   * the ctx proves: the owner's own run writes.
-   */
-  canWriteFiles?: boolean;
   /**
    * True when an EXTERNAL SYSTEM submitted this turn through the owner's
    * personal task API (`POST /api/v1/avatar/tasks`) instead of the owner typing
@@ -432,9 +423,7 @@ export function deckCapabilityLine(
   const tail =
     authoring === "skill-disabled"
       ? "; the administrator disabled the `pptx` skill in this deployment, so do not build decks — say so if asked"
-      : authoring === "read-only"
-        ? "; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can"
-        : !ctx.fileOutputEnabled
+      : !ctx.fileOutputEnabled
           ? "; preview/download need an interactive chat turn"
           : mode === "converter"
             ? " — use the `pptx` skill: author slides as HTML, run its deck.sh check/build in the foreground, then `mcp__file_output__share_file` the built .pptx IN PLACE (the card shows the converter's exact slide renders). " +
@@ -451,23 +440,10 @@ export function deckCapabilityLine(
 const IMAGE_SOURCES_LINE_PREFIX = "- Images for documents and decks: ";
 
 /**
- * Whether this run may write files, as the image-sources line states it:
- * runCapabilities' `canWriteFiles` (always true on pi) when set, else only what the
- * ctx proves (the owner's own run), so an unwired caller
- * never tells a read-only colleague to copy files. The prompt's attached-images
- * tail resolves the SAME flag the same way (`promptBuilder.ts`).
- */
-function canWriteFilesOf(
-  ctx: Pick<SystemToolsContext, "canWriteFiles" | "viewerIsOwner">,
-): boolean {
-  return ctx.canWriteFiles ?? ctx.viewerIsOwner;
-}
-
-/**
  * describe_system's image-sources line, shared by the owner and non-owner
  * branches (like the deck line) so they never disagree: which images
- * this run has as FILES and where they are, and whether it may place them into
- * a deck, document or commit (`canWriteFiles`) or only read them. Each source
+ * this run has as FILES and where they are, and how to place one into a deck,
+ * document or commit (every pi run writes files in its own sandbox). Each source
  * is keyed on the same run flag the prompt's standing text reads (browser +
  * vision for captures, `confluenceSaveToWorkspace` for Confluence), so the two
  * metacognition surfaces offer the same routes.
@@ -480,8 +456,6 @@ export function imageSourcesLine(
     | "visionEnabled"
     | "confluenceSaveToWorkspace"
     | "scratchWorkspaceDir"
-    | "canWriteFiles"
-    | "viewerIsOwner"
   >,
 ): string {
   const where = ctx.scratchWorkspaceDir
@@ -501,9 +475,7 @@ export function imageSourcesLine(
       : []),
     "a web page's images cannot be downloaded with mcp__web__fetch, which returns page text only",
   ];
-  const use = canWriteFilesOf(ctx)
-    ? "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it"
-    : "This conversation cannot write files, so you can read them here but not place them into a deck, document or commit — the owner or a trusted teammate can";
+  const use = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
   return `${IMAGE_SOURCES_LINE_PREFIX}files in ${where} — ${sources.join("; ")}. ${use}`;
 }
 

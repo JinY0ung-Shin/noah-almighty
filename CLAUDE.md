@@ -232,7 +232,7 @@ These are the invariants the project is built around. New work should reinforce 
   writes into `confluence/` — so a deck or document includes the image instead of describing it. Every
   host-side write below a sandbox root goes through the descriptor-pinned `PinnedDir`/`piSandboxDir` (the
   agent owns those folders and can swap any of them for a link). Both metacognition surfaces list which of
-  these the run has (`canWriteFiles`). These server-written copies die with what they mirror: **a new
+  these the run has. These server-written copies die with what they mirror: **a new
   conversation-deleting path calls `deleteConversationWorkspaceCopies`**, and a rewind's dropped attachments take their
   staged copies along. The pptx skill settles each slide's visual AND its source first, and text stays a legitimate
   choice: **never add a check that fires because a slide has no image** (user decision 2026-09-30). Text over a picture

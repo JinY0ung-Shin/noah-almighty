@@ -5,13 +5,11 @@ import type { AgentRequest } from "../src/server/types.js";
 import { withTempDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
-// canWriteFiles end to end: buildRunCapabilities derives it ONCE (every pi run
-// writes in its principal's own sandbox, so it is always true), hands it to
-// describe_system's ctx, and stampPromptRequest stamps it onto the prompt
-// request. Both metacognition surfaces must then tell each viewer class the
-// same thing about the images it has as files. A missing stamp is silent: the
-// prompt falls back to "only the owner writes", so a colleague would hear
-// read-only from the prompt and place-the-file from describe_system.
+// Placing an image file, end to end: every pi run writes files in its
+// principal's own sandbox, so both metacognition surfaces (describe_system's
+// image-sources line, the user prompt's attached-images tail) must tell EVERY
+// viewer class to place the file — there is no read-only run class left
+// (review-2 L5 removed the dead `canWriteFiles` flag and its read-only texts).
 // ---------------------------------------------------------------------------
 
 // The REAL server, with its ctx recorded: describe_system's half of the pair.
@@ -31,7 +29,7 @@ const getTempDir = withTempDir("agent-can-write-files", () => {
   vi.mocked(buildSystemServer).mockClear();
 });
 
-describe("canWriteFiles reaches both metacognition surfaces", () => {
+describe("every run class may place an image file, on both metacognition surfaces", () => {
   it("tells the owner, a trusted teammate and a plain colleague the same thing on each", async () => {
     const { config, store } = createServices({
       dataDir: path.join(tempDir, "data"),
@@ -76,11 +74,8 @@ describe("canWriteFiles reaches both metacognition surfaces", () => {
 
     for (const [i, c] of cases.entries()) {
       const caps = await buildRunCapabilities(c.request, [], config, store, undefined, undefined, () => 0);
-      expect(caps.canWriteFiles, c.label).toBe(true);
       const ctx = vi.mocked(buildSystemServer).mock.calls[i][1] as Parameters<typeof imageSourcesLine>[0];
-      expect(ctx.canWriteFiles, c.label).toBe(true);
       const stamped = stampPromptRequest(c.request, caps, config, undefined);
-      expect(stamped.canWriteFiles, c.label).toBe(true);
 
       const line = imageSourcesLine(ctx);
       const userPrompt = buildUserPrompt(stamped);
@@ -92,7 +87,7 @@ describe("canWriteFiles reaches both metacognition surfaces", () => {
     store.close();
   });
 
-  it("the stamp is load-bearing: an UNSTAMPED colleague request falls back to read-only on both surfaces", () => {
+  it("needs no stamp: an unstamped colleague request is told to place the file too", () => {
     const colleague: AgentRequest = {
       message: "m",
       avatar: { id: "owner", displayName: "오너", alias: "", persona: "" },
@@ -101,19 +96,13 @@ describe("canWriteFiles reaches both metacognition surfaces", () => {
       images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
       imageFiles: [{ path: "/x/attachments/a.png", mediaType: "image/png" }],
     };
-    expect(buildUserPrompt(colleague)).toContain(
-      "This conversation cannot write files, so you can read these files here",
-    );
-    expect(buildUserPrompt(colleague)).not.toContain("place the FILE itself");
-    expect(imageSourcesLine({ headless: false, viewerIsOwner: false })).toContain(
-      "This conversation cannot write files, so you can read them here",
-    );
-    // A text-only turn (no image blocks) uses the same flag for its own tail.
-    expect(buildUserPrompt({ ...colleague, images: undefined })).toContain(
-      "This conversation cannot write files: show one to the user with mcp__file_output__show_file",
-    );
-    expect(buildUserPrompt({ ...colleague, images: undefined, canWriteFiles: true })).toContain(
-      "Handle them as files: show one to the user with mcp__file_output__show_file",
-    );
+    expect(buildUserPrompt(colleague)).toContain("place the FILE itself instead of describing or redrawing it");
+    expect(buildUserPrompt(colleague)).not.toContain("cannot write files");
+    expect(imageSourcesLine({ headless: false })).toContain("copy that FILE (e.g. into the deck's `assets/`)");
+    expect(imageSourcesLine({ headless: false })).not.toContain("cannot write files");
+    // A text-only turn (no image blocks) has its own tail.
+    const textOnly = buildUserPrompt({ ...colleague, images: undefined });
+    expect(textOnly).toContain("Handle them as files: show one to the user with mcp__file_output__show_file");
+    expect(textOnly).not.toContain("cannot write files");
   });
 });

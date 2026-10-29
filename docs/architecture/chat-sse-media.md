@@ -193,11 +193,10 @@
   turn: a vision turn carries BOTH `AgentRequest.images` (blocks, unchanged) and
   `imageFiles` (the same attachments, same order), and `buildUserPrompt` words the listing per case. A
   text-only turn keeps its "cannot view" text. A vision turn says the images shown are ALSO files, claims
-  "in the same order" only while both lists have the same length, and ends by run capability: a run that
-  can write files (`AgentRequest.canWriteFiles` = runCapabilities' `elevatedToolAccess`, the flag describe_system's
-  image-sources line reads, see [`agent-core.md`](agent-core.md)) is told to place the FILE (a deck's
-  `assets/`, a document, a commit) instead of describing or redrawing it; a read-only run, that it can read
-  the files but not place them in this conversation. A vision turn whose staging produced nothing keeps its
+  "in the same order" only while both lists have the same length, and ends by telling the run to place the
+  FILE (a deck's `assets/`, a document, a commit) instead of describing or redrawing it — every pi run writes
+  files in its own sandbox, so there is no read-only variant (describe_system's image-sources line says the
+  same, see [`agent-core.md`](agent-core.md)). A vision turn whose staging produced nothing keeps its
   image blocks and gets no listing. Because the folder is AGENT-WRITABLE (it is the sandbox's), the staging
   opens every segment from the sandbox user root down to `attachments/` by descriptor without following links
   (`workspaceSubdirForWrite` → `PinnedDir`; a planted symlink or file on the way stages nothing); each copy

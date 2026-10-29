@@ -1493,16 +1493,6 @@ export interface AgentRequest {
    */
   confluenceSaveToWorkspace?: boolean;
   /**
-   * Whether THIS run's tools may write files (`runCapabilities.ts`'s
-   * `canWriteFiles` — always true on pi, whose built-ins write in the
-   * principal's own sandbox). Stamped by `stampPromptRequest` from the plan — the SAME value `SystemToolsContext.canWriteFiles` carries — so
-   * the user prompt's attached-images tail and describe_system's image-sources
-   * line agree on whether an image file can be placed into a deck, document or
-   * commit, or only read. Undefined → only what the request proves: the owner's
-   * own run writes; anything else is treated as read-only.
-   */
-  canWriteFiles?: boolean;
-  /**
    * Redacted proxy env self-state for `mcp__web__fetch` guidance (set by
    * `stampPromptRequest` from the live env). Undefined means "unknown" for direct
    * unit calls — the prompt then omits the proxy detail sentence.

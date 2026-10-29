@@ -694,19 +694,15 @@ describe("pptx skill names, modes and authoring status", () => {
     }
   });
 
-  it("deckAuthoringStatusFor mirrors the hook's exact skill rule, then Bash/Write access", () => {
+  it("deckAuthoringStatusFor mirrors the skill sync's exact skill rule", () => {
     const names = ["pptx", "avatar-defaults:pptx"];
-    const status = (elevatedToolAccess: boolean, disabledSkills: string[]) =>
-      deckAuthoringStatusFor({ elevatedToolAccess, disabledSkills, pptxSkillNames: names });
-    expect(status(true, [])).toBe("allowed");
-    expect(status(true, ["pptx"])).toBe("skill-disabled");
-    expect(status(true, ["avatar-defaults:pptx"])).toBe("skill-disabled");
+    const status = (disabledSkills: string[]) => deckAuthoringStatusFor({ disabledSkills, pptxSkillNames: names });
+    expect(status([])).toBe("allowed");
+    expect(status(["pptx"])).toBe("skill-disabled");
+    expect(status(["avatar-defaults:pptx"])).toBe("skill-disabled");
     // A DIFFERENT plugin's pptx skill does not disable the bundled one.
-    expect(status(true, ["other:pptx"])).toBe("allowed");
-    expect(status(true, ["docx", "drawio"])).toBe("allowed");
-    expect(status(false, [])).toBe("read-only");
-    // skill-disabled takes precedence over read-only.
-    expect(status(false, ["pptx"])).toBe("skill-disabled");
+    expect(status(["other:pptx"])).toBe("allowed");
+    expect(status(["docx", "drawio"])).toBe("allowed");
   });
 
   it("deckGuidanceFlags needs the toolchain, file output and an allowed author", () => {
@@ -723,7 +719,6 @@ describe("pptx skill names, modes and authoring status", () => {
     expect(flags({ deckRenderingAvailable: false })).toEqual({ deckRenderingEnabled: false, deckConverterEnabled: true });
     for (const off of [
       { fileOutputActive: false },
-      { deckAuthoring: "read-only" as const },
       { deckAuthoring: "skill-disabled" as const },
     ]) {
       expect(flags(off), JSON.stringify(off)).toEqual({ deckRenderingEnabled: false, deckConverterEnabled: false });

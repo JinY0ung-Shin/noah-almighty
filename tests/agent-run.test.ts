@@ -212,7 +212,6 @@ describe("run capability plan", () => {
     }
     // Every built server is one pi's broker knows; nothing is relayed for this run.
     expect(run.caps.piMcpProxies.upstreams).toEqual([]);
-    expect(run.caps.canWriteFiles).toBe(true);
     expect(run.caps.piRuntimeFacts.sandboxOwner).toBe("owner");
   });
 
