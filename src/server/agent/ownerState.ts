@@ -9,6 +9,7 @@ import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
+import { modelOverrideState } from "../modelOverride.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -70,8 +71,10 @@ export interface OwnerState {
   sharedSkillCount: number;
   /** Total times teammates learned this owner's skills (전수된 횟수, all skills). */
   sharedSkillLearnTotal: number;
-  /** Admin-selected model override; used when the conversation picked no tier. */
+  /** Admin-selected model override runs use when the conversation picked no tier (null: none, or ignored). */
   modelOverride: string | null;
+  /** A stored override that is neither a tier nor a `PI_MODEL_MAP` key — ignored, runs use the default tier. */
+  modelOverrideIgnored: string | null;
   /** Experimental (beta) feature keys the owner enabled for this avatar (#50). */
   experimentalFeatures: string[];
   /**
@@ -131,7 +134,10 @@ export function summarizeOwnerState(
     get sharedSkillLearnTotal() {
       return store.countSkillLearnsForOwner(avatarUserId);
     },
-    modelOverride: store.getModelOverride(),
+    ...(() => {
+      const override = modelOverrideState(store, config);
+      return { modelOverride: override.effective, modelOverrideIgnored: override.ignored };
+    })(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),
     sharedAccount: store.isSharedAccount(avatarUserId),
     // Lazy like the counts above: only describe_system reads it (the prompt stays static).

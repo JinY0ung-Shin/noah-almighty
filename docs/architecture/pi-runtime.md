@@ -421,7 +421,10 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 trimmed by `readPiGatewayApiKey`; both set, an unreadable or empty file, or a second line stops the boot; the key never
 enters `process.env` — the bundled compose stack sets only the file), `PI_MODEL_MAP` (required, validated JSON that must map every
 composer tier — fable/opus/sonnet/haiku; it is the ONLY tier→model source, and model fallback chains map through it;
-malformed or incomplete stops the boot), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional
+malformed or incomplete stops the boot; the admin model override (`PUT /api/admin/model`) accepts only a tier or a
+`PI_MODEL_MAP` key, and a stored value that is neither — an SDK-era Claude id kept across the upgrade, a typo — is
+IGNORED at run time with one warn log, the run using the default tier and describe_system saying so, while
+`GET /api/admin/system` reports `modelOverrideIgnored`; `modelOverride.ts`, review-2 M2), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional
 `/mcp` peer allowlist), `PI_DECK_SANDBOX`.
 
 Removed with the SDK runner: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (the old hard lock — the composer's models endpoint

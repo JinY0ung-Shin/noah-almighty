@@ -106,6 +106,7 @@ import {
   MODEL_TIERS,
   DEFAULT_MODEL_TIER,
 } from "../modelTiers.js";
+import { effectiveModelOverride } from "../modelOverride.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   attachRunClient,
@@ -822,7 +823,7 @@ export async function executeChatTurn(
     (requestedModel === null
       ? store.getConversationModel(ownerUserId, conversationId)
       : requestedModel || null) ??
-    store.getModelOverride() ??
+    effectiveModelOverride(store, config) ??
     DEFAULT_MODEL_TIER;
   const turnVisionEnabled = visionForModel(
     turnModel,

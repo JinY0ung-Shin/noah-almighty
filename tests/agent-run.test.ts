@@ -450,10 +450,20 @@ describe("pi run loop (fake gateway)", () => {
 
   it("uses the admin override as the run's model and chains from it", async () => {
     const env = setup();
+    env.config.pi!.modelMap["noah-custom-model"] = { model: "m-custom" };
     env.store.setModelOverride("noah-custom-model");
     const run = await plan(env, { ...routine(env), modelTier: undefined });
     expect(run.caps.effectiveModel).toBe("noah-custom-model");
     expect(run.caps.modelChain).toEqual(["noah-custom-model", "sonnet", "haiku"]);
+  });
+
+  it("ignores a stored override that is neither a tier nor a PI_MODEL_MAP key (review-2 M2)", async () => {
+    const env = setup();
+    // An SDK-era deployment's concrete Claude id, kept across the upgrade.
+    env.store.setModelOverride("claude-opus-4-1-20250805");
+    const run = await plan(env, { ...routine(env), modelTier: undefined });
+    expect(run.caps.effectiveModel).toBe("opus");
+    expect(run.caps.modelChain).toEqual(["opus", "sonnet", "haiku"]);
   });
 
   it("does NOT fall back on a non-retryable error even when the chain has more tiers", async () => {

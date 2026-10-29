@@ -419,11 +419,17 @@ describe("admin: model override", () => {
     const admin = await mkUser(app, "admin");
 
     await admin.agent.put("/api/admin/model").send({ model: "  " }).expect(400);
+    // Only a tier or a PI_MODEL_MAP key: anything else would silently run on pi's default model.
+    const bad = await admin.agent.put("/api/admin/model").send({ model: "claude-test-model" }).expect(400);
+    expect(bad.body.error).toContain("PI_MODEL_MAP");
+    expect(services.store.getModelOverride()).toBeNull();
 
-    await admin.agent.put("/api/admin/model").send({ model: "claude-test-model" }).expect(200);
-    expect(services.store.getModelOverride()).toBe("claude-test-model");
+    await admin.agent.put("/api/admin/model").send({ model: "sonnet" }).expect(200);
+    expect(services.store.getModelOverride()).toBe("sonnet");
     let sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelOverride).toBe("claude-test-model");
+    expect(sys.body.system.modelOverride).toBe("sonnet");
+    expect(sys.body.system.modelOverrideIgnored).toBe(false);
+    expect(sys.body.system.modelOverrideChoices).toEqual(expect.arrayContaining(["opus", "sonnet", "haiku"]));
     // The env hard lock (ANTHROPIC_MODEL) is gone with the SDK runner.
     expect(sys.body.system).not.toHaveProperty("modelEnvLocked");
 
@@ -431,6 +437,30 @@ describe("admin: model override", () => {
     expect(services.store.getModelOverride()).toBeNull();
     sys = await admin.agent.get("/api/admin/system").expect(200);
     expect(sys.body.system.modelOverride).toBeNull();
+  });
+});
+
+describe("admin: model override validation against PI_MODEL_MAP", () => {
+  it("accepts a PI_MODEL_MAP key, and flags a stored unmapped override as ignored", async () => {
+    const { app, services } = boot({
+      agentRuntime: "pi",
+      pi: {
+        gatewayUrl: "http://pi.invalid",
+        apiKey: "k",
+        deckSandbox: false,
+        modelMap: { fable: { model: "m-f" }, opus: { model: "m-o" }, sonnet: { model: "m-s" }, haiku: { model: "m-h" }, "long-ctx": { model: "m-l" } },
+      },
+    });
+    const admin = await mkUser(app, "admin");
+    await admin.agent.put("/api/admin/model").send({ model: "long-ctx" }).expect(200);
+    let sys = await admin.agent.get("/api/admin/system").expect(200);
+    expect(sys.body.system.modelOverrideChoices).toContain("long-ctx");
+    expect(sys.body.system.modelOverrideIgnored).toBe(false);
+    // An SDK-era deployment's stored Claude id survives the upgrade: reported as ignored.
+    services.store.setModelOverride("claude-opus-4-1-20250805");
+    sys = await admin.agent.get("/api/admin/system").expect(200);
+    expect(sys.body.system.modelOverride).toBe("claude-opus-4-1-20250805");
+    expect(sys.body.system.modelOverrideIgnored).toBe(true);
   });
 });
 

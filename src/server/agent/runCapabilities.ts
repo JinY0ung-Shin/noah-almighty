@@ -57,6 +57,7 @@ import {
   DEFAULT_MODEL_TIER,
   MODEL_TIER_IDS,
 } from "../modelTiers.js";
+import { effectiveModelOverride } from "../modelOverride.js";
 import { isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
 import { summarizeOwnerState } from "./ownerState.js";
@@ -425,7 +426,8 @@ export async function buildRunCapabilities(
   // Effective model: the user's per-conversation tier pick (mapped to a pi model
   // by the operator's PI_MODEL_MAP), otherwise the admin-selected override,
   // otherwise the DEFAULT tier (opus). Unknown tiers are ignored so a
-  // stale/garbage value can never become a model id.
+  // stale/garbage value can never become a model id — and so is a stored
+  // override that is neither a tier nor a PI_MODEL_MAP key (modelOverride.ts).
   const userModelTier = isModelTier(request.modelTier)
     ? request.modelTier
     : undefined;
@@ -434,7 +436,7 @@ export async function buildRunCapabilities(
   const userEffort = isEffortLevel(request.effort) ? request.effort : undefined;
   const effectiveModel =
     userModelTier ??
-    store.getModelOverride() ??
+    effectiveModelOverride(store, config) ??
     DEFAULT_MODEL_TIER;
   // Model fallback chain (unattended runs — `request.modelFallback`): on a
   // transient model/server error, retry down the tier order from the resolved

@@ -8,6 +8,7 @@ import logger from "../logger.js";
 import { createRateLimiter } from "../rateLimit.js";
 import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_shared.js";
 import { DEFAULT_MODEL_TIER, MODEL_TIERS } from "../modelTiers.js";
+import { effectiveModelOverride } from "../modelOverride.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 
@@ -172,7 +173,7 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
         // Vision of the model a conversation gets when the user picked nothing:
         // admin override > default tier (mirrors runCapabilities).
         defaultVision: visionForModel(
-          store.getModelOverride() ?? DEFAULT_MODEL_TIER,
+          effectiveModelOverride(store, config) ?? DEFAULT_MODEL_TIER,
           store.getModelVisionPolicy(),
           config.visionEnabled,
         ),

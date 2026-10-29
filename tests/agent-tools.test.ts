@@ -2770,7 +2770,7 @@ describe("system tools (avatar system management)", () => {
   it("reports the effective model, groups, profile visibility and pending requests", async () => {
     const s = setup("st-describe-full");
     // No env model pin in tests → the admin override is the effective model.
-    s.store.setModelOverride("claude-test-model");
+    s.store.setModelOverride("sonnet");
     const group = s.store.createGroup({ name: "플랫폼팀" });
     s.store.addGroupMember(group.id, s.owner.id, "admin");
     s.store.addKnowledgeRequest(s.owner.id, { question: "다음 출시일은?", askerName: "동료" });
@@ -2778,7 +2778,7 @@ describe("system tools (avatar system management)", () => {
     const res = await callTool(toolsFor(s), "describe_system", {});
     expect(res.isError).toBeFalsy();
     const body = res.content[0].text;
-    expect(body).toContain("claude-test-model (admin setting)");
+    expect(body).toContain("sonnet (admin setting)");
     expect(body).toContain("플랫폼팀(admin, shared repository none)");
     // New avatars default to group visibility.
     expect(body).toContain("group (discoverable by group teammates only)");
@@ -3526,6 +3526,18 @@ describe("system tools (avatar system management)", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("describe_system reports the default tier when the stored admin override is unmapped (review-2 M2)", async () => {
+    const s = setup("st-admin-model-ignored");
+    // An SDK-era deployment's concrete Claude id, kept across the upgrade.
+    s.store.setModelOverride("claude-opus-4-1-20250805");
+    const tools = buildSystemTools(s.store, { ...s.baseCtx, config: piConfig(s.config, { opus: "pi-opus-5" }), viewerIsOwner: true });
+    const body = (await callTool(tools, "describe_system", {})).content[0].text;
+    expect(body).toContain(
+      "pi-opus-5 (opus) (default — the admin model setting 'claude-opus-4-1-20250805' is neither a tier nor a PI_MODEL_MAP key, so it is ignored)",
+    );
+    expect(body).not.toContain("(admin setting)");
   });
 
   it("describe_system names the admin model override (a PI_MODEL_MAP key) when the composer picked none", async () => {

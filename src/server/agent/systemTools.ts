@@ -718,7 +718,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           ? `${named(userTier)} (chosen for this conversation in the composer)`
           : adminModel
             ? `${named(adminModel)} (admin setting)`
-            : `${named(DEFAULT_MODEL_TIER)} (default)`;
+            : state.modelOverrideIgnored
+              ? `${named(DEFAULT_MODEL_TIER)} (default — the admin model setting '${state.modelOverrideIgnored}' is neither a tier nor a PI_MODEL_MAP key, so it is ignored)`
+              : `${named(DEFAULT_MODEL_TIER)} (default)`;
         // Per-conversation reasoning effort, mirroring the model-tier wiring above:
         // when the composer picked a level, name it (with its Korean label) as the
         // effort chosen for THIS conversation; otherwise the default level.

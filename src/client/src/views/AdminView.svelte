@@ -210,7 +210,9 @@
           ? "저장하지 않은 모델 변경 사항이 있습니다."
           : "저장하면 기본 티어로 되돌립니다."
         : savedModelOverride
-          ? "저장됨"
+          ? sys.modelOverrideIgnored
+            ? "저장된 값이 티어 이름도 PI_MODEL_MAP 키도 아니어서 무시하고 기본 티어를 사용 중입니다. 다시 지정하거나 비워 주세요."
+            : "저장됨"
           : "기본 티어 사용 중";
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
@@ -844,7 +846,7 @@
                   />
                 </label>
                 <div class="settings-save-row">
-                  <span id={modelStatusId} class="settings-save-status" class:dirty={modelDirty && !modelBusy && !modelError} class:pending={modelBusy} class:invalid={Boolean(modelError)} role="status" aria-live="polite">{modelStatus}</span>
+                  <span id={modelStatusId} class="settings-save-status" class:dirty={modelDirty && !modelBusy && !modelError} class:pending={modelBusy} class:invalid={Boolean(modelError) || Boolean(!modelDirty && savedModelOverride && sys.modelOverrideIgnored)} role="status" aria-live="polite">{modelStatus}</span>
                   <button class="primary" type="submit" disabled={!modelCanSave}>{modelBusy ? "저장 중…" : modelValueTrimmed ? "모델 저장" : "기본값 사용"}</button>
                 </div>
               </form>

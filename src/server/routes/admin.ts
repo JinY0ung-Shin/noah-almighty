@@ -22,6 +22,7 @@ import {
 import { listPluginRootSkills } from "../agent/skillCatalog.js";
 import { loadDefaultPluginRoots } from "../plugins.js";
 import { MODEL_TIER_IDS } from "../modelTiers.js";
+import { isAcceptedModelOverride, modelOverrideChoices, modelOverrideState } from "../modelOverride.js";
 import {
   apiError,
   avatarDir,
@@ -76,8 +77,12 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
-        // Admin-selected model override (a tier or a PI_MODEL_MAP key).
+        // Admin-selected model override (a tier or a PI_MODEL_MAP key), and
+        // whether the stored one is IGNORED (saved before validation — e.g. an
+        // SDK-era Claude model id — so runs use the default tier instead).
         modelOverride: store.getModelOverride(),
+        modelOverrideIgnored: modelOverrideState(store, config).ignored !== null,
+        modelOverrideChoices: modelOverrideChoices(config),
         // Per-model-tier vision policy (+ the deployment default an unset tier
         // inherits) — the panel renders one selector per tier.
         modelVisionPolicy: store.getModelVisionPolicy(),
@@ -528,11 +533,17 @@ export function createAdminRouter(deps: RouterDeps): Router {
   });
 
   // Admin-selected agent model: used when a conversation picked no tier
-  // (runCapabilities.ts), mapped to a pi model through PI_MODEL_MAP.
+  // (runCapabilities.ts), mapped to a pi model through PI_MODEL_MAP — so only a
+  // tier name or a PI_MODEL_MAP key is accepted (review-2 M2; anything else
+  // would silently run on pi's own default model).
   router.put("/api/admin/model", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
     const model = safeString(req.body?.model);
     if (!model) {
       apiError(res, 400, "모델 이름을 입력해 주세요.");
+      return;
+    }
+    if (!isAcceptedModelOverride(config, model)) {
+      apiError(res, 400, `티어 이름 또는 PI_MODEL_MAP에 있는 이름만 지정할 수 있습니다: ${modelOverrideChoices(config).join(", ")}`);
       return;
     }
     store.setModelOverride(model);
