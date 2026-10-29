@@ -331,6 +331,7 @@ function installGates(session: Session, serverName: string, gates: McpRunGates):
 }
 
 function jsonRpcError(res: Response, status: number, code: number, message: string, headers: Record<string, string> = {}) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
   for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
   res.status(status).json({ jsonrpc: "2.0", error: { code, message }, id: null });
 }
@@ -414,7 +415,10 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
   const acl = options.networkAcl ?? null;
 
   // Before the body parser: a peer outside the allowlist costs no parse.
+  // The router sits ahead of createApp's security-header middleware, so it
+  // sets nosniff itself on every response (JSON, SSE and errors alike).
   router.all(`${basePath}/:server`, (req: Request, res: Response, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
     if (acl && !acl.allows(req.socket.remoteAddress)) {
       jsonRpcError(res, 403, -32001, "Forbidden: this address may not reach the MCP endpoint");
       return;

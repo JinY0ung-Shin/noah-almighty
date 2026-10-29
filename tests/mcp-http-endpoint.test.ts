@@ -279,11 +279,28 @@ describe("NOAH_MCP_ALLOWED_CIDRS (optional peer allowlist)", () => {
           body: JSON.stringify(initBody),
         });
         expect(res.status, cidrs).toBe(expected);
+        expect(res.headers.get("x-content-type-options"), cidrs).toBe("nosniff");
         await res.body?.cancel();
       } finally {
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     }
+  });
+});
+
+describe("/mcp response headers", () => {
+  it("sets nosniff on error responses and on a served initialize", async () => {
+    const missing = await rawInit("repo");
+    expect(missing.status).toBe(401);
+    expect(missing.headers.get("x-content-type-options")).toBe("nosniff");
+    const token = registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } });
+    const unknown = await rawInit("nope", token);
+    expect(unknown.status).toBe(404);
+    expect(unknown.headers.get("x-content-type-options")).toBe("nosniff");
+    const ok = await rawInit("repo", token);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("x-content-type-options")).toBe("nosniff");
+    await ok.body?.cancel();
   });
 });

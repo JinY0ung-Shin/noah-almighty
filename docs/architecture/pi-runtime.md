@@ -135,9 +135,9 @@ component by NAME:
   conversation and account deletion. The generic writers take an `anchor` (the deepest folder the agent cannot
   replace) — the pi user root on pi runs, the scratch workspace itself on the SDK path.
 - **Residual (documented, not closable from Node):** a missing folder created on the way can be raced only into a
-  refusal; a file's CONTENT is the agent's after Noah wrote it; and without `/proc/self/fd` (non-Linux dev hosts —
-  pi is Linux-only) entries are addressed by name under the pinned folder's original path (check-then-act) and the
-  opened-file check passes. **A new host-side operation below a sandbox root MUST go through `piSandboxDir` /
+  refusal; and a file's CONTENT is the agent's after Noah wrote it. Without `/proc/self/fd` there is no pinning
+  (entries would be addressed by name, check-then-act), so `AGENT_RUNTIME=pi` REFUSES TO BOOT there
+  (`assertProcFdPinning` in `loadPiRuntimeConfig`); only the SDK path's scratch writers run in that fallback. **A new host-side operation below a sandbox root MUST go through `piSandboxDir` /
   `PinnedDir`** — `removeNoFollow` and by-name `fs.*` calls are only for paths whose every ancestor is Noah's.
 
 ## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)

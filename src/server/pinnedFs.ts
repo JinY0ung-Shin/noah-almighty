@@ -25,9 +25,11 @@
  * Residual (not closable from Node, documented): a MISSING folder on the way is
  * created by mkdir under the pinned parent and then opened no-follow, so a race
  * there can only make Noah refuse; file CONTENT stays the agent's after Noah
- * wrote it; and without `/proc/self/fd` (non-Linux dev hosts — pi itself is
- * Linux-only) entries are addressed by name under the pinned folder's original
- * path, i.e. check-then-act.
+ * wrote it; and without `/proc/self/fd` (non-Linux dev hosts) entries are
+ * addressed by name under the pinned folder's original path, i.e.
+ * check-then-act — which is why `AGENT_RUNTIME=pi` refuses to boot there
+ * ({@link assertProcFdPinning}); only the SDK path's scratch writers ever run
+ * in that mode.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -65,6 +67,19 @@ export function fdPathIs(fd: number, expected: string): boolean {
     return fs.readlinkSync(`/proc/self/fd/${fd}`) === expected;
   } catch {
     return false;
+  }
+}
+
+/**
+ * pi runs depend on descriptor pinning for their safety (the sandbox is
+ * agent-writable at Noah's uid), so `AGENT_RUNTIME=pi` refuses to boot without
+ * `/proc/self/fd` instead of silently falling back to check-then-act.
+ */
+export function assertProcFdPinning(available: boolean = procFdAvailable()): void {
+  if (!available) {
+    throw new Error(
+      "AGENT_RUNTIME=pi requires /proc/self/fd (Linux with /proc mounted): Noah pins every sandbox folder by descriptor and will not fall back to check-then-act path operations.",
+    );
   }
 }
 

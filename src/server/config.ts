@@ -3,6 +3,7 @@ import type { AgentRuntime, AppConfig, PiModelMapping, PiRuntimeConfig } from ".
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { MODEL_TIER_IDS } from "./modelTiers.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
+import { assertProcFdPinning } from "./pinnedFs.js";
 
 function env(name: string, fallback = ""): string {
   return process.env[name]?.trim() || fallback;
@@ -74,6 +75,8 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
   } catch {
     throw new Error("PI_GATEWAY_URL must be an absolute URL (e.g. http://pi-gateway:8080).");
   }
+  // Sandbox folders are only ever touched through descriptor pinning.
+  assertProcFdPinning();
   const workspacesDir = env("PI_WORKSPACES_DIR");
   // Validated here so a typo fails the boot instead of opening or closing /mcp.
   const mcpAcl = parseMcpNetworkAcl(env("NOAH_MCP_ALLOWED_CIDRS"));

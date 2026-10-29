@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/server/types.js";
-import { PinnedDir, listDirVerified, readFileVerified } from "../src/server/pinnedFs.js";
+import { PinnedDir, assertProcFdPinning, listDirVerified, procFdAvailable, readFileVerified } from "../src/server/pinnedFs.js";
 import {
   deletePiConversationCopies,
   deletePiUserWorkspace,
@@ -73,6 +73,15 @@ function world() {
 }
 
 describe("PinnedDir", () => {
+  it("AGENT_RUNTIME=pi refuses to boot without /proc/self/fd instead of falling back to check-then-act", () => {
+    expect(() => assertProcFdPinning(false)).toThrow(/AGENT_RUNTIME=pi requires \/proc\/self\/fd/);
+    expect(() => assertProcFdPinning(true)).not.toThrow();
+    expect(procFdAvailable()).toBe(true); // this Linux test host
+    // The pi config loader runs the assertion (a typo-proof pin of the wiring).
+    const config = fs.readFileSync(new URL("../src/server/config.ts", import.meta.url), "utf8");
+    expect(config.slice(config.indexOf("function loadPiRuntimeConfig"))).toMatch(/^[\s\S]*?assertProcFdPinning\(\);[\s\S]*?return \{/);
+  });
+
   it("refuses a link anywhere on the way and keeps writing into the folder it pinned after a swap", () => {
     const base = dir();
     fs.mkdirSync(path.join(base, "root", "a"), { recursive: true });
