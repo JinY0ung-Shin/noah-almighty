@@ -504,7 +504,7 @@ describe("mcp__todo__* registration", () => {
     pluginRoots: { type: "local"; path: string }[] = [],
   ) {
     built.servers.length = 0;
-    const workspace = piWorkspaceFor(s.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+    const workspace = piWorkspaceFor(s.config, request.avatarConsultation ? "consult-000000000000000000000000" : piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
     const caps = await buildRunCapabilities(request, pluginRoots, s.config, s.store, runEvents, undefined, () => 0, {
       piConversationDir: workspace.conversationDir,
       piWorkspace: workspace,

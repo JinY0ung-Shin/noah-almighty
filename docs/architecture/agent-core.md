@@ -251,7 +251,7 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   `ConfluenceToolsContext.isConversationLive` (the conversation row still exists — ids are never reused) is
   checked after the write. Target = `ConfluenceToolsContext.workspaceDir` = the host view of the run's sandbox
   conversation folder (`piWorkspace.hostConversationDir`, falling back to the pure `conversationScratchDir(request)`).
-  No `conversationId` (profile generators, consultations — their ephemeral work folder is not a conversation
+  No `conversationId` (profile generators, consultations — their run folder is not a conversation
   workspace) → undefined → the option refuses before any request ("Saving attachments to the workspace is not
   available in this run."). `buildRunCapabilities` derives ONE boolean, `confluenceSaveToWorkspace` = Confluence group
   registered && `elevatedToolAccess` && scratch dir && `confluenceCredentialsConfigured` (the tools' own

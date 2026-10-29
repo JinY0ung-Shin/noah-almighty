@@ -23,11 +23,22 @@
   `modelFallback: true`, a 3-min wall clock (`AVATAR_ASK_TIMEOUT_MS`), an 8k-char answer cap
   (`AVATAR_ASK_ANSWER_CAP` — the answer is another user's model output entering the asker's context, so
   it's bounded like the directory bio), and the OUTER run's abort signal propagated in.
-- **Where it runs:** on pi like every run, in the ASKER's own sandbox (`piRunPrincipal` = `viewerUserId`, the
-  asking owner), with pi's full built-ins there — pi has no per-request tool allowlist (decision U8). It never
-  reaches the target owner's files: their repo/brain are reachable only through the MCP tools below, and no
-  conversation exists, so the run works in an ephemeral `/workspace/c/<run-…>/` folder with no stored session
-  and no frozen instructions row.
+- **Where it runs:** on pi like every run, with pi's full built-ins (pi has no per-request tool allowlist,
+  decision U8) — but in a FRESH, EMPTY sandbox of its own, never the asker's or the target's (user decision
+  2026-10-30, review-2 H1). The run is driven by the TARGET's authored content (persona, knowledge-repo
+  `CLAUDE.md`, recalled notes, captured third-party pages) with nobody watching; in the asker's sandbox that text
+  could read the asker's conversation files, tamper with the asker's repo copies (committed later as the asker)
+  and file what it read to the target via `request_info`. So `runPiAgent` mints a principal no user has
+  (`beginPiConsultationSandbox` → `consult-<24 random hex>`, pi's user-id pattern), runs there, and removes its
+  `u-<key>` folder (descriptor-pinned, no link followed) plus Noah's repo-copy records when the run ends
+  (`endPiConsultationSandbox`); a record under `<dataDir>/pi-consultation-sandboxes/` lets the boot sweep one a
+  crash left (`sweepPiConsultationSandboxes`). `piRunPrincipal` REFUSES a consultation request, so no caller
+  can fall back to a user's sandbox. pi's sandbox container is not Noah's to stop: sandboxd reaps it once idle
+  (`SANDBOX_IDLE_SECONDS`, 15 min by default). Cost: every consultation cold-starts a sandbox container (~300 ms
+  on the dev box, before the model's first token). `viewerUserId` stays the asker — it is who the MCP gates see
+  (trust, `request_info` attribution), not whose files the shell gets. The run folder is `/workspace/c/run-ask`
+  with no stored session and no frozen instructions row. `request_info` stays: with an empty sandbox there is
+  nothing of the asker's to exfiltrate through it, and filing a gap with the asker attributed is its purpose.
 - **Machine-initiated ⇒ read-only toward the TARGET's data, beyond what a human teammate turn gets**
   (`consultationRun` in `runCapabilities.ts`): the shared-account write-widening is withheld
   (`repoWriteAccess`'s `sharedAccount && elevatedToolAccess` arm adds `&& !consultationRun` — no human sees the
@@ -35,7 +46,7 @@
   relayed at all (third-party servers can't self-gate per viewer; registration is their only gate), and no
   vault value reaches any child. The target keeps skills (prompt-level) but answers with recall MCP tools only
   (`mcpAllowedTools` + handler self-gates); the consultation prompt branch and describe_system state what the
-  run has, that its sandbox is the asker's own, and the `brainSection` "consultation" mode never invites
+  run has, that its sandbox is an empty temporary one owned by nobody (`sandboxOwner: "nobody"`), and the `brainSection` "consultation" mode never invites
   capture, even on a shared account.
 - **Per-turn budget:** the tool closure in `avatarDirectoryTools.ts` counts consultations and refuses
   past `AVATAR_ASK_MAX_PER_TURN` (5) — each consult is a full pi run with its own model calls,

@@ -340,7 +340,7 @@ type HeadlessAvatarResult =
 
 /**
  * Run a headless, owner-scoped agent turn (no owner-level MCP tools; pi
- * built-ins in the owner's own sandbox, ephemeral work folder) for the avatar's OWN
+ * built-ins in the owner's own sandbox, a reused run folder) for the avatar's OWN
  * profile generators (intro/hashtags). Sets up the per-feature workspace, a
  * 2-minute abort deadline, and returns the raw reply text (`response.text ||
  * response.summary || ""`) on success, or `{ ok: false }` on a thrown run (the

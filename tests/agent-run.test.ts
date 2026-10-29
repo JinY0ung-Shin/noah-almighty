@@ -108,7 +108,8 @@ type Env = ReturnType<typeof setup>;
 
 /** The plan as runPiAgent builds it, plus the frozen append and this turn's preamble its stamps produce. */
 async function plan(env: Env, request: AgentRequest, events: AgentEvents | undefined = makeEvents(), pluginRoots: PluginRoot[] = []) {
-  const workspace = piWorkspaceFor(env.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+  const principal = request.avatarConsultation ? "consult-000000000000000000000000" : piRunPrincipal(request);
+  const workspace = piWorkspaceFor(env.config, principal, request.conversationId ?? piEphemeralRunKey(request));
   const caps = await buildRunCapabilities(request, pluginRoots, env.config, env.store, events, undefined, () => 0, {
     piConversationDir: workspace.conversationDir,
     piWorkspace: workspace,
@@ -376,7 +377,7 @@ describe("run capability plan", () => {
     );
     expect(consultation.caps.piMcpProxies.facts.pluginServers).toEqual([]);
     expect(consultation.caps.piMcpProxies.upstreams).toEqual([]);
-    expect(consultation.caps.piRuntimeFacts.sandboxOwner).toBe("asker");
+    expect(consultation.caps.piRuntimeFacts.sandboxOwner).toBe("nobody");
   });
 
   it("redacts a BROWSER-typeable secret from every result, and only the opted-in names", async () => {

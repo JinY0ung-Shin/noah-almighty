@@ -2,9 +2,11 @@
  * One Noah run on pi-gateway (`AGENT_RUNTIME=pi`, design §6 N3,
  * docs/architecture/pi-runtime.md) — the only agent runtime: `runAgentStream`
  * sends every non-`local` run here, in the sandbox of the user it runs AS
- * (`piRunPrincipal`). A run without a conversation (an avatar consultation, a
- * profile generator) uses an ephemeral work folder (`piEphemeralRunKey`) and
- * always a fresh pi session: nothing is stored for it.
+ * (`piRunPrincipal`) — or, for an avatar consultation, in a fresh empty sandbox
+ * of its own that is removed when the run ends (`beginPiConsultationSandbox`).
+ * A run without a conversation (a consultation, a profile generator) uses a
+ * run folder (`piEphemeralRunKey`) and always a fresh pi session: nothing is
+ * stored for it.
  *
  * The capability plan (`runCapabilities.ts`) decides the gates, the in-process
  * MCP servers and the self-state both metacognition surfaces report; this
@@ -56,7 +58,14 @@ import {
 } from "../promptBuilder.js";
 import { resultErrorMessage } from "../runErrors.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog, piKnownTools } from "./mcpCatalog.js";
-import { PI_RUN_TOKEN_HEADER, piEphemeralRunKey, piRunPrincipal, piServicesFor } from "./piRuntime.js";
+import {
+  PI_RUN_TOKEN_HEADER,
+  beginPiConsultationSandbox,
+  endPiConsultationSandbox,
+  piEphemeralRunKey,
+  piRunPrincipal,
+  piServicesFor,
+} from "./piRuntime.js";
 import { ensurePiConversationDir, piWorkspaceFor, stagePiAttachmentFiles } from "./piWorkspace.js";
 import { materializePiSkills } from "./piSkills.js";
 import { PiTurnFailedError, runPiTurn, type PiRunResult } from "./eventAdapter.js";
@@ -151,8 +160,30 @@ export async function runPiAgent(
   abortController: AbortController | undefined,
   deps: RunPiAgentDeps = {},
 ): Promise<AgentResponse> {
-  const principal = piRunPrincipal(request);
-  // Undefined for a run without a conversation: an ephemeral folder, a fresh
+  if (!request.avatarConsultation) {
+    return runPiAgentAs(piRunPrincipal(request), request, pluginRoots, config, store, events, abortController, deps);
+  }
+  // A consultation runs in a fresh, empty sandbox of its own — never the
+  // asker's or the consulted owner's (piRunPrincipal) — removed when it ends.
+  const principal = beginPiConsultationSandbox(config);
+  try {
+    return await runPiAgentAs(principal, request, pluginRoots, config, store, events, abortController, deps);
+  } finally {
+    endPiConsultationSandbox(config, principal);
+  }
+}
+
+async function runPiAgentAs(
+  principal: string,
+  request: AgentRequest,
+  pluginRoots: PluginRoot[],
+  config: AppConfig,
+  store: Store,
+  events: AgentEvents | undefined,
+  abortController: AbortController | undefined,
+  deps: RunPiAgentDeps,
+): Promise<AgentResponse> {
+  // Undefined for a run without a conversation: a run folder, a fresh
   // session every time, no stored profile, instructions or resume point.
   const conversationId = request.conversationId;
   const workKey = conversationId ?? piEphemeralRunKey(request);

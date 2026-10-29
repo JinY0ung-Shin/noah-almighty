@@ -163,10 +163,11 @@ export interface PiRuntimeFacts {
   /**
    * Whose sandbox the run's built-ins work in (`piRunPrincipal`): the avatar
    * `owner` (own chat, routine, task API, profile generators), the `viewer`
-   * (a colleague chatting with someone else's avatar, trusted or not), or the
-   * `asker` (an avatar consultation runs in the asking user's sandbox). Both
-   * surfaces state it (`piSandboxOwnerSentence`), so a non-owner run never
-   * mistakes those files for the owner's.
+   * (a colleague chatting with someone else's avatar, trusted or not), or
+   * `nobody` (an avatar consultation runs in a fresh, empty sandbox of its own,
+   * removed when the run ends — `beginPiConsultationSandbox`). Both surfaces
+   * state it (`piSandboxOwnerSentence`), so a non-owner run never mistakes
+   * those files for the owner's.
    */
   sandboxOwner?: PiSandboxOwner;
   /**
@@ -206,7 +207,7 @@ export interface PiRuntimeFacts {
 }
 
 /** See {@link PiRuntimeFacts.sandboxOwner}. */
-export type PiSandboxOwner = "owner" | "viewer" | "asker";
+export type PiSandboxOwner = "owner" | "viewer" | "nobody";
 
 /** See {@link PiRuntimeFacts.knownTools}. */
 export interface PiKnownTools {

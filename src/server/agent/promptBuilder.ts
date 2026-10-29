@@ -785,7 +785,9 @@ function piRuntimeSection(request: AgentRequest): string | null {
     ? `Work in this conversation's folder \`${pi.conversationDir}\`: create files there and always pass ABSOLUTE paths to every tool — the shell starts in /workspace, not in that folder. The user's attached files, your browser captures and saved Confluence attachments land in its \`attachments/\`, \`captures/\` and \`confluence/\` subfolders. `
     : "Use absolute paths under /workspace. ";
   return (
-    "**Runtime: your own pi sandbox.** You run inside THIS user's Linux sandbox (no sudo; its files persist for this user across conversations). " +
+    (pi.sandboxOwner === "nobody"
+      ? "**Runtime: a temporary pi sandbox.** You run inside a Linux sandbox made for this one run (no sudo; nothing in it persists). "
+      : "**Runtime: your own pi sandbox.** You run inside THIS user's Linux sandbox (no sudo; its files persist for this user across conversations). ") +
     (sandboxOwner ? `${sandboxOwner} ` : "") +
     "It has no direct network: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), and only to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance; empty by default, which blocks everything). Direct TCP/UDP, DNS and raw SSH always fail, and a destination off the list answers `407 Request rejected by proxy` — report it as that operator's policy, never work around it. Noah's own tools (`mcp__web__fetch` and the rest) do not run in the sandbox and keep Noah's network. " +
     folder +
@@ -1189,15 +1191,16 @@ export function buildSystemPromptAppend(
           : "."),
     );
     // State the tool level explicitly (every sibling branch does): the
-    // built-ins here work in the ASKER's sandbox, so the owner's knowledge is
-    // reachable only through the recall tools, which would otherwise go unused.
+    // built-ins here work in an empty sandbox of this run's own, so the owner's
+    // knowledge is reachable only through the recall tools, which would
+    // otherwise go unused.
     lines.push(
       "Your owner's knowledge is reachable in this consultation only through the Noah recall tools" +
         (mcpToolGroupEnabled(request, "personal_knowledge") &&
         request.knowledgeRepoConfigured !== false
           ? ": recall what you know with `mcp__brain__search`/`mcp__brain__get_note` and `mcp__repo__list_files`/`mcp__repo__read_file`."
           : ".") +
-        " Repository writes are unavailable here. Your built-in file and shell tools work in the asking teammate's sandbox, not your owner's, so they cannot reach your owner's knowledge — do not use them to look for it.",
+        " Repository writes are unavailable here. Your built-in file and shell tools work in an empty, temporary sandbox that belongs to nobody (neither your owner's nor the asking teammate's), so they cannot reach your owner's knowledge — do not use them to look for it.",
     );
     const consultationBrainBlock = mcpToolGroupEnabled(
       request,

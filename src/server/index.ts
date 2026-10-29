@@ -14,6 +14,7 @@ import { applyCustomGithubCa } from "./tlsCa.js";
 import { retireCraftApps } from "./retireCraftApps.js";
 import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
+import { sweepPiConsultationSandboxes } from "./agent/pi/piRuntime.js";
 import {
   deckToolchainLogFields,
   probeDeckRendering,
@@ -52,6 +53,12 @@ retireCraftApps(services);
 // quarantine the whole folder once, after the retirements above took their own
 // transcripts out of it (best effort; a marker ends it).
 retireAgentSessions(services);
+// Avatar consultations run in a sandbox of their own, removed when the run ends;
+// remove the ones a crash or restart left behind (best effort).
+const sweptConsultations = sweepPiConsultationSandboxes(services.config);
+if (sweptConsultations > 0) {
+  logger.info({ count: sweptConsultations }, "removed leftover avatar-consultation sandboxes");
+}
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);

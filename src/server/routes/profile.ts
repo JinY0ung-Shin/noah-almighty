@@ -194,7 +194,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
 
   // One intro/hashtags generation per user at a time: each is a ~2-minute pi
   // run and they share one work folder (workspaceDirFor(…, "intro"/"hashtags")
-  // → the ephemeral sandbox folder `piEphemeralRunKey` derives from it), so
+  // → the reused sandbox run folder `piEphemeralRunKey` derives from it), so
   // concurrent runs would stomp each other AND let one user fan out unbounded runs. A per-user in-flight set gates re-entry with 409.
   const generateInFlight = new Set<string>();
 

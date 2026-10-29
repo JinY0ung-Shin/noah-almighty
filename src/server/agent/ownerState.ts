@@ -196,8 +196,8 @@ export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): strin
   if (owner === "viewer") {
     return "This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner: your built-in tools (read/write/edit/ls/find/grep/bash) work only on that colleague's own files, never on the owner's, and anything you build there is theirs. The owner's knowledge and repositories are reachable only through the Noah tools this run lists, which refuse anything reserved for the owner.";
   }
-  if (owner === "asker") {
-    return "This consultation runs in the sandbox of the teammate who asked — NOT your owner's: your built-in tools see only that teammate's files, and nothing you write there reaches the answer. Answer from your owner's knowledge through the Noah recall tools this run lists.";
+  if (owner === "nobody") {
+    return "This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's: it starts with no files, nothing you write there reaches the answer, and it is deleted when the run ends. Answer from your owner's knowledge through the Noah recall tools this run lists.";
   }
   return "";
 }

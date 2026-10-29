@@ -244,11 +244,15 @@ These are the invariants the project is built around. New work should reinforce 
   every composer tier are required — it is the ONLY
   tier→model source) or `local` (the deterministic stub for tests and the e2e harness); anything else stops the
   boot. Every run goes to `runPiAgent` in ONE sandbox principal, `piRunPrincipal` = whoever the run executes AS
-  (`viewerUserId ?? avatar.id`: the viewer of a colleague chat, the ASKER of a consultation, the owner of a
-  routine/task/generator). The formerly read-only classes (untrusted colleague, consultation, intro/hashtag
-  generators) therefore get the FULL built-ins in their OWN sandbox — never the owner's files — and reach owner
-  data only through the gated, self-gating MCP tools; both surfaces say exactly that. A run without a
-  conversation works in an ephemeral `/workspace/c/<run-…>/` folder (no stored session, no frozen prompt row).
+  (`viewerUserId ?? avatar.id`: the viewer of a colleague chat, the owner of a routine/task/generator). An avatar
+  CONSULTATION is nobody's: it runs in a FRESH, EMPTY sandbox of its own (`consult-<random>`,
+  `beginPiConsultationSandbox`), deleted when it ends and swept at boot after a crash — never the asker's (the
+  target's authored text would drive a shell over the asker's files, unattended) nor the target's (user decision
+  2026-10-30); `viewerUserId` stays the asker for the MCP gates. The formerly read-only classes (untrusted
+  colleague, consultation, intro/hashtag generators) therefore get the FULL built-ins, never over the owner's
+  files, and reach owner data only through the gated, self-gating MCP tools; both surfaces say exactly that. A run
+  without a conversation works in a `/workspace/c/<run-…>/` folder (no stored session, no frozen prompt row; a
+  generator's folder is reused in the owner's sandbox, a consultation's goes with its sandbox).
   Noah never executes git or agent-authored code from a sandbox dir: a working repo is a sandbox COPY whose
   working tree `commit` reads back into the canonical clone (git runs there, `serverGitEnv`), and a stdio plugin
   MCP server spawns only from the plugins bundled with Noah — every agent-editable root (knowledge repo, group

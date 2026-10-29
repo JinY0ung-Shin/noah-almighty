@@ -3481,15 +3481,17 @@ describe("system tools (avatar system management)", () => {
     expect(colleague).toContain("- runtime: pi (pi-gateway)");
     expect(colleague).toContain(piSandboxOwnerSentence("viewer"));
 
-    // A consultation: the ASKER's sandbox, in an ephemeral run folder.
+    // A consultation: a fresh sandbox of its own, owned by nobody, in its run folder.
     const asker = runtime(await describe({
       ...s.baseCtx,
       config,
       viewerIsOwner: false,
-      piRuntime: { sandboxOwner: "asker", conversationDir: "/workspace/c/run-ask-u1", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "nobody", conversationDir: "/workspace/c/run-ask", shellSecretsUnavailable: [] },
     }));
-    expect(asker).toContain(piSandboxOwnerSentence("asker"));
-    expect(asker).toContain("Work in this run's folder `/workspace/c/run-ask-u1`");
+    expect(asker).toContain(piSandboxOwnerSentence("nobody"));
+    expect(asker).toContain("You run in a temporary Linux sandbox made for this one run: no sudo, nothing in it persists");
+    expect(asker).not.toContain("THIS user's own Linux sandbox");
+    expect(asker).toContain("Work in this run's folder `/workspace/c/run-ask`");
 
     // No Claude CLI / SDK wording survives on either branch.
     for (const line of [owner, colleague, asker]) {

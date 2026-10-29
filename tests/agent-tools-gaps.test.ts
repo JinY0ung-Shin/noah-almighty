@@ -991,7 +991,7 @@ describe("run plan — the Confluence save target", () => {
       {
         label: "avatar consultation",
         over: { viewerUserId: colleague.id, viewerIsOwner: false, avatarConsultation: true, conversationId: undefined },
-        sandboxOwner: "asker",
+        sandboxOwner: "nobody",
       },
       // Profile generators: headless, no viewer, no conversation — the owner's sandbox.
       {

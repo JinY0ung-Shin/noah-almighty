@@ -134,7 +134,7 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
 
 /** What one run registers (the plan as runPiAgent builds it): the gate entry, the server's own tool, the prompt. */
 async function planRun(s: ReturnType<typeof setup>, request: AgentRequest, events: AgentEvents) {
-  const workspace = piWorkspaceFor(s.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+  const workspace = piWorkspaceFor(s.config, request.avatarConsultation ? "consult-000000000000000000000000" : piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
   const caps = await buildRunCapabilities(request, [], s.config, s.store, events, undefined, () => 0, {
     piConversationDir: workspace.conversationDir,
     piWorkspace: workspace,

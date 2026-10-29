@@ -4,6 +4,7 @@
  * the registration script's server list. The fake client replaces the network;
  * everything Noah-side (store, capability plan, MCP servers, router) is real.
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -20,12 +21,22 @@ import type { AgentEvents } from "../src/server/agent/events.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
 import { McpRunRegistry, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
 import { PI_MCP_SERVER_NAMES } from "../src/server/agent/pi/mcpCatalog.js";
-import { PI_RUN_TOKEN_HEADER, piEphemeralRunKey, piRunPrincipal, piRunWorkspace } from "../src/server/agent/pi/piRuntime.js";
+import {
+  PI_CONSULTATION_PRINCIPAL_PATTERN,
+  PI_RUN_TOKEN_HEADER,
+  beginPiConsultationSandbox,
+  piEphemeralRunKey,
+  piRunPrincipal,
+  piRunWorkspace,
+  sweepPiConsultationSandboxes,
+} from "../src/server/agent/pi/piRuntime.js";
+import { askAvatar } from "../src/server/agent/avatarAsk.js";
+import { piSandboxOwnerSentence } from "../src/server/agent/ownerState.js";
 import { isPiResponseId, piSessionKey, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import { piConversationSegment, piHostPath, piUserKey, piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { PiGatewayError, type PiResponseRequest, type PiResponsesClient, type PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
-import { withTempDir, signup } from "./helpers.js";
+import { gitInit, makeBareRemote, withTempDir, signup } from "./helpers.js";
 
 const dir = withTempDir("pi-runner");
 
@@ -143,37 +154,120 @@ const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req
 // ---- runPiAgent ---------------------------------------------------------------------------
 
 describe("runPiAgent: formerly read-only run classes (U8)", () => {
-  it("runs an avatar consultation in the ASKER's sandbox: ephemeral folder, fresh session, nothing stored", async () => {
-    const { store, config, owner, base } = setup();
+  it("runs each avatar consultation in a FRESH, EMPTY sandbox of its own, gated as before, and removes it afterwards", async () => {
+    const { store, config, owner } = setup();
+    // owner = the CONSULTED avatar (C), asker = the asking avatar's owner (A).
     const asker = store.createUser({ username: "asker", displayName: "Asker", password: "password123" });
-    const { client, requests } = fakeClient([() => textTurn("resp_c1_1", "One answer"), () => textTurn("resp_c2_1", "Again")]);
-    const consult = base({
-      conversationId: undefined,
-      viewerUserId: asker.id,
-      viewerName: "Asker",
-      viewerIsOwner: false,
-      elevated: true,
-      headless: true,
-      allowHeadlessTools: true,
-      avatarConsultation: true,
-      cwd: path.join(dir(), "ws-host", `avatar-ask-${asker.id}`),
-    });
-    const first = await runPiAgent(consult, [], config, store, {}, undefined, { client });
-    expect(first.text).toBe("One answer");
-    const [req] = requests;
-    expect(req!.user).toBe(asker.id);
-    expect(req!.previousResponseId).toBeUndefined();
-    expect(req!.instructions).toContain(`/workspace/c/run-ask-${owner.id}`);
-    expect(req!.instructions).toContain("sandbox of the teammate who asked");
-    expect(inputText(req!)).toContain("Run kind (this turn): an automated avatar-to-avatar consultation");
-    // The folder exists in the asker's sandbox, not the owner's.
-    const ws = piWorkspaceFor(config, asker.id, `run-ask-${owner.id}`);
-    expect(fs.statSync(ws.hostConversationDir!).isDirectory()).toBe(true);
-    expect(fs.existsSync(piWorkspaceFor(config, owner.id, `run-ask-${owner.id}`).hostConversationDir!)).toBe(false);
-    // No conversation: every run is a new session with freshly rendered instructions.
-    await runPiAgent(consult, [], config, store, {}, undefined, { client });
-    expect(requests[1]!.previousResponseId).toBeUndefined();
-    expect(requests[1]!.instructions).toBe(req!.instructions);
+    const group = store.createGroup({ name: "Team", createdBy: null });
+    store.addGroupMember(group.id, owner.id, "member");
+    store.addGroupMember(group.id, asker.id, "member");
+    // C's knowledge: a real vault the recall tools clone and search.
+    const seed = path.join(dir(), "kb-seed");
+    gitInit(seed);
+    fs.mkdirSync(path.join(seed, "wiki"), { recursive: true });
+    fs.writeFileSync(path.join(seed, "wiki", "release.md"), "---\ntitle: Release policy\n---\nReleases ship every Tuesday after the freeze.\n");
+    const remote = makeBareRemote(path.join(dir(), "kb.git"));
+    const git = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
+    git("add", "-A");
+    git("commit", "-q", "-m", "kb");
+    git("branch", "-M", "main");
+    git("remote", "add", "origin", remote);
+    git("push", "-q", "origin", "main");
+    store.setKnowledgeRepo(owner.id, remote, "main");
+    // Both users' own sandboxes hold files the consultation must never see or touch.
+    const ownFile = (userId: string) => {
+      const file = path.join(piWorkspaceFor(config, userId, "conv-x").hostConversationDir!, "attachments", "private.txt");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${userId} only`);
+      return file;
+    };
+    const askerFile = ownFile(asker.id);
+    const ownerFile = ownFile(owner.id);
+    const workspacesDir = config.pi!.workspacesDir!;
+    const rootsBefore = fs.readdirSync(workspacesDir).sort();
+
+    const registry = new McpRunRegistry();
+    const app = express();
+    app.use(express.json());
+    app.use(createMcpHttpRouter({ registry }));
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const connect = async (name: string, token: string) => {
+      const mcp = new Client({ name: "broker", version: "1" });
+      await mcp.connect(
+        new StreamableHTTPClientTransport(new URL(`${url}/mcp/${name}`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }),
+      );
+      return mcp;
+    };
+    const seen: Record<string, unknown> = {};
+    const step = async (req: PiResponseRequest) => {
+      const root = path.join(workspacesDir, piUserKey(req.user));
+      seen.during = { exists: fs.existsSync(root), entries: fs.readdirSync(root).sort(), runDir: fs.readdirSync(path.join(root, "c")) };
+      const token = req.headers![PI_RUN_TOKEN_HEADER]!;
+      const [brain, todo, repo, system] = await Promise.all(["brain", "todo", "repo", "system"].map((name) => connect(name, token)));
+      seen.recall = await brain.callTool({ name: "search", arguments: { query: "release" } });
+      seen.todo = await todo.callTool({ name: "list_todos", arguments: {} });
+      seen.write = await repo.callTool({ name: "write_file", arguments: { path: "x.md", content: "x" } });
+      seen.describe = await system.callTool({ name: "describe_system", arguments: {} });
+      await Promise.all([brain.close(), todo.close(), repo.close(), system.close()]);
+      return textTurn(`resp_c${requests.length}_1`, "Releases ship every Tuesday.");
+    };
+    const { client, requests } = fakeClient([step, step]);
+    const run: typeof runPiAgent = (request, roots, cfg, st, events, abort) =>
+      runPiAgent(request, roots, cfg, st, events, abort, { client, registry });
+    try {
+      const outcome = await askAvatar(store, config, { askerUserId: asker.id, askerName: "Asker", targetUsername: "owner", question: "When do releases ship?" }, { run, loadRoots: async () => [] });
+      expect(outcome).toMatchObject({ ok: true, answer: "Releases ship every Tuesday." });
+      // A second consultation gets ANOTHER fresh sandbox.
+      await askAvatar(store, config, { askerUserId: asker.id, askerName: "Asker", targetUsername: "owner", question: "Again?" }, { run, loadRoots: async () => [] });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    const [first, second] = requests;
+    expect(first!.user).toMatch(/^consult-[0-9a-f]{24}$/);
+    expect(second!.user).toMatch(/^consult-[0-9a-f]{24}$/);
+    expect(second!.user).not.toBe(first!.user);
+    expect([asker.id, owner.id]).not.toContain(first!.user);
+    // While it ran: a new root holding only the run folder (and the skill index dir).
+    expect(seen.during).toMatchObject({ exists: true, runDir: ["run-ask"] });
+    expect((seen.during as { entries: string[] }).entries.every((name) => ["c", ".noah"].includes(name))).toBe(true);
+    expect(first!.previousResponseId).toBeUndefined();
+    expect(first!.instructions).toContain("Work in this run's folder `/workspace/c/run-ask`");
+    expect(first!.instructions).toContain(piSandboxOwnerSentence("nobody"));
+    expect(first!.instructions).not.toContain("THIS user's Linux sandbox");
+    expect(inputText(first!)).toContain("Run kind (this turn): an automated avatar-to-avatar consultation");
+    // Gates unchanged: C's knowledge stays readable, owner-only tools refuse.
+    expect(seen.recall).not.toMatchObject({ isError: true });
+    expect(JSON.stringify(seen.recall)).toContain("wiki/release.md");
+    expect(seen.todo).toMatchObject({ isError: true });
+    expect(seen.write).toMatchObject({ isError: true });
+    const describeText = JSON.stringify(seen.describe);
+    expect(describeText).toContain("You run in a temporary Linux sandbox made for this one run");
+    expect(describeText).toContain("owned by nobody");
+    // Afterwards: both consultation roots are gone, nothing else changed.
+    expect(fs.readdirSync(workspacesDir).sort()).toEqual(rootsBefore);
+    expect(fs.readFileSync(askerFile, "utf8")).toBe(`${asker.id} only`);
+    expect(fs.readFileSync(ownerFile, "utf8")).toBe(`${owner.id} only`);
+    expect(fs.readdirSync(path.join(config.dataDir, "pi-consultation-sandboxes"))).toEqual([]);
+    expect(registry.size).toBe(0);
+  });
+
+  it("refuses to run a consultation in a user's sandbox, and the boot sweeps a crashed one", () => {
+    const { config } = setup();
+    expect(() => piRunPrincipal({ viewerUserId: "asker-1", avatarConsultation: true, avatar: { id: "owner-1" } })).toThrow(/own fresh sandbox/);
+    const principal = beginPiConsultationSandbox(config);
+    expect(principal).toMatch(PI_CONSULTATION_PRINCIPAL_PATTERN);
+    const ws = piWorkspaceFor(config, principal, "run-ask");
+    fs.mkdirSync(path.join(ws.hostConversationDir!, "junk"), { recursive: true });
+    // A link the sandbox planted is removed, never followed.
+    const outside = path.join(dir(), "outside.txt");
+    fs.writeFileSync(outside, "keep");
+    fs.symlinkSync(outside, path.join(ws.hostRoot!, "link"));
+    expect(sweepPiConsultationSandboxes(config)).toBe(1);
+    expect(fs.existsSync(ws.hostRoot!)).toBe(false);
+    expect(fs.readFileSync(outside, "utf8")).toBe("keep");
+    expect(sweepPiConsultationSandboxes(config)).toBe(0);
   });
 
   it("runs an untrusted colleague chat in the colleague's own sandbox and says so", async () => {
@@ -669,7 +763,6 @@ describe("piRunPrincipal", () => {
     ["owner routine", { ...base, headless: true, allowHeadlessTools: true }, "owner-1"],
     ["task API turn", { ...base, externalTaskApi: true }, "owner-1"],
     ["untrusted colleague (principal = viewer)", { ...base, viewerUserId: "x", viewerIsOwner: false }, "x"],
-    ["consultation (principal = asker)", { ...base, viewerUserId: "asker-1", headless: true, avatarConsultation: true, viewerIsOwner: false, elevated: true }, "asker-1"],
     ["intro/hashtag generator (owner)", { ...base, headless: true }, "owner-1"],
     ["no viewer → the avatar", { ...base, viewerUserId: undefined }, "owner-1"],
   ] as [string, AgentRequest, string][])("%s", (_label, req, principal) => {
@@ -681,7 +774,7 @@ describe("piRunPrincipal", () => {
   });
 
   it("keys a conversation-less run's folder by its kind", () => {
-    expect(piEphemeralRunKey({ ...base, avatarConsultation: true, cwd: "/data/ws/target/avatar-ask-asker" })).toBe("run-ask-owner-1");
+    expect(piEphemeralRunKey({ ...base, avatarConsultation: true, cwd: "/data/ws/target/avatar-ask-asker" })).toBe("run-ask");
     expect(piEphemeralRunKey({ ...base, cwd: "/data/ws/owner-1/intro" })).toBe("run-intro");
     expect(piEphemeralRunKey({ ...base })).toBe("run-headless");
   });

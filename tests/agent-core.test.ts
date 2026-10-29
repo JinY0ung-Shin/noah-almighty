@@ -1715,7 +1715,7 @@ describe("buildPrompt", () => {
     // built-in set it no longer runs with.
     expect(p).toContain("Your owner's knowledge is reachable in this consultation only through the Noah recall tools");
     expect(p).toContain("Repository writes are unavailable here.");
-    expect(p).toContain("Your built-in file and shell tools work in the asking teammate's sandbox, not your owner's");
+    expect(p).toContain("Your built-in file and shell tools work in an empty, temporary sandbox that belongs to nobody (neither your owner's nor the asking teammate's)");
     expect(p).not.toContain("READ-ONLY");
     expect(p).not.toContain("Read/Glob/Grep");
     expect(p).toContain("Recall is read-only in this consultation");
@@ -3509,7 +3509,7 @@ describe("planMcpToolFamilies", () => {
 
 describe("pi sandbox owner (both metacognition surfaces)", () => {
   const VIEWER = piSandboxOwnerSentence("viewer");
-  const ASKER = piSandboxOwnerSentence("asker");
+  const ASKER = piSandboxOwnerSentence("nobody");
   const avatar = { id: "a1", displayName: "도우미", alias: "", persona: "" };
   const colleagueRequest: AgentRequest = {
     message: "안녕",
@@ -3527,14 +3527,15 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     viewerIsOwner: false,
     elevated: true,
     viewerName: "질문자",
-    piRuntime: { conversationDir: "/workspace/c/run-ask-a1", sandboxOwner: "asker", shellSecretsUnavailable: [] },
+    piRuntime: { conversationDir: "/workspace/c/run-ask", sandboxOwner: "nobody", shellSecretsUnavailable: [] },
   };
 
   it("names the colleague's or the asker's sandbox, and says nothing extra for the owner's own runs", () => {
     expect(VIEWER).toContain("This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner");
     expect(VIEWER).toContain("work only on that colleague's own files, never on the owner's");
     expect(VIEWER).toContain("reachable only through the Noah tools this run lists");
-    expect(ASKER).toContain("This consultation runs in the sandbox of the teammate who asked — NOT your owner's");
+    expect(ASKER).toContain("This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's");
+    expect(ASKER).toContain("it is deleted when the run ends");
     expect(ASKER).toContain("nothing you write there reaches the answer");
     expect(ASKER).toContain("through the Noah recall tools this run lists");
     // "this user's sandbox" already says it for the owner.
@@ -3551,7 +3552,9 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     expect(consultation).toContain(ASKER);
     expect(consultation).not.toContain(VIEWER);
     // A conversation-less run works in its ephemeral run folder.
-    expect(consultation).toContain("Work in this run's folder `/workspace/c/run-ask-a1`");
+    expect(consultation).toContain("Work in this run's folder `/workspace/c/run-ask`");
+    expect(consultation).toContain("**Runtime: a temporary pi sandbox.** You run inside a Linux sandbox made for this one run (no sudo; nothing in it persists).");
+    expect(consultation).not.toContain("**Runtime: your own pi sandbox.**");
     // The owner's own chat names neither.
     const owner = buildSystemPromptAppend({
       ...colleagueRequest,

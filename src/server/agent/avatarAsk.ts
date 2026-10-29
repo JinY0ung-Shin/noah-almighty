@@ -34,6 +34,13 @@ export {
  * with persona + personal-knowledge READ tools (second-brain recall), exactly
  * what the asking user could already get by chatting directly.
  *
+ * Sandbox: the run executes neither in the asker's sandbox nor the target's —
+ * the pi runner gives every consultation a fresh, empty sandbox of its own and
+ * removes it afterwards (`beginPiConsultationSandbox`), because the run is
+ * driven by the TARGET's authored content (persona, CLAUDE.md, recalled notes)
+ * with full built-ins and nobody watching. `viewerUserId` stays the asker: it
+ * is who the MCP gates see, not whose files the shell gets.
+ *
  * Depth guard: the inner request carries `avatarConsultation: true`, which
  * keeps `ask_avatar` OUT of the inner run's tool registration — an A→B→C (or
  * A→B→A) chain is impossible by construction.

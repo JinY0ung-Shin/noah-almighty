@@ -130,7 +130,7 @@ const handoffFiles = () => (fs.existsSync(secretsDir()) ? fs.readdirSync(secrets
 async function run(request: AgentRequest, env: ReturnType<typeof setup>, pluginRoots: PluginRoot[] = []) {
   recorded.servers.length = 0;
   const events = makeEvents();
-  const workspace = piWorkspaceFor(env.config, piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
+  const workspace = piWorkspaceFor(env.config, request.avatarConsultation ? "consult-000000000000000000000000" : piRunPrincipal(request), request.conversationId ?? piEphemeralRunKey(request));
   const caps = await buildRunCapabilities(request, pluginRoots, env.config, env.store, events, undefined, () => 0, {
     piConversationDir: workspace.conversationDir,
     piWorkspace: workspace,

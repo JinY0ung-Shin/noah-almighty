@@ -166,7 +166,7 @@ Group knowledge uses mcp__group_brain__search/mcp__group_brain__get_note for rec
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
-Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited (it answers from that avatar's knowledge, in your own sandbox), not a general background delegation channel.
+Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited (it answers from that avatar's knowledge, in a fresh, empty sandbox of its own that is deleted afterwards — it never sees your files or the teammate's), not a general background delegation channel.
 
 Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question.`,
   },

@@ -642,8 +642,8 @@ export async function buildRunCapabilities(
   const deckToolchain = piSandboxDeckToolchain(config);
   // Whether this run can write files at all. Every pi run can: its built-ins
   // (write/edit/bash) work in the sandbox of the user it runs AS — the
-  // viewer's own on a colleague chat, the asker's on a consultation — never
-  // the owner's. ONE flag for both metacognition surfaces: describe_system's
+  // viewer's own on a colleague chat, a fresh empty one on a consultation —
+  // never the owner's. ONE flag for both metacognition surfaces: describe_system's
   // ctx below, and the prompt through the returned plan.
   const canWriteFiles = true;
   const deckAuthoring = deckAuthoringStatusFor({
@@ -752,9 +752,10 @@ export async function buildRunCapabilities(
   // pi self-state, ONE value for both metacognition surfaces (describe_system
   // here, the prompt through stampPromptRequest).
   const piRuntimeFacts: PiRuntimeFacts = {
-        // Whose sandbox this is (piRunPrincipal: viewerUserId ?? avatar.id).
+        // Whose sandbox this is (piRunPrincipal: viewerUserId ?? avatar.id; a
+        // consultation's own fresh one belongs to nobody).
         sandboxOwner: consultationRun
-          ? "asker"
+          ? "nobody"
           : (request.viewerUserId ?? request.avatar.id) === request.avatar.id
             ? "owner"
             : "viewer",

@@ -12,28 +12,43 @@ pi-gateway code is changed — everything pi lacks is a Noah-side degrade, state
 
 `runAgentStream` (`agent/index.ts`) sends every non-`local` run to `runPiAgent`. The sandbox principal is
 `piRunPrincipal(request)` (`agent/pi/piRuntime.ts`, unit-pinned) = `viewerUserId ?? avatar.id`, whoever the run
-executes AS:
+executes AS — except an avatar consultation, which `piRunPrincipal` refuses and `runPiAgent` runs in a sandbox of its
+own:
 
 | Run class | Principal (sandbox) | Owner data |
 |---|---|---|
 | owner chat, owner routine, task-API turn | the owner | own |
 | trusted (group) colleague chat | the colleague (U4) | owner repo/brain/skills only through Noah MCP tools |
 | untrusted colleague chat | the colleague | the read-only MCP set only (`mcpAllowedTools`) |
-| avatar consultation (the consulted avatar's run) | the ASKER | read-only MCP toward the consulted owner |
+| avatar consultation (the consulted avatar's run) | NOBODY: a fresh, empty `consult-<random>` sandbox, deleted after the run | read-only MCP toward the consulted owner |
 | intro/hashtag generators, any run without a conversation | the owner | own |
 
 pi has no per-request tool allowlist (P1), so EVERY class gets the full built-ins (read/write/edit/bash/ls/find/grep)
 — including the classes that used to be read-only — always in its principal's OWN sandbox, never the owner's files.
 What a run may do to anyone else's data is decided only by the `/mcp` gate (`allowCall` over this run's
 `mcpAllowedTools`) and the handlers' self-gates. Both metacognition surfaces say what the run has and whose
-sandbox it is: `PiRuntimeFacts.sandboxOwner` (`owner` / `viewer` / `asker`, set by the capability plan) renders ONE
+sandbox it is: `PiRuntimeFacts.sandboxOwner` (`owner` / `viewer` / `nobody`, set by the capability plan) renders ONE
 sentence, `piSandboxOwnerSentence` (`ownerState.ts`), in the prompt's runtime section and describe_system's
 runtime line. An admin built-in toggle is advisory on pi (describe_system names it as such); a
 disabled SKILL is enforced by omission (see "Skills").
 
-**A run without a conversation** (consultations, the generators) works in an ephemeral folder
-`/workspace/c/<piEphemeralRunKey>/` in the principal's sandbox (`run-ask-<consulted avatar>` for a consultation,
-`run-<feature>` — `run-intro`, `run-hashtags` — for a generator): no stored pi session and no `pi_instructions` row (the prompt is rendered for that run only).
+**A run without a conversation** (consultations, the generators) works in a run folder
+`/workspace/c/<piEphemeralRunKey>/` (`run-<feature>` — `run-intro`, `run-hashtags` — for a generator, REUSED in the
+owner's sandbox and never removed; `run-ask` for a consultation, gone with its sandbox): no stored pi session and no
+`pi_instructions` row (the prompt is rendered for that run only).
+
+**A consultation's own sandbox** (user decision 2026-10-30, review-2 H1). The consulted avatar's run is driven by
+ANOTHER user's authored text (its persona, knowledge-repo `CLAUDE.md`, recalled notes and captured pages) with full
+built-ins and no one watching, so it runs neither in the asker's sandbox (it could read the asker's conversation
+files, edit the asker's repo copies that the asker's next `commit` reads back, and `request_info` what it read to the
+target) nor the target's. `runPiAgent` mints `consult-<24 random hex>` (`beginPiConsultationSandbox`; pi's user-id
+pattern accepts it, no Noah id has that shape), records it under `<dataDir>/pi-consultation-sandboxes/`, and in
+`finally` removes its `u-<key>` folder through a pinned descriptor (no link followed), its repo-copy records and the
+record (`endPiConsultationSandbox`); the boot sweeps records a crash left (`sweepPiConsultationSandboxes`). The
+sandbox CONTAINER is pi's: sandboxd reaps it when idle (`SANDBOX_IDLE_SECONDS`, 15 min default) and no request ever
+names that principal again. Cost: each consultation cold-starts a container (~300 ms on the dev box) before its first
+model call. Skills there are the bundled ones as files plus the target's via `mcp__skills__read` (a non-owner run);
+`viewerUserId` stays the asker, so the MCP gates, `request_info` attribution and trust checks are what they were.
 
 ## One run (`agent/pi/runPiAgent.ts`)
 
@@ -277,7 +292,7 @@ holds it:
 
 - **`mcp__avatars__ask_avatar`, interactive chat** (a run with a steer channel): the handler runs the synchronous
   gates (`preflightAvatarAsk` — unknown/self/untrusted refuse at once) and returns `Consultation ask-<id> … started in
-  the background`. The consultation (a pi run in the asker's sandbox) runs as a `PiAsyncJobs` job; its
+  the background`. The consultation (a pi run in its own fresh sandbox) runs as a `PiAsyncJobs` job; its
   result is pushed into the run's SteerChannel with BOTH texts (`askOutcomeDelivery`: English with provenance for the
   model, a Korean bubble carrying the answer for the chat — `SteerRecord.displayText` — plus WHO answered,
   `SteerRecord.source`). The route persists it as a `kind: "consultation"` user row with that source

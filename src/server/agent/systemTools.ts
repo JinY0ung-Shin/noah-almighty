@@ -578,7 +578,10 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
   if (ctx.config.agentRuntime === "local") return "local (the deterministic test stub — no model, no tools)";
   const owner = piSandboxOwnerSentence(pi?.sandboxOwner);
   return (
-    "pi (pi-gateway). You run in THIS user's own Linux sandbox: no sudo, files persist per user; no direct network — the shell's HTTP(S) leaves only through pi-gateway's egress proxy to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW`, empty = everything blocked; a refusal is `407 Request rejected by proxy`), and Noah's own tools keep Noah's network. " +
+    (pi?.sandboxOwner === "nobody"
+      ? "pi (pi-gateway). You run in a temporary Linux sandbox made for this one run: no sudo, nothing in it persists; no direct network"
+      : "pi (pi-gateway). You run in THIS user's own Linux sandbox: no sudo, files persist per user; no direct network") +
+    " — the shell's HTTP(S) leaves only through pi-gateway's egress proxy to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW`, empty = everything blocked; a refusal is `407 Request rejected by proxy`), and Noah's own tools keep Noah's network. " +
     (owner ? `${owner} ` : "") +
     (pi?.conversationDir
       ? `Work in this ${pi.conversationDir.startsWith("/workspace/c/run-") ? "run" : "conversation"}'s folder \`${pi.conversationDir}\` and pass ABSOLUTE paths (the shell starts in /workspace, not there). `
@@ -710,7 +713,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           const turnLines = rewindLines(ctx);
           return text(
             `${publicGuide.join("\n")}\n\nThe current conversation partner is not the owner, so changes to plugin/routine/knowledge-repository settings cannot be made.${turnLines.length ? `\n\n${turnLines.join("\n")}` : ""}\n\nDeployment capabilities for this run:\n${deckCapabilityLine(ctx)}\n${imageSourcesLine(ctx)}\n${nonOwnerShareLinkLine(ctx)}${sharedMcpLines(ctx).map((line) => `\n${line}`).join("")}${
-              // The run's own runtime facts (its sandbox is the VIEWER's or the ASKER's).
+              // The run's own runtime facts (its sandbox is the VIEWER's, or a consultation's own empty one).
               [`- runtime: ${runtimeLine(ctx)}`, ...piRunLines(ctx)].map((line) => `\n${line}`).join("")
             }`,
           );
