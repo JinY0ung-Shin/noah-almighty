@@ -250,8 +250,12 @@ describe("retireGroupAgents", () => {
         table,
       ).toBe(0);
     }
+    // Every file was QUARANTINED, not deleted: moved under retired/<boot stamp>/
+    // at its path relative to dataDir.
+    const quarantine = path.join(config.dataDir, "retired", store.retirementGate().stamp);
     for (const [name, file] of Object.entries(seed.files)) {
       expect(fs.existsSync(file), name).toBe(false);
+      expect(fs.existsSync(path.join(quarantine, path.relative(config.dataDir, file))), name).toBe(true);
     }
     // Whole agent trees go: workspace folders and the workspace-cwd project folder.
     expect(fs.existsSync(path.dirname(path.dirname(path.dirname(seed.files.workspace))))).toBe(false);
@@ -293,17 +297,21 @@ describe("retireGroupAgents", () => {
     store.close();
   });
 
-  it("purges the rows even when a media folder cannot be removed, keeps it pending, and finishes next boot", () => {
+  it("purges the rows even when a media folder is on another filesystem (EXDEV), keeps it pending, and finishes next boot", () => {
     const config = configFor("sweep-fails");
     const seed = seedLegacyDeployment(config);
     const busy = path.dirname(seed.files.chatImage);
-    const realRm = fs.rmSync;
-    vi.spyOn(fs, "rmSync").mockImplementation(((target: fs.PathLike, options?: fs.RmOptions) => {
-      if (String(target) === busy) {
-        throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    // A media folder mounted from another device cannot be renamed into the
+    // quarantine, and it is NEVER copied and deleted instead: it stays put.
+    const realRename = fs.renameSync;
+    const cp = vi.spyOn(fs, "cpSync");
+    const rm = vi.spyOn(fs, "rmSync");
+    vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(from) === busy) {
+        throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
       }
-      realRm(target, options);
-    }) as typeof fs.rmSync);
+      realRename(from, to);
+    }) as typeof fs.renameSync);
     const warn = vi.spyOn(logger, "warn");
     const store = new Store(config);
 
@@ -323,19 +331,32 @@ describe("retireGroupAgents", () => {
     });
     expect(store.groupAgentsRetired()).toBe(false);
     expect(warn).toHaveBeenCalledWith(
-      { failures: 1, paths: [`${busy} (EBUSY)`] },
+      { failures: 1, paths: [`${busy} (EXDEV)`] },
       expect.stringContaining("NOT stamped"),
     );
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ target: busy }),
+      expect.stringContaining("another filesystem"),
+    );
+    expect(fs.readdirSync(busy)).toEqual([path.basename(seed.files.chatImage)]);
+    expect(cp).not.toHaveBeenCalled();
+    expect(rm.mock.calls.map(([target]) => String(target))).not.toContain(busy);
 
-    vi.mocked(fs.rmSync).mockRestore();
-    expect(retireGroupAgents({ config, store })).toBeNull();
+    // The next boot (its own stamp) moves it once the mount is fixed.
+    vi.mocked(fs.renameSync).mockRestore();
+    store.close();
+    const next = new Store(config);
+    expect(retireGroupAgents({ config, store: next })).toBeNull();
     expect(fs.existsSync(busy)).toBe(false);
-    expect(store.groupAgentsRetired()).toBe(true);
-    expect(pendingDocument(store)).toBeNull();
+    expect(
+      fs.existsSync(path.join(config.dataDir, "retired", next.retirementGate().stamp, path.relative(config.dataDir, seed.files.chatImage))),
+    ).toBe(true);
+    expect(next.groupAgentsRetired()).toBe(true);
+    expect(pendingDocument(next)).toBeNull();
     for (const [name, file] of Object.entries(seed.controls)) {
       expect(fs.existsSync(file), name).toBe(true);
     }
-    store.close();
+    next.close();
   });
 
   it("does not skip a marked boot while pending retries are stored, and drops malformed entries", () => {

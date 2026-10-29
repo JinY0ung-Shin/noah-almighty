@@ -206,8 +206,12 @@ describe("retireExternalAvatars", () => {
     expect(
       countRows(config, "SELECT COUNT(*) AS c FROM avatar_notifications WHERE avatar_user_id = ?", seed.external),
     ).toBe(0);
+    // Every file was QUARANTINED, not deleted: moved under retired/<boot stamp>/
+    // at its path relative to dataDir.
+    const quarantine = path.join(config.dataDir, "retired", store.retirementGate().stamp);
     for (const [name, file] of Object.entries(seed.files)) {
       expect(fs.existsSync(file), name).toBe(false);
+      expect(fs.existsSync(path.join(quarantine, path.relative(config.dataDir, file))), name).toBe(true);
     }
     expect(fs.existsSync(path.dirname(path.dirname(seed.files.workspace)))).toBe(false);
 
@@ -241,17 +245,17 @@ describe("retireExternalAvatars", () => {
     store.close();
   });
 
-  it("purges the rows even when a media folder cannot be removed, keeps it pending, and finishes next boot", () => {
+  it("purges the rows even when a media folder cannot be moved, keeps it pending, and finishes next boot", () => {
     const config = configFor("sweep-fails");
     const seed = seedLegacyDeployment(config);
     const busy = path.dirname(seed.files.chatImage);
-    const realRm = fs.rmSync;
-    vi.spyOn(fs, "rmSync").mockImplementation(((target: fs.PathLike, options?: fs.RmOptions) => {
-      if (String(target) === busy) {
+    const realRename = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(from) === busy) {
         throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
       }
-      realRm(target, options);
-    }) as typeof fs.rmSync);
+      realRename(from, to);
+    }) as typeof fs.renameSync);
     const warn = vi.spyOn(logger, "warn");
     const store = new Store(config);
 
@@ -270,7 +274,7 @@ describe("retireExternalAvatars", () => {
       expect.stringContaining("NOT stamped"),
     );
 
-    vi.mocked(fs.rmSync).mockRestore();
+    vi.mocked(fs.renameSync).mockRestore();
     expect(retireExternalAvatars({ config, store, env: NO_ENV })).toBeNull();
     expect(fs.existsSync(busy)).toBe(false);
     expect(store.externalAvatarsRetired()).toBe(true);

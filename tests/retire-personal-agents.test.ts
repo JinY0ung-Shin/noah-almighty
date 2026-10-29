@@ -3,8 +3,9 @@
 // bot threads (`personal:<owner>:<agent>` avatar ids) with their messages,
 // canvases, share links, notifications and SDK session ids, bot-bound routines
 // (`routine_jobs.personal_agent_id`) and the bots' files. The retirement deletes
-// all of it — disk first, then one DB transaction that also drops the two
-// tables — while everything that is not a bot's survives: the owner's own and
+// all of its rows — disk first, then one DB transaction that also drops the two
+// tables — after backing the DB up, and QUARANTINES the files (moved under
+// `retired/<boot stamp>/`, never deleted) — while everything that is not a bot's survives: the owner's own and
 // group-agent threads, the owner's routines, sessions and files, and the bots'
 // memory folders inside the owner's knowledge repo (user content, never
 // touched). It runs on every boot until one clean pass stamps the
@@ -114,16 +115,21 @@ function errnoError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(code), { code });
 }
 
-/** Make `fs.rmSync` throw `code` the first time it is called on one of `targets`. */
-function failRmOnce(targets: string[], code: string) {
-  const realRm = fs.rmSync;
+/** Make `fs.renameSync` (the quarantine move) throw `code` the first time it moves one of `targets`. */
+function failMoveOnce(targets: string[], code: string) {
+  const realRename = fs.renameSync;
   const remaining = new Set(targets);
-  return vi.spyOn(fs, "rmSync").mockImplementation(((target: fs.PathLike, options?: fs.RmOptions) => {
-    if (remaining.delete(String(target))) {
+  return vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+    if (remaining.delete(String(from))) {
       throw errnoError(code);
     }
-    realRm(target, options);
-  }) as typeof fs.rmSync);
+    realRename(from, to);
+  }) as typeof fs.renameSync);
+}
+
+/** Where this boot's retirement quarantined `file` (same path relative to dataDir). */
+function quarantined(config: AppConfig, store: Store, file: string): string {
+  return path.join(config.dataDir, "retired", store.retirementGate().stamp, path.relative(config.dataDir, file));
 }
 
 /** Make `fs.readdirSync` throw `code` whenever it lists `dir`. */
@@ -430,10 +436,18 @@ describe("retirePersonalAgents", () => {
       store.listConversations(seed.owner.id, undefined, "routine").map((c) => c.id),
     ).toEqual([seed.ownRoutine.conversationId]);
 
-    // Files: every bot artifact is gone, every control file is still there.
+    // Files: every bot artifact left its place for the quarantine, at the same
+    // path relative to dataDir and with its content; every control file is
+    // still where it was.
     for (const [name, file] of Object.entries(seed.files)) {
       expect(fs.existsSync(file), name).toBe(false);
+      expect(fs.readFileSync(quarantined(config, store, file), "utf8"), name).toBe("x");
     }
+    const quarantineRoot = path.join(config.dataDir, "retired");
+    expect(fs.statSync(quarantineRoot).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(quarantineRoot, store.retirementGate().stamp)).mode & 0o777).toBe(0o700);
+    // The traversal session id was never joined into a path: the sentinel stays.
+    expect(fs.existsSync(path.join(quarantineRoot, store.retirementGate().stamp, "sentinel"))).toBe(false);
     expect(fs.existsSync(path.dirname(workspaceDirFor(config, seed.botA, "x")))).toBe(false);
     // Bot-workspace project folders go whole, by name; the work-repo folder the
     // owner shares stays, with only the bot sessions' files taken out of it.
@@ -513,13 +527,13 @@ describe("retirePersonalAgents", () => {
     const config = configFor("sweep-fails");
     const seed = seedLegacyDeployment(config);
     const busyTree = path.join(config.dataDir, "workspaces", "personal-stray-0123456789ab");
-    const realRm = fs.rmSync;
-    vi.spyOn(fs, "rmSync").mockImplementation(((target: fs.PathLike, options?: fs.RmOptions) => {
-      if (String(target) === busyTree) {
+    const realRename = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(from) === busyTree) {
         throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
       }
-      realRm(target, options);
-    }) as typeof fs.rmSync);
+      realRename(from, to);
+    }) as typeof fs.renameSync);
     const warn = vi.spyOn(logger, "warn");
     const store = new Store(config);
 
@@ -538,9 +552,10 @@ describe("retirePersonalAgents", () => {
     );
 
     // The next boot finds no rows, retries the name-prefixed sweep, and stamps.
-    vi.mocked(fs.rmSync).mockRestore();
+    vi.mocked(fs.renameSync).mockRestore();
     expect(retirePersonalAgents({ config, store })).toBeNull();
     expect(fs.existsSync(busyTree)).toBe(false);
+    expect(fs.existsSync(quarantined(config, store, path.join(busyTree, "x", "f")))).toBe(true);
     expect(store.personalAgentsRetired()).toBe(true);
     for (const [name, file] of Object.entries(seed.controls)) {
       expect(fs.existsSync(file), name).toBe(true);
@@ -548,16 +563,16 @@ describe("retirePersonalAgents", () => {
     store.close();
   });
 
-  it("removes a read-only bot tree, chmodding only real folders inside it", () => {
+  it("quarantines a read-only bot tree whole, chmodding only its own top folder", () => {
     const config = configFor("read-only");
     const seed = seedLegacyDeployment(config);
     const botTree = path.dirname(workspaceDirFor(config, seed.botA, "x"));
     const threadDir = workspaceDirFor(config, seed.botA, "bot-chat");
     // What `go mod download` leaves behind: read-only folders full of files —
-    // here also holding a link to the owner's knowledge clone, which the
-    // first removal cannot unlink (its folder is not writable). It must be
-    // unlinked, never followed: neither the clone's contents nor its mode may
-    // change (0o550 lacks u+w, so a chmod through the link would show).
+    // here also holding a link to the owner's knowledge clone. The move is one
+    // rename, so nothing inside is opened, chmodded or followed: the link
+    // travels AS a link, and neither the clone's contents nor its mode change
+    // (0o550 lacks u+w, so a chmod through the link would show).
     const moduleCache = path.join(threadDir, "go", "pkg", "mod", "example.com", "lib@v1.0.0");
     writeFile(path.join(moduleCache, "lib.go"));
     const clone = knowledgeClonePath(seed.owner.id, config);
@@ -566,13 +581,17 @@ describe("retirePersonalAgents", () => {
     fs.chmodSync(moduleCache, 0o555);
     fs.chmodSync(path.dirname(moduleCache), 0o555);
     fs.chmodSync(clone, 0o550);
+    // Renaming a folder to a new parent needs write access to the folder itself.
+    fs.chmodSync(botTree, 0o555);
     const cloneMode = fs.statSync(clone).mode;
-    // Permissions do not bite for root (Docker CI), so the first removal of
-    // the tree is forced to fail with EACCES; the chmod walk and the retry run
-    // for real either way.
-    failRmOnce([botTree], "EACCES");
+    // Permissions do not bite for root (Docker CI), so the first move of the
+    // tree is forced to fail with EACCES; the chmod and the retry run for real
+    // either way.
+    failMoveOnce([botTree], "EACCES");
     const chmod = vi.spyOn(fs, "chmodSync");
     const store = new Store(config);
+    const moved = quarantined(config, store, botTree);
+    const movedCache = quarantined(config, store, moduleCache);
 
     try {
       retirePersonalAgents({ config, store });
@@ -581,21 +600,28 @@ describe("retirePersonalAgents", () => {
       expect(store.personalAgentsRetired()).toBe(true);
       expect(fs.statSync(clone).mode).toBe(cloneMode);
       expect(fs.existsSync(seed.controls.botMemory)).toBe(true);
+      // The tree arrived whole: its read-only folders, its file, its link.
+      expect(fs.statSync(moved).mode & 0o777).toBe(0o555);
+      expect(fs.statSync(movedCache).mode & 0o777).toBe(0o555);
+      expect(fs.existsSync(path.join(movedCache, "lib.go"))).toBe(true);
+      expect(fs.lstatSync(path.join(movedCache, "clone-link")).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(path.join(movedCache, "clone-link"))).toBe(clone);
       const chmodded = chmod.mock.calls.map(([target]) => String(target));
       expect(chmodded).toContain(botTree);
-      expect(chmodded).toContain(moduleCache);
-      expect(chmodded.every((target) => target === botTree || target.startsWith(`${botTree}${path.sep}`))).toBe(true);
+      expect(chmodded.filter((target) => target.startsWith(`${botTree}${path.sep}`))).toEqual([]);
+      expect(chmodded.filter((target) => target.startsWith(`${moved}${path.sep}`))).toEqual([]);
       expect(chmodded).not.toContain(link);
+      expect(chmodded).not.toContain(clone);
     } finally {
       // Leave nothing the temp-dir cleanup could trip over if an assertion failed.
-      for (const dir of [moduleCache, path.dirname(moduleCache), clone]) {
+      for (const dir of [botTree, moduleCache, path.dirname(moduleCache), moved, movedCache, path.dirname(movedCache), clone]) {
         if (fs.existsSync(dir)) fs.chmodSync(dir, 0o755);
       }
       store.close();
     }
   });
 
-  it("unlinks a bot-prefixed workspace link without following it", () => {
+  it("quarantines a bot-prefixed workspace link AS a link, never following it", () => {
     const config = configFor("symlink");
     const seed = seedLegacyDeployment(config);
     const ownTree = path.dirname(workspaceDirFor(config, seed.owner.id, "x"));
@@ -606,7 +632,12 @@ describe("retirePersonalAgents", () => {
     retirePersonalAgents({ config, store });
 
     expect(fs.existsSync(link)).toBe(false);
+    const moved = quarantined(config, store, link);
+    expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(moved)).toBe(ownTree);
+    // The link's target is untouched, in place.
     expect(fs.existsSync(seed.controls.ownWorkspace)).toBe(true);
+    expect(fs.readdirSync(ownTree).length).toBeGreaterThan(0);
     store.close();
   });
 
@@ -615,7 +646,7 @@ describe("retirePersonalAgents", () => {
     const seed = seedLegacyDeployment(config);
     const botImages = chatImagesDir(config, "bot-chat");
     const botEnv = path.join(config.agentSessionsDir, "session-env", BOT_SESSION);
-    const rm = failRmOnce([botImages, botEnv], "EBUSY");
+    const rm = failMoveOnce([botImages, botEnv], "EBUSY");
     const store = new Store(config);
 
     expect(retirePersonalAgents({ config, store })).toMatchObject({ bots: 2, conversations: 3 });
@@ -833,7 +864,7 @@ describe("retirePersonalAgents", () => {
   it("drops the marker in a re-retirement's purge, so its failed sweep is retried next boot", () => {
     const config = configFor("rollback-sweep-fails");
     const rollback = seedRollback(config);
-    const rm = failRmOnce([rollback.chatImages], "EBUSY");
+    const rm = failMoveOnce([rollback.chatImages], "EBUSY");
     const store = new Store(config);
 
     expect(retirePersonalAgents({ config, store })).toMatchObject({ bots: 1, conversations: 2 });
@@ -856,7 +887,7 @@ describe("retirePersonalAgents", () => {
   it("rolls a re-retirement back whole when dropping the marker fails, and the next boot finishes it", () => {
     const config = configFor("rollback-purge-fails");
     const rollback = seedRollback(config);
-    const rm = failRmOnce([rollback.chatImages], "EBUSY");
+    const rm = failMoveOnce([rollback.chatImages], "EBUSY");
     const store = new Store(config);
     const realDelete = store.deleteAppSecret.bind(store);
     const deleteSecret = vi.spyOn(store, "deleteAppSecret").mockImplementation((key: string) => {
@@ -922,13 +953,13 @@ describe("retirePersonalAgents", () => {
     const config = configFor("pending-write-fails");
     seedLegacyDeployment(config);
     const botImages = chatImagesDir(config, "bot-chat");
-    let rm = failRmOnce([botImages], "EBUSY");
+    let rm = failMoveOnce([botImages], "EBUSY");
     const store = new Store(config);
     retirePersonalAgents({ config, store });
     expect(pendingDocument(store)?.paths).toEqual(["chat-images/bot-chat"]);
     rm.mockRestore();
     // Boot 2 has no rows left: the retry fails again, and storing its list throws.
-    rm = failRmOnce([botImages], "EBUSY");
+    rm = failMoveOnce([botImages], "EBUSY");
     const save = vi.spyOn(store, "saveRetiredPersonalAgentPending").mockImplementationOnce(() => {
       throw new Error("database is locked");
     });

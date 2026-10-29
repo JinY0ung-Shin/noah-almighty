@@ -6,18 +6,21 @@ import {
   errorCode,
   isPlainSegment,
   listEntries,
+  newSweep,
+  quarantineRetired,
   recordFailure,
-  removeRetired,
   type SweepTally,
 } from "./retiredFiles.js";
 import { avatarDir } from "./routes/_shared.js";
 import type { AppConfig } from "./types.js";
+import { SERVER_WORKSPACE_COPY_DIRS, workspaceDirFor } from "./workspace.js";
 
 /**
  * Row-keyed disk primitives shared by the boot-time retirements of removed
  * avatar KINDS whose threads ran on the local SDK (`retirePersonalAgents.ts`,
  * `retireGroupAgents.ts`): each thread's chat media and SDK session artifacts
- * can only be named through its rows, so they are swept while the rows exist
+ * can only be named through its rows, so they are QUARANTINED (moved under
+ * `retired/<stamp>/`, never deleted — `retiredFiles.ts`) while the rows exist
  * and whatever fails is kept in a PENDING document (relative, exact-shape
  * paths plus session ids whose folders could not be listed) that later boots
  * retry. Plus the NAME-prefix sweep of the kind's avatar images, workspace
@@ -101,13 +104,14 @@ export function resolveRowKeyed(
 }
 
 /**
- * Remove one row-keyed entry; a failure keeps it in `next` for the next boot.
+ * Quarantine one row-keyed entry; a failure (EXDEV included) keeps it in
+ * `next` for the next boot.
  * The target's existence is checked first (an entry already gone is done),
  * then every folder between the root and it must be a REAL directory — a link
  * there would send a valid-looking path somewhere else, so it is refused and
  * kept pending until someone looks.
  */
-export function removeRowKeyed(
+export function quarantineRowKeyed(
   config: AppConfig,
   rel: string,
   sweep: SweepTally,
@@ -133,7 +137,7 @@ export function removeRowKeyed(
     next.paths.add(rel);
     return;
   }
-  if (!removeRetired(resolved.target, sweep)) {
+  if (!quarantineRetired(resolved.target, sweep)) {
     next.paths.add(rel);
   }
 }
@@ -264,15 +268,15 @@ export function sweepSessionArtifacts(
     for (const entry of entries) {
       const id = entry.name.endsWith(".jsonl") ? entry.name.slice(0, -".jsonl".length) : entry.name;
       if (idSet.has(id)) {
-        removeRowKeyed(config, `agent-sessions/projects/${project.name}/${entry.name}`, sweep, next);
+        quarantineRowKeyed(config, `agent-sessions/projects/${project.name}/${entry.name}`, sweep, next);
       }
     }
   }
   for (const id of ids) {
-    removeRowKeyed(config, `agent-sessions/session-env/${id}`, sweep, next);
-    removeRowKeyed(config, `agent-sessions/tasks/${id}`, sweep, next);
-    removeRowKeyed(config, `agent-sessions/file-history/${id}`, sweep, next);
-    removeRowKeyed(config, `agent-sessions/debug/${id}.txt`, sweep, next);
+    quarantineRowKeyed(config, `agent-sessions/session-env/${id}`, sweep, next);
+    quarantineRowKeyed(config, `agent-sessions/tasks/${id}`, sweep, next);
+    quarantineRowKeyed(config, `agent-sessions/file-history/${id}`, sweep, next);
+    quarantineRowKeyed(config, `agent-sessions/debug/${id}.txt`, sweep, next);
   }
   const todos = listEntries(path.join(config.agentSessionsDir, "todos"), sweep);
   if (todos === null) {
@@ -280,7 +284,7 @@ export function sweepSessionArtifacts(
   }
   for (const entry of todos ?? []) {
     if (idSet.has(entry.name.slice(0, 36))) {
-      removeRowKeyed(config, `agent-sessions/todos/${entry.name}`, sweep, next);
+      quarantineRowKeyed(config, `agent-sessions/todos/${entry.name}`, sweep, next);
     }
   }
   if (incomplete) {
@@ -303,8 +307,8 @@ function encodeProjectDir(cwd: string): string {
  * `workspacePrefix`, and the SDK project folders of runs whose cwd was one of
  * those trees — including a run that died before recording any session id.
  * The caller's prefixes must belong to ONE retired namespace only (user ids are
- * UUIDs; every namespaced avatar kind has its own). A link is unlinked, never
- * followed.
+ * UUIDs; every namespaced avatar kind has its own). Each is quarantined; a link
+ * is moved as a link, never followed.
  */
 export function sweepNamedLeftovers(
   config: AppConfig,
@@ -315,13 +319,13 @@ export function sweepNamedLeftovers(
   const avatars = avatarDir(config);
   for (const entry of listEntries(avatars, sweep) ?? []) {
     if (entry.name.startsWith(prefixes.avatarPrefix)) {
-      removeRetired(path.join(avatars, entry.name), sweep);
+      quarantineRetired(path.join(avatars, entry.name), sweep);
     }
   }
   const workspacesRoot = path.resolve(config.dataDir, "workspaces");
   for (const entry of listEntries(workspacesRoot, sweep) ?? []) {
     if (entry.name.startsWith(prefixes.workspacePrefix)) {
-      removeRetired(path.join(workspacesRoot, entry.name), sweep);
+      quarantineRetired(path.join(workspacesRoot, entry.name), sweep);
     }
   }
   // The CLI encodes the PHYSICAL cwd, so both spellings of the workspaces root
@@ -338,7 +342,53 @@ export function sweepNamedLeftovers(
   const projectPrefixes = [...roots].map((root) => `${encodeProjectDir(root)}-${prefixes.workspacePrefix}`);
   for (const entry of projectEntries ?? []) {
     if (projectPrefixes.some((prefix) => entry.name.startsWith(prefix))) {
-      removeRetired(path.join(projectsRoot, entry.name), sweep);
+      quarantineRetired(path.join(projectsRoot, entry.name), sweep);
     }
+  }
+}
+
+/**
+ * The retirement form of `deleteConversationWorkspaceCopies`: QUARANTINE the
+ * server-written copies (`SERVER_WORKSPACE_COPY_DIRS`) of retired threads,
+ * resolved by thread id under EVERY real avatar folder of `workspaces/` (a
+ * link there is skipped, a link named like a copy folder is moved as a link).
+ * Best effort with its own tally, like the delete it replaces: a copy that
+ * cannot be moved (EXDEV included) stays in place and is named in one warning,
+ * never deleted and never holding the marker. Run it AFTER the name-prefix
+ * sweep, so copies inside a retired avatar's own tree travel with that tree.
+ * The pi runtime's sandbox copies (`PI_WORKSPACES_DIR`, outside `dataDir`) are
+ * left in place: no released build ran a retired kind on pi.
+ */
+export function quarantineConversationWorkspaceCopies(
+  config: AppConfig,
+  conversationIds: readonly string[],
+  sweep: SweepTally,
+): void {
+  if (conversationIds.length === 0) {
+    return;
+  }
+  const tally = newSweep(sweep.quarantine);
+  // The conversation segment depends on the id alone (`workspaceDirFor`).
+  const segments = new Set(conversationIds.map((id) => path.basename(workspaceDirFor(config, "avatar", id))));
+  const root = path.join(config.dataDir, "workspaces");
+  for (const avatar of listEntries(root, tally) ?? []) {
+    if (!avatar.isDirectory()) {
+      continue;
+    }
+    const avatarPath = path.join(root, avatar.name);
+    for (const entry of listEntries(avatarPath, tally) ?? []) {
+      if (!entry.isDirectory() || !segments.has(entry.name)) {
+        continue;
+      }
+      for (const name of SERVER_WORKSPACE_COPY_DIRS) {
+        quarantineRetired(path.join(avatarPath, entry.name, name), tally);
+      }
+    }
+  }
+  if (tally.failures > 0) {
+    logger.warn(
+      { failures: tally.failures, paths: tally.sample },
+      "server-written workspace copies of retired threads could not be quarantined and were left in place",
+    );
   }
 }

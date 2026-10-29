@@ -1,11 +1,12 @@
 import path from "node:path";
 import { safeConversationDir } from "./chatImages.js";
 import logger from "./logger.js";
-import { listEntries, type SweepTally } from "./retiredFiles.js";
+import { listEntries, openRetirementSweep } from "./retiredFiles.js";
 import {
   isSessionId,
+  quarantineConversationWorkspaceCopies,
   readRowKeyedPending,
-  removeRowKeyed,
+  quarantineRowKeyed,
   serializePending,
   sweepNamedLeftovers,
   sweepSessionArtifacts,
@@ -14,7 +15,6 @@ import {
 import type { Store } from "./store.js";
 import type { RetiredPersonalAgentPurge } from "./store/retiredPersonalAgents.js";
 import type { AppConfig } from "./types.js";
-import { deleteConversationWorkspaceCopies } from "./workspace.js";
 
 /**
  * Boot-time retirement of the removed 내 봇 (personal agents) feature: delete
@@ -37,7 +37,12 @@ import { deleteConversationWorkspaceCopies } from "./workspace.js";
  * reserved FOREVER. A fresh install has nothing to do and is stamped silently
  * on its first boot.
  *
- * DISK FIRST, then the database. Bot avatar images and workspace trees are
+ * DISK FIRST, then the database — and the disk half QUARANTINES, never
+ * deletes: every file is moved to `<dataDir>/retired/<boot stamp>/` at its
+ * path relative to dataDir (`retiredFiles.ts`), and the DB is backed up to
+ * `<dataDir>/backups/` before the first destructive step; a failed backup skips
+ * this whole pass until a later boot (`store/retirementBackup.ts`).
+ * Bot avatar images and workspace trees are
  * found by NAME prefix (never through row fields), on every boot that runs.
  * Files only the rows can name — each bot thread's chat media and SDK session
  * artifacts — are swept while those rows exist; whatever of them fails is kept
@@ -63,23 +68,22 @@ export function retirePersonalAgents(deps: {
       logger.warn("an older release recreated the retired personal-agent tables — retiring again");
     }
   }
-  const sweep: SweepTally = { failures: 0, sample: [] };
+  const sweep = openRetirementSweep(config.dataDir, store.retirementGate(), "personal-agent");
+  if (!sweep) {
+    return null;
+  }
   const pending = readPending(config, store);
   const next: PendingRetries = { paths: new Set(), sessionIds: new Set() };
   for (const rel of pending.paths) {
-    removeRowKeyed(config, rel, sweep, next);
+    quarantineRowKeyed(config, rel, sweep, next);
   }
   const snapshot = store.snapshotRetiredPersonalAgents();
   const conversationIds = snapshot?.conversationIds ?? [];
   for (const conversationId of conversationIds) {
     const dir = safeConversationDir(conversationId);
-    removeRowKeyed(config, `chat-images/${dir}`, sweep, next);
-    removeRowKeyed(config, `chat-files/${dir}`, sweep, next);
+    quarantineRowKeyed(config, `chat-images/${dir}`, sweep, next);
+    quarantineRowKeyed(config, `chat-files/${dir}`, sweep, next);
   }
-  // Server-written copies (attachments/captures/confluence) are resolved by
-  // thread id under EVERY avatar folder; best-effort, never throws. A bot
-  // thread's own workspace goes with its bot tree below.
-  deleteConversationWorkspaceCopies(config, conversationIds);
   const projectsRoot = path.join(config.agentSessionsDir, "projects");
   const projectEntries = listEntries(projectsRoot, sweep);
   const sessionIds = new Set([...(snapshot?.sessionIds ?? []).filter(isSessionId), ...pending.sessionIds]);
@@ -90,6 +94,10 @@ export function retirePersonalAgents(deps: {
     projectEntries,
     sweep,
   );
+  // Server-written copies (attachments/captures/confluence), resolved by
+  // thread id under EVERY avatar folder; best-effort, never throws. A thread's
+  // own workspace went with its avatar's tree just above.
+  quarantineConversationWorkspaceCopies(config, conversationIds, sweep);
   const pendingDocument = serializePending(next);
   const purge = snapshot ? store.purgeRetiredPersonalAgents(pendingDocument) : null;
   if (purge) {
@@ -112,7 +120,7 @@ export function retirePersonalAgents(deps: {
   }
   logger.warn(
     { failures: sweep.failures, paths: sweep.sample },
-    "retired personal-agent files could not be removed; the retirement marker was NOT stamped, so the next boot retries — remove these paths by hand if this repeats",
+    "retired personal-agent files could not be quarantined and were left in place; the retirement marker was NOT stamped, so the next boot retries — move these paths under retired/ by hand if this repeats",
   );
   return purge;
 }

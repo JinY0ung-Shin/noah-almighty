@@ -6,15 +6,16 @@ import {
   errorCode,
   isPlainSegment,
   listEntries,
+  openRetirementSweep,
+  quarantineRetired,
   recordFailure,
-  removeRetired,
   type SweepTally,
 } from "./retiredFiles.js";
+import { quarantineConversationWorkspaceCopies } from "./retiredSessionFiles.js";
 import { avatarDir } from "./routes/_shared.js";
 import type { Store } from "./store.js";
 import type { RetiredExternalAvatarPurge } from "./store/retiredExternalAvatars.js";
 import type { AppConfig } from "./types.js";
-import { deleteConversationWorkspaceCopies } from "./workspace.js";
 
 /**
  * Boot-time retirement of the removed external avatars (removed 2026-10-29,
@@ -34,7 +35,12 @@ import { deleteConversationWorkspaceCopies } from "./workspace.js";
  * `external:` / `external-` names, so those prefixes stay reserved FOREVER. A
  * fresh install has nothing to do and is stamped silently on its first boot.
  *
- * DISK FIRST, then the database. Avatar image files (`avatars/external:<id>.*`)
+ * DISK FIRST, then the database — and the disk half QUARANTINES, never
+ * deletes: every file is moved to `<dataDir>/retired/<boot stamp>/` at its
+ * path relative to dataDir (`retiredFiles.ts`), and the DB is backed up to
+ * `<dataDir>/backups/` before the first destructive step; a failed backup skips
+ * this whole pass until a later boot (`store/retirementBackup.ts`).
+ * Avatar image files (`avatars/external:<id>.*`)
  * and workspace trees (`workspaces/external-…`; external turns never created
  * one, swept by name in case an old build did) are found by NAME prefix, on
  * every boot that runs. Each thread's chat media (`chat-images/<dir>`,
@@ -69,16 +75,19 @@ export function retireExternalAvatars(deps: {
       logger.warn("an older release recreated the retired external-avatar table — retiring again");
     }
   }
-  const sweep: SweepTally = { failures: 0, sample: [] };
+  const sweep = openRetirementSweep(config.dataDir, store.retirementGate(), "external-avatar");
+  if (!sweep) {
+    return null;
+  }
   const next = new Set<string>();
   const snapshot = store.snapshotRetiredExternalAvatars();
   const conversationIds = snapshot?.conversationIds ?? [];
   const mediaDirs = new Set([...readPending(store), ...conversationIds.map(safeConversationDir)]);
-  removeMedia(config, mediaDirs, sweep, next);
+  quarantineMedia(config, mediaDirs, sweep, next);
+  sweepPrefixedLeftovers(config, sweep);
   // Server-written workspace copies, resolved by thread id under EVERY avatar
   // folder; best-effort, never throws.
-  deleteConversationWorkspaceCopies(config, conversationIds);
-  sweepPrefixedLeftovers(config, sweep);
+  quarantineConversationWorkspaceCopies(config, conversationIds, sweep);
   const pendingDocument = serializePending(next);
   const purge = snapshot ? store.purgeRetiredExternalAvatars(pendingDocument) : null;
   if (purge) {
@@ -101,7 +110,7 @@ export function retireExternalAvatars(deps: {
   }
   logger.warn(
     { failures: sweep.failures, paths: sweep.sample },
-    "retired external-avatar files could not be removed; the retirement marker was NOT stamped, so the next boot retries — remove these paths by hand if this repeats",
+    "retired external-avatar files could not be quarantined and were left in place; the retirement marker was NOT stamped, so the next boot retries — move these paths under retired/ by hand if this repeats",
   );
   return purge;
 }
@@ -130,12 +139,12 @@ function isMediaDir(dir: unknown): dir is string {
 }
 
 /**
- * Remove the threads' media folders; a failure keeps the folder name in
- * `next`. Each root is listed ONCE and must be a REAL directory — a link there
+ * Quarantine the threads' media folders; a failure (EXDEV included) keeps the
+ * folder name in `next`. Each root is listed ONCE and must be a REAL directory — a link there
  * would send the folder names somewhere else, so it is refused and every name
  * is kept pending until someone looks.
  */
-function removeMedia(config: AppConfig, dirs: Set<string>, sweep: SweepTally, next: Set<string>): void {
+function quarantineMedia(config: AppConfig, dirs: Set<string>, sweep: SweepTally, next: Set<string>): void {
   if (dirs.size === 0) {
     return;
   }
@@ -160,7 +169,7 @@ function removeMedia(config: AppConfig, dirs: Set<string>, sweep: SweepTally, ne
     }
     const present = new Set(entries.map((entry) => entry.name));
     for (const dir of dirs) {
-      if (present.has(dir) && !removeRetired(path.join(root, dir), sweep)) {
+      if (present.has(dir) && !quarantineRetired(path.join(root, dir), sweep)) {
         next.add(dir);
       }
     }
@@ -216,20 +225,20 @@ function serializePending(next: Set<string>): string | null {
  * Leftovers found by NAME, on every boot that runs: profile images and
  * workspace trees. Only an external id carries these prefixes: user ids are
  * UUIDs (a UUID can never start with `external`) and every other namespaced
- * avatar uses its own (the retired `group:` / `personal:`). A link is unlinked,
- * never followed.
+ * avatar uses its own (the retired `group:` / `personal:`). Each is
+ * quarantined; a link is moved as a link, never followed.
  */
 function sweepPrefixedLeftovers(config: AppConfig, sweep: SweepTally): void {
   const avatars = avatarDir(config);
   for (const entry of listEntries(avatars, sweep) ?? []) {
     if (entry.name.startsWith(EXTERNAL_AVATAR_PREFIX)) {
-      removeRetired(path.join(avatars, entry.name), sweep);
+      quarantineRetired(path.join(avatars, entry.name), sweep);
     }
   }
   const workspacesRoot = path.resolve(config.dataDir, "workspaces");
   for (const entry of listEntries(workspacesRoot, sweep) ?? []) {
     if (entry.name.startsWith(EXTERNAL_WORKSPACE_PREFIX)) {
-      removeRetired(path.join(workspacesRoot, entry.name), sweep);
+      quarantineRetired(path.join(workspacesRoot, entry.name), sweep);
     }
   }
 }

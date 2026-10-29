@@ -248,6 +248,39 @@ both as in [docs/egress-policy.md](docs/egress-policy.md), and roll back by re-t
 running `up -d --no-build` with both compose files. The converter needs nothing from the egress
 boundary: its Chromium only talks to loopback, which the egress firewall allows.
 
+### Retirement backups and quarantine
+
+Removed features (personal bots, external avatars, group shared agents, server agents, Craft apps, STT)
+are cleaned out of an existing deployment at boot. Before any of that deletes data, Noah:
+
+- **backs up the whole SQLite DB** to `APP_DATA_DIR/backups/pre-retire-<UTC stamp>.db` (file 0600,
+  folder 0700), once per boot that still has retired data — never on a clean or already-retired DB. The
+  boot log has one `database backed up before retiring removed features` line with the path and size.
+- **moves, never deletes, every retired file** to `APP_DATA_DIR/retired/<same stamp>/`, at the same
+  path relative to `APP_DATA_DIR` (chat media, workspace trees and copies, SDK session files, avatar
+  images, `runtime/craft-purge`). A symlink is moved as a link; its target is never touched. An item
+  on another filesystem (EXDEV) is left in place, logged, and retried on later boots.
+
+If the backup fails (disk full, `backups` is not a folder or is a symlink), the boot logs
+`database backup before retirement FAILED` and skips EVERY retirement step — nothing is dropped, purged
+or moved — and the next boot tries again. Free space or fix the folder, then restart.
+
+**Both folders hold full user data** (conversations, encrypted secrets readable with this deployment's
+`SESSION_SECRET`, files) and are never pruned, served or swept by Noah — account deletion does not reach
+them either. Keep them owner-only and delete them yourself when satisfied:
+
+```bash
+# inside the data volume (APP_DATA_DIR, /app/data in the image)
+ls -l backups/ retired/
+chmod -R u+w retired/<stamp>     # only if a read-only tree refuses rm
+rm -rf retired/<stamp> backups/pre-retire-<stamp>.db
+```
+
+To restore: stop Noah, replace `noah-almighty.db` with the backup (and remove `noah-almighty.db-wal` /
+`-shm`), move the items you need from `retired/<stamp>/` back to the same relative paths, then start the
+release you are rolling back to. Starting this release again retires the same data again (with a new
+backup and quarantine).
+
 ## Running on pi-gateway
 
 `AGENT_RUNTIME=pi` moves owner, trusted-colleague, routine and task-API turns to a dedicated pi-gateway

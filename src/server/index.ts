@@ -30,6 +30,11 @@ const services = createServices();
 // image also makes the node binary execute-only, so this process itself is
 // non-dumpable and its initial environment unreadable to other processes.
 scrubServerOnlySecretEnv(process.env);
+// Every retirement below (and the retired-table drops in the store's migrate,
+// already run) works behind ONE per-boot gate: the whole DB is backed up to
+// <dataDir>/backups/ first and files are MOVED to <dataDir>/retired/<stamp>/,
+// never deleted; a failed backup skips them all until a later boot
+// (store/retirementBackup.ts). Noah never prunes either folder.
 // Purge what the removed 내 봇 feature left in this deployment (bots, their
 // threads, bot-bound routines, their files) BEFORE anything can read it: the
 // scheduler started below would fire a bot-bound routine as the owner's main
@@ -44,8 +49,8 @@ retireExternalAvatars(services);
 // anything can serve it. Groups and their knowledge repos stay. A no-op once
 // done; a failed purge throws and stops the boot.
 retireGroupAgents(services);
-// The removed Craft apps left only a retry queue on disk; drop it (best effort).
-retireCraftApps(services.config);
+// The removed Craft apps left only a retry queue on disk; quarantine it (best effort).
+retireCraftApps(services);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);

@@ -64,7 +64,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `retirePersonalAgents` (`src/server/retirePersonalAgents.ts` + the `store/retiredPersonalAgents.ts` mixin,
   called from `index.ts` right after `createServices()` — before `createApp`, `listen` and the routine
   scheduler, which would otherwise run a bot-bound routine as the owner) clears what an existing deployment
-  still holds: every `personal:`-bound conversation (messages, canvases, share links, task rows,
+  still holds (files QUARANTINED, not deleted, after a DB backup — see "Retirement backup and quarantine"
+  below): every `personal:`-bound conversation (messages, canvases, share links, task rows,
   notifications) and any other row keyed by a bot avatar id, bot-bound `routine_jobs` rows, then `DROP`s
   `bot_tasks` and `personal_agents`. Disk first: bot avatar images, workspace trees and bot-workspace SDK
   project dirs are found by NAME prefix (`avatars/personal:*`, `workspaces/personal-*`, both spellings of the
@@ -89,7 +90,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   retired columns.
 - **The retired external avatars (oh-my-gateway, removed 2026-10-29) are purged at boot the same way.**
   `retireExternalAvatars` (`src/server/retireExternalAvatars.ts` + the `store/retiredExternalAvatars.ts`
-  mixin, called from `index.ts` right after `retirePersonalAgents`) deletes ALL external-avatar history
+  mixin, called from `index.ts` right after `retirePersonalAgents`) deletes ALL external-avatar history (rows
+  after the DB backup; files are quarantined, see below)
   (user decision D4 — the old "revocation preserves history" promise is void): every conversation whose
   avatar id starts with `external:` gets `deleteConversation`'s cascade (messages, canvases, share links,
   `avatar_tasks`, notifications, routine rows pointing into it), plus any other row keyed by an `external:`
@@ -104,10 +106,11 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   which re-runs the full purge — so the `external:` prefix, that table name and the registry key stay
   reserved FOREVER. A still-set `EXTERNAL_AGENTS_JSON` is ignored with one boot warning. Tests:
   `tests/retire-external-avatars.test.ts`. The no-follow removal / listing / failure-tally primitives every
-  retirement uses live in `src/server/retiredFiles.ts`.
+  retirement uses (now: the no-follow QUARANTINE move) live in `src/server/retiredFiles.ts`.
 - **The retired group shared agents (removed 2026-10-29) are purged at boot the same way.**
   `retireGroupAgents` (`src/server/retireGroupAgents.ts` + the `store/retiredGroupAgents.ts` mixin, called
-  from `index.ts` right after `retireExternalAvatars`) deletes ALL group-agent history (decision D4): every
+  from `index.ts` right after `retireExternalAvatars`) deletes ALL group-agent history (decision D4; rows
+  after the DB backup, files quarantined — see below): every
   conversation whose avatar id starts with `group:` (`group:<groupId>:<agentId>`, or the pre-multi
   `group:<groupId>`) gets `deleteConversation`'s cascade (messages, canvases, share links, `avatar_tasks`,
   notifications, routine rows pointing into it), plus any other row keyed by a `group:` avatar id
@@ -127,6 +130,52 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its
   group-knowledge clone (`removeGroupKnowledgeClone`, `groupKnowledgeRepo.ts`). Tests:
   `tests/retire-group-agents.test.ts`.
+- **Retirement backup and quarantine (user decision 2026-10-29): no retirement ever deletes a FILE, and
+  none deletes a ROW before the whole DB is backed up.** One per-boot gate in `StoreBase`
+  (`retirementGate()`, helpers in `src/server/store/retirementBackup.ts`) carries a UTC stamp
+  (`2026-10-29T03-04-05.678Z-<6 hex>`) shared by both halves:
+  - **DB backup.** The gate is asked in the `Store` constructor BEFORE `migrate()` and again by every boot
+    purge. When `retirementDataPresent` (read-only, schema-defensive, safe pre-migrate) finds anything a
+    retirement would delete — a retired table (`server_agents`, `server_agent_sessions`, `group_agents`,
+    `group_agents_legacy`, `external_avatar_images`, `personal_agents`, `bot_tasks`,
+    `avatar_trusted_users`), a retired `app_config` key (`server_agents_enabled`,
+    `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`, the
+    three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
+    `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, or a bot-bound routine — the
+    first ask copies the DB with `VACUUM INTO` (synchronous, WAL included) to
+    `<dataDir>/backups/pre-retire-<stamp>.db`: the file is created empty at 0600 first, the folder 0700 and
+    never a link, the copy re-opened read-only and its schema count compared. One `warn` line logs path and
+    size. A clean DB, and one whose every retirement already finished, is never backed up. **A failed backup
+    HOLDS the boot**: `migrate()` skips every retired drop/delete below its gate, and every boot purge
+    (`openRetirementSweep` → null) returns without moving, purging or stamping anything; one `error` line
+    says so, the app keeps serving, and the next boot retries with a new stamp. Only the failed attempt's
+    own partial file is removed. While held, `listDueRoutineJobs` also skips rows with
+    `routine_jobs.personal_agent_id` set, so a bot-bound routine can never fire as its owner. Retired
+    external/group threads stay visible until a backup succeeds.
+  - **Quarantine.** Every file or tree a retirement removed before is now MOVED by `quarantineRetired`
+    (`src/server/retiredFiles.ts`) to `<dataDir>/retired/<stamp>/<path relative to dataDir>`, one
+    `rename`, parents created 0700: chat media, server-written workspace copies
+    (`quarantineConversationWorkspaceCopies`, `retiredSessionFiles.ts`, run AFTER the name-prefix sweep so
+    copies travel with their avatar's tree), SDK session artifacts, avatar images, workspace trees, SDK
+    project folders and `runtime/craft-purge`. A link is moved AS a link (never followed, its target
+    untouched); a quarantine root or folder on the way that is a link, a target outside `dataDir` or inside
+    `backups/`/`retired/` are refused. A folder whose destination this boot already filled (a transcript
+    moved by session id, then its project folder by name) is merged entry by entry and only the emptied
+    folder is removed. A read-only top folder gets u+w for the rename and its mode back after. **EXDEV is
+    never copied and deleted**: the item stays, is counted as a failure (pending list as before, marker
+    withheld) with a warning, and later boots retry. The pi runtime's sandbox copies of retired threads
+    (`PI_WORKSPACES_DIR`, outside `dataDir`) are left in place: no released build ran a retired kind on pi.
+  - **Manual cleanup only.** Noah never reads, serves, lists, sweeps or prunes `backups/` or `retired/` (no
+    static route reaches `dataDir`, no code lists `dataDir` itself, account deletion sweeps only its named
+    per-user namespaces — so a deleted user's data in either folder stays until the operator removes it).
+    Both hold FULL user data — conversations, encrypted secrets (readable with the deployment's
+    SESSION_SECRET), files — and, like the live DB, are reachable by same-uid agent Bash until #71's uid
+    separation lands. Restore: stop Noah, replace `noah-almighty.db` (and delete its `-wal`/`-shm`) with the
+    backup, move the wanted items from `retired/<stamp>/` back to the same relative paths, start an OLDER
+    release (this one would retire them again). Delete when satisfied: `rm -rf <dataDir>/retired/<stamp>
+    <dataDir>/backups/pre-retire-<stamp>.db` (a read-only tree inside may need `chmod -R u+w` first).
+    Operator text: README "Retirement backups and quarantine". Tests: `tests/retire-backup.test.ts` plus
+    the quarantine expectations in every `tests/retire-*.test.ts`.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

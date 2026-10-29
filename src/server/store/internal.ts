@@ -2,6 +2,7 @@ import fs from "node:fs";
 import Database from "better-sqlite3";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import logger from "../logger.js";
+import { backupDatabase, retirementDataPresent, retirementStamp } from "./retirementBackup.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type {
   AppConfig,
@@ -284,12 +285,29 @@ export class StoreBase {
   /** Key secret for at-rest token encryption (from config.sessionSecret). */
   protected readonly secret: string;
 
+  /**
+   * This boot's retirement gate (`store/retirementBackup.ts`): its stamp, and
+   * whether the DB backup that must precede any destructive retirement step was
+   * taken (`backedUp`), failed (`held` — every such step is skipped until the
+   * next boot) or is not needed so far (`clean`, re-checked on each ask).
+   */
+  private readonly retirement: {
+    dataDir: string;
+    stamp: string;
+    state: "clean" | "backedUp" | "held";
+    backupPath: string | null;
+  };
+
   constructor(config: AppConfig) {
     this.secret = config.sessionSecret;
     fs.mkdirSync(config.dataDir, { recursive: true });
     this.db = new Database(config.dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+    this.retirement = { dataDir: config.dataDir, stamp: retirementStamp(), state: "clean", backupPath: null };
+    // BEFORE migrate(): its retired-table drops and key deletes are the first
+    // destructive retirement steps of a boot.
+    this.retirementGate();
     this.migrate();
     this.seedRoles();
     logger.info({ dbPath: config.dbPath }, "database opened");
@@ -848,6 +866,12 @@ export class StoreBase {
     this.migrateCanvasArtifacts();
     this.migrateOnboardedAndRoutineFlags();
     this.migrateTodoStatuses();
+    // Everything below DELETES what a retired feature left. It runs only once
+    // the pre-retirement DB backup exists (or nothing here needed one); a failed
+    // backup leaves it all in place until a later boot's backup succeeds.
+    if (!this.retirementGate().allowed) {
+      return;
+    }
     // Trust is now derived purely from group co-membership; the old per-(avatar,
     // viewer) trust table is dropped (its grants don't survive the migration).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
@@ -1138,6 +1162,44 @@ export class StoreBase {
 
   protected normalizeRole(role: string | null | undefined): GroupRole {
     return role === "admin" ? "admin" : "member";
+  }
+
+  /**
+   * Whether this boot may run a destructive retirement step, and the stamp its
+   * quarantine folder and backup share. The first ask that finds retired data
+   * (`retirementDataPresent`) backs the whole DB up; a failed backup holds every
+   * later step of this boot (logged once — the next boot retries), and a DB
+   * with nothing to retire is never backed up. Never throws.
+   */
+  retirementGate(): { allowed: boolean; stamp: string; backupPath: string | null } {
+    const gate = this.retirement;
+    if (gate.state === "clean") {
+      let present = true;
+      try {
+        present = retirementDataPresent(this.db);
+      } catch (err) {
+        // Unsure counts as present: a needless backup beats an unbacked purge.
+        logger.warn({ err }, "could not check the database for retired data; backing it up before any retirement");
+      }
+      if (present) {
+        try {
+          const backup = backupDatabase(this.db, gate.dataDir, gate.stamp);
+          gate.state = "backedUp";
+          gate.backupPath = backup.path;
+          logger.warn(
+            { path: backup.path, bytes: backup.bytes },
+            "database backed up before retiring removed features (Noah never deletes this file; remove it by hand once satisfied)",
+          );
+        } catch (err) {
+          gate.state = "held";
+          logger.error(
+            { err },
+            "database backup before retirement FAILED: every retirement step (retired-table drops, boot purges) is skipped on this boot and retried on the next — free disk space or fix the backups folder",
+          );
+        }
+      }
+    }
+    return { allowed: gate.state !== "held", stamp: gate.stamp, backupPath: gate.backupPath };
   }
 
   /** Close the underlying SQLite handle. Called on graceful shutdown. */

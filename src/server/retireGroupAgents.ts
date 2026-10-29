@@ -1,11 +1,12 @@
 import path from "node:path";
 import { safeConversationDir } from "./chatImages.js";
 import logger from "./logger.js";
-import { listEntries, type SweepTally } from "./retiredFiles.js";
+import { listEntries, openRetirementSweep } from "./retiredFiles.js";
 import {
   isSessionId,
+  quarantineConversationWorkspaceCopies,
   readRowKeyedPending,
-  removeRowKeyed,
+  quarantineRowKeyed,
   serializePending,
   sweepNamedLeftovers,
   sweepSessionArtifacts,
@@ -14,7 +15,6 @@ import {
 import type { Store } from "./store.js";
 import type { RetiredGroupAgentPurge } from "./store/retiredGroupAgents.js";
 import type { AppConfig } from "./types.js";
-import { deleteConversationWorkspaceCopies } from "./workspace.js";
 
 /**
  * Boot-time retirement of the removed group shared agents (removed
@@ -39,7 +39,8 @@ import { deleteConversationWorkspaceCopies } from "./workspace.js";
  * install has nothing to do and is stamped silently on its first boot.
  *
  * DISK FIRST, then the database — the personal-agent retirement's shape
- * (`retiredSessionFiles.ts`). Agent avatar images (`avatars/group:…`),
+ * (`retiredSessionFiles.ts`), quarantining (moving under `retired/<boot
+ * stamp>/`), never deleting, after a DB backup (`store/retirementBackup.ts`). Agent avatar images (`avatars/group:…`),
  * workspace trees (`workspaces/group-…`) and the SDK project folders of runs
  * whose cwd was one of those trees are found by NAME prefix, on every boot
  * that runs. Files only the rows can name — each thread's chat media and SDK
@@ -64,7 +65,10 @@ export function retireGroupAgents(deps: {
       logger.warn("an older release recreated the retired group-agent table — retiring again");
     }
   }
-  const sweep: SweepTally = { failures: 0, sample: [] };
+  const sweep = openRetirementSweep(config.dataDir, store.retirementGate(), "group-agent");
+  if (!sweep) {
+    return null;
+  }
   const pending = readRowKeyedPending(
     config,
     () => store.retiredGroupAgentPendingState(),
@@ -72,19 +76,15 @@ export function retireGroupAgents(deps: {
   );
   const next: PendingRetries = { paths: new Set(), sessionIds: new Set() };
   for (const rel of pending.paths) {
-    removeRowKeyed(config, rel, sweep, next);
+    quarantineRowKeyed(config, rel, sweep, next);
   }
   const snapshot = store.snapshotRetiredGroupAgents();
   const conversationIds = snapshot?.conversationIds ?? [];
   for (const conversationId of conversationIds) {
     const dir = safeConversationDir(conversationId);
-    removeRowKeyed(config, `chat-images/${dir}`, sweep, next);
-    removeRowKeyed(config, `chat-files/${dir}`, sweep, next);
+    quarantineRowKeyed(config, `chat-images/${dir}`, sweep, next);
+    quarantineRowKeyed(config, `chat-files/${dir}`, sweep, next);
   }
-  // Server-written copies (attachments/captures/confluence) are resolved by
-  // thread id under EVERY avatar folder; best-effort, never throws. A thread's
-  // own workspace goes with its agent's tree below.
-  deleteConversationWorkspaceCopies(config, conversationIds);
   const projectsRoot = path.join(config.agentSessionsDir, "projects");
   const projectEntries = listEntries(projectsRoot, sweep);
   const sessionIds = new Set([...(snapshot?.sessionIds ?? []).filter(isSessionId), ...pending.sessionIds]);
@@ -95,6 +95,10 @@ export function retireGroupAgents(deps: {
     projectEntries,
     sweep,
   );
+  // Server-written copies (attachments/captures/confluence), resolved by
+  // thread id under EVERY avatar folder; best-effort, never throws. A thread's
+  // own workspace went with its avatar's tree just above.
+  quarantineConversationWorkspaceCopies(config, conversationIds, sweep);
   const pendingDocument = serializePending(next);
   const purge = snapshot ? store.purgeRetiredGroupAgents(pendingDocument) : null;
   if (purge) {
@@ -117,7 +121,7 @@ export function retireGroupAgents(deps: {
   }
   logger.warn(
     { failures: sweep.failures, paths: sweep.sample },
-    "retired group-agent files could not be removed; the retirement marker was NOT stamped, so the next boot retries — remove these paths by hand if this repeats",
+    "retired group-agent files could not be quarantined and were left in place; the retirement marker was NOT stamped, so the next boot retries — move these paths under retired/ by hand if this repeats",
   );
   return purge;
 }
