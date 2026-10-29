@@ -79,5 +79,5 @@ removed. A boot purge (`src/server/retireGroupAgents.ts` + `store/retiredGroupAg
 member's thread with one and the files it left, then drops the table; the `group:` avatar-id prefix and
 the table names are reserved forever (details in [`server-core.md`](server-core.md)). Groups, their
 members, the `avatar_sharing` policy, group knowledge repos and the personal-run
-`mcp__group_repo__*`/`mcp__group_brain__*` tools are unaffected. `isTrustedFor` is the only elevation
+`mcp__group_repo__*` tools are unaffected. `isTrustedFor` is the only elevation
 source left — there is no membership-gated carve-out any more.

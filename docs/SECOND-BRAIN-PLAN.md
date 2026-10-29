@@ -1,5 +1,9 @@
 # Second Brain — Implementation Plan (v2)
 
+> **2026-10-30: the GROUP half of this plan is removed (user decision).** The team brain
+> (`mcp__group_brain__*`, group vault scaffolding, the group knowledge-graph view) no longer exists; the
+> second brain is personal only. Decision 1 and Phase 4 below are historical.
+
 Evolve the per-user (and per-group) git knowledge repo from a passive skill store into
 an active, self-maintaining **second brain** (Karpathy LLM-Wiki + mem0 consolidation +
 sleep-time-agent loop): the avatar captures durable knowledge into a structured `wiki/`,

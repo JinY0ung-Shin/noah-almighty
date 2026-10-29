@@ -20,6 +20,9 @@
  *   --dry-run         print what would change, change nothing
  *   --remove          delete every broker entry that points at THIS Noah
  *
+ * Every run (not only --remove) also deletes this Noah's entries under a RETIRED id
+ * (RETIRED_MCP_SERVER_NAMES), so a server Noah dropped leaves pi's broker on the next `up`.
+ *
  * The admin key is read from PI_GATEWAY_ADMIN_KEY only (never an argument, so it
  * stays out of shell history and `ps`); Noah never stores it.
  *
@@ -54,7 +57,6 @@ export const NOAH_MCP_SERVER_NAMES = [
   "git_repo",
   "group_repo",
   "brain",
-  "group_brain",
   "canvas",
   "browser",
   "file_output",
@@ -64,6 +66,13 @@ export const NOAH_MCP_SERVER_NAMES = [
   "plugins",
   "shared",
 ];
+
+/**
+ * Broker ids an older Noah registered for a server that is gone. A normal run deletes such an entry when it
+ * still points at THIS Noah (an earlier deployment registered it; left alone the broker keeps listing its tools
+ * and every call fails), and never reuses the id. `group_brain`: the team second brain, removed 2026-10-30.
+ */
+export const RETIRED_MCP_SERVER_NAMES = ["group_brain"];
 
 /**
  * The broker entry's `description` per id: what the service IS, in NOUNS only. pi shows its first line in
@@ -85,7 +94,6 @@ export const SERVER_DESCRIPTIONS = {
   git_repo: "General git code repositories (GitHub projects) of the owner.",
   group_repo: "Group (team) shared knowledge repository.",
   brain: "Second brain: the owner's curated wiki notes, memory of past decisions, people and projects.",
-  group_brain: "Team brain: a group's shared wiki notes.",
   canvas: "Visual canvas side panel: diagrams, mockups, charts, HTML previews.",
   browser: "The user's own web browser (Chrome extension): pages, tabs, forms.",
   file_output: "Files for the user: images in the chat, download cards, share links.",
@@ -234,6 +242,11 @@ async function main() {
       continue;
     }
     await act(`PUT ${name} → ${want.transport.url}`, () => admin("PUT", `/mcp/servers/${name}`, { config: want }));
+  }
+  // --remove deletes a retired entry too: it is one this Noah owns.
+  for (const name of RETIRED_MCP_SERVER_NAMES) {
+    const have = existing.get(name);
+    if (have && ours(have, name)) await act(`DELETE ${name} (retired)`, () => admin("DELETE", `/mcp/servers/${name}`));
   }
 
   if (!opts.configure || opts.remove) return;

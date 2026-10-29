@@ -207,7 +207,7 @@ describe("run capability plan", () => {
     expect(run.servers).toEqual(
       expect.arrayContaining(["knowledge", "repo", "system", "todo", "confluence", "avatars", "git_repo"]),
     );
-    for (const absent of ["canvas", "brain", "group_repo", "group_brain", "ssh_trust", "browser", "file_output"]) {
+    for (const absent of ["canvas", "brain", "group_repo", "ssh_trust", "browser", "file_output"]) {
       expect(run.servers).not.toContain(absent);
     }
     // Every built server is one pi's broker knows; nothing is relayed for this run.
@@ -302,15 +302,15 @@ describe("run capability plan", () => {
     expect(run.allowed).not.toContain("mcp__file_output__create_share_link");
   });
 
-  it("registers the group repo + group brain servers when the owner belongs to a group with a shared repo", async () => {
+  it("registers the group repo server (and no team brain) when the owner belongs to a group with a shared repo", async () => {
     const env = setup();
     const group = env.store.createGroup({ name: "팀" });
     env.store.addGroupMember(group.id, env.owner.id, "admin");
     env.store.setGroupKnowledgeRepo(group.id, "team/kb", "main");
     const run = await plan(env, env.baseRequest);
-    // owner in ≥1 group → group_repo; the group has a connected repo → group_brain.
+    // owner in ≥1 group → group_repo; the team brain is gone (removed 2026-10-30).
     expect(run.servers).toContain("group_repo");
-    expect(run.servers).toContain("group_brain");
+    expect(run.servers).not.toContain("group_brain");
   });
 
   it("allows ask_avatar ONLY on owner-driven runs and never inside a consultation", async () => {

@@ -1,6 +1,6 @@
 ---
 name: brain-search
-description: Recall from the second brain — search the curated wiki/ notes in your knowledge repo BEFORE answering anything that could draw on accumulated knowledge (owner preferences, prior decisions, people/projects, recurring topics). Read-only; works on the personal brain (mcp__brain__*) and, when in a shared group, the team brain (mcp__group_brain__*). Available to the owner and trusted same-group teammates.
+description: Recall from the second brain — search the curated wiki/ notes in your knowledge repo BEFORE answering anything that could draw on accumulated knowledge (owner preferences, prior decisions, people/projects, recurring topics). Read-only; works on the personal brain (mcp__brain__*). Available to the owner and trusted same-group teammates.
 ---
 
 # brain-search — recall from the second brain
@@ -17,17 +17,16 @@ recurring topic. Prefer recalling what is already written down over re-asking th
 ## Tools (read-only)
 - **Personal brain:** `mcp__brain__search` (ranked hits with path + snippet) then `mcp__brain__get_note`
   to read a full note (wiki-scoped; `mcp__repo__read_file` reads other repo paths).
-- **Team brain (only when you are in a group with a shared repo):** `mcp__group_brain__search` /
-  `mcp__group_brain__get_note`, scoped to one group; any group member may read. Use it to surface
-  team-shared rules, decisions, and context any member captured. When a question is plausibly both
-  personal and team knowledge, search both.
+- There is no team brain: the second brain is personal only. A group's shared repository is read
+  with `mcp__group_repo__list_files`/`mcp__group_repo__read_file`, not searched here — and a group
+  repo's notes that mention `mcp__group_brain__*` predate its removal.
 
 ## How to search well
 1. Start with the most specific keywords or a natural-language phrase; titles/aliases rank highest,
    then tags, then body.
 2. If the first query is thin, retry with synonyms or an alternate name (a person's role, a project
    alias) and raise `limit` (up to 20).
-3. Read the most relevant hit in full with `mcp__brain__get_note` (team brain: `mcp__group_brain__get_note`), then follow any linked notes / `[[references]]`
+3. Read the most relevant hit in full with `mcp__brain__get_note`, then follow any linked notes / `[[references]]`
    it points to — the best context is often one hop away in `synthesis/`.
 4. Cite what you found by note path so the user can trace it; never fabricate a fact the notes don't
    support, and don't present a `raw/` capture as settled — `wiki/` is the curated layer.

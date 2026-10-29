@@ -522,12 +522,14 @@ export async function writeRepoTemplate(
   );
   await writeFile(repoRoot, "README.md", repoTemplateReadme(shortName, kind));
   await writeFile(repoRoot, "CLAUDE.md", repoTemplateClaudeMd(shortName, kind));
-  // Seed the second-brain vault skeleton (raw/ inbox + wiki/ consolidated layer) for
-  // BOTH personal and group repos. Empty dirs need a .gitkeep to survive commit/clone.
-  // The brain-* default skills operate on this layout; existing repos created before
-  // this change keep marketplace.json (so they early-return above) and are upgraded by
-  // the brain-migrate skill instead. NOTE: no skills are seeded here on purpose — the
-  // brain skills are default-bundled, so marketplace.json stays {plugins: []}.
+  // Seed the second-brain vault skeleton (raw/ inbox + wiki/ consolidated layer) for a
+  // PERSONAL repo only — the second brain is personal (the team brain was removed
+  // 2026-10-30), so a group repo starts as a plain shared repo. Empty dirs need a .gitkeep
+  // to survive commit/clone. The brain-* default skills operate on this layout; existing
+  // repos created before it keep marketplace.json (so they early-return above) and are
+  // upgraded by the brain-migrate skill instead. NOTE: no skills are seeded here on
+  // purpose — the brain skills are default-bundled, so marketplace.json stays {plugins: []}.
+  if (kind === "group") return true;
   await writeFile(repoRoot, "raw/.gitkeep", "");
   for (const section of ["sources", "entities", "concepts", "synthesis"]) {
     await writeFile(repoRoot, `wiki/${section}/.gitkeep`, "");
@@ -547,27 +549,19 @@ export async function writeRepoTemplate(
  */
 function repoTemplateClaudeMd(name: string, kind: "personal" | "group" = "personal"): string {
   if (kind === "group") {
-    // Team-framed, Korean human-facing + English-readable structure. Kept short —
-    // the server caps the GROUP CLAUDE.md injection at GROUP_CLAUDE_MD_CAP (4000).
-    return `# ${name} — 팀 공유 브레인 (CLAUDE.md)
+    // Team-framed, Korean human-facing. Kept short — the server caps the GROUP
+    // CLAUDE.md injection at GROUP_CLAUDE_MD_CAP (4000).
+    return `# ${name} — 팀 공유 지식 저장소 (CLAUDE.md)
 
-이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소(팀 브레인)** 입니다. 이 파일은 구성원들의
-아바타에게 **매 대화마다** 상시 지침으로 주입됩니다. 시스템·안전 지침이 항상 우선하며,
-길어지면 서버가 일부를 잘라냅니다(그룹 CLAUDE.md는 개인보다 짧게).
-
-## 구조 (vault)
-- \`wiki/<section>/<slug>.md\` — 정제된 팀 노트. frontmatter: \`title\`, \`tags\`, \`aliases\`.
-  팀 브레인 검색(\`mcp__group_brain__search\`)이 우선 검색합니다.
-- 관련 노트는 본문에서 \`[[노트 제목]]\`으로 연결하세요 — 이 링크가 지식 그래프를 잇습니다.
-- \`raw/\` — 아직 정리되지 않은 원본 캡처. 나중에 reflect로 wiki에 정리.
+이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소**입니다. 이 파일은 구성원들의 아바타에게
+**매 대화마다** 상시 지침으로 주입됩니다. 시스템·안전 지침이 항상 우선하며, 길어지면 서버가
+일부를 잘라냅니다(그룹 CLAUDE.md는 개인보다 짧게).
 
 ## 운영 원칙
-- 답하기 전에 먼저 팀 브레인을 검색하세요.
+- 팀에 관한 질문이면 이 저장소의 문서를 먼저 확인하세요(\`mcp__group_repo__list_files\`/\`read_file\`).
 - **읽기는 모든 구성원**, **쓰기·커밋은 그룹 관리자만**(\`mcp__group_repo__write_file\`/\`commit\`).
-  구성원은 관리자에게 정리를 요청하세요.
-- 정리(consolidation)는 **온디맨드**입니다. 관리자가 brain-reflect로 \`raw/\`+\`wiki/\`만 보고
-  정리합니다. **대화 기록은 절대 읽지 않습니다** — 그룹에는 공유 대화 스트림이 없고, 구성원
-  개인 대화를 읽는 것은 프라이버시 위반입니다.
+  구성원은 관리자에게 반영을 요청하세요.
+- 팀 공용 스킬은 \`mcp__group_repo__scaffold_skill\`로 만들면 다음 대화부터 모든 구성원의 아바타가 씁니다.
 
 ## 여기에 적어 둘 것
 - 팀 공통 응답 말투/형식, 자주 쓰는 용어·약어, 반복 작업의 기본 규칙, 합의된 결정과 배경.
@@ -607,14 +601,12 @@ function repoTemplateReadme(name: string, kind: "personal" | "group" = "personal
   if (kind === "group") {
     return `# ${name} — 팀 공유 지식 저장소
 
-이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소(팀 브레인)** 입니다. 구성원의 아바타가
-대화에서 활용하며, 정리된 지식을 다음 대화부터 함께 사용합니다.
+이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소**입니다. 구성원의 아바타가 대화에서 활용하며,
+여기에 정리한 문서와 스킬을 다음 대화부터 함께 사용합니다.
 
-## 구조 (세컨드 브레인 vault)
-
-- \`raw/\` — 원본 캡처 인박스
-- \`wiki/{sources,entities,concepts,synthesis}/\` — 정제된 팀 노트
-- \`wiki/index.md\` · \`wiki/log.md\` · \`wiki/_template.md\` — 목차 / 정리 이력 / 노트 템플릿
+- \`CLAUDE.md\` — 구성원 아바타에게 매 대화 주입되는 팀 공통 지침
+- \`skills/<이름>/SKILL.md\` — 팀 공용 스킬 (marketplace에 등록된 것만 로드)
+- \`.claude-plugin/marketplace.json\` — 추가 스킬(플러그인) 목록
 
 읽기는 모든 구성원, 쓰기·커밋은 그룹 관리자만 가능합니다.
 `;

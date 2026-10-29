@@ -349,8 +349,6 @@ export async function buildRunCapabilities(
     await import("./canvasTools.js");
   const { buildBrainServer, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } =
     await import("./brainTools.js");
-  const { buildGroupBrainServer, GROUP_BRAIN_SERVER_NAME, GROUP_BRAIN_TOOL_NAMES } =
-    await import("./groupBrainTools.js");
   const {
     buildTodoServer,
     TODO_SERVER_NAME,
@@ -939,20 +937,6 @@ export async function buildRunCapabilities(
     config,
     onMemory: onGroupMemory,
   });
-  // Group (team) second brain: read-only `wiki/` recall over a group's shared
-  // repo, scoped per-group to the OWNER's memberships inside the tools. Owner-only
-  // at registration (like the group repo tools), active when the owner is in ≥1
-  // group with a connected shared repo. groupBrainActive is the SINGLE boolean
-  // used byte-identically in mcpAllowedTools + inProcessMcpServers below.
-  const groupBrainActive =
-    groupKnowledgeToolsEnabled &&
-    ownerToolAccess &&
-    ownerGroups.some((g) => g.knowledgeRepoConfigured);
-  const groupBrainServer = buildGroupBrainServer(store, {
-    avatarUserId: request.avatar.id,
-    viewerIsOwner: ownerToolAccess,
-    config,
-  });
   // To-do server (todoToolsActive above). The handlers re-check viewerIsOwner
   // — registration is not the boundary under the static catalog — and stamp
   // each new item with WHO added it and the conversation it came from.
@@ -1197,9 +1181,6 @@ export async function buildRunCapabilities(
     ...(skillsServer ? { [SKILLS_SERVER_NAME]: skillsServer } : {}),
     ...(groupRepoActive ? { [GROUP_REPO_SERVER_NAME]: groupRepoServer } : {}),
     ...(brainActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
-    ...(groupBrainActive
-      ? { [GROUP_BRAIN_SERVER_NAME]: groupBrainServer }
-      : {}),
     ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
     ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
     ...(fileOutputServer
@@ -1233,7 +1214,6 @@ export async function buildRunCapabilities(
       ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
       ...(groupRepoActive ? GROUP_REPO_TOOL_NAMES : []),
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
-      ...(groupBrainActive ? GROUP_BRAIN_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),
       ...(fileOutputActive ? FILE_OUTPUT_TOOL_NAMES : []),

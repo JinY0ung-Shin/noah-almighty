@@ -24,11 +24,6 @@ import {
   BRAIN_SERVER_NAME,
 } from "../src/server/agent/brainTools.js";
 import {
-  buildGroupBrainTools,
-  buildGroupBrainServer,
-  GROUP_BRAIN_SERVER_NAME,
-} from "../src/server/agent/groupBrainTools.js";
-import {
   buildGroupRepoTools,
   buildGroupRepoServer,
   GROUP_REPO_SERVER_NAME,
@@ -1101,68 +1096,6 @@ describe("brain tools — search + get_note over a real vault", () => {
     const s = setup("brain-server", null);
     expect(buildBrainServer(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config })).toBeTruthy();
     expect(BRAIN_SERVER_NAME).toBe("brain");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// groupBrainTools — team second-brain search over a REAL local group clone
-// ---------------------------------------------------------------------------
-
-describe("group brain tools — search + get_note over a real group vault", () => {
-  function setup(dir: string, files: Record<string, string> | null) {
-    const base = path.join(tempDir, dir);
-    fs.mkdirSync(base, { recursive: true });
-    const { store, config } = createServices({ dataDir: path.join(base, "data"), agentRuntime: "local", sessionSecret: "t" });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "member");
-    if (files) {
-      const remote = seedRemote(base, files);
-      store.setGroupKnowledgeRepo(group.id, remote, "main");
-    }
-    return { store, config, owner, group };
-  }
-  const tools = (s: ReturnType<typeof setup>) =>
-    buildGroupBrainTools(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config });
-
-  const NOTE = "---\ntitle: Team Runbook\ntags: [oncall]\n---\nEscalate incidents to the platform channel.\n";
-
-  it("ranks a matching group note and reads it with get_note", async () => {
-    const s = setup("gb-hit", { "wiki/runbook.md": NOTE });
-    const hit = await callTool(tools(s), "search", { group: "Team", query: "incidents" });
-    expect(hit.isError).toBeFalsy();
-    expect(hit.content[0].text).toContain("Team Runbook");
-    expect(hit.content[0].text).toContain("'Team' team brain");
-
-    const note = await callTool(tools(s), "get_note", { group: "Team", path: "wiki/runbook.md" });
-    expect(note.isError).toBeFalsy();
-    expect(note.content[0].text).toContain("Escalate incidents");
-  });
-
-  it("reports no matches, and points a vault-less group repo at brain-migrate", async () => {
-    const withVault = setup("gb-empty", { "wiki/runbook.md": NOTE });
-    const noMatch = await callTool(tools(withVault), "search", { group: "Team", query: "unrelatedxyz" });
-    expect(noMatch.isError).toBeFalsy();
-    expect(noMatch.content[0].text).toContain("team brain matched");
-
-    const noVault = setup("gb-novault", { "README.md": "x" });
-    const res = await callTool(tools(noVault), "search", { group: "Team", query: "incidents" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("brain-migrate");
-  });
-
-  it("get_note surfaces a read failure for a missing group wiki path", async () => {
-    const s = setup("gb-missing", { "wiki/runbook.md": NOTE });
-    const res = await callTool(tools(s), "get_note", { group: "Team", path: "wiki/ghost.md" });
-    expect(res.isError).toBe(true);
-    // Same containment+existence guard as the personal server.
-    expect(res.content[0].text).toContain("Invalid path");
-  });
-
-  it("buildGroupBrainServer exposes the named MCP server", () => {
-    const s = setup("gb-server", null);
-    expect(buildGroupBrainServer(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config })).toBeTruthy();
-    expect(GROUP_BRAIN_SERVER_NAME).toBe("group_brain");
   });
 });
 

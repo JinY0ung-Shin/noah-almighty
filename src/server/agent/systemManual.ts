@@ -162,7 +162,7 @@ Check plugin enabled state, sync errors, selected content, permissions, and whet
     summary: "Team knowledge, teammate discovery and one-shot consultation.",
     body: `## Team setup
 System administrators create groups and assign group administrators. Manage group membership and the shared knowledge repository in the group settings. The avatar-sharing switch controls peer discovery/trust; shared repository knowledge still works when that switch is off.
-Group knowledge uses mcp__group_brain__search/mcp__group_brain__get_note for recall and mcp__group_repo__* for repository operations. Group-admin checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
+Group knowledge lives in the group's shared repository, handled with mcp__group_repo__* (there is no team-brain search; the second brain is personal only). Group-admin checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.

@@ -97,15 +97,18 @@
   turn; an edit mid-conversation applies from the next conversation. Wired in chat + scheduler
   (routines = all groups, no toggle); intro/hashtag gen leaves it unset. `writeRepoTemplate` seeds a
   starter root `CLAUDE.md`.
-- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store.** `wiki/` (curated)
-  + `raw/` (capture) are just directories inside the existing personal/group knowledge repo. **Recall**
-  is read-only search: `mcp__brain__*` (personal, `search`/`get_note`, gated `elevated`) and
-  `mcp__group_brain__*` (one group, read gated on group-MEMBERship). Both metacognition surfaces (the
-  prompt's `brainSection`/`groupsSection` and the `describe_system` brain lines) check the per-conversation
-  `personal_knowledge`/`group_knowledge` tool-group toggle FIRST — mirroring `buildRunCapabilities`'
-  `brainActive`/`groupBrainActive` — so a deselected group reads as OFF, never as active. **Capture/consolidate** is the
-  `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` (personal) /
-  `mcp__group_repo__write_file` (group) + `commit` — there is NO separate "brain write" tool, so a
+- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL only.**
+  `wiki/` (curated) + `raw/` (capture) are just directories inside the owner's personal knowledge repo.
+  The team brain (`mcp__group_brain__*`, group vault scaffolding, group graph) was REMOVED 2026-10-30 (user
+  decision); `group_brain` is a retired pi broker id (`RETIRED_MCP_SERVER_NAMES` in
+  `scripts/pi-register-mcp.mjs` deletes a stale entry) and a reserved shared-MCP name. **Recall** is read-only
+  search: `mcp__brain__*` (`search`/`get_note`, gated `elevated`). Both metacognition surfaces (the prompt's
+  `brainSection` and the `describe_system` brain line) check the per-conversation `personal_knowledge`
+  tool-group toggle FIRST — mirroring `buildRunCapabilities`' `brainActive` — so a deselected group reads as
+  OFF, never as active; both also say there is no team brain and send a group repo's stale
+  `mcp__group_brain__*` mention to `mcp__group_repo__read_file`. **Capture/consolidate** is the
+  `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` + `commit` —
+  there is NO separate "brain write" tool, so a
   capture is a repo write plus a commit (uncommitted = not persisted). It composes with the backfill
   loop: `request_info` ESCALATES a true unknown to the owner, `brain-ingest` RETAINS the answer.
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the

@@ -4,44 +4,21 @@
   import Icon from "../components/Icon.svelte";
   import { api } from "../lib/api";
   import { renderMarkdown } from "../lib/format";
-  import { goView, syncHash } from "../lib/nav";
-  import { appState, readState, updateState } from "../lib/state";
+  import { goView } from "../lib/nav";
+  import { appState } from "../lib/state";
   import type { KnowledgeGraph, KnowledgeGraphNode, KnowledgeNote, User } from "../lib/types";
 
-  // Full-page second-brain graph, reached from the left nav. Pairs the reusable
-  // GraphCanvas with a source switcher (personal repo + each group brain) and a
-  // note panel that fetches + renders the clicked note's markdown — the richer
-  // surface over the compact GraphViewModal in settings.
-
-  interface GraphSource {
-    key: string;
-    label: string;
-    graphEndpoint: string;
-    noteEndpoint: string;
-  }
+  // Full-page second-brain graph of the owner's personal knowledge repo, reached
+  // from the left nav. Pairs the reusable GraphCanvas with a note panel that
+  // fetches + renders the clicked note's markdown — the richer surface over the
+  // compact GraphViewModal in settings. (Group repos have no graph: the team
+  // brain was removed 2026-10-30.)
+  const GRAPH_ENDPOINT = "/api/me/knowledge-repo/graph";
+  const NOTE_ENDPOINT = "/api/me/knowledge-repo/note";
 
   $: user = $appState.user as User;
-
-  // Personal repo first, then each group that has a knowledge repo connected
-  // (the graph/note endpoints 404 without one).
-  $: sources = [
-    ...(user?.knowledgeRepo
-      ? [{ key: "personal", label: "내 지식 저장소", graphEndpoint: "/api/me/knowledge-repo/graph", noteEndpoint: "/api/me/knowledge-repo/note" }]
-      : []),
-    ...(user?.groups ?? [])
-      .filter((g) => g.knowledgeRepoConfigured)
-      .map((g) => ({
-        key: `group:${g.id}`,
-        label: g.name,
-        graphEndpoint: `/api/me/groups/${encodeURIComponent(g.id)}/knowledge-repo/graph`,
-        noteEndpoint: `/api/me/groups/${encodeURIComponent(g.id)}/knowledge-repo/note`,
-      })),
-  ] as GraphSource[];
-
-  // Seed from the route (a group's "전체 화면으로 열기" or a #/brain/group:<id>
-  // deep link); falls back to personal if that source isn't available.
-  let activeKey = readState().brainSource || "personal";
-  $: active = sources.find((s) => s.key === activeKey) ?? sources[0];
+  // The graph/note endpoints 404 without a connected repo.
+  $: hasRepo = Boolean(user?.knowledgeRepo);
 
   let loading = true;
   let error = "";
@@ -52,40 +29,26 @@
   let noteError = "";
   let noteHtml = "";
   // Each bumped on a new fetch so a slow earlier request can't overwrite a newer
-  // graph load (source switch) or note selection.
+  // graph load (refresh) or note selection.
   let graphToken = 0;
   let noteToken = 0;
 
   onMount(() => {
-    // Normalize a stale/forbidden source key (e.g. a group that lost its repo)
-    // down to whatever `active` resolved to, and reflect it in the hash.
-    if (!active) {
+    if (!hasRepo) {
       loading = false;
       return;
     }
-    if (active.key !== activeKey) setActiveKey(active.key);
-    void loadGraph(active);
+    void loadGraph();
   });
 
-  function setActiveKey(key: string): void {
-    activeKey = key;
-    if (readState().brainSource !== key) {
-      updateState((state) => {
-        state.brainSource = key;
-      });
-      syncHash(true);
-    }
-  }
-
-  async function loadGraph(source: GraphSource | undefined): Promise<void> {
-    if (!source) return;
+  async function loadGraph(): Promise<void> {
     loading = true;
     error = "";
     graph = null;
     clearNote();
     const token = ++graphToken;
     try {
-      const res = await api<{ graph: KnowledgeGraph }>(source.graphEndpoint);
+      const res = await api<{ graph: KnowledgeGraph }>(GRAPH_ENDPOINT);
       if (token !== graphToken) return;
       graph = res.graph;
     } catch (err) {
@@ -94,36 +57,6 @@
     } finally {
       if (token === graphToken) loading = false;
     }
-  }
-
-  function selectSource(source: GraphSource): void {
-    if (source.key === activeKey) return;
-    setActiveKey(source.key);
-    void loadGraph(source);
-  }
-
-  function sourceDomId(key: string): string {
-    return `brain-source-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  }
-
-  function focusSource(key: string): void {
-    requestAnimationFrame(() => document.getElementById(sourceDomId(key))?.focus());
-  }
-
-  function onSourceKeydown(event: KeyboardEvent, source: GraphSource): void {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const currentIndex = sources.findIndex((item) => item.key === source.key);
-    if (currentIndex < 0) return;
-    const nextIndex =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? sources.length - 1
-          : (currentIndex + (event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1) + sources.length) % sources.length;
-    const next = sources[nextIndex];
-    selectSource(next);
-    focusSource(next.key);
   }
 
   function clearNote(): void {
@@ -146,7 +79,7 @@
     noteLoading = true;
     const token = ++noteToken;
     try {
-      const res = await api<{ note: KnowledgeNote }>(`${active.noteEndpoint}?path=${encodeURIComponent(node.id)}`);
+      const res = await api<{ note: KnowledgeNote }>(`${NOTE_ENDPOINT}?path=${encodeURIComponent(node.id)}`);
       if (token !== noteToken) return;
       noteHtml = renderMarkdown(res.note.content);
     } catch (err) {
@@ -168,14 +101,14 @@
       <h1>지식 그래프</h1>
       <p class="muted small">노트 사이의 <code>[[링크]]</code> 연결을 한눈에 보고, 노드를 클릭하면 내용을 바로 읽을 수 있어요.</p>
     </div>
-    {#if sources.length}
-      <button class="ghost-sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => loadGraph(active)}>
+    {#if hasRepo}
+      <button class="ghost-sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => loadGraph()}>
         <Icon name="refresh" size={15} /><span>새로고침</span>
       </button>
     {/if}
   </header>
 
-  {#if !sources.length}
+  {#if !hasRepo}
     <section class="brain-empty">
       <span class="brain-empty-icon"><Icon name="book" size={24} /></span>
       <div>
@@ -185,34 +118,11 @@
       <button class="primary" type="button" on:click={() => goView("settings", "knowledge")}>지식 저장소 설정</button>
     </section>
   {:else}
-  {#if sources.length > 1}
-    <div class="brain-sources" role="tablist" aria-label="지식 저장소 선택">
-      {#each sources as source}
-        <button
-          id={sourceDomId(source.key)}
-          class="brain-source"
-          type="button"
-          role="tab"
-          aria-selected={source.key === activeKey}
-          aria-controls="brain-graph-panel"
-          tabindex={source.key === activeKey ? 0 : -1}
-          class:active={source.key === activeKey}
-          on:click={() => selectSource(source)}
-          on:keydown={(event) => onSourceKeydown(event, source)}
-        >
-          <Icon name={source.key === "personal" ? "user" : "users"} size={14} />
-          <span>{source.label}</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
 
   <div class="brain-body">
     <div
       id="brain-graph-panel"
       class="brain-graph"
-      role="tabpanel"
-      aria-labelledby={active ? sourceDomId(active.key) : undefined}
       aria-busy={loading ? "true" : "false"}
     >
       {#if loading}
@@ -220,7 +130,7 @@
       {:else if error}
         <div class="brain-state error-note" role="alert">
           불러오기 실패: {error}
-          <button class="linkish small" type="button" disabled={loading} on:click={() => loadGraph(active)}>다시 시도</button>
+          <button class="linkish small" type="button" disabled={loading} on:click={() => loadGraph()}>다시 시도</button>
         </div>
       {:else if graph?.noVault}
         <div class="brain-state muted">
@@ -300,11 +210,6 @@
   .brain-title p {
     margin: var(--s-1) 0 0;
   }
-  .brain-sources {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-  }
   .brain-empty {
     width: min(560px, 100%);
     margin: auto;
@@ -334,26 +239,6 @@
   .brain-empty p {
     margin: var(--s-2) 0 0;
     line-height: 1.6;
-  }
-  .brain-source {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--s-1);
-    padding: var(--s-1) var(--s-3);
-    border: 1px solid var(--line-soft);
-    border-radius: var(--r-pill);
-    background: var(--material-thick, var(--panel));
-    color: var(--muted);
-    font-size: var(--t-sm);
-    cursor: pointer;
-  }
-  .brain-source.active {
-    /* Chunk-order tie-break: this lazy route's CSS loads after the main bundle,
-       so the 80-layer `.brain-source.active` (0-2-0) loses `color` to the scoped
-       base above (also 0-2-0 with the svelte hash). Keep the differentiating
-       color scoped; the active shadow/background come from the shared
-       seg-active list in 80-apple-design.css. */
-    color: var(--text);
   }
   .brain-body {
     flex: 1;

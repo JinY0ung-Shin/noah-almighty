@@ -38,7 +38,7 @@ These are the invariants the project is built around. New work should reinforce 
   boot purge (`retireGroupAgents.ts`) deletes every `group:` thread and quarantines its files, and drops
   `group_agents`. The `group:` avatar-id prefix, the `group-` workspace prefix and the table names are
   reserved FOREVER — never mint an avatar id under them again. Groups, their knowledge repos and the
-  personal-run `mcp__group_repo__*`/`mcp__group_brain__*` tools stay. Mechanics →
+  personal-run `mcp__group_repo__*` tools stay. Mechanics →
   `docs/architecture/server-core.md`.
 - **A retirement never destroys data without a way back.** Every retirement step (boot purges and the
   ungated retired drops in `migrate()`) runs behind `retirementGate()`: when anything retired is present,
@@ -290,6 +290,8 @@ These are the invariants the project is built around. New work should reinforce 
 - **Knowledge repo = one per user, agent-managed** (the avatar edits its own repo via `mcp__repo__*`).
   **Second brain = a CONVENTION (`wiki/`+`raw/`) over that SAME repo, NOT a new store** — recall is
   read-only MCP search; capture writes through the repo-write tools + commit (uncommitted = not persisted).
+  The second brain is PERSONAL only: the team brain (`mcp__group_brain__*`, group vault, group graph) was
+  removed 2026-10-30 (user decision) — `group_brain` stays a retired pi broker id and a reserved name.
 - **Per-user settings follow ONE pattern** (column → migration → `toUser` → `updateProfile` → `User` type →
   `PATCH /api/me` → settings tab). Some defaults are written from the composer, not a settings tab: the
   model/effort/MCP-tool-group pickers remember the owner's last choice via per-user defaults

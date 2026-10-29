@@ -941,22 +941,15 @@ describe("loadDefaultPluginRoots", () => {
         "utf8",
       );
     const migrate = skill("brain-migrate");
-    expect(migrate).toContain(
-      "Decide the target from the user's requested repo",
-    );
-    expect(migrate).toContain("BOTH personal `mcp__repo__*` tools and group");
-    expect(migrate).toContain("Group / team brain requested");
-    expect(migrate).not.toContain(
-      "If only `mcp__group_repo__*` tools are available",
-    );
+    // Personal only: the team brain is gone, so the skill never targets a group repo.
+    expect(migrate).toContain("Personal repo only");
+    expect(migrate).toContain("there is no team brain");
+    expect(migrate).not.toContain("mcp__group_repo__");
 
     const reflect = skill("brain-reflect");
-    expect(reflect).toContain(
-      "Personal scope reads raw/ + wiki/ and may optionally review",
-    );
-    expect(reflect).toContain(
-      "group scope reads ONLY the group's raw/ + wiki/ and never conversations",
-    );
+    expect(reflect).toContain("Reads raw/ + wiki/ and may optionally review the owner's own recent conversations");
+    expect(reflect).toContain("never run this pass on a group's shared repository");
+    expect(reflect).not.toContain("mcp__group_repo__");
     expect(reflect).not.toContain(
       "It reads ONLY raw/ and wiki/ — never conversations",
     );
@@ -1918,7 +1911,9 @@ describe("buildPrompt", () => {
       }),
       0,
     );
-    expect(p).toContain("mcp__group_brain__search");
+    // No team brain: the prompt says so and sends stale mentions to the group repo tools.
+    expect(p).toContain("There is no team-brain search tool");
+    expect(p).toContain("`mcp__group_repo__read_file` instead");
   });
 
   it("injects personal + group CLAUDE.md standing memory with an injection guard", () => {
@@ -2667,10 +2662,10 @@ describe("buildPrompt", () => {
     expect(p).toContain("`GIT_TOKEN`");
     expect(p).toContain("mcp__system__describe_system");
     expect(p).toContain("Remote git work goes through MCP tools ONLY");
-    // Second-brain self-state: the routine has the personal brain trigger AND,
-    // since its group has a shared repo, knows about the team brain it can search.
+    // Second-brain self-state: the routine has the personal brain trigger, and the
+    // group-repo line says there is no team brain.
     expect(p).toContain("mcp__brain__search");
-    expect(p).toContain("mcp__group_brain__search");
+    expect(p).toContain("There is no team-brain search tool");
     // A routine CAN now open a working repo (scheduler threads conversationId +
     // resolves the opened repo as cwd); it takes effect from the next run.
     expect(p).toContain("mcp__git_repo__open_repo");

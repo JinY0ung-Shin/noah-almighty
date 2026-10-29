@@ -177,8 +177,7 @@ export function describeAvatarEquipment(
 
 /**
  * Map a knowledge-repo `readFile` rejection to its user-facing (Korean) HTTP
- * response — shared by the personal + group note endpoints, whose catch blocks
- * were byte-identical. Do NOT reuse `mcpTools.decodeRepoFsError` (English agent
+ * response for the personal note endpoint. Do NOT reuse `mcpTools.decodeRepoFsError` (English agent
  * channel).
  */
 export function respondNoteFsError(res: Response, error: unknown): void {

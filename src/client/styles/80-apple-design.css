@@ -522,8 +522,7 @@ button:disabled {
 .settings-tab.active,
 .seg-btn.active,
 .inbox-filter button.active,
-.split-btn.active,
-.brain-source.active {
+.split-btn.active {
   border-color: var(--line-soft);
   background: var(--material-thick);
   color: var(--text);

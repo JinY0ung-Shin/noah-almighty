@@ -34,8 +34,6 @@ export interface ClientState {
   view: ViewName;
   settingsTab: SettingsTab;
   adminTab: AdminTab;
-  /** Active source on the brain (knowledge-graph) view: "personal" or "group:<id>". */
-  brainSource: string;
   /**
    * Token of the share link the share view shows (`#/share/<token>`); "" when
    * none. It lives here, not only in the hash, because currentRoute() rebuilds
@@ -116,7 +114,6 @@ export const appState = writable<ClientState>({
   view: "explore",
   settingsTab: "profile",
   adminTab: "overview",
-  brainSource: "personal",
   shareToken: "",
   shareTitle: "",
   avatars: [],

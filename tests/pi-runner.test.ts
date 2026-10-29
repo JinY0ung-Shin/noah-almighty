@@ -4,7 +4,7 @@
  * the registration script's server list. The fake client replaces the network;
  * everything Noah-side (store, capability plan, MCP servers, router) is real.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -1078,5 +1078,49 @@ describe("scripts/pi-register-mcp.mjs", () => {
       },
       timeoutSec: 600,
     });
+  });
+
+  it("deletes this Noah's entry under a retired id on a normal run, and leaves a foreign one alone", async () => {
+    const noahUrl = "http://10.0.0.1:48787";
+    const calls: string[] = [];
+    const servers = [
+      { config: { id: "group_brain", transport: { type: "http", url: `${noahUrl}/mcp/group_brain` } } },
+    ];
+    const fake = http.createServer((req, res) => {
+      calls.push(`${req.method} ${req.url}`);
+      res.setHeader("content-type", "application/json");
+      res.end(req.method === "GET" ? JSON.stringify({ servers }) : "{}");
+    });
+    await new Promise<void>((resolve) => fake.listen(0, "127.0.0.1", resolve));
+    const gateway = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+    const run = (extra: string[]) =>
+      new Promise<string>((resolve, reject) => {
+        const child = spawn(process.execPath, ["scripts/pi-register-mcp.mjs", "--gateway", gateway, "--noah-url", noahUrl, ...extra], {
+          env: { ...process.env, PI_GATEWAY_ADMIN_KEY: "k" },
+        });
+        let out = "";
+        child.stdout.on("data", (d) => (out += d));
+        child.stderr.on("data", (d) => (out += d));
+        child.on("error", reject);
+        child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(out))));
+      });
+    try {
+      const dry = await run(["--dry-run"]);
+      expect(dry).toContain("would DELETE group_brain (retired)");
+      expect(calls.filter((c) => c.startsWith("DELETE"))).toEqual([]);
+
+      await run([]);
+      expect(calls).toContain("DELETE /admin/api/mcp/servers/group_brain");
+      // Never re-registered.
+      expect(calls).not.toContain("PUT /admin/api/mcp/servers/group_brain");
+
+      // An entry under that id pointing somewhere else is not this Noah's: untouched.
+      calls.length = 0;
+      servers[0]!.config.transport.url = "http://elsewhere/mcp/group_brain";
+      await run([]);
+      expect(calls.filter((c) => c.startsWith("DELETE"))).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => fake.close(() => resolve()));
+    }
   });
 });

@@ -1,6 +1,6 @@
 ---
 name: brain-ingest
-description: Capture a durable fact, decision, preference, or source into the knowledge repo's raw/ capture area, then commit. Use whenever the owner (personal repo) or a teammate working in a group repo states something worth remembering long-term. Works on the personal repo (mcp__repo__*) OR a group shared repo (mcp__group_repo__*).
+description: Capture a durable fact, decision, preference, or source into the personal knowledge repo's raw/ capture area, then commit. Use whenever the owner states something worth remembering long-term. Works on the personal repo (mcp__repo__*) only — the second brain is personal.
 ---
 
 # brain-ingest — capture into the second brain
@@ -15,10 +15,9 @@ not actually say. Never invent facts.
 
 ## Scope
 - **Personal repo:** `mcp__repo__write_file` then `mcp__repo__commit`.
-- **Group repo:** `mcp__group_repo__write_file` then `mcp__group_repo__commit`. Group writes are
-  admin-gated; if a write is denied because you are a member (not admin), do NOT retry via Bash
-  and do NOT use `request_info` (it routes to your OWN owner, not the group admin) — instead tell
-  the user plainly that a GROUP ADMIN must persist this note.
+- **Not a group repo:** the second brain is personal only. A group's shared repository has no
+  `raw/`/`wiki/` capture flow; edit it as an ordinary file with the `mcp__group_repo__*` tools when
+  asked (group writes are admin-only).
 - **No repo connected (personal):** if a write returns `NO_REPO` and `mcp__repo__create_repo` is
   available, offer to create the knowledge repo first; otherwise ask the owner to connect one.
 

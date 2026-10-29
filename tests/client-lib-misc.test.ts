@@ -575,9 +575,7 @@ describe("nav routing", () => {
     expect(currentRoute()).toBe("#/admin/audit");
     replaceState({ view: "admin", adminTab: "mcp" });
     expect(currentRoute()).toBe("#/admin/mcp");
-    replaceState({ view: "brain", brainSource: "group:42" });
-    expect(currentRoute()).toBe("#/brain/group%3A42");
-    replaceState({ view: "brain", brainSource: "personal" });
+    replaceState({ view: "brain" });
     expect(currentRoute()).toBe("#/brain");
     replaceState({
       view: "chat",

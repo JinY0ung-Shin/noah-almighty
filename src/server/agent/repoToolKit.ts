@@ -74,7 +74,7 @@ export function createRepoCatchMessage(targetHost: string, error: unknown): stri
 
 /**
  * Resolve a `group` argument (id or name, case-insensitive) among the groups the
- * avatar's owner belongs to. Shared by `groupRepoTools.ts`/`groupBrainTools.ts`
+ * avatar's owner belongs to. Used by `groupRepoTools.ts`
  * so a model-supplied group is always checked against the owner's OWN memberships
  * (never a cross-tenant read of another team's repo). Returns null when blank or
  * unmatched; the caller maps that to its own NO_SUCH_GROUP refusal.

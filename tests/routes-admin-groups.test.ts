@@ -1042,36 +1042,21 @@ describe("group knowledge repo views", () => {
 
     // Non-member, non-admin → 403 on every view.
     await outsider.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(403);
-    await outsider.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(403);
-    await outsider.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/x.md`)
-      .expect(403);
     await outsider.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(403);
 
     // System admin passes membership, but with no repo connected → 404.
     await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(404);
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(404);
     await admin.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(404);
-    // note: an invalid path is rejected (400) before the repo lookup...
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=../escape.md`)
-      .expect(400);
-    // ...a valid path with no repo connected → 404.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/x.md`)
-      .expect(404);
     // Sanity: the store still reports no repo.
     expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
   });
 
-  it("clones a connected repo and serves contents, graph, and notes", async () => {
+  it("clones a connected repo and serves contents; the team-brain graph/note routes are gone", async () => {
     const { app, services } = boot();
     const admin = await mkUser(app, "admin");
     const groupId = await createGroup(admin, "team");
     const remote = seedRemote("group-ok", {
       "wiki/foo.md": "# Foo\n\nLinks to [[bar]].\n",
-      // Larger than the 512 KiB display cap, to exercise the 413 branch below.
-      "wiki/big.md": `# Big\n${"a".repeat(520 * 1024)}`,
     });
     // Point the group at the local remote (bypasses the PUT host validation,
     // which is exercised separately).
@@ -1083,28 +1068,9 @@ describe("group knowledge repo views", () => {
       .expect(200);
     expect(contents.body.contents.kind).toBe("none");
 
-    // graph: the wiki note becomes a node.
-    const graph = await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/graph`)
-      .expect(200);
-    expect(graph.body.graph.nodes.some((n: { id: string }) => n.id === "wiki/foo.md")).toBe(true);
-
-    // note: read the seeded file back.
-    const note = await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/foo.md`)
-      .expect(200);
-    expect(note.body.note.path).toBe("wiki/foo.md");
-    expect(note.body.note.content).toContain("# Foo");
-
-    // note: a valid-shaped path that doesn't exist in the clone → 404.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/missing.md`)
-      .expect(404);
-
-    // note: a note larger than the display cap → 413.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/big.md`)
-      .expect(413);
+    // The team brain was removed 2026-10-30: no group graph or note route (unmatched → 404).
+    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(404);
+    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/foo.md`).expect(404);
 
     // refresh: re-fetches the existing clone and returns contents.
     const refreshed = await admin.agent
@@ -1125,12 +1091,7 @@ describe("group knowledge repo views", () => {
     );
 
     await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(502);
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(502);
     await admin.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(502);
-    // The note endpoint funnels a clone failure through respondNoteFsError → 502.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/foo.md`)
-      .expect(502);
   });
 });
 

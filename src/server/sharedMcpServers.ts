@@ -64,7 +64,7 @@ const RESERVED_SERVER_NAMES: ReadonlySet<string> = new Set([
   "confluence",
   "file_output",
   "git_repo",
-  "group_brain",
+  "group_brain", // retired 2026-10-30 (team brain); reserved forever
   "group_repo",
   "hex-ssh",
   "knowledge",

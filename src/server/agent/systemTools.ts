@@ -804,14 +804,13 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Admin-disabled skills: ${ctx.toolSkillPolicy?.disabledSkills.length ? ctx.toolSkillPolicy.disabledSkills.map((name) => `\`${name}\``).join(", ") + " (deployment-wide; they are never copied into your sandbox or served, so none of them is available)" : "(none)"}`,
           `- Knowledge repository: ${knowledgeRepo.repo || "(none)"}${knowledgeRepo.branch ? ` @ ${knowledgeRepo.branch}` : ""}`,
           `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted same-group teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
-          // Both brain lines check the per-conversation TOOL GROUP first: this
-          // mirrors runCapabilities' `brainActive` (needs `personalKnowledgeToolsEnabled`)
-          // and `groupBrainActive`/`groupRepoActive` (need `groupKnowledgeToolsEnabled`),
-          // which withhold those servers entirely when the group is deselected,
-          // and the prompt's matching `brainSection`/`groupsSection` gating — so
-          // the report and the run's real tool roster can't drift.
+          // The brain line checks the per-conversation TOOL GROUP first: this
+          // mirrors runCapabilities' `brainActive` (needs `personalKnowledgeToolsEnabled`),
+          // which withholds the server entirely when the group is deselected,
+          // and the prompt's matching `brainSection` gating — so the report and
+          // the run's real tool roster can't drift.
           `- Second brain (personal): ${!enabledMcpToolGroups.includes("personal_knowledge") ? "OFF for this conversation (personal knowledge tool group deselected — no brain recall or capture tools are registered this turn)" : state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
-          `- Team second brain: ${!enabledMcpToolGroups.includes("group_knowledge") ? "OFF for this conversation (group knowledge tool group deselected)" : groups.filter((g) => g.knowledgeRepoConfigured).length > 0 ? `${groups.filter((g) => g.knowledgeRepoConfigured).length} group(s) expose \`mcp__group_brain__search\` (members search; admins consolidate)` : "none (no group has a connected shared repository)"}`,
+          `- Team second brain: none — the second brain is personal only; a group repository's CLAUDE.md or notes that mention \`mcp__group_brain__*\` or a "팀 브레인" predate its removal, so read that repository with \`mcp__group_repo__list_files\`/\`mcp__group_repo__read_file\` instead`,
           `- General git repos: ${state.gitRepoCount}`,
           `- Working repository: ${ctx.activeRepoName ? (ctx.piRuntime?.activeRepoDir ? `${ctx.activeRepoName} (opened via open_repo; you work on its sandbox copy ${ctx.piRuntime.activeRepoDir}/, save with mcp__git_repo__commit, push via mcp__git_repo__push)` : `${ctx.activeRepoName} (opened via open_repo; save with mcp__git_repo__commit, push via mcp__git_repo__push)`) : "(none open)"}`,
           `- Local image output: ${ctx.fileOutputEnabled ? "enabled — use `mcp__file_output__show_file` for PNG/JPEG/WebP/GIF files in the working directories" : "unavailable in this run"}`,

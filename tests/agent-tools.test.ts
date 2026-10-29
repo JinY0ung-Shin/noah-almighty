@@ -74,11 +74,6 @@ import { buildBrainTools, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } from "../src/ser
 import { NO_CHANGES, NO_GIT_TOKEN } from "../src/server/agent/repoToolKit.js";
 import { normalizeWikiPath } from "../src/server/agent/brainSearch.js";
 import {
-  buildGroupBrainTools,
-  GROUP_BRAIN_SERVER_NAME,
-  GROUP_BRAIN_TOOL_NAMES,
-} from "../src/server/agent/groupBrainTools.js";
-import {
   buildConfluenceTools,
   CONFLUENCE_SERVER_NAME,
   CONFLUENCE_TOOL_NAMES,
@@ -1607,17 +1602,19 @@ describe("repo tools (knowledge-repo management)", () => {
     expect(await writeRepoTemplate(dir, "owner/my-knowledge")).toBe(false);
   });
 
-  it("writeRepoTemplate 'group' variant seeds a team-framed CLAUDE.md under the group cap", async () => {
+  it("writeRepoTemplate 'group' variant seeds a plain team CLAUDE.md under the group cap, with no vault", async () => {
     const dir = path.join(tempDir, "rt-template-group");
     fs.mkdirSync(dir, { recursive: true });
     expect(await writeRepoTemplate(dir, "g/team", "group")).toBe(true);
     const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
-    expect(claude).toContain("팀 공유 브레인");
+    expect(claude).toContain("팀 공유 지식 저장소");
+    expect(claude).not.toContain("브레인");
+    expect(claude).not.toContain("mcp__group_brain");
     // Group CLAUDE.md rides the smaller GROUP_CLAUDE_MD_CAP (4000) injection cap.
     expect(Buffer.byteLength(claude, "utf8")).toBeLessThanOrEqual(4000);
-    // Same vault skeleton as personal.
-    expect(fs.existsSync(path.join(dir, "wiki/index.md"))).toBe(true);
-    expect(fs.existsSync(path.join(dir, "raw/.gitkeep"))).toBe(true);
+    // The second brain is personal only (team brain removed 2026-10-30): no vault skeleton.
+    expect(fs.existsSync(path.join(dir, "wiki"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "raw"))).toBe(false);
   });
 
   it("create_repo seeds the marketplace template as the repo's initial content", async () => {
@@ -3591,33 +3588,18 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("never-in-shell");
   });
 
-  it("describe_system counts only the groups whose shared repository is connected", async () => {
+  it("describe_system reports there is no team brain and redirects stale mentions to the group repo", async () => {
     const s = setup("st-team-brain");
     const withRepo = s.store.createGroup({ name: "플랫폼팀" });
     const withoutRepo = s.store.createGroup({ name: "지식전용팀" });
     s.store.addGroupMember(withRepo.id, s.owner.id, "member");
     s.store.addGroupMember(withoutRepo.id, s.owner.id, "member");
-
-    const before = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
-    expect(before).toContain("Team second brain: none (no group has a connected shared repository)");
-
     s.store.setGroupKnowledgeRepo(withRepo.id, "acme/team-knowledge", "main");
-    const after = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
-    expect(after).toContain("Team second brain: 1 group(s) expose `mcp__group_brain__search`");
-    expect(after).toContain("플랫폼팀(member, shared repository connected)");
-    expect(after).toContain("지식전용팀(member, shared repository none)");
-
-    // The per-conversation tool group wins over the repo count: deselecting
-    // 그룹 지식 makes runCapabilities skip mcp__group_brain__*/mcp__group_repo__*, so the
-    // report must not keep advertising a search tool this turn cannot call.
-    // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
-    const groupOff = (await callTool(
-      buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, enabledMcpToolGroups: [] }),
-      "describe_system",
-      {},
-    )).content[0].text ?? "";
-    expect(groupOff).toContain("Team second brain: OFF for this conversation (group knowledge tool group deselected)");
-    expect(groupOff).not.toContain("group(s) expose `mcp__group_brain__search`");
+    const text = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(text).toContain("Team second brain: none — the second brain is personal only");
+    expect(text).toContain("`mcp__group_repo__read_file` instead");
+    expect(text).toContain("플랫폼팀(member, shared repository connected)");
+    expect(text).toContain("지식전용팀(member, shared repository none)");
   });
 });
 
@@ -4446,55 +4428,6 @@ describe("brain tools (personal second brain search)", () => {
   });
 });
 
-describe("group brain tools (team second brain search)", () => {
-  function setup(dir: string) {
-    const { store, config } = createServices({ dataDir: path.join(tempDir, dir), agentRuntime: "local", sessionSecret: "t" });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    return { store, config, owner };
-  }
-  const tools = (s: ReturnType<typeof setup>, viewerIsOwner = true) =>
-    buildGroupBrainTools(s.store, { avatarUserId: s.owner.id, viewerIsOwner, config: s.config });
-
-  it("exposes the documented server + tool names", () => {
-    const s = setup("gb-names");
-    expect(GROUP_BRAIN_SERVER_NAME).toBe("group_brain");
-    expect(GROUP_BRAIN_TOOL_NAMES).toEqual(["mcp__group_brain__search", "mcp__group_brain__get_note"]);
-    expect(tools(s).map((t) => t.name)).toEqual(["search", "get_note"]);
-  });
-
-  it("refuses for a non-owner viewer", async () => {
-    const s = setup("gb-owner");
-    const res = await callTool(tools(s, false), "search", { group: "x", query: "q" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("avatar owner");
-  });
-
-  it("blocks searching a group the owner is NOT a member of (cross-tenant gate)", async () => {
-    const s = setup("gb-cross");
-    const a = s.store.createGroup({ name: "A", createdBy: null });
-    s.store.addGroupMember(a.id, s.owner.id, "member");
-    s.store.setGroupKnowledgeRepo(a.id, "/tmp/a-repo", "main");
-    // Group B has a connected repo but the owner is NOT a member — must be unreachable
-    // BY NAME and BY ID (resolveGroup only searches the owner's own memberships).
-    const b = s.store.createGroup({ name: "B", createdBy: null });
-    s.store.setGroupKnowledgeRepo(b.id, "/tmp/b-repo", "main");
-    const byName = await callTool(tools(s), "search", { group: "B", query: "q" });
-    expect(byName.isError).toBe(true);
-    expect(byName.content[0].text).toContain("Could not find a group");
-    const byId = await callTool(tools(s), "search", { group: b.id, query: "q" });
-    expect(byId.content[0].text).toContain("Could not find a group");
-  });
-
-  it("returns NO_REPO for an owner's group that has no shared repo", async () => {
-    const s = setup("gb-norepo");
-    const g = s.store.createGroup({ name: "NoRepo", createdBy: null });
-    s.store.addGroupMember(g.id, s.owner.id, "member");
-    const res = await callTool(tools(s), "search", { group: "NoRepo", query: "q" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("does not have a shared knowledge repository");
-  });
-});
-
 describe("system conversation-read tools + brain self-state", () => {
   function setup(dir: string) {
     const { store, config } = createServices({ dataDir: path.join(tempDir, dir), agentRuntime: "local", sessionSecret: "t" });
@@ -4607,22 +4540,6 @@ describe("normalizeWikiPath (shared wiki-scope guard)", () => {
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("mcp__repo__read_file");
     expect(res.content[0].text).not.toContain("mcp__group_repo__read_file");
-  });
-
-  it("the group get_note refusal points at mcp__group_repo__read_file", async () => {
-    const { store, config } = createServices({
-      dataDir: path.join(tempDir, "wikiguard-group"),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "member");
-    store.setGroupKnowledgeRepo(group.id, "/tmp/g-repo", "main");
-    const tools = buildGroupBrainTools(store, { avatarUserId: owner.id, viewerIsOwner: true, config });
-    const res = await callTool(tools, "get_note", { group: "Team", path: "raw/secret.md" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("mcp__group_repo__read_file");
   });
 });
 
@@ -4830,8 +4747,13 @@ describe("resolveOwnerGroup scoping via a group tool", () => {
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
     return { store, config, owner };
   }
-  const groupBrain = (s: ReturnType<typeof setup>) =>
-    buildGroupBrainTools(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config });
+  const groupRepo = (s: ReturnType<typeof setup>) =>
+    buildGroupRepoTools(s.store, {
+      avatarUserId: s.owner.id,
+      owner: { id: s.owner.id, username: "owner", displayName: "Owner" },
+      viewerIsOwner: true,
+      config: s.config,
+    });
 
   it("resolves an owner group by ID and by case-insensitive name", async () => {
     const s = setup("resolve-ok");
@@ -4841,14 +4763,14 @@ describe("resolveOwnerGroup scoping via a group tool", () => {
 
     // Resolve by exact ID: the group resolves, so we pass the resolve gate and
     // proceed to the clone (a /tmp path → load failure, NOT a NO_SUCH_GROUP).
-    const byId = await callTool(groupBrain(s), "search", { group: g.id, query: "q" });
+    const byId = await callTool(groupRepo(s), "list_files", { group: g.id });
     expect(byId.content[0].text).not.toContain("Could not find a group");
 
     // Resolve by name, case-insensitively.
-    const byName = await callTool(groupBrain(s), "search", { group: "platform team", query: "q" });
+    const byName = await callTool(groupRepo(s), "list_files", { group: "platform team" });
     expect(byName.content[0].text).not.toContain("Could not find a group");
 
-    const byNameUpper = await callTool(groupBrain(s), "search", { group: "PLATFORM TEAM", query: "q" });
+    const byNameUpper = await callTool(groupRepo(s), "list_files", { group: "PLATFORM TEAM" });
     expect(byNameUpper.content[0].text).not.toContain("Could not find a group");
   });
 
@@ -4860,16 +4782,16 @@ describe("resolveOwnerGroup scoping via a group tool", () => {
     const foreign = s.store.createGroup({ name: "Foreign", createdBy: null });
     s.store.setGroupKnowledgeRepo(foreign.id, "/tmp/foreign-repo", "main");
 
-    const unknown = await callTool(groupBrain(s), "search", { group: "Nope", query: "q" });
+    const unknown = await callTool(groupRepo(s), "list_files", { group: "Nope" });
     expect(unknown.isError).toBe(true);
     expect(unknown.content[0].text).toContain("Could not find a group");
 
     // The foreign group is unreachable BY NAME and BY ID — scoping is the owner's
     // own memberships only, never a cross-tenant read of another team's repo.
-    const foreignByName = await callTool(groupBrain(s), "search", { group: "Foreign", query: "q" });
+    const foreignByName = await callTool(groupRepo(s), "list_files", { group: "Foreign" });
     expect(foreignByName.isError).toBe(true);
     expect(foreignByName.content[0].text).toContain("Could not find a group");
-    const foreignById = await callTool(groupBrain(s), "search", { group: foreign.id, query: "q" });
+    const foreignById = await callTool(groupRepo(s), "list_files", { group: foreign.id });
     expect(foreignById.isError).toBe(true);
     expect(foreignById.content[0].text).toContain("Could not find a group");
   });

@@ -1,6 +1,6 @@
 ---
 name: brain-reflect
-description: Consolidation pass over a knowledge repo — synthesize durable notes into wiki/{sources,entities,concepts,synthesis}/, update wiki/index.md and append wiki/log.md, then commit. Personal scope reads raw/ + wiki/ and may optionally review the owner's own recent conversations; group scope reads ONLY the group's raw/ + wiki/ and never conversations.
+description: Consolidation pass over the personal knowledge repo — synthesize durable notes into wiki/{sources,entities,concepts,synthesis}/, update wiki/index.md and append wiki/log.md, then commit. Reads raw/ + wiki/ and may optionally review the owner's own recent conversations. Personal repo only — the second brain is personal.
 ---
 
 # brain-reflect — consolidate the second brain
@@ -8,25 +8,15 @@ description: Consolidation pass over a knowledge repo — synthesize durable not
 Move durable knowledge from `raw/` capture into the consolidated `wiki/`. Run on demand or when
 asked to "tidy up / consolidate my notes".
 
-## Privacy boundary (read this first)
-- **Personal repo:** read `raw/` and `wiki/`; optionally review the owner's OWN recent
-  conversations with the owner-scoped system tools described below.
-- For a GROUP repo there is no shared group conversation stream, and reading members' individual
-  conversations would violate their privacy — read ONLY the group repo's `raw/` and `wiki/`.
-
 ## Scope
-- **Personal repo:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
-- **Group repo:** pick the group with `mcp__group_repo__list_groups`; read with
-  `mcp__group_repo__read_file`/`mcp__group_repo__list_files`. Write/commit require group ADMIN role; if you are only
-  a member, summarize proposed changes for an admin instead of writing.
+- **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
+  The second brain is personal; never run this pass on a group's shared repository.
 
-## Personal scope only — optional conversation pull
-For the PERSONAL repo you MAY also review the owner's OWN recent conversations to mine durable facts
-worth consolidating (this is the nightly conversation-reflection source):
-`mcp__system__list_recent_conversations` (e.g. `sinceHours: 24`) then `mcp__system__read_conversation`
-per id. Both are owner-scoped — they return nothing for conversations the owner does not own. The
-GROUP branch above must NEVER do this: there is no shared group conversation stream, and reading
-members' individual conversations would violate their privacy.
+## Optional conversation pull
+You MAY also review the owner's OWN recent conversations to mine durable facts worth consolidating
+(this is the nightly conversation-reflection source): `mcp__system__list_recent_conversations`
+(e.g. `sinceHours: 24`) then `mcp__system__read_conversation` per id. Both are owner-scoped — they
+return nothing for conversations the owner does not own. Never read anyone else's conversations.
 
 ## Procedure (mem0-style: ADD / UPDATE / NOOP, prune the stale)
 1. List and read `raw/` (and the existing `wiki/`).
@@ -51,5 +41,4 @@ members' individual conversations would violate their privacy.
    — for an UPDATE that changed a value, one terse line naming the note and `old → new`; this is
    where the change history is kept, not in the note.
 6. Optionally archive raw notes you fully consolidated.
-7. **Commit once.** For group scope, if a write is denied (member, not admin), report findings —
-   do not retry via Bash.
+7. **Commit once.** If a write or the commit fails, report what you found — do not retry via Bash.

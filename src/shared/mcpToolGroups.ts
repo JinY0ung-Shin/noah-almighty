@@ -9,7 +9,7 @@ export const MCP_TOOL_GROUPS = [
     id: "group_knowledge",
     labelKo: "그룹 지식",
     labelEn: "group knowledge",
-    descriptionKo: "그룹 저장소와 팀 브레인",
+    descriptionKo: "그룹 공유 지식 저장소",
   },
   {
     id: "git_repo",

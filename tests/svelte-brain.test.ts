@@ -41,7 +41,7 @@ const user = {
 } satisfies User;
 
 beforeEach(() => {
-  replaceState({ user, view: "brain", settingsTab: "profile", brainSource: "personal" });
+  replaceState({ user, view: "brain", settingsTab: "profile" });
 });
 
 describe("BrainView empty setup state", () => {

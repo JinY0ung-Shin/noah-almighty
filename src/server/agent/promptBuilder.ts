@@ -290,7 +290,7 @@ function groupsSection(request: AgentRequest): string | null {
   }
   if (groups.some((g) => g.knowledgeRepoConfigured)) {
     groupLines.push(
-      "When a group has a shared knowledge repository, you can also SEARCH its **team brain** with `mcp__group_brain__search`/`mcp__group_brain__get_note` (scoped to one group; any group member may read) to surface team-shared rules, decisions, and context any member captured. To ADD to a team brain, ingest a note with `mcp__group_repo__write_file` then `mcp__group_repo__commit` — writes are group-admin only, so a member who wants to contribute should ask an admin.",
+      "There is no team-brain search tool: the second brain is personal only. A group repository's CLAUDE.md or notes that mention `mcp__group_brain__*` or a \"팀 브레인\" predate its removal — read that group's repository with `mcp__group_repo__list_files`/`mcp__group_repo__read_file` instead.",
     );
   }
   return groupLines.join(" ");

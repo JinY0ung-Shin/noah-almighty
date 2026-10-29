@@ -175,10 +175,9 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   UNGATED (fingerprints aren't secrets; directory search is all-viewer read-only) while its sibling
   `ask_avatar` in the SAME file is owner-driven (see the consultation section below). Don't "normalize"
   these.
-- **Second-brain read tools (`brainTools`/`groupBrainTools`):** read-only RECALL servers
-  (`search`/`get_note`) over the same knowledge-repo clones. `brainTools` (personal) gates reads on
-  `ctx.elevated`; `groupBrainTools` gates reads on group-MEMBERship. There is NO brain WRITE tool — route
-  writes through `mcp__repo__write_file`/`mcp__group_repo__write_file` + `commit`.
+- **Second-brain read tools (`brainTools`):** a read-only RECALL server (`search`/`get_note`) over the
+  personal knowledge-repo clone, gating reads on `ctx.elevated`. The team brain (`groupBrainTools`) was
+  removed 2026-10-30. There is NO brain WRITE tool — route writes through `mcp__repo__write_file` + `commit`.
 - **Web fetch (`webFetchTools.ts`, server `web`, tool-group id `web`):** one `mcp__web__fetch` tool that
   fetches from Noah's process, NOT the sandbox — pi has no WebFetch/WebSearch built-in, and the sandbox's only
   way out is pi's egress allowlist, so this is the avatar's one web reader (plain-HTTP intranet pages included).
