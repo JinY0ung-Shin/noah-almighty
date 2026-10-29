@@ -78,7 +78,10 @@ disabled SKILL is enforced by omission (see "Skills").
 6. **Errors** — 404/409 on a continued session, or 400 `model_not_configured` (the operator removed the session's
    model from pi; a session's model is fixed, so a rewind onto a row of that session would otherwise fail every time;
    `isLostPiSession`) → once, a new session from history (status-free, the model is told
-   in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). A model
+   in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). An empty turn —
+   pi's `empty_response` (no text, reasoning or tool call; pi does NOT commit it) — is re-sent ONCE as the same
+   request (same `previous_response_id`, or the same fresh session; status line `모델이 빈 응답을 보내 한 번 더 시도하는 중…`),
+   never once a text delta or a question reached the user, a steer is queued, or for a steer follow-up turn. A model
    fallback chain (routines, task API: `modelFallback`) gives each attempt a fresh session.
 7. **Stop / failure** — a stop `cancel`s the live response, so pi COMMITS the partial turn (`incomplete`) and the runner
    reports its id. The chat route's cancel and error paths keep that id as `agent_session_id` (`sessionAfterAbort`):

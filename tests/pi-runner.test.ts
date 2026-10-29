@@ -513,6 +513,70 @@ describe("runPiAgent", () => {
     expect(steers.closed).toBe(true);
   });
 
+  it("retries an empty turn (empty_response) ONCE on the same previous_response_id", async () => {
+    const { store, config, base } = setup();
+    const empty = (id: string, before: PiStreamEvent[] = []): PiStreamEvent[] => [
+      ev("response.created", { response: { id, model: "fake-model", status: "in_progress" } }),
+      ...before,
+      ev("response.failed", { response: { id, status: "failed", error: { code: "empty_response", message: "No response generated" } } }),
+    ];
+    // Retried once: the same request again, and the run completes.
+    const once = fakeClient([() => empty("resp_e_2"), () => textTurn("resp_e_3", "Here it is")]);
+    const { events, calls } = recorder();
+    const response = await runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, events, undefined, { client: once.client });
+    expect(response.text).toBe("Here it is");
+    expect(once.requests).toHaveLength(2);
+    expect(once.requests[1]).toEqual(once.requests[0]);
+    expect(once.requests[1]!.previousResponseId).toBe("resp_e_1");
+    expect(of(calls, "status")).toContain("모델이 빈 응답을 보내 한 번 더 시도하는 중…");
+    expect(of(calls, "session")).toEqual(["resp_e_3"]);
+
+    // Only once: a second empty turn fails the run.
+    const twice = fakeClient([() => empty("resp_e_2"), () => empty("resp_e_3")]);
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, undefined, undefined, { client: twice.client }),
+    ).rejects.toMatchObject({ name: "PiTurnFailedError", code: "empty_response" });
+    expect(twice.requests).toHaveLength(2);
+
+    // Never once text reached the user…
+    const shown = fakeClient([
+      () => empty("resp_e_2", [ev("response.output_item.added", { item: { type: "message", id: "m" } }), ev("response.output_text.delta", { delta: "Par" })]),
+    ]);
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, recorder().events, undefined, { client: shown.client }),
+    ).rejects.toMatchObject({ code: "empty_response" });
+    expect(shown.requests).toHaveLength(1);
+
+    // …or while a steer is queued (it is the user's next turn, not a replay).
+    const steers = new SteerChannel();
+    const steered = fakeClient([
+      () => {
+        steers.push("are you there?");
+        return empty("resp_e_2");
+      },
+    ]);
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, recorder({ steers }).events, undefined, { client: steered.client }),
+    ).rejects.toMatchObject({ code: "empty_response" });
+    expect(steered.requests).toHaveLength(1);
+
+    // …or for a steer follow-up turn.
+    const followSteers = new SteerChannel();
+    const follow = fakeClient([
+      () => {
+        followSteers.push("one more thing");
+        return textTurn("resp_e_2", "First");
+      },
+      () => empty("resp_e_3"),
+    ]);
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_e_1" }), [], config, store, recorder({ steers: followSteers }).events, undefined, {
+        client: follow.client,
+      }),
+    ).rejects.toMatchObject({ code: "empty_response" });
+    expect(follow.requests).toHaveLength(2);
+  });
+
   it("walks the model fallback chain with a fresh session per attempt", async () => {
     const { store, config, base } = setup();
     const { client, requests } = fakeClient([

@@ -23,8 +23,10 @@
  *     from the text history). Each committed turn reports its response id as both the
  *     session id and the row's resume point, so a rewind forks from it.
  *  4. A lost session (404/409) self-heals once from the text history; 503/429
- *     at stream open retry with backoff; a model fallback chain (routines, the
- *     task API) gives each attempt a fresh session.
+ *     at stream open retry with backoff; an empty turn (`empty_response`, not
+ *     committed by pi) is re-sent once while nothing was shown and no steer is
+ *     queued; a model fallback chain (routines, the task API) gives each
+ *     attempt a fresh session.
  *  5. pi has no mid-turn input (design P2): steers queue, and once the current
  *     pi response completes they are delivered TOGETHER as a follow-up turn on
  *     the same run (the route's `turn_end` contract).
@@ -304,15 +306,27 @@ export async function runPiAgent(
 
   const steers = events?.steers;
   const contextWindow = chain[0]?.contextWindow;
+  // Whether the CURRENT pi request already showed the user anything (text, a
+  // question): an empty turn is only retried while nothing has.
+  let attemptShowedOutput = false;
   // The host sees pi's committed turns as session ids AND resume points (a
   // rewind onto that row forks from it); segment boundaries are this runner's.
   const piEvents: AgentEvents = {
     ...events,
     steers: undefined,
     onDelta: (text) => {
+      attemptShowedOutput = true;
       anchorText += text;
       events?.onDelta?.(text);
     },
+    ...(events?.onQuestion
+      ? {
+          onQuestion: (question: Parameters<NonNullable<AgentEvents["onQuestion"]>>[0]) => {
+            attemptShowedOutput = true;
+            return events.onQuestion!(question);
+          },
+        }
+      : {}),
     ...(events?.onTextFold
       ? {
           onTextFold: (text: string) => {
@@ -331,6 +345,7 @@ export async function runPiAgent(
   let result: PiRunResult | undefined;
   let usage: AgentUsage | undefined;
   let healed = false;
+  let emptyRetried = false;
   try {
     let input: PiResponseRequest["input"] | null = null;
     for (;;) {
@@ -338,6 +353,7 @@ export async function runPiAgent(
       for (;;) {
         const fresh = !previous;
         const current = chain[attempt] ?? {};
+        attemptShowedOutput = false;
         const piRequest: PiResponseRequest = {
           user: principal,
           input: input ?? { kind: "prompt", text: firstInputText(fresh), ...(images.length ? { images } : {}) },
@@ -378,6 +394,24 @@ export async function runPiAgent(
             agentLogger.warn({ conversationId, previous, kind: error.kind, code: error.code }, "pi session missing; retrying with stored history");
             previous = undefined;
             newSessionReason = "session_lost";
+            continue;
+          }
+          // pi fails a turn with no text, reasoning or tool call as
+          // `empty_response` and does NOT commit it, so the same request (same
+          // previous_response_id, or the same fresh session) runs once more — the
+          // retired SDK runner's one empty-turn retry. Never once the user saw
+          // output or a steer is queued (that becomes its own turn), and never for
+          // a follow-up turn (`input`, refused above).
+          if (
+            !emptyRetried &&
+            error instanceof PiTurnFailedError &&
+            error.code === "empty_response" &&
+            !attemptShowedOutput &&
+            (steers?.undelivered().length ?? 0) === 0
+          ) {
+            emptyRetried = true;
+            agentLogger.warn({ conversationId, previous: previous ?? null }, "pi returned an empty turn; retrying once");
+            events?.onStatus?.("모델이 빈 응답을 보내 한 번 더 시도하는 중…");
             continue;
           }
           const retryable =
