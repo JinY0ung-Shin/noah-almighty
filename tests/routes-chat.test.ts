@@ -858,7 +858,7 @@ describe("working-repo resolution failures (before SSE)", () => {
 });
 
 describe("per-conversation preferences persist + feed the agent", () => {
-  it("stores the owner's model/effort/group-knowledge choices and passes them this turn", async () => {
+  it("stores the owner's model/effort choices and passes them this turn", async () => {
     const { app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "prefs").expect(201)).body.user.id as string;
@@ -871,7 +871,7 @@ describe("per-conversation preferences persist + feed the agent", () => {
         message: "hi",
         model: "sonnet",
         effort: "medium",
-        groupKnowledgeOff: ["g1", "g2", 5], // the non-string is filtered out
+        groupKnowledgeOff: ["g1"], // a retired field an old client may still send: ignored
       })
       .expect(200);
 
@@ -881,7 +881,7 @@ describe("per-conversation preferences persist + feed the agent", () => {
     const msgs = await owner.get("/api/messages?conversationId=conv-prefs").expect(200);
     expect(msgs.body.selectedModel).toBe("sonnet");
     expect(msgs.body.selectedEffort).toBe("medium");
-    expect(msgs.body.groupKnowledgeOff).toEqual(["g1", "g2"]);
+    expect(msgs.body).not.toHaveProperty("groupKnowledgeOff");
   });
 
   it("drops system messages from the reconstructed conversation history", async () => {
@@ -3178,7 +3178,7 @@ describe("second-brain memory notices", () => {
 
     H.impl = async (_req, _pr, config, _store, events) => {
       events.onMemory?.({ scope: "personal", action: "add", path: "wiki/people/kim.md" });
-      events.onMemory?.({ scope: "group", action: "update", path: "wiki/rules.md", groupName: "플랫폼" });
+      events.onMemory?.({ scope: "personal", action: "update", path: "wiki/rules.md" });
       return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "기억했습니다" };
     };
 
@@ -3190,7 +3190,7 @@ describe("second-brain memory notices", () => {
     const memory = parseSse(res.text).filter((f) => f.event === "memory");
     expect(memory).toHaveLength(2);
     expect(memory[0].data).toMatchObject({ scope: "personal", action: "add", path: "wiki/people/kim.md" });
-    expect(memory[1].data).toMatchObject({ scope: "group", action: "update", groupName: "플랫폼" });
+    expect(memory[1].data).toMatchObject({ scope: "personal", action: "update", path: "wiki/rules.md" });
     // The client dedupes replayed rows by this id, so the two must differ.
     expect(frameData(memory[0]).id).toEqual(expect.any(String));
     expect(frameData(memory[0]).id).not.toBe(frameData(memory[1]).id);

@@ -22,7 +22,7 @@
   (`mcp__system__{create,update}_routine`). New schedule fields go in `routineSchedule.ts` + the two
   error maps + `RoutineJob` (types.ts) + the `addColumnIfMissing` migration.
 - **Routines load the same skills as chat** via the shared `loadAgentPluginRoots` (plugins.ts): default
-  + avatar plugins + personal & group knowledge-repo roots. Both `routes/chat.ts` and `scheduler.ts` call
+  + avatar plugins + the personal knowledge-repo roots. Both `routes/chat.ts` and `scheduler.ts` call
   it, so they can't drift; `local` runtime returns `[]`. On pi the runner syncs those roots into the owner's
   sandbox (`materializePiSkills`, [`pi-runtime.md`](pi-runtime.md) "Skills").
 - **Routines fall back down the model tier chain on transient failures.** The scheduler sets

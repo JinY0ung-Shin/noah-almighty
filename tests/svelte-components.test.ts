@@ -689,9 +689,6 @@ function groupProps(role: "admin" | "member"): SettingsGroup {
     id: "g1",
     name: "플랫폼팀",
     role,
-    knowledgeRepo: null,
-    knowledgeBranch: null,
-    knowledgeSelected: null,
     allowedMcpToolGroups: null,
     avatarSharing: true,
     members: [
@@ -741,7 +738,7 @@ describe("SettingsGroupCard 공유 스킬", () => {
   it("shows a member's shares and blocks one through the group channel", async () => {
     const { calls } = mockChannel();
     const { container } = render(SettingsGroupCard, {
-      props: { group: groupProps("admin"), githubHost: "github.com", reload: async () => {} },
+      props: { group: groupProps("admin"), reload: async () => {} },
     });
 
     await screen.findByText("Deck maker");
@@ -769,7 +766,7 @@ describe("SettingsGroupCard 공유 스킬", () => {
   it("unblocks through the id/name path and hides the section from plain members", async () => {
     const { calls } = mockChannel();
     const { unmount } = render(SettingsGroupCard, {
-      props: { group: groupProps("admin"), githubHost: "github.com", reload: async () => {} },
+      props: { group: groupProps("admin"), reload: async () => {} },
     });
     await screen.findByText("Deck maker");
     await fireEvent.click(screen.getByRole("button", { name: "Deck maker 차단" }));
@@ -789,7 +786,7 @@ describe("SettingsGroupCard 공유 스킬", () => {
     // A plain member sees no moderation section and never fetches the channel.
     const before = calls.length;
     render(SettingsGroupCard, {
-      props: { group: groupProps("member"), githubHost: "github.com", reload: async () => {} },
+      props: { group: groupProps("member"), reload: async () => {} },
     });
     await waitFor(() => expect(screen.getByText("플랫폼팀")).toBeTruthy());
     expect(screen.queryByText("공유 스킬")).toBeNull();

@@ -61,7 +61,6 @@ function pane(modelTier: string): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
     modelTier,
   } as unknown as ChatPane;
 }

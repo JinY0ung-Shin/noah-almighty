@@ -8,7 +8,7 @@ import { text } from "./mcpTools.js";
  * `mcp__skills__read` — read-only access to skills that are listed in a pi
  * run's instructions but NOT copied into its sandbox (docs/architecture/pi-runtime.md
  * "Skills"): a trusted colleague chatting with someone's avatar runs in their
- * OWN sandbox, so the avatar owner's personal, plugin and group skills reach
+ * OWN sandbox, so the avatar owner's personal and plugin skills reach
  * them only through this tool. The skill set is the run's own (`sources`,
  * already filtered by the admin skill policy); an unlisted skill, a path out
  * of the skill folder, a link or a file over the cap is refused. Registered

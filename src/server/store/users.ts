@@ -52,9 +52,6 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         knowledgeRepo: row.knowledge_repo ?? null,
         knowledgeBranch: row.knowledge_branch ?? null,
         knowledgeSelected: parseNameList(row.knowledge_selected),
-        // OFF-set seeding new conversations ([] = every group on).
-        groupKnowledgeOffDefault:
-          parseNameList(row.group_knowledge_off_default) ?? [],
         // Remembered composer defaults seeding new conversations (null = unset →
         // fall back to the hardcoded server default).
         modelDefault: row.model_default?.trim() || null,

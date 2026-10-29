@@ -76,9 +76,9 @@ which check owner/group trust themselves.
   co-members **auto-trust each other symmetrically**: they see each other's `group`-visibility
   avatars and get elevated tool access (write-capable tools with a per-tool prompt) when chatting
   with a co-member's avatar. There is no per-user "trusted users" list anymore — `isTrustedFor` IS
-  group co-membership (`shareAnyGroup`), the single choke point. Each group has one shared
-  **knowledge repo** whose skills are auto-loaded for all member avatars; group admins edit it via
-  the `mcp__group_repo__*` tools. Group self-serve (member/repo management) is at `/api/me/groups*`.
+  group co-membership (`shareAnyGroup`), the single choke point. Groups have no shared knowledge
+  repo (retired 2026-10-30); team knowledge travels as shared skills. Group self-serve (member
+  management, avatar sharing, shared-skill channel) is at `/api/me/groups*`.
 - **Knowledge-backfill loop**: when the avatar notices a knowledge gap it can file a
   `request_info` gap. The owner sees pending gaps in the **내 아바타** nav badge and receives
   an in-app toast; clicking through lets them answer and feed the answer back to the avatar,

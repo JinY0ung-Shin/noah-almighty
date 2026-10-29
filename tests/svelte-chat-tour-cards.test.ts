@@ -58,7 +58,6 @@ function paneOf(avatar: AvatarDetail, mcpToolGroups?: string[]): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
     mcpToolGroups,
   } as unknown as ChatPane;
 }

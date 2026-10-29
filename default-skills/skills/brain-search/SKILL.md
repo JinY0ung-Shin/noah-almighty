@@ -17,9 +17,8 @@ recurring topic. Prefer recalling what is already written down over re-asking th
 ## Tools (read-only)
 - **Personal brain:** `mcp__brain__search` (ranked hits with path + snippet) then `mcp__brain__get_note`
   to read a full note (wiki-scoped; `mcp__repo__read_file` reads other repo paths).
-- There is no team brain: the second brain is personal only. A group's shared repository is read
-  with `mcp__group_repo__list_files`/`mcp__group_repo__read_file`, not searched here — and a group
-  repo's notes that mention `mcp__group_brain__*` predate its removal.
+- There is no team brain and no group repository (both were removed): the second brain is personal
+  only. A mention of `mcp__group_brain__*` or `mcp__group_repo__*` predates that removal.
 
 ## How to search well
 1. Start with the most specific keywords or a natural-language phrase; titles/aliases rank highest,

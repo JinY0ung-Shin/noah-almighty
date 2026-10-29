@@ -72,7 +72,6 @@ function pane(messages: StoredMessage[]): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
   } as unknown as ChatPane;
 }
 

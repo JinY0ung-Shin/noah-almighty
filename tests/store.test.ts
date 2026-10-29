@@ -421,26 +421,6 @@ describe("store agent session resume", () => {
     expect(store.getConversationAvatarId(other.id, "conv-4")).toBeNull();
   });
 
-  it("tracks the per-conversation group-knowledge OFF set (default all-on), owner-scoped", () => {
-    const { store, ownerId } = makeStore();
-    store.touchConversation(ownerId, "conv-gk", ownerId, "hi");
-    // Default: nothing disabled → every group on.
-    expect(store.getConversationGroupKnowledgeOff(ownerId, "conv-gk")).toEqual([]);
-    // Replace the OFF set (dedupes, drops falsy); empty clears it.
-    store.setConversationGroupKnowledgeOff(ownerId, "conv-gk", ["g1", "g2", "g1", ""]);
-    expect(new Set(store.getConversationGroupKnowledgeOff(ownerId, "conv-gk"))).toEqual(new Set(["g1", "g2"]));
-    store.setConversationGroupKnowledgeOff(ownerId, "conv-gk", ["g2"]);
-    expect(store.getConversationGroupKnowledgeOff(ownerId, "conv-gk")).toEqual(["g2"]);
-    store.setConversationGroupKnowledgeOff(ownerId, "conv-gk", []);
-    expect(store.getConversationGroupKnowledgeOff(ownerId, "conv-gk")).toEqual([]);
-    // Another owner can't read or mutate this conversation's setting.
-    store.setConversationGroupKnowledgeOff(ownerId, "conv-gk", ["g2"]);
-    const other = store.createUser({ username: "gkother", displayName: "Other", password: "password123" });
-    expect(store.getConversationGroupKnowledgeOff(other.id, "conv-gk")).toEqual([]);
-    store.setConversationGroupKnowledgeOff(other.id, "conv-gk", ["g3"]);
-    expect(store.getConversationGroupKnowledgeOff(ownerId, "conv-gk")).toEqual(["g2"]);
-  });
-
   it("round-trips the per-conversation model tier (null default), owner-scoped", () => {
     const { store, ownerId } = makeStore();
     store.touchConversation(ownerId, "conv-model", ownerId, "hi");
@@ -552,17 +532,6 @@ describe("store agent session resume", () => {
     expect(store.listConversations(ownerId)).toHaveLength(0);
     expect(store.listConversations(ownerId, undefined, "routine").map((c) => c.id)).toEqual(["conv-routine"]);
     expect(store.listConversations(other.id).map((c) => c.id)).toEqual(["conv-other"]);
-  });
-
-  it("round-trips the per-user default group-knowledge OFF set (seeds new conversations)", () => {
-    const { store, ownerId } = makeStore();
-    // Default on a fresh user: every group on.
-    expect(store.getUserById(ownerId)?.groupKnowledgeOffDefault).toEqual([]);
-    // Saving the default surfaces on the User; [] clears it back to "all on".
-    expect(store.setGroupKnowledgeOffDefault(ownerId, ["g1", "g2"]).groupKnowledgeOffDefault).toEqual(["g1", "g2"]);
-    expect(store.getUserById(ownerId)?.groupKnowledgeOffDefault).toEqual(["g1", "g2"]);
-    expect(store.setGroupKnowledgeOffDefault(ownerId, []).groupKnowledgeOffDefault).toEqual([]);
-    expect(store.getUserById(ownerId)?.groupKnowledgeOffDefault).toEqual([]);
   });
 
   it("seeds signups with the current release and re-stamps it via markReleaseSeen", () => {
@@ -1555,22 +1524,15 @@ describe("group avatar-sharing policy", () => {
     expect(store.sharedGroupNames(friendId, ownerId)).toEqual([]);
   });
 
-  it("a sharing-off group still shares its knowledge repo and its admin tool policy", () => {
+  it("a sharing-off group still applies its admin tool policy", () => {
     const { store, ownerId, friendId } = makeStore("as3");
     const group = store.createGroup({ name: "Workshop" });
     store.addGroupMember(group.id, ownerId, "admin");
     store.addGroupMember(group.id, friendId, "member");
-    store.setGroupKnowledgeRepo(group.id, "acme/wiki", null);
     store.setGroupAllowedMcpToolGroups(group.id, ["personal_knowledge"]);
     store.setGroupAvatarSharing(group.id, false);
-    // Knowledge-sharing-only: repo membership + tool clamp are policy-independent.
-    expect(
-      store.listGroupKnowledgeReposForUser(friendId).some((g) => g.groupId === group.id),
-    ).toBe(true);
-    expect(store.listUserGroups(friendId)[0]).toMatchObject({
-      knowledgeRepoConfigured: true,
-      avatarSharing: false,
-    });
+    // The tool clamp is policy-independent.
+    expect(store.listUserGroups(friendId)[0]).toMatchObject({ avatarSharing: false });
     expect(store.allowedMcpToolGroupsForUser(friendId)).toEqual(["personal_knowledge", "system"]);
     expect(store.listGroupMembers(group.id)).toHaveLength(2);
   });
@@ -1759,22 +1721,6 @@ describe("store groups", () => {
     const u = store.getUserById(aliceId);
     expect(u?.groups.map((x) => x.name)).toEqual(["Team"]);
     expect(u?.groups[0].role).toBe("admin");
-  });
-
-  it("group knowledge repo: setting it clears selection; lists per-user repos", () => {
-    const { store, aliceId, bobId } = makeStore("g-repo");
-    const g = store.createGroup({ name: "T", createdBy: null });
-    store.addGroupMember(g.id, aliceId);
-    expect(store.getGroupKnowledgeRepo(g.id).repo).toBeNull();
-    store.setGroupKnowledgeRepo(g.id, "org/team-knowledge", "main");
-    store.setGroupKnowledgeSelected(g.id, ["a"]);
-    expect(store.getGroupKnowledgeRepo(g.id).selected).toEqual(["a"]);
-    store.setGroupKnowledgeRepo(g.id, "org/other", null);
-    expect(store.getGroupKnowledgeRepo(g.id).selected).toBeNull();
-    const repos = store.listGroupKnowledgeReposForUser(aliceId);
-    expect(repos.map((r) => r.repo)).toEqual(["org/other"]);
-    // bob isn't in the group → sees no group repos.
-    expect(store.listGroupKnowledgeReposForUser(bobId)).toEqual([]);
   });
 
   it("listPublishedAvatars surfaces group-visible teammates with sharesGroup, and nobody else", () => {

@@ -4,6 +4,7 @@ import { normalizeGithubHost } from "../marketplace.js";
 import { kstDateTimeString } from "../routineSchedule.js";
 import {
   DIRECT_MESSAGE_STATE,
+  GROUP_REPOS_RETIRED_SENTENCE,
   gettingStartedGaps,
   piAdminDisabledToolsNote,
   piSandboxOwnerSentence,
@@ -128,7 +129,7 @@ export function conversationHistoryBlock(
  * doesn't drift into shell git after an MCP failure.
  */
 export const GIT_MCP_ONLY_GUIDANCE =
-  "**Remote git work goes through MCP tools ONLY**: remote git operations such as clone/pull/push/fetch MUST be performed exclusively via the dedicated MCP tools (`mcp__repo__*` for the personal knowledge repository, `mcp__git_repo__*` for general repos, `mcp__group_repo__*` for group repositories). " +
+  "**Remote git work goes through MCP tools ONLY**: remote git operations such as clone/pull/push/fetch MUST be performed exclusively via the dedicated MCP tools (`mcp__repo__*` for the personal knowledge repository, `mcp__git_repo__*` for general repos). " +
   "Git credentials are injected by the server into those tools only and are NOT present in your shell — running `git clone`/`git push`/`gh` via Bash cannot authenticate. " +
   "If an MCP remote-git tool fails, do NOT work around it or retry with Bash git; instead resolve the cause shown in the failure message (token/permission/branch/URL) or report it to the user. " +
   "In the sandbox copy of a repo you opened with `open_repo`, native git works for local inspection and diffs, but a commit made there is NOT saved — save with `mcp__git_repo__commit`; remote operations still stay MCP-only.";
@@ -255,8 +256,10 @@ function brainSection(
 
 /**
  * Group meta-cognition section (owner prompt): which groups the owner is in,
- * their role, the shared group knowledge repo, plus a nudge for admin groups
- * that have no shared repo yet. Returns null when the owner is in no groups.
+ * their role and avatar-sharing policy, and what co-membership grants. Groups
+ * carry no knowledge repository (retired 2026-10-30), and the section says so
+ * for frozen prompts, notes and skills that still name the old tools. Returns
+ * null when the owner is in no groups.
  */
 function groupsSection(request: AgentRequest): string | null {
   const groups = request.groupMemberships ?? [];
@@ -264,36 +267,20 @@ function groupsSection(request: AgentRequest): string | null {
     return null;
   }
   const describe = (g: (typeof groups)[number]) =>
-    `${g.name}(${g.role === "admin" ? "admin" : "member"}${g.knowledgeRepoConfigured ? ", shared repository connected" : ", no shared repository"}${g.avatarSharing ? "" : ", avatar sharing off"})`;
-  const adminNoRepo = groups.filter(
-    (g) => g.role === "admin" && !g.knowledgeRepoConfigured,
-  );
+    `${g.name}(${g.role === "admin" ? "admin" : "member"}${g.avatarSharing ? "" : ", avatar sharing off"})`;
   const anySharing = groups.some((g) => g.avatarSharing);
-  // Kept byte-identical for the common all-sharing case (prompt tests pin the
-  // sentence); groups with avatar sharing OFF get an appended qualifier, and
-  // the all-off case swaps in an accurate replacement instead.
+  // Groups with avatar sharing OFF get an appended qualifier, and the all-off
+  // case swaps in an accurate replacement instead.
   const trustSentence = anySharing
     ? "Members of the same group **automatically trust each other (elevated)** — group co-membership is the ONLY source of elevated (owner-level tool) access. So when you talk to a same-group colleague's avatar you gain owner-level tool permissions, and group-visible avatars can find and talk to each other." +
       (groups.some((g) => !g.avatarSharing)
-        ? ' Exception: groups marked "avatar sharing off" are knowledge-sharing-only — their co-membership grants NO avatar visibility and NO mutual trust/elevation; only avatar-sharing groups do.'
+        ? ' Exception: groups marked "avatar sharing off" grant NO avatar visibility, NO mutual trust/elevation and no skill sharing; only avatar-sharing groups do.'
         : "")
-    : 'Every group of this owner has avatar sharing OFF (knowledge-sharing-only): co-membership grants NO avatar visibility and NO mutual trust/elevation, so no teammate can reach this avatar and no teammate avatar is reachable. Shared group repositories still work normally.';
-  const groupLines = [
-    `The owner belongs to the following groups: ${groups.map(describe).join(", ")}. ` +
-      trustSentence,
-    "Each group may have a **shared knowledge repository**, handled with the `mcp__group_repo__*` tools: use `mcp__group_repo__list_groups` to check groups/roles; all group members can `mcp__group_repo__list_files`/`mcp__group_repo__read_file`, while only **group admins** can `mcp__group_repo__write_file`/`mcp__group_repo__edit_file`/`mcp__group_repo__delete_file`/`mcp__group_repo__move_file`/`mcp__group_repo__scaffold_skill`/`mcp__group_repo__commit`. Skills organized in a group's shared repository are used by every group member's avatar starting from the next conversation.",
-  ];
-  if (adminNoRepo.length > 0) {
-    groupLines.push(
-      `Among the groups where you are an admin, ${adminNoRepo.map((g) => `'${g.name}'`).join(", ")} do not have a shared knowledge repository yet. If the owner wants, you can create a new internal GitHub repository with \`mcp__group_repo__create_repo\` and connect it to that group (you can also connect an existing repository via Group management in Settings).`,
-    );
-  }
-  if (groups.some((g) => g.knowledgeRepoConfigured)) {
-    groupLines.push(
-      "There is no team-brain search tool: the second brain is personal only. A group repository's CLAUDE.md or notes that mention `mcp__group_brain__*` or a \"팀 브레인\" predate its removal — read that group's repository with `mcp__group_repo__list_files`/`mcp__group_repo__read_file` instead.",
-    );
-  }
-  return groupLines.join(" ");
+    : "Every group of this owner has avatar sharing OFF: co-membership grants NO avatar visibility, NO mutual trust/elevation and no skill sharing, so no teammate can reach this avatar and no teammate avatar is reachable.";
+  return [
+    `The owner belongs to the following groups: ${groups.map(describe).join(", ")}. ` + trustSentence,
+    GROUP_REPOS_RETIRED_SENTENCE,
+  ].join(" ");
 }
 
 /**
@@ -403,8 +390,7 @@ function sshEnablementSection(secretNames: string[]): string | null {
 }
 
 /**
- * Standing CLAUDE.md memory injected every turn (personal repo + each enabled
- * group repo). Unlike skills (pulled on demand), this is always-on context, so
+ * Standing CLAUDE.md memory injected every turn (the personal repo). Unlike skills (pulled on demand), this is always-on context, so
  * the server caps it before it reaches here. Carries an explicit injection
  * guard: the system/safety instructions above always win over repo content.
  * Returns null when there is no memory to inject.
@@ -423,15 +409,6 @@ function knowledgeMemorySection(request: AgentRequest): string | null {
     blocks.push(
       `### Personal knowledge repository — CLAUDE.md\n${memory.personal.trim()}`,
     );
-  }
-  if (mcpToolGroupEnabled(request, "group_knowledge")) {
-    for (const group of memory.groups ?? []) {
-      if (group.content && group.content.trim()) {
-        blocks.push(
-          `### Group knowledge repository "${group.name}" — CLAUDE.md\n${group.content.trim()}`,
-        );
-      }
-    }
   }
   if (blocks.length === 0) {
     return null;
@@ -1271,18 +1248,15 @@ export function buildSystemPromptAppend(
     if (
       anyMcpToolGroupEnabled(request, [
         "personal_knowledge",
-        "group_knowledge",
         "git_repo",
       ])
     ) {
       lines.push(GIT_MCP_ONLY_GUIDANCE);
     }
-    // Group meta-cognition: which groups the owner is in, their role, and the
-    // shared group knowledge repo (managed via mcp__group_repo__*). Group members
-    // auto-trust each other, so teammates' avatars are reachable at elevated level.
-    const groupBlock = mcpToolGroupEnabled(request, "group_knowledge")
-      ? groupsSection(request)
-      : null;
+    // Group meta-cognition: which groups the owner is in, their role, and what
+    // co-membership grants. Group members auto-trust each other, so teammates'
+    // avatars are reachable at elevated level.
+    const groupBlock = groupsSection(request);
     if (groupBlock) {
       lines.push(groupBlock);
     }
@@ -1399,7 +1373,6 @@ export function buildSystemPromptAppend(
       if (
         anyMcpToolGroupEnabled(request, [
           "personal_knowledge",
-          "group_knowledge",
           "git_repo",
         ])
       ) {

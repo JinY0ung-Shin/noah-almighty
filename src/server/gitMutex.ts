@@ -2,10 +2,9 @@
  * Serialize git operations that touch the same on-disk clone.
  *
  * Multiple chat turns (and the HTTP routes) can hit the same working tree
- * concurrently: every group member's turn loads skills from the SAME group
- * clone at ${dataDir}/group-knowledge/<groupId> while a group admin commits and
- * pushes; a single user's concurrent turns race on their personal knowledge
- * clone too. Interleaved `fetch`/`checkout`/`add`/`commit`/`push` on one
+ * concurrently: a single user's concurrent turns (and a trusted teammate's on
+ * a shared account) race on their personal knowledge clone, and on a registered
+ * repo's clone. Interleaved `fetch`/`checkout`/`add`/`commit`/`push` on one
  * working tree corrupt the index or each other's staged state.
  *
  * `withRepoLock` runs `fn` exclusively per `key` by chaining each call onto the

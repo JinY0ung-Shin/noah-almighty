@@ -287,7 +287,7 @@
   (INVALID_PATH/FILE_TOO_LARGE/NOT_A_FILE/SKILL_EXISTS sentinels), `decodeExecError(err, {redactToken?,
   fallback?})` (git/gh stderr + `scrubGitError`). Use these; don't reintroduce a local `text()`.
 - **`repoToolKit.ts`** — the shared guard→resolve→ensureClone→decode skeleton for skill/file CRUD used by
-  `repoTools` (owner-only) and `groupRepoTools` (owner + group + admin-role write gate). `commit` handlers
+  `repoTools` (owner-only; `groupRepoTools` shared it until group knowledge repos were retired). `commit` handlers
   and `create_repo` are intentionally NOT folded in. `OWNER_ONLY` here =
   `'This tool can only be used by the avatar owner.'`; **`systemTools` has a DIFFERENT `OWNER_ONLY` string**
   (`…in a conversation the avatar owner is participating in.`).

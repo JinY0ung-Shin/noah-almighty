@@ -1493,7 +1493,6 @@
     background: var(--surface-2);
   }
   .composer-controls.open .composer-model-select,
-  .composer-controls.open .composer-gk-btn,
   .composer-controls.open .composer-tools-btn {
     width: 100%;
     max-width: none;
@@ -1509,7 +1508,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .composer-gk-panel,
   .composer-tools-panel {
     left: 0;
     right: 0;

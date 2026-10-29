@@ -32,11 +32,10 @@
 
   $: user = $appState.user;
   $: isSystemAdmin = Boolean(user?.roles?.includes("admin"));
-  $: githubHost = $appState.bootstrap?.githubHost || "github.com";
   $: groupQuery = $appState.adminGroupSearch.trim().toLowerCase();
   $: shownGroups = groupQuery
     ? $appState.adminGroups.filter((g) =>
-        [g.name, g.description || "", g.knowledgeRepo ? "공용 저장소" : "", `그룹원 ${g.memberCount}`, `관리자 ${g.adminCount}`]
+        [g.name, g.description || "", `그룹원 ${g.memberCount}`, `관리자 ${g.adminCount}`]
           .join(" ")
           .toLowerCase()
           .includes(groupQuery),
@@ -153,7 +152,7 @@
 <header class="view-header">
   <div class="title">
     <h1>그룹</h1>
-    <p>{isSystemAdmin ? "내가 속한 그룹을 확인하고 전체 그룹을 관리하세요" : "내가 속한 그룹과 그룹원, 공용 자원을 확인하세요"}</p>
+    <p>{isSystemAdmin ? "내가 속한 그룹을 확인하고 전체 그룹을 관리하세요" : "내가 속한 그룹과 그룹원을 확인하세요"}</p>
   </div>
   <button class="ghost-sm" type="button" disabled={refreshing} on:click={refreshAll}>{refreshing ? "새로고침 중…" : "새로고침"}</button>
 </header>
@@ -165,7 +164,7 @@
         <h3>내 그룹</h3>
         <p class="muted">
           내가 속한 그룹과 그룹원입니다. 그룹원 아바타 상호 공개가 켜진 그룹에서는 그룹원끼리 자동으로 서로 신뢰해 아바타에 권한이 부여됩니다. 그룹 관리자는
-          그룹원과 공용 지식 저장소를 여기서 관리할 수 있어요.
+          그룹원과 공유 스킬 채널을 여기서 관리할 수 있어요.
         </p>
       </div>
       <div class="head-actions">
@@ -186,7 +185,7 @@
         </div>
       {:else}
         {#each groups as group (group.id)}
-          <SettingsGroupCard {group} {githubHost} reload={reloadMyGroups} />
+          <SettingsGroupCard {group} reload={reloadMyGroups} />
         {/each}
       {/if}
     </div>
@@ -198,7 +197,7 @@
         <div>
           <h3>그룹 관리</h3>
           <p class="muted">
-            시스템 관리자 전용입니다. 그룹 생성·삭제와 도구 정책, 그룹원 구성을 여기서 관리합니다. 각 그룹의 공용 지식 저장소·그룹원 아바타
+            시스템 관리자 전용입니다. 그룹 생성·삭제와 도구 정책, 그룹원 구성을 여기서 관리합니다. 각 그룹의 그룹원 아바타
             상호 공개는 그룹 관리자가 자기 그룹의 ‘내 그룹’ 카드에서 설정해요.
           </p>
         </div>

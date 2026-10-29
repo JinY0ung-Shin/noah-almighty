@@ -17,7 +17,6 @@ import { createApp, createServices } from "../src/server/app.js";
 import { chatFilesDir } from "../src/server/chatFiles.js";
 import { chatImagesDir, safeConversationDir } from "../src/server/chatImages.js";
 import { loadConfig } from "../src/server/config.js";
-import { groupKnowledgeClonePath } from "../src/server/groupKnowledgeRepo.js";
 import logger from "../src/server/logger.js";
 import { retireGroupAgents } from "../src/server/retireGroupAgents.js";
 import { Store } from "../src/server/store.js";
@@ -122,7 +121,8 @@ function pendingDocument(store: Store): { v: number; paths: string[]; sessionIds
  * task-API row, chat media and SDK sessions; one pre-multi thread), rows keyed
  * by the agent id itself, the agent table, image and workspace files — and,
  * as CONTROLS, the owner's own thread with its session, the group with its
- * members and knowledge repo, a personal avatar image and workspace.
+ * members (and a clone of its since-retired knowledge repo, which this purge
+ * never touches), a personal avatar image and workspace.
  */
 function seedLegacyDeployment(config: AppConfig) {
   const store = new Store(config);
@@ -131,7 +131,6 @@ function seedLegacyDeployment(config: AppConfig) {
   const group = store.createGroup({ name: "Team" });
   store.addGroupMember(group.id, owner.id, "member");
   store.addGroupMember(group.id, other.id, "admin");
-  store.setGroupKnowledgeRepo(group.id, "acme/team-knowledge", "main");
   const agentAvatar = `group:${group.id}:agent-1`;
   const legacyAvatar = `group:${group.id}`;
 
@@ -218,7 +217,7 @@ function seedLegacyDeployment(config: AppConfig) {
     ownChatImage: writeFile(path.join(chatImagesDir(config, "own-chat"), "a.png")),
     ownTranscript: writeFile(path.join(sharedProject, `${OWN_SESSION}.jsonl`)),
     ownSessionEnv: writeFile(path.join(sessions, "session-env", OWN_SESSION, "env")),
-    groupClone: writeFile(path.join(groupKnowledgeClonePath(group.id, config), "wiki", "rule.md")),
+    groupClone: writeFile(path.join(config.dataDir, "group-knowledge", group.id, "wiki", "rule.md")),
   };
   return { owner, other, group, agentAvatar, legacyAvatar, ownRoutine, files, controls };
 }
@@ -272,7 +271,6 @@ describe("retireGroupAgents", () => {
     expect(store.listRoutineJobs(seed.owner.id).map((job) => job.id)).toEqual([seed.ownRoutine.id]);
     expect(store.getGroup(seed.group.id)?.name).toBe("Team");
     expect(store.groupRoleFor(seed.other.id, seed.group.id)).toBe("admin");
-    expect(store.getGroupKnowledgeRepo(seed.group.id).repo).toBe("acme/team-knowledge");
     for (const [name, file] of Object.entries(seed.controls)) {
       expect(fs.existsSync(file), name).toBe(true);
     }
@@ -417,7 +415,7 @@ describe("retireGroupAgents", () => {
 });
 
 describe("deleting a group after the retirement", () => {
-  it("still removes the group's knowledge clone, and nothing else of the members'", async () => {
+  it("deletes the group and nothing of the members'", async () => {
     const services = createServices({
       dataDir: path.join(tempDir(), "group-delete"),
       agentRuntime: "local",
@@ -430,14 +428,12 @@ describe("deleting a group after the retirement", () => {
     const created = await admin.post("/api/admin/groups").send({ name: "Team" }).expect(200);
     const groupId = created.body.group.id as string;
     await admin.post(`/api/admin/groups/${groupId}/members`).send({ username: "sys-admin" }).expect(200);
-    const clone = writeFile(path.join(groupKnowledgeClonePath(groupId, config), "wiki", "rule.md"));
     store.touchConversation(adminId, "own-chat", adminId, "안녕");
     const ownMedia = writeFile(path.join(chatImagesDir(config, "own-chat"), "a.png"));
 
     await admin.delete(`/api/admin/groups/${groupId}`).expect(200);
 
     expect(store.getGroup(groupId)).toBeNull();
-    expect(fs.existsSync(path.dirname(path.dirname(clone)))).toBe(false);
     expect(store.listConversations(adminId).map((c) => c.id)).toEqual(["own-chat"]);
     expect(fs.existsSync(ownMedia)).toBe(true);
     store.close();

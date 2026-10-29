@@ -1023,7 +1023,6 @@ describe("live refresh after the avatar's to-do tools", () => {
       liveTasks: [],
       livePlugins: [],
       liveStatusStickyUntil: 0,
-      groupKnowledgeOff: [],
       mcpToolGroups: [...DEFAULT_MCP_TOOL_GROUPS],
       canvases: [],
       activeCanvasId: null,

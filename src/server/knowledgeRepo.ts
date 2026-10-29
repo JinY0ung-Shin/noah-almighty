@@ -506,7 +506,6 @@ export async function ensureMarketplaceManifest(repoRoot: string, slug: string):
 export async function writeRepoTemplate(
   repoRoot: string,
   repoName: string,
-  kind: "personal" | "group" = "personal",
 ): Promise<boolean> {
   const manifestRel = ".claude-plugin/marketplace.json";
   if (await pathExists(resolveInRepo(repoRoot, manifestRel)!)) {
@@ -520,16 +519,13 @@ export async function writeRepoTemplate(
     manifestRel,
     `${JSON.stringify({ name: marketplaceName, plugins: [] }, null, 2)}\n`,
   );
-  await writeFile(repoRoot, "README.md", repoTemplateReadme(shortName, kind));
-  await writeFile(repoRoot, "CLAUDE.md", repoTemplateClaudeMd(shortName, kind));
-  // Seed the second-brain vault skeleton (raw/ inbox + wiki/ consolidated layer) for a
-  // PERSONAL repo only — the second brain is personal (the team brain was removed
-  // 2026-10-30), so a group repo starts as a plain shared repo. Empty dirs need a .gitkeep
-  // to survive commit/clone. The brain-* default skills operate on this layout; existing
+  await writeFile(repoRoot, "README.md", repoTemplateReadme(shortName));
+  await writeFile(repoRoot, "CLAUDE.md", repoTemplateClaudeMd(shortName));
+  // Seed the second-brain vault skeleton (raw/ inbox + wiki/ consolidated layer).
+  // Empty dirs need a .gitkeep to survive commit/clone. The brain-* default skills operate on this layout; existing
   // repos created before it keep marketplace.json (so they early-return above) and are
   // upgraded by the brain-migrate skill instead. NOTE: no skills are seeded here on
   // purpose — the brain skills are default-bundled, so marketplace.json stays {plugins: []}.
-  if (kind === "group") return true;
   await writeFile(repoRoot, "raw/.gitkeep", "");
   for (const section of ["sources", "entities", "concepts", "synthesis"]) {
     await writeFile(repoRoot, `wiki/${section}/.gitkeep`, "");
@@ -547,26 +543,7 @@ export async function writeRepoTemplate(
  * conventions, and long-term context. Kept short on purpose — the server caps
  * what it injects.
  */
-function repoTemplateClaudeMd(name: string, kind: "personal" | "group" = "personal"): string {
-  if (kind === "group") {
-    // Team-framed, Korean human-facing. Kept short — the server caps the GROUP
-    // CLAUDE.md injection at GROUP_CLAUDE_MD_CAP (4000).
-    return `# ${name} — 팀 공유 지식 저장소 (CLAUDE.md)
-
-이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소**입니다. 이 파일은 구성원들의 아바타에게
-**매 대화마다** 상시 지침으로 주입됩니다. 시스템·안전 지침이 항상 우선하며, 길어지면 서버가
-일부를 잘라냅니다(그룹 CLAUDE.md는 개인보다 짧게).
-
-## 운영 원칙
-- 팀에 관한 질문이면 이 저장소의 문서를 먼저 확인하세요(\`mcp__group_repo__list_files\`/\`read_file\`).
-- **읽기는 모든 구성원**, **쓰기·커밋은 그룹 관리자만**(\`mcp__group_repo__write_file\`/\`commit\`).
-  구성원은 관리자에게 반영을 요청하세요.
-- 팀 공용 스킬은 \`mcp__group_repo__scaffold_skill\`로 만들면 다음 대화부터 모든 구성원의 아바타가 씁니다.
-
-## 여기에 적어 둘 것
-- 팀 공통 응답 말투/형식, 자주 쓰는 용어·약어, 반복 작업의 기본 규칙, 합의된 결정과 배경.
-`;
-  }
+function repoTemplateClaudeMd(name: string): string {
   // Personal: bilingual — English instructions (the model reads this as standing input)
   // + Korean examples for the human owner. Kept under PERSONAL_CLAUDE_MD_CAP (6000).
   return `# ${name} — your second brain (CLAUDE.md)
@@ -597,20 +574,7 @@ caps the injected length — keep it tight.
 }
 
 /** The starter README seeded alongside the marketplace manifest. */
-function repoTemplateReadme(name: string, kind: "personal" | "group" = "personal"): string {
-  if (kind === "group") {
-    return `# ${name} — 팀 공유 지식 저장소
-
-이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소**입니다. 구성원의 아바타가 대화에서 활용하며,
-여기에 정리한 문서와 스킬을 다음 대화부터 함께 사용합니다.
-
-- \`CLAUDE.md\` — 구성원 아바타에게 매 대화 주입되는 팀 공통 지침
-- \`skills/<이름>/SKILL.md\` — 팀 공용 스킬 (marketplace에 등록된 것만 로드)
-- \`.claude-plugin/marketplace.json\` — 추가 스킬(플러그인) 목록
-
-읽기는 모든 구성원, 쓰기·커밋은 그룹 관리자만 가능합니다.
-`;
-  }
+function repoTemplateReadme(name: string): string {
   return `# ${name} — 지식 저장소 (세컨드 브레인)
 
 이 저장소는 아바타(Noah Almighty)의 **개인 지식 저장소(세컨드 브레인)** 입니다. 아바타가

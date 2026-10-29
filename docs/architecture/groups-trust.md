@@ -32,8 +32,8 @@
   trusted same-group teammates chatting with that avatar also get the personal knowledge-repo WRITE
   tools: `buildRunCapabilities` computes `repoWriteAccess = ownerToolAccess || (sharedAccount && elevatedToolAccess)`
   and passes it as `RepoToolsContext.writeAccess` (defaults to `viewerIsOwner`; still headless-gated).
-  Scope is DELIBERATELY narrow: `create_repo`, repo connect/disconnect settings (`knowledgeTools`), group
-  repo tools, and every other owner-only tool are untouched; a plain (non-group) viewer stays read-only.
+  Scope is DELIBERATELY narrow: `create_repo`, repo connect/disconnect settings (`knowledgeTools`) and
+  every other owner-only tool are untouched; a plain (non-group) viewer stays read-only.
   The write tools' `(owner only)` description suffix is computed per run (`writeGate`) so a shared-account
   teammate turn doesn't self-refuse; `commit` audits the ACTUAL actor (`ctx.viewer`) with a
   `(shared account, owner <username>)` detail when a teammate pushes AND appends a
@@ -53,20 +53,15 @@
 ## Groups
 - `groups` + `group_members(role admin|member)` tables (always-run schema). System admin
   creates/deletes groups + assigns group admins (`/api/admin/groups*`); group admins self-serve their
-  group's members + repo + policies (`/api/me/groups*`, gated by `canManageGroup` = system admin OR
+  group's members + policies (`/api/me/groups*`, gated by `canManageGroup` = system admin OR
   group admin). **`isTrustedFor` IS `shareAnyGroup`** → co-members of an AVATAR-SHARING group are
   mutually + SYMMETRICALLY elevated and reach each other's `group`-visible avatars (but NOT each
-  other's `private` ones — visibility is a separate axis). Each group has ONE shared **knowledge repo**
-  (`groupKnowledgeRepo.ts` mirrors `knowledgeRepo.ts`: full clone at `dataDir/group-knowledge/<groupId>`,
-  REUSES its repo-relative file ops; `token` = acting user's `getGitToken`). Members' avatars auto-load
-  its skills (`loadGroupKnowledgeRepoRoots`); only group admins edit via the OWNER-ONLY
-  `mcp__group_repo__*` server (per-tool role check: member reads, admin
-  writes/deletes/moves/commits/`create_repo`). Discovery: `listPublishedAvatars` also returns
+  other's `private` ones — visibility is a separate axis). Groups have NO knowledge repository (retired
+  2026-10-30 — `server-core.md`); team knowledge travels as shared skills. Discovery: `listPublishedAvatars` also returns
   `group`-visible group teammates flagged `sharesGroup`.
 - **Per-group avatar-sharing policy** (`groups.avatar_sharing`, `addColumnIfMissing`; NULL/1 = on, 0 =
-  off): off makes the group **knowledge-sharing-only** — its co-membership grants NEITHER avatar
-  visibility NOR trust/elevation (both ride `SHARING_TEAMMATES`), while the shared repo/brain, tool
-  policy (`allowedMcpToolGroupsForUser`), and rosters are untouched. Set via
+  off): its co-membership then grants NEITHER avatar visibility NOR trust/elevation NOR skill sharing
+  (all ride `SHARING_TEAMMATES`), while the tool policy (`allowedMcpToolGroupsForUser`), and rosters are untouched. Set via
   `PUT /api/me/groups/:id/avatar-sharing` (`canManageGroup`); echoed on `Group`/`UserGroupMembership`
   (`avatarSharing`). Meta-cognition rides the membership list: groupsSection/describe_system append an
   ", avatar sharing off" marker per group, and the ask_avatar gates (`runCapabilities` `avatarAskActive`,
@@ -78,6 +73,6 @@ Team avatars that were not users rows (`group_agents`, avatar id `group:<groupId
 removed. A boot purge (`src/server/retireGroupAgents.ts` + `store/retiredGroupAgents.ts`) deletes every
 member's thread with one and the files it left, then drops the table; the `group:` avatar-id prefix and
 the table names are reserved forever (details in [`server-core.md`](server-core.md)). Groups, their
-members, the `avatar_sharing` policy, group knowledge repos and the personal-run
-`mcp__group_repo__*` tools are unaffected. `isTrustedFor` is the only elevation
+members and the `avatar_sharing` policy are unaffected (group knowledge repos were retired separately on
+2026-10-30). `isTrustedFor` is the only elevation
 source left — there is no membership-gated carve-out any more.

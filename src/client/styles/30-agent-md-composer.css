@@ -1331,7 +1331,7 @@ button.composer-bridge:focus-visible {
 }
 
 /* Per-conversation model tier picker (all viewers). Styled to match the
-   group-knowledge button since the global input chrome only applies inside a
+   MCP tool button since the global input chrome only applies inside a
    `.field` ancestor (see src/client/CLAUDE.md). */
 .composer-model-select {
   flex: none;
@@ -1355,10 +1355,8 @@ button.composer-bridge:focus-visible {
   border-color: var(--accent, var(--text));
 }
 
-/* Owner-only per-conversation group-knowledge toggle (button + dropdown), the
-   MCP tool picker, and the 할 일 overlay switch (ChatView adds only its icon
+/* The MCP tool picker (button + dropdown) and the 할 일 overlay switch (ChatView adds only its icon
    layout and the pressed/overdue states). */
-.composer-gk-btn,
 .composer-tools-btn,
 .composer-todo-btn {
   flex: none;
@@ -1375,12 +1373,9 @@ button.composer-bridge:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.composer-gk-btn[hidden],
 .composer-tools-btn[hidden] {
   display: none;
 }
-.composer-gk-btn[aria-expanded="true"],
-.composer-gk-btn:hover,
 .composer-tools-btn[aria-expanded="true"],
 .composer-tools-btn:hover,
 .composer-todo-btn:hover {
@@ -1405,7 +1400,6 @@ button.composer-bridge:focus-visible {
     transform: scale(1);
   }
 }
-.composer-gk-panel,
 .composer-tools-panel {
   position: absolute;
   right: 0;
@@ -1422,17 +1416,14 @@ button.composer-bridge:focus-visible {
   background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
 }
-.composer-gk-panel[hidden],
 .composer-tools-panel[hidden] {
   display: none;
 }
-.composer-gk-title,
 .composer-tools-title {
   font-size: 0.78em;
   color: var(--muted);
   padding-bottom: var(--s-1);
 }
-.composer-gk-item,
 .composer-tools-item {
   display: flex;
   align-items: center;

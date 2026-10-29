@@ -421,31 +421,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Group ids whose shared knowledge is toggled OFF for this conversation
-     * (owner-only). Empty array = every group enabled (the default). Owner-scoped
-     * so a guessed conversation id can't read another owner's setting.
-     */
-    getConversationGroupKnowledgeOff(ownerId: string, conversationId: string): string[] {
-      const row = this.db
-        .prepare("SELECT group_knowledge_off FROM conversations WHERE id = ? AND owner_user_id = ?")
-        .get(conversationId, ownerId) as { group_knowledge_off: string | null } | undefined;
-      return parseNameList(row?.group_knowledge_off ?? null) ?? [];
-    }
-
-    /**
-     * Replace the conversation's group-knowledge OFF set (the group ids whose shared
-     * knowledge is disabled). Empty array clears it (every group ON). Stores the OFF
-     * set so groups default ON. No-op when the conversation isn't the owner's.
-     */
-    setConversationGroupKnowledgeOff(ownerId: string, conversationId: string, offGroupIds: string[]): void {
-      const unique = [...new Set(offGroupIds.filter(Boolean))];
-      const next = unique.length > 0 ? JSON.stringify(unique) : null;
-      this.db
-        .prepare("UPDATE conversations SET group_knowledge_off = ? WHERE id = ? AND owner_user_id = ?")
-        .run(next, conversationId, ownerId);
-    }
-
-    /**
      * The user-chosen model TIER (alias) for this conversation, or null when none
      * was picked (use the server default resolution). Owner-scoped so a guessed
      * conversation id can't read another owner's setting.

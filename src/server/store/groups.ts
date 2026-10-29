@@ -34,18 +34,15 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class Groups extends Base {
     // ---- Groups -----------------------------------------------------------
     // A group is created by a SYSTEM admin. Members of a group auto-trust each
-    // other (via `shareAnyGroup` → `isTrustedFor`) and share one knowledge repo
-    // that only group admins (role='admin') may edit. Group admins manage their
-    // own group's membership; the system admin manages all groups.
+    // other (via `shareAnyGroup` → `isTrustedFor`) and share skills. (Group
+    // knowledge repos were retired 2026-10-30.) Group admins manage their own
+    // group's membership; the system admin manages all groups.
 
     private toGroup(row: GroupRow): Group {
       return {
         id: row.id,
         name: row.name,
         description: row.description ?? "",
-        knowledgeRepo: row.knowledge_repo ?? null,
-        knowledgeBranch: row.knowledge_branch ?? null,
-        knowledgeSelected: parseNameList(row.knowledge_selected),
         allowedMcpToolGroups: parseAllowedMcpToolGroups(row.allowed_mcp_tool_groups),
         // Off only when explicitly 0 (NULL = pre-policy rows = on) — mirrors the
         // SQL SHARING_TEAMMATES gate in store/avatars.ts.
@@ -125,8 +122,8 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
      * GROUP-ADMIN policy: whether this group's co-membership shares avatars
      * (mutual visibility AND mutual trust/elevation ride the same SQL fragment —
      * see SHARING_TEAMMATES in store/avatars.ts). Off makes the group
-     * knowledge-sharing-only; group repo/brain access and the admin tool policy
-     * are unaffected. Managed via PUT /api/me/groups/:id/avatar-sharing
+     * a skill-sharing/tool-policy-only unit; the admin tool policy is
+     * unaffected. Managed via PUT /api/me/groups/:id/avatar-sharing
      * (canManageGroup), unlike the system-admin-only tool policy above.
      */
     setGroupAvatarSharing(id: string, enabled: boolean): Group | null {
@@ -141,8 +138,7 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     /**
      * Delete a group, its memberships and its shared-skill channel blocks
-     * (manual cascade, no ON DELETE CASCADE). The on-disk group-knowledge
-     * clone is the route's job (`removeGroupKnowledgeClone`).
+     * (manual cascade, no ON DELETE CASCADE).
      * Returns false if it didn't exist.
      */
     deleteGroup(id: string): boolean {
@@ -267,11 +263,11 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.groupRoleFor(userId, groupId) === "admin";
     }
 
-    /** Groups a user belongs to, with role + repo-configured flag (for `User`/roster). */
+    /** Groups a user belongs to, with role + policy flags (for `User`/roster). */
     listUserGroups(userId: string): UserGroupMembership[] {
       const rows = this.db
         .prepare(
-          `SELECT g.id AS id, g.name AS name, m.role AS role, g.knowledge_repo AS knowledge_repo,
+          `SELECT g.id AS id, g.name AS name, m.role AS role,
                   g.allowed_mcp_tool_groups AS allowed_mcp_tool_groups,
                   g.avatar_sharing AS avatar_sharing
            FROM group_members m JOIN groups g ON g.id = m.group_id
@@ -281,7 +277,6 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
         id: string;
         name: string;
         role: string;
-        knowledge_repo: string | null;
         allowed_mcp_tool_groups: string | null;
         avatar_sharing: number | null;
       }[];
@@ -289,7 +284,6 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
         id: r.id,
         name: r.name,
         role: this.normalizeRole(r.role),
-        knowledgeRepoConfigured: Boolean(r.knowledge_repo),
         allowedMcpToolGroups: parseAllowedMcpToolGroups(r.allowed_mcp_tool_groups),
         avatarSharing: r.avatar_sharing !== 0,
       }));
@@ -318,80 +312,5 @@ export function withGroups<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return allowed === null ? null : effectiveMcpToolGroups(allowed);
     }
 
-    // ---- Group knowledge repo --------------------------------------------
-
-    /** The group's shared knowledge repo + branch + plugin selection. */
-    getGroupKnowledgeRepo(groupId: string): {
-      repo: string | null;
-      branch: string | null;
-      selected: string[] | null;
-    } {
-      const row = this.groupRowById(groupId);
-      return {
-        repo: row?.knowledge_repo ?? null,
-        branch: row?.knowledge_branch ?? null,
-        selected: parseNameList(row?.knowledge_selected ?? null),
-      };
-    }
-
-    /** Connect/clear the group's shared knowledge repo (clears selection, like the user one). */
-    setGroupKnowledgeRepo(groupId: string, repo: string | null, branch: string | null): Group | null {
-      if (!this.groupRowById(groupId)) {
-        return null;
-      }
-      this.db
-        .prepare(
-          "UPDATE groups SET knowledge_repo = ?, knowledge_branch = ?, knowledge_selected = NULL WHERE id = ?",
-        )
-        .run(repo?.trim() || null, branch?.trim() || null, groupId);
-      return this.toGroup(this.groupRowById(groupId)!);
-    }
-
-    /** Set which group-repo plugins members' avatars load; `null` = load all. */
-    setGroupKnowledgeSelected(groupId: string, selected: string[] | null): Group | null {
-      if (!this.groupRowById(groupId)) {
-        return null;
-      }
-      this.db
-        .prepare("UPDATE groups SET knowledge_selected = ? WHERE id = ?")
-        .run(selected ? JSON.stringify(selected) : null, groupId);
-      return this.toGroup(this.groupRowById(groupId)!);
-    }
-
-    /**
-     * Group knowledge repos to load as plugin roots for a user's avatar chats:
-     * every group the user is in that has a repo connected. Members read these
-     * skills; group admins edit them. Excludes groups with no repo.
-     */
-    listGroupKnowledgeReposForUser(userId: string): {
-      groupId: string;
-      groupName: string;
-      repo: string;
-      branch: string | null;
-      selected: string[] | null;
-    }[] {
-      const rows = this.db
-        .prepare(
-          `SELECT g.id AS id, g.name AS name, g.knowledge_repo AS repo,
-                  g.knowledge_branch AS branch, g.knowledge_selected AS selected
-           FROM group_members m JOIN groups g ON g.id = m.group_id
-           WHERE m.user_id = ? AND g.knowledge_repo IS NOT NULL
-           ORDER BY g.name COLLATE NOCASE ASC`,
-        )
-        .all(userId) as {
-        id: string;
-        name: string;
-        repo: string;
-        branch: string | null;
-        selected: string | null;
-      }[];
-      return rows.map((r) => ({
-        groupId: r.id,
-        groupName: r.name,
-        repo: r.repo,
-        branch: r.branch,
-        selected: parseNameList(r.selected),
-      }));
-    }
   };
 }

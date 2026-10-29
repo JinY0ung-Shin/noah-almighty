@@ -10,7 +10,7 @@ asked to "tidy up / consolidate my notes".
 
 ## Scope
 - **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
-  The second brain is personal; never run this pass on a group's shared repository.
+  The second brain is personal only (groups have no shared repository).
 
 ## Optional conversation pull
 You MAY also review the owner's OWN recent conversations to mine durable facts worth consolidating

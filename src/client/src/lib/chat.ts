@@ -146,9 +146,6 @@ function makePane(
     liveTasks: [],
     livePlugins: [],
     liveStatusStickyUntil: 0,
-    groupKnowledgeOff: avatar.isOwn
-      ? [...(readState().user?.groupKnowledgeOffDefault || [])]
-      : [],
     // Seed the composer pickers from the owner's remembered defaults so the last
     // choice carries to a new conversation (null/undefined = fall back to the
     // hardcoded server/SDK default). selectConversation() overrides these with the
@@ -1095,7 +1092,6 @@ export async function sendMessage(
         regenerate: opts.regenerate === true,
         ...(rewindFromMessageId ? { rewindFromMessageId } : {}),
         multiSession: readState().chatPanes.length > 1,
-        groupKnowledgeOff: pane.groupKnowledgeOff || [],
         // Model tier / reasoning effort / MCP groups: the pane is seeded from
         // remembered defaults, then persisted per conversation.
         model: pane.modelTier || DEFAULT_MODEL_TIER,
@@ -2019,10 +2015,8 @@ function handleBlocked(paneId: string, data: any): void {
 function handleMemory(paneId: string, data: any): void {
   const id = String(data.id || "") || newId();
   const action = data.action === "update" ? "갱신됨" : "추가됨";
-  const label = data.scope === "group" ? `그룹 기억 ${action}` : `기억 ${action}`;
-  const groupName = String(data.groupName || "").trim();
-  const path = String(data.path || "").trim();
-  const detail = groupName ? `${groupName} · ${path}` : path;
+  const label = `기억 ${action}`;
+  const detail = String(data.path || "").trim();
   updatePane(paneId, (pane) => {
     if (pane.liveTools.some((t) => t.id === id)) return;
     pane.liveTools.push({
@@ -3211,7 +3205,6 @@ function applyLoadedConversation(
   loaded: Awaited<ReturnType<typeof loadMessages>>,
 ): void {
   applyLoadedTranscript(target, loaded);
-  target.groupKnowledgeOff = loaded.groupKnowledgeOff || [];
   target.modelTier = loaded.selectedModel || undefined;
   target.effort = loaded.selectedEffort || undefined;
   target.mcpToolGroups = loaded.selectedMcpToolGroups ?? [

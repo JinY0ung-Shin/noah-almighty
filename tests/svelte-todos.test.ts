@@ -43,7 +43,6 @@ const user = {
   knowledgeRepo: null,
   knowledgeBranch: null,
   knowledgeSelected: null,
-  groupKnowledgeOffDefault: [],
   modelDefault: null,
   effortDefault: null,
   mcpToolGroupsDefault: null,
@@ -699,7 +698,6 @@ describe("chat overlay", () => {
       liveTools: [],
       liveTasks: [],
       livePlugins: [],
-      groupKnowledgeOff: [],
     } as unknown as ChatPane;
     replaceState({ avatars: [], chatPanes: [pane], activePaneId: "pane-1", view: "chat" });
   }

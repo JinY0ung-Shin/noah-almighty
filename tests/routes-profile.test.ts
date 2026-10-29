@@ -103,37 +103,6 @@ describe("PATCH /api/me profile fields", () => {
   });
 });
 
-describe("PUT /api/me/group-knowledge-default", () => {
-  it("stores the OFF-set and rejects a non-string-array body", async () => {
-    const app = testApp();
-    const { agent } = await newUser(app, "gk-owner");
-
-    await agent
-      .put("/api/me/group-knowledge-default")
-      .send({ off: "nope" })
-      .expect(400);
-    await agent
-      .put("/api/me/group-knowledge-default")
-      .send({ off: [1, 2] })
-      .expect(400);
-
-    const set = await agent
-      .put("/api/me/group-knowledge-default")
-      .send({ off: ["group-a", "group-b"] })
-      .expect(200);
-    expect(set.body.user.groupKnowledgeOffDefault).toEqual([
-      "group-a",
-      "group-b",
-    ]);
-
-    const cleared = await agent
-      .put("/api/me/group-knowledge-default")
-      .send({ off: [] })
-      .expect(200);
-    expect(cleared.body.user.groupKnowledgeOffDefault).toEqual([]);
-  });
-});
-
 describe("POST /api/me/release-seen", () => {
   it("seeds signups as caught-up and stamps the server-current release id", async () => {
     const app = testApp();

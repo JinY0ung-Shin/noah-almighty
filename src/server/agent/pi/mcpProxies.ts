@@ -133,7 +133,6 @@ const STDIO_ONLY_BUNDLED =
  * bundled with this Noah build (`config.defaultPluginsDir`). Every other root
  * is agent-writable, directly or at one remove:
  *   - the personal knowledge clone: `mcp__repo__*` writes and commits it;
- *   - a group knowledge clone: members' agents write it (`mcp__group_repo__*`);
  *   - an installed plugin repo: `mcp__git_repo__*` registers any URL and pushes
  *     with the owner's git token, and the next plugin refresh pulls it;
  *   - anything else: unknown provenance, refused (fail closed).
@@ -145,8 +144,6 @@ export function piStdioRootRefusal(rootPath: string, config: AppConfig): string 
       return null;
     case "knowledge":
       return `it is defined in the knowledge repository, which the agent edits through mcp__repo__*${STDIO_ONLY_BUNDLED}`;
-    case "group":
-      return `it is defined in a group knowledge repository, which members' agents edit through mcp__group_repo__*${STDIO_ONLY_BUNDLED}`;
     case "plugin":
       return `it is defined in an installed plugin repository, whose remote an agent can push to with mcp__git_repo__* before the next plugin refresh${STDIO_ONLY_BUNDLED}`;
     default:

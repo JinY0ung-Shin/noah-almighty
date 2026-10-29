@@ -56,7 +56,7 @@
 - The agent shell is the pi sandbox and holds no git credentials, so Bash `git clone/push`/`gh` can never
   authenticate (a sandbox working-repo copy's `.git` is for status/diff/log only; Noah commits and pushes the
   canonical clone, design D1). `GIT_MCP_ONLY_GUIDANCE` (`promptBuilder.ts`) is injected on every tool-capable turn
-  telling the avatar to use `mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*` ONLY and never retry a
+  telling the avatar to use `mcp__repo__*`/`mcp__git_repo__*` ONLY and never retry a
   failed MCP git call via Bash; the git tools' failure messages repeat the no-Bash-fallback line with cause
   hints. When adding a git-ish capability, route it through an in-process MCP bridge and keep that line in
   its error text.

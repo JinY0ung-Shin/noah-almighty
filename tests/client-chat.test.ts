@@ -157,7 +157,6 @@ function seedPane(overrides: Partial<ChatPane> = {}): string {
     liveTasks: [],
     livePlugins: [],
     liveStatusStickyUntil: 0,
-    groupKnowledgeOff: [],
     mcpToolGroups: [...DEFAULT_MCP_TOOL_GROUPS],
     canvases: [],
     sideTab: null,
@@ -568,7 +567,7 @@ describe("opening + resuming conversations", () => {
     replaceState({ conversations: [{ id: "c1", avatarUserId: "av1", isRoutine: false } as any] });
     const assistantMsg = { id: "m", role: "assistant", content: "이전 답변", response: null, conversationId: "c1", createdAt: "t" };
     useFetch((url) => {
-      if (url.startsWith("/api/messages")) return jsonRes({ messages: [assistantMsg], groupKnowledgeOff: [], canvases: [] });
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [assistantMsg], canvases: [] });
       if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
       return undefined;
@@ -617,7 +616,7 @@ describe("opening + resuming conversations", () => {
     });
     const fetchFn = useFetch((url) => {
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [], canvases: [] });
       if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
       return undefined;
@@ -636,7 +635,7 @@ describe("opening + resuming conversations", () => {
       if (url === "/api/conversations?kind=routine")
         return jsonRes({ conversations: [{ id: "r2", avatarUserId: "av1", isRoutine: true }] });
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [], canvases: [] });
       if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
       return undefined;
@@ -995,7 +994,7 @@ describe("reattaching to a live run", () => {
     const reloaded = { id: "old", role: "assistant", content: "저장된 답변", response: null, conversationId: "c1", createdAt: "t" };
     useFetch((url) => {
       if (url.includes("/events")) return { ok: false, status: 404, body: null, json: async () => ({}) };
-      if (url.startsWith("/api/messages")) return jsonRes({ messages: [reloaded], groupKnowledgeOff: [], canvases: [] });
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [reloaded], canvases: [] });
       return undefined;
     });
     await attachRun(id, "run404");
@@ -1015,7 +1014,6 @@ describe("reattaching to a live run", () => {
             { id: "u", role: "user", content: "질문", response: null, conversationId: "c1", createdAt: "t" },
             { id: "a", role: "assistant", content: "완료된 답변", response: null, conversationId: "c1", createdAt: "t" },
           ],
-          groupKnowledgeOff: [],
           canvases: [],
         });
       }
@@ -1159,7 +1157,7 @@ describe("opening a seeded or brand-new chat", () => {
   it("startChatWith resumes the existing conversation instead of opening a duplicate", async () => {
     replaceState({ conversations: [{ id: "c-old", avatarUserId: "av9", isRoutine: false } as any] });
     useFetch((url) => {
-      // A thread that never had canvases or group-knowledge picks omits both keys.
+      // A thread that never had canvases omits the key.
       if (url.startsWith("/api/messages")) return jsonRes({ messages: [] });
       if (url === "/api/avatars/av9") return jsonRes({ avatar: { id: "av9", alias: "동료", isOwn: false } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
@@ -1169,7 +1167,6 @@ describe("opening a seeded or brand-new chat", () => {
     expect(readState().chatPanes).toHaveLength(1);
     expect(readState().chatPanes[0]).toMatchObject({
       conversationId: "c-old",
-      groupKnowledgeOff: [],
       canvases: [],
     });
   });
@@ -1215,7 +1212,6 @@ describe("opening a seeded or brand-new chat", () => {
               response: { kind: "text", runtime: "claude", text: "", usage: { inputTokens: 0, outputTokens: 0 } },
             },
           ],
-          groupKnowledgeOff: ["g1"],
           selectedModel: "opus",
           selectedEffort: "high",
           selectedMcpToolGroups: ["git_repo", "web"],
@@ -1242,7 +1238,6 @@ describe("opening a seeded or brand-new chat", () => {
     expect(s.currentAvatar?.id).toBe("av9");
     expect(added).toMatchObject({
       conversationId: "c9",
-      groupKnowledgeOff: ["g1"],
       modelTier: "opus",
       effort: "high",
       mcpToolGroups: ["git_repo", "web"],
@@ -1687,6 +1682,7 @@ describe("stream events applied to a pane", () => {
       ["memory", { id: "mem1", path: "wiki/회의.md", action: "create" }],
       // A reattach replays the whole log; the same capture must not stack up.
       ["memory", { id: "mem1", path: "wiki/회의.md", action: "create" }],
+      // A retired group-scope frame (an older server's replay) renders as a plain capture.
       ["memory", { id: "mem2", path: "wiki/정책.md", action: "update", scope: "group", groupName: "플랫폼" }],
       // An id-less capture still gets a row (it just cannot be deduped).
       ["memory", { path: "wiki/무제.md" }],
@@ -1700,7 +1696,7 @@ describe("stream events applied to a pane", () => {
       status: "done",
       agentId: "main",
     });
-    expect(rows[1]).toMatchObject({ label: "그룹 기억 갱신됨", detail: "플랫폼 · wiki/정책.md" });
+    expect(rows[1]).toMatchObject({ label: "기억 갱신됨", detail: "wiki/정책.md" });
     expect(rows[2]).toMatchObject({ label: "기억 추가됨", detail: "wiki/무제.md" });
     expect(rows[2].id).toBeTruthy();
   });
@@ -2378,7 +2374,7 @@ describe("auto-reconnect", () => {
         return { ok: false, status: 404, body: null, json: async () => ({}) };
       }
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [saved], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [saved], canvases: [] });
       return jsonRes({ ok: true });
     });
 
@@ -3666,7 +3662,6 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
           selectedModel: "opus",
           selectedEffort: "high",
           selectedMcpToolGroups: ["system"],
-          groupKnowledgeOff: ["g-server"],
         });
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
@@ -3679,7 +3674,6 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
       target.modelTier = "haiku";
       target.effort = "low";
       target.mcpToolGroups = ["system", "browser"] as any;
-      target.groupKnowledgeOff = ["g-mine"];
     });
     finish();
     await waitFor(() => !pane(id).streaming);
@@ -3688,7 +3682,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     // The transcript was re-read …
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "n1"]);
     // … and every selection is still the viewer's.
-    expect(pane(id)).toMatchObject({ modelTier: "haiku", effort: "low", groupKnowledgeOff: ["g-mine"] });
+    expect(pane(id)).toMatchObject({ modelTier: "haiku", effort: "low" });
     expect(pane(id).mcpToolGroups).toEqual(["system", "browser"]);
   });
 

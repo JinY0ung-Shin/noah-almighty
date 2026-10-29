@@ -948,7 +948,7 @@ describe("loadDefaultPluginRoots", () => {
 
     const reflect = skill("brain-reflect");
     expect(reflect).toContain("Reads raw/ + wiki/ and may optionally review the owner's own recent conversations");
-    expect(reflect).toContain("never run this pass on a group's shared repository");
+    expect(reflect).toContain("The second brain is personal only (groups have no shared repository)");
     expect(reflect).not.toContain("mcp__group_repo__");
     expect(reflect).not.toContain(
       "It reads ONLY raw/ and wiki/ — never conversations",
@@ -1577,7 +1577,6 @@ describe("buildPrompt", () => {
     id: "g1",
     name: "Team",
     role: "member" as const,
-    knowledgeRepoConfigured: false,
     allowedMcpToolGroups: null,
     avatarSharing: true,
   };
@@ -1820,7 +1819,7 @@ describe("buildPrompt", () => {
     // The user-deselected sentence lists exactly the user's own picks — the
     // admin-blocked pair is never (mis)attributed to the user...
     expect(p).toContain(
-      "in the chat composer: personal knowledge, group knowledge, Confluence, avatar discovery & consultation, visual canvas, browser control.",
+      "in the chat composer: personal knowledge, Confluence, avatar discovery & consultation, visual canvas, browser control.",
     );
     // ...and the policy itself is never mentioned: the avatar only knows the
     // tools it has (owner decision — no policy meta-cognition).
@@ -1833,7 +1832,6 @@ describe("buildPrompt", () => {
         viewerIsOwner: true,
         mcpToolGroups: [
           "personal_knowledge",
-          "group_knowledge",
           "git_repo",
           "confluence",
           "avatars",
@@ -1894,7 +1892,7 @@ describe("buildPrompt", () => {
     expect(p).not.toContain("states the CURRENT truth only");
   });
 
-  it("surfaces the group team-brain trigger when a group has a shared repo", () => {
+  it("tells a group member that groups have no repository or team brain", () => {
     const p = buildPrompt(
       req({
         viewerIsOwner: true,
@@ -1904,30 +1902,25 @@ describe("buildPrompt", () => {
             id: "g1",
             name: "플랫폼팀",
             role: "member",
-            knowledgeRepoConfigured: true,
             avatarSharing: true,
           },
         ],
       }),
       0,
     );
-    // No team brain: the prompt says so and sends stale mentions to the group repo tools.
-    expect(p).toContain("There is no team-brain search tool");
-    expect(p).toContain("`mcp__group_repo__read_file` instead");
+    // Retired 2026-10-30: the prompt says so and redirects stale mentions.
+    expect(p).toContain("플랫폼팀(member)");
+    expect(p).toContain("Groups have NO shared knowledge repository and there is no team brain");
+    expect(p).toContain("say group repositories were removed");
+    expect(p).not.toContain("mcp__group_repo__list_groups");
   });
 
-  it("injects personal + group CLAUDE.md standing memory with an injection guard", () => {
+  it("injects the personal CLAUDE.md standing memory with an injection guard", () => {
     const p = buildPrompt(
       req({
         viewerIsOwner: true,
         knowledgeMemory: {
           personal: "항상 존댓말을 쓰세요.",
-          groups: [
-            {
-              name: "보안팀",
-              content: "비밀번호는 절대 평문으로 다루지 마세요.",
-            },
-          ],
         },
       }),
       0,
@@ -1936,8 +1929,7 @@ describe("buildPrompt", () => {
     expect(p).toContain("always take precedence");
     expect(p).toContain("Personal knowledge repository — CLAUDE.md");
     expect(p).toContain("항상 존댓말을 쓰세요.");
-    expect(p).toContain('Group knowledge repository "보안팀" — CLAUDE.md');
-    expect(p).toContain("비밀번호는 절대 평문으로 다루지 마세요.");
+    expect(p).not.toContain("Group knowledge repository");
   });
 
   it("omits the standing-memory section when there is no knowledge memory", () => {
@@ -1949,7 +1941,7 @@ describe("buildPrompt", () => {
     const empty = buildPrompt(
       req({
         viewerIsOwner: true,
-        knowledgeMemory: { personal: "  ", groups: [] },
+        knowledgeMemory: { personal: "  " },
       }),
       0,
     );
@@ -2643,7 +2635,6 @@ describe("buildPrompt", () => {
           id: "g1",
           name: "플랫폼팀",
           role: "admin" as const,
-          knowledgeRepoConfigured: true,
           avatarSharing: true,
         },
       ],
@@ -2658,14 +2649,14 @@ describe("buildPrompt", () => {
     );
     expect(turn(over)).toContain("do not ask questions");
     expect(p).toContain("mcp__repo__commit");
-    expect(p).toContain("플랫폼팀(admin, shared repository connected)");
+    expect(p).toContain("플랫폼팀(admin)");
     expect(p).toContain("`GIT_TOKEN`");
     expect(p).toContain("mcp__system__describe_system");
     expect(p).toContain("Remote git work goes through MCP tools ONLY");
     // Second-brain self-state: the routine has the personal brain trigger, and the
-    // group-repo line says there is no team brain.
+    // groups line says groups have no repository or team brain.
     expect(p).toContain("mcp__brain__search");
-    expect(p).toContain("There is no team-brain search tool");
+    expect(p).toContain("Groups have NO shared knowledge repository and there is no team brain");
     // A routine CAN now open a working repo (scheduler threads conversationId +
     // resolves the opened repo as cwd); it takes effect from the next run.
     expect(p).toContain("mcp__git_repo__open_repo");
@@ -3467,7 +3458,6 @@ describe("planMcpToolFamilies", () => {
       personalKnowledge: true,
       web: true,
       system: true,
-      groupKnowledge: false,
       gitRepo: false,
       confluence: false,
       ssh: false,

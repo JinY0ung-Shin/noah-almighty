@@ -59,7 +59,7 @@ export interface OwnerState {
    * them as fact.
    */
   browserSecrets: BrowserSecretPolicy[];
-  /** Groups the owner belongs to, with role + shared-repo flag per group. */
+  /** Groups the owner belongs to, with role + avatar-sharing flag per group. */
   groups: UserGroupMembership[];
   /** Number of general (work/code) git repos the owner has registered. */
   gitRepoCount: number;
@@ -279,3 +279,12 @@ export function sharedMcpServerLines(
     }
   });
 }
+
+/**
+ * Groups have no shared knowledge repository and there is no team brain
+ * (both retired 2026-10-30). Said on BOTH metacognition surfaces, because a
+ * frozen prompt of an older conversation, a skill or a note may still name
+ * `mcp__group_repo__*` / `mcp__group_brain__*`.
+ */
+export const GROUP_REPOS_RETIRED_SENTENCE =
+  "Groups have NO shared knowledge repository and there is no team brain: both were removed, so the `mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist. If an earlier message, a skill or a note names them, say group repositories were removed and use the owner's personal repository (`mcp__repo__*`) or skill sharing (`mcp__skill_exchange__*`) instead — never look for a workaround.";

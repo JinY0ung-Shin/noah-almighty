@@ -253,6 +253,19 @@ async function closeSession(slot: ServerSlot, session: Session): Promise<void> {
   if (isFactory(slot.source)) await session.server.close().catch(() => undefined);
 }
 
+/**
+ * Model-facing text for a broker id Noah no longer serves (the register script
+ * deletes these entries, `RETIRED_MCP_SERVER_NAMES`; a pi instance it has not
+ * re-run against still routes here). An older conversation's frozen prompt may
+ * still name their tools.
+ */
+const RETIRED_SERVER_MESSAGES: Record<string, string> = {
+  group_repo:
+    "MCP server 'group_repo' was removed: group knowledge repositories no longer exist. Tell the user group repositories were removed; use the personal repository (mcp__repo__*) or skill sharing (mcp__skill_exchange__*) instead.",
+  group_brain:
+    "MCP server 'group_brain' was removed: there is no team brain any more. Search the personal second brain (mcp__brain__search) instead.",
+};
+
 function refusedToolResult(tool: string, message?: string): CallToolResult {
   return {
     content: [{ type: "text", text: message ?? `Tool '${tool}' is not available in this run.` }],
@@ -522,7 +535,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
       const serverName = String(req.params.server ?? "");
       const slot = run.servers.get(serverName);
       if (!slot) {
-        jsonRpcError(res, 404, -32601, `MCP server '${serverName.slice(0, 80)}' is not available to this run`);
+        jsonRpcError(res, 404, -32601, RETIRED_SERVER_MESSAGES[serverName] ?? `MCP server '${serverName.slice(0, 80)}' is not available to this run`);
         return;
       }
       const authed = req as Request & { auth?: AuthInfo };

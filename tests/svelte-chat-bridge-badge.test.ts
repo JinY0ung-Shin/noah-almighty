@@ -52,7 +52,6 @@ function browserPane(): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
     mcpToolGroups: ["browser"],
   } as unknown as ChatPane;
 }

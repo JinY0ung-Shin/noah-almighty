@@ -851,7 +851,7 @@ describe("pi prompt variant", () => {
     // deliberate omission on an unattended first turn.
     gitTokenSet: true,
     knowledgeRepoConfigured: true,
-    groupMemberships: [{ id: "g", name: "Team", role: "member", knowledgeRepoConfigured: false, avatarSharing: true }],
+    groupMemberships: [{ id: "g", name: "Team", role: "member", avatarSharing: true }],
     todoState: { deleteEnabled: true },
   } as AgentRequest;
   const facts = (asyncAskAvatar: boolean) => ({

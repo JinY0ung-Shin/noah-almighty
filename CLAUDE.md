@@ -32,14 +32,24 @@ These are the invariants the project is built around. New work should reinforce 
 - **Avatar visibility is a 2-state enum** (`group` | `private`) — the `public` state is RETIRED: avatars
   never reach beyond the owner's groups (a group-less user reaches only their own avatar). The per-group
   `avatar_sharing` policy gates visibility AND trust TOGETHER (one SQL fragment, `SHARING_TEAMMATES`);
-  off = knowledge-sharing-only group (repo/brain/tool-policy unaffected). Visibility (`private` opt-out)
+  off = no visibility, trust or skill sharing through that group (tool policy unaffected). Visibility (`private` opt-out)
   and trust remain separate axes: a teammate reaches your `group` avatar but never your `private` one.
 - **Group shared agents are RETIRED (2026-10-29).** Team avatars that were not users rows are gone; a
   boot purge (`retireGroupAgents.ts`) deletes every `group:` thread and quarantines its files, and drops
   `group_agents`. The `group:` avatar-id prefix, the `group-` workspace prefix and the table names are
-  reserved FOREVER — never mint an avatar id under them again. Groups, their knowledge repos and the
-  personal-run `mcp__group_repo__*` tools stay. Mechanics →
+  reserved FOREVER — never mint an avatar id under them again. Groups themselves stay. Mechanics →
   `docs/architecture/server-core.md`.
+- **Group knowledge repositories are RETIRED too (2026-10-30, user decision).** A group is ONLY the
+  avatar-sharing / trust / skill-sharing (+ admin tool policy) unit: no shared repo, no group skills or
+  group CLAUDE.md in members' runs, no `mcp__group_repo__*`, no `group_knowledge` tool group or
+  per-conversation group-knowledge toggle. `migrate()` drops `groups.knowledge_*`,
+  `users.group_knowledge_off_default` and `conversations.group_knowledge_off` behind the gate
+  (`RETIRED_COLUMNS`), `retireGroupKnowledgeRepos.ts` quarantines Noah's clones (`<dataDir>/group-knowledge`,
+  reserved forever); the remote repos are never touched. `group_repo`/`group_brain` are retired pi broker
+  ids (`RETIRED_MCP_SERVER_NAMES` deletes this Noah's stale entries) and reserved names, a saved
+  `group_knowledge` selection is silently dropped (`normalizeMcpToolGroups`), and BOTH metacognition surfaces
+  say groups have no repository (`GROUP_REPOS_RETIRED_SENTENCE`) because older frozen prompts still name
+  the tools. Team knowledge travels as shared skills.
 - **A retirement never destroys data without a way back.** Every retirement step (boot purges and the
   ungated retired drops in `migrate()`) runs behind `retirementGate()`: when anything retired is present,
   the whole DB is first copied to `<dataDir>/backups/pre-retire-<stamp>.db` (0600), and if that backup
@@ -125,7 +135,7 @@ These are the invariants the project is built around. New work should reinforce 
   `docs/architecture/chat-sse-media.md`.
 - **git remote work is MCP-only BY DESIGN.** The agent shell (the run principal's pi sandbox) holds NO git
   credentials, so Bash `git push`/`gh` can never authenticate. Route every git-ish capability through a
-  Noah MCP tool (`mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*`) and keep the no-Bash-fallback
+  Noah MCP tool (`mcp__repo__*`/`mcp__git_repo__*`) and keep the no-Bash-fallback
   line in its error text. Per-user git tokens are used server-side only, never reach the agent, and Noah
   runs git only in its own canonical clone — never in a `.git` the agent can edit.
 - **Browser control is a RELAY into the user's own browser, and the extension runs no page JS EXCEPT one
@@ -291,12 +301,12 @@ These are the invariants the project is built around. New work should reinforce 
   **Second brain = a CONVENTION (`wiki/`+`raw/`) over that SAME repo, NOT a new store** — recall is
   read-only MCP search; capture writes through the repo-write tools + commit (uncommitted = not persisted).
   The second brain is PERSONAL only: the team brain (`mcp__group_brain__*`, group vault, group graph) was
-  removed 2026-10-30 (user decision) — `group_brain` stays a retired pi broker id and a reserved name.
+  removed 2026-10-30 with the group repos it lived in (user decision).
 - **Per-user settings follow ONE pattern** (column → migration → `toUser` → `updateProfile` → `User` type →
   `PATCH /api/me` → settings tab). Some defaults are written from the composer, not a settings tab: the
   model/effort/MCP-tool-group pickers remember the owner's last choice via per-user defaults
-  (`*_default` columns + `setChatDefaults` + `PUT /api/me/chat-defaults`) that seed new conversations,
-  mirroring `groupKnowledgeOffDefault`. The per-conversation `selected_*` value still overrides the
+  (`*_default` columns + `setChatDefaults` + `PUT /api/me/chat-defaults`) that seed new conversations.
+  The per-conversation `selected_*` value still overrides the
   default when resuming an existing thread.
 - **Modules are split behind UNCHANGED exports.** When refactoring, keep import paths stable via
   re-exports rather than forcing callers to move.

@@ -743,7 +743,6 @@ export interface ChatTurnContext {
   requestedModel?: string | null;
   requestedEffort?: string | null;
   requestedMcpToolGroups?: McpToolGroupId[] | null;
-  requestedGroupKnowledgeOff?: string[] | null;
   appOrigin?: string;
   viewerPlatform?: "mac" | "windows" | "linux";
   audit: (entry: {
@@ -813,7 +812,6 @@ export async function executeChatTurn(
   const requestedModel = ctx.requestedModel ?? null;
   const requestedEffort = ctx.requestedEffort ?? null;
   const requestedMcpToolGroups = ctx.requestedMcpToolGroups ?? null;
-  const requestedGroupKnowledgeOff = ctx.requestedGroupKnowledgeOff ?? null;
   // Effective vision for THIS turn's model, mirroring runCapabilities'
   // resolution chain (this turn's tier pick > stored tier > admin override >
   // default) against the admin per-tier policy. Gates the
@@ -1093,15 +1091,6 @@ export async function executeChatTurn(
       avatar.id,
       displayMessage,
     );
-    // Persist the owner's group-knowledge selection now that the row exists, so
-    // it survives reload and applies to later turns until changed again.
-    if (requestedGroupKnowledgeOff) {
-      store.setConversationGroupKnowledgeOff(
-        ownerUserId,
-        conversationId,
-        requestedGroupKnowledgeOff,
-      );
-    }
     // Persist the chosen model so it survives reload and applies to later
     // turns until changed. null = client sent nothing → leave the stored value.
     if (requestedModel !== null) {
@@ -1452,22 +1441,10 @@ export async function executeChatTurn(
 
     try {
       // Load plugin roots (read-only): default plugins + the avatar's own + its
-      // personal knowledge repo + group knowledge repos. Shared with the routine
+      // personal knowledge repo. Shared with the routine
       // scheduler via `loadAgentPluginRoots` so the two can't drift. Tolerate
       // clone/resolve fails.
       const pluginWarnings: string[] = [];
-      // Owner-only per-conversation group-knowledge toggle: skip the OFF groups'
-      // skills AND their CLAUDE.md. Use this turn's selection when the client sent
-      // one, else the stored set. Colleague turns ignore the toggle (always ON).
-      const disabledGroupIds = viewerIsOwner
-        ? new Set(
-            requestedGroupKnowledgeOff ??
-              store.getConversationGroupKnowledgeOff(
-                ownerUserId,
-                conversationId,
-              ),
-          )
-        : new Set<string>();
       // Model tier for this turn: this turn's pick if the client sent one ("" =
       // explicit reset to default), else the stored value (mapped to a pi model
       // through PI_MODEL_MAP downstream).
@@ -1486,13 +1463,10 @@ export async function executeChatTurn(
         avatar.id,
         config,
         (warn) => pluginWarnings.push(warn),
-        { disabledGroupIds },
       );
-      // Standing CLAUDE.md memory (personal repo always; group repos gated by the
-      // toggle). Read after plugin roots ensured the clones for this turn.
-      const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config, {
-        disabledGroupIds,
-      });
+      // Standing CLAUDE.md memory of the personal repo. Read after plugin roots
+      // ensured the clone for this turn.
+      const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config);
 
       for (const warn of pluginWarnings) {
         emitRunEvent(runId, "status", { label: `플러그인 경고: ${warn}` });
@@ -2749,12 +2723,7 @@ export function createChatRouter({
         res.json({ skills: [] });
         return;
       }
-      const { sourced } = await resolveAvatarSkillSources(
-        store,
-        avatar,
-        config,
-        false,
-      );
+      const { sourced } = await resolveAvatarSkillSources(store, avatar, config);
       res.json({ skills: await listSkillsInRoots(sourced) });
     },
   );
@@ -2800,12 +2769,6 @@ export function createChatRouter({
       }
       res.json({
         messages: store.listMessages(req.user!.id, conversationId),
-        // Owner-only group-knowledge toggle state for this conversation (group ids
-        // turned OFF). The client shows the toggle only for the owner's own avatar.
-        groupKnowledgeOff: store.getConversationGroupKnowledgeOff(
-          req.user!.id,
-          conversationId,
-        ),
         // The user's chosen model tier for this conversation (null = server default),
         // so the composer picker restores on reload.
         selectedModel: store.getConversationModel(req.user!.id, conversationId),
@@ -3142,19 +3105,6 @@ export function createChatRouter({
         return;
       }
       const { avatar, viewerIsOwner } = resolved.target;
-      // Owner-only per-conversation group-knowledge selection, chosen in the UI and
-      // sent with the turn: the group ids turned OFF (skills + CLAUDE.md). The client
-      // owns this state from the moment a chat starts, so no separate persist step is
-      // needed; the server applies it this turn and stores it on the conversation.
-      // Colleague turns ignore it (always all-on); null = client sent nothing → keep
-      // whatever is already stored.
-      const requestedGroupKnowledgeOff =
-        viewerIsOwner && Array.isArray(req.body?.groupKnowledgeOff)
-          ? (req.body.groupKnowledgeOff as unknown[]).filter(
-              (x): x is string => typeof x === "string",
-            )
-          : null;
-
       // Per-conversation model tier chosen in the composer (all viewers, not just
       // the owner). A known tier alias applies; "" clears back to the server default;
       // anything else (incl. nothing sent) → null = keep whatever is already stored.
@@ -3235,7 +3185,6 @@ export function createChatRouter({
           requestedModel,
           requestedEffort,
           requestedMcpToolGroups,
-          requestedGroupKnowledgeOff,
           // Noah's own public origin, so copy_image can hand the agent an
           // absolute clipboard-staging URL to open with new_tab. Derived
           // from THIS request to match the origin the user's browser is on.

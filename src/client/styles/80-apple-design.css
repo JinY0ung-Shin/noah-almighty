@@ -768,7 +768,6 @@ button:disabled {
   box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
-.composer-gk-panel,
 .composer-tools-panel,
 .slash-menu,
 .popover,
@@ -783,7 +782,6 @@ button:disabled {
   transform-origin: bottom center;
 }
 
-.composer-gk-panel,
 .composer-tools-panel,
 .slash-menu {
   transform-origin: bottom left;
@@ -1003,7 +1001,6 @@ button:disabled {
   .modal-overlay,
   .modal-card,
   .toast,
-  .composer-gk-panel,
   .composer-tools-panel,
   .todo-overlay {
     -webkit-backdrop-filter: none !important;

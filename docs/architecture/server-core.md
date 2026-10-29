@@ -123,13 +123,27 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   a pass with ZERO failures stamps `retired:group_agents` (read by EXISTENCE). A marked boot returns at once
   unless a pending row exists or a retired table re-appears (an older release booted after the stamp), which
   re-runs the full purge — so the `group:` avatar-id prefix, the `group-` workspace prefix, the two table
-  names, the index name and both marker keys stay reserved FOREVER. Groups, members, knowledge repos and
+  names, the index name and both marker keys stay reserved FOREVER. Groups, members and
   audit rows are untouched; AdminView keeps the `group_agent_create/delete/update/image` labels for retained
   audit rows. The row-keyed helpers (pending document, session-artifact sweep, name-prefix sweep) are shared
   with the personal-bot retirement in `src/server/retiredSessionFiles.ts`. `migrateGroupAgentsMulti` and the
-  boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its
-  group-knowledge clone (`removeGroupKnowledgeClone`, `groupKnowledgeRepo.ts`). Tests:
+  boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its rows. Tests:
   `tests/retire-group-agents.test.ts`.
+- **Group knowledge repositories are RETIRED (2026-10-30, user decision).** Groups stay only as the
+  avatar-sharing / trust / skill-sharing (+ admin tool policy) unit. Behind `retirementGate()` (DB backup
+  first — `retirementDataPresent` counts a `RETIRED_COLUMNS` entry only while it holds a value), `migrate()`
+  drops `groups.knowledge_repo`/`knowledge_branch`/`knowledge_selected`, `users.group_knowledge_off_default`
+  and `conversations.group_knowledge_off` (`dropColumnIfPresent`); every name is reserved forever.
+  `retireGroupKnowledgeRepos.ts` (boot, after the Craft step) quarantines Noah's clones
+  `<dataDir>/group-knowledge` whole into `retired/<stamp>/group-knowledge` and stamps
+  `retired:group_knowledge_repos`; a refused move (EXDEV included) is retried next boot. The remote
+  repositories are never touched. Removed with it: `groupKnowledgeRepo.ts`, `groupRepoTools.ts`
+  (`mcp__group_repo__*`), the `/api/me/groups/:id/knowledge-repo*` routes, `PUT /api/me/group-knowledge-default`,
+  group skill roots / group CLAUDE.md in `loadAgentPluginRoots`/`loadKnowledgeRepoMemory`, the
+  `group_knowledge` MCP tool group (a saved selection or group policy naming it is filtered by
+  `normalizeMcpToolGroups`), the composer's 그룹 지식 toggle and the 그룹 카드 repo section. AdminView keeps
+  the `group_repo_*` audit labels for retained rows. A `group-<name>` skill root an older build copied into a
+  sandbox is pruned like any unused root (`piSkills.ts`). Tests: `tests/retire-group-knowledge-repos.test.ts`.
 - **The retired Claude Agent SDK runtime (removed 2026-10-29, decision U8) leaves CLI state behind.** Through
   `retirementGate()` (DB backup first): the `claude_oauth_token` app_config key (the old `claude setup-token`
   subscription token) and the skill-discovery cache key (`skill_discovery_cache`) are deleted and both names are
@@ -198,22 +212,11 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `browser_password_only`). They still surface on `User` (`shellExposedSecretNames`, `browserSecrets`)
   via `toUser`, and a security-relevant one gets its own audit action. Detail →
   [`secrets-ssh.md`](secrets-ssh.md).
-- **Per-conversation group-knowledge toggle (owner-only):** `conversations.group_knowledge_off` (JSON
-  OFF-set; NULL/`[]` = every group ON) + `get/setConversationGroupKnowledgeOff`. The CLIENT owns the
-  selection and sends it on each chat POST (`groupKnowledgeOff`) — there is NO per-conversation PATCH
-  endpoint, so it works from a brand-new chat with no row. The chat route turns it into ONE
-  `disabledGroupIds` set that filters BOTH `loadAgentPluginRoots` group skill roots AND
-  `loadKnowledgeRepoMemory` group CLAUDE.md, and persists it on the row. Colleague turns ignore it
-  (always all-on); routines pass no filter.
-- **Per-USER default group-knowledge OFF-set:** `users.group_knowledge_off_default` (JSON OFF-set,
-  `[]`=all on) + `setGroupKnowledgeOffDefault`, on `User.groupKnowledgeOffDefault`, written by
-  `PUT /api/me/group-knowledge-default`. The composer toggle saves here so the choice SEEDS every NEW
-  conversation — crucially the **auto-greeting**, which fires before any toggle interaction. Client seeds
-  new panes via `defaultGroupKnowledgeOff(avatar)` (own avatar only). Existing conversations still load
-  their persisted per-conversation value, which overrides the default for that chat.
 - **The composer model/effort/MCP-tool-group pickers remember the owner's last choice** via per-user
-  defaults (`users.model_default` / `effort_default` / `mcp_tool_groups_default`), mirroring
-  `group_knowledge_off_default`. The setter `store.setChatDefaults` + `PUT /api/me/chat-defaults` write
+  defaults (`users.model_default` / `effort_default` / `mcp_tool_groups_default`). (The group-knowledge
+  OFF-sets that once sat next to them — `conversations.group_knowledge_off`,
+  `users.group_knowledge_off_default`, `PUT /api/me/group-knowledge-default` — were retired with group
+  knowledge repos, see below.) The setter `store.setChatDefaults` + `PUT /api/me/chat-defaults` write
   them; `toUser` exposes `modelDefault`/`effortDefault`/`mcpToolGroupsDefault` (null = never chosen →
   fall back to the hardcoded server default; for MCP, `[]` = explicitly all-off as a remembered
   choice). The client seeds new panes from these in `makePane`; the per-conversation `selected_*` value

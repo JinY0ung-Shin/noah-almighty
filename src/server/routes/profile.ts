@@ -111,27 +111,6 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
-  // Owner's DEFAULT group-knowledge OFF-set (group ids turned off). The composer
-  // toggle writes here so the choice seeds every NEW conversation — the
-  // per-conversation value (chat POST `groupKnowledgeOff`) still overrides it for
-  // an already-started conversation. Body: `{ off: string[] }` ([] re-enables all).
-  router.put(
-    "/api/me/group-knowledge-default",
-    requireAuth(store),
-    (req: AuthenticatedRequest, res) => {
-      const raw = req.body?.off;
-      if (!Array.isArray(raw) || !raw.every((s) => typeof s === "string")) {
-        apiError(res, 400, "off는 문자열 배열이어야 합니다.");
-        return;
-      }
-      const user = store.setGroupKnowledgeOffDefault(
-        req.user!.id,
-        raw as string[],
-      );
-      res.json({ user });
-    },
-  );
-
   // Owner's remembered chat-composer defaults (model tier / reasoning effort / MCP
   // tool groups). The composer pickers write here so each choice seeds the NEXT new
   // conversation — the per-conversation `selected_*` value (chat POST) still
@@ -235,7 +214,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       // resolution — so the whole body is wrapped; an unhandled async throw would
       // otherwise hang the request until the client's timeout in Express 4.)
       const { sourced, enabledPlugins, pluginRoots } =
-        await resolveAvatarSkillSources(store, avatar, config, true);
+        await resolveAvatarSkillSources(store, avatar, config);
       const skills = await listSkillsInRoots(sourced);
 
       // Describe the avatar's equipment so it can ground the intro in reality
@@ -323,7 +302,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       // reflect what the avatar can actually do. (Wrapped like intro/generate so a
       // resolve/list throw becomes a 502 instead of a hung request.)
       const { sourced, enabledPlugins, pluginRoots } =
-        await resolveAvatarSkillSources(store, avatar, config, true);
+        await resolveAvatarSkillSources(store, avatar, config);
       const skills = await listSkillsInRoots(sourced);
 
       // When adding to an existing set, tell the avatar what it already has and ask

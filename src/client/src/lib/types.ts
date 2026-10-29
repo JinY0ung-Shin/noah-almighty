@@ -197,7 +197,6 @@ export interface ChatPane {
   liveStatusPinSource?: string;
   /** The newest server status that arrived while the pin held: shown once the pin lapses (setStatus). */
   liveStatusHeld?: string;
-  groupKnowledgeOff: string[];
   /** Installed skills for this pane's avatar, lazily fetched the first time the slash menu opens (#slash-skills). Drives skill entries in the "/" menu. */
   skills?: import("../../../server/types.js").SkillInfo[];
   /** Guards the one-shot skills fetch (set once the request settles, success or fail). */

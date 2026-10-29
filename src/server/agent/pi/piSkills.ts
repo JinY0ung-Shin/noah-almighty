@@ -9,7 +9,9 @@
  *  - OWNER runs (the principal owns the skill sources: owner chat, routine,
  *    task API, profile generators) copy every root of the run into
  *    `/workspace/.noah/skills/<root>/<skill>/`: the bundled default-skills,
- *    the owner's plugins, the personal and group knowledge repos' skills.
+ *    the owner's plugins, the personal knowledge repo's skills. (Group
+ *    knowledge repos were retired 2026-10-30; a `group-<name>` root an older
+ *    build copied is pruned like any root no run uses any more.)
  *  - A NON-OWNER run (a colleague in their OWN sandbox, design U4; a
  *    consultation in its fresh one) gets only the bundled default-skills
  *    (public) as files, in a SEPARATE folder `/workspace/.noah/skills-shared/`;
@@ -30,8 +32,8 @@
  * nothing outside them is ever touched.
  *
  * Pruning (review-2 M1): runs of one sandbox sync CONCURRENTLY with different
- * root sets (a chat with group knowledge off next to one with it on, a
- * generator, a colleague's chat in the viewer's sandbox), and a run's frozen
+ * root sets (a chat next to a generator, a colleague's chat in the viewer's
+ * sandbox), and a run's frozen
  * index points at its copies for the whole turn. So ONLY an owner run prunes
  * (non-owner runs only ever write their own roots), and it removes a root it
  * did not write only once no run has used it for {@link PRUNE_GRACE_MS} —
@@ -86,7 +88,7 @@ export interface PiSkillPlan {
   failures: string[];
 }
 
-export type PiPluginRootKind = "default" | "knowledge" | "group" | "plugin" | "other";
+export type PiPluginRootKind = "default" | "knowledge" | "plugin" | "other";
 
 function inside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
@@ -95,7 +97,7 @@ function inside(parent: string, child: string): boolean {
 
 /**
  * Where a plugin root lives: the plugins bundled with this Noah build, the
- * personal or a group knowledge clone, an installed plugin repo, or elsewhere.
+ * personal knowledge clone, an installed plugin repo, or elsewhere.
  * Also decides which roots may spawn stdio MCP servers on pi (`mcpProxies.ts`).
  */
 export function piPluginRootKind(config: AppConfig, root: string): PiPluginRootKind {
@@ -103,7 +105,6 @@ export function piPluginRootKind(config: AppConfig, root: string): PiPluginRootK
   if (config.defaultPluginsDir && inside(path.resolve(config.defaultPluginsDir), resolved)) return "default";
   const data = path.resolve(config.dataDir);
   if (inside(path.join(data, "knowledge"), resolved)) return "knowledge";
-  if (inside(path.join(data, "group-knowledge"), resolved)) return "group";
   if (inside(path.join(data, "plugins"), resolved)) return "plugin";
   return "other";
 }

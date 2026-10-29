@@ -751,7 +751,7 @@ describe("admin: group tool policy", () => {
 // ---- Groups self-service: /api/me/groups --------------------------------
 
 describe("groups self-service: roster", () => {
-  it("lists the caller's groups with roster and repo fields", async () => {
+  it("lists the caller's groups with their roster, and no repo fields", async () => {
     const { app } = boot();
     const admin = await mkUser(app, "admin");
     const bob = await mkUser(app, "bob");
@@ -765,9 +765,9 @@ describe("groups self-service: roster", () => {
     expect(res.body.groups).toHaveLength(1);
     const g = res.body.groups[0];
     expect(g.id).toBe(groupId);
-    expect(g.knowledgeRepo).toBeNull();
-    expect(g.knowledgeBranch).toBeNull();
-    expect(g.knowledgeSelected).toBeNull();
+    // Group knowledge repositories are retired (2026-10-30).
+    expect(g).not.toHaveProperty("knowledgeRepo");
+    expect(g).not.toHaveProperty("knowledgeRepoConfigured");
     expect(g.members.map((m: { userId: string }) => m.userId)).toContain(bob.id);
 
     // A user in no groups gets an empty list.
@@ -910,188 +910,18 @@ describe("groups self-service: membership management", () => {
   });
 });
 
-describe("groups self-service: knowledge repo settings", () => {
-  it("connects, clears, and validates the group knowledge repo", async () => {
-    const { app, services } = boot();
+describe("group knowledge repositories are retired", () => {
+  it("serves none of the old group repo routes (each unmatched → 404)", async () => {
+    const { app } = boot();
     const admin = await mkUser(app, "admin");
     const groupId = await createGroup(admin, "team");
-
-    // Unknown group → 404.
-    await admin.agent
-      .put("/api/me/groups/ghost/knowledge-repo")
-      .send({ repo: "org/knowledge" })
-      .expect(404);
-
-    // Non-manager (plain member) → 403.
-    const member = await mkUser(app, "member");
-    await admin.agent
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username: "member", role: "member" })
-      .expect(200);
-    await member.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/knowledge" })
-      .expect(403);
-
-    // Malformed repo string → 400.
-    await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "not a repo at all" })
-      .expect(400);
-
-    // Valid owner/repo → connected (owner/repo shorthand is always internal).
-    const set = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/knowledge", branch: "main" })
-      .expect(200);
-    expect(set.body.group.knowledgeRepo).toBe("org/knowledge");
-    expect(set.body.group.knowledgeBranch).toBe("main");
-
-    // Clear with empty string → repo null.
-    const cleared = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "" })
-      .expect(200);
-    expect(cleared.body.group.knowledgeRepo).toBeNull();
-    expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
-  });
-
-  it("rejects a group knowledge repo outside the internal GitHub host", async () => {
-    const { app } = boot({ githubHost: "github.enterprise.local" });
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-    const res = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "https://github.com/org/knowledge.git", branch: "main" })
-      .expect(400);
-    expect(res.body.error).toContain("사내 GitHub host(github.enterprise.local)");
-  });
-
-  // Regression (sec): the internal-host check used to pass anything whose host it
-  // could not parse, so a local path (or `scheme::` syntax) ending in `.git` slipped
-  // through — pointing a GROUP repo at another user's clone would expose it to every
-  // group member. Same root cause as the personal knowledge-repo route.
-  it("rejects a local path or remote-helper syntax as a group knowledge repo", async () => {
-    const { app, services } = boot({ githubHost: "github.enterprise.local" });
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-
-    for (const repo of [
-      "/data/knowledge/other-user-id/.git",
-      "ext::sh -c evil .git",
-    ]) {
-      const res = await admin.agent
-        .put(`/api/me/groups/${groupId}/knowledge-repo`)
-        .send({ repo, branch: "main" })
-        .expect(400);
-      expect(res.body.error).toContain("사내 GitHub host");
-    }
-    expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
-  });
-
-  it("sets and clears the group repo plugin selection", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-
-    // No repo connected yet → 404.
-    await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: ["a"] })
-      .expect(404);
-
-    services.store.setGroupKnowledgeRepo(groupId, "org/knowledge", "main");
-
-    // Non-array, non-null → 400.
-    await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: "alpha" })
-      .expect(400);
-
-    // Array of strings → set.
-    const set = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: ["alpha", "beta"] })
-      .expect(200);
-    expect(set.body.group.knowledgeSelected).toEqual(["alpha", "beta"]);
-
-    // null → load all.
-    const all = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: null })
-      .expect(200);
-    expect(all.body.group.knowledgeSelected).toBeNull();
-
-    // Non-member → 403 (permission gate precedes everything).
-    const outsider = await mkUser(app, "outsider");
-    await outsider.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: null })
-      .expect(403);
-  });
-});
-
-// ---- Group knowledge-repo views (clone-backed) --------------------------
-
-describe("group knowledge repo views", () => {
-  it("enforces membership and requires a connected repo", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const outsider = await mkUser(app, "outsider");
-    const groupId = await createGroup(admin, "team");
-
-    // Non-member, non-admin → 403 on every view.
-    await outsider.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(403);
-    await outsider.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(403);
-
-    // System admin passes membership, but with no repo connected → 404.
+    await admin.agent.put(`/api/me/groups/${groupId}/knowledge-repo`).send({ repo: "acme/kb" }).expect(404);
+    await admin.agent.put(`/api/me/groups/${groupId}/knowledge-repo/selected`).send({ selected: null }).expect(404);
     await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(404);
     await admin.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(404);
-    // Sanity: the store still reports no repo.
-    expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
-  });
-
-  it("clones a connected repo and serves contents; the team-brain graph/note routes are gone", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-    const remote = seedRemote("group-ok", {
-      "wiki/foo.md": "# Foo\n\nLinks to [[bar]].\n",
-    });
-    // Point the group at the local remote (bypasses the PUT host validation,
-    // which is exercised separately).
-    services.store.setGroupKnowledgeRepo(groupId, remote, "main");
-
-    // contents: the seed has no `.claude-plugin`, so it's a "none" layout.
-    const contents = await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/contents`)
-      .expect(200);
-    expect(contents.body.contents.kind).toBe("none");
-
-    // The team brain was removed 2026-10-30: no group graph or note route (unmatched → 404).
     await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(404);
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/foo.md`).expect(404);
-
-    // refresh: re-fetches the existing clone and returns contents.
-    const refreshed = await admin.agent
-      .post(`/api/me/groups/${groupId}/knowledge-repo/refresh`)
-      .expect(200);
-    expect(refreshed.body.contents.kind).toBe("none");
-  });
-
-  it("returns 502 when the configured repo cannot be cloned", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-    // A local path that does not exist → `git clone` fails fast, offline.
-    services.store.setGroupKnowledgeRepo(
-      groupId,
-      path.join(tempDir, "nonexistent-remote.git"),
-      "main",
-    );
-
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(502);
-    await admin.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(502);
+    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/x.md`).expect(404);
+    await admin.agent.put("/api/me/group-knowledge-default").send({ off: [] }).expect(404);
   });
 });
 

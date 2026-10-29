@@ -364,15 +364,11 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   design.
 
 ## Behavior gotchas (don't "fix" these)
-- **Group-knowledge toggle saves a per-USER default, fire-and-forget with NO readback.** A new chat pane
-  seeds `groupKnowledgeOff` from `state.user.groupKnowledgeOffDefault` (own-avatar panes only). This is what
-  lets the toggle reach the **auto-greeting** (fires before the composer is touched). The toggle updates
-  `state.user.groupKnowledgeOffDefault` optimistically and PUTs `/api/me/group-knowledge-default` in the
-  background; it deliberately does NOT sync `state.user` from the response (rapid toggles resolve out of
-  order) and only toasts on failure. Don't "fix" this into an await-and-sync.
-- **The model/effort/MCP-group pickers write through to a per-user default** (`PUT /api/me/chat-defaults`),
-  same optimistic-update pattern as the group-knowledge toggle: update `state.user.{model,effort,
-  mcpToolGroups}Default` then PUT in the background, toast only on failure. New panes seed from these.
+- **The model/effort/MCP-group pickers write through to a per-user default, fire-and-forget with NO
+  readback** (`PUT /api/me/chat-defaults`): update `state.user.{model,effort,mcpToolGroups}Default`
+  optimistically then PUT in the background, toast only on failure — never sync `state.user` from the
+  response (rapid picks resolve out of order). New panes seed from these, which is what lets a pick reach
+  the **auto-greeting**. (The retired group-knowledge toggle worked the same way.)
 - Some settings cards (profile/visibility/secrets) save WITHOUT a full reload to avoid wiping unsaved form
   text — preserve in-place updates there.
 - **A `secret`-carrying browser op is version-gated CLIENT-side, and the value passes straight through.**

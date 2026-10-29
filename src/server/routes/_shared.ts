@@ -3,7 +3,6 @@ import path from "node:path";
 import { type Response } from "express";
 import logger from "../logger.js";
 import {
-  groupKnowledgeRepoSkillSources,
   knowledgeRepoSkillSources,
   loadDefaultPluginRoots,
   resolvePluginRoots,
@@ -11,7 +10,6 @@ import {
 } from "../plugins.js";
 import { knowledgeRepoContextFor } from "../knowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
-import { groupKnowledgeRepoContextsForUser } from "../groupKnowledgeRepo.js";
 import { Store } from "../store.js";
 import type { AppConfig, AvatarVisibility, PluginRoot } from "../types.js";
 import { runAgentStream } from "../agent/index.js";
@@ -289,16 +287,13 @@ interface SkillAvatar {
  * Resolve the plugin roots + skills an avatar can use, attributing each source.
  * Shared by `/api/me/intro/generate`, `/api/me/hashtags/generate`, and
  * `/api/avatars/:id/skills` — they all walked the same default + per-plugin +
- * personal/group knowledge-repo loop. `includeGroupRepos` adds the owner's group
- * knowledge repos (the intro/hashtag generators count them; the skills panel does
- * not). Returns the attributed sources, the flattened skills, and pre-built
+ * personal knowledge-repo loop. Returns the attributed sources, the flattened skills, and pre-built
  * read-only `PluginRoot[]` for `runAgentStream`.
  */
 export async function resolveAvatarSkillSources(
   store: Store,
   avatar: SkillAvatar,
   config: AppConfig,
-  includeGroupRepos: boolean,
 ) {
   const sourced: { path: string; source: string }[] = [];
   // Repo-bundled defaults, loaded for every avatar.
@@ -322,12 +317,6 @@ export async function resolveAvatarSkillSources(
   }
   // The avatar's own knowledge repo, so its accumulated skills surface too.
   sourced.push(...(await knowledgeRepoSkillSources(knowledgeRepoContextFor(store, avatar.id, config))));
-  // Shared group knowledge repos the owner belongs to (intro/hashtags only).
-  if (includeGroupRepos) {
-    sourced.push(
-      ...(await groupKnowledgeRepoSkillSources(groupKnowledgeRepoContextsForUser(store, avatar.id, config))),
-    );
-  }
   const pluginRoots: PluginRoot[] = sourced.map((s) => ({ type: "local", path: s.path }));
   return { sourced, enabledPlugins, pluginRoots };
 }

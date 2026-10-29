@@ -302,15 +302,17 @@ describe("run capability plan", () => {
     expect(run.allowed).not.toContain("mcp__file_output__create_share_link");
   });
 
-  it("registers the group repo server (and no team brain) when the owner belongs to a group with a shared repo", async () => {
+  it("registers no group repo or team brain server for a group admin (both retired 2026-10-30)", async () => {
     const env = setup();
     const group = env.store.createGroup({ name: "팀" });
     env.store.addGroupMember(group.id, env.owner.id, "admin");
-    env.store.setGroupKnowledgeRepo(group.id, "team/kb", "main");
     const run = await plan(env, env.baseRequest);
-    // owner in ≥1 group → group_repo; the team brain is gone (removed 2026-10-30).
-    expect(run.servers).toContain("group_repo");
+    expect(run.servers).not.toContain("group_repo");
     expect(run.servers).not.toContain("group_brain");
+    expect(run.allowed.some((name) => name.startsWith("mcp__group_"))).toBe(false);
+    // The groups section still states the group and that it has no repository.
+    expect(run.append).toContain("팀(admin)");
+    expect(run.append).toContain("Groups have NO shared knowledge repository");
   });
 
   it("allows ask_avatar ONLY on owner-driven runs and never inside a consultation", async () => {

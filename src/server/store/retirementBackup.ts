@@ -53,6 +53,20 @@ const RETIRED_APP_CONFIG_KEYS = [
   "retired:group_agents:pending",
 ] as const;
 
+/**
+ * Columns only a retired feature wrote, dropped by migrate() behind the gate.
+ * Every name is reserved FOREVER by its retirement. Group knowledge
+ * repositories (retired 2026-10-30): the group's repo connection, the owner's
+ * default and each conversation's group-knowledge OFF-set.
+ */
+export const RETIRED_COLUMNS: readonly (readonly [table: string, column: string])[] = [
+  ["groups", "knowledge_repo"],
+  ["groups", "knowledge_branch"],
+  ["groups", "knowledge_selected"],
+  ["users", "group_knowledge_off_default"],
+  ["conversations", "group_knowledge_off"],
+];
+
 /** Avatar-id namespaces of the retired avatar kinds. */
 const RETIRED_AVATAR_PREFIXES = ["personal:", "external:", "group:"] as const;
 
@@ -86,6 +100,17 @@ function columnExists(db: Database.Database, table: string, column: string): boo
 export function retirementDataPresent(db: Database.Database): boolean {
   if (RETIRED_TABLES.some((table) => tableExists(db, table))) {
     return true;
+  }
+  // A retired column counts only while it holds a value: dropping an all-NULL
+  // column loses nothing, so it needs no backup.
+  for (const [table, column] of RETIRED_COLUMNS) {
+    if (
+      tableExists(db, table) &&
+      columnExists(db, table, column) &&
+      db.prepare(`SELECT 1 FROM ${table} WHERE ${column} IS NOT NULL LIMIT 1`).get()
+    ) {
+      return true;
+    }
   }
   if (tableExists(db, "app_config")) {
     const placeholders = RETIRED_APP_CONFIG_KEYS.map(() => "?").join(", ");

@@ -71,8 +71,6 @@
   let slashPaneId = "";
   let slashIndex = 0;
   let physicalKeyboard = false;
-  // Per-pane group-knowledge dropdown open state.
-  let gkOpenPaneId = "";
   // Per-pane MCP tool-group checkbox panel open state.
   let mcpToolsOpenPaneId = "";
   // Per-pane mobile composer settings disclosure state.
@@ -212,10 +210,6 @@
     return Boolean(item.avatar.isOwn || item.avatar.id === user?.id);
   }
 
-  function eligibleGroups(item: ChatPane) {
-    return isOwnPane(item) ? (user?.groups || []).filter((g) => g.knowledgeRepoConfigured) : [];
-  }
-
   function hasModelPicker(): boolean {
     return Boolean($appState.bootstrap?.modelSelection?.tiers.length);
   }
@@ -246,13 +240,6 @@
   function effortLabel(item: ChatPane): string {
     const levelId = item.effort ?? $appState.bootstrap?.effortSelection?.default ?? DEFAULT_EFFORT_LEVEL;
     return $appState.bootstrap?.effortSelection?.levels.find((level) => level.id === levelId)?.label ?? levelId;
-  }
-
-  function groupKnowledgeLabel(item: ChatPane): string {
-    const groups = eligibleGroups(item);
-    if (!groups.length) return "";
-    const onCount = groups.filter((g) => !(item.groupKnowledgeOff || []).includes(g.id)).length;
-    return `그룹 ${onCount}/${groups.length}`;
   }
 
   function selectedMcpToolGroups(item: ChatPane): McpToolGroupId[] {
@@ -421,8 +408,6 @@
     const parts: string[] = [];
     if (hasModelPicker()) parts.push(modelTierLabel(item));
     if (hasEffortPicker()) parts.push(`강도 ${effortLabel(item)}`);
-    const groupLabel = groupKnowledgeLabel(item);
-    if (groupLabel) parts.push(groupLabel);
     parts.push(mcpToolsLabel(item, adminBlocked));
     return parts.join(" · ");
   }
@@ -455,20 +440,12 @@
   function toggleComposerSettings(item: ChatPane) {
     const closing = composerSettingsOpenPaneId === item.id;
     composerSettingsOpenPaneId = closing ? "" : item.id;
-    if (closing && gkOpenPaneId === item.id) gkOpenPaneId = "";
     if (closing && mcpToolsOpenPaneId === item.id) mcpToolsOpenPaneId = "";
   }
 
   function toggleMcpToolsPanel(item: ChatPane) {
     const closing = mcpToolsOpenPaneId === item.id;
     mcpToolsOpenPaneId = closing ? "" : item.id;
-    if (!closing && gkOpenPaneId === item.id) gkOpenPaneId = "";
-  }
-
-  function toggleGroupKnowledgePanel(item: ChatPane) {
-    const closing = gkOpenPaneId === item.id;
-    gkOpenPaneId = closing ? "" : item.id;
-    if (!closing && mcpToolsOpenPaneId === item.id) mcpToolsOpenPaneId = "";
   }
 
   async function submit(item: ChatPane) {
@@ -1008,24 +985,7 @@
     }
   }
 
-  async function setGroupKnowledge(item: ChatPane, groupId: string, on: boolean) {
-    const off = new Set(item.groupKnowledgeOff || []);
-    if (on) off.delete(groupId);
-    else off.add(groupId);
-    const next = [...off];
-    updateState((state) => {
-      const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.groupKnowledgeOff = next;
-      if (state.user) state.user.groupKnowledgeOffDefault = [...next];
-    });
-    const label = eligibleGroups(item).find((g) => g.id === groupId)?.name || "그룹";
-    notify(`"${label}" 그룹 지식을 ${on ? "사용" : "사용 해제"}했습니다. 다음 메시지부터 적용됩니다.`, "info");
-    api("/api/me/group-knowledge-default", { method: "PUT", body: JSON.stringify({ off: next }) }).catch((err) =>
-      notify(`그룹 지식 기본값을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
-    );
-  }
-
-  // Model tier picked in the composer. Like the group-knowledge toggle it lives on
+  // Model tier picked in the composer. It lives on
   // the pane and rides the next chat POST (which persists it per-conversation), AND
   // writes through to the owner's remembered default so the choice seeds the next
   // new conversation. The picker has no "default" option — every value is a real
@@ -1686,18 +1646,6 @@
                       {/each}
                     </select>
                   {/if}
-                  {#if eligibleGroups(item).length}
-                    {@const groups = eligibleGroups(item)}
-                    {@const onCount = groups.filter((g) => !(item.groupKnowledgeOff || []).includes(g.id)).length}
-                    <button
-                      class="composer-gk-btn"
-                      type="button"
-                      aria-expanded={gkOpenPaneId === item.id ? "true" : "false"}
-                      aria-controls={paneDomId("composer-gk-panel", item.id)}
-                      title="이 대화에서 다음 메시지부터 사용할 그룹 지식을 고릅니다"
-                      on:click={() => toggleGroupKnowledgePanel(item)}
-                    >그룹 지식 {onCount}/{groups.length}</button>
-                  {/if}
                   <button
                     class="composer-tools-btn"
                     type="button"
@@ -1734,27 +1682,6 @@
           {/if}
         </div>
       </form>
-      {#if gkOpenPaneId === item.id && eligibleGroups(item).length}
-        <div
-          id={paneDomId("composer-gk-panel", item.id)}
-          class="composer-gk-panel"
-          role="group"
-          aria-label="이 대화에서 사용할 그룹 지식"
-          use:clickOutside={{ onOutside: () => (gkOpenPaneId = ""), ignore: ".composer-gk-btn" }}
-        >
-          <div class="composer-gk-title">이 대화에서 사용할 그룹 지식</div>
-          {#each eligibleGroups(item) as group (group.id)}
-            <label class="composer-gk-item">
-              <input
-                type="checkbox"
-                checked={!(item.groupKnowledgeOff || []).includes(group.id)}
-                on:change={(event) => setGroupKnowledge(item, group.id, event.currentTarget.checked)}
-              />
-              <span>{group.name}</span>
-            </label>
-          {/each}
-        </div>
-      {/if}
       {#if mcpToolsOpenPaneId === item.id}
         <div
           id={paneDomId("composer-tools-panel", item.id)}
@@ -1938,7 +1865,7 @@
 
 <style>
   /* The 할 일 overlay switch in the composer hint row. Its chrome is the MCP
-     도구/그룹 지식 buttons' own rule (30-agent-md-composer.css joins it there);
+     도구 buttons' own rule (30-agent-md-composer.css joins it there);
      only the icon layout and the accent-filled "shown" state live here. */
   .composer-todo-btn {
     display: inline-flex;

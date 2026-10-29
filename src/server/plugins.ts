@@ -8,12 +8,6 @@ import {
   knowledgeRepoContextFor,
   type KnowledgeRepoContext,
 } from "./knowledgeRepo.js";
-import {
-  ensureGroupClone,
-  groupKnowledgeClonePath,
-  groupKnowledgeRepoContextsForUser,
-  type GroupKnowledgeRepoContext,
-} from "./groupKnowledgeRepo.js";
 import logger from "./logger.js";
 import { mcpHttpBridgeServerDef, type McpHttpBridgeConfig } from "./sharedMcpServers.js";
 import type { Store } from "./store.js";
@@ -163,9 +157,8 @@ export async function readPluginMcpServers(
  * True when a plugin root belongs to the avatar OWNER's own sources — their
  * synced plugin repos (`dataDir/plugins/<userId>/…`) or their personal
  * knowledge repo clone (`dataDir/knowledge/<userId>`, incl. marketplace
- * subdirs). Group knowledge repos and the app's default plugin roots are NOT
- * owned: secrets must never flow into an MCP server a group teammate (or the
- * app repo) defined. Used by the secret-injection lift below.
+ * subdirs). The app's default plugin roots are NOT owned: secrets must never
+ * flow into an MCP server the app repo defined. Used by the secret-injection lift below.
  */
 export function isOwnedPluginRoot(
   rootPath: string,
@@ -230,8 +223,7 @@ function mapHttpDefStrings(def: PluginMcpServerDef, fn: (value: string) => strin
  *    expanded to the root path. Other `${VAR}` forms are left for the relay
  *    (which refuses them outside the bundled roots).
  *  - FIRST definition of a name wins, matching the load order default →
- *    avatar plugins → knowledge repo → group repos, so a group repo can't
- *    shadow the owner's own server.
+ *    avatar plugins → knowledge repo.
  * No definition carries a secret value: nothing from the vault is resolved here.
  */
 export async function liftPluginMcpServers(
@@ -530,8 +522,7 @@ export const KNOWLEDGE_REPO_SOURCE = "지식 저장소";
 /**
  * One knowledge-repo clone job: how to materialize the working tree (`ensure`),
  * the UI source label to attribute its skills to, and the plugin subset to load.
- * Personal and group knowledge repos differ ONLY in these three fields, so both
- * flow through the single resolver below.
+ * Every knowledge-repo skill source flows through the single resolver below.
  */
 interface KnowledgeRepoJob {
   ensure: () => Promise<string>;
@@ -540,10 +531,10 @@ interface KnowledgeRepoJob {
 }
 
 /**
- * THE shared knowledge-repo resolver: clone each job's working tree and resolve
- * it into `{path, source}` skill-source entries. The 4 public functions below
- * (personal/group × roots/sources) are thin views over this — they differ only
- * in how the jobs are built and whether failures warn (Korean) or stay silent.
+ * THE knowledge-repo resolver: clone each job's working tree and resolve it into
+ * `{path, source}` skill-source entries. The two public functions below
+ * (roots/sources) are thin views over this — they differ only in whether
+ * failures warn (Korean) or stay silent.
  * Tolerant: a clone/fetch failure on one job warns (when `onWarn` given) and
  * contributes no skills, so chat never breaks.
  */
@@ -601,42 +592,10 @@ export async function knowledgeRepoSkillSources(
   return resolveKnowledgeRepoSources(knowledgeRepoJobs(ctx));
 }
 
-/** Display label attributed to skills coming from a group's shared knowledge repo. */
-export const GROUP_KNOWLEDGE_REPO_SOURCE = "그룹 지식 저장소";
-
-/** Source label for one group's repo, including the group name when known. */
-function groupRepoSource(ctx: GroupKnowledgeRepoContext): string {
-  return ctx.groupName ? `${GROUP_KNOWLEDGE_REPO_SOURCE} · ${ctx.groupName}` : GROUP_KNOWLEDGE_REPO_SOURCE;
-}
-
-/** Wrap each group knowledge-repo context as a clone job. */
-function groupKnowledgeRepoJobs(contexts: GroupKnowledgeRepoContext[]): KnowledgeRepoJob[] {
-  return contexts.map((ctx) => ({
-    ensure: () => ensureGroupClone(ctx),
-    source: groupRepoSource(ctx),
-    selected: ctx.selected,
-  }));
-}
-
-/**
- * Resolve the group knowledge repos a member shares into plugin roots, so the
- * shared skills load for EVERY chat the member has with their own avatar. Mirrors
- * `loadKnowledgeRepoRoots`; tolerant — a clone/fetch failure on one group warns
- * and contributes no roots rather than breaking chat. Accepts many contexts (a
- * user may belong to several groups, each with a repo).
- */
-export async function loadGroupKnowledgeRepoRoots(
-  contexts: GroupKnowledgeRepoContext[],
-  onWarn?: (message: string) => void,
-): Promise<PluginRoot[]> {
-  const sources = await resolveKnowledgeRepoSources(groupKnowledgeRepoJobs(contexts), onWarn);
-  return sources.map(({ path }) => ({ type: "local", path }));
-}
-
 /**
  * The full set of plugin roots an avatar's AGENT should load for a real turn:
  * the repo-bundled default plugins, the avatar's own enabled plugins, its
- * personal knowledge repo, and every group knowledge repo its owner belongs to.
+ * and its personal knowledge repo (group knowledge repos were retired 2026-10-30).
  * Returns `[]` in `local` runtime (no plugins in local dev). This is the SINGLE
  * source of truth shared by the chat endpoint AND the routine scheduler, so the
  * two cannot drift — a routine must be able to USE the same skills a chat can.
@@ -648,18 +607,10 @@ export async function loadAgentPluginRoots(
   avatarId: string,
   config: AppConfig,
   onWarn?: (message: string) => void,
-  opts?: { disabledGroupIds?: Set<string> },
 ): Promise<PluginRoot[]> {
   if (config.agentRuntime === "local") {
     return [];
   }
-  // Per-conversation group-knowledge toggle (owner-only): skip the skill roots of
-  // any group the owner turned OFF for this conversation. The scheduler and
-  // intro/hashtag paths pass no opts, so they always load every group.
-  const disabled = opts?.disabledGroupIds;
-  const groupContexts = groupKnowledgeRepoContextsForUser(store, avatarId, config).filter(
-    (ctx) => !disabled?.has(ctx.groupId),
-  );
   return [
     ...(await loadDefaultPluginRoots(config, onWarn)),
     ...(await loadAvatarPluginRoots(
@@ -676,23 +627,16 @@ export async function loadAgentPluginRoots(
       },
     )),
     ...(await loadKnowledgeRepoRoots(knowledgeRepoContextFor(store, avatarId, config), onWarn)),
-    // Shared knowledge repos of every group the avatar's owner belongs to — so
-    // group skills load for all members' chats and routines alike.
-    ...(await loadGroupKnowledgeRepoRoots(groupContexts, onWarn)),
   ];
 }
 
-/** Per-group/total caps on injected CLAUDE.md so standing memory can't bloat every turn. */
+/** Cap on the injected CLAUDE.md so standing memory can't bloat every turn. */
 const PERSONAL_CLAUDE_MD_CAP = 6_000;
-const GROUP_CLAUDE_MD_CAP = 4_000;
-const TOTAL_GROUP_CLAUDE_MD_CAP = 8_000;
 
-/** Standing CLAUDE.md memory read from the avatar's knowledge repos (push, every turn). */
+/** Standing CLAUDE.md memory read from the avatar's knowledge repo (push, every turn). */
 export interface KnowledgeRepoMemory {
   /** Root CLAUDE.md of the personal knowledge repo, or null when absent/empty. */
   personal: string | null;
-  /** Root CLAUDE.md of each enabled group repo that has one. */
-  groups: { name: string; content: string }[];
 }
 
 /** Read a repo-root CLAUDE.md (trimmed, capped). Returns null when missing/empty. */
@@ -709,59 +653,26 @@ async function readRepoClaudeMd(repoRoot: string, cap: number): Promise<string |
 }
 
 /**
- * Load the standing CLAUDE.md memory from the avatar's personal knowledge repo
- * and each enabled group repo. Reads the working-tree clones directly (which
- * `loadAgentPluginRoots` already ensured for the same turn); a missing repo, a
- * missing CLAUDE.md, or a not-yet-cloned repo simply contributes nothing.
- *
- * Group filtering mirrors `loadAgentPluginRoots`: `disabledGroupIds` (the
- * owner's per-conversation toggle) are skipped; colleague turns pass none.
- * Unlike skills (pulled on demand), this is injected into the prompt every turn,
- * so it is capped. Personal memory is always included; the group toggle controls
- * only group memory.
+ * Load the standing CLAUDE.md memory from the avatar's personal knowledge repo.
+ * Reads the working-tree clone directly (which `loadAgentPluginRoots` already
+ * ensured for the same turn); a missing repo, a missing CLAUDE.md, or a
+ * not-yet-cloned repo simply contributes nothing. Unlike skills (pulled on
+ * demand), this is injected into the prompt, so it is capped. (Group repo
+ * CLAUDE.md files were injected too until group knowledge repos were retired
+ * 2026-10-30.)
  */
 export async function loadKnowledgeRepoMemory(
   store: Store,
   avatarId: string,
   config: AppConfig,
-  opts?: { disabledGroupIds?: Set<string> },
 ): Promise<KnowledgeRepoMemory> {
   if (config.agentRuntime === "local") {
-    return { personal: null, groups: [] };
+    return { personal: null };
   }
   const personal = store.getKnowledgeRepo(avatarId).repo
     ? await readRepoClaudeMd(knowledgeClonePath(avatarId, config), PERSONAL_CLAUDE_MD_CAP)
     : null;
-  const disabled = opts?.disabledGroupIds;
-  const groups: { name: string; content: string }[] = [];
-  let totalGroupChars = 0;
-  for (const g of store.listGroupKnowledgeReposForUser(avatarId)) {
-    if (disabled?.has(g.groupId)) {
-      continue;
-    }
-    // Bound the TOTAL, not just entry: the old `>= CAP` check ran BEFORE the read,
-    // so N groups each under GROUP_CLAUDE_MD_CAP could still sum past the total
-    // (up to ~TOTAL-1 + GROUP_CAP). Truncate the tail entry to the remaining
-    // budget so the injected group memory can never exceed TOTAL_GROUP_CLAUDE_MD_CAP.
-    const remaining = TOTAL_GROUP_CLAUDE_MD_CAP - totalGroupChars;
-    if (remaining <= 0) {
-      break;
-    }
-    const content = await readRepoClaudeMd(groupKnowledgeClonePath(g.groupId, config), GROUP_CLAUDE_MD_CAP);
-    if (content) {
-      const bounded = content.length > remaining ? content.slice(0, remaining) : content;
-      groups.push({ name: g.groupName, content: bounded });
-      totalGroupChars += bounded.length;
-    }
-  }
-  return { personal, groups };
-}
-
-/** Like `loadGroupKnowledgeRepoRoots` but returns `{path, source}` for the skills/intro paths. */
-export async function groupKnowledgeRepoSkillSources(
-  contexts: GroupKnowledgeRepoContext[],
-): Promise<{ path: string; source: string }[]> {
-  return resolveKnowledgeRepoSources(groupKnowledgeRepoJobs(contexts));
+  return { personal };
 }
 
 /**

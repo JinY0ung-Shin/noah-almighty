@@ -388,7 +388,6 @@ function paneWith(attachment: MessageAttachment, over: Partial<ChatPane> = {}): 
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
     canvases: [],
     fileTabs: [{ attachment, slides: [] }],
     sideTab: { kind: "file", id: attachment.id },

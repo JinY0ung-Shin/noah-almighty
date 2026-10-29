@@ -55,7 +55,6 @@ export const NOAH_MCP_SERVER_NAMES = [
   "skill_exchange",
   "ssh_identity",
   "git_repo",
-  "group_repo",
   "brain",
   "canvas",
   "browser",
@@ -70,9 +69,10 @@ export const NOAH_MCP_SERVER_NAMES = [
 /**
  * Broker ids an older Noah registered for a server that is gone. A normal run deletes such an entry when it
  * still points at THIS Noah (an earlier deployment registered it; left alone the broker keeps listing its tools
- * and every call fails), and never reuses the id. `group_brain`: the team second brain, removed 2026-10-30.
+ * and every call fails), and never reuses the id. `group_brain`: the team second brain; `group_repo`: group
+ * knowledge repositories — both removed 2026-10-30.
  */
-export const RETIRED_MCP_SERVER_NAMES = ["group_brain"];
+export const RETIRED_MCP_SERVER_NAMES = ["group_brain", "group_repo"];
 
 /**
  * The broker entry's `description` per id: what the service IS, in NOUNS only. pi shows its first line in
@@ -92,7 +92,6 @@ export const SERVER_DESCRIPTIONS = {
   skill_exchange: "Skill sharing between teammates' avatars.",
   ssh_identity: "The owner's SSH key pair.",
   git_repo: "General git code repositories (GitHub projects) of the owner.",
-  group_repo: "Group (team) shared knowledge repository.",
   brain: "Second brain: the owner's curated wiki notes, memory of past decisions, people and projects.",
   canvas: "Visual canvas side panel: diagrams, mockups, charts, HTML previews.",
   browser: "The user's own web browser (Chrome extension): pages, tabs, forms.",
@@ -112,7 +111,6 @@ export const SERVER_TIMEOUT_SEC = {
   // clone / sync / push of a large repository (git clone budget 180 s) plus the sandbox copy.
   repo: 300,
   git_repo: 300,
-  group_repo: 300,
   // share_file renders deck previews Noah-side (LibreOffice + pdftoppm, 120 s per stage).
   file_output: 240,
   // relayed servers: a remote command over SSH, third-party tools of unknown duration.

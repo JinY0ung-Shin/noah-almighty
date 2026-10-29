@@ -1922,44 +1922,4 @@ describe("groups", () => {
       .send({ username: "dave" })
       .expect(403);
   });
-
-  it("group repo connect is group-admin-only and validated to the internal host", async () => {
-    const app = testApp();
-    const { agent: adminA } = await newUser(app, "admin");
-    const { agent: agentB } = await newUser(app, "bob");
-    const { agent: agentC } = await newUser(app, "carol");
-    const created = await adminA
-      .post("/api/admin/groups")
-      .send({ name: "Team" })
-      .expect(200);
-    const groupId = created.body.group.id;
-    await adminA
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username: "bob", role: "admin" })
-      .expect(200);
-    await adminA
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username: "carol" })
-      .expect(200);
-
-    // bob (group admin) connects an internal repo (owner/repo shorthand).
-    await agentB
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/team-knowledge", branch: "main" })
-      .expect(200);
-    const mine = await agentB.get("/api/me/groups").expect(200);
-    expect(mine.body.groups[0].knowledgeRepo).toBe("org/team-knowledge");
-
-    // An external host is rejected.
-    await agentB
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "https://gitlab.example.com/x/y.git" })
-      .expect(400);
-
-    // A plain member cannot set the group repo.
-    await agentC
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/x" })
-      .expect(403);
-  });
 });

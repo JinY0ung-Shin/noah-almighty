@@ -2,7 +2,7 @@ import fs from "node:fs";
 import Database from "better-sqlite3";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import logger from "../logger.js";
-import { backupDatabase, retirementDataPresent, retirementStamp } from "./retirementBackup.js";
+import { RETIRED_COLUMNS, backupDatabase, retirementDataPresent, retirementStamp } from "./retirementBackup.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type {
   AppConfig,
@@ -155,7 +155,6 @@ export interface UserRow {
   knowledge_selected: string | null;
   ssh_public_key: string | null;
   hashtags: string | null;
-  group_knowledge_off_default: string | null;
   model_default: string | null;
   effort_default: string | null;
   mcp_tool_groups_default: string | null;
@@ -210,9 +209,6 @@ export interface GroupRow {
   id: string;
   name: string;
   description: string | null;
-  knowledge_repo: string | null;
-  knowledge_branch: string | null;
-  knowledge_selected: string | null;
   /** Admin tool policy: JSON array of MCP tool-group ids; NULL = no restriction. */
   allowed_mcp_tool_groups: string | null;
   /** Group policy: member avatars visible/trusted to each other. NULL/1 = on, 0 = off. */
@@ -455,9 +451,6 @@ export class StoreBase {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT DEFAULT '',
-        knowledge_repo TEXT,
-        knowledge_branch TEXT,
-        knowledge_selected TEXT,
         created_by TEXT,
         created_at TEXT
       );
@@ -685,12 +678,6 @@ export class StoreBase {
     this.addColumnIfMissing("users", "knowledge_branch", "TEXT");
     // JSON array of plugin names to load from the knowledge repo; null = all.
     this.addColumnIfMissing("users", "knowledge_selected", "TEXT");
-    // The owner's DEFAULT group-knowledge OFF-set, seeding every NEW conversation
-    // (including a brand-new conversation before any toggle interaction).
-    // JSON array of group ids; NULL/[] = every group on by default. Mirrors the
-    // per-conversation `conversations.group_knowledge_off`, but at the user level:
-    // the composer toggle writes here so the choice persists across conversations.
-    this.addColumnIfMissing("users", "group_knowledge_off_default", "TEXT");
     // The owner's remembered chat-composer defaults, seeding every NEW conversation
     // (the picker's last choice persists across conversations). NULL = never chosen,
     // so a new conversation falls back to the hardcoded server default. Mirrors
@@ -784,13 +771,6 @@ export class StoreBase {
       "is_routine",
       "INTEGER NOT NULL DEFAULT 0",
     );
-    // Per-conversation, owner-only toggle for which of the owner's group
-    // knowledge repos are DISABLED in this conversation. A JSON array of group
-    // ids; NULL/[] means every group is enabled (the default). We store the OFF
-    // set (not the ON set) so a newly-joined group is enabled by default without
-    // touching existing rows. Only meaningful for the owner's own conversations;
-    // colleague conversations always load all groups (no toggle).
-    this.addColumnIfMissing("conversations", "group_knowledge_off", "TEXT");
     // Per-conversation model TIER chosen by the user in the chat composer: a
     // tier alias (`opus`/`sonnet`/`haiku`) or NULL = use the server default
     // resolution. The tier resolves to a concrete pi model via the operator's
@@ -895,6 +875,16 @@ export class StoreBase {
     this.db
       .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
       .run("claude_oauth_token", "skill_discovery_cache");
+    // Group knowledge repositories are retired (2026-10-30, user decision):
+    // groups stay only as the avatar-sharing/trust/skill-sharing unit. Drop the
+    // group repo connection, the per-user default and the per-conversation
+    // group-knowledge OFF-sets. Nothing creates or writes these columns any
+    // more, so this can only match what an older release left — keep every name
+    // reserved. The clones on disk are quarantined by retireGroupKnowledgeRepos;
+    // the remote repositories themselves are never touched.
+    for (const [table, column] of RETIRED_COLUMNS) {
+      this.dropColumnIfPresent(table, column);
+    }
   }
 
   /** One-time backfill of canvas artifacts that pre-date the dedicated tables:
@@ -1111,6 +1101,19 @@ export class StoreBase {
     }[];
     if (!cols.some((c) => c.name === column)) {
       this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+
+  /**
+   * Drop a retired column if it is still there (idempotent). Called only behind
+   * `retirementGate()`, so a column that held data is in the pre-retirement backup.
+   */
+  protected dropColumnIfPresent(table: string, column: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    if (cols.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
     }
   }
 

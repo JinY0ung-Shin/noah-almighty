@@ -170,7 +170,6 @@ export function deriveAgentToolAccess(
  */
 export interface McpToolFamilyPlan {
   personalKnowledge: boolean;
-  groupKnowledge: boolean;
   gitRepo: boolean;
   confluence: boolean;
   web: boolean;
@@ -186,7 +185,6 @@ export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPla
   const has = (id: McpToolGroupId) => enabled.includes(id);
   const byId: Record<McpToolGroupId, boolean> = {
     personal_knowledge: has("personal_knowledge"),
-    group_knowledge: has("group_knowledge"),
     git_repo: has("git_repo"),
     confluence: has("confluence"),
     web: has("web"),
@@ -199,7 +197,6 @@ export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPla
   const registered = effectiveMcpToolGroups(enabled).filter((id) => byId[id]);
   return {
     personalKnowledge: byId.personal_knowledge,
-    groupKnowledge: byId.group_knowledge,
     gitRepo: byId.git_repo,
     confluence: byId.confluence,
     web: byId.web,
@@ -341,8 +338,6 @@ export async function buildRunCapabilities(
   } = await import("./gitRepoTools.js");
   const { buildSkillsServer, SKILLS_SERVER_NAME, SKILLS_TOOL_NAMES } =
     await import("./skillsTools.js");
-  const { buildGroupRepoServer, GROUP_REPO_SERVER_NAME, GROUP_REPO_TOOL_NAMES } =
-    await import("./groupRepoTools.js");
   const { buildBrowserServer, BROWSER_SERVER_NAME, BROWSER_TOOL_NAMES } =
     await import("./browserTools.js");
   const { buildCanvasServer, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES } =
@@ -411,7 +406,6 @@ export async function buildRunCapabilities(
   // can't drift.
   const familyPlan = planMcpToolFamilies(enabledMcpToolGroups);
   const personalKnowledgeToolsEnabled = familyPlan.personalKnowledge;
-  const groupKnowledgeToolsEnabled = familyPlan.groupKnowledge;
   const gitRepoToolsEnabled = familyPlan.gitRepo;
   const confluenceToolsEnabled = familyPlan.confluence;
   const webFetchToolsEnabled = familyPlan.web;
@@ -917,26 +911,7 @@ export async function buildRunCapabilities(
   const piSkillSources = runOptions.piSkills?.mcpSources;
   const skillsReadActive = Boolean(piSkillSources && piSkillSources.size > 0);
   const skillsServer = skillsReadActive ? buildSkillsServer({ sources: piSkillSources }) : null;
-  // Group knowledge-repo tools (per group the OWNER belongs to). OWNER-ONLY like
-  // the personal repo tools — a group admin edits their group repo through their
-  // own avatar; each tool then checks the owner's role in the named group (member
-  // reads, admin writes). Registered only for an owner-driven turn where the
-  // owner actually belongs to ≥1 group, to keep the tools out of other prompts.
   const ownerGroups = ownerState.groups;
-  // A single `active` boolean + a single server value so mcpAllowedTools/inProcessMcpServers
-  // can't drift.
-  const groupRepoActive =
-    groupKnowledgeToolsEnabled && ownerToolAccess && ownerGroups.length > 0;
-  // Group second-brain capture notice, mirroring the personal repo's onMemory.
-  const onGroupMemory = (e: { action: "add" | "update"; path: string; groupName: string }) =>
-    events?.onMemory?.({ ...e, scope: "group" });
-  const groupRepoServer = buildGroupRepoServer(store, {
-    avatarUserId: request.avatar.id,
-    owner,
-    viewerIsOwner: ownerToolAccess,
-    config,
-    onMemory: onGroupMemory,
-  });
   // To-do server (todoToolsActive above). The handlers re-check viewerIsOwner
   // — registration is not the boundary under the static catalog — and stamp
   // each new item with WHO added it and the conversation it came from.
@@ -1179,7 +1154,6 @@ export async function buildRunCapabilities(
       : {}),
     ...(gitRepoToolsEnabled ? { [GIT_REPO_SERVER_NAME]: gitRepoServer } : {}),
     ...(skillsServer ? { [SKILLS_SERVER_NAME]: skillsServer } : {}),
-    ...(groupRepoActive ? { [GROUP_REPO_SERVER_NAME]: groupRepoServer } : {}),
     ...(brainActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
     ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
     ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
@@ -1212,7 +1186,6 @@ export async function buildRunCapabilities(
       // The sandbox copy's commit (registered by the pi git_repo build).
       ...(gitRepoToolsEnabled ? [GIT_REPO_PI_COMMIT_TOOL_NAME] : []),
       ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
-      ...(groupRepoActive ? GROUP_REPO_TOOL_NAMES : []),
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),

@@ -276,7 +276,6 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   | Root | Why it is agent-writable |
   |---|---|
   | personal knowledge clone (`dataDir/knowledge/<user>`) | `mcp__repo__*` write + commit, directly on that clone |
-  | group knowledge clone (`dataDir/group-knowledge/<group>`) | any member's agent writes it (`mcp__group_repo__*`) |
   | installed plugin repo (`dataDir/plugins/<user>/<repo>`) | at one remove: `mcp__git_repo__open_repo` takes any URL and `push` uses the owner's git token, and the next plugin refresh pulls what was pushed (Noah cannot tell which remotes the token can write, so all are refused) |
   | anything else | unknown provenance, refused (fail closed) |
 
@@ -335,7 +334,7 @@ Measured without a model, then mitigated Noah-side:
 | **Known Noah tool names** in the frozen prompt | `piKnownTools` (`mcpCatalog.ts`) → `PiRuntimeFacts.knownTools` → `piKnownToolsSection` | Built only while the conversation has no `pi_instructions` (its first pi turn): every tool of THIS run (`mcpAllowedTools` ∩ catalog), one line `mcp__<server>__<tool>(<required args>)`, catalog order (servers as `PI_NOAH_SERVER_NAMES`, tools in registration order), then relayed tools read from the run's proxy pool (`listToolsReport`, pi's name sanitizing, sorted; a source that did not answer is flagged). Frozen with the rest (D2): a later tool is found with `mcp_search`, a listed one may be refused (describe_system is authoritative). ≈3.4k chars for all 99 Noah tools |
 | Query line | `MCP_SEARCH_QUERY_LINE` (`piRuntimeSection`) | English, service id + action — tool text is English and keyword-matched |
 | Callable-now mirror | describe_system `piRunLines` ← `PiRuntimeFacts.callableNoahTools` (set after `mcpAllowedTools`) | live list of exact names |
-| Full sibling names | prompt, manual, skills, tool descriptions, errors | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs group_repo vs git_repo) |
+| Full sibling names | prompt, manual, skills, tool descriptions, errors | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs git_repo) |
 | Compact descriptions + discovery sentences | `pi/catalogText.ts`, applied by `piCatalogTool` in the STATIC catalog only (the builders keep the full text) | a compact entry names the sha256 of the builder text it replaces; a changed builder text is served instead (warn) and the test fails until the entry is revisited. Sentences were kept because the held-out query set did not regress |
 | Noun-only broker descriptions | `SERVER_DESCRIPTIONS` in `scripts/pi-register-mcp.mjs` | pi shows the first line in the always-visible service list AND appends it to every tool document of that server, so verbs there match every tool (measured: verbs cost held-out recall) |
 | Unknown argument names refused | `checkArguments` gate + `unknownArgumentProblem` (`mcpHttp/endpoint.ts`), wired by `runPiAgent` for Noah's own servers | the McpServer's zod objects STRIP unknown keys (MCP SDK 1.29 `z.object`), and the catalog schemas have no `additionalProperties:false`, so `list_todos {state}` used to list everything; now the call is refused with the valid names (nested objects/arrays of objects checked; `anyOf` branches and open objects not). Relayed servers are not judged |
@@ -401,10 +400,12 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 - Registers one broker entry per `PI_MCP_SERVER_NAMES` name (ids = Noah server names, so pi's `mcp__<id>__<tool>`
   equals every `mcp__repo__commit`-style name in prompts/skills/manual, plus the relays `hex-ssh`/`plugins`/`shared`),
   header `Authorization: Bearer {{ctx.header:x-noah-run-token}}`. `timeoutSec` 120 by default; longer only where the
-  server's own work needs it (`SERVER_TIMEOUT_SEC`: `avatars` 240 — unattended ask_avatar still waits; `repo`/`git_repo`/
-  `group_repo` 300 — clone/sync/push + sandbox copy; `file_output` 240 — Noah-side deck previews; `hex-ssh` 600,
+  server's own work needs it (`SERVER_TIMEOUT_SEC`: `avatars` 240 — unattended ask_avatar still waits; `repo`/`git_repo`
+  300 — clone/sync/push + sandbox copy; `file_output` 240 — Noah-side deck previews; `hex-ssh` 600,
   `plugins`/`shared` 300 — remote/third-party). Browser ops fit easily (the bridge relay times out at 45 s).
-  `--timeout-sec N` overrides every id. Refuses to take over an id pointing elsewhere without `--force`. The admin
+  `--timeout-sec N` overrides every id. Every run also deletes this Noah's entries under a RETIRED id
+  (`RETIRED_MCP_SERVER_NAMES`: `group_brain`, `group_repo` — retired 2026-10-30), and Noah's `/mcp` answers a
+  call that still reaches one with a "was removed" error (`RETIRED_SERVER_MESSAGES`, `mcpHttp/endpoint.ts`). Refuses to take over an id pointing elsewhere without `--force`. The admin
   key is read from the environment only and never stored by Noah.
 - `--configure-instance` also disables pi's `request_admin` and `present_file` built-ins (Noah has its own) and deploys
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;

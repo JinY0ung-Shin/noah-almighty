@@ -199,20 +199,19 @@ export interface TurnResultEvent {
 
 /**
  * The avatar saved a note into a second brain: a successful repo write under
- * `wiki/` (personal knowledge repo or a group's shared repo). Surfaced as a
+ * `wiki/` of the personal knowledge repo. Surfaced as a
  * dedicated "기억" row in the activity tree — separate from the raw tool rows —
  * so the viewer sees at a glance that a memory was captured. Fired per note
  * write, before the commit that persists it (the standing prompt already
  * drives the avatar to commit right after capturing).
  */
 export interface MemoryEvent {
-  scope: "personal" | "group";
+  /** Always "personal": the second brain is personal only (group repos retired 2026-10-30). */
+  scope: "personal";
   /** write_file → "add", edit_file → "update". */
   action: "add" | "update";
   /** Repo-relative note path (always under wiki/). */
   path: string;
-  /** The group whose brain was written (scope "group" only). */
-  groupName?: string;
 }
 
 /**

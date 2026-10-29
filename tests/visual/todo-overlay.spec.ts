@@ -133,7 +133,7 @@ async function mockApp(page: Page): Promise<void> {
     } else if (path === "/api/messages") {
       // The canvas conversation opens the tabbed side panel next to the chat column.
       const canvases = new URL(route.request().url()).searchParams.get("conversationId") === "conversation-2" ? [canvas] : [];
-      body = { messages, groupKnowledgeOff: [], canvases };
+      body = { messages, canvases };
     } else if (path === "/api/me/todos") {
       body = todoList;
     } else if (path === "/api/chat/runs") {

@@ -31,7 +31,6 @@ import type { PiResponseRequest, PiResponsesClient, PiStreamEvent } from "../src
 import { buildCanvasTools } from "../src/server/agent/canvasTools.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { knowledgeClonePath } from "../src/server/knowledgeRepo.js";
-import { groupKnowledgeClonePath } from "../src/server/groupKnowledgeRepo.js";
 import { sdkToolLabel } from "../src/shared/sdkToolPresentation.js";
 import { withTempDir } from "./helpers.js";
 
@@ -271,7 +270,8 @@ describe("planPiMcpProxies", () => {
       odd: { type: "http", url: "https://x.example.com", oauth: { clientId: "c" } },
     });
     const knowledgeRoot = writePluginRoot(knowledgeClonePath("u1", config), { brainy: { command: process.execPath, args: [fake] } });
-    const groupRoot = writePluginRoot(groupKnowledgeClonePath("g1", config), {
+    // A leftover clone of a retired group knowledge repo is just an unknown root: refused.
+    const groupRoot = writePluginRoot(path.join(config.dataDir, "group-knowledge", "g1"), {
       team: { command: process.execPath, args: [fake] },
       teamHttp: { type: "http", url: "https://team.example.com/mcp?k=${API_TOKEN}" },
     });
@@ -345,7 +345,7 @@ describe("planPiMcpProxies", () => {
         { name: "jira", reason: expect.stringContaining("shared MCP server") },
         { name: "odd", reason: expect.stringContaining("oauth") },
         { name: "brainy", reason: expect.stringContaining("knowledge repository, which the agent edits") },
-        { name: "team", reason: expect.stringContaining("group knowledge repository") },
+        { name: "team", reason: expect.stringContaining("not defined in a plugin bundled with Noah") },
         { name: "teamHttp", reason: expect.stringContaining("placeholders (`API_TOKEN`)") },
         { name: "stray", reason: expect.stringContaining("not defined in a plugin bundled with Noah") },
         { name: "kHttp", reason: expect.stringContaining("placeholders (`API_TOKEN`)") },

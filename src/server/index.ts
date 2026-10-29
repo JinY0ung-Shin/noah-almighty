@@ -12,6 +12,7 @@ import { retireGroupAgents } from "./retireGroupAgents.js";
 import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { retireCraftApps } from "./retireCraftApps.js";
+import { retireGroupKnowledgeRepos } from "./retireGroupKnowledgeRepos.js";
 import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import { sweepPiConsultationSandboxes } from "./agent/pi/piRuntime.js";
@@ -44,11 +45,15 @@ retirePersonalAgents(services);
 retireExternalAvatars(services);
 // Delete what the removed group shared agents left (every member's thread with
 // them, their files and CLI transcripts, the agent table — decision D4) before
-// anything can serve it. Groups and their knowledge repos stay. A no-op once
+// anything can serve it. Groups stay. A no-op once
 // done; a failed purge throws and stops the boot.
 retireGroupAgents(services);
 // The removed Craft apps left only a retry queue on disk; quarantine it (best effort).
 retireCraftApps(services);
+// The retired group knowledge repositories left Noah's clones on disk
+// (<dataDir>/group-knowledge); quarantine the whole folder once (best effort; a
+// marker ends it). The remote repositories are never touched.
+retireGroupKnowledgeRepos(services);
 // The removed Claude Agent SDK runner's CLI transcripts (<dataDir>/agent-sessions):
 // quarantine the whole folder once, after the retirements above took their own
 // transcripts out of it (best effort; a marker ends it).

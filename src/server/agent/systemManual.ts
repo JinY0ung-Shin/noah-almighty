@@ -71,7 +71,7 @@ The visible controls depend on the account, deployment and conversation type. Us
 3. Configure the internal Git token through Noah's credential controls. Do not ask for its value in chat.
 4. Ask your MAIN avatar to create and connect a personal knowledge repository. With a token configured and create_repo available, it can do this directly after you give a repository name.
 5. Try: "우리 팀 배포 절차를 기억해줘", then ask a question about that procedure in another conversation. Read knowledge for capture and recall details.
-6. Join a group through its administrator to share team knowledge and reach teammate avatars. Avatar-sharing policy and profile visibility determine peer access.
+6. Join a group through its administrator to share skills and reach teammate avatars. Avatar-sharing policy and profile visibility determine peer access.
 
 ## Administration and troubleshooting
 System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
@@ -135,7 +135,7 @@ Connect one personal knowledge repository through 내 아바타's knowledge cont
 When a teammate asks something the avatar cannot answer, it can create an information request. The owner opens 알림, provides an answer to the information request and has the avatar capture it and resolve the request. Do not invent missing owner knowledge.
 
 ## Scope and troubleshooting
-Writes are normally owner-only; shared-account teammates are the deliberate exception. Group knowledge is a separate repository and separate brain.
+Writes are normally owner-only; shared-account teammates are the deliberate exception. Groups have no shared repository or brain (both were removed); team knowledge travels as shared skills.
 For "I remembered this but cannot find it", check which avatar was used, which repository/namespace received it, whether the commit succeeded and whether it is a wiki/ note. For a failed push, preserve the tool's error and use the dedicated repository tools; the shell has no Git credentials.`,
   },
   {
@@ -143,7 +143,7 @@ For "I remembered this but cannot find it", check which avatar was used, which r
     title: "Skills and plugins",
     summary: "Install, enable, author, share and learn capabilities; when changes load.",
     body: `## What they provide
-Skills are reusable instructions/procedures; plugins can bundle skills and MCP integrations. Noah loads its default skills together with the user's enabled plugins and eligible personal/group knowledge-repository content. A skill being listed does not override disabled tools or deployment policy.
+Skills are reusable instructions/procedures; plugins can bundle skills and MCP integrations. Noah loads its default skills together with the user's enabled plugins and eligible personal knowledge-repository content. A skill being listed does not override disabled tools or deployment policy.
 
 ## Add or author
 Use the plugin controls in 내 아바타, or ask your own avatar to add a repository using mcp__system__add_plugin (repo, optional ref and label). list_plugins shows registered plugins; set_plugin_enabled toggles one by id. Plugin additions/enabling normally take effect from the NEXT conversation, so start a new conversation when validating a change.
@@ -159,10 +159,10 @@ Check plugin enabled state, sync errors, selected content, permissions, and whet
   {
     id: "groups-avatars",
     title: "Groups and avatar collaboration",
-    summary: "Team knowledge, teammate discovery and one-shot consultation.",
+    summary: "Groups, teammate discovery, skill sharing and one-shot consultation.",
     body: `## Team setup
-System administrators create groups and assign group administrators. Manage group membership and the shared knowledge repository in the group settings. The avatar-sharing switch controls peer discovery/trust; shared repository knowledge still works when that switch is off.
-Group knowledge lives in the group's shared repository, handled with mcp__group_repo__* (there is no team-brain search; the second brain is personal only). Group-admin checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
+System administrators create groups and assign group administrators. Manage group membership in the group settings. The avatar-sharing switch controls peer discovery, trust and skill sharing.
+Groups have no shared knowledge repository and there is no team brain: both were removed, so mcp__group_repo__*/mcp__group_brain__* no longer exist. Share team knowledge as skills (mcp__skill_exchange__*) or keep it in each member's personal repository.
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
@@ -304,7 +304,7 @@ General Git repositories hold code/work projects. They are distinct from the ded
 
 ## Boundaries
 Registration/removal are owner operations. Eligible elevated teammates can have working-repository operations but do not thereby gain settings ownership. A busy repository can be locked by another run; use the returned conflict information instead of opening parallel writers.
-The agent shell intentionally has no Git credentials. Do not fall back to Bash git push/gh authentication or ask for tokens in chat. Personal knowledge changes use mcp__repo__*, team knowledge uses mcp__group_repo__*, and work repositories use mcp__git_repo__*.
+The agent shell intentionally has no Git credentials. Do not fall back to Bash git push/gh authentication or ask for tokens in chat. Personal knowledge changes use mcp__repo__* and work repositories use mcp__git_repo__*.
 
 Example: "등록한 backend 저장소를 열고 이 오류를 수정해줘. 변경 내용을 검토한 뒤 푸시해줘."
 

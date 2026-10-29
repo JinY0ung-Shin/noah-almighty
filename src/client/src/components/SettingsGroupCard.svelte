@@ -2,48 +2,41 @@
   import type { GroupMember } from "../lib/types";
   import type { McpToolGroupId } from "../../../shared/mcpToolGroups";
 
-  // The richer per-group shape returned by GET /api/me/groups (members + repo),
+  // The richer per-group shape returned by GET /api/me/groups (with members),
   // vs. the lighter UserGroupMembership on User.groups.
   export interface SettingsGroup {
     id: string;
     name: string;
     role: "admin" | "member";
-    knowledgeRepo: string | null;
-    knowledgeBranch: string | null;
-    knowledgeSelected: string[] | null;
     /** System-admin tool policy for this group (read-only here); null = none. */
     allowedMcpToolGroups: McpToolGroupId[] | null;
-    /** Group policy: off = knowledge-sharing-only (no avatar reach/trust between members). */
+    /** Group policy: off = no avatar reach, trust or skill sharing between members. */
     avatarSharing: boolean;
     members: GroupMember[];
   }
 </script>
 
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount } from "svelte";
   // One group block in the 그룹 tab: teammate roster (searchable, chat shortcut),
   // and for group admins, member management (role toggle / remove) + a member-add
-  // typeahead, plus the shared knowledge-repo card. Ports buildGroupBlock /
-  // buildGroupRosterRow / buildGroupRepoCard / buildGroupMemberAddForm from
+  // typeahead, plus the shared-skill channel. Ports buildGroupBlock /
+  // buildGroupRosterRow / buildGroupMemberAddForm from
   // settings/groups.js. The user-search typeahead is inlined here (per the task
   // rule: no shared UserSearch component).
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
-  import { startChatWith, openSeededChat } from "../lib/chat";
+  import { startChatWith } from "../lib/chat";
   import { notify, readState, newId } from "../lib/state";
-  import { repoToHref } from "../lib/format";
-  import type { AvatarSummary, GroupSharedSkill, RepoPluginContents } from "../lib/types";
+  import type { AvatarSummary, GroupSharedSkill } from "../lib/types";
   import { MCP_TOOL_GROUPS, effectiveMcpToolGroups } from "../../../shared/mcpToolGroups";
   import AvatarImage from "./AvatarImage.svelte";
   import Icon from "./Icon.svelte";
-  import SettingsPluginSelect from "./SettingsPluginSelect.svelte";
 
-  let requestRepoBusy = false;
   let chatBusyId = "";
 
   export let group: SettingsGroup;
-  export let githubHost = "github.com";
-  /** Reload the whole group list from the server (after member/repo mutations). */
+  /** Reload the whole group list from the server (after member mutations). */
   export let reload: () => Promise<void>;
 
   $: amAdmin = group.role === "admin";
@@ -358,156 +351,6 @@
     }
   }
 
-  // ---- group knowledge repo ----
-  let repoInput = "";
-  let branchInput = "";
-  $: savedGroupRepo = group.knowledgeRepo || "";
-  $: savedGroupBranch = group.knowledgeBranch || "";
-  $: {
-    repoInput = savedGroupRepo;
-    branchInput = savedGroupBranch;
-  }
-  let repoBusy = false;
-  let repoRefreshed = false;
-  let repoError = "";
-  $: repoStatusId = groupPanelId("repo-status");
-  $: repoInputTrimmed = repoInput.trim();
-  $: branchInputTrimmed = branchInput.trim();
-  $: repoDirty = repoInputTrimmed !== savedGroupRepo || branchInputTrimmed !== savedGroupBranch;
-  $: repoCanSave = Boolean(!repoBusy && repoInputTrimmed && repoDirty);
-  $: repoStatus = repoBusy
-    ? "저장 중…"
-    : repoError
-      ? `저장 실패: ${repoError}`
-      : !repoInputTrimmed && savedGroupRepo
-        ? "연결 해제는 ‘연결 해제’ 버튼을 사용합니다."
-        : repoDirty
-          ? "저장하지 않은 저장소 변경 사항이 있습니다."
-          : savedGroupRepo
-            ? "연결됨"
-            : "연결 전";
-
-  async function saveRepo(): Promise<void> {
-    if (repoBusy) return;
-    const repo = repoInputTrimmed;
-    const branch = branchInputTrimmed;
-    if (!repo) {
-      repoError = group.knowledgeRepo ? "공용 저장소 연결 해제는 ‘연결 해제’ 버튼을 사용해 주세요." : "공용 지식 저장소 주소를 입력해 주세요.";
-      notify(group.knowledgeRepo ? "공용 저장소 연결을 해제하려면 ‘연결 해제’ 버튼을 사용해 주세요." : "공용 지식 저장소 주소를 입력해 주세요.", "warn");
-      return;
-    }
-    if (!repoDirty) return;
-    repoBusy = true;
-    repoError = "";
-    try {
-      await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo`, {
-        method: "PUT",
-        body: JSON.stringify({ repo, branch: branch || null }),
-      });
-    } catch (err) {
-      repoError = (err as Error).message;
-      notify(`저장 실패: ${repoError}`, "warn");
-      repoBusy = false;
-      return;
-    }
-    // New repo → different plugins; drop the cached listing + close the picker so
-    // it can't show the old repo's plugin names against the new selection.
-    pickOpen = false;
-    contents = null;
-    try {
-      await reload();
-      notify(`"${group.name}" 공용 지식 저장소 "${repo}"을 연결했습니다.`, "ok");
-    } catch (err) {
-      notify(`공용 지식 저장소는 연결했지만 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      repoBusy = false;
-    }
-  }
-
-  async function refreshRepo(): Promise<void> {
-    if (repoBusy) return;
-    repoBusy = true;
-    try {
-      await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/refresh`, { method: "POST" });
-      repoRefreshed = true;
-      setTimeout(() => (repoRefreshed = false), 1200);
-      notify(`"${group.name}" 공용 지식 저장소를 최신 상태로 새로고침했습니다.`, "ok");
-    } catch (err) {
-      notify(`새로고침 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      repoBusy = false;
-    }
-  }
-
-  async function disconnectRepo(): Promise<void> {
-    if (repoBusy) return;
-    if (!(await confirmAction("이 그룹의 공용 지식 저장소 연결을 해제할까요?\nGitHub의 저장소는 삭제되지 않고, 그룹원 아바타들이 더 이상 그 스킬을 불러오지 않습니다."))) return;
-    repoBusy = true;
-    try {
-      await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo`, { method: "PUT", body: JSON.stringify({ repo: null }) });
-    } catch (err) {
-      notify(`연결 해제 실패: ${(err as Error).message}`, "warn");
-      repoBusy = false;
-      return;
-    }
-    try {
-      await reload();
-      notify(`"${group.name}" 공용 지식 저장소 연결을 해제했습니다.`, "ok");
-    } catch (err) {
-      notify(`공용 지식 저장소 연결은 해제했지만 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      repoBusy = false;
-    }
-  }
-
-  async function requestGroupRepo(): Promise<void> {
-    if (requestRepoBusy) return;
-    requestRepoBusy = true;
-    try {
-      await openSeededChat(`"${group.name}" 그룹의 공용 지식 저장소를 만들어서 연결해줘. 그룹원들이 함께 사용할 기본 지식/스킬 구조까지 준비해줘.`);
-    } catch (err) {
-      notify(`요청 대화를 열지 못했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      requestRepoBusy = false;
-    }
-  }
-
-  // plugin selection (expandable)
-  let pickOpen = false;
-  let contents: RepoPluginContents | null = null;
-  let contentsErr = "";
-  let contentsLoading = false;
-  $: selSummary = !group.knowledgeSelected ? "저장소의 모든 플러그인을 사용 중" : `${group.knowledgeSelected.length}개 플러그인만 사용 중`;
-
-  async function togglePick(): Promise<void> {
-    pickOpen = !pickOpen;
-    if (!pickOpen) return;
-    if (!contents && !contentsLoading) await loadContents();
-    await tick();
-    document.getElementById(groupPanelId("plugin-contents"))?.scrollIntoView({ block: "center" });
-  }
-  async function loadContents(): Promise<void> {
-    if (contentsLoading) return;
-    contentsLoading = true;
-    contentsErr = "";
-    try {
-      const { contents: info } = await api<{ contents: RepoPluginContents }>(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/contents`);
-      contents = info;
-    } catch (err) {
-      contentsErr = (err as Error).message;
-    } finally {
-      contentsLoading = false;
-    }
-  }
-  async function saveSelection(next: string[] | null): Promise<void> {
-    await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/selected`, { method: "PUT", body: JSON.stringify({ selected: next }) });
-    try {
-      await reload();
-    } catch (err) {
-      notify(`플러그인 선택은 저장했지만 그룹 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    }
-  }
-
   const listboxId = `group-search-${newId()}`;
 
   // ---- 공유 스킬 채널 관리 (그룹 관리자) ----
@@ -591,7 +434,7 @@
       notify(
         on
           ? `"${group.name}" 그룹의 그룹원 아바타 상호 공개를 켰습니다.`
-          : `"${group.name}" 그룹의 그룹원 아바타 상호 공개를 껐습니다. 이제 이 그룹은 지식 공유 전용이에요.`,
+          : `"${group.name}" 그룹의 그룹원 아바타 상호 공개를 껐습니다. 이제 이 그룹을 통해서는 아바타와 스킬이 공유되지 않아요.`,
         "ok",
       );
       try {
@@ -605,17 +448,6 @@
       sharingSaving = false;
     }
   }
-
-  function summarizeRepoContentsError(message: string): string {
-    const lower = message.toLowerCase();
-    if (lower.includes("repository not found")) return "저장소를 찾지 못했습니다. 저장소 주소 또는 접근 권한을 확인해 주세요.";
-    if (lower.includes("command failed") || lower.includes("git clone")) return "저장소 내용을 가져오지 못했습니다.";
-    return message.length > 140 ? `${message.slice(0, 140)}…` : message;
-  }
-
-  function shouldShowRepoErrorDetails(message: string): boolean {
-    return message.length > 140 || /command failed|git clone/i.test(message);
-  }
 </script>
 
 <div class="group-block">
@@ -627,7 +459,7 @@
       <span class="tag read">그룹원</span>
     {/if}
     {#if !group.avatarSharing}
-      <span class="tag read">지식 공유 전용</span>
+      <span class="tag read">상호 공개 꺼짐</span>
     {/if}
   </div>
 
@@ -642,11 +474,11 @@
       />
       <span class="shared-account-meta">
         <strong>그룹원 아바타 상호 공개</strong>
-        <span class="muted">켜면 같은 그룹원끼리 서로의 아바타를 찾고 대화할 수 있어요(신뢰 권한 포함). 끄면 이 그룹은 지식 공유 전용이 되어 그룹원 아바타가 서로에게 보이지 않아요. 공용 지식 저장소는 계속 함께 사용합니다.</span>
+        <span class="muted">켜면 같은 그룹원끼리 서로의 아바타를 찾고 대화할 수 있어요(신뢰 권한 포함). 끄면 그룹원 아바타가 서로에게 보이지 않고, 이 그룹을 통한 스킬 공유도 멈춰요.</span>
       </span>
     </label>
   {:else if !group.avatarSharing}
-    <p class="muted">이 그룹은 그룹원 아바타 상호 공개가 꺼져 있어요(지식 공유 전용). 그룹원 아바타와의 대화는 그룹 관리자가 다시 켜면 가능해집니다.</p>
+    <p class="muted">이 그룹은 그룹원 아바타 상호 공개가 꺼져 있어요. 그룹원 아바타와의 대화는 그룹 관리자가 다시 켜면 가능해집니다.</p>
   {/if}
 
   {#if group.members.length}
@@ -787,86 +619,6 @@
       {/if}
     </div>
 
-    <div class="group-repo">
-      <h4 class="knowledge-sub">공용 지식 저장소</h4>
-      {#if group.knowledgeRepo}
-        <div class="head-actions">
-          <button class="linkish small" type="button" disabled={repoBusy} on:click={refreshRepo}>{repoRefreshed ? "새로고침됨 ✓" : "새로고침"}</button>
-          <button class="linkish small danger" type="button" disabled={repoBusy} title="이 그룹의 공용 저장소 연결을 해제합니다 (GitHub의 저장소 자체는 삭제되지 않습니다)" on:click={disconnectRepo}>연결 해제</button>
-        </div>
-      {/if}
-      <form class="settings-form" on:submit|preventDefault={saveRepo}>
-        <div class="field-row-2col">
-          <label class="field">
-            <span>저장소 주소</span>
-            <input bind:value={repoInput} placeholder="owner/repo 또는 사내 git URL" aria-describedby={repoStatusId} aria-invalid={repoError ? "true" : undefined} disabled={repoBusy} on:input={() => (repoError = "")} />
-          </label>
-          <label class="field">
-            <span>브랜치 (선택)</span>
-            <input bind:value={branchInput} placeholder="비우면 기본 브랜치" aria-describedby={repoStatusId} disabled={repoBusy} on:input={() => (repoError = "")} />
-          </label>
-        </div>
-        <div class="settings-save-row">
-          <span id={repoStatusId} class="settings-save-status" class:dirty={repoDirty && !repoBusy && !repoError} class:pending={repoBusy} class:invalid={Boolean(repoError)} role="status" aria-live="polite">{repoStatus}</span>
-          <button class="primary" type="submit" disabled={!repoCanSave}>{repoBusy ? "저장 중…" : savedGroupRepo ? "저장" : "연결"}</button>
-        </div>
-      </form>
-      {#if !group.knowledgeRepo}
-        <div class="empty-note">
-          공용 저장소를 연결하면 그룹원 전원의 아바타가 그 저장소의 스킬을 사용합니다.
-          <button class="linkish small" type="button" disabled={requestRepoBusy} on:click={requestGroupRepo}>
-            {requestRepoBusy ? "대화 여는 중…" : "아바타에게 공용 저장소 만들기 요청"}
-          </button>
-        </div>
-      {:else}
-        {@const href = repoToHref(group.knowledgeRepo, githubHost)}
-        {@const linkText = group.knowledgeRepo + (group.knowledgeBranch ? ` @ ${group.knowledgeBranch}` : "")}
-        <div class="kr-link">
-          <Icon name="globe" />
-          {#if href}
-            <a {href} target="_blank" rel="noreferrer noopener">{linkText}</a>
-          {:else}
-            <code>{linkText}</code>
-          {/if}
-        </div>
-        <div class="kr-plugins">
-          <span class="muted">{selSummary}</span>
-          <button
-            class="linkish small"
-            type="button"
-            aria-expanded={pickOpen}
-            aria-controls={groupPanelId("plugin-contents")}
-            on:click={togglePick}
-          >사용할 플러그인 선택</button>
-        </div>
-        {#if pickOpen}
-          <div id={groupPanelId("plugin-contents")} class="plugin-contents" aria-busy={contentsLoading ? "true" : "false"}>
-            {#if contentsLoading}
-              <div class="muted" role="status">불러오는 중…</div>
-            {:else if contentsErr}
-              <div class="error-note" role="alert">
-                조회 실패: {summarizeRepoContentsError(contentsErr)}
-                {#if shouldShowRepoErrorDetails(contentsErr)}
-                  <details class="error-details">
-                    <summary>오류 상세</summary>
-                    <code>{contentsErr}</code>
-                  </details>
-                {/if}
-                <button class="linkish small" type="button" disabled={contentsLoading} on:click={loadContents}>다시 시도</button>
-              </div>
-            {:else if contents}
-              <SettingsPluginSelect
-                info={contents}
-                selected={group.knowledgeSelected}
-                headText="그룹원 아바타가 사용할 플러그인을 선택하세요. 모두 선택하거나 모두 해제하면 전체가 사용됩니다."
-                onSave={saveSelection}
-              />
-            {/if}
-          </div>
-        {/if}
-      {/if}
-    </div>
-
     <div class="group-shared-skills">
       <h4 class="knowledge-sub">공유 스킬</h4>
       <div class="head-actions">
@@ -925,10 +677,6 @@
         </div>
       {/if}
     </div>
-  {:else}
-    <p class="muted small">
-      {group.knowledgeRepo ? "이 그룹에는 공용 지식 저장소가 연결되어 그룹원들의 아바타와 공유됩니다." : "이 그룹에는 아직 공용 지식 저장소가 없습니다."}
-    </p>
   {/if}
 
   {#if policyAllowedLabels}

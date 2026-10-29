@@ -324,12 +324,6 @@ export interface User {
    */
   knowledgeSelected: string[] | null;
   /**
-   * The owner's DEFAULT group-knowledge OFF-set (group ids whose shared knowledge
-   * is off). Seeds every NEW conversation so the toggle choice persists across
-   * conversations. `[]` = every group on (the default).
-   */
-  groupKnowledgeOffDefault: string[];
-  /**
    * The owner's remembered chat-composer defaults, seeding every NEW conversation
    * so the picker's last choice persists across conversations. `null` = never
    * chosen → a new conversation falls back to the hardcoded server default.
@@ -436,18 +430,13 @@ export type GroupRole = "admin" | "member";
 
 /**
  * A group created by a system admin. Members of the same group automatically
- * trust each other (mutual `elevated` access — see `isTrustedFor`), and the
- * group has one shared knowledge repo that only group admins may edit.
+ * trust each other (mutual `elevated` access — see `isTrustedFor`) and share
+ * skills. (Group knowledge repos were retired 2026-10-30.)
  */
 export interface Group {
   id: string;
   name: string;
   description: string;
-  /** The group's shared knowledge repo (`owner/repo` or git URL) + branch. */
-  knowledgeRepo: string | null;
-  knowledgeBranch: string | null;
-  /** Subset of the group repo's plugins to load; `null` = load all. */
-  knowledgeSelected: string[] | null;
   /**
    * SYSTEM-ADMIN tool policy for this group's members: the MCP tool groups
    * (src/shared/mcpToolGroups.ts ids) members may use in chats THEY drive.
@@ -459,8 +448,8 @@ export interface Group {
   /**
    * GROUP-ADMIN policy: whether co-membership in THIS group shares avatars —
    * mutual visibility and mutual trust/elevation together (they ride the same
-   * SQL fragment). `false` makes the group knowledge-sharing-only; group
-   * repo/brain access and `allowedMcpToolGroups` are unaffected. Default on.
+   * SQL fragment). `false` leaves the group a skill-sharing/tool-policy unit;
+   * `allowedMcpToolGroups` is unaffected. Default on.
    */
   avatarSharing: boolean;
   /** User id of the system admin who created the group (may be gone). */
@@ -491,8 +480,6 @@ export interface UserGroupMembership {
   id: string;
   name: string;
   role: GroupRole;
-  /** True when the group has a shared knowledge repo connected. */
-  knowledgeRepoConfigured: boolean;
   /** This group's admin tool policy (see {@link Group.allowedMcpToolGroups}); `null` = none. */
   allowedMcpToolGroups: McpToolGroupId[] | null;
   /** This group's avatar-sharing policy (see {@link Group.avatarSharing}). */
@@ -1526,14 +1513,11 @@ export interface AgentRequest {
   /**
    * Standing CLAUDE.md memory read from the avatar's knowledge repos and injected
    * into the prompt every turn (push, unlike on-demand skills). `personal` is the
-   * owner's personal repo root CLAUDE.md; `groups` are the enabled group repos'.
-   * The server (chat route / scheduler) loads + caps it; intro/hashtag generation
-   * leaves it unset. Group filtering reflects the owner-only per-conversation
-   * group-knowledge toggle.
+   * owner's personal repo root CLAUDE.md. The server (chat route / scheduler)
+   * loads + caps it; intro/hashtag generation leaves it unset.
    */
   knowledgeMemory?: {
     personal?: string | null;
-    groups?: { name: string; content: string }[];
   };
   /**
    * Whether this turn registered the canvas tool (its canvas tool group is on

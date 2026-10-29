@@ -33,7 +33,6 @@ const BASE_USER = {
   knowledgeRepo: null,
   knowledgeBranch: null,
   knowledgeSelected: null,
-  groupKnowledgeOffDefault: [],
   modelDefault: null,
   effortDefault: null,
   mcpToolGroupsDefault: null,

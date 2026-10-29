@@ -12,8 +12,8 @@ skill performs that upgrade **idempotently** — running it twice changes nothin
 
 ## Scope
 Personal repo only: `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
-The second brain is personal — there is no team brain, so if the user asks to set one up for a
-group, say so plainly and do not write a vault into the group's shared repository.
+The second brain is personal — there is no team brain and groups have no shared repository, so if
+the user asks to set one up for a group, say so plainly.
 
 ## Procedure (create-if-absent only — NEVER overwrite)
 1. **List the current tree** with `mcp__repo__list_files`. Do not assume. Call every tool by its full

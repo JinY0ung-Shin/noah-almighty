@@ -32,7 +32,6 @@ import {
   type RouterDeps,
 } from "./_shared.js";
 import { registerAdminEgressRoutes } from "./adminEgress.js";
-import { removeGroupKnowledgeClone } from "../groupKnowledgeRepo.js";
 
 // ---- Admin -----------------------------------------------------------
 export function createAdminRouter(deps: RouterDeps): Router {
@@ -359,7 +358,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   // ---- Admin: groups ----------------------------------------------------
   // Only system admins create/delete groups and assign group admins. Group
-  // admins then self-serve their group's members + repo via /api/me/groups/*.
+  // admins then self-serve their group's members via /api/me/groups/*.
 
   router.get("/api/admin/groups", requireAuth(store), requireAdmin, (_req, res) => {
     res.json({ groups: store.listGroups() });
@@ -448,14 +447,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
     if (!removed) {
       apiError(res, 404, "그룹을 찾을 수 없습니다.");
       return;
-    }
-    // Best-effort disk cleanup after the DB cascade: the group-knowledge clone
-    // (possibly a private repo). Never throw — a cleanup failure must not turn
-    // a successful deletion into a 500.
-    try {
-      removeGroupKnowledgeClone(config, req.params.id);
-    } catch (err) {
-      logger.warn({ err, groupId: req.params.id }, "post-delete disk cleanup failed");
     }
     auditAs(req, "group_delete", `deleted group ${req.params.id}`);
     logger.warn({ actorId: req.user!.id, groupId: req.params.id }, "group deleted");

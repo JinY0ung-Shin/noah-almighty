@@ -167,7 +167,7 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   earlier link keeps serving the earlier file — and the result names the conversation's other active links
   (`ShareLinkResult.otherActiveLinks`: names + KST expiry, never their URLs) so the avatar tells the user.
   Mechanics → [`share-links.md`](share-links.md).
-- **Guard convention differs per file BY DESIGN:** groupRepo/system/sshIdentity/knowledge-write gate on
+- **Guard convention differs per file BY DESIGN:** system/sshIdentity/knowledge-write gate on
   `ctx.viewerIsOwner` (= `ownerToolAccess` = owner chat OR owner routine); `repoTools` (personal knowledge
   repo) splits READ (`list_files`/`read_file`, gated on `ctx.elevated` = owner OR trusted same-group
   teammate) vs WRITE/commit/create (owner-only); `gitRepoTools` splits owner vs elevated; `confluenceTools`

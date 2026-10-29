@@ -6,12 +6,6 @@ export const MCP_TOOL_GROUPS = [
     descriptionKo: "개인 지식 저장소, 세컨드 브레인, 정보 요청",
   },
   {
-    id: "group_knowledge",
-    labelKo: "그룹 지식",
-    labelEn: "group knowledge",
-    descriptionKo: "그룹 공유 지식 저장소",
-  },
-  {
     id: "git_repo",
     labelKo: "Git 저장소",
     labelEn: "git repositories",
@@ -71,6 +65,11 @@ export function isMcpToolGroupId(value: unknown): value is McpToolGroupId {
   return typeof value === "string" && MCP_TOOL_GROUP_SET.has(value);
 }
 
+/**
+ * Known ids only, deduplicated. A saved selection or policy may still name a
+ * RETIRED id (`group_knowledge`, group knowledge repositories, retired
+ * 2026-10-30); it is dropped here, never an error.
+ */
 export function normalizeMcpToolGroups(raw: unknown): McpToolGroupId[] {
   if (!Array.isArray(raw)) {
     return [];

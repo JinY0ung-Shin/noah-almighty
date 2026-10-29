@@ -467,7 +467,7 @@
 
   async function deleteGroup() {
     if (busy) return;
-    if (!(await confirmAction(`'${group.name}' 그룹을 삭제할까요?\n그룹 소속이 모두 해제되고 그룹원 간 자동 신뢰가 사라집니다. (공용 저장소 자체는 GitHub에 남습니다.)`))) return;
+    if (!(await confirmAction(`'${group.name}' 그룹을 삭제할까요?\n그룹 소속이 모두 해제되고 그룹원 간 자동 신뢰와 이 그룹을 통한 스킬 공유가 사라집니다.`))) return;
     busy = true;
     try {
       await api(`/api/admin/groups/${encodeURIComponent(group.id)}`, { method: "DELETE" });
@@ -499,7 +499,6 @@
     <div class="ar-tags">
       <span class="tag">그룹원 {group.memberCount}</span>
       <span class="tag write">관리자 {group.adminCount}</span>
-      {#if group.knowledgeRepo}<span class="tag accent">공용 저장소</span>{/if}
       {#if group.allowedMcpToolGroups}<span class="tag danger">도구 제한 {effectiveMcpToolGroups(group.allowedMcpToolGroups).length}/{MCP_TOOL_GROUPS.length}</span>{/if}
       {#if !group.avatarSharing}<span class="tag read">아바타 상호 공개 꺼짐</span>{/if}
     </div>

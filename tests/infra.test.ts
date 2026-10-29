@@ -869,7 +869,7 @@ describe("knowledge graph (wikilink extraction)", () => {
     fs.mkdirSync(root, { recursive: true });
     // The REAL seeder (fs-level writes only, no git): the vault it creates holds
     // nothing but wiki/index.md, wiki/log.md, wiki/_template.md and .gitkeep stubs.
-    expect(await writeRepoTemplate(root, "brain-empty", "personal")).toBe(true);
+    expect(await writeRepoTemplate(root, "brain-empty")).toBe(true);
 
     const g = await buildKnowledgeGraph(root);
     expect(g.noVault).toBeUndefined(); // the vault EXISTS — it is merely empty
