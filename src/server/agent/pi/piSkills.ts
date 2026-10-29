@@ -2,17 +2,20 @@
  * Skills on pi runs (docs/architecture/pi-runtime.md "Skills").
  *
  * pi does not load Claude Code plugin roots, so Noah materializes the run's
- * skills as FILES in the viewer's sandbox, `/workspace/.noah/skills/<root>/<skill>/`,
- * and lists them (name, description, SKILL.md path) in the conversation's
- * frozen instructions; the model `read`s a skill's SKILL.md before using it.
+ * skills as FILES in the principal's sandbox and lists them (name,
+ * description, SKILL.md path) in the conversation's frozen instructions; the
+ * model `read`s a skill's SKILL.md before using it.
  *
- *  - OWNER runs (owner chat, routine, task API) copy every root of the run:
- *    the bundled default-skills, the owner's plugins, the personal and group
- *    knowledge repos' skills.
- *  - A trusted COLLEAGUE runs in their OWN sandbox (design U4), so only the
- *    bundled default-skills (public) are copied there; the owner's personal
- *    skills are listed with `via: "mcp"` and read through the read-only
- *    `mcp__skills__read` tool — their files never land in someone else's sandbox.
+ *  - OWNER runs (the principal owns the skill sources: owner chat, routine,
+ *    task API, profile generators) copy every root of the run into
+ *    `/workspace/.noah/skills/<root>/<skill>/`: the bundled default-skills,
+ *    the owner's plugins, the personal and group knowledge repos' skills.
+ *  - A NON-OWNER run (a colleague in their OWN sandbox, design U4; a
+ *    consultation in its fresh one) gets only the bundled default-skills
+ *    (public) as files, in a SEPARATE folder `/workspace/.noah/skills-shared/`;
+ *    the owner's personal skills are listed with `via: "mcp"` and read through
+ *    the read-only `mcp__skills__read` tool — their files never land in
+ *    someone else's sandbox.
  *  - The admin skill policy is enforced by omission: a disabled skill (bare
  *    name or `<plugin>:<name>`) is neither
  *    copied nor listed nor readable.
@@ -22,9 +25,18 @@
  * `timeout: 600000` becomes pi's seconds (`timeout: 600`).
  *
  * Re-sync is cheap: a stat-only fingerprint (path, size, mtime) of each source
- * root and of what was written is kept in `.noah/skills/.noah-sync.json`, and a
- * root is rewritten only when either side changed. Noah owns `.noah/skills`
- * wholesale (a stale root is removed); nothing outside it is ever touched.
+ * root and of what was written is kept in each folder's `.noah-sync.json`, and
+ * a root is rewritten only when either side changed. Noah owns both folders;
+ * nothing outside them is ever touched.
+ *
+ * Pruning (review-2 M1): runs of one sandbox sync CONCURRENTLY with different
+ * root sets (a chat with group knowledge off next to one with it on, a
+ * generator, a colleague's chat in the viewer's sandbox), and a run's frozen
+ * index points at its copies for the whole turn. So ONLY an owner run prunes
+ * (non-owner runs only ever write their own roots), and it removes a root it
+ * did not write only once no run has used it for {@link PRUNE_GRACE_MS} —
+ * longer than any single run — or at once when the admin policy left it with
+ * no skill at all (a disabled skill must not stay readable).
  *
  * The sandbox can replace `.noah`, `.noah/skills` or anything inside them with
  * a link (review C1: `ln -s ../.. .noah/skills` once made this sync list
@@ -43,11 +55,19 @@ import { skillMdMeta } from "../skillCatalog.js";
 import type { PinnedDir } from "../../pinnedFs.js";
 import { PI_SANDBOX_ROOT, piSandboxDir, type PiWorkspace } from "./piWorkspace.js";
 
-/** Where skills live in the sandbox. */
+/** Where an owner run's skills live in the sandbox. */
 export const PI_SKILLS_SANDBOX_DIR = path.posix.join(PI_SANDBOX_ROOT, ".noah", "skills");
+/** Where a non-owner run's (bundled, public) skills live: never pruned by those runs. */
+export const PI_SHARED_SKILLS_SANDBOX_DIR = path.posix.join(PI_SANDBOX_ROOT, ".noah", "skills-shared");
 const MANIFEST = ".noah-sync.json";
 /** Bump when the copy/rewrite rules change, so every sandbox re-syncs once. */
 const SYNC_VERSION = 1;
+/**
+ * How long a root another run used stays when an owner run prunes: longer than
+ * the longest single run (the task API's 5 h budget), so no in-flight turn
+ * loses the copies its index names.
+ */
+export const PRUNE_GRACE_MS = 6 * 60 * 60 * 1000;
 const SKIP_NAMES = new Set(["__pycache__", ".build", ".git", "node_modules", ".DS_Store"]);
 const ROOT_MAX_FILES = 5_000;
 const ROOT_MAX_BYTES = 128 * 1024 * 1024;
@@ -188,7 +208,8 @@ function isDisabled(disabled: Set<string>, name: string, dir: string, pluginName
 
 interface Manifest {
   version: number;
-  roots: Record<string, { source: string; dest: string }>;
+  /** `usedAt`: when a run last wrote or verified the root (ms) — the prune grace's clock. */
+  roots: Record<string, { source: string; dest: string; usedAt?: number }>;
 }
 
 function readManifest(skills: PinnedDir): Manifest {
@@ -248,10 +269,12 @@ export interface MaterializeInput {
   config: AppConfig;
   workspace: PiWorkspace;
   pluginRoots: PluginRoot[];
-  /** True when the run executes AS the owner (their own sandbox). */
+  /** True when the run executes AS the owner (their own sandbox): every root as files, and the only runs that prune. */
   ownerRun: boolean;
   /** Admin policy: bare skill names and `<plugin>:<skill>`. */
   disabledSkills: string[];
+  /** Injected for tests (ms). */
+  now?: number;
 }
 
 /**
@@ -261,21 +284,71 @@ export interface MaterializeInput {
  * path that does not exist.
  */
 export function materializePiSkills(input: MaterializeInput): PiSkillPlan {
-  const skills = input.workspace.hostRoot
-    ? piSandboxDir(input.workspace, [".noah", "skills"], { create: true, mode: 0o755 })
-    : null;
+  const open = (name: string) =>
+    input.workspace.hostRoot ? piSandboxDir(input.workspace, [".noah", name], { create: true, mode: 0o755 }) : null;
+  const skills = open(input.ownerRun ? "skills" : "skills-shared");
   try {
-    return materializeInto(input, skills);
+    const plan = materializeInto(input, skills);
+    // The owner also collects what non-owner runs left in its sandbox (a
+    // colleague chat's bundled copies), under the same grace.
+    if (input.ownerRun && input.workspace.hostRoot) {
+      const shared = piSandboxDir(input.workspace, [".noah", "skills-shared"]);
+      try {
+        if (shared) prune(shared, new Set(), new Set(), input.now ?? Date.now());
+      } finally {
+        shared?.close();
+      }
+    }
+    return plan;
   } finally {
     skills?.close();
   }
 }
 
+/**
+ * Remove what no run needs any more from one skills folder (owner runs only):
+ * an entry not `written` this run goes once its last use — the manifest's
+ * `usedAt` or its own mtime, whichever is newer — is older than
+ * {@link PRUNE_GRACE_MS}, or at once when it is an `emptied` root (the admin
+ * policy left it no skill). The manifest is re-read here and merged, so a
+ * concurrent run's fresh entry is kept. Through the pinned folder only.
+ */
+function prune(skills: PinnedDir, written: Set<string>, emptied: Set<string>, now: number, next?: Manifest): void {
+  try {
+    const current = readManifest(skills);
+    const merged: Manifest = { version: SYNC_VERSION, roots: {} };
+    for (const entry of skills.list()) {
+      if (entry.name === MANIFEST || written.has(entry.name)) continue;
+      const known = current.roots[entry.name];
+      const lastUse = Math.max(known?.usedAt ?? 0, skills.lstat(entry.name)?.mtimeMs ?? 0);
+      if (emptied.has(entry.name) || now - lastUse > PRUNE_GRACE_MS) {
+        skills.remove(entry.name);
+      } else if (known) {
+        merged.roots[entry.name] = known;
+      }
+    }
+    Object.assign(merged.roots, next?.roots ?? {});
+    writeManifest(skills, merged);
+  } catch {
+    /* the next turn re-syncs */
+  }
+}
+
+/** Replace the manifest atomically (a fresh exclusive temp file, then a rename). */
+function writeManifest(skills: PinnedDir, manifest: Manifest): void {
+  const tmpManifest = `.tmp-manifest-${randomBytes(4).toString("hex")}`;
+  if (skills.writeFileExclusive(tmpManifest, JSON.stringify(manifest)) === "written") skills.rename(tmpManifest, MANIFEST);
+}
+
 function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiSkillPlan {
   const { config, workspace, pluginRoots, ownerRun } = input;
+  const now = input.now ?? Date.now();
+  const sandboxDir = ownerRun ? PI_SKILLS_SANDBOX_DIR : PI_SHARED_SKILLS_SANDBOX_DIR;
   const disabled = new Set(input.disabledSkills);
   const plan: PiSkillPlan = { entries: [], mcpSources: new Map(), failures: [] };
   const used = new Set<string>();
+  // Roots this run knows the admin policy left with no skill: removed at once.
+  const emptied = new Set<string>();
   const roots: { label: string; source: string; dirs: string[]; local: boolean }[] = [];
   for (const root of pluginRoots) {
     const source = path.resolve(root.path);
@@ -288,14 +361,19 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
       const meta = skillMdMeta(path.join(source, "skills", dir, "SKILL.md"));
       return !isDisabled(disabled, meta.name || dir, dir, pluginName);
     });
-    if (dirs.length === 0) continue;
+    if (dirs.length === 0) {
+      emptied.add(label);
+      continue;
+    }
     // A colleague's sandbox only ever receives the bundled (public) skills;
-    // with no usable `.noah/skills` (unmounted, or a link/file planted there)
+    // with no usable skills folder (unmounted, or a link/file planted there)
     // every root is read through mcp__skills__read instead.
     roots.push({ label, source, dirs, local: skills !== null && (ownerRun || kind === "default") });
   }
   if (workspace.hostRoot && !skills) {
-    plan.failures.push(".noah/skills: not a plain folder in the sandbox (a link or a file there is never followed); skills are read through mcp__skills__read this run");
+    plan.failures.push(
+      `${path.posix.relative(PI_SANDBOX_ROOT, sandboxDir)}: not a plain folder in the sandbox (a link or a file there is never followed); skills are read through mcp__skills__read this run`,
+    );
   }
 
   const manifest = skills ? readManifest(skills) : { version: SYNC_VERSION, roots: {} };
@@ -303,7 +381,7 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
   const written = new Set<string>();
 
   for (const root of roots) {
-    const sandboxRoot = path.posix.join(PI_SKILLS_SANDBOX_DIR, root.label);
+    const sandboxRoot = path.posix.join(sandboxDir, root.label);
     if (root.local && skills) {
       // Stat-only fingerprint walks go through the pinned folder too.
       const target = skills.entry(root.label);
@@ -321,7 +399,7 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
           const tmpName = `.tmp-${root.label}-${randomBytes(4).toString("hex")}`;
           try {
             const tmp = skills.dir([tmpName], { create: true, mode: 0o755 });
-            if (!tmp) throw new Error("could not create a staging folder in .noah/skills");
+            if (!tmp) throw new Error(`could not create a staging folder in ${path.posix.basename(sandboxDir)}`);
             try {
               writeRoot(root.source, root.dirs, tmp, sandboxRoot);
             } finally {
@@ -333,7 +411,7 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
             skills.remove(tmpName);
           }
         }
-        next.roots[root.label] = { source: sourceFp, dest: destFp() };
+        next.roots[root.label] = { source: sourceFp, dest: destFp(), usedAt: now };
         written.add(root.label);
       } catch (error) {
         plan.failures.push(`${root.label}: ${error instanceof Error ? error.message : String(error)}`);
@@ -356,16 +434,17 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
   }
 
   if (skills) {
-    // Noah owns .noah/skills: anything there that is not a current root goes
-    // (through the pinned folder — never a listing of wherever a link points).
-    try {
-      for (const entry of skills.list()) {
-        if (entry.name !== MANIFEST && !written.has(entry.name)) skills.remove(entry.name);
+    if (ownerRun) {
+      prune(skills, written, emptied, now, next);
+    } else {
+      // A non-owner run never removes anything: it only records its own roots
+      // (merged into what other runs recorded).
+      try {
+        const current = readManifest(skills);
+        writeManifest(skills, { version: SYNC_VERSION, roots: { ...current.roots, ...next.roots } });
+      } catch {
+        /* the next turn re-syncs */
       }
-      const tmpManifest = `.tmp-manifest-${randomBytes(4).toString("hex")}`;
-      if (skills.writeFileExclusive(tmpManifest, JSON.stringify(next)) === "written") skills.rename(tmpManifest, MANIFEST);
-    } catch {
-      /* the next turn re-syncs */
     }
   }
   return plan;

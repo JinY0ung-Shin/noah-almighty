@@ -65,7 +65,7 @@ export function buildSkillsTools(ctx: SkillsToolsContext) {
         const sources = ctx.sources;
         if (!sources || sources.size === 0) {
           return text(
-            "No skills are served through this tool in this run. Your skills are files under /workspace/.noah/skills/ — read their SKILL.md with the built-in read tool (paths are in your instructions).",
+            "No skills are served through this tool in this run. Your skills are files under /workspace/.noah/ — read their SKILL.md with the built-in read tool (paths are in your instructions).",
             true,
           );
         }

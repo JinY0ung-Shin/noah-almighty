@@ -885,7 +885,7 @@ function piSkillsSection(request: AgentRequest): string | null {
   const line = (skill: (typeof skills)[number], where: string) =>
     `- ${skill.name}${skill.description ? ` — ${skill.description}` : ""} (${where})`;
   return [
-    "**Skills**: before a task one of these covers, READ its SKILL.md first and follow it (paths in it are already sandbox paths; a skill's own files are next to its SKILL.md). Do not edit files under /workspace/.noah/skills — Noah keeps them in sync and overwrites changes.",
+    "**Skills**: before a task one of these covers, READ its SKILL.md first and follow it (paths in it are already sandbox paths; a skill's own files are next to its SKILL.md). Do not edit files under /workspace/.noah/ — Noah keeps them in sync and overwrites changes.",
     ...files.map((skill) => line(skill, `\`${skill.skillMd}\``)),
     ...(served.length
       ? [

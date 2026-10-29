@@ -20,7 +20,7 @@ import {
   piWorkspaceFor,
   stagePiAttachmentFiles,
 } from "../src/server/agent/pi/piWorkspace.js";
-import { materializePiSkills } from "../src/server/agent/pi/piSkills.js";
+import { PRUNE_GRACE_MS, materializePiSkills } from "../src/server/agent/pi/piSkills.js";
 import { commitPiRepoCopy, ensurePiRepoCopy, removePiRepoCopy } from "../src/server/agent/pi/piRepoCopy.js";
 import {
   chatImagesDir,
@@ -170,6 +170,9 @@ describe("sandbox filesystem operations never follow a planted link (review C1)"
     materializePiSkills({ config: w.config, workspace: w.attacker, pluginRoots: roots, ownerRun: true, disabledSkills: [] });
     const skills = path.join(w.attacker.hostRoot!, ".noah", "skills");
     fs.symlinkSync(w.victimRoot("victimA"), path.join(skills, "stale"));
+    // Stale = unused past the prune grace (the link's own mtime).
+    const old = new Date(Date.now() - PRUNE_GRACE_MS - 60_000);
+    fs.lutimesSync(path.join(skills, "stale"), old, old);
     fs.rmSync(path.join(skills, "default", "demo"), { recursive: true });
     fs.symlinkSync(w.victimRoot("victimB"), path.join(skills, "default", "demo"));
     const plan = materializePiSkills({ config: w.config, workspace: w.attacker, pluginRoots: roots, ownerRun: true, disabledSkills: [] });

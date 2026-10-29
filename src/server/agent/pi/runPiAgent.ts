@@ -195,9 +195,11 @@ async function runPiAgentAs(
   const signal = abortController?.signal;
   const workspace = piWorkspaceFor(config, principal, workKey);
   ensurePiConversationDir(workspace);
-  // Skills as sandbox files (owner runs: every root; a colleague: the bundled
-  // ones, plus the owner's through mcp__skills__read). Re-synced each turn by
-  // a stat fingerprint; the index rides the frozen instructions.
+  // Skills as sandbox files (owner runs: every root in .noah/skills, the only
+  // runs that prune; a colleague or consultation: the bundled ones in
+  // .noah/skills-shared, plus the owner's through mcp__skills__read).
+  // Re-synced each turn by a stat fingerprint; the index rides the frozen
+  // instructions.
   const piSkills = materializePiSkills({
     config,
     workspace,

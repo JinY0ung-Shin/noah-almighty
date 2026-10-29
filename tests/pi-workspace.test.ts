@@ -23,7 +23,7 @@ import {
   stagePiAttachmentFiles,
 } from "../src/server/agent/pi/piWorkspace.js";
 import { piRunWorkspace, preparePiRunWorkspace } from "../src/server/agent/pi/piRuntime.js";
-import { materializePiSkills, rewriteSkillMarkdown } from "../src/server/agent/pi/piSkills.js";
+import { PRUNE_GRACE_MS, materializePiSkills, rewriteSkillMarkdown } from "../src/server/agent/pi/piSkills.js";
 import { buildSkillsTools } from "../src/server/agent/skillsTools.js";
 import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopySandboxPath } from "../src/server/agent/pi/piRepoCopy.js";
 import { buildGitRepoTools, GIT_REPO_PI_COMMIT_TOOL_NAME } from "../src/server/agent/gitRepoTools.js";
@@ -194,9 +194,12 @@ describe("skills in the sandbox", () => {
     expect(fs.existsSync(path.join(skills, "default", "drawio"))).toBe(false);
     expect(plan.entries[0]!.skillMd).toBe("/workspace/.noah/skills/default/pptx/SKILL.md");
 
-    // An edit in the sandbox copy is healed; a stale root goes; nothing outside .noah/skills is touched.
+    // An edit in the sandbox copy is healed; a stale root (unused past the
+    // prune grace) goes; nothing outside .noah/skills is touched.
     fs.writeFileSync(path.join(skills, "default", "pptx", "SKILL.md"), "tampered");
     fs.mkdirSync(path.join(skills, "gone"));
+    const old = new Date(Date.now() - PRUNE_GRACE_MS - 60_000);
+    fs.utimesSync(path.join(skills, "gone"), old, old);
     fs.writeFileSync(path.join(ws.hostRoot!, "keep.txt"), "mine");
     materializePiSkills({ config, workspace: ws, pluginRoots, ownerRun: true, disabledSkills: [] });
     expect(fs.readFileSync(path.join(skills, "default", "pptx", "SKILL.md"), "utf8")).toContain("deck.sh");
@@ -210,8 +213,11 @@ describe("skills in the sandbox", () => {
     const ws = piWorkspaceFor(config, mate.id, "conv-1");
     const plan = materializePiSkills({ config, workspace: ws, pluginRoots: roots(config), ownerRun: false, disabledSkills: [] });
     expect(plan.entries.filter((e) => e.via === "mcp").map((e) => `${e.root}/${e.dir}`)).toEqual(["knowledge/mine"]);
-    expect(fs.existsSync(path.join(ws.hostRoot!, ".noah", "skills", "knowledge"))).toBe(false);
-    expect(fs.existsSync(path.join(ws.hostRoot!, ".noah", "skills", "default", "pptx", "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(ws.hostRoot!, ".noah", "skills-shared", "knowledge"))).toBe(false);
+    expect(fs.existsSync(path.join(ws.hostRoot!, ".noah", "skills-shared", "default", "pptx", "SKILL.md"))).toBe(true);
+    expect(plan.entries.find((e) => e.name === "pptx")?.skillMd).toBe("/workspace/.noah/skills-shared/default/pptx/SKILL.md");
+    // A non-owner run never writes into the owner-run folder.
+    expect(fs.existsSync(path.join(ws.hostRoot!, ".noah", "skills"))).toBe(false);
 
     const tools = buildSkillsTools({ sources: plan.mcpSources });
     const read = await callTool(tools, "read", { skill: "knowledge/mine" });
@@ -220,6 +226,46 @@ describe("skills in the sandbox", () => {
     expect((await callTool(tools, "read", { skill: "knowledge/mine", path: "../../x" })).isError).toBe(true);
     expect((await callTool(tools, "read", { skill: "default/pptx" })).isError).toBe(true);
     expect((await callTool(buildSkillsTools({}), "read", { skill: "knowledge/mine" })).isError).toBe(true);
+  });
+
+  it("no run takes another run's copies (review-2 M1): non-owner runs never prune, owner runs only past the grace", () => {
+    const { config, owner } = setup();
+    const [defaults, knowledge] = roots(config);
+    const group = path.join(config.dataDir, "group-knowledge", "g1");
+    makeSkill(group, "team", "---\nname: team\ndescription: Team\n---");
+    const ws = piWorkspaceFor(config, owner.id, "conv-1");
+    const skills = path.join(ws.hostRoot!, ".noah", "skills");
+    const all = [defaults!, knowledge!, { type: "local" as const, path: group }];
+    const own = materializePiSkills({ config, workspace: ws, pluginRoots: all, ownerRun: true, disabledSkills: [] });
+    const mine = path.join(ws.hostRoot!, own.entries.find((e) => e.name === "mine")!.skillMd!.replace("/workspace/", ""));
+    const team = path.join(ws.hostRoot!, own.entries.find((e) => e.name === "team")!.skillMd!.replace("/workspace/", ""));
+    expect([fs.existsSync(mine), fs.existsSync(team)]).toEqual([true, true]);
+
+    // The reviewer's repro: a non-owner sync in the same sandbox (a chat the
+    // owner has with a colleague's avatar) — the owner's SKILL.md survives.
+    materializePiSkills({ config, workspace: piWorkspaceFor(config, owner.id, "conv-2"), pluginRoots: [defaults!], ownerRun: false, disabledSkills: [] });
+    expect([fs.existsSync(mine), fs.existsSync(team)]).toEqual([true, true]);
+    // An owner run leaves that run's fresh copies alone too.
+    const shared = path.join(ws.hostRoot!, ".noah", "skills-shared", "default");
+    materializePiSkills({ config, workspace: ws, pluginRoots: all, ownerRun: true, disabledSkills: [] });
+    expect(fs.existsSync(shared)).toBe(true);
+
+    // A generator / a chat with group knowledge off (an owner run with fewer
+    // roots) leaves the group copy another turn may be using…
+    const generator = piWorkspaceFor(config, owner.id, "run-intro");
+    materializePiSkills({ config, workspace: generator, pluginRoots: [defaults!, knowledge!], ownerRun: true, disabledSkills: [] });
+    expect([fs.existsSync(mine), fs.existsSync(team)]).toEqual([true, true]);
+    // …until nothing used it for longer than any run lasts; the non-owner
+    // run's stale copies are collected by the owner then as well.
+    materializePiSkills({ config, workspace: generator, pluginRoots: [defaults!, knowledge!], ownerRun: true, disabledSkills: [], now: Date.now() + PRUNE_GRACE_MS + 60_000 });
+    expect(fs.existsSync(mine)).toBe(true);
+    expect(fs.existsSync(team)).toBe(false);
+    expect(fs.existsSync(shared)).toBe(false);
+
+    // A root the admin policy left with no skill goes at once (a disabled skill never stays readable).
+    materializePiSkills({ config, workspace: ws, pluginRoots: all, ownerRun: true, disabledSkills: ["mine"] });
+    expect(fs.existsSync(path.join(skills, "knowledge"))).toBe(false);
+    expect(fs.existsSync(team)).toBe(true);
   });
 
   it("the skill index rides the pi instructions", () => {

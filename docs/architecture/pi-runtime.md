@@ -189,17 +189,25 @@ pi does not load Claude Code plugin roots. Each pi turn `materializePiSkills` sy
 returns the index the prompt (`piSkillsSection`, frozen with the instructions — a skill added later loads from the
 next conversation) and describe_system (`piRunLines`, live) both state (`PiRuntimeFacts.skills`).
 
-- **Owner runs** (chat, routine, task API, generators — principal = the avatar's owner) copy every root. A
-  **non-owner run** (a colleague, a consultation's asker) runs in its OWN sandbox: only the bundled default-skills are
-  copied there; the owner's personal/plugin/group skills are listed `via: "mcp"` and read through `mcp__skills__read`
+- **Owner runs** (chat, routine, task API, generators — principal = the avatar's owner) copy every root into
+  `.noah/skills/`. A **non-owner run** (a colleague in their OWN sandbox, a consultation in its fresh one) gets only the
+  bundled default-skills as files, in a SEPARATE folder `.noah/skills-shared/<root>/` (so it can never touch the
+  sandbox owner's own copies); the owner's personal/plugin/group skills are listed `via: "mcp"` and read through `mcp__skills__read`
   (`skills` server — registered only on such runs, when such skills exist; files never land in the
   other user's sandbox; links and paths out of the skill are refused).
 - **Admin skill policy** by omission: a disabled skill (bare name or `<plugin>:<name>`) is not copied, listed or readable.
 - **Rewrites** in copied `.md` files: `${CLAUDE_SKILL_DIR}` → the skill's sandbox path; `timeout: 600000` (Claude
   Code ms) → `timeout: 600` (pi seconds, max 86 400). Served skills read `${CLAUDE_SKILL_DIR}` as `skill:<root>/<dir>`.
 - **Re-sync** is a stat-only fingerprint (path, size, mtime) of the source root AND of what was written, kept in
-  `.noah/skills/.noah-sync.json`; a root is rewritten only when either side changed (so an edit in the sandbox copy
-  heals). Noah owns `.noah/skills` wholesale (stale roots removed), never anything outside it. `__pycache__`,
+  each folder's `.noah-sync.json`; a root is rewritten only when either side changed (so an edit in the sandbox copy
+  heals). Noah owns both folders, never anything outside them.
+- **Pruning (review-2 M1).** Runs of one sandbox sync concurrently with DIFFERENT root sets (a chat with group
+  knowledge off next to one with it on, a generator, a colleague chat in the viewer's sandbox), and a turn's frozen
+  index names its copies for the whole turn. So only OWNER runs prune — non-owner runs only write their own roots and
+  merge the manifest — and an owner run removes a root it did not write only once no run used it (manifest `usedAt`
+  or the entry's mtime, the newer) for `PRUNE_GRACE_MS` (6 h, past the task API's 5 h budget), or at once when the
+  admin policy left that root with no skill. It collects stale `.noah/skills-shared/` leftovers by the same rule. So a
+  left group's skill copy can stay in the user's own sandbox up to 6 h. `__pycache__`,
   `.build`, `.git`, `node_modules` and links are skipped; caps 5 000 files / 128 MB per root, 32 MB per file.
 
 ## Working repositories (design D1, `agent/pi/piRepoCopy.ts`)

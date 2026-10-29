@@ -584,7 +584,7 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
         ? "none in this run"
         : [
             files.length
-              ? `${files.length} copied into your sandbox under /workspace/.noah/skills/<root>/<skill>/ (${names(files)}) — read a skill's SKILL.md before following it; Noah re-syncs that folder every turn, so do not edit it`
+              ? `${files.length} copied into your sandbox under ${files.some((skill) => skill.skillMd?.startsWith("/workspace/.noah/skills-shared/")) ? "/workspace/.noah/skills-shared" : "/workspace/.noah/skills"}/<root>/<skill>/ (${names(files)}) — read a skill's SKILL.md before following it; Noah re-syncs that folder every turn, so do not edit it`
               : "",
             served.length
               ? `${served.length} of the avatar owner's skills served read-only by mcp__skills__read (${names(served)}) — not in your sandbox`

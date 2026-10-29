@@ -236,7 +236,7 @@ export interface PiProxiedMcpFacts {
 
 /** One skill a pi run can use (see {@link PiRuntimeFacts.skills}). */
 export interface PiSkillIndexEntry {
-  /** `<root>` folder under `/workspace/.noah/skills` (also the mcp__skills__read prefix). */
+  /** `<root>` folder under `/workspace/.noah/skills` (`skills-shared` on a non-owner run; also the mcp__skills__read prefix). */
   root: string;
   /** The skill's directory name. */
   dir: string;
