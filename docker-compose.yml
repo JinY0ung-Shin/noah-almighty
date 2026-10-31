@@ -72,7 +72,7 @@ services:
       PI_GATEWAY_API_KEY_FILE: /run/secrets/pi_gateway_api_key
       PI_WORKSPACES_DIR: /srv/pi-workspaces
       # Only pi's broker (its pinned noah-mcp address) may reach /mcp. Widen deliberately in .env.
-      NOAH_MCP_ALLOWED_CIDRS: ${NOAH_MCP_ALLOWED_CIDRS:-${NOAH_MCP_BROKER_IP:-172.30.248.10}/32}
+      NOAH_MCP_ALLOWED_CIDRS: ${NOAH_MCP_ALLOWED_CIDRS:-${NOAH_MCP_BROKER_IP:-172.16.248.10}/32}
       # Sandboxes run noah-almighty/pi-sandbox (docker/pi/compose.override.yml), which builds decks.
       PI_DECK_SANDBOX: "true"
       # NODE_EXTRA_CA_CERTS in .env is a HOST path (pi-gateway's meaning); mounted below.

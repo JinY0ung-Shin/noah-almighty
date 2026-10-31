@@ -28,12 +28,15 @@ services:
   mcp-broker:
     networks:
       noah-mcp:
-        ipv4_address: ${NOAH_MCP_BROKER_IP:-172.30.248.10}
+        ipv4_address: ${NOAH_MCP_BROKER_IP:-172.16.248.10}
 
 networks:
   # broker ↔ Noah only. Internal: no route out, and no sandbox is ever attached (sandboxes have no network).
+  # The default subnet sits in 172.16.0.0/16, OUTSIDE Docker's default auto-allocation pools
+  # (172.17-31.0.0/16, 192.168.0.0/16): a pinned subnet inside them can collide with any network Docker
+  # auto-allocates there, this stack's own networks included.
   noah-mcp:
     internal: true
     ipam:
       config:
-        - subnet: ${NOAH_MCP_SUBNET:-172.30.248.0/24}
+        - subnet: ${NOAH_MCP_SUBNET:-172.16.248.0/24}

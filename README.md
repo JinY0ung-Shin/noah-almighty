@@ -208,7 +208,7 @@ never copied into this repository.
 | | |
 |---|---|
 | Noah → pi | `http://gateway:8080` over pi's `edge` network, with pi's service key from the compose secret (`PI_GATEWAY_API_KEY_FILE`). |
-| pi's broker → Noah `/mcp/<server>` | `http://noah-almighty:48787` over `noah-mcp`, an internal network only the broker and Noah are on. The broker has a pinned address there (`NOAH_MCP_BROKER_IP`, default `172.30.248.10` in `NOAH_MCP_SUBNET` `172.30.248.0/24`), and Noah's `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that address, so no other container, and no published-port client, passes `/mcp`'s source check; each call still needs a per-run token Noah mints itself. Change both variables if the subnet collides with a network your host routes to. |
+| pi's broker → Noah `/mcp/<server>` | `http://noah-almighty:48787` over `noah-mcp`, an internal network only the broker and Noah are on. The broker has a pinned address there (`NOAH_MCP_BROKER_IP`, default `172.16.248.10` in `NOAH_MCP_SUBNET` `172.16.248.0/24` — outside Docker's default address pools, so no auto-allocated network lands on it), and Noah's `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that address, so no other container, and no published-port client, passes `/mcp`'s source check; each call still needs a per-run token Noah mints itself. Change both variables if the subnet collides with a network your host routes to. |
 | sandboxes | No network at all (`network_mode: none`, pi's sandboxd). Their only exit is pi's egress-proxy, which opens only what pi's `SANDBOX_EGRESS_ALLOW` lists — keep Noah's address out of it: the broker, not the sandbox, calls Noah. |
 | workspaces | `$PI_GATEWAY_HOME/workspaces` is bind-mounted read-write into Noah at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`): Noah stages attachments, captures and Confluence files into each user's sandbox folder and reads shared files and deck previews from it. uid 1000 on both sides. |
 | sandbox image | `noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}` ([docker/pi-sandbox](docker/pi-sandbox/README.md)), built FROM pi's own `pi-gateway/sandbox:latest` and set as sandboxd's `SANDBOX_IMAGE`; pi's own image keeps its own tag. It carries the pptx skill's converter (Chromium headless shell, the pinned Python set, the deck fonts), so `PI_DECK_SANDBOX=true` is fixed. |
@@ -289,6 +289,12 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   (`cp ../pi-gateway/.env vendor/pi-gateway/.env`) and retire the old checkout, or keep using it with
   `PI_GATEWAY_DIR=../pi-gateway` in Noah's `.env` and check out the submodule's commit there
   (`git submodule status`). The compose project name is unchanged, so pi's volumes stay attached.
+- **`noah-mcp` moved from `172.30.248.0/24` to `172.16.248.0/24`** (the old default sat inside Docker's
+  auto-allocation pool and could collide with the stack's own networks: `Pool overlaps with other one`). A
+  deployment that never set `NOAH_MCP_SUBNET`/`NOAH_MCP_BROKER_IP` gets the new subnet on its next
+  `docker compose up -d`: Compose recreates the network and the two containers on it (verified on Compose
+  5.0.0). If your Compose refuses with a diverged-network error, run `docker compose down` first (volumes
+  stay). To keep the old subnet, set both variables to the old values in `.env`.
 - **A new sandbox image only applies to new sandboxes.** Running ones keep the old image until idle
   (`SANDBOX_IDLE_SECONDS`, 15 min); to switch at once (workspaces stay):
   `docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)`.
@@ -420,7 +426,7 @@ backup and quarantine).
 | `PI_DECK_SANDBOX` | `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). **Fixed to `true` by docker-compose.yml**, which builds and wires that image. |
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
 | `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default the `./vendor/pi-gateway` submodule), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |
-| `NOAH_MCP_SUBNET` / `NOAH_MCP_BROKER_IP` / `NOAH_MCP_HOST_ALIAS` / `NOAH_PI_SANDBOX_TAG` | Compose only: the internal broker↔Noah network (default `172.30.248.0/24`), the broker's pinned address on it (`172.30.248.10`), Noah's extra name there (native TLS), and the tag of the deck sandbox image (`latest`). |
+| `NOAH_MCP_SUBNET` / `NOAH_MCP_BROKER_IP` / `NOAH_MCP_HOST_ALIAS` / `NOAH_PI_SANDBOX_TAG` | Compose only: the internal broker↔Noah network (default `172.16.248.0/24`, outside Docker's default address pools), the broker's pinned address on it (`172.16.248.10`), Noah's extra name there (native TLS), and the tag of the deck sandbox image (`latest`). |
 | `NOAH_PI_SESSION_IDLE_SECONDS` | Compose only: pi's `SESSION_IDLE_SECONDS` (default `1800`; a value in pi-gateway's `.env` is ignored) — see [Sizing pi-gateway](#sizing-pi-gateway). |
 | `PORT` / `APP_DATA_DIR` |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | Optional PEM cert/key paths that switch the app's own listener to HTTPS — set both or the boot refuses (docker-compose mounts `./docker/tls` → `/app/tls`). HTTPS gives pages a secure context, which the browser-bridge one-click update (File System Access) requires. Set `SECURE_COOKIES=true` with it. |

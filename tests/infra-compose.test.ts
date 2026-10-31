@@ -131,13 +131,13 @@ describe("docker-compose.yml — the Noah service", () => {
 
   it("admits only the broker's pinned address to /mcp by default", () => {
     expect(environment).toContain(
-      "NOAH_MCP_ALLOWED_CIDRS: ${NOAH_MCP_ALLOWED_CIDRS:-${NOAH_MCP_BROKER_IP:-172.30.248.10}/32}",
+      "NOAH_MCP_ALLOWED_CIDRS: ${NOAH_MCP_ALLOWED_CIDRS:-${NOAH_MCP_BROKER_IP:-172.16.248.10}/32}",
     );
     const broker = block(block(override, "services", 0), "mcp-broker", 2);
-    expect(broker).toContain("ipv4_address: ${NOAH_MCP_BROKER_IP:-172.30.248.10}");
+    expect(broker).toContain("ipv4_address: ${NOAH_MCP_BROKER_IP:-172.16.248.10}");
     const net = block(block(override, "networks", 0), "noah-mcp", 2);
     expect(net).toMatch(/^ {4}internal: true$/m);
-    expect(net).toContain("- subnet: ${NOAH_MCP_SUBNET:-172.30.248.0/24}");
+    expect(net).toContain("- subnet: ${NOAH_MCP_SUBNET:-172.16.248.0/24}");
   });
 
   it("joins its own network, pi's gateway network and noah-mcp — nothing a sandbox is on", () => {

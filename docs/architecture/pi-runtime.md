@@ -374,7 +374,8 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   exits 0 (`service_completed_successfully`). The admin key reaches the script through its env, never argv.
 - **Networks** — Noah joins pi's `edge` network to call `http://gateway:8080` (`PI_GATEWAY_URL`, fixed by compose).
   pi's broker calls Noah's `/mcp/<server>` over `noah-mcp`, an INTERNAL network only the broker and Noah are on,
-  from a pinned address (`NOAH_MCP_BROKER_IP`, default `172.30.248.10` in `NOAH_MCP_SUBNET` `172.30.248.0/24`);
+  from a pinned address (`NOAH_MCP_BROKER_IP`, default `172.16.248.10` in `NOAH_MCP_SUBNET` `172.16.248.0/24` — outside
+  Docker's default auto-allocation pools, so no auto-allocated network, this stack's own included, can overlap it);
   `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that `/32`, so the network gateway (where published-port traffic can
   appear from) and every other pi service get 403. Sandboxes keep `network_mode: none` and gain no route.
 - **Service key** — Noah's OWN 0400 uid-1000 copy of pi's service key (`docker/pi/setup-host.sh` copies it to

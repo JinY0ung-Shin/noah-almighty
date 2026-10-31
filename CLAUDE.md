@@ -353,7 +353,8 @@ These are the invariants the project is built around. New work should reinforce 
   instance config: sandboxd runs `noah-almighty/pi-sandbox`, the broker's pinned address). Facts that fail in
   the field, not in CI: a one-shot `pi-setup` service (uid 10001, pi's admin-key secret) registers Noah's MCP
   servers and Noah's prompt on every `up`, and Noah starts only after it exits 0; pi's broker reaches `/mcp` over
-  the internal `noah-mcp` network from `172.30.248.10` (`NOAH_MCP_BROKER_IP`), and `NOAH_MCP_ALLOWED_CIDRS`
+  the internal `noah-mcp` network from `172.16.248.10` (`NOAH_MCP_BROKER_IP`; the subnet stays OUTSIDE Docker's
+  default address pools), and `NOAH_MCP_ALLOWED_CIDRS`
   defaults to exactly that /32; Noah gets pi's service key ONLY as its own compose secret
   (`PI_GATEWAY_API_KEY_FILE=/run/secrets/pi_gateway_api_key`, uid 1000 0400 copy by `docker/pi/setup-host.sh`
   — a `PI_GATEWAY_API_KEY` in `.env` next to it stops the boot); `.env` wins inside pi's compose file too, so a
