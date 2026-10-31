@@ -251,15 +251,18 @@ turn holding a `sleep` in its sandbox):
   ≈ 4 GiB).
 - One user's 8 simultaneous turns all ran in parallel.
 
-**Session starts, not concurrent turns, are the limit.** pi starts a session on a conversation's first turn,
-after `SESSION_IDLE_SECONDS` without one (it unloads the idle session and rebuilds it on the next turn), and on a
-model/effort change, and every start lists all of Noah's MCP servers through the broker. 200 starts in the same
-second saturated the gateway and the broker (one core each): their internal calls hit a 10 s connect timeout,
-so up to half of those sessions started WITHOUT Noah's tools (a session keeps the tool list it started with) and
-most of their sandbox commands failed (`sandboxd is unreachable`); a larger libuv threadpool
-(`UV_THREADPOOL_SIZE`) did not help. The same 200 starts spread at 3–20 per second ran clean (at 10–20 per
-second, one session in 200 missed its tool list). Noah itself starts at most `ROUTINE_MAX_CONCURRENT_RUNS` (10)
-routines and 4 task-API runs at once.
+**Session starts are the expensive part.** pi starts a session on a conversation's first turn and after
+`SESSION_IDLE_SECONDS` without one (it unloads the idle session and rebuilds it on the next turn), and every
+start lists all of Noah's MCP servers through the broker. Before pi-gateway `52e5f2f`, 200 starts in the same
+second made up to half of those sessions start WITHOUT Noah's tools and most of their sandbox commands fail
+(`sandboxd is unreachable`): Docker's embedded DNS answered in up to 16 s while dockerd created 200 sandboxes, the
+broker's connection pool refused instead of waiting, and the broker's accept queue overflowed. pi now caches and
+coalesces name lookups, the broker pool waits for a free slot, the gateway sends at most 32 tool-list requests to
+the broker at once, and a server whose list still failed is asked again (at most every 30 s) when the model
+searches or calls an unknown tool. Measured after the fix (same stack, 3 runs of 200 starts in one second): no
+session missed a tool list, no sandbox command failed; the first turn started up to ≈ 17 s (median) / 30 s later
+than unloaded, the broker at ≈ 1.5 cores being the bottleneck. Noah itself starts at most
+`ROUTINE_MAX_CONCURRENT_RUNS` (10) routines and 4 task-API runs at once.
 
 So the bundle sets pi's `SESSION_IDLE_SECONDS` to **1800** (pi's default is 300, which makes every 5-minute
 pause in a conversation a session start), from Noah's own `NOAH_PI_SESSION_IDLE_SECONDS` — a
