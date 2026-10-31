@@ -26,9 +26,11 @@ Durable principles for this layer:
   is RESET at every fold and follow-up turn.
 - **The loop half has exactly ONE inbound channel: `AgentEvents.steers`.** Every other member of
   `AgentEvents` is the run calling OUT (even a parked `onQuestion` originates in the loop); a `SteerChannel`
-  (`steerChannel.ts`) is the HOST pushing in. pi has no mid-turn input, so the RUN LOOP drains every queued
-  steer (and every async `ask_avatar` answer, `pi/asyncJobs.ts`) at the response boundary as ONE follow-up
-  turn, and closes the channel at a steer-free boundary and again in `finally`. A run given no channel simply
+  (`steerChannel.ts`) is the HOST pushing in. `runPiTurn` hands every queued steer (and every async
+  `ask_avatar` answer, `pi/asyncJobs.ts`) to the RUNNING pi response (`POST …/input`), and pi's
+  `response.input_consumed` marks it delivered; whatever pi did not deliver before the response ended, the
+  RUN LOOP drains at the response boundary as ONE follow-up turn, and it closes the channel at a steer-free
+  boundary and again in `finally`. A run given no channel simply
   cannot be steered; that is how headless and external-task-API runs opt out, and `midTurnMessages` reports it
   on both metacognition surfaces.
 - **`ownerState.ts` is the metacognition sync point.** `summarizeOwnerState` returns UNFORMATTED self-state

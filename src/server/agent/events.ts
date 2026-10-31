@@ -536,8 +536,9 @@ export interface AgentEvents {
    */
   onTurnResult?: (event: TurnResultEvent) => void;
   /**
-   * Inbound mid-turn user messages for this run; the run loop sends every
-   * queued one as the follow-up turn after the current answer. Absent on
+   * Inbound mid-turn user messages for this run; pi folds each queued one into
+   * the running turn at its next tool boundary, and the run loop sends any it
+   * did not as the follow-up turn after the current answer. Absent on
    * headless/external-task-API runs.
    */
   steers?: SteerChannel;

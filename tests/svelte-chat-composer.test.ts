@@ -257,7 +257,7 @@ describe("composer mid-turn messages", () => {
     expect(steerButton).toBeTruthy();
     expect(steerButton!.getAttribute("aria-label")).toBe("응답 중 메시지 보내기");
     expect(steerButton!.disabled).toBe(false);
-    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (지금 답변이 끝난 뒤 이어서 전달됩니다)");
+    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요)");
     // The stop button is untouched — killing the run and messaging it are two acts.
     expect(container.querySelector(".send-button.is-stop")).toBeTruthy();
     // And the extra column is declared, or the button would wrap onto its own row.
@@ -285,7 +285,7 @@ describe("composer mid-turn messages", () => {
     seedStreaming();
     const { container } = render(ChatView);
     expect(composerTextarea(container).placeholder).toBe(
-      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 지금 답변이 끝난 뒤 이어서 전달됩니다",
+      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요",
     );
     expect(container.textContent).not.toContain("다음 작업 사이");
   });

@@ -622,7 +622,7 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
       : []),
     `- Long-running tools on this runtime: ${
       pi.asyncAskAvatar
-        ? "mcp__avatars__ask_avatar returns at once with a consultation id and its answer arrives as its own message after your current answer (the run stays open for it)"
+        ? "mcp__avatars__ask_avatar returns at once with a consultation id and its answer arrives later as its own message (at your next tool-call boundary while you are still working, else right after your current answer; the run stays open for it)"
         : "mcp__avatars__ask_avatar (when available) waits for the answer in this run"
     }; a canvas never waits — its submission arrives as the user's next message`,
     ...(pi.activeRepoDir
@@ -790,7 +790,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // the run either has a live steer channel or it does not, and the
           // avatar must not promise a viewer it can be interrupted when it
           // cannot (or ignore a message that arrives when it can).
-          `- Mid-turn user messages: ${!ctx.midTurnMessages ? "not available in this run" : "ENABLED, but on this runtime a message the person sends while you work is NOT shown to you between tool calls: it is delivered as the NEXT turn, right after your current answer finishes. Finish the current answer, then read it and let the newest instruction win when it conflicts with an earlier one"}`,
+          `- Mid-turn user messages: ${!ctx.midTurnMessages ? "not available in this run" : "ENABLED — a message the person sends while you work is delivered DURING your work: it appears as a user message at your next tool-call boundary (after the current tool calls finish, or right after the answer you are writing) and may change the task. Read it before you continue and let the newest instruction win when it conflicts with an earlier one; one that arrives just as you finish comes as the next turn instead"}`,
           ...rewindLines(ctx),
           `- runtime: ${runtimeLine(ctx)}`,
           ...piRunLines(ctx),

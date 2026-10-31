@@ -307,8 +307,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `routes/chat.ts`, which `tsconfig.client.json` must never include (it reaches express and
   better-sqlite3 through its imports) — so the interface is declared twice and nothing type-checks across
   the gap. Fields: `id`, `text`, `state` (`queued|delivered|completed|dropped`), `createdAt`, `followUp`
-  (the model gets it only AFTER the current answer, as its own follow-up turn in the same run — every steer
-  on pi), and
+  (true when the model got it only AFTER the current answer, as its own follow-up turn in the same run — the
+  fallback; false when pi folded it into the running turn), and
   `message` — the persisted `kind:"steer"` user row, present ONLY on the `delivered` frame and `null`
   when the conversation was deleted mid-run. `PendingSteer` (`pane.steers`) has no server counterpart and
   is LIVE-only: `resetLive` clears it and a reattach rebuilds it from the replayed frames.
@@ -319,9 +319,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   the text came back before being told the run stopped. `turn_end {message, response}` carries the same payload shape as `done` but
   is deliberately absent from `isTerminalFrame` (`lib/chat.ts`), so the reader keeps reading: the visible
   turn was sealed only because a steer is pending and the follow-up turn continues on the SAME run. The
-  `open` frame carries no delivery mode: the composer's hint is always "지금 답변이 끝난 뒤 이어서 전달됩니다", and a
-  delivered row's badge comes from its position (`steerBadgeLabel` — "답변 뒤 전달"; SDK-era rows folded mid-turn
-  keep "응답 중 전달").
+  `open` frame carries no delivery mode: the composer's hint is always "작업 도중에 전달돼 진행 중인 일을 바꿀 수
+  있어요", and a delivered row's badge comes from its position (`steerBadgeLabel` — "응답 중 전달" for a steer folded
+  into the running turn, "답변 뒤 전달" for a follow-up one).
   `finalizeVisibleTurn` appends the bubble for both, and `endLiveTurn(pane, true)` keeps
   `streaming`/`liveRunId`/`abortController` where `clearLive` would drop them. Both frames ride the
   replayed event log, so **every handler has to be re-appliable**: messages dedupe by id, and a bounded

@@ -30,7 +30,7 @@ export interface AvatarDirectoryContext {
   askCaptureHint?: boolean;
   /**
    * pi interactive runs (design D8): start the consultation in the BACKGROUND
-   * and return at once — the run hands the answer to the model as a follow-up
+   * and return at once — the run hands the answer to the model as a later
    * message (`pi/asyncJobs.ts`). Resolves with the acceptance id, or with an
    * immediate refusal (unknown / untrusted target). Wins over `askAvatar`.
    */

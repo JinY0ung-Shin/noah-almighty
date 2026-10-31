@@ -112,15 +112,19 @@ These are the invariants the project is built around. New work should reinforce 
   conversation, backs off on 409, records a graceful restart as `failed`), independent of routines;
   the run's audit rows keep their own action names (only `chat` becomes `avatar_api_task`). Mechanics →
   `docs/architecture/avatar-task-api.md`.
-- **A mid-turn user message ("steer") is delivered AFTER the current answer, on the SAME run — never a
-  second run.** `POST /api/chat/runs/:runId/message` pushes text into the live run's `SteerChannel`; pi has
-  no mid-turn input, so when the pi response completes `runPiAgent` drains EVERY queued steer (and every
-  async `ask_avatar` answer) as ONE follow-up turn: the run stays OPEN and the segment so far persists as
-  its own message (`turn_end`, not `done`). Persist at DELIVERY (= that follow-up turn) only; a run given
-  no channel (headless, external-task-API) cannot be steered; `midTurnMessages` says so on BOTH
-  metacognition surfaces, and the composer always says the message follows the current answer. Rows from
-  the retired CLI runner (which folded steers in mid-turn) keep their position-based badge
-  (`steerBadgeLabel`). Mechanics → `docs/architecture/chat-sse-media.md`.
+- **A mid-turn user message ("steer") is delivered INTO the running turn, on the SAME run — never a
+  second run** (user decision 2026-10-31). `POST /api/chat/runs/:runId/message` pushes text into the live
+  run's `SteerChannel`; `runPiTurn` hands it to the RUNNING pi response (`POST /v1/responses/{id}/input`),
+  pi puts it into the context at its next tool-call boundary and streams `response.input_consumed`, which
+  marks it delivered — so it may change the task mid-work. Async `ask_avatar` answers ride the same path. A
+  steer pi did not deliver before the response ended (`undelivered_input`: it arrived as the turn was
+  ending; or it starts with `/`, which pi would expand, so it is never handed over) falls back: `runPiAgent`
+  drains EVERY still-queued one as ONE follow-up turn — the run stays OPEN and the segment so far persists
+  as its own message (`turn_end`, not `done`). Persist at DELIVERY only (mid-turn: before the answer it
+  joined, badge "응답 중 전달"; follow-up: after the sealed segment, "답변 뒤 전달" — `steerBadgeLabel` reads
+  the position); a run given no channel (headless, external-task-API) cannot be steered; `midTurnMessages`
+  says so on BOTH metacognition surfaces, and the composer says the message reaches the avatar during its
+  work. Mechanics → `docs/architecture/chat-sse-media.md`.
 - **A rewind cuts HISTORY, never the world.** Editing an earlier message and 다시 생성 share ONE plan →
   apply path: `planConversationRewind` before the turn's first await, `applyConversationRewind` right
   before `openRun` after a synchronous re-plan that refuses on any drift. Exact context comes from the

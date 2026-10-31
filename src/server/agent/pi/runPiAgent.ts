@@ -26,20 +26,22 @@
  *     session id and the row's resume point, so a rewind forks from it.
  *  4. A lost session (404/409) self-heals once from the text history; 503/429
  *     at stream open retry with backoff; an empty turn (`empty_response`, not
- *     committed by pi) is re-sent once while nothing was shown (a queued steer
- *     waits and follows as its own turn); a model fallback chain (routines,
+ *     committed by pi) is re-sent once while nothing was shown (a steer pi
+ *     already delivered counts as shown); a model fallback chain (routines,
  *     the task API) gives each attempt a fresh session.
- *  5. pi has no mid-turn input (design P2): steers queue, and once the current
- *     pi response completes they are delivered TOGETHER as a follow-up turn on
- *     the same run (the route's `turn_end` contract).
+ *  5. Mid-turn messages (design P2): a steer is handed to the RUNNING pi
+ *     response (`runPiTurn`), which delivers it at its next tool boundary; one
+ *     pi did not deliver before the response ended is sent, together with the
+ *     rest, as a follow-up turn on the same run (the route's `turn_end` contract).
  *  6. A model/effort change starts a new session from the text history (pi
  *     fixes both per session, design P3); the user hears it on the status line.
  *  7. hex-ssh, plugin `.mcp.json` and 공용 MCP servers are relayed by Noah as an
  *     MCP client (`mcpProxies.ts`, stable ids `hex-ssh`/`plugins`/`shared`);
  *     every Noah MCP result is redacted at the endpoint with the run's set.
  *  8. A tool that would hold the broker for minutes runs in the background
- *     (design D8, `asyncJobs.ts`): its result is pushed as a steer, and the run
- *     stays open until its jobs settle, so it always arrives as a follow-up turn.
+ *     (design D8, `asyncJobs.ts`): its result is pushed as a steer (mid-turn
+ *     while a response runs, else a follow-up turn), and the run stays open
+ *     until its jobs settle, so it always finds a live run.
  */
 import type { McpServer as McpServerType } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -212,7 +214,8 @@ async function runPiAgentAs(
   // Background jobs of this run (ask_avatar in an interactive chat): a result
   // rides the steer channel — the model text (with its provenance) + the Korean
   // bubble + WHO answered, so the route persists it as that avatar's row, never
-  // as the owner's — and becomes a follow-up turn below.
+  // as the owner's — and reaches the model like a typed steer (mid-turn, or the
+  // follow-up turn below).
   const steerChannel = events?.steers;
   const asyncJobs = steerChannel
     ? new PiAsyncJobs((delivery) =>
@@ -336,6 +339,11 @@ async function runPiAgentAs(
   // Whether the CURRENT pi request already showed the user anything (text, a
   // question): an empty turn is only retried while nothing has.
   let attemptShowedOutput = false;
+  // A steer pi delivered mid-turn is persisted and shown, and pi rewinds a
+  // failed turn with it inside: that attempt is never silently re-sent.
+  steers?.onChange((record) => {
+    if (record.state === "delivered") attemptShowedOutput = true;
+  });
   // The host sees pi's committed turns as session ids AND resume points (a
   // rewind onto that row forks from it); segment boundaries are this runner's.
   const piEvents: AgentEvents = {
@@ -399,6 +407,7 @@ async function runPiAgentAs(
             client,
             request: piRequest,
             events: piEvents,
+            ...(steers ? { steers } : {}),
             ...(signal ? { signal } : {}),
             retry: {
               ...PI_OPEN_RETRY,
@@ -428,9 +437,9 @@ async function runPiAgentAs(
           // previous_response_id, or the same fresh session) runs once more — the
           // retired SDK runner's one empty-turn retry. Never once the user saw
           // output, and never for a follow-up turn (`input`, refused above). A
-          // steer queued meanwhile simply stays queued: once the retried turn
-          // completes it is delivered as the follow-up turn below, as it would
-          // have been after a non-empty answer (review-2 L2).
+          // steer still queued simply waits: once the retried turn completes it
+          // is delivered as the follow-up turn below, as it would have been
+          // after a non-empty answer (review-2 L2).
           if (
             !emptyRetried &&
             error instanceof PiTurnFailedError &&
@@ -486,9 +495,9 @@ async function runPiAgentAs(
         // through its cancel path instead of emitting `done`.
         if (signal?.aborted) throw new PiGatewayError("aborted");
       }
-      // Steers that arrived while pi was answering: pi cannot take them
-      // mid-response (design P2), so they become ONE follow-up turn. Checked
-      // and closed in the same tick so nothing slips between.
+      // Steers pi did not deliver mid-turn (they arrived as the response was
+      // ending, or start with a slash command pi would expand): ONE follow-up
+      // turn. Checked and closed in the same tick so nothing slips between.
       const pending = signal?.aborted ? [] : (steers?.undelivered() ?? []);
       if (pending.length === 0) {
         steers?.close();

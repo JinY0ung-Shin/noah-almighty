@@ -105,7 +105,7 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). An empty turn —
    pi's `empty_response` (no text, reasoning or tool call; pi does NOT commit it) — is re-sent ONCE as the same
    request (same `previous_response_id`, or the same fresh session; status line `모델이 빈 응답을 보내 한 번 더 시도하는 중…`),
-   never once a text delta or a question reached the user, a steer is queued, or for a steer follow-up turn. A model
+   never once a text delta, a question or a mid-turn steer reached the user, or for a steer follow-up turn. A model
    fallback chain (routines, task API: `modelFallback`) gives each attempt a fresh session.
 7. **Stop / failure** — a stop `cancel`s the live response, so pi COMMITS the partial turn (`incomplete`) and the runner
    reports its id. The chat route's cancel and error paths keep that id as `agent_session_id` (`sessionAfterAbort`):
@@ -116,12 +116,16 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    request carries the stopped prompt, no assistant message), so the route hands the stopped row's text as
    `AgentRequest.stoppedAnswer` and a CONTINUED turn's input restates it (`Stopped answer: …<stopped_answer>`, tail
    4 000 chars; `buildPiTurnPreamble`). A fresh session needs no note — its text history ends with that row.
+8. **Mid-turn messages (P2)** — a steer (or an async `ask_avatar` answer) is handed to the RUNNING response
+   (`POST /v1/responses/{id}/input`); pi folds it in at its next tool-call boundary and streams
+   `response.input_consumed`, which marks it delivered. One pi did not deliver (`undelivered_input`) stays queued and
+   goes with the rest as ONE follow-up turn after the response. Mechanics →
+   [`chat-sse-media.md`](chat-sse-media.md) "Mid-turn user messages".
 
 ## S1 degrades (pi changes P1–P6 are out of scope)
 
 | Gap | Noah-side behavior | Surfaces |
 |---|---|---|
-| no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the composer always says "지금 답변이 끝난 뒤 이어서 전달됩니다" (the `open` frame carries no delivery mode); the delivered row's badge is position-based (`steerBadgeLabel`: "답변 뒤 전달" after an assistant row — the retired CLI runner's mid-turn rows still read "응답 중 전달") |
 | model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
 | no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
 | context window (P5) | unknown (pi's model list carries none): the usage badge shows output tokens only; no compaction chip | — |
@@ -316,7 +320,8 @@ holds it:
   it framed by `consultationHistoryText` as that avatar's untrusted data, never as the owner's words. It is never a
   rewind/regenerate anchor, the client renders it under the consulted avatar's name (`@x 아바타의 답변`, badge `팀원
   상담 결과`), never shows it as a pending "나" bubble and never hands a dropped one back to the composer
-  (`SteerPublic.source`). After the pi response completes, `runPiAgent` keeps the run OPEN while jobs are pending
+  (`SteerPublic.source`). A result that lands while a pi response runs is folded into it like a typed steer; after
+  the pi response completes, `runPiAgent` keeps the run OPEN while jobs are pending
   (status `팀원 아바타의 답변을 기다리는 중…`, capped at the consultation budget + 30 s; a message the user sends wakes
   it too), then delivers everything queued as ONE follow-up turn (the steer `turn_end` contract). So the answer always
   lands in a live run the client is attached to — no server-started turn the client would only discover on reload. A
@@ -498,7 +503,7 @@ and reserved forever, and `<dataDir>/agent-sessions` (the CLI transcripts) is mo
 - `tests/pi-mcp-proxies.test.ts` — the relay plan (secret routing, skips, redaction set), the pool against a real
   stdio fixture (lazy start, names, no leaked process), hex-ssh's allowlist through the real policy proxy, a run
   through the endpoint (shared server via the real bridge, plugin server, redaction incl. a browser secret), async
-  ask_avatar as a follow-up turn, the never-waiting canvas, labels.
+  ask_avatar as a later message, the never-waiting canvas, labels.
 - `tests/pi-tool-discovery.test.ts` — the known-tools list (only this run's tools, deterministic, relays), the query line,
   describe_system's callable line, compact descriptions (hash-bound, safety rules kept), broker descriptions, unknown
   argument names refused at the endpoint. 

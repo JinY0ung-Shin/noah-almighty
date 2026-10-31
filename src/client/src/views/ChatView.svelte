@@ -813,10 +813,11 @@
   }
 
   /**
-   * When a message sent now reaches the avatar, as the composer says it: always
-   * once the current answer is done (a follow-up turn on the same run).
+   * When a message sent now reaches the avatar, as the composer says it: during
+   * the work, at its next tool-call boundary — so it can change what the avatar
+   * is doing (one that arrives as the turn ends follows as its own turn).
    */
-  const STEER_WHEN = "지금 답변이 끝난 뒤 이어서 전달됩니다";
+  const STEER_WHEN = "작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요";
 
   /**
    * The mid-turn send button's tooltip. A control disabled with no stated

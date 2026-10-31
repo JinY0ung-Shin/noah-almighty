@@ -550,13 +550,12 @@ export function consultationLabel(message: StoredMessage): string {
 
 /**
  * The badge on a delivered mid-turn message (`kind: "steer"`), from WHERE it sits
- * — the persisted rows carry no runtime, and position is what says when the
- * model got it. Folded in between tool calls (older runs of the retired SDK
- * runtime), it was persisted before that turn's answer, so it follows the turn's
- * opener: "응답 중 전달". Delivered only after an answer finished (every steer
- * today), it follows that answer's sealed segment: "답변 뒤 전달". Steers and
- * consultation answers queued together are skipped over, so each of a batch
- * reads the same.
+ * — position is what says when the model got it. Folded into the running turn
+ * (pi delivers it at a tool-call boundary), it was persisted before that turn's
+ * answer, so it follows the turn's opener: "응답 중 전달". Delivered only after an
+ * answer finished (the follow-up fallback), it follows that answer's sealed
+ * segment: "답변 뒤 전달". Steers and consultation answers delivered together are
+ * skipped over, so each of a batch reads the same.
  */
 export function steerBadgeLabel(messages: StoredMessage[], index: number): string {
   for (let i = index - 1; i >= 0; i--) {

@@ -2085,11 +2085,12 @@ describe("system tools (avatar system management)", () => {
       {},
     )).content[0].text ?? "";
     expect(on).toContain("Mid-turn user messages: ENABLED");
-    // Mirrors the prompt's per-turn run-kind line (piRunKindParagraph): pi has
-    // no mid-turn input, so a message sent while the avatar works arrives as
-    // the NEXT turn — the avatar must never promise to read it mid-answer.
-    expect(on).toContain("NOT shown to you between tool calls");
-    expect(on).toContain("it is delivered as the NEXT turn, right after your current answer finishes");
+    // Mirrors the prompt's per-turn run-kind line (piRunKindParagraph): pi folds
+    // a message sent while the avatar works into the running turn at its next
+    // tool-call boundary, and it may change the task.
+    expect(on).toContain("is delivered DURING your work");
+    expect(on).toContain("at your next tool-call boundary");
+    expect(on).toContain("may change the task");
     expect(on).toContain("let the newest instruction win");
     expect(on).not.toContain("Mid-turn user messages: not available");
   });

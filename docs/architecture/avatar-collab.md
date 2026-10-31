@@ -65,7 +65,7 @@
   the tool joins the server's tool list only when the executor is present, and the handler still
   self-gates on `viewerIsOwner`. Timeout on a busy model returns the PARTIAL streamed text in the error.
   In an interactive chat the call does not wait: it returns `Consultation ask-<id> … started in the background`
-  and the answer arrives as a follow-up turn (`agent/pi/asyncJobs.ts`); unattended runs (routines, task API) keep
+  and the answer arrives later as its own message (`agent/pi/asyncJobs.ts`); unattended runs (routines, task API) keep
   the waiting call. Mechanics → [`pi-runtime.md`](pi-runtime.md) "Asynchronous tools".
 - **Nothing persists on the target's side** — deliberate: a teammate chatting with your avatar in the UI
   leaves you no transcript either, and the intro/hashtag headless runs persist nothing. The exchange

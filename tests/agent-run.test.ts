@@ -165,6 +165,9 @@ function fakeClient(steps: Step[]) {
     async cancel() {
       return { status: "cancelled" };
     },
+    async input() {
+      throw new Error("not used");
+    },
     async listModels() {
       return [];
     },
@@ -575,19 +578,19 @@ describe("pi run loop (fake gateway)", () => {
 
   it("tells the model it can be interrupted only when the run really has a channel", async () => {
     const env = setup();
-    const NEXT_TURN = "arrives as the NEXT user turn";
+    const MID_TURN = "They are delivered DURING your work";
     const withChannel = fakeClient([() => textTurn("resp_c_1", "ok")]);
     await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents({ steers: new SteerChannel() }), undefined, {
       client: withChannel.client,
     });
-    expect(inputText(withChannel.requests[0]!)).toContain(NEXT_TURN);
+    expect(inputText(withChannel.requests[0]!)).toContain(MID_TURN);
 
     env.store.touchConversation(env.owner.id, "conv-2", env.owner.id, "x");
     const without = fakeClient([() => textTurn("resp_c_2", "ok")]);
     await runPiAgent({ ...env.baseRequest, conversationId: "conv-2" }, [], env.config, env.store, makeEvents(), undefined, {
       client: without.client,
     });
-    expect(inputText(without.requests[0]!)).not.toContain(NEXT_TURN);
+    expect(inputText(without.requests[0]!)).not.toContain(MID_TURN);
   });
 
   it("closes the steer channel at a steer-free boundary, so a late message is refused", async () => {

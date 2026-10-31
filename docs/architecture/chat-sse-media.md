@@ -1,7 +1,7 @@
 # Chat, SSE, and generated media
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
-> SSE sessions and history (pi sessions, rewind, steers as follow-up turns, AskUserQuestion), image attachments, `share_file` / PPTX / draw.io delivery, and the visual canvas.
+> SSE sessions and history (pi sessions, rewind, steers delivered into the running turn, AskUserQuestion), image attachments, `share_file` / PPTX / draw.io delivery, and the visual canvas.
 
 ## Chat / SSE / sessions
 - **Chat is SSE, and an owner turn can be driven from anywhere in the client.**
@@ -113,21 +113,32 @@
 - **Background work is gone.** The SDK runner's background phase (Bash `run_in_background`, background subagents,
   wake-up turns) left with it; pi's subagent (`Agent`, from the default-skills plugin) runs inside the turn and
   shows as ONE flat card (P6). A run ends at its answer (or its last steer follow-up turn).
-- **Mid-turn user messages ("steers") are delivered AFTER the current answer, as ONE follow-up turn of the same
-  run.** pi takes no input while a response streams (design P2), so `POST /api/chat/runs/:runId/message`
-  queues the text in the run's **`SteerChannel`** (`agent/steerChannel.ts`) — the per-run queue + state machine
+- **Mid-turn user messages ("steers") are delivered INTO the running turn of the same run** (user decision
+  2026-10-31), with a follow-up turn only as the fallback. `POST /api/chat/runs/:runId/message` queues the text
+  in the run's **`SteerChannel`** (`agent/steerChannel.ts`) — the per-run queue + state machine
   (`queued` → `delivered` → `completed`, or → `dropped`): `push`/`noteLifecycle`/`noteResultBoundary`/
   `undelivered`/`close`/`onChange`, bounded by `MAX_UNDELIVERED_STEERS` (10). It rides
   `openRun` meta, `pushRunSteer(runId, userId, text)` is the only writer
   (`not_found|unsupported|closed|too_many`), and `cancelRun`/`cancelAllRuns`/`closeRun` close it so every
-  undelivered record reports `dropped` BEFORE the run's terminal frame. **Delivery** (`runPiAgent`): when a pi
-  response completes, every undelivered steer is taken in the same tick; none → the channel closes and the run
-  ends. Otherwise `noteResultBoundary()`, `onTurnResult({steerPending:true})` for the segment just answered,
-  each steer marked `started` (= delivered), and ONE follow-up pi response on the same session carries them all
-  (a fresh turn preamble + the texts). A steer is plain text to pi — no slash dispatch exists there, so a
-  `/new …` steer is just words; steers carry no images, no slash expansion and no canvas, and a queued steer
-  cannot be cancelled. Async `ask_avatar` answers ride the same channel (see
-  [`pi-runtime.md`](pi-runtime.md) "Asynchronous tools").
+  undelivered record reports `dropped` BEFORE the run's terminal frame. **Mid-turn delivery** (`runPiTurn`,
+  `agent/pi/eventAdapter.ts`): from the response's `response.created` on, every queued record (and every one
+  pushed later) is handed ONCE to that response — `POST /v1/responses/{id}/input {client_id: record.id, text}`
+  (`responsesClient.input`); pi puts it into the context at its next tool-call boundary (after the running tool
+  calls, or right after the answer being written — pi then keeps the turn going) and streams
+  `response.input_consumed {client_id}`, which marks the record `started` (= delivered). That event is also a
+  text-block and retry-attempt boundary in the adapter, so text written before it folds like narration before
+  a tool call. A refusal (404/409: the response is ending, e.g. on AskUserQuestion) or a failed call leaves the
+  record queued; after a question the answer's response takes it. A text starting with `/` is never handed over
+  (pi would expand it as a skill/prompt template), so it always takes the fallback. A delivered steer counts as
+  shown output: the empty-turn retry never re-sends an attempt pi folded one into (pi rewinds a failed turn,
+  the steer with it). **Fallback** (`runPiAgent`): when a pi response completes, every STILL-queued steer (pi
+  lists what it took but never delivered in `undelivered_input` and drops it from its queue; Noah needs no
+  parse — those records simply stayed `queued`) is taken in the same tick; none → the channel closes and the
+  run ends. Otherwise `noteResultBoundary()`, `onTurnResult({steerPending:true})` for the segment just answered,
+  each steer marked `started`, and ONE follow-up pi response on the same session carries them all (a fresh turn
+  preamble + the texts). Steers carry no images and no canvas, and a queued steer cannot be cancelled. Async
+  `ask_avatar` answers ride the same channel and the same two paths (see [`pi-runtime.md`](pi-runtime.md)
+  "Asynchronous tools").
   **`turn_end` vs `done`:** on a steer-pending boundary the chat route persists the visible segment (its text,
   or `STEER_TURN_END_PLACEHOLDER` when it was empty) and emits `turn_end {message, response}` — payload shape
   identical to `done`, but the run is kept OPEN, the `persisted*Offset`s advance and `turnFinalized` is
@@ -138,18 +149,20 @@
   `agent_session_id` (its steer lives only in Noah's rows) — [`pi-runtime.md`](pi-runtime.md) "Stop / failure".
   **Persistence happens at DELIVERY, never at accept:** the `delivered` listener writes the user row with
   `kind:"steer"` (`messages.kind`, `addColumnIfMissing`) and carries it back inside the frame as
-  `steer.message`, so a message the model never saw never enters history.
+  `steer.message`, so a message the model never saw never enters history. A mid-turn steer is therefore
+  persisted BEFORE the assistant row of the answer it joined.
   **Endpoint:** `POST /api/chat/runs/:runId/message` — session cookie only (never a personal API key),
   plain text capped at `MAX_STEER_LENGTH` (20k chars); 400 empty/too long, 404 unknown/ended/other-user
   run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **Out of scope by design:**
   external-task-API and headless turns get NO channel (`steers` undefined → `midTurnMessages` false on both
-  metacognition surfaces). The `open` frame carries no delivery mode any more: the composer always says
-  "지금 답변이 끝난 뒤 이어서 전달됩니다". Client: pending steers render as dimmed 전달 대기 중 bubbles above the live
-  bubble, `delivered` moves them into `pane.messages`, `dropped` returns the text to the composer with a toast,
-  and `turn_end` seals the bubble via `finalizeVisibleTurn` while `endLiveTurn` keeps `streaming` true. The
-  delivered row's badge is derived from its POSITION (`steerBadgeLabel`): after a sealed answer segment it reads
-  "답변 뒤 전달" (every steer today); rows the retired SDK runner folded between tool calls sit right after the
-  turn opener and keep "응답 중 전달". **Both frames must be replay-idempotent** — they ride the ordered run-event
+  metacognition surfaces, which otherwise say a message arrives DURING the work at the next tool-call boundary
+  and may change the task). The `open` frame carries no delivery mode: the composer always says
+  "작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요". Client: pending steers render as dimmed 전달 대기 중 bubbles above
+  the live bubble, `delivered` moves them into `pane.messages`, `dropped` returns the text to the composer with a
+  toast, and `turn_end` seals the bubble via `finalizeVisibleTurn` while `endLiveTurn` keeps `streaming` true.
+  The delivered row's badge is derived from its POSITION (`steerBadgeLabel`): a mid-turn steer sits right after
+  the turn opener (or another steer) and reads "응답 중 전달"; a fallback one follows a sealed answer segment and
+  reads "답변 뒤 전달". **Both frames must be replay-idempotent** — they ride the ordered run-event
   log, so a reattach re-applies them (see [`client.md`](./client.md) for the wire contract).
 
 ## Image attachments
