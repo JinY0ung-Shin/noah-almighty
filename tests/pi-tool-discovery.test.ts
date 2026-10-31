@@ -87,6 +87,9 @@ function fakeClient(steps: ((req: PiResponseRequest) => PiStreamEvent[] | Promis
     async cancel() {
       return { status: "cancelled" };
     },
+    async input() {
+      throw new Error("not used");
+    },
     async listModels() {
       return [];
     },

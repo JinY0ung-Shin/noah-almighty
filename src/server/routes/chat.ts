@@ -1544,8 +1544,9 @@ export async function executeChatTurn(
         config,
         store,
         {
-          // Mid-turn messages: the run loop sends whatever lands here as the
-          // follow-up turn after the current answer and reports each record's
+          // Mid-turn messages: the run hands whatever lands here to the
+          // running pi response (or, if pi did not deliver it, the follow-up
+          // turn after the current answer) and reports each record's
           // lifecycle, which drives the `steer` frames subscribed above.
           steers,
           onDelta: (text) => {
@@ -3289,9 +3290,10 @@ export function createChatRouter({
   );
 
   // Send ANOTHER message while the run is still streaming (a "steer"). It is
-  // not a new run: it queues on the run's SteerChannel, and when the current pi
-  // response completes the run loop delivers every queued steer together as ONE
-  // follow-up turn in the same session (pi has no mid-turn input). Session cookie only,
+  // not a new run: it queues on the run's SteerChannel and is handed to the
+  // running pi response, which folds it in at its next tool boundary; one pi
+  // did not deliver before the response ended becomes, with the rest, ONE
+  // follow-up turn in the same session. Session cookie only,
   // exactly like /api/chat/respond; personal API keys are never accepted here.
   // Plain text by design: no slash-command expansion, no images, no canvas.
   router.post(

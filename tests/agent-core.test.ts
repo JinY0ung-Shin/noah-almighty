@@ -2324,8 +2324,9 @@ describe("buildPrompt", () => {
     const over = { viewerIsOwner: true, midTurnMessages: true };
     const t = turn(over);
     expect(t).toContain("The user may send additional messages while you are working");
-    // pi folds a steer in only after the answer: the line must not promise more.
-    expect(t).toContain("each one arrives as the NEXT user turn, right after your current answer finishes");
+    // pi folds a steer into the running turn at its next tool-call boundary.
+    expect(t).toContain("a new message appears as a user message at your next tool-call boundary");
+    expect(t).toContain("it may change the task");
     expect(t).toContain("let the newest instruction take precedence");
     expect(t).toContain("briefly acknowledge the change instead of restarting");
     // Never in the frozen append.

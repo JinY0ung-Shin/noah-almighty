@@ -1500,10 +1500,10 @@ function piRunKindParagraph(request: AgentRequest): string {
   return (
     "Run kind (this turn): interactive chat — a person is on the other side of this conversation." +
     (request.midTurnMessages === true
-      ? " The user may send additional messages while you are working. On this runtime they are NOT shown to you between tool calls: each one arrives as the NEXT user turn, right after your current answer finishes. When one arrives, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch."
+      ? " The user may send additional messages while you are working. They are delivered DURING your work: a new message appears as a user message at your next tool-call boundary (after the current tool calls finish, or right after the answer you are writing), and it may change the task. Read it before you continue, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch. One that arrives just as you finish comes as the next user turn instead."
       : "") +
     (request.piRuntime?.asyncAskAvatar
-      ? " `mcp__avatars__ask_avatar` returns at once with a consultation id; the answer arrives as its own message after your current answer (Noah keeps the run open for it), so tell the user whom you asked instead of waiting or polling."
+      ? " `mcp__avatars__ask_avatar` returns at once with a consultation id; the answer arrives later as its own message — at your next tool-call boundary while you are still working, otherwise right after your current answer (Noah keeps the run open for it) — so tell the user whom you asked instead of waiting or polling."
       : "") +
     authority
   );

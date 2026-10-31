@@ -268,7 +268,7 @@ describe.skipIf(!LIVE)("runPiAgent live (e2e instance)", () => {
   const textOf = (content: unknown) =>
     typeof content === "string" ? content : JSON.stringify(content);
 
-  it("frozen instructions, continuation, an effort change, then steers as one follow-up turn", async () => {
+  it("frozen instructions, continuation, an effort change, then a steer folded into the running turn", async () => {
     const { store, config } = services;
     const user = store.createUser({ username: `live-${randomUUID().slice(0, 6)}`, displayName: "Live", password: "password123" });
     const conversationId = randomUUID();
@@ -332,11 +332,11 @@ describe.skipIf(!LIVE)("runPiAgent live (e2e instance)", () => {
       },
       undefined,
     );
-    expect(r4.text).toBe("fifth");
-    expect(turnResults).toEqual([
-      expect.objectContaining({ text: "fourth", steerPending: true }),
-      expect.objectContaining({ text: "fifth", steerPending: false }),
-    ]);
+    // The steer lands while the "fourth" call is delayed; pi folds it in right after that answer and
+    // keeps the SAME response going (no follow-up turn). No fold sink here, so both blocks stay.
+    expect(r4.text).toBe("fourth\n\nfifth");
+    expect(turnResults).toEqual([expect.objectContaining({ text: "fourth\n\nfifth", steerPending: false })]);
+    expect(steers.records().map((r) => [r.state, r.followUp])).toEqual([["completed", false]]);
     const reqs = await llmRequests(key);
     expect(reqs).toHaveLength(5);
     const system = (i: number) => textOf(reqs[i]!.body.messages[0]!.content);

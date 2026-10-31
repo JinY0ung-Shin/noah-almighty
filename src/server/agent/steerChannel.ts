@@ -1,21 +1,22 @@
 /**
  * Inbound MID-TURN user messages ("steers") for one live chat run.
  *
- * While the avatar is streaming, the viewer can send another message. pi has
- * no mid-turn input (design P2), so it is NOT folded into the running answer:
- * the run loop (`pi/runPiAgent.ts`) takes every queued record at the response
- * boundary and sends them TOGETHER as ONE follow-up turn of the same run (the
- * chat route's `turn_end` contract). Background-job results ride the same
- * queue (`pi/asyncJobs.ts`).
+ * While the avatar is streaming, the viewer can send another message. It is
+ * folded INTO the running answer (design P2): `pi/eventAdapter.ts`'s
+ * `runPiTurn` hands each queued record to the live pi response, which delivers
+ * it at its next tool boundary (`response.input_consumed`). A record pi did
+ * not deliver before the response ended stays queued, and the run loop
+ * (`pi/runPiAgent.ts`) sends every such record TOGETHER as ONE follow-up turn
+ * of the same run (the chat route's `turn_end` contract). Background-job
+ * results ride the same queue (`pi/asyncJobs.ts`).
  *
  * This class is the queue + the state machine between the route and the loop:
  *
- *   route  --push()-->  [queued]  --undelivered()-->  run loop --> pi
+ *   route  --push()-->  [queued]  --undelivered()-->  live pi response | follow-up turn
  *   run loop  --noteLifecycle()-->  listeners --> SSE
  *
- * A record the run loop never starts (the run was cancelled, errored, or
- * wrapped up first) ends as `dropped` and is never persisted to history — the
- * model never saw it.
+ * A record the model never received (the run was cancelled, errored, or
+ * wrapped up first) ends as `dropped` and is never persisted to history.
  *
  * Deliberately dependency-free (only `node:crypto`): it is unit-tested on its
  * own and is consumed from both the run loop and the HTTP route.
@@ -26,8 +27,9 @@ import { randomUUID } from "node:crypto";
 /**
  * Lifecycle of one mid-turn message.
  *  - `queued`    accepted by the server, not yet handed to the model.
- *  - `delivered` the run loop sent it as the follow-up turn's input.
- *  - `completed` that follow-up turn was answered (informational).
+ *  - `delivered` the model received it: pi folded it into the running turn,
+ *                or the run loop sent it as the follow-up turn's input.
+ *  - `completed` the run's answer covering it finished (informational).
  *  - `dropped`   it never reached the model (run cancelled/errored/closed).
  */
 export type SteerState = "queued" | "delivered" | "completed" | "dropped";
@@ -63,8 +65,8 @@ export interface SteerRecord {
   state: SteerState;
   /**
    * True when the running answer's boundary passed while this record was still
-   * `queued`: it starts its OWN follow-up turn (on pi every steer does). Set by
-   * `noteResultBoundary`, reported to the client on `delivered`.
+   * `queued`: it starts its OWN follow-up turn instead of joining the running
+   * one. Set by `noteResultBoundary`, reported to the client on `delivered`.
    */
   followUp: boolean;
 }

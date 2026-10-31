@@ -91,6 +91,9 @@ function fakeClient(streams: PiStreamEvent[][], opts: { holdAfter?: number } = {
       release?.();
       return { status: "cancelling" };
     },
+    async input() {
+      throw new Error("not used");
+    },
     async listModels() {
       return [];
     },
@@ -325,6 +328,28 @@ describe("PiEventAdapter edge semantics (synthetic frames per pi api/mapper.ts)"
         expect(adapter.answerText(true)).toBe("The full answer.");
       } else {
         expect(adapter.answerText(true)).toBe("Looking first.\n\nThe full answer.");
+      }
+    }
+  });
+
+  it("a consumed mid-turn message is a block boundary even inside one message item (pi continues the answer)", () => {
+    for (const fold of [false, true]) {
+      const { events, calls } = recorder({ fold });
+      const adapter = new PiEventAdapter(events);
+      feed(adapter, [
+        created,
+        msgAdded("msg_1"),
+        delta("msg_1", "Here is X."),
+        ev("response.input_consumed", { client_id: "s1" }),
+        delta("msg_1", "And Y, as you asked."),
+        msgDone("msg_1", "completed"),
+        ev("response.completed", { response: { id: "resp_s_1", status: "completed" } }),
+      ]);
+      if (fold) {
+        expect(only(calls, "fold")).toEqual([["fold", "Here is X."]]);
+        expect(adapter.answerText(true)).toBe("And Y, as you asked.");
+      } else {
+        expect(adapter.answerText(true)).toBe("Here is X.\n\nAnd Y, as you asked.");
       }
     }
   });

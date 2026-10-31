@@ -41,10 +41,15 @@
  *   brackets it with `response.compaction` (`in_progress` → `completed` |
  *   `failed`): a live status label while it runs, `onCompact` when it ends.
  *   The badge's window is pi's `usage.context_window`.
+ * - A mid-turn message (`runPiTurn`'s `steers`) is handed to the streaming
+ *   response (`POST …/input`); `response.input_consumed` says pi put it into the
+ *   context, and the next model call follows it — a block and attempt boundary
+ *   like a tool result, even when the model was writing its final answer.
  */
 import type { AgentUsage } from "../../types.js";
 import { MAIN_AGENT_ID, type AgentEvents, type QuestionAnswer } from "../events.js";
 import { asString, isRecord, truncate } from "../agentUtils.js";
+import type { SteerChannel } from "../steerChannel.js";
 import { mcpToolInputSummary, sdkToolLabel } from "../../../shared/sdkToolPresentation.js";
 import {
   PiGatewayError,
@@ -483,6 +488,11 @@ export class PiEventAdapter {
         }
         return null;
       }
+      case "response.input_consumed":
+        // A mid-turn message joined the context; the next model call answers it.
+        this.closeText();
+        this.attemptStartBlock = this.blocks.length;
+        return null;
       case "response.completed":
       case "response.incomplete":
       case "response.failed":
@@ -623,6 +633,14 @@ export interface RunPiTurnOptions extends PiEventAdapterOptions {
   maxQuestionRounds?: number;
   /** After an abort, how long to wait for pi's `incomplete(user_cancelled)` before cutting the stream. */
   cancelGraceMs?: number;
+  /**
+   * The run's mid-turn messages (design P2). Each queued record is handed to the
+   * response streaming at that moment; pi's `response.input_consumed` marks it
+   * delivered. One pi does not take, or takes but never delivers before the turn
+   * ends (reported in `undelivered_input`), simply stays queued: the runner sends
+   * it as the follow-up turn.
+   */
+  steers?: SteerChannel;
 }
 
 function sumUsage(previous: AgentUsage | undefined, next: AgentUsage | undefined): AgentUsage | undefined {
@@ -657,6 +675,7 @@ export async function runPiTurn(options: RunPiTurnOptions): Promise<PiRunResult>
   const maxRounds = options.maxQuestionRounds ?? 20;
   const graceMs = options.cancelGraceMs ?? 5_000;
   const outer = options.signal;
+  const steers = options.steers;
   let request = options.request;
   let usage: AgentUsage | undefined;
 
@@ -676,16 +695,40 @@ export async function runPiTurn(options: RunPiTurnOptions): Promise<PiRunResult>
     if (outer?.aborted) throw new PiGatewayError("aborted");
     outer?.addEventListener("abort", onAbort, { once: true });
     adapter.responseId = null;
+    // The response that takes mid-turn input right now, and the records already handed to it.
+    let live: string | null = null;
+    const handed = new Set<string>();
+    const handOver = (): void => {
+      const responseId = live;
+      if (!steers || !responseId) return;
+      for (const record of steers.undelivered()) {
+        // pi would expand a leading slash command (a skill or prompt template); the follow-up turn never does.
+        if (handed.has(record.id) || record.text.startsWith("/")) continue;
+        handed.add(record.id);
+        // A refusal (the turn is ending, e.g. on a question) or a failed call leaves it queued for the follow-up.
+        options.client.input(responseId, request.user, { clientId: record.id, text: record.text }).catch(() => undefined);
+      }
+    };
+    const offSteers = steers?.onChange((_record, change) => {
+      if (change.previous === null) handOver();
+    });
     let outcome: PiTurnOutcome | null = null;
     try {
       for await (const event of options.client.stream(request, { signal: inner.signal, retry: options.retry })) {
         outcome = adapter.handle(event);
         if (outcome) break;
+        if (event.type === "response.created") {
+          live = adapter.responseId;
+          handOver();
+        } else if (event.type === "response.input_consumed") {
+          steers?.noteLifecycle(asString(event.data.client_id), "started");
+        }
       }
     } catch (error) {
       if (outer?.aborted) throw new PiGatewayError("aborted", { cause: error });
       throw error;
     } finally {
+      offSteers?.();
       outer?.removeEventListener("abort", onAbort);
       if (graceTimer) clearTimeout(graceTimer);
     }

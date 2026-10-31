@@ -81,6 +81,9 @@ vi.mock("../src/server/agent/pi/responsesClient.js", async (importOriginal) => {
       async cancel() {
         return { status: "cancelled" };
       },
+      async input() {
+        throw new Error("not used");
+      },
       async listModels() {
         return [];
       },

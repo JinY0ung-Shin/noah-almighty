@@ -249,7 +249,7 @@ export interface RunCapabilityOptions {
   /**
    * pi runs with a live steer channel (interactive chat): background jobs of
    * this run (design D8). `ask_avatar` starts its consultation here and
-   * returns at once; runPiAgent delivers the answer as a follow-up turn.
+   * returns at once; runPiAgent delivers the answer like a steer (mid-turn or a follow-up turn).
    */
   piAsyncJobs?: PiAsyncJobs;
 }
@@ -728,7 +728,7 @@ export async function buildRunCapabilities(
         reservedNames: PI_NOAH_SERVER_NAMES,
       });
   // pi + an interactive chat (a live steer channel): ask_avatar runs in the
-  // background and its answer arrives as a follow-up message (design D8).
+  // background and its answer arrives as a later message (design D8).
   // Unattended pi runs (routines, the task API) keep the waiting call.
   //
   // Avatar consultation (#ask-avatar): OWNER-DRIVEN runs (owner chats + owner
@@ -852,7 +852,7 @@ export async function buildRunCapabilities(
           askCaptureHint:
             personalKnowledgeToolsEnabled && knowledgeRepoConfigured,
           // pi interactive chat (design D8): the consultation runs in the
-          // background; its answer reaches the model as a follow-up message.
+          // background; its answer reaches the model as a later message.
           ...(piAsyncAsk
             ? {
                 startAskAvatar: async (targetUsername: string, question: string) => {

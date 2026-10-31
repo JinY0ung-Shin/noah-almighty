@@ -337,6 +337,24 @@ describe("cancel / models / files", () => {
     expect(err.code).toBe("response_not_cancellable");
   });
 
+  it("hands mid-turn input to a running response with ?user= and a JSON body; 409 maps to conflict", async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "resp_e_2", object: "response.input", client_id: "s-1", status: "queued" }));
+    };
+    await expect(client().input("resp_e_2", "u1", { clientId: "s-1", text: "also this" })).resolves.toBeUndefined();
+    expect(seen[0]!.method).toBe("POST");
+    expect(seen[0]!.url).toBe("/v1/responses/resp_e_2/input?user=u1");
+    expect(seen[0]!.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(seen[0]!.body)).toEqual({ client_id: "s-1", text: "also this" });
+
+    handler = (_req, res) =>
+      errorBody(res, 409, { message: "no longer running", type: "invalid_request_error", code: "response_not_running" });
+    const err = await client().input("resp_e_2", "u1", { clientId: "s-2", text: "late" }).catch((e) => e);
+    expect(err.kind).toBe("conflict");
+    expect(err.code).toBe("response_not_running");
+  });
+
   it("lists models and downloads a presented file", async () => {
     handler = (req, res) => {
       if (req.url === "/v1/models") {

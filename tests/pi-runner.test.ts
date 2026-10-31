@@ -46,8 +46,10 @@ const dir = withTempDir("pi-runner");
 
 type Step = (req: PiResponseRequest) => PiStreamEvent[] | Error | Promise<PiStreamEvent[] | Error>;
 
-function fakeClient(steps: Step[]) {
+/** `acceptInput`: pi takes mid-turn input (`POST …/input` succeeds); otherwise every call is refused (404). */
+function fakeClient(steps: Step[], { acceptInput = false } = {}) {
   const requests: PiResponseRequest[] = [];
+  const inputs: { responseId: string; user: string; clientId: string; text: string }[] = [];
   let index = 0;
   const client: PiResponsesClient = {
     async *stream(req) {
@@ -61,6 +63,10 @@ function fakeClient(steps: Step[]) {
     async cancel() {
       return { status: "cancelled" };
     },
+    async input(responseId, user, input) {
+      inputs.push({ responseId, user, ...input });
+      if (!acceptInput) throw new PiGatewayError("not_found", { status: 404 });
+    },
     async listModels() {
       return [];
     },
@@ -68,7 +74,7 @@ function fakeClient(steps: Step[]) {
       throw new Error("not used");
     },
   };
-  return { client, requests };
+  return { client, requests, inputs };
 }
 
 const ev = (type: string, data: Record<string, unknown>): PiStreamEvent => ({ type, data });
@@ -381,11 +387,11 @@ describe("runPiAgent", () => {
     expect(req!.instructions).toContain("Runtime: your own pi sandbox");
     expect(req!.instructions).toContain(conversationDir);
     // Run-kind guidance (mid-turn messages included) rides the turn input (M2).
-    expect(req!.instructions).not.toContain("arrives as the NEXT user turn");
+    expect(req!.instructions).not.toContain("They are delivered DURING your work");
     expect(req!.instructions).not.toContain("[Current date and time");
     expect(inputText(req!)).toMatch(/^\[Current date and time: \d{4}-\d\d-\d\d \d\d:\d\d KST\]/);
     expect(inputText(req!)).toContain("Run kind (this turn): interactive chat");
-    expect(inputText(req!)).toContain("arrives as the NEXT user turn");
+    expect(inputText(req!)).toContain("They are delivered DURING your work");
     expect(inputText(req!)).toContain("User message:\nhello there");
     expect(of(calls, "session")).toEqual(["resp_s1_1"]);
     expect(of(calls, "resume")).toEqual([{ sessionId: "resp_s1_1", uuid: "resp_s1_1" }]);
@@ -621,13 +627,13 @@ describe("runPiAgent", () => {
       ? [inputText(first!), inputText(second!)]
       : [inputText(second!), inputText(first!)];
     expect(routineText).toContain("Run kind (this turn): the **automated execution** of a scheduled routine");
-    expect(routineText).not.toContain("arrives as the NEXT user turn");
+    expect(routineText).not.toContain("They are delivered DURING your work");
     expect(chatText).toContain("Run kind (this turn): interactive chat");
-    expect(chatText).toContain("arrives as the NEXT user turn");
+    expect(chatText).toContain("They are delivered DURING your work");
     expect(chatText).not.toContain("do not ask questions");
   });
 
-  it("delivers mid-turn messages together as ONE follow-up turn after the answer (turn_end contract)", async () => {
+  it("sends steers pi did not take as ONE follow-up turn after the answer (turn_end contract)", async () => {
     const { store, config, base } = setup();
     const steers = new SteerChannel();
     const { client, requests } = fakeClient([
@@ -654,6 +660,92 @@ describe("runPiAgent", () => {
       ["completed", true],
     ]);
     expect(steers.closed).toBe(true);
+  });
+
+  it("folds a steer into the RUNNING pi response: pi delivers it at the next tool boundary, no follow-up turn", async () => {
+    const { store, config, base } = setup();
+    const steers = new SteerChannel();
+    const seen: string[] = [];
+    steers.onChange((record) => seen.push(record.state));
+    const { client, requests, inputs } = fakeClient(
+      [
+        () => {
+          const record = steers.push("also check the logs")!;
+          return [
+            ev("response.created", { response: { id: "resp_m_1", model: "fake-model", status: "in_progress" } }),
+            ev("response.output_item.added", { item: { type: "message", id: "m1" } }),
+            ev("response.output_text.delta", { delta: "Looking." }),
+            ev("response.tool_use", { tool_use_id: "t1", name: "bash", input: { command: "ls" } }),
+            ev("response.tool_result", { tool_use_id: "t1", is_error: false }),
+            ev("response.input_consumed", { client_id: record.id }),
+            ev("response.output_text.delta", { delta: "Checked the logs too." }),
+            ev("response.output_item.done", { item: { type: "message", id: "m1", status: "completed" } }),
+            ev("response.completed", { response: { id: "resp_m_1", status: "completed" } }),
+          ];
+        },
+      ],
+      { acceptInput: true },
+    );
+    const { events, calls } = recorder({ steers });
+    const response = await runPiAgent(base(), [], config, store, events, undefined, { client });
+
+    // Handed to THAT response, under the run's principal, keyed by the record id.
+    expect(inputs).toEqual([{ responseId: "resp_m_1", user: requests[0]!.user, clientId: steers.records()[0]!.id, text: "also check the logs" }]);
+    expect(requests).toHaveLength(1);
+    expect(response.text).toBe("Checked the logs too.");
+    expect(of(calls, "turnResult")).toEqual([expect.objectContaining({ steerPending: false })]);
+    expect(seen).toEqual(["queued", "delivered", "completed"]);
+    expect(steers.records()[0]!.followUp).toBe(false);
+  });
+
+  it("sends a steer pi took but never delivered — or one starting with a slash — as the follow-up turn", async () => {
+    const { store, config, base } = setup();
+    const steers = new SteerChannel();
+    const { client, requests, inputs } = fakeClient(
+      [
+        () => {
+          steers.push("one more thing");
+          steers.push("/skill:deck make it short");
+          // pi accepted the input but the turn ended first (`undelivered_input`).
+          return textTurn("resp_u_1", "First answer");
+        },
+        () => textTurn("resp_u_2", "Follow-up answer"),
+      ],
+      { acceptInput: true },
+    );
+    const response = await runPiAgent(base(), [], config, store, recorder({ steers }).events, undefined, { client });
+
+    // pi would expand a leading slash command, so that one is never handed over.
+    expect(inputs.map((i) => i.text)).toEqual(["one more thing"]);
+    expect(response.text).toBe("Follow-up answer");
+    expect(requests[1]!.previousResponseId).toBe("resp_u_1");
+    expect(inputText(requests[1]!)).toMatch(/one more thing\n\n\/skill:deck make it short$/);
+    expect(steers.records().map((r) => [r.state, r.followUp])).toEqual([
+      ["completed", true],
+      ["completed", true],
+    ]);
+  });
+
+  it("never silently re-sends an empty turn pi folded a steer into (pi rewinds it with the steer)", async () => {
+    const { store, config, base } = setup();
+    const steers = new SteerChannel();
+    const { client, requests } = fakeClient(
+      [
+        () => {
+          const record = steers.push("stop and summarize")!;
+          return [
+            ev("response.created", { response: { id: "resp_x_2", model: "fake-model", status: "in_progress" } }),
+            ev("response.input_consumed", { client_id: record.id }),
+            ev("response.failed", { response: { id: "resp_x_2", status: "failed", error: { code: "empty_response", message: "No response generated" } } }),
+          ];
+        },
+      ],
+      { acceptInput: true },
+    );
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_x_1" }), [], config, store, recorder({ steers }).events, undefined, { client }),
+    ).rejects.toMatchObject({ code: "empty_response" });
+    expect(requests).toHaveLength(1);
   });
 
   it("retries an empty turn (empty_response) ONCE on the same previous_response_id", async () => {
@@ -847,7 +939,7 @@ describe("runPiAgent", () => {
     const describeText = JSON.stringify(seen.describe);
     expect(describeText).toContain("runtime: pi (pi-gateway)");
     expect(describeText).toContain(`/workspace/c/${piConversationSegment("conv-1")}`);
-    expect(describeText).toContain("delivered as the NEXT turn");
+    expect(describeText).toContain("is delivered DURING your work");
     expect(describeText).toContain("conversation scratch workspace (`/workspace/c/");
     void owner;
   });
@@ -929,7 +1021,7 @@ describe("pi prompt variant", () => {
     expect(pi).not.toContain("Conversation rewind (this turn)");
     expect(pi).not.toContain("submitted by an **EXTERNAL SYSTEM**");
     expect(pi).toContain("`API_TOKEN` is set to 셸 노출 and present as `$NAME` environment variables in every `bash` command of this run");
-    expect(pi).not.toContain("arrives as the NEXT user turn");
+    expect(pi).not.toContain("They are delivered DURING your work");
     const turn = buildPiTurnPreamble(owner, { now: new Date("2026-10-29T00:00:00Z") });
     expect(turn).toContain("[Current date and time: 2026-10-29 09:00 KST]");
     expect(turn).toContain("Conversation rewind (this turn)");
@@ -971,7 +1063,7 @@ describe("pi prompt variant", () => {
     // No run-kind branch, mid-turn line, background-ask line or open-repo line in it.
     expect(frozen).not.toContain("automated execution");
     expect(frozen).not.toContain("talking to right now");
-    expect(frozen).not.toContain("arrives as the NEXT user turn");
+    expect(frozen).not.toContain("They are delivered DURING your work");
     expect(frozen).not.toContain("returns at once with a consultation id");
     expect(frozen).not.toContain("Working repository");
     // It points at the per-turn note instead, and keeps the owner's standing state.
@@ -985,12 +1077,12 @@ describe("pi prompt variant", () => {
     expect(routineTurn).toContain("Run kind (this turn): the **automated execution** of a scheduled routine");
     expect(routineTurn).toContain("do not ask questions");
     expect(routineTurn).toContain("mcp__system__notify_user");
-    expect(routineTurn).not.toContain("arrives as the NEXT user turn");
+    expect(routineTurn).not.toContain("They are delivered DURING your work");
     expect(routineTurn).not.toContain("returns at once with a consultation id");
 
     const chatTurn = buildPiTurnPreamble(chat, { now });
     expect(chatTurn).toContain("Run kind (this turn): interactive chat — a person is on the other side of this conversation.");
-    expect(chatTurn).toContain("arrives as the NEXT user turn");
+    expect(chatTurn).toContain("They are delivered DURING your work");
     expect(chatTurn).toContain("returns at once with a consultation id");
     expect(chatTurn).not.toContain("do not ask questions");
 

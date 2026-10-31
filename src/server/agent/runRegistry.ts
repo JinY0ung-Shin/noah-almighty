@@ -358,8 +358,9 @@ export function awaitResponse(
 
 /**
  * Accept a MID-TURN user message ("steer") for a live run: the viewer typed
- * something while the avatar was still answering. The run loop sends every
- * queued one, together, as the follow-up turn once the current answer is done.
+ * something while the avatar was still answering. pi folds it into the running
+ * turn at its next tool boundary; one it did not is sent, together with the
+ * rest, as the follow-up turn once the current answer is done.
  *
  * Scoped exactly like the other run endpoints — an unknown, ended, or
  * other-user run is `not_found` and says nothing more. The refusals map 1:1 to

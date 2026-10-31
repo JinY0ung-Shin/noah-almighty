@@ -5,10 +5,12 @@
  *
  * Delivery reuses the steer path: a finished job pushes its result into the
  * run's SteerChannel (model-facing English text + the Korean bubble the chat
- * shows), and runPiAgent turns undelivered steers into ONE follow-up turn after
- * the current pi response. The runner keeps the run OPEN while jobs are pending
- * (`waitForChange`), so a result always finds a live run; when the run ends
- * anyway (cancel, error) every pending job is aborted and nothing is delivered.
+ * shows), so it reaches the model like a typed steer — folded into the running
+ * pi response at its next tool boundary, or (no response running, or pi did not
+ * take it) as the follow-up turn runPiAgent starts. The runner keeps the run
+ * OPEN while jobs are pending (`waitForChange`), so a result always finds a live
+ * run; when the run ends anyway (cancel, error) every pending job is aborted
+ * and nothing is delivered.
  */
 import { randomUUID } from "node:crypto";
 import logger from "../../logger.js";

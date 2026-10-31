@@ -179,6 +179,9 @@ function fakeClient(steps: Step[]) {
     async cancel() {
       return { status: "cancelled" };
     },
+    async input() {
+      throw new Error("not used");
+    },
     async listModels() {
       return [];
     },

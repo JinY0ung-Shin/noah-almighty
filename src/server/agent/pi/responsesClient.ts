@@ -4,7 +4,7 @@
  *
  * Contract (pi-gateway `apps/gateway/src/api/{responses,request,sse,files}.ts`):
  * - Auth is the SERVICE key (`Authorization: Bearer …`); every call names the
- *   principal in `user` (body for POST, `?user=` for GET/cancel). pi trusts it.
+ *   principal in `user` (body for POST /v1/responses, `?user=` for GET/cancel/input). pi trusts it.
  * - A turn continues a session by `previous_response_id` (`resp_<uuid>_<turn>`).
  *   `instructions` is accepted ONLY on the first turn (a session's system prompt
  *   is fixed — design D2). `reasoning.effort` is fixed at session creation too
@@ -475,6 +475,12 @@ export interface PiResponsesClient {
   stream(request: PiResponseRequest, options?: PiStreamOptions): AsyncGenerator<PiStreamEvent>;
   /** `POST /v1/responses/{id}/cancel?user=` → the stream ends `incomplete` (`user_cancelled`) and the turn is KEPT. */
   cancel(responseId: string, user: string, signal?: AbortSignal): Promise<{ status: string }>;
+  /**
+   * `POST /v1/responses/{id}/input?user=` → pi hands `text` to the RUNNING turn at its next tool boundary and
+   * streams `response.input_consumed {client_id}`; one the turn ends without delivering is listed in the final
+   * response's `undelivered_input`. 404/409: the response is not (or no longer) taking input.
+   */
+  input(responseId: string, user: string, input: { clientId: string; text: string }, signal?: AbortSignal): Promise<void>;
   listModels(signal?: AbortSignal): Promise<PiModel[]>;
   /** A `present_file` item's bytes. `path` must be under `/workspace`. */
   fileContent(path: string, user: string, signal?: AbortSignal): Promise<PiFileContent>;
@@ -531,6 +537,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     path: string,
     query: Record<string, string>,
     signal: AbortSignal | undefined,
+    body?: Record<string, unknown>,
   ): Promise<Response> {
     const url = joinUrl(config.baseUrl, path);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
@@ -544,7 +551,8 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     try {
       const response = await doFetch(url, {
         method,
-        headers: { ...auth, Accept: "application/json" },
+        headers: { ...auth, Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
         redirect: "error",
         signal: controller.signal,
       });
@@ -682,6 +690,11 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
       const response = await jsonCall("POST", `/v1/responses/${encodeURIComponent(responseId)}/cancel`, { user }, signal);
       const json = await readJson(response);
       return { status: isRecord(json) && typeof json.status === "string" ? json.status : "cancelling" };
+    },
+    async input(responseId, user, input, signal) {
+      const path = `/v1/responses/${encodeURIComponent(responseId)}/input`;
+      const response = await jsonCall("POST", path, { user }, signal, { client_id: input.clientId, text: input.text });
+      await response.body?.cancel().catch(() => undefined);
     },
     async listModels(signal) {
       const json = await readJson(await jsonCall("GET", "/v1/models", {}, signal));

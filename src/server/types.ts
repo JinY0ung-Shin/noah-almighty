@@ -201,8 +201,8 @@ export interface PiRuntimeFacts {
   mcpProxies?: PiProxiedMcpFacts;
   /**
    * `mcp__avatars__ask_avatar` returns at once and its answer arrives as a
-   * follow-up message (design D8) — interactive pi chats only; unattended pi
-   * runs keep the waiting call.
+   * later message (mid-turn or a follow-up turn, design D8) — interactive pi
+   * chats only; unattended pi runs keep the waiting call.
    */
   asyncAskAvatar?: boolean;
   /**
