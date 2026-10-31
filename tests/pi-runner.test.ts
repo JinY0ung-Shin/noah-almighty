@@ -863,11 +863,11 @@ describe("pi prompt variant", () => {
     shellExposedSecretNames: ["API_TOKEN"],
   };
   it("moves per-turn provenance out of the frozen append and states the runtime", () => {
-    const pi = buildSystemPromptAppend({ ...owner, piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretsUnavailable: ["API_TOKEN"] } });
+    const pi = buildSystemPromptAppend({ ...owner, piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretNames: ["API_TOKEN"] } });
     expect(pi).toContain("Runtime: your own pi sandbox");
     expect(pi).not.toContain("Conversation rewind (this turn)");
     expect(pi).not.toContain("submitted by an **EXTERNAL SYSTEM**");
-    expect(pi).toContain("sandbox shell receives NO secrets");
+    expect(pi).toContain("`API_TOKEN` is set to 셸 노출 and present as `$NAME` environment variables in every `bash` command of this run");
     expect(pi).not.toContain("arrives as the NEXT user turn");
     const turn = buildPiTurnPreamble(owner, { now: new Date("2026-10-29T00:00:00Z") });
     expect(turn).toContain("[Current date and time: 2026-10-29 09:00 KST]");
@@ -894,7 +894,7 @@ describe("pi prompt variant", () => {
   } as AgentRequest;
   const facts = (asyncAskAvatar: boolean) => ({
     conversationDir: "/workspace/c/x",
-    shellSecretsUnavailable: [],
+    shellSecretNames: [],
     readOnlyBuiltins: false,
     asyncAskAvatar,
     activeRepoDir: "/workspace/repos/o/notes",
@@ -951,7 +951,7 @@ describe("pi prompt variant", () => {
     const unstamped = buildSystemPromptAppend(owner);
     expect(unstamped).not.toContain("Conversation rewind (this turn)");
     expect(unstamped).not.toContain("submitted by an **EXTERNAL SYSTEM**");
-    expect(unstamped).toContain("sandbox shell receives NO secrets");
+    expect(unstamped).toContain("`API_TOKEN` is set to 셸 노출 but NOT in the shell");
     expect(unstamped).not.toContain("exported into your Bash shell");
   });
 });

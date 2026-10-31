@@ -392,6 +392,8 @@ async function runPiAgentAs(
                 ...(capabilities.piRuntimeFacts.readOnlyBuiltins ? { readOnly: true } : {}),
               }
             : { previousResponseId: previous }),
+          // Every request: pi keeps sandbox_env only for the request it came with.
+          ...(Object.keys(capabilities.piSandboxEnv).length ? { sandboxEnv: capabilities.piSandboxEnv } : {}),
           headers: { [PI_RUN_TOKEN_HEADER]: token },
         };
         try {

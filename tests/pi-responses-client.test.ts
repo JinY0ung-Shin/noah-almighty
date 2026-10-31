@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   PiGatewayError,
   buildResponsesBody,
+  piSandboxEnvOf,
   createPiResponsesClient,
   withPiRetry,
   type PiStreamEvent,
@@ -112,6 +113,27 @@ describe("buildResponsesBody", () => {
     ).toThrow(PiGatewayError);
     expect(() => buildResponsesBody({ user: "bad user", input: { kind: "prompt", text: "hi" } })).toThrow(PiGatewayError);
     expect(() => buildResponsesBody({ user: "u", input: { kind: "answer", callId: "c", output: "o" } })).toThrow(PiGatewayError);
+  });
+
+  it("sends sandbox_env on any request that carries it, continuing turns and answers included", () => {
+    const body = buildResponsesBody({
+      user: "user-1",
+      previousResponseId: "resp_x_1",
+      sandboxEnv: { API_TOKEN: "v" },
+      input: { kind: "answer", callId: "call_1", output: "Blue" },
+    });
+    expect(body.sandbox_env).toEqual({ API_TOKEN: "v" });
+    expect(buildResponsesBody({ user: "u", sandboxEnv: {}, input: { kind: "prompt", text: "hi" } })).not.toHaveProperty("sandbox_env");
+  });
+
+  it("keeps only the names pi's sandbox_env admits", () => {
+    const values = { API_TOKEN: "a", HTTPS_PROXY: "b", LD_PRELOAD: "c", BASH_ENV: "d", PATH: "e", NUL_VALUE: "x\0y", OTHER: "o" };
+    expect(piSandboxEnvOf(values, ["API_TOKEN", "HTTPS_PROXY", "LD_PRELOAD", "BASH_ENV", "PATH", "NUL_VALUE", "MISSING"])).toEqual({
+      API_TOKEN: "a",
+    });
+    // Past the 256 KiB budget a name is left out instead of failing the turn.
+    const big = "x".repeat(200 * 1024);
+    expect(Object.keys(piSandboxEnvOf({ A_KEY: big, B_KEY: big, C_KEY: "small" }, ["A_KEY", "B_KEY", "C_KEY"]))).toEqual(["A_KEY", "C_KEY"]);
   });
 });
 

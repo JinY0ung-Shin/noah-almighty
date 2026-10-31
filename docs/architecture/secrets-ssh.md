@@ -15,10 +15,10 @@
   `avatar.id`=owner), `get/set/delete/listUserSecretNames`/`getUserSecrets`. Exposed to clients as
   `secretNames` ONLY (values never via `toUser`). `PUT/DELETE /api/me/secrets/:name` (env-key-name
   validated). Settings UI "시크릿" card under the 권한·연결 tab. Owner, non-headless chat prompts include
-  only those secret NAMES so the avatar knows what is configured; values never enter the prompt or Bash env.
-- **Where secret VALUES actually flow (selective injection, never the shell):** the agent's shell is pi's
-  sandbox, and it receives NO user secret (pi has no per-run sandbox env, design P4). Known names route to
-  dedicated Noah-side consumers: `SSH_*`/`ALLOWED_HOST*` → the hex-ssh relay child only, `CONFLUENCE_PAT` → the
+  only those secret NAMES so the avatar knows what is configured; values never enter the prompt.
+- **Where secret VALUES actually flow (selective injection):** the agent's shell is pi's sandbox, and it receives
+  a user secret ONLY through the per-secret 셸 노출 opt-in on the owner's own runs (next-but-one bullet). Known names
+  route to dedicated Noah-side consumers: `SSH_*`/`ALLOWED_HOST*` → the hex-ssh relay child only, `CONFLUENCE_PAT` → the
   in-process Confluence tools, git tokens → server-side git only, slot-bound secrets → the 공용 MCP bridge (next
   bullet). **Plugin `.mcp.json` servers get NO vault value.** Noah relays them as an MCP client on the `plugins`
   broker id (`agent/pi/mcpProxies.ts`, parsing through `plugins.liftPluginMcpServers` — both the
@@ -63,15 +63,18 @@
   server reserves its name for the run, mounted or not: a same-named plugin server is dropped (status-line
   warning), so `mcp__<name>__*` never points at something the metacognition says is unavailable; app servers win
   over both. Shared servers ignore the composer's tool-group picker and group tool policy, like plugin servers.
-- **Per-secret AGENT-SHELL exposure (opt-in, currently UNAVAILABLE):** `user_secrets.shell_expose` (0 default) —
+- **Per-secret AGENT-SHELL exposure (셸 노출, opt-in):** `user_secrets.shell_expose` (0 default) —
   toggled per key via `PATCH /api/me/secrets/:name {shellExpose}` (셸 노출 checkbox in the 시크릿 card; hidden for
-  reserved names via the client-imported `secretPolicy.isShellExposableSecret`). The pi sandbox has no per-run env
-  (P4), so flagged values are NOT exported; the toggle and column stay so the owner's choice survives until the
-  runtime can honor it. Both metacognition surfaces name the flagged secrets as unavailable
-  (`PiRuntimeFacts.shellSecretsUnavailable`). Reserved git/SSH names live in `secretPolicy.ts` (leaf module,
-  shared with the client; a unit test pins it to the gitCredentials constants).
+  reserved names via the client-imported `secretPolicy.isShellExposableSecret`). On an OWNER run in the owner's own
+  sandbox (owner chat, owner routine, task API — `ownerToolAccess && sandboxOwner === "owner"`, never a colleague's
+  or a consultation's shell) the flagged values ride every pi request as `sandbox_env` (pi P4): `$NAME` in that
+  run's `bash`, kept only in pi's memory per request, redacted from tool results by pi and from Noah MCP results by
+  `piRedactions`. `piSandboxEnvOf` drops reserved git/SSH names and names pi refuses; both metacognition surfaces
+  name what the shell has (`PiRuntimeFacts.shellSecretNames`, `shellSecretsSentence`) and any flagged name left
+  out. Reserved git/SSH names live in `secretPolicy.ts` (leaf module, shared with the client; a unit test pins it
+  to the gitCredentials constants). Mechanics → [`pi-runtime.md`](pi-runtime.md) "Shell secrets".
 - **Per-secret BROWSER INPUT (브라우저 입력, opt-in):** the second per-secret exposure toggle, and the only
-  one whose value leaves the server — the avatar names a secret and the extension types it into the
+  one whose value reaches the user's browser — the avatar names a secret and the extension types it into the
   owner's OWN browser, so the MODEL never sees the value. Storage rides the secret row:
   `user_secrets.browser_expose` (0 default), `browser_hosts` (JSON array of exact lowercase hostnames,
   NULL when unset) and `browser_password_only` (1 default) — all three added by `addColumnIfMissing`

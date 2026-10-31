@@ -85,6 +85,13 @@ export interface PiResponseRequest {
    * different value on a later turn). `PiRuntimeFacts.readOnlyBuiltins`.
    */
   readOnly?: boolean;
+  /**
+   * EVERY request of an owner run: pi's `sandbox_env` (P4) — env vars of that
+   * request's `bash` commands, kept only in pi's memory for that request, so
+   * it is re-sent each turn (an AskUserQuestion answer included). Only valid
+   * with the service key. Build it with {@link piSandboxEnvOf}.
+   */
+  sandboxEnv?: Record<string, string>;
   /** String map; pi forwards only the keys listed in its MCP_METADATA_KEYS to MCP servers. */
   metadata?: Record<string, string>;
   /**
@@ -398,8 +405,37 @@ export function buildResponsesBody(request: PiResponseRequest): Record<string, u
     user: request.user,
     ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
     ...(request.readOnly ? { read_only: true } : {}),
+    ...(request.sandboxEnv && Object.keys(request.sandboxEnv).length ? { sandbox_env: request.sandboxEnv } : {}),
     ...(request.metadata && Object.keys(request.metadata).length ? { metadata: request.metadata } : {}),
   };
+}
+
+/**
+ * pi's `sandbox_env` admission rules, mirrored so one unfit secret never 400s
+ * the whole turn: env-name syntax, the names pi's sandbox reserves (shell,
+ * proxy, loader and locale variables), at most 64 names, 256 KiB of names +
+ * values, no NUL byte. A name that does not fit is left out (the metacognition
+ * surfaces name it as not exported).
+ */
+const PI_SANDBOX_ENV_MAX_NAMES = 64;
+const PI_SANDBOX_ENV_MAX_BYTES = 256 * 1024;
+const PI_SANDBOX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PI_SANDBOX_ENV_RESERVED =
+  /^(PATH|HOME|USER|SHELL|PWD|OLDPWD|TMPDIR|LANG|TERM|IFS|ENV|HOSTNAME|PS4|PROMPT_COMMAND|SHELLOPTS)$|^(LD_|BASH|LC_)|_PROXY$/i;
+
+/** The `names` (in order) whose `values` pi accepts as `sandbox_env`. */
+export function piSandboxEnvOf(values: Record<string, string>, names: readonly string[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  let bytes = 0;
+  for (const name of names) {
+    const value = values[name];
+    if (value === undefined || !PI_SANDBOX_ENV_NAME.test(name) || PI_SANDBOX_ENV_RESERVED.test(name) || value.includes("\0")) continue;
+    const size = Buffer.byteLength(name) + Buffer.byteLength(value);
+    if (Object.keys(env).length >= PI_SANDBOX_ENV_MAX_NAMES || bytes + size > PI_SANDBOX_ENV_MAX_BYTES) continue;
+    env[name] = value;
+    bytes += size;
+  }
+  return env;
 }
 
 const RESERVED_HEADERS = new Set(["authorization", "content-type", "accept", "content-length", "host"]);

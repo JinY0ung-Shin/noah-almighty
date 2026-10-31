@@ -40,6 +40,19 @@ the no-vision PDF hint, the draw.io section and the working-repository turn line
 An admin built-in toggle is advisory on pi (describe_system names it as such); a
 disabled SKILL is enforced by omission (see "Skills").
 
+**Shell secrets (`sandbox_env`, pi P4; user decision U5, confirmed 2026-10-31).** The owner's 셸 노출 secrets reach
+`bash` ONLY on an owner run in the owner's own sandbox — owner chat, owner routine, external task API
+(`ownerToolAccess && sandboxOwner === "owner"`); a colleague chat (`viewer`), a consultation (`nobody`) and a
+restricted generator send none. The capability plan builds `piSandboxEnv` from the vault minus the reserved git/SSH
+names (`mcpInjectableSecretEnv`) through `piSandboxEnvOf` (`responsesClient.ts`), which mirrors pi's admission rules
+(env-name syntax, pi's reserved names such as `PATH`/`HOME`/`*_PROXY`/`LD_*`/`BASH*`/`LC_*`, ≤64 names, ≤256 KiB) so
+one unfit secret never 400s the turn — a flagged name it leaves out is named as NOT in the shell. `runPiAgent` sends
+it as `sandbox_env` on EVERY pi request of the run (pi keeps it in the live session's memory for that request only —
+never its DB, session file or logs — so a restart or idle unload loses nothing), pi passes it to `bash` alone and
+redacts the values from every tool result, progress update and error; the values also join `piRedactions`. Both
+surfaces say which names are `$NAME` in bash from `PiRuntimeFacts.shellSecretNames` (`shellSecretsSentence`,
+`ownerState.ts`); the consultation sandbox sentence says it has no secrets.
+
 **A run without a conversation** (consultations, the generators) works in a run folder
 `/workspace/c/<piEphemeralRunKey>/` (`run-<feature>` — `run-intro`, `run-hashtags` — for a generator, REUSED in the
 owner's sandbox and never removed; `run-ask` for a consultation, gone with its sandbox): no stored pi session and no
@@ -123,7 +136,6 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
 |---|---|---|
 | no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the composer always says "지금 답변이 끝난 뒤 이어서 전달됩니다" (the `open` frame carries no delivery mode); the delivered row's badge is position-based (`steerBadgeLabel`: "답변 뒤 전달" after an assistant row — the retired CLI runner's mid-turn rows still read "응답 중 전달") |
 | model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
-| no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
 | context window (P5) | unknown (pi's model list carries none): the usage badge shows output tokens only; no compaction chip | — |
 | subagents (P6) | flat: pi's `Agent` is one card | — |
 | no per-session cwd (P1) | the model is told to work in `/workspace/c/<seg>/` with absolute paths (prompt + describe_system + refusal redirects); Noah creates the folder 0700 | both |
@@ -272,9 +284,9 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   going after. A closed pool refuses calls instead of respawning. Tests prove no process outlives it.
 - **Redaction (`piRedactions`)**: the relays' secrets (the whole injectable vault once any of it reached a child,
   credential-looking bridge headers + their bare tokens via `mcpBridgeRedactions`, the
-  SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`) plus every browser-typeable secret value. Applied
-  by the endpoint's `transformResult` to EVERY Noah MCP result of the run (`redactSecretValues`, `[REDACTED:<NAME>]`).
-  pi's built-ins need none: the sandbox holds no secrets.
+  SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`), every browser-typeable secret value and the
+  run's `sandbox_env` values. Applied by the endpoint's `transformResult` to EVERY Noah MCP result of the run
+  (`redactSecretValues`, `[REDACTED:<NAME>]`). pi redacts the `sandbox_env` values from its own built-ins' results.
 - **stdio servers spawn only from bundled plugins (`piStdioRootRefusal`).** A stdio def is a command Noah runs in
   ITS OWN container (the data volume, every user's state), so on pi only roots no agent can author qualify: the
   plugins bundled with this Noah build (`DEFAULT_PLUGINS_DIR`, classified by `piPluginRootKind`, `piSkills.ts`).

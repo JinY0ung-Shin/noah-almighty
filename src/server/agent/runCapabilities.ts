@@ -38,6 +38,7 @@ import { PI_NOAH_SERVER_NAMES } from "./pi/mcpCatalog.js";
 import { catalogModel, catalogModelIds } from "./pi/modelCatalog.js";
 import { piServicesFor } from "./pi/piRuntime.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
+import { piSandboxEnvOf } from "./pi/responsesClient.js";
 import { normalizeGitRepoName } from "../gitRepos.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { readWorkspaceImage } from "../chatImages.js";
@@ -634,11 +635,22 @@ export async function buildRunCapabilities(
   // The avatar acts on its OWNER's behalf, so it uses the OWNER's secrets
   // (avatar.id) regardless of who is chatting — a colleague talking to the
   // owner's avatar still operates with the owner's credentials. The values are
-  // decrypted only here and handed to the MCP subprocess as env, so they never
-  // surface to the agent (Bash/`env` runs in a different process) nor to `toUser`.
-  // Read ahead of describe_system's ctx, which reports what the Confluence PAT
-  // allows.
+  // decrypted only here and handed to the MCP subprocesses as env, and — the
+  // owner's 셸 노출 subset, on owner runs only — to pi as `sandbox_env` below;
+  // never to `toUser`. Read ahead of describe_system's ctx, which reports what
+  // the Confluence PAT allows.
   const ownerSecrets = store.getUserSecrets(request.avatar.id);
+  // pi `sandbox_env` (design P4): the owner's 셸 노출 secrets as env of this
+  // run's `bash`. OWNER runs in the owner's OWN sandbox only (owner chat, owner
+  // routine, external task API — ownerToolAccess); a colleague's chat (viewer
+  // sandbox) and a consultation (nobody's) get none, and neither do restricted
+  // headless generators. Reserved git/SSH names never qualify
+  // (mcpInjectableSecretEnv), nor a name pi refuses (piSandboxEnvOf). The values
+  // join the run's redaction set (piRedactions) and are never logged.
+  const piSandboxEnv =
+    ownerToolAccess && sandboxOwner === "owner"
+      ? piSandboxEnvOf(mcpInjectableSecretEnv(ownerSecrets), ownerState.shellExposedSecretNames)
+      : {};
   // The run's conversation scratch workspace (conversationScratchDir) — where
   // get_attachment's save_to_workspace writes, and the path describe_system names.
   // A pi run's scratch IS its sandbox conversation folder (host view here;
@@ -737,8 +749,8 @@ export async function buildRunCapabilities(
         mcpProxies: piMcpProxies.facts,
         asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),
-        // Owner self-state (the names), like the prompt's secret list.
-        shellSecretsUnavailable: ownerToolAccess ? ownerState.shellExposedSecretNames : [],
+        // The names this run's bash receives (owner runs only; values never here).
+        shellSecretNames: Object.keys(piSandboxEnv),
         // The skill index (materialized files, or mcp__skills__read entries).
         skills: (runOptions.piSkills?.entries ?? []).map((entry) => ({ ...entry })),
         // The open working repo's SANDBOX copy (design D1) — where the model works.
@@ -1236,9 +1248,13 @@ export async function buildRunCapabilities(
     mcpAllowedTools,
     piRuntimeFacts,
     piMcpProxies,
+    // pi `sandbox_env` for EVERY request of this run (empty = none sent).
+    piSandboxEnv,
     // What the endpoint redacts from EVERY Noah MCP result of the run — the
-    // relayed servers' secrets (piMcpProxies) plus the browser-typeable values
-    // (a page can echo a typed password into a later snapshot or fetch).
+    // relayed servers' secrets (piMcpProxies), the browser-typeable values
+    // (a page can echo a typed password into a later snapshot or fetch) and
+    // the shell's env values (bash can write one into a file a Noah tool reads;
+    // pi itself redacts them from its own tool results).
     piRedactions: {
       ...piMcpProxies.redactions,
       ...Object.fromEntries(
@@ -1246,6 +1262,7 @@ export async function buildRunCapabilities(
           injectableSecretEnv[policy.name] !== undefined ? [[policy.name, injectableSecretEnv[policy.name]!] as const] : [],
         ),
       ),
+      ...piSandboxEnv,
     } as Record<string, string>,
   };
 }

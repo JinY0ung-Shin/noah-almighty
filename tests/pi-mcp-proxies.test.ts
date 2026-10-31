@@ -653,7 +653,7 @@ describe("asynchronous tools on pi", () => {
       canvasEnabled: true,
       mcpToolGroups: ["canvas"],
       piRuntime: {
-        shellSecretsUnavailable: [],
+        shellSecretNames: [],
         readOnlyBuiltins: false,
         asyncAskAvatar: true,
         mcpProxies: { hexSsh: true, pluginServers: ["jira-cli"], skippedPluginServers: [] },
