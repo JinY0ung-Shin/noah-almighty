@@ -1516,8 +1516,8 @@ export function buildPrompt(
  * pi only: the per-turn lines the frozen system prompt cannot carry (design
  * D2) — the current KST date/time (pi fixes its own at session creation), a
  * rewind's provenance, the turn's RUN KIND (live chat / routine / task API,
- * with the guidance that depends on it), the open working repo, and a new
- * session's reason. Prepended to the turn's user input.
+ * with the guidance that depends on it), the open working repo, and whether
+ * a lost session was rebuilt. Prepended to the turn's user input.
  */
 /** How much of a stopped answer a continued pi turn restates (its tail — what the user read last). */
 const STOPPED_ANSWER_MAX_CHARS = 4_000;
@@ -1526,7 +1526,8 @@ export function buildPiTurnPreamble(
   request: AgentRequest,
   options: {
     now?: Date;
-    newSessionReason?: "model_changed" | "session_lost";
+    /** The previous session could not be resumed, so this turn starts a new one from the text history. */
+    sessionLost?: boolean;
     /** The turn continues the session of an answer the user stopped (`AgentRequest.stoppedAnswer`). */
     continuedAfterStop?: boolean;
   } = {},
@@ -1549,11 +1550,9 @@ export function buildPiTurnPreamble(
           : "and nothing of it had reached the user yet."),
     );
   }
-  if (options.newSessionReason) {
+  if (options.sessionLost) {
     lines.push(
-      options.newSessionReason === "model_changed"
-        ? "Session note: the model or reasoning effort changed, so this turn starts a NEW session. The conversation so far is in the history below as text — tool calls and their results from earlier turns are not carried over; re-read files you need."
-        : "Session note: the previous session could not be resumed, so this turn starts a NEW session. The conversation so far is in the history below as text — tool calls and their results from earlier turns are not carried over; re-read files you need.",
+      "Session note: the previous session could not be resumed, so this turn starts a NEW session. The conversation so far is in the history below as text — tool calls and their results from earlier turns are not carried over; re-read files you need.",
     );
   }
   return lines.join("\n\n");

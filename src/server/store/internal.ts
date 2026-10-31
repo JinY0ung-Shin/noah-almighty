@@ -796,12 +796,10 @@ export class StoreBase {
     // owner turn.
     this.addColumnIfMissing("conversations", "todo_snapshot", "TEXT");
     // pi runtime (docs/architecture/pi-runtime.md): the system prompt frozen at
-    // the conversation's FIRST pi turn (design D2), and the model/effort
-    // profile per pi session (JSON map, design P3). NULL = no pi turn yet — an
+    // the conversation's FIRST pi turn (design D2). NULL = no pi turn yet — an
     // existing conversation renders its prompt on its first pi turn and
     // rebuilds context from the stored text history.
     this.addColumnIfMissing("conversations", "pi_instructions", "TEXT");
-    this.addColumnIfMissing("conversations", "pi_session_profiles", "TEXT");
     // Per-group ADMIN tool policy: which MCP tool groups this group's members
     // may use in chats they drive. NULL = no restriction; a JSON array
     // (including []) is an allowlist validated against src/shared/mcpToolGroups.ts.
@@ -881,7 +879,9 @@ export class StoreBase {
     // group-knowledge OFF-sets. Nothing creates or writes these columns any
     // more, so this can only match what an older release left — keep every name
     // reserved. The clones on disk are quarantined by retireGroupKnowledgeRepos;
-    // the remote repositories themselves are never touched.
+    // the remote repositories themselves are never touched. The same list drops
+    // the per-pi-session model/effort profiles (retired 2026-10-31: pi switches
+    // a live session's model and effort, so a change keeps the session).
     for (const [table, column] of RETIRED_COLUMNS) {
       this.dropColumnIfPresent(table, column);
     }

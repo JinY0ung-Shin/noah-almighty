@@ -24,17 +24,17 @@ function scriptedPi(answers: (PiModel[] | Error)[]) {
 }
 
 describe("pi model catalog", () => {
-  it("maps pi's list (owned_by → server), drops blanks and duplicates, and caches it for the TTL", async () => {
+  it("maps pi's list (owned_by → server, the default flag), drops blanks and duplicates, and caches it for the TTL", async () => {
     let now = 1_000;
     const { client } = scriptedPi([
-      [{ id: "deepseek/v3", ownedBy: "deepseek" }, { id: "qwen/coder" }, { id: " " }, { id: "deepseek/v3" }],
+      [{ id: "deepseek/v3", ownedBy: "deepseek" }, { id: "qwen/coder", default: true }, { id: " " }, { id: "deepseek/v3" }],
       [{ id: "glm-4" }],
     ]);
     const catalog = createPiModelCatalog(client, { now: () => now });
     expect(catalog.peek()).toEqual([]);
     const first = [
       { id: "deepseek/v3", server: "deepseek" },
-      { id: "qwen/coder", server: null },
+      { id: "qwen/coder", server: null, default: true },
     ];
     expect(await catalog.list()).toEqual(first);
     expect(catalog.peek()).toEqual(first);

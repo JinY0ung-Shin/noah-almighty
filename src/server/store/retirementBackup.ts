@@ -57,7 +57,9 @@ const RETIRED_APP_CONFIG_KEYS = [
  * Columns only a retired feature wrote, dropped by migrate() behind the gate.
  * Every name is reserved FOREVER by its retirement. Group knowledge
  * repositories (retired 2026-10-30): the group's repo connection, the owner's
- * default and each conversation's group-knowledge OFF-set.
+ * default and each conversation's group-knowledge OFF-set. The per-pi-session
+ * model/effort profiles (retired 2026-10-31: pi switches a live session's model
+ * and effort, so a change no longer starts a new session).
  */
 export const RETIRED_COLUMNS: readonly (readonly [table: string, column: string])[] = [
   ["groups", "knowledge_repo"],
@@ -65,6 +67,7 @@ export const RETIRED_COLUMNS: readonly (readonly [table: string, column: string]
   ["groups", "knowledge_selected"],
   ["users", "group_knowledge_off_default"],
   ["conversations", "group_knowledge_off"],
+  ["conversations", "pi_session_profiles"],
 ];
 
 /** Avatar-id namespaces of the retired avatar kinds. */

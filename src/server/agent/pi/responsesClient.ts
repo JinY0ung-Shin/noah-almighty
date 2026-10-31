@@ -73,7 +73,7 @@ export interface PiResponseRequest {
   /** pi principal = the Noah user id of whoever the run executes AS (design §2). */
   user: string;
   input: PiTurnInput;
-  /** New sessions only; continuing turns always use the session's model. */
+  /** A continuing turn switches the session to it (P3); omitted there, the session keeps its model. */
   model?: string;
   /** New sessions only (pi 400s it together with previous_response_id). */
   instructions?: string;
@@ -390,7 +390,7 @@ export function buildResponsesBody(request: PiResponseRequest): Record<string, u
     }
   }
   return {
-    ...(request.model && !request.previousResponseId ? { model: request.model } : {}),
+    ...(request.model ? { model: request.model } : {}),
     input,
     ...(request.instructions ? { instructions: request.instructions } : {}),
     ...(request.previousResponseId ? { previous_response_id: request.previousResponseId } : {}),
@@ -409,6 +409,8 @@ const RESERVED_HEADERS = new Set(["authorization", "content-type", "accept", "co
 export interface PiModel {
   id: string;
   ownedBy?: string;
+  /** pi-gateway's default model (the one a new session without `model` runs). */
+  default?: true;
 }
 
 export interface PiFileContent {
@@ -645,7 +647,11 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
       return json.data
         .filter(isRecord)
         .filter((m) => typeof m.id === "string")
-        .map((m) => ({ id: m.id as string, ...(typeof m.owned_by === "string" ? { ownedBy: m.owned_by } : {}) }));
+        .map((m) => ({
+          id: m.id as string,
+          ...(typeof m.owned_by === "string" ? { ownedBy: m.owned_by } : {}),
+          ...(m.default === true ? { default: true as const } : {}),
+        }));
     },
     async fileContent(path, user, signal) {
       const response = await jsonCall("GET", "/v1/files/content", { path, user }, signal);

@@ -21,7 +21,7 @@
   history, with the larger first-turn cap (`PI_FIRST_TURN_HISTORY_LIMITS`). The old CLI transcripts
   (`<dataDir>/agent-sessions`) are quarantined at boot behind `retirementGate()` (marker
   `retired:agent_sessions`), never read. `greeting` (ephemeral) starts a fresh session. Sessions, lost-session
-  heals, the per-session model/effort profile and stop/cancel continuations → [`pi-runtime.md`](pi-runtime.md)
+  heals, per-turn model/effort switches and stop/cancel continuations → [`pi-runtime.md`](pi-runtime.md)
   "One run".
 - **Rewind ("여기서부터 다시") and regenerate share ONE plan → apply path, and cut HISTORY, never the
   world.** Editing an earlier ordinary user message (`POST /api/chat/stream {rewindFromMessageId,

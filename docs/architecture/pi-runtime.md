@@ -98,15 +98,19 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    continues the stored session unless it is a rewind. Every committed turn
    reports its response id via `onSessionId` AND `onResumePoint({sessionId: id, uuid: id})`, so the chat route
    persists it as `agent_session_id` and stamps it on the assistant row; a rewind onto that row forks from it
-   (pi branches on an older `previous_response_id`; no fork flag).
+   (pi branches on an older `previous_response_id`; no fork flag). Every turn — new or continuing — sends the run's
+   `model` and `reasoningEffort`, so a composer change applies to the SAME session from that turn on (pi P3 switches the
+   session, history and tools kept). pi's default model has no id in Noah's chain (`undefined`): a new session omits
+   `model`, a continuing turn sends the id pi's `/v1/models` marks `default: true` (`piModelFor`; unknown → omitted,
+   the session keeps its model).
 6. **Errors** — 404/409 on a continued session, or 400 `model_not_configured` (the operator removed the session's
-   model from pi; a session's model is fixed, so a rewind onto a row of that session would otherwise fail every time;
-   `isLostPiSession`) → once, a new session from history (status-free, the model is told
-   in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). An empty turn —
+   model from pi and the turn could not name pi's default; `isLostPiSession`) → once, a new session from history
+   (status-free, the model is told in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). An empty turn —
    pi's `empty_response` (no text, reasoning or tool call; pi does NOT commit it) — is re-sent ONCE as the same
    request (same `previous_response_id`, or the same fresh session; status line `모델이 빈 응답을 보내 한 번 더 시도하는 중…`),
    never once a text delta or a question reached the user, a steer is queued, or for a steer follow-up turn. A model
-   fallback chain (routines, task API: `modelFallback`) gives each attempt a fresh session.
+   fallback chain (routines, task API: `modelFallback`) retries the uncommitted turn on the next model in the SAME
+   session (a new one only when pi's default cannot be named).
 7. **Stop / failure** — a stop `cancel`s the live response, so pi COMMITS the partial turn (`incomplete`) and the runner
    reports its id. The chat route's cancel and error paths keep that id as `agent_session_id` (`sessionAfterAbort`):
    the next turn continues it, and the stopped row already shows the same partial. They clear it (history rebuild —
@@ -122,7 +126,6 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
 | Gap | Noah-side behavior | Surfaces |
 |---|---|---|
 | no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the composer always says "지금 답변이 끝난 뒤 이어서 전달됩니다" (the `open` frame carries no delivery mode); the delivered row's badge is position-based (`steerBadgeLabel`: "답변 뒤 전달" after an assistant row — the retired CLI runner's mid-turn rows still read "응답 중 전달") |
-| model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
 | no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
 | context window (P5) | unknown (pi's model list carries none): the usage badge shows output tokens only; no compaction chip | — |
 | subagents (P6) | flat: pi's `Agent` is one card | — |
@@ -312,7 +315,7 @@ holds it:
   model, a Korean bubble carrying the answer for the chat — `SteerRecord.displayText` — plus WHO answered,
   `SteerRecord.source`). The route persists it as a `kind: "consultation"` user row with that source
   (`messages.consultation_json`), NEVER as a `steer` the owner typed: another avatar's answer is untrusted input, and
-  any history rebuild (a fresh session after a cancel, model change, heal or rewind; `read_conversation`) re-feeds
+  any history rebuild (a fresh session after a cancel, heal or rewind; `read_conversation`) re-feeds
   it framed by `consultationHistoryText` as that avatar's untrusted data, never as the owner's words. It is never a
   rewind/regenerate anchor, the client renders it under the consulted avatar's name (`@x 아바타의 답변`, badge `팀원
   상담 결과`), never shows it as a pending "나" bubble and never hands a dropped one back to the composer
@@ -434,10 +437,11 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 
 ## Models (`agent/pi/modelCatalog.ts`)
 
-pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy}`) is the ONLY model
+pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy, default?}`) is the ONLY model
 source (user decision 2026-10-31): the composer picker, the per-user default, the admin override
 (`PUT /api/admin/model`) and the vision policy (`PUT /api/admin/model-vision-policy`, keyed by model id) all name pi
-model ids; none = pi-gateway's DEFAULT model (picked on pi's admin LLM page), and then Noah sends no `model` at all.
+model ids; none = pi-gateway's DEFAULT model (picked on pi's admin LLM page): a new session sends no `model`, a
+continuing turn sends the id pi marks `default: true` (omitting it there would keep the session's model).
 `piServicesFor(store, config).models` is one catalog per app instance: a 60 s cache, one in-flight fetch for every
 caller (5 s timeout), stale-on-error (a failed refresh keeps the last good list; retried after 5 s); never fetched
 successfully → empty, and the `local` stub's is always empty (the client then hides the picker).
@@ -449,7 +453,7 @@ successfully → empty, and the `local` stub's is always empty (the client then 
   describe_system names the id and its source (`… (chosen for this conversation in the composer)` / `(admin setting)`
   / `pi-gateway's default model (default)`, plus the ignored-override note).
 - **Fallback** (`request.modelFallback`, unattended runs): `[resolved, default]`, so ONE retry on pi's default model
-  in a fresh session; a run already on the default gets one attempt.
+  in the same session; a run already on the default gets one attempt.
 - **Writes** validate against the list: an unknown non-empty id → 400, pi never reachable → 503 (`offeredModelIdsOr503`,
   `routes/_shared.ts`). The chat stream's `model` is NOT validated: it is stored as sent ("" clears), so a pick
   survives pi being briefly unreachable, and the run applies it only while pi offers it.
@@ -474,9 +478,13 @@ default-skills root (`listPluginRootSkills`, `agent/skillCatalog.ts`); `PUT/DELE
 
 ## Existing deployments
 
-New nullable columns `conversations.pi_instructions` / `pi_session_profiles` (NULL = no pi turn yet). Old CLI session
+New nullable column `conversations.pi_instructions` (NULL = no pi turn yet). Old CLI session
 ids and resume points (anything not `resp_…`) are IGNORED by the pi runner, never resumed: the first pi turn of an old
 conversation rebuilds context from the text history with the larger cap, and a rewind onto a pre-pi row does the same.
+
+`conversations.pi_session_profiles` (the per-pi-session model/effort map that made a change start a new session) is
+RETIRED (2026-10-31, pi P3 switches the live session): `RETIRED_COLUMNS` drops it behind `retirementGate()`; the name
+is reserved forever.
 
 The retired runner's state goes through `retirementGate()` (DB backup first, files quarantined, never deleted): the
 `claude_oauth_token` app_config key (the old `claude setup-token` login) and the skill-discovery cache key are deleted

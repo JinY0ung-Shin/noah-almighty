@@ -91,18 +91,21 @@ describe("buildResponsesBody", () => {
     });
   });
 
-  it("drops the model on a continuing turn and sends function_call_output answers", () => {
+  it("sends model and effort on a continuing turn (pi switches the session) and function_call_output answers", () => {
     const body = buildResponsesBody({
       user: "user-1",
-      model: "ignored",
+      model: "m2",
+      reasoningEffort: "low",
       previousResponseId: "resp_x_1",
       input: { kind: "answer", callId: "call_1", output: "Blue" },
     });
     expect(body).toEqual({
+      model: "m2",
       input: [{ type: "function_call_output", call_id: "call_1", output: "Blue" }],
       previous_response_id: "resp_x_1",
       stream: true,
       user: "user-1",
+      reasoning: { effort: "low" },
     });
   });
 
@@ -308,13 +311,13 @@ describe("cancel / models / files", () => {
     handler = (req, res) => {
       if (req.url === "/v1/models") {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ object: "list", data: [{ id: "fake-model", object: "model", owned_by: "fake" }, { nope: 1 }] }));
+        res.end(JSON.stringify({ object: "list", data: [{ id: "fake-model", object: "model", owned_by: "fake", default: true }, { nope: 1 }] }));
         return;
       }
       res.writeHead(200, { "content-type": "text/markdown" });
       res.end("# hi\n");
     };
-    await expect(client({ baseUrl: `${baseUrl}/` }).listModels()).resolves.toEqual([{ id: "fake-model", ownedBy: "fake" }]);
+    await expect(client({ baseUrl: `${baseUrl}/` }).listModels()).resolves.toEqual([{ id: "fake-model", ownedBy: "fake", default: true }]);
     const file = await client().fileContent("/workspace/c/conv1/report.md", "u1");
     expect(file.bytes.toString()).toBe("# hi\n");
     expect(file.contentType).toBe("text/markdown");

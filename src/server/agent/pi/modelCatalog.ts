@@ -20,6 +20,8 @@ import type { PiResponsesClient } from "./responsesClient.js";
 export interface CatalogModel {
   id: string;
   server: string | null;
+  /** pi-gateway's default model — the id a continuing turn sends to switch to "기본 모델" (P3). */
+  default?: true;
 }
 
 /** What one lookup knows: the models, and whether that list came from pi at all. */
@@ -80,7 +82,7 @@ export function createPiModelCatalog(
           const id = model.id.trim();
           if (!id || seen.has(id)) continue;
           seen.add(id);
-          good.push({ id, server: model.ownedBy?.trim() || null });
+          good.push({ id, server: model.ownedBy?.trim() || null, ...(model.default ? { default: true as const } : {}) });
         }
         lastFetchFailed = false;
         freshUntil = now() + ttlMs;
