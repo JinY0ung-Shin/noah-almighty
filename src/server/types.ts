@@ -171,6 +171,16 @@ export interface PiRuntimeFacts {
    */
   sandboxOwner?: PiSandboxOwner;
   /**
+   * The run's pi session is `read_only` (pi-gateway P1): its built-ins are
+   * `read`/`ls`/`find`/`grep` only — pi removes `write`, `edit`, `bash` and
+   * sandbox-run MCP servers. True exactly when `sandboxOwner` is `viewer`: a
+   * colleague's chat runs someone ELSE's avatar (the owner's persona, skills
+   * and notes) in the colleague's own sandbox, so it may look but never change
+   * or run anything there (user decision 2026-10-31). The runner sends it on a
+   * new session; both surfaces state it.
+   */
+  readOnlyBuiltins: boolean;
+  /**
    * The owner's shell-exposed secret names, which a pi run CANNOT export into
    * its shell (no sandbox env yet — design P4). Empty on non-owner runs.
    */

@@ -553,7 +553,8 @@ function todoSnapshotBlock(snapshot: TodoPromptSnapshot): string {
  * itself, so this only needs the run to be able to publish files.
  */
 function drawioSection(request: AgentRequest): string | null {
-  if (!request.fileOutputEnabled) return null;
+  // Authoring a .drawio file needs `write`, which a read-only session lacks.
+  if (!request.fileOutputEnabled || request.piRuntime?.readOnlyBuiltins) return null;
   return (
     "**draw.io diagrams**: when the user asks for a diagram they can keep editing (architecture, flowchart, sequence, org chart, …) or wants to SEE a .drawio file you can reach (e.g. downloaded from a Confluence page), use the `drawio` skill — author UNCOMPRESSED mxfile XML, save it as a `.drawio` file, and deliver it with `mcp__file_output__share_file`. " +
     "The file card's side panel renders the diagram interactively on the client (zoom/pan/pages, no server toolchain involved), so do NOT export or publish PNG previews just for delivery, and never paste raw mxfile XML into the chat as a substitute."
@@ -569,7 +570,10 @@ function noVisionSection(request: AgentRequest): string | null {
   if (request.visionEnabled !== false) return null;
   return (
     "**No image input**: the active model CANNOT accept images. Never open an image or PDF file with `read` (the API would reject the whole turn). " +
-    "Extract PDF text with `bash` `pdftotext file.pdf -`. To show an image to the USER, use `mcp__file_output__show_file` — the user sees it even though you cannot. " +
+    (request.piRuntime?.readOnlyBuiltins
+      ? "This session is read-only (no `bash`), so PDF text cannot be extracted here. "
+      : "Extract PDF text with `bash` `pdftotext file.pdf -`. ") +
+    "To show an image to the USER, use `mcp__file_output__show_file` — the user sees it even though you cannot. " +
     "When the user attaches images they arrive as FILES in the conversation folder, with their paths listed in the user message. Never `read` them; manage, convert, share, or show them as files instead."
   );
 }
@@ -639,6 +643,9 @@ function piActiveRepoTurnLine(request: AgentRequest): string | null {
   const name = request.activeRepoName?.trim();
   const piCopy = request.piRuntime?.activeRepoDir;
   if (!name || !piCopy || !mcpToolGroupEnabled(request, "git_repo")) return null;
+  if (request.piRuntime?.readOnlyBuiltins) {
+    return `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Its copy is \`${piCopy}/\` in this sandbox, but this conversation is read-only (no write/edit/bash): read it with \`read\`/\`ls\`/\`find\`/\`grep\` and absolute paths; you cannot edit, test or commit it here.`;
+  }
   return (
     `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it. ` +
     `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
@@ -758,6 +765,8 @@ function piRuntimeSection(request: AgentRequest): string | null {
   const sandboxOwner = piSandboxOwnerSentence(pi.sandboxOwner);
   const folder = pi.conversationDir?.startsWith("/workspace/c/run-")
     ? `Work in this run's folder \`${pi.conversationDir}\` and always pass ABSOLUTE paths to every tool — the shell starts in /workspace, not in that folder. `
+    : pi.conversationDir && pi.readOnlyBuiltins
+    ? `This conversation's folder is \`${pi.conversationDir}\`; always pass ABSOLUTE paths to every tool. The user's attached files, your browser captures and saved Confluence attachments land in its \`attachments/\`, \`captures/\` and \`confluence/\` subfolders. `
     : pi.conversationDir
     ? `Work in this conversation's folder \`${pi.conversationDir}\`: create files there and always pass ABSOLUTE paths to every tool — the shell starts in /workspace, not in that folder. The user's attached files, your browser captures and saved Confluence attachments land in its \`attachments/\`, \`captures/\` and \`confluence/\` subfolders. `
     : "Use absolute paths under /workspace. ";
@@ -768,7 +777,9 @@ function piRuntimeSection(request: AgentRequest): string | null {
     (sandboxOwner ? `${sandboxOwner} ` : "") +
     "It has no direct network: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), and only to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance; empty by default, which blocks everything). Direct TCP/UDP, DNS and raw SSH always fail, and a destination off the list answers `407 Request rejected by proxy` — report it as that operator's policy, never work around it. Noah's own tools (`mcp__web__fetch` and the rest) do not run in the sandbox and keep Noah's network. " +
     folder +
-    "Built-in tools: `read` (files and images), `write` (new files or complete rewrites), `edit` (exact replacements), `ls`/`find`/`grep` (explore), `bash` (run programs; its `timeout` is in SECONDS). " +
+    (pi.readOnlyBuiltins
+      ? "Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore). "
+      : "Built-in tools: `read` (files and images), `write` (new files or complete rewrites), `edit` (exact replacements), `ls`/`find`/`grep` (explore), `bash` (run programs; its `timeout` is in SECONDS). ") +
     "Noah's own tools — every `mcp__<server>__<tool>` name in these instructions, skills and the manual — are called through `mcp_call` with `{name, arguments}`" +
     (pi.knownTools
       ? "; call a tool from the Known Noah tool names list below directly, without searching first, and use `mcp_search` only for a tool that list does not name. "
@@ -1416,6 +1427,7 @@ export function buildUserPrompt(
       .map((f) => `- ${f.path} (${f.mediaType}${f.name ? `, original name "${f.name}"` : ""})`)
       .join("\n");
     const shownCount = request.images?.length ?? 0;
+    const readOnly = Boolean(request.piRuntime?.readOnlyBuiltins);
     lines.push(
       shownCount > 0
         ? "Attached image files: the image(s) attached to this message (shown to you) are ALSO saved as files in the conversation folder" +
@@ -1424,14 +1436,18 @@ export function buildUserPrompt(
             (shownCount === request.imageFiles.length ? ", in the same order" : "") +
             ":\n" +
             listing +
-            // Every pi run writes files in its own sandbox, so it can place one
-            // (describe_system's image-sources line says the same).
-            "\nWhen the user wants an attached image IN something you produce (a deck's `assets/`, a document, a commit), place the FILE itself instead of describing or redrawing it."
+            // Placing a file needs a session that can write — the SAME fact
+            // describe_system's image-sources line reads (readOnlyBuiltins).
+            (readOnly
+              ? "\nThis conversation is read-only (no write/edit/bash), so you can read these files here but not place them into a deck or document."
+              : "\nWhen the user wants an attached image IN something you produce (a deck's `assets/`, a document, a commit), place the FILE itself instead of describing or redrawing it.")
         : "Attached image files: the user attached image file(s) to this message. " +
             "The active model cannot view image content, so they are staged as FILES in the conversation folder instead of being shown to you:\n" +
             listing +
             "\nYou cannot see their pixels: never open them with `read`. " +
-            "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with `bash`, commit via the repo tools, or place one into a web page with mcp__browser__copy_image.",
+            (readOnly
+              ? "This conversation is read-only (no write/edit/bash): show one to the user with mcp__file_output__show_file if they need to see it."
+              : "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with `bash`, commit via the repo tools, or place one into a web page with mcp__browser__copy_image."),
     );
   }
   return lines.join("\n\n");

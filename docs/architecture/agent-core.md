@@ -208,11 +208,11 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   `deckCapabilityLine` pattern). It names the folder's sandbox path when `SystemToolsContext.scratchWorkspaceDir`
   is set. It lists attachments unless the run is `headless`, captures only when `browserEnabled` and vision
   is on (at most 30 per RUN), and Confluence only when `confluenceSaveToWorkspace` holds, and it always
-  says `mcp__web__fetch` returns text only. It ends by telling the run to copy the FILE into the deliverable:
-  every pi run writes files with its built-ins in its OWN principal's sandbox (the owner-side write tools still
-  refuse a non-owner), so there is no read-only variant on either surface — the `canWriteFiles` flag and the
-  deck line's `read-only` tail that fed one were removed as dead (review-2 L5). The vision user-prompt tail in
-  `buildUserPrompt` says the same. The prompt
+  says `mcp__web__fetch` returns text only. It ends by telling the run to copy the FILE into the deliverable —
+  unless the run's pi session is read-only (`PiRuntimeFacts.readOnlyBuiltins`, a colleague chat, see
+  [`pi-runtime.md`](pi-runtime.md)), which is told it can read the files but not place them (the owner-side write
+  tools refuse a non-owner either way). The deck line's `read-only` tail (`DeckAuthoringStatus`) and the vision
+  user-prompt tail in `buildUserPrompt` key on the same fact. The prompt
   mirrors the same flags in three short places: `imageFilesSection` (vision on AND a deck flag — a
   text-only run is shown no images, and `noVisionSection` already covers its files; the deck flags already
   imply an author, so no read-only branch is needed there), the browser paragraph's screenshot sentence

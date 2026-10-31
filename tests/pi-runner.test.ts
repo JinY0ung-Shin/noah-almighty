@@ -153,7 +153,7 @@ const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req
 
 // ---- runPiAgent ---------------------------------------------------------------------------
 
-describe("runPiAgent: formerly read-only run classes (U8)", () => {
+describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
   it("runs each avatar consultation in a FRESH, EMPTY sandbox of its own, gated as before, and removes it afterwards", async () => {
     const { store, config, owner } = setup();
     // owner = the CONSULTED avatar (C), asker = the asking avatar's owner (A).
@@ -233,6 +233,8 @@ describe("runPiAgent: formerly read-only run classes (U8)", () => {
     expect(seen.during).toMatchObject({ exists: true, runDir: ["run-ask"] });
     expect((seen.during as { entries: string[] }).entries.every((name) => ["c", ".noah"].includes(name))).toBe(true);
     expect(first!.previousResponseId).toBeUndefined();
+    // Nothing of anyone's is in that sandbox: the consultation keeps the full built-ins.
+    expect(first!.readOnly).toBeUndefined();
     expect(first!.instructions).toContain("Work in this run's folder `/workspace/c/run-ask`");
     expect(first!.instructions).toContain(piSandboxOwnerSentence("nobody"));
     expect(first!.instructions).not.toContain("THIS user's Linux sandbox");
@@ -270,26 +272,35 @@ describe("runPiAgent: formerly read-only run classes (U8)", () => {
     expect(sweepPiConsultationSandboxes(config)).toBe(0);
   });
 
-  it("runs an untrusted colleague chat in the colleague's own sandbox and says so", async () => {
+  it("runs a colleague chat in the colleague's own sandbox as a read_only pi session, and says so", async () => {
     const { store, config, base } = setup();
     const mate = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     store.touchConversation(mate.id, "conv-m", base().avatar.id, "hi");
-    const { client, requests } = fakeClient([() => textTurn("resp_m1_1", "Hi")]);
-    await runPiAgent(
-      base({ conversationId: "conv-m", viewerUserId: mate.id, viewerName: "Mate", viewerIsOwner: false, elevated: false }),
-      [],
-      config,
-      store,
-      { steers: new SteerChannel() },
-      undefined,
-      { client },
-    );
+    const { client, requests } = fakeClient([() => textTurn("resp_m1_1", "Hi"), () => textTurn("resp_m1_2", "Again")]);
+    const turn = (resumeSessionId?: string) =>
+      runPiAgent(
+        base({ conversationId: "conv-m", viewerUserId: mate.id, viewerName: "Mate", viewerIsOwner: false, elevated: true, resumeSessionId }),
+        [],
+        config,
+        store,
+        { steers: new SteerChannel() },
+        undefined,
+        { client },
+      );
+    await turn();
     const [req] = requests;
     expect(req!.user).toBe(mate.id);
+    // A trusted colleague too: someone else's avatar never gets write/edit/bash in the colleague's sandbox.
+    expect(req!.readOnly).toBe(true);
     expect(req!.instructions).toContain("This sandbox belongs to the person you are talking to, a colleague");
-    expect(req!.instructions).toContain("their files, never the owner's");
-    expect(req!.instructions).not.toContain("READ-ONLY");
+    expect(req!.instructions).toContain("this session is READ-ONLY there");
+    expect(req!.instructions).toContain("Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore).");
+    expect(req!.instructions).not.toContain("`bash` (run programs");
     expect(store.getConversationPiSessionProfile(mate.id, "conv-m", "m1")).toBe("m-opus|");
+    // The continued session already is read_only; only a new session carries the flag.
+    await turn("resp_m1_1");
+    expect(requests[1]!.previousResponseId).toBe("resp_m1_1");
+    expect(requests[1]!.readOnly).toBeUndefined();
   });
 
   it("runs a profile generator in the owner's sandbox with the one-shot run kind", async () => {
@@ -306,6 +317,7 @@ describe("runPiAgent: formerly read-only run classes (U8)", () => {
     );
     const [req] = requests;
     expect(req!.user).toBe(owner.id);
+    expect(req!.readOnly).toBeUndefined();
     expect(req!.instructions).toContain("/workspace/c/run-hashtags");
     expect(req!.instructions).toContain("do not create files or run commands");
     expect(inputText(req!)).toContain("Run kind (this turn): an automated one-shot task");
@@ -825,7 +837,7 @@ describe("pi prompt variant", () => {
     shellExposedSecretNames: ["API_TOKEN"],
   };
   it("moves per-turn provenance out of the frozen append and states the runtime", () => {
-    const pi = buildSystemPromptAppend({ ...owner, piRuntime: { conversationDir: "/workspace/c/x", shellSecretsUnavailable: ["API_TOKEN"] } });
+    const pi = buildSystemPromptAppend({ ...owner, piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretsUnavailable: ["API_TOKEN"] } });
     expect(pi).toContain("Runtime: your own pi sandbox");
     expect(pi).not.toContain("Conversation rewind (this turn)");
     expect(pi).not.toContain("submitted by an **EXTERNAL SYSTEM**");
@@ -857,6 +869,7 @@ describe("pi prompt variant", () => {
   const facts = (asyncAskAvatar: boolean) => ({
     conversationDir: "/workspace/c/x",
     shellSecretsUnavailable: [],
+    readOnlyBuiltins: false,
     asyncAskAvatar,
     activeRepoDir: "/workspace/repos/o/notes",
   });

@@ -60,12 +60,13 @@ const client = (extra: Partial<Parameters<typeof createPiResponsesClient>[0]> = 
   createPiResponsesClient({ baseUrl, serviceKey: "svc-key-1", ...extra });
 
 describe("buildResponsesBody", () => {
-  it("maps a first turn with images, effort, metadata and instructions", () => {
+  it("maps a first turn with images, effort, read_only, metadata and instructions", () => {
     const body = buildResponsesBody({
       user: "user-1",
       model: "m1",
       instructions: "be brief",
       reasoningEffort: "high",
+      readOnly: true,
       metadata: { conversation: "c1" },
       input: { kind: "prompt", text: "look", images: [{ mediaType: "image/png", data: "AAAA" }] },
     });
@@ -75,6 +76,7 @@ describe("buildResponsesBody", () => {
       stream: true,
       user: "user-1",
       reasoning: { effort: "high" },
+      read_only: true,
       metadata: { conversation: "c1" },
       input: [
         {

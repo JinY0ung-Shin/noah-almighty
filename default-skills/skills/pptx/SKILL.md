@@ -21,7 +21,7 @@ act on its marker:
 | `toolchain available` + `converter: NOT INSTALLED`, or `toolchain available` with no `converter:` marker | python-pptx path (§9); tell the user the design converter is not installed in this deployment, so the deck will be plainer |
 | `UNAVAILABLE` | stop: tell the user a system administrator must rebuild the server image to enable PPT generation |
 
-A tail on that line overrides the table: ``administrator disabled the `pptx` skill`` or
+A tail on that line overrides the table: `read-only`, ``administrator disabled the `pptx` skill`` or
 `preview/download need an interactive chat turn` → do not build a deck in this run; explain why in one sentence.
 If describe_system is unavailable in this run, `bash ${CLAUDE_SKILL_DIR}/scripts/deck.sh probe` answers the same
 question (exit 0 = converter installed, exit 4 = not; it starts no browser; its `selftest` line is informational).

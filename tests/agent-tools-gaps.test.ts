@@ -899,7 +899,7 @@ describe("run plan — the Confluence save target", () => {
         scratchWorkspaceDir?: string;
         confluenceSaveToWorkspace?: boolean;
         deckAuthoring?: string;
-        piRuntime?: { sandboxOwner?: string };
+        piRuntime?: { sandboxOwner?: string; readOnlyBuiltins?: boolean };
       },
     };
   }
@@ -968,36 +968,47 @@ describe("run plan — the Confluence save target", () => {
     expect((await plan(noUrl, request(noUrl))).systemCtx.confluenceSaveToWorkspace).toBe(false);
   });
 
-  it("every run class may author (deckAuthoring allowed), each in its own principal's sandbox", async () => {
-    // pi has no per-request built-in allowlist: every run writes files with its
-    // built-ins, in the sandbox of the user it runs AS (piRunPrincipal) — so
-    // only the admin skill policy gates decks, and both surfaces name WHOSE
-    // sandbox it is.
+  it("a colleague chat is read-only (no deck), every other class may author, each in its own principal's sandbox", async () => {
+    // The run's built-ins work in the sandbox of the user it runs AS
+    // (piRunPrincipal). A colleague chat's pi session is read_only (someone
+    // else's avatar in the colleague's sandbox — user decision 2026-10-31), so
+    // it cannot build a deck; both surfaces name WHOSE sandbox it is.
     const s = setup("plan-can-write");
     const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
-    const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string }[] = [
-      { label: "owner chat", over: {}, sandboxOwner: "owner" },
-      { label: "untrusted colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, sandboxOwner: "viewer" },
+    const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string; readOnly: boolean }[] = [
+      { label: "owner chat", over: {}, sandboxOwner: "owner", readOnly: false },
+      { label: "untrusted colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, sandboxOwner: "viewer", readOnly: true },
+      {
+        label: "trusted colleague",
+        over: { viewerUserId: colleague.id, viewerIsOwner: false, elevated: true },
+        sandboxOwner: "viewer",
+        readOnly: true,
+      },
       {
         label: "avatar consultation",
         over: { viewerUserId: colleague.id, viewerIsOwner: false, avatarConsultation: true, conversationId: undefined },
         sandboxOwner: "nobody",
+        readOnly: false,
       },
       // Profile generators: headless, no viewer, no conversation — the owner's sandbox.
       {
         label: "restricted headless",
         over: { headless: true, conversationId: undefined, viewerUserId: undefined },
         sandboxOwner: "owner",
+        readOnly: false,
       },
-      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, sandboxOwner: "owner" },
+      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, sandboxOwner: "owner", readOnly: false },
     ];
     for (const c of cases) {
       const { result, systemCtx } = await plan(s, request(s, c.over));
-      expect(systemCtx.deckAuthoring, c.label).toBe("allowed");
-      expect(result.deckAuthoring, c.label).toBe("allowed");
+      const authoring = c.readOnly ? "read-only" : "allowed";
+      expect(systemCtx.deckAuthoring, c.label).toBe(authoring);
+      expect(result.deckAuthoring, c.label).toBe(authoring);
       expect(result.piRuntimeFacts.sandboxOwner, c.label).toBe(c.sandboxOwner);
+      expect(result.piRuntimeFacts.readOnlyBuiltins, c.label).toBe(c.readOnly);
       // describe_system reads the SAME facts object the prompt is stamped from.
       expect(systemCtx.piRuntime?.sandboxOwner, c.label).toBe(c.sandboxOwner);
+      expect(systemCtx.piRuntime?.readOnlyBuiltins, c.label).toBe(c.readOnly);
     }
   });
 });

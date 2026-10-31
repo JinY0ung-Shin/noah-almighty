@@ -275,6 +275,7 @@ describe("skills in the sandbox", () => {
       viewerIsOwner: true,
       piRuntime: {
         shellSecretsUnavailable: [],
+        readOnlyBuiltins: false,
         skills: [
           { root: "default", dir: "pptx", name: "pptx", description: "Decks", via: "file", skillMd: "/workspace/.noah/skills/default/pptx/SKILL.md" },
           { root: "knowledge", dir: "mine", name: "mine", description: "Private", via: "mcp" },

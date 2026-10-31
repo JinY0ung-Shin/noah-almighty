@@ -39,9 +39,9 @@ Durable principles for this layer:
   `mcpAllowedTools`, but tools/list is a STATIC catalog (pi freezes a session's tool list while later turns
   carry other capabilities), so the handler is the check that sees the live caller. **Guard conventions
   differ per file BY DESIGN** (owner-only vs elevated vs group-member vs intentionally ungated); don't
-  "normalize" them. A formerly read-only run class (untrusted colleague, consultation, generator) has full
-  built-ins in its OWN sandbox (a consultation: a fresh empty one, `beginPiConsultationSandbox`) — the owner's
-  data is protected only here.
+  "normalize" them. Every run class works in its OWN sandbox (a consultation: a fresh empty one,
+  `beginPiConsultationSandbox`); a colleague chat's pi session is `read_only` (`readOnlyBuiltins`), the rest have
+  full built-ins — the owner's data is protected only here.
 - **A new tool means updating BOTH `inProcessMcpServers` AND `mcpAllowedTools`** in `runCapabilities.ts` — two
   hand-synced lists. `mcpAllowedTools` is the endpoint's per-call gate and the "callable now" list
   describe_system reports. Miss one and the model either sees a tool it can't call or calls one that isn't built.

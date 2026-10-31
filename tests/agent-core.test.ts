@@ -3075,7 +3075,7 @@ describe("buildPrompt", () => {
     // the admin skill policy decides.
     const pptxSkillNames = ["pptx", "avatar-defaults:pptx"];
     const promptFor = (over: Partial<AgentRequest>, disabledSkills: string[] = []) => {
-      const deckAuthoring = deckAuthoringStatusFor({ disabledSkills, pptxSkillNames });
+      const deckAuthoring = deckAuthoringStatusFor({ readOnlyBuiltins: false, disabledSkills, pptxSkillNames });
       const flags = deckGuidanceFlags({
         deckRenderingAvailable: true,
         deckConverterInstalled: true,
@@ -3487,7 +3487,7 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     avatar,
     viewerIsOwner: false,
     viewerName: "김철수",
-    piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "viewer", shellSecretsUnavailable: [] },
+    piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "viewer", readOnlyBuiltins: true, shellSecretsUnavailable: [] },
   };
   const consultationRequest: AgentRequest = {
     message: "질문",
@@ -3498,12 +3498,13 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     viewerIsOwner: false,
     elevated: true,
     viewerName: "질문자",
-    piRuntime: { conversationDir: "/workspace/c/run-ask", sandboxOwner: "nobody", shellSecretsUnavailable: [] },
+    piRuntime: { conversationDir: "/workspace/c/run-ask", sandboxOwner: "nobody", readOnlyBuiltins: false, shellSecretsUnavailable: [] },
   };
 
   it("names the colleague's or the asker's sandbox, and says nothing extra for the owner's own runs", () => {
     expect(VIEWER).toContain("This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner");
-    expect(VIEWER).toContain("work only on that colleague's own files, never on the owner's");
+    expect(VIEWER).toContain("this session is READ-ONLY there: your only built-in tools are `read`, `ls`, `find` and `grep`");
+    expect(VIEWER).toContain("they see only that colleague's own files, never the owner's");
     expect(VIEWER).toContain("reachable only through the Noah tools this run lists");
     expect(ASKER).toContain("This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's");
     expect(ASKER).toContain("it is deleted when the run ends");
@@ -3530,19 +3531,20 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     const owner = buildSystemPromptAppend({
       ...colleagueRequest,
       viewerIsOwner: true,
-      piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "owner", shellSecretsUnavailable: [] },
+      piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretsUnavailable: [] },
     });
     expect(owner).not.toContain(VIEWER);
     expect(owner).not.toContain(ASKER);
   });
 
-  it("no longer tells an untrusted colleague or a consultation that its built-ins are read-only", () => {
-    for (const request of [colleagueRequest, consultationRequest]) {
-      const p = buildPrompt(request, 0);
-      expect(p).not.toContain("READ-ONLY");
-      expect(p).not.toContain("Read/Glob/Grep");
-      expect(p).not.toContain("read-only tools");
-    }
+  it("lists only the read-only built-ins for a colleague chat, and the full set for a consultation", () => {
+    const colleague = buildSystemPromptAppend(colleagueRequest);
+    expect(colleague).toContain("Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore).");
+    expect(colleague).not.toContain("`bash` (run programs");
+    expect(colleague).not.toContain("create files there");
+    const consultation = buildSystemPromptAppend(consultationRequest);
+    expect(consultation).toContain("`bash` (run programs; its `timeout` is in SECONDS)");
+    expect(consultation).not.toContain("READ-ONLY");
   });
 
   function describeSystemFor(dir: string, piRuntime: AgentRequest["piRuntime"]) {

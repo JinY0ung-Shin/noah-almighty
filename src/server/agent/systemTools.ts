@@ -145,8 +145,9 @@ export interface SystemToolsContext {
   deckToolchain?: DeckToolchainState;
   /**
    * Whether THIS run may author a deck (`deckAuthoringStatusFor`: the `pptx`
-   * skill not admin-disabled) — picks the deck line's TAIL, so an
-   * admin-disabled skill is never told to build. Undefined → "allowed".
+   * skill not admin-disabled, then a session that can write) — picks the deck
+   * line's TAIL, so an admin-disabled skill or a read-only colleague chat is
+   * never told to build. Undefined → "allowed".
    */
   deckAuthoring?: DeckAuthoringStatus;
   /**
@@ -423,7 +424,9 @@ export function deckCapabilityLine(
   const tail =
     authoring === "skill-disabled"
       ? "; the administrator disabled the `pptx` skill in this deployment, so do not build decks — say so if asked"
-      : !ctx.fileOutputEnabled
+      : authoring === "read-only"
+        ? "; this conversation is read-only (no bash/write), so decks cannot be built here — the colleague can build one with their own avatar"
+        : !ctx.fileOutputEnabled
           ? "; preview/download need an interactive chat turn"
           : mode === "converter"
             ? " — use the `pptx` skill: author slides as HTML, run its deck.sh check/build in the foreground, then `mcp__file_output__share_file` the built .pptx IN PLACE (the card shows the converter's exact slide renders). " +
@@ -443,7 +446,8 @@ const IMAGE_SOURCES_LINE_PREFIX = "- Images for documents and decks: ";
  * describe_system's image-sources line, shared by the owner and non-owner
  * branches (like the deck line) so they never disagree: which images
  * this run has as FILES and where they are, and how to place one into a deck,
- * document or commit (every pi run writes files in its own sandbox). Each source
+ * document or commit — or, on a read-only session (`readOnlyBuiltins`, a
+ * colleague's chat), that it can only read them. Each source
  * is keyed on the same run flag the prompt's standing text reads (browser +
  * vision for captures, `confluenceSaveToWorkspace` for Confluence), so the two
  * metacognition surfaces offer the same routes.
@@ -456,6 +460,7 @@ export function imageSourcesLine(
     | "visionEnabled"
     | "confluenceSaveToWorkspace"
     | "scratchWorkspaceDir"
+    | "piRuntime"
   >,
 ): string {
   const where = ctx.scratchWorkspaceDir
@@ -475,7 +480,9 @@ export function imageSourcesLine(
       : []),
     "a web page's images cannot be downloaded with mcp__web__fetch, which returns page text only",
   ];
-  const use = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
+  const use = ctx.piRuntime?.readOnlyBuiltins
+    ? "This conversation is read-only (no write/edit/bash), so you can read those files here but not place them into a deck or document"
+    : "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
   return `${IMAGE_SOURCES_LINE_PREFIX}files in ${where} — ${sources.join("; ")}. ${use}`;
 }
 
@@ -542,8 +549,8 @@ function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
 
 /**
  * The runtime line: what pi really is for THIS run (whose sandbox, pi's
- * built-in tools, what is missing there). Every run class has the full
- * built-in set in its principal's sandbox (`piSandboxOwnerSentence`).
+ * built-in tools, what is missing there). A colleague's run is read-only
+ * (`readOnlyBuiltins`; `piSandboxOwnerSentence` says why).
  */
 function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): string {
   const pi = ctx.piRuntime;
@@ -556,9 +563,14 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
     " — the shell's HTTP(S) leaves only through pi-gateway's egress proxy to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW`, empty = everything blocked; a refusal is `407 Request rejected by proxy`), and Noah's own tools keep Noah's network. " +
     (owner ? `${owner} ` : "") +
     (pi?.conversationDir
-      ? `Work in this ${pi.conversationDir.startsWith("/workspace/c/run-") ? "run" : "conversation"}'s folder \`${pi.conversationDir}\` and pass ABSOLUTE paths (the shell starts in /workspace, not there). `
+      ? pi.readOnlyBuiltins
+        ? `This conversation's folder is \`${pi.conversationDir}\`; pass ABSOLUTE paths. `
+        : `Work in this ${pi.conversationDir.startsWith("/workspace/c/run-") ? "run" : "conversation"}'s folder \`${pi.conversationDir}\` and pass ABSOLUTE paths (the shell starts in /workspace, not there). `
       : "Use absolute paths under /workspace. ") +
-    "Built-in tools: read/write/edit/ls/find/grep/bash; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
+    (pi?.readOnlyBuiltins
+      ? "Built-in tools: read/ls/find/grep only (read-only session: no write, edit or bash)"
+      : "Built-in tools: read/write/edit/ls/find/grep/bash") +
+    "; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
     "No WebSearch (use mcp__web__fetch for a known URL). " +
     "hex-ssh, plugin `.mcp.json` and admin 공용 MCP servers are relayed by Noah as `mcp__hex-ssh__<tool>`, `mcp__plugins__<server>__<tool>` and `mcp__shared__<server>__<tool>` (the `mcp__<server>__<tool>` form resolves too); the session's tool list is read when the pi session starts, so a server connected since appears only in a later session and a removed one is refused. " +
     "A model or reasoning-effort change starts a NEW session that continues from the saved text history (earlier tool results are not carried over). " +

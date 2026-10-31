@@ -216,9 +216,9 @@ These are the invariants the project is built around. New work should reinforce 
   `serverGitEnv` (GIT_CONFIG_* env, hooks + fsmonitor OFF in agent-edited clones), never `-c` in argv
   (cmdline is world-readable). Mechanics → `docs/architecture/secrets-ssh.md` ("Same-uid posture (#71)").
 - **Tool access has TWO halves, and the sandbox is the boundary for the first.** Built-ins are pi's
-  (read/write/edit/bash/ls/find/grep), ALWAYS on in the run principal's sandbox — pi has no per-request
-  allowlist, so an admin built-in toggle is advisory there (describe_system says so) and the formerly
-  read-only run classes are restricted only toward OTHER people's data. Every Noah MCP tool is gated PER CALL: the `/mcp` endpoint admits
+  (read/write/edit/bash/ls/find/grep), on in the run principal's sandbox. pi's only per-request switches are
+  `interactive` and `read_only`; a colleague chat's session is `read_only` (read/ls/find/grep), every other
+  class has the full set. An admin built-in toggle is advisory there (describe_system says so). Every Noah MCP tool is gated PER CALL: the `/mcp` endpoint admits
   only the run's `mcpAllowedTools` (`allowCall`, bearer run token only), and tools/list is a static catalog,
   so a listed tool proves nothing — **every MCP handler MUST self-gate** (owner/elevated/member checks live
   there). There is no permission prompt (no tool call waits for approval); an AskUserQuestion is pi's
@@ -259,9 +259,12 @@ These are the invariants the project is built around. New work should reinforce 
   CONSULTATION is nobody's: it runs in a FRESH, EMPTY sandbox of its own (`consult-<random>`,
   `beginPiConsultationSandbox`), deleted when it ends and swept at boot after a crash — never the asker's (the
   target's authored text would drive a shell over the asker's files, unattended) nor the target's (user decision
-  2026-10-30); `viewerUserId` stays the asker for the MCP gates. The formerly read-only classes (untrusted
-  colleague, consultation, intro/hashtag generators) therefore get the FULL built-ins, never over the owner's
-  files, and reach owner data only through the gated, self-gating MCP tools; both surfaces say exactly that. A run
+  2026-10-30); `viewerUserId` stays the asker for the MCP gates. A COLLEAGUE chat (trusted or not) runs someone
+  else's avatar in the colleague's own sandbox, so its pi session is `read_only` (pi P1: only
+  read/ls/find/grep — no write/edit/bash, no sandbox-run MCP server; `PiRuntimeFacts.readOnlyBuiltins`, sent on a
+  new session; user decision 2026-10-31). The consultation and the intro/hashtag generators keep the FULL
+  built-ins, never over the owner's files; every class reaches owner data only through the gated, self-gating MCP
+  tools, and both surfaces say exactly that. A run
   without a conversation works in a `/workspace/c/<run-…>/` folder (no stored session, no frozen prompt row; a
   generator's folder is reused in the owner's sandbox, a consultation's goes with its sandbox).
   Noah never executes git or agent-authored code from a sandbox dir: a working repo is a sandbox COPY whose

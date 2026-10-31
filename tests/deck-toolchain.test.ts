@@ -696,10 +696,14 @@ describe("pptx skill names, modes and authoring status", () => {
 
   it("deckAuthoringStatusFor mirrors the skill sync's exact skill rule", () => {
     const names = ["pptx", "avatar-defaults:pptx"];
-    const status = (disabledSkills: string[]) => deckAuthoringStatusFor({ disabledSkills, pptxSkillNames: names });
+    const status = (disabledSkills: string[], readOnlyBuiltins = false) =>
+      deckAuthoringStatusFor({ readOnlyBuiltins, disabledSkills, pptxSkillNames: names });
     expect(status([])).toBe("allowed");
     expect(status(["pptx"])).toBe("skill-disabled");
     expect(status(["avatar-defaults:pptx"])).toBe("skill-disabled");
+    // A colleague's read-only session cannot run the converter; the admin policy still wins.
+    expect(status([], true)).toBe("read-only");
+    expect(status(["pptx"], true)).toBe("skill-disabled");
     // A DIFFERENT plugin's pptx skill does not disable the bundled one.
     expect(status(["other:pptx"])).toBe("allowed");
     expect(status(["docx", "drawio"])).toBe("allowed");

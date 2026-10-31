@@ -79,6 +79,12 @@ export interface PiResponseRequest {
   instructions?: string;
   previousResponseId?: string;
   reasoningEffort?: PiReasoningEffort;
+  /**
+   * New sessions only: pi's `read_only` (P1) — the session gets no `write`,
+   * `edit`, `bash` or sandbox-run MCP servers, for its whole life (pi 400s a
+   * different value on a later turn). `PiRuntimeFacts.readOnlyBuiltins`.
+   */
+  readOnly?: boolean;
   /** String map; pi forwards only the keys listed in its MCP_METADATA_KEYS to MCP servers. */
   metadata?: Record<string, string>;
   /**
@@ -391,6 +397,7 @@ export function buildResponsesBody(request: PiResponseRequest): Record<string, u
     stream: true,
     user: request.user,
     ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
+    ...(request.readOnly ? { read_only: true } : {}),
     ...(request.metadata && Object.keys(request.metadata).length ? { metadata: request.metadata } : {}),
   };
 }

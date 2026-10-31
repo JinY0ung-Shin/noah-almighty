@@ -196,11 +196,12 @@ export function piAdminDisabledToolsNote(disabledTools: readonly string[]): stri
  * Whose sandbox a run's built-in tools work in (`PiRuntimeFacts.sandboxOwner`),
  * ONE text for both metacognition surfaces (the prompt's runtime section and
  * describe_system's runtime line). Empty for the owner's own runs: "this
- * user's sandbox" already says it.
+ * user's sandbox" already says it. A colleague's run is also READ-ONLY
+ * (`readOnlyBuiltins` is true exactly then), and this sentence says so.
  */
 export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): string {
   if (owner === "viewer") {
-    return "This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner: your built-in tools (read/write/edit/ls/find/grep/bash) work only on that colleague's own files, never on the owner's, and anything you build there is theirs. The owner's knowledge and repositories are reachable only through the Noah tools this run lists, which refuse anything reserved for the owner.";
+    return "This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner — and this session is READ-ONLY there: your only built-in tools are `read`, `ls`, `find` and `grep` (pi left out `write`, `edit` and `bash`), they see only that colleague's own files, never the owner's, and you cannot create or change a file or run a program in this conversation. Put what you produce in your reply instead; for work that needs a shell or a new file, the colleague can ask their OWN avatar. The owner's knowledge and repositories are reachable only through the Noah tools this run lists, which refuse anything reserved for the owner.";
   }
   if (owner === "nobody") {
     return "This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's: it starts with no files, nothing you write there reaches the answer, and it is deleted when the run ends. Answer from your owner's knowledge through the Noah recall tools this run lists.";

@@ -5,11 +5,12 @@ import type { AgentRequest } from "../src/server/types.js";
 import { withTempDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
-// Placing an image file, end to end: every pi run writes files in its
-// principal's own sandbox, so both metacognition surfaces (describe_system's
-// image-sources line, the user prompt's attached-images tail) must tell EVERY
-// viewer class to place the file — there is no read-only run class left
-// (review-2 L5 removed the dead `canWriteFiles` flag and its read-only texts).
+// Placing an image file, end to end: the capability plan derives ONE fact,
+// `PiRuntimeFacts.readOnlyBuiltins` (a colleague chat's pi session is
+// read_only — user decision 2026-10-31), hands it to describe_system's ctx and
+// stamps it onto the prompt request. Both surfaces (describe_system's
+// image-sources line, the user prompt's attached-images tails) must then tell
+// the owner to place the FILE and every colleague that it can only read it.
 // ---------------------------------------------------------------------------
 
 // The REAL server, with its ctx recorded: describe_system's half of the pair.
@@ -29,8 +30,8 @@ const getTempDir = withTempDir("agent-can-write-files", () => {
   vi.mocked(buildSystemServer).mockClear();
 });
 
-describe("every run class may place an image file, on both metacognition surfaces", () => {
-  it("tells the owner, a trusted teammate and a plain colleague the same thing on each", async () => {
+describe("placing an image file follows the run's read-only fact, on both metacognition surfaces", () => {
+  it("tells the owner to place the file and a trusted or plain colleague that it cannot, on each", async () => {
     const { config, store } = createServices({
       dataDir: path.join(tempDir, "data"),
       agentRuntime: "pi",
@@ -60,49 +61,41 @@ describe("every run class may place an image file, on both metacognition surface
       images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
       imageFiles: [{ path: path.join(cwd, "attachments", "a.png"), mediaType: "image/png" }],
     };
-    const cases: Array<{ label: string; request: AgentRequest }> = [
-      { label: "owner", request: base },
+    const cases: Array<{ label: string; request: AgentRequest; readOnly: boolean }> = [
+      { label: "owner", request: base, readOnly: false },
       {
         label: "trusted teammate",
         request: { ...base, viewerUserId: "mate", viewerName: "동료", viewerIsOwner: false, elevated: true },
+        readOnly: true,
       },
       {
         label: "plain colleague",
         request: { ...base, viewerUserId: "colleague", viewerName: "동료", viewerIsOwner: false, elevated: false },
+        readOnly: true,
       },
     ];
 
     for (const [i, c] of cases.entries()) {
       const caps = await buildRunCapabilities(c.request, [], config, store, undefined, undefined, () => 0);
+      expect(caps.piRuntimeFacts.readOnlyBuiltins, c.label).toBe(c.readOnly);
       const ctx = vi.mocked(buildSystemServer).mock.calls[i][1] as Parameters<typeof imageSourcesLine>[0];
       const stamped = stampPromptRequest(c.request, caps, config, undefined);
 
       const line = imageSourcesLine(ctx);
       const userPrompt = buildUserPrompt(stamped);
+      const textOnly = buildUserPrompt({ ...stamped, images: undefined });
       expect(userPrompt, c.label).toContain("ALSO saved as files in the conversation folder");
-      expect(line, c.label).toContain("copy that FILE (e.g. into the deck's `assets/`)");
-      expect(userPrompt, c.label).toContain("place the FILE itself instead of describing or redrawing it");
-      expect(userPrompt, c.label).not.toContain("This conversation cannot write files");
+      if (c.readOnly) {
+        expect(line, c.label).toContain("you can read those files here but not place them");
+        expect(userPrompt, c.label).toContain("you can read these files here but not place them");
+        expect(userPrompt, c.label).not.toContain("place the FILE itself");
+        expect(textOnly, c.label).not.toContain("inspect or convert with `bash`");
+      } else {
+        expect(line, c.label).toContain("copy that FILE (e.g. into the deck's `assets/`)");
+        expect(userPrompt, c.label).toContain("place the FILE itself instead of describing or redrawing it");
+        expect(textOnly, c.label).toContain("inspect or convert with `bash`");
+      }
     }
     store.close();
-  });
-
-  it("needs no stamp: an unstamped colleague request is told to place the file too", () => {
-    const colleague: AgentRequest = {
-      message: "m",
-      avatar: { id: "owner", displayName: "오너", alias: "", persona: "" },
-      viewerUserId: "colleague",
-      viewerIsOwner: false,
-      images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
-      imageFiles: [{ path: "/x/attachments/a.png", mediaType: "image/png" }],
-    };
-    expect(buildUserPrompt(colleague)).toContain("place the FILE itself instead of describing or redrawing it");
-    expect(buildUserPrompt(colleague)).not.toContain("cannot write files");
-    expect(imageSourcesLine({ headless: false })).toContain("copy that FILE (e.g. into the deck's `assets/`)");
-    expect(imageSourcesLine({ headless: false })).not.toContain("cannot write files");
-    // A text-only turn (no image blocks) has its own tail.
-    const textOnly = buildUserPrompt({ ...colleague, images: undefined });
-    expect(textOnly).toContain("Handle them as files: show one to the user with mcp__file_output__show_file");
-    expect(textOnly).not.toContain("cannot write files");
   });
 });

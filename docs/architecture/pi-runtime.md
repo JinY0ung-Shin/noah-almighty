@@ -23,13 +23,21 @@ own:
 | avatar consultation (the consulted avatar's run) | NOBODY: a fresh, empty `consult-<random>` sandbox, deleted after the run | read-only MCP toward the consulted owner |
 | intro/hashtag generators, any run without a conversation | the owner | own |
 
-pi has no per-request tool allowlist (P1), so EVERY class gets the full built-ins (read/write/edit/bash/ls/find/grep)
-— including the classes that used to be read-only — always in its principal's OWN sandbox, never the owner's files.
+Every class runs in its principal's OWN sandbox, never over the owner's files. A COLLEAGUE chat (trusted or not —
+`sandboxOwner: "viewer"`) runs someone else's avatar — the owner's persona, skills and recalled notes — in the
+colleague's sandbox, so its pi session is `read_only` (pi-gateway P1, user decision 2026-10-31): pi gives it only
+`read`/`ls`/`find`/`grep` (+ `present_file`), no `write`/`edit`/`bash` and no sandbox-run MCP server, for the
+session's whole life. The capability plan derives `PiRuntimeFacts.readOnlyBuiltins` (= `sandboxOwner === "viewer"`)
+and `runPiAgent` sends `read_only: true` on every NEW pi session of that run (like the model and effort; a
+continued session already has it). Every other class keeps the full built-ins (read/write/edit/bash/ls/find/grep).
 What a run may do to anyone else's data is decided only by the `/mcp` gate (`allowCall` over this run's
 `mcpAllowedTools`) and the handlers' self-gates. Both metacognition surfaces say what the run has and whose
 sandbox it is: `PiRuntimeFacts.sandboxOwner` (`owner` / `viewer` / `nobody`, set by the capability plan) renders ONE
 sentence, `piSandboxOwnerSentence` (`ownerState.ts`), in the prompt's runtime section and describe_system's
-runtime line. An admin built-in toggle is advisory on pi (describe_system names it as such); a
+runtime line — the `viewer` one says the session is read-only — and `readOnlyBuiltins` switches the built-in tool
+list, the deck line's `read-only` tail (`DeckAuthoringStatus`), the image-sources line, the attached-images tails,
+the no-vision PDF hint, the draw.io section and the working-repository turn line to their read-only wording.
+An admin built-in toggle is advisory on pi (describe_system names it as such); a
 disabled SKILL is enforced by omission (see "Skills").
 
 **A run without a conversation** (consultations, the generators) works in a run folder

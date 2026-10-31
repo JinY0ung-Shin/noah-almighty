@@ -23,8 +23,8 @@
   `modelFallback: true`, a 3-min wall clock (`AVATAR_ASK_TIMEOUT_MS`), an 8k-char answer cap
   (`AVATAR_ASK_ANSWER_CAP` — the answer is another user's model output entering the asker's context, so
   it's bounded like the directory bio), and the OUTER run's abort signal propagated in.
-- **Where it runs:** on pi like every run, with pi's full built-ins (pi has no per-request tool allowlist,
-  decision U8) — but in a FRESH, EMPTY sandbox of its own, never the asker's or the target's (user decision
+- **Where it runs:** on pi like every run, with pi's full built-ins (not `read_only`: nothing of anyone's is in
+  its sandbox) — but in a FRESH, EMPTY sandbox of its own, never the asker's or the target's (user decision
   2026-10-30, review-2 H1). The run is driven by the TARGET's authored content (persona, knowledge-repo
   `CLAUDE.md`, recalled notes, captured third-party pages) with nobody watching; in the asker's sandbox that text
   could read the asker's conversation files, tamper with the asker's repo copies (committed later as the asker)

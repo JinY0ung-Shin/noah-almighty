@@ -18,6 +18,7 @@ import type {
   AgentRequest,
   AgentOwner,
   PiRuntimeFacts,
+  PiSandboxOwner,
   PluginRoot,
 } from "../types.js";
 import type { Store } from "../store.js";
@@ -626,18 +627,27 @@ export async function buildRunCapabilities(
   // describe_system with the `converter: INSTALLED` / `NOT INSTALLED` markers.
   // Deck guidance additionally needs a turn that can publish files (the
   // preview/download path) and a viewer who may author one: deckAuthoring is
-  // the admin skill policy (an exact `pptx` / `<plugin>:pptx` disable) — every
-  // pi run can write files, in its principal's own sandbox.
+  // the admin skill policy (an exact `pptx` / `<plugin>:pptx` disable), then
+  // whether this run's built-ins can write (readOnlyBuiltins below).
   // A pi run builds decks INSIDE the user's sandbox: its toolchain is the
   // sandbox image's (PI_DECK_SANDBOX), never the host probe, and the sandbox
   // has no LibreOffice for the legacy render path.
   const deckRenderingAvailable = false;
   const deckToolchain = piSandboxDeckToolchain(config);
-  // Every pi run can write files: its built-ins (write/edit/bash) work in the
-  // sandbox of the user it runs AS — the viewer's own on a colleague chat, a
-  // fresh empty one on a consultation — never the owner's. So both surfaces
-  // always offer placing a file, and only the admin skill policy gates decks.
+  // Whose sandbox the built-ins work in (piRunPrincipal: viewerUserId ??
+  // avatar.id; a consultation's own fresh one belongs to nobody).
+  const sandboxOwner: PiSandboxOwner = consultationRun
+    ? "nobody"
+    : (request.viewerUserId ?? request.avatar.id) === request.avatar.id
+      ? "owner"
+      : "viewer";
+  // A colleague's chat runs someone ELSE's avatar in the colleague's own
+  // sandbox, so its pi session is read_only: read/ls/find/grep, no
+  // write/edit/bash (user decision 2026-10-31). ONE value for the runner's
+  // request and both metacognition surfaces.
+  const readOnlyBuiltins = sandboxOwner === "viewer";
   const deckAuthoring = deckAuthoringStatusFor({
+    readOnlyBuiltins,
     disabledSkills: toolSkillPolicy.disabledSkills,
     pptxSkillNames: deckToolchain.pptxSkillNames,
   });
@@ -742,13 +752,8 @@ export async function buildRunCapabilities(
   // pi self-state, ONE value for both metacognition surfaces (describe_system
   // here, the prompt through stampPromptRequest).
   const piRuntimeFacts: PiRuntimeFacts = {
-        // Whose sandbox this is (piRunPrincipal: viewerUserId ?? avatar.id; a
-        // consultation's own fresh one belongs to nobody).
-        sandboxOwner: consultationRun
-          ? "nobody"
-          : (request.viewerUserId ?? request.avatar.id) === request.avatar.id
-            ? "owner"
-            : "viewer",
+        sandboxOwner,
+        readOnlyBuiltins,
         mcpProxies: piMcpProxies.facts,
         asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),

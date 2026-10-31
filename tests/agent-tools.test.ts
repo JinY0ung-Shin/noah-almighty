@@ -3427,7 +3427,7 @@ describe("system tools (avatar system management)", () => {
       ...s.baseCtx,
       config,
       viewerIsOwner: true,
-      piRuntime: { sandboxOwner: "owner", conversationDir: "/workspace/c/conv-1", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, conversationDir: "/workspace/c/conv-1", shellSecretsUnavailable: [] },
     }));
     expect(owner).toContain("- runtime: pi (pi-gateway). You run in THIS user's own Linux sandbox");
     expect(owner).toContain("Work in this conversation's folder `/workspace/c/conv-1`");
@@ -3441,7 +3441,7 @@ describe("system tools (avatar system management)", () => {
       ...s.baseCtx,
       config,
       viewerIsOwner: false,
-      piRuntime: { sandboxOwner: "viewer", conversationDir: "/workspace/c/conv-2", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "viewer", readOnlyBuiltins: true, conversationDir: "/workspace/c/conv-2", shellSecretsUnavailable: [] },
     }));
     expect(colleague).toContain("- runtime: pi (pi-gateway)");
     expect(colleague).toContain(piSandboxOwnerSentence("viewer"));
@@ -3451,7 +3451,7 @@ describe("system tools (avatar system management)", () => {
       ...s.baseCtx,
       config,
       viewerIsOwner: false,
-      piRuntime: { sandboxOwner: "nobody", conversationDir: "/workspace/c/run-ask", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "nobody", readOnlyBuiltins: false, conversationDir: "/workspace/c/run-ask", shellSecretsUnavailable: [] },
     }));
     expect(asker).toContain(piSandboxOwnerSentence("nobody"));
     expect(asker).toContain("You run in a temporary Linux sandbox made for this one run: no sudo, nothing in it persists");
@@ -3489,7 +3489,7 @@ describe("system tools (avatar system management)", () => {
       const tools = buildSystemTools(s.store, {
         ...s.baseCtx,
         viewerIsOwner: true,
-        piRuntime: { conversationDir: "/workspace/c/x", shellSecretsUnavailable: [] },
+        piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretsUnavailable: [] },
       });
       const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
       expect(body).toContain("NOT your sandbox shell: bash/curl/Python go only through pi-gateway's own egress proxy");
