@@ -37,6 +37,10 @@
  * - AskUserQuestion ends the pi turn (`requires_action` + `function_call`); the
  *   answer is the NEXT request's `function_call_output`. `runPiTurn` loops that
  *   inside one Noah run so the host still sees one blocking `onQuestion`.
+ * - pi summarizes a session near the model's context window on its own and
+ *   brackets it with `response.compaction` (`in_progress` → `completed` |
+ *   `failed`): a live status label while it runs, `onCompact` when it ends.
+ *   The badge's window is pi's `usage.context_window`.
  */
 import type { AgentUsage } from "../../types.js";
 import { MAIN_AGENT_ID, type AgentEvents, type QuestionAnswer } from "../events.js";
@@ -183,8 +187,6 @@ export function incompleteErrorSubtype(reason: string | undefined): string | und
 }
 
 export interface PiEventAdapterOptions {
-  /** Model context window for the usage badge (until pi reports `usage.context_window`, design P5). */
-  contextWindow?: number;
   /** pi `present_file` output items (Noah publishes via its own file_output MCP; wiring is later work). */
   onPresentedFile?: (file: PiPresentedFile) => void;
 }
@@ -341,8 +343,7 @@ export class PiEventAdapter {
     const outputDetails = isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {};
     const output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
     const context = typeof details.context_tokens === "number" && details.context_tokens > 0 ? details.context_tokens : 0;
-    const reported = typeof usage.context_window === "number" ? usage.context_window : undefined;
-    const window = reported ?? this.options.contextWindow ?? 0;
+    const window = typeof usage.context_window === "number" ? usage.context_window : 0;
     const thinking = typeof outputDetails.reasoning_tokens === "number" ? outputDetails.reasoning_tokens : 0;
     if (!output && !context) return undefined;
     // Without a context snapshot there is no honest fill ratio (finalizeTurnUsage rule).
@@ -471,6 +472,17 @@ export class PiEventAdapter {
         this.toolEnd(asString(data.tool_use_id), data.is_error !== true);
         this.attemptStartBlock = this.blocks.length;
         return null;
+      case "response.compaction": {
+        this.closeText();
+        const status = asString(data.status);
+        if (status === "in_progress") {
+          this.status("맥락 정리 중…");
+        } else if (status === "completed" || status === "failed") {
+          this.events.onCompact?.({ ok: status === "completed", trigger: "auto" });
+          this.status("응답 생성 중…");
+        }
+        return null;
+      }
       case "response.completed":
       case "response.incomplete":
       case "response.failed":

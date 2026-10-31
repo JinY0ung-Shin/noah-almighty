@@ -804,7 +804,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Model in use: ${modelLine}`,
           `- Reasoning effort: ${effortLine}`,
           `- MCP tool groups enabled for this conversation: ${enabledMcpToolGroupLabels.length ? enabledMcpToolGroupLabels.join(", ") : "(none)"}`,
-          "- Context compaction: automatic (pi-gateway summarizes the session near the model's context limit; no chat notice is shown)",
+          "- Context compaction: automatic (pi-gateway summarizes the session near the model's context limit; an interactive chat shows a status line while it runs and a lasting \"context summarized\" activity row after)",
           `- Confluence host: ${ctx.config.confluenceUrl ? `set (mcp__confluence__* is READ-ONLY — no page creation, editing, or deletion exists; ${ctx.browserEnabled ? "to write, drive Confluence in the user's own browser with mcp__browser__* — including mcp__browser__copy_image then press_key paste (Ctrl+V; Cmd+V on macOS) to put an image into a page body, and mcp__browser__copy_text the same way for long body text or source, which a rich editor drops part of when typed" : "writing would need browser control, which is unavailable in this run"})` : "(none)"}`,
           `- Confluence PAT: ${secretNames.includes("CONFLUENCE_PAT") || secretNames.includes("CONFLUENCE_PERSONAL_ACCESS_TOKEN") ? "secret set" : "(none)"}`,
           // Mirrors buildSystemPromptAppend's web-fetch proxy self-state (the

@@ -215,6 +215,18 @@ export interface MemoryEvent {
 }
 
 /**
+ * pi-gateway summarized the session because it neared the model's context
+ * window (`response.compaction`, completed or failed). The live "맥락 정리 중…"
+ * status label is transient, so this event leaves the DURABLE activity-row
+ * trace: a user who looked away still learns the conversation was summarized.
+ */
+export interface CompactEvent {
+  ok: boolean;
+  /** pi compacts on its own; there is no manual trigger (the `/compact` command is retired). */
+  trigger: "auto";
+}
+
+/**
  * One operation shipped to the VIEWER's own browser through the extension
  * bridge. The chat route emits it over the run's SSE stream and parks; the
  * Noah tab relays it to the extension, which performs the CDP calls and posts
@@ -543,6 +555,8 @@ export interface AgentEvents {
   steers?: SteerChannel;
   /** A second-brain note was saved (repo write under wiki/) — display notice. */
   onMemory?: (event: MemoryEvent) => void;
+  /** pi-gateway summarized the session (context compaction) — durable activity-row notice. */
+  onCompact?: (event: CompactEvent) => void;
 
   /**
    * BLOCKING: the model raised a user dialog (AskUserQuestion). Resolve with the

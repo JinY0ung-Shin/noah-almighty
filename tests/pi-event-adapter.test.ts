@@ -43,6 +43,7 @@ function recorder(options: { fold?: boolean; answer?: QuestionAnswer } = {}): { 
     onAgentStart: push("agentStart"),
     onAgentEnd: push("agentEnd"),
     onTurnResult: push("turnResult"),
+    onCompact: push("compact"),
     ...(options.fold === false ? {} : { onTextFold: push("fold") }),
   };
   if (options.answer) {
@@ -135,7 +136,7 @@ describe("tool presentation", () => {
 describe("PiEventAdapter on captured transcripts", () => {
   it("a1: plain text turn → deltas, model, committed session id, usage", () => {
     const { events, calls } = recorder();
-    const adapter = new PiEventAdapter(events, { contextWindow: 131072 });
+    const adapter = new PiEventAdapter(events);
     const outcome = feed(adapter, fixture("a1-turn1"));
     expect(outcome?.status).toBe("completed");
     const deltas = only(calls, "delta").map(([, d]) => d).join("");
@@ -328,24 +329,48 @@ describe("PiEventAdapter edge semantics (synthetic frames per pi api/mapper.ts)"
     }
   });
 
-  it("usage: context_tokens is the snapshot, output accumulates, no snapshot → no window", () => {
-    const withCtx = new PiEventAdapter(recorder().events, { contextWindow: 200_000 });
+  it("usage: context_tokens is the snapshot, the window is pi's usage.context_window, no snapshot → no window", () => {
+    const withCtx = new PiEventAdapter(recorder().events);
     const a = withCtx.handle(
       ev("response.completed", {
         response: {
           id: "resp_s_1",
           status: "completed",
-          usage: { input_tokens: 5000, output_tokens: 40, input_tokens_details: { cached_tokens: 4000, cache_creation_tokens: 0, context_tokens: 1800 } },
+          usage: {
+            input_tokens: 5000,
+            output_tokens: 40,
+            input_tokens_details: { cached_tokens: 4000, cache_creation_tokens: 0, context_tokens: 1800 },
+            context_window: 200_000,
+          },
         },
       }),
     );
     expect(a).toMatchObject({ usage: { inputTokens: 1800, outputTokens: 40, contextWindow: 200_000 } });
-    const noCtx = new PiEventAdapter(recorder().events, { contextWindow: 200_000 });
+    const noCtx = new PiEventAdapter(recorder().events);
     const b = noCtx.handle(
-      ev("response.completed", { response: { id: "resp_s_1", status: "completed", usage: { input_tokens: 5000, output_tokens: 40 } } }),
+      ev("response.completed", {
+        response: { id: "resp_s_1", status: "completed", usage: { input_tokens: 5000, output_tokens: 40, context_window: 200_000 } },
+      }),
     );
     expect(b).toMatchObject({ usage: { inputTokens: 0, outputTokens: 40 } });
-    expect((b as { usage: { contextWindow?: number } }).usage.contextWindow).toBeUndefined();
+    expect(b).not.toHaveProperty("usage.contextWindow");
+  });
+
+  it("response.compaction: a status line while pi summarizes, one onCompact when it ends", () => {
+    const { events, calls } = recorder();
+    const adapter = new PiEventAdapter(events);
+    feed(adapter, [
+      created,
+      ev("response.compaction", { status: "in_progress" }),
+      ev("response.compaction", { status: "completed" }),
+      ev("response.compaction", { status: "in_progress" }),
+      ev("response.compaction", { status: "failed" }),
+    ]);
+    expect(only(calls, "compact")).toEqual([
+      ["compact", { ok: true, trigger: "auto" }],
+      ["compact", { ok: false, trigger: "auto" }],
+    ]);
+    expect(only(calls, "status").map(([, s]) => s)).toEqual(["맥락 정리 중…", "응답 생성 중…", "맥락 정리 중…", "응답 생성 중…"]);
   });
 
   it("incomplete reasons map onto SDK-style error subtypes", () => {

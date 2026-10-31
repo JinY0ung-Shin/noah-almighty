@@ -1654,6 +1654,11 @@ export async function executeChatTurn(
             // the client dedupes 기억 rows by this id.
             emitRunEvent(runId, "memory", { id: crypto.randomUUID(), ...event });
           },
+          // Context compaction finished (or failed). Same id discipline as 기억 —
+          // a reattach replays the log and the client dedupes on it.
+          onCompact: (event) => {
+            emitRunEvent(runId, "compact", { id: crypto.randomUUID(), ...event });
+          },
           // AskUserQuestion (pi `requires_action`).
           onQuestion: async (requestData) => {
             const requestId = crypto.randomUUID();
