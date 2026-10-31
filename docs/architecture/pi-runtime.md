@@ -137,7 +137,6 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
 | model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
 | no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
 | context window (P5) | unknown (pi's model list carries none): the usage badge shows output tokens only; no compaction chip | — |
-| subagents (P6) | flat: pi's `Agent` is one card | — |
 | no per-session cwd (P1) | the model is told to work in `/workspace/c/<seg>/` with absolute paths (prompt + describe_system + refusal redirects); Noah creates the folder 0700 | both |
 | no WebSearch | not registered; stated | both |
 | relayed MCP tool lists are per SESSION | pi reads `tools/list` when it builds the session (first turn, after ~5 idle minutes, a model change); a server/tool connected later appears only in a later session, a removed one is refused at call time | both (runtime line + prompt sentence) |
