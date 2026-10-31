@@ -49,8 +49,8 @@
   instead of expanding, and trailing text after the slug rides along as a focus hint like `/learn`'s.
 - **The manual `/compact` is retired** (2026-10-29, pi migration): `expandChatSlashCommand` refuses it with a
   Korean `error` exactly like `/new`, and a 다시 생성 of a legacy `/compact` row is refused with that same text (the
-  client hides the button via `isCompactCommandText`). Context compaction is pi's own and emits no event Noah can
-  show (design P5): no compaction chip. Text reaching pi is plain model input — no slash command runs there.
+  client hides the button via `isCompactCommandText`). Context compaction is pi's own; its `response.compaction`
+  event becomes the `compact` frame (see chat-sse-media). Text reaching pi is plain model input — no slash command runs there.
 
 ## git remote work is MCP-only
 - The agent shell is the pi sandbox and holds no git credentials, so Bash `git clone/push`/`gh` can never

@@ -922,7 +922,7 @@ export interface AgentUsage {
    * bogus "출력" count. Omitted/0 when the turn did no reasoning.
    */
   thinkingTokens?: number;
-  /** The model's context-window size, if known (getContextUsage/modelUsage). */
+  /** The session model's context-window size — pi's `usage.context_window`. */
   contextWindow?: number;
 }
 

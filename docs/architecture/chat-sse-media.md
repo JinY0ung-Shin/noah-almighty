@@ -92,9 +92,12 @@
   (`currentTextAnchor` slices from the fold index).
 - **Manual `/compact` is retired (2026-10-29).** Typing it is refused like `/new`; a legacy `/compact`
   row still renders, can be EDITED into ordinary text (a normal rewind), and refuses 다시 생성. Its old
-  assistant bubble (`대화 맥락을 요약해 정리했습니다…`) is plain stored text. pi compacts a long session on its
-  own and emits no event for it (design P5), so no new compaction chip appears; stored `compact` activity rows
-  still render.
+  assistant bubble (`대화 맥락을 요약해 정리했습니다…`) is plain stored text.
+- **pi's automatic compaction is visible.** pi-gateway brackets it with `response.compaction`
+  (`status: in_progress` → `completed` | `failed`); the pi event adapter shows the status line `맥락 정리 중…`
+  while it runs and fires `onCompact({ ok, trigger: "auto" })` at the end, which the chat route emits as the
+  `compact` frame (server-minted id, deduped on replay) → the client's persisted `compact` activity row + chip.
+  The usage badge's window is pi's `usage.context_window` (`AgentUsage.contextWindow`).
 - **Tool gate: built-ins are pi's, MCP tools are gated per call at `/mcp`.** pi's built-ins
   (read/write/edit/bash/ls/find/grep) are always on and run in the RUN PRINCIPAL's own sandbox (viewer for a
   colleague chat, the asker for a consultation, the owner otherwise — `piRunPrincipal`); pi has no per-request

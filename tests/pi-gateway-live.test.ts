@@ -133,7 +133,6 @@ describe.skipIf(!LIVE)("pi-gateway live (e2e instance)", () => {
       client,
       request: { user: USER, input: { kind: "prompt", text: `go [[fake:${key}]]` }, headers: { "x-noah-run-token": token } },
       events,
-      contextWindow: 131072,
     });
     await registry.revoke(token);
     expect(result.status).toBe("completed");
