@@ -361,7 +361,10 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   checkout PINNED at `1b2ccc2` (`1b2ccc23419e…`, the commit this branch is verified against; README names it),
   together with `docker/pi/compose.override.yml` — Noah's instance configuration merged onto pi's services
   (sandboxd's `SANDBOX_IMAGE=noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG}`, built by the build-only
-  `pi-sandbox-image` service FROM pi's own `sandbox-image`; the broker's `noah-mcp` address). A pi-gateway bump
+  `pi-sandbox-image` service FROM pi's own `sandbox-image`; the gateway's `SESSION_IDLE_SECONDS` from
+  `NOAH_PI_SESSION_IDLE_SECONDS`, default 1800 — a reloaded idle session re-lists every Noah server, so pi's 300
+  turned every 5-minute pause into a session start, see README "Sizing pi-gateway"; the broker's `noah-mcp`
+  address). A pi-gateway bump
   re-pins the commit in the README and re-runs the boot test.
 - **`pi-setup`** — a one-shot service (`FROM` Noah's image, uid 10001 = the owner of pi's `admin_api_key` secret,
   read-only, caps dropped) that runs `docker/pi/pi-setup.sh` → `scripts/pi-register-mcp.mjs --configure-instance`
@@ -410,7 +413,8 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 - `--configure-instance` also disables pi's `request_admin` and `present_file` built-ins (Noah has its own) and deploys
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;
   pi enforces no placeholder, the template keeps `{{WORKSPACE}}`, `{{LANGUAGE}}`, `{{DATETIME}}`).
-- Other instance config stays in pi's own admin/`.env`: LLM servers, `SANDBOX_EGRESS_ALLOW`, turn concurrency limits.
+- Other instance config stays in pi's own admin/`.env`: LLM servers, `SANDBOX_EGRESS_ALLOW`, turn concurrency limits
+  (pi's defaults fit a small team; README "Sizing pi-gateway" has the measured sizing and the session-start limit).
   (`SANDBOX_IMAGE` and `PI_DECK_SANDBOX=true` are fixed by the bundle; a native setup sets both itself.)
   `SANDBOX_EGRESS_ALLOW` is the sandbox shell's ONLY way out (HTTP(S) via pi's egress proxy; empty = all blocked, a
   refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own

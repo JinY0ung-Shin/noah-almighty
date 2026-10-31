@@ -12,6 +12,15 @@ services:
       pi-sandbox-image:
         condition: service_completed_successfully
 
+  # pi unloads a session after SESSION_IDLE_SECONDS without a turn and rebuilds it on the next one,
+  # re-listing every Noah MCP server through the broker — the step that saturates gateway and broker
+  # when many sessions start at once (README "Sizing pi-gateway"). pi's own default (300) makes every
+  # 5-minute pause a session start; 30 minutes covers the pauses inside a conversation. Its own name, so
+  # the SESSION_IDLE_SECONDS=300 in a copied pi .env.example does not silently win.
+  gateway:
+    environment:
+      SESSION_IDLE_SECONDS: ${NOAH_PI_SESSION_IDLE_SECONDS:-1800}
+
   # The broker calls Noah's /mcp/<server> over a network only it and Noah are on, from a PINNED address:
   # Noah's NOAH_MCP_ALLOWED_CIDRS defaults to exactly that address (/32), so neither the network's
   # gateway address (where published-port traffic can appear to come from) nor any other pi service

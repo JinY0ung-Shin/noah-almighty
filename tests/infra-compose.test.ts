@@ -260,6 +260,7 @@ describe(".env.example — bundled pi-gateway", () => {
       "NOAH_MCP_PUBLIC_URL",
       "NOAH_MCP_HOST_ALIAS",
       "NOAH_PI_SANDBOX_TAG",
+      "NOAH_PI_SESSION_IDLE_SECONDS",
       "NODE_EXTRA_CA_CERTS",
     ]) {
       expect(documented(name), name).toBe(true);

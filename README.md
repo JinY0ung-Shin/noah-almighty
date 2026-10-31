@@ -171,7 +171,8 @@ never copied into this repository.
    `$PI_GATEWAY_HOME/secrets`, and adds `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`, `DOCKER_GID` to
    `../pi-gateway/.env`. Review the rest of pi's settings there (`cp .env.example .env` first if you want
    its comments): `GATEWAY_BIND_ADDR`/`GATEWAY_PORT` (where pi's admin page and API listen, default
-   `127.0.0.1:8080`), `SANDBOX_*` limits, `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
+   `127.0.0.1:8080`), the turn and `SANDBOX_*` limits (size them first: [Sizing pi-gateway](#sizing-pi-gateway)),
+   `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
 2. **Prepare the host for Noah** (idempotent; re-run whenever pi's service key changes):
    ```bash
    sudo PI_GATEWAY_HOME=/srv/pi-gateway docker/pi/setup-host.sh
@@ -228,6 +229,44 @@ sentry's own threads count against the sandbox's pids cgroup, and a deck build a
 sandbox (`WaitPID ... failed: EOF`). Peaks of 340–550 were measured for one build
 ([docker/pi-sandbox/README.md](docker/pi-sandbox/README.md)), so use at least 1024; pi-gateway's
 `docs/OPERATIONS.md` §7 recommends starting at 4096. Install and register runsc as that section describes.
+
+### Sizing pi-gateway
+
+pi-gateway's defaults fit a small team. They are pi's own settings: set them in **pi-gateway's `.env`**, then
+`docker compose up -d`. Example for a peak of 100–200 concurrent turns with at most 8 per user:
+
+| pi `.env` | pi default | Example | At the default |
+|---|---|---|---|
+| `MAX_CONCURRENT_TURNS` | `16` | `250` (peak + headroom) | Turns over the limit queue; after `TURN_QUEUE_TIMEOUT_SECONDS` (120) pi answers 503, Noah tries the stream open 4 times in all with backoff, then the turn fails. |
+| `MAX_CONCURRENT_TURNS_PER_USER` | `3` | `8` | A user's 4th simultaneous conversation waits until one of the first three finishes. |
+| `SANDBOX_MEMORY` / `SANDBOX_CPUS` | `1g` / `1` | `4g` / `2` | All of one user's turns share ONE sandbox: with 8 at once, a deck build (one ≈ 0.5 GiB Chromium; builds queue one at a time per sandbox) and the other turns' commands (python, pandas…) share 1 GiB and one CPU. Both are caps, not reservations. |
+
+Measured with the example values (2026-10-31, the e2e stack in dind on a 12-core dev box, a stub model, every
+turn holding a `sleep` in its sandbox):
+
+- 200 concurrent turns from 200 users, started over 60 s: none queued; at the peak pi's services used ≈ 1.1 GiB
+  PSS (gateway 0.6, broker 0.4), the 200 sandbox containers with their containerd shims ≈ 0.85 GiB, Noah
+  ≈ 1.35 GiB — ≈ 3.3 GiB in all, before whatever the turns' own commands use.
+- 200 live sessions holding 400 KiB of history each added ≈ 100 MiB to the gateway's heap (its V8 limit is
+  ≈ 4 GiB).
+- One user's 8 simultaneous turns all ran in parallel.
+
+**Session starts, not concurrent turns, are the limit.** pi starts a session on a conversation's first turn,
+after `SESSION_IDLE_SECONDS` without one (it unloads the idle session and rebuilds it on the next turn), and on a
+model/effort change, and every start lists all of Noah's MCP servers through the broker. 200 starts in the same
+second saturated the gateway and the broker (one core each): their internal calls hit a 10 s connect timeout,
+so up to half of those sessions started WITHOUT Noah's tools (a session keeps the tool list it started with) and
+most of their sandbox commands failed (`sandboxd is unreachable`); a larger libuv threadpool
+(`UV_THREADPOOL_SIZE`) did not help. The same 200 starts spread at 3–20 per second ran clean (at 10–20 per
+second, one session in 200 missed its tool list). Noah itself starts at most `ROUTINE_MAX_CONCURRENT_RUNS` (10)
+routines and 4 task-API runs at once.
+
+So the bundle sets pi's `SESSION_IDLE_SECONDS` to **1800** (pi's default is 300, which makes every 5-minute
+pause in a conversation a session start), from Noah's own `NOAH_PI_SESSION_IDLE_SECONDS` — a
+`SESSION_IDLE_SECONDS` in pi-gateway's `.env` is ignored. Longer keeps more sessions loaded (800 live sessions
+held ≈ 600 MiB of gateway heap in the runs above) and refreshes
+the relayed tool lists (공용 MCP servers, plugin MCP, hex-ssh) later: a newly bound or added server shows up
+once the conversation has been idle that long, or in a new conversation. Going past an hour gains little.
 
 ### Closed networks (build mirrors)
 
@@ -378,6 +417,7 @@ backup and quarantine).
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
 | `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default `../pi-gateway`), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |
 | `NOAH_MCP_SUBNET` / `NOAH_MCP_BROKER_IP` / `NOAH_MCP_HOST_ALIAS` / `NOAH_PI_SANDBOX_TAG` | Compose only: the internal broker↔Noah network (default `172.30.248.0/24`), the broker's pinned address on it (`172.30.248.10`), Noah's extra name there (native TLS), and the tag of the deck sandbox image (`latest`). |
+| `NOAH_PI_SESSION_IDLE_SECONDS` | Compose only: pi's `SESSION_IDLE_SECONDS` (default `1800`; a value in pi-gateway's `.env` is ignored) — see [Sizing pi-gateway](#sizing-pi-gateway). |
 | `PORT` / `APP_DATA_DIR` |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | Optional PEM cert/key paths that switch the app's own listener to HTTPS — set both or the boot refuses (docker-compose mounts `./docker/tls` → `/app/tls`). HTTPS gives pages a secure context, which the browser-bridge one-click update (File System Access) requires. Set `SECURE_COOKIES=true` with it. |
 | `GITHUB_HOST` | Internal/default GitHub host for shorthand repo values like `owner/repo` (default `github.com`). Knowledge repos must use this host; full github.com URLs can use `GITHUB_TOKEN`. |
