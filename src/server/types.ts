@@ -174,6 +174,14 @@ export interface PiRuntimeFacts {
    */
   readOnlyBuiltins: boolean;
   /**
+   * The run's pi session is `interactive: false`: nobody can answer a question
+   * (a scheduled routine, an avatar consultation, a profile generator), so pi
+   * leaves `AskUserQuestion` out of the session and its subagents. The
+   * external task API is NOT one: its key holder answers through `/respond`.
+   * The runner sends it on a new session; both surfaces state it.
+   */
+  nonInteractive?: boolean;
+  /**
    * The owner's shell-exposed secret names, which a pi run CANNOT export into
    * its shell (no sandbox env yet — design P4). Empty on non-owner runs.
    */

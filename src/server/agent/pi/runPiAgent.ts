@@ -390,6 +390,7 @@ async function runPiAgentAs(
                 ...(currentModel ? { model: currentModel } : {}),
                 ...(effort ? { reasoningEffort: effort } : {}),
                 ...(capabilities.piRuntimeFacts.readOnlyBuiltins ? { readOnly: true } : {}),
+                ...(capabilities.piRuntimeFacts.nonInteractive ? { interactive: false } : {}),
               }
             : { previousResponseId: previous }),
           headers: { [PI_RUN_TOKEN_HEADER]: token },

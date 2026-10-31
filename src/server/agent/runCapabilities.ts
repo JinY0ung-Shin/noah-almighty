@@ -626,6 +626,13 @@ export async function buildRunCapabilities(
   // write/edit/bash (user decision 2026-10-31). ONE value for the runner's
   // request and both metacognition surfaces.
   const readOnlyBuiltins = sandboxOwner === "viewer";
+  // Nobody can answer a question on this run — a scheduled routine, an avatar
+  // consultation or a profile generator (headless, no conversation) — so its
+  // pi session is `interactive: false` and pi removes AskUserQuestion (its
+  // subagents' too). The external task API is NOT headless: its key holder
+  // answers question prompts through `/respond`. ONE value for the runner's
+  // request and both metacognition surfaces.
+  const nonInteractive = headless || consultationRun;
   const deckAuthoring = deckAuthoringStatusFor({
     readOnlyBuiltins,
     disabledSkills: toolSkillPolicy.disabledSkills,
@@ -734,6 +741,7 @@ export async function buildRunCapabilities(
   const piRuntimeFacts: PiRuntimeFacts = {
         sandboxOwner,
         readOnlyBuiltins,
+        nonInteractive,
         mcpProxies: piMcpProxies.facts,
         asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),

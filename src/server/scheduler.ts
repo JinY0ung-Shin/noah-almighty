@@ -79,8 +79,8 @@ const ROUTINE_REPO_BUSY =
 
 /**
  * Run a single routine job headlessly and append the result to its dedicated
- * conversation. The request is marked `headless`, so questions and permission
- * prompts are still auto-denied. Owner-scheduled routines opt into owner-level
+ * conversation. The request is marked `headless`, so its pi session starts
+ * without AskUserQuestion (`interactive: false`). Owner-scheduled routines opt into owner-level
  * tool access explicitly so they can perform the same work an owner chat can.
  *
  * Never throws: every failure (including avatar/plugin/workspace setup) is
@@ -220,7 +220,7 @@ async function runRoutineJobNow(
       pluginRoots,
       config,
       store,
-      // Headless runs cannot ask questions, so there is no onQuestion here. onDelta is purely an accumulator: it keeps the
+      // Headless runs cannot ask questions (their pi session is `interactive: false`), so there is no onQuestion here. onDelta is purely an accumulator: it keeps the
       // partial answer so a timed-out/failed run can still persist what it produced
       // (the success path uses `response.text`, which never arrives on abort).
       {

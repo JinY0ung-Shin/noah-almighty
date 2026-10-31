@@ -40,6 +40,18 @@ the no-vision PDF hint, the draw.io section and the working-repository turn line
 An admin built-in toggle is advisory on pi (describe_system names it as such); a
 disabled SKILL is enforced by omission (see "Skills").
 
+**A run nobody can answer starts its pi session `interactive: false`** (pi removes `AskUserQuestion` from the
+session and its subagents, for the session's whole life): a scheduled routine, an avatar consultation and the
+intro/hashtag generators. The capability plan derives `PiRuntimeFacts.nonInteractive` (= `headless ||
+avatarConsultation`) and `runPiAgent` sends it on every NEW pi session, never on a continuation (pi 400s a
+different value on a later turn). These runs never continue a session another class started: routines pass no
+resume point and their rows carry none, consultations and generators have no conversation. The external task API
+is NOT one of them — its key holder answers `question` prompts through `/respond`, so its sessions stay
+interactive. A run without `onQuestion` (exactly these) that gets a `requires_action` anyway fails with a
+`protocol` error (`runPiTurn`); the former fixed "cannot ask" answer is gone. Both surfaces state it with
+`PI_NO_ASK_USER_SENTENCE` (`ownerState.ts`): the per-turn run-kind note (`piRunKindParagraph`) and describe_system's
+runtime line; the prompt's "do not ask questions" instruction stays.
+
 **A run without a conversation** (consultations, the generators) works in a run folder
 `/workspace/c/<piEphemeralRunKey>/` (`run-<feature>` — `run-intro`, `run-hashtags` — for a generator, REUSED in the
 owner's sandbox and never removed; `run-ask` for a consultation, gone with its sandbox): no stored pi session and no

@@ -899,7 +899,7 @@ describe("run plan — the Confluence save target", () => {
         scratchWorkspaceDir?: string;
         confluenceSaveToWorkspace?: boolean;
         deckAuthoring?: string;
-        piRuntime?: { sandboxOwner?: string; readOnlyBuiltins?: boolean };
+        piRuntime?: { sandboxOwner?: string; readOnlyBuiltins?: boolean; nonInteractive?: boolean };
       },
     };
   }
@@ -975,20 +975,29 @@ describe("run plan — the Confluence save target", () => {
     // it cannot build a deck; both surfaces name WHOSE sandbox it is.
     const s = setup("plan-can-write");
     const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
-    const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string; readOnly: boolean }[] = [
-      { label: "owner chat", over: {}, sandboxOwner: "owner", readOnly: false },
-      { label: "untrusted colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, sandboxOwner: "viewer", readOnly: true },
+    // nonInteractive: nobody can answer a question (pi session `interactive: false`).
+    const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string; readOnly: boolean; nonInteractive: boolean }[] = [
+      { label: "owner chat", over: {}, sandboxOwner: "owner", readOnly: false, nonInteractive: false },
+      {
+        label: "untrusted colleague",
+        over: { viewerUserId: colleague.id, viewerIsOwner: false },
+        sandboxOwner: "viewer",
+        readOnly: true,
+        nonInteractive: false,
+      },
       {
         label: "trusted colleague",
         over: { viewerUserId: colleague.id, viewerIsOwner: false, elevated: true },
         sandboxOwner: "viewer",
         readOnly: true,
+        nonInteractive: false,
       },
       {
         label: "avatar consultation",
         over: { viewerUserId: colleague.id, viewerIsOwner: false, avatarConsultation: true, conversationId: undefined },
         sandboxOwner: "nobody",
         readOnly: false,
+        nonInteractive: true,
       },
       // Profile generators: headless, no viewer, no conversation — the owner's sandbox.
       {
@@ -996,8 +1005,17 @@ describe("run plan — the Confluence save target", () => {
         over: { headless: true, conversationId: undefined, viewerUserId: undefined },
         sandboxOwner: "owner",
         readOnly: false,
+        nonInteractive: true,
       },
-      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, sandboxOwner: "owner", readOnly: false },
+      {
+        label: "owner routine",
+        over: { headless: true, allowHeadlessTools: true },
+        sandboxOwner: "owner",
+        readOnly: false,
+        nonInteractive: true,
+      },
+      // The key holder answers questions through /respond.
+      { label: "task API", over: { externalTaskApi: true }, sandboxOwner: "owner", readOnly: false, nonInteractive: false },
     ];
     for (const c of cases) {
       const { result, systemCtx } = await plan(s, request(s, c.over));
@@ -1006,9 +1024,11 @@ describe("run plan — the Confluence save target", () => {
       expect(result.deckAuthoring, c.label).toBe(authoring);
       expect(result.piRuntimeFacts.sandboxOwner, c.label).toBe(c.sandboxOwner);
       expect(result.piRuntimeFacts.readOnlyBuiltins, c.label).toBe(c.readOnly);
+      expect(result.piRuntimeFacts.nonInteractive, c.label).toBe(c.nonInteractive);
       // describe_system reads the SAME facts object the prompt is stamped from.
       expect(systemCtx.piRuntime?.sandboxOwner, c.label).toBe(c.sandboxOwner);
       expect(systemCtx.piRuntime?.readOnlyBuiltins, c.label).toBe(c.readOnly);
+      expect(systemCtx.piRuntime?.nonInteractive, c.label).toBe(c.nonInteractive);
     }
   });
 });

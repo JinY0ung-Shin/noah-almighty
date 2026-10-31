@@ -85,6 +85,13 @@ export interface PiResponseRequest {
    * different value on a later turn). `PiRuntimeFacts.readOnlyBuiltins`.
    */
   readOnly?: boolean;
+  /**
+   * New sessions only: `false` = pi's `interactive: false` — nobody can answer
+   * a question, so the session (subagents included) has no `AskUserQuestion`,
+   * for its whole life (pi 400s a different value on a later turn).
+   * `PiRuntimeFacts.nonInteractive`. Omitted = pi's default (`true`).
+   */
+  interactive?: boolean;
   /** String map; pi forwards only the keys listed in its MCP_METADATA_KEYS to MCP servers. */
   metadata?: Record<string, string>;
   /**
@@ -398,6 +405,7 @@ export function buildResponsesBody(request: PiResponseRequest): Record<string, u
     user: request.user,
     ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
     ...(request.readOnly ? { read_only: true } : {}),
+    ...(request.interactive === false ? { interactive: false } : {}),
     ...(request.metadata && Object.keys(request.metadata).length ? { metadata: request.metadata } : {}),
   };
 }

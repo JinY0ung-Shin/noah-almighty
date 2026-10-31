@@ -81,7 +81,7 @@
   through.
 - **A failed routine persists its PARTIAL output into the thread.** The catch path accumulates `onDelta`
   into `streamedText` (the only reason routines pass an events sink at all — they still take no
-  `onQuestion`, so an AskUserQuestion gets the fixed "cannot ask" answer) and writes `partial + "\n\n" + cause` as the assistant turn, mirroring the
+  `onQuestion`: their pi session is `interactive: false`, so there is no AskUserQuestion) and writes `partial + "\n\n" + cause` as the assistant turn, mirroring the
   chat route's cancel/error paths. Before this, a failed run wrote NOTHING to its conversation and the
   sole trace was the one-line `last_error` in the routines list. The persist is best-effort and wrapped so
   it can never mask the original failure. `response.text` is NOT usable here — it never arrives on abort.

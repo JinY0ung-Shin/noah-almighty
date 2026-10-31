@@ -1,4 +1,4 @@
-import { DIRECT_MESSAGE_STATE, GROUP_REPOS_RETIRED_SENTENCE } from "./ownerState.js";
+import { DIRECT_MESSAGE_STATE, GROUP_REPOS_RETIRED_SENTENCE, PI_NO_ASK_USER_SENTENCE } from "./ownerState.js";
 import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import {
@@ -549,7 +549,8 @@ function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
 /**
  * The runtime line: what pi really is for THIS run (whose sandbox, pi's
  * built-in tools, what is missing there). A colleague's run is read-only
- * (`readOnlyBuiltins`; `piSandboxOwnerSentence` says why).
+ * (`readOnlyBuiltins`; `piSandboxOwnerSentence` says why); a run nobody can
+ * answer has no AskUserQuestion (`nonInteractive`).
  */
 function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): string {
   const pi = ctx.piRuntime;
@@ -571,6 +572,7 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
       : "Built-in tools: read/write/edit/ls/find/grep/bash") +
     "; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
     "No WebSearch (use mcp__web__fetch for a known URL). " +
+    (pi?.nonInteractive ? `${PI_NO_ASK_USER_SENTENCE} ` : "") +
     "hex-ssh, plugin `.mcp.json` and admin 공용 MCP servers are relayed by Noah as `mcp__hex-ssh__<tool>`, `mcp__plugins__<server>__<tool>` and `mcp__shared__<server>__<tool>` (the `mcp__<server>__<tool>` form resolves too); the session's tool list is read when the pi session starts, so a server connected since appears only in a later session and a removed one is refused. " +
     "A model or reasoning-effort change starts a NEW session that continues from the saved text history (earlier tool results are not carried over). " +
     "The system prompt is fixed when the conversation starts, so this tool is the source of CURRENT state"

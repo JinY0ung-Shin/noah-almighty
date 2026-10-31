@@ -60,13 +60,14 @@ const client = (extra: Partial<Parameters<typeof createPiResponsesClient>[0]> = 
   createPiResponsesClient({ baseUrl, serviceKey: "svc-key-1", ...extra });
 
 describe("buildResponsesBody", () => {
-  it("maps a first turn with images, effort, read_only, metadata and instructions", () => {
+  it("maps a first turn with images, effort, read_only, interactive, metadata and instructions", () => {
     const body = buildResponsesBody({
       user: "user-1",
       model: "m1",
       instructions: "be brief",
       reasoningEffort: "high",
       readOnly: true,
+      interactive: false,
       metadata: { conversation: "c1" },
       input: { kind: "prompt", text: "look", images: [{ mediaType: "image/png", data: "AAAA" }] },
     });
@@ -77,6 +78,7 @@ describe("buildResponsesBody", () => {
       user: "user-1",
       reasoning: { effort: "high" },
       read_only: true,
+      interactive: false,
       metadata: { conversation: "c1" },
       input: [
         {
@@ -89,6 +91,12 @@ describe("buildResponsesBody", () => {
         },
       ],
     });
+  });
+
+  it("sends interactive only as false: the default (true or omitted) leaves pi's default", () => {
+    for (const interactive of [true, undefined]) {
+      expect(buildResponsesBody({ user: "u", interactive, input: { kind: "prompt", text: "hi" } })).not.toHaveProperty("interactive");
+    }
   });
 
   it("drops the model on a continuing turn and sends function_call_output answers", () => {

@@ -7,6 +7,7 @@ import {
   GROUP_REPOS_RETIRED_SENTENCE,
   gettingStartedGaps,
   piAdminDisabledToolsNote,
+  PI_NO_ASK_USER_SENTENCE,
   piSandboxOwnerSentence,
   rewindTurnState,
   sharedMcpServerLines,
@@ -1474,14 +1475,16 @@ function piOwnerRun(request: AgentRequest): boolean {
 function piRunKindParagraph(request: AgentRequest): string {
   const authority =
     " Where the standing instructions describe tools or permissions that differ on this turn, this note and `mcp__system__describe_system` are authoritative; a tool this turn lacks is refused when called.";
+  // Same fact the runner sends as `interactive: false` (PiRuntimeFacts.nonInteractive).
+  const noAsk = request.piRuntime?.nonInteractive ? ` ${PI_NO_ASK_USER_SENTENCE}` : "";
   if (request.externalTaskApi) {
     return `Run kind (this turn): an external-system task. ${externalTaskTurnParagraph(request)}${authority}`;
   }
   if (request.headless && request.avatarConsultation) {
-    return "Run kind (this turn): an automated avatar-to-avatar consultation — one question, one self-contained answer, nobody to ask back (see the consultation instructions)." + authority;
+    return "Run kind (this turn): an automated avatar-to-avatar consultation — one question, one self-contained answer, nobody to ask back (see the consultation instructions)." + noAsk + authority;
   }
   if (request.headless && !request.allowHeadlessTools) {
-    return "Run kind (this turn): an automated one-shot task (e.g. a profile intro or hashtags) — no one answers questions; output only the result." + authority;
+    return "Run kind (this turn): an automated one-shot task (e.g. a profile intro or hashtags) — no one answers questions; output only the result." + noAsk + authority;
   }
   if (request.headless) {
     return (
@@ -1490,6 +1493,7 @@ function piRunKindParagraph(request: AgentRequest): string {
       (mcpToolGroupEnabled(request, "system")
         ? " If there is an important result the user should be told about separately, leave an app notification with `mcp__system__notify_user`."
         : "") +
+      noAsk +
       authority
     );
   }

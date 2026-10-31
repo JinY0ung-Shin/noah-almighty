@@ -416,12 +416,11 @@ describe("runPiTurn", () => {
     expect(only(calls, "fold")).toEqual([["fold", "Let me ask."]]);
   });
 
-  it("answers for a headless run (no onQuestion) without blocking", async () => {
+  it("fails a run without onQuestion that gets asked anyway (its session is interactive: false)", async () => {
     const { client, requests } = fakeClient([fixture("c1-ask"), fixture("c2-answer")]);
     const { events } = recorder();
-    await runPiTurn({ client, request, events });
-    const answer = requests[1]!.input as { output: string };
-    expect(answer.output).toContain("cannot ask the user questions");
+    await expect(runPiTurn({ client, request, events })).rejects.toMatchObject({ name: "PiGatewayError", kind: "protocol" });
+    expect(requests).toHaveLength(1);
   });
 
   it("throws PiTurnFailedError (status-classified) on an in-band failure", async () => {

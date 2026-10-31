@@ -263,7 +263,9 @@ These are the invariants the project is built around. New work should reinforce 
   read/ls/find/grep — no write/edit/bash, no sandbox-run MCP server; `PiRuntimeFacts.readOnlyBuiltins`, sent on a
   new session; user decision 2026-10-31). The consultation and the intro/hashtag generators keep the FULL
   built-ins, never over the owner's files; every class reaches owner data only through the gated, self-gating MCP
-  tools, and both surfaces say exactly that. A run
+  tools, and both surfaces say exactly that. A run nobody can answer (routine, consultation, generator —
+  `PiRuntimeFacts.nonInteractive`; NOT the task API, whose key holder answers via `/respond`) starts its session
+  `interactive: false`, so pi has no AskUserQuestion there and both surfaces say so. A run
   without a conversation works in a `/workspace/c/<run-…>/` folder (no stored session, no frozen prompt row; a
   generator's folder is reused in the owner's sandbox, a consultation's goes with its sandbox).
   Noah never executes git or agent-authored code from a sandbox dir: a working repo is a sandbox COPY whose

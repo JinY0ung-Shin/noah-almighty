@@ -33,7 +33,7 @@ import {
   sweepPiConsultationSandboxes,
 } from "../src/server/agent/pi/piRuntime.js";
 import { askAvatar } from "../src/server/agent/avatarAsk.js";
-import { piSandboxOwnerSentence } from "../src/server/agent/ownerState.js";
+import { PI_NO_ASK_USER_SENTENCE, piSandboxOwnerSentence } from "../src/server/agent/ownerState.js";
 import { isPiResponseId, piSessionKey, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import { piConversationSegment, piHostPath, piUserKey, piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { PiGatewayError, type PiResponseRequest, type PiResponsesClient, type PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
@@ -244,6 +244,9 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     expect(first!.instructions).toContain(piSandboxOwnerSentence("nobody"));
     expect(first!.instructions).not.toContain("THIS user's Linux sandbox");
     expect(inputText(first!)).toContain("Run kind (this turn): an automated avatar-to-avatar consultation");
+    // Nobody can answer a consultation: its session has no AskUserQuestion, and both surfaces say so.
+    expect(first!.interactive).toBe(false);
+    expect(inputText(first!)).toContain(PI_NO_ASK_USER_SENTENCE);
     // Gates unchanged: C's knowledge stays readable, owner-only tools refuse.
     expect(seen.recall).not.toMatchObject({ isError: true });
     expect(JSON.stringify(seen.recall)).toContain("wiki/release.md");
@@ -252,6 +255,7 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     const describeText = JSON.stringify(seen.describe);
     expect(describeText).toContain("You run in a temporary Linux sandbox made for this one run");
     expect(describeText).toContain("owned by nobody");
+    expect(describeText).toContain(PI_NO_ASK_USER_SENTENCE);
     // Afterwards: both consultation roots are gone, nothing else changed.
     expect(fs.readdirSync(workspacesDir).sort()).toEqual(rootsBefore);
     expect(fs.readFileSync(askerFile, "utf8")).toBe(`${asker.id} only`);
@@ -297,6 +301,9 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     expect(req!.user).toBe(mate.id);
     // A trusted colleague too: someone else's avatar never gets write/edit/bash in the colleague's sandbox.
     expect(req!.readOnly).toBe(true);
+    // A person is on the other side: pi's default (interactive) session.
+    expect(req!.interactive).toBeUndefined();
+    expect(inputText(req!)).not.toContain(PI_NO_ASK_USER_SENTENCE);
     expect(req!.instructions).toContain("This sandbox belongs to the person you are talking to, a colleague");
     expect(req!.instructions).toContain("this session is READ-ONLY there");
     expect(req!.instructions).toContain("Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore).");
@@ -323,9 +330,35 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     const [req] = requests;
     expect(req!.user).toBe(owner.id);
     expect(req!.readOnly).toBeUndefined();
+    expect(req!.interactive).toBe(false);
+    expect(inputText(req!)).toContain(PI_NO_ASK_USER_SENTENCE);
     expect(req!.instructions).toContain("/workspace/c/run-hashtags");
     expect(req!.instructions).toContain("do not create files or run commands");
     expect(inputText(req!)).toContain("Run kind (this turn): an automated one-shot task");
+  });
+
+  it("starts a routine's session interactive: false, but never a task-API turn's or a continued one", async () => {
+    const { store, config, base } = setup();
+    const { client, requests } = fakeClient([
+      () => textTurn("resp_r1_1", "Done"),
+      () => textTurn("resp_t1_1", "Done"),
+      () => textTurn("resp_t1_2", "Done"),
+    ]);
+    // A scheduled routine (scheduler.ts): headless, owner tools, no events but onDelta.
+    await runPiAgent(base({ headless: true, allowHeadlessTools: true }), [], config, store, { onDelta: () => {} }, undefined, { client });
+    expect(requests[0]!.interactive).toBe(false);
+    expect(inputText(requests[0]!)).toContain("Run kind (this turn): the **automated execution** of a scheduled routine task");
+    expect(inputText(requests[0]!)).toContain(PI_NO_ASK_USER_SENTENCE);
+    // The external task API: the key holder answers questions through /respond.
+    const apiTurn = (resumeSessionId?: string) =>
+      runPiAgent(base({ externalTaskApi: true, resumeSessionId }), [], config, store, { onQuestion: async () => ({ behavior: "cancelled" }) }, undefined, { client });
+    await apiTurn();
+    expect(requests[1]!.previousResponseId).toBeUndefined();
+    expect(requests[1]!.interactive).toBeUndefined();
+    expect(inputText(requests[1]!)).not.toContain(PI_NO_ASK_USER_SENTENCE);
+    await apiTurn("resp_t1_1");
+    expect(requests[2]!.previousResponseId).toBe("resp_t1_1");
+    expect(requests[2]!.interactive).toBeUndefined();
   });
 });
 

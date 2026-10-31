@@ -213,6 +213,16 @@ export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): strin
 }
 
 /**
+ * A run nobody can answer (`PiRuntimeFacts.nonInteractive`: a scheduled
+ * routine, an avatar consultation, a profile generator) has a pi session
+ * started `interactive: false`, so AskUserQuestion is not among its tools.
+ * ONE text for both metacognition surfaces (the prompt's per-turn run-kind
+ * note and describe_system's runtime line).
+ */
+export const PI_NO_ASK_USER_SENTENCE =
+  "`AskUserQuestion` is not available in this run: its session was started without it because nobody can answer.";
+
+/**
  * Turn PROVENANCE of a rewind (`AgentRequest.rewind`): the viewer edited an
  * earlier message or regenerated the latest answer. ONE text for both
  * metacognition surfaces — buildSystemPromptAppend's per-turn line and

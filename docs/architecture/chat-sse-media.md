@@ -107,7 +107,8 @@
   `requires_action` + a `function_call`; `runPiTurn` (`eventAdapter.ts`) parks on `events.onQuestion` (status
   `사용자 답변 대기 중…`, the client's question modal), then sends the answer as the next request's
   `function_call_output` on the same session — the host sees ONE blocking `onQuestion`. A run with no
-  `onQuestion` (headless) gets a fixed "cannot ask" answer instead. The `requires_action` id is never reported
+  `onQuestion` (headless: routines, consultations, generators) starts its session `interactive: false`, so pi
+  never asks there; a question anyway fails the run as a `protocol` error. The `requires_action` id is never reported
   via `onSessionId`, so a run that dies while a question waits resumes from the last committed turn. At most 20
   question rounds per run.
 - **Background work is gone.** The SDK runner's background phase (Bash `run_in_background`, background subagents,

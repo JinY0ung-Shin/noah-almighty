@@ -558,9 +558,6 @@ export function formatPiQuestionAnswer(answer: QuestionAnswer | null): string {
   return lines.length ? `The user answered the question(s) as follows:\n${lines.join("\n")}` : "The user provided an answer.";
 }
 
-const HEADLESS_QUESTION_ANSWER =
-  "During a scheduled automated run you cannot ask the user questions. Proceed with reasonable assumptions.";
-
 // ---- One Noah run over pi -----------------------------------------------------------
 
 /** A pi turn ended `failed` in-band. `status` lets `isRetryableModelError` classify it. */
@@ -624,7 +621,9 @@ function sumUsage(previous: AgentUsage | undefined, next: AgentUsage | undefined
 
 /**
  * Drive one Noah run over pi: stream the turn, answer AskUserQuestion pauses
- * through `events.onQuestion` (headless runs get a "cannot ask" answer), and return the final text. Abort → `cancel` the live response so pi
+ * through `events.onQuestion`, and return the final text. A run without
+ * `onQuestion` (nobody can answer) starts its session `interactive: false`, so
+ * pi never asks there; a question anyway is a protocol error. Abort → `cancel` the live response so pi
  * KEEPS the partial turn (a dropped connection would discard it), wait briefly
  * for its `incomplete`, then cut the stream and throw `PiGatewayError("aborted")`.
  * A `requires_action` response id is never reported via `onSessionId`: if the run
@@ -679,18 +678,16 @@ export async function runPiTurn(options: RunPiTurnOptions): Promise<PiRunResult>
       if (round + 1 >= maxRounds) {
         throw new PiGatewayError("protocol", { message: "질문이 너무 많이 반복되어 실행을 중단했습니다." });
       }
-      let output: string;
       if (!events.onQuestion) {
-        output = HEADLESS_QUESTION_ANSWER;
-      } else {
-        events.onStatus?.("사용자 답변 대기 중…");
-        const answer = await events.onQuestion({
-          dialogKind: "AskUserQuestion",
-          payload: { questions: outcome.question.questions },
-          toolUseId: outcome.question.callId,
-        });
-        output = formatPiQuestionAnswer(answer);
+        throw new PiGatewayError("protocol", { message: "사용자가 답할 수 없는 실행에서 질문이 와 실행을 중단했습니다." });
       }
+      events.onStatus?.("사용자 답변 대기 중…");
+      const answer = await events.onQuestion({
+        dialogKind: "AskUserQuestion",
+        payload: { questions: outcome.question.questions },
+        toolUseId: outcome.question.callId,
+      });
+      const output = formatPiQuestionAnswer(answer);
       if (outer?.aborted) throw new PiGatewayError("aborted");
       request = {
         user: request.user,
