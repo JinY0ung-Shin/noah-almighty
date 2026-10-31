@@ -24,6 +24,7 @@ import {
   gettingStartedGaps,
   piAdminDisabledToolsNote,
   piSandboxOwnerSentence,
+  shellSecretsSentence,
   rewindTurnState,
   sharedMcpServerLines,
   summarizeOwnerState,
@@ -835,7 +836,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Internal Git token (GIT_TOKEN): ${state.gitTokenSet ? "set" : "not set"}`,
           `- Getting started: ${gettingStartedLine}`,
           `- Secret names: ${secretNames.length ? secretNames.map((name) => `\`${name}\``).join(", ") + " (no plugin/knowledge-repo .mcp.json server receives them — a def outside the bundled plugins that names a ${NAME} placeholder is left out, see the relayed-servers line; a secret reaches an external server only via a bound shared MCP slot; git/SSH credentials go only to their dedicated tools)" : "(none)"}`,
-          `- Shell-exposed secrets: ${state.shellExposedSecretNames.length ? `UNAVAILABLE on this runtime — ${state.shellExposedSecretNames.map((name) => `\`${name}\``).join(", ")} are set to 셸 노출, but the pi sandbox shell receives no secrets, so \`$NAME\` is empty in bash; use the dedicated MCP tools, or tell the owner the task needs a secret this runtime cannot hand to the shell` : "(none — and on this runtime the pi sandbox shell receives no secrets at all)"}`,
+          `- Shell-exposed secrets: ${shellSecretsSentence(ctx.piRuntime?.shellSecretNames ?? [], state.shellExposedSecretNames)}`,
           // Browser input is the SECOND per-key exposure the owner can grant, so
           // it sits next to the shell one. It branches on whether the bridge is
           // reachable in THIS run: the policies exist either way, but with no

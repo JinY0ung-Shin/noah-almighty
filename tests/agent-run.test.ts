@@ -418,6 +418,60 @@ describe("run capability plan", () => {
     expect(run.caps.browserActive).toBe(false);
     expect(run.caps.piRedactions).toEqual({});
   });
+
+  it("hands the owner's 셸 노출 secrets to bash ONLY on owner runs in the owner's sandbox", async () => {
+    const env = setup();
+    env.store.setUserSecret(env.owner.id, "API_TOKEN", "owner-shell-secret-1");
+    env.store.setUserSecret(env.owner.id, "HTTPS_PROXY", "http://reserved.invalid");
+    env.store.setUserSecret(env.owner.id, "NOT_EXPOSED", "vault-only-value");
+    env.store.setSecretShellExpose(env.owner.id, "API_TOKEN", true);
+    env.store.setSecretShellExpose(env.owner.id, "HTTPS_PROXY", true);
+
+    // Owner chat, owner routine and the external task API: the flagged secret pi
+    // accepts, never the unflagged one nor a name pi's sandbox reserves.
+    for (const request of [
+      env.baseRequest,
+      { ...env.baseRequest, headless: true, allowHeadlessTools: true },
+      { ...env.baseRequest, externalTaskApi: true },
+    ]) {
+      const run = await plan(env, request);
+      expect(run.caps.piSandboxEnv).toEqual({ API_TOKEN: "owner-shell-secret-1" });
+      expect(run.caps.piRuntimeFacts.shellSecretNames).toEqual(["API_TOKEN"]);
+      // Bash can copy the value into a file a Noah tool reads: it joins the redaction set.
+      expect(run.caps.piRedactions).toMatchObject({ API_TOKEN: "owner-shell-secret-1" });
+      expect(run.append).toContain("`API_TOKEN` is set to 셸 노출 and present as `$NAME`");
+      expect(run.append).toContain("`HTTPS_PROXY` is set to 셸 노출 but NOT in the shell");
+    }
+
+    // A colleague's chat, a consultation and a restricted generator: nothing.
+    for (const request of [
+      { ...env.baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, elevated: true },
+      { ...env.baseRequest, avatarConsultation: true, viewerUserId: "asker-id", viewerIsOwner: false, elevated: true, headless: true, allowHeadlessTools: true },
+      { ...env.baseRequest, headless: true },
+    ]) {
+      const run = await plan(env, request);
+      expect(run.caps.piSandboxEnv).toEqual({});
+      expect(run.caps.piRuntimeFacts.shellSecretNames).toEqual([]);
+      expect(JSON.stringify(run.caps.piRedactions)).not.toContain("owner-shell-secret-1");
+      expect(run.append).not.toContain("owner-shell-secret-1");
+    }
+
+    // The wire: the owner run's pi request carries it, a colleague's does not.
+    const owner = fakeClient([() => textTurn("resp_env_1", "ok")]);
+    await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents(), undefined, { client: owner.client });
+    expect(owner.requests[0]!.sandboxEnv).toEqual({ API_TOKEN: "owner-shell-secret-1" });
+    const colleague = fakeClient([() => textTurn("resp_env_2", "ok")]);
+    await runPiAgent(
+      { ...env.baseRequest, conversationId: "conv-2", viewerUserId: "someone-else", viewerIsOwner: false, elevated: true },
+      [],
+      env.config,
+      env.store,
+      makeEvents(),
+      undefined,
+      { client: colleague.client },
+    );
+    expect(colleague.requests[0]!.sandboxEnv).toBeUndefined();
+  });
 });
 
 // ===========================================================================

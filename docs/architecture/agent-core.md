@@ -96,8 +96,10 @@ run. **Browser input is the narrow path**: `browserSecretPolicies` (owner state,
 echoing a typed password into its DOM would otherwise print it in the next snapshot — while a vault secret the
 owner never opted in stays out (redacting it would shred unrelated output for nothing). The browser tools
 additionally redact their OWN reply before `report()`, and the chat route redacts the extension's reply before
-anything reads it. pi's built-ins need no redaction: the sandbox holds no secrets (shell-exposed secrets are not
-exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire + guards →
+anything reads it. **Shell exposure is the third path**: an owner run's `piSandboxEnv` (the 셸 노출 values pi gets
+as `sandbox_env`) joins the set, because bash can copy a value into a file a Noah tool later reads; pi redacts the
+same values from its OWN built-in results before they leave the gateway (its shared `Redactor`). A non-owner run
+sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire + guards →
 [`browser-bridge/contract.md`](browser-bridge/contract.md) and
 [`browser-bridge/actions.md`](browser-bridge/actions.md).
 

@@ -10,6 +10,7 @@ import {
   PI_NO_ASK_USER_SENTENCE,
   piSandboxOwnerSentence,
   rewindTurnState,
+  shellSecretsSentence,
   sharedMcpServerLines,
 } from "./ownerState.js";
 import { PROMPT_TTL_MS } from "./runRegistry.js";
@@ -320,6 +321,7 @@ function browserSecretGuidance(request: AgentRequest): string {
 function secretsSection(
   secretNames: string[],
   shellExposedSecretNames: string[] = [],
+  shellSecretNames: string[] = [],
   browserSecrets: BrowserSecretPolicy[] = [],
 ): string | null {
   if (secretNames.length === 0) {
@@ -338,10 +340,7 @@ function secretsSection(
     browserExposed.length > 0
       ? ` ${browserExposed.map((policy) => `\`${policy.name}\``).join(", ")} ${browserExposed.length === 1 ? "is" : "are"} ALSO enabled for BROWSER INPUT (per-secret opt-in under 설정 → 권한·연결 → 시크릿 → 브라우저 입력): on the sites the owner listed you enter one by passing its NAME as \`secretName\` to \`mcp__browser__type\`/\`mcp__browser__fill_form\` — the bridge types the value, you never see it, and typing such a credential literally is never correct. This works ONLY in an interactive chat where the browser bridge is connected (the browser tools are present); in a run without them nothing can type these secrets.`
       : "";
-  const shellNote =
-    shellExposed.length > 0
-      ? ` The owner set ${shellExposed.map((name) => `\`${name}\``).join(", ")} to 셸 노출, but on this runtime the sandbox shell receives NO secrets — \`$NAME\` is empty in bash. If a task needs one there, say so instead of working around it.`
-      : " On this runtime the sandbox shell receives no secrets.";
+  const shellNote = ` Shell: ${shellSecretsSentence(shellSecretNames, shellExposed)}.`;
   return (
     "Environment-variable names registered in the **Secrets** tab of Settings: " +
     secretNames.map((name) => `\`${name}\``).join(", ") +
@@ -1275,6 +1274,7 @@ export function buildSystemPromptAppend(
     const secretsBlock = secretsSection(
       secretNames,
       request.shellExposedSecretNames ?? [],
+      request.piRuntime?.shellSecretNames ?? [],
       request.browserSecrets ?? [],
     );
     if (secretsBlock) {

@@ -181,10 +181,13 @@ export interface PiRuntimeFacts {
    */
   nonInteractive?: boolean;
   /**
-   * The owner's shell-exposed secret names, which a pi run CANNOT export into
-   * its shell (no sandbox env yet — design P4). Empty on non-owner runs.
+   * The secret names this run hands its `bash` as env vars (pi `sandbox_env`,
+   * design P4): the owner's 셸 노출 secrets on an OWNER run in the owner's own
+   * sandbox (owner chat, owner routine, external task API), minus reserved
+   * git/SSH names and names pi's sandbox refuses (`piSandboxEnvOf`). Empty on
+   * every other run — a colleague's or a consultation's shell gets none.
    */
-  shellSecretsUnavailable: string[];
+  shellSecretNames: string[];
   /**
    * The run's skill index (docs/architecture/pi-runtime.md "Skills"): skills
    * copied into the sandbox (`via: "file"`, read their SKILL.md) or served by
@@ -359,9 +362,9 @@ export interface User {
   secretNames: string[];
   /**
    * Subset of `secretNames` the user opted into AGENT-SHELL exposure for
-   * (per-secret toggle): those values are exported into the agent's Bash env
-   * on elevated runs, with tool outputs redacted. Reserved git/SSH names are
-   * excluded by policy regardless (`secretPolicy.ts`).
+   * (per-secret toggle): on the user's OWN runs those values are exported into
+   * the pi sandbox's bash env (`sandbox_env`), with tool outputs redacted.
+   * Reserved git/SSH names are excluded by policy regardless (`secretPolicy.ts`).
    */
   shellExposedSecretNames: string[];
   /**
@@ -1433,9 +1436,9 @@ export interface AgentRequest {
   secretNames?: string[];
   /**
    * Subset of `secretNames` the owner opted into agent-shell exposure for
-   * (per-key toggle). Drives the standing prompt note that these are usable as
-   * `$NAME` in Bash on elevated runs, with tool outputs redacted. Same gating
-   * as `secretNames`.
+   * (per-key toggle) — what the owner FLAGGED; the names this run's bash
+   * actually receives are `piRuntime.shellSecretNames`. Same gating as
+   * `secretNames`.
    */
   shellExposedSecretNames?: string[];
   /**

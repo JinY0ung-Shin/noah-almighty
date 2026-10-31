@@ -276,11 +276,14 @@ These are the invariants the project is built around. New work should reinforce 
   **A new server joins `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`) AND `scripts/pi-register-mcp.mjs`**; the
   bundled one-shot `pi-setup` service re-runs the script on every `docker compose up`. The prompt is FROZEN per conversation (D2, `conversations.pi_instructions`,
   sent only when a pi session starts; per-turn facts ride the user input). Every gap pi has is stated on BOTH
-  metacognition surfaces: shell-exposed secrets are
-  unavailable, no WebSearch, relayed tool lists are per session, and `ask_avatar` (interactive chat) / canvas
+  metacognition surfaces: no WebSearch, relayed tool lists are per session, and `ask_avatar` (interactive chat) / canvas
   never wait — the answer or submission arrives as a later message. A model/effort change is NOT a gap: every turn
   sends the current model and effort and pi switches the SAME session (P3; `conversations.pi_session_profiles` is
-  retired through `RETIRED_COLUMNS`, reserved forever). The retired runner's leftovers on existing
+  retired through `RETIRED_COLUMNS`, reserved forever). 셸 노출 secrets reach the shell ONLY on owner runs in the owner's own sandbox (owner
+  chat, owner routine, task API — `ownerToolAccess && sandboxOwner === "owner"`): Noah re-sends them on EVERY pi
+  request as `sandbox_env` (pi keeps them in memory for that request only, passes them to `bash` alone and redacts
+  them from tool results; Noah adds them to the run's redaction set), and both surfaces name them from
+  `PiRuntimeFacts.shellSecretNames`. The retired runner's leftovers on existing
   deployments go through `retirementGate()`: the `claude_oauth_token` and skill-discovery cache keys are deleted
   and reserved forever, `<dataDir>/agent-sessions` (CLI transcripts) is quarantined, and old CLI session ids are
   ignored (the next turn continues from the text history). **The models are pi-gateway's LIVE list** (`GET /v1/models`,

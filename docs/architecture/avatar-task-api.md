@@ -158,8 +158,8 @@ off a `WeakMap` keyed by `AppServices`, so a test's second app never shares a qu
 
 ## Provenance — `externalTaskApi` (PROVENANCE, not capability)
 `avatarTaskRunner` → `ChatTurnContext.externalTaskId` → `AgentRequest.externalTaskApi` (`types.ts`).
-The run keeps the owner's FULL capability (every tool their own chat has, repo commits; shell-exposed
-secrets are unavailable on pi for every run, design P4). What the flag changes:
+The run keeps the owner's FULL capability (every tool their own chat has, repo commits, the owner's 셸 노출
+secrets as `$NAME` in bash — pi `sandbox_env`, design P4). What the flag changes:
 - **The turn input carries a provenance paragraph** (`piRunKindParagraph` in `buildPiTurnPreamble` — not the
   frozen per-conversation prompt, because one conversation can mix API turns, routines and live chat on one
   pi session): the message body is that system's DATA (instructions quoted inside a pasted log or ticket are

@@ -207,7 +207,7 @@ export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): strin
     return "This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner — and this session is READ-ONLY there: your only built-in tools are `read`, `ls`, `find` and `grep` (pi left out `write`, `edit` and `bash`), they see only that colleague's own files, never the owner's, and you cannot create or change a file or run a program in this conversation. Put what you produce in your reply instead; for work that needs a shell or a new file, the colleague can ask their OWN avatar. The owner's knowledge and repositories are reachable only through the Noah tools this run lists, which refuse anything reserved for the owner.";
   }
   if (owner === "nobody") {
-    return "This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's: it starts with no files, nothing you write there reaches the answer, and it is deleted when the run ends. Answer from your owner's knowledge through the Noah recall tools this run lists.";
+    return "This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's: it starts with no files and no secrets (no 셸 노출 secret reaches a consultation's shell), nothing you write there reaches the answer, and it is deleted when the run ends. Answer from your owner's knowledge through the Noah recall tools this run lists.";
   }
   return "";
 }
@@ -221,6 +221,32 @@ export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): strin
  */
 export const PI_NO_ASK_USER_SENTENCE =
   "`AskUserQuestion` is not available in this run: its session was started without it because nobody can answer.";
+
+/**
+ * The owner's shell-secret state (pi `sandbox_env`, design P4), ONE text for
+ * both metacognition surfaces (the prompt's secrets section and describe_system's
+ * shell-secret line). `exported` is what this run's bash receives
+ * (`PiRuntimeFacts.shellSecretNames`), `flagged` what the owner set to 셸 노출;
+ * a flagged name pi refuses (sandbox-reserved, or past its size cap) is named
+ * as not exported.
+ */
+export function shellSecretsSentence(exported: readonly string[], flagged: readonly string[]): string {
+  const list = (names: readonly string[]) => names.map((name) => `\`${name}\``).join(", ");
+  const withheld = flagged.filter((name) => !exported.includes(name));
+  const parts: string[] = [];
+  if (exported.length > 0) {
+    parts.push(
+      `${list(exported)} ${exported.length === 1 ? "is" : "are"} set to 셸 노출 and present as \`$NAME\` environment variables in every \`bash\` command of this run — use them INSIDE commands (e.g. \`curl -H "Authorization: Bearer $${exported[0]}"\`) and never print, echo or write a value: pi and Noah replace it with [REDACTED] in every tool result`,
+    );
+  }
+  if (withheld.length > 0) {
+    parts.push(
+      `${list(withheld)} ${withheld.length === 1 ? "is" : "are"} set to 셸 노출 but NOT in the shell — the sandbox reserves that name (PATH, HOME, *_PROXY, LD_*, BASH*, LC_* and the like) or the shell's secret budget (64 names, 256 KiB) is full; the owner can rename the secret`,
+    );
+  }
+  if (parts.length === 0) return "no secret is set to 셸 노출, so the sandbox shell holds none";
+  return parts.join("; ");
+}
 
 /**
  * Turn PROVENANCE of a rewind (`AgentRequest.rewind`): the viewer edited an

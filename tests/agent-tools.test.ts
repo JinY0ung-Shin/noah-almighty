@@ -3432,7 +3432,7 @@ describe("system tools (avatar system management)", () => {
       ...s.baseCtx,
       config,
       viewerIsOwner: true,
-      piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, conversationDir: "/workspace/c/conv-1", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, conversationDir: "/workspace/c/conv-1", shellSecretNames: [] },
     }));
     expect(owner).toContain("- runtime: pi (pi-gateway). You run in THIS user's own Linux sandbox");
     expect(owner).toContain("Work in this conversation's folder `/workspace/c/conv-1`");
@@ -3446,7 +3446,7 @@ describe("system tools (avatar system management)", () => {
       ...s.baseCtx,
       config,
       viewerIsOwner: false,
-      piRuntime: { sandboxOwner: "viewer", readOnlyBuiltins: true, conversationDir: "/workspace/c/conv-2", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "viewer", readOnlyBuiltins: true, conversationDir: "/workspace/c/conv-2", shellSecretNames: [] },
     }));
     expect(colleague).toContain("- runtime: pi (pi-gateway)");
     expect(colleague).toContain(piSandboxOwnerSentence("viewer"));
@@ -3456,7 +3456,7 @@ describe("system tools (avatar system management)", () => {
       ...s.baseCtx,
       config,
       viewerIsOwner: false,
-      piRuntime: { sandboxOwner: "nobody", readOnlyBuiltins: false, conversationDir: "/workspace/c/run-ask", shellSecretsUnavailable: [] },
+      piRuntime: { sandboxOwner: "nobody", readOnlyBuiltins: false, conversationDir: "/workspace/c/run-ask", shellSecretNames: [] },
     }));
     expect(asker).toContain(piSandboxOwnerSentence("nobody"));
     expect(asker).toContain("You run in a temporary Linux sandbox made for this one run: no sudo, nothing in it persists");
@@ -3494,7 +3494,7 @@ describe("system tools (avatar system management)", () => {
       const tools = buildSystemTools(s.store, {
         ...s.baseCtx,
         viewerIsOwner: true,
-        piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretsUnavailable: [] },
+        piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretNames: [] },
       });
       const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
       expect(body).toContain("NOT your sandbox shell: bash/curl/Python go only through pi-gateway's own egress proxy");
@@ -3557,15 +3557,21 @@ describe("system tools (avatar system management)", () => {
     });
     s.store.setUserSecret(s.owner.id, "GRAFANA_TOKEN", "shell-secret-value");
     s.store.setUserSecret(s.owner.id, "VAULT_ONLY", "never-in-shell");
+    s.store.setUserSecret(s.owner.id, "HTTPS_PROXY", "reserved-name-value");
     expect(s.store.setSecretShellExpose(s.owner.id, "GRAFANA_TOKEN", true)).toBe(true);
+    expect(s.store.setSecretShellExpose(s.owner.id, "HTTPS_PROXY", true)).toBe(true);
 
-    const body = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    // The run's plan exported GRAFANA_TOKEN to bash (pi sandbox_env); pi refuses HTTPS_PROXY.
+    const tools = buildSystemTools(s.store, {
+      ...s.baseCtx,
+      viewerIsOwner: true,
+      piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretNames: ["GRAFANA_TOKEN"] },
+    });
+    const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
     expect(body).toContain("intro set");
     expect(body).toContain("#쿠버네티스 #관측성");
-    // The pi sandbox shell receives no secrets: a 셸 노출 secret is named, but
-    // reported UNAVAILABLE rather than promised as `$NAME`.
-    expect(body).toContain("Shell-exposed secrets: UNAVAILABLE on this runtime — `GRAFANA_TOKEN` are set to 셸 노출");
-    expect(body).toContain("`$NAME` is empty in bash");
+    expect(body).toContain("Shell-exposed secrets: `GRAFANA_TOKEN` is set to 셸 노출 and present as `$NAME` environment variables in every `bash` command of this run");
+    expect(body).toContain("`HTTPS_PROXY` is set to 셸 노출 but NOT in the shell — the sandbox reserves that name");
     // The non-exposed secret is still NAMED in the secret list but never in the
     // shell line, and no value ever appears.
     expect(body).toContain("`VAULT_ONLY`");

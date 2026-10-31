@@ -700,9 +700,9 @@ export class StoreBase {
     // repo (write/delete/move/scaffold/commit). Repo creation/connection settings
     // stay owner-only. Widens ONLY the repo-write tool gate (repoTools.ts).
     this.addColumnIfMissing("users", "shared_account", "INTEGER DEFAULT 0");
-    // Per-secret shell exposure opt-in. pi sandboxes get no secrets (design P4),
-    // so a flagged secret is NOT exported: both metacognition surfaces name it as
-    // UNAVAILABLE. Values are still redacted from MCP results (secretRedaction.ts).
+    // Per-secret shell exposure opt-in: on the owner's own runs a flagged secret
+    // is passed to pi as `sandbox_env` (design P4) — `$NAME` in that run's bash,
+    // redacted from tool results by pi and Noah (secretRedaction.ts).
     // OFF by default; reserved git/SSH names never qualify (secretPolicy.ts).
     this.addColumnIfMissing("user_secrets", "shell_expose", "INTEGER DEFAULT 0");
     // Per-secret BROWSER-INPUT opt-in (브라우저 입력): when 1, the avatar may name

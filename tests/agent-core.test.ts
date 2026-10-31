@@ -1774,7 +1774,7 @@ describe("buildPrompt", () => {
 
   it("says Noah's egress proxy does not govern the sandbox shell on a pi run", () => {
     const webFetchProxy = { httpsProxy: "http://172.30.247.2:3128", egressPolicy: "domain-proxy" as const };
-    const pi = buildSystemPromptAppend(req({ webFetchProxy, piRuntime: { conversationDir: "/workspace/c/x", shellSecretsUnavailable: [] } }));
+    const pi = buildSystemPromptAppend(req({ webFetchProxy, piRuntime: { conversationDir: "/workspace/c/x", shellSecretNames: [] } }));
     expect(pi).toContain("It does NOT govern your sandbox shell on this runtime");
     expect(pi).toContain("`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance");
     expect(pi).toContain("407 Request rejected by proxy");
@@ -2671,7 +2671,7 @@ describe("buildPrompt", () => {
       headless: true,
       allowHeadlessTools: true,
       activeRepoName: "service-api",
-      piRuntime: { activeRepoDir: "/workspace/c/x/repos/service-api", shellSecretsUnavailable: [] },
+      piRuntime: { activeRepoDir: "/workspace/c/x/repos/service-api", shellSecretNames: [] },
     };
     const t = turn(over);
     expect(t).toContain("**Working repository (this turn)**");
@@ -2802,26 +2802,28 @@ describe("buildPrompt", () => {
     expect(shared).toContain("states the CURRENT truth only");
   });
 
-  it("tells the owner that no secret reaches the sandbox shell, even one set to 셸 노출", () => {
+  it("tells the owner which 셸 노출 secrets this run's bash has as $NAME", () => {
     const exposed = buildPrompt(
       req({
         viewerIsOwner: true,
-        secretNames: ["MY_API_KEY", "OTHER"],
-        shellExposedSecretNames: ["MY_API_KEY"],
+        secretNames: ["MY_API_KEY", "OTHER", "HTTPS_PROXY"],
+        shellExposedSecretNames: ["MY_API_KEY", "HTTPS_PROXY"],
+        piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretNames: ["MY_API_KEY"] },
       }),
       0,
     );
     expect(exposed).toContain(
-      "The owner set `MY_API_KEY` to 셸 노출, but on this runtime the sandbox shell receives NO secrets — `$NAME` is empty in bash.",
+      "Shell: `MY_API_KEY` is set to 셸 노출 and present as `$NAME` environment variables in every `bash` command of this run",
     );
-    expect(exposed).not.toContain("exported into your Bash shell environment");
+    // A flagged name pi's sandbox refuses is named as NOT in the shell.
+    expect(exposed).toContain("`HTTPS_PROXY` is set to 셸 노출 but NOT in the shell");
+    expect(exposed).not.toContain("`OTHER` is set to 셸 노출");
     // Without any exposed key the line is the plain fact.
     const none = buildPrompt(
-      req({ viewerIsOwner: true, secretNames: ["MY_API_KEY"] }),
+      req({ viewerIsOwner: true, secretNames: ["MY_API_KEY"], piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretNames: [] } }),
       0,
     );
-    expect(none).toContain("On this runtime the sandbox shell receives no secrets.");
-    expect(none).not.toContain("셸 노출, but");
+    expect(none).toContain("Shell: no secret is set to 셸 노출, so the sandbox shell holds none.");
   });
 
   it("surfaces the shared-account flag to the owner as self-state", () => {
@@ -3133,7 +3135,7 @@ describe("buildPrompt", () => {
     const over = {
       viewerIsOwner: true,
       activeRepoName: "myrepo",
-      piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretsUnavailable: [] },
+      piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretNames: [] },
     };
     const t = turn(over);
     expect(t).toContain("**Working repository (this turn)**");
@@ -3156,7 +3158,7 @@ describe("buildPrompt", () => {
         elevated: true,
         viewerName: "김철수",
         activeRepoName: "myrepo",
-        piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretsUnavailable: [] },
+        piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretNames: [] },
       }),
     ).toContain("**Working repository (this turn)**");
   });
@@ -3172,7 +3174,7 @@ describe("buildPrompt", () => {
         viewerIsOwner: true,
         activeRepoName: "myrepo",
         mcpToolGroups: ["web"],
-        piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretsUnavailable: [] },
+        piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretNames: [] },
       }),
     ).not.toContain("Working repository");
   });
@@ -3468,7 +3470,7 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     avatar,
     viewerIsOwner: false,
     viewerName: "김철수",
-    piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "viewer", readOnlyBuiltins: true, shellSecretsUnavailable: [] },
+    piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "viewer", readOnlyBuiltins: true, shellSecretNames: [] },
   };
   const consultationRequest: AgentRequest = {
     message: "질문",
@@ -3479,7 +3481,7 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     viewerIsOwner: false,
     elevated: true,
     viewerName: "질문자",
-    piRuntime: { conversationDir: "/workspace/c/run-ask", sandboxOwner: "nobody", readOnlyBuiltins: false, shellSecretsUnavailable: [] },
+    piRuntime: { conversationDir: "/workspace/c/run-ask", sandboxOwner: "nobody", readOnlyBuiltins: false, shellSecretNames: [] },
   };
 
   it("names the colleague's or the asker's sandbox, and says nothing extra for the owner's own runs", () => {
@@ -3512,7 +3514,7 @@ describe("pi sandbox owner (both metacognition surfaces)", () => {
     const owner = buildSystemPromptAppend({
       ...colleagueRequest,
       viewerIsOwner: true,
-      piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretsUnavailable: [] },
+      piRuntime: { conversationDir: "/workspace/c/conv-1", sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretNames: [] },
     });
     expect(owner).not.toContain(VIEWER);
     expect(owner).not.toContain(ASKER);

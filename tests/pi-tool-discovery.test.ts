@@ -270,7 +270,7 @@ describe("runPiAgent tool discovery", () => {
       message: "m",
       avatar: { id: "o", displayName: "O", alias: "", persona: "" },
       viewerIsOwner: true,
-      piRuntime: { shellSecretsUnavailable: [], readOnlyBuiltins: false, knownTools: known },
+      piRuntime: { shellSecretNames: [], readOnlyBuiltins: false, knownTools: known },
     });
     expect(text).toContain("\nmcp__hex-ssh__remote-ssh(host, command)\n");
     expect(text).toContain("at least one server did not answer in time, so search for its tools");
