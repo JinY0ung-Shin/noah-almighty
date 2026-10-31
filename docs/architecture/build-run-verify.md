@@ -19,8 +19,8 @@
 - `rtk proxy npx vitest run tests/<file>.test.ts` — run ONE test file (full suite is ~16s); the
   suites are split agent-core/agent-tools/store/infra/app/chat-history.
 - `docker compose config` — validate compose/env wiring before Docker changes. The stack INCLUDES
-  pi-gateway's compose from `${PI_GATEWAY_DIR:-../pi-gateway}` (README "Deployment"), so `config` needs a
-  pi-gateway checkout (a `git -C ~/pi-gateway archive <pin> | tar -x -C <dir>` export works), a Noah `.env`
+  pi-gateway's compose from `${PI_GATEWAY_DIR:-./vendor/pi-gateway}` (the submodule; README "Deployment"), so
+  `config` needs it checked out (`git submodule update --init`), a Noah `.env`
   (the `env_file` must exist) and pi's required vars (`PI_GATEWAY_HOME`, `DOCKER_GID`). Run it from a scratch
   COPY of the compose files (`docker-compose.yml`, `docker/`), never against the repo's real `.env`.
   `config` has no daemon side effects; `build`/`up` do — see "Combined-stack boot test" below.
@@ -73,8 +73,9 @@
   project's `.env` inside the included file — hence the shared-keys list in `.env.example`; (2) a service of
   the same name in a later `-f` file MERGES into the included one silently — never reuse a pi service name
   (`gateway`, `sandboxd`, `mcp-broker`, `egress-proxy`, `sandbox-image`) in an overlay.
-- **Combined-stack boot test — NEVER on the host daemon** (the user's own pi-gateway runs there; a second
-  sandboxd adopts/removes its sandboxes and the egress socket volume name is fixed). Use a private
+- **Combined-stack boot test — in a private dind, not on the host daemon** (the host runs the user's own dev
+  pi-gateway — the bundled stack from this checkout, or a standalone one, ONE per daemon: a second sandboxd
+  adopts/removes its sandboxes and the egress socket volume name is fixed). Use a private
   privileged `docker:29-dind` on its own network, the way the 2026-10-29 verification did:
   `docker network create --subnet 10.217.0.0/24 noahcompose-net`, `docker run -d --name noahcompose-dind
   --privileged --network noahcompose-net -e DOCKER_TLS_CERTDIR= -v <dir>:<dir> docker:29-dind dockerd
@@ -88,8 +89,9 @@
   `scripts/security-check/run.mjs` (run in `sandboxd`, `--internal noah-almighty:48787` plus each Noah IP) →
   all PASS, sandboxes `noah-almighty/pi-sandbox:latest` with network `none`. Tear the dind and its volume down
   afterwards; leave `noahpi-dind` (the pi e2e instance) alone.
-- `docker build` and `docker run` DO work here (plain `docker build -t <unique tag> .` of the Noah image only —
-  never `docker compose build` on the host: pi's `sandbox-image` service would retag `pi-gateway/sandbox:latest`).
+- `docker build` and `docker run` DO work here (plain `docker build -t <unique tag> .` of the Noah image). The
+  user's dev stack on the host is this checkout's own `docker compose up -d --build`; never run it while a
+  standalone pi-gateway stack is up on the same daemon (`docker ps --filter label=com.docker.compose.service=sandboxd`).
   Smoke-test: `docker run -d -e SESSION_SECRET=x -e AGENT_RUNTIME=local <img>` then `docker exec <c> curl -fsS
   --noproxy '*' localhost:48787/api/bootstrap` (the unauth health probe + HEALTHCHECK). `SESSION_SECRET` is
   REQUIRED to boot (`NODE_ENV=production`), the image runs as non-root `node` (so global bins must be

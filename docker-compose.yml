@@ -21,8 +21,8 @@
 
 include:
   - path:
-      # PI_GATEWAY_DIR = the pi-gateway checkout (default: next to this repository).
-      - ${PI_GATEWAY_DIR:-../pi-gateway}/docker-compose.yml
+      # PI_GATEWAY_DIR = the pi-gateway checkout (default: the vendor/pi-gateway git submodule).
+      - ${PI_GATEWAY_DIR:-./vendor/pi-gateway}/docker-compose.yml
       - docker/pi/compose.override.yml
 
 # Build args of the Noah image. Map syntax (NAME: value) throughout — compose forbids mixing the

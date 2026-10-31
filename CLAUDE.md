@@ -348,8 +348,8 @@ These are the invariants the project is built around. New work should reinforce 
   here is NOT the deploy env, and there's no local DB. Schema/UID/volume/`SESSION_SECRET` changes need an
   EXISTING-deployment migration path, not just fresh-install behavior.
 - **Noah ships WITH its pi-gateway as ONE compose stack (U9).** `docker-compose.yml` `include:`s pi-gateway's
-  own compose file from an operator checkout (`${PI_GATEWAY_DIR:-../pi-gateway}`, pinned at `1b2ccc2` in README
-  "Deployment"; pi's code and compose file are never edited) plus `docker/pi/compose.override.yml` (Noah's
+  own compose file from the `vendor/pi-gateway` git submodule (`${PI_GATEWAY_DIR:-./vendor/pi-gateway}`; the
+  gitlink IS the pin, kept out of the Noah image by `.dockerignore`; pi's code and compose file are never edited) plus `docker/pi/compose.override.yml` (Noah's
   instance config: sandboxd runs `noah-almighty/pi-sandbox`, the broker's pinned address). Facts that fail in
   the field, not in CI: a one-shot `pi-setup` service (uid 10001, pi's admin-key secret) registers Noah's MCP
   servers and Noah's prompt on every `up`, and Noah starts only after it exits 0; pi's broker reaches `/mcp` over
@@ -360,7 +360,7 @@ These are the invariants the project is built around. New work should reinforce 
   shared key means the same on both sides — `NODE_EXTRA_CA_CERTS` is a HOST path (mounted read-only into
   Noah); ONE pi-gateway per Docker daemon (sandboxd reaps every `pi-gateway.instance=default` sandbox); the
   egress overlay (`docker-compose.egress.yml`) is NOT supported with the bundle (its firewall blocks pi's
-  gateway). A pi-gateway bump re-pins the commit and re-runs the dind boot test (`build-run-verify.md`).
+  gateway). A pi-gateway bump moves the submodule to a PUSHED commit and re-runs the dind boot test (`build-run-verify.md`).
 - **Project name diverges by layer:** display "Noah Almighty", code slug `noah-almighty`, working dir
   `avatar-chat`. Grep both old/new slugs when auditing names.
 - **The user fleet is Windows/Linux only — no macOS.** Platform-dependent decisions (browser-bridge

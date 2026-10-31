@@ -11,7 +11,7 @@ set -eu
 
 key_file=/run/secrets/pi_gateway_admin_api_key
 if [ ! -r "$key_file" ]; then
-  echo "pi-setup: cannot read $key_file (pi-gateway's admin_api_key; run pi-gateway's scripts/setup-host.sh)" >&2
+  echo "pi-setup: cannot read $key_file (pi-gateway's admin_api_key; run sudo docker/pi/setup-host.sh on the host)" >&2
   exit 1
 fi
 PI_GATEWAY_ADMIN_KEY="$(cat "$key_file")"

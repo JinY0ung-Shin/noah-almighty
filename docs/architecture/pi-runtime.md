@@ -357,15 +357,17 @@ open; an invalid entry stops the boot. The bundled compose stack sets it to the 
 Noah and its pi-gateway are ONE `docker compose up -d --build` (operator steps: README "Deployment"; the dind
 boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is edited or copied:
 
-- **`include:`** — `docker-compose.yml` includes `${PI_GATEWAY_DIR:-../pi-gateway}/docker-compose.yml`, an operator
-  checkout PINNED at `1b2ccc2` (`1b2ccc23419e…`, the commit this branch is verified against; README names it),
+- **`include:`** — `docker-compose.yml` includes `${PI_GATEWAY_DIR:-./vendor/pi-gateway}/docker-compose.yml`, the
+  pi-gateway GIT SUBMODULE (`.gitmodules`, `ignore = untracked` for pi's own `.env`; the gitlink is the pin this
+  branch is verified against, excluded from the Noah image by `.dockerignore`),
   together with `docker/pi/compose.override.yml` — Noah's instance configuration merged onto pi's services
   (sandboxd's `SANDBOX_IMAGE=noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG}`, built by the build-only
   `pi-sandbox-image` service FROM pi's own `sandbox-image`; the gateway's `SESSION_IDLE_SECONDS` from
   `NOAH_PI_SESSION_IDLE_SECONDS`, default 1800 — a reloaded idle session re-lists every Noah server, so pi's 300
   turned every 5-minute pause into a session start, see README "Sizing pi-gateway"; the broker's `noah-mcp`
   address). A pi-gateway bump
-  re-pins the commit in the README and re-runs the boot test.
+  moves the submodule (`git -C vendor/pi-gateway checkout <pushed commit>` + commit the gitlink) and re-runs the
+  boot test.
 - **`pi-setup`** — a one-shot service (`FROM` Noah's image, uid 10001 = the owner of pi's `admin_api_key` secret,
   read-only, caps dropped) that runs `docker/pi/pi-setup.sh` → `scripts/pi-register-mcp.mjs --configure-instance`
   once the gateway is healthy. It is idempotent and re-runs on every `up`; `noah-almighty` starts only after it

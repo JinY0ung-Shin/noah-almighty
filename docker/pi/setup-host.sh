@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Noah's half of the host preparation for the bundled pi-gateway. Run it AFTER pi-gateway's own
-# scripts/setup-host.sh (which creates the data root, the workspaces dir and pi's secret files), and again
-# whenever pi's service key changes:
+# Host preparation for the bundled pi-gateway, in ONE command. Run it before the first `docker compose up`,
+# and again whenever pi's service key changes:
 #
-#   sudo PI_GATEWAY_HOME=/srv/pi-gateway docker/pi/setup-host.sh
+#   sudo docker/pi/setup-host.sh
+#
+# PI_GATEWAY_HOME (required), PI_GATEWAY_SECRETS and PI_GATEWAY_DIR come from Noah's .env — the same values
+# compose reads — unless set in the environment (`sudo PI_GATEWAY_HOME=… docker/pi/setup-host.sh`).
 #
 # What it does
+#   runs    pi-gateway's own scripts/setup-host.sh from PI_GATEWAY_DIR (default: the vendor/pi-gateway
+#           submodule) with the same PI_GATEWAY_HOME/PI_GATEWAY_SECRETS: data root, workspaces, plugins,
+#           pi's secret files and pi's .env (it keeps whatever already exists)
 #   checks  $PI_GATEWAY_HOME/workspaces   uid 1000, the uid Noah's container runs as (it bind-mounts it)
 #   copies  $PI_GATEWAY_SECRETS/gateway/api_key → $PI_GATEWAY_SECRETS/noah/pi_gateway_api_key
 #           uid 1000, 0400 — pi-gateway keeps one copy of a secret per service, owned by that service's uid,
@@ -15,12 +20,31 @@
 # Values are never printed.
 set -euo pipefail
 
-: "${PI_GATEWAY_HOME:?set PI_GATEWAY_HOME to the absolute path used by the setup-host.sh of pi-gateway}"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+ENV_FILE="$REPO/.env"
+NOAH_UID=1000
+
+# env_value KEY: the last KEY=value line of Noah's .env, surrounding quotes dropped. Never `source`d: the file
+# holds secrets and is compose syntax, not shell.
+env_value() {
+  [ -f "$ENV_FILE" ] || return 0
+  local value
+  value="$(grep -E "^$1=" "$ENV_FILE" | tail -n 1)" || true
+  value="${value#*=}"
+  case "$value" in \"*\") value="${value:1:${#value}-2}" ;; \'*\') value="${value:1:${#value}-2}" ;; esac
+  printf '%s' "$value"
+}
+
+PI_GATEWAY_HOME="${PI_GATEWAY_HOME:-$(env_value PI_GATEWAY_HOME)}"
+PI_GATEWAY_SECRETS="${PI_GATEWAY_SECRETS:-$(env_value PI_GATEWAY_SECRETS)}"
+PI_GATEWAY_DIR="${PI_GATEWAY_DIR:-$(env_value PI_GATEWAY_DIR)}"
+PI_GATEWAY_DIR="${PI_GATEWAY_DIR:-./vendor/pi-gateway}"
+case "$PI_GATEWAY_DIR" in /*) ;; *) PI_GATEWAY_DIR="$REPO/$PI_GATEWAY_DIR" ;; esac
+
+: "${PI_GATEWAY_HOME:?set PI_GATEWAY_HOME in $ENV_FILE (the pi-gateway data root, e.g. /srv/pi-gateway)}"
 case "$PI_GATEWAY_HOME" in /*) ;; *) echo "PI_GATEWAY_HOME must be absolute" >&2; exit 1 ;; esac
 SECRETS="${PI_GATEWAY_SECRETS:-$PI_GATEWAY_HOME/secrets}"
 case "$SECRETS" in /*) ;; *) echo "PI_GATEWAY_SECRETS must be absolute" >&2; exit 1 ;; esac
-ENV_FILE="$(cd "$(dirname "$0")/../.." && pwd)/.env"
-NOAH_UID=1000
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root (the secret copy must be owned by uid $NOAH_UID inside a root-only directory)" >&2
@@ -29,13 +53,20 @@ fi
 
 fail() { echo "error: $*" >&2; exit 1; }
 
+PI_SETUP="$PI_GATEWAY_DIR/scripts/setup-host.sh"
+[ -f "$PI_SETUP" ] || fail "$PI_SETUP not found — run git submodule update --init (or fix PI_GATEWAY_DIR)"
+echo "== pi-gateway ($PI_SETUP)"
+PI_GATEWAY_HOME="$PI_GATEWAY_HOME" PI_GATEWAY_SECRETS="$SECRETS" bash "$PI_SETUP"
+echo
+echo "== noah"
+
 WS="$PI_GATEWAY_HOME/workspaces"
-[ -d "$WS" ] || fail "$WS does not exist — run pi-gateway's scripts/setup-host.sh first"
+[ -d "$WS" ] || fail "$WS does not exist after pi-gateway's setup-host.sh"
 [ "$(stat -c %u "$WS")" = "$NOAH_UID" ] || fail "$WS is not owned by uid $NOAH_UID (pi's sandbox uid = Noah's uid)"
 echo "ok     $WS (uid $NOAH_UID)"
 
 API_KEY="$SECRETS/gateway/api_key"
-[ -s "$API_KEY" ] || fail "$API_KEY is missing or empty — run pi-gateway's scripts/setup-host.sh first"
+[ -s "$API_KEY" ] || fail "$API_KEY is missing or empty after pi-gateway's setup-host.sh"
 [ -s "$SECRETS/gateway/admin_api_key" ] \
   || fail "$SECRETS/gateway/admin_api_key is empty — Noah's pi-setup service needs pi's admin API to register its MCP servers"
 

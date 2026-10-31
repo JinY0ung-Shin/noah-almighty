@@ -77,14 +77,15 @@ const noah = block(services, "noah-almighty", 2);
 const piSetup = block(services, "pi-setup", 2);
 const piSandbox = block(services, "pi-sandbox-image", 2);
 
-describe("docker-compose.yml — pi-gateway is included, never vendored", () => {
+describe("docker-compose.yml — pi-gateway is included from its submodule, never copied", () => {
   it("includes pi's own compose from PI_GATEWAY_DIR with Noah's override merged on top", () => {
     const include = block(compose, "include", 0);
-    expect(include).toContain("- ${PI_GATEWAY_DIR:-../pi-gateway}/docker-compose.yml");
+    expect(include).toContain("- ${PI_GATEWAY_DIR:-./vendor/pi-gateway}/docker-compose.yml");
     expect(include).toContain("- docker/pi/compose.override.yml");
     expect(include.indexOf("docker-compose.yml")).toBeLessThan(include.indexOf("compose.override.yml"));
-    // No pi-gateway source in this repository.
+    // No pi-gateway source in this repository's own tree, and none of the submodule in the Noah image.
     expect(fs.existsSync(path.join(ROOT, "apps/gateway"))).toBe(false);
+    expect(read(".dockerignore").split("\n")).toContain("vendor/pi-gateway/");
   });
 
   it("defines no service or network whose name pi's compose already uses", () => {

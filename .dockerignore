@@ -39,3 +39,6 @@ tests/
 # /app/tls:ro). It must never be baked into an image layer — a private key would
 # ride every image copy — and a renewed cert would bust the app-layer cache.
 docker/tls/
+# pi-gateway (git submodule, included by docker-compose.yml): its own services build
+# from it; none of it belongs in the Noah image.
+vendor/pi-gateway/

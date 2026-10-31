@@ -149,45 +149,43 @@ never copied into this repository.
   container labelled `pi-gateway.instance=default` on its daemon, and its egress socket volume has a fixed
   name (`pi-gateway-proxy-sock`) — neither can be changed by configuration. Two pi-gateway stacks on one
   daemon delete each other's sandboxes.
-- **A pi-gateway checkout at the pinned commit**, by default next to this repository (`../pi-gateway`; set
-  `PI_GATEWAY_DIR` in `.env` for another path). This Noah release is verified against pi-gateway
-  **`1b2ccc23419ef43d46c4493da3fa2eb27386c9b6`** (`1b2ccc2`, origin/main of 2026-10-29):
+- **The pi-gateway submodule** (`vendor/pi-gateway`, pinned by this repository's commit; pi's code is used as
+  it is, never edited here). Clone with `--recursive`, or after a plain clone:
   ```bash
-  git clone https://github.com/JinY0ung-Shin/pi-gateway.git ../pi-gateway
-  git -C ../pi-gateway checkout 1b2ccc2
+  git submodule update --init
   ```
+  `git submodule status` shows the pinned commit. `PI_GATEWAY_DIR` in `.env` points the stack at another
+  checkout instead (an existing deployment's `../pi-gateway`, see Upgrade).
 - `openssl` and root on the host (pi's `scripts/setup-host.sh` creates the secret files).
 - An LLM endpoint pi-gateway can call (OpenAI-compatible `/v1/chat/completions` or Anthropic-compatible
   `/v1/messages`, with tool calling). Model credentials live in pi-gateway only, never in Noah.
 
 ### First boot
 
-1. **Prepare the host for pi-gateway** (data root, secrets, its `.env`; idempotent):
+1. **Write Noah's `.env`:** `cp .env.example .env`, then set at least `SESSION_SECRET`, `PI_GATEWAY_HOME`
+   (pi's data root, e.g. `/srv/pi-gateway`; `PI_GATEWAY_SECRETS` only when it is not `$PI_GATEWAY_HOME/secrets`)
+   and `PI_MODEL_MAP`. Values in Noah's `.env` win over pi-gateway's `.env` inside pi's compose file too, so
+   the keys both read (`LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
+   `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`) must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a
+   **host** path.
+2. **Prepare the host** (idempotent; re-run whenever pi's service key changes). It reads `PI_GATEWAY_HOME`
+   (and `PI_GATEWAY_SECRETS`, `PI_GATEWAY_DIR`) from that `.env`:
    ```bash
-   sudo PI_GATEWAY_HOME=/srv/pi-gateway ../pi-gateway/scripts/setup-host.sh
+   sudo docker/pi/setup-host.sh
    ```
-   It creates `$PI_GATEWAY_HOME/workspaces` (uid 1000 — the same uid as Noah's container, which mounts it),
-   `$PI_GATEWAY_HOME/plugins`, one 0400 copy of each secret per pi service under
-   `$PI_GATEWAY_HOME/secrets`, and adds `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`, `DOCKER_GID` to
-   `../pi-gateway/.env`. Review the rest of pi's settings there (`cp .env.example .env` first if you want
-   its comments): `GATEWAY_BIND_ADDR`/`GATEWAY_PORT` (where pi's admin page and API listen, default
-   `127.0.0.1:8080`), the turn and `SANDBOX_*` limits (size them first: [Sizing pi-gateway](#sizing-pi-gateway)),
-   `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
-2. **Prepare the host for Noah** (idempotent; re-run whenever pi's service key changes):
-   ```bash
-   sudo PI_GATEWAY_HOME=/srv/pi-gateway docker/pi/setup-host.sh
-   ```
-   It checks the workspaces owner, copies pi's service key to `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key`
-   (uid 1000, 0400 — pi's one-copy-per-service convention; compose mounts it into Noah as a secret, so the
-   key never sits in `.env`), checks that pi's admin key is set, and adds `PI_GATEWAY_HOME` /
-   `PI_GATEWAY_SECRETS` to Noah's `.env`.
-3. **Write Noah's `.env`:** `cp .env.example .env` (before step 2, or merge), then set at least
-   `SESSION_SECRET`, `PI_GATEWAY_HOME` (and `PI_GATEWAY_SECRETS` when it is not `$PI_GATEWAY_HOME/secrets`)
-   — **the same values as pi-gateway's `.env`** — and `PI_MODEL_MAP`. Values in Noah's `.env` win over
-   pi-gateway's `.env` inside pi's compose file too, so the keys both read (`LOG_LEVEL`,
-   `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`)
-   must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a **host** path.
-4. **Build and start everything:**
+   - **pi-gateway's half** (it runs the submodule's `scripts/setup-host.sh` with the same values): creates
+     `$PI_GATEWAY_HOME/workspaces` (uid 1000 — the same uid as Noah's container, which mounts it),
+     `$PI_GATEWAY_HOME/plugins`, one 0400 copy of each secret per pi service under `$PI_GATEWAY_SECRETS`, and
+     adds `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`, `DOCKER_GID` to `vendor/pi-gateway/.env` (git-ignored
+     there); whatever already exists is kept. Review the rest of pi's settings in that file (`cp
+     .env.example .env` there first if you want its comments): `GATEWAY_BIND_ADDR`/`GATEWAY_PORT` (where pi's
+     admin page and API listen, default `127.0.0.1:8080`), the turn and `SANDBOX_*` limits (size them first:
+     [Sizing pi-gateway](#sizing-pi-gateway)), `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
+   - **Noah's half:** checks the workspaces owner, copies pi's service key to
+     `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key` (uid 1000, 0400 — pi's one-copy-per-service convention;
+     compose mounts it into Noah as a secret, so the key never sits in `.env`) and checks that pi's admin key
+     is set.
+3. **Build and start everything:**
    ```bash
    docker compose up -d --build
    docker compose ps    # gateway, sandboxd, mcp-broker, egress-proxy healthy, noah-almighty healthy;
@@ -199,11 +197,11 @@ never copied into this repository.
    `mcp-broker` → `gateway` (healthy) → `pi-setup` → `noah-almighty`. `pi-setup` registers one broker entry per
    Noah MCP server, deploys Noah's system prompt (`scripts/pi-system-prompt.md`, live prompt `noah`) and turns
    off pi's `request_admin` / `present_file` built-ins; it is idempotent and re-runs on every `up`.
-5. **Configure the LLM in pi-gateway:** open pi's admin page (`http://127.0.0.1:8080/admin` on the host by
+4. **Configure the LLM in pi-gateway:** open pi's admin page (`http://127.0.0.1:8080/admin` on the host by
    default; key: `$PI_GATEWAY_SECRETS/gateway/admin_api_key`) → **LLM**, add the corporate LLM server and its
    models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
    pi's `llm_not_configured`. Map Noah's composer tiers to those model ids with `PI_MODEL_MAP`.
-6. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
+5. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
 
 ### What the stack wires up
 
@@ -284,9 +282,13 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
 
 ### Upgrade
 
-- **Noah:** `git pull`, then `docker compose up -d --build`. If the release notes move the pi-gateway pin,
-  check out the new commit in the pi-gateway checkout first (`git -C ../pi-gateway fetch && git -C
-  ../pi-gateway checkout <commit>`). `pi-setup` re-registers what changed.
+- **Noah:** `git pull && git submodule update --init`, then `docker compose up -d --build`. The submodule
+  carries the pi-gateway pin, so a pin move arrives with the pull. `pi-setup` re-registers what changed.
+- **Deployments from before the submodule** (pi-gateway checked out at `../pi-gateway`): pi's `.env` lives
+  there, and without it pi's compose loses `DOCKER_GID`, `GATEWAY_BIND_ADDR` and the rest. Either copy it once
+  (`cp ../pi-gateway/.env vendor/pi-gateway/.env`) and retire the old checkout, or keep using it with
+  `PI_GATEWAY_DIR=../pi-gateway` in Noah's `.env` and check out the submodule's commit there
+  (`git submodule status`). The compose project name is unchanged, so pi's volumes stay attached.
 - **A new sandbox image only applies to new sandboxes.** Running ones keep the old image until idle
   (`SANDBOX_IDLE_SECONDS`, 15 min); to switch at once (workspaces stay):
   `docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)`.
@@ -338,7 +340,8 @@ docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)   # sandboxes 
 ```
 
 Delete the `:pre-upgrade` tags once the new images have proven themselves. pi-gateway's own images
-(`pi-gateway/*:latest`) roll back the same way, or by checking out the previous pinned commit and rebuilding.
+(`pi-gateway/*:latest`) roll back the same way, or by checking out the previous Noah commit
+(`git submodule update` moves pi with it) and rebuilding.
 
 ### Moving an existing deployment to pi
 
@@ -348,14 +351,15 @@ quarantined at the first boot (next section) — the old CLI transcripts in `APP
 included.
 
 1. Tag the running image for rollback (as above).
-2. Check out pi-gateway at the pinned commit next to the repository, then run First boot steps 1–2.
+2. Check out the pi-gateway submodule (`git submodule update --init`).
 3. In `.env`: add `PI_GATEWAY_HOME` (and `PI_GATEWAY_SECRETS` if not the default) and `PI_MODEL_MAP`; set
    `NODE_EXTRA_CA_CERTS` to the CA's **host** path or remove it (the old in-image path
    `/usr/local/share/ca-certificates/extra-proxy-ca.crt` does not exist on the host and stops `up`); remove
    `AGENT_RUNTIME`, `DECK_CONVERTER`, `UV_DEFAULT_INDEX`/`UV_INDEX` and the Claude-SDK-only keys (`ANTHROPIC_*`,
    `MAX_TURNS`, `AUTO_COMPACT_WINDOW`, `READONLY_TOOLS`) — Noah ignores them. Move the model endpoint and its
    credentials to pi-gateway's LLM page; the admin UI's Claude subscription token is gone.
-4. `docker compose up -d --build`, then configure the LLM in pi (First boot step 5).
+4. `sudo docker/pi/setup-host.sh` (First boot step 2), `docker compose up -d --build`, then configure the LLM
+   in pi (First boot step 4).
 5. **Rollback** to the SDK-era release: `git checkout` that release, re-tag the old image as `latest`, and
    `docker compose up -d --no-build noah-almighty`. pi's services keep running until
    `docker compose down` from the new checkout; nothing of Noah's data volume depends on them. The first pi boot
@@ -415,7 +419,7 @@ backup and quarantine).
 | `PI_MODEL_MAP` | **Required.** JSON, composer tier → pi model id, or `{"model": "...", "contextWindow": N}` (the window feeds the context badge). Every tier (`fable`, `opus`, `sonnet`, `haiku`) must be mapped: it is the only tier → model source, model fallbacks included. Malformed or incomplete → the boot stops. The models themselves (and their credentials) are configured in pi-gateway. |
 | `PI_DECK_SANDBOX` | `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). **Fixed to `true` by docker-compose.yml**, which builds and wires that image. |
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
-| `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default `../pi-gateway`), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |
+| `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default the `./vendor/pi-gateway` submodule), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |
 | `NOAH_MCP_SUBNET` / `NOAH_MCP_BROKER_IP` / `NOAH_MCP_HOST_ALIAS` / `NOAH_PI_SANDBOX_TAG` | Compose only: the internal broker↔Noah network (default `172.30.248.0/24`), the broker's pinned address on it (`172.30.248.10`), Noah's extra name there (native TLS), and the tag of the deck sandbox image (`latest`). |
 | `NOAH_PI_SESSION_IDLE_SECONDS` | Compose only: pi's `SESSION_IDLE_SECONDS` (default `1800`; a value in pi-gateway's `.env` is ignored) — see [Sizing pi-gateway](#sizing-pi-gateway). |
 | `PORT` / `APP_DATA_DIR` |
