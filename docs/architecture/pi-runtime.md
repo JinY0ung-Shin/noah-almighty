@@ -151,14 +151,14 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    goes with the rest as ONE follow-up turn after the response. Mechanics →
    [`chat-sse-media.md`](chat-sse-media.md) "Mid-turn user messages".
 
-## S1 degrades (pi changes P1–P6 are out of scope)
+## S1 degrades (what pi still lacks)
 
 | Gap | Noah-side behavior | Surfaces |
 |---|---|---|
 
 | no per-session cwd (P1) | the model is told to work in `/workspace/c/<seg>/` with absolute paths (prompt + describe_system + refusal redirects); Noah creates the folder 0700 | both |
 | no WebSearch | not registered; stated | both |
-| relayed MCP tool lists are per SESSION | pi reads `tools/list` when it builds the session (first turn, after ~5 idle minutes, a model change); a server/tool connected later appears only in a later session, a removed one is refused at call time | both (runtime line + prompt sentence) |
+| relayed MCP tool lists are per SESSION | pi reads `tools/list` when it builds the session (first turn, a reload after `SESSION_IDLE_SECONDS` — 1800 s in the bundle — or a model/effort switch, which reopens the session); a server whose list failed is asked again at most every 30 s when the model searches or calls an unknown name; a server/tool connected later appears only in a later session, a removed one is refused at call time | both (runtime line + prompt sentence) |
 | broker calls cannot wait minutes | `ask_avatar` in a chat runs in the background, a canvas never waits (see "Asynchronous tools") | both + tool descriptions |
 | date fixed at session creation | KST date/time line prepended to every input | turn input |
 
