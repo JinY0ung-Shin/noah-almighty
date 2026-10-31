@@ -111,8 +111,9 @@
   via `onSessionId`, so a run that dies while a question waits resumes from the last committed turn. At most 20
   question rounds per run.
 - **Background work is gone.** The SDK runner's background phase (Bash `run_in_background`, background subagents,
-  wake-up turns) left with it; pi's subagent (`Agent`, from the default-skills plugin) runs inside the turn and
-  shows as ONE flat card (P6). A run ends at its answer (or its last steer follow-up turn).
+  wake-up turns) left with it; pi's subagent (`Agent`, from the default-skills plugin) runs inside the turn as its
+  own card, and its tool calls (pi tags them `parent_tool_use_id`) nest under that card — `SendMessage`, which
+  continues a subagent, is a card too (`agent/pi/eventAdapter.ts`). A run ends at its answer (or its last steer follow-up turn).
 - **Mid-turn user messages ("steers") are delivered AFTER the current answer, as ONE follow-up turn of the same
   run.** pi takes no input while a response streams (design P2), so `POST /api/chat/runs/:runId/message`
   queues the text in the run's **`SteerChannel`** (`agent/steerChannel.ts`) — the per-run queue + state machine

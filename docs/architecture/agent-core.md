@@ -132,7 +132,8 @@ exported there, P4). Policy/columns → [`secrets-ssh.md`](secrets-ssh.md); wire
   the whole background phase. A stored policy naming `SendMessage`/`Workflow` normalizes them away on read.
 - Kept read-only for OLD rows: a stored `response.plan` renders as a plain plan card (no buttons) and a
   stored activity snapshot's agent `name` still renders as `@name`.
-- Subagents are pi's own `Agent` tool (one flat card; nested events are not relayed, design P6).
+- Subagents are pi's own `Agent` tool: an agent card whose tool calls (`parent_tool_use_id` on pi's tool events) nest
+  under it in the activity tree; `SendMessage` continuing one is a card of its own.
 
 ## Adding / changing an MCP tool server
 - **One template per `*Tools.ts`:** `buildXTools` (handler-level owner/elevated guards) + `buildXServer`

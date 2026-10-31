@@ -371,6 +371,36 @@ describe("PiEventAdapter edge semantics (synthetic frames per pi api/mapper.ts)"
     ]);
   });
 
+  it("a subagent's tool calls (parent_tool_use_id) nest under its Agent / SendMessage card", () => {
+    const { events, calls } = recorder();
+    feed(new PiEventAdapter(events), [
+      created,
+      ev("response.tool_use", { tool_use_id: "t1", name: "Agent", input: { description: "look around", prompt: "p", subagent_type: "scout" } }),
+      ev("response.tool_use_started", { tool_use_id: "c1", name: "bash", parent_tool_use_id: "t1" }),
+      ev("response.tool_use", { tool_use_id: "c1", name: "bash", input: { command: "ls" }, parent_tool_use_id: "t1" }),
+      ev("response.tool_progress", { tool_use_id: "c1", name: "bash", elapsed_seconds: 3, source: "gateway", parent_tool_use_id: "t1" }),
+      ev("response.tool_result", { tool_use_id: "c1", content: "a.txt", is_error: false, parent_tool_use_id: "t1" }),
+      ev("response.tool_result", { tool_use_id: "t1", content: "found\n\nagent_id: 0123456789abcdef", is_error: false }),
+      ev("response.tool_use", { tool_use_id: "t2", name: "SendMessage", input: { to: "0123456789abcdef", message: "and y?" } }),
+      ev("response.tool_use", { tool_use_id: "c2", name: "read", input: { path: "/workspace/b.txt" }, parent_tool_use_id: "t2" }),
+      ev("response.tool_result", { tool_use_id: "c2", content: "y", is_error: true, parent_tool_use_id: "t2" }),
+      ev("response.tool_result", { tool_use_id: "t2", content: "y is in b.txt", is_error: false }),
+      // A parent that is not a subagent card never swallows a call.
+      ev("response.tool_use", { tool_use_id: "c3", name: "ls", input: { path: "/workspace" }, parent_tool_use_id: "unknown" }),
+    ]);
+    expect(only(calls, "agentStart", "agentEnd", "toolStart", "toolEnd")).toEqual([
+      ["agentStart", { agentId: "t1", parentId: "main", subagentType: "scout", description: "look around" }],
+      ["toolStart", { toolUseId: "c1", name: "Bash", agentId: "t1", inputSummary: "ls" }],
+      ["toolEnd", { toolUseId: "c1", ok: true }],
+      ["agentEnd", { agentId: "t1", ok: true }],
+      ["agentStart", { agentId: "t2", parentId: "main", subagentType: undefined, description: "and y?" }],
+      ["toolStart", { toolUseId: "c2", name: "Read", agentId: "t2", inputSummary: "/workspace/b.txt" }],
+      ["toolEnd", { toolUseId: "c2", ok: false }],
+      ["agentEnd", { agentId: "t2", ok: true }],
+      ["toolStart", { toolUseId: "c3", name: "LS", agentId: "main", inputSummary: "/workspace" }],
+    ]);
+  });
+
   it("failed turns carry the in-band error and never report a session id", () => {
     const { events, calls } = recorder();
     const outcome = new PiEventAdapter(events).handle(

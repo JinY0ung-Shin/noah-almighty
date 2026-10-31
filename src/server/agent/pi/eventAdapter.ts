@@ -9,8 +9,12 @@
  *   delta reaches `onDelta`) and once more at the end (keep last). No `onTextFold`
  *   sink ⇒ no folding and the final text is every block joined (legacy contract).
  * - `onToolStart`/`onToolEnd` use Noah's tool names (`Read`, `Bash`,
- *   `mcp__repo__commit`, …) and a one-line input summary; subagent spawns use
- *   `onAgentStart`/`onAgentEnd`; AskUserQuestion never shows as a tool row.
+ *   `mcp__repo__commit`, …) and a one-line input summary; subagent runs
+ *   (`Agent`, and `SendMessage` continuing one) use `onAgentStart`/`onAgentEnd`;
+ *   AskUserQuestion never shows as a tool row.
+ * - A subagent's own tool calls arrive as the same tool events tagged with
+ *   `parent_tool_use_id` (the `Agent`/`SendMessage` call); they nest under that
+ *   card (`ToolEvent.agentId`), never under the main agent.
  *
  * pi specifics the adapter absorbs (verified against pi-gateway `api/mapper.ts`):
  * - pi keeps ONE `message` output item open across tool calls (it closes it only
@@ -70,7 +74,8 @@ export const PI_TOOL_PRESENTATION: Readonly<Record<string, { kind: PiToolKind; n
   // also yields a `file` output item, handed to `onPresentedFile`.
   present_file: { kind: "tool", noahName: "PresentFile" },
   request_admin: { kind: "tool", noahName: "RequestAdmin" },
-  SendMessage: { kind: "tool", noahName: "SendMessage" },
+  // Continues a subagent: its own tool calls nest under this call like an Agent's.
+  SendMessage: { kind: "agent", noahName: "SendMessage" },
   Agent: { kind: "agent", noahName: "Agent" },
   AskUserQuestion: { kind: "question", noahName: "AskUserQuestion" },
   // text.format json_schema only — Noah does not request it; never a row.
@@ -294,23 +299,27 @@ export class PiEventAdapter {
     this.closeText();
   }
 
-  private toolStart(id: string, rawName: string, input: unknown): void {
+  /** `parent` is the subagent card a nested call belongs to (pi's `parent_tool_use_id`). */
+  private toolStart(id: string, rawName: string, input: unknown, parent: string): void {
     if (!id || this.tools.has(id)) return;
     const tool = resolvePiTool(rawName, input);
     this.tools.set(id, { kind: tool.kind, name: tool.name });
+    // Only a subagent card owns nested calls; an unknown parent falls back to the main agent.
+    const agentId = parent && this.tools.get(parent)?.kind === "agent" ? parent : MAIN_AGENT_ID;
     if (tool.kind === "agent") {
       this.events.onAgentStart?.({
         agentId: id,
-        parentId: MAIN_AGENT_ID,
+        parentId: agentId,
         subagentType: asString(tool.input.subagent_type) || undefined,
-        description: (asString(tool.input.description) || asString(tool.input.prompt)).slice(0, 200) || undefined,
+        description:
+          (asString(tool.input.description) || asString(tool.input.prompt) || asString(tool.input.message)).slice(0, 200) || undefined,
       });
       this.status("에이전트 작업 중…");
     } else if (tool.kind === "tool") {
       this.events.onToolStart?.({
         toolUseId: id,
         name: tool.name,
-        agentId: MAIN_AGENT_ID,
+        agentId,
         inputSummary: summarizePiToolInput(tool.name, tool.input),
       });
       const label = sdkToolLabel(tool.name);
@@ -446,7 +455,7 @@ export class PiEventAdapter {
       }
       case "response.tool_use":
         this.closeText();
-        this.toolStart(asString(data.tool_use_id), asString(data.name), data.input);
+        this.toolStart(asString(data.tool_use_id), asString(data.name), data.input, asString(data.parent_tool_use_id));
         return null;
       case "response.tool_progress": {
         const tool = this.tools.get(asString(data.tool_use_id));
