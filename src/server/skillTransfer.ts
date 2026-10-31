@@ -16,7 +16,7 @@ import {
 } from "./knowledgeRepo.js";
 import { git } from "./repoGitCore.js";
 import { resolveShareCopy } from "../shared/skillOriginMatch.js";
-import { skillMdMeta } from "./agent/skillDiscovery.js";
+import { skillMdMeta } from "./agent/skillCatalog.js";
 import type { SharedSkill, SharedSkillManifest } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -1096,8 +1096,9 @@ async function copyTree(
  * Rewrite the copied skill's IDENTITY files so it loads under `slug`:
  * `.claude-plugin/plugin.json` (created when the source skill lacked one —
  * without it the marketplace entry is not loadable) and, when the frontmatter
- * carries a `name:`, the SKILL.md name line (the CLI prefers frontmatter over
- * the directory name, so a stale name would collide with the source skill).
+ * carries a `name:`, the SKILL.md name line (the skill loaders prefer
+ * frontmatter over the directory name — `skillMdMeta`, the pi skill sync — so a
+ * stale name would collide with the source skill).
  */
 async function rewriteSkillIdentity(
   destRoot: string,

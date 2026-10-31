@@ -139,27 +139,25 @@ describe("AvatarCapabilitiesModal", () => {
     await waitFor(() => expect(screen.getByText("제가 할 수 있는 일을 소개합니다.")).toBeTruthy());
   });
 
-  it("says so when the avatar has no skills (an external avatar always answers empty)", async () => {
+  it("says so when the avatar has no skills or plugins", async () => {
     mockFetch({
-      detail: () => ok({ avatar: { ...detail, runtime: "external", intro: "", plugins: [] } }),
+      detail: () => ok({ avatar: { ...detail, intro: "", plugins: [] } }),
       skills: () => ok({ skills: [] }),
     });
-    render(AvatarCapabilitiesModal, { props: { avatar: { ...avatar, runtime: "external" } } });
+    render(AvatarCapabilitiesModal, { props: { avatar } });
 
     await waitFor(() => expect(screen.getByText("사용 가능한 스킬이 없습니다.")).toBeTruthy());
     expect(screen.queryByText("플러그인")).toBeNull();
   });
 
-  it("notes the group-agent scope and dispatches close from the 닫기 button", async () => {
+  it("dispatches close from the 닫기 button", async () => {
     mockFetch({ detail: () => ok({ avatar: detail }), skills: () => ok({ skills: [] }) });
     const onClose = vi.fn();
-    const groupAgent = { groupId: "g-1", groupName: "플랫폼팀" };
     render(AvatarCapabilitiesModal, {
-      props: { avatar: { ...avatar, groupAgent } },
+      props: { avatar },
       events: { close: onClose },
     });
 
-    expect(screen.getByText(/그룹 에이전트 · 플랫폼팀/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText("사용 가능한 스킬이 없습니다.")).toBeTruthy());
 
     await fireEvent.click(screen.getByRole("button", { name: "닫기" }));

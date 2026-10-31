@@ -33,7 +33,7 @@
   function isErrored(message: StoredMessage): boolean {
     return (message as { errored?: boolean }).errored === true || message.response?.summary === "오류" || message.response?.summary === "중지됨";
   }
-  // runtime is only "local"|"claude"; error/blocked/stopped surface via summary.
+  // runtime only says "local" vs a real model; error/blocked/stopped surface via summary.
   function runtimeBadge(message: StoredMessage): string | null {
     if (message.response?.runtime === "local") return "로컬";
     const summary = message.response?.summary;

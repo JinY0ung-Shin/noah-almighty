@@ -1,5 +1,5 @@
 // Shared low-level git plumbing for the repo clone/commit/push paths
-// (knowledgeRepo.ts, groupKnowledgeRepo.ts, gitRepos.ts). These three modules
+// (knowledgeRepo.ts, gitRepos.ts; the retired groupKnowledgeRepo.ts too). These modules
 // each re-implemented the same `git -C <root> …` exec wrapper plus a
 // `currentBranch` and a porcelain dirty-status reader — extracted here so they
 // share one definition rather than copy-paste. Everything is keyed off a single
@@ -91,7 +91,7 @@ export async function dirtyPaths(
  * Count commits on local HEAD not yet on origin/<branch>. Returns 0 when the
  * branch is up to date or behind, a positive count when ahead, and null when
  * origin/<branch> doesn't exist (so callers can tell "fresh repo" apart from
- * "in sync"). Shared by the knowledge / group-knowledge align paths.
+ * "in sync"). Used by the knowledge align path.
  */
 export async function aheadOfRemote(repoRoot: string, branch: string): Promise<number | null> {
   try {
@@ -192,8 +192,7 @@ export async function restoreTrackedMcpJson(repoRoot: string): Promise<void> {
 
 /**
  * Stage all changes, commit with the given identity, and push to the remote
- * branch — the shared body of the knowledge / group-knowledge commitAndPush
- * paths. Returns false when there is nothing to do (clean tree AND nothing
+ * branch — the body of the knowledge commitAndPush path. Returns false when there is nothing to do (clean tree AND nothing
  * stacked); a clean tree with unpushed local commits (a prior push failed
  * transiently) still pushes, so an explicit retry self-heals. Throws NOT_CLONED
  * if the clone is missing, and on git failure (auth, conflicts) so the caller

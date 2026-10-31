@@ -4,14 +4,10 @@ import { Router, type Response } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import {
-  groupKnowledgeRepoSkillSources,
   listSkillsInRoots,
   loadAgentPluginRoots,
-  loadGroupAgentKnowledgeMemory,
-  loadGroupAgentPluginRoots,
   loadKnowledgeRepoMemory,
 } from "../plugins.js";
-import { groupKnowledgeRepoContextFor } from "../groupKnowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
 import { resolveActiveWorkspaceRepo } from "../activeRepoResolve.js";
 import { kstDateWithWeekday } from "../routineSchedule.js";
@@ -23,20 +19,17 @@ import type {
   AgentResponse,
   AgentRewindInfo,
   AppConfig,
-  ExternalAgentConfig,
   MessageAttachment,
+  MessageConsultationSource,
   SdkResumePoint,
   StoredMessage,
 } from "../types.js";
 import type { ConversationRewindPlan } from "../store/conversations.js";
+import { consultationHistoryText } from "../agent/avatarDirectoryTools.js";
 import type {
-  AgentEvents,
-  CompactEvent,
   BrowserCookie,
   BrowserStorageEntry,
   BrowserTab,
-  CraftPreviewRequest,
-  CraftPreviewResult,
   DeckSidecarFact,
   ShareLinkRequest,
   ShareLinkResult,
@@ -45,7 +38,8 @@ import {
   formatSubmission,
   MAX_CANVAS_CONTENT_CHARS,
 } from "../agent/canvasTools.js";
-import { redactSecretValues } from "../agent/postToolUseHook.js";
+import { redactSecretValues } from "../agent/secretRedaction.js";
+import { isRecord } from "../agent/agentUtils.js";
 import {
   DEFAULT_MCP_TOOL_GROUPS,
   normalizeMcpToolGroups,
@@ -60,7 +54,6 @@ import { TOUR_PROMPTS } from "../tourScenarios.js";
 import {
   decodeChatImages,
   deleteChatImageAttachments,
-  detectImageMediaType,
   deleteConversationImages,
   deleteStagedAttachmentCopies,
   publishWorkspaceImage,
@@ -86,7 +79,6 @@ import {
   SHARE_LINK_CAP_ERROR,
   SHARE_LINK_UNAVAILABLE_ERROR,
   SHARE_LINK_UNSHOWABLE_ERROR,
-  SHARE_LINK_UNWATCHED_ERROR,
 } from "../shareLinks.js";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
@@ -96,7 +88,6 @@ import {
   deleteChatFileAttachments,
   deleteConversationFiles,
   publishBrowserScreenshot,
-  publishCraftPreview,
   publishWorkspaceFile,
   resolveStoredFile,
   saveBrowserCapture,
@@ -104,39 +95,14 @@ import {
   MAX_HIDDEN_CHAT_IMAGES_PER_MESSAGE,
   MAX_SAVED_CAPTURES_PER_TURN,
   MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
-  MAX_CRAFT_PREVIEWS_PER_MESSAGE,
-  SHARED_IMAGE_PREVIEW_EXTENSIONS,
-  shareableExtensions,
+  SHAREABLE_EXTENSIONS,
   MAX_CHAT_FILE_BYTES,
   sanitizeDownloadName,
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import {
-  probeExternalAgentGateway,
-  runExternalAgent,
-} from "../agent/externalAgent.js";
-import {
-  externalAvatarDetail,
-  findExternalAgent,
-  findVisibleExternalAgent,
-  isSafeExternalModelId,
-  listExternalAvatarSummaries,
-  mergeExternalAgentRegistries,
-} from "../externalAgents.js";
-import {
-  findChattableGroupAgent,
-  groupAgentAvatarDetail,
-  groupAgentCaptureAllowed,
-  listGroupAgentAvatarSummaries,
-  type ChattableGroupAgent,
-} from "../groupAgents.js";
-import {
-  isModelTier,
-  modelTierLabel,
-  MODEL_TIERS,
-  DEFAULT_MODEL_TIER,
-} from "../modelTiers.js";
+import { effectiveModelOverride } from "../modelOverride.js";
+import { MAX_MODEL_ID_CHARS, catalogModel, catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   attachRunClient,
@@ -147,7 +113,6 @@ import {
   getActiveRun,
   getActiveRunForConversation,
   isRunCancelled,
-  markRunBackground,
   openRun,
   pushRunSteer,
   submitResponse,
@@ -155,8 +120,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
-import { purgeCraftSessions } from "../craftRunner.js";
-import { craftAppById } from "../../shared/craftApps.js";
+import { piRunWorkspace, piServicesFor, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
@@ -174,12 +138,6 @@ interface ChatSlashExpansion {
   message: string;
   error?: string;
   ownerOnly?: boolean;
-  /**
-   * The CLI's own `/compact`: not a prompt expansion — the turn becomes a
-   * native compaction (`ChatTurnContext.compact` → `AgentRequest.compact`),
-   * and `message` stays the literal the user typed.
-   */
-  compact?: { instructions: string };
 }
 
 // Validate + size-cap a client-sent activity-tree snapshot before persisting it on
@@ -384,12 +342,16 @@ export function expandChatSlashCommand(message: string): ChatSlashExpansion {
         ownerOnly: true,
       };
     }
-    // "/compact [what to keep]" is NOT a prompt: the run sends the CLI's own
-    // slash command verbatim so the SDK summarizes the conversation natively.
-    // The text after it is what the summary must keep, passed on as the
-    // command's instructions.
+    // The manual /compact was retired: context is compacted automatically
+    // when it nears the limit. Refused like /new, so the literal never reaches
+    // the model. Older
+    // threads may still hold a "/compact" row; regenerate refuses it with this
+    // same text.
     case "compact":
-      return { message, compact: { instructions: args } };
+      return {
+        message,
+        error: "/compact는 더 이상 지원하지 않습니다. 대화가 길어지면 맥락은 자동으로 정리됩니다.",
+      };
     case "new":
       return {
         message,
@@ -460,6 +422,11 @@ export function conversationHistoryForPrompt(
     if (!message.content.trim() || isEmptyStoppedAssistant(message)) {
       return [];
     }
+    // A consulted avatar's answer is a user-role row Noah wrote: it re-enters
+    // framed as that avatar's untrusted data, never as the owner's words.
+    if (message.kind === "consultation") {
+      return [{ role: "user", content: consultationHistoryText(message.content, message.consultation) }];
+    }
     return [{ role: message.role, content: message.content }];
   });
 }
@@ -502,8 +469,6 @@ function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
 
 /** The avatar a chat turn actually targets, after every reach gate ran. */
 export interface ChatTarget {
-  externalAgent: ExternalAgentConfig | null;
-  groupAgentHit: ChattableGroupAgent | null;
   avatar: { id: string; displayName: string; alias: string; persona: string };
   viewerIsOwner: boolean;
 }
@@ -519,18 +484,15 @@ export interface ChatTurnRefusal {
   userMessagePersisted?: boolean;
 }
 
-/** Both 409 texts for "this conversation is already running" (two check sites). */
-function activeRunMessage(background: boolean): string {
-  return background
-    ? "아바타가 이 대화의 백그라운드 작업을 진행 중입니다. 작업이 끝나면 메시지를 보낼 수 있어요. 기다리지 않으려면 중지 버튼으로 백그라운드 작업을 중단해 주세요."
-    : "이미 이 대화의 응답을 생성 중입니다. 잠시 후 다시 시도해 주세요.";
-}
+/** The 409 text for "this conversation is already running" (two check sites). */
+const ACTIVE_RUN_MESSAGE = "이미 이 대화의 응답을 생성 중입니다. 잠시 후 다시 시도해 주세요.";
 
 /**
  * Resolve a rewind / regenerate request to its plan, or to the refusal that
  * stops it (plain JSON — nothing has been written yet). An edit may anchor only
- * at an ordinary user row: a steer sits mid-turn in the SDK transcript, so there
- * is no clean point to resume before it.
+ * at an ordinary user row: a steer was folded into a running turn (a follow-up
+ * turn on pi; mid-turn on the removed SDK runner), so there is no clean point
+ * to resume before it.
  */
 function planTurnRewind(
   store: Store,
@@ -565,7 +527,8 @@ function planTurnRewind(
   if (!plan) {
     return { ok: false, refusal: { status: 404, message: "메시지를 찾을 수 없습니다." } };
   }
-  if (plan.anchor.role !== "user" || plan.anchor.kind === "steer") {
+  // A consulted avatar's answer is not the owner's message: never an edit anchor.
+  if (plan.anchor.role !== "user" || plan.anchor.kind === "steer" || plan.anchor.kind === "consultation") {
     return {
       ok: false,
       refusal: { status: 400, message: "이 메시지에서는 다시 시작할 수 없습니다." },
@@ -606,64 +569,6 @@ function sameMessageIds(a: StoredMessage[], b: StoredMessage[]): boolean {
   return a.length === b.length && a.every((message, i) => message.id === b[i].id);
 }
 
-/**
- * Why a /compact has no session to summarize. A thread WITH messages can lack
- * one for several reasons — its last turn was stopped or failed (both paths
- * clear the session so the next turn rebuilds from the stored rows), it is a
- * routine thread (routine runs never save one), or it predates sessions — so
- * the wording names no cause; sending one message gives it a session in every
- * case. A thread without messages simply has nothing yet.
- */
-function compactNoSessionRefusal(
-  store: Store,
-  ownerUserId: string,
-  conversationId: string,
-): ChatTurnRefusal {
-  return store.listMessages(ownerUserId, conversationId).length > 0
-    ? {
-        status: 400,
-        message:
-          "지금은 정리할 대화 맥락이 없습니다. 메시지를 하나 보낸 뒤 다시 시도해 주세요.",
-      }
-    : { status: 400, message: "아직 정리할 대화 맥락이 없습니다." };
-}
-
-/** A compact bubble's token figure: plain digits under 1,000, else "18.0K". */
-function compactTokenLabel(tokens: number): string {
-  return tokens < 1000 ? String(Math.round(tokens)) : `${(tokens / 1000).toFixed(1)}K`;
-}
-
-/** A failed native /compact's bubble; `detail` is the SDK's (English) cause. */
-function compactFailureText(detail?: string): string {
-  const cause = (detail ?? "").replace(/\s+/g, " ").trim();
-  // The everyday refusal — a short thread, or a /compact right after another
-  // one — gets a Korean sentence instead of the CLI's English.
-  if (/not enough messages to compact/i.test(cause)) {
-    return "아직 정리할 만큼 대화가 쌓이지 않아 맥락을 정리하지 않았습니다.";
-  }
-  return cause
-    ? `맥락 정리에 실패했습니다: ${cause.length > 120 ? `${cause.slice(0, 120)}…` : cause}`
-    : "맥락 정리에 실패했습니다.";
-}
-
-/**
- * The bubble a native /compact run leaves — composed here because the CLI
- * streams no text for the command. The figures appear only when the compact
- * event carried both sides AND the summary is smaller (re-compacting a short
- * thread can grow it — the activity row still shows both numbers); no event at
- * all means nothing was compacted.
- */
-export function compactResultText(outcome: CompactEvent | null): string {
-  if (!outcome?.ok) {
-    return compactFailureText(outcome?.error);
-  }
-  const figures =
-    outcome.preTokens && outcome.postTokens && outcome.postTokens < outcome.preTokens
-      ? ` (약 ${compactTokenLabel(outcome.preTokens)} → ${compactTokenLabel(outcome.postTokens)} 토큰)`
-      : "";
-  return `대화 맥락을 요약해 정리했습니다${figures}. 이후 대화는 요약본을 바탕으로 이어집니다.`;
-}
-
 /** A user row's own (bubble) images — what a rewind or regenerate re-feeds. */
 function hasVisibleImages(message: StoredMessage): boolean {
   return (message.attachments ?? []).some((att) => att.kind === "image" && !att.hidden);
@@ -671,10 +576,9 @@ function hasVisibleImages(message: StoredMessage): boolean {
 
 /**
  * User-facing note stored on a timed-out unattended run (an external task API
- * run), derived from the SAME config value that armed the deadline. The SDK
- * labels EVERY abort "Claude Code process aborted by user" (it only checks
- * `signal.aborted`), and nobody was present to cancel an unattended task — see
- * the routine scheduler's identical substitution.
+ * run), derived from the SAME config value that armed the deadline. An abort
+ * otherwise surfaces as a generic stop, and nobody was present to cancel an
+ * unattended task — see the routine scheduler's identical substitution.
  */
 function unattendedTimeoutMessage(timeoutMs: number): string {
   return `실행 제한 시간(${formatDurationKo(timeoutMs)})을 초과해 작업이 중단되었습니다. 작업을 더 작은 단위로 나눠 다시 맡겨 주세요.`;
@@ -691,56 +595,21 @@ export function formatDurationKo(ms: number): string {
 
 /**
  * Resolve who a chat turn is talking to and refuse every unreachable target,
- * in the ORDER the checks have always run (external → group agent → native
- * row → image support → owner-only command).
+ * in the ORDER the checks have always run (avatar row → owner-only command).
  */
 export function resolveChatTarget(args: {
   store: Store;
-  externalAgents: ExternalAgentConfig[];
-  viewerGroupIds: Set<string>;
   viewerUserId: string;
   avatarId: string;
-  /** This turn carries image attachments (external avatars refuse them). */
-  hasImages: boolean;
   /** The message expanded from an owner-only slash command (`/learn`, …). */
   ownerOnlyCommand: boolean;
 }): { ok: true; target: ChatTarget } | { ok: false; refusal: ChatTurnRefusal } {
   const { store, viewerUserId, avatarId } = args;
-  const externalAgent = findVisibleExternalAgent(
-    args.externalAgents,
-    avatarId,
-    args.viewerGroupIds,
-  );
-  // Group shared agent: member-only reach; a member-visible DISABLED agent
-  // gets its own 403 (they already know it exists — no leak), everything
-  // else collapses into the generic 403 below (external precedent). Images
-  // are allowed: unlike externals, group agents run the full local stack.
-  const groupAgentHit = externalAgent
-    ? null
-    : findChattableGroupAgent(store, viewerUserId, avatarId, {
-        includeDisabled: true,
-      });
-  if (groupAgentHit && !groupAgentHit.agent.enabled) {
-    return {
-      ok: false,
-      refusal: { status: 403, message: "그룹 에이전트가 비활성화되어 있습니다. 그룹 관리자에게 문의해 주세요." },
-    };
-  }
-  const avatar = externalAgent
-    ? externalAvatarDetail(externalAgent)
-    : groupAgentHit
-      ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-      : store.resolveChatAvatar(viewerUserId, avatarId);
+  const avatar = store.resolveChatAvatar(viewerUserId, avatarId);
   if (!avatar) {
     return {
       ok: false,
       refusal: { status: 403, message: "이 아바타와 대화할 수 없습니다." },
-    };
-  }
-  if (externalAgent && args.hasImages) {
-    return {
-      ok: false,
-      refusal: { status: 400, message: "외부 아바타는 아직 이미지 첨부를 지원하지 않습니다." },
     };
   }
   // ownerOnly bites on a RAW `/command`: server-expanded commands (e.g. /learn)
@@ -756,13 +625,10 @@ export function resolveChatTarget(args: {
       refusal: { status: 403, message: "이 명령은 내 아바타와의 대화에서만 사용할 수 있습니다." },
     };
   }
-  const viewerIsOwner =
-    !externalAgent && !groupAgentHit && viewerUserId === avatar.id;
+  const viewerIsOwner = viewerUserId === avatar.id;
   return {
     ok: true,
     target: {
-      externalAgent,
-      groupAgentHit,
       avatar,
       viewerIsOwner,
     },
@@ -782,14 +648,6 @@ export interface ChatTurnDeps {
  * `undefined` for every optional selection, which the derivations below already
  * read as "use whatever is stored on the conversation".
  */
-/**
- * Visible-reply text of a turn that hands work to background tasks/subagents
- * before it streamed anything itself (the early `done{background:true}` frame).
- * Exported so the task-API runner can keep it OUT of a stored task result — the
- * real answer arrives later as `bg_message` reports.
- */
-export const BACKGROUND_TURN_PLACEHOLDER = "백그라운드 작업을 진행 중입니다.";
-
 /**
  * Filler text for a visible segment a steer cut short before the model wrote
  * anything: the run stays open and the follow-up turn answers next, but the
@@ -821,18 +679,37 @@ export interface SteerPublic {
   state: SteerRecord["state"];
   createdAt: string;
   followUp: boolean;
-  /** The persisted `kind: "steer"` user row. Only on the `delivered` frame. */
+  /**
+   * Present when NOAH pushed it, not the viewer: a consulted avatar's answer.
+   * The client never shows it as the viewer's pending bubble and never hands it
+   * back to the composer when it is dropped.
+   */
+  source?: MessageConsultationSource;
+  /**
+   * The persisted user row (`kind: "steer"`, or `kind: "consultation"` with a
+   * `source`). Only on the `delivered` frame.
+   */
   message?: StoredMessage | null;
+}
+
+/** A channel record's source as the stored/wire shape (the channel's `kind` tag dropped). */
+function consultationSourceOf(record: SteerRecord): MessageConsultationSource | undefined {
+  if (!record.source) return undefined;
+  const { kind: _kind, ...source } = record.source;
+  return source;
 }
 
 /** Project a channel record onto the wire shape (drops nothing sensitive; it is the viewer's own text). */
 function publicSteer(record: SteerRecord): SteerPublic {
+  const source = consultationSourceOf(record);
   return {
     id: record.id,
-    text: record.text,
+    // A machine-delivered message (a pi run's async tool result) shows its Korean bubble.
+    text: record.displayText ?? record.text,
     state: record.state,
     createdAt: record.createdAt,
     followUp: record.followUp,
+    ...(source ? { source } : {}),
   };
 }
 
@@ -859,17 +736,9 @@ export interface ChatTurnContext {
    * `regenerate` and with fresh `images` (the HTTP prelude refuses both).
    */
   rewindFromMessageId?: string;
-  /**
-   * Native `/compact [instructions]` (see ChatSlashExpansion.compact): the run
-   * summarizes the conversation's SDK session instead of answering, on a FORK
-   * of it, and the bubble is composed from the compact event. Set only by the
-   * HTTP route, for an interactive local chat turn.
-   */
-  compact?: { instructions: string };
   requestedModel?: string | null;
   requestedEffort?: string | null;
   requestedMcpToolGroups?: McpToolGroupId[] | null;
-  requestedGroupKnowledgeOff?: string[] | null;
   appOrigin?: string;
   viewerPlatform?: "mac" | "windows" | "linux";
   audit: (entry: {
@@ -883,7 +752,7 @@ export interface ChatTurnContext {
    * live stop button, so it stays un-deadlined.
    */
   unattendedDeadlineMs?: number;
-  /** Fall down the model tier chain on transient failures (unattended runs). */
+  /** Retry once on pi-gateway's default model on transient failures (unattended runs). */
   modelFallback?: boolean;
   /** The user message is already stored (an earlier, re-queued attempt wrote it). */
   skipUserMessagePersist?: boolean;
@@ -891,7 +760,7 @@ export interface ChatTurnContext {
    * The `avatar_tasks` row this turn executes, when an EXTERNAL SYSTEM submitted
    * the instruction through the owner's personal task API (`POST
    * /api/v1/avatar/tasks`). Set only by `avatarTaskRunner`. PROVENANCE, not
-   * capability: the run stays a full owner run, but the SDK request is stamped
+   * capability: the run stays a full owner run, but the agent request is stamped
    * `externalTaskApi` so the prompt, `describe_system`, and the interactive-only
    * tool gates (share links) can tell that no owner typed this turn.
    */
@@ -932,72 +801,13 @@ export async function executeChatTurn(
   // A regenerate re-derives both from the STORED row it re-runs (see the rewind
   // plan below); every other turn keeps what the HTTP prelude derived.
   let { agentMessage, displayMessage } = ctx;
-  const { externalAgent, groupAgentHit, avatar, viewerIsOwner } = ctx.target;
+  const { avatar, viewerIsOwner } = ctx.target;
   const decodedImages = ctx.images;
   // Absent (a server-started turn) reads as "keep whatever is stored", which is
   // the same null the HTTP prelude produces when the client sends nothing.
   const requestedModel = ctx.requestedModel ?? null;
   const requestedEffort = ctx.requestedEffort ?? null;
   const requestedMcpToolGroups = ctx.requestedMcpToolGroups ?? null;
-  const requestedGroupKnowledgeOff = ctx.requestedGroupKnowledgeOff ?? null;
-  const existingAvatarId = store.getConversationAvatarId(
-    ownerUserId,
-    conversationId,
-  );
-  // Effective vision for THIS turn's model, mirroring claudeAgent's
-  // resolution chain (env pin > this turn's tier pick > stored tier >
-  // admin override > default) against the admin per-tier policy. Gates the
-  // upload below AND the regenerate image re-feed; the run itself
-  // recomputes the same value. External turns keep the deployment default
-  // (gateway models are outside the tier policy; their composer has no
-  // attach UI anyway).
-  const turnModel = externalAgent
-    ? config.anthropicModel
-    : (config.anthropicModel ??
-      (requestedModel === null
-        ? store.getConversationModel(ownerUserId, conversationId)
-        : requestedModel || null) ??
-      store.getModelOverride() ??
-      DEFAULT_MODEL_TIER);
-  const turnVisionEnabled = visionForModel(
-    turnModel,
-    store.getModelVisionPolicy(),
-    config.visionEnabled,
-  );
-  // Text-only model for this turn ("file mode"): images are NOT rejected. As on
-  // every local image turn they are staged as FILES in the conversation scratch
-  // workspace (below), and here the model receives ONLY their paths
-  // (buildUserPrompt), never image content blocks (which would 400 the whole
-  // turn at the API layer). External turns never reach here with images
-  // (rejected above).
-  const imageFileMode =
-    decodedImages.length > 0 && !turnVisionEnabled && !externalAgent;
-  if (externalAgent && existingAvatarId) {
-    const boundEndpoint = store.getConversationExternalEndpoint(
-      ownerUserId,
-      conversationId,
-    );
-    if (!boundEndpoint) {
-      return {
-        ok: false,
-        refusal: {
-          status: 409,
-          message:
-            "이 기존 대화에는 신뢰한 Gateway 주소 정보가 없습니다. 기록 보호를 위해 새 대화를 시작해 주세요.",
-        },
-      };
-    }
-    if (boundEndpoint !== externalAgent.endpoint) {
-      return {
-        ok: false,
-        refusal: {
-          status: 409,
-          message:
-            "이 대화는 이전 Gateway 주소에 연결되어 있습니다. 기록 보호를 위해 새 대화를 시작해 주세요.",
-        },
-      };
-    }
-  }
   const conversationMcpToolGroups = requestedMcpToolGroups ??
     store.getConversationMcpToolGroups(ownerUserId, conversationId) ?? [
       ...DEFAULT_MCP_TOOL_GROUPS,
@@ -1005,7 +815,7 @@ export async function executeChatTurn(
   // Admin per-group tool policy: the RUN uses the intersection of the
   // composer selection and what the system admin allows for this user
   // (null = unrestricted). The per-conversation row keeps the user's RAW
-  // choice — lifting the policy later restores it untouched. claudeAgent
+  // choice — lifting the policy later restores it untouched. runCapabilities
   // re-clamps identically, always retaining system; this local copy exists because git-repo gating
   // below must see the same effective set BEFORE the run starts.
   const adminAllowedMcpToolGroups = store.allowedMcpToolGroupsForUser(
@@ -1031,30 +841,12 @@ export async function executeChatTurn(
       ok: false,
       refusal: {
         status: 409,
-        message: activeRunMessage(activeRun.background),
+        message: ACTIVE_RUN_MESSAGE,
         // Nothing has been persisted yet, so a caller that retries the turn
         // (the task API runner) still owns the user message.
         userMessagePersisted: false,
       },
     };
-  }
-
-  // Native /compact summarizes the conversation's SDK SESSION, so there must be
-  // one — on a fresh session the CLI would compact nothing. Checked before any
-  // write, like every refusal here.
-  if (ctx.compact) {
-    if (externalAgent) {
-      return {
-        ok: false,
-        refusal: { status: 400, message: "외부 아바타 대화에서는 /compact를 사용할 수 없습니다." },
-      };
-    }
-    if (!store.getAgentSessionId(ownerUserId, conversationId)) {
-      return {
-        ok: false,
-        refusal: compactNoSessionRefusal(store, ownerUserId, conversationId),
-      };
-    }
   }
 
   // Rewind (edit an earlier message) / regenerate (re-run the latest one):
@@ -1089,15 +881,16 @@ export async function executeChatTurn(
       // and a stale client picking a different row cannot swap the text in.
       displayMessage = rewindPlan.anchor.content;
       const expansion = expandChatSlashCommand(displayMessage);
-      agentMessage = expansion.error ? displayMessage : expansion.message;
-      // A /compact row has no answer to redo: its "answer" is the compaction,
-      // and re-running it would summarize the already-summarized session.
-      if (expansion.compact) {
+      // A stored row whose command no longer expands (a retired /compact from
+      // an older thread) is refused exactly as typing it now would be — never
+      // re-run as a literal the model would read as an instruction.
+      if (expansion.error) {
         return {
           ok: false,
-          refusal: { status: 400, message: "/compact는 다시 생성할 수 없습니다." },
+          refusal: { status: 400, message: expansion.error },
         };
       }
+      agentMessage = expansion.message;
       // The same convenience guard resolveChatTarget runs on a typed command.
       if (expansion.ownerOnly && ownerUserId !== avatar.id) {
         return {
@@ -1114,9 +907,33 @@ export async function executeChatTurn(
     }
   }
 
+  // This turn's model, mirroring runCapabilities' resolution (this turn's pick >
+  // stored pick > admin override > pi-gateway's default model, each only while
+  // pi offers it — its live list, read AFTER the rewind plan above). Its vision
+  // (admin per-model policy ∘ MODEL_VISION) gates the upload below AND the
+  // regenerate image re-feed; the run itself recomputes the same value. It also
+  // names the model a transient failure bubble blames.
+  const piModels = await piServicesFor(store, config).models.list();
+  const turnModel =
+    catalogModel(
+      piModels,
+      requestedModel === null ? store.getConversationModel(ownerUserId, conversationId) : requestedModel,
+    ) ?? effectiveModelOverride(store, catalogModelIds(piModels)) ?? undefined;
+  const turnVisionEnabled = visionForModel(
+    turnModel,
+    store.getModelVisionPolicy(),
+    config.visionEnabled,
+  );
+  // Text-only model for this turn ("file mode"): images are NOT rejected. As on
+  // every local image turn they are staged as FILES in the conversation scratch
+  // workspace (below), and here the model receives ONLY their paths
+  // (buildUserPrompt), never image content blocks (which would 400 the whole
+  // turn at the API layer).
+  const imageFileMode = decodedImages.length > 0 && !turnVisionEnabled;
+
   // Working repository: the avatar opens one registered git repo (via
-  // `mcp__git_repo__open_repo`) as the SDK cwd so it edits/tests with native
-  // tools. The selection is held per conversation (repoWorkspace.ts) and read
+  // `mcp__git_repo__open_repo`); on pi it edits/tests its sandbox COPY with the
+  // built-in tools while Noah's clone stays the commit/push side. The selection is held per conversation (repoWorkspace.ts) and read
   // here at turn start via the shared resolver (also used by the routine
   // scheduler, so the two can't drift). Resolve + clone + take the per-clone
   // serialization lock BEFORE switching to SSE, so validation/contention
@@ -1125,127 +942,113 @@ export async function executeChatTurn(
   // belt-and-suspenders — open_repo is itself elevated-only — in case trust
   // changed since the repo was opened.
   const elevatedViewer =
-    !externalAgent &&
-    !groupAgentHit &&
-    (viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id));
+    viewerIsOwner || store.isTrustedFor(ownerUserId, avatar.id);
   /**
    * `onShareLink` (the avatar's create_share_link) is supplied ONLY on an
-   * interactive turn of the owner's OWN avatar: never a group-agent member
-   * thread (shared only via the group second brain), a colleague's thread, an
-   * external avatar, a turn an external system submitted through the task API,
-   * or any unattended (deadlined) run. A link is a bearer URL every signed-in
-   * user can open, so the owner must be the one asking — runPlan's
-   * registration gate is the second lock, the callback's own re-check the third.
+   * interactive turn of the owner's OWN avatar: never a colleague's thread, a
+   * turn an external system submitted through the task API, or any unattended
+   * (deadlined) run. A link is a bearer URL every signed-in
+   * user can open, so the owner must be the one asking — runCapabilities'
+   * registration gate (`shareLinkToolActive`) is the second lock, the callback's own re-check the third.
    */
   const shareLinkTurn =
     viewerIsOwner &&
     ownerUserId === avatar.id &&
-    !groupAgentHit &&
-    !externalAgent &&
     !ctx.externalTaskId &&
     ctx.unattendedDeadlineMs === undefined;
+  // The turn runs in the VIEWER's pi sandbox (piRunPrincipal). Every
+  // server-written copy — staged attachments, browser captures, Confluence
+  // saves — lands in the sandbox conversation folder, and the file-output tools
+  // resolve the model's `/workspace/...` paths against the user's sandbox
+  // workspace. Null on the `local` stub (no sandbox).
+  const piRunClass: PiRunClass = {
+    avatar: { id: avatar.id },
+    conversationId,
+    viewerUserId: ownerUserId,
+  };
+  const piWorkspace = piRunWorkspace(config, piRunClass);
+  const runsOnPi = config.agentRuntime === "pi";
   let activeRepoCwd: string | null = null;
   let activeRepoName: string | null = null;
   let releaseActiveRepoLock: (() => void) | null = null;
-  // Group-agent runs skip the whole block: no isTrustedFor on a synthetic
-  // id, no personal work-repo workspace (the run kind carries capability).
-  if (!externalAgent && !groupAgentHit) {
-    const repoResolution = await resolveActiveWorkspaceRepo({
-      store,
-      config,
-      avatar: {
-        id: avatar.id,
-        displayName: avatar.displayName,
-        alias: avatar.alias,
-      },
-      conversationId,
-      elevated: elevatedViewer,
-      gitRepoToolsEnabled,
-    });
-    if (repoResolution.kind === "error") {
-      return {
-        ok: false,
-        refusal:
-          repoResolution.reason === "not_found"
+  const repoResolution = await resolveActiveWorkspaceRepo({
+    store,
+    config,
+    avatar: {
+      id: avatar.id,
+      displayName: avatar.displayName,
+      alias: avatar.alias,
+    },
+    conversationId,
+    elevated: elevatedViewer,
+    gitRepoToolsEnabled,
+    ...(piWorkspace ? { piWorkspace } : {}),
+  });
+  if (repoResolution.kind === "error") {
+    return {
+      ok: false,
+      refusal:
+        repoResolution.reason === "not_found"
+          ? {
+              status: 400,
+              message:
+                "등록된 저장소를 찾을 수 없습니다. 먼저 저장소를 등록해 주세요.",
+            }
+          : repoResolution.reason === "locked"
             ? {
-                status: 400,
+                status: 409,
                 message:
-                  "등록된 저장소를 찾을 수 없습니다. 먼저 저장소를 등록해 주세요.",
+                  "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
               }
-            : repoResolution.reason === "locked"
-              ? {
-                  status: 409,
-                  message:
-                    "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
-                }
-              : {
-                  status: 502,
-                  message: `저장소 작업공간을 열지 못했습니다: ${repoResolution.detail ?? ""}`,
-                },
-      };
-    }
-    if (repoResolution.kind === "ok") {
-      activeRepoCwd = repoResolution.cwd;
-      activeRepoName = repoResolution.repoName;
-      // Frees the per-clone serialization lock; called once when the run ends.
-      releaseActiveRepoLock = repoResolution.release;
-    }
+            : {
+                status: 502,
+                message: `저장소 작업공간을 열지 못했습니다: ${repoResolution.detail ?? ""}`,
+              },
+    };
+  }
+  if (repoResolution.kind === "ok") {
+    activeRepoCwd = repoResolution.cwd;
+    activeRepoName = repoResolution.repoName;
+    // Frees the per-clone serialization lock; called once when the run ends.
+    releaseActiveRepoLock = repoResolution.release;
   }
 
   try {
     const runId = crypto.randomUUID();
     const chatStart = Date.now();
-    // Image blocks reach the model THIS turn: fresh vision uploads, or the
-    // stored images a rewind/regenerate re-feeds from its anchor row.
-    const imageTurn = turnVisionEnabled &&
-      (rewindPlan ? hasVisibleImages(rewindPlan.anchor) : decodedImages.length > 0);
-    // Resume the conversation's prior SDK session so the model keeps its context
-    // across turns. Image turns start fresh: the SDK receives images through
-    // streaming input, and combining that with `resume` can drop the structured
-    // image blocks before they reach the model. File-mode turns (text-only model)
-    // never build a structured message — the prompt stays a plain string — so they
-    // keep the session resume.
+    // Continue the conversation's pi session so the model keeps its context
+    // across turns (images ride a continued session too).
     //
-    // A rewind/regenerate never resumes the CURRENT session: its transcript still
-    // holds the turns being discarded. When the kept history ends at an assistant
-    // row that recorded where its segment ended, the run resumes THAT point
-    // (resume + resumeSessionAt, forked into a new session by runPlan) and keeps
-    // the exact context up to there — tool calls and results included. Without
-    // one (a legacy/cancelled/errored row, an external avatar, an image re-feed)
-    // it starts fresh from the kept text history below, as a regenerate used to.
-    const rewindResumeAt =
-      rewindPlan?.resumeAt && !externalAgent && !imageTurn
-        ? rewindPlan.resumeAt
-        : null;
+    // A rewind/regenerate never continues the CURRENT session: it still holds
+    // the turns being discarded. When the kept history ends at an assistant row
+    // that recorded its response id, the run branches from THAT response
+    // (`previous_response_id` = an older id) and keeps the exact context up to
+    // there — tool calls and results included. Without one (a legacy, cancelled
+    // or errored row, or an id the removed SDK runner wrote) it starts a new
+    // session from the kept text history below.
+    const rewindResumeAt = rewindPlan?.resumeAt ?? null;
     const resumeSessionId = rewindPlan
       ? rewindResumeAt?.sessionId
-      : externalAgent || imageTurn
-        ? undefined
-        : (store.getAgentSessionId(ownerUserId, conversationId) ??
-          undefined);
+      : (store.getAgentSessionId(ownerUserId, conversationId) ?? undefined);
     const resumeSessionAt = rewindResumeAt?.uuid;
-    // Re-read after the repo-resolution await: a turn that ended in between may
-    // have cleared the session the early check saw. Still before any write.
-    if (ctx.compact && !resumeSessionId) {
-      return {
-        ok: false,
-        refusal: compactNoSessionRefusal(store, ownerUserId, conversationId),
-      };
-    }
     // Carry prior context on every turn. It is INJECTED into the prompt only when
-    // there's no SDK session to resume (buildPrompt guards on resumeSessionId) —
-    // a fresh (image/rewind) turn needs it, and a resume turn keeps it latent so
-    // claudeAgent can self-heal a stale/missing SDK transcript (or a rewind point
-    // it can no longer find) by re-running without `resume` (then this history
-    // is what rebuilds the context). A fresh turn also persists its new session
-    // id, so without this every later turn would resume a context-less session.
-    // (chat-01 / lifecycle-02) A rewind carries only the rows it KEEPS — never
-    // the ones it is about to delete, nor its anchor (re-sent as `message`).
-    const conversationHistory = conversationHistoryForPrompt(
-      rewindPlan
-        ? rewindPlan.keep
-        : store.listMessages(ownerUserId, conversationId),
-    );
+    // there's no session to continue (buildUserPrompt guards on resumeSessionId)
+    // — a fresh (new/rewind) turn needs it, and a continued turn keeps it latent
+    // so the runner can self-heal a lost pi session (or a rewind point pi no
+    // longer has) by starting a new one (then this history is what rebuilds the
+    // context). (chat-01 / lifecycle-02) A rewind carries only the rows it KEEPS
+    // — never the ones it is about to delete, nor its anchor (re-sent as
+    // `message`).
+    const historyRows = rewindPlan ? rewindPlan.keep : store.listMessages(ownerUserId, conversationId);
+    const conversationHistory = conversationHistoryForPrompt(historyRows);
+    // pi keeps a stopped turn's session but not its partial text (see
+    // AgentRequest.stoppedAnswer). The new user row is not written yet, so the
+    // last row is the previous turn's end.
+    const lastRow = historyRows.at(-1);
+    const stoppedAnswer =
+      runsOnPi && !rewindPlan && lastRow?.role === "assistant" && lastRow.response?.summary === "중지됨"
+        ? (lastRow.response.text ?? "")
+        : undefined;
     // Images fed to the model THIS turn. For a fresh send we save the uploads to
     // disk + record them on the user message; a rewind/regenerate brings no new
     // uploads, so it re-reads its anchor row's stored attachments instead.
@@ -1258,35 +1061,36 @@ export async function executeChatTurn(
     // Per-conversation workspace: each chat session gets an isolated cwd, scoped
     // under the avatar so sessions cannot mix files by accident. Created here
     // (before the message persist) because the image staging writes into it.
-    // External turns run no local workspace, so they don't get a directory.
-    const workspaceDir = workspaceDirFor(config, avatar.id, conversationId);
-    if (!externalAgent) {
-      fs.mkdirSync(workspaceDir, { recursive: true });
-    }
+    // On pi the conversation's workspace IS its sandbox folder
+    // (`/workspace/c/<conv>`); its first pi turn moves the scratch files the
+    // removed SDK runner left in the legacy folder (design D3).
+    const legacyWorkspaceDir = workspaceDirFor(config, avatar.id, conversationId);
+    const piPrepared = piWorkspace ? preparePiRunWorkspace(config, piRunClass, legacyWorkspaceDir) : null;
+    const workspaceDir = piPrepared?.hostConversationDir ?? legacyWorkspaceDir;
+    // Server writes below a pi sandbox root never follow a link from there
+    // down (`c/<conv>` is the agent's); the legacy (`local`) scratch folder anchors itself.
+    const workspaceAnchor = piPrepared?.hostRoot;
+    // pi: preparePiRunWorkspace already made the folder through pinned
+    // descriptors — a by-name mkdir here would follow a planted link.
+    if (!piPrepared) fs.mkdirSync(workspaceDir, { recursive: true });
     // The run's explicit output roots — the active repo clone first (the run
     // cwd) when one is open, then the conversation scratch workspace. show_file,
     // share_file and share_file's deck-preview sidecar lookup all resolve
-    // against exactly this list, so they cannot disagree on containment.
-    const outputRoots = [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])];
+    // against exactly this list, so they cannot disagree on containment. A pi
+    // run's root is the user's whole sandbox workspace: the model hands
+    // `/workspace/...` paths, which runCapabilities maps to host paths there
+    // (its working-repo copy lives in it too), and Noah's own clone is never a root.
+    const outputRoots = piPrepared?.hostRoot
+      ? [piPrepared.hostRoot]
+      : [activeRepoCwd ?? workspaceDir, ...(activeRepoCwd ? [workspaceDir] : [])];
     store.touchConversation(
       ownerUserId,
       conversationId,
       avatar.id,
       displayMessage,
-      externalAgent ? { externalEndpoint: externalAgent.endpoint } : {},
     );
-    // Persist the owner's group-knowledge selection now that the row exists, so
-    // it survives reload and applies to later turns until changed again.
-    if (requestedGroupKnowledgeOff) {
-      store.setConversationGroupKnowledgeOff(
-        ownerUserId,
-        conversationId,
-        requestedGroupKnowledgeOff,
-      );
-    }
     // Persist the chosen model so it survives reload and applies to later
     // turns until changed. null = client sent nothing → leave the stored value.
-    // Native rows hold a tier alias; external rows hold a gateway model id.
     if (requestedModel !== null) {
       store.setConversationModel(
         ownerUserId,
@@ -1294,15 +1098,15 @@ export async function executeChatTurn(
         requestedModel || null,
       );
     }
-    // Persist the chosen effort level (same semantics as the model tier above).
-    if (!externalAgent && requestedEffort !== null) {
+    // Persist the chosen effort level (same semantics as the model above).
+    if (requestedEffort !== null) {
       store.setConversationEffort(
         ownerUserId,
         conversationId,
         requestedEffort || null,
       );
     }
-    if (!externalAgent && requestedMcpToolGroups !== null) {
+    if (requestedMcpToolGroups !== null) {
       store.setConversationMcpToolGroups(
         ownerUserId,
         conversationId,
@@ -1318,16 +1122,14 @@ export async function executeChatTurn(
       // The persisted attachments are the same either way — the bubble
       // renders identically; only the MODEL-facing shape differs. Every local
       // turn stages the uploads as workspace files; only a vision turn also
-      // gets them as image blocks. (An external turn carries no images and
-      // runs no workspace.)
-      if (!externalAgent) {
-        requestImageFiles = stageChatImageFilesFromAttachments(
-          config,
-          conversationId,
-          workspaceDir,
-          saved.attachments,
-        );
-      }
+      // gets them as image blocks.
+      requestImageFiles = stageChatImageFilesFromAttachments(
+        config,
+        conversationId,
+        workspaceDir,
+        saved.attachments,
+        workspaceAnchor,
+      );
       if (!imageFileMode) {
         requestImages = saved.images;
       }
@@ -1347,14 +1149,13 @@ export async function executeChatTurn(
       // send. On a text-only turn that is the only form they take, never image
       // blocks the API would reject, so a regenerate under a swapped model
       // still sees them. A vision turn gets the re-fed image blocks as well.
-      if (!externalAgent) {
-        requestImageFiles = stageChatImageFilesFromAttachments(
-          config,
-          conversationId,
-          workspaceDir,
-          rewindPlan.anchor.attachments,
-        );
-      }
+      requestImageFiles = stageChatImageFilesFromAttachments(
+        config,
+        conversationId,
+        workspaceDir,
+        rewindPlan.anchor.attachments,
+        workspaceAnchor,
+      );
       if (turnVisionEnabled) {
         requestImages = readChatImages(
           config,
@@ -1368,11 +1169,24 @@ export async function executeChatTurn(
         userMessageId = rewindPlan.anchor.id;
       }
     }
-    // The SDK session id this run reports (init event); persisted on success so
-    // the next turn can resume it.
+    // The pi response id this run reports (its latest committed turn);
+    // persisted on success so the next turn can continue it.
     let runSessionId: string | null = null;
-    // The LATEST main-chain assistant entry of this run's transcript (local SDK
-    // runs only — see AgentEvents.onResumePoint). Stamped on every assistant row
+    // Whether the run's LATEST input is committed in pi — the runner
+    // reports a response id (onSessionId) only for a turn pi committed, a
+    // cancelled one included (`incomplete`), and a follow-up turn for queued
+    // steers is a new, not-yet-committed input until its own id arrives.
+    let piLatestInputCommitted = false;
+    // What a cancelled or failed run leaves as the conversation's session. A
+    // turn pi already COMMITTED (a stop → `incomplete`) holds the same partial
+    // the stopped row shows, so the next turn continues that response instead
+    // of starting a new session; an input pi never committed is not in it, so
+    // the next turn rebuilds from the stored messages (which now include this
+    // turn's user row + partial). (chat-02)
+    const sessionAfterAbort = (): string | null =>
+      runsOnPi && piLatestInputCommitted && runSessionId ? runSessionId : null;
+    // The LATEST committed pi turn of this run (its response id — see
+    // AgentEvents.onResumePoint). Stamped on every assistant row
     // a success boundary persists, so a later rewind onto the next user row can
     // resume exactly there. Reset with each new session (a self-heal or
     // empty-turn retry): a point from the abandoned attempt must never be
@@ -1384,24 +1198,8 @@ export async function executeChatTurn(
     // rows such a boundary persists get no point, and neither does the final
     // `done` row when the run's last boundary carried one.
     let lastTurnErrorSubtype: string | null = null;
-    // A native /compact's outcome, from the run's compact event (the CLI streams
-    // no text for it): what the bubble says, and whether the conversation moves
-    // onto the fork's compacted session.
-    // (Asserted rather than annotated: it is assigned only inside the onCompact
-    // callback, and an annotated `= null` would narrow it to null at the read.)
-    let compactOutcome = null as CompactEvent | null;
     const resumePointFor = (errorSubtype: string | null | undefined) =>
       errorSubtype ? undefined : (runResumePoint ?? undefined);
-    // A FAILED or STOPPED /compact changed nothing the conversation resumes: it
-    // ran on a fork, and the conversation stays on its own session. So its row
-    // carries the point the /compact row itself sat on — the previous answer's,
-    // in that untouched session — and a rewind right after it stays exact.
-    // (Only a SUCCESSFUL compaction stamps the fork's own point.)
-    const compactKeptPoint = (): SdkResumePoint | undefined =>
-      ctx.compact && userMessageId
-        ? (store.planConversationRewind(ownerUserId, conversationId, userMessageId, "from")
-            ?.resumeAt ?? undefined)
-        : undefined;
     // Accumulate the main-agent text as it streams, so the cancel/error paths can
     // persist the partial the user already watched (not an empty "(중지됨)" stub).
     let streamedText = "";
@@ -1418,8 +1216,6 @@ export async function executeChatTurn(
     // Browser screenshots saved as workspace FILES (`captures/`) this run — a
     // budget of its own too, independent of the share cap above.
     let savedCaptureCount = 0;
-    // Craft app previews auto-shared as file cards this run (own budget).
-    let sharedCraftPreviewCount = 0;
     // Documents the model shared via share_file this run. Counted on its own
     // rather than off `shownAttachments`, which also carries the screenshot
     // auto-share's kind:"file" cards — a browsing loop must not spend this cap.
@@ -1427,26 +1223,11 @@ export async function executeChatTurn(
     // Visual-canvas artifacts (#50) now persist to the dedicated canvas tables as
     // they are shown (see the onCanvas handler), with version history — they no
     // longer ride the assistant message's response JSON.
-    // The latest plan the avatar submitted via ExitPlanMode this turn (plan mode).
-    // Persisted on the assistant response so the plan card rebuilds on reload, and
-    // mirrored on the cancel/error paths like canvases. Latest plan of the turn wins.
-    let latestPlan: string | null = null;
-    // Background phase (SDK-native): when the model hands work to a background
-    // task/subagent, the SDK holds the session open past the first `result`,
-    // wakes the model when a task settles, and streams follow-up turns. We
-    // finalize the VISIBLE turn at that first result (persist + done with
-    // `background: true`, run kept open) and deliver each wake-up turn as a
-    // NEW assistant message (`bg_message`). `turnFinalized` marks the phase;
-    // the offsets remember how much of the accumulated stream text/thinking/
-    // attachments was already persisted, so wake-up and cancel/error paths
-    // only carry their own tail.
-    let turnFinalized = false;
-    // The owner is PRESENT in the background phase while a message they typed
-    // drives the segment: set when a steer is DELIVERED after the visible turn
-    // was finalized, cleared at every later result boundary, never set by a
-    // pure wake-up turn (a task settled). onShareLink keys on it — a bearer
-    // link is made only for an owner who is there to receive it.
-    let ownerSteeredSinceBoundary = false;
+    // Steer follow-up turns (onTurnResult with `steerPending`): each visible
+    // segment is persisted as its own assistant message (`turn_end`) while the
+    // run continues. The offsets remember how much of the accumulated stream
+    // text/thinking/attachments was already persisted, so the next segment and
+    // the cancel/error paths only carry their own tail.
     let persistedTextOffset = 0;
     let persistedThinkingOffset = 0;
     let persistedAttachmentsOffset = 0;
@@ -1473,7 +1254,6 @@ export async function executeChatTurn(
               rewindResume: Boolean(rewindResumeAt),
             }
           : {}),
-        ...(ctx.compact ? { compact: true } : {}),
       },
       "chat stream started",
     );
@@ -1501,7 +1281,7 @@ export async function executeChatTurn(
         ok: false,
         refusal: {
           status: 409,
-          message: activeRunMessage(racedRun.background),
+          message: ACTIVE_RUN_MESSAGE,
           // The turn body already wrote the user message above, so a caller
           // that retries the turn must NOT persist it again. A rewind has
           // written nothing yet (it applies just below).
@@ -1572,24 +1352,19 @@ export async function executeChatTurn(
         deleteChatFileAttachments(config, conversationId, swept);
         // Their staged workspace copies go with them (captures and saved
         // Confluence files are tool side effects of the dropped turns: they stay).
-        if (!externalAgent) deleteStagedAttachmentCopies(workspaceDir, swept);
+        deleteStagedAttachmentCopies(workspaceDir, swept, workspaceAnchor);
       }
     }
 
     const abortController = new AbortController();
     // Mid-turn messages ("steers"): the viewer can keep typing while this run
-    // streams. Two run kinds get no channel, and POST …/message answers 409 for
-    // both. An EXTERNAL gateway avatar is one stateless request/response with no
-    // live stdin to fold a message into. An EXTERNAL-TASK-API turn is the
-    // interactive-only gate every such capability carries (`AgentRequest`'s own
-    // contract: midTurnMessages is never set there) — nobody typed it, the key
-    // holder answers only through /respond, and both metacognition surfaces
-    // already tell the avatar no person is on the other side.
-    // A native /compact gets none either: it is one CLI command with no model
-    // turn to fold a message into, and a steered "/compact" would run as a
-    // command inside the turn (the steer route refuses that text outright).
-    const steers =
-      externalAgent || ctx.externalTaskId || ctx.compact ? undefined : new SteerChannel();
+    // streams. An EXTERNAL-TASK-API turn gets no channel (POST …/message answers
+    // 409): it is the interactive-only gate every such capability carries
+    // (`AgentRequest`'s own contract: midTurnMessages is never set there) —
+    // nobody typed it, the key holder answers only through /respond, and both
+    // metacognition surfaces already tell the avatar no person is on the other
+    // side.
+    const steers = ctx.externalTaskId ? undefined : new SteerChannel();
     openRun(runId, ownerUserId, {
       conversationId,
       avatarId: avatar.id,
@@ -1606,7 +1381,6 @@ export async function executeChatTurn(
         emitRunEvent(runId, "steer", { steer: publicSteer(record) });
         return;
       }
-      if (turnFinalized) ownerSteeredSinceBoundary = true;
       // The conversation may have been deleted mid-run; skip the insert (the FK
       // would reject it) and report the frame without a message, exactly like
       // the other persist sites here. The channel SWALLOWS a listener throw, so
@@ -1616,10 +1390,14 @@ export async function executeChatTurn(
       let message: StoredMessage | null = null;
       try {
         if (store.conversationOwner(conversationId) === ownerUserId) {
+          // A consulted avatar's answer is persisted as THAT avatar's row
+          // (provenance kept), never as a steer the owner typed — a later
+          // history rebuild would otherwise hand it back as the owner's words.
+          const source = consultationSourceOf(record);
           message = store.addMessage(conversationId, {
             role: "user",
-            content: record.text,
-            kind: "steer",
+            content: record.displayText ?? record.text,
+            ...(source ? { kind: "consultation" as const, consultation: source } : { kind: "steer" as const }),
           });
         }
       } catch (err) {
@@ -1649,7 +1427,7 @@ export async function executeChatTurn(
     }
 
     // Unattended turn (the task API runner started it, nobody can press stop): a
-    // hung SDK call must not hold the thread forever. Owner-typed turns stay
+    // hung pi call must not hold the thread forever. Owner-typed turns stay
     // un-deadlined — the stop button already is the deadline.
     let timedOut = false;
     const deadline = ctx.unattendedDeadlineMs
@@ -1660,190 +1438,33 @@ export async function executeChatTurn(
       : undefined;
 
     try {
-      if (externalAgent) {
-        // External avatars are conversation-stateless and run their own tool
-        // stack behind the gateway. Do not resolve local plugins, knowledge,
-        // MCP servers, repos, workspaces, or SDK sessions. The one local
-        // setting that DOES apply is the viewer-picked gateway model id
-        // (this turn's pick, else the stored per-conversation choice); the
-        // admin-configured model stays the default when neither is set.
-        const selectedExternalModel =
-          requestedModel === null
-            ? store.getConversationModel(ownerUserId, conversationId)
-            : requestedModel || null;
-        const response = await runExternalAgent(
-          {
-            message: agentMessage,
-            conversationHistory,
-          },
-          selectedExternalModel
-            ? { ...externalAgent, model: selectedExternalModel }
-            : externalAgent,
-          {
-            onDelta: (text) => {
-              streamedText += text;
-              emitRunEvent(runId, "delta", { text });
-            },
-            onThinking: (text) => {
-              streamedThinking += text;
-              emitRunEvent(runId, "thinking", { text });
-            },
-            onTextFold: (text) => {
-              // Demoted narration joins the reasoning stream (persisted as
-              // response.thinking)…
-              streamedThinking += (streamedThinking ? "\n\n" : "") + text;
-              // …and leaves the answer: cancel/error tails must not resurrect it.
-              foldedTextOffset = streamedText.length;
-              // Anchors index into the answer text, and the answer just
-              // restarted from empty — every stamped card now belongs before
-              // the new tail.
-              for (const attachment of shownAttachments) {
-                if (typeof attachment.anchor === "number") attachment.anchor = 0;
-              }
-              emitRunEvent(runId, "text_fold", {});
-            },
-            onStatus: (label) => {
-              emitRunEvent(runId, "status", { label });
-            },
-            // onModel and onSessionId are intentionally OMITTED for external
-            // runs: external Gateway telemetry must not overwrite the local SDK
-            // model shown in the admin system overview, and a gateway SDK
-            // session id must never become Noah continuation state
-            // (runExternalAgent nulls onSessionId regardless). runSessionId
-            // stays null here and the external branch returns before any reader,
-            // so no handler is wired.
-            onPlugin: (event) => {
-              emitRunEvent(runId, "plugin", event);
-            },
-            onToolStart: (event) => {
-              emitRunEvent(runId, "tool", event);
-            },
-            onToolEnd: (event) => {
-              emitRunEvent(runId, "tool_end", event);
-            },
-            onTaskStart: (event) => {
-              emitRunEvent(runId, "task", event);
-            },
-            onTaskUpdate: (event) => {
-              emitRunEvent(runId, "task_update", event);
-            },
-            onTaskEnd: (event) => {
-              emitRunEvent(runId, "task_end", event);
-            },
-            onAgentStart: (event) => {
-              emitRunEvent(runId, "agent", event);
-            },
-            onAgentEnd: (event) => {
-              emitRunEvent(runId, "agent_end", event);
-            },
-            onBlocked: (event) => {
-              emitRunEvent(runId, "blocked", event);
-            },
-            onMemory: (event) => {
-              // Stable id: an SSE reattach replays the whole event log, and
-              // the client dedupes 기억 rows by this id.
-              emitRunEvent(runId, "memory", { id: crypto.randomUUID(), ...event });
-            },
-            onCompact: (event) => {
-              emitRunEvent(runId, "compact", { id: crypto.randomUUID(), ...event });
-            },
-            onPlan: (event) => {
-              if (event.plan) latestPlan = event.plan;
-              emitRunEvent(runId, "plan", {
-                plan: event.plan,
-                planning: event.planning ?? false,
-              });
-            },
-          } satisfies AgentEvents,
-          abortController,
-        );
-        if (latestPlan) response.plan = latestPlan;
-        if (streamedThinking) response.thinking = streamedThinking;
-
-        const assistantMessage =
-          store.conversationOwner(conversationId) === ownerUserId
-            ? store.addMessage(conversationId, {
-                role: "assistant",
-                content: response.text || response.summary,
-                response,
-              })
-            : null;
-        audit({
-          action: "chat",
-          detail: `chat with ${avatar.displayName} (${response.runtime})`,
-        });
-        logger.info(
-          {
-            userId: ownerUserId,
-            avatarId: avatar.id,
-            conversationId,
-            runtime: response.runtime,
-            durationMs: Date.now() - chatStart,
-          },
-          "external chat completed",
-        );
-        emitRunEvent(runId, "done", { message: assistantMessage, response });
-        return { ok: true };
-      }
-
       // Load plugin roots (read-only): default plugins + the avatar's own + its
-      // personal knowledge repo + group knowledge repos. Shared with the routine
+      // personal knowledge repo. Shared with the routine
       // scheduler via `loadAgentPluginRoots` so the two can't drift. Tolerate
       // clone/resolve fails.
       const pluginWarnings: string[] = [];
-      // Owner-only per-conversation group-knowledge toggle: skip the OFF groups'
-      // skills AND their CLAUDE.md. Use this turn's selection when the client sent
-      // one, else the stored set. Colleague turns ignore the toggle (always ON).
-      const disabledGroupIds = viewerIsOwner
-        ? new Set(
-            requestedGroupKnowledgeOff ??
-              store.getConversationGroupKnowledgeOff(
-                ownerUserId,
-                conversationId,
-              ),
-          )
-        : new Set<string>();
-      // Model tier for this turn: this turn's pick if the client sent one ("" =
-      // explicit reset to default), else the stored value. Ignored downstream when
-      // ANTHROPIC_MODEL pins a model (env pin is a hard lock).
-      const conversationModelTier =
+      // Model pick for this turn: this turn's pick if the client sent one ("" =
+      // explicit reset to default), else the stored value. runCapabilities
+      // applies it only while pi-gateway offers it (else the override / pi's default).
+      const conversationModel =
         requestedModel === null
           ? store.getConversationModel(ownerUserId, conversationId)
           : requestedModel || null;
       // Effort for this turn: this turn's pick if sent ("" = reset to default),
-      // else the stored value. Mirrors the model tier resolution above.
+      // else the stored value. Mirrors the model resolution above.
       const conversationEffort =
         requestedEffort === null
           ? store.getConversationEffort(ownerUserId, conversationId)
           : requestedEffort || null;
-      // Group-agent runs load ONLY the owning group's repo (with the acting
-      // member's tokens) + defaults; native runs load the avatar's full set.
-      const pluginRoots = groupAgentHit
-        ? await loadGroupAgentPluginRoots(
-            store,
-            groupAgentHit.groupId,
-            ownerUserId,
-            config,
-            (warn) => pluginWarnings.push(warn),
-          )
-        : await loadAgentPluginRoots(
-            store,
-            avatar.id,
-            config,
-            (warn) => pluginWarnings.push(warn),
-            { disabledGroupIds },
-          );
-      // Standing CLAUDE.md memory (personal repo always; group repos gated by the
-      // toggle). Read after plugin roots ensured the clones for this turn.
-      const knowledgeMemory = groupAgentHit
-        ? await loadGroupAgentKnowledgeMemory(
-            store,
-            groupAgentHit.groupId,
-            config,
-          )
-        : await loadKnowledgeRepoMemory(store, avatar.id, config, {
-            disabledGroupIds,
-          });
+      const pluginRoots = await loadAgentPluginRoots(
+        store,
+        avatar.id,
+        config,
+        (warn) => pluginWarnings.push(warn),
+      );
+      // Standing CLAUDE.md memory of the personal repo. Read after plugin roots
+      // ensured the clone for this turn.
+      const knowledgeMemory = await loadKnowledgeRepoMemory(store, avatar.id, config);
 
       for (const warn of pluginWarnings) {
         emitRunEvent(runId, "status", { label: `플러그인 경고: ${warn}` });
@@ -1861,10 +1482,12 @@ export async function executeChatTurn(
           // Lets in-process tools (open_repo/close_repo) key the working-repo
           // selection to this conversation.
           conversationId,
-          // Working repository: the opened repo's clone becomes the cwd and the
-          // per-conversation scratch dir is exposed as an additional writable dir.
-          cwd: activeRepoCwd ?? workspaceDir,
-          additionalDirs: activeRepoCwd ? [workspaceDir] : undefined,
+          // pi: the cwd is the sandbox conversation folder — the model works on
+          // its sandbox COPY of an open repo, never on Noah's clone. `local`
+          // stub only: the opened repo's clone becomes the cwd and the
+          // per-conversation scratch dir an additional writable dir.
+          cwd: piPrepared ? workspaceDir : (activeRepoCwd ?? workspaceDir),
+          additionalDirs: activeRepoCwd && !piPrepared ? [workspaceDir] : undefined,
           // Noah's own public origin, so copy_image can hand the agent an
           // absolute clipboard-staging URL to open with new_tab. Derived
           // from THIS request to match the origin the user's browser is on.
@@ -1874,9 +1497,10 @@ export async function executeChatTurn(
           viewerPlatform: ctx.viewerPlatform,
           activeRepoName: activeRepoName ?? undefined,
           resumeSessionId,
-          // A rewind onto a recorded point: resume only up to it, forked.
+          // A rewind onto a recorded point: pi branches from that older response.
           ...(resumeSessionAt ? { resumeSessionAt } : {}),
           conversationHistory,
+          ...(stoppedAnswer !== undefined ? { stoppedAnswer } : {}),
           images: requestImages.length ? requestImages : undefined,
           // Every local image turn: the staged file PATHS, listed in the user
           // prompt — the only form on a text-only turn, next to the image
@@ -1884,39 +1508,24 @@ export async function executeChatTurn(
           imageFiles: requestImageFiles.length
             ? requestImageFiles
             : undefined,
-          modelTier: conversationModelTier ?? undefined,
+          model: conversationModel ?? undefined,
           effort: conversationEffort ?? undefined,
           mcpToolGroups: effectiveMcpToolGroupsForRun,
           viewerUserId: ownerUserId,
           viewerName: ctx.ownerDisplayName,
           viewerIsOwner,
           knowledgeMemory,
-          // Elevated tool permissions for the owner OR a trusted user. The tool
-          // gate denies everyone else, so auto-approving the elevated path is safe.
-          // (Group-agent runs carry capability via `groupAgent` instead.)
+          // Elevated MCP tool access for the owner OR a trusted user. The MCP gate
+          // (mcpAllowedTools + handler self-gates) denies everyone else.
           elevated: elevatedViewer,
           // WHY a non-owner viewer is elevated, when group co-membership is the
           // source: the shared group names surface in the prompt (META-COGNITION).
           trustedViaGroups:
-            groupAgentHit || ownerUserId === avatar.id
+            ownerUserId === avatar.id
               ? []
               : store.sharedGroupNames(ownerUserId, avatar.id),
-          // Group shared-agent run kind: pins the run to ONE group's
-          // resources and carries the acting member's role/capture right.
-          groupAgent: groupAgentHit
-            ? {
-                groupId: groupAgentHit.groupId,
-                agentId: groupAgentHit.agent.id,
-                groupName: groupAgentHit.groupName,
-                viewerRole: groupAgentHit.viewerRole,
-                captureAllowed: groupAgentCaptureAllowed(
-                  groupAgentHit.agent,
-                  groupAgentHit.viewerRole,
-                ),
-              }
-            : undefined,
           autoApprove: true,
-          // Unattended work (the task API) falls down the tier chain on a
+          // Unattended work (the task API) retries once on pi-gateway's default model on a
           // transient model failure, exactly like a routine — there is no live
           // viewer to hand the "try another model" nudge to.
           ...(ctx.modelFallback ? { modelFallback: true } : {}),
@@ -1930,17 +1539,15 @@ export async function executeChatTurn(
           ...(rewindKind
             ? { rewind: { kind: rewindKind, discardedMessages: rewindDiscarded } }
             : {}),
-          // Native /compact: the CLI command runs verbatim against a fork of
-          // `resumeSessionId` (the conversation's session, checked above).
-          ...(ctx.compact ? { compact: ctx.compact } : {}),
         },
         pluginRoots,
         config,
         store,
         {
-          // Mid-turn messages: the run loop yields whatever lands here into the
-          // CLI's stdin and feeds its command_lifecycle frames back, which is
-          // what drives the `steer` frames subscribed above.
+          // Mid-turn messages: the run hands whatever lands here to the
+          // running pi response (or, if pi did not deliver it, the follow-up
+          // turn after the current answer) and reports each record's
+          // lifecycle, which drives the `steer` frames subscribed above.
           steers,
           onDelta: (text) => {
             streamedText += text;
@@ -1982,15 +1589,10 @@ export async function executeChatTurn(
           onSessionId: (sessionId) => {
             runSessionId = sessionId;
             runResumePoint = null;
+            piLatestInputCommitted = true;
           },
           onResumePoint: (point) => {
             runResumePoint = point;
-          },
-          onPlugin: (event) => {
-            emitRunEvent(runId, "plugin", {
-              status: event.status,
-              name: event.name,
-            });
           },
           onToolStart: (event) => {
             emitRunEvent(runId, "tool", event);
@@ -1998,148 +1600,35 @@ export async function executeChatTurn(
           onToolEnd: (event) => {
             emitRunEvent(runId, "tool_end", event);
           },
-          onTaskStart: (event) => {
-            emitRunEvent(runId, "task", event);
-          },
-          onTaskUpdate: (event) => {
-            emitRunEvent(runId, "task_update", event);
-          },
-          onTaskEnd: (event) => {
-            emitRunEvent(runId, "task_end", event);
-          },
           onAgentStart: (event) => {
             emitRunEvent(runId, "agent", event);
           },
           onAgentEnd: (event) => {
             emitRunEvent(runId, "agent_end", event);
           },
-          // Live background-task set (REPLACE semantics). Relayed so the
-          // client can show a "백그라운드 작업 진행 중" indicator, and mirrored
-          // onto the run snapshot so reloads/new-POST 409s know the state.
-          onBackgroundTasks: (event) => {
-            if (turnFinalized) {
-              markRunBackground(runId, event.tasks.length);
-            }
-            emitRunEvent(runId, "bg_tasks", { tasks: event.tasks });
-          },
-          // Result boundary. First boundary with live background tasks →
-          // finalize the visible turn NOW (persist + done{background:true})
-          // while the SDK session keeps running underneath; every later
-          // boundary is a wake-up turn delivered as a NEW assistant message.
+          // Response boundary. A steer the model has not seen yet becomes a
+          // FOLLOW-UP turn of this same run: the run stays open and the
+          // visible segment becomes its own assistant message (a `turn_end`
+          // frame, not `done`). A boundary with nothing queued is the normal
+          // end — the post-await done path handles it.
           onTurnResult: (segment) => {
             // Before any early return: the `done` row reads it after the run.
             lastTurnErrorSubtype = segment.errorSubtype ?? null;
-            if (!turnFinalized) {
-              if (segment.backgroundTasks.length === 0) {
-                if (!segment.steerPending) {
-                  return; // normal turn — the post-await done path handles it
-                }
-                // A mid-turn message the model never got to fold in: the CLI
-                // runs it as a SECOND turn in this same session, so the run
-                // stays open and the visible segment becomes its own assistant
-                // message (a `turn_end` frame, not `done`). Deliberately does
-                // NOT set turnFinalized — the follow-up turn's answer is still
-                // this run's real `done`.
-                if (runSessionId) {
-                  store.setAgentSessionId(
-                    ownerUserId,
-                    conversationId,
-                    runSessionId,
-                  );
-                }
-                const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
-                const attachmentsTail = shownAttachments.slice(persistedAttachmentsOffset);
-                const segResponse: AgentResponse = {
-                  kind: "text",
-                  runtime: config.agentRuntime,
-                  summary: "Claude Agent SDK 실행이 완료되었습니다.",
-                  text: segment.text || STEER_TURN_END_PLACEHOLDER,
-                  ...(latestPlan ? { plan: latestPlan } : {}),
-                  ...(thinkingTail ? { thinking: thinkingTail } : {}),
-                  ...(segment.usage ? { usage: segment.usage } : {}),
-                };
-                const message =
-                  store.conversationOwner(conversationId) === ownerUserId
-                    ? store.addMessage(conversationId, {
-                        role: "assistant",
-                        content: segResponse.text,
-                        response: segResponse,
-                        attachments: attachmentsTail,
-                        resumePoint: resumePointFor(segment.errorSubtype),
-                      })
-                    : null;
-                emitRunEvent(runId, "turn_end", {
-                  message,
-                  response: segResponse,
-                });
-                persistedTextOffset = streamedText.length;
-                persistedThinkingOffset = streamedThinking.length;
-                persistedAttachmentsOffset = shownAttachments.length;
-                // The plan belongs to the segment just persisted; the follow-up
-                // turn carries its own (or none).
-                latestPlan = null;
-                return;
-              }
-              turnFinalized = true;
-              markRunBackground(runId, segment.backgroundTasks.length);
-              // Persist the session id NOW: the phase can outlive tab
-              // closes, and the next turn must resume this transcript.
-              if (runSessionId) {
-                store.setAgentSessionId(
-                  ownerUserId,
-                  conversationId,
-                  runSessionId,
-                );
-              }
-              const segResponse: AgentResponse = {
-                kind: "text",
-                runtime: config.agentRuntime,
-                summary: "Claude Agent SDK 실행이 완료되었습니다.",
-                text: segment.text || BACKGROUND_TURN_PLACEHOLDER,
-                ...(latestPlan ? { plan: latestPlan } : {}),
-                ...(streamedThinking ? { thinking: streamedThinking } : {}),
-                ...(segment.usage ? { usage: segment.usage } : {}),
-              };
-              const message =
-                store.conversationOwner(conversationId) === ownerUserId
-                  ? store.addMessage(conversationId, {
-                      role: "assistant",
-                      content: segResponse.text,
-                      response: segResponse,
-                      attachments: shownAttachments.slice(),
-                      resumePoint: resumePointFor(segment.errorSubtype),
-                    })
-                  : null;
-              persistedTextOffset = streamedText.length;
-              persistedThinkingOffset = streamedThinking.length;
-              persistedAttachmentsOffset = shownAttachments.length;
-              emitRunEvent(runId, "done", {
-                message,
-                response: segResponse,
-                background: true,
-                tasks: segment.backgroundTasks,
-              });
+            if (!segment.steerPending) {
               return;
             }
-            // Wake-up turn finished → its own assistant message. Skip pure
-            // bookkeeping boundaries (no text, no new attachments).
-            // Whatever drove that segment is over: the next one is the owner's
-            // only once another message of theirs is delivered.
-            ownerSteeredSinceBoundary = false;
-            const text = segment.text.trim();
+            if (runSessionId) {
+              store.setAgentSessionId(ownerUserId, conversationId, runSessionId);
+            }
+            // pi sends the queued messages as a new input right after this.
+            piLatestInputCommitted = false;
             const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
             const attachmentsTail = shownAttachments.slice(persistedAttachmentsOffset);
-            persistedTextOffset = streamedText.length;
-            persistedThinkingOffset = streamedThinking.length;
-            persistedAttachmentsOffset = shownAttachments.length;
-            if (!text && attachmentsTail.length === 0) {
-              return;
-            }
             const segResponse: AgentResponse = {
               kind: "text",
               runtime: config.agentRuntime,
-              summary: "백그라운드 작업 보고",
-              text: text || "(백그라운드 작업이 종료되었습니다.)",
+              summary: "pi-gateway 실행이 완료되었습니다.",
+              text: segment.text || STEER_TURN_END_PLACEHOLDER,
               ...(thinkingTail ? { thinking: thinkingTail } : {}),
               ...(segment.usage ? { usage: segment.usage } : {}),
             };
@@ -2153,78 +1642,25 @@ export async function executeChatTurn(
                     resumePoint: resumePointFor(segment.errorSubtype),
                   })
                 : null;
-            if (message) {
-              emitRunEvent(runId, "bg_message", { message });
-            }
-          },
-          onBlocked: (event) => {
-            emitRunEvent(runId, "blocked", event);
+            emitRunEvent(runId, "turn_end", {
+              message,
+              response: segResponse,
+            });
+            persistedTextOffset = streamedText.length;
+            persistedThinkingOffset = streamedThinking.length;
+            persistedAttachmentsOffset = shownAttachments.length;
           },
           onMemory: (event) => {
             // Stable id: an SSE reattach replays the whole event log, and
             // the client dedupes 기억 rows by this id.
             emitRunEvent(runId, "memory", { id: crypto.randomUUID(), ...event });
           },
-          // Compaction happened (or failed). Same id discipline as 기억 —
+          // Context compaction finished (or failed). Same id discipline as 기억 —
           // a reattach replays the log and the client dedupes on it.
           onCompact: (event) => {
-            if (ctx.compact) compactOutcome = event;
             emitRunEvent(runId, "compact", { id: crypto.randomUUID(), ...event });
           },
-          // Plan mode: the avatar submitted a plan via ExitPlanMode. Surface it as
-          // a dedicated plan card (display-only) and keep the latest one to persist
-          // on the assistant response so it rebuilds on reload.
-          onPlan: (event) => {
-            // EnterPlanMode emits an empty-plan "planning" signal; only a real plan
-            // (ExitPlanMode) is worth persisting on the response.
-            if (event.plan) latestPlan = event.plan;
-            emitRunEvent(runId, "plan", {
-              plan: event.plan,
-              planning: event.planning ?? false,
-            });
-          },
-          // Interactive plan approval (owner only). The avatar proposed a plan
-          // via ExitPlanMode; park the run and emit the plan to the client,
-          // which shows approve/reject controls on the plan card. Approve →
-          // the avatar implements; reject → feed the feedback back so it revises.
-          onPlanReview: async (requestData) => {
-            const requestId = crypto.randomUUID();
-            emitRunEvent(runId, "plan_review", {
-              runId,
-              requestId,
-              plan: requestData.plan,
-            });
-            const answer = await awaitResponse(runId, requestId);
-            if (answer === CANCELLED) {
-              // Run ended / cancelled / timed out before an answer: treat as a
-              // rejection (no feedback) so the avatar never barrels ahead with
-              // an unapproved plan.
-              return { behavior: "rejected" };
-            }
-            const reply = answer as { behavior?: string; feedback?: string };
-            return reply?.behavior === "approved"
-              ? { behavior: "approved" }
-              : { behavior: "rejected", feedback: reply?.feedback };
-          },
-          // Interactive permission prompt (owner only — see claudeAgent).
-          onPermission: async (requestData) => {
-            const requestId = crypto.randomUUID();
-            emitRunEvent(runId, "permission", {
-              runId,
-              requestId,
-              ...requestData,
-            });
-            const answer = await awaitResponse(runId, requestId);
-            if (answer === CANCELLED) {
-              // TTL expiry / stop / run end — nobody clicked anything.
-              // Marked so the hook doesn't misreport it as a user refusal.
-              return { behavior: "deny", unanswered: true };
-            }
-            return (answer as { behavior: "allow" }).behavior === "allow"
-              ? { behavior: "allow" }
-              : { behavior: "deny" };
-          },
-          // AskUserQuestion (and other request_user_dialog kinds).
+          // AskUserQuestion (pi `requires_action`).
           onQuestion: async (requestData) => {
             const requestId = crypto.randomUUID();
             emitRunEvent(runId, "question", {
@@ -2645,7 +2081,7 @@ export async function executeChatTurn(
               } else if (store.conversationOwner(conversationId) !== ownerUserId) {
                 saveSkipped = "conversation_gone";
               } else {
-                const saved = saveBrowserCapture(workspaceDir, captureBytes);
+                const saved = saveBrowserCapture(workspaceDir, captureBytes, Date.now(), workspaceAnchor);
                 if ("error" in saved) {
                   // The real reason: bytes that are no image vs a save that
                   // failed (TOO_LARGE is unreachable behind the relay's own
@@ -2842,14 +2278,12 @@ export async function executeChatTurn(
                 message: "The conversation no longer exists, so the file cannot be shared.",
               };
             }
-            const craftFileTypes = requestData.craftFileTypes === true;
             const result = publishWorkspaceFile(
               config,
               conversationId,
               requestData.path,
               outputRoots,
               requestData.name,
-              craftFileTypes,
             );
             if ("error" in result) {
               const maxMb = Math.round(MAX_CHAT_FILE_BYTES / (1024 * 1024));
@@ -2864,7 +2298,7 @@ export async function executeChatTurn(
                 NOT_FILE: "The supplied path is not a regular file.",
                 EMPTY: "The file is empty.",
                 TOO_LARGE: `The file is larger than the ${maxMb} MB limit.`,
-                UNSUPPORTED: `Unsupported file type. share_file accepts: ${shareableExtensions(craftFileTypes).map((e) => `.${e}`).join(", ")} — and the content must match the extension. There is no Bash or Markdown workaround for delivering other file types.`,
+                UNSUPPORTED: `Unsupported file type. share_file accepts: ${SHAREABLE_EXTENSIONS.map((e) => `.${e}`).join(", ")} — and the content must match the extension. There is no Bash or Markdown workaround for delivering other file types.`,
                 READ_FAILED: "The file could not be read.",
               } as const;
               return { behavior: "error", message: messages[result.error] };
@@ -2893,23 +2327,6 @@ export async function executeChatTurn(
             let previewTotal: number | undefined;
             let deckSidecar: DeckSidecarFact | undefined;
             const stored = resolveStoredFile(config, conversationId, result.attachment.id);
-            // A shared raster image (a Craft result) gets one hidden copy of
-            // itself as the card's preview slide — the screenshot card shape,
-            // so the side panel shows the picture. Best-effort like the rest.
-            if (stored && SHARED_IMAGE_PREVIEW_EXTENSIONS.has(stored.ext)) {
-              try {
-                const bytes = fs.readFileSync(stored.path);
-                const mediaType = detectImageMediaType(bytes);
-                if (mediaType) {
-                  attachPreview(
-                    saveHiddenChatImage(config, conversationId, bytes, mediaType, result.attachment.name ?? "image", result.attachment.id),
-                  );
-                  previewCount = 1;
-                }
-              } catch (err) {
-                logger.warn({ err, conversationId, fileId: result.attachment.id }, "shared image preview could not be stored");
-              }
-            }
             if (stored && isPreviewableExtension(stored.ext)) {
               if (stored.ext === "pptx") {
                 const sidecar = await loadConverterPreviews({
@@ -2992,54 +2409,9 @@ export async function executeChatTurn(
               ...(deckSidecar ? { deckSidecar } : {}),
             };
           },
-          // Craft app previews (admin-only beta): the images a Craft tool
-          // returned, published like a browser screenshot (visible card +
-          // hidden slide), then `craft_preview` so the side panel can follow.
-          // Supplied on the SAME interactive own-avatar turns as share links —
-          // its presence is part of runPlan's Craft gate.
-          ...(shareLinkTurn
-            ? {
-                onCraftPreview: async (requestData: CraftPreviewRequest): Promise<CraftPreviewResult> => {
-                  const published: MessageAttachment[] = [];
-                  let skipped = 0;
-                  for (const image of requestData.images) {
-                    if (
-                      sharedCraftPreviewCount >= MAX_CRAFT_PREVIEWS_PER_MESSAGE ||
-                      store.conversationOwner(conversationId) !== ownerUserId
-                    ) {
-                      skipped += 1;
-                      continue;
-                    }
-                    const result = publishCraftPreview(
-                      config,
-                      conversationId,
-                      image.buffer,
-                      craftAppById(requestData.app).labelKo,
-                    );
-                    if ("error" in result) {
-                      skipped += 1;
-                      continue;
-                    }
-                    sharedCraftPreviewCount += 1;
-                    result.file.anchor = requestData.anchor;
-                    for (const attachment of [result.file, result.slide]) {
-                      shownAttachments.push(attachment);
-                      emitRunEvent(runId, "file", { runId, attachment });
-                    }
-                    emitRunEvent(runId, "craft_preview", {
-                      runId,
-                      app: requestData.app,
-                      attachmentId: result.file.id,
-                    });
-                    published.push(result.file, result.slide);
-                  }
-                  return { published, skipped };
-                },
-              }
-            : {}),
           // create_share_link: a login-required link to one PPTX card, made
           // (or reused) for the owner who asked for it in THIS turn. Absent =
-          // runPlan never registers the tool (see shareLinkTurn above).
+          // runCapabilities never registers the tool (see shareLinkTurn above).
           ...(shareLinkTurn
             ? {
                 onShareLink: async (requestData: ShareLinkRequest): Promise<ShareLinkResult> => {
@@ -3053,12 +2425,6 @@ export async function executeChatTurn(
                       ok: false,
                       error: "The conversation no longer exists, so no share link can be created.",
                     };
-                  }
-                  // Background / wake-up segment: the visible turn already
-                  // ended and the owner may have closed the tab — unless a
-                  // message they typed in this phase drives the segment.
-                  if (turnFinalized && !ownerSteeredSinceBoundary) {
-                    return { ok: false, error: SHARE_LINK_UNWATCHED_ERROR };
                   }
                   const expiresInDays = requestData.expiresInDays ?? DEFAULT_SHARE_LINK_EXPIRY_DAYS;
                   if (!isShareLinkExpiryDays(expiresInDays)) {
@@ -3135,11 +2501,6 @@ export async function executeChatTurn(
       // Canvases shown this turn are already persisted to the dedicated tables by
       // the onCanvas handler (with version history); they no longer ride the
       // response JSON. The live panel is driven by the SSE "canvas" events. (#50)
-      // Carry the plan submitted this turn (plan mode) so the plan card persists
-      // and rebuilds on reload.
-      if (latestPlan) {
-        response.plan = latestPlan;
-      }
       // Carry the turn's reasoning so the collapsible "생각 과정" view rebuilds
       // on reload (streaming path only — headless runs emit no onThinking).
       // Only the TAIL since the last persisted boundary: a run whose turn was
@@ -3151,17 +2512,8 @@ export async function executeChatTurn(
         response.thinking = thinkingTail;
       }
 
-      // Native /compact: the CLI answers with no text, so the bubble is composed
-      // from its compact event. Only a SUCCESSFUL compaction moves the
-      // conversation onto the fork's compacted session (and marks where it
-      // ended); a failed one keeps the old session, which the fork never touched.
-      const compactFailed = Boolean(ctx.compact) && !compactOutcome?.ok;
-      if (ctx.compact) {
-        response.text = compactResultText(compactOutcome);
-      }
-
-      // Remember this run's SDK session so the next turn resumes its context.
-      if (runSessionId && !compactFailed) {
+      // Remember this run's pi session so the next turn continues it.
+      if (runSessionId) {
         store.setAgentSessionId(ownerUserId, conversationId, runSessionId);
       }
       audit({
@@ -3174,65 +2526,50 @@ export async function executeChatTurn(
           avatarId: avatar.id,
           conversationId,
           runtime: response.runtime,
-          background: turnFinalized,
           durationMs: Date.now() - chatStart,
         },
         "chat completed",
       );
-      if (turnFinalized) {
-        // Background phase over: the visible turn and every wake-up report
-        // were already persisted at their result boundaries — persisting the
-        // aggregate `response` here would duplicate them. Just signal the
-        // end of the phase; the run closes in the finally below.
-        emitRunEvent(runId, "bg_end", {});
-      } else {
-        // The conversation may have been deleted mid-run; skip persistence (the FK
-        // on messages would reject the insert) and just signal completion.
-        const assistantMessage =
-          store.conversationOwner(conversationId) === ownerUserId
-            ? store.addMessage(conversationId, {
-                role: "assistant",
-                content: response.text || response.summary,
-                response,
-                // Same tail rule as the reasoning above: cards already carried
-                // by a `turn_end` segment must not be attached twice. Offset 0
-                // on an ordinary run, so this is the full array.
-                attachments: shownAttachments.slice(persistedAttachmentsOffset),
-                // Where this answer ended in the transcript — the point a later
-                // rewind onto the next user message resumes at.
-                resumePoint: compactFailed
-                  ? compactKeptPoint()
-                  : resumePointFor(lastTurnErrorSubtype),
-              })
-            : null;
-        emitRunEvent(runId, "done", { message: assistantMessage, response });
-      }
+      // The conversation may have been deleted mid-run; skip persistence (the FK
+      // on messages would reject the insert) and just signal completion.
+      const assistantMessage =
+        store.conversationOwner(conversationId) === ownerUserId
+          ? store.addMessage(conversationId, {
+              role: "assistant",
+              content: response.text || response.summary,
+              response,
+              // Same tail rule as the reasoning above: cards already carried
+              // by a `turn_end` segment must not be attached twice. Offset 0
+              // on an ordinary run, so this is the full array.
+              attachments: shownAttachments.slice(persistedAttachmentsOffset),
+              // Where this answer ended — the point a later rewind onto the
+              // next user message branches from.
+              resumePoint: resumePointFor(lastTurnErrorSubtype),
+            })
+          : null;
+      emitRunEvent(runId, "done", { message: assistantMessage, response });
     } catch (error) {
       if (isRunCancelled(runId)) {
-        // Clear the persisted SDK session: the aborted run's transcript is
-        // incomplete, so the NEXT turn rebuilds context from stored messages
-        // (which now include this cancelled turn's user message + partial)
-        // instead of resuming a half-written session that omits it. (chat-02)
-        // A /compact ran on a FORK, so the conversation's own session is intact.
-        if (!externalAgent && !ctx.compact) {
-          store.setAgentSessionId(ownerUserId, conversationId, null);
-        }
+        // Keep the session only when pi committed the stopped turn
+        // (sessionAfterAbort); otherwise clear it, so the NEXT turn rebuilds
+        // context from stored messages (which now include this cancelled
+        // turn's user message + partial). (chat-02)
+        store.setAgentSessionId(ownerUserId, conversationId, sessionAfterAbort());
         // Keep whatever the model already streamed before the stop. The client's
         // finalizeStopped keeps it on screen, so the persisted record must carry
         // it too — otherwise the visible answer is gone on the next reload/revisit.
-        // In a background phase, only the TAIL since the last persisted result
+        // After a steer follow-up, only the TAIL since the last persisted
         // boundary belongs here (earlier segments are already stored messages);
-        // an empty tail still persists a notice so the kill is visible on reload.
+        // an empty tail still persists a notice so the stop is visible on reload.
         const cancelledText = streamedText.slice(
           Math.max(persistedTextOffset, foldedTextOffset),
         );
         const cancelledThinking = streamedThinking.slice(persistedThinkingOffset);
         const response: AgentResponse = {
           kind: "text",
-          runtime: externalAgent ? "external" : config.agentRuntime,
+          runtime: config.agentRuntime,
           summary: "중지됨",
           text: cancelledText,
-          ...(latestPlan && !turnFinalized ? { plan: latestPlan } : {}),
           ...(cancelledThinking ? { thinking: cancelledThinking } : {}),
         };
         // Skip the insert if the conversation was deleted mid-run (FK would reject).
@@ -3240,30 +2577,30 @@ export async function executeChatTurn(
           store.conversationOwner(conversationId) === ownerUserId
             ? store.addMessage(conversationId, {
                 role: "assistant",
-                content:
-                  cancelledText ||
-                  (turnFinalized
-                    ? "(진행 중이던 백그라운드 작업이 중지되었습니다.)"
-                    : "(중지됨)"),
+                content: cancelledText || "(중지됨)",
                 response,
                 attachments: shownAttachments.slice(persistedAttachmentsOffset),
-                // A stopped /compact: the point its /compact row sat on.
-                resumePoint: compactKeptPoint(),
               })
             : null;
         emitRunEvent(runId, "cancelled", {
           message: stopped,
           response,
-          background: turnFinalized,
         });
         return { ok: true };
       }
       // Scrub before logging too: a git auth failure carries the token in its
       // argv (`http.extraHeader`), which pino's `err` serializer would emit.
       const detail = scrubGitError(error);
+      // pi's own English detail (`upstreamMessage`, logs only) — the Korean
+      // `detail` alone cannot tell an overload from a rejected request.
+      const upstream =
+        isRecord(error) && typeof error.upstreamMessage === "string" && error.upstreamMessage
+          ? { upstream: error.upstreamMessage, ...(typeof error.code === "string" ? { upstreamCode: error.code } : {}) }
+          : {};
       logger.error(
         {
           detail,
+          ...upstream,
           userId: ownerUserId,
           avatarId: avatar.id,
           conversationId,
@@ -3273,39 +2610,31 @@ export async function executeChatTurn(
       );
       audit({ action: "chat", detail, status: "error" });
       // When a TRANSIENT model/server failure ends the turn (overload, rate-limit,
-      // 5xx, timeout) AND the model isn't env-pinned (so the picker is available),
-      // nudge the user to switch models. Chat never auto-falls-back (a live viewer
-      // is watching the stream — only headless routines retry on a lower tier), so
+      // 5xx, timeout), nudge the user to switch models. Chat never auto-falls-back (a live viewer
+      // is watching the stream — only unattended runs retry on pi's default model), so
       // this is how a stuck model gets unblocked. Every other failure gets a Korean
-      // lead with `detail` appended: the SDK's own text is English, so it can never
+      // lead with `detail` appended: the runtime's own text is English, so it can never
       // be the whole bubble. The technical `detail` still goes to logs/audit above.
-      const failedTier =
-        store.getConversationModel(ownerUserId, conversationId) ??
-        DEFAULT_MODEL_TIER;
-      const alternatives = MODEL_TIERS.filter((t) => t.id !== failedTier)
-        .map((t) => t.label)
+      const failedModelLabel = turnModel ? `${turnModel} 모델` : "기본 모델";
+      const alternatives = piModels
+        .map((model) => model.id)
+        .filter((id) => id !== turnModel)
         .join(", ");
-      // OUR deadline wins the message: the SDK labels every abort as the user's
-      // doing, and no user was there to press stop on an unattended task.
-      const userFacing = ctx.compact
-        ? compactFailureText(detail)
-        : timedOut
+      // OUR deadline wins the message: an abort reads as the user's doing, and
+      // no user was there to press stop on an unattended task.
+      const userFacing = timedOut
         ? unattendedTimeoutMessage(ctx.unattendedDeadlineMs ?? 0)
-        : !externalAgent &&
-            !config.anthropicModel &&
-            isRetryableModelError(error)
-          ? `지금 ${modelTierLabel(failedTier)} 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델(${alternatives})로 바꿔 다시 시도해 보세요.`
+        : isRetryableModelError(error)
+          ? `지금 ${failedModelLabel}이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델${alternatives ? `(${alternatives})` : ""}로 바꿔 다시 시도해 보세요.`
           : detail.trim()
             ? `응답 생성 중 오류가 발생했습니다: ${detail}`
             : "응답 생성 중 오류가 발생했습니다.";
       if (store.conversationOwner(conversationId) === ownerUserId) {
-        // Clear the session for the same reason as the cancel path (chat-02), and
+        // Clear the session for the same reason as the cancel path (chat-02;
+        // a pi input pi committed is kept), and
         // don't discard the partial the user already watched stream — keep it
-        // alongside the error so a reload shows what the live view showed. A
-        // failed /compact leaves the session alone (it ran on a fork).
-        if (!externalAgent && !ctx.compact) {
-          store.setAgentSessionId(ownerUserId, conversationId, null);
-        }
+        // alongside the error so a reload shows what the live view showed.
+        store.setAgentSessionId(ownerUserId, conversationId, sessionAfterAbort());
         // Background phase: earlier segments are already stored messages, so
         // only the tail since the last result boundary rides the error bubble.
         const erroredText = streamedText.slice(
@@ -3316,32 +2645,27 @@ export async function executeChatTurn(
           ? `${erroredText}\n\n${userFacing}`
           : userFacing;
         // Any canvas shown before the error is already persisted to the canvas
-        // tables by the onCanvas handler. If a plan and/or reasoning was produced,
-        // carry it so the plan/thinking cards survive reload; text=content keeps the
-        // error bubble identical, and a response is attached only when there's
-        // something to carry (plain errors keep their existing null-response shape).
+        // tables by the onCanvas handler. If reasoning was produced, carry it so
+        // the thinking card survives reload; text=content keeps the error bubble
+        // identical, and a response is attached only when there's something to
+        // carry (plain errors keep their existing null-response shape).
         store.addMessage(conversationId, {
           role: "assistant",
           content,
           attachments: shownAttachments.slice(persistedAttachmentsOffset),
-          // A failed /compact: the point its /compact row sat on.
-          resumePoint: compactKeptPoint(),
-          response:
-            (latestPlan && !turnFinalized) || erroredThinking
-              ? {
-                  kind: "text",
-                  runtime: externalAgent ? "external" : config.agentRuntime,
-                  summary: "오류",
-                  text: content,
-                  ...(latestPlan && !turnFinalized ? { plan: latestPlan } : {}),
-                  ...(erroredThinking ? { thinking: erroredThinking } : {}),
-                }
-              : undefined,
+          response: erroredThinking
+            ? {
+                kind: "text",
+                runtime: config.agentRuntime,
+                summary: "오류",
+                text: content,
+                thinking: erroredThinking,
+              }
+            : undefined,
         });
       }
       emitRunEvent(runId, "error", {
         error: userFacing,
-        background: turnFinalized,
       });
     } finally {
       clearTimeout(deadline);
@@ -3364,21 +2688,6 @@ export function createChatRouter({
   auditAs,
 }: RouterDeps): Router {
   const router = Router();
-  const viewerGroupIds = (req: AuthenticatedRequest): Set<string> =>
-    new Set((req.user?.groups ?? []).map((group) => group.id));
-  const effectiveExternalAgents = () =>
-    mergeExternalAgentRegistries(
-      config.externalAgents,
-      store.getManagedExternalAgents(),
-    );
-  // Gateway model catalogs for the external-avatar composer picker, cached per
-  // agent so opening the settings row doesn't probe the gateway on every hit.
-  // Keyed by id+endpoint (an admin rebind changes the endpoint → fresh probe).
-  const externalModelCatalogCache = new Map<
-    string,
-    { at: number; models: string[] }
-  >();
-  const EXTERNAL_MODEL_CATALOG_TTL_MS = 60_000;
 
   // ---- Discovery -------------------------------------------------------
 
@@ -3386,23 +2695,9 @@ export function createChatRouter({
     "/api/avatars",
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
-      // External summaries hardcode hasImage:false (pure config); overlay the
-      // admin-set profile images stored outside the registry.
-      const externalImageIds = store.listExternalAvatarImageIds();
-      const avatars = [
-        ...store.listPublishedAvatars(req.user!.id),
-        // Shared group agents of the viewer's groups (enabled only) — reach is
-        // membership-scoped by the store query, like the native list above.
-        ...listGroupAgentAvatarSummaries(store, req.user!.id),
-        ...listExternalAvatarSummaries(
-          effectiveExternalAgents(),
-          viewerGroupIds(req),
-        ).map((summary) =>
-          externalImageIds.has(summary.id)
-            ? { ...summary, hasImage: true }
-            : summary,
-        ),
-      ].sort((a, b) => a.displayName.localeCompare(b.displayName));
+      const avatars = store
+        .listPublishedAvatars(req.user!.id)
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
       res.json({ avatars });
     },
   );
@@ -3411,27 +2706,10 @@ export function createChatRouter({
     "/api/avatars/:id",
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
-      const external = findVisibleExternalAgent(
-        effectiveExternalAgents(),
-        req.params.id,
-        viewerGroupIds(req),
-      );
-      const groupAgentHit = external
-        ? null
-        : findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const avatar = external
-        ? externalAvatarDetail(external)
-        : groupAgentHit
-          ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-          : store.getAvatar(req.user!.id, req.params.id);
+      const avatar = store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
         return;
-      }
-      if (external) {
-        // Detail mirrors the list overlay: images live outside the registry.
-        avatar.hasImage =
-          store.getExternalAvatarImageExt(avatar.id) !== null;
       }
       res.json({ avatar });
     },
@@ -3445,25 +2723,9 @@ export function createChatRouter({
     "/api/avatars/:id/skills",
     requireAuth(store),
     async (req: AuthenticatedRequest, res) => {
-      const external = findVisibleExternalAgent(
-        effectiveExternalAgents(),
-        req.params.id,
-        viewerGroupIds(req),
-      );
-      const groupAgentHit = external
-        ? null
-        : findChattableGroupAgent(store, req.user!.id, req.params.id);
-      const avatar = external
-        ? externalAvatarDetail(external)
-        : groupAgentHit
-          ? groupAgentAvatarDetail(groupAgentHit.agent, groupAgentHit.groupName)
-          : store.getAvatar(req.user!.id, req.params.id);
+      const avatar = store.getAvatar(req.user!.id, req.params.id);
       if (!avatar) {
         apiError(res, 404, "아바타를 찾을 수 없습니다.");
-        return;
-      }
-      if (external) {
-        res.json({ skills: [] });
         return;
       }
       // The local runtime loads no plugins/skills, so there's nothing to list.
@@ -3471,79 +2733,8 @@ export function createChatRouter({
         res.json({ skills: [] });
         return;
       }
-      if (groupAgentHit) {
-        // A group agent's skills come from the owning group's shared repo only,
-        // cloned with the VIEWER's tokens (the standing group-repo pattern).
-        const ctx = groupKnowledgeRepoContextFor(
-          store,
-          groupAgentHit.groupId,
-          req.user!.id,
-          config,
-          groupAgentHit.groupName,
-        );
-        const sources = await groupKnowledgeRepoSkillSources(ctx ? [ctx] : []);
-        res.json({ skills: await listSkillsInRoots(sources) });
-        return;
-      }
-      const { sourced } = await resolveAvatarSkillSources(
-        store,
-        avatar,
-        config,
-        false,
-      );
+      const { sourced } = await resolveAvatarSkillSources(store, avatar, config);
       res.json({ skills: await listSkillsInRoots(sourced) });
-    },
-  );
-
-  // Gateway model catalog for an EXTERNAL avatar's composer model picker.
-  // Visibility mirrors getAvatar/skills (shared external visibility helper).
-  // Returns the gateway-advertised Claude model ids plus the admin-configured
-  // default; a native avatar gets an empty catalog (its picker uses the
-  // bootstrap model tiers instead). Probes are cached briefly per agent.
-  router.get(
-    "/api/avatars/:id/models",
-    requireAuth(store),
-    async (req: AuthenticatedRequest, res) => {
-      const external = findVisibleExternalAgent(
-        effectiveExternalAgents(),
-        req.params.id,
-        viewerGroupIds(req),
-      );
-      if (!external) {
-        const avatar =
-          findChattableGroupAgent(store, req.user!.id, req.params.id) ??
-          store.getAvatar(req.user!.id, req.params.id);
-        if (!avatar) {
-          apiError(res, 404, "아바타를 찾을 수 없습니다.");
-          return;
-        }
-        // Native + group agents both use the bootstrap model-tier picker.
-        res.json({ models: [], defaultModel: null });
-        return;
-      }
-      const cacheKey = `${external.id}\n${external.endpoint}`;
-      const cached = externalModelCatalogCache.get(cacheKey);
-      if (cached && Date.now() - cached.at < EXTERNAL_MODEL_CATALOG_TTL_MS) {
-        res.json({
-          models: cached.models,
-          defaultModel: external.model ?? null,
-        });
-        return;
-      }
-      try {
-        const probe = await probeExternalAgentGateway(external);
-        externalModelCatalogCache.set(cacheKey, {
-          at: Date.now(),
-          models: probe.models,
-        });
-        res.json({ models: probe.models, defaultModel: external.model ?? null });
-      } catch (error) {
-        logger.warn(
-          { externalAgentId: external.id, detail: (error as Error).message },
-          "external model catalog probe failed",
-        );
-        apiError(res, 502, "Gateway 모델 목록을 가져오지 못했습니다.");
-      }
     },
   );
 
@@ -3561,10 +2752,6 @@ export function createChatRouter({
         conversations: store
           .listConversations(req.user!.id, avatarId, kind)
           .map((conversation) => {
-            const external = findExternalAgent(
-              effectiveExternalAgents(),
-              conversation.avatarUserId,
-            );
             // Live run state (in-memory map lookup per row) so the sidebar can
             // badge a conversation that is still working — the only in-app signal
             // once the user navigates away from its pane.
@@ -3574,8 +2761,7 @@ export function createChatRouter({
             );
             return {
               ...conversation,
-              ...(external ? { avatarDisplayName: external.displayName } : {}),
-              activeRun: active ? { background: active.background } : null,
+              activeRun: active ? {} : null,
             };
           }),
       });
@@ -3593,16 +2779,10 @@ export function createChatRouter({
       }
       res.json({
         messages: store.listMessages(req.user!.id, conversationId),
-        // Owner-only group-knowledge toggle state for this conversation (group ids
-        // turned OFF). The client shows the toggle only for the owner's own avatar.
-        groupKnowledgeOff: store.getConversationGroupKnowledgeOff(
-          req.user!.id,
-          conversationId,
-        ),
-        // The user's chosen model tier for this conversation (null = server default),
-        // so the composer picker restores on reload.
+        // The user's chosen pi model id for this conversation (null = default; one
+        // pi no longer offers also reads as default), so the composer picker restores on reload.
         selectedModel: store.getConversationModel(req.user!.id, conversationId),
-        // The user's chosen effort level for this conversation (null = SDK default),
+        // The user's chosen effort level for this conversation (null = runtime default),
         // so the composer picker restores on reload.
         selectedEffort: store.getConversationEffort(
           req.user!.id,
@@ -3729,8 +2909,6 @@ export function createChatRouter({
       // …and the server-written copies in their scratch workspaces (staged
       // attachments, capture/Confluence files), resolved across avatar trees.
       deleteConversationWorkspaceCopies(config, deletedIds);
-      // …and their Craft sessions on the craft-runner (best effort, retried).
-      purgeCraftSessions(config, deletedIds);
       res.json({
         ok: true,
         deleted: deletedIds.length,
@@ -3760,7 +2938,6 @@ export function createChatRouter({
       deleteConversationImages(config, req.params.id);
       deleteConversationFiles(config, req.params.id);
       deleteConversationWorkspaceCopies(config, [req.params.id]);
-      purgeCraftSessions(config, [req.params.id]);
       res.json({ ok: true });
     },
   );
@@ -3819,8 +2996,9 @@ export function createChatRouter({
         attachmentContentDisposition(downloadName, `file.${resolved.ext}`),
       );
       res.setHeader("X-Content-Type-Options", "nosniff");
-      // An SVG (a Craft result) can carry script: always a download, and
-      // sandboxed with no fetches even if something renders it directly.
+      // An SVG (a stored card from the removed Craft apps) can carry script:
+      // always a download, and sandboxed with no fetches even if something
+      // renders it directly.
       if (resolved.ext === "svg") {
         res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
       }
@@ -3909,22 +3087,6 @@ export function createChatRouter({
         }
       }
 
-      // Native /compact (see ChatSlashExpansion.compact). A regenerate never is
-      // one — its text is re-derived from the stored row, which refuses it —
-      // and a canvas interaction is not typed text.
-      const compact =
-        regenerate || canvasSubmission ? undefined : slashExpansion.compact;
-      if (compact) {
-        if (decodedImages.length > 0) {
-          apiError(res, 400, "/compact에는 이미지를 첨부할 수 없습니다.");
-          return;
-        }
-        if (rewindFromMessageId !== undefined) {
-          apiError(res, 400, "/compact는 수정해서 보낼 수 없습니다. 새 메시지로 보내 주세요.");
-          return;
-        }
-      }
-
       // Validate BEFORE switching to SSE so failures stay plain JSON. A turn with
       // image attachments but no text is allowed (the images are the message).
       // A rewind/regenerate may carry only its anchor's images, which the turn
@@ -3944,63 +3106,36 @@ export function createChatRouter({
       }
       const resolved = resolveChatTarget({
         store,
-        externalAgents: effectiveExternalAgents(),
-        viewerGroupIds: viewerGroupIds(req),
         viewerUserId: req.user!.id,
         avatarId,
-        hasImages: decodedImages.length > 0,
         ownerOnlyCommand: slashExpansion.ownerOnly === true,
       });
       if (!resolved.ok) {
         apiError(res, resolved.refusal.status, resolved.refusal.message);
         return;
       }
-      const { externalAgent, avatar, viewerIsOwner } = resolved.target;
-      // A gateway avatar is stateless (the full text history rides every turn),
-      // so there is no session of ours to compact.
-      if (compact && externalAgent) {
-        apiError(res, 400, "외부 아바타 대화에서는 /compact를 사용할 수 없습니다.");
-        return;
-      }
-      // Owner-only per-conversation group-knowledge selection, chosen in the UI and
-      // sent with the turn: the group ids turned OFF (skills + CLAUDE.md). The client
-      // owns this state from the moment a chat starts, so no separate persist step is
-      // needed; the server applies it this turn and stores it on the conversation.
-      // Colleague turns ignore it (always all-on); null = client sent nothing → keep
-      // whatever is already stored.
-      const requestedGroupKnowledgeOff =
-        viewerIsOwner && Array.isArray(req.body?.groupKnowledgeOff)
-          ? (req.body.groupKnowledgeOff as unknown[]).filter(
-              (x): x is string => typeof x === "string",
-            )
-          : null;
-
-      // Per-conversation model tier chosen in the composer (all viewers, not just
-      // the owner). A known tier alias applies; "" clears back to the server default;
-      // anything else (incl. nothing sent) → null = keep whatever is already stored.
+      const { avatar, viewerIsOwner } = resolved.target;
+      // Per-conversation pi model id chosen in the composer (all viewers, not just
+      // the owner). A sent id is stored as is — NOT checked against pi's list here,
+      // so a pick survives pi being briefly unreachable; the run applies it only
+      // while pi offers it (else the admin override / pi's default model). ""
+      // clears back to the default; nothing sent → null = keep whatever is stored.
       // The client owns this and sends it on each turn, so it works from a brand-new
       // chat with no row yet. The composer ALSO writes the choice to a per-user
-      // default (PUT /api/me/chat-defaults → users.model_default) that seeds the next
-      // new conversation's pane; this per-conversation value still overrides that
-      // default for an already-started thread.
-      // External conversations reuse the same slot for the GATEWAY model id the
-      // viewer picked (validated syntactically here; the gateway is the authority
-      // on whether the id actually exists). Native turns keep tier-alias semantics.
+      // default (PUT /api/me/chat-defaults → users.model_default, validated there)
+      // that seeds the next new conversation's pane; this per-conversation value
+      // still overrides that default for an already-started thread.
       const rawModel = safeString(req.body?.model);
       const requestedModel: string | null =
         req.body?.model === undefined || req.body?.model === null
           ? null
-          : externalAgent
-            ? isSafeExternalModelId(rawModel)
-              ? rawModel
-              : "" // sent but not a usable model id (incl. empty) → clear to default
-            : isModelTier(rawModel)
-              ? rawModel
-              : ""; // sent but not a known tier (incl. empty) → clear to default
+          : rawModel.length <= MAX_MODEL_ID_CHARS
+            ? rawModel
+            : ""; // not a plausible model id → clear to default
 
-      // Per-conversation reasoning effort, same client-owned model as the tier
-      // above: a known level applies; "" clears back to the SDK default; nothing
-      // sent → null = keep whatever is already stored. Like the tier, the composer
+      // Per-conversation reasoning effort, client-owned like the model above: a
+      // known level applies; "" clears back to the runtime default; nothing sent
+      // → null = keep whatever is already stored. Like the model, the composer
       // also writes a per-user default (users.effort_default) that seeds new panes.
       const rawEffort = safeString(req.body?.effort);
       const requestedEffort: string | null =
@@ -4059,11 +3194,9 @@ export function createChatRouter({
           images: decodedImages,
           regenerate,
           rewindFromMessageId,
-          compact,
           requestedModel,
           requestedEffort,
           requestedMcpToolGroups,
-          requestedGroupKnowledgeOff,
           // Noah's own public origin, so copy_image can hand the agent an
           // absolute clipboard-staging URL to open with new_tab. Derived
           // from THIS request to match the origin the user's browser is on.
@@ -4157,9 +3290,10 @@ export function createChatRouter({
   );
 
   // Send ANOTHER message while the run is still streaming (a "steer"). It is
-  // not a new turn: the run's held-open prompt generator writes it to the CLI's
-  // stdin, which folds it into the running turn after the next tool call — or
-  // starts it as a follow-up turn in the same session. Session cookie only,
+  // not a new run: it queues on the run's SteerChannel and is handed to the
+  // running pi response, which folds it in at its next tool boundary; one pi
+  // did not deliver before the response ended becomes, with the rest, ONE
+  // follow-up turn in the same session. Session cookie only,
   // exactly like /api/chat/respond; personal API keys are never accepted here.
   // Plain text by design: no slash-command expansion, no images, no canvas.
   router.post(
@@ -4174,12 +3308,6 @@ export function createChatRouter({
       }
       if (message.length > MAX_STEER_LENGTH) {
         apiError(res, 400, "메시지가 너무 깁니다.");
-        return;
-      }
-      // A steer reaches the CLI's stdin verbatim, where a leading /compact would
-      // run as a command INSIDE the live turn. It is a turn of its own.
-      if (/^\/compact(?:\s|$)/i.test(message)) {
-        apiError(res, 400, "/compact는 응답이 끝난 뒤에 보내 주세요.");
         return;
       }
       const pushed = pushRunSteer(runId, req.user!.id, message);
@@ -4203,7 +3331,7 @@ export function createChatRouter({
     },
   );
 
-  // Answer an interactive prompt (permission / AskUserQuestion) raised mid-run.
+  // Answer an interactive prompt (AskUserQuestion / a waiting canvas) raised mid-run.
   // The run stream stays open on a separate request; this delivers the reply.
   router.post(
     "/api/chat/respond",

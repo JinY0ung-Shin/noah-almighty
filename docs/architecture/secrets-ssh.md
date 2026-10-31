@@ -15,24 +15,20 @@
   `avatar.id`=owner), `get/set/delete/listUserSecretNames`/`getUserSecrets`. Exposed to clients as
   `secretNames` ONLY (values never via `toUser`). `PUT/DELETE /api/me/secrets/:name` (env-key-name
   validated). Settings UI "시크릿" card under the 권한·연결 tab. Owner, non-headless chat prompts include
-  only those secret NAMES so the avatar knows what is configured; values never enter the prompt or Bash env.
-- **Where secret VALUES actually flow (selective injection, never the shell):** the SDK subprocess env
-  (`agentSubprocessEnv`) gets NO user secrets — Bash/`env` stays clean. Known names route to dedicated
-  consumers: `SSH_*`/`ALLOWED_HOST*` → the hex-ssh subprocess only (`sshMcpSecretEnv`), `CONFLUENCE_PAT`
-  → the in-process Confluence tools, git tokens → server-side git only. **Custom secrets reach plugin MCP
-  servers via the lift**: `runClaudeAgent` sets `strictMcpConfig: true` (CLI MCP discovery — plugin
-  `.mcp.json`, cwd project `.mcp.json`, user settings — is OFF) and registers every plugin root's
-  `.mcp.json` servers itself through `plugins.liftPluginMcpServers` (both the `{"mcpServers":{…}}` wrapper
-  and the legacy flat shape parse). OWNED roots (the avatar's own plugin clones + personal knowledge repo)
-  get `mcpInjectableSecretEnv` (vault minus git-credential + SSH names); group/default roots are lifted
-  verbatim with NO secrets (a group teammate's `.mcp.json` must not read your vault). **Injection is
-  additionally gated on `elevatedToolAccess`** (owner or trusted teammate; same line Confluence draws for
-  the owner's PAT): plugin servers can't self-gate per viewer and the PreToolUse hook auto-allows every
-  `mcp__*`, so REGISTRATION is the gate — plain-colleague and restricted-headless runs get the servers
-  credential-less (pre-lift parity), never with the vault.
-  `${CLAUDE_PLUGIN_ROOT}` is expanded app-side (the CLI no longer sees the plugin origin); first
-  definition of a name wins (load order default → avatar plugins → knowledge repo → group), and app
-  in-process servers spread after the lifted map so app names always win.
+  only those secret NAMES so the avatar knows what is configured; values never enter the prompt.
+- **Where secret VALUES actually flow (selective injection):** the agent's shell is pi's sandbox, and it receives
+  a user secret ONLY through the per-secret 셸 노출 opt-in on the owner's own runs (next-but-one bullet). Known names
+  route to dedicated Noah-side consumers: `SSH_*`/`ALLOWED_HOST*` → the hex-ssh relay child only, `CONFLUENCE_PAT` → the
+  in-process Confluence tools, git tokens → server-side git only, slot-bound secrets → the 공용 MCP bridge (next
+  bullet). **Plugin `.mcp.json` servers get NO vault value.** Noah relays them as an MCP client on the `plugins`
+  broker id (`agent/pi/mcpProxies.ts`, parsing through `plugins.liftPluginMcpServers` — both the
+  `{"mcpServers":{…}}` wrapper and the legacy flat shape): a stdio def spawns only from the plugins bundled with
+  Noah (`piStdioRootRefusal` — every other root is agent-writable), bundled defs keep `${VAR}` expansion from
+  Noah's scrubbed env (`${CLAUDE_PLUGIN_ROOT}` expanded app-side), and an http/sse def outside the bundled roots
+  that names ANY `${…}` placeholder sits out (`piPlaceholderRefusal`) because an agent-edited def could send the
+  value anywhere from Noah's network. First definition of a name wins (load order), and a plugin server named
+  like a Noah server or an enabled 공용 MCP server sits out. Both metacognition surfaces list every skip with its
+  reason. Mechanics → [`pi-runtime.md`](pi-runtime.md) "Proxied MCP servers".
 - **공용 MCP 서버 (admin-registered external HTTP MCP, `sharedMcpServers.ts` + `routes/sharedMcp.ts`):** ONE
   `app_config` blob (`shared_mcp_servers`, encrypted; unreadable/corrupt → empty list, entries that fail
   `parseSharedMcpServer` — or stored slots without an id — are DROPPED: fail closed), admin CRUD under
@@ -48,45 +44,37 @@
   prunes leftovers for the name. Bindings are pruned when the slot or server is removed, when the bound secret is deleted, and in
   `deleteUser`. `GET /api/me/shared-mcp-servers` returns label/description/origin and the caller's own bindings.
   The admin connection check spawns the SAME bridge with the CHECKING admin's own bindings. **Per run**
-  `planSharedMcpRun` (in runPlan, before describe_system's ctx) resolves each enabled server from the OWNER's
+  `planSharedMcpRun` (in `buildRunCapabilities`, before describe_system's ctx) resolves each enabled server from the OWNER's
   bindings + injectable vault: `active` / `needs_binding` (+`hostChanged`) / `missing_secrets` /
-  `secrets_unavailable` — a slotted server registers ONLY on `elevatedToolAccess && !groupAgent` runs with every
+  `secrets_unavailable` — a slotted server registers ONLY on `elevatedToolAccess` runs with every
   slot bound for the current origin to a secret that still exists (trimmed; a value with a line break counts
   as missing); consultation and restricted headless (intro/hashtag) runs get none. Slot/secret names
-  ride owner runs only. A server with no headers at all registers natively (`{type, url}`); anything else runs
-  through **`scripts/mcp-http-bridge.mjs`** (`node --use-system-ca … --config <0600 file>`): the file holds the
-  RESOLVED url/headers + a redact list, is consumed (deleted) on read, and the bridge keeps values in memory — not
-  in its env, unlike the stdio wrapper — so neither argv nor `/proc/<pid>/environ` carries them. It relays
+  ride owner runs only. Every server — a header-less one too, so the corporate CA and error scrubbing always
+  apply — is relayed on the `shared` broker id through **`scripts/mcp-http-bridge.mjs`**
+  (`node --use-system-ca … --config <0600 file>`): the file holds the RESOLVED url/headers + a redact list, is
+  written right before the child starts, consumed (deleted) on read (and removed again if the child never read
+  it), and the bridge keeps values in memory, not in its env, so neither argv nor `/proc/<pid>/environ` carries
+  them. It relays
   JSON-RPC transport-to-transport (sets the negotiated protocol version from the initialize response, orders
   notifications before later sends, answers a failed upstream request with a scrubbed JSON-RPC error, scrubbing
-  BEFORE truncating). Bound vault values join the PostToolUse redaction set, and so does every credential-looking
+  BEFORE truncating). Bound vault values join the run's redaction set (`piRedactions`), and so does every credential-looking
   bridged header value (`<server>:<header>` — a narrow name match, never an unresolved `${…}` template — plus the
   bare token after a `Bearer`/`Basic`/`Token` scheme word, and each slot's trimmed value as sent). Every ENABLED admin
   server reserves its name for the run, mounted or not: a same-named plugin server is dropped (status-line
   warning), so `mcp__<name>__*` never points at something the metacognition says is unavailable; app servers win
   over both. Shared servers ignore the composer's tool-group picker and group tool policy, like plugin servers.
-- **One-shot MCP handoff files are written per ATTEMPT** (`plan.writeMcpHandoffFiles`, called right before every
-  `query()`): the plugin secret-wrapper env, hex-ssh secrets and bridge configs are consumed by the first spawn, and
-  a model fallback / self-heal retry respawns the CLI on the same options. `plan.removeMcpHandoffFiles` deletes
-  any left unconsumed when the run ends (abort right after `query()`, a CLI dying before a server spawned). Only files a REGISTERED server's argv
-  names are written, so a shadowed server leaves no plaintext behind. The SAME bridge serves OWNED plugin
-  `.mcp.json` http/sse entries whose url/headers reference vault names as `${NAME}` (`expandEnv: true` keeps the
-  CLI's `${VAR}` env expansion for the rest — templates stay unresolved in the file and the bridge fills vault + env
-  refs in ONE pass, so a vault value containing `${…}` is never expanded again; a def with fields the bridge cannot
-  carry, e.g. `oauth`/`headersHelper`, stays native), and NON-owned http/sse entries get references to shell-exposed names
-  blanked — the CLI would otherwise expand them from its own env into a group repo's URL.
-- **Per-secret AGENT-SHELL exposure (opt-in):** `user_secrets.shell_expose` (0 default) — toggled per key
-  via `PATCH /api/me/secrets/:name {shellExpose}` (셸 노출 checkbox in the 시크릿 card; hidden for reserved
-  names via the client-imported `secretPolicy.isShellExposableSecret`). Flagged values merge into
-  `options.env` on ELEVATED runs only, so `$NAME` works in Bash; the **PostToolUse hook
-  (`postToolUseHook.ts`, SDK `updatedToolOutput`) redacts every injectable value from every tool output**
-  (`[REDACTED:<NAME>]`, values ≥6 chars) before the model sees it — accident prevention, not containment
-  (a prompted model could re-encode a value it can use). Because the CLI env is inherited by every
-  CLI-spawned server, non-owned lifted MCP servers get the shell-exposed names BLANKED
-  (`liftPluginMcpServers` `maskEnvNames`). Reserved git/SSH names live in `secretPolicy.ts` (leaf module,
-  shared with the client; a unit test pins it to the gitCredentials constants).
+- **Per-secret AGENT-SHELL exposure (셸 노출, opt-in):** `user_secrets.shell_expose` (0 default) —
+  toggled per key via `PATCH /api/me/secrets/:name {shellExpose}` (셸 노출 checkbox in the 시크릿 card; hidden for
+  reserved names via the client-imported `secretPolicy.isShellExposableSecret`). On an OWNER run in the owner's own
+  sandbox (owner chat, owner routine, task API — `ownerToolAccess && sandboxOwner === "owner"`, never a colleague's
+  or a consultation's shell) the flagged values ride every pi request as `sandbox_env` (pi P4): `$NAME` in that
+  run's `bash`, kept only in pi's memory per request, redacted from tool results by pi and from Noah MCP results by
+  `piRedactions`. `piSandboxEnvOf` drops reserved git/SSH names and names pi refuses; both metacognition surfaces
+  name what the shell has (`PiRuntimeFacts.shellSecretNames`, `shellSecretsSentence`) and any flagged name left
+  out. Reserved git/SSH names live in `secretPolicy.ts` (leaf module, shared with the client; a unit test pins it
+  to the gitCredentials constants). Mechanics → [`pi-runtime.md`](pi-runtime.md) "Shell secrets".
 - **Per-secret BROWSER INPUT (브라우저 입력, opt-in):** the second per-secret exposure toggle, and the only
-  one whose value leaves the server — the avatar names a secret and the extension types it into the
+  one whose value reaches the user's browser — the avatar names a secret and the extension types it into the
   owner's OWN browser, so the MODEL never sees the value. Storage rides the secret row:
   `user_secrets.browser_expose` (0 default), `browser_hosts` (JSON array of exact lowercase hostnames,
   NULL when unset) and `browser_password_only` (1 default) — all three added by `addColumnIfMissing`
@@ -116,51 +104,44 @@
   once-per-browser-session `secret` consent popup the server cannot bypass (one approval covers every
   allowed site — the per-site limit is the owner's own host allowlist, re-checked at the keyboard on
   every write, not the popup); the reply is redacted server-side and the value joins the
-  PostToolUse redaction set, so any later echo comes back `[REDACTED:<NAME>]`. Wire/extension mechanics
+  run's redaction set (`piRedactions`, applied by the `/mcp` endpoint to every Noah MCP result), so any later
+  echo comes back `[REDACTED:<NAME>]`. Wire/extension mechanics
   → [`browser-bridge/contract.md`](browser-bridge/contract.md) + [`actions.md`](browser-bridge/actions.md).
-- **⚠️ MCP secret TRANSPORT is a one-shot file + wrapper, NEVER the server definition.** The SDK
-  serializes `options.mcpServers` into the CLI's `--mcp-config` ARGV, and argv is world-readable via
-  `/proc/<pid>/cmdline` — the agent's own Bash is a child of that CLI (`cat /proc/$PPID/cmdline`). So
-  injected env values (and hex-ssh's `SSH_PRIVATE_KEY`, which used to sit in the def env — a real
-  pre-wrapper exposure) ride in per-server mode-0600 files under `dataDir/runtime/mcp-secrets/`, and the
-  def becomes `node scripts/mcp-secret-wrapper.mjs --secrets <file> -- <real command…>`. The wrapper
-  reads the file, DELETES it (one-shot), and execs the real server with secrets merged over its env;
-  `sweepStaleMcpSecretFiles` removes >1h crash leftovers at the next run. Residual (accepted) exposure:
-  everything runs as ONE container uid (see "Same-uid posture (#71)" below) — the wrapper closes the casual
-  `env`-dump and world-readable-argv tiers, not uid isolation.
-- **Same-uid posture (#71) — what phase 0 closes and what it doesn't.** The server, every agent CLI and
-  every agent Bash run as the image's `node` uid. Phase 0 (2026-10-28):
+- **MCP secret TRANSPORT never rides argv.** Noah spawns every relayed child itself (`pi/mcpProxies.ts`), so no
+  server definition is serialized into anyone's command line: hex-ssh's SSH material sits in its child's env
+  (behind the node policy proxy, which is non-dumpable — next bullet), and bridge configs are one-shot 0600 files
+  under `dataDir/runtime/mcp-secrets/`.
+- **Same-uid posture (#71).** The agent's shell no longer runs in Noah's container at all — it is the run
+  principal's pi sandbox — so the old hole (any agent Bash reading the shared data volume and other runs'
+  environ) is gone structurally. What still runs as Noah's `node` uid is Noah itself and the children it spawns:
+  the hex-ssh policy proxy + upstream, stdio servers of the BUNDLED plugins, and `mcp-http-bridge.mjs`. None of
+  them is agent-authored. Phase 0 hardening (2026-10-28) still applies to them:
   - **node and tini are execute-only** (`chmod 0711` in the Dockerfile), so every process running node —
-    the server, the MCP secret wrapper and the node MCP servers it execs, the relays/bridges — is
-    non-dumpable: its `/proc/<pid>/environ` and memory are unreadable to other processes of the same uid.
-    PID 1 holds the container's full environment, so it is the image's own tini, started through
-    `docker-entrypoint.sh`'s `exec` (`ENTRYPOINT ["docker-entrypoint.sh", "/usr/bin/tini", "--"]`) with
-    compose `init: false` — verified on the built image: Docker's `init: true` (readable docker-init) and a
+    the server, the relays/bridges — is non-dumpable: its `/proc/<pid>/environ` and memory are unreadable to
+    other processes of the same uid. PID 1 holds the container's full environment, so it is the image's own tini,
+    started through `docker-entrypoint.sh`'s `exec` (`ENTRYPOINT ["docker-entrypoint.sh", "/usr/bin/tini", "--"]`)
+    with compose `init: false` — verified on the built image: Docker's `init: true` (readable docker-init) and a
     tini started directly by the runtime both kept a READABLE environment. The egress overlay keeps
     `init: true`: its image runs that init as root. The HEALTHCHECK runs behind `env -u` so its short-lived
     shell/curl never carry the server-only secrets.
-  - **The server drops `SERVER_ONLY_SECRET_ENV_NAMES`** (`SESSION_SECRET`, `CRAFT_CONTROL_SECRET`,
+  - **The server drops `SERVER_ONLY_SECRET_ENV_NAMES`** (`SESSION_SECRET`, `PI_GATEWAY_API_KEY`, …;
     `secretPolicy.ts`) from `process.env` right after the config reads them (`index.ts`), so no process it
-    starts later inherits them; `agentSubprocessEnv`, the skill-discovery preflight and the server-agent base
-    env strip the same list again.
+    starts later inherits them; `piProxyBaseEnv()` (`agent/pi/mcpProxies.ts`) builds a relayed child's env
+    from that scrubbed env minus git credentials.
   - **Server git never carries a token in argv** (argv is world-readable under `/proc/<pid>/cmdline`): the
     `http.extraHeader` rides `GIT_CONFIG_COUNT/KEY/VALUE` env via `serverGitEnv` (`marketplace.ts`), and
     every server git command also runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false` — the
-    clones are agent-edited, so their own hooks must never run in the server's git.
-  - **No cross-session messages (2026-10-28).** Every live CLI registers in
-    `<CLAUDE_CONFIG_DIR>/sessions/<pid>.json` and listens on `<TMPDIR>/cc-socks/<pid>.sock`, so with the shared
-    config dir `ListAgents` listed other users' runs and `SendMessage{to}` (by name or `uds:<path>`) injected a
-    turn into them, unprompted (permission-mode parity) and without Bash. Every Noah-spawned CLI — chat runs,
-    the skill-discovery preflight, server-agent runs and their install check — now passes
-    `settings: CROSS_SESSION_SETTINGS` (`crossSessionInbound: "refuse"`, `agent/sessionIsolation.ts`), and
-    `ListAgents` is in `UNUSED_SDK_BUILTIN_TOOLS`. Splitting config dirs alone would NOT close it (the socket path
-    is predictable); in-run agent teams are unaffected (same CLI process, mailbox, not a peer socket). **A new
-    `query()` call site passes the same settings.**
-  - **Still open (needs uid separation, #71):** the shared data volume (SQLite DB, every user's
-    workspaces/clones/transcripts) is readable and writable by any agent Bash; the native CLI binary is
-    readable, so a CLI process's environ (its run's shell-exposed vault secrets and model credentials) is
-    readable by other agents; a server git child's environ (one call's auth header) is readable while it
-    runs; non-node MCP servers keep a readable environ. No hook rule can be the boundary.
+    clones are agent-edited, so their own hooks must never run in the server's git. Noah never runs git in a
+    sandbox copy's `.git` (design D1, [`pi-runtime.md`](pi-runtime.md) "Working repositories").
+  - **Still open:** a server git child's environ (one call's auth header) is readable by same-uid processes
+    while it runs, and non-node children keep a readable environ — both only matter if something agent-authored
+    ran in the container, which the bundled-only stdio rule exists to prevent.
+  - **Not covered: secret FILES.** "Server-only secrets never reach a child" holds for the ENVIRONMENT only. pi's
+    service-key file (`PI_GATEWAY_API_KEY_FILE` → `/run/secrets/pi_gateway_api_key`, uid 1000, 0400 — see "Model
+    credentials live in pi-gateway only" below) is readable by EVERY uid-1000 process in Noah's container: hex-ssh, the bundled
+    stdio plugin servers, `mcp-http-bridge.mjs`, git, LibreOffice. That key runs turns AS ANY user, so a child
+    that read it is the whole deployment. Marginal today (the same children already reach the rw workspaces bind
+    mount and the data volume — this is not uid isolation), and closed only by #71's uid separation.
 - **Two git tokens, vault-backed, host-routed.** Each user can store TWO git tokens as named
   `user_secrets`: `GIT_TOKEN` (`INTERNAL_GIT_TOKEN_SECRET_NAME`) for the internal `GITHUB_HOST`, and
   `GITHUB_TOKEN` (`EXTERNAL_GIT_TOKEN_SECRET_NAME`) for github.com. `tokenForGitUrl` in
@@ -174,10 +155,9 @@
 - **The per-user git tokens NEVER reach the agent's shell.** Used only server-side: as a per-invocation
   `http.extraHeader` on the app's OWN clone/push (`knowledgeRepo.ts`, `syncPluginRepo`, `gitRepos.ts`) and
   by the server-side `mcp__repo__create_repo` bridge (invokes `gh repo create` with the token in
-  child-process env). NOT injected into the SDK subprocess env; `claudeAgent.ts` strips `GIT_TOKEN`/
-  `GITHUB_TOKEN`/`GH_TOKEN`-style names from `process.env` before launch and only forwards SSH-specific
-  secrets to the hex-ssh subprocess. So the avatar can't `gh repo create`; `create_repo` is the only
-  bridge. The prompt surfaces `gitTokenSet` (not the value).
+  child-process env). The sandbox never holds one, and `piProxyBaseEnv` strips `GIT_TOKEN`/
+  `GITHUB_TOKEN`/`GH_TOKEN`-style names from every child Noah spawns (hex-ssh gets only its SSH-specific
+  secrets). So the avatar can't `gh repo create`; `create_repo` is the only bridge. The prompt surfaces `gitTokenSet` (not the value).
 - **The prompt tells the owner how to enable SSH when it's off.** `buildPrompt` adds an SSH enablement
   note on owner, non-headless turns whenever `SSH_PRIVATE_KEY` isn't in `secretNames`. Drops off once
   the key is stored.
@@ -185,58 +165,21 @@
   They silently depend on the **image carrying python3 + `cryptography` + `paramiko`** (no
   `ssh-keygen`/`ssh-keyscan`). A base-image change breaks them at RUNTIME, not build. A unit test asserts
   the TS `fingerprintOf` and the python SHA256 format agree — keep it green.
-- **Server agents (서버 에이전트) reuse the same vault key + per-owner known_hosts** but connect with Noah's own
-  ssh2 client (passphrase supported, fail-closed host check, TOCTOU-safe `trustHostWithFingerprint` for the
-  settings card) — see [`server-agents.md`](server-agents.md).
 - **SSH host-key trust is agent-managed + volume-persistent.** `mcp__ssh_trust__{add,list,remove}_host`
   (sshTrustTools.ts) write a per-owner `known_hosts` under `${dataDir}/ssh/<userId>` (data volume →
   survives restarts), injected into hex-ssh as `KNOWN_HOSTS_PATH` (re-read per connection, so `add_host`
   takes effect mid-session). Fingerprints aren't secrets, so these tools are NOT owner-only.
   `fetchHostKey` uses paramiko (image has no `ssh-keyscan`).
-- **Subscription auth is app-wide and admin-managed.** Auth precedence: `.env` `ANTHROPIC_API_KEY` >
-  stored subscription token > none. When no API key is set, `claudeAgent.ts` injects the admin-pasted
-  `claude setup-token` token (stored under `app_config[CLAUDE_OAUTH_TOKEN_KEY]`) as
-  `CLAUDE_CODE_OAUTH_TOKEN` into the SDK subprocess env — decrypted only there, never shown to the agent.
-  Managed via `PUT/DELETE /api/admin/claude-token` + the 관리자 ▸ 구독 로그인 card; status surfaces through
-  `GET /api/admin/system` (`subscriptionConnected`, `apiKeyOverride`). setup-token tokens are long-lived,
-  so there's no refresh logic.
-- **External-avatar registry is app-wide and admin-managed.** UI entries are stored as one versioned
-  JSON value under encrypted `app_config[external_agents_registry_v1]`; no schema migration is needed.
-  `EXTERNAL_AGENTS_JSON` entries remain read-only and take precedence on an ID collision, while the
-  remaining managed entries are merged into the live registry on every request. The admin DTO returns
-  only `apiKeySet`, never the bearer value. A corrupt/undecryptable registry fails closed. Ciphertext
-  identity and the parsed registry are cached per Store instance, so steady-state reads avoid repeating
-  synchronous scrypt while a DB change/tamper is still detected on the next request. External IDs are
-  immutable: history-bearing entries can be disabled but not deleted, and an endpoint change needs
-  explicit confirmation because the next stateless turn sends the complete stored transcript. Existing
-  bearer keys are bound to the exact endpoint and cannot be kept across an address change. Each external
-  conversation also stores its trusted endpoint; an unapproved env/config re-point fails closed and asks
-  the user to start a new conversation instead of forwarding history to the new address. Pre-binding
-  legacy rows with `NULL` fail closed instead of adopting the current endpoint. Confirmed managed
-  endpoint changes compare-and-swap the encrypted registry and rebind eligible conversation rows in one
-  immediate SQLite transaction, so write failure or a concurrent admin update cannot split the two. The
-  admin "인증·모델 확인" calls authenticated `/v1/models`, requires at least one Claude model, and
-  deliberately does not execute an agent turn or tools. The configured endpoint is separately
-  constrained to the exact `/v1/agents/messages` path contract; its SSE stream is validated on the
-  first real chat turn.
-- **External avatar profile images live OUTSIDE the registry.** Bytes on disk in the same `avatarDir`
-  as user photos (stem = the public `external:<id>` avatar id), extension in the
-  `external_avatar_images` table (CREATE TABLE IF NOT EXISTS = the migration). Admin-only
-  `PUT/DELETE /api/admin/external-agents/:id/image` (works for env entries too — the registry is
-  untouched); the public `GET /api/users/:id/avatar-image` route falls back to the external ext
-  lookup. `externalAvatarSummary`/`adminExternalAgent` stay pure (`hasImage: false`) — route code
-  overlays the stored state (avatars list, avatar detail, admin DTOs). Agent delete manually
-  cascades the image row + file. Shared upload validation lives in `_shared.ts`
-  (`decodeAvatarImage`/`saveAvatarImageFile`/`deleteAvatarImageFile`, also used by profile photos).
-- **`conversations.selected_model` is dual-semantic.** Native conversations store a model TIER alias;
-  external conversations store a GATEWAY model id (viewer-picked per conversation, `isSafeExternalModelId`
-  charset, cleared→admin default). One column is safe because a conversation is bound to a single avatar
-  for life; the chat route branches validation on `externalAgent`. The composer picker's catalog comes
-  from viewer-facing `GET /api/avatars/:id/models` (shared visibility helper, `probeExternalAgentGateway`
-  behind a 60s per-agent cache in the chat-router closure; native avatars answer `{ models: [] }`). The
-  client fetches it EAGERLY per external pane (ChatView reactive loop) because desktop shows composer
-  controls inline — the mobile-only settings toggle can't be the fetch trigger. External panes also skip
-  the native model/effort default seeding in `makePane` so a tier alias never leaks to the gateway.
+- **Model credentials live in pi-gateway only** (design D7). Noah holds no LLM key: `ANTHROPIC_API_KEY` and the
+  admin-pasted `claude setup-token` subscription token are gone (`PUT/DELETE /api/admin/claude-token` → 404). The
+  stored `claude_oauth_token` app_config key is deleted on existing deployments through `retirementGate()` (DB
+  backup first) and the name stays reserved forever. Noah's only gateway secret is pi's service key (a
+  server-only secret): inline `PI_GATEWAY_API_KEY`, or the file `PI_GATEWAY_API_KEY_FILE` names
+  (`readPiGatewayApiKey`, `config.ts` — both set, unreadable or empty stops the boot; a file's key never enters
+  `process.env`). The bundled compose stack uses ONLY the file: Noah's own uid-1000 0400 copy
+  (`docker/pi/setup-host.sh`) mounted as the compose secret `/run/secrets/pi_gateway_api_key`. Same-uid caveat
+  (#71): unlike the scrubbed env, that file stays readable to every uid-1000 process in Noah's container, the
+  relayed MCP children (owner plugins, 공용 MCP stdio side, hex-ssh) included — until uid separation lands.
 
 ## On-prem GitHub CA
 - **One var `GITHUB_CA_CERT`** (PEM path, `applyCustomGithubCa` in `tlsCa.ts`, called from `index.ts`).

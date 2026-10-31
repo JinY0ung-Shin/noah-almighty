@@ -8,6 +8,7 @@ import { get } from "svelte/store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ActivityTree from "../src/client/src/components/ActivityTree.svelte";
+import PromptModal from "../src/client/src/components/PromptModal.svelte";
 import RoutineModal from "../src/client/src/components/RoutineModal.svelte";
 import SettingsGroupCard from "../src/client/src/components/SettingsGroupCard.svelte";
 import SidePanel from "../src/client/src/components/SidePanel.svelte";
@@ -27,6 +28,43 @@ import type {
   RoutineJob,
   Toast,
 } from "../src/client/src/lib/types.js";
+
+/* ------------------------------------------------------------------ */
+/* PromptModal — the avatar's question (the permission card is gone)   */
+/* ------------------------------------------------------------------ */
+
+describe("PromptModal", () => {
+  it("shows a queued question with no approve/deny controls, and Escape skips it", async () => {
+    const posted: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        posted.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    replaceState({
+      view: "explore",
+      chatPanes: [],
+      promptQueue: [
+        { id: "q-1", runId: "run-q", paneId: "pane-x", kind: "question", data: { payload: { questions: [{ question: "어느 쪽으로 갈까요?", options: [{ label: "왼쪽" }] }] } } },
+      ],
+    } as unknown as Parameters<typeof replaceState>[0]);
+    render(PromptModal);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toContain("question");
+    expect(within(dialog).getByText("어느 쪽으로 갈까요?")).toBeTruthy();
+    const labels = within(dialog).getAllByRole("button").map((b) => b.textContent?.trim());
+    expect(labels).not.toContain("승인");
+    expect(labels).not.toContain("거부");
+    expect(dialog.textContent).not.toContain("권한 요청");
+
+    await fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(posted).toEqual([{ runId: "run-q", requestId: "q-1", value: { cancelled: true } }]));
+    vi.unstubAllGlobals();
+  });
+});
 
 /* ------------------------------------------------------------------ */
 /* Toggle — accessible switch whose visual state follows the SAVE      */
@@ -355,23 +393,15 @@ describe("ActivityTree", () => {
     expect(tool.querySelector(".tool-arg")!.textContent).toBe("ls -la");
   });
 
-  it("marks a background sub-agent on its card and in its accessible name", () => {
-    const bgAgents: LiveAgentNode[] = [
-      agents[0],
-      { ...agents[1], background: true },
-      { id: "sub2", parentId: "main", label: "요약 담당", status: "done", isMain: false },
-    ];
+  it("names every sub-agent card plainly, with no background badge", () => {
     const { container } = render(ActivityTree, {
-      props: { agentId: "main", agents: bgAgents, tools, tasks },
+      props: { agentId: "main", agents, tools, tasks },
     });
 
-    const bg = screen.getByText("조사 담당").closest(".agent-node")!;
-    expect(bg.querySelector(".agent-bg-badge")?.textContent).toBe("백그라운드");
-    expect(bg.getAttribute("aria-label")).toBe("백그라운드 에이전트 · 조사 담당 · 진행 중");
-    // A foreground agent carries no such badge.
-    const fg = screen.getByText("요약 담당").closest(".agent-node")!;
-    expect(fg.querySelector(".agent-bg-badge")).toBeNull();
-    expect(container.querySelectorAll(".agent-bg-badge")).toHaveLength(1);
+    const card = screen.getByText("조사 담당").closest(".agent-node")!;
+    expect(card.getAttribute("aria-label")).toBe("에이전트 · 조사 담당 · 진행 중");
+    expect(container.querySelector(".agent-bg-badge")).toBeNull();
+    expect(container.textContent).not.toContain("백그라운드");
   });
 
   it("omits the task-name span for an unnamed task (the 태스크 badge carries it)", () => {
@@ -470,7 +500,7 @@ describe("ActivityTree", () => {
       expect(toggle.querySelector(".agent-count")!.textContent).toBe("도구 3개 · 태스크 1개");
       expect(args(tester)).toEqual(["npm test"]);
       expect(tester.querySelector(".task-row")).toBeNull();
-      // The teammate's name leads its accessible name as well as its card.
+      // A stored (pre-retirement) teammate name leads its accessible name as well as its card.
       expect(tester.getAttribute("aria-label")).toBe("에이전트 · @tester · general-purpose · 테스트 실행 · 진행 중");
       expect(args(card("Explore · 문서 조사"))).toEqual(["TODO · src"]);
       // The main agent's own rows are never folded.
@@ -659,12 +689,8 @@ function groupProps(role: "admin" | "member"): SettingsGroup {
     id: "g1",
     name: "플랫폼팀",
     role,
-    knowledgeRepo: null,
-    knowledgeBranch: null,
-    knowledgeSelected: null,
     allowedMcpToolGroups: null,
     avatarSharing: true,
-    agents: [],
     members: [
       {
         userId: "mate-1",
@@ -712,7 +738,7 @@ describe("SettingsGroupCard 공유 스킬", () => {
   it("shows a member's shares and blocks one through the group channel", async () => {
     const { calls } = mockChannel();
     const { container } = render(SettingsGroupCard, {
-      props: { group: groupProps("admin"), githubHost: "github.com", reload: async () => {} },
+      props: { group: groupProps("admin"), reload: async () => {} },
     });
 
     await screen.findByText("Deck maker");
@@ -740,7 +766,7 @@ describe("SettingsGroupCard 공유 스킬", () => {
   it("unblocks through the id/name path and hides the section from plain members", async () => {
     const { calls } = mockChannel();
     const { unmount } = render(SettingsGroupCard, {
-      props: { group: groupProps("admin"), githubHost: "github.com", reload: async () => {} },
+      props: { group: groupProps("admin"), reload: async () => {} },
     });
     await screen.findByText("Deck maker");
     await fireEvent.click(screen.getByRole("button", { name: "Deck maker 차단" }));
@@ -760,7 +786,7 @@ describe("SettingsGroupCard 공유 스킬", () => {
     // A plain member sees no moderation section and never fetches the channel.
     const before = calls.length;
     render(SettingsGroupCard, {
-      props: { group: groupProps("member"), githubHost: "github.com", reload: async () => {} },
+      props: { group: groupProps("member"), reload: async () => {} },
     });
     await waitFor(() => expect(screen.getByText("플랫폼팀")).toBeTruthy());
     expect(screen.queryByText("공유 스킬")).toBeNull();

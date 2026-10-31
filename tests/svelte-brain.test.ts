@@ -24,7 +24,6 @@ const user = {
   knowledgeRepo: null,
   knowledgeBranch: null,
   knowledgeSelected: null,
-  groupKnowledgeOffDefault: [],
   modelDefault: null,
   effortDefault: null,
   mcpToolGroupsDefault: null,
@@ -41,7 +40,7 @@ const user = {
 } satisfies User;
 
 beforeEach(() => {
-  replaceState({ user, view: "brain", settingsTab: "profile", brainSource: "personal" });
+  replaceState({ user, view: "brain", settingsTab: "profile" });
 });
 
 describe("BrainView empty setup state", () => {

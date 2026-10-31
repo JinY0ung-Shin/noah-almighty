@@ -4,7 +4,6 @@ import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { listSkillsInRoots } from "../plugins.js";
 import { normalizeHashtags } from "../store.js";
-import { isModelTier } from "../modelTiers.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   type McpToolGroupId,
@@ -19,6 +18,7 @@ import {
   describeAvatarEquipment,
   isAvatarVisibility,
   resolveAvatarSkillSources,
+  offeredModelIdsOr503,
   runHeadlessAvatarPrompt,
   safeString,
   saveAvatarImageFile,
@@ -111,28 +111,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
-  // Owner's DEFAULT group-knowledge OFF-set (group ids turned off). The composer
-  // toggle writes here so the choice seeds every NEW conversation — the
-  // per-conversation value (chat POST `groupKnowledgeOff`) still overrides it for
-  // an already-started conversation. Body: `{ off: string[] }` ([] re-enables all).
-  router.put(
-    "/api/me/group-knowledge-default",
-    requireAuth(store),
-    (req: AuthenticatedRequest, res) => {
-      const raw = req.body?.off;
-      if (!Array.isArray(raw) || !raw.every((s) => typeof s === "string")) {
-        apiError(res, 400, "off는 문자열 배열이어야 합니다.");
-        return;
-      }
-      const user = store.setGroupKnowledgeOffDefault(
-        req.user!.id,
-        raw as string[],
-      );
-      res.json({ user });
-    },
-  );
-
-  // Owner's remembered chat-composer defaults (model tier / reasoning effort / MCP
+  // Owner's remembered chat-composer defaults (pi model id / reasoning effort / MCP
   // tool groups). The composer pickers write here so each choice seeds the NEXT new
   // conversation — the per-conversation `selected_*` value (chat POST) still
   // overrides it for an already-started conversation. Each field is optional: omit
@@ -141,7 +120,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
   router.put(
     "/api/me/chat-defaults",
     requireAuth(store),
-    (req: AuthenticatedRequest, res) => {
+    async (req: AuthenticatedRequest, res) => {
       const patch: {
         model?: string | null;
         effort?: string | null;
@@ -150,10 +129,16 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       if (req.body?.model !== undefined) {
         const raw = req.body.model;
         if (raw === null || raw === "") patch.model = null;
-        else if (isModelTier(raw)) patch.model = raw;
         else {
-          apiError(res, 400, "알 수 없는 모델입니다.");
-          return;
+          // A model pi-gateway offers right now (its live list); a pick it later
+          // stops offering reads as the default when a conversation starts.
+          const offered = await offeredModelIdsOr503(store, config, res);
+          if (!offered) return;
+          if (typeof raw !== "string" || !offered.includes(raw)) {
+            apiError(res, 400, "알 수 없는 모델입니다.");
+            return;
+          }
+          patch.model = raw;
         }
       }
       if (req.body?.effort !== undefined) {
@@ -192,16 +177,17 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
-  // One intro/hashtags generation per user at a time: each spawns a ~2-minute
-  // SDK subprocess and they share one workspace dir (workspaceDirFor(…, "intro"/
-  // "hashtags")), so concurrent runs would stomp each other AND let one user fan
-  // out unbounded subprocesses. A per-user in-flight set gates re-entry with 409.
+  // One intro/hashtags generation per user at a time: each is a ~2-minute pi
+  // run and they share one work folder (workspaceDirFor(…, "intro"/"hashtags")
+  // → the reused sandbox run folder `piEphemeralRunKey` derives from it), so
+  // concurrent runs would stomp each other AND let one user fan out unbounded runs. A per-user in-flight set gates re-entry with 409.
   const generateInFlight = new Set<string>();
 
   // Generate a first-person self-introduction for the owner's avatar. The
   // avatar inspects its own persona + skills and writes a short blurb the owner
   // then reviews/edits before saving (this endpoint does NOT persist it). Runs
-  // headless and read-only, like a routine — no human is mid-conversation.
+  // headless (no owner-level MCP tools; pi built-ins in the owner's own sandbox)
+  // — no human is mid-conversation.
   router.post(
     "/api/me/intro/generate",
     requireAuth(store),
@@ -234,7 +220,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       // resolution — so the whole body is wrapped; an unhandled async throw would
       // otherwise hang the request until the client's timeout in Express 4.)
       const { sourced, enabledPlugins, pluginRoots } =
-        await resolveAvatarSkillSources(store, avatar, config, true);
+        await resolveAvatarSkillSources(store, avatar, config);
       const skills = await listSkillsInRoots(sourced);
 
       // Describe the avatar's equipment so it can ground the intro in reality
@@ -280,7 +266,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
   // Generate capability hashtags (역량 해시태그) for the owner's avatar, mirroring
   // intro/generate: the avatar inspects its persona + skills and proposes a short
   // set of searchable tags the owner reviews/edits before saving (NOT persisted
-  // here). Runs headless + read-only, like a routine.
+  // here). Runs headless, like intro/generate.
   router.post(
     "/api/me/hashtags/generate",
     requireAuth(store),
@@ -322,7 +308,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       // reflect what the avatar can actually do. (Wrapped like intro/generate so a
       // resolve/list throw becomes a 502 instead of a hung request.)
       const { sourced, enabledPlugins, pluginRoots } =
-        await resolveAvatarSkillSources(store, avatar, config, true);
+        await resolveAvatarSkillSources(store, avatar, config);
       const skills = await listSkillsInRoots(sourced);
 
       // When adding to an existing set, tell the avatar what it already has and ask
@@ -409,14 +395,9 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
   );
 
   router.get("/api/users/:id/avatar-image", (req, res) => {
-    // Users first, then the namespaced avatar kinds ("external:<id>",
-    // "group:<groupId>:<agentId>") — the prefixes can't collide with a user UUID, and
-    // every lookup only hits disk when a registered row matched (so an
+    // The lookup only hits disk when a registered row matched (so an
     // arbitrary :id never becomes a file path).
-    const ext =
-      store.getAvatarExt(req.params.id) ??
-      store.getExternalAvatarImageExt(req.params.id) ??
-      store.getGroupAgentImageExtByAvatarId(req.params.id);
+    const ext = store.getAvatarExt(req.params.id);
     if (!ext) {
       res.status(404).json({ error: "No avatar image" });
       return;

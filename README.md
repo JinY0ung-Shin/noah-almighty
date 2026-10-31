@@ -2,8 +2,9 @@
 
 A platform where each user signs up, builds an **avatar** (profile + GitHub plugins +
 personal knowledge repo), browses coworkers' avatars, and chats with any avatar they can reach.
-Chats run through the Claude Agent SDK with a tiered permission model — read-only for
-plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
+Every chat turn runs on a bundled pi-gateway, each in the acting user's own network-less sandbox;
+the owner's data (knowledge repo, secrets, SSH, to-dos) is reached only through Noah's MCP tools,
+which check owner/group trust themselves.
 
 ## What it does
 
@@ -50,7 +51,7 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   link in a chat with it. Anyone signed in to Noah who has the link can page through the slide renders,
   present them full screen and download the `.pptx` (speaker notes included) until the link expires:
   1, 7 (default) or 30 days, fixed at creation. Links are revocable any time under **내 아바타 → 권한·연결
-  → 공유 링크**; group-agent conversations cannot be link-shared. A link exports one file — it grants no
+  → 공유 링크**. A link exports one file — it grants no
   access to the conversation or the avatar. Mechanics:
   [`docs/architecture/share-links.md`](docs/architecture/share-links.md).
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,
@@ -75,9 +76,9 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   co-members **auto-trust each other symmetrically**: they see each other's `group`-visibility
   avatars and get elevated tool access (write-capable tools with a per-tool prompt) when chatting
   with a co-member's avatar. There is no per-user "trusted users" list anymore — `isTrustedFor` IS
-  group co-membership (`shareAnyGroup`), the single choke point. Each group has one shared
-  **knowledge repo** whose skills are auto-loaded for all member avatars; group admins edit it via
-  the `mcp__group_repo__*` tools. Group self-serve (member/repo management) is at `/api/me/groups*`.
+  group co-membership (`shareAnyGroup`), the single choke point. Groups have no shared knowledge
+  repo (retired 2026-10-30); team knowledge travels as shared skills. Group self-serve (member
+  management, avatar sharing, shared-skill channel) is at `/api/me/groups*`.
 - **Knowledge-backfill loop**: when the avatar notices a knowledge gap it can file a
   `request_info` gap. The owner sees pending gaps in the **내 아바타** nav badge and receives
   an in-app toast; clicking through lets them answer and feed the answer back to the avatar,
@@ -105,46 +106,21 @@ plain colleagues, elevated (write/SSH/repo) for owners and group co-members.
   unpublished avatars. An avatar can look up other avatars' capabilities mid-chat
   (the shared read-only `mcp__avatars__search_avatars` tool) and point you to a
   better-suited teammate when a request is outside its own expertise.
-- **External avatars**: operators can register stateless agents in **관리자 ▸ 외부 아바타**
-  (encrypted at rest) or as read-only deployment entries with `EXTERNAL_AGENTS_JSON`. They
-  appear in Explore and use the same Noah transcript/activity
-  UI, while each turn sends the full stored text history to an external
-  `POST /v1/agents/messages` endpoint. Their gateway owns model, system prompt, and tools;
-  Noah does not expose local model/effort, MCP, repo/plugin, routine, or image controls for
-  them. The event stream must declare schema `claude-agent-sdk-message-v1` and wrap normalized
-  Claude Agent SDK envelopes in `sdk_message` events. `visibleToGroupIds` (a non-empty list of
-  Noah group UUIDs) is REQUIRED for anyone to see the avatar: an entry without it still parses
-  but is visible to no one until groups are assigned (the admin UI enforces this on save; env
-  entries need the JSON edited + a restart). This group list is a Noah visibility ACL only; it
-  neither changes gateway tools nor grants local trust/elevation. System admins must also be
-  members of an allowed group to chat; removing membership blocks the next detail/chat request
-  but does not erase that user's existing conversation history or interrupt a run already started.
-  Existing conversations are bound to their original endpoint, so changing a static env endpoint
-  does not forward prior transcripts; start a new conversation after such a change.
-  The admin screen supports create/edit, activation, group selection, write-only Gateway API
-  keys, safety timeouts, and a side-effect-free Gateway auth/model check. Environment entries
-  remain read-only and win an ID collision, so existing deployments keep their behavior.
-- **Per-conversation model picker**: the chat composer lets any user choose a model
-  tier (Opus / Sonnet / Haiku) per conversation; the choice persists on the conversation
-  and rides each turn. **Opus is the default** when nothing is picked. Operators map each
-  tier to a concrete model id via `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` (the picker
-  shows the mapped id). An env-pinned `ANTHROPIC_MODEL` hard-locks the model and hides the picker.
-- **Tiered chat permissions**: the Claude Agent SDK runs with `permissionMode: "default"`.
-  A `PreToolUse` hook is the single gate for all tool calls:
-  - **Owner** (chatting with own avatar): all tools auto-approved with no prompt, including
-    Write/Edit/Bash, repo commit/push, SSH, knowledge-backfill, and routine management.
-  - **Elevated viewer** (group co-member in an avatar-sharing group): same tool set, but each
-    non-read tool requires an interactive per-tool allow/deny prompt.
-  - **Plain colleague / headless routines**: read-only tools only (`READONLY_TOOLS`,
-    default `Read,Glob,Grep`), plus in-process MCP tools that self-gate to owner/elevated
-    in their handlers.
+- **Per-conversation model picker**: the chat composer lists the models pi-gateway offers right now
+  (its live `GET /v1/models`, configured on pi's admin LLM page) plus **기본 모델**, pi-gateway's default
+  model, which runs when nothing is picked. The choice persists on the conversation and rides each turn;
+  a stored pick pi stops offering quietly runs the default. An admin may set a deployment-wide model
+  (관리자 → 시스템 → 모델) and per-model image-input support.
+- **Per-user sandboxes, tiered data access**: each run executes in the ACTING user's own pi
+  sandbox with the full tool set (shell, files) — a colleague chatting with your avatar works in
+  the colleague's sandbox, never yours. What separates owners, group co-members (avatar-sharing
+  groups) and plain colleagues is what Noah's MCP tools let each of them reach: owner-only tools
+  (repo commit/push, SSH, secrets, routines, to-dos) check the owner in their handlers.
   - Streaming, markdown rendering, conversations, and per-message actions (copy,
     regenerate, edit-and-resend) are supported for all viewer classes.
-- **Admin**: list users, grant/revoke the `admin` role, delete accounts, manage groups
-  (create/delete teams, assign group admins, manage members), and configure the subscription
-  login (관리자 ▸ 구독 로그인) — paste the output of `claude setup-token` to use a Claude
-  subscription instead of an `ANTHROPIC_API_KEY`. System info (model, subscription status,
-  API key override) is at `GET /api/admin/system`.
+- **Admin**: list users, grant/revoke the `admin` role, delete accounts and manage groups
+  (create/delete teams, assign group admins, manage members). The LLM endpoints are configured
+  in pi-gateway's own admin page (README "Deployment").
 
 ## Quick start
 
@@ -156,116 +132,289 @@ npm run dev
 
 Open `http://localhost:48787`, click **회원가입**, and create the first account (it becomes admin).
 
-## Docker Compose
+## Deployment
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
+Noah runs as one Docker Compose stack together with its own pi-gateway: every agent turn runs on
+pi-gateway (`POST /v1/responses`), and each user's files and commands live in that user's network-less
+pi sandbox. Design and mechanics: [docs/architecture/pi-runtime.md](docs/architecture/pi-runtime.md).
+`docker-compose.yml` **includes** pi-gateway's own `docker-compose.yml` from a pi-gateway checkout
+(compose `include:`) and adds Noah's instance configuration on top
+([`docker/pi/compose.override.yml`](docker/pi/compose.override.yml)); pi-gateway's code is used as it is,
+never copied into this repository.
 
-The image includes Node.js, git, GitHub CLI (`gh`), Python 3, ripgrep, `jq`, `uv`, LibreOffice,
-poppler-utils and Korean (Nanum) fonts, plus what backs the avatar's PowerPoint decks: the Chromium
-headless shell (Debian `chromium-headless-shell`, which the pptx skill's converter drives with the
-network blocked), `fontconfig`, and a pinned Python set (`python-pptx`, `lxml`, Pillow, `fonttools`,
-`defusedxml`, `openpyxl`, `XlsxWriter` — `default-skills/skills/pptx/converter/requirements.txt`).
-The converter's OFL fonts (Pretendard, Gothic A1, Selawik, Noto Sans KR) are vendored in the skill
-with their license texts and registered with fontconfig for LibreOffice's previews. The build ends
-with the converter's self-test (about 40 s). SQLite data and uploaded avatar images persist under
-`APP_DATA_DIR`. The container runs as the non-root `node` user.
+### Prerequisites
 
-On a closed corporate network, optional build args (in `docker-compose.yml`, all empty by default =
-public upstreams) route installs through internal mirrors. Alongside the existing `APT_MIRROR_HOST`,
-`NPM_CONFIG_REGISTRY`, and `CA_CERT_FILE`, two cover the PyPI fetch of the pinned Python set:
+- Linux x86_64 host, **Docker Engine 25 or newer** with the Compose v2 plugin (≥ 2.24: `include` with an
+  override list, `additional_contexts: service:`) and buildx. Verified with Engine 29.9 / Compose 5.6.
+- **A Docker daemon that runs no other pi-gateway.** pi's sandboxd adopts, reaps and removes every sandbox
+  container labelled `pi-gateway.instance=default` on its daemon, and its egress socket volume has a fixed
+  name (`pi-gateway-proxy-sock`) — neither can be changed by configuration. Two pi-gateway stacks on one
+  daemon delete each other's sandboxes.
+- **The pi-gateway submodule** (`vendor/pi-gateway`, pinned by this repository's commit; pi's code is used as
+  it is, never edited here). Clone with `--recursive`, or after a plain clone:
+  ```bash
+  git submodule update --init
+  ```
+  `git submodule status` shows the pinned commit. `PI_GATEWAY_DIR` in `.env` points the stack at another
+  checkout instead (an existing deployment's `../pi-gateway`, see Upgrade).
+- `openssl` and root on the host (pi's `scripts/setup-host.sh` creates the secret files).
+- An LLM endpoint pi-gateway can call (OpenAI-compatible `/v1/chat/completions` or Anthropic-compatible
+  `/v1/messages`, with tool calling). Model credentials live in pi-gateway only, never in Noah.
 
-- `PIP_INDEX_URL` — internal PyPI index URL used by `pip install` at build time.
-- `PIP_TRUSTED_HOST` — host to trust when that PyPI mirror uses HTTP or a self-signed cert.
+### First boot
 
-What the mirrors must serve for the deck converter:
+1. **Write Noah's `.env`:** `cp .env.example .env`, then set at least `SESSION_SECRET`, `PI_GATEWAY_HOME`
+   (pi's data root, e.g. `/srv/pi-gateway`; `PI_GATEWAY_SECRETS` only when it is not `$PI_GATEWAY_HOME/secrets`).
+   Values in Noah's `.env` win over pi-gateway's `.env` inside pi's compose file too, so
+   the keys both read (`LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
+   `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`) must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a
+   **host** path.
+2. **Prepare the host** (idempotent; re-run whenever pi's service key changes). It reads `PI_GATEWAY_HOME`
+   (and `PI_GATEWAY_SECRETS`, `PI_GATEWAY_DIR`) from that `.env`:
+   ```bash
+   sudo docker/pi/setup-host.sh
+   ```
+   - **pi-gateway's half** (it runs the submodule's `scripts/setup-host.sh` with the same values): creates
+     `$PI_GATEWAY_HOME/workspaces` (uid 1000 — the same uid as Noah's container, which mounts it),
+     `$PI_GATEWAY_HOME/plugins`, one 0400 copy of each secret per pi service under `$PI_GATEWAY_SECRETS`, and
+     adds `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`, `DOCKER_GID` to `vendor/pi-gateway/.env` (git-ignored
+     there); whatever already exists is kept. Review the rest of pi's settings in that file (`cp
+     .env.example .env` there first if you want its comments): `GATEWAY_BIND_ADDR`/`GATEWAY_PORT` (where pi's
+     admin page and API listen, default `127.0.0.1:8080`), the turn and `SANDBOX_*` limits (size them first:
+     [Sizing pi-gateway](#sizing-pi-gateway)), `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
+   - **Noah's half:** checks the workspaces owner, copies pi's service key to
+     `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key` (uid 1000, 0400 — pi's one-copy-per-service convention;
+     compose mounts it into Noah as a secret, so the key never sits in `.env`) and checks that pi's admin key
+     is set.
+3. **Build and start everything:**
+   ```bash
+   docker compose up -d --build
+   docker compose ps    # gateway, sandboxd, mcp-broker, egress-proxy healthy, noah-almighty healthy;
+                        # sandbox-image, pi-sandbox-image and pi-setup exited (0)
+   docker compose logs pi-setup
+   ```
+   Start order: pi's `sandbox-image` and `egress-proxy` → Noah's deck sandbox image `pi-sandbox-image`
+   (built FROM pi's sandbox image; the build runs the converter self-test, about 35 s) → `sandboxd` →
+   `mcp-broker` → `gateway` (healthy) → `pi-setup` → `noah-almighty`. `pi-setup` registers one broker entry per
+   Noah MCP server, deploys Noah's system prompt (`scripts/pi-system-prompt.md`, live prompt `noah`) and turns
+   off pi's `request_admin` / `present_file` built-ins; it is idempotent and re-runs on every `up`.
+4. **Configure the LLM in pi-gateway:** open pi's admin page (`http://127.0.0.1:8080/admin` on the host by
+   default; key: `$PI_GATEWAY_SECRETS/gateway/admin_api_key`) → **LLM**, add the corporate LLM server and its
+   models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
+   pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
+   picks none runs pi's default model).
+5. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
 
-- **apt** — `chromium-headless-shell` and `chromium-common`, from `bookworm-security` (Chromium 154
-  when this was written) or `bookworm` main (150, verified to convert identically), plus about 70
-  dependencies (~132 MB of `.deb`s). `APT_MIRROR_HOST` rewrites both suites, so the mirror has to
-  proxy `/debian-security` for the newer build.
-- **PyPI** — every version pinned in `requirements.txt`, as CPython 3.11 wheels.
-- **npm** — nothing new: `playwright-core` (pinned `1.61.1`, a runtime dependency) was already in the
-  lockfile through `@playwright/test`.
+### What the stack wires up
 
-Two build args control the converter (compose passes them through; set them in `.env` or the shell):
+| | |
+|---|---|
+| Noah → pi | `http://gateway:8080` over pi's `edge` network, with pi's service key from the compose secret (`PI_GATEWAY_API_KEY_FILE`). |
+| pi's broker → Noah `/mcp/<server>` | `http://noah-almighty:48787` over `noah-mcp`, an internal network only the broker and Noah are on. The broker has a pinned address there (`NOAH_MCP_BROKER_IP`, default `172.16.248.10` in `NOAH_MCP_SUBNET` `172.16.248.0/24` — outside Docker's default address pools, so no auto-allocated network lands on it), and Noah's `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that address, so no other container, and no published-port client, passes `/mcp`'s source check; each call still needs a per-run token Noah mints itself. Change both variables if the subnet collides with a network your host routes to. |
+| sandboxes | No network at all (`network_mode: none`, pi's sandboxd). Their only exit is pi's egress-proxy, which opens only what pi's `SANDBOX_EGRESS_ALLOW` lists — keep Noah's address out of it: the broker, not the sandbox, calls Noah. |
+| workspaces | `$PI_GATEWAY_HOME/workspaces` is bind-mounted read-write into Noah at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`): Noah stages attachments, captures and Confluence files into each user's sandbox folder and reads shared files and deck previews from it. uid 1000 on both sides. |
+| sandbox image | `noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}` ([docker/pi-sandbox](docker/pi-sandbox/README.md)), built FROM pi's own `pi-gateway/sandbox:latest` and set as sandboxd's `SANDBOX_IMAGE`; pi's own image keeps its own tag. It carries the pptx skill's converter (Chromium headless shell, the pinned Python set, the deck fonts), so `PI_DECK_SANDBOX=true` is fixed. |
+| Noah image | No agent runs in it any more. It keeps what the server itself runs: git (server-side repository work), `gh` (create_repo), LibreOffice + poppler + the deck fonts (share_file's approximate previews), python3-cryptography/paramiko (SSH key generation, known_hosts), the hex-ssh MCP server (relayed to pi), and the MCP bridge scripts. No Chromium, Python package set, uv or ripgrep (those are in the sandbox image). |
 
-- `DECK_CONVERTER=0` builds a legacy image without Chromium: new decks fall back to python-pptx and
-  `describe_system` tells the avatar the converter is not installed. Use it only when the apt mirror
-  cannot serve Chromium.
-- `DECK_CONVERTER_STRICT_GOLDEN=1` makes golden drift fail the build (next section).
+docker-compose.yml FIXES `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_KEY_FILE`, `PI_WORKSPACES_DIR`,
+`PI_DECK_SANDBOX` and the default `NOAH_MCP_PUBLIC_URL` / `NOAH_MCP_ALLOWED_CIDRS` for the container; `.env`
+cannot override the fixed ones.
 
-The converter adds about 0.21 GB compressed / 0.54 GB uncompressed to the image.
+**Native TLS** (`TLS_CERT_FILE`/`TLS_KEY_FILE`): the broker must reach Noah by the name its certificate
+carries. Set `NOAH_MCP_PUBLIC_URL=https://<that name>:<PORT>` and `NOAH_MCP_HOST_ALIAS=<that name>` (a network
+alias on `noah-mcp`), and make sure pi's broker trusts the issuing CA (`NODE_EXTRA_CA_CERTS`).
+
+**gVisor:** with `SANDBOX_RUNTIME=runsc` in pi-gateway's `.env`, raise `SANDBOX_PIDS_LIMIT`: the gVisor
+sentry's own threads count against the sandbox's pids cgroup, and a deck build at the default 256 kills the
+sandbox (`WaitPID ... failed: EOF`). Peaks of 340–550 were measured for one build
+([docker/pi-sandbox/README.md](docker/pi-sandbox/README.md)), so use at least 1024; pi-gateway's
+`docs/OPERATIONS.md` §7 recommends starting at 4096. Install and register runsc as that section describes.
+
+### Sizing pi-gateway
+
+pi-gateway's defaults fit a small team. They are pi's own settings: set them in **pi-gateway's `.env`**, then
+`docker compose up -d`. Example for a peak of 100–200 concurrent turns with at most 8 per user:
+
+| pi `.env` | pi default | Example | At the default |
+|---|---|---|---|
+| `MAX_CONCURRENT_TURNS` | `16` | `250` (peak + headroom) | Turns over the limit queue; after `TURN_QUEUE_TIMEOUT_SECONDS` (120) pi answers 503, Noah tries the stream open 4 times in all with backoff, then the turn fails. |
+| `MAX_CONCURRENT_TURNS_PER_USER` | `3` | `8` | A user's 4th simultaneous conversation waits until one of the first three finishes. |
+| `SANDBOX_MEMORY` / `SANDBOX_CPUS` | `1g` / `1` | `4g` / `2` | All of one user's turns share ONE sandbox: with 8 at once, a deck build (one ≈ 0.5 GiB Chromium; builds queue one at a time per sandbox) and the other turns' commands (python, pandas…) share 1 GiB and one CPU. Both are caps, not reservations. |
+
+Measured with the example values (2026-10-31, the e2e stack in dind on a 12-core dev box, a stub model, every
+turn holding a `sleep` in its sandbox):
+
+- 200 concurrent turns from 200 users, started over 60 s: none queued; at the peak pi's services used ≈ 1.1 GiB
+  PSS (gateway 0.6, broker 0.4), the 200 sandbox containers with their containerd shims ≈ 0.85 GiB, Noah
+  ≈ 1.35 GiB — ≈ 3.3 GiB in all, before whatever the turns' own commands use.
+- 200 live sessions holding 400 KiB of history each added ≈ 100 MiB to the gateway's heap (its V8 limit is
+  ≈ 4 GiB).
+- One user's 8 simultaneous turns all ran in parallel.
+
+**Session starts are the expensive part.** pi starts a session on a conversation's first turn and after
+`SESSION_IDLE_SECONDS` without one (it unloads the idle session and rebuilds it on the next turn), and every
+start lists all of Noah's MCP servers through the broker. Before pi-gateway `52e5f2f`, 200 starts in the same
+second made up to half of those sessions start WITHOUT Noah's tools and most of their sandbox commands fail
+(`sandboxd is unreachable`): Docker's embedded DNS answered in up to 16 s while dockerd created 200 sandboxes, the
+broker's connection pool refused instead of waiting, and the broker's accept queue overflowed. pi now caches and
+coalesces name lookups, the broker pool waits for a free slot, the gateway sends at most 32 tool-list requests to
+the broker at once, and a server whose list still failed is asked again (at most every 30 s) when the model
+searches or calls an unknown tool. Measured after the fix (same stack, 3 runs of 200 starts in one second): no
+session missed a tool list, no sandbox command failed; the first turn started up to ≈ 17 s (median) / 30 s later
+than unloaded, the broker at ≈ 1.5 cores being the bottleneck. Noah itself starts at most
+`ROUTINE_MAX_CONCURRENT_RUNS` (10) routines and 4 task-API runs at once.
+
+So the bundle sets pi's `SESSION_IDLE_SECONDS` to **1800** (pi's default is 300, which makes every 5-minute
+pause in a conversation a session start), from Noah's own `NOAH_PI_SESSION_IDLE_SECONDS` — a
+`SESSION_IDLE_SECONDS` in pi-gateway's `.env` is ignored. Longer keeps more sessions loaded (800 live sessions
+held ≈ 600 MiB of gateway heap in the runs above) and refreshes
+the relayed tool lists (공용 MCP servers, plugin MCP, hex-ssh) later: a newly bound or added server shows up
+once the conversation has been idle that long, or in a new conversation. Going past an hour gains little.
+
+### Closed networks (build mirrors)
+
+Every build arg is empty by default (= public upstreams); set them in Noah's `.env` or the shell.
+
+- **Noah image:** `APT_MIRROR_HOST`, `NPM_CONFIG_REGISTRY`, `CA_CERT_FILE` (a corporate proxy CA inside the
+  build context, e.g. `docker/tls-fullchain.crt`), and the standard `HTTP(S)_PROXY`/`NO_PROXY` args.
+- **Deck sandbox image:** `PIP_INDEX_URL` / `PIP_TRUSTED_HOST` (every pin of
+  `default-skills/skills/pptx/converter/requirements.txt` as a CPython 3.12 wheel), `NPM_CONFIG_REGISTRY`
+  (`playwright-core`), `CA_CERT_FILE`. Its apt follows the mirror pi's sandbox image was built with, which must
+  then also serve Debian trixie's `chromium-headless-shell` and `chromium-common`. uv is a pinned GitHub
+  release download.
+- **pi-gateway's images:** `APT_MIRROR_URL`, `APT_SECURITY_MIRROR_URL`, `GOPROXY` in pi-gateway's `.env`;
+  `NPM_CONFIG_REGISTRY` and `PIP_INDEX_URL` are shared with Noah's (Noah's `.env` wins).
+
+### Upgrade
+
+- **Noah:** `git pull && git submodule update --init`, then `docker compose up -d --build`. The submodule
+  carries the pi-gateway pin, so a pin move arrives with the pull. `pi-setup` re-registers what changed.
+- **Deployments from before the submodule** (pi-gateway checked out at `../pi-gateway`): pi's `.env` lives
+  there, and without it pi's compose loses `DOCKER_GID`, `GATEWAY_BIND_ADDR` and the rest. Either copy it once
+  (`cp ../pi-gateway/.env vendor/pi-gateway/.env`) and retire the old checkout, or keep using it with
+  `PI_GATEWAY_DIR=../pi-gateway` in Noah's `.env` and check out the submodule's commit there
+  (`git submodule status`). The compose project name is unchanged, so pi's volumes stay attached.
+- **`noah-mcp` moved from `172.30.248.0/24` to `172.16.248.0/24`** (the old default sat inside Docker's
+  auto-allocation pool and could collide with the stack's own networks: `Pool overlaps with other one`). A
+  deployment that never set `NOAH_MCP_SUBNET`/`NOAH_MCP_BROKER_IP` gets the new subnet on its next
+  `docker compose up -d`: Compose recreates the network and the two containers on it (verified on Compose
+  5.0.0). If your Compose refuses with a diverged-network error, run `docker compose down` first (volumes
+  stay). To keep the old subnet, set both variables to the old values in `.env`.
+- **A new sandbox image only applies to new sandboxes.** Running ones keep the old image until idle
+  (`SANDBOX_IDLE_SECONDS`, 15 min); to switch at once (workspaces stay):
+  `docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)`.
+- Existing SDK-era deployments: see "Moving an existing deployment to pi" below.
 
 ### Deck converter golden drift
 
-The build-time self-test converts two frozen reference decks in both font profiles.
+Decks are built inside the user's pi sandbox by the image `pi-sandbox-image` builds
+([docker/pi-sandbox](docker/pi-sandbox/README.md)). Its build-time self-test converts two frozen reference
+decks in both font profiles.
 
-- An **integrity** failure — a gate rejects a deck, a stage crashes, the toolchain is incomplete —
-  always FAILS the build.
-- **Golden drift** — the image's Chromium lays the reference decks out differently from the committed
-  golden IR (a numeric delta beyond 0.01 px, or a changed lint/warning set) while every integrity gate
-  still passes — is RECORDED, not fatal. The build log prints
-  `deck converter selftest: DRIFT (Chromium <ver>; max Δ <x> px on <n> leaves; lint set changed: …)`,
-  the record lands in `/usr/local/share/noah-almighty/deck-selftest.json`, and the running server
-  reports it: in the `deck toolchain probe` boot log line plus a warn line, and in `describe_system`.
-  Decks keep building and passing every integrity gate; their layout may differ slightly from the
-  reference renders.
+- An **integrity** failure — a gate rejects a deck, a stage crashes, the toolchain is incomplete — always
+  FAILS the build.
+- **Golden drift** — the image's Chromium lays the reference decks out differently from the committed golden
+  IR (a numeric delta beyond 0.01 px, or a changed lint/warning set) while every integrity gate still passes —
+  is RECORDED in the image (`/usr/local/share/noah-almighty/deck-selftest.json`, printed at the end of the
+  build), not fatal. Decks keep building and passing every integrity gate; their layout may differ slightly
+  from the reference renders.
 
-Drift is not fatal by default because the apt mirror follows `bookworm-security`: the next Chromium
-security update must not be able to block every unrelated deploy. `DECK_CONVERTER_STRICT_GOLDEN=1`
-makes it fatal; the Docker smoke (`scripts/deck-docker-smoke.sh`) always treats it as fatal.
+Drift is not fatal by default so that the next Chromium security update cannot block every unrelated deploy.
+`DECK_CONVERTER_STRICT_GOLDEN=1` makes it fatal. When drift is recorded, maintainers:
 
-When drift is recorded, maintainers:
-
-1. Render the reference decks with the image's own Chromium and open them in desktop PowerPoint
-   (opens without a repair prompt, text inside its boxes, tables and charts editable):
-   ```bash
-   IMG=noah-almighty:deck-verify   # the image that recorded the drift
-   mkdir -p /tmp/deck-drift
-   docker run --rm --network none -u "$(id -u):$(id -g)" -v /tmp/deck-drift:/out "$IMG" \
-     bash /app/default-skills/skills/pptx/scripts/deck.sh selftest --keep /out/selftest
-   ```
+1. Render the reference decks with the image's own Chromium and open them in desktop PowerPoint (opens without
+   a repair prompt, text inside its boxes, tables and charts editable):
+   `docker/pi-sandbox/verify.sh --image noah-almighty/pi-sandbox:latest --keep /tmp/deck-drift --quick`.
 2. If they look right, regenerate the goldens on a dev box —
-   `bash default-skills/skills/pptx/scripts/deck.sh selftest --update-golden` — with that SAME
-   Chromium build (point `NOAH_PPTX_CHROMIUM` at it, or run the command inside the image with the
-   checkout's converter directory bind-mounted over `/app/default-skills/skills/pptx/converter`;
-   `--update-golden` refuses a read-only skill tree), commit them, and rebuild the image.
-3. If they look wrong, keep the previous image (next section) and report the regression; do not
-   update the goldens.
+   `bash default-skills/skills/pptx/scripts/deck.sh selftest --update-golden` — with that SAME Chromium build
+   (point `NOAH_PPTX_CHROMIUM` at it), commit them, and rebuild the image.
+3. If they look wrong, keep the previous image (next section) and report the regression; do not update the
+   goldens.
 
 ### Deck converter rollback
 
-Moving an EXISTING deployment to the converter image needs no DB, volume or `.env` migration and no
-new required env; uid 1000 is unchanged, and old download cards keep their stored previews. The
-compose service has no `image:` key, so `docker compose build` overwrites
-`<project>-noah-almighty:latest` — tag the running image first:
+Both images this repository builds can be rolled back by tag. Before an upgrade, tag the running ones:
 
-1. Tag the running image for rollback:
-   ```bash
-   IMG="$(docker compose config --images noah-almighty)"
-   docker image tag "$IMG:latest" "$IMG:pre-deck"
-   ```
-2. `git pull`, then `docker compose build` with the same mirror args as before (add
-   `DECK_CONVERTER=0` only if the apt mirror cannot serve Chromium).
-   `docker compose --progress plain build` shows the self-test's output.
-3. Watch the build log for `deck converter selftest: PASS`. On `DRIFT` the build continues and the
-   drift is reported at runtime (previous section).
-4. `docker compose up -d`. The boot log shows the probe with `"mode":"converter"`:
-   `docker compose logs noah-almighty | grep 'deck toolchain probe'`.
-5. **Rollback** (same shell, `IMG` from step 1):
-   ```bash
-   docker image tag "$IMG:pre-deck" "$IMG:latest" && docker compose up -d --no-build noah-almighty
-   ```
+```bash
+NOAH_IMG="$(docker compose config --images noah-almighty)"
+docker image tag "$NOAH_IMG:latest" "$NOAH_IMG:pre-upgrade"
+docker image tag noah-almighty/pi-sandbox:latest noah-almighty/pi-sandbox:pre-upgrade
+```
 
-Delete the `:pre-deck` tag (`docker image rm "$IMG:pre-deck"`) once the new image has proven itself;
-until then it keeps the old image's layers on disk. Egress-overlay deployments run
-`noah-almighty:egress`, built FROM `noah-almighty:egress-base`: tag those two the same way, rebuild
-both as in [docs/egress-policy.md](docs/egress-policy.md), and roll back by re-tagging them and
-running `up -d --no-build` with both compose files. The converter needs nothing from the egress
-boundary: its Chromium only talks to loopback, which the egress firewall allows.
+Roll back (same shell):
+
+```bash
+docker image tag "$NOAH_IMG:pre-upgrade" "$NOAH_IMG:latest"
+docker image tag noah-almighty/pi-sandbox:pre-upgrade noah-almighty/pi-sandbox:latest
+docker compose up -d --no-build
+docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)   # sandboxes pick the image up again
+```
+
+Delete the `:pre-upgrade` tags once the new images have proven themselves. pi-gateway's own images
+(`pi-gateway/*:latest`) roll back the same way, or by checking out the previous Noah commit
+(`git submodule update` moves pi with it) and rebuilding.
+
+### Moving an existing deployment to pi
+
+An SDK-era Noah deployment (single `noah-almighty` service) moves over without a data migration: the project
+name, the `noah-almighty-data` volume and uid 1000 are unchanged, and retired data is backed up and
+quarantined at the first boot (next section) — the old CLI transcripts in `APP_DATA_DIR/agent-sessions`
+included.
+
+1. Tag the running image for rollback (as above).
+2. Check out the pi-gateway submodule (`git submodule update --init`).
+3. In `.env`: add `PI_GATEWAY_HOME` (and `PI_GATEWAY_SECRETS` if not the default), delete `PI_MODEL_MAP` (retired); set
+   `NODE_EXTRA_CA_CERTS` to the CA's **host** path or remove it (the old in-image path
+   `/usr/local/share/ca-certificates/extra-proxy-ca.crt` does not exist on the host and stops `up`); remove
+   `AGENT_RUNTIME`, `DECK_CONVERTER`, `UV_DEFAULT_INDEX`/`UV_INDEX` and the Claude-SDK-only keys (`ANTHROPIC_*`,
+   `MAX_TURNS`, `AUTO_COMPACT_WINDOW`, `READONLY_TOOLS`) — Noah ignores them. Move the model endpoint and its
+   credentials to pi-gateway's LLM page; the admin UI's Claude subscription token is gone.
+4. `sudo docker/pi/setup-host.sh` (First boot step 2), `docker compose up -d --build`, then configure the LLM
+   in pi (First boot step 4).
+5. **Rollback** to the SDK-era release: `git checkout` that release, re-tag the old image as `latest`, and
+   `docker compose up -d --no-build noah-almighty`. pi's services keep running until
+   `docker compose down` from the new checkout; nothing of Noah's data volume depends on them. The first pi boot
+   did change two things the old release reads, though: it DELETED the stored Claude subscription token
+   (`claude_oauth_token` — paste it again in the old admin UI, or restore it from
+   `APP_DATA_DIR/backups/pre-retire-<stamp>.db`) and MOVED the CLI transcripts (`agent-sessions`) to
+   `APP_DATA_DIR/retired/<stamp>/` — move them back, or older conversations continue from their text history
+   only. Turns taken on pi have no CLI transcript either way.
+
+The optional egress overlay ([docs/egress-policy.md](docs/egress-policy.md)) is not yet supported together
+with the bundled pi-gateway: its firewall admits only its own proxy, so Noah cannot reach pi's gateway.
+
+### Retirement backups and quarantine
+
+Removed features (personal bots, external avatars, group shared agents, server agents, Craft apps, STT)
+are cleaned out of an existing deployment at boot. Before any of that deletes data, Noah:
+
+- **backs up the whole SQLite DB** to `APP_DATA_DIR/backups/pre-retire-<UTC stamp>.db` (file 0600,
+  folder 0700), once per boot that still has retired data — never on a clean or already-retired DB. The
+  boot log has one `database backed up before retiring removed features` line with the path and size.
+- **moves, never deletes, every retired file** to `APP_DATA_DIR/retired/<same stamp>/`, at the same
+  path relative to `APP_DATA_DIR` (chat media, workspace trees and copies, SDK session files, avatar
+  images, `runtime/craft-purge`). A symlink is moved as a link; its target is never touched. An item
+  on another filesystem (EXDEV) is left in place, logged, and retried on later boots.
+
+If the backup fails (disk full, `backups` is not a folder or is a symlink), the boot logs
+`database backup before retirement FAILED` and skips EVERY retirement step — nothing is dropped, purged
+or moved — and the next boot tries again. Free space or fix the folder, then restart.
+
+**Both folders hold full user data** (conversations, encrypted secrets readable with this deployment's
+`SESSION_SECRET`, files) and are never pruned, served or swept by Noah — account deletion does not reach
+them either. Keep them owner-only and delete them yourself when satisfied:
+
+```bash
+# inside the data volume (APP_DATA_DIR, /app/data in the image)
+ls -l backups/ retired/
+chmod -R u+w retired/<stamp>     # only if a read-only tree refuses rm
+rm -rf retired/<stamp> backups/pre-retire-<stamp>.db
+```
+
+To restore: stop Noah, replace `noah-almighty.db` with the backup (and remove `noah-almighty.db-wal` /
+`-shm`), move the items you need from `retired/<stamp>/` back to the same relative paths, then start the
+release you are rolling back to. Starting this release again retires the same data again (with a new
+backup and quarantine).
 
 ## Configuration
 
@@ -273,30 +422,32 @@ boundary: its Chromium only talks to loopback, which the egress firewall allows.
 | --- | --- |
 | `SESSION_SECRET` | Session token hashing secret (required in production). |
 | `SECURE_COOKIES` | `true` to mark the session cookie `Secure` (HTTPS-only). Leave unset for plain-HTTP deployments (e.g. local docker-compose) or the cookie is never sent back and login fails. |
-| `AGENT_RUNTIME` | `claude` (default) or `local` (offline stub, no plugin execution). |
-| `EXTERNAL_AGENTS_JSON` | Optional read-only JSON array of stateless external avatars (the admin UI can manage additional entries). Each entry requires `id`, `displayName`, and exactly one of `endpoint` or `baseUrl`; an exact endpoint must end in `/v1/agents/messages`, while a base URL gets that suffix appended. The v1 contract supports only `agent: "claude"`. Entries also support public `alias`/`bio`/`persona`/`intro`/`hashtags`, a non-empty `visibleToGroupIds` for Noah group visibility (REQUIRED for the avatar to be visible — omitting it keeps the entry parseable but hidden from everyone until groups are assigned), private upstream `model`, `system`, and `apiKeyEnv` (preferred) or `apiKey`, plus positive `connectTimeoutSeconds` (default 15), `idleTimeoutSeconds` (default 120), and `totalTimeoutSeconds` (default 1800). Values are stable group IDs from the admin groups API/UI and are never returned by public avatar APIs. Environment entries are read-only and take precedence over a UI entry with the same ID. Public ids are `external:<id>`. |
-| `ANTHROPIC_API_KEY` | Optional; absent → SDK uses subscription token (admin UI) or local Claude Code auth. |
-| `ANTHROPIC_MODEL` | Optional. Pin the Claude model (e.g. `claude-opus-4-8`). When set it's a **hard lock**: the per-conversation model picker is hidden. Absent → the resolution chain below (defaulting to Opus). |
-| `ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL` | Optional. Map each composer model TIER (Fable/Opus/Sonnet/Haiku) to a concrete model id; the picker shows the mapped id. Unset tier → SDK resolves the alias to the account default (shown as just the tier label). Precedence: `ANTHROPIC_MODEL` > user's per-conversation tier > admin override > **Opus** (default). |
-| `PORT` / `APP_DATA_DIR` | Server port (default `48787`) / data directory (SQLite DB + avatar images). |
+| `AGENT_RUNTIME` | `pi` (default; every turn runs on pi-gateway — see `docs/architecture/pi-runtime.md`) or `local` (deterministic offline stub for tests). `claude` is retired and stops the boot. **Fixed to `pi` by docker-compose.yml.** |
+| `PI_GATEWAY_URL` / `PI_GATEWAY_API_KEY` / `PI_GATEWAY_API_KEY_FILE` | The pi-gateway origin and its service key — inline, or a file holding only the key (trimmed). Set ONE: both, or an unreadable/empty file, stops the boot. The key is server-only (it can run turns as any user): an inline key is scrubbed from the process env after boot, a file's key never enters it. **Fixed by docker-compose.yml** (`http://gateway:8080`, the compose secret `/run/secrets/pi_gateway_api_key`; a `PI_GATEWAY_API_KEY` in `.env` would stop the boot); set them yourself only for a native run. |
+| `PI_WORKSPACES_DIR` | Path of pi's `$PI_GATEWAY_HOME/workspaces` as Noah sees it (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. **Fixed by docker-compose.yml** (`/srv/pi-workspaces`, a bind mount of `$PI_GATEWAY_HOME/workspaces`). |
+| `NOAH_MCP_PUBLIC_URL` | The base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (registered by the `pi-setup` service through `scripts/pi-register-mcp.mjs`, logged at boot). Compose default `http://noah-almighty:<PORT>`; set it (with `NOAH_MCP_HOST_ALIAS`) only for native TLS. |
+| `NOAH_MCP_ALLOWED_CIDRS` | Comma-separated addresses/CIDRs (IPv4/IPv6) allowed to reach `/mcp/<server>`, matched on the TCP peer (never `X-Forwarded-For`); others get 403 before the token is read. An invalid entry stops the boot. Compose default: the broker's pinned address, `${NOAH_MCP_BROKER_IP}/32`. Unset (native run) = open — then bind/firewall the port to the broker's network. |
+| `PI_MODEL_MAP` | **Retired** — the composer now offers pi-gateway's live model list (2026-10-31). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. Stored picks that named a tier (`opus`, `sonnet`, …) are not migrated: they run pi-gateway's default model until a model is picked again, and an admin model setting naming a tier is reported as ignored (관리자 → 시스템). |
+| `PI_DECK_SANDBOX` | `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). **Fixed to `true` by docker-compose.yml**, which builds and wires that image. |
+| `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
+| `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default the `./vendor/pi-gateway` submodule), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |
+| `NOAH_MCP_SUBNET` / `NOAH_MCP_BROKER_IP` / `NOAH_MCP_HOST_ALIAS` / `NOAH_PI_SANDBOX_TAG` | Compose only: the internal broker↔Noah network (default `172.16.248.0/24`, outside Docker's default address pools), the broker's pinned address on it (`172.16.248.10`), Noah's extra name there (native TLS), and the tag of the deck sandbox image (`latest`). |
+| `NOAH_PI_SESSION_IDLE_SECONDS` | Compose only: pi's `SESSION_IDLE_SECONDS` (default `1800`; a value in pi-gateway's `.env` is ignored) — see [Sizing pi-gateway](#sizing-pi-gateway). |
+| `PORT` / `APP_DATA_DIR` |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | Optional PEM cert/key paths that switch the app's own listener to HTTPS — set both or the boot refuses (docker-compose mounts `./docker/tls` → `/app/tls`). HTTPS gives pages a secure context, which the browser-bridge one-click update (File System Access) requires. Set `SECURE_COOKIES=true` with it. |
-| `READONLY_TOOLS` | Tool allowlist for unelevated colleague chat sessions (default `Read,Glob,Grep`). |
 | `GITHUB_HOST` | Internal/default GitHub host for shorthand repo values like `owner/repo` (default `github.com`). Knowledge repos must use this host; full github.com URLs can use `GITHUB_TOKEN`. |
 | `GITHUB_CA_CERT` | Optional PEM CA bundle for on-prem GitHub Enterprise (GHES) with a private CA. |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Optional corporate proxy for outbound web access — used by the `mcp__web__fetch` avatar tool and inherited by the SDK subprocess (built-in WebFetch/WebSearch). Put intranet hosts/domain suffixes in `NO_PROXY` so they bypass the proxy. |
-| `NODE_EXTRA_CA_CERTS` | Optional PEM bundle for intranet HTTPS behind a private corporate CA — honored by the app process (`mcp__web__fetch`) and the SDK subprocess (built-in WebFetch). Docker images built with the `CA_CERT_FILE` arg already contain `/usr/local/share/ca-certificates/extra-proxy-ca.crt`. |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Optional corporate proxy for Noah's own outbound web access — the `mcp__web__fetch` avatar tool and the MCP servers Noah relays. Put intranet hosts/domain suffixes in `NO_PROXY` so they bypass the proxy. Sandbox egress is pi-gateway's `SANDBOX_EGRESS_ALLOW`. |
+| `NODE_EXTRA_CA_CERTS` | Optional PEM bundle for intranet HTTPS behind a private corporate CA, as a **host** path: compose mounts it read-only into Noah (app fetch, `mcp__web__fetch`, MCP relays) and pi-gateway's compose into its gateway and broker — one key for both (README "Deployment"). A CA baked in with the `CA_CERT_FILE` build arg covers git/curl, not Node. |
 | `CONFLUENCE_URL` | Optional app-wide Confluence Server/Data Center base URL for page, attachment, and image/draw.io asset tools. Per-avatar PATs are stored as the `CONFLUENCE_PAT` user secret. |
 | `BROWSER_ALLOWED_ORIGINS` | Optional comma-separated DEFAULT browser-control allowlist (`intra.example.com,*.corp.local`). Seeded once into a browser whose extension allowlist is still empty — a user-edited or managed (enterprise-policy) list is never touched, and the user can change it afterwards in 설정 → 접근/보안. Entries that would cover Noah's own host (including a bare `*`) are dropped before serving: the app UI must never become drivable by default. |
 | `LOG_LEVEL` | Pino log level: `trace`/`debug`/`info`/`warn`/`error` (default `debug` in dev, `info` in prod). |
-| `MAX_TURNS` | Maximum agent turns per chat run (default `1000`). |
-| `AUTO_COMPACT_WINDOW` | Optional. Compact the conversation near this many context tokens instead of waiting for the model's full context window (lower = cheaper turns, more frequent summarization). Clamped to `100000`–`1000000`; non-numeric or `≤ 0` is ignored. Unset → the model's full window. |
 | `ROUTINE_RUN_TIMEOUT_MINUTES` | Wall-clock deadline for one scheduled-routine run (default `30`, minimum `1` — it cannot be disabled). Covers the whole run, model-fallback retries included. `지금 실행` holds its HTTP request open for up to this long, so keep it under any reverse proxy's read timeout. |
 | `ROUTINE_MAX_CONCURRENT_RUNS` | How many scheduled routines may run at once across the server (default `10`; must be a whole number ≥ `1`, anything else falls back to the default). Each run is a full agent process, so this bounds the burst when many routines fall due together or after downtime. A due routine over the cap waits for a free slot. `지금 실행` is never refused by the cap but occupies a slot while it runs. |
 | `ROUTINE_MAX_CONCURRENT_RUNS_PER_USER` | How many of one user's routines may run at once (default `2`, same validation). Keep it below `ROUTINE_MAX_CONCURRENT_RUNS` so one user with many due routines can't take every slot. |
-| `AVATAR_TASK_TIMEOUT_MINUTES` | Wall-clock deadline for one external task API run (`POST /api/v1/avatar/tasks`; default `300` = 5 hours, minimum `1` — it cannot be disabled). Covers the whole run, including time waiting on a question and any background phase. A single pending request (question, permission, plan review or canvas input) still expires after 30 minutes without a response. |
-| `CRAFT_EXCHANGE_DIR` / `CRAFT_CONTROL_SECRET` | Craft apps (admin-only beta — PhotoCraft & co. driven headless through MCP, see [docs/architecture/craft-apps.md](docs/architecture/craft-apps.md)). `CRAFT_EXCHANGE_DIR` is where this container mounts the shared `craft-exchange` volume (compose: `/app/craft-exchange`); `CRAFT_CONTROL_SECRET` authenticates Noah to the `craft-runner` container's control socket (a random string of at least 32 characters — the runner keeps its control socket closed otherwise — with the SAME value in both services; never reaches the agent). Either unset → the feature reads "not configured" everywhere. Even when set it stays OFF until a system admin turns on 관리자 → 시스템 → Craft 앱; deploying it changes nothing for existing users (no migration). Noah and the runner authenticate each other by HMAC challenge/response (the secret and the per-run tokens never cross the sockets). **"Admin-only" is a product-exposure gate, not a security boundary against other users' agents**: every agent's Bash runs as Noah's uid 1000, which can reach the exchange volume and sockets (the pre-existing same-uid posture; uid separation is issue [#71](https://github.com/JinY0ung-Shin/noah-almighty/issues/71) — its phase 0 already makes Noah's own process environment unreadable). |
-| `DEFAULT_PLUGINS_DIR` | Path to built-in skills loaded for every avatar (default `<cwd>/default-skills`). Keep it inside the app tree: the pptx skill's converter resolves `playwright-core` from the app's `node_modules`. |
-| `NOAH_PPTX_*` | Optional tuning of the pptx skill's deck converter: `NOAH_PPTX_MAX_CONCURRENT` (host-wide conversion slots, default `2` — each running conversion is one headless Chromium inside the app container), `NOAH_PPTX_SLOT_WAIT_SECONDS` (`150`), `NOAH_PPTX_MAX_SECONDS` (`540`; keep it below the agent's 600 s Bash ceiling), `NOAH_PPTX_MAX_SLIDES` (`60`), `NOAH_PPTX_CHROMIUM` / `NOAH_PPTX_PYTHON` (explicit executables), `NOAH_PPTX_SELFTEST_RECORD`. `NOAH_PPTX_DEV` and `NOAH_PPTX_LOCK_NAMESPACE` are for dev boxes and tests. See `.env.example` and [docs/architecture/pptx-converter.md](docs/architecture/pptx-converter.md). |
+| `AVATAR_TASK_TIMEOUT_MINUTES` | Wall-clock deadline for one external task API run (`POST /api/v1/avatar/tasks`; default `300` = 5 hours, minimum `1` — it cannot be disabled). Covers the whole run, including time waiting on a question. A single pending request (question, permission or canvas input) still expires after 30 minutes without a response. |
+| `DEFAULT_PLUGINS_DIR` | Path to built-in skills loaded for every avatar (default `<cwd>/default-skills`). Keep it inside the app tree: on a dev box the pptx skill's converter resolves `playwright-core` from the app's `node_modules`. |
+| `NOAH_PPTX_*` | Dev boxes / native checkouts only: tuning of the pptx skill's deck converter (`NOAH_PPTX_MAX_CONCURRENT`, `NOAH_PPTX_SLOT_WAIT_SECONDS`, `NOAH_PPTX_MAX_SECONDS`, `NOAH_PPTX_MAX_SLIDES`, `NOAH_PPTX_CHROMIUM` / `NOAH_PPTX_PYTHON`, `NOAH_PPTX_SELFTEST_RECORD`, `NOAH_PPTX_DEV`, `NOAH_PPTX_LOCK_NAMESPACE`). In the Docker stack decks build in the pi sandbox, whose image fixes its own values. See `.env.example` and [docs/architecture/pptx-converter.md](docs/architecture/pptx-converter.md). |
 | `PLUGIN_AUTO_REFRESH_MINUTES` | Minutes before an enabled avatar plugin clone is refreshed from git at chat/routine start (default `10`; `0` disables auto refresh after the first clone). |
 | `BROWSER_BRIDGE_MULTIMEDIA_NOTICE` | `true`/`1`/`on` adds a corporate-policy line to the browser-bridge install guide telling users to unpack the extension into the upload-approved **Multimedia** folder. Default: hidden. |
 | `ENV_FILE` | Override the `.env` file path loaded at startup (default `.env` in cwd). |
@@ -305,13 +456,13 @@ boundary: its Chromium only talks to loopback, which the egress firewall allows.
 
 ## Security note
 
-Avatar plugins are arbitrary GitHub repositories loaded by the Claude Agent SDK. The tool
-permission model is tiered — owners and group co-members can run elevated tools
-(Write/Edit/Bash, repo commit/push, SSH); plain colleague chats are read-only. The
-`PreToolUse` hook in `src/server/agent/claudeAgent.ts` is the single enforcement gate; all
-in-process MCP server handlers self-gate for owner/elevated checks. Loading a third-party
-plugin still executes its code on the server. For a public/production deployment, run plugin
-execution in a sandbox (container/VM per request, network egress limits).
+Agent turns never run in Noah's container: each one runs in the acting user's pi-gateway sandbox
+(no network, read-only root filesystem, its own workspace), and the sandbox reaches Noah only
+through pi's MCP broker with a per-run token Noah mints — `/mcp` additionally admits only the
+broker's address. Every Noah MCP handler self-gates owner/elevated access, and the group trust
+check (`isTrustedFor`) stays the single choke point for peer trust. Installed plugins' HTTP MCP
+servers are relayed by Noah; stdio MCP servers from knowledge, group or plugin repositories are
+not started. Keep pi-gateway's `SANDBOX_EGRESS_ALLOW` minimal, and never list Noah in it.
 
 ## Verification
 

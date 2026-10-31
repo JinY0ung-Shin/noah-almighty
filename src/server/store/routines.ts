@@ -106,12 +106,19 @@ export function withRoutines<TBase extends Constructor<StoreBase>>(Base: TBase) 
     listDueRoutineJobs(nowIso: string): RoutineJob[] {
       // Skip jobs whose owner is suspended: a suspended account's avatar must not
       // keep running headless, elevated routines (with its stored secrets/tokens).
+      // Also skip a retired bot-bound routine (old DBs carry
+      // `routine_jobs.personal_agent_id`): the boot purge normally deletes it, but
+      // a boot whose pre-retirement backup failed holds that purge, and the row
+      // must never fire as the OWNER's main avatar meanwhile.
+      const botColumn = (this.db.prepare("PRAGMA table_info(routine_jobs)").all() as { name: string }[]).some(
+        (c) => c.name === "personal_agent_id",
+      );
       const rows = this.db
         .prepare(
           `SELECT rj.* FROM routine_jobs rj
            JOIN users u ON u.id = rj.avatar_user_id
            WHERE rj.enabled = 1 AND rj.next_run_at IS NOT NULL AND rj.next_run_at <= ?
-             AND u.suspended = 0
+             AND u.suspended = 0${botColumn ? " AND rj.personal_agent_id IS NULL" : ""}
            ORDER BY rj.next_run_at ASC`,
         )
         .all(nowIso) as RoutineJobRow[];

@@ -16,21 +16,22 @@
   `ownerState.experimentalFeatures.includes(key)`.
 
 ## hex-ssh (remote SSH)
-- An APP-registered MCP, not a plugin one. `claudeAgent` adds it to `mcpServers` only when the owner stored
-  `SSH_PRIVATE_KEY` AND the current viewer class has at least one allowed hex-ssh tool. The registered
-  command is `scripts/hex-ssh-policy-proxy.mjs`, which runs the upstream command from
+- An APP-managed MCP, not a plugin one. Noah relays it on the `hex-ssh` broker id (`agent/pi/mcpProxies.ts`) only
+  when the owner stored `SSH_PRIVATE_KEY` AND the current viewer class has at least one allowed hex-ssh tool
+  (`sshActive`). Noah spawns `scripts/hex-ssh-policy-proxy.mjs`, which runs the upstream command from
   `config.hexSshCommand` (`HEX_SSH_COMMAND`, default `hex-ssh-mcp`) and filters `tools/list` by
-  `HEX_SSH_ALLOWED_TOOLS` before the model sees the schema. The PreToolUse hook separately blocks
-  disallowed `mcp__hex-ssh__*` calls, so the proxy is token/UX optimization and the hook is the final gate.
-  The upstream package is installed into the image at build time, not via runtime `npx`.
-- **App-managed MCP servers shadow same-named plugin ones.** MCP config is keyed by server name, so a
-  plugin's bundled `.mcp.json` declaring `hex-ssh` (keyless) can win over the app's keyed one.
-  `stripManagedMcpServers` (plugins.ts, `APP_MANAGED_MCP_SERVERS`) removes those names from each plugin
-  `.mcp.json` in `resolvePluginRoots` before the SDK sees them. For the knowledge repo, `commitAndPush`
-  restores tracked `.mcp.json` from HEAD before `git add -A`, so the strip is never pushed back.
-- **Debugging a launched MCP server:** the SDK spawns it as a subprocess, so failures DON'T appear in the
-  app's pino logs. Check `~/.cache/claude-cli-nodejs/<workspace>/mcp-logs-<server>/` — the dir name is the
-  server name, so it also reveals WHICH instance won a name collision (`hex-ssh` vs `plugin_<plugin>_hex-ssh`).
+  `HEX_SSH_ALLOWED_TOOLS`. The per-viewer-class allowlist holds three times: that proxy, the relay pool
+  (`allowTool` filters `tools/list` AND refuses `tools/call`), and the `/mcp` endpoint's `allowCall`. Model-facing
+  names stay `mcp__hex-ssh__<tool>`. The upstream package is installed into the image at build time, not via
+  runtime `npx`.
+- **App-managed MCP servers shadow same-named plugin ones.** A plugin's bundled `.mcp.json` declaring `hex-ssh`
+  (keyless) must never stand in for the app's keyed one. `stripManagedMcpServers` (plugins.ts,
+  `APP_MANAGED_MCP_SERVERS`) removes those names from each plugin `.mcp.json` in `resolvePluginRoots`. For the
+  knowledge repo, `commitAndPush` restores tracked `.mcp.json` from HEAD before `git add -A`, so the strip is never
+  pushed back.
+- **Debugging a relayed MCP server:** Noah spawns it, so a child that fails to start logs
+  `pi mcp proxy: upstream failed to start` in the app's pino logs with the first 500 chars of its stderr; the run
+  reports that source as not answering on both metacognition surfaces.
 
 ## Slash commands (server-expanded)
 - **ALL built-in slash commands but one are server-expanded** (`/learn`/`/summarize`/`/remember`/`/routine`/`/find`/`/tour`):
@@ -46,17 +47,16 @@
   list + Korean card copy (the client renders the 체험 시나리오 cards from it), while the English walkthrough
   prompts live server-only in `src/server/tourScenarios.ts` — an unknown slug fails with a Korean error
   instead of expanding, and trailing text after the slug rides along as a focus hint like `/learn`'s.
-- **`/compact [what to keep]` is the ONE native command: it reaches the CLI VERBATIM.** A slash command only
-  runs when it IS the prompt, so `expandChatSlashCommand` returns `compact: {instructions}` instead of an
-  expansion, and `claudeAgent` sends exactly `/compact[ <instructions>]` with no `buildUserPrompt` wrapper,
-  history or images. Mechanics and gates → [`chat-sse-media.md`](chat-sse-media.md) (native `/compact`
-  bullet). Every other text, including a mid-turn message, must never start a CLI command: the steer route
-  refuses a `/compact` steer, and a wrapped prompt never starts with `/`.
+- **The manual `/compact` is retired** (2026-10-29, pi migration): `expandChatSlashCommand` refuses it with a
+  Korean `error` exactly like `/new`, and a 다시 생성 of a legacy `/compact` row is refused with that same text (the
+  client hides the button via `isCompactCommandText`). Context compaction is pi's own; its `response.compaction`
+  event becomes the `compact` frame (see chat-sse-media). Text reaching pi is plain model input — no slash command runs there.
 
 ## git remote work is MCP-only
-- The agent shell has no git credentials (stripped from the subprocess env), so Bash `git clone/push`/`gh`
-  can never authenticate. `GIT_MCP_ONLY_GUIDANCE` (claudeAgent.ts) is injected on every tool-capable turn
-  telling the avatar to use `mcp__repo__*`/`mcp__git_repo__*`/`mcp__group_repo__*` ONLY and never retry a
+- The agent shell is the pi sandbox and holds no git credentials, so Bash `git clone/push`/`gh` can never
+  authenticate (a sandbox working-repo copy's `.git` is for status/diff/log only; Noah commits and pushes the
+  canonical clone, design D1). `GIT_MCP_ONLY_GUIDANCE` (`promptBuilder.ts`) is injected on every tool-capable turn
+  telling the avatar to use `mcp__repo__*`/`mcp__git_repo__*` ONLY and never retry a
   failed MCP git call via Bash; the git tools' failure messages repeat the no-Bash-fallback line with cause
   hints. When adding a git-ish capability, route it through an in-process MCP bridge and keep that line in
   its error text.
@@ -65,15 +65,15 @@
   redirects (e.g. `NO_REPO` → "use `create_repo`"). Greeting-only text once left it unaware it had
   `create_repo` mid-conversation.
 
-## External agent stream: abort must not trust undici
-- `readSseFrames` (`agent/externalAgent.ts`) races every `reader.read()` against the upstream
-  abort signal and rejects ITSELF with the abort reason. Relying on undici to reject an in-flight
-  body read when the request signal aborts is a race it intermittently loses — observed as the
-  idle/total deadline firing while the run hung forever on a quiet socket (and as a ~1/3 flake of
-  `tests/external-agent.test.ts`'s "times out when an open SSE stream goes idle" once an unrelated
-  2026-08 change shifted file timing). The raced rejection flows into the same `timeoutKind`
-  mapping, so every user-facing timeout message is unchanged. The never-raced promise pre-attaches
-  a `.catch` (unhandled-rejection guard) and the generator's `finally` removes the abort listener.
+## SSE stream readers: abort must not trust undici
+- Lesson from the removed external-avatar runner (`agent/externalAgent.ts`, deleted 2026-10-29), whose
+  `readSseFrames` the pi client (`agent/pi/responsesClient.ts`) inherited: race every `reader.read()` against
+  the upstream abort signal and reject ITSELF with the abort reason. Relying on undici to reject an
+  in-flight body read when the request signal aborts is a race it intermittently loses — observed as
+  the idle/total deadline firing while the run hung forever on a quiet socket (a ~1/3 test flake once
+  an unrelated 2026-08 change shifted file timing). Map the raced rejection through the same timeout
+  classification so user-facing timeout messages stay one set; pre-attach a `.catch` to the never-raced
+  promise (unhandled-rejection guard) and remove the abort listener in the generator's `finally`.
 
 ## Testing git/repo tools offline
 - Point the repo at a LOCAL bare remote (`git init --bare`) so clone/commit/push need no network —

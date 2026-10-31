@@ -15,13 +15,16 @@ ARG NPM_CONFIG_REGISTRY=
 # avoid PEP 668 pip restrictions on Debian and to resolve through the apt mirror.
 #
 # libreoffice-impress + poppler-utils back the server's APPROXIMATE document
-# previews (share_file) and the pptx skill's render_deck.sh: soffice --headless
-# converts pptx/docx/xlsx->pdf, then pdftoppm renders pdf->png, with fonts-nanum
-# supplying Korean fonts so Hangul renders in headless conversions. Decks built
-# by the skill's converter carry their own exact renders (see the converter
-# layers below); LibreOffice previews those only after the .pptx was edited.
+# previews (share_file): soffice --headless converts pptx/docx/xlsx->pdf, then
+# pdftoppm renders pdf->png, with fonts-nanum supplying Korean fonts so Hangul
+# renders in headless conversions. fontconfig's fc-cache registers the deck fonts
+# below. git backs every server-side repository operation, gh the create_repo tool.
 #
-# Build speed: apt, pip and npm downloads go through BuildKit cache mounts
+# No agent runs in this container any more: every turn runs on pi-gateway, whose
+# per-user sandboxes (docker/pi-sandbox) carry the agent's shell toolchain —
+# Chromium + the pinned Python set for decks, uv, ripgrep. So none of that is here.
+#
+# Build speed: apt and npm downloads go through BuildKit cache mounts
 # (RUN --mount=type=cache), so a rebuilt layer reuses the packages fetched last
 # time instead of pulling them through the mirror again. Mounted dirs never land
 # in the image. No `# syntax=` line on purpose: it would make BuildKit pull the
@@ -40,21 +43,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     build-essential \
     ca-certificates \
     curl \
+    fontconfig \
     fonts-nanum \
     git \
     gh \
     libreoffice-impress \
     poppler-utils \
     python3 \
-    python3-pip \
     python3-cryptography \
     python3-paramiko \
-    ripgrep \
-    procps \
-    jq \
     tini \
   && mv /etc/apt/docker-clean.parked /etc/apt/apt.conf.d/docker-clean \
-  && rm -f /usr/local/bin/apt_mirror_sources.sh
+  && rm -f /usr/local/bin/apt_mirror_sources.sh \
+  && soffice --version \
+  && command -v pdftoppm fc-cache \
+  && python3 -c "import cryptography, paramiko"
 
 # Trust an optional corporate proxy CA so git/curl/node can clone over HTTPS
 # through an intercepting proxy. Folding it into the system bundle covers git
@@ -78,83 +81,13 @@ RUN if grep -q "BEGIN CERTIFICATE" /tmp/extra-ca.crt; then \
 
 WORKDIR /app
 
-ARG TARGETARCH
-
-# uv/uvx (Python package + venv manager) for agent shell workflows. Pinned
-# prebuilt GitHub-release binary — a single HTTPS fetch through the
-# already-trusted corporate proxy CA above (the previous install.sh attempt
-# silently skipped on closed networks, leaving images without uv). At RUNTIME,
-# point uv at a corporate PyPI mirror via UV_DEFAULT_INDEX / UV_INDEX in .env —
-# the whole .env reaches the container (compose env_file) and flows through the
-# server into the agent subprocess env, so `uv pip install`/`uvx` in the agent
-# shell resolve through the mirror. Bump UV_VERSION to upgrade.
-ARG UV_VERSION=0.8.17
-RUN case "$TARGETARCH" in \
-      amd64|"") UV_TARGET=x86_64-unknown-linux-musl ;; \
-      arm64)    UV_TARGET=aarch64-unknown-linux-musl ;; \
-      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-  && curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
-       | tar -xz -C /usr/local/bin --strip-components=1 "uv-${UV_TARGET}/uv" "uv-${UV_TARGET}/uvx" \
-  && chmod +x /usr/local/bin/uv /usr/local/bin/uvx \
-  && uv --version \
-  && uvx --version
-
-# fontconfig + the Chromium headless shell back the pptx skill's HTML→editable-PPTX
-# converter (default-skills/skills/pptx/converter; docs/architecture/pptx-converter.md).
-# Its own layer AFTER uv, so the cached base apt, CA and uv layers survive. The first
-# layer's apt_mirror_sources.sh rewrote /etc/apt/sources.list.d/debian.sources in
-# place and that file persists, so this apt run goes through the same mirror — which
-# must serve chromium-headless-shell + chromium-common (bookworm-security, or bookworm
-# main) and their ~70 dependencies. chromium-headless-shell, not `chromium`: no
-# GTK3/dbus/systemd and ~155 MB smaller; the converter drives
-# /usr/lib/chromium/chromium-headless-shell directly, bypassing Debian's /usr/bin
-# wrapper (and its /etc/chromium.d). fontconfig is installed explicitly because the
-# font registration below needs fc-cache (libreoffice-core happens to pull it in today).
-# DECK_CONVERTER=0 builds a legacy image without Chromium (and without the self-test):
-# the pptx skill then falls back to python-pptx, and the probe reports why.
-ARG DECK_CONVERTER=1
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-  mv /etc/apt/apt.conf.d/docker-clean /etc/apt/docker-clean.parked \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends fontconfig $( [ "$DECK_CONVERTER" != "0" ] && echo chromium-headless-shell ) \
-  && mv /etc/apt/docker-clean.parked /etc/apt/apt.conf.d/docker-clean \
-  && command -v fc-cache \
-  && { [ "$DECK_CONVERTER" = "0" ] || /usr/lib/chromium/chromium-headless-shell --version; }
-
-# The pptx skill's Python set, PINNED in default-skills/skills/pptx/converter/requirements.txt
-# (python-pptx, lxml, Pillow, XlsxWriter, fonttools, defusedxml, openpyxl + their pinned
-# deps). Installed regardless of DECK_CONVERTER: python-pptx is the legacy path too.
-# python-pptx is NOT packaged in Debian bookworm and apt's python3-fonttools would drag in
-# ~664 MB of scipy & co., hence pip with --break-system-packages, which overrides PEP 668's
-# externally-managed guard for this pinned set (system python; no venv in this image).
-# PIP_INDEX_URL / PIP_TRUSTED_HOST follow the NPM_CONFIG_REGISTRY pattern above (empty =
-# upstream PyPI); --trusted-host is added only when set, for an HTTP mirror with a
-# self-signed cert. The mirror must carry every pinned version for CPython 3.11. The
-# trailing self-test asserts soffice, pdftoppm and every module the skill imports, so a
-# broken mirror fails the build here.
-ARG PIP_INDEX_URL=
-ARG PIP_TRUSTED_HOST=
-COPY default-skills/skills/pptx/converter/requirements.txt /tmp/deck-requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-  if [ -n "$PIP_INDEX_URL" ]; then \
-      pip3 install --break-system-packages --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/deck-requirements.txt; \
-    else \
-      pip3 install --break-system-packages -r /tmp/deck-requirements.txt; \
-    fi \
-  && rm -f /tmp/deck-requirements.txt \
-  && soffice --version \
-  && command -v pdftoppm \
-  && python3 -c "import pptx, lxml, PIL, fontTools, defusedxml, openpyxl, xlsxwriter"
-
 # Install the hex-ssh MCP server (remote-server access tools) into the IMAGE at
 # build time, so the avatar never has to `npx`-download it at runtime — that
 # fails on a closed corporate network where the public npm registry is
 # unreachable. The build-time mirror (NPM_CONFIG_REGISTRY) IS reachable, so we
 # install through it here, then expose the package's bin under the fixed name
 # `hex-ssh-mcp` (the actual bin key in package.json is resolved at build time, so
-# claudeAgent can spawn a stable command). Kept in its own layer, BEFORE the app's
+# Noah's hex-ssh relay can spawn a stable command). Kept in its own layer, BEFORE the app's
 # package.json, so a dependency change does not re-download it and an upstream
 # version bump only rebuilds this step. Pinned for reproducibility.
 ARG HEX_SSH_MCP_VERSION=1.9.2
@@ -196,52 +129,21 @@ RUN --mount=type=cache,target=/root/.npm \
     fi \
   && rm -f .npmrc
 
-# Deck converter wiring. It depends ONLY on the pptx skill tree, the fontconfig file, the
-# Chromium/Python layers and node_modules (the converter resolves playwright-core from it) —
-# never on app code — so it runs BEFORE the app COPY: an ordinary code change reuses this
-# cached layer instead of re-running the ~40 s self-test, which re-runs only when the pptx
-# skill or the dependencies changed. The final `COPY . .` excludes default-skills/skills/pptx
-# so the tree is not duplicated into a second layer (read-only at runtime):
-# 1. register the vendored OFL fonts with fontconfig for LibreOffice's fallback previews
-#    (docker/fontconfig/60-noah-deck-fonts.conf: Pretendard, Gothic A1, Selawik — never the
-#    NotoSansKR variable font — plus a 맑은 고딕/Malgun Gothic alias);
-# 2. precompile the converter's Python with the image's python3 (a syntax error fails here);
-# 3. run the converter's self-test (two frozen decks × both font profiles, ~40 s) as the
-#    build's gate: an integrity failure FAILS the build, while golden drift (the image's
-#    Chromium laying the reference decks out differently from the committed goldens) is
-#    RECORDED in deck-selftest.json — reported by `deck.sh probe`, the boot log and
-#    describe_system — unless DECK_CONVERTER_STRICT_GOLDEN=1 makes it fatal
-#    (README.md#deck-converter-golden-drift). Drift is not fatal by default so that the next
-#    Chromium security update cannot block every unrelated deploy.
-# The self-test runs as root with TMPDIR and HOME pointed at a throwaway dir removed in the
-# same RUN, and the last line fails the build if anything leaked into /tmp that the
-# unprivileged `node` user could later trip over. The converter's locks are abstract UNIX
-# sockets and never touch the filesystem. DECK_CONVERTER=0 writes a "disabled" record.
-ARG DECK_CONVERTER_STRICT_GOLDEN=0
+# The pptx skill's vendored OFL fonts, registered with fontconfig for LibreOffice's
+# approximate previews of decks edited after conversion
+# (docker/fontconfig/60-noah-deck-fonts.conf: Pretendard, Gothic A1, Selawik — never the
+# NotoSansKR variable font — plus a 맑은 고딕/Malgun Gothic alias). The decks themselves are
+# built inside the user's pi sandbox. This layer depends only on the pptx skill tree and the
+# fontconfig file, so it sits BEFORE the app COPY: an ordinary code change reuses it. The
+# final `COPY . .` excludes default-skills/skills/pptx so the tree is not duplicated into a
+# second layer (read-only at runtime; Noah copies it into each sandbox).
 COPY docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/
 COPY default-skills/skills/pptx ./default-skills/skills/pptx
-RUN fc-cache -f >/dev/null && fc-list | grep -q Pretendard \
-  && python3 -m compileall -q default-skills/skills/pptx/converter/tools \
-  && mkdir -p /usr/local/share/noah-almighty \
-  && if [ "$DECK_CONVERTER" != "0" ]; then \
-       T="$(mktemp -d)"; \
-       TMPDIR="$T" HOME="$T" node default-skills/skills/pptx/converter/tools/deck.mjs selftest \
-         --record /usr/local/share/noah-almighty/deck-selftest.json \
-         $( [ "$DECK_CONVERTER_STRICT_GOLDEN" = "1" ] && echo --fail-on-drift ); rc=$?; \
-       rm -rf "$T"; [ "$rc" -eq 0 ]; \
-     else \
-       printf '{"format":"noah-deck-selftest-record","version":1,"status":"disabled"}\n' \
-         > /usr/local/share/noah-almighty/deck-selftest.json; \
-     fi \
-  && ! ls -A /tmp | grep -Eq '^(noah-pptx|playwright|deck-)'
+RUN fc-cache -f >/dev/null && fc-list | grep -q Pretendard
 
-# The pptx skill tree is already in place (deck converter layer above).
+# The pptx skill tree is already in place (font layer above).
 COPY --exclude=default-skills/skills/pptx . .
 RUN npm run build
-
-# uv was installed into /root during the base layer, then COPIED (not symlinked)
-# to /usr/local/bin/uv so the unprivileged `node` user can execute it — a symlink
-# into /root would be unreadable because /root is mode 700.
 
 ENV NODE_ENV=production
 ENV PORT=48787
@@ -252,20 +154,20 @@ EXPOSE 48787
 # (TLS_CERT_FILE/TLS_KEY_FILE), and in https mode the cert names the deploy
 # host — not localhost — so chain verification can't be part of the probe.
 # Exec form behind `env -u`: Docker starts the probe with the container's full
-# environment, so the server-only secrets are dropped before the shell and curl
+# environment, so the server-only secret is dropped before the shell and curl
 # start — the probe processes are readable to the node uid (#71).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD ["env", "-u", "SESSION_SECRET", "-u", "CRAFT_CONTROL_SECRET", "sh", "-c", \
+  CMD ["env", "-u", "SESSION_SECRET", "sh", "-c", \
     "curl -f --noproxy '*' \"http://localhost:${PORT:-48787}/api/bootstrap\" || curl -fk --noproxy '*' \"https://localhost:${PORT:-48787}/api/bootstrap\" || exit 1"]
 
 # Drop root privileges: the node:22 base image ships a `node` user (uid 1000).
 # The `node` user only ever WRITES under APP_DATA_DIR (default /app/data): the
-# SQLite DB, avatar images, agent-session transcripts, per-conversation
+# SQLite DB, avatar images, chat media, per-conversation
 # workspaces, ssh known_hosts, and any cloned repos. The rest of /app (dist,
 # node_modules, default-skills) is read-only at runtime, so we only
 # chown the data dir — `chown -R /app` would needlessly re-stamp tens of
 # thousands of node_modules files and duplicate them into a new image layer.
-# HOME-based tool caches (gh/git/python, SDK MCP logs) land under /home/node,
+# HOME-based tool caches (gh/git/python, LibreOffice profiles) land under /home/node,
 # which the base image already owns as node:node.
 #
 # APP_DATA_DIR is typically a named volume mounted at runtime. The directory is
@@ -275,8 +177,8 @@ RUN mkdir -p /app/data && chown node:node /app/data
 
 # node and tini are EXECUTE-ONLY (#71): a process whose executable its uid
 # cannot read is marked non-dumpable by the kernel, so its /proc/<pid>/environ
-# and memory are unreadable to the agent's Bash and every other process — they
-# run as the same `node` uid. Executing them is unaffected; only reading the
+# and memory are unreadable to every other process the server starts (hex-ssh,
+# relayed MCP servers, git, LibreOffice) — they run as the same `node` uid. Executing them is unaffected; only reading the
 # file is denied. tini matters because PID 1 holds the container's FULL
 # environment (SESSION_SECRET included): it is this image's ENTRYPOINT instead
 # of compose `init: true`, whose docker-init binary is readable. The server

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { hashToken } from "./auth.js";
 import { resolveStoredFile, sanitizeDownloadName, withDownloadExtension } from "./chatFiles.js";
 import { resolveStoredImage, SAFE_ID } from "./chatImages.js";
-import { GROUP_AGENT_AVATAR_PREFIX } from "./groupAgents.js";
 import type { Store } from "./store.js";
 import type { ShareLinkLookup, ShareLinkRecord } from "./store/shareLinks.js";
 import type { AppConfig, ImageMediaType, MessageAttachment } from "./types.js";
@@ -151,22 +150,19 @@ export function shareDownloadName(name: string | undefined): string {
  * Whether `conversationId` is a thread whose decks its owner may share by link
  * — checked at creation AND on every recipient call:
  * - the owner's own-avatar threads (external-task-API threads included): yes;
- * - group-agent member threads: NO (phase 1 — member threads are private and
- *   the team shares through the group second brain);
  * - a colleague's own thread with someone else's avatar: only while that
  *   avatar is still reachable for them (`resolveChatAvatar`: not suspended,
  *   still visible through a shared group) — a link must not outlive the reach
  *   the thread was built on;
- * - anything else (external avatars carry no file cards): no.
+ * - anything else: no.
  */
 export function shareableThread(store: Store, ownerUserId: string, conversationId: string): boolean {
   if (store.conversationOwner(conversationId) !== ownerUserId) return false;
   const avatarId = store.getConversationAvatarId(ownerUserId, conversationId);
   if (!avatarId) return false;
   if (avatarId === ownerUserId) return true;
-  if (avatarId.startsWith(GROUP_AGENT_AVATAR_PREFIX)) return false;
-  // Every other namespaced id (external:, a malformed group:) fails closed;
-  // user ids never contain a colon.
+  // Every namespaced id (a retired external:/personal:/group: thread) fails
+  // closed; user ids never contain a colon.
   if (avatarId.includes(":")) return false;
   return store.resolveChatAvatar(ownerUserId, avatarId) !== null;
 }
@@ -313,8 +309,8 @@ export interface ValidShareLink {
 /**
  * The full recipient validity, run on every recipient call: the row exists and
  * is unexpired, its creator is not suspended, the thread can still share
- * ({@link shareableThread}: still owned by the creator, not a group-agent
- * thread, a colleague's avatar still reachable) and the card's bytes are still
+ * ({@link shareableThread}: still owned by the creator, a colleague's
+ * avatar still reachable) and the card's bytes are still
  * a .pptx on disk. Null = the one 404 (`SHARE_LINK_GONE_MESSAGE`).
  */
 export function validateShareLink(
@@ -419,13 +415,6 @@ export function resolveShareSlide(
 // ---- The avatar's path (create_share_link → the chat route's onShareLink) ----
 // Model-facing English, like every other tool result.
 
-/**
- * A background / wake-up segment that no message from the user started (a task
- * settled): nobody may be watching. A segment driven by the owner's own
- * mid-turn message is allowed (the chat route's `ownerSteeredSinceBoundary`).
- */
-export const SHARE_LINK_UNWATCHED_ERROR =
-  "No message from the user started this background segment, so they may not be watching; tell them to use the 공유 링크 button next to the deck's file card, or to ask you for the link again.";
 /** Reuse of an active link whose token can no longer be recomputed (SESSION_SECRET changed). */
 export const SHARE_LINK_UNSHOWABLE_ERROR =
   "An active link for this deck exists but can no longer be shown; ask the user to revoke it (내 아바타 → 권한·연결 → 공유 링크), then create a new one.";

@@ -49,15 +49,15 @@
   $: profileReady = isProfileReady($appState.user);
   $: knowledgeReady = isKnowledgeReady($appState.user);
   $: accessReady = isAccessReady($appState.user);
-  // 아바타는 같은 그룹원에게만 보이므로, 그룹이 없는 사용자에게는 자기 아바타(와 외부
-  // Agent)만 남습니다. 빈 목록처럼 보이는 이유를 카드 아래에서 설명해 줍니다.
-  $: hasPeerAvatars = $appState.avatars.some((av) => av.id !== $appState.user?.id && av.runtime !== "external");
+  // 아바타는 같은 그룹원에게만 보이므로, 그룹이 없는 사용자에게는 자기 아바타만
+  // 남습니다. 빈 목록처럼 보이는 이유를 카드 아래에서 설명해 줍니다.
+  $: hasPeerAvatars = $appState.avatars.some((av) => av.id !== $appState.user?.id);
   const GROUP_HINT = "그룹에 소속되면 동료의 아바타가 여기에 보여요. 그룹 참여는 관리자에게 문의하세요.";
 
   function rank(av: AvatarSummary) {
     if (av.id === $appState.user?.id) return 0;
     // Group shared agents sort with same-group teammates (both are group-scoped).
-    if (av.sharesGroup || av.groupAgent) return 1;
+    if (av.sharesGroup) return 1;
     return 2;
   }
 
@@ -312,10 +312,6 @@
                 <strong>{av.displayName}</strong>
                 {#if av.id === $appState.user?.id}
                   <span class="tag accent">나</span>
-                {:else if av.runtime === "external"}
-                  <span class="tag accent">외부 아바타</span>
-                {:else if av.groupAgent}
-                  <span class="tag write">그룹 에이전트 · {av.groupAgent.groupName}</span>
                 {:else if av.sharesGroup}
                   <span class="tag write">같은 그룹</span>
                 {/if}
@@ -330,7 +326,7 @@
                 {#each (av.hashtags || []).slice(0, 6) as tag}
                   <span class="tag accent">#{tag}</span>
                 {/each}
-                {#if av.runtime !== "external" && av.pluginCount != null}
+                {#if av.pluginCount != null}
                   <span class="tag">플러그인 {av.pluginCount}개</span>
                 {/if}
               </div>

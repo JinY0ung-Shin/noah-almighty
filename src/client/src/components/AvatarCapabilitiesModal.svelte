@@ -77,12 +77,6 @@
 <Modal cardClass="avatar-intro-card" ariaLabelledby={titleId} on:close={close}>
   <h2 id={titleId}>이 아바타의 역량</h2>
   <p class="ai-sub">{shown.displayName} 아바타가 사용할 수 있는 도구</p>
-  {#if avatar.groupAgent}
-    <p class="ai-sub">
-      그룹 에이전트 · {avatar.groupAgent.groupName} — 대화는 개인별로 비공개이며, 그룹 공유는 그룹 지식
-      저장소(공유 세컨드브레인)를 통해 이뤄져요.
-    </p>
-  {/if}
 
   {#if detailLoading}
     <p class="ai-note" role="status">소개를 불러오는 중…</p>

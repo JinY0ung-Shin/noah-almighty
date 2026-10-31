@@ -100,9 +100,9 @@ async function pullRebase(ctx: GitRepoContext, repoRoot: string, url: string): P
       await git(repoRoot, ["pull", "--rebase", "--autostash"], undefined, auth);
     }
   } catch (error) {
-    // NEVER leave the clone mid-rebase: the activeRepoMode PreToolUse guard blocks
-    // the native `git rebase`/`reset` the avatar would need to finish or abort it,
-    // so a stuck rebase is unrecoverable from chat. Roll back to the pre-sync state
+    // NEVER leave the clone mid-rebase: the avatar never works in Noah's clone
+    // (a pi run edits its sandbox copy), so nothing in chat could finish or abort
+    // it and a stuck rebase is unrecoverable from chat. Roll back to the pre-sync state
     // and surface an actionable error instead. The abort is best-effort AND the
     // try also covers checkout/fetch (where no rebase is in progress), so
     // `git rebase --abort` exits non-zero there — only claim "rolled back" when it

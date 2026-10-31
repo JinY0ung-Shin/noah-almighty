@@ -1,19 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Icon from "../components/Icon.svelte";
-  import RevealableInput from "../components/RevealableInput.svelte";
   import AdminUserRow from "../components/AdminUserRow.svelte";
-  import AdminExternalAgentsPanel from "../components/AdminExternalAgentsPanel.svelte";
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
   import { api } from "../lib/api";
-  import { craftAppLabelKo, refreshCraftApps } from "../lib/craftApps";
-  import { confirmAction } from "../lib/confirm";
-  import { loadAdminGroups, loadAdminOverview } from "../lib/loaders";
+  import { loadAdminOverview } from "../lib/loaders";
   import { goView } from "../lib/nav";
   import { appState, notify, replaceState, updateState } from "../lib/state";
   import { timeLabel } from "../lib/format";
-  import { MODEL_TIERS } from "../../../server/modelTiers";
   import type { AdminTab, AdminUserSummary, SignupMode } from "../lib/types";
 
   let loading = true;
@@ -28,18 +23,9 @@
 
   // system tab field state
   let modelInput = "";
-  let claudeToken = "";
-  let subBusy = false;
   let modelBusy = false;
   let hexBusy = false;
   let signupBusy = false;
-  // 서버 에이전트 switch: turning it ON passes through a confirm step showing the credential warning.
-  let serverAgentsBusy = false;
-  let serverAgentsConfirming = false;
-  let serverAgentsError = "";
-  let craftAppsBusy = false;
-  let craftAppsError = "";
-  let tokenError = "";
   let modelError = "";
   let signupError = "";
   let hexError = "";
@@ -56,23 +42,16 @@
   // audit action filter
   let auditAction = "";
   const signupStatusId = "admin-signup-status";
-  const tokenStatusId = "admin-token-status";
   const modelStatusId = "admin-model-status";
   const hexStatusId = "admin-hex-policy-status";
-  const serverAgentsStatusId = "admin-server-agents-status";
-  const craftAppsStatusId = "admin-craft-apps-status";
-  const SERVER_AGENTS_WARNING =
-    "서버를 등록한 사용자는 자기 서버에서 이 배포의 모델 인증정보(API 키 또는 구독 토큰)를 읽을 수 있습니다. 신뢰하는 사용자만 있는 환경에서만 켜세요.";
   const toolSkillStatusId = "admin-tool-skill-status";
 
   // 그룹 관리 moved to the shared 그룹 view (GroupsView) — #/admin/groups
-  // redirects there (lib/nav.ts); adminGroups stays loaded for the
-  // external-agents panel's visibility picker.
+  // redirects there (lib/nav.ts).
   type AdminTabDef = { id: AdminTab; label: string; icon: string };
   const tabs: AdminTabDef[] = [
     { id: "overview", label: "개요", icon: "activity" },
     { id: "users", label: "사용자", icon: "users" },
-    { id: "external-agents", label: "외부 아바타", icon: "globe" },
     { id: "mcp", label: "공용 MCP", icon: "link" },
     { id: "access", label: "가입·접근", icon: "key" },
     { id: "system", label: "시스템", icon: "server" },
@@ -100,11 +79,7 @@
     { id: "closed" as SignupMode, label: "차단", desc: "신규 가입을 받지 않습니다." },
   ];
 
-  onMount(() => {
-    void load();
-    // The Craft 앱 card shows runner health from /api/me's craftApps.
-    void refreshCraftApps(() => api("/api/me"));
-  });
+  onMount(load);
 
   // ---- derived ----
   // loadAdminOverview stores the raw GET /api/admin/system response, which is
@@ -152,6 +127,7 @@
     clear_stt_override: "STT 설정 해제",
     set_model_vision_policy: "모델 비전 정책 변경",
     set_hex_ssh_policy: "hex-ssh 도구 정책 변경",
+    // Server agents were removed; the label stays for the retained audit rows.
     set_server_agents_enabled: "서버 에이전트 기능 설정",
     set_craft_apps_enabled: "Craft 앱 기능 설정",
     craft_tool: "Craft 앱 도구 실행",
@@ -221,6 +197,10 @@
   }
   $: stats = $appState.adminStats;
   $: savedModelOverride = String(sys.modelOverride || "");
+  $: modelChoices = (Array.isArray(sys.modelOverrideChoices) ? sys.modelOverrideChoices : []) as string[];
+  // A stored override pi no longer offers stays selectable as-is (disabled) so
+  // the select shows what is saved instead of silently jumping to the default.
+  $: modelSavedUnavailable = Boolean(savedModelOverride && !modelChoices.includes(savedModelOverride));
   $: modelValueTrimmed = modelInput.trim();
   $: modelDirty = modelValueTrimmed !== savedModelOverride;
   $: modelCanSave = Boolean(!modelBusy && modelDirty);
@@ -231,54 +211,15 @@
       : modelDirty
         ? modelValueTrimmed
           ? "저장하지 않은 모델 변경 사항이 있습니다."
-          : "저장하면 SDK 기본값으로 되돌립니다."
+          : "저장하면 pi-gateway 기본 모델로 되돌립니다."
         : savedModelOverride
-          ? "저장됨"
-          : "SDK 기본값 사용 중";
-  $: claudeTokenTrimmed = claudeToken.trim();
-  $: tokenCanSave = Boolean(!subBusy && claudeTokenTrimmed);
-  $: tokenStatus = subBusy
-    ? "저장 중…"
-    : tokenError
-      ? `저장 실패: ${tokenError}`
-      : claudeTokenTrimmed
-        ? "저장할 준비가 됐습니다."
-        : sys.subscriptionConnected
-          ? "새 토큰을 붙여넣으면 기존 토큰을 교체합니다."
-          : "토큰을 붙여넣어 주세요.";
+          ? sys.modelOverrideIgnored
+            ? "저장된 모델을 지금 pi-gateway가 제공하지 않아 무시하고 기본 모델을 사용 중입니다. 다른 모델을 고르거나 해제해 주세요."
+            : "저장됨"
+          : "pi-gateway 기본 모델 사용 중";
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
-  $: serverAgentsEnabled = sys.serverAgentsEnabled === true;
-  $: serverAgentsStatus = serverAgentsBusy
-    ? "저장 중…"
-    : serverAgentsError
-      ? `저장 실패: ${serverAgentsError}`
-      : serverAgentsEnabled
-        ? "켜짐 — 사용자가 등록한 서버에서 점검·위임이 동작합니다."
-        : "꺼짐 — 서버 등록과 호스트 신뢰만 할 수 있고 점검·위임은 동작하지 않습니다.";
-  $: craftAppsEnabled = sys.craftAppsEnabled === true;
-  $: craftAppsStatus = craftAppsBusy
-    ? "저장 중…"
-    : craftAppsError
-      ? `저장 실패: ${craftAppsError}`
-      : craftAppsEnabled
-        ? "켜져 있습니다. 시스템 관리자가 채팅의 MCP 도구에서 Craft 앱을 고를 수 있습니다."
-        : "꺼져 있습니다. 아무도 Craft 앱 도구를 쓸 수 없습니다.";
-  // Runner health per app (`GET /api/me` craftApps) so an ON switch that still
-  // offers nothing in the composer says why. Unknown until the first read. An
-  // app the reachable runner does not register is "not supported yet", not a
-  // broken connection.
-  $: craftInfo = $appState.craftApps;
-  $: craftRunnerDown = craftInfo?.configured !== false && craftInfo?.runnerReachable === false;
-  $: craftAppRows = (craftInfo?.apps ?? []).map((app) => {
-    const label = craftAppLabelKo(app.id);
-    if (app.status === "ready") return { id: app.id, label, version: app.version ?? "", text: "사용 가능", tone: "ok" };
-    if (app.status === "failed") return { id: app.id, label, version: app.version ?? "", text: "시작 실패", tone: "danger" };
-    return craftInfo?.runnerReachable === true
-      ? { id: app.id, label, version: "", text: "아직 미지원", tone: "" }
-      : { id: app.id, label, version: "", text: "연결 안 됨", tone: "write" };
-  });
   $: hexTools = Array.isArray(sys.hexSshTools) ? sys.hexSshTools : [];
   $: hexSavedKey = hexPolicyKeyFromSaved(sys.hexSshToolPolicy || {}, hexTools);
   $: hexCurrentKey = hexPolicyKeyFromMatrix(hexPolicy, hexTools);
@@ -312,10 +253,10 @@
 
   // Vision has a draft but no explicit dirty flag; derive one so a manual refresh
   // can preserve unsaved vision-policy edits (see load()).
-  $: visionDirty = MODEL_TIERS.some((tier) => {
+  $: visionDirty = piModels.some((model) => {
     const saved = (unwrapSystem($appState.adminSystem).modelVisionPolicy || {}) as Record<string, boolean>;
-    const savedVal = tier.id in saved ? (saved[tier.id] ? "on" : "off") : "default";
-    return (visionPolicyDraft[tier.id] ?? "default") !== savedVal;
+    const savedVal = model.id in saved ? (saved[model.id] ? "on" : "off") : "default";
+    return (visionPolicyDraft[model.id] ?? "default") !== savedVal;
   });
 
   // overview stat cards
@@ -337,7 +278,7 @@
     loading = true;
     error = "";
     try {
-      await Promise.all([loadAdminOverview(), loadAdminGroups()]);
+      await loadAdminOverview();
       // Preserve unsaved policy edits across a manual 새로고침 (the header button
       // calls load() on every tab): only re-seed a panel from server state when
       // it has NO pending edits — otherwise the refresh silently discards them,
@@ -448,23 +389,21 @@
     }
   }
 
-  // ---- system: per-tier vision policy ----
-  // Draft: tier id → "default" (inherit MODEL_VISION) | "on" | "off".
+  // ---- system: per-model vision policy ----
+  // Draft: pi model id → "default" (inherit MODEL_VISION) | "on" | "off".
   let visionPolicyDraft: Record<string, "default" | "on" | "off"> = {};
   let visionBusy = false;
   $: visionDefaultLabel = sys.visionDefault === false ? "미지원" : "지원";
-  // Concrete model id each tier maps to (ANTHROPIC_DEFAULT_<TIER>_MODEL), from
-  // the bootstrap payload the composer picker already uses. Null = unmapped
-  // (the SDK resolves the alias to the account default).
-  $: tierModelById = new Map(
-    ($appState.bootstrap?.modelSelection?.tiers ?? []).map((tier) => [tier.id, tier.model]),
-  );
+  // pi-gateway's live model list (empty under the local stub or when pi is unreachable).
+  $: piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as { id: string; server: string | null }[];
 
   function syncVisionPolicyFromSys() {
-    const saved = (unwrapSystem($appState.adminSystem).modelVisionPolicy || {}) as Record<string, boolean>;
+    const current = unwrapSystem($appState.adminSystem);
+    const saved = (current.modelVisionPolicy || {}) as Record<string, boolean>;
+    const models = (Array.isArray(current.piModels) ? current.piModels : []) as { id: string }[];
     const draft: Record<string, "default" | "on" | "off"> = {};
-    for (const tier of MODEL_TIERS) {
-      draft[tier.id] = tier.id in saved ? (saved[tier.id] ? "on" : "off") : "default";
+    for (const model of models) {
+      draft[model.id] = model.id in saved ? (saved[model.id] ? "on" : "off") : "default";
     }
     visionPolicyDraft = draft;
   }
@@ -472,10 +411,10 @@
   async function saveVisionPolicy() {
     if (visionBusy) return;
     const policy: Record<string, boolean> = {};
-    for (const tier of MODEL_TIERS) {
-      const pick = visionPolicyDraft[tier.id];
-      if (pick === "on") policy[tier.id] = true;
-      else if (pick === "off") policy[tier.id] = false;
+    for (const model of piModels) {
+      const pick = visionPolicyDraft[model.id];
+      if (pick === "on") policy[model.id] = true;
+      else if (pick === "off") policy[model.id] = false;
     }
     visionBusy = true;
     try {
@@ -494,7 +433,7 @@
   async function saveModel() {
     if (modelBusy || !modelDirty) return;
     const value = modelValueTrimmed;
-    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. SDK 기본값을 사용합니다.";
+    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. pi-gateway 기본 모델을 사용합니다.";
     modelBusy = true;
     modelError = "";
     try {
@@ -514,114 +453,6 @@
       notify(`모델 설정은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
       modelBusy = false;
-    }
-  }
-
-  // ---- system: subscription ----
-  async function saveToken() {
-    if (subBusy) return;
-    const token = claudeTokenTrimmed;
-    if (!token) {
-      tokenError = "토큰을 붙여넣어 주세요.";
-      notify("토큰을 붙여넣어 주세요.", "warn");
-      return;
-    }
-    subBusy = true;
-    tokenError = "";
-    try {
-      await api("/api/admin/claude-token", { method: "PUT", body: JSON.stringify({ token }) });
-    } catch (err) {
-      subBusy = false;
-      tokenError = (err as Error).message;
-      notify(`저장 실패: ${tokenError}`);
-      return;
-    }
-    claudeToken = "";
-    try {
-      await loadAdminOverview();
-      notify("구독 토큰을 저장했습니다.", "ok");
-    } catch (err) {
-      notify(`구독 토큰은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      subBusy = false;
-    }
-  }
-
-  async function disconnectToken() {
-    if (subBusy) return;
-    if (!(await confirmAction("저장된 구독 토큰을 삭제할까요?"))) return;
-    subBusy = true;
-    tokenError = "";
-    try {
-      await api("/api/admin/claude-token", { method: "DELETE" });
-    } catch (err) {
-      subBusy = false;
-      tokenError = (err as Error).message;
-      notify(`해제 실패: ${tokenError}`);
-      return;
-    }
-    try {
-      await loadAdminOverview();
-      notify("구독 토큰 연결을 해제했습니다.", "ok");
-    } catch (err) {
-      notify(`구독 토큰은 삭제했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      subBusy = false;
-    }
-  }
-
-  // ---- system: 서버 에이전트 switch ----
-  // Craft 앱 switch (admin-only beta). No acknowledgement step: unlike server
-  // agents it hands nothing to a user-controlled host — the apps run in the
-  // deployment's own network-less craft-runner, for system admins only.
-  async function saveCraftApps(enabled: boolean) {
-    if (craftAppsBusy) return;
-    craftAppsBusy = true;
-    craftAppsError = "";
-    try {
-      await api("/api/admin/craft-apps", { method: "PUT", body: JSON.stringify({ enabled }) });
-    } catch (err) {
-      craftAppsBusy = false;
-      craftAppsError = (err as Error).message;
-      notify(`저장 실패: ${craftAppsError}`);
-      return;
-    }
-    try {
-      await loadAdminOverview();
-      // The composer's craft groups read /api/me's craftApps — refresh it too.
-      await refreshCraftApps(() => api("/api/me"));
-      notify(enabled ? "Craft 앱 기능을 켰습니다." : "Craft 앱 기능을 껐습니다.", "ok");
-    } catch (err) {
-      notify(`저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      craftAppsBusy = false;
-    }
-  }
-
-  async function saveServerAgents(enabled: boolean) {
-    if (serverAgentsBusy) return;
-    serverAgentsBusy = true;
-    serverAgentsError = "";
-    try {
-      // Enabling carries the acknowledgement the confirm step just collected.
-      await api("/api/admin/server-agents", {
-        method: "PUT",
-        body: JSON.stringify(enabled ? { enabled: true, acknowledged: true } : { enabled: false }),
-      });
-    } catch (err) {
-      serverAgentsBusy = false;
-      serverAgentsError = (err as Error).message;
-      notify(`저장 실패: ${serverAgentsError}`);
-      return;
-    }
-    serverAgentsConfirming = false;
-    try {
-      await loadAdminOverview();
-      notify(enabled ? "서버 에이전트 기능을 켰습니다." : "서버 에이전트 기능을 껐습니다.", "ok");
-    } catch (err) {
-      notify(`저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      serverAgentsBusy = false;
     }
   }
 
@@ -735,7 +566,7 @@
     disabledToolChecks = toolChecks;
     disabledSkillChecks = skillChecks;
     // Saved names the discovery list doesn't cover (typed by an admin, or from
-    // an older CLI) stay visible/removable so the dirty-compare stays honest.
+    // an older skill list) stay visible/removable so the dirty-compare stays honest.
     customDisabledSkills = savedSkills.filter((name) => !discoveredNames.has(name));
   }
 
@@ -788,19 +619,14 @@
   async function reloadUsers() {
     await loadAdminOverview();
   }
-  async function reloadGroups() {
-    await loadAdminGroups();
-  }
 </script>
 
 <header class="view-header">
   <div class="title">
     <h1>관리자</h1>
-    <p>사용자·외부 아바타·접근·시스템을 관리하세요</p>
+    <p>사용자·접근·시스템을 관리하세요</p>
   </div>
-  {#if $appState.adminTab !== "external-agents"}
-    <button class="ghost-sm" type="button" disabled={loadBusy} on:click={load}>{loadBusy ? "새로고침 중…" : "새로고침"}</button>
-  {/if}
+  <button class="ghost-sm" type="button" disabled={loadBusy} on:click={load}>{loadBusy ? "새로고침 중…" : "새로고침"}</button>
 </header>
 
 <div class="view-body scroll-thin">
@@ -833,11 +659,6 @@
     </div>
 
     <div class="admin-panel" role="tabpanel" id="admin-panel" aria-labelledby={`admin-tab-${$appState.adminTab}`}>
-      <AdminExternalAgentsPanel
-        active={$appState.adminTab === "external-agents"}
-        groups={$appState.adminGroups}
-        {reloadGroups}
-      />
       <AdminEgressPanel active={$appState.adminTab === "access"} />
       <AdminSharedMcpPanel active={$appState.adminTab === "mcp"} />
       {#if $appState.adminTab === "overview"}
@@ -972,12 +793,16 @@
               <div class="sys-grid">
                 <div class="sys-row">
                   <span class="sys-key muted">런타임</span>
-                  <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "claude" ? "Claude Agent SDK" : "로컬 스텁"}</span></span>
+                  <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "pi" ? "pi-gateway" : "로컬 스텁"}</span></span>
                 </div>
                 <div class="sys-row">
-                  <span class="sys-key muted">설정된 모델</span>
+                  <span class="sys-key muted">pi 모델</span>
                   <span class="sys-val">
-                    {#if sys.configuredModel}<span class="tag mono">{sys.configuredModel}</span>{:else}<span class="muted">미설정 (SDK 기본값)</span>{/if}
+                    {#if piModels.length}
+                      {#each piModels as model (model.id)}
+                        <span class="tag mono" title={model.server ? `제공: ${model.server}` : undefined}>{model.id}</span>{" "}
+                      {/each}
+                    {:else}<span class="muted">{sys.agentRuntime === "pi" ? "없음 — pi-gateway 모델 목록을 불러오지 못했습니다 (기본 모델로 실행)" : "없음 (로컬 스텁)"}</span>{/if}
                   </span>
                 </div>
                 <div class="sys-row">
@@ -985,14 +810,6 @@
                   <span class="sys-val">
                     {#if sys.observedModel}<span class="tag mono accent">{sys.observedModel}</span>{:else}<span class="muted">아직 확인되지 않음 (첫 대화 후 표시)</span>{/if}
                   </span>
-                </div>
-                <div class="sys-row">
-                  <span class="sys-key muted">인증 방식</span>
-                  <span class="sys-val"><span class="tag">{sys.authMode === "api_key" ? "API 키" : "구독 로그인"}</span></span>
-                </div>
-                <div class="sys-row">
-                  <span class="sys-key muted">읽기 전용 도구</span>
-                  <span class="sys-val"><span class="muted">{(sys.readOnlyTools || []).join(", ") || "없음"}</span></span>
                 </div>
                 <div class="sys-row">
                   <span class="sys-key muted">Confluence</span>
@@ -1003,179 +820,72 @@
               </div>
             </div>
 
-            <!-- subscription -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>구독 로그인</h3>
-                  <p class="muted">Claude 구독으로 아바타를 구동합니다. ① 내 PC에서 claude setup-token 실행 → ② 출력된 sk-ant-oat… 토큰을 아래에 붙여넣고 저장하세요. 토큰은 암호화되어 저장되며 다시 표시되지 않습니다.</p>
-                </div>
-              </div>
-              <div class="sys-grid">
-                <div class="sys-row">
-                  <span class="sys-key muted">구독 연결</span>
-                  <span class="sys-val">
-                    <span class={sys.subscriptionConnected ? "tag accent" : "muted"}>{sys.subscriptionConnected ? "● 연결됨" : "○ 미연결"}</span>
-                  </span>
-                </div>
-              </div>
-              {#if sys.apiKeyOverride}
-                <p class="muted">.env의 ANTHROPIC_API_KEY가 설정되어 있어 API 키가 구독 토큰보다 우선합니다. 구독 토큰을 사용하려면 API 키를 비우세요.</p>
-              {/if}
-              {#if sys.subscriptionConnected}
-                <div class="ar-actions">
-                  <button class="ghost-sm danger" type="button" disabled={subBusy} on:click={disconnectToken}>연결 해제</button>
-                </div>
-              {/if}
-              <form class="settings-form" on:submit|preventDefault={saveToken}>
-                <label class="field">
-                  <span>{sys.subscriptionConnected ? "토큰 교체" : "Claude 구독 토큰"}</span>
-                  <RevealableInput
-                    bind:value={claudeToken}
-                    name="token"
-                    placeholder="sk-ant-oat01-…"
-                    ariaLabel={sys.subscriptionConnected ? "Claude 구독 토큰 교체" : "Claude 구독 토큰"}
-                    ariaDescribedby={tokenStatusId}
-                    ariaInvalid={Boolean(tokenError)}
-                    revealLabel="토큰"
-                    disabled={subBusy}
-                    onInput={() => (tokenError = "")}
-                  />
-                </label>
-                <div class="settings-save-row">
-                  <span id={tokenStatusId} class="settings-save-status" class:dirty={Boolean(claudeTokenTrimmed && !subBusy && !tokenError)} class:pending={subBusy} class:invalid={Boolean(tokenError)} role="status" aria-live="polite">{tokenStatus}</span>
-                  <button class="primary" type="submit" disabled={!tokenCanSave}>{subBusy ? "저장 중…" : sys.subscriptionConnected ? "교체 저장" : "저장"}</button>
-                </div>
-              </form>
-            </section>
-
             <!-- model override -->
             <section class="settings-card">
               <div class="panel-section-head">
                 <div>
                   <h3>아바타 모델</h3>
-                  <p class="muted">아바타 대화에 사용할 모델을 지정합니다. 비워 두면 SDK 기본값을 사용합니다. 예: claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5-20251001.</p>
+                  <p class="muted">대화에서 모델을 고르지 않았을 때 사용할 모델을 지정합니다. 목록은 pi-gateway가 지금 제공하는 모델이며, 지정하지 않으면 pi-gateway 기본 모델을 사용합니다.</p>
                 </div>
               </div>
-              {#if sys.modelEnvLocked}
-                <p class="muted">.env의 ANTHROPIC_MODEL이 설정되어 있어 환경 변수가 우선합니다. 아래 설정은 환경 변수가 없을 때만 적용됩니다.</p>
-              {/if}
               <form class="settings-form" on:submit|preventDefault={saveModel}>
                 <label class="field">
-                  <span>모델 이름</span>
-                  <input
+                  <span>모델</span>
+                  <select
                     name="model"
                     bind:value={modelInput}
-                    placeholder="claude-opus-4-8 (비우면 기본값)"
-                    autocomplete="off"
                     aria-describedby={modelStatusId}
                     aria-invalid={modelError ? "true" : undefined}
                     disabled={modelBusy}
-                    on:input={() => (modelError = "")}
-                  />
+                    on:change={() => (modelError = "")}
+                  >
+                    <option value="">기본 모델 사용</option>
+                    {#if modelSavedUnavailable}
+                      <option value={savedModelOverride} disabled>{savedModelOverride} (현재 제공되지 않음)</option>
+                    {/if}
+                    {#each modelChoices as choice (choice)}
+                      <option value={choice}>{choice}</option>
+                    {/each}
+                  </select>
                 </label>
                 <div class="settings-save-row">
-                  <span id={modelStatusId} class="settings-save-status" class:dirty={modelDirty && !modelBusy && !modelError} class:pending={modelBusy} class:invalid={Boolean(modelError)} role="status" aria-live="polite">{modelStatus}</span>
+                  <span id={modelStatusId} class="settings-save-status" class:dirty={modelDirty && !modelBusy && !modelError} class:pending={modelBusy} class:invalid={Boolean(modelError) || Boolean(!modelDirty && savedModelOverride && sys.modelOverrideIgnored)} role="status" aria-live="polite">{modelStatus}</span>
                   <button class="primary" type="submit" disabled={!modelCanSave}>{modelBusy ? "저장 중…" : modelValueTrimmed ? "모델 저장" : "기본값 사용"}</button>
                 </div>
               </form>
             </section>
 
-            <!-- per-tier vision (image input) policy -->
+            <!-- per-model vision (image input) policy -->
             <section class="settings-card">
               <div class="panel-section-head">
                 <div>
                   <h3>모델별 이미지 입력(비전)</h3>
                   <p class="muted">
-                    모델 티어별 이미지 입력 지원 여부를 지정합니다. "기본값"은 배포 환경설정(MODEL_VISION, 현재 {visionDefaultLabel})을 따릅니다.
+                    pi 모델별 이미지 입력 지원 여부를 지정합니다. "기본값"은 배포 환경설정(MODEL_VISION, 현재 {visionDefaultLabel})을 따릅니다.
                     미지원으로 설정된 모델을 쓰는 대화에서는 이미지 첨부가 차단되고, 아바타의 이미지/PDF 파일 읽기가 거부되며, 아바타에게도 그 사실이 안내됩니다.
                   </p>
                 </div>
               </div>
               <form class="settings-form" on:submit|preventDefault={saveVisionPolicy}>
-                {#each MODEL_TIERS as tier (tier.id)}
+                {#each piModels as model (model.id)}
                   <label class="field">
                     <span>
-                      {tier.label}
-                      {#if tierModelById.get(tier.id)}
-                        <span class="muted mono">{tierModelById.get(tier.id)}</span>
-                      {:else}
-                        <span class="muted">(매핑 없음 — ANTHROPIC_DEFAULT_{tier.id.toUpperCase()}_MODEL 미설정, SDK 기본값 사용)</span>
-                      {/if}
+                      <span class="mono">{model.id}</span>
+                      {#if model.server}<span class="muted">{model.server}</span>{/if}
                     </span>
-                    <select bind:value={visionPolicyDraft[tier.id]} disabled={visionBusy} aria-label={`${tier.label} 이미지 입력 지원`}>
+                    <select bind:value={visionPolicyDraft[model.id]} disabled={visionBusy} aria-label={`${model.id} 이미지 입력 지원`}>
                       <option value="default">기본값 ({visionDefaultLabel})</option>
                       <option value="on">지원</option>
                       <option value="off">미지원</option>
                     </select>
                   </label>
+                {:else}
+                  <p class="muted">{sys.agentRuntime === "pi" ? "pi-gateway 모델 목록을 불러오지 못해 설정할 모델이 없습니다." : "로컬 스텁에는 설정할 모델이 없습니다."}</p>
                 {/each}
                 <div class="settings-save-row">
-                  <button class="primary" type="submit" disabled={visionBusy}>{visionBusy ? "저장 중…" : "저장"}</button>
+                  <button class="primary" type="submit" disabled={visionBusy || !piModels.length}>{visionBusy ? "저장 중…" : "저장"}</button>
                 </div>
               </form>
-            </section>
-
-            <!-- 서버 에이전트 switch -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>서버 에이전트</h3>
-                  <p class="muted">사용자가 등록한 SSH 서버에서 Claude Code 에이전트를 실행해 작업을 위임하는 기능입니다. 기본값은 꺼짐입니다.</p>
-                </div>
-                <span class="tag {serverAgentsEnabled ? 'ok' : ''}">{serverAgentsEnabled ? "켜짐" : "꺼짐"}</span>
-              </div>
-              {#if serverAgentsConfirming}
-                <div class="warn-box" role="alert">{SERVER_AGENTS_WARNING}</div>
-                <div class="settings-save-row">
-                  <span id={serverAgentsStatusId} class="settings-save-status" class:pending={serverAgentsBusy} class:invalid={Boolean(serverAgentsError)} role="status" aria-live="polite">{serverAgentsStatus}</span>
-                  <button class="btn" type="button" disabled={serverAgentsBusy} on:click={() => (serverAgentsConfirming = false)}>취소</button>
-                  <button class="primary" type="button" disabled={serverAgentsBusy} on:click={() => saveServerAgents(true)}>{serverAgentsBusy ? "저장 중…" : "경고를 확인했고 켭니다"}</button>
-                </div>
-              {:else}
-                <div class="settings-save-row">
-                  <span id={serverAgentsStatusId} class="settings-save-status" class:pending={serverAgentsBusy} class:invalid={Boolean(serverAgentsError)} role="status" aria-live="polite">{serverAgentsStatus}</span>
-                  {#if serverAgentsEnabled}
-                    <button class="btn" type="button" disabled={serverAgentsBusy} aria-describedby={serverAgentsStatusId} on:click={() => saveServerAgents(false)}>{serverAgentsBusy ? "저장 중…" : "끄기"}</button>
-                  {:else}
-                    <button class="primary" type="button" disabled={serverAgentsBusy} aria-describedby={serverAgentsStatusId} on:click={() => { serverAgentsError = ""; serverAgentsConfirming = true; }}>켜기</button>
-                  {/if}
-                </div>
-              {/if}
-            </section>
-
-            <!-- Craft 앱 switch (admin-only beta) -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>Craft 앱 (관리자 전용 베타)</h3>
-                  <p class="muted">아바타가 PhotoCraft 같은 Craft 앱으로 이미지를 편집합니다. 서버에 craft-runner 서비스가 있어야 하고, 시스템 관리자의 대화형 채팅에서만 쓸 수 있습니다. 기본값은 꺼짐입니다.</p>
-                </div>
-                <span class="tag {craftAppsEnabled ? 'ok' : ''}">{craftAppsEnabled ? "켜짐" : "꺼짐"}</span>
-              </div>
-              <div class="settings-save-row">
-                <span id={craftAppsStatusId} class="settings-save-status" class:pending={craftAppsBusy} class:invalid={Boolean(craftAppsError)} role="status" aria-live="polite">{craftAppsStatus}</span>
-                {#if craftAppsEnabled}
-                  <button class="btn" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 끄기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(false)}>{craftAppsBusy ? "저장 중…" : "끄기"}</button>
-                {:else}
-                  <button class="primary" type="button" disabled={craftAppsBusy} aria-label="Craft 앱 켜기" aria-describedby={craftAppsStatusId} on:click={() => saveCraftApps(true)}>{craftAppsBusy ? "저장 중…" : "켜기"}</button>
-                {/if}
-              </div>
-              {#if craftAppsEnabled && craftInfo?.configured === false}
-                <p class="warn-box">서버에 craft-runner 설정(CRAFT_EXCHANGE_DIR, CRAFT_CONTROL_SECRET)이 없어 켜져 있어도 쓸 수 없습니다.</p>
-              {:else if craftAppsEnabled && craftAppRows.length}
-                {#if craftRunnerDown}
-                  <p class="warn-box">craft-runner에 연결할 수 없습니다. craft-runner 컨테이너가 실행 중인지 확인하세요.</p>
-                {/if}
-                <ul class="craft-app-status" aria-label="Craft 앱 상태">
-                  {#each craftAppRows as row (row.id)}
-                    <li>
-                      <span class="craft-app-name"><strong>{row.label}</strong>{#if row.version}{" "}<span class="muted mono">v{row.version}</span>{/if}</span>
-                      <span class="tag {row.tone}">{row.text}</span>
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
             </section>
 
             <!-- hex-ssh policy -->
@@ -1229,15 +939,16 @@
               <div class="panel-section-head">
                 <div>
                   <h3>내장 도구·스킬 정책</h3>
-                  <p class="muted">체크한 항목은 모든 아바타에서 비활성화됩니다. 도구는 대화에서 완전히 제거되고, 스킬은 목록에서 숨겨지거나 실행이 차단됩니다.</p>
+                  <p class="muted">체크한 항목은 모든 아바타에서 비활성화됩니다. 스킬은 목록에서 숨겨지거나 실행이 차단됩니다.</p>
                 </div>
               </div>
               <form class="settings-form" on:submit|preventDefault={saveToolSkillPolicy}>
                 <div class="field">
                   <span>내장 도구 비활성화</span>
-                  <div class="external-agent-group-picker" role="group" aria-label="내장 도구 비활성화" aria-describedby={toolSkillStatusId}>
+                  <small class="muted">pi 런타임에는 내장 도구를 막는 도구 게이트가 없어, 비활성화한 도구는 강제로 차단되지 않고 아바타에게 사용하지 말라는 안내로 전달됩니다.</small>
+                  <div class="policy-option-picker" role="group" aria-label="내장 도구 비활성화" aria-describedby={toolSkillStatusId}>
                     {#each togglableTools as entry (entry.id)}
-                      <label class="external-agent-group-option">
+                      <label class="policy-option">
                         <input type="checkbox" bind:checked={disabledToolChecks[entry.id]} aria-describedby={toolSkillStatusId} disabled={toolSkillBusy} on:change={() => (toolSkillError = "")} />
                         <span><strong>{entry.labelKo}</strong><small class="muted">{entry.descriptionKo}</small></span>
                       </label>
@@ -1247,16 +958,16 @@
                 <div class="field">
                   <span>스킬 비활성화</span>
                   {#if sys.skillDiscovery}
-                    <p class="muted">CLI v{sys.skillDiscovery.cliVersion} 기준으로 발견한 스킬/커맨드 {discoveredSkills.length}개입니다.</p>
-                    <div class="external-agent-group-picker" role="group" aria-label="스킬 비활성화" aria-describedby={toolSkillStatusId}>
+                    <p class="muted">기본 스킬 플러그인에서 찾은 스킬 {discoveredSkills.length}개입니다.</p>
+                    <div class="policy-option-picker" role="group" aria-label="스킬 비활성화" aria-describedby={toolSkillStatusId}>
                       {#each discoveredSkills as skill (skill.name)}
-                        <label class="external-agent-group-option">
+                        <label class="policy-option">
                           <input type="checkbox" bind:checked={disabledSkillChecks[skill.name]} aria-describedby={toolSkillStatusId} disabled={toolSkillBusy} on:change={() => (toolSkillError = "")} />
                           <span><strong>{skill.name}</strong>{#if skill.description}<small class="muted">{skill.description}</small>{/if}</span>
                         </label>
                       {/each}
                       {#each customDisabledSkills as name (name)}
-                        <label class="external-agent-group-option">
+                        <label class="policy-option">
                           <input type="checkbox" checked disabled={toolSkillBusy} on:change={() => removeCustomDisabledSkill(name)} />
                           <span><strong>{name}</strong><small class="muted">직접 추가됨 — 체크를 해제하면 목록에서 제거됩니다.</small></span>
                         </label>
@@ -1265,9 +976,9 @@
                   {:else}
                     <div class="empty-note">스킬 목록을 불러오지 못했습니다. 아래 입력으로 스킬 이름을 직접 추가해 비활성화할 수 있습니다.</div>
                     {#if customDisabledSkills.length}
-                      <div class="external-agent-group-picker" role="group" aria-label="직접 추가한 비활성 스킬" aria-describedby={toolSkillStatusId}>
+                      <div class="policy-option-picker" role="group" aria-label="직접 추가한 비활성 스킬" aria-describedby={toolSkillStatusId}>
                         {#each customDisabledSkills as name (name)}
-                          <label class="external-agent-group-option">
+                          <label class="policy-option">
                             <input type="checkbox" checked disabled={toolSkillBusy} on:change={() => removeCustomDisabledSkill(name)} />
                             <span><strong>{name}</strong><small class="muted">직접 추가됨 — 체크를 해제하면 목록에서 제거됩니다.</small></span>
                           </label>

@@ -51,7 +51,7 @@ export function renderMarkdown(text: string | null | undefined): string {
 // html was identical. renderMarkdown is pure in its source text, so caching on
 // that text makes the parse cost O(new text) instead of O(transcript × tokens).
 //
-// Streaming text (liveText / liveThinking / livePlan) must keep using the plain
+// Streaming text (liveText / liveThinking) must keep using the plain
 // renderMarkdown: it changes every token, so caching it only churns the map.
 const MARKDOWN_CACHE_LIMIT = 500;
 const markdownCache = new Map<string, string>();

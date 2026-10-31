@@ -4,7 +4,8 @@ import { buildSystemTools, SYSTEM_TOOL_NAMES, type SystemToolsContext } from "..
 import type { Store } from "../src/server/store.js";
 import { callTool } from "./helpers.js";
 import { effectiveMcpToolGroups } from "../src/shared/mcpToolGroups.js";
-import { buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import type { AgentRequest } from "../src/server/types.js";
 
 describe("official system manual", () => {
   it("keeps system available through old empty selections and restrictive policies", () => {
@@ -19,9 +20,10 @@ describe("official system manual", () => {
   it("keeps procedures out of the prompt while retaining live scope and safety", () => {
     // A TRIPWIRE against procedures creeping into the standing prompt — NOT a
     // bound on real owner prompts. The config is maximal over the BOOLEAN
-    // feature flags only (midTurnMessages, shareLinksEnabled and todoState
-    // included: every interactive owner run with file output carries the first
-    // two, and every owner run with the to-do tools the last) and sets no
+    // feature flags only (shareLinksEnabled and todoState included: every
+    // interactive owner run with file output carries the first, and every owner
+    // run with the to-do tools the last; midTurnMessages is set too, but its
+    // line rides the per-turn preamble, never the standing append) and sets no
     // data-driven field. Real owner turns also carry sections this cap does not
     // measure: the External task API line (avatarApiKeyCount is stamped even at
     // 0 keys), the web-fetch proxy note, and the group, secret, Confluence and
@@ -49,7 +51,12 @@ describe("official system manual", () => {
     expect(visionPrompt).toContain("Images you are shown are also FILES in the scratch workspace");
     expect(visionPrompt).toContain("saved in the scratch workspace's `captures/`");
     expect(visionPrompt).not.toContain("Screenshots and pixel-mode clicks are unavailable");
-    expect(prompt).toContain("The user may send additional messages while you are working.");
+    // The mid-turn line is a per-turn fact: it rides the pi turn preamble, so
+    // it neither appears in nor counts against the standing append.
+    expect(prompt).not.toContain("The user may send additional messages");
+    expect(buildPiTurnPreamble(flags as unknown as AgentRequest)).toContain(
+      "The user may send additional messages while you are working.",
+    );
     expect(prompt).toContain("Share links: `create_share_link`, ONLY if the user asks for a link.");
     expect(prompt).toContain("manage it ONLY with `mcp__todo__*`");
     // The converter deck section (the longer of the two) is what this budgets.
@@ -87,11 +94,17 @@ describe("official system manual", () => {
     expect(index.text).not.toContain("curl -sS");
   });
 
-  it("documents native /compact and what the avatar can still see after it", () => {
+  it("no longer documents the retired manual /compact", () => {
     const page = readSystemManual("chat").text;
-    expect(page).toContain("`/compact [what to keep]` summarizes the conversation so far to free context");
-    expect(page).toContain("the avatar sees only that summary (plus what the user asked to keep)");
-    expect(page).toContain("the earlier messages stay in the chat and can still be rewound to");
+    expect(page).not.toContain("/compact");
+    expect(page).toContain("Editing an earlier message rewinds the conversation to it");
+  });
+
+  it("no longer documents background work (background tasks are disabled)", () => {
+    expect(readSystemManual("chat").text).not.toContain("## Background work");
+    const tasks = readSystemManual("external-tasks").text;
+    expect(tasks).not.toContain("Background follow-up reports");
+    expect(tasks).not.toContain("background phase");
   });
 
   it("documents the deck converter without claiming it is available", () => {
@@ -113,7 +126,6 @@ describe("official system manual", () => {
   it("documents the share-link exception to conversation-scoped artifacts without claiming availability", () => {
     const page = readSystemManual("files-canvas").text;
     expect(page).toContain("Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card.");
-    expect(page).toContain("group-agent conversations cannot be link-shared");
     expect(page).toContain("speaker notes included");
     expect(page).toContain("1, 7 or 30 days, 7 by default, fixed at creation");
     // One active link per delivered CARD: a rebuilt deck delivered again is a

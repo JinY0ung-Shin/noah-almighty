@@ -12,16 +12,12 @@
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
-  // API path to fetch the {graph} from — personal repo by default, or a group's.
-  export let endpoint = "/api/me/knowledge-repo/graph";
-  // Heading; group views pass the group name.
-  export let title = "지식 그래프";
-  // Brain-view source key this graph maps to, so "전체 화면으로 열기" opens the same
-  // source: "personal" (default) or "group:<id>".
-  export let sourceKey = "personal";
+  // The owner's personal knowledge repo — the only graph (the team brain was
+  // removed 2026-10-30, so group repos have none).
+  const endpoint = "/api/me/knowledge-repo/graph";
 
   // Compact graph preview opened from a settings card. The full-page brain view
-  // (a left-nav button) is the richer surface — note contents, source switching.
+  // (a left-nav button) is the richer surface — note contents.
 
   let loading = true;
   let error = "";
@@ -30,9 +26,8 @@
   let loadToken = 0;
   let destroyed = false;
   const instanceId = ++graphModalSeq;
-  $: idBase = `graph-${instanceId}-${sourceKey.replace(/[^A-Za-z0-9_-]/g, "-")}`;
-  $: titleId = `${idBase}-title`;
-  $: descId = `${idBase}-desc`;
+  const titleId = `graph-${instanceId}-title`;
+  const descId = `graph-${instanceId}-desc`;
 
   onMount(() => {
     void loadGraph();
@@ -59,14 +54,14 @@
 
   function openFullView() {
     dispatch("close");
-    goView("brain", sourceKey);
+    goView("brain");
   }
 </script>
 
 <Modal cardClass="graph-modal-card" ariaLabelledby={titleId} ariaDescribedby={descId} on:close={() => dispatch("close")}>
   <div class="graph-head">
     <div>
-      <h2 id={titleId}>{title}</h2>
+      <h2 id={titleId}>지식 그래프</h2>
       <p class="muted" id={descId}>노트 사이의 <code>[[링크]]</code> 연결을 시각화합니다. 드래그·휠 줌·노드 클릭이 가능합니다.</p>
     </div>
     <div class="graph-head-acts">

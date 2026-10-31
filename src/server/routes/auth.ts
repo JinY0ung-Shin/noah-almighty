@@ -7,10 +7,11 @@ import {
 import logger from "../logger.js";
 import { createRateLimiter } from "../rateLimit.js";
 import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_shared.js";
-import { DEFAULT_MODEL_TIER, MODEL_TIERS } from "../modelTiers.js";
+import { catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
+import { effectiveModelOverride } from "../modelOverride.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
-import { craftAppsClientStatus } from "../craftRunner.js";
 
 // ---- Auth ------------------------------------------------------------
 export function createAuthRouter({ config, store }: RouterDeps): Router {
@@ -145,7 +146,11 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
 
   // First-run probe: when no account exists yet, the client shows the
   // admin-account setup screen instead of the normal login.
-  router.get("/api/bootstrap", (_req, res) => {
+  router.get("/api/bootstrap", async (_req, res) => {
+    // pi-gateway's live model list (cached; empty on the `local` stub and while
+    // pi has never answered — the client then hides the picker).
+    const models = await piServicesFor(store, config).models.list();
+    const visionPolicy = store.getModelVisionPolicy();
     res.json({
       needsSetup: !store.hasAnyUser(),
       githubHost: config.githubHost,
@@ -155,36 +160,32 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // Lets onboarding show the Confluence PAT field only when the deployment
       // has a Confluence host configured (the PAT is useless otherwise).
       confluenceConfigured: Boolean(config.confluenceUrl),
-      // Deployment default for image input (MODEL_VISION). Per-TIER support
-      // rides on modelSelection.tiers[].vision below; this global remains the
-      // fallback for locked/unresolvable cases.
+      // Deployment default for image input (MODEL_VISION). Per-MODEL support
+      // rides on modelSelection.models[].vision below; this global remains the
+      // fallback when no model resolves.
       visionEnabled: config.visionEnabled,
-      // Per-conversation model picker: the selectable tiers + whether the choice
-      // is locked by an env-pinned ANTHROPIC_MODEL (then the composer hides the
-      // picker). The concrete model each tier maps to is the operator's call via
-      // ANTHROPIC_DEFAULT_*_MODEL (see modelTiers.ts).
+      // Per-conversation model picker: the models pi-gateway offers right now.
+      // A pick is a pi model id; none (or one pi stopped offering) runs the
+      // admin override, else pi-gateway's default model.
       modelSelection: {
-        // Each tier carries the concrete model id it resolves to when the operator
-        // pinned one via ANTHROPIC_DEFAULT_<TIER>_MODEL (null otherwise — the SDK
-        // then uses the account default, which the app can't name), plus whether
-        // that tier accepts image input (admin per-tier policy ∘ MODEL_VISION).
-        tiers: MODEL_TIERS.map((tier) => ({
-          ...tier,
-          model: config.defaultTierModels[tier.id] ?? null,
-          vision: visionForModel(tier.id, store.getModelVisionPolicy(), config.visionEnabled),
+        // `server` is pi's `owned_by`; `vision` the admin per-model policy ∘ MODEL_VISION.
+        models: models.map((model) => ({
+          id: model.id,
+          server: model.server,
+          vision: visionForModel(model.id, visionPolicy, config.visionEnabled),
         })),
-        locked: Boolean(config.anthropicModel),
         // Vision of the model a conversation gets when the user picked nothing:
-        // env pin > admin override > default tier (mirrors claudeAgent).
+        // the admin override when pi offers it, else pi-gateway's default model
+        // (mirrors runCapabilities).
         defaultVision: visionForModel(
-          config.anthropicModel ?? store.getModelOverride() ?? DEFAULT_MODEL_TIER,
-          store.getModelVisionPolicy(),
+          effectiveModelOverride(store, catalogModelIds(models)),
+          visionPolicy,
           config.visionEnabled,
         ),
       },
-      // Per-conversation reasoning effort picker. Independent of the model pin
-      // (effort still applies when ANTHROPIC_MODEL locks the model), so there is
-      // no `locked` flag here. The SDK downgrades unsupported levels per model.
+      // Per-conversation reasoning effort picker. A change mid-conversation
+      // starts a new pi session from the text history (pi fixes effort per
+      // session).
       effortSelection: {
         levels: EFFORT_LEVELS,
         default: DEFAULT_EFFORT_LEVEL,
@@ -194,13 +195,6 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
 
   router.get("/api/me", (req, res) => {
     const user = store.getUserBySessionToken(sessionTokenFromRequest(req));
-    // Craft apps (admin-only beta): system admins also hear what the
-    // deployment can serve, so the composer shows a Craft tool group only
-    // when it is usable. Everyone else's payload is unchanged.
-    if (user && store.isAdmin(user.id)) {
-      res.json({ user, craftApps: craftAppsClientStatus(config, store.isCraftAppsEnabled()) });
-      return;
-    }
     res.json({ user });
   });
 

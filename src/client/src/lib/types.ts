@@ -1,7 +1,5 @@
 export type {
   AdminGroupSummary,
-  AdminExternalAgent,
-  AdminExternalAgentInput,
   SharedMcpServerUserView,
   SharedMcpServerView,
   SharedMcpTransport,
@@ -18,7 +16,6 @@ export type {
   AvatarVisibility,
   CanvasArtifact,
   ConversationSummary,
-  GroupAgent,
   GroupMember,
   GroupSharedSkill,
   ImageMediaType,
@@ -51,15 +48,6 @@ export type {
   ShareViewPayload,
   ShareViewSlide,
 } from "../../../shared/shareLinks";
-
-export type {
-  ServerAgentAccess,
-  ServerAgentHostKeyResponse,
-  ServerAgentInput,
-  ServerAgentInstallState,
-  ServerAgentListResponse,
-  ServerAgentView,
-} from "../../../shared/serverAgents";
 
 import type { CanvasArtifact, RoutineJob } from "../../../server/types.js";
 import type { TodoCounts, TodoItem } from "../../../shared/todos";
@@ -114,7 +102,14 @@ export interface SteerPublic {
   createdAt: string;
   followUp: boolean;
   /**
-   * The persisted `kind: "steer"` user row, `null` when the conversation was
+   * Present when Noah pushed it, not the viewer: a consulted teammate avatar's
+   * answer (persisted as `kind: "consultation"`). Never a pending "나" bubble,
+   * never handed back to the composer when dropped.
+   */
+  source?: import("../../../server/types.js").MessageConsultationSource;
+  /**
+   * The persisted user row (`kind: "steer"`, or `"consultation"` with a
+   * `source`), `null` when the conversation was
    * deleted mid-run. Present only on the `delivered` SSE frame — the POST
    * response's steer never carries it, and the other three states omit the key.
    */
@@ -151,7 +146,6 @@ export type SettingsTab = "profile" | "access" | "knowledge";
 export type AdminTab =
   | "overview"
   | "users"
-  | "external-agents"
   | "mcp"
   | "access"
   | "system"
@@ -185,45 +179,24 @@ export interface ChatPane {
   turnFinalized?: boolean;
   /** The model's reasoning (extended-thinking) text streamed this turn; shown in a collapsible "생각 과정" view until the turn finishes and the persisted `response.thinking` takes over. */
   liveThinking?: string;
-  /** True while reasoning deltas are actively streaming (set on each thinking delta, cleared once answer text / tool / agent / task / plan activity arrives). Drives the live "생각 중…" indicator on the collapsed thinking card. */
+  /** True while reasoning deltas are actively streaming (set on each thinking delta, cleared once answer text / tool / agent / task activity arrives). Drives the live "생각 중…" indicator on the collapsed thinking card. */
   thinkingActive?: boolean;
-  /** Plan submitted via ExitPlanMode this turn (plan mode); shown live as a plan card until the turn finishes and the persisted `response.plan` takes over. */
-  livePlan?: string;
-  /** True between EnterPlanMode and ExitPlanMode: the avatar is composing a plan in the background. Drives a "writing plan…" placeholder card so the turn doesn't look stalled. Cleared once `livePlan` arrives. */
-  planPending?: boolean;
-  /** Set when the avatar proposed a plan (ExitPlanMode) and is awaiting the owner's approval; drives inline approve/reject controls on the live plan card. Holds the ids needed to answer via /api/chat/respond. Cleared once answered/resolved. */
-  planReview?: { requestId: string; runId: string } | null;
-  /** A plan-approval submit (approve/reject) is in flight, to disable the controls. */
-  planReviewSubmitting?: boolean;
   liveStatus: string;
   liveRunId: string | null;
   /** Multi-agent activity tree (root "main" + sub-agents) for the live bubble. */
   liveAgents: LiveAgentNode[];
   /** Tool / blocked rows, each owned by an agent in liveAgents. */
   liveTools: LiveToolRow[];
-  /** SDK task rows, tracked separately from normal tool calls. */
+  /** Task rows, tracked separately from normal tool calls. */
   liveTasks: LiveTaskRow[];
   /** Plugin-load chips (name + status). */
   livePlugins: LivePluginChip[];
   /** ms timestamp until which a sticky status label resists a generic overwrite. */
   liveStatusStickyUntil?: number;
-  /** True between done{background:true} and bg_end/cancelled: the visible turn is finalized but the SDK session is still running background work. Drives the background chip + keeps the live activity tree mounted. */
-  backgroundPhase?: boolean;
-  /** Live background tasks (SDK level signal, REPLACE semantics). */
-  backgroundTasks?: BackgroundTaskChip[];
-  /** Persisted message id of the finalized turn, so the final activity snapshot lands on it at bg_end/cancel. */
-  backgroundMessageId?: string | null;
-  /**
-   * The activity segment new rows are stamped with: 0 for the visible turn,
-   * k for the k-th background wake-up turn (see lib/activitySegments.ts).
-   */
-  liveSegment?: number;
-  /**
-   * Persisted message id per segment, in order: [finalized turn, wake-up 1, …].
-   * The in-flight segment has no entry until its bg_message lands.
-   */
-  segmentMessageIds?: string[];
-  groupKnowledgeOff: string[];
+  /** The tool whose frame set the current pin: its own progress echo is dropped while it runs. */
+  liveStatusPinSource?: string;
+  /** The newest server status that arrived while the pin held: shown once the pin lapses (setStatus). */
+  liveStatusHeld?: string;
   /** Installed skills for this pane's avatar, lazily fetched the first time the slash menu opens (#slash-skills). Drives skill entries in the "/" menu. */
   skills?: import("../../../server/types.js").SkillInfo[];
   /** Guards the one-shot skills fetch (set once the request settles, success or fail). */
@@ -252,12 +225,8 @@ export interface ChatPane {
    * serving URL (`/api/conversations/:id/images/:imageId`).
    */
   localImages?: Record<string, string>;
-  /** User-chosen model for this conversation; "" / undefined = server default. Native panes hold a model TIER alias; external panes hold a GATEWAY model id. */
-  modelTier?: string;
-  /** Gateway model catalog for an EXTERNAL avatar's picker, lazily fetched when the composer settings first open. undefined = not fetched yet, null = fetch failed (default-only picker). */
-  externalModels?: string[] | null;
-  /** Admin-configured default gateway model id for an EXTERNAL avatar (null = gateway decides), from the same catalog fetch. */
-  externalDefaultModel?: string | null;
+  /** User-chosen pi model id for this conversation; "" / undefined = pi-gateway's default model. */
+  model?: string;
   /** User-chosen reasoning effort level for this conversation; "" / undefined = SDK default (high). */
   effort?: string;
   /** MCP tool groups enabled for this conversation; defaults to every group. */
@@ -302,28 +271,6 @@ export interface ChatPane {
 export interface PaneFileTab {
   attachment: import("../../../server/types.js").MessageAttachment;
   slides: import("../../../server/types.js").MessageAttachment[];
-  /**
-   * Set only on a Craft app's LIVE preview tab (opened by a `craft_preview`
-   * frame, lib/chat `handleCraftPreview`): the app id. The next preview of the
-   * same app replaces this tab in place instead of opening one more; a tab the
-   * viewer opened from a card never carries it, so it is never swapped away.
-   */
-  craftApp?: string;
-  /** Strip label overriding the file name (a Craft preview: the app's Korean name). */
-  label?: string;
-}
-
-/** Runner health of one Craft app as `GET /api/me` reports it (admins only). */
-export type CraftAppStatus = "ready" | "failed" | "unavailable";
-
-/** `GET /api/me`'s `craftApps` (spec P1 §6): the admin toggle + per-app runner status. */
-export interface CraftAppsInfo {
-  enabled: boolean;
-  /** Exchange env set on this deployment (absent = not reported). */
-  configured?: boolean;
-  /** The runner answered its last health probe (absent = not reported). */
-  runnerReachable?: boolean;
-  apps: { id: string; status: CraftAppStatus; version?: string }[];
 }
 
 /** One tab of the right-side panel: a canvas (artifact id) or an open file (attachment id). */
@@ -353,16 +300,12 @@ export interface LiveAgentNode {
   parentId: string;
   label: string;
   /**
-   * Addressable teammate name (agent-teams `Agent` spawn with `name:`), kept
-   * apart from `label` so a nameless re-announce can never drop it. Persisted.
+   * Addressable teammate name from the retired agent teams. Read-only: only
+   * older stored snapshots carry it; new runs never set it.
    */
   name?: string;
   status: "running" | "done" | "failed";
   isMain: boolean;
-  /** The sub-agent runs (or ran) in the background; its card says so. */
-  background?: boolean;
-  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
-  segment?: number;
 }
 
 /** A tool/blocked/memory/compact row in the activity tree, owned by an agent. */
@@ -373,19 +316,15 @@ export interface LiveToolRow {
   label: string;
   detail?: string;
   status: "running" | "done" | "failed" | "blocked";
-  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
-  segment?: number;
 }
 
-/** A non-subagent SDK task row in the activity tree. */
+/** A non-subagent task row in the activity tree. */
 export interface LiveTaskRow {
   id: string;
   agentId: string;
   label: string;
   detail?: string;
   status: "running" | "done" | "failed";
-  /** Live-only activity segment (lib/activitySegments.ts); never persisted. */
-  segment?: number;
 }
 
 export interface LivePluginChip {
@@ -393,20 +332,23 @@ export interface LivePluginChip {
   status: string;
 }
 
-/** One live background task (SDK level signal), for the background-phase chip. */
-export interface BackgroundTaskChip {
-  taskId: string;
-  taskType?: string;
-  description?: string;
-}
-
-/** An interactive prompt (permission / AskUserQuestion) awaiting the owner. */
+/** An interactive prompt (AskUserQuestion) awaiting the owner. */
 export interface PromptRequest {
   id: string;
   runId: string;
   paneId: string;
-  kind: "permission" | "question";
+  kind: "question";
   data: any;
+}
+
+/** One model pi-gateway currently offers (`GET /api/bootstrap` → `modelSelection.models`). */
+export interface PiModelOption {
+  /** pi model id — the value stored per conversation / per user and sent to the server. */
+  id: string;
+  /** pi's `owned_by` (the serving backend), if reported. */
+  server: string | null;
+  /** Whether this model accepts image input (admin per-model policy ∘ MODEL_VISION). */
+  vision: boolean;
 }
 
 export interface BootstrapInfo {
@@ -421,24 +363,18 @@ export interface BootstrapInfo {
    */
   visionEnabled?: boolean;
   /**
-   * Per-conversation model picker config: selectable tiers + whether an env-pinned
-   * ANTHROPIC_MODEL locks the choice (then the composer hides the picker). Optional
-   * for forward-compat with an older server that omits it.
+   * Per-conversation model picker config: pi-gateway's live model list. Empty
+   * under the local stub or when pi is unreachable (the picker is hidden).
+   * Optional for forward-compat with an older server that omits it.
    */
   modelSelection?: {
-    /** Each tier + the concrete model id it resolves to (null when not env-pinned). */
-    tiers: (import("../../../server/modelTiers").ModelTier & {
-      model: string | null;
-      /** Whether this tier's model accepts image input (admin per-tier policy). */
-      vision?: boolean;
-    })[];
-    locked: boolean;
-    /** Vision of the model used when the user picked no tier (pin/override/default). */
+    models: PiModelOption[];
+    /** Vision of the model used when the user picked none (admin override/pi default). */
     defaultVision?: boolean;
   };
   /**
    * Per-conversation reasoning effort picker config: selectable levels + the
-   * default level applied when unset. Independent of the model pin (no lock).
+   * default level applied when unset.
    * Optional for forward-compat with an older server that omits it.
    */
   effortSelection?: {

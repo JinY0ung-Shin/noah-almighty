@@ -203,117 +203,8 @@
   flex-wrap: wrap;
 }
 
-/* ---- External avatar editor ---- */
-.external-agent-modal-card {
-  width: min(760px, 100%);
-}
-.external-agent-modal-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s-4);
-}
-.external-agent-enabled {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 40px;
-  padding: 0 var(--s-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  background: var(--panel);
-  font-size: var(--t-sm);
-  font-weight: 600;
-}
-.external-agent-form {
-  display: grid;
-  gap: var(--s-4);
-}
-.external-agent-section {
-  min-width: 0;
-  margin: 0;
-  padding: var(--s-4);
-  display: grid;
-  gap: var(--s-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--panel);
-}
-.external-agent-section > legend {
-  padding: 0 var(--s-2);
-  color: var(--text-soft);
-  font-size: var(--t-sm);
-  font-weight: 700;
-}
-.external-agent-fields {
-  display: grid;
-  gap: var(--s-3);
-  min-width: 0;
-}
-.external-agent-fields.two-columns {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.external-agent-fields.three-columns {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.external-agent-section .field {
-  min-width: 0;
-}
-.external-agent-section .field textarea {
-  resize: vertical;
-  min-height: 76px;
-}
-.external-agent-section .field-hint {
-  color: var(--muted);
-  font-size: var(--t-xs);
-  font-weight: 400;
-  line-height: 1.4;
-}
-.external-agent-key-modes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2) var(--s-4);
-}
-.external-agent-key-modes label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  font-size: var(--t-sm);
-  font-weight: 400;
-  /* Short radio captions must never wrap INSIDE a label (CJK breaks per
-     glyph at min-content); the container's flex-wrap breaks BETWEEN them. */
-  white-space: nowrap;
-}
-
-/* Korean copy in the editor wraps between words, not mid-word; overflow-wrap
-   still rescues long unbreakable tokens (endpoint URLs, model ids). */
-.external-agent-modal-head p,
-.external-agent-section .field-hint,
-.external-agent-acl-note,
-.external-agent-test-result,
-.external-agent-group-option small {
-  word-break: keep-all;
-  overflow-wrap: anywhere;
-}
-.external-agent-advanced {
-  border-top: 1px solid var(--line-soft);
-  padding-top: var(--s-3);
-}
-.external-agent-advanced summary {
-  width: max-content;
-  color: var(--text-soft);
-  cursor: pointer;
-  font-size: var(--t-sm);
-  font-weight: 600;
-}
-.external-agent-advanced[open] summary {
-  margin-bottom: var(--s-3);
-}
-.external-agent-section .radio-cards.compact {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.external-agent-group-picker {
+/* ---- Checkbox option picker (admin built-in tool / skill policy) ---- */
+.policy-option-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s-2);
@@ -322,7 +213,7 @@
   overscroll-behavior: contain;
   padding: var(--s-1);
 }
-.external-agent-group-option {
+.policy-option {
   display: flex;
   align-items: flex-start;
   gap: var(--s-2);
@@ -331,56 +222,24 @@
   border-radius: var(--r-md);
   background: var(--bg-elevated);
 }
-.external-agent-group-option > span {
+.policy-option > span {
   min-width: 0;
   display: grid;
   gap: var(--s-0-5);
 }
-.external-agent-group-option strong,
-.external-agent-group-option small {
+.policy-option strong,
+.policy-option small {
   overflow-wrap: anywhere;
 }
-.external-agent-group-option.invalid {
-  border-color: var(--danger-line);
-  background: var(--danger-soft);
-}
-.external-agent-acl-note {
-  font-size: var(--t-xs);
-}
-.external-agent-test-result {
-  padding: var(--s-2) var(--s-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--panel);
-  font-size: var(--t-sm);
-}
-.external-agent-test-result.ok {
-  color: var(--ok);
-  border-color: var(--ok-line);
-  background: var(--ok-soft);
-}
-.external-agent-test-result.warn {
-  color: var(--warn);
-  border-color: var(--warn-line);
-  background: var(--warn-soft);
-}
-.external-agent-test-result.error {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-soft);
+/* Korean descriptions wrap between words, not mid-word; overflow-wrap still
+   rescues long unbreakable tokens. */
+.policy-option small {
+  word-break: keep-all;
 }
 
 @media (max-width: 640px) {
-  .external-agent-modal-head {
-    flex-direction: column;
-  }
-  .external-agent-fields.two-columns,
-  .external-agent-fields.three-columns,
-  .external-agent-section .radio-cards.compact,
-  .external-agent-group-picker {
+  .policy-option-picker {
     grid-template-columns: 1fr;
-  }
-  .external-agent-group-picker {
     max-height: none;
     overflow-y: visible;
     padding: 0;

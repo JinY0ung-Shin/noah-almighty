@@ -1,66 +1,23 @@
-// Admin builtin tool/skill on-off policy: validators, the skills-allowlist
-// math (discovery cache ∪ plugin-root scan − disabled), and the PreToolUse
-// hook + prompt enforcement/meta-cognition surfaces.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+// Admin builtin tool/skill on-off policy: validators, the global skill list
+// (plugin-root scan of the bundled default-skills, served by GET
+// /api/admin/system), and the prompt meta-cognition surface.
+import { afterAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import request from "supertest";
 
-// ---------------------------------------------------------------------------
-// The discovery preflight opens a REAL SDK session (`query()` in streaming-input
-// mode). Replace ONLY `query` with a per-test fake and keep everything else real
-// — tool()/createSdkMcpServer() are used at import time by the in-process MCP
-// servers that createServices pulls in. Each call records a SNAPSHOT of the
-// options bag so assertions read what the preflight actually asked for.
-// ---------------------------------------------------------------------------
-type PreflightQuery = AsyncIterable<unknown> & {
-  supportedCommands?: () => Promise<Array<{ name?: unknown; description?: unknown }>>;
-};
-type PreflightArgs = { prompt: unknown; options: Record<string, unknown> };
-
-const sdkMock = vi.hoisted(() => ({
-  impl: null as null | ((args: PreflightArgs) => PreflightQuery),
-  calls: [] as Record<string, unknown>[],
-}));
-
-vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    query: (args: PreflightArgs) => {
-      sdkMock.calls.push({ ...args.options });
-      if (!sdkMock.impl) {
-        throw new Error("sdkMock.impl not programmed for this test");
-      }
-      return sdkMock.impl(args);
-    },
-  };
-});
-
-import { createServices } from "../src/server/app.js";
+import { createApp, createServices } from "../src/server/app.js";
 import {
   DEFAULT_TOOL_SKILL_POLICY,
   TOGGLABLE_BUILTIN_TOOLS,
-  disallowedEntriesForPolicy,
-  isAgentTeamsDisabled,
-  normalizeSkillDiscoveryCache,
   normalizeToolSkillPolicy,
   parseToolSkillPolicy,
-  type SkillDiscoveryCache,
 } from "../src/server/toolSkillPolicy.js";
-import {
-  bundledCliVersion,
-  computeSkillsOption,
-  discoverGlobalSkills,
-  freshSkillDiscoveryCache,
-  listPluginRootSkills,
-  skillMdMeta,
-} from "../src/server/agent/skillDiscovery.js";
-import { buildPreToolUseHook } from "../src/server/agent/preToolUseHook.js";
+import { listPluginRootSkills, skillMdMeta } from "../src/server/agent/skillCatalog.js";
 import { buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
-import { DEFAULT_HEX_SSH_TOOL_POLICY } from "../src/server/hexSshPolicy.js";
 import type { AgentRequest } from "../src/server/types.js";
-import type { AgentEvents } from "../src/server/agent/events.js";
+import { makeSkill, signup } from "./helpers.js";
 
 const tempDirs: string[] = [];
 function tmpDir(): string {
@@ -78,8 +35,13 @@ describe("tool/skill policy validators", () => {
   it("keeps the core tools out of the togglable catalog", () => {
     const names = TOGGLABLE_BUILTIN_TOOLS.flatMap((tool) => tool.names);
     expect(names).toEqual(
-      expect.arrayContaining(["WebFetch", "WebSearch", "SendMessage"]),
+      expect.arrayContaining(["WebFetch", "WebSearch"]),
     );
+    // The retired agent-teams / workflow toggles are gone with their features.
+    expect(names).not.toContain("SendMessage");
+    expect(names).not.toContain("Workflow");
+    expect(TOGGLABLE_BUILTIN_TOOLS.map((tool) => tool.id)).not.toContain("agent_teams");
+    expect(TOGGLABLE_BUILTIN_TOOLS.map((tool) => tool.id)).not.toContain("workflow");
     for (const core of ["Bash", "Read", "Glob", "Grep", "Edit", "Write", "Skill", "AskUserQuestion"]) {
       expect(names).not.toContain(core);
     }
@@ -125,36 +87,21 @@ describe("tool/skill policy validators", () => {
     ).toEqual({ disabledTools: ["WebSearch"], disabledSkills: ["ok-skill"] });
   });
 
-  it("compiles the policy into disallowedTools entries", () => {
-    const policy = { disabledTools: ["WebFetch"], disabledSkills: ["code-review"] };
-    expect(disallowedEntriesForPolicy(policy)).toEqual(["WebFetch", "Skill(code-review)"]);
-  });
-
-  it("derives the agent-teams feature switch from the SendMessage toggle", () => {
-    expect(isAgentTeamsDisabled(DEFAULT_TOOL_SKILL_POLICY)).toBe(false);
+  it("normalizes a stored policy's retired SendMessage/Workflow toggles away on read", () => {
     expect(
-      isAgentTeamsDisabled({ disabledTools: ["WebFetch"], disabledSkills: [] }),
-    ).toBe(false);
-    expect(
-      isAgentTeamsDisabled({ disabledTools: ["SendMessage"], disabledSkills: [] }),
-    ).toBe(true);
-  });
-
-  it("reads the discovery cache leniently", () => {
-    expect(normalizeSkillDiscoveryCache(null)).toBeNull();
-    expect(normalizeSkillDiscoveryCache({ cliVersion: "", skills: [] })).toBeNull();
-    expect(normalizeSkillDiscoveryCache({ cliVersion: "1.0.0", skills: "nope" })).toBeNull();
-    expect(
-      normalizeSkillDiscoveryCache({
-        cliVersion: "1.0.0",
-        fetchedAt: "t",
-        skills: [{ name: "a", description: "d" }, { description: "nameless" }, "junk"],
+      normalizeToolSkillPolicy({
+        disabledTools: ["SendMessage", "WebFetch", "Workflow"],
+        disabledSkills: [],
       }),
-    ).toEqual({ cliVersion: "1.0.0", fetchedAt: "t", skills: [{ name: "a", description: "d" }] });
+    ).toEqual({ disabledTools: ["WebFetch"], disabledSkills: [] });
+    // …and the strict admin write path rejects them like any unknown name.
+    expect(parseToolSkillPolicy({ disabledTools: ["SendMessage"], disabledSkills: [] })).toBeNull();
+    expect(parseToolSkillPolicy({ disabledTools: ["Workflow"], disabledSkills: [] })).toBeNull();
   });
+
 });
 
-describe("skill discovery helpers", () => {
+describe("skill catalog helpers", () => {
   function writeSkill(root: string, dir: string, frontmatter?: string) {
     const skillDir = path.join(root, "skills", dir);
     fs.mkdirSync(skillDir, { recursive: true });
@@ -177,33 +124,9 @@ describe("skill discovery helpers", () => {
     ]);
   });
 
-  it("computes the skills option with fail-open visibility", () => {
-    const emptyPolicy = { disabledTools: [], disabledSkills: [] };
-    const policy = { disabledTools: [], disabledSkills: ["code-review", "qualified-skill"] };
-    const cache: SkillDiscoveryCache = {
-      cliVersion: "2.1.185",
-      fetchedAt: "t",
-      skills: [
-        { name: "code-review", description: "" },
-        { name: "verify", description: "" },
-        { name: "some-plugin:qualified-skill", description: "" },
-      ],
-    };
-    // Nothing disabled → pre-feature behavior.
-    expect(computeSkillsOption(emptyPolicy, cache, [])).toBe("all");
-    // Disabled but no fresh cache → visibility fail-open (hook still denies).
-    expect(computeSkillsOption(policy, null, [])).toBe("all");
-
-    const root = tmpDir();
-    writeSkill(root, "gamma", "---\nname: gamma-skill\n---\n");
-    // Allowlist = (cache ∪ plugin roots) − disabled; a disabled bare name also
-    // strips the plugin-qualified form.
-    expect(computeSkillsOption(policy, cache, [root])).toEqual(["gamma-skill", "verify"]);
-  });
-
   it("skips a skills/ subdirectory that carries no SKILL.md", () => {
-    // The scan feeds an ALLOWLIST, so a stray directory must not invent a skill
-    // name (the CLI would never load one, and the entry would be inert noise).
+    // The scan feeds the admin list and the pi skill sync, so a stray directory
+    // must not invent a skill name nothing would ever load.
     const root = tmpDir();
     writeSkill(root, "real", "---\nname: real-skill\n---\n");
     fs.mkdirSync(path.join(root, "skills", "empty-dir"), { recursive: true });
@@ -225,7 +148,7 @@ describe("skill discovery helpers", () => {
 
     const root = tmpDir();
     // Opening `---` but no closing fence: the whole head is treated as frontmatter
-    // rather than discarded, so a name/description still reaches the allowlist.
+    // rather than discarded, so a name/description still reaches the catalog.
     const openEnded = path.join(root, "SKILL.md");
     fs.writeFileSync(openEnded, '---\nname: "quoted-name"\ndescription: still readable\n');
     expect(skillMdMeta(openEnded)).toEqual({
@@ -235,403 +158,88 @@ describe("skill discovery helpers", () => {
   });
 });
 
-describe("global skill discovery (preflight + cache)", () => {
-  afterEach(() => {
-    sdkMock.impl = null;
-    sdkMock.calls.length = 0;
+describe("admin global skill list (GET /api/admin/system)", () => {
+  async function adminSystem(defaultPluginsDir: string) {
+    const services = createServices({
+      dataDir: path.join(tmpDir(), "data"),
+      agentRuntime: "local",
+      sessionSecret: "t",
+      defaultPluginsDir,
+    });
+    const agent = request.agent(createApp(services));
+    // The first signup on a fresh app is the system admin.
+    await signup(agent, "admin").expect(201);
+    const res = await agent.get("/api/admin/system").expect(200);
+    return res.body.system as {
+      skillDiscovery: { fetchedAt: string; skills: { name: string; description: string }[] } & Record<string, unknown>;
+    };
+  }
+
+  it("lists the default-skills plugin root's skills from disk, with no CLI version", async () => {
+    const root = tmpDir();
+    fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "defaults" }));
+    makeSkill(root, "alpha", "---\nname: alpha-skill\ndescription: Alpha helper\n---");
+    makeSkill(root, "beta", "no frontmatter");
+
+    const system = await adminSystem(root);
+    expect(system.skillDiscovery.skills).toEqual(listPluginRootSkills([root]));
+    expect(system.skillDiscovery.skills).toEqual([
+      { name: "alpha-skill", description: "Alpha helper" },
+      { name: "beta", description: "" },
+    ]);
+    expect(Number.isNaN(Date.parse(system.skillDiscovery.fetchedAt))).toBe(false);
+    // The retired SDK preflight keyed its cache by the bundled CLI version.
+    expect(system.skillDiscovery).not.toHaveProperty("cliVersion");
   });
 
-  function services(label: string) {
-    return createServices({
-      dataDir: path.join(tmpDir(), label),
+  it("reads the list fresh on every request, so a new SKILL.md shows without a restart", async () => {
+    const root = tmpDir();
+    fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "defaults" }));
+    makeSkill(root, "first", "---\nname: first\n---");
+    const services = createServices({
+      dataDir: path.join(tmpDir(), "data"),
+      agentRuntime: "local",
+      sessionSecret: "t",
+      defaultPluginsDir: root,
+    });
+    const agent = request.agent(createApp(services));
+    await signup(agent, "admin").expect(201);
+    let res = await agent.get("/api/admin/system").expect(200);
+    expect(res.body.system.skillDiscovery.skills.map((s: { name: string }) => s.name)).toEqual(["first"]);
+    makeSkill(root, "second", "---\nname: second\n---");
+    res = await agent.get("/api/admin/system").expect(200);
+    expect(res.body.system.skillDiscovery.skills.map((s: { name: string }) => s.name).sort()).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("answers an empty list (never an error) when the default plugin dir is missing", async () => {
+    const system = await adminSystem(path.join(tmpDir(), "no-such-dir"));
+    expect(system.skillDiscovery.skills).toEqual([]);
+  });
+
+  it("lists the repo-bundled default-skills root as shipped", async () => {
+    const bundled = path.join(process.cwd(), "default-skills");
+    const system = await adminSystem(bundled);
+    const names = system.skillDiscovery.skills.map((s) => s.name);
+    expect(names).toEqual(listPluginRootSkills([bundled]).map((s) => s.name));
+    expect(names).toEqual(expect.arrayContaining(["pptx", "brain-search"]));
+  });
+
+  it("is admin-gated", async () => {
+    const services = createServices({
+      dataDir: path.join(tmpDir(), "data"),
       agentRuntime: "local",
       sessionSecret: "t",
     });
-  }
-
-  /**
-   * A query handle shaped like the SDK's: async-iterable (the preflight drains it
-   * so the CLI subprocess is reaped) with an optional `supportedCommands()`.
-   * `kickInput` starts the caller's idle input generator, which is what registers
-   * the abort listener the preflight relies on to end the session.
-   */
-  function preflightHandle(
-    args: PreflightArgs,
-    opts: {
-      supportedCommands?: () => Promise<Array<{ name?: unknown; description?: unknown }>>;
-      drainMessages?: unknown[];
-      drainError?: unknown;
-      drainHangs?: boolean;
-      kickInput?: boolean;
-    },
-  ): PreflightQuery {
-    if (opts.kickInput !== false) {
-      void (args.prompt as AsyncGenerator<never>).next();
-    }
-    async function* drain(): AsyncGenerator<unknown> {
-      for (const message of opts.drainMessages ?? []) {
-        yield message;
-      }
-      if (opts.drainError) {
-        throw opts.drainError;
-      }
-      if (opts.drainHangs) {
-        // A CLI that takes the abort but never closes its message stream.
-        await new Promise<void>(() => {});
-      }
-    }
-    const handle = drain() as PreflightQuery;
-    if (opts.supportedCommands) {
-      handle.supportedCommands = opts.supportedCommands;
-    }
-    return handle;
-  }
-
-  const commands = async () => [
-    { name: "code-review", description: "Review the current diff" },
-    { name: "plugin:deep-research" },
-    { name: "", description: "nameless commands are dropped" },
-    { description: "so are shapeless ones" },
-  ];
-
-  it("reads the bundled CLI version out of the installed SDK's package metadata", () => {
-    // The discovery cache is keyed by this value, so it must be the SDK's real
-    // claudeCodeVersion — an "unknown" fallback would make every cache stale.
-    const pkg = JSON.parse(
-      fs.readFileSync(
-        path.join(process.cwd(), "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json"),
-        "utf8",
-      ),
-    ) as { version?: string; claudeCodeVersion?: string };
-    expect(bundledCliVersion()).toBe(pkg.claudeCodeVersion || pkg.version || "unknown");
-    expect(bundledCliVersion()).not.toBe("unknown");
-  });
-
-  it("treats a stored cache as fresh only while it matches the bundled CLI version", () => {
-    const { store } = services("fresh-cache");
-    expect(freshSkillDiscoveryCache(store)).toBeNull();
-
-    store.setSkillDiscoveryCache({
-      cliVersion: "0.0.0-stale",
-      fetchedAt: "t",
-      skills: [{ name: "old-skill", description: "" }],
-    });
-    // After an SDK upgrade the stale list could omit new built-ins, so it is
-    // dropped rather than used to compute an allowlist.
-    expect(freshSkillDiscoveryCache(store)).toBeNull();
-
-    const current = {
-      cliVersion: bundledCliVersion(),
-      fetchedAt: "t",
-      skills: [{ name: "new-skill", description: "" }],
-    };
-    store.setSkillDiscoveryCache(current);
-    expect(freshSkillDiscoveryCache(store)).toEqual(current);
-  });
-
-  it("runs one auth-free preflight, keeps only named commands, and caches the result", async () => {
-    const { store, config } = services("preflight-ok");
-    sdkMock.impl = (args) => preflightHandle(args, { supportedCommands: commands });
-
-    const cache = await discoverGlobalSkills(store, config);
-    expect(cache.cliVersion).toBe(bundledCliVersion());
-    expect(cache.skills).toEqual([
-      { name: "code-review", description: "Review the current diff" },
-      { name: "plugin:deep-research", description: "" },
-    ]);
-    // Persisted, so the next boot answers from app_config instead of re-running it.
-    expect(store.getSkillDiscoveryCache()).toEqual(cache);
-
-    // The session must be incapable of spending a turn: no user message is ever
-    // sent, only the app default-skills root is mounted, and the CLI writes into
-    // the app's own session dir.
-    expect(sdkMock.calls).toHaveLength(1);
-    const options = sdkMock.calls[0];
-    expect(options.skills).toBe("all");
-    expect(options.settingSources).toEqual([]);
-    expect(options.settings).toEqual({ crossSessionInbound: "refuse" });
-    expect(options.strictMcpConfig).toBe(true);
-    expect(options.maxTurns).toBe(1);
-    expect(options.cwd).toBe(config.dataDir);
-    expect(options.plugins).toEqual([{ type: "local", path: config.defaultPluginsDir }]);
-    expect((options.env as Record<string, string>).CLAUDE_CONFIG_DIR).toBe(config.agentSessionsDir);
-    expect(fs.existsSync(config.agentSessionsDir)).toBe(true);
-  });
-
-  it("answers a fresh cache without touching the SDK, and refreshes a stale one", async () => {
-    const { store, config } = services("preflight-cached");
-    const stored = {
-      cliVersion: bundledCliVersion(),
-      fetchedAt: "2026-01-01T00:00:00.000Z",
-      skills: [{ name: "cached-skill", description: "from app_config" }],
-    };
-    store.setSkillDiscoveryCache(stored);
-    // sdkMock.impl stays null: a query() call here would throw.
-    expect(await discoverGlobalSkills(store, config)).toEqual(stored);
-    expect(sdkMock.calls).toHaveLength(0);
-
-    store.setSkillDiscoveryCache({ ...stored, cliVersion: "0.0.0-stale" });
-    sdkMock.impl = (args) => preflightHandle(args, { supportedCommands: commands });
-    const refreshed = await discoverGlobalSkills(store, config);
-    expect(refreshed.cliVersion).toBe(bundledCliVersion());
-    expect(refreshed.skills.map((s) => s.name)).toEqual(["code-review", "plugin:deep-research"]);
-    expect(sdkMock.calls).toHaveLength(1);
-  });
-
-  it("shares ONE preflight between concurrent callers", async () => {
-    const { store, config } = services("preflight-single-flight");
-    let release: (() => void) | null = null;
-    sdkMock.impl = (args) =>
-      preflightHandle(args, {
-        supportedCommands: () =>
-          new Promise((resolve) => {
-            release = () => resolve([{ name: "slow-skill" }]);
-          }),
-      });
-
-    const first = discoverGlobalSkills(store, config);
-    const second = discoverGlobalSkills(store, config);
-    await vi.waitFor(() => expect(release).not.toBeNull());
-    release!();
-    const [a, b] = await Promise.all([first, second]);
-
-    expect(sdkMock.calls).toHaveLength(1);
-    expect(a).toBe(b);
-    expect(a.skills).toEqual([{ name: "slow-skill", description: "" }]);
-  });
-
-  it("propagates a preflight failure and clears the single-flight guard", async () => {
-    const { store, config } = services("preflight-fail");
-    // An SDK whose query handle lacks supportedCommands() cannot enumerate skills.
-    sdkMock.impl = (args) => preflightHandle(args, {});
-    await expect(discoverGlobalSkills(store, config)).rejects.toThrow(
-      "SDK query() has no supportedCommands()",
-    );
-    // Nothing cached — the admin route reports the failure, agent runs fail open.
-    expect(store.getSkillDiscoveryCache()).toBeNull();
-
-    // The guard was released, so a later attempt runs a NEW preflight.
-    sdkMock.impl = (args) => preflightHandle(args, { supportedCommands: commands });
-    const cache = await discoverGlobalSkills(store, config);
-    expect(cache.skills.map((s) => s.name)).toEqual(["code-review", "plugin:deep-research"]);
-    expect(sdkMock.calls).toHaveLength(2);
-  });
-
-  it("drains the aborted session's remaining messages and swallows its abort error", async () => {
-    // The drain exists to reap the CLI subprocess; whatever it yields is
-    // discarded and an abort-time throw must not lose the enumerated skills.
-    const { store, config } = services("preflight-drain-error");
-    sdkMock.impl = (args) =>
-      preflightHandle(args, {
-        supportedCommands: async () => [{ name: "survivor" }],
-        drainMessages: [{ type: "system", subtype: "init" }],
-        drainError: new Error("AbortError: session aborted"),
-      });
-    const cache = await discoverGlobalSkills(store, config);
-    expect(cache.skills).toEqual([{ name: "survivor", description: "" }]);
-    expect(store.getSkillDiscoveryCache()?.skills).toEqual([{ name: "survivor", description: "" }]);
-  });
-
-  it("aborts a hung preflight at the hard timeout so the admin panel cannot wedge", async () => {
-    const { store, config } = services("preflight-timeout");
-    vi.useFakeTimers();
-    try {
-      let abortedAfterMs: number | null = null;
-      const startedAt = Date.now();
-      sdkMock.impl = (args) => {
-        const { signal } = args.options.abortController as AbortController;
-        return preflightHandle(args, {
-          // A CLI that never answers: the only thing that settles this is the
-          // preflight's own abort.
-          supportedCommands: () =>
-            new Promise((resolve) => {
-              signal.addEventListener(
-                "abort",
-                () => {
-                  abortedAfterMs = Date.now() - startedAt;
-                  resolve([]);
-                },
-                { once: true },
-              );
-            }),
-        });
-      };
-      const pending = discoverGlobalSkills(store, config);
-      await vi.advanceTimersByTimeAsync(29_000);
-      expect(abortedAfterMs).toBeNull();
-      await vi.advanceTimersByTimeAsync(1_000);
-      const cache = await pending;
-      expect(abortedAfterMs).toBe(30_000);
-      expect(cache.skills).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("bounds the post-abort drain by the same hard timeout, keeping the enumerated skills", async () => {
-    // The cap covers the WHOLE preflight: a CLI that answers supportedCommands()
-    // but never closes its message stream used to hang the drain forever, past
-    // the cap, with the admin request awaiting it inline.
-    const { store, config } = services("preflight-drain-hang");
-    vi.useFakeTimers();
-    try {
-      sdkMock.impl = (args) =>
-        preflightHandle(args, {
-          supportedCommands: async () => [{ name: "enumerated" }],
-          drainMessages: [{ type: "system", subtype: "init" }],
-          drainHangs: true,
-        });
-      const pending = discoverGlobalSkills(store, config);
-      let settled: "resolved" | "rejected" | null = null;
-      void pending.then(
-        () => (settled = "resolved"),
-        () => (settled = "rejected"),
-      );
-
-      await vi.advanceTimersByTimeAsync(29_000);
-      expect(settled).toBeNull();
-      await vi.advanceTimersByTimeAsync(1_000);
-      // The drain only reaps the subprocess, so losing it costs nothing — the
-      // skills it already enumerated survive, exactly like a drain that throws.
-      expect(settled).toBe("resolved");
-      expect((await pending).skills).toEqual([{ name: "enumerated", description: "" }]);
-
-      // The single-flight guard was released: a discovery that goes stale runs
-      // a NEW preflight rather than replaying the abandoned one.
-      store.setSkillDiscoveryCache({ cliVersion: "0.0.0-stale", fetchedAt: "t", skills: [] });
-      sdkMock.impl = (args) => preflightHandle(args, { supportedCommands: commands });
-      const next = await discoverGlobalSkills(store, config);
-      expect(next.skills.map((s) => s.name)).toEqual(["code-review", "plugin:deep-research"]);
-      expect(sdkMock.calls).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("fails the discovery when the CLI ignores the abort entirely", async () => {
-    // Nothing here ever settles on its own — the deadline is the only exit. It
-    // fails rather than caching an empty list, so the panel reports the failure
-    // and runs keep failing open to "all".
-    const { store, config } = services("preflight-deaf-cli");
-    vi.useFakeTimers();
-    try {
-      sdkMock.impl = (args) =>
-        preflightHandle(args, {
-          supportedCommands: () => new Promise(() => {}),
-          drainHangs: true,
-        });
-      const pending = discoverGlobalSkills(store, config);
-      const outcome = pending.then(
-        () => "resolved",
-        (error: unknown) => (error as Error).message,
-      );
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(await outcome).toBe("skill discovery preflight timed out after 30000ms");
-      expect(store.getSkillDiscoveryCache()).toBeNull();
-
-      // Guard released here too, so the admin can retry without a restart.
-      sdkMock.impl = (args) => preflightHandle(args, { supportedCommands: commands });
-      const cache = await discoverGlobalSkills(store, config);
-      expect(cache.skills.map((s) => s.name)).toEqual(["code-review", "plugin:deep-research"]);
-      expect(sdkMock.calls).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe("PreToolUse hook admin tool/skill policy", () => {
-  const READONLY = ["Read", "Glob", "Grep"];
-
-  function policyHook(
-    policy: { disabledTools: string[]; disabledSkills: string[] },
-    events: AgentEvents = {},
-  ) {
-    return buildPreToolUseHook(
-      events,
-      true,
-      READONLY,
-      false,
-      false,
-      true,
-      "owner",
-      DEFAULT_HEX_SSH_TOOL_POLICY,
-      false,
-      policy,
-    );
-  }
-
-  it("denies an admin-disabled skill with a redirecting reason and Korean block notice", async () => {
-    const blocked: string[] = [];
-    const hook = policyHook(
-      { disabledTools: [], disabledSkills: ["code-review"] },
-      { onBlocked: (info) => void blocked.push(info.uiReason ?? "") },
-    );
-    const out = await hook(
-      { tool_name: "Skill", tool_input: { skill: "code-review" }, tool_use_id: "t1" },
-      "t1",
-    );
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("disabled by the system administrator");
-    expect(blocked[0]).toContain("관리자가 비활성화한 스킬");
-  });
-
-  it("denies a plugin-qualified invocation of a disabled bare skill name", async () => {
-    const hook = policyHook({ disabledTools: [], disabledSkills: ["security-review"] });
-    const out = await hook(
-      { tool_name: "Skill", tool_input: { skill: "some-plugin:security-review" }, tool_use_id: "t2" },
-      "t2",
-    );
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-  });
-
-  it("still auto-allows other skills and read-only tools under a policy", async () => {
-    const hook = policyHook({ disabledTools: ["WebFetch"], disabledSkills: ["code-review"] });
-    const skill = await hook(
-      { tool_name: "Skill", tool_input: { skill: "verify" }, tool_use_id: "t3" },
-      "t3",
-    );
-    expect(skill.hookSpecificOutput.permissionDecision).toBe("allow");
-    const read = await hook(
-      { tool_name: "Read", tool_input: { file_path: "/tmp/x" }, tool_use_id: "t4" },
-      "t4",
-    );
-    expect(read.hookSpecificOutput.permissionDecision).toBe("allow");
-  });
-
-  it("denies an admin-disabled built-in tool even for an auto-approving owner", async () => {
-    const hook = policyHook({ disabledTools: ["WebFetch"], disabledSkills: [] });
-    const out = await hook(
-      { tool_name: "WebFetch", tool_input: { url: "https://example.com" }, tool_use_id: "t5" },
-      "t5",
-    );
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("disabled by the system administrator");
-  });
-
-  it("denies admin-disabled team messaging (SendMessage) despite its auto-allow", async () => {
-    // SendMessage is in the orchestration auto-allow set; the admin policy
-    // check runs BEFORE the auto-allow, so the kill-switch must still win.
-    const hook = policyHook({ disabledTools: ["SendMessage"], disabledSkills: [] });
-    const out = await hook(
-      { tool_name: "SendMessage", tool_input: { to: "reviewer", message: "hi" }, tool_use_id: "t6" },
-      "t6",
-    );
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("disabled by the system administrator");
-  });
-
-  it("denies admin-disabled workflows (ultracode) despite its auto-allow", async () => {
-    // Workflow is in the orchestration auto-allow set too (TASK_ORCHESTRATION_TOOLS);
-    // the admin policy check runs BEFORE the auto-allow, so the kill-switch still wins.
-    const hook = policyHook({ disabledTools: ["Workflow"], disabledSkills: [] });
-    const out = await hook(
-      { tool_name: "Workflow", tool_input: { name: "spec" }, tool_use_id: "t7" },
-      "t7",
-    );
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("disabled by the system administrator");
+    const app = createApp(services);
+    await signup(request.agent(app), "admin").expect(201);
+    const member = request.agent(app);
+    await signup(member, "member").expect(201);
+    await member.get("/api/admin/system").expect(403);
   });
 });
 
@@ -658,7 +266,7 @@ describe("prompt admin-disabled note", () => {
   });
 });
 
-// ---- per-model-tier vision policy (modelVisionPolicy.ts) ----
+// ---- per-model vision policy (modelVisionPolicy.ts) ----
 import {
   normalizeModelVisionPolicy,
   parseModelVisionPolicy,
@@ -666,28 +274,32 @@ import {
 } from "../src/server/modelVisionPolicy.js";
 
 describe("model vision policy", () => {
-  it("normalize keeps only known tiers with strict-boolean values", () => {
+  it("normalize keeps model-id keys with strict-boolean values", () => {
     expect(normalizeModelVisionPolicy(null)).toEqual({});
     expect(normalizeModelVisionPolicy("junk")).toEqual({});
-    expect(normalizeModelVisionPolicy({ opus: true, haiku: "no", gpt: false })).toEqual({ opus: true });
+    expect(normalizeModelVisionPolicy({ "deepseek/v3": true, haiku: "no", " pad": false, "": true })).toEqual({
+      "deepseek/v3": true,
+    });
   });
 
-  it("parse rejects unknown tiers, non-boolean values, and non-object shapes", () => {
-    expect(parseModelVisionPolicy({ opus: false })).toEqual({ opus: false });
-    expect(parseModelVisionPolicy({})).toEqual({});
-    expect(parseModelVisionPolicy({ gpt: true })).toBeNull();
-    expect(parseModelVisionPolicy({ opus: 1 })).toBeNull();
-    expect(parseModelVisionPolicy([])).toBeNull();
-    expect(parseModelVisionPolicy(null)).toBeNull();
+  it("parse accepts only models pi-gateway offers, strict booleans, and plain objects", () => {
+    const offered = ["deepseek/v3", "qwen/coder"];
+    expect(parseModelVisionPolicy({ "qwen/coder": false }, offered)).toEqual({ "qwen/coder": false });
+    expect(parseModelVisionPolicy({}, offered)).toEqual({});
+    expect(parseModelVisionPolicy({ opus: true }, offered)).toBeNull();
+    expect(parseModelVisionPolicy({ "qwen/coder": 1 }, offered)).toBeNull();
+    expect(parseModelVisionPolicy([], offered)).toBeNull();
+    expect(parseModelVisionPolicy(null, offered)).toBeNull();
   });
 
-  it("visionForModel: tiers consult the policy; concrete ids and unset tiers inherit the default", () => {
-    const policy = { sonnet: false };
-    expect(visionForModel("sonnet", policy, true)).toBe(false);
-    expect(visionForModel("opus", policy, true)).toBe(true);
-    expect(visionForModel("opus", policy, false)).toBe(false);
-    expect(visionForModel("claude-opus-4-8", policy, true)).toBe(true);
+  it("visionForModel: a set model consults the policy; unset models and pi's default inherit", () => {
+    const policy = { "qwen/coder": false };
+    expect(visionForModel("qwen/coder", policy, true)).toBe(false);
+    expect(visionForModel("deepseek/v3", policy, true)).toBe(true);
+    expect(visionForModel("deepseek/v3", policy, false)).toBe(false);
     expect(visionForModel(null, policy, false)).toBe(false);
     expect(visionForModel(undefined, policy, true)).toBe(true);
+    // Prototype keys are never policy entries.
+    expect(visionForModel("constructor", policy, true)).toBe(true);
   });
 });

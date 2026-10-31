@@ -1,5 +1,5 @@
 // Shared arg guards for the repo clone/commit/push paths (knowledgeRepo.ts,
-// groupKnowledgeRepo.ts, gitRepos.ts, marketplace.ts). A value git would read
+// gitRepos.ts, marketplace.ts). A value git would read
 // as an option (e.g. an identity or branch starting with "-") is a security hole,
 // so these guards are intentionally identical across all call sites — kept
 // in one place rather than copy-pasted. The identity/branch checks fall back to a

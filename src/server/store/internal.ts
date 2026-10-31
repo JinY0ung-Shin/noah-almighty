@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import Database from "better-sqlite3";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import logger from "../logger.js";
+import { RETIRED_COLUMNS, backupDatabase, retirementDataPresent, retirementStamp } from "./retirementBackup.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type {
   AppConfig,
@@ -155,7 +155,6 @@ export interface UserRow {
   knowledge_selected: string | null;
   ssh_public_key: string | null;
   hashtags: string | null;
-  group_knowledge_off_default: string | null;
   model_default: string | null;
   effort_default: string | null;
   mcp_tool_groups_default: string | null;
@@ -210,9 +209,6 @@ export interface GroupRow {
   id: string;
   name: string;
   description: string | null;
-  knowledge_repo: string | null;
-  knowledge_branch: string | null;
-  knowledge_selected: string | null;
   /** Admin tool policy: JSON array of MCP tool-group ids; NULL = no restriction. */
   allowed_mcp_tool_groups: string | null;
   /** Group policy: member avatars visible/trusted to each other. NULL/1 = on, 0 = off. */
@@ -229,23 +225,6 @@ export interface GroupMemberRow {
   visibility: string | null;
   role: string;
   created_at: string | null;
-}
-
-export interface GroupAgentRow {
-  id: string;
-  group_id: string;
-  display_name: string;
-  alias: string | null;
-  bio: string | null;
-  intro: string | null;
-  persona: string | null;
-  hashtags: string | null;
-  avatar_ext: string | null;
-  enabled: number;
-  capture_scope: string | null;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string | null;
 }
 
 export interface RoutineJobRow {
@@ -268,30 +247,10 @@ export interface RoutineJobRow {
   created_at: string;
 }
 
-/**
- * app_config key under which the Claude subscription OAuth token (from
- * `claude setup-token`) is stored. Injected as CLAUDE_CODE_OAUTH_TOKEN into the
- * agent subprocess when no ANTHROPIC_API_KEY is configured (see claudeAgent.ts).
- */
-export const CLAUDE_OAUTH_TOKEN_KEY = "claude_oauth_token";
-
 /** app_config key: how self-service signups are gated ("open" | "closed" | "approval"). */
 export const SIGNUP_MODE_KEY = "signup_mode";
-/** app_config key: admin-selected agent model, overriding nothing when an env
- *  ANTHROPIC_MODEL is set (env wins, mirroring the API-key/subscription rule). */
+/** app_config key: admin-selected agent model (a pi model id from pi-gateway's live list). */
 export const MODEL_OVERRIDE_KEY = "agent_model_override";
-/**
- * app_config key: a system admin enabled 서버 에이전트 ("on"; anything else = off).
- * Off by default — existing deployments start disabled — because a remote run hands
- * the deployment's model credentials to the CLI on the registrant's server.
- */
-export const SERVER_AGENTS_ENABLED_KEY = "server_agents_enabled";
-/**
- * app_config key: a system admin enabled the Craft apps beta ("on"; anything
- * else = off). Off by default, so a deploy that adds the craft-runner changes
- * nothing until an admin opts in (craftRunner.ts, agent/craftTools.ts).
- */
-export const CRAFT_APPS_ENABLED_KEY = "craft_apps_enabled";
 
 /**
  * Generic constructor type used to compose the per-domain mixins back onto a
@@ -314,12 +273,29 @@ export class StoreBase {
   /** Key secret for at-rest token encryption (from config.sessionSecret). */
   protected readonly secret: string;
 
+  /**
+   * This boot's retirement gate (`store/retirementBackup.ts`): its stamp, and
+   * whether the DB backup that must precede any destructive retirement step was
+   * taken (`backedUp`), failed (`held` — every such step is skipped until the
+   * next boot) or is not needed so far (`clean`, re-checked on each ask).
+   */
+  private readonly retirement: {
+    dataDir: string;
+    stamp: string;
+    state: "clean" | "backedUp" | "held";
+    backupPath: string | null;
+  };
+
   constructor(config: AppConfig) {
     this.secret = config.sessionSecret;
     fs.mkdirSync(config.dataDir, { recursive: true });
     this.db = new Database(config.dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+    this.retirement = { dataDir: config.dataDir, stamp: retirementStamp(), state: "clean", backupPath: null };
+    // BEFORE migrate(): its retired-table drops and key deletes are the first
+    // destructive retirement steps of a boot.
+    this.retirementGate();
     this.migrate();
     this.seedRoles();
     logger.info({ dbPath: config.dbPath }, "database opened");
@@ -403,7 +379,6 @@ export class StoreBase {
         avatar_user_id TEXT NOT NULL,
         title TEXT,
         working_repo TEXT,
-        external_endpoint TEXT,
         created_at TEXT,
         updated_at TEXT
       );
@@ -476,9 +451,6 @@ export class StoreBase {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT DEFAULT '',
-        knowledge_repo TEXT,
-        knowledge_branch TEXT,
-        knowledge_selected TEXT,
         created_by TEXT,
         created_at TEXT
       );
@@ -536,39 +508,10 @@ export class StoreBase {
         created_at TEXT,
         PRIMARY KEY (artifact_id, version)
       );
-      -- Profile images for EXTERNAL avatars (admin-set). External agents have no
-      -- users row, so the users.avatar_ext pattern gets its own tiny table keyed
-      -- by the public avatar id ("external:<registry id>"). Image bytes live on
-      -- disk next to user avatar images; this row only records the extension.
-      -- Deliberately NOT inside the encrypted registry: images are not secret,
-      -- and env-defined (read-only) agents can carry one too.
-      CREATE TABLE IF NOT EXISTS external_avatar_images (
-        external_avatar_id TEXT PRIMARY KEY,
-        ext TEXT NOT NULL
-      );
-      -- Shared GROUP AGENTS (several per group allowed, group-admin managed).
-      -- NOT users rows: the public avatar id is "group:<group_id>:<id>"
-      -- (external:<id> precedent — conversations.avatar_user_id has no FK).
-      -- Pre-multi DBs (group_id PK, no id column) are rebuilt by
-      -- migrateGroupAgentsMulti(), which also rewrites conversation bindings.
-      -- capture_scope: who may write+commit to the shared second brain through
-      -- the agent ('members' | 'admins'; normalized on read, default members).
-      CREATE TABLE IF NOT EXISTS group_agents (
-        id TEXT PRIMARY KEY,
-        group_id TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        alias TEXT DEFAULT '',
-        bio TEXT DEFAULT '',
-        intro TEXT DEFAULT '',
-        persona TEXT DEFAULT '',
-        hashtags TEXT,
-        avatar_ext TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        capture_scope TEXT NOT NULL DEFAULT 'members',
-        created_by TEXT,
-        created_at TEXT,
-        updated_at TEXT
-      );
+      -- RESERVED FOREVER: the retired group shared agents' table names
+      -- (group_agents, group_agents_legacy, idx_group_agents_group) and the
+      -- "group:" avatar-id prefix. retireGroupAgents.ts purges and drops them;
+      -- never re-create them here.
       -- Skills shared from an owner's knowledge repo (#skill-share): one row per
       -- (owner, skills/<slug> dir). METADATA SNAPSHOT ONLY — the content stays in
       -- the owner's repo and is copied into the learner's repo at learn time.
@@ -676,41 +619,6 @@ export class StoreBase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
-      -- 서버 에이전트 (store/serverAgents.ts): the owner's registered SSH servers
-      -- the avatar delegates to (the CLI runs ON the server). access is
-      -- read|exec|full; install_state is a JSON ServerAgentInstallState or NULL.
-      -- server_agent_sessions maps (conversation, server) to the remote CLI
-      -- session a delegate resumes. No FKs: deleteServerAgent/deleteUser remove
-      -- rows manually, and EVERY conversation-deleting path calls
-      -- deleteServerAgentSessionsForConversation next to the share-link cascade
-      -- (a rewind clears the conversation's mappings too).
-      CREATE TABLE IF NOT EXISTS server_agents (
-        id TEXT PRIMARY KEY,
-        owner_user_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        host TEXT NOT NULL,
-        port INTEGER NOT NULL DEFAULT 22,
-        username TEXT NOT NULL,
-        workdir TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT '',
-        notes TEXT NOT NULL DEFAULT '',
-        access TEXT NOT NULL DEFAULT 'read',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        install_state TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE (owner_user_id, name)
-      );
-      CREATE TABLE IF NOT EXISTS server_agent_sessions (
-        conversation_id TEXT NOT NULL,
-        server_agent_id TEXT NOT NULL,
-        remote_session_id TEXT NOT NULL,
-        cli_version TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, server_agent_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_server_agent_sessions_server ON server_agent_sessions(server_agent_id);
-      CREATE INDEX IF NOT EXISTS idx_group_agents_group ON group_agents(group_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
       CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
@@ -737,10 +645,15 @@ export class StoreBase {
     // the previous turn was still running (see StoredMessage.kind). NULL on
     // every ordinary row, so the mapper omits the field entirely for those.
     this.addColumnIfMissing("messages", "kind", "TEXT");
-    // Where an assistant row's segment ended in the LOCAL SDK transcript (the
-    // session id + last main-chain assistant uuid), so a later rewind can
-    // resume exactly there (SDK resume + resumeSessionAt, forked). NULL on user
-    // rows, external-avatar rows, cancel/error rows and every legacy row — a
+    // Who answered a `kind = 'consultation'` row (a teammate avatar a pi run
+    // consulted in the background): JSON `MessageConsultationSource`. NULL on
+    // every other row.
+    this.addColumnIfMissing("messages", "consultation_json", "TEXT");
+    // Where an assistant row's segment ended (on pi both columns hold the
+    // committed turn's `resp_…` response id), so a later rewind can branch
+    // exactly there (`previous_response_id`). Rows the removed SDK runner wrote
+    // hold a CLI session id + uuid, which pi ignores (text history). NULL on user
+    // rows, cancel/error rows and every legacy row — a
     // rewind onto one of those falls back to the stored text history.
     // Server-only: never mapped onto StoredMessage.
     this.addColumnIfMissing("messages", "sdk_session_id", "TEXT");
@@ -765,15 +678,9 @@ export class StoreBase {
     this.addColumnIfMissing("users", "knowledge_branch", "TEXT");
     // JSON array of plugin names to load from the knowledge repo; null = all.
     this.addColumnIfMissing("users", "knowledge_selected", "TEXT");
-    // The owner's DEFAULT group-knowledge OFF-set, seeding every NEW conversation
-    // (including a brand-new conversation before any toggle interaction).
-    // JSON array of group ids; NULL/[] = every group on by default. Mirrors the
-    // per-conversation `conversations.group_knowledge_off`, but at the user level:
-    // the composer toggle writes here so the choice persists across conversations.
-    this.addColumnIfMissing("users", "group_knowledge_off_default", "TEXT");
     // The owner's remembered chat-composer defaults, seeding every NEW conversation
     // (the picker's last choice persists across conversations). NULL = never chosen,
-    // so a new conversation falls back to the hardcoded server/SDK default. Mirrors
+    // so a new conversation falls back to the hardcoded server default. Mirrors
     // the per-conversation `conversations.selected_*` columns, but at the user level:
     // the composer pickers write here so the choice carries to the next conversation.
     this.addColumnIfMissing("users", "model_default", "TEXT");
@@ -793,10 +700,10 @@ export class StoreBase {
     // repo (write/delete/move/scaffold/commit). Repo creation/connection settings
     // stay owner-only. Widens ONLY the repo-write tool gate (repoTools.ts).
     this.addColumnIfMissing("users", "shared_account", "INTEGER DEFAULT 0");
-    // Per-secret shell exposure opt-in: when 1, this secret is ALSO exported
-    // into the agent shell env on elevated runs (values are redacted from tool
-    // outputs by the PostToolUse hook). OFF by default; reserved git/SSH names
-    // never ship regardless (secretPolicy.ts).
+    // Per-secret shell exposure opt-in: on the owner's own runs a flagged secret
+    // is passed to pi as `sandbox_env` (design P4) — `$NAME` in that run's bash,
+    // redacted from tool results by pi and Noah (secretRedaction.ts).
+    // OFF by default; reserved git/SSH names never qualify (secretPolicy.ts).
     this.addColumnIfMissing("user_secrets", "shell_expose", "INTEGER DEFAULT 0");
     // Per-secret BROWSER-INPUT opt-in (브라우저 입력): when 1, the avatar may name
     // this secret (`secretName`) in `mcp__browser__type` / `fill_form` and the
@@ -821,8 +728,9 @@ export class StoreBase {
     // should get the one-time notice on their first load after a deploy. New
     // signups are seeded with the current release at creation instead (createUser).
     this.addColumnIfMissing("users", "last_seen_release", "TEXT");
-    // SDK session id of the conversation's last turn, used to resume context on
-    // the next turn (see claudeAgent resume). Null until the first turn completes.
+    // Session of the conversation's last turn (on pi its latest `resp_…`
+    // response id, continued as `previous_response_id`). Null until the first
+    // turn completes; a CLI session id left by the removed SDK runner is ignored.
     this.addColumnIfMissing("conversations", "agent_session_id", "TEXT");
     // The registered git-repo NAME this conversation opened as its working dir via
     // `mcp__git_repo__open_repo` (repoWorkspace.ts); NULL = scratch workspace. Made
@@ -830,10 +738,9 @@ export class StoreBase {
     // their working repo, and so an interactive open in a routine's thread carries to
     // every scheduled run on the same conversation id.
     this.addColumnIfMissing("conversations", "working_repo", "TEXT");
-    // Exact stateless Gateway endpoint this external conversation first trusted.
-    // Binding prevents an env/config change from silently sending the stored full
-    // transcript to a different endpoint on the next turn.
-    this.addColumnIfMissing("conversations", "external_endpoint", "TEXT");
+    // `conversations.external_endpoint` belonged to the retired external avatars
+    // (store/retiredExternalAvatars.ts): deployments that ran them keep the dead
+    // column, nothing reads or writes it, and a fresh DB never gets it.
     // Capability hashtags (역량 해시태그): a JSON array of short searchable tags the
     // avatar generates from its skills/persona, shown in discovery (탐색) and queried
     // by the cross-avatar `mcp__avatars__search_avatars` tool. Null/[] = none.
@@ -864,23 +771,14 @@ export class StoreBase {
       "is_routine",
       "INTEGER NOT NULL DEFAULT 0",
     );
-    // Per-conversation, owner-only toggle for which of the owner's group
-    // knowledge repos are DISABLED in this conversation. A JSON array of group
-    // ids; NULL/[] means every group is enabled (the default). We store the OFF
-    // set (not the ON set) so a newly-joined group is enabled by default without
-    // touching existing rows. Only meaningful for the owner's own conversations;
-    // colleague conversations always load all groups (no toggle).
-    this.addColumnIfMissing("conversations", "group_knowledge_off", "TEXT");
-    // Per-conversation model TIER chosen by the user in the chat composer: a Claude
-    // model alias (`opus`/`sonnet`/`haiku`) or NULL = use the server default
-    // resolution. The alias resolves to a concrete model via the operator's
-    // ANTHROPIC_DEFAULT_*_MODEL env (see modelTiers.ts). Ignored when ANTHROPIC_MODEL
-    // pins a model (the env pin is a hard lock).
+    // Per-conversation model chosen by the user in the chat composer: a pi
+    // model id from pi-gateway's live list (agent/pi/modelCatalog.ts) or NULL =
+    // the default resolution. A value pi no longer offers (incl. a legacy tier
+    // alias like `opus`) reads as unset at run time — never migrated.
     this.addColumnIfMissing("conversations", "selected_model", "TEXT");
     // Per-conversation reasoning EFFORT level chosen in the composer
-    // (`low`/`medium`/`high`/`xhigh`/`max`) or NULL = SDK default (`high`). Passed
-    // to the SDK as `options.effort`; independent of the model pin (see
-    // effortLevels.ts).
+    // (`low`/`medium`/`high`/`xhigh`/`max`) or NULL = pi's default. Passed to pi
+    // as `reasoningEffort`; independent of the model (see effortLevels.ts).
     this.addColumnIfMissing("conversations", "selected_effort", "TEXT");
     // Per-conversation MCP tool group selection from the chat composer. NULL means
     // every default group is enabled; a JSON array (including []) is an explicit
@@ -897,6 +795,11 @@ export class StoreBase {
     // a conversation from before this column takes its snapshot on its next
     // owner turn.
     this.addColumnIfMissing("conversations", "todo_snapshot", "TEXT");
+    // pi runtime (docs/architecture/pi-runtime.md): the system prompt frozen at
+    // the conversation's FIRST pi turn (design D2). NULL = no pi turn yet — an
+    // existing conversation renders its prompt on its first pi turn and
+    // rebuilds context from the stored text history.
+    this.addColumnIfMissing("conversations", "pi_instructions", "TEXT");
     // Per-group ADMIN tool policy: which MCP tool groups this group's members
     // may use in chats they drive. NULL = no restriction; a JSON array
     // (including []) is an allowlist validated against src/shared/mcpToolGroups.ts.
@@ -932,8 +835,13 @@ export class StoreBase {
     this.migrateVisibility();
     this.migrateCanvasArtifacts();
     this.migrateOnboardedAndRoutineFlags();
-    this.migrateGroupAgentsMulti();
     this.migrateTodoStatuses();
+    // Everything below DELETES what a retired feature left. It runs only once
+    // the pre-retirement DB backup exists (or nothing here needed one); a failed
+    // backup leaves it all in place until a later boot's backup succeeds.
+    if (!this.retirementGate().allowed) {
+      return;
+    }
     // Trust is now derived purely from group co-membership; the old per-(avatar,
     // viewer) trust table is dropped (its grants don't survive the migration).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
@@ -941,6 +849,42 @@ export class StoreBase {
     // Nothing writes this key any more, so the delete can only match a row left
     // by an older release — keep the key name reserved.
     this.db.prepare("DELETE FROM app_config WHERE key = ?").run("stt_override");
+    // The server agents feature (SSH remote CLI delegation) is removed: drop its
+    // tables and its app_config keys (the admin switch and the deployment id its
+    // remote pid files carried). Nothing creates or writes these any more, so
+    // this can only match what an older release left — keep the table and key
+    // names reserved. Remote ~/.noah-agent and ~/.claude-noah dirs on registered
+    // servers are the operator's to clean up by hand.
+    this.db.exec("DROP INDEX IF EXISTS idx_server_agent_sessions_server");
+    this.db.exec("DROP TABLE IF EXISTS server_agent_sessions");
+    this.db.exec("DROP TABLE IF EXISTS server_agents");
+    this.db
+      .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
+      .run("server_agents_enabled", "server_agent_deployment_id");
+    // The Craft apps feature (craft-runner sidecar) is removed: drop its admin
+    // switch. Nothing writes this key any more, so the delete can only match a
+    // row left by an older build — keep the key name reserved.
+    this.db.prepare("DELETE FROM app_config WHERE key = ?").run("craft_apps_enabled");
+    // The Claude Agent SDK runner is removed (pi-gateway is the only runtime):
+    // drop the admin-stored `claude setup-token` subscription token the CLI
+    // authenticated with, and the SDK preflight's skill-discovery cache. Nothing
+    // reads or writes either key any more, so this can only match what an older
+    // release left — keep both names reserved.
+    this.db
+      .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
+      .run("claude_oauth_token", "skill_discovery_cache");
+    // Group knowledge repositories are retired (2026-10-30, user decision):
+    // groups stay only as the avatar-sharing/trust/skill-sharing unit. Drop the
+    // group repo connection, the per-user default and the per-conversation
+    // group-knowledge OFF-sets. Nothing creates or writes these columns any
+    // more, so this can only match what an older release left — keep every name
+    // reserved. The clones on disk are quarantined by retireGroupKnowledgeRepos;
+    // the remote repositories themselves are never touched. The same list drops
+    // the per-pi-session model/effort profiles (retired 2026-10-31: pi switches
+    // a live session's model and effort, so a change keeps the session).
+    for (const [table, column] of RETIRED_COLUMNS) {
+      this.dropColumnIfPresent(table, column);
+    }
   }
 
   /** One-time backfill of canvas artifacts that pre-date the dedicated tables:
@@ -1073,70 +1017,6 @@ export class StoreBase {
     );
   }
 
-  /**
-   * One-time rebuild for the multi-agent group_agents shape: pre-multi DBs had
-   * `group_id` as PRIMARY KEY (one agent per group) and bound conversations to
-   * `group:<groupId>`. Detected by the missing `id` column (the big CREATE IF
-   * NOT EXISTS above never touches an existing table). Each legacy row gets a
-   * fresh uuid and every conversation binding is rewritten to the canonical
-   * `group:<groupId>:<agentId>` in the SAME transaction. On-disk artifacts
-   * keyed by the old avatar id (profile image file, workspace tree) are
-   * renamed by the startup sweep in ../groupAgents.ts — the store has no
-   * config/dataDir. The renamed legacy table keeps its index, so the index is
-   * dropped and re-created against the rebuilt table.
-   */
-  private migrateGroupAgentsMulti(): void {
-    const cols = this.db
-      .prepare("PRAGMA table_info(group_agents)")
-      .all() as { name: string }[];
-    if (!cols.length || cols.some((c) => c.name === "id")) {
-      return;
-    }
-    const tx = this.db.transaction(() => {
-      this.db.exec("ALTER TABLE group_agents RENAME TO group_agents_legacy");
-      this.db.exec("DROP INDEX IF EXISTS idx_group_agents_group");
-      this.db.exec(`
-        CREATE TABLE group_agents (
-          id TEXT PRIMARY KEY,
-          group_id TEXT NOT NULL,
-          display_name TEXT NOT NULL,
-          alias TEXT DEFAULT '',
-          bio TEXT DEFAULT '',
-          intro TEXT DEFAULT '',
-          persona TEXT DEFAULT '',
-          hashtags TEXT,
-          avatar_ext TEXT,
-          enabled INTEGER NOT NULL DEFAULT 1,
-          capture_scope TEXT NOT NULL DEFAULT 'members',
-          created_by TEXT,
-          created_at TEXT,
-          updated_at TEXT
-        );
-        CREATE INDEX idx_group_agents_group ON group_agents(group_id);
-      `);
-      const legacyRows = this.db
-        .prepare("SELECT * FROM group_agents_legacy")
-        .all() as Omit<GroupAgentRow, "id">[];
-      const insert = this.db.prepare(
-        `INSERT INTO group_agents (id, group_id, display_name, alias, bio, intro, persona, hashtags, avatar_ext, enabled, capture_scope, created_by, created_at, updated_at)
-         VALUES (@id, @group_id, @display_name, @alias, @bio, @intro, @persona, @hashtags, @avatar_ext, @enabled, @capture_scope, @created_by, @created_at, @updated_at)`,
-      );
-      const rewrite = this.db.prepare(
-        "UPDATE conversations SET avatar_user_id = ? WHERE avatar_user_id = ?",
-      );
-      for (const row of legacyRows) {
-        const id = crypto.randomUUID();
-        insert.run({ ...row, id });
-        rewrite.run(
-          `group:${row.group_id}:${id}`,
-          `group:${row.group_id}`,
-        );
-      }
-      this.db.exec("DROP TABLE group_agents_legacy");
-    });
-    tx();
-  }
-
   /** One-time backfill of is_routine on pre-column conversations. Linked ones
    *  come from the routine_jobs join; already-orphaned ones (scheduled job since
    *  deleted) are matched by the legacy/current title prefixes. The title match
@@ -1224,6 +1104,19 @@ export class StoreBase {
     }
   }
 
+  /**
+   * Drop a retired column if it is still there (idempotent). Called only behind
+   * `retirementGate()`, so a column that held data is in the pre-retirement backup.
+   */
+  protected dropColumnIfPresent(table: string, column: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    if (cols.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    }
+  }
+
   protected seedRoles(): void {
     const insert = this.db.prepare(
       "INSERT OR IGNORE INTO roles (name) VALUES (?)",
@@ -1274,6 +1167,44 @@ export class StoreBase {
     return role === "admin" ? "admin" : "member";
   }
 
+  /**
+   * Whether this boot may run a destructive retirement step, and the stamp its
+   * quarantine folder and backup share. The first ask that finds retired data
+   * (`retirementDataPresent`) backs the whole DB up; a failed backup holds every
+   * later step of this boot (logged once — the next boot retries), and a DB
+   * with nothing to retire is never backed up. Never throws.
+   */
+  retirementGate(): { allowed: boolean; stamp: string; backupPath: string | null } {
+    const gate = this.retirement;
+    if (gate.state === "clean") {
+      let present = true;
+      try {
+        present = retirementDataPresent(this.db);
+      } catch (err) {
+        // Unsure counts as present: a needless backup beats an unbacked purge.
+        logger.warn({ err }, "could not check the database for retired data; backing it up before any retirement");
+      }
+      if (present) {
+        try {
+          const backup = backupDatabase(this.db, gate.dataDir, gate.stamp);
+          gate.state = "backedUp";
+          gate.backupPath = backup.path;
+          logger.warn(
+            { path: backup.path, bytes: backup.bytes },
+            "database backed up before retiring removed features (Noah never deletes this file; remove it by hand once satisfied)",
+          );
+        } catch (err) {
+          gate.state = "held";
+          logger.error(
+            { err },
+            "database backup before retirement FAILED: every retirement step (retired-table drops, boot purges) is skipped on this boot and retried on the next — free disk space or fix the backups folder",
+          );
+        }
+      }
+    }
+    return { allowed: gate.state !== "held", stamp: gate.stamp, backupPath: gate.backupPath };
+  }
+
   /** Close the underlying SQLite handle. Called on graceful shutdown. */
   close(): void {
     this.db.close();
@@ -1306,17 +1237,13 @@ export interface StoreBase {
     conversationId: string,
     avatarUserId: string,
     firstUserText: string,
-    opts?: { isRoutine?: boolean; externalEndpoint?: string },
+    opts?: { isRoutine?: boolean },
   ): void;
   deleteCanvasArtifactsForConversation(conversationId: string): void;
   /** Sibling of the canvas cascade at EVERY conversation-deleting site (store/shareLinks.ts). */
   deleteShareLinksForConversation(conversationId: string): void;
   /** The links of specific deck cards — the rewind/regenerate cascade (store/shareLinks.ts). */
   deleteShareLinksForFiles(conversationId: string, fileIds: readonly string[]): void;
-  /** Sibling of the share-link cascade at EVERY conversation-deleting site + rewind (store/serverAgents.ts). */
-  deleteServerAgentSessionsForConversation(conversationId: string): void;
-  /** deleteUser's server-agent sweep (store/serverAgents.ts). */
-  deleteServerAgentsForOwner(ownerUserId: string): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(

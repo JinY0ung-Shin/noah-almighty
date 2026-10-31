@@ -1,0 +1,11 @@
+# Build context of docker/pi-sandbox/Dockerfile (BuildKit reads <Dockerfile>.dockerignore instead of the
+# root .dockerignore). Only what that Dockerfile copies or bind-mounts: the pptx skill tree (fonts,
+# requirements, the self-test), this directory, and the CA placeholder / an operator's CA file.
+*
+!default-skills/skills/pptx/
+!docker/pi-sandbox/
+!docker/extra-ca.crt.example
+!docker/tls-fullchain.crt
+**/__pycache__/
+**/*.pyc
+**/.build/

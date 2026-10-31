@@ -13,7 +13,6 @@ import type {
   ChatLayout,
   ChatPane,
   ConversationSummary,
-  CraftAppsInfo,
   KnowledgeRequest,
   Plugin,
   PromptRequest,
@@ -32,17 +31,9 @@ export interface ClientState {
   bootError: string;
   bootstrap: BootstrapInfo | null;
   user: User | null;
-  /**
-   * Craft-app availability from `GET /api/me` (admins only; null = unknown or
-   * none). Kept beside `user`, not on it, so a PATCH that returns a bare user
-   * never drops it. lib/craftApps decides which `craft_*` groups the composer shows.
-   */
-  craftApps: CraftAppsInfo | null;
   view: ViewName;
   settingsTab: SettingsTab;
   adminTab: AdminTab;
-  /** Active source on the brain (knowledge-graph) view: "personal" or "group:<id>". */
-  brainSource: string;
   /**
    * Token of the share link the share view shows (`#/share/<token>`); "" when
    * none. It lives here, not only in the hash, because currentRoute() rebuilds
@@ -81,7 +72,7 @@ export interface ClientState {
   /** Live "who's here now" for the admin-only rail badge; null until first poll. */
   adminPresence: AdminPresence | null;
   audit: AuditEvent[];
-  /** Interactive permission/question prompts awaiting the owner (one shown at a time). */
+  /** Interactive question prompts awaiting the owner (one shown at a time). */
   promptQueue: PromptRequest[];
   /**
    * One-shot deep link from the what's-new dialog: the 권한·연결 tab opens the
@@ -120,11 +111,9 @@ export const appState = writable<ClientState>({
   bootError: "",
   bootstrap: null,
   user: null,
-  craftApps: null,
   view: "explore",
   settingsTab: "profile",
   adminTab: "overview",
-  brainSource: "personal",
   shareToken: "",
   shareTitle: "",
   avatars: [],

@@ -132,7 +132,6 @@ async function mockApp(page: Page): Promise<void> {
             createdAt: "2026-08-11T03:00:00.000Z",
           },
         ],
-        groupKnowledgeOff: [],
         canvases: [],
       };
     } else if (path === "/api/chat/runs") {
@@ -147,8 +146,6 @@ async function mockApp(page: Page): Promise<void> {
                 eventCount: 3,
                 pendingCount: 1,
                 cancelled: false,
-                background: false,
-                backgroundTasks: 0,
               },
             }
           : { run: null };

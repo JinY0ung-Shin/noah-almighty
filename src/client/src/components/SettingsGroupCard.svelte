@@ -1,54 +1,42 @@
 <script lang="ts" context="module">
-  import type { GroupAgent, GroupMember } from "../lib/types";
+  import type { GroupMember } from "../lib/types";
   import type { McpToolGroupId } from "../../../shared/mcpToolGroups";
 
-  // The richer per-group shape returned by GET /api/me/groups (members + repo),
+  // The richer per-group shape returned by GET /api/me/groups (with members),
   // vs. the lighter UserGroupMembership on User.groups.
   export interface SettingsGroup {
     id: string;
     name: string;
     role: "admin" | "member";
-    knowledgeRepo: string | null;
-    knowledgeBranch: string | null;
-    knowledgeSelected: string[] | null;
     /** System-admin tool policy for this group (read-only here); null = none. */
     allowedMcpToolGroups: McpToolGroupId[] | null;
-    /** Group policy: off = knowledge-sharing-only (no avatar reach/trust between members). */
+    /** Group policy: off = no avatar reach, trust or skill sharing between members. */
     avatarSharing: boolean;
-    /** The group's shared agents (several allowed; disabled included, for managers). */
-    agents: GroupAgent[];
     members: GroupMember[];
   }
 </script>
 
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount } from "svelte";
   // One group block in the 그룹 tab: teammate roster (searchable, chat shortcut),
   // and for group admins, member management (role toggle / remove) + a member-add
-  // typeahead, plus the shared knowledge-repo card. Ports buildGroupBlock /
-  // buildGroupRosterRow / buildGroupRepoCard / buildGroupMemberAddForm from
+  // typeahead, plus the shared-skill channel. Ports buildGroupBlock /
+  // buildGroupRosterRow / buildGroupMemberAddForm from
   // settings/groups.js. The user-search typeahead is inlined here (per the task
   // rule: no shared UserSearch component).
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
-  import { startChatWith, openSeededChat } from "../lib/chat";
+  import { startChatWith } from "../lib/chat";
   import { notify, readState, newId } from "../lib/state";
-  import { repoToHref } from "../lib/format";
-  import { downscaleImageToDataUrl } from "../lib/dom";
-  import type { AvatarSummary, GroupSharedSkill, RepoPluginContents } from "../lib/types";
+  import type { AvatarSummary, GroupSharedSkill } from "../lib/types";
   import { MCP_TOOL_GROUPS, effectiveMcpToolGroups } from "../../../shared/mcpToolGroups";
   import AvatarImage from "./AvatarImage.svelte";
   import Icon from "./Icon.svelte";
-  import SettingsPluginSelect from "./SettingsPluginSelect.svelte";
-  import GraphViewModal from "./GraphViewModal.svelte";
 
-  let graphOpen = false;
-  let requestRepoBusy = false;
   let chatBusyId = "";
 
   export let group: SettingsGroup;
-  export let githubHost = "github.com";
-  /** Reload the whole group list from the server (after member/repo mutations). */
+  /** Reload the whole group list from the server (after member mutations). */
   export let reload: () => Promise<void>;
 
   $: amAdmin = group.role === "admin";
@@ -363,346 +351,7 @@
     }
   }
 
-  // ---- group knowledge repo ----
-  let repoInput = "";
-  let branchInput = "";
-  $: savedGroupRepo = group.knowledgeRepo || "";
-  $: savedGroupBranch = group.knowledgeBranch || "";
-  $: {
-    repoInput = savedGroupRepo;
-    branchInput = savedGroupBranch;
-  }
-  let repoBusy = false;
-  let repoRefreshed = false;
-  let repoError = "";
-  $: repoStatusId = groupPanelId("repo-status");
-  $: repoInputTrimmed = repoInput.trim();
-  $: branchInputTrimmed = branchInput.trim();
-  $: repoDirty = repoInputTrimmed !== savedGroupRepo || branchInputTrimmed !== savedGroupBranch;
-  $: repoCanSave = Boolean(!repoBusy && repoInputTrimmed && repoDirty);
-  $: repoStatus = repoBusy
-    ? "저장 중…"
-    : repoError
-      ? `저장 실패: ${repoError}`
-      : !repoInputTrimmed && savedGroupRepo
-        ? "연결 해제는 ‘연결 해제’ 버튼을 사용합니다."
-        : repoDirty
-          ? "저장하지 않은 저장소 변경 사항이 있습니다."
-          : savedGroupRepo
-            ? "연결됨"
-            : "연결 전";
-
-  async function saveRepo(): Promise<void> {
-    if (repoBusy) return;
-    const repo = repoInputTrimmed;
-    const branch = branchInputTrimmed;
-    if (!repo) {
-      repoError = group.knowledgeRepo ? "공용 저장소 연결 해제는 ‘연결 해제’ 버튼을 사용해 주세요." : "공용 지식 저장소 주소를 입력해 주세요.";
-      notify(group.knowledgeRepo ? "공용 저장소 연결을 해제하려면 ‘연결 해제’ 버튼을 사용해 주세요." : "공용 지식 저장소 주소를 입력해 주세요.", "warn");
-      return;
-    }
-    if (!repoDirty) return;
-    repoBusy = true;
-    repoError = "";
-    try {
-      await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo`, {
-        method: "PUT",
-        body: JSON.stringify({ repo, branch: branch || null }),
-      });
-    } catch (err) {
-      repoError = (err as Error).message;
-      notify(`저장 실패: ${repoError}`, "warn");
-      repoBusy = false;
-      return;
-    }
-    // New repo → different plugins; drop the cached listing + close the picker so
-    // it can't show the old repo's plugin names against the new selection.
-    pickOpen = false;
-    contents = null;
-    try {
-      await reload();
-      notify(`"${group.name}" 공용 지식 저장소 "${repo}"을 연결했습니다.`, "ok");
-    } catch (err) {
-      notify(`공용 지식 저장소는 연결했지만 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      repoBusy = false;
-    }
-  }
-
-  async function refreshRepo(): Promise<void> {
-    if (repoBusy) return;
-    repoBusy = true;
-    try {
-      await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/refresh`, { method: "POST" });
-      repoRefreshed = true;
-      setTimeout(() => (repoRefreshed = false), 1200);
-      notify(`"${group.name}" 공용 지식 저장소를 최신 상태로 새로고침했습니다.`, "ok");
-    } catch (err) {
-      notify(`새로고침 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      repoBusy = false;
-    }
-  }
-
-  async function disconnectRepo(): Promise<void> {
-    if (repoBusy) return;
-    if (!(await confirmAction("이 그룹의 공용 지식 저장소 연결을 해제할까요?\nGitHub의 저장소는 삭제되지 않고, 그룹원 아바타들이 더 이상 그 스킬을 불러오지 않습니다."))) return;
-    repoBusy = true;
-    try {
-      await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo`, { method: "PUT", body: JSON.stringify({ repo: null }) });
-    } catch (err) {
-      notify(`연결 해제 실패: ${(err as Error).message}`, "warn");
-      repoBusy = false;
-      return;
-    }
-    try {
-      await reload();
-      notify(`"${group.name}" 공용 지식 저장소 연결을 해제했습니다.`, "ok");
-    } catch (err) {
-      notify(`공용 지식 저장소 연결은 해제했지만 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      repoBusy = false;
-    }
-  }
-
-  async function requestGroupRepo(): Promise<void> {
-    if (requestRepoBusy) return;
-    requestRepoBusy = true;
-    try {
-      await openSeededChat(`"${group.name}" 그룹의 공용 지식 저장소를 만들어서 연결해줘. 그룹원들이 함께 사용할 기본 지식/스킬 구조까지 준비해줘.`);
-    } catch (err) {
-      notify(`요청 대화를 열지 못했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      requestRepoBusy = false;
-    }
-  }
-
-  // plugin selection (expandable)
-  let pickOpen = false;
-  let contents: RepoPluginContents | null = null;
-  let contentsErr = "";
-  let contentsLoading = false;
-  $: selSummary = !group.knowledgeSelected ? "저장소의 모든 플러그인을 사용 중" : `${group.knowledgeSelected.length}개 플러그인만 사용 중`;
-
-  async function togglePick(): Promise<void> {
-    pickOpen = !pickOpen;
-    if (!pickOpen) return;
-    if (!contents && !contentsLoading) await loadContents();
-    await tick();
-    document.getElementById(groupPanelId("plugin-contents"))?.scrollIntoView({ block: "center" });
-  }
-  async function loadContents(): Promise<void> {
-    if (contentsLoading) return;
-    contentsLoading = true;
-    contentsErr = "";
-    try {
-      const { contents: info } = await api<{ contents: RepoPluginContents }>(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/contents`);
-      contents = info;
-    } catch (err) {
-      contentsErr = (err as Error).message;
-    } finally {
-      contentsLoading = false;
-    }
-  }
-  async function saveSelection(next: string[] | null): Promise<void> {
-    await api(`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/selected`, { method: "PUT", body: JSON.stringify({ selected: next }) });
-    try {
-      await reload();
-    } catch (err) {
-      notify(`플러그인 선택은 저장했지만 그룹 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    }
-  }
-
   const listboxId = `group-search-${newId()}`;
-
-  // ---- group shared agents (그룹 에이전트, 여러 개 가능) ----
-  const agentAvatarIdOf = (agent: GroupAgent) => `group:${group.id}:${agent.id}`;
-  const agentPath = (suffix = "") =>
-    `/api/me/groups/${encodeURIComponent(group.id)}/agents${suffix}`;
-  let agentSaving = false;
-  let agentChatBusyId = "";
-  let agentPicBusy = false;
-  let agentRowBusyId = "";
-  let agentFormOpen = false;
-  /** Agent being edited in the form; null = the form creates a NEW agent. */
-  let editingAgentId: string | null = null;
-  let agentDisplayName = "";
-  let agentAlias = "";
-  let agentBio = "";
-  let agentIntro = "";
-  let agentPersona = "";
-  let agentCaptureScope: "members" | "admins" = "members";
-
-  $: editingAgent = editingAgentId
-    ? (group.agents.find((a) => a.id === editingAgentId) ?? null)
-    : null;
-
-  function openAgentForm(agent: GroupAgent | null): void {
-    editingAgentId = agent?.id ?? null;
-    agentDisplayName = agent?.displayName ?? `${group.name} 에이전트`;
-    agentAlias = agent?.alias ?? "";
-    agentBio = agent?.bio ?? "";
-    agentIntro = agent?.intro ?? "";
-    agentPersona = agent?.persona ?? "";
-    agentCaptureScope = agent?.captureScope ?? "members";
-    agentFormOpen = true;
-  }
-
-  async function saveAgent(): Promise<void> {
-    if (agentSaving) return;
-    if (!agentDisplayName.trim()) {
-      notify("에이전트 이름을 입력해 주세요.", "warn");
-      return;
-    }
-    agentSaving = true;
-    try {
-      const body = JSON.stringify({
-        displayName: agentDisplayName.trim(),
-        alias: agentAlias,
-        bio: agentBio,
-        intro: agentIntro,
-        persona: agentPersona,
-        captureScope: agentCaptureScope,
-      });
-      if (editingAgentId) {
-        await api(agentPath(`/${encodeURIComponent(editingAgentId)}`), { method: "PATCH", body });
-      } else {
-        await api(agentPath(), { method: "POST", body });
-      }
-      notify(`"${group.name}" 그룹 에이전트를 저장했습니다.`, "ok");
-      agentFormOpen = false;
-      editingAgentId = null;
-      try {
-        await reload();
-      } catch (err) {
-        notify(`저장은 됐지만 그룹 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-      }
-    } catch (err) {
-      notify(`그룹 에이전트 저장 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      agentSaving = false;
-    }
-  }
-
-  async function toggleAgentEnabled(agent: GroupAgent, on: boolean): Promise<void> {
-    if (agentRowBusyId) return;
-    agentRowBusyId = agent.id;
-    try {
-      await api(agentPath(`/${encodeURIComponent(agent.id)}`), {
-        method: "PATCH",
-        body: JSON.stringify({ enabled: on }),
-      });
-      notify(
-        on
-          ? `"${agent.displayName}"을(를) 활성화했습니다.`
-          : `"${agent.displayName}"을(를) 비활성화했습니다. 다음 대화부터 차단되며 기존 대화 기록은 유지됩니다.`,
-        "ok",
-      );
-      try {
-        await reload();
-      } catch (err) {
-        notify(`설정은 저장했지만 그룹 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-      }
-    } catch (err) {
-      notify(`그룹 에이전트 설정 변경 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      agentRowBusyId = "";
-    }
-  }
-
-  async function deleteAgent(agent: GroupAgent): Promise<void> {
-    if (agentRowBusyId) return;
-    if (
-      !(await confirmAction(
-        `"${agent.displayName}" 그룹 에이전트를 삭제할까요?\n모든 그룹원의 이 에이전트 대화 기록이 함께 삭제되며 되돌릴 수 없습니다. 기록을 남기려면 대신 ‘비활성화’를 사용하세요.`,
-      ))
-    )
-      return;
-    agentRowBusyId = agent.id;
-    try {
-      await api(agentPath(`/${encodeURIComponent(agent.id)}`), { method: "DELETE" });
-      notify(`"${agent.displayName}" 그룹 에이전트를 삭제했습니다.`, "ok");
-      if (editingAgentId === agent.id) {
-        agentFormOpen = false;
-        editingAgentId = null;
-      }
-      try {
-        await reload();
-      } catch (err) {
-        notify(`삭제는 됐지만 그룹 목록 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-      }
-    } catch (err) {
-      notify(`그룹 에이전트 삭제 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      agentRowBusyId = "";
-    }
-  }
-
-  async function chatWithAgent(agent: GroupAgent): Promise<void> {
-    if (agentChatBusyId) return;
-    agentChatBusyId = agent.id;
-    try {
-      await startChatWith({
-        id: agentAvatarIdOf(agent),
-        username: `group-agent-${agent.id.slice(0, 8)}`,
-        displayName: agent.displayName,
-        alias: agent.alias,
-        bio: agent.bio,
-        hashtags: agent.hashtags,
-        hasImage: agent.hasImage,
-        pluginCount: 0,
-        visibility: "group",
-        updatedAt: null,
-        runtime: "native",
-        groupAgent: { groupId: group.id, groupName: group.name },
-      });
-    } catch (err) {
-      notify(`그룹 에이전트와의 대화를 열지 못했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      agentChatBusyId = "";
-    }
-  }
-
-  async function uploadAgentImage(event: Event): Promise<void> {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (!file || agentPicBusy || !editingAgentId) return;
-    agentPicBusy = true;
-    try {
-      const image = await downscaleImageToDataUrl(file, 256);
-      await api(agentPath(`/${encodeURIComponent(editingAgentId)}/image`), {
-        method: "PUT",
-        body: JSON.stringify({ image }),
-      });
-      notify("그룹 에이전트 사진을 변경했습니다.", "ok");
-      await reload();
-    } catch (err) {
-      notify(`사진 업로드 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      agentPicBusy = false;
-    }
-  }
-
-  async function deleteAgentImage(): Promise<void> {
-    if (agentPicBusy || !editingAgentId) return;
-    agentPicBusy = true;
-    try {
-      await api(agentPath(`/${encodeURIComponent(editingAgentId)}/image`), {
-        method: "DELETE",
-      });
-      notify("그룹 에이전트 사진을 삭제했습니다.", "ok");
-      await reload();
-    } catch (err) {
-      notify(`사진 삭제 실패: ${(err as Error).message}`, "warn");
-    } finally {
-      agentPicBusy = false;
-    }
-  }
-
-  // Avatar image resize uses the shared lib/dom.downscaleImageToDataUrl (which
-  // REJECTS on a null 2d context and preserves jpeg/webp) — the old hand-rolled
-  // copy silently uploaded a BLANK image when getContext returned null.
 
   // ---- 공유 스킬 채널 관리 (그룹 관리자) ----
   // 그룹원이 공유한 스킬을 이 그룹 채널에서만 내리는 moderation. 차단은
@@ -785,7 +434,7 @@
       notify(
         on
           ? `"${group.name}" 그룹의 그룹원 아바타 상호 공개를 켰습니다.`
-          : `"${group.name}" 그룹의 그룹원 아바타 상호 공개를 껐습니다. 이제 이 그룹은 지식 공유 전용이에요.`,
+          : `"${group.name}" 그룹의 그룹원 아바타 상호 공개를 껐습니다. 이제 이 그룹을 통해서는 아바타와 스킬이 공유되지 않아요.`,
         "ok",
       );
       try {
@@ -799,17 +448,6 @@
       sharingSaving = false;
     }
   }
-
-  function summarizeRepoContentsError(message: string): string {
-    const lower = message.toLowerCase();
-    if (lower.includes("repository not found")) return "저장소를 찾지 못했습니다. 저장소 주소 또는 접근 권한을 확인해 주세요.";
-    if (lower.includes("command failed") || lower.includes("git clone")) return "저장소 내용을 가져오지 못했습니다.";
-    return message.length > 140 ? `${message.slice(0, 140)}…` : message;
-  }
-
-  function shouldShowRepoErrorDetails(message: string): boolean {
-    return message.length > 140 || /command failed|git clone/i.test(message);
-  }
 </script>
 
 <div class="group-block">
@@ -821,7 +459,7 @@
       <span class="tag read">그룹원</span>
     {/if}
     {#if !group.avatarSharing}
-      <span class="tag read">지식 공유 전용</span>
+      <span class="tag read">상호 공개 꺼짐</span>
     {/if}
   </div>
 
@@ -836,127 +474,11 @@
       />
       <span class="shared-account-meta">
         <strong>그룹원 아바타 상호 공개</strong>
-        <span class="muted">켜면 같은 그룹원끼리 서로의 아바타를 찾고 대화할 수 있어요(신뢰 권한 포함). 끄면 이 그룹은 지식 공유 전용이 되어 그룹원 아바타가 서로에게 보이지 않아요. 공용 지식 저장소는 계속 함께 사용합니다.</span>
+        <span class="muted">켜면 같은 그룹원끼리 서로의 아바타를 찾고 대화할 수 있어요(신뢰 권한 포함). 끄면 그룹원 아바타가 서로에게 보이지 않고, 이 그룹을 통한 스킬 공유도 멈춰요.</span>
       </span>
     </label>
   {:else if !group.avatarSharing}
-    <p class="muted">이 그룹은 그룹원 아바타 상호 공개가 꺼져 있어요(지식 공유 전용). 그룹원 아바타와의 대화는 그룹 관리자가 다시 켜면 가능해집니다.</p>
-  {/if}
-
-  <h4 class="knowledge-sub">그룹 에이전트</h4>
-  {#if group.agents.length}
-    <div class="plugin-rows">
-      {#each group.agents as agent (agent.id)}
-        <div
-          class="plugin-row"
-          class:busy={agentChatBusyId === agent.id || agentRowBusyId === agent.id}
-          aria-busy={agentChatBusyId === agent.id || agentRowBusyId === agent.id ? "true" : "false"}
-        >
-          <AvatarImage user={{ id: agentAvatarIdOf(agent), hasImage: agent.hasImage, displayName: agent.displayName }} size={32} alt="" />
-          <div class="pr-main">
-            <strong>{agent.displayName}</strong>
-            <div class="pr-sub">
-              공유 세컨드브레인: {group.knowledgeRepo ? group.knowledgeRepo : "연결 안 됨"} ·
-              기록 권한: {agent.captureScope === "members" ? "그룹원 모두" : "관리자만"}
-            </div>
-          </div>
-          {#if !agent.enabled}<span class="tag read">비활성</span>{/if}
-          <div class="pr-actions">
-            {#if agent.enabled}
-              <button class="ghost-sm" type="button" disabled={Boolean(agentChatBusyId)} on:click={() => chatWithAgent(agent)}>
-                {agentChatBusyId === agent.id ? "여는 중…" : "대화하기"}
-              </button>
-            {/if}
-            {#if amAdmin}
-              <button class="ghost-sm" type="button" disabled={agentSaving || Boolean(agentRowBusyId)} on:click={() => openAgentForm(agent)}>설정</button>
-              <button class="ghost-sm" type="button" disabled={agentSaving || Boolean(agentRowBusyId)} on:click={() => toggleAgentEnabled(agent, !agent.enabled)}>
-                {agent.enabled ? "비활성화" : "활성화"}
-              </button>
-              <button class="ghost-sm danger" type="button" title="모든 그룹원의 이 에이전트 대화 기록이 함께 삭제됩니다" disabled={agentSaving || Boolean(agentRowBusyId)} on:click={() => deleteAgent(agent)}>삭제</button>
-            {/if}
-          </div>
-        </div>
-      {/each}
-    </div>
-    {#if !amAdmin && group.agents.every((a) => !a.enabled)}
-      <p class="muted">그룹 에이전트가 모두 비활성화되어 있어요. 그룹 관리자가 다시 켜면 대화할 수 있습니다.</p>
-    {/if}
-  {:else if amAdmin}
-    <p class="muted">이 그룹에는 아직 그룹 에이전트가 없어요. 그룹원 누구나 대화할 수 있고, 그룹 지식 저장소를 공유 세컨드브레인으로 쓰는 그룹 에이전트를 여러 개 만들 수 있어요.</p>
-  {:else}
-    <p class="muted">이 그룹에는 아직 그룹 에이전트가 없어요. 그룹 관리자가 만들 수 있습니다.</p>
-  {/if}
-  {#if amAdmin && !agentFormOpen}
-    <button class="ghost-sm" type="button" on:click={() => openAgentForm(null)}>
-      {group.agents.length ? "그룹 에이전트 추가" : "그룹 에이전트 만들기"}
-    </button>
-  {/if}
-
-  {#if agentFormOpen && amAdmin}
-    <div class="group-add-panel" aria-busy={agentSaving}>
-      <label class="field">
-        <span>표시 이름</span>
-        <input type="text" bind:value={agentDisplayName} maxlength="64" placeholder={`${group.name} 에이전트`} disabled={agentSaving} />
-      </label>
-      <label class="field">
-        <span>별칭 (대화에서 스스로를 부르는 이름)</span>
-        <input type="text" bind:value={agentAlias} maxlength="64" disabled={agentSaving} />
-      </label>
-      <label class="field">
-        <span>한 줄 소개</span>
-        <input type="text" bind:value={agentBio} maxlength="200" disabled={agentSaving} />
-      </label>
-      <label class="field">
-        <span>자기소개 (탐색의 소개 보기에 표시)</span>
-        <textarea rows="2" bind:value={agentIntro} disabled={agentSaving}></textarea>
-      </label>
-      <label class="field">
-        <span>페르소나 · 지침</span>
-        <textarea rows="4" bind:value={agentPersona} disabled={agentSaving} placeholder="이 그룹 에이전트의 말투, 역할, 우선순위를 적어 주세요"></textarea>
-      </label>
-      <div class="field">
-        <span>공유 세컨드브레인 기록 권한</span>
-        <div class="radio-cards" role="radiogroup" aria-label="공유 세컨드브레인 기록 권한">
-          <label class="radio-card">
-            <input type="radio" bind:group={agentCaptureScope} value="members" disabled={agentSaving} />
-            <div class="radio-card-body">
-              <strong>그룹원 모두 기록 가능</strong>
-              <div class="muted">모든 그룹원이 대화로 공유 세컨드브레인에 기록(커밋)할 수 있어요.</div>
-            </div>
-          </label>
-          <label class="radio-card">
-            <input type="radio" bind:group={agentCaptureScope} value="admins" disabled={agentSaving} />
-            <div class="radio-card-body">
-              <strong>관리자만 기록 가능</strong>
-              <div class="muted">그 외 그룹원은 조회·검색만 할 수 있어요.</div>
-            </div>
-          </label>
-        </div>
-      </div>
-      {#if editingAgent}
-        <div class="pr-actions">
-          <label class="ghost-sm" style="cursor:pointer">
-            사진 업로드
-            <input type="file" accept="image/*" style="display:none" disabled={agentPicBusy} on:change={uploadAgentImage} />
-          </label>
-          {#if editingAgent.hasImage}
-            <button class="ghost-sm danger" type="button" disabled={agentPicBusy} on:click={deleteAgentImage}>사진 삭제</button>
-          {/if}
-        </div>
-      {/if}
-      <div class="pr-actions">
-        <button class="ghost-sm" type="button" disabled={agentSaving} on:click={saveAgent}>{agentSaving ? "저장 중…" : editingAgentId ? "저장" : "만들기"}</button>
-        <button
-          class="ghost-sm"
-          type="button"
-          disabled={agentSaving}
-          on:click={() => {
-            agentFormOpen = false;
-            editingAgentId = null;
-          }}
-        >닫기</button>
-      </div>
-    </div>
+    <p class="muted">이 그룹은 그룹원 아바타 상호 공개가 꺼져 있어요. 그룹원 아바타와의 대화는 그룹 관리자가 다시 켜면 가능해집니다.</p>
   {/if}
 
   {#if group.members.length}
@@ -1097,87 +619,6 @@
       {/if}
     </div>
 
-    <div class="group-repo">
-      <h4 class="knowledge-sub">공용 지식 저장소</h4>
-      {#if group.knowledgeRepo}
-        <div class="head-actions">
-          <button class="linkish small" type="button" title="노트 사이의 [[링크]] 연결을 그래프로 봅니다" on:click={() => (graphOpen = true)}>그래프 보기</button>
-          <button class="linkish small" type="button" disabled={repoBusy} on:click={refreshRepo}>{repoRefreshed ? "새로고침됨 ✓" : "새로고침"}</button>
-          <button class="linkish small danger" type="button" disabled={repoBusy} title="이 그룹의 공용 저장소 연결을 해제합니다 (GitHub의 저장소 자체는 삭제되지 않습니다)" on:click={disconnectRepo}>연결 해제</button>
-        </div>
-      {/if}
-      <form class="settings-form" on:submit|preventDefault={saveRepo}>
-        <div class="field-row-2col">
-          <label class="field">
-            <span>저장소 주소</span>
-            <input bind:value={repoInput} placeholder="owner/repo 또는 사내 git URL" aria-describedby={repoStatusId} aria-invalid={repoError ? "true" : undefined} disabled={repoBusy} on:input={() => (repoError = "")} />
-          </label>
-          <label class="field">
-            <span>브랜치 (선택)</span>
-            <input bind:value={branchInput} placeholder="비우면 기본 브랜치" aria-describedby={repoStatusId} disabled={repoBusy} on:input={() => (repoError = "")} />
-          </label>
-        </div>
-        <div class="settings-save-row">
-          <span id={repoStatusId} class="settings-save-status" class:dirty={repoDirty && !repoBusy && !repoError} class:pending={repoBusy} class:invalid={Boolean(repoError)} role="status" aria-live="polite">{repoStatus}</span>
-          <button class="primary" type="submit" disabled={!repoCanSave}>{repoBusy ? "저장 중…" : savedGroupRepo ? "저장" : "연결"}</button>
-        </div>
-      </form>
-      {#if !group.knowledgeRepo}
-        <div class="empty-note">
-          공용 저장소를 연결하면 그룹원 전원의 아바타가 그 저장소의 스킬을 사용합니다.
-          <button class="linkish small" type="button" disabled={requestRepoBusy} on:click={requestGroupRepo}>
-            {requestRepoBusy ? "대화 여는 중…" : "아바타에게 공용 저장소 만들기 요청"}
-          </button>
-        </div>
-      {:else}
-        {@const href = repoToHref(group.knowledgeRepo, githubHost)}
-        {@const linkText = group.knowledgeRepo + (group.knowledgeBranch ? ` @ ${group.knowledgeBranch}` : "")}
-        <div class="kr-link">
-          <Icon name="globe" />
-          {#if href}
-            <a {href} target="_blank" rel="noreferrer noopener">{linkText}</a>
-          {:else}
-            <code>{linkText}</code>
-          {/if}
-        </div>
-        <div class="kr-plugins">
-          <span class="muted">{selSummary}</span>
-          <button
-            class="linkish small"
-            type="button"
-            aria-expanded={pickOpen}
-            aria-controls={groupPanelId("plugin-contents")}
-            on:click={togglePick}
-          >사용할 플러그인 선택</button>
-        </div>
-        {#if pickOpen}
-          <div id={groupPanelId("plugin-contents")} class="plugin-contents" aria-busy={contentsLoading ? "true" : "false"}>
-            {#if contentsLoading}
-              <div class="muted" role="status">불러오는 중…</div>
-            {:else if contentsErr}
-              <div class="error-note" role="alert">
-                조회 실패: {summarizeRepoContentsError(contentsErr)}
-                {#if shouldShowRepoErrorDetails(contentsErr)}
-                  <details class="error-details">
-                    <summary>오류 상세</summary>
-                    <code>{contentsErr}</code>
-                  </details>
-                {/if}
-                <button class="linkish small" type="button" disabled={contentsLoading} on:click={loadContents}>다시 시도</button>
-              </div>
-            {:else if contents}
-              <SettingsPluginSelect
-                info={contents}
-                selected={group.knowledgeSelected}
-                headText="그룹원 아바타가 사용할 플러그인을 선택하세요. 모두 선택하거나 모두 해제하면 전체가 사용됩니다."
-                onSave={saveSelection}
-              />
-            {/if}
-          </div>
-        {/if}
-      {/if}
-    </div>
-
     <div class="group-shared-skills">
       <h4 class="knowledge-sub">공유 스킬</h4>
       <div class="head-actions">
@@ -1236,13 +677,6 @@
         </div>
       {/if}
     </div>
-  {:else}
-    <p class="muted small">
-      {group.knowledgeRepo ? "이 그룹에는 공용 지식 저장소가 연결되어 그룹원들의 아바타와 공유됩니다." : "이 그룹에는 아직 공용 지식 저장소가 없습니다."}
-      {#if group.knowledgeRepo}
-        <button class="linkish small" type="button" title="노트 사이의 [[링크]] 연결을 그래프로 봅니다" on:click={() => (graphOpen = true)}>그래프 보기</button>
-      {/if}
-    </p>
   {/if}
 
   {#if policyAllowedLabels}
@@ -1253,12 +687,4 @@
     </p>
   {/if}
 
-  {#if graphOpen}
-    <GraphViewModal
-      endpoint={`/api/me/groups/${encodeURIComponent(group.id)}/knowledge-repo/graph`}
-      title={`지식 그래프 · ${group.name}`}
-      sourceKey={`group:${group.id}`}
-      on:close={() => (graphOpen = false)}
-    />
-  {/if}
 </div>

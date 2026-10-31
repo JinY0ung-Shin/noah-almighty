@@ -26,6 +26,9 @@ upstream.on("exit", (code, signal) => {
 
 process.on("SIGINT", () => upstream.kill("SIGINT"));
 process.on("SIGTERM", () => upstream.kill("SIGTERM"));
+// The client hung up (an MCP client closes stdin first): stop the upstream, and
+// with it this proxy, instead of waiting for the client's SIGTERM.
+process.stdin.on("end", () => upstream.kill("SIGTERM"));
 
 const pending = new Map();
 

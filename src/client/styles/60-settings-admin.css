@@ -680,7 +680,7 @@
   font-size: var(--t-sm);
 }
 /* The tool/skill pickers: tall enough that a long description is not cut mid-line. */
-.admin-panel .settings-form .external-agent-group-picker {
+.admin-panel .settings-form .policy-option-picker {
   max-height: 360px;
 }
 .admin-panel .hex-policy-head:first-child {
@@ -729,47 +729,18 @@
 /* Checkbox option cards (built-in tool / skill policy): the form-wide
    `.settings-form .field input { width: 100% }` stretched the checkbox and
    pushed the text to the far edge; `.field span` made the description bold. */
-.settings-form .external-agent-group-option input[type="checkbox"] {
+.settings-form .policy-option input[type="checkbox"] {
   width: auto;
   flex: none;
   margin: 2px 0 0;
 }
-.field .external-agent-group-option > span {
+.field .policy-option > span {
   color: var(--text);
   font-weight: 400;
 }
-.field .external-agent-group-option small {
+.field .policy-option small {
   font-size: var(--t-xs);
   font-weight: 400;
-}
-.craft-app-status {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-}
-.craft-app-status li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: var(--s-2-5) var(--s-3);
-  font-size: var(--t-sm);
-}
-.craft-app-status li + li {
-  border-top: 1px solid var(--line);
-}
-.craft-app-name {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--s-2);
-  min-width: 0;
-}
-.craft-app-name .mono {
-  font-size: var(--t-xs);
 }
 .nowrap {
   white-space: nowrap;
@@ -981,89 +952,6 @@
   overflow-wrap: anywhere;
 }
 
-/* External avatar administration */
-.external-agents-panel .settings-card {
-  display: grid;
-  gap: var(--s-4);
-}
-/* This card is a grid with its own gap — the block-flow toolbar margin above
-   would double the spacing here. */
-.external-agents-panel .settings-card > .admin-users-head {
-  margin: 0;
-}
-.external-agents-head {
-  align-items: flex-start;
-}
-.external-agent-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  max-height: clamp(260px, calc(100dvh - 330px), 620px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: var(--s-0-5);
-}
-.external-agent-row {
-  flex: none;
-}
-.external-agent-row.is-disabled {
-  border-color: var(--line-soft);
-}
-.external-agent-row.is-disabled .admin-row {
-  opacity: 0.72;
-}
-.external-agent-mark {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  color: var(--accent);
-  background: var(--accent-soft);
-  overflow: hidden;
-}
-
-/* Profile-photo row in the external-avatar editor (preview + pick/remove). */
-.external-agent-image-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-}
-.external-agent-image-preview {
-  width: 56px;
-  height: 56px;
-  border-radius: var(--r-pill);
-  object-fit: cover;
-  border: 1px solid var(--line);
-  display: block;
-}
-.external-agent-id {
-  font-family: var(--font-mono);
-}
-.external-agent-endpoint {
-  margin-top: var(--s-0-5);
-  overflow-wrap: anywhere;
-}
-.external-agent-row-note {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
-  border-top: 1px solid var(--line-soft);
-  background: var(--bg);
-  font-size: var(--t-xs);
-  /* Korean notes: wrap between words, not mid-word. */
-  word-break: keep-all;
-}
-.external-agent-empty {
-  display: grid;
-  justify-items: start;
-  gap: var(--s-2);
-  padding: var(--s-5);
-}
-
 /* Signup-mode radio cards */
 .radio-cards {
   display: grid;
@@ -1090,8 +978,8 @@
   margin-top: var(--s-1);
   accent-color: var(--accent);
   /* Neutralize the generic `.field input` stretch (20-shell-chat.css) when a
-     radio-card group sits inside a .field, e.g. the group-agent capture-scope
-     picker — a 100%-wide radio floats detached from its label text. */
+     radio-card group sits inside a .field — a 100%-wide radio floats detached
+     from its label text. */
   width: auto;
   flex: none;
 }
@@ -1605,7 +1493,6 @@
     background: var(--surface-2);
   }
   .composer-controls.open .composer-model-select,
-  .composer-controls.open .composer-gk-btn,
   .composer-controls.open .composer-tools-btn {
     width: 100%;
     max-width: none;
@@ -1621,7 +1508,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .composer-gk-panel,
   .composer-tools-panel {
     left: 0;
     right: 0;
@@ -1760,11 +1646,6 @@
   .admin-row .ar-actions {
     flex-basis: 100%;
     justify-content: flex-start;
-  }
-  .external-agent-list {
-    max-height: none;
-    overflow-y: visible;
-    padding-right: 0;
   }
   .panel-section-head .head-actions {
     justify-content: flex-start;

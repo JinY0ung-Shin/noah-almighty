@@ -45,7 +45,7 @@ const avatar = {
   plugins: [],
 } as unknown as AvatarDetail;
 
-function pane(modelTier: string): ChatPane {
+function pane(model: string): ChatPane {
   return {
     id: "pane-1",
     avatar,
@@ -61,26 +61,24 @@ function pane(modelTier: string): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
-    modelTier,
+    model,
   } as unknown as ChatPane;
 }
 
-/** Two tiers so the pane's own pick — not the deployment default — decides vision. */
-function seed(modelTier: string): void {
+/** Two models so the pane's own pick — not the default model — decides vision. */
+function seed(model: string): void {
   replaceState({
     avatars: [],
-    chatPanes: [pane(modelTier)],
+    chatPanes: [pane(model)],
     activePaneId: "pane-1",
     view: "chat",
     bootstrap: {
       visionEnabled: true,
       modelSelection: {
-        locked: false,
         defaultVision: true,
-        tiers: [
-          { id: "seeing", label: "Seeing", description: "", model: "m-1", vision: true },
-          { id: "blind", label: "Blind", description: "", model: "m-2", vision: false },
+        models: [
+          { id: "seeing", server: "vllm-a", vision: true },
+          { id: "blind", server: null, vision: false },
         ],
       },
     },
@@ -169,6 +167,63 @@ describe("composer image attach in file mode", () => {
     const { container } = render(ChatView);
     expect(attachLabel(container).title).toBe("이미지 첨부");
   });
+
+  it("treats a pick pi no longer offers as the default model (vision included)", () => {
+    seed("opus");
+    const { container } = render(ChatView);
+    expect(attachLabel(container).title).toBe("이미지 첨부");
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    expect(select.value).toBe("");
+  });
+});
+
+describe("composer model picker", () => {
+  it("offers pi's default model first, then every pi model by id", () => {
+    seed("blind");
+    const { container } = render(ChatView);
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    expect(select).toBeTruthy();
+    expect(select.disabled).toBe(false);
+    expect(select.title).toBe("이 대화에서 다음 메시지부터 사용할 모델을 고릅니다");
+    expect([...select.options].map((o) => [o.value, o.textContent?.trim()])).toEqual([
+      ["", "기본 모델"],
+      ["seeing", "seeing"],
+      ["blind", "blind"],
+    ]);
+    expect(select.value).toBe("blind");
+    expect(container.textContent).not.toContain("고정되어 있습니다");
+  });
+
+  it("is hidden when pi offers no models", () => {
+    replaceState({
+      avatars: [],
+      chatPanes: [pane("")],
+      activePaneId: "pane-1",
+      view: "chat",
+      bootstrap: { visionEnabled: true, modelSelection: { defaultVision: true, models: [] } },
+    } as unknown as Parameters<typeof replaceState>[0]);
+    const { container } = render(ChatView);
+    expect(container.querySelector('select[aria-label="이 대화에 사용할 모델"]')).toBeNull();
+  });
+
+  it("picking a model writes it through as the remembered default; 기본 모델 clears it", async () => {
+    seed("blind");
+    const { container } = render(ChatView);
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockClear();
+
+    await fireEvent.change(select, { target: { value: "seeing" } });
+    expect(readState().chatPanes[0].model).toBe("seeing");
+    await fireEvent.change(select, { target: { value: "" } });
+    expect(readState().chatPanes[0].model).toBeUndefined();
+    expect(get(toasts).some((t) => t.message.includes("모델을 기본 모델(으)로 변경했습니다"))).toBe(true);
+
+    const bodies = fetchMock.mock.calls
+      .filter(([url]) => String(url).includes("/api/me/chat-defaults"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies).toEqual([{ model: "seeing" }, { model: null }]);
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -187,8 +242,6 @@ function seedStreaming(overrides: Partial<ChatPane> = {}): void {
   } as unknown as Parameters<typeof replaceState>[0]);
 }
 
-const externalAvatar = { ...avatar, id: "avatar-ext", runtime: "external" } as unknown as AvatarDetail;
-
 function composerTextarea(container: HTMLElement): HTMLTextAreaElement {
   const el = container.querySelector<HTMLTextAreaElement>(".composer-box textarea");
   expect(el).toBeTruthy();
@@ -204,7 +257,7 @@ describe("composer mid-turn messages", () => {
     expect(steerButton).toBeTruthy();
     expect(steerButton!.getAttribute("aria-label")).toBe("응답 중 메시지 보내기");
     expect(steerButton!.disabled).toBe(false);
-    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (다음 작업 사이에 전달됩니다)");
+    expect(steerButton!.title).toBe("응답 중 메시지 보내기 (작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요)");
     // The stop button is untouched — killing the run and messaging it are two acts.
     expect(container.querySelector(".send-button.is-stop")).toBeTruthy();
     // And the extra column is declared, or the button would wrap onto its own row.
@@ -228,29 +281,13 @@ describe("composer mid-turn messages", () => {
     expect(container.querySelector(".composer-box.with-steer")).toBeTruthy();
   });
 
-  it("an external pane keeps the old mid-stream composer: no button, Enter breaks the line", async () => {
-    seedStreaming({ avatar: externalAvatar });
-    const { container } = render(ChatView);
-
-    expect(container.querySelector(".send-button.steer-send")).toBeNull();
-    expect(container.querySelector(".composer-box.with-steer")).toBeNull();
-    await fireEvent.keyDown(composerTextarea(container), { key: "Enter" });
-    expect(vi.mocked(sendSteer)).not.toHaveBeenCalled();
-  });
-
-  it("says a message can be sent mid-answer — but only where one actually can", () => {
+  it("says a message sent mid-answer arrives after the answer, never between actions", () => {
     seedStreaming();
-    const local = render(ChatView);
-    expect(composerTextarea(local.container).placeholder).toBe(
-      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다",
+    const { container } = render(ChatView);
+    expect(composerTextarea(container).placeholder).toBe(
+      "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요",
     );
-    local.unmount();
-
-    seedStreaming({ avatar: externalAvatar });
-    const external = render(ChatView);
-    expect(composerTextarea(external.container).placeholder).toBe(
-      "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)",
-    );
+    expect(container.textContent).not.toContain("다음 작업 사이");
   });
 
   it("refuses to steer while an image is staged, and says when it can go", async () => {

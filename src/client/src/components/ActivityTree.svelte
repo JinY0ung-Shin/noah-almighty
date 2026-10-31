@@ -95,7 +95,7 @@
     class={`agent-node ${node.isMain ? "is-main" : "sub"}`}
     data-status={node.status}
     role={node.isMain ? undefined : "listitem"}
-    aria-label={node.isMain ? undefined : rowLabel(node.background ? "백그라운드 에이전트" : "에이전트", title, node.status)}
+    aria-label={node.isMain ? undefined : rowLabel("에이전트", title, node.status)}
   >
     {#if !node.isMain}
       {#if foldable}
@@ -105,13 +105,12 @@
           type="button"
           class="agent-head agent-toggle"
           aria-expanded={open}
-          aria-label={rowLabel(node.background ? "백그라운드 에이전트" : "에이전트", title, node.status, rowCount)}
+          aria-label={rowLabel("에이전트", title, node.status, rowCount)}
           title={open ? "접기" : "펼치기"}
           on:click={() => toggleAgentCard(agentId)}
         >
           <span class="agent-spinner"></span>
           <span class="agent-badge">에이전트</span>
-          {#if node.background}<span class="agent-bg-badge">백그라운드</span>{/if}
           {#if node.name}<span class="agent-name">@{node.name}</span>{/if}
           <span class="agent-label">{node.label}</span>
           <span class="agent-meta">
@@ -123,7 +122,6 @@
         <div class="agent-head">
           <span class="agent-spinner"></span>
           <span class="agent-badge">에이전트</span>
-          {#if node.background}<span class="agent-bg-badge">백그라운드</span>{/if}
           {#if node.name}<span class="agent-name">@{node.name}</span>{/if}
           <span class="agent-label">{node.label}</span>
         </div>

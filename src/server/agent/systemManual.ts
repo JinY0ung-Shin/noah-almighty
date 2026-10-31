@@ -27,9 +27,9 @@ DM is human-to-human UI functionality. DM content and contact lists are not adde
   {
     id: "network-policy",
     title: "Shared server outbound network policy",
-    summary: "Domain blocking, proxy denials, browser scope and deployment setup.",
+    summary: "Domain blocking, proxy denials, browser scope, the pi sandbox allowlist and deployment setup.",
     body: `## Scope
-An optional deployment overlay applies one outbound policy to ALL local avatars, group agents, routines and server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. External gateways and remote hosts need their own policy for requests they originate.
+An optional deployment overlay applies one outbound policy to Noah's server-side tools in the Noah container. It also affects model API, Git, Confluence and plugin traffic. describe_system reports the bootstrap's policy marker when present; it does not independently audit firewall rules or read the administrator's blocklist. The user's browser bridge executes on their PC and is outside this boundary. Remote hosts need their own policy for requests they originate. The avatar's shell is outside it too (see "The avatar's sandbox shell" below).
 
 ## Behavior
 The container bootstrap installs IPv4/IPv6 firewall rules before Noah starts, then drops root and all capabilities. Only loopback, replies to incoming connections and TCP to the dedicated HTTP proxy (3128) and its admin-session-protected policy controller (3129) are allowed. Destination DNS resolution happens at the proxy. Programs that ignore HTTP_PROXY/HTTPS_PROXY fail closed; raw SSH and other direct protocols are unavailable. HTTP requests and HTTPS CONNECT destination domains are checked against the same list. HTTPS paths are encrypted and are not filtered. IP-literal proxy destinations are denied.
@@ -40,14 +40,17 @@ System administrators manage domains at 관리자 → 가입·접근 → 외부 
 The isolated controller rechecks the caller's live administrator browser session with Noah for every read/write. No controller machine key or writable policy volume is exposed to avatar processes. The host-only blocked-domains.txt seeds the first start; later changes live in the proxy's dedicated noah-egress-policy volume and survive restarts. upstream.conf remains operator-owned for a corporate parent proxy. The guide covers authentication callback URL/CA setup, persistence, verification and rollback. There is no avatar-facing policy editing tool; never seek admin session cookies to edit policy.
 
 ## Handling denials
-Report the blocked destination and ask the deployment administrator to review the policy. Do not retry with IP literals, alternate proxies or tunnels. Do not claim a timeout proves a policy denial: it can also indicate an unavailable proxy or an unsupported client. A domain denylist cannot identify the same service under every alias or prevent relaying through arbitrary allowed sites. If an operator needs stronger isolation, use an allowlist and review allowed proxy/tunnel services.`,
+Report the blocked destination and ask the deployment administrator to review the policy. Do not retry with IP literals, alternate proxies or tunnels. Do not claim a timeout proves a policy denial: it can also indicate an unavailable proxy or an unsupported client. A domain denylist cannot identify the same service under every alias or prevent relaying through arbitrary allowed sites. If an operator needs stronger isolation, use an allowlist and review allowed proxy/tunnel services.
+
+## The avatar's sandbox shell (pi runtime)
+The avatar's shell (\`bash\`, curl, Python, pip, npm, git) runs in the user's pi-gateway sandbox, NOT in the Noah container, so the policy above does not reach it and the 외부 통신 차단 panel does not change what it can reach. The sandbox has no network of its own: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), which opens only the destinations listed in \`SANDBOX_EGRESS_ALLOW\` in the pi-gateway instance's \`.env\` (exact domain names, IPs or CIDRs, optionally with a port; empty blocks everything). Direct TCP/UDP, DNS and raw SSH always fail; a refused destination answers \`407 Request rejected by proxy\`. The list belongs to the pi-gateway operator: there is no Noah screen or avatar tool to change it — name the destination and ask that operator. Noah's own tools (\`mcp__web__fetch\`, repo/git, Confluence and the relayed hex-ssh, plugin and shared MCP servers) still run in the Noah container under the policy above.`,
   },
   {
     id: "getting-started",
     title: "Getting started and navigation",
     summary: "Account setup, menu map, first useful tasks.",
     body: `## Purpose and access
-Noah Almighty gives each user a main avatar with a profile/persona, skills, plugins and a personal knowledge repository. Local avatars run with tools supplied by Noah. External avatars use another gateway; read external-avatars for that separate workflow.
+Noah Almighty gives each user a main avatar with a profile/persona, skills, plugins and a personal knowledge repository. Avatars run with tools supplied by Noah.
 
 ## Where to go
 - 내 아바타: configure your avatar through 프로필, 권한·연결 and 지식·플러그인 tabs. Code/tool messages may call 내 아바타 "Settings/설정".
@@ -55,11 +58,11 @@ Noah Almighty gives each user a main avatar with a profile/persona, skills, plug
 - 대화: revisit conversation history and continue work.
 - 할 일: your work to-do list; in a chat, the 할 일 button under the message box shows it as a card. Read todos.
 - 예약 작업: create, edit, pause and run scheduled work and read its results.
-- 그룹: membership, shared repositories and group-agent settings.
+- 그룹: membership and shared repositories.
 - 스킬 배우기: browse and learn shared teammate skills.
 - 지식 그래프: explore the second brain's notes and relationships.
 - 알림: review notifications and pending information requests.
-- 관리자: system administrators manage users, groups, deployment features and external avatars.
+- 관리자: system administrators manage users, groups and deployment features.
 The visible controls depend on the account, deployment and conversation type. Use the current state/tool results before claiming a particular feature is enabled.
 
 ## First setup
@@ -68,7 +71,11 @@ The visible controls depend on the account, deployment and conversation type. Us
 3. Configure the internal Git token through Noah's credential controls. Do not ask for its value in chat.
 4. Ask your MAIN avatar to create and connect a personal knowledge repository. With a token configured and create_repo available, it can do this directly after you give a repository name.
 5. Try: "우리 팀 배포 절차를 기억해줘", then ask a question about that procedure in another conversation. Read knowledge for capture and recall details.
-6. Join a group through its administrator to share team knowledge and reach teammate avatars. Avatar-sharing policy and profile visibility determine peer access.
+6. Join a group through its administrator to share skills and reach teammate avatars. Avatar-sharing policy and profile visibility determine peer access.
+
+## Administration and troubleshooting
+System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
+For a missing feature, first inspect this run's state and visible controls, then distinguish account role, group membership, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.
 
 Reading this manual does not grant permissions. For an action, use only the tools this run actually has.`,
   },
@@ -77,20 +84,17 @@ Reading this manual does not grant permissions. For an action, use only the tool
     title: "Chat, models and tools",
     summary: "Conversations, attachments, model/effort selection, questions and cancellation.",
     body: `## Starting and continuing work
-Open your own avatar or a reachable avatar from 탐색 and send a task. Continue in the same conversation when its context matters; start another for independent work. Message actions include copy, regenerate (re-runs the latest answer) and edit. Editing an earlier message rewinds the conversation to it: that message and everything after it are replaced by the edited message and a new answer, while files, commits and other actions the discarded turns took stay as they are. Typing \`/compact [what to keep]\` summarizes the conversation so far to free context: afterwards the avatar sees only that summary (plus what the user asked to keep), while the earlier messages stay in the chat and can still be rewound to. Reopening a running conversation reconnects to its updates.
+Open your own avatar or a reachable avatar from 탐색 and send a task. Continue in the same conversation when its context matters; start another for independent work. Message actions include copy, regenerate (re-runs the latest answer) and edit. Editing an earlier message rewinds the conversation to it: that message and everything after it are replaced by the edited message and a new answer, while files, commits and other actions the discarded turns took stay as they are. Reopening a running conversation reconnects to its updates.
 
 ## Model and tool controls
-The composer can select a model tier (Opus/Sonnet/Haiku), reasoning effort and MCP tool groups for local avatars. A deployment model pin can hide/override the model choice; available tiers and image support depend on administrator configuration. Ask describe_system for this run's model and capabilities rather than guessing a concrete model from the tier name.
+The composer can select a model (one of the models pi-gateway currently offers, or 기본 모델 = pi-gateway's default model), reasoning effort and MCP tool groups for local avatars. With no pick, an administrator's model setting applies if pi-gateway offers it, else pi-gateway's default model; a remembered pick pi-gateway no longer offers also runs the default. Image support is set per model by an administrator. Ask describe_system for this run's model and capabilities rather than guessing.
 The system tool group is always on for local avatars, including when all optional groups are off or an administrator restricts them. Its manual and state tools remain available; management tools still enforce owner/group permissions. Other tool groups follow composer selection and administrator policy. Turning on a group does not grant owner privileges. Changes affecting an existing run may require the next turn or a new conversation; plugin load changes normally require a new conversation.
 
 ## Questions and approvals
-Respond to question, permission, plan or canvas cards in Noah to let a waiting run continue. A submitted task or accepted plan is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
+Respond to question or canvas cards in Noah to let a waiting run continue. A submitted task is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
 
 ## Attachments
 Attach supported files with the composer. Image understanding depends on the selected model; a text-only model receives image file paths rather than visible images. Generated files arrive as file cards; local filesystem paths are not download links. Read files-canvas for previews and exports.
-
-## Background work
-Background shell work can outlive the first visible reply. Noah keeps the session alive and delivers follow-up reports as new messages. While it runs, this conversation cannot accept another message; cancelling stops the work. A server restart also ends pending background processes. Subagent work is forced into the foreground in this host.
 
 Example: "이 파일을 분석하고 결과를 CSV 파일로 줘. 불명확한 기준은 먼저 물어봐."`,
   },
@@ -108,7 +112,6 @@ Personal avatar visibility is group or private, not public-to-everyone. Peer dis
 - Your main avatar can use owner tools on your behalf, subject to enabled tool groups and deployment policy.
 - A trusted teammate may have elevated file/command access with interactive approvals, but that does not make them the owner. System settings and personal integrations remain owner-controlled.
 - A plain non-owner run is read-only except for the specific public or scoped MCP capabilities its handlers allow.
-- Group shared agents use group resources and their group's capture policy. They do not inherit personal secrets, repositories or plugins.
 
 ## Shared accounts
 The shared/communal account toggle is in the profile settings. It lets trusted teammates write and commit the account's PERSONAL knowledge repository as well as read it. Repository creation/connection remains owner-only. Turn it on only when this account's knowledge is intentionally maintained by the team.
@@ -126,13 +129,13 @@ Connect one personal knowledge repository through 내 아바타's knowledge cont
 1. Tell the avatar what to remember, for example "이 장애 원인과 재발 방지 절차를 기억해줘". The /remember command is also a capture shortcut in interactive chat.
 2. It writes quick source material under raw/ and organized notes under wiki/, using repository tools. Durable reusable procedures can become skills/<name>/SKILL.md.
 3. It must commit/push with mcp__repo__commit. Uncommitted local files are not persisted to the remote repository or shared with later clones.
-4. On later questions, mcp__brain__search and get_note recall wiki/ notes. Use repository list/read tools for other files. A conversation's history and the second brain are separate: merely saying something in chat is not proof that it was saved to the repository.
+4. On later questions, mcp__brain__search and mcp__brain__get_note recall wiki/ notes. Use repository list/read tools for other files. A conversation's history and the second brain are separate: merely saying something in chat is not proof that it was saved to the repository.
 
 ## Knowledge gaps
 When a teammate asks something the avatar cannot answer, it can create an information request. The owner opens 알림, provides an answer to the information request and has the avatar capture it and resolve the request. Do not invent missing owner knowledge.
 
 ## Scope and troubleshooting
-Writes are normally owner-only; shared-account teammates are the deliberate exception. Group knowledge is a separate repository and separate brain.
+Writes are normally owner-only; shared-account teammates are the deliberate exception. Groups have no shared repository or brain (both were removed); team knowledge travels as shared skills.
 For "I remembered this but cannot find it", check which avatar was used, which repository/namespace received it, whether the commit succeeded and whether it is a wiki/ note. For a failed push, preserve the tool's error and use the dedicated repository tools; the shell has no Git credentials.`,
   },
   {
@@ -140,7 +143,7 @@ For "I remembered this but cannot find it", check which avatar was used, which r
     title: "Skills and plugins",
     summary: "Install, enable, author, share and learn capabilities; when changes load.",
     body: `## What they provide
-Skills are reusable instructions/procedures; plugins can bundle skills and MCP integrations. Noah loads its default skills together with the user's enabled plugins and eligible personal/group knowledge-repository content. A skill being listed does not override disabled tools or deployment policy.
+Skills are reusable instructions/procedures; plugins can bundle skills and MCP integrations. Noah loads its default skills together with the user's enabled plugins and eligible personal knowledge-repository content. A skill being listed does not override disabled tools or deployment policy.
 
 ## Add or author
 Use the plugin controls in 내 아바타, or ask your own avatar to add a repository using mcp__system__add_plugin (repo, optional ref and label). list_plugins shows registered plugins; set_plugin_enabled toggles one by id. Plugin additions/enabling normally take effect from the NEXT conversation, so start a new conversation when validating a change.
@@ -156,17 +159,14 @@ Check plugin enabled state, sync errors, selected content, permissions, and whet
   {
     id: "groups-avatars",
     title: "Groups and avatar collaboration",
-    summary: "Team knowledge, group agents, teammate discovery and one-shot consultation.",
+    summary: "Groups, teammate discovery, skill sharing and one-shot consultation.",
     body: `## Team setup
-System administrators create groups and assign group administrators. Manage group membership and the shared knowledge repository in the group settings. The avatar-sharing switch controls peer discovery/trust; shared repository knowledge still works when that switch is off.
-Group knowledge uses mcp__group_brain__search/get_note for recall and mcp__group_repo__* for repository operations. Group-admin and capture-policy checks control writes; pushes use the acting member's Git identity/token. Connecting a repository does not provide credentials by itself.
-
-## Shared group agents
-A group can have several shared agents. Members chat with them in PRIVATE per-member conversations; shared knowledge lives in the group repository, not in a shared transcript. These agents have group-scoped memory and tools, without personal secrets, personal plugins or personal repositories. Group administrators configure persona/profile and capture scope. Do not promise a personal-avatar action from a group agent's thread.
+System administrators create groups and assign group administrators. Manage group membership in the group settings. The avatar-sharing switch controls peer discovery, trust and skill sharing.
+Groups have no shared knowledge repository and there is no team brain: both were removed, so mcp__group_repo__*/mcp__group_brain__* no longer exist. Share team knowledge as skills (mcp__skill_exchange__*) or keep it in each member's personal repository.
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
-Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited and read-only, not a general background delegation channel.
+Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited (it answers from that avatar's knowledge, in a fresh, empty sandbox of its own that is deleted afterwards — it never sees your files or the teammate's), not a general background delegation channel.
 
 Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question.`,
   },
@@ -205,7 +205,7 @@ Every item is 시작 전 (todo), 진행 중 (in_progress), 완료 (done) or 드�
 Only the title is required (up to 200 characters). Optional: a memo (markdown, up to 4000 characters), a due date (a KST calendar DATE — no time of day), priority 높음/보통/낮음 (default 보통) and up to 5 tags. Overdue means due before today in KST. A user may keep up to 500 open items, and reopening a closed item counts toward that; the newest 200 완료 and the newest 200 드랍 items stay listed until 완료 항목 비우기 / 드랍 항목 비우기 removes them.
 
 ## Avatar tools (mcp__todo__*)
-Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar, a group agent or an avatar consultation. These tools are NOT TodoWrite/TaskCreate, which are the avatar's private per-run checklist and disappear when the turn ends.
+Only the owner's own avatar can read or change the list: in the owner's own chats, the owner's routines and external Task API runs — never in a teammate's chat with that avatar or an avatar consultation. It is the owner's persistent list, separate from any working note the avatar keeps for itself (this runtime has no TodoWrite/TaskCreate).
 - list_todos: status open (default, = todo + in_progress) | todo | in_progress | done | dropped | all, dueBefore (YYYY-MM-DD, exclusive), tag, query, includeNotes.
 - add_todos: 1-20 items per call, all-or-nothing; each {title, note?, dueDate?, priority?: high|normal|low, tags?, status?: todo|in_progress}.
 - update_todo: {id, ...fields, status?: todo|in_progress|done|dropped}; dueDate null or "" clears it, tags [] clears them. The avatar changes a status only on the owner's word, and marks an item the owner abandons as dropped instead of deleting it.
@@ -223,11 +223,11 @@ Example: "/todo 금요일까지 3분기 보고서 초안, 우선순위 높음 #�
     title: "External Task API integration",
     summary: "Bearer keys, curl, submit/poll/respond/cancel, idempotency and errors.",
     body: `## Purpose and prerequisites
-An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user, a group agent or an external avatar. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
+An external server can submit arbitrary text instructions to the API-key owner's MAIN avatar without creating a routine. The work uses the owner's conversation/tool policy, knowledge and skills. This API cannot target another user's avatar. Input is text only; there are no model-selection or image-attachment fields and UI slash commands are not expanded.
 
 ## Issue a key
 In 내 아바타 → 권한·연결 → 외부 작업 API, issue a named personal key. The raw key is shown only once; at most 10 may be active per user. Store it in the calling system's secret store/environment, never in a chat message or committed source file. NOAH_URL below is the actual externally reachable Noah origin, not the avatar's localhost; NOAH_API_KEY is the secret environment variable. Use HTTPS for a real deployment.
-The key acts with the owner's full task capabilities and can answer permission requests. It authenticates ONLY this task API, not session or administrator endpoints. Login cookies are not accepted here. Any active key of the same owner can read/respond to/cancel that owner's tasks. Revocation prevents new requests and queued work accepted under that key; already-running work needs explicit cancellation. Suspended users' keys cannot be used.
+The key acts with the owner's full task capabilities and can answer the run's questions. It authenticates ONLY this task API, not session or administrator endpoints. Login cookies are not accepted here. Any active key of the same owner can read/respond to/cancel that owner's tasks. Revocation prevents new requests and queued work accepted under that key; already-running work needs explicit cancellation. Suspended users' keys cannot be used.
 
 ## 1. Submit
 ~~~bash
@@ -251,15 +251,15 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID" \\
 ~~~
 GET /api/v1/avatar/tasks/:id returns {"task":...}. GET /api/v1/avatar/tasks returns the latest 100 as {"tasks":[...]}.
 - queued: waiting to start.
-- running: executing, including background work still settling.
-- waiting_input: inspect pendingRequests and answer the outstanding question/permission/plan/canvas request.
+- running: executing.
+- waiting_input: inspect pendingRequests and answer the outstanding question/canvas request.
 - succeeded: read result.text and result.summary. result is the task's final response, not the whole conversation transcript.
 - failed: inspect error and the partial response in Noah; work may have partially changed external systems.
 - cancelled: cancelled.
-Poll until a terminal state with a reasonable delay/backoff. Noah also displays the conversation and its live question/approval UI. Background follow-up reports are accumulated into result.text before completion; result.summary is from the final report.
+Poll until a terminal state with a reasonable delay/backoff. Noah also displays the conversation and its live question/approval UI.
 
 ## 3. Answer a pending request
-Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question, permission, plan_review or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
+Each pendingRequests item is an event envelope: {"event":"question","data":{"requestId":"...",...}} is a question example. The event can be question or canvas. Use its event and data (including requestId and payload) to build the matching value; do not approve every request automatically.
 ~~~bash
 curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID/respond" \\
   -H "Authorization: Bearer $NOAH_API_KEY" \\
@@ -268,8 +268,6 @@ curl -sS "$NOAH_URL/api/v1/avatar/tasks/$TASK_ID/respond" \\
 ~~~
 POST /api/v1/avatar/tasks/:id/respond accepts {"requestId":"...","value":...}.
 - Question: value is {"result":...} matching data.dialogKind/data.payload, or {"cancelled":true}. The service example above is illustrative, not a universal question schema.
-- Tool permission: {"behavior":"allow"} or {"behavior":"deny"}.
-- Plan approval: {"behavior":"approved"} or {"behavior":"rejected","feedback":"requested changes"}.
 - Canvas: follow that canvas's input schema; the user may answer in Noah instead.
 Success returns {"ok":true}. An expired/already-answered request returns 409; refresh the task rather than replaying it blindly. Browser work still needs the owner to have the conversation open with the Noah extension connected. API submission does not supply a remote browser. Interactive-only share-link creation is unavailable on this path.
 
@@ -283,7 +281,7 @@ Queued work is cancelled; running work receives an asynchronous stop request. Po
 ## Limits and recovery
 - At most 20 unfinished tasks per user; at most 60 new submissions/minute. 429 includes Retry-After: 60. Respect it.
 - API tasks run one per user and at most four across the server. A busy conversation/repository causes waiting/retry; do not submit duplicates because the queue is slow. A long or stuck task holds its owner's only slot until it finishes, fails, or is cancelled, so that user's later tasks wait — cancel stuck work instead of waiting out the budget.
-- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input and any background phase. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled, a permission request as denied, and a plan review as rejected.
+- The dispatcher checks roughly once per second. Each run's wall-clock budget is AVATAR_TASK_TIMEOUT_MINUTES (default 300 minutes = 5 hours; the operator may change it, and describe_system reports the configured value) and includes waiting for user input. A run over budget is stopped and becomes failed. Separately, a single pending request expires after 30 minutes without a response: a question or canvas input then counts as cancelled.
 - Queued tasks survive a restart. A task interrupted while running becomes failed, not automatically retried. Review partial effects before submitting again.
 - Deleting its Noah conversation also deletes task history. Do not rely on the task endpoint as permanent archival storage. There is currently no automatic retention cleanup for completed task rows.
 - 400: check the request body/field constraints. 401: check Bearer key validity/revocation and account state. 404: verify the task/conversation id belongs to this owner and still exists. 409: inspect the conflict (idempotency mismatch, expired response or completed task); do not treat every 409 as retryable. 429: back off.
@@ -306,7 +304,7 @@ General Git repositories hold code/work projects. They are distinct from the ded
 
 ## Boundaries
 Registration/removal are owner operations. Eligible elevated teammates can have working-repository operations but do not thereby gain settings ownership. A busy repository can be locked by another run; use the returned conflict information instead of opening parallel writers.
-The agent shell intentionally has no Git credentials. Do not fall back to Bash git push/gh authentication or ask for tokens in chat. Personal knowledge changes use mcp__repo__*, team knowledge uses mcp__group_repo__*, and work repositories use mcp__git_repo__*.
+The agent shell intentionally has no Git credentials. Do not fall back to Bash git push/gh authentication or ask for tokens in chat. Personal knowledge changes use mcp__repo__* and work repositories use mcp__git_repo__*.
 
 Example: "등록한 backend 저장소를 열고 이 오류를 수정해줘. 변경 내용을 검토한 뒤 푸시해줘."
 
@@ -349,10 +347,10 @@ Confluence requires deployment URL configuration and the owner's configured PAT.
 Use 내 아바타 → 권한·연결 to manage credentials rather than pasting values into chat. System state exposes configured NAMES and capabilities, not secret values. Internal GIT_TOKEN and external GITHUB_TOKEN are used server-side by dedicated Git tools. Custom secrets can be supplied to the owner's plugin MCP servers.
 
 ## Shared MCP servers (공용 MCP 서버)
-A system admin can register external HTTP MCP servers for every avatar (관리자 → 공용 MCP). Their tools appear as mcp__<server>__<tool>. A server that needs per-user authentication declares credential slots (which header, in what format) — the admin never chooses or sees anyone's secret. Each user connects one of their OWN secrets to each slot (내 아바타 → 권한·연결 → 시크릿 → 공용 MCP 서버에 연결할 시크릿, which also shows the host the value is sent to); the server fills it in server-side, so the value never reaches the avatar, the shell or the chat. Until every slot is connected the server is left out of that user's runs (connecting applies from the next message). A connection is tied to the server's host: if the admin moves the server to another host, every connection resets and must be made again. Connected secrets are only used in the owner's own conversations and trusted group teammates' chats; plain colleague chats, group shared agents and avatar consultations never get a slotted shared server. In the owner's own plugin/knowledge-repository .mcp.json, http/sse entries may reference vault secrets as \${NAME} in their headers/URL instead. describe_system lists each shared server and whether this run has it.
+A system admin can register external HTTP MCP servers for every avatar (관리자 → 공용 MCP). Their tools appear as mcp__shared__<server>__<tool> (the mcp__<server>__<tool> form resolves too). A server that needs per-user authentication declares credential slots (which header, in what format) — the admin never chooses or sees anyone's secret. Each user connects one of their OWN secrets to each slot (내 아바타 → 권한·연결 → 시크릿 → 공용 MCP 서버에 연결할 시크릿, which also shows the host the value is sent to); the server fills it in server-side, so the value never reaches the avatar, the shell or the chat. Until every slot is connected the server is left out of that user's runs (connecting applies from the next message). A connection is tied to the server's host: if the admin moves the server to another host, every connection resets and must be made again. Connected secrets are only used in the owner's own conversations and trusted group teammates' chats; plain colleague chats and avatar consultations never get a slotted shared server. No plugin or knowledge-repository .mcp.json entry receives a secret (one outside the plugins bundled with Noah that names a \${NAME} placeholder is left out of the run), so a shared MCP server slot is the way there. describe_system lists each shared server and whether this run has it.
 
 ## Explicit exposure options
-Shell exposure is a per-secret opt-in: enabled custom secrets can be used as environment variables by elevated shell work, with output redaction. Browser input is a separate opt-in with exact allowed hosts and an optional password-field-only rule. The avatar passes secretName to browser type/fill_form; the server resolves the value. Reserved Git/SSH credentials are not general-purpose browser/shell secrets. Never print or save credentials merely to verify configuration.
+Shell exposure is a per-secret opt-in: an enabled custom secret is an environment variable ($NAME) in bash on the owner's OWN runs (owner chat, owner routines, the task API) — never in a colleague's chat or an avatar consultation — and its value is redacted from every tool result. Browser input is a separate opt-in with exact allowed hosts and an optional password-field-only rule. The avatar passes secretName to browser type/fill_form; the server resolves the value. Reserved Git/SSH credentials are not general-purpose browser/shell secrets. Never print or save credentials merely to verify configuration.
 
 ## SSH setup and use
 1. Generate/configure SSH_PRIVATE_KEY using Noah's key controls. Install the PUBLIC key on the intended remote account; keep the private key in Noah's vault.
@@ -364,43 +362,12 @@ Shell exposure is a per-secret opt-in: enabled custom secrets can be used as env
 No tools: check key presence, SSH group selection, current role and deployment policy. Host verification failure: verify host trust; do not bypass it. Authentication failure: check remote account/public-key installation. Network failure: SSH runs from the Noah server, so the server must be able to reach the host. The user's browser being able to reach an intranet host does not prove server-side SSH reachability.`,
   },
   {
-    id: "server-agents",
-    title: "Server agents (delegating to your SSH servers)",
-    summary: "Run a Claude Code agent on your own servers: setup, tiers, delegation, limits and error codes.",
-    body: `## What it is
-A server agent is a Claude Code agent that Noah runs ON one of the owner's registered SSH servers. The owner's avatar delegates a task with mcp__server_agents__delegate: Noah connects over SSH with the owner's key, starts the agent CLI on the server in the registered working directory, and keeps every permission decision in Noah. Several servers can work on one request in parallel, and each keeps its own context per conversation. Nothing listens on the server: no daemon, no extra inbound port, no root. Server agents are OWNER-ONLY: they work in the owner's own chats, routines and external task API runs, never when a teammate (trusted or not) talks to the owner's avatar, and never for group agents, because they act with the owner's key and server accounts.
-
-## Setup
-0. Admin switch: a system administrator must first enable the feature in 관리자 → 시스템 → 서버 에이전트. It is OFF by default because a check or delegation hands this deployment's model credentials (API key or subscription token) to the agent process on the registered server, where the person who registered that server can read them; enabling it requires acknowledging that warning. While it is off the owner can still register servers, trust host keys and delete servers, but 점검 and delegation refuse and no server-agent tools are offered.
-1. SSH key: 내 아바타 → 권한·연결 → 시크릿 — generate SSH_PRIVATE_KEY, or register an existing OpenSSH/PEM private key (store SSH_PASSPHRASE too if it is passphrase-protected).
-2. Server account: ask the server administrator for a dedicated account (for example noah-agent) and add the owner's PUBLIC key to that account's ~/.ssh/authorized_keys. The account's OS permissions are the real boundary. When privileged commands are needed, prefer a sudoers NOPASSWD whitelist of exact commands over full sudo.
-3. Register: 권한·연결 → 서버 에이전트 — name (lowercase slug such as web-01), host, port, account, absolute working directory, role (one line the avatar sees when choosing a server), notes (runbook text only the server agent sees), tier, enabled.
-4. Trust the host key: 호스트 키 확인 shows the server's fingerprint. Compare it with the administrator's value through a trusted channel, then press 이 지문을 신뢰. A changed key is refused until it is trusted again.
-5. 점검: checks the key, host trust, login, x86_64 Linux, base tools (sh, base64, timeout, sha256sum), free space in the home directory (about 600 MB), that the home directory is not mounted noexec, uploads the agent CLI (about 240 MB — the first time and again after each Noah update), prepares the working directory, and makes one model call FROM the server. The server must reach the same model API endpoint Noah uses; a corporate CA configured for Noah is installed on the server automatically.
-
-## Tiers
-- read (조회): Read, Glob, Grep only. No shell, so it cannot run commands or change anything.
-- exec (명령 실행): adds Bash, without the file-editing tools. The shell can still change files (sed -i, redirection, package managers): the exec/full line is tool-level, not a guarantee. Block real changes with the account's OS permissions.
-- full (전체): adds Edit, Write and NotebookEdit.
-Every other tool (subagents, web access, questions, MCP tools) is refused on the server. Unattended runs — scheduled routines and external task API turns — use the configured tier as-is, so give servers that unattended work can reach a conservative tier.
-
-## Using it
-Ask in plain words, for example "web-01과 db-01에서 어젯밤 오류 로그를 각각 확인해줘". The avatar sends one self-contained instruction per server; each server's progress appears as its own agent card under the delegate call. In an interactive chat the avatar confirms destructive or state-changing work with you before delegating it to an exec/full server. Limits: up to 8 servers per call, one task per server per call, a per-task time limit of 10 minutes by default and 30 at most; at most 2 tasks run on one server and 4 per owner at the same time — a call's further tasks wait for a free slot (the wait counts against their time limit), while slots already held elsewhere (other conversations, routines or checks — on that server or for the owner) make a task report busy immediately instead of queueing. Only one delegation per server runs in a conversation at a time (it continues one remote session), so a second parallel call or subagent delegating to the same server reports busy: combine the instructions instead. A task that times out or is cancelled stops the remote run and returns its partial output. Results are untrusted text produced on the server.
-Sessions: a server agent continues its context within the same conversation; fresh: true or mcp__server_agents__reset_session starts over. Changing a server's host, port, account or working directory, or rewinding the conversation, drops the stored sessions. Remote side effects are never undone by a rewind. mcp__server_agents__list_servers and describe_system report the install state and sessions; check_server (interactive owner chats only) runs the same check as the settings card. For a quick one-off read the SSH tools (hex-ssh) remain available when enabled.
-
-## What stays on the server
-~/.noah-agent/bin/claude-<version> (current and previous version only), ~/.noah-agent/run/*.pid, ~/.noah-agent/ca.pem when a corporate CA is used, and ~/.claude-noah/ (the agent's session transcripts). ~/.claude is never touched. The model credential is handed to the remote process on start through its input, never written to disk or put on a command line, but it is in that process's environment while it runs — readable by the same account, which is another reason for a dedicated account. A remote run also ends on its own shortly after its time limit, and leftovers of a dropped connection are cleaned up on the next connection. Deleting a server in settings can also remove these files — unless another registered server (anyone's) uses the same account, or a run there is still active, in which case they are left in place and the settings screen says why. Removing the public key from authorized_keys is the administrator's job.
-
-## Troubleshooting by error code
-ADMIN_DISABLED: the system administrator has not enabled server agents (관리자 → 시스템 → 서버 에이전트). NO_SSH_KEY: create or register SSH_PRIVATE_KEY. EGRESS_BLOCKED: the deployment forbids direct outbound connections; ask the administrator. HOST_NOT_TRUSTED: confirm and trust the fingerprint. HOST_KEY_MISMATCH: the server presented a different key — do not proceed until the administrator confirms a rotation. PASSPHRASE_REQUIRED / BAD_PASSPHRASE: store the correct SSH_PASSPHRASE. AUTH_FAILED: the public key is missing from the account's authorized_keys (or the account name is wrong). UNREACHABLE / TIMEOUT: the Noah server cannot reach host:port — your own PC reaching it proves nothing. UNSUPPORTED_ARCH: only x86_64 Linux. MISSING_TOOLS: install the listed base tools. NOEXEC_HOME: the home directory is mounted noexec. DISK_SPACE: free about 600 MB in the home directory. UPLOAD_FAILED: retry 점검; check disk and SFTP availability. TLS_CA: the server does not trust the model API's certificate — configure the corporate CA for Noah (NODE_EXTRA_CA_CERTS) so it is installed. MODEL_UNREACHABLE: the server cannot reach the model API (network/proxy on the server side). WORKDIR: the working directory cannot be created or written by the account.`,
-  },
-  {
     id: "files-canvas",
     title: "Files, canvas and notifications",
     summary: "Download cards, previews, charts/diagrams, slide decks and notification delivery.",
     body: `## Files and previews
 Ask for a downloadable artifact explicitly, for example "분석 결과를 XLSX로 만들어줘". The avatar creates the file and publishes it with the available file-output tools. show_file displays supported previews and share_file provides a download card. Use the returned Noah URL/card; a local filesystem path or file:// link is not browser-accessible.
-Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card. The conversation's owner makes one with the 공유 링크 button next to the card, or by asking their own avatar for a link in a chat with it; group-agent conversations cannot be link-shared. Anyone signed in to Noah who has the link (where self-service sign-up is open, that includes anyone who can reach Noah) can view the slide renders and download the .pptx, speaker notes included, until it expires — 1, 7 or 30 days, 7 by default, fixed at creation. Each delivered deck card has at most one active link, and a link keeps opening the file it was made for: a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked. It is a human-initiated export, like downloading the file and forwarding it — not a way to share the conversation, and not avatar access or trust. The owner revokes links in 내 아바타 → 권한·연결 → 공유 링크. Whether the avatar can create one in this run is a runtime fact reported by describe_system.
+Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card. The conversation's owner makes one with the 공유 링크 button next to the card, or by asking their own avatar for a link in a chat with it. Anyone signed in to Noah who has the link (where self-service sign-up is open, that includes anyone who can reach Noah) can view the slide renders and download the .pptx, speaker notes included, until it expires — 1, 7 or 30 days, 7 by default, fixed at creation. Each delivered deck card has at most one active link, and a link keeps opening the file it was made for: a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked. It is a human-initiated export, like downloading the file and forwarding it — not a way to share the conversation, and not avatar access or trust. The owner revokes links in 내 아바타 → 권한·연결 → 공유 링크. Whether the avatar can create one in this run is a runtime fact reported by describe_system.
 Do not assume a local temporary file will become visible without publication. If file output is unavailable in this run, explain that before promising a downloadable result.
 
 ## Canvas
@@ -412,23 +379,6 @@ For draw.io, author an uncompressed mxfile XML .drawio file and publish it. Noah
 
 ## Notifications
 mcp__system__notify_user leaves an in-app notification for the owner about an important result or required action. It is not an email/SMS service. Routine results remain in 예약 작업. A notification supplements the stored result rather than proving delivery through an external channel.`,
-  },
-  {
-    id: "external-avatars",
-    title: "External avatars and administration",
-    summary: "Gateway-backed avatars, visibility ACLs, admin settings and support boundaries.",
-    body: `## External avatars
-Administrators can register external avatars under 관리자 → 외부 아바타, or operators can configure deployment entries. The external gateway owns the model, prompt, tools and execution. Noah provides discovery, conversation storage and its transcript/activity UI. Local MCP, repository/plugin, model/effort, routine and image controls are not supplied to those external turns.
-An external avatar requires at least one allowed Noah group. Only members of its allowed groups can reach it; even system administrators must be members. This is a visibility ACL, not a grant of local tools or trust. Existing conversation history remains user-owned after access is revoked, but new requests are blocked.
-Configuration includes enablement, endpoint, allowed groups, a write-only gateway API key and timeouts. The admin connection check checks gateway authentication/models without executing an agent turn. Environment-managed entries are read-only in the UI. Existing conversations bind to the endpoint they trusted; changing endpoints requires the supported confirmation/migration flow, or a new conversation for an environment change.
-
-## Do not confuse the two external features
-- External Task API: another server asks the owner's LOCAL main avatar to do work. Read external-tasks for the Bearer API and curl examples.
-- External avatar: a Noah user chats with an agent hosted by ANOTHER gateway. The local manual/prompt/tools described here are not automatically injected into that gateway.
-
-## Administration and troubleshooting
-System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
-For a missing feature, first inspect this run's state and visible controls, then distinguish account role, group membership, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.`,
   },
   {
     id: "browser-operations",

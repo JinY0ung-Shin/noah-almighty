@@ -27,14 +27,9 @@ npm-debug.log*
 # next to the .csproj even when publishing elsewhere).
 scripts/openxml-validator/bin/
 scripts/openxml-validator/obj/
-# The deck-converter Docker smoke and the validator source are dev/CI-only: the
-# smoke drives a built image from the host (it copies the validator source from
-# the host checkout), so neither belongs inside the image.
-scripts/deck-docker-smoke.sh
+# The Open XML SDK validator source is dev/CI-only (run from the host checkout
+# against produced decks), so it never belongs inside the image.
 scripts/openxml-validator/
-
-# craft-runner sidecar is its own image (docker-compose service craft-runner)
-craft-runner/
 
 # Dev-only trees: never read at runtime or by the build (`npm run build` compiles
 # src/ only). Excluding them keeps a docs- or tests-only commit a full cache hit.
@@ -44,3 +39,6 @@ tests/
 # /app/tls:ro). It must never be baked into an image layer — a private key would
 # ride every image copy — and a renewed cert would bust the app-layer cache.
 docker/tls/
+# pi-gateway (git submodule, included by docker-compose.yml): its own services build
+# from it; none of it belongs in the Noah image.
+vendor/pi-gateway/

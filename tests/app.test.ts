@@ -7,6 +7,8 @@ import {
   loadDefaultPluginRoots,
   resolvePluginRoots,
 } from "../src/server/plugins.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import { parseSse, shareGroup, signup, withTempDir } from "./helpers.js";
 
 let tempDir: string;
@@ -91,21 +93,40 @@ describe("noah-almighty platform", () => {
     expect(res.body.githubHost).toBe("github.enterprise.local");
   });
 
-  it("surfaces per-tier vision support in the bootstrap model selection", async () => {
+  it("offers pi-gateway's live models in the bootstrap model selection, with per-model vision", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "local",
+      agentRuntime: "pi",
       sessionSecret: "test",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
     });
-    services.store.setModelVisionPolicy({ haiku: false });
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "m-a", ownedBy: "anthropic" }, { id: "m-b" }],
+    });
+    services.store.setModelVisionPolicy({ "m-b": false });
     const app = createApp(services);
-    const res = await request(app).get("/api/bootstrap").expect(200);
+    let res = await request(app).get("/api/bootstrap").expect(200);
     expect(res.body.visionEnabled).toBe(true);
-    const tiers = res.body.modelSelection.tiers as Array<{ id: string; vision: boolean }>;
-    expect(tiers.find((t) => t.id === "haiku")?.vision).toBe(false);
-    expect(tiers.find((t) => t.id === "opus")?.vision).toBe(true);
-    // Default tier (opus) has no explicit entry → inherits the on default.
-    expect(res.body.modelSelection.defaultVision).toBe(true);
+    expect(res.body.modelSelection).toEqual({
+      models: [
+        { id: "m-a", server: "anthropic", vision: true },
+        { id: "m-b", server: null, vision: false },
+      ],
+      // Nothing picked, no override → pi-gateway's default model inherits MODEL_VISION.
+      defaultVision: true,
+    });
+    // The admin override pi offers decides the default's vision.
+    services.store.setModelOverride("m-b");
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.defaultVision).toBe(false);
+    services.store.close();
+  });
+
+  it("offers no models on the local stub (the client hides the picker)", async () => {
+    const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
+    const res = await request(createApp(services)).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection).toEqual({ models: [], defaultVision: true });
+    services.store.close();
   });
 
   it("hides the browser-bridge Multimedia notice by default and serves any signed-in user", async () => {
@@ -987,7 +1008,7 @@ describe("noah-almighty platform", () => {
     const app = createApp(
       createServices({
         dataDir: tempDir,
-        agentRuntime: "claude",
+        agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
         sessionSecret: "test",
         defaultPluginsDir: pluginsDir,
       }),
@@ -1074,52 +1095,15 @@ describe("noah-almighty platform", () => {
     ]);
   });
 
-  it("stores/clears a subscription token and reflects it in system status", async () => {
-    const app = testApp(); // no ANTHROPIC_API_KEY → subscription mode
-    const { agent: admin } = await newUser(app, "boss"); // first → admin
-
-    // Initially disconnected, subscription auth mode (no API key in test config).
-    let sys = (await admin.get("/api/admin/system").expect(200)).body.system;
-    expect(sys.subscriptionConnected).toBe(false);
-    expect(sys.apiKeyOverride).toBe(false);
-    expect(sys.authMode).toBe("subscription");
-
-    // Reject empty / malformed tokens.
-    await admin
-      .put("/api/admin/claude-token")
-      .send({ token: "  " })
-      .expect(400);
-    await admin
-      .put("/api/admin/claude-token")
-      .send({ token: "nope" })
-      .expect(400);
-
-    // Store a valid-looking token; it must never be echoed back.
-    const put = await admin
-      .put("/api/admin/claude-token")
-      .send({ token: "sk-ant-oat01-secret" })
-      .expect(200);
-    expect(put.body).toEqual({ ok: true });
-    expect(JSON.stringify(put.body)).not.toContain("secret");
-
-    sys = (await admin.get("/api/admin/system").expect(200)).body.system;
-    expect(sys.subscriptionConnected).toBe(true);
-
-    // Clearing it returns to disconnected.
-    await admin.delete("/api/admin/claude-token").expect(200);
-    sys = (await admin.get("/api/admin/system").expect(200)).body.system;
-    expect(sys.subscriptionConnected).toBe(false);
-  });
-
-  it("forbids the subscription-token endpoints for members (403)", async () => {
+  it("no longer serves the removed claude setup-token endpoints", async () => {
     const app = testApp();
-    await newUser(app, "boss"); // first → admin
-    const { agent: member } = await newUser(app, "peon");
-    await member
-      .put("/api/admin/claude-token")
-      .send({ token: "sk-ant-oat01-x" })
-      .expect(403);
-    await member.delete("/api/admin/claude-token").expect(403);
+    const { agent: admin } = await newUser(app, "boss"); // first → admin
+    await admin.put("/api/admin/claude-token").send({ token: "sk-ant-oat01-x" }).expect(404);
+    await admin.delete("/api/admin/claude-token").expect(404);
+    const sys = (await admin.get("/api/admin/system").expect(200)).body.system;
+    for (const gone of ["subscriptionConnected", "apiKeyOverride", "authMode", "readOnlyTools", "configuredModel", "modelEnvLocked"]) {
+      expect(sys).not.toHaveProperty(gone);
+    }
   });
 
   it("exposes system/runtime info to admins, gated from members", async () => {
@@ -1127,7 +1111,6 @@ describe("noah-almighty platform", () => {
       dataDir: tempDir,
       agentRuntime: "local",
       sessionSecret: "test",
-      anthropicModel: "claude-opus-4-8",
     });
     const app = createApp(services);
 
@@ -1135,11 +1118,9 @@ describe("noah-almighty platform", () => {
     await signup(admin, "boss").expect(201);
     const res = await admin.get("/api/admin/system").expect(200);
     expect(res.body.system.agentRuntime).toBe("local");
-    expect(res.body.system.configuredModel).toBe("claude-opus-4-8");
-    // No Claude run has reported a model yet (local runtime never does).
+    // The local stub has no pi, so no models, and never reports one.
+    expect(res.body.system.piModels).toEqual([]);
     expect(res.body.system.observedModel).toBeNull();
-    expect(res.body.system.authMode).toBe("subscription");
-    expect(Array.isArray(res.body.system.readOnlyTools)).toBe(true);
     expect(
       res.body.system.hexSshTools.map((t: { name: string }) => t.name),
     ).toContain("remote-ssh");
@@ -1192,8 +1173,9 @@ describe("noah-almighty platform", () => {
     expect(
       before.body.system.togglableBuiltinTools.flatMap((t: { names: string[] }) => t.names),
     ).toEqual(expect.arrayContaining(["WebFetch", "WebSearch"]));
-    // Offline (`local`) runtime never spawns the CLI preflight: cache-only, absent here.
-    expect(before.body.system.skillDiscovery).toBeNull();
+    // The global skill list is read from the bundled default-skills root (no CLI preflight).
+    expect(Array.isArray(before.body.system.skillDiscovery.skills)).toBe(true);
+    expect(before.body.system.skillDiscovery).not.toHaveProperty("cliVersion");
 
     const policy = { disabledTools: ["WebFetch", "WebSearch"], disabledSkills: ["code-review"] };
     const saved = await admin.put("/api/admin/tool-skill-policy").send({ policy }).expect(200);
@@ -1219,12 +1201,27 @@ describe("noah-almighty platform", () => {
     await member.put("/api/admin/tool-skill-policy").send({ policy }).expect(403);
   });
 
-  it("reports configuredModel as null when ANTHROPIC_MODEL is unset", async () => {
-    const app = testApp();
-    const admin = request.agent(app);
+  it("reports pi-gateway's live model list, never the retired PI_MODEL_MAP", async () => {
+    const services = createServices({
+      dataDir: tempDir,
+      agentRuntime: "pi",
+      sessionSecret: "test",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
+    });
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "deepseek/v3", ownedBy: "deepseek" }, { id: "qwen/coder" }],
+    });
+    const admin = request.agent(createApp(services));
     await signup(admin, "boss").expect(201);
     const res = await admin.get("/api/admin/system").expect(200);
-    expect(res.body.system.configuredModel).toBeNull();
+    expect(res.body.system.agentRuntime).toBe("pi");
+    expect(res.body.system.piModels).toEqual([
+      { id: "deepseek/v3", server: "deepseek" },
+      { id: "qwen/coder", server: null },
+    ]);
+    expect(res.body.system.modelOverrideChoices).toEqual(["deepseek/v3", "qwen/coder"]);
+    expect(res.body.system).not.toHaveProperty("piModelMap");
+    services.store.close();
   });
 
   // ---- Input validation -------------------------------------------------
@@ -1946,46 +1943,6 @@ describe("groups", () => {
     await agentC
       .post(`/api/me/groups/${groupId}/members`)
       .send({ username: "dave" })
-      .expect(403);
-  });
-
-  it("group repo connect is group-admin-only and validated to the internal host", async () => {
-    const app = testApp();
-    const { agent: adminA } = await newUser(app, "admin");
-    const { agent: agentB } = await newUser(app, "bob");
-    const { agent: agentC } = await newUser(app, "carol");
-    const created = await adminA
-      .post("/api/admin/groups")
-      .send({ name: "Team" })
-      .expect(200);
-    const groupId = created.body.group.id;
-    await adminA
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username: "bob", role: "admin" })
-      .expect(200);
-    await adminA
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username: "carol" })
-      .expect(200);
-
-    // bob (group admin) connects an internal repo (owner/repo shorthand).
-    await agentB
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/team-knowledge", branch: "main" })
-      .expect(200);
-    const mine = await agentB.get("/api/me/groups").expect(200);
-    expect(mine.body.groups[0].knowledgeRepo).toBe("org/team-knowledge");
-
-    // An external host is rejected.
-    await agentB
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "https://gitlab.example.com/x/y.git" })
-      .expect(400);
-
-    // A plain member cannot set the group repo.
-    await agentC
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/x" })
       .expect(403);
   });
 });

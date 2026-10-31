@@ -1,51 +1,12 @@
 import type { SteerChannel } from "./steerChannel.js";
 
-export type PluginStatus = "started" | "installed" | "failed" | "completed";
-
-export interface PluginEvent {
-  status: PluginStatus;
-  name: string;
-}
-
-/** A tool/permission/question belongs to the main agent or a named subagent. */
+/** A tool/question belongs to the main agent or a named subagent. */
 export const MAIN_AGENT_ID = "main";
 
 /**
- * The model asked to use a tool that is NOT pre-approved. The host decides
- * whether to run it. Only ever raised for the avatar's OWNER (colleagues stay
- * read-only and get an `onBlocked` notice instead). The returned decision is
- * fed back to the SDK as the PreToolUse hook's permission decision.
- */
-export interface PermissionRequest {
-  toolUseId: string;
-  toolName: string;
-  /** Short noun phrase from the SDK (e.g. "Read file"), if any. */
-  displayName?: string;
-  /** Full prompt sentence from the SDK (e.g. "Claude wants to run …"), if any. */
-  title?: string;
-  description?: string;
-  /** Trimmed tool input, for the user to inspect before approving. */
-  input: Record<string, unknown>;
-  /** Which agent wants the tool: MAIN_AGENT_ID or a subagent's id. */
-  agentId: string;
-}
-export type PermissionDecision =
-  | { behavior: "allow" }
-  | {
-      behavior: "deny";
-      /**
-       * True when the prompt expired (TTL) or the run ended before ANY answer,
-       * as opposed to the owner explicitly clicking 거부. The hook words the
-       * deny reason differently so the model never mistakes an unattended
-       * prompt for a refusal.
-       */
-      unanswered?: boolean;
-    };
-
-/**
- * The model invoked AskUserQuestion (or another `request_user_dialog` kind).
- * `payload` is forwarded to the client verbatim; the client's answer becomes
- * the dialog result. `cancelled` lets the SDK apply the dialog's default.
+ * The model invoked AskUserQuestion (pi `requires_action`). `payload` is
+ * forwarded to the client verbatim; the client's answer becomes the dialog
+ * result, sent back as the call's output (`formatPiQuestionAnswer`).
  */
 export interface QuestionRequest {
   dialogKind: string;
@@ -109,12 +70,6 @@ export interface ShareFileRequest {
   path: string;
   /** Download filename shown to the user; defaults to the file's basename. */
   name?: string;
-  /**
-   * Set by runPlan (never by the model): this run has an active Craft app, so
-   * the image/PSD/.pcraft types are accepted too (Addendum A5). Absent = the
-   * document types only.
-   */
-  craftFileTypes?: boolean;
 }
 
 /**
@@ -213,65 +168,19 @@ export interface ToolEvent {
   inputSummary?: string;
 }
 
-/** A background/foreground SDK task that is not necessarily a subagent. */
-export interface TaskEvent {
-  taskId: string;
-  toolUseId?: string;
-  taskType?: string;
-  subagentType?: string;
-  workflowName?: string;
-  description?: string;
-  prompt?: string;
-  /** The sub-agent whose tool call started the task (absent = the main agent's). */
-  agentId?: string;
-}
-
-/** Progress or state update for a previously created SDK task. */
-export interface TaskUpdateEvent {
-  taskId: string;
-  status?: string;
-  description?: string;
-  summary?: string;
-  lastToolName?: string;
-  error?: string;
-  isBackgrounded?: boolean;
-  /** Same owner as the task's TaskEvent; repeated on every frame. */
-  agentId?: string;
-}
-
 /** A subagent was spawned via the Task/Agent tool. `agentId` === its tool_use id. */
 export interface AgentSpawnEvent {
   agentId: string;
-  /** Teammate name for addressable agent-teams spawns (`Agent` with `name:`). */
-  name?: string;
   subagentType?: string;
   description?: string;
   /** The parent agent that spawned it (MAIN_AGENT_ID for top-level spawns). */
   parentId: string;
-  /**
-   * The agent now runs in the BACKGROUND (its spawn returned only a launch
-   * receipt, or the CLI backgrounded it mid-run). Re-emitted for an agent that
-   * already started; the card stays running until its task ends it.
-   */
-  background?: boolean;
 }
 
 /**
- * One live background task, relayed from the SDK's `background_tasks_changed`
- * level signal (REPLACE semantics: each event carries the FULL set).
- */
-export interface BackgroundTaskSummary {
-  taskId: string;
-  /** SDK task-type label, e.g. "local_bash", "subagent". */
-  taskType?: string;
-  description?: string;
-}
-
-/**
- * A turn boundary: the SDK emitted a `result` message. When background tasks
- * are still live at this point the query keeps running (the SDK holds the
- * session open, wakes the model when a task settles, and streams follow-up
- * turns) — each of those follow-ups ends in another TurnResultEvent.
+ * A turn boundary: a pi response completed. With steers or background-job
+ * results queued the run keeps going with a follow-up turn, which ends in
+ * another TurnResultEvent.
  */
 export interface TurnResultEvent {
   /** Main-agent text streamed since the previous result boundary. */
@@ -280,99 +189,42 @@ export interface TurnResultEvent {
   usage?: import("../types.js").AgentUsage;
   /** In-band error subtype on this result (e.g. error_max_turns), if any. */
   errorSubtype?: string;
-  /** Live background tasks at this boundary (empty = the run is truly over). */
-  backgroundTasks: BackgroundTaskSummary[];
   /**
-   * A steer accepted for this run had not reached the model when this result
-   * boundary passed; the CLI will start it as a follow-up turn and the run
-   * stays open. The host finalizes the visible segment as its own assistant
+   * A steer accepted for this run had not reached the model when this
+   * boundary passed; the run sends it as a follow-up turn and stays open. The host finalizes the visible segment as its own assistant
    * message (a `turn_end` frame) rather than the run's terminal `done`.
    */
   steerPending?: boolean;
 }
 
-/** A tool was denied without an interactive prompt (read-only colleague, deny rule, dontAsk). */
-export interface BlockedEvent {
-  toolUseId?: string;
-  toolName: string;
-  agentId: string;
-  /**
-   * MODEL-facing deny text, mirroring the SDK's `decision_reason` — English, and
-   * on a hook deny it is this app's own directive prose. Diagnostic only: the
-   * client shows it as a detail, never as the row's label.
-   */
-  reason?: string;
-  /** User-facing (Korean) explanation the client labels the blocked row with. */
-  uiReason?: string;
-}
-
 /**
  * The avatar saved a note into a second brain: a successful repo write under
- * `wiki/` (personal knowledge repo or a group's shared repo). Surfaced as a
+ * `wiki/` of the personal knowledge repo. Surfaced as a
  * dedicated "기억" row in the activity tree — separate from the raw tool rows —
  * so the viewer sees at a glance that a memory was captured. Fired per note
  * write, before the commit that persists it (the standing prompt already
  * drives the avatar to commit right after capturing).
  */
 export interface MemoryEvent {
-  scope: "personal" | "group";
+  /** Always "personal": the second brain is personal only (group repos retired 2026-10-30). */
+  scope: "personal";
   /** write_file → "add", edit_file → "update". */
   action: "add" | "update";
   /** Repo-relative note path (always under wiki/). */
   path: string;
-  /** The group whose brain was written (scope "group" only). */
-  groupName?: string;
 }
 
 /**
- * A context compaction completed (compact_boundary) or failed (status
- * compact_result). The live "맥락 정리 중…" status label is transient, so this
- * event is what leaves a DURABLE trace in the activity tree — otherwise a user
- * who looked away never learns the conversation was summarized, and a FAILED
- * compaction stays invisible until the run dies on the context limit.
+ * pi-gateway summarized the session because it neared the model's context
+ * window (`response.compaction`, completed or failed). The live "맥락 정리 중…"
+ * status label is transient, so this event leaves the DURABLE activity-row
+ * trace: a user who looked away still learns the conversation was summarized.
  */
 export interface CompactEvent {
   ok: boolean;
-  trigger?: "auto" | "manual";
-  preTokens?: number;
-  /** Conversation tokens left after the summary (`compact_metadata.post_tokens`). */
-  postTokens?: number;
-  /** SDK English error detail (diagnostic; client shows it as detail, never the row label). */
-  error?: string;
+  /** pi compacts on its own; there is no manual trigger (the `/compact` command is retired). */
+  trigger: "auto";
 }
-
-/**
- * The model submitted a plan via ExitPlanMode (plan mode). The host forwards the
- * plan markdown to the client to render as a dedicated plan card. This is the
- * DISPLAY signal (always fires); a PRESENT owner additionally gets an interactive
- * approval gate via `onPlanReview` (see below), which BLOCKS the run.
- */
-export interface PlanEvent {
-  /** The plan markdown the model proposed. Empty while still planning. */
-  plan: string;
-  /**
-   * True the moment the model ENTERS plan mode (EnterPlanMode), before any plan
-   * exists. Lets the UI show a "writing plan…" placeholder so the turn doesn't
-   * look stalled during the (tool-row-suppressed) planning phase. The real plan
-   * arrives in a later event with `plan` set and this falsy.
-   */
-  planning?: boolean;
-}
-
-/**
- * The model proposed a plan via ExitPlanMode and the present owner must approve
- * it before the avatar starts implementing. Surfaced to the client as inline
- * approve/reject controls on the plan card; the run blocks on the answer.
- */
-export interface PlanReviewRequest {
-  /** The plan markdown awaiting approval. */
-  plan: string;
-  /** The ExitPlanMode tool_use id, for correlating with the display card. */
-  toolUseId?: string;
-}
-export type PlanReviewDecision =
-  | { behavior: "approved" }
-  | { behavior: "rejected"; feedback?: string };
 
 /**
  * One operation shipped to the VIEWER's own browser through the extension
@@ -594,7 +446,7 @@ export type BrowserResult =
       shareNote?: string;
       /**
        * screenshot only, SERVER-INTERNAL: the download-card + hidden-slide
-       * attachments the auto-share published, exposed so claudeAgent can stamp
+       * attachments the auto-share published, exposed so runCapabilities can stamp
        * the same text anchor the file-output wrappers stamp.
        */
       sharedAttachments?: import("../types.js").MessageAttachment[];
@@ -667,83 +519,49 @@ export interface AgentEvents {
   onTextFold?: (text: string) => void;
   /** Human-readable Korean activity label. */
   onStatus?: (label: string) => void;
-  /** The model the SDK actually initialized with (from the `init` system event). */
+  /** The model pi reported for this run (`response.created`). */
   onModel?: (model: string) => void;
   /**
-   * The SDK session id for this run (from the `init` system event). Persist it
-   * to resume the conversation's context on the next turn.
+   * The pi response id of the run's latest committed turn. Persist it to
+   * continue the conversation's pi session on the next turn.
    */
   onSessionId?: (sessionId: string) => void;
   /**
-   * A MAIN-chain assistant message (no `parent_tool_use_id`) landed in the local
-   * SDK transcript: `uuid` is an entry a later rewind can resume AT, inside
-   * `sessionId` (that message's own session — a fork reports its NEW id). Fires
-   * for every such message, so the host keeps the LATEST one and stamps it on
-   * each assistant row it persists (turn_end / background finalize / bg_message
-   * / done). Local SDK runs only: the external gateway never emits it.
+   * A committed pi turn a later rewind can branch from (`sessionId` = `uuid` =
+   * its response id). The host keeps the LATEST one and stamps it on each
+   * assistant row it persists (turn_end / done).
    */
   onResumePoint?: (point: import("../types.js").SdkResumePoint) => void;
-  /** Plugin install lifecycle. */
-  onPlugin?: (event: PluginEvent) => void;
 
   /** A concrete tool call started, attributed to its agent. */
   onToolStart?: (event: ToolEvent) => void;
   /** A tool call finished (tool_result observed). */
   onToolEnd?: (event: { toolUseId: string; ok: boolean }) => void;
-  /** A non-subagent SDK task started. */
-  onTaskStart?: (event: TaskEvent) => void;
-  /** A non-subagent SDK task changed progress/state. */
-  onTaskUpdate?: (event: TaskUpdateEvent) => void;
-  /** A non-subagent SDK task finished. */
-  onTaskEnd?: (event: { taskId: string; ok: boolean; status?: string; summary?: string; agentId?: string }) => void;
   /** A subagent was spawned. */
   onAgentStart?: (event: AgentSpawnEvent) => void;
   /** A subagent finished. */
   onAgentEnd?: (event: { agentId: string; ok: boolean }) => void;
   /**
-   * The full set of live background tasks changed (SDK level signal).
-   * REPLACE semantics: swap any kept set for this payload — never pair edges.
-   */
-  onBackgroundTasks?: (event: { tasks: BackgroundTaskSummary[] }) => void;
-  /**
-   * A `result` boundary passed. With live background tasks the SDK session
-   * stays open past this point, so the host can finalize the visible turn here
-   * and treat later boundaries as background follow-up reports.
+   * A response boundary passed. With steers queued (`steerPending`) the run
+   * continues with a follow-up turn, so the host finalizes the visible segment
+   * as its own assistant message.
    */
   onTurnResult?: (event: TurnResultEvent) => void;
   /**
-   * Inbound mid-turn user messages for this run; the held-open prompt generator
-   * yields them to the SDK and the run loop feeds `command_lifecycle` frames
-   * back. Absent on headless/external runs.
+   * Inbound mid-turn user messages for this run; pi folds each queued one into
+   * the running turn at its next tool boundary, and the run loop sends any it
+   * did not as the follow-up turn after the current answer. Absent on
+   * headless/external-task-API runs.
    */
   steers?: SteerChannel;
-  /** A tool was auto-denied (no interactive prompt). */
-  onBlocked?: (event: BlockedEvent) => void;
   /** A second-brain note was saved (repo write under wiki/) — display notice. */
   onMemory?: (event: MemoryEvent) => void;
-  /** A context compaction finished or failed — durable activity-row notice. */
+  /** pi-gateway summarized the session (context compaction) — durable activity-row notice. */
   onCompact?: (event: CompactEvent) => void;
-  /** The model submitted a plan via ExitPlanMode (plan mode) — display card. */
-  onPlan?: (event: PlanEvent) => void;
 
-  /**
-   * BLOCKING: the model finished planning and proposed a plan via ExitPlanMode.
-   * For a present owner (interactive, non-auto-approve) the run PARKS here for an
-   * explicit approval: approve → the avatar proceeds to implement; reject → the
-   * (optional) feedback is fed back to the model so it revises and re-proposes.
-   * If omitted (headless / colleague / auto-approve), the plan tool just
-   * auto-continues and only the display card (`onPlan`) is shown.
-   */
-  onPlanReview?: (request: PlanReviewRequest) => Promise<PlanReviewDecision>;
-
-  /**
-   * BLOCKING: the model wants a non-pre-approved tool. Resolve with the user's
-   * decision. If omitted, the runner falls back to auto-deny semantics.
-   */
-  onPermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
   /**
    * BLOCKING: the model raised a user dialog (AskUserQuestion). Resolve with the
-   * user's answer. If omitted, the dialog is cancelled (SDK default applies).
+   * user's answer. If omitted, the dialog is cancelled.
    */
   onQuestion?: (request: QuestionRequest) => Promise<QuestionAnswer>;
   /**
@@ -766,8 +584,8 @@ export interface AgentEvents {
   /**
    * Make (or reuse) a share link for a PPTX card of this conversation. The chat
    * route supplies it ONLY on an interactive turn of the owner's own avatar (never
-   * group-agent, external-avatar, external-task-API or unattended turns) and
-   * re-checks that inside; `runPlan.ts` registers `create_share_link` only when it
+   * external-task-API or unattended turns) and
+   * re-checks that inside; `runCapabilities.ts` registers `create_share_link` only when it
    * is present AND the run passes the same gate. Absent = the tool is not offered.
    */
   onShareLink?: (request: ShareLinkRequest) => Promise<ShareLinkResult>;
@@ -779,27 +597,4 @@ export interface AgentEvents {
    * not registered (a headless run has no browser to drive).
    */
   onBrowser?: (request: BrowserRequest) => Promise<BrowserResult>;
-  /**
-   * Publish the images a Craft app returned (`mcp__<app>__render_preview` …)
-   * to the user: a visible file card + a hidden preview slide per image (the
-   * browser-screenshot shape), then a `craft_preview` SSE event. The chat route
-   * supplies it ONLY on an interactive turn of the owner's own avatar; its
-   * presence is part of runPlan's Craft gate (the "interactive" half).
-   */
-  onCraftPreview?: (request: CraftPreviewRequest) => Promise<CraftPreviewResult>;
-}
-
-/** Images ONE Craft tool result carried, already sniffed as PNG/JPEG/WebP/GIF. */
-export interface CraftPreviewRequest {
-  app: import("../../shared/craftApps.js").CraftAppId;
-  tool: string;
-  images: { buffer: Buffer; mediaType: import("../types.js").ImageMediaType }[];
-  /** Text anchor for the visible cards (see runPlan's currentTextAnchor). */
-  anchor: number;
-}
-
-export interface CraftPreviewResult {
-  published: import("../types.js").MessageAttachment[];
-  /** Images not published (per-message cap, conversation gone, write failure). */
-  skipped: number;
 }

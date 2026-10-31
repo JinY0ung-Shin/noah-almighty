@@ -6,11 +6,11 @@ import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
 import { sanitizeName } from "../marketplace.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
-import { craftAppsClientStatus, purgeCraftSessions } from "../craftRunner.js";
+import { deletePiUserWorkspace } from "../agent/pi/piWorkspace.js";
+import { piRepoCopyStateDir } from "../agent/pi/piRepoCopy.js";
 import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
-import { CLAUDE_OAUTH_TOKEN_KEY } from "../store.js";
 import { HEX_SSH_TOOL_INFOS, parseHexSshToolPolicy } from "../hexSshPolicy.js";
 import { TOGGLABLE_BUILTIN_TOOLS, parseToolSkillPolicy } from "../toolSkillPolicy.js";
 import { parseModelVisionPolicy } from "../modelVisionPolicy.js";
@@ -19,59 +19,53 @@ import {
   normalizeMcpToolGroups,
   type McpToolGroupId,
 } from "../../shared/mcpToolGroups.js";
-import { discoverGlobalSkills } from "../agent/skillDiscovery.js";
+import { listPluginRootSkills } from "../agent/skillCatalog.js";
+import { loadDefaultPluginRoots } from "../plugins.js";
+import { modelOverrideState } from "../modelOverride.js";
+import { catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
 import {
   apiError,
   avatarDir,
-  deleteAvatarImageFile,
   isAvatarVisibility,
+  offeredModelIdsOr503,
   safeString,
   MIN_PASSWORD_LENGTH,
   type RouterDeps,
 } from "./_shared.js";
-import { registerAdminExternalAgentRoutes } from "./adminExternalAgents.js";
 import { registerAdminEgressRoutes } from "./adminEgress.js";
-import { cleanupGroupDataDirs, groupAgentAvatarId } from "../groupAgents.js";
 
 // ---- Admin -----------------------------------------------------------
 export function createAdminRouter(deps: RouterDeps): Router {
   const { config, store, observedModel, auditAs } = deps;
   const router = Router();
 
-  registerAdminExternalAgentRoutes(router, deps);
   registerAdminEgressRoutes(router, deps);
 
-  // System/runtime info: which model the agent is pinned to (config) vs. which
-  // one the SDK actually reported on its last run (observed), plus the auth mode
-  // and the read-only tool allowlist. Read-only; admin-gated.
+  // System/runtime info: the runtime, the models pi-gateway offers (its live
+  // list), the model the last run reported (observed), and the policy catalogs.
+  // Read-only; admin-gated.
   router.get("/api/admin/system", requireAuth(store), requireAdmin, async (_req, res) => {
-    // Global skill list for the tool/skill policy card. Cached per bundled CLI
-    // version; a cache miss runs the SDK preflight inline (~0.3s measured). A
-    // broken CLI surfaces as skillDiscovery: null so the panel still loads —
-    // the admin can keep editing via the free-form skill input. The `local`
-    // (offline/test) runtime never spawns the CLI: cache-only.
-    let skillDiscovery = store.getSkillDiscoveryCache();
-    if (config.agentRuntime === "claude") {
-      try {
-        skillDiscovery = await discoverGlobalSkills(store, config);
-      } catch (error) {
-        logger.warn({ err: error }, "skill discovery preflight failed");
-      }
+    // Global skill list for the tool/skill policy card: the bundled
+    // default-skills root, read from disk (cheap: SKILL.md frontmatter only).
+    // A root that cannot be loaded lists nothing — the admin can still type a
+    // skill name into the free-form input.
+    let rootPaths: string[] = [];
+    try {
+      rootPaths = (await loadDefaultPluginRoots(config)).map((root) => root.path);
+    } catch (error) {
+      logger.warn({ err: error }, "default plugin roots could not be listed for the skill policy");
     }
+    const skillDiscovery = { fetchedAt: new Date().toISOString(), skills: listPluginRootSkills(rootPaths) };
+    // pi-gateway's live model list (cached, stale-on-error); empty on the
+    // `local` stub and while pi has never answered.
+    const piModels = await piServicesFor(store, config).models.list();
+    const piModelIds = catalogModelIds(piModels);
     res.json({
       system: {
         agentRuntime: config.agentRuntime,
-        configuredModel: config.anthropicModel ?? null,
+        piModels,
         observedModel: observedModel.get(),
-        authMode: config.anthropicApiKey ? "api_key" : "subscription",
-        // Whether a subscription OAuth token (claude setup-token) is stored. The
-        // raw token is never returned — only whether one is present.
-        subscriptionConnected: Boolean(store.getAppSecret(CLAUDE_OAUTH_TOKEN_KEY)),
-        // When an ANTHROPIC_API_KEY is set in .env it takes precedence over the
-        // stored subscription token; the UI surfaces this so the admin isn't
-        // surprised that pasting a token has no effect.
-        apiKeyOverride: Boolean(config.anthropicApiKey),
-        readOnlyTools: config.readOnlyTools,
         confluenceConfigured: Boolean(config.confluenceUrl),
         hexSshTools: HEX_SSH_TOOL_INFOS,
         hexSshToolPolicy: store.getHexSshToolPolicy(),
@@ -82,18 +76,14 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
-        // 서버 에이전트 deployment switch (PUT /api/admin/server-agents), default off.
-        serverAgentsEnabled: store.isServerAgentsEnabled(),
-        // Craft apps beta switch (PUT /api/admin/craft-apps), default off, plus
-        // what the deployment's craft-runner currently serves.
-        craftAppsEnabled: store.isCraftAppsEnabled(),
-        craftApps: craftAppsClientStatus(config, store.isCraftAppsEnabled()),
-        // Admin-selected model override + whether an env ANTHROPIC_MODEL shadows it
-        // (env wins, mirroring the API-key-vs-subscription precedence).
+        // Admin-selected model override (a pi model id), and whether the stored
+        // one is IGNORED (pi no longer offers it — a dropped model, an SDK-era
+        // Claude id, a retired tier alias — so runs use pi-gateway's default model).
         modelOverride: store.getModelOverride(),
-        modelEnvLocked: Boolean(config.anthropicModel),
-        // Per-model-tier vision policy (+ the deployment default an unset tier
-        // inherits) — the panel renders one selector per tier.
+        modelOverrideIgnored: modelOverrideState(store, piModelIds).ignored !== null,
+        modelOverrideChoices: piModelIds,
+        // Per-model vision policy, keyed by pi model id (+ the deployment default
+        // an unset model inherits) — the panel renders one selector per model.
         modelVisionPolicy: store.getModelVisionPolicy(),
         visionDefault: config.visionEnabled,
       },
@@ -130,33 +120,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
     );
     logger.warn({ actorId: req.user!.id, policy: saved }, "builtin tool/skill policy changed");
     res.json({ policy: saved });
-  });
-
-  // Store/replace the Claude subscription token (`claude setup-token` output).
-  // Encrypted at rest in app_config; injected as CLAUDE_CODE_OAUTH_TOKEN into the
-  // agent subprocess when no ANTHROPIC_API_KEY is configured (see claudeAgent.ts).
-  // Write-only: the token is never echoed back.
-  router.put("/api/admin/claude-token", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
-    if (!token) {
-      apiError(res, 400, "토큰을 입력해 주세요.");
-      return;
-    }
-    if (!token.startsWith("sk-ant-")) {
-      apiError(res, 400, "`claude setup-token`이 출력한 토큰(sk-ant-…)을 붙여넣어 주세요.");
-      return;
-    }
-    store.setAppSecret(CLAUDE_OAUTH_TOKEN_KEY, token);
-    auditAs(req, "set_claude_token", "subscription OAuth token stored");
-    logger.info({ actorId: req.user!.id }, "claude subscription token set");
-    res.json({ ok: true });
-  });
-
-  router.delete("/api/admin/claude-token", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    store.deleteAppSecret(CLAUDE_OAUTH_TOKEN_KEY);
-    auditAs(req, "clear_claude_token", "subscription OAuth token cleared");
-    logger.info({ actorId: req.user!.id }, "claude subscription token cleared");
-    res.json({ ok: true });
   });
 
   router.get("/api/admin/stats", requireAuth(store), requireAdmin, (_req, res) => {
@@ -236,6 +199,11 @@ export function createAdminRouter(deps: RouterDeps): Router {
           force: true,
         });
         fs.rmSync(path.dirname(knownHostsPath(req.params.id, config)), { recursive: true, force: true });
+        // pi runtime: the user's whole sandbox workspace (<PI_WORKSPACES_DIR>/u-<key>,
+        // their /workspace — conversation folders, skill and repo copies) and
+        // Noah's records of their repo copies.
+        deletePiUserWorkspace(config, req.params.id);
+        fs.rmSync(piRepoCopyStateDir(config, req.params.id), { recursive: true, force: true });
         const avatarsDir = avatarDir(config);
         if (fs.existsSync(avatarsDir)) {
           for (const f of fs.readdirSync(avatarsDir)) {
@@ -253,7 +221,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
         // is already gone above, but their threads with OTHER avatars live
         // under those avatars' trees — resolved by conversation id.
         deleteConversationWorkspaceCopies(config, conversationIds);
-        purgeCraftSessions(config, conversationIds);
       } catch (err) {
         logger.warn({ err, targetId: req.params.id }, "post-delete disk cleanup failed");
       }
@@ -391,7 +358,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   // ---- Admin: groups ----------------------------------------------------
   // Only system admins create/delete groups and assign group admins. Group
-  // admins then self-serve their group's members + repo via /api/me/groups/*.
+  // admins then self-serve their group's members via /api/me/groups/*.
 
   router.get("/api/admin/groups", requireAuth(store), requireAdmin, (_req, res) => {
     res.json({ groups: store.listGroups() });
@@ -438,7 +405,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   // SYSTEM-ADMIN-ONLY per-group tool policy: which MCP tool groups this group's
   // members may use in chats they drive. The composer disables the rest and
-  // every run is clamped server-side (claudeAgent intersects policies across
+  // every run is clamped server-side (runCapabilities intersects policies across
   // the user's groups). Body `{ allowed: string[] | null }` — null clears the
   // policy, [] blocks every optional MCP tool group. Unknown ids are rejected
   // (not silently dropped) so an admin typo can't change the policy's meaning.
@@ -476,48 +443,10 @@ export function createAdminRouter(deps: RouterDeps): Router {
   );
 
   router.delete("/api/admin/groups/:id", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    // Snapshot EVERY agent's artifacts BEFORE the row cascade removes them —
-    // the per-conversation chat-image/file dirs, image files, and workspace
-    // trees are keyed by ids the cascade erases (mirrors the user-delete
-    // snapshot). A group may have several shared agents.
-    const agentArtifacts = store.listGroupAgents(req.params.id).map((agent) => {
-      const avatarId = groupAgentAvatarId(req.params.id, agent.id);
-      return {
-        avatarId,
-        imageExt: store.getGroupAgentImageExtByAvatarId(avatarId),
-        conversationIds: store.listConversationIdsForAvatar(avatarId),
-      };
-    });
     const removed = store.deleteGroup(req.params.id);
     if (!removed) {
       apiError(res, 404, "그룹을 찾을 수 없습니다.");
       return;
-    }
-    // Best-effort disk cleanup after the DB cascade: the group-knowledge clone
-    // (pre-existing leak — possibly a private repo), each agent's workspaces,
-    // profile-image file, and every member's chat image/file dirs for the
-    // agents' now-deleted conversations. Never throw — a cleanup failure must
-    // not turn a successful deletion into a 500.
-    try {
-      cleanupGroupDataDirs(
-        config,
-        req.params.id,
-        agentArtifacts.map((artifact) => artifact.avatarId),
-      );
-      for (const artifact of agentArtifacts) {
-        deleteAvatarImageFile(config, artifact.avatarId, artifact.imageExt);
-        for (const conversationId of artifact.conversationIds) {
-          deleteConversationImages(config, conversationId);
-          deleteConversationFiles(config, conversationId);
-        }
-        // Same per-conversation cascade as every other delete path. The agents'
-        // workspace trees are removed whole by cleanupGroupDataDirs above; this
-        // keeps the server-written copies swept even if that ever narrows.
-        deleteConversationWorkspaceCopies(config, artifact.conversationIds);
-        purgeCraftSessions(config, artifact.conversationIds);
-      }
-    } catch (err) {
-      logger.warn({ err, groupId: req.params.id }, "post-delete disk cleanup failed");
     }
     auditAs(req, "group_delete", `deleted group ${req.params.id}`);
     logger.warn({ actorId: req.user!.id, groupId: req.params.id }, "group deleted");
@@ -594,51 +523,19 @@ export function createAdminRouter(deps: RouterDeps): Router {
     res.json({ signupMode: mode });
   });
 
-  // 서버 에이전트 on/off. A check or delegation hands this deployment's model
-  // credentials (API key / subscription token) to the CLI on the registrant's own
-  // server, where that account can read them — so turning it ON requires the
-  // admin's explicit acknowledgement of exactly that.
-  router.put("/api/admin/server-agents", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const enabled = req.body?.enabled;
-    if (typeof enabled !== "boolean") {
-      apiError(res, 400, "enabled는 true 또는 false여야 합니다.");
-      return;
-    }
-    if (enabled && req.body?.acknowledged !== true) {
-      apiError(
-        res,
-        400,
-        "서버 에이전트를 켜려면 경고를 확인해야 합니다. 서버를 등록한 사용자는 자기 서버에서 이 배포의 모델 인증정보를 읽을 수 있습니다.",
-      );
-      return;
-    }
-    store.setServerAgentsEnabled(enabled);
-    auditAs(req, "set_server_agents_enabled", `server agents = ${enabled ? "on" : "off"}`);
-    logger.warn({ actorId: req.user!.id, enabled }, "server agents switch changed");
-    res.json({ serverAgentsEnabled: enabled });
-  });
-
-  // Craft apps (admin-only beta) on/off. Even when on, a Craft run also needs
-  // the craft-runner configured + healthy and a system admin's own interactive
-  // chat (agent/craftTools.ts); off stops every Craft run from the next turn.
-  router.put("/api/admin/craft-apps", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const enabled = req.body?.enabled;
-    if (typeof enabled !== "boolean") {
-      apiError(res, 400, "enabled는 true 또는 false여야 합니다.");
-      return;
-    }
-    store.setCraftAppsEnabled(enabled);
-    auditAs(req, "set_craft_apps_enabled", `craft apps = ${enabled ? "on" : "off"}`);
-    logger.warn({ actorId: req.user!.id, enabled }, "craft apps switch changed");
-    res.json({ craftAppsEnabled: enabled, craftApps: craftAppsClientStatus(config, enabled) });
-  });
-
-  // Admin-selected agent model. An env ANTHROPIC_MODEL still wins at runtime
-  // (claudeAgent.ts) — the UI surfaces that so the admin isn't surprised.
-  router.put("/api/admin/model", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
+  // Admin-selected agent model: used when a conversation picked none
+  // (runCapabilities.ts). Only a model pi-gateway offers right now is accepted
+  // (review-2 M2; anything else would silently run on pi's own default model).
+  router.put("/api/admin/model", requireAuth(store), requireAdmin, async (req: AuthenticatedRequest, res) => {
     const model = safeString(req.body?.model);
     if (!model) {
       apiError(res, 400, "모델 이름을 입력해 주세요.");
+      return;
+    }
+    const offered = await offeredModelIdsOr503(store, config, res);
+    if (!offered) return;
+    if (!offered.includes(model)) {
+      apiError(res, 400, `pi-gateway가 제공하는 모델만 지정할 수 있습니다: ${offered.join(", ") || "(없음)"}`);
       return;
     }
     store.setModelOverride(model);
@@ -654,11 +551,16 @@ export function createAdminRouter(deps: RouterDeps): Router {
     res.json({ ok: true });
   });
 
-  // Per-model-tier vision policy: which composer tiers accept image input.
-  // Body: { policy: { opus?: boolean, sonnet?: boolean, haiku?: boolean } } —
-  // a tier ABSENT from the map inherits the MODEL_VISION deployment default.
-  router.put("/api/admin/model-vision-policy", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const policy = parseModelVisionPolicy(req.body?.policy);
+  // Per-model vision policy: which of pi-gateway's models accept image input.
+  // Body: { policy: { [piModelId]: boolean } } — every key a model pi offers
+  // right now; a model ABSENT from the map inherits the MODEL_VISION default.
+  router.put("/api/admin/model-vision-policy", requireAuth(store), requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const raw = req.body?.policy;
+    // An empty policy names no model, so it needs no model list.
+    const needsCatalog = raw && typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length > 0;
+    const offered = needsCatalog ? await offeredModelIdsOr503(store, config, res) : [];
+    if (!offered) return;
+    const policy = parseModelVisionPolicy(raw, offered);
     if (!policy) {
       apiError(res, 400, "모델별 비전 정책 형식이 올바르지 않습니다.");
       return;
@@ -668,7 +570,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
       req,
       "set_model_vision_policy",
       Object.entries(saved)
-        .map(([tier, vision]) => `${tier}=${vision ? "on" : "off"}`)
+        .map(([model, vision]) => `${model}=${vision ? "on" : "off"}`)
         .join(", ") || "(all inherit default)",
     );
     logger.info({ actorId: req.user!.id, policy: saved }, "model vision policy set");

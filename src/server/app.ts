@@ -7,8 +7,7 @@ import { loadConfig } from "./config.js";
 import logger from "./logger.js";
 import { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
-import { avatarDir, type AppServices, type ObservedModelHolder, type RouterDeps } from "./routes/_shared.js";
-import { migrateGroupAgentDiskArtifacts } from "./groupAgents.js";
+import { type AppServices, type ObservedModelHolder, type RouterDeps } from "./routes/_shared.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createProfileRouter } from "./routes/profile.js";
 import { createPluginsRouter } from "./routes/plugins.js";
@@ -17,7 +16,6 @@ import { createGroupsRouter } from "./routes/groups.js";
 import { createAvatarTasksRouter } from "./routes/avatarTasks.js";
 import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
-import { createServerAgentsRouter } from "./routes/serverAgents.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSharedMcpRouter } from "./routes/sharedMcp.js";
 import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
@@ -25,36 +23,19 @@ import { createAdminRouter } from "./routes/admin.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
+import { createMcpHttpRouter } from "./mcpHttp/endpoint.js";
+import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
+import { piServicesFor } from "./agent/pi/piRuntime.js";
 
 export type { AppServices };
 export { expandChatSlashCommand };
 
 export function createServices(configOverrides: Partial<AppConfig> = {}): AppServices {
   const config = loadConfig(configOverrides);
-  // Group binding is required for external avatars to be visible; a legacy env
-  // entry without one still parses (never break boot over it) but is dark until
-  // the operator adds `visibleToGroupIds` to EXTERNAL_AGENTS_JSON.
-  for (const agent of config.externalAgents ?? []) {
-    if (!agent.visibleToGroupIds?.length) {
-      logger.warn(
-        { externalAgentId: agent.id },
-        "external agent has no visibleToGroupIds and is visible to no one",
-      );
-    }
-  }
   const store = new Store(config);
-  // On-disk half of the multi-agent group_agents migration (the store rebuild
-  // rewrote the DB bindings): rename legacy `group:<gid>`-named image files and
-  // workspace trees to the canonical `group:<gid>:<aid>`. Idempotent, no-op
-  // once the legacy names are gone; never break boot over a rename failure.
-  try {
-    migrateGroupAgentDiskArtifacts(store, config, avatarDir(config));
-  } catch (err) {
-    logger.warn({ err }, "group-agent disk artifact migration failed");
-  }
-  // The model the SDK last reported via its `init` event. Null until the first
-  // Claude run reports one; the admin "system info" view surfaces it alongside
-  // the configured model so an operator can confirm what actually ran. Held in a
+  // The model pi last reported (`response.created`, AgentEvents.onModel). Null
+  // until the first run reports one; the admin "system info" view surfaces it
+  // alongside pi-gateway's model list so an operator can confirm what actually ran. Held in a
   // small mutable box so every run path can write it and the admin router read it.
   let observedModelValue: string | null = null;
   const observedModel: ObservedModelHolder = {
@@ -96,6 +77,20 @@ export function createApp(services = createServices()) {
   };
 
   const app = express();
+  // Noah's HTTP MCP endpoint for pi-gateway's broker (docs/architecture/pi-runtime.md).
+  // Its ONLY auth is the per-run bearer token, and only under /mcp/: no session
+  // cookie is read there (a cookie alone gets the same 401 as no token), and no
+  // other router sees these paths. Mounted on every runtime — without a pi run
+  // no token exists, so every request is a 401. Mounted BEFORE the global JSON
+  // parser so its own 16 MB body cap is the effective one, with the optional
+  // NOAH_MCP_ALLOWED_CIDRS peer allowlist checked before any body is parsed.
+  app.use(
+    createMcpHttpRouter({
+      registry: piServicesFor(store, config).registry,
+      basePath: "/mcp",
+      networkAcl: parseMcpNetworkAcl(config.pi?.mcpAllowedCidrs?.join(",")),
+    }),
+  );
   // Limit bumped from 3mb to accommodate chat image attachments (base64-inflated,
   // up to MAX_CHAT_IMAGES_PER_MESSAGE × ~5MB; the client downscales before send).
   app.use(express.json({ limit: "50mb" }));
@@ -174,8 +169,6 @@ export function createApp(services = createServices()) {
   app.use(createRoutinesRouter(deps));
   app.use(createTodosRouter(deps));
   app.use(createAvatarTasksRouter(deps));
-  // 서버 에이전트: the owner's SSH servers (register, trust host key, check/install).
-  app.use(createServerAgentsRouter(deps));
   app.use(createSkillShareRouter(deps));
   app.use(createSharedMcpRouter(deps));
   app.use(createChatRouter(deps));

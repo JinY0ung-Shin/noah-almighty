@@ -341,6 +341,9 @@ describe("chatImages", () => {
 
         expect(stageChatImageFilesFromAttachments(config(), "conv-race", workspace, attachments)).toEqual([]);
         expect(fs.readdirSync(elsewhere)).toEqual([]);
+        // The write went through the PINNED folder: it landed in the real
+        // folder the agent moved away, never through the link.
+        expect(fs.readdirSync(path.join(workspace, "attachments-moved"))).toEqual(["img-x.png"]);
       });
 
       it("removes a partial copy when the copy fails part-way, and stages the rest", () => {

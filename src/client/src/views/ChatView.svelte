@@ -17,11 +17,13 @@
     closePane,
     hasVisibleImages,
     isRewindAnchor,
+    consultationLabel,
+    steerBadgeLabel,
     messageKey,
+    knownModel,
     newChat,
     openFileTab,
     regenerate,
-    respondPlanReview,
     selectConversation,
     sendMessage,
     sendSteer,
@@ -49,23 +51,19 @@
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
   import { hasSideTabs } from "../lib/sidePanel";
-  import { liveSegmentRows, messageSegmentRows, type SegmentRows } from "../lib/activitySegments";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
-  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
-  import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
+  import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
   import {
     DEFAULT_MCP_TOOL_GROUPS,
     MCP_TOOL_GROUPS,
     effectiveMcpToolGroups,
     isRequiredMcpToolGroup,
-    withoutDefaultOffMcpToolGroups,
     type McpToolGroupId,
   } from "../../../shared/mcpToolGroups";
   import { TOUR_SCENARIOS, type TourScenario } from "../../../shared/tourScenarios";
   import { isPptxCard } from "../../../shared/shareLinks";
-  import { hiddenCraftToolGroups, isSystemAdmin, refreshCraftApps } from "../lib/craftApps";
 
   let splitAvatarId = "";
   let splitAddBusy = false;
@@ -73,59 +71,10 @@
   let slashPaneId = "";
   let slashIndex = 0;
   let physicalKeyboard = false;
-  // Per-pane group-knowledge dropdown open state.
-  let gkOpenPaneId = "";
   // Per-pane MCP tool-group checkbox panel open state.
   let mcpToolsOpenPaneId = "";
   // Per-pane mobile composer settings disclosure state.
   let composerSettingsOpenPaneId = "";
-  // Plan-approval: which pane is in "수정 요청" (reject-with-feedback) mode, and its draft.
-  let planRejectPaneId = "";
-  let planFeedback = "";
-  let planReviewErrors: Record<string, string> = {};
-
-  function planReviewStatusText(pane: ChatPane): string {
-    if (pane.planReviewSubmitting) return "응답을 전송하는 중입니다.";
-    return planReviewErrors[pane.id] ? `응답 전송 실패: ${planReviewErrors[pane.id]}` : "";
-  }
-  function clearPlanReviewError(paneId: string): void {
-    if (!planReviewErrors[paneId]) return;
-    const next = { ...planReviewErrors };
-    delete next[paneId];
-    planReviewErrors = next;
-  }
-  function setPlanReviewError(paneId: string, message: string): void {
-    planReviewErrors = { ...planReviewErrors, [paneId]: message };
-  }
-
-  async function approvePlan(pane: ChatPane): Promise<void> {
-    clearPlanReviewError(pane.id);
-    try {
-      await respondPlanReview(pane.id, "approved");
-    } catch (err) {
-      setPlanReviewError(pane.id, (err as Error).message);
-    }
-  }
-  function startRejectPlan(pane: ChatPane): void {
-    planRejectPaneId = pane.id;
-    planFeedback = "";
-    clearPlanReviewError(pane.id);
-  }
-  function cancelRejectPlan(): void {
-    planRejectPaneId = "";
-    planFeedback = "";
-  }
-  async function submitRejectPlan(pane: ChatPane): Promise<void> {
-    const feedback = planFeedback;
-    clearPlanReviewError(pane.id);
-    try {
-      await respondPlanReview(pane.id, "rejected", feedback);
-      cancelRejectPlan();
-    } catch (err) {
-      setPlanReviewError(pane.id, (err as Error).message);
-    }
-  }
-
   onMount(async () => {
     try {
       const route = routeFromHash();
@@ -261,26 +210,18 @@
     return Boolean(item.avatar.isOwn || item.avatar.id === user?.id);
   }
 
-  function isExternalPane(item: ChatPane): boolean {
-    return item.avatar.runtime === "external";
-  }
-
-  function eligibleGroups(item: ChatPane) {
-    return isOwnPane(item) ? (user?.groups || []).filter((g) => g.knowledgeRepoConfigured) : [];
-  }
-
   function hasModelPicker(): boolean {
-    return Boolean($appState.bootstrap?.modelSelection?.tiers.length);
+    return Boolean($appState.bootstrap?.modelSelection?.models.length);
   }
 
-  function canPickModel(): boolean {
-    return Boolean(hasModelPicker() && !$appState.bootstrap?.modelSelection?.locked);
+  // The pane's pi model id as the picker shows it; "" = pi-gateway's default
+  // model (also for a stored id pi no longer offers).
+  function currentModel(item: ChatPane): string {
+    return knownModel(item.model, $appState.bootstrap?.modelSelection?.models ?? []);
   }
 
-  function currentModelTier(item: ChatPane): string {
-    const tiers = $appState.bootstrap?.modelSelection?.tiers || [];
-    const selected = item.modelTier ?? DEFAULT_MODEL_TIER;
-    return tiers.some((tier) => tier.id === selected) ? selected : DEFAULT_MODEL_TIER;
+  function modelLabel(model: string): string {
+    return model || "기본 모델";
   }
 
   function hasEffortPicker(): boolean {
@@ -288,17 +229,15 @@
   }
 
   function hasComposerControls(item: ChatPane): boolean {
-    // External panes get the settings row for the gateway model picker; native
-    // panes always get it too — the MCP tool-group picker always exists
+    // Every pane gets the settings row — the MCP tool-group picker always exists
     // (MCP_TOOL_GROUPS is a non-empty registry), so the row is never empty. The
     // per-item argument is kept for call-site clarity and future gating.
     void item;
     return true;
   }
 
-  function modelTierLabel(item: ChatPane): string {
-    const tierId = currentModelTier(item);
-    return $appState.bootstrap?.modelSelection?.tiers.find((tier) => tier.id === tierId)?.label ?? tierId;
+  function currentModelLabel(item: ChatPane): string {
+    return modelLabel(currentModel(item));
   }
 
   function effortLabel(item: ChatPane): string {
@@ -306,26 +245,10 @@
     return $appState.bootstrap?.effortSelection?.levels.find((level) => level.id === levelId)?.label ?? levelId;
   }
 
-  function groupKnowledgeLabel(item: ChatPane): string {
-    const groups = eligibleGroups(item);
-    if (!groups.length) return "";
-    const onCount = groups.filter((g) => !(item.groupKnowledgeOff || []).includes(g.id)).length;
-    return `그룹 ${onCount}/${groups.length}`;
-  }
-
   function selectedMcpToolGroups(item: ChatPane): McpToolGroupId[] {
     const selected = item.mcpToolGroups ?? DEFAULT_MCP_TOOL_GROUPS;
     return effectiveMcpToolGroups(selected);
   }
-
-  // Craft-app groups (`craft_*`, admin-only beta) the picker must not offer:
-  // all of them unless the viewer is a system admin, the feature is on and that
-  // app's runner reports `ready` (`GET /api/me` craftApps, lib/craftApps). A
-  // hidden group is never shown, counted or toggled, but a saved selection keeps
-  // it (the server gates the run). Top-level `$:` for the same reason as the
-  // admin-blocked set below; helpers take it as a PARAMETER.
-  $: hiddenMcpToolGroupSet = hiddenCraftToolGroups($appState.craftApps, $appState.user);
-  $: visibleMcpToolGroups = MCP_TOOL_GROUPS.filter((group) => !hiddenMcpToolGroupSet.has(group.id));
 
   // Admin per-group tool policy from /api/me (`user.allowedMcpToolGroups`, the
   // effective intersection): blocked groups render disabled in the picker; the
@@ -426,7 +349,7 @@
 
   $: browserBridgeSelected =
     !adminBlockedMcpToolGroupSet.has("browser") &&
-    $appState.chatPanes.some((p) => !isExternalPane(p) && selectedMcpToolGroups(p).includes("browser"));
+    $appState.chatPanes.some((p) => selectedMcpToolGroups(p).includes("browser"));
   $: if (browserBridgeSelected && !bridgeCompatStarted) {
     bridgeCompatStarted = true;
     void probeBridgeCompat();
@@ -474,29 +397,21 @@
     goView("settings", "access");
   }
 
-  /** "N/M" over the groups the picker SHOWS — a hidden Craft group counts on neither side. */
-  function mcpToolsCount(item: ChatPane, adminBlocked: Set<McpToolGroupId>, hidden: Set<McpToolGroupId>): string {
-    const effective = selectedMcpToolGroups(item).filter((id) => !adminBlocked.has(id) && !hidden.has(id));
-    return `${effective.length}/${MCP_TOOL_GROUPS.filter((group) => !hidden.has(group.id)).length}`;
+  /** "N/M": the selected groups the admin policy leaves on, over every group. */
+  function mcpToolsCount(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
+    const effective = selectedMcpToolGroups(item).filter((id) => !adminBlocked.has(id));
+    return `${effective.length}/${MCP_TOOL_GROUPS.length}`;
   }
 
-  function mcpToolsLabel(item: ChatPane, adminBlocked: Set<McpToolGroupId>, hidden: Set<McpToolGroupId>): string {
-    return `도구 ${mcpToolsCount(item, adminBlocked, hidden)}`;
+  function mcpToolsLabel(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
+    return `도구 ${mcpToolsCount(item, adminBlocked)}`;
   }
 
-  function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>, hidden: Set<McpToolGroupId>): string {
-    if (isExternalPane(item)) {
-      return (
-        item.modelTier ||
-        (item.externalDefaultModel ? `기본 (${item.externalDefaultModel})` : "기본 모델")
-      );
-    }
+  function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
     const parts: string[] = [];
-    if (hasModelPicker()) parts.push(modelTierLabel(item));
+    if (hasModelPicker()) parts.push(currentModelLabel(item));
     if (hasEffortPicker()) parts.push(`강도 ${effortLabel(item)}`);
-    const groupLabel = groupKnowledgeLabel(item);
-    if (groupLabel) parts.push(groupLabel);
-    parts.push(mcpToolsLabel(item, adminBlocked, hidden));
+    parts.push(mcpToolsLabel(item, adminBlocked));
     return parts.join(" · ");
   }
 
@@ -528,34 +443,12 @@
   function toggleComposerSettings(item: ChatPane) {
     const closing = composerSettingsOpenPaneId === item.id;
     composerSettingsOpenPaneId = closing ? "" : item.id;
-    if (closing && gkOpenPaneId === item.id) gkOpenPaneId = "";
     if (closing && mcpToolsOpenPaneId === item.id) mcpToolsOpenPaneId = "";
-  }
-
-  // Gateway model catalogs load eagerly per EXTERNAL pane: on desktop the
-  // composer controls are always visible (the settings toggle only exists on
-  // mobile), so there is no interaction to hook a lazy fetch onto — populate
-  // the picker as soon as the pane exists. ensureExternalModels is one-shot
-  // per pane (undefined-check + in-flight guard), so this settles immediately.
-  $: for (const paneItem of panes) {
-    if (isExternalPane(paneItem) && paneItem.externalModels === undefined) {
-      void ensureExternalModels(paneItem);
-    }
   }
 
   function toggleMcpToolsPanel(item: ChatPane) {
     const closing = mcpToolsOpenPaneId === item.id;
     mcpToolsOpenPaneId = closing ? "" : item.id;
-    if (!closing && gkOpenPaneId === item.id) gkOpenPaneId = "";
-    // The Craft runner may have come up (or failed) since boot, and a login
-    // from the auth screen never read craftApps: re-read it for admins.
-    if (!closing && isSystemAdmin($appState.user)) void refreshCraftApps(() => api("/api/me"));
-  }
-
-  function toggleGroupKnowledgePanel(item: ChatPane) {
-    const closing = gkOpenPaneId === item.id;
-    gkOpenPaneId = closing ? "" : item.id;
-    if (!closing && mcpToolsOpenPaneId === item.id) mcpToolsOpenPaneId = "";
   }
 
   async function submit(item: ChatPane) {
@@ -577,7 +470,7 @@
     return Boolean(
       !item.streaming &&
         item.avatar &&
-        (item.draft.trim() || (!isExternalPane(item) && item.pendingImages?.length)),
+        (item.draft.trim() || item.pendingImages?.length),
     );
   }
 
@@ -586,7 +479,7 @@
   }
 
   // Scoped to the composer box: the transcript can hold textareas of its own (the
-  // inline 여기서부터 다시 editor, a plan's 수정 요청 field), which come FIRST in the
+  // inline 여기서부터 다시 editor), which come FIRST in the
   // pane's DOM order.
   function blurComposer(paneId: string) {
     const el = document.querySelector<HTMLTextAreaElement>(`[data-pane="${paneId}"] .composer-box textarea`);
@@ -618,26 +511,23 @@
     return { dataUrl, mediaType };
   }
 
-  // Vision support for the model THIS pane would use: pane pick > my saved
-  // default > deployment default. Mirrors the server's resolution (which also
-  // enforces it on upload); env-pinned deployments fall back to the global flag.
+  // Vision support for the model THIS pane would use: the pane's pick when pi
+  // still offers it, else the default model's (admin override / pi default).
+  // Mirrors the server's resolution (which also enforces it on upload); a server
+  // without a picker falls back to the global flag.
   function paneVisionEnabled(item: ChatPane, state: ReturnType<typeof readState> = readState()): boolean {
     const boot = state.bootstrap;
-    if (!boot || isExternalPane(item)) return true;
+    if (!boot) return true;
     const sel = boot.modelSelection;
-    if (!sel || sel.locked) return boot.visionEnabled !== false;
-    const tier = item.modelTier || state.user?.modelDefault || "";
-    const entry = tier ? sel.tiers.find((t) => t.id === tier) : undefined;
+    if (!sel) return boot.visionEnabled !== false;
+    const model = knownModel(item.model, sel.models);
+    const entry = model ? sel.models.find((m) => m.id === model) : undefined;
     if (entry) return entry.vision !== false;
     return (sel.defaultVision ?? boot.visionEnabled) !== false;
   }
 
   async function addImages(item: ChatPane, files: FileList | File[] | null | undefined) {
     if (!files) return;
-    if (isExternalPane(item)) {
-      notify("외부 아바타는 아직 이미지 첨부를 지원하지 않습니다.", "warn");
-      return;
-    }
     // Vision-off pane = FILE MODE: the server stages the image in the agent
     // workspace and hands the model only the path, so the ORIGINAL bytes go up
     // (no canvas re-encode) and only the four types the server sniffs pass.
@@ -687,11 +577,8 @@
     return paneVisionEnabled(item, state) ? "이미지 첨부" : "이미지 첨부 (모델이 내용을 보지 못하고 파일로 전달됨)";
   }
 
-  // The disabled send button's title enumerates what WOULD make it sendable, so
-  // it has to name the inputs this pane actually has: image attach is native-only.
-  function emptyComposerHint(item: ChatPane): string {
-    return isExternalPane(item) ? "메시지를 입력하세요" : "메시지 또는 이미지를 추가하세요";
-  }
+  // The disabled send button's title enumerates what WOULD make it sendable.
+  const EMPTY_COMPOSER_HINT = "메시지 또는 이미지를 추가하세요";
 
   async function onPickImages(event: Event, item: ChatPane) {
     const input = event.currentTarget as HTMLInputElement;
@@ -700,7 +587,6 @@
   }
 
   function onComposerPaste(event: ClipboardEvent, item: ChatPane) {
-    if (isExternalPane(item)) return;
     const clipboard = event.clipboardData;
     if (!clipboard) return;
     // Prefer items (covers screenshots/copied images), fall back to files (some
@@ -748,11 +634,10 @@
     return att.name ? `${base}?name=${encodeURIComponent(att.name)}` : base;
   }
 
-  // 공유 링크 beside a deck card: PPTX decks only, never in a group agent's
-  // thread (member threads are private; the group shares through its second
-  // brain). Reads only its arguments, so the template stays reactive.
-  function canShareCard(item: ChatPane, att: MessageAttachment): boolean {
-    return isPptxCard(att) && !item.avatar.groupAgent && !item.avatar.id.startsWith("group:");
+  // 공유 링크 beside a deck card: PPTX decks only. Reads only its argument,
+  // so the template stays reactive.
+  function canShareCard(att: MessageAttachment): boolean {
+    return isPptxCard(att);
   }
 
   // The card whose share-link dialog is open; null = closed. The dialog
@@ -823,36 +708,6 @@
       skillsInFlight.delete(item.id);
     }
   }
-  // Gateway model catalog for an external pane's model picker, fetched once
-  // (lazily) the first time the composer settings open. Mirrors ensureSkills:
-  // the result lives on the pane for reactivity; a failure soft-fails to a
-  // default-only picker (externalModels = null) instead of blocking the chat.
-  const externalModelsInFlight = new Set<string>();
-  async function ensureExternalModels(item: ChatPane) {
-    if (item.externalModels !== undefined || externalModelsInFlight.has(item.id)) return;
-    externalModelsInFlight.add(item.id);
-    try {
-      const result = await api<{ models: string[]; defaultModel: string | null }>(
-        `/api/avatars/${encodeURIComponent(item.avatar.id)}/models`,
-      );
-      updateState((state) => {
-        const target = state.chatPanes.find((p) => p.id === item.id);
-        if (target) {
-          target.externalModels = result.models || [];
-          target.externalDefaultModel = result.defaultModel ?? null;
-        }
-      });
-    } catch {
-      updateState((state) => {
-        const target = state.chatPanes.find((p) => p.id === item.id);
-        if (target) target.externalModels = null;
-      });
-      notify("Gateway 모델 목록을 가져오지 못했습니다. 기본 모델로 대화를 계속합니다.", "warn");
-    } finally {
-      externalModelsInFlight.delete(item.id);
-    }
-  }
-
   function closeSlash() {
     slashPaneId = "";
     slashIndex = 0;
@@ -922,9 +777,7 @@
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       if (item.streaming) {
         // Mid-turn message: the server hands it to the model between the running
-        // turn's tool calls. An external avatar runs behind the gateway, which
-        // has no such channel — there Enter keeps inserting a newline.
-        if (isExternalPane(item)) return;
+        // turn's tool calls.
         if (item.pendingImages?.length) {
           // Swallow the Enter too: the user meant "send", and a stray newline on
           // top of the refusal is noise.
@@ -948,8 +801,7 @@
   }
 
   /**
-   * Can this pane take a mid-turn message at all? Local panes only — an external
-   * gateway run has no channel for one — for as long as a turn is streaming. It
+   * Can this pane take a mid-turn message at all? For as long as a turn is streaming. It
    * deliberately does NOT look at the draft: the control is a standing part of
    * the streaming composer, disabled while there is nothing to send, so the grid
    * column list never changes under the user's fingers as they type. Reads only
@@ -957,8 +809,15 @@
    * whenever the pane object changes.
    */
   function canSteer(item: ChatPane): boolean {
-    return Boolean(!isExternalPane(item) && item.streaming);
+    return Boolean(item.streaming);
   }
+
+  /**
+   * When a message sent now reaches the avatar, as the composer says it: during
+   * the work, at its next tool-call boundary — so it can change what the avatar
+   * is doing (one that arrives as the turn ends follows as its own turn).
+   */
+  const STEER_WHEN = "작업 도중에 전달돼 진행 중인 일을 바꿀 수 있어요";
 
   /**
    * The mid-turn send button's tooltip. A control disabled with no stated
@@ -967,22 +826,19 @@
    */
   function steerSendTitle(item: ChatPane): string {
     return item.draft.trim()
-      ? "응답 중 메시지 보내기 (다음 작업 사이에 전달됩니다)"
+      ? `응답 중 메시지 보내기 (${STEER_WHEN})`
       : "메시지를 입력하면 응답 중에도 보낼 수 있어요";
   }
 
   /**
-   * The composer's placeholder while a turn is streaming. Local panes say that a
-   * message sent now is delivered between the avatar's next two actions, and name
-   * the gesture that actually sends on this device — Enter only sends where a
-   * physical keyboard was detected. External panes keep the old wording: there
-   * the draft really is only a head start on the next turn.
+   * The composer's placeholder while a turn is streaming: when a message sent now
+   * is delivered (`STEER_WHEN`), and the gesture that actually sends on this
+   * device — Enter only sends where a physical keyboard was detected.
    */
-  function streamingPlaceholder(item: ChatPane, sends: boolean): string {
-    if (isExternalPane(item)) return "응답을 기다리는 중… (다음 메시지를 미리 작성할 수 있어요)";
+  function streamingPlaceholder(sends: boolean): string {
     return sends
-      ? "응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 다음 작업 사이에 전달됩니다"
-      : "응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 다음 작업 사이에 전달됩니다";
+      ? `응답 중에도 메시지를 보낼 수 있어요 · Enter로 보내면 ${STEER_WHEN}`
+      : `응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 ${STEER_WHEN}`;
   }
 
   function onComposerInput(event: Event, item: ChatPane) {
@@ -1134,59 +990,23 @@
     }
   }
 
-  async function setGroupKnowledge(item: ChatPane, groupId: string, on: boolean) {
-    const off = new Set(item.groupKnowledgeOff || []);
-    if (on) off.delete(groupId);
-    else off.add(groupId);
-    const next = [...off];
+  // pi model picked in the composer ("" = pi-gateway's default model). It lives
+  // on the pane and rides the next chat POST (which persists it per-conversation),
+  // AND writes through to the owner's remembered default so the choice seeds the
+  // next new conversation.
+  function setModel(item: ChatPane, model: string) {
     updateState((state) => {
       const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.groupKnowledgeOff = next;
-      if (state.user) state.user.groupKnowledgeOffDefault = [...next];
+      if (target) target.model = model || undefined;
+      if (state.user) state.user.modelDefault = model || null;
     });
-    const label = eligibleGroups(item).find((g) => g.id === groupId)?.name || "그룹";
-    notify(`"${label}" 그룹 지식을 ${on ? "사용" : "사용 해제"}했습니다. 다음 메시지부터 적용됩니다.`, "info");
-    api("/api/me/group-knowledge-default", { method: "PUT", body: JSON.stringify({ off: next }) }).catch((err) =>
-      notify(`그룹 지식 기본값을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
-    );
-  }
-
-  // Model tier picked in the composer. Like the group-knowledge toggle it lives on
-  // the pane and rides the next chat POST (which persists it per-conversation), AND
-  // writes through to the owner's remembered default so the choice seeds the next
-  // new conversation. The picker has no "default" option — every value is a real
-  // tier (the default is Opus, applied server-side when never chosen).
-  function setModelTier(item: ChatPane, tier: string) {
-    updateState((state) => {
-      const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.modelTier = tier;
-      if (state.user) state.user.modelDefault = tier;
-    });
-    const label = $appState.bootstrap?.modelSelection?.tiers.find((t) => t.id === tier)?.label;
-    notify(`모델을 ${label ?? tier}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`, "info");
-    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ model: tier }) }).catch((err) =>
+    notify(`모델을 ${modelLabel(model)}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`, "info");
+    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ model: model || null }) }).catch((err) =>
       notify(`기본 모델을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
     );
   }
 
-  // Gateway model for an EXTERNAL pane: lives on the pane and rides the next
-  // chat POST (per-conversation). Unlike the native tier there is no per-user
-  // default — the admin-configured agent model is the baseline, and "" clears
-  // back to it.
-  function setExternalModel(item: ChatPane, modelId: string) {
-    updateState((state) => {
-      const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.modelTier = modelId || undefined;
-    });
-    notify(
-      modelId
-        ? `모델을 ${modelId}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`
-        : "기본 모델로 되돌렸습니다. 다음 메시지부터 적용됩니다.",
-      "info",
-    );
-  }
-
-  // Reasoning effort, mirroring setModelTier: lives on the pane, rides the next chat
+  // Reasoning effort, mirroring setModel: lives on the pane, rides the next chat
   // POST (per-conversation), and writes through to the remembered per-user default.
   // Every value is a real level (the default is "높음"/high when never chosen).
   function setEffort(item: ChatPane, effort: string) {
@@ -1204,7 +1024,7 @@
 
   function setMcpToolGroup(item: ChatPane, groupId: McpToolGroupId, on: boolean) {
     // Admin-blocked groups are disabled in the picker; ignore any stray toggle.
-    if (isRequiredMcpToolGroup(groupId) || adminBlockedMcpToolGroupSet.has(groupId) || hiddenMcpToolGroupSet.has(groupId)) return;
+    if (isRequiredMcpToolGroup(groupId) || adminBlockedMcpToolGroupSet.has(groupId)) return;
     const current = new Set(selectedMcpToolGroups(item));
     if (on) current.add(groupId);
     else current.delete(groupId);
@@ -1212,13 +1032,11 @@
     updateState((state) => {
       const target = state.chatPanes.find((p) => p.id === item.id);
       if (target) target.mcpToolGroups = next;
-      if (state.user) state.user.mcpToolGroupsDefault = withoutDefaultOffMcpToolGroups(next);
+      if (state.user) state.user.mcpToolGroupsDefault = [...next];
     });
     const label = MCP_TOOL_GROUPS.find((group) => group.id === groupId)?.labelKo ?? groupId;
     notify(`"${label}" MCP 도구를 ${on ? "사용" : "사용 해제"}했습니다. 다음 메시지부터 적용됩니다.`, "info");
-    // The remembered default never carries a Craft group (default-off per
-    // conversation); THIS conversation's pick rides the next chat turn.
-    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ mcpToolGroups: withoutDefaultOffMcpToolGroups(next) }) }).catch((err) =>
+    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ mcpToolGroups: next }) }).catch((err) =>
       notify(`기본 MCP 도구 설정을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
     );
   }
@@ -1229,7 +1047,6 @@
   function runtimeBadge(message: StoredMessage): string | null {
     const runtime = message.response?.runtime;
     if (runtime === "local") return "로컬";
-    if (runtime === "external") return "외부 아바타";
     if (message.response?.summary === "오류" || message.response?.summary === "중지됨") return message.response.summary;
     return null;
   }
@@ -1242,38 +1059,29 @@
     if (agentCount) parts.push(`에이전트 ${agentCount}개`);
     return parts.length ? `${parts.join(" · ")} ${suffix}` : emptyLabel;
   }
-  function activitySummary(rows: SegmentRows): string {
+  type ActivityRows = { agents: LiveAgentNode[]; tools: LiveToolRow[]; tasks: LiveTaskRow[] };
+  function rowsRunning(rows: ActivityRows): boolean {
+    return (
+      rows.agents.some((a) => !a.isMain && a.status === "running") ||
+      rows.tools.some((t) => t.status === "running") ||
+      rows.tasks.some((t) => t.status === "running")
+    );
+  }
+  // The in-flight turn's rows: "진행 중" only while one of them runs — between
+  // actions (the model is writing, or a pi run waits on a consulted avatar) the
+  // rows are finished, so "사용함".
+  function activitySummary(rows: ActivityRows): string {
     const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
     const taskCount = rows.tasks.length;
     const agentCount = rows.agents.filter((a) => !a.isMain).length;
-    return activityCountLabel(toolCount, taskCount, agentCount, "진행 중", "작업 중…");
-  }
-  // A finished turn's live rows during the background phase (its background
-  // agents may still be at work): "진행 중" while anything runs, else "사용함".
-  function segmentActivityLabel(rows: SegmentRows): string {
-    const running =
-      rows.agents.some((a) => !a.isMain && a.status === "running") ||
-      rows.tools.some((t) => t.status === "running") ||
-      rows.tasks.some((t) => t.status === "running");
-    const toolCount = rows.tools.filter((t) => t.kind === "tool").length;
-    const taskCount = rows.tasks.length + rows.tools.filter((t) => t.kind === "task").length;
-    const agentCount = rows.agents.filter((a) => !a.isMain).length;
-    return activityCountLabel(toolCount, taskCount, agentCount, running ? "진행 중" : "사용함", "작업 내역");
-  }
-  // One-line description list for the background-phase note ("빌드 실행, 리포 조사").
-  function bgTaskSummary(item: ChatPane): string {
-    return (item.backgroundTasks || [])
-      .map((t) => t.description || t.taskType || t.taskId)
-      .filter(Boolean)
-      .join(", ");
+    return activityCountLabel(toolCount, taskCount, agentCount, rowsRunning(rows) ? "진행 중" : "사용함", "작업 중…");
   }
 
   // Activity-tree snapshot kept on a COMPLETED assistant message, so the tool/agent
   // runs stay visible after the response finishes (collapsed by default).
   function completedActivity(message: StoredMessage) {
     const activity = message.response?.activity;
-    // A sealed background segment can hold only an agent card (a background
-    // agent that ran no tool yet): that is still worth showing.
+    // An agent card with no tool rows of its own is still worth showing.
     return activity &&
       (activity.tools.length || activity.tasks?.length || activity.agents.some((a) => !a.isMain))
       ? activity
@@ -1359,7 +1167,7 @@
       {#if att.kind === "file"}
         <!-- A LIVE card has no persisted message the server could find yet, so
              the link control appears once the turn is stored. -->
-        {#if source !== item.liveAttachments && canShareCard(item, att)}
+        {#if source !== item.liveAttachments && canShareCard(att)}
           <!-- One flex item: the card is itself a <button>, so the control is
                a sibling, and the wrapper keeps the pair together on a wrap. -->
           <div class="msg-file-share">
@@ -1411,12 +1219,11 @@
               <h3>{item.avatar.alias || item.avatar.displayName} 아바타와 대화</h3>
               <p>{item.avatar.bio || (item.avatar.elevated || own ? "무엇이든 물어보세요." : "무엇이든 물어보세요. 이 아바타의 도구는 읽기 전용으로 실행됩니다.")}</p>
             </div>
-            {#if own && !isExternalPane(item)}
+            {#if own}
               <!-- The owner's own avatar gets guided tours instead of generic
                    chips: a first-time owner needs to see what the avatar can do,
-                   not a prompt they still have to judge. Colleague, group-agent
-                   and external panes keep the chips (isOwn is false for all
-                   three, group agents included). -->
+                   not a prompt they still have to judge. Colleague panes
+                   keep the chips (isOwn is false there). -->
               <div class="starter-prompts tour-cards" role="group" aria-label="체험 시나리오">
                 <p class="tour-caption">처음이라면 이 중 하나로 시작해 보세요. 카드를 누르면 입력창에 준비됩니다.</p>
                 {#each tourScenarios as scenario (scenario.slug)}
@@ -1444,14 +1251,19 @@
           <!-- Named in the markup (not read inside a helper) so legacy-mode
                tracking re-renders the bubble the moment the editor opens/closes. -->
           {@const editing = message.role === "user" && item.rewindEdit?.messageId === message.id}
-          <div class={`message ${message.role}`}>
+          <!-- A consulted teammate avatar's answer (kind "consultation") is a
+               user-role row Noah wrote: it renders on the avatars' side under
+               THAT avatar's name, never as "나", and offers no edit. -->
+          {@const consultation = message.role === "user" && message.kind === "consultation"}
+          <div class={`message ${consultation ? "consultation" : message.role}`}>
             <div class="msg-role">
               <span class="role-dot"></span>
-              <span>{message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>
+              <span>{consultation ? consultationLabel(message) : message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>
+              {#if consultation}<span class="tag steer-badge">팀원 상담 결과</span>{/if}
               <!-- A message the viewer sent WHILE the avatar was answering. The
-                   badge is what tells it apart from an ordinary turn: it landed
-                   between the previous turn's tool calls, not after it. -->
-              {#if message.role === "user" && message.kind === "steer"}<span class="tag steer-badge">응답 중 전달</span>{/if}
+                   badge is what tells it apart from an ordinary turn, and says
+                   when the model got it: between tool calls, or after the answer. -->
+              {#if message.role === "user" && message.kind === "steer"}<span class="tag steer-badge">{steerBadgeLabel(item.messages, index)}</span>{/if}
               {#if message.createdAt}<time class="msg-time" datetime={message.createdAt}>{timeLabel(message.createdAt)}</time>{/if}
             </div>
             <div class={`bubble ${message.response?.summary === "오류" ? "errored" : ""}`} class:rewind-editing={editing}>
@@ -1470,6 +1282,7 @@
                   </details>
                 {/if}
                 {#if message.response?.plan}
+                  <!-- Read-only: plan mode is retired, but an older turn's stored plan still renders. -->
                   <details class="plan-card" open>
                     <summary class="plan-card-head"><span class="tag plan-card-badge">계획</span><span class="plan-card-hint">계획 모드</span></summary>
                     <div class="md plan-card-body" use:enhanceMarkdown={message.response.plan}>{@html renderMarkdownCached(message.response.plan)}</div>
@@ -1503,25 +1316,6 @@
                       </div>
                     {/if}
                   </details>
-                {:else}
-                  {@const segRows = messageSegmentRows(item, message.id)}
-                  <!-- Background phase: THIS bubble's live rows (its background agents
-                       may still be running) render under it, not in the trailing live
-                       bubble, until bg_end seals them onto this message. -->
-                  {#if segRows}
-                    {@const segMemChip = memoryChip(segRows.tools)}
-                    {@const segCmpChip = compactChip(segRows.tools)}
-                    <details class="activity-live" open>
-                      <summary>
-                        <span class="activity-summary-text">{segmentActivityLabel(segRows)}</span>
-                        {#if segMemChip}<span class="activity-memory-chip" title={segMemChip.title}><span aria-hidden="true">🧠</span>{segMemChip.label}</span>{/if}
-                        {#if segCmpChip}<span class="activity-memory-chip" title={segCmpChip.title}><span aria-hidden="true">{segCmpChip.icon}</span>{segCmpChip.label}</span>{/if}
-                      </summary>
-                      <div class="agent-activity">
-                        <ActivityTree agentId="main" agents={segRows.agents} tools={segRows.tools} tasks={segRows.tasks} />
-                      </div>
-                    </details>
-                  {/if}
                 {/if}
               {:else}
                 {#if visibleAttachments(message.attachments).length}
@@ -1607,45 +1401,6 @@
                   <div class="md thinking-card-body" use:enhanceMarkdown={item.liveThinking}>{@html renderMarkdown(item.liveThinking)}</div>
                 </details>
               {/if}
-              {#if item.livePlan}
-                <details class="plan-card" open>
-                  <summary class="plan-card-head"><span class="tag plan-card-badge">계획</span><span class="plan-card-hint">{item.planReview ? "승인 대기 중" : "계획 모드"}</span></summary>
-                  <div class="md plan-card-body" use:enhanceMarkdown={item.livePlan}>{@html renderMarkdown(item.livePlan)}</div>
-                  {#if item.planReview}
-                    {@const planStatus = planReviewStatusText(item)}
-                    <div class="plan-actions" aria-busy={item.planReviewSubmitting ? "true" : "false"} aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined}>
-                      {#if planRejectPaneId === item.id}
-                        <textarea
-                          class="plan-feedback"
-                          rows="2"
-                          placeholder="수정할 점을 알려주세요 (선택)"
-                          bind:value={planFeedback}
-                          aria-label="계획 수정 요청 내용"
-                          aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined}
-                          aria-invalid={planReviewErrors[item.id] ? "true" : undefined}
-                          disabled={item.planReviewSubmitting}
-                        ></textarea>
-                        <div class="plan-actions-row">
-                          <button class="btn btn-ghost btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={cancelRejectPlan}>취소</button>
-                          <button class="btn btn-primary btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={() => submitRejectPlan(item)}>수정 요청 보내기</button>
-                        </div>
-                      {:else}
-                        <div class="plan-actions-row">
-                          <button class="btn btn-ghost btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={() => startRejectPlan(item)}>수정 요청</button>
-                          <button class="btn btn-primary btn-sm" type="button" aria-describedby={planStatus ? paneDomId("plan-review-status", item.id) : undefined} disabled={item.planReviewSubmitting} on:click={() => approvePlan(item)}>승인</button>
-                        </div>
-                      {/if}
-                      {#if planStatus}
-                        <div id={paneDomId("plan-review-status", item.id)} class="plan-review-status" class:invalid={Boolean(planReviewErrors[item.id])} role="status" aria-live="polite">{planStatus}</div>
-                      {/if}
-                    </div>
-                  {/if}
-                </details>
-              {:else if item.planPending}
-                <div class="plan-card plan-card-pending">
-                  <div class="plan-card-head"><span class="tag plan-card-badge">계획</span><span class="plan-card-hint">계획을 작성하는 중…</span><span class="plan-card-spin" aria-hidden="true"></span></div>
-                </div>
-              {/if}
               {#each segmentAttachments(item.liveText, item.liveAttachments) as seg, segIndex (segIndex)}
                 {#if seg.text || (seg.tail && item.liveText)}
                   <div class="md" use:enhanceMarkdown={seg.text}>{@html renderMarkdown(seg.text)}{#if seg.tail}<span class="stream-caret" aria-hidden="true"></span>{/if}</div>
@@ -1663,35 +1418,19 @@
                    the bubble's edge instead, which is exactly what autoscroll
                    already follows. -->
               {#if item.liveAgents.length}
-                {@const liveRows = liveSegmentRows(item)}
-                <!-- The in-flight turn's rows only: in the background phase the
-                     finished bubbles above show their own (lib/activitySegments). -->
-                {#if liveRows}
-                  {@const liveMemChip = memoryChip(liveRows.tools)}
-                  {@const liveCmpChip = compactChip(liveRows.tools)}
-                  <details class="activity-live" open>
-                    <summary>
-                      <span class="activity-summary-text">{activitySummary(liveRows)}</span>
-                      {#if liveMemChip}<span class="activity-memory-chip" title={liveMemChip.title}><span aria-hidden="true">🧠</span>{liveMemChip.label}</span>{/if}
-                      {#if liveCmpChip}<span class="activity-memory-chip" title={liveCmpChip.title}><span aria-hidden="true">{liveCmpChip.icon}</span>{liveCmpChip.label}</span>{/if}
-                    </summary>
-                    <div class="agent-activity">
-                      <ActivityTree agentId="main" agents={liveRows.agents} tools={liveRows.tools} tasks={liveRows.tasks} />
-                    </div>
-                  </details>
-                {/if}
-              {/if}
-              {#if item.backgroundPhase}
-                <!-- The visible turn is finalized (bubble above), but SDK background
-                     tasks keep the session alive; the stop button cancels them. -->
-                <div class="bg-task-note" role="status">
-                  <span class="bg-task-dot" aria-hidden="true"></span>
-                  <span class="bg-task-text">
-                    {item.backgroundTasks?.length
-                      ? `백그라운드 작업 ${item.backgroundTasks.length}개 진행 중 · ${bgTaskSummary(item)}`
-                      : "백그라운드 작업 마무리 중…"}
-                  </span>
-                </div>
+                {@const liveRows = { agents: item.liveAgents, tools: item.liveTools, tasks: item.liveTasks }}
+                {@const liveMemChip = memoryChip(liveRows.tools)}
+                {@const liveCmpChip = compactChip(liveRows.tools)}
+                <details class="activity-live" open>
+                  <summary>
+                    <span class="activity-summary-text">{activitySummary(liveRows)}</span>
+                    {#if liveMemChip}<span class="activity-memory-chip" title={liveMemChip.title}><span aria-hidden="true">🧠</span>{liveMemChip.label}</span>{/if}
+                    {#if liveCmpChip}<span class="activity-memory-chip" title={liveCmpChip.title}><span aria-hidden="true">{liveCmpChip.icon}</span>{liveCmpChip.label}</span>{/if}
+                  </summary>
+                  <div class="agent-activity">
+                    <ActivityTree agentId="main" agents={liveRows.agents} tools={liveRows.tools} tasks={liveRows.tasks} />
+                  </div>
+                </details>
               {/if}
               <div class="stream-status">
                 <span class="spinner"></span>
@@ -1748,7 +1487,7 @@
             </div>
           {/if}
         {/if}
-        {#if !isExternalPane(item) && item.pendingImages?.length}
+        {#if item.pendingImages?.length}
           <div class="composer-attachments" aria-label="첨부한 이미지">
             {#each item.pendingImages as img (img.id)}
               <div class="composer-thumb">
@@ -1769,35 +1508,31 @@
         {/if}
         <div
           class="composer-box"
-          class:no-attach={isExternalPane(item)}
           class:with-steer={canSteer(item)}
         >
-          {#if !isExternalPane(item)}
-            <label
-              class="composer-attach"
-              class:disabled={item.streaming}
-              title={attachHint(item, $appState)}
-              aria-label={attachHint(item, $appState)}
-            >
-              <Icon name="image" />
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple
-                hidden
-                disabled={item.streaming}
-                on:change={(event) => onPickImages(event, item)}
-              />
-            </label>
-          {/if}
+          <label
+            class="composer-attach"
+            class:disabled={item.streaming}
+            title={attachHint(item, $appState)}
+            aria-label={attachHint(item, $appState)}
+          >
+            <Icon name="image" />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              hidden
+              disabled={item.streaming}
+              on:change={(event) => onPickImages(event, item)}
+            />
+          </label>
           <!-- Intentionally NOT disabled while streaming: disabling blurs the
                textarea (focus loss after every send) and blocks composing the
-               next message. On a local pane what is typed mid-stream can now be
-               SENT into the running turn (see `canSteer`); on an external one it
-               is still only a head start on the next turn. -->
+               next message. What is typed mid-stream can be SENT into the
+               running turn (see `canSteer`). -->
           <textarea
             rows="1"
-            placeholder={item.streaming ? streamingPlaceholder(item, enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
+            placeholder={item.streaming ? streamingPlaceholder(enterSends) : `${item.avatar.alias || item.avatar.displayName}에게 메시지…`}
             value={item.draft}
             aria-label={`${item.avatar.alias || item.avatar.displayName}에게 보낼 메시지`}
             aria-describedby={paneDomId("composer-hint", item.id)}
@@ -1832,7 +1567,7 @@
             class:is-stop={item.streaming}
             type="button"
             aria-label={item.streaming ? "응답 중지" : "보내기"}
-            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : emptyComposerHint(item)}
+            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : EMPTY_COMPOSER_HINT}
             disabled={!item.streaming && !canSendMessage(item)}
             on:click={() => (item.streaming ? stopPane(item.id) : submit(item))}
           >
@@ -1883,42 +1618,21 @@
                 >
                   <Icon name="gear" size={16} />
                   <span class="composer-settings-label">설정</span>
-                  <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet, hiddenMcpToolGroupSet)}</span>
+                  <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet)}</span>
                 </button>
                 <span id={paneDomId("composer-controls", item.id)} class="composer-controls" class:open={composerSettingsOpenPaneId === item.id}>
-                  {#if isExternalPane(item)}
-                    <select
-                      class="composer-model-select"
-                      aria-label="이 대화에 사용할 Gateway 모델"
-                      title="이 대화에서 다음 메시지부터 사용할 Gateway 모델을 고릅니다"
-                      value={item.modelTier ?? ""}
-                      disabled={item.externalModels === undefined}
-                      on:change={(event) => setExternalModel(item, event.currentTarget.value)}
-                    >
-                      <option value="">
-                        {item.externalModels === undefined
-                          ? "모델 목록 불러오는 중…"
-                          : item.externalDefaultModel
-                            ? `기본 (${item.externalDefaultModel})`
-                            : "기본 모델"}
-                      </option>
-                      {#each (item.externalModels ?? []).filter((id) => id !== item.externalDefaultModel) as modelId (modelId)}
-                        <option value={modelId}>{modelId}</option>
-                      {/each}
-                    </select>
-                  {:else}
-                  {#if $appState.bootstrap?.modelSelection?.tiers.length}
+                  {#if $appState.bootstrap?.modelSelection?.models.length}
                     <select
                       class="composer-model-select"
                       aria-label="이 대화에 사용할 모델"
-                      title={canPickModel() ? "이 대화에서 다음 메시지부터 사용할 모델을 고릅니다" : "서버 설정으로 모델이 고정되어 있습니다"}
-                      value={currentModelTier(item)}
-                      disabled={!canPickModel()}
-                      on:change={(event) => setModelTier(item, event.currentTarget.value)}
+                      title="이 대화에서 다음 메시지부터 사용할 모델을 고릅니다"
+                      value={currentModel(item)}
+                      on:change={(event) => setModel(item, event.currentTarget.value)}
                     >
-                      {#each $appState.bootstrap.modelSelection.tiers as tier (tier.id)}
-                        <option value={tier.id} title={tier.model ? `${tier.description}\n(${tier.model})` : tier.description}>
-                          {tier.label}{tier.model ? ` · ${tier.model}` : ""}
+                      <option value="" title="pi-gateway가 정한 기본 모델을 사용합니다">기본 모델</option>
+                      {#each $appState.bootstrap.modelSelection.models as model (model.id)}
+                        <option value={model.id} title={model.server ? `${model.id}\n(${model.server})` : model.id}>
+                          {model.id}
                         </option>
                       {/each}
                     </select>
@@ -1936,18 +1650,6 @@
                       {/each}
                     </select>
                   {/if}
-                  {#if eligibleGroups(item).length}
-                    {@const groups = eligibleGroups(item)}
-                    {@const onCount = groups.filter((g) => !(item.groupKnowledgeOff || []).includes(g.id)).length}
-                    <button
-                      class="composer-gk-btn"
-                      type="button"
-                      aria-expanded={gkOpenPaneId === item.id ? "true" : "false"}
-                      aria-controls={paneDomId("composer-gk-panel", item.id)}
-                      title="이 대화에서 다음 메시지부터 사용할 그룹 지식을 고릅니다"
-                      on:click={() => toggleGroupKnowledgePanel(item)}
-                    >그룹 지식 {onCount}/{groups.length}</button>
-                  {/if}
                   <button
                     class="composer-tools-btn"
                     type="button"
@@ -1955,14 +1657,13 @@
                     aria-controls={paneDomId("composer-tools-panel", item.id)}
                     title="이 대화에서 다음 메시지부터 사용할 MCP 도구 묶음을 고릅니다"
                     on:click={() => toggleMcpToolsPanel(item)}
-                  >MCP 도구 {mcpToolsCount(item, adminBlockedMcpToolGroupSet, hiddenMcpToolGroupSet)}</button>
-                  {/if}
+                  >MCP 도구 {mcpToolsCount(item, adminBlockedMcpToolGroupSet)}</button>
                 </span>
               {/if}
               {#if formatUsageLabel(item.usage)}
                 <span class="composer-usage">{formatUsageLabel(item.usage)}</span>
               {/if}
-              {#if bridgeCompat && !isExternalPane(item) && selectedMcpToolGroups(item).includes("browser") && !adminBlockedMcpToolGroupSet.has("browser")}
+              {#if bridgeCompat && selectedMcpToolGroups(item).includes("browser") && !adminBlockedMcpToolGroupSet.has("browser")}
                 {@const badge = bridgeBadge(bridgeCompat)}
                 {#if bridgeCompat.level === "current"}
                   <span class="composer-bridge" data-status="current" title={badge.title}>{badge.text}</span>
@@ -1985,28 +1686,7 @@
           {/if}
         </div>
       </form>
-      {#if gkOpenPaneId === item.id && eligibleGroups(item).length}
-        <div
-          id={paneDomId("composer-gk-panel", item.id)}
-          class="composer-gk-panel"
-          role="group"
-          aria-label="이 대화에서 사용할 그룹 지식"
-          use:clickOutside={{ onOutside: () => (gkOpenPaneId = ""), ignore: ".composer-gk-btn" }}
-        >
-          <div class="composer-gk-title">이 대화에서 사용할 그룹 지식</div>
-          {#each eligibleGroups(item) as group (group.id)}
-            <label class="composer-gk-item">
-              <input
-                type="checkbox"
-                checked={!(item.groupKnowledgeOff || []).includes(group.id)}
-                on:change={(event) => setGroupKnowledge(item, group.id, event.currentTarget.checked)}
-              />
-              <span>{group.name}</span>
-            </label>
-          {/each}
-        </div>
-      {/if}
-      {#if !isExternalPane(item) && mcpToolsOpenPaneId === item.id}
+      {#if mcpToolsOpenPaneId === item.id}
         <div
           id={paneDomId("composer-tools-panel", item.id)}
           class="composer-tools-panel"
@@ -2015,7 +1695,7 @@
           use:clickOutside={{ onOutside: () => (mcpToolsOpenPaneId = ""), ignore: ".composer-tools-btn" }}
         >
           <div class="composer-tools-title">이 대화에서 사용할 MCP 도구</div>
-          {#each visibleMcpToolGroups as group (group.id)}
+          {#each MCP_TOOL_GROUPS as group (group.id)}
             {@const adminBlocked = adminBlockedMcpToolGroupSet.has(group.id)}
             <label class="composer-tools-item">
               <input
@@ -2189,7 +1869,7 @@
 
 <style>
   /* The 할 일 overlay switch in the composer hint row. Its chrome is the MCP
-     도구/그룹 지식 buttons' own rule (30-agent-md-composer.css joins it there);
+     도구 buttons' own rule (30-agent-md-composer.css joins it there);
      only the icon layout and the accent-filled "shown" state live here. */
   .composer-todo-btn {
     display: inline-flex;
@@ -2272,9 +1952,8 @@
     justify-content: flex-end;
     gap: var(--s-2);
   }
-  /* Plan-mode plan card (ExitPlanMode). A distinct, collapsible card inside the
-     assistant bubble that surfaces the proposed plan — shown live while the turn
-     streams and persisted on the finished message (response.plan). */
+  /* Plan card (retired plan mode): a distinct, collapsible card inside an OLDER
+     assistant bubble that still carries a stored plan (response.plan). Read-only. */
   .plan-card {
     min-width: 0;
     max-width: 100%;
@@ -2320,57 +1999,6 @@
     padding: 0 var(--s-3) var(--s-2);
     min-width: 0;
     max-width: 100%;
-  }
-  /* Inline approve / reject controls shown on a live plan card while the avatar
-     waits for the owner's approval (interactive plan mode). */
-  .plan-actions {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-    padding: 0 var(--s-3) var(--s-3);
-  }
-  .plan-actions-row {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--s-2);
-  }
-  .plan-feedback {
-    width: 100%;
-    box-sizing: border-box;
-    resize: vertical;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    background: var(--panel);
-    color: var(--text);
-    padding: var(--s-2);
-    font: inherit;
-    font-size: var(--t-sm);
-  }
-  .plan-review-status {
-    align-self: flex-end;
-    color: var(--muted);
-    font-size: var(--t-xs);
-  }
-  .plan-review-status.invalid {
-    color: var(--danger);
-  }
-  /* Placeholder shown between EnterPlanMode and ExitPlanMode: the avatar is
-     composing the plan in the background (tool rows are suppressed for plan
-     tools), so without this the turn looks stalled. */
-  .plan-card-pending .plan-card-head {
-    cursor: default;
-  }
-  /* Self-contained spinner: the base `.spinner` rule is scoped to `.stream-status`,
-     so this placeholder (outside it) must style its own. `spin` is a global keyframe. */
-  .plan-card-spin {
-    margin-left: auto;
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border: 2px solid var(--line);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
   }
   /* Reasoning (extended-thinking) view. Deliberately muted and secondary to the
      answer — collapsed by default on completed bubbles, expanded live so the user

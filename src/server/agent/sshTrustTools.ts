@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { AppConfig } from "../types.js";
 import { addTrustedHost, listTrustedHosts, removeTrustedHost } from "../sshTrust.js";
@@ -22,7 +22,7 @@ export interface SshTrustToolsContext {
 /** MCP server name; tools surface to the model as `mcp__ssh_trust__<tool>`. */
 export const SSH_TRUST_SERVER_NAME = "ssh_trust";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const SSH_TRUST_TOOL_NAMES = [
   "mcp__ssh_trust__add_host",
   "mcp__ssh_trust__list_hosts",
@@ -100,7 +100,7 @@ export function buildSshTrustTools(ctx: SshTrustToolsContext) {
  * single conversation's context.
  */
 export function buildSshTrustServer(ctx: SshTrustToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: SSH_TRUST_SERVER_NAME,
     version: "0.1.0",
     tools: buildSshTrustTools(ctx),

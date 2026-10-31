@@ -126,7 +126,6 @@ async function mockApp(page: Page, canvases: CanvasFixture[]): Promise<void> {
             createdAt: "2026-10-06T03:00:00.000Z",
           },
         ],
-        groupKnowledgeOff: [],
         canvases,
       };
     } else if (path === "/api/chat/runs") {

@@ -3,25 +3,25 @@
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
 > Clone/commit plumbing shared by the repo families, plus backfill / request_info / second-brain mechanics.
 
-## Repo plumbing (`knowledgeRepo.ts` / `groupKnowledgeRepo.ts` / `gitRepos.ts` / `repoGitCore.ts` / `repoGitGuards.ts`)
+## Repo plumbing (`knowledgeRepo.ts` / `gitRepos.ts` / `repoGitCore.ts` / `repoGitGuards.ts`)
 - **Low-level git is shared in `repoGitCore.ts`** (exec wrapper, `currentBranch`, dirty-status) and arg
-  guards in `repoGitGuards.ts`. `knowledgeRepo.ts` + `groupKnowledgeRepo.ts` are thin context-resolvers
-  over it; `gitRepos.ts` uses it too. **They were line-for-line mirrors before** — keep the shared core
+  guards in `repoGitGuards.ts`. `knowledgeRepo.ts` is a thin context-resolver
+  over it (so was `groupKnowledgeRepo.ts` until group knowledge repos were retired 2026-10-30); `gitRepos.ts` uses it too. **They were line-for-line mirrors before** — keep the shared core
   the single edit point for git-safety.
-- **`dirtyPaths` flag difference is PRESERVED, not unified:** knowledge/group repos use `--porcelain`,
+- **`dirtyPaths` flag difference is PRESERVED, not unified:** the knowledge repo uses `--porcelain`,
   `gitRepos` uses `--porcelain -uall`, threaded via the `extraStatusArgs` param. The knowledge-repo
   variant misses files inside otherwise-untracked dirs — a **latent bug flagged for a deliberate
   decision** (T3.7), NOT something to "fix" incidentally.
 - **Git safety is TWO separate layers — don't merge them.**
   1. **Arg-safety: ONE validator, every clone path.** `assertSafeGitValue` (`repoGitGuards.ts`,
      re-exported via `repoGitCore.ts`) rejects leading-dash values and `scheme::` remote-helper syntax
-     (`ext::sh -c …`). Used by `gitRepos.ts`, `knowledgeRepo.ts`, `groupKnowledgeRepo.ts`, and
+     (`ext::sh -c …`). Used by `gitRepos.ts`, `knowledgeRepo.ts`, and
      `marketplace.ts`'s `assertSafeArg` (plugin clones). It is deliberately **transport-agnostic**: a bare
      local path is a LEGITIMATE repo source (`register_repo` accepts one by design, and every offline repo
      test clones from a local bare remote), so this layer must never reject one. Was T3.8 — the three
      non-`gitRepos` paths used to check only for a leading dash and leaned on git's own default protocol
      policy (`fatal: transport 'ext' not allowed`) to stop `ext::`.
-  2. **Source/host POLICY: `isInternalGitSource` (`gitCredentials.ts`), knowledge + group repos only.**
+  2. **Source/host POLICY: `isInternalGitSource` (`gitCredentials.ts`), the knowledge repo only.**
      It answers "is this on the internal GitHub host?" and **must fail CLOSED** — a non-shorthand source
      needs a PARSEABLE host matching `config.githubHost`. It used to return `true` for `host === null`,
      which (since `looksLikeRepo` accepts anything ending in `.git`) let any authenticated user point their
@@ -38,7 +38,7 @@
   conflicting rebase is `--abort`ed (local commits preserved) and thrown as **`REBASE_CONFLICT:<files>`**;
   `repoToolKit.commitFailureMessage` decodes that sentinel into a conflict explanation (naming the files,
   telling the model to inform the user, not to retry-loop) instead of the misleading token/branch-protection
-  hint. Applies to BOTH personal and group knowledge repos (shared core).
+  hint. Lives in the shared core.
 - **`stripManagedMcpServers` mutates `.mcp.json` in place.** Committable-repo write paths MUST
   `restoreTrackedMcpJson` (from HEAD) before `git add -A`, or the strip gets pushed to the user's repo.
   Preserve that ordering.
@@ -58,9 +58,10 @@
   `git_repositories` table (`get/list/upsert/delete/markGitRepoSynced`), plumbing in `gitRepos.ts`, MCP
   server in `agent/gitRepoTools.ts`. **Single working-surface model (NOT MCP file CRUD):** owner-only
   `register_repo`/`remove_repo`; owner OR trusted may `sync_repo`/`push` (remote git) and
-  `open_repo`/`close_repo`. There are **NO status/list_files/read_file/write_file/delete_file/diff/commit
-  MCP tools** — the avatar OPENS one repo as the conversation's **working directory** (`open_repo`) and
-  edits/tests/commits it with NATIVE tools (Read/Edit/Bash local git). Each tool self-gates
+  `open_repo`/`close_repo`. There are **NO status/list_files/read_file/write_file/delete_file/diff MCP tools** —
+  the avatar OPENS one repo as the conversation's **working directory** (`open_repo`), edits/tests its sandbox
+  copy with NATIVE tools (read/edit/bash, local git for status/diff/log), and saves with `mcp__git_repo__commit`
+  (`GIT_REPO_PI_COMMIT_TOOL_NAME`), which reads the copy back into the canonical clone. Each tool self-gates
   (`ownerGuard`/`elevatedGuard`, both `&& !headless`); the owner's git token is used server-side only
   (`gitAuthArgs`), with arg-injection (`assertSafeGitValue`) and path-traversal (`resolveInRepo`) guards.
   Public repos on internal hosts / github.com / other HTTPS hosts clone without a token; tokens are
@@ -71,39 +72,44 @@
   `get/setWorkspaceRepo` are thin wrappers over `store.get/setConversationWorkingRepo`; deleting the
   conversation clears it for free). Persistence — not the old in-memory map — is what lets **routines**
   keep a working repo between their spaced-out runs and across restarts.
-  **The SDK cwd is fixed when a turn starts**, so `open_repo` takes effect **from the NEXT turn**.
   **One shared resolver, `activeRepoResolve.ts` `resolveActiveWorkspaceRepo`, is used by BOTH the chat
   route (turn start) AND the routine scheduler (before a headless run)** so they can't drift: it reads
-  the selection → resolves/ensures the clone (no sync) → takes the per-clone lock → configures commit
-  identity → returns the clone path as the SDK **cwd** (per-conversation scratch dir rides along as
-  `additionalDirectories`) + a `release()` the caller invokes when the run ends. From then the avatar
-  edits/tests with native Read/Edit/Bash + LOCAL git; only `push`/`sync_repo` stay MCP. `open_repo` needs
-  `request.conversationId` — the chat route and the scheduler both thread it; only a run with NO
-  conversation (e.g. intro gen) can't open one. A per-clone-path lock (`activeRepoLock.ts`) serializes
-  concurrent opens (chat → 409; a routine whose repo is busy/missing logs and falls back to scratch).
-  `preToolUseHook`'s `activeRepoMode` (= `Boolean(request.activeRepoName)`) is an INTEGRITY (not security)
-  guard: denies remote/branch/history-rewriting/destructive Bash git, allows read-only git + local
-  staging/commit. The clone path is NEVER returned to the client.
+  the selection → resolves/ensures the canonical clone (no sync) → configures commit identity, and with the
+  run's `piWorkspace` only creates a MISSING sandbox copy (no per-clone run lock; Noah's own git ops are serialized
+  per operation by `withRepoLock`). The avatar works on that COPY in its principal's sandbox,
+  `/workspace/repos/<owner-seg>/<name>/` (design D1): native read/edit/bash + LOCAL git for status/diff/log there,
+  while `commit` (reads the copy's working tree back into the canonical clone and commits THERE), `push` and
+  `sync_repo` stay MCP. `open_repo` returns the copy's sandbox path and takes effect THIS turn. `open_repo` needs
+  `request.conversationId` — the chat route and the scheduler both thread it; only a run with NO conversation
+  (e.g. intro gen) can't open one. Noah never runs git in a sandbox `.git` (its config could run commands in Noah's
+  container or redirect the token), so the copy's local commits are never read. The canonical clone path is NEVER
+  returned to the client. Copy mechanics, caps and the moved-base refusal → [`pi-runtime.md`](pi-runtime.md)
+  "Working repositories".
 
 ## Knowledge backfill, request_info, second brain — mechanics
 - Owner sees pending `request_info` gaps in-app via a "내 아바타" nav badge + a poll/visibility watcher
   that toasts on new gaps (`refreshKnowledgeStatus`/`startKnowledgeWatch` in `lib/loaders.ts`).
 - **Knowledge-repo `CLAUDE.md` is injected as standing memory.** The repo-root `CLAUDE.md` of the
-  personal repo (ALWAYS) + each ENABLED group repo is read DIRECTLY from the clone (NOT via
-  settingSources, which stays `[]`), size-capped, and pushed into the prompt EVERY turn via
-  `AgentRequest.knowledgeMemory` (`loadKnowledgeRepoMemory` in plugins.ts → `knowledgeMemorySection` in
-  promptBuilder.ts) — distinct from on-demand skills, with an injection guard. Wired in chat + scheduler
-  (routines = all groups, no toggle); intro/hashtag gen leaves it unset. `writeRepoTemplate` seeds a
+  personal repo is read DIRECTLY from the clone (NOT via
+  any loader), size-capped, and rendered into the prompt via `AgentRequest.knowledgeMemory` (`loadKnowledgeRepoMemory` in plugins.ts → `knowledgeMemorySection` in
+  promptBuilder.ts) — distinct from on-demand skills, with an injection guard. The prompt is frozen per
+  conversation (D2, `conversations.pi_instructions`), so the memory is the one read at the conversation's first
+  turn; an edit mid-conversation applies from the next conversation. Wired in chat + scheduler;
+  intro/hashtag gen leaves it unset. (Group repo CLAUDE.md files were injected too until group knowledge
+  repos were retired, 2026-10-30.) `writeRepoTemplate` seeds a
   starter root `CLAUDE.md`.
-- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store.** `wiki/` (curated)
-  + `raw/` (capture) are just directories inside the existing personal/group knowledge repo. **Recall**
-  is read-only search: `mcp__brain__*` (personal, `search`/`get_note`, gated `elevated`) and
-  `mcp__group_brain__*` (one group, read gated on group-MEMBERship). Both metacognition surfaces (the
-  prompt's `brainSection`/`groupsSection` and the `describe_system` brain lines) check the per-conversation
-  `personal_knowledge`/`group_knowledge` tool-group toggle FIRST — mirroring runPlan's
-  `brainActive`/`groupBrainActive` — so a deselected group reads as OFF, never as active. **Capture/consolidate** is the
-  `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` (personal) /
-  `mcp__group_repo__write_file` (group) + `commit` — there is NO separate "brain write" tool, so a
+- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL only.**
+  `wiki/` (curated) + `raw/` (capture) are just directories inside the owner's personal knowledge repo.
+  The team brain (`mcp__group_brain__*`, group vault scaffolding, group graph) was REMOVED 2026-10-30 (user
+  decision), and group knowledge repos with it; `group_brain`/`group_repo` are retired pi broker ids (`RETIRED_MCP_SERVER_NAMES` in
+  `scripts/pi-register-mcp.mjs` deletes stale entries) and reserved shared-MCP names. **Recall** is read-only
+  search: `mcp__brain__*` (`search`/`get_note`, gated `elevated`). Both metacognition surfaces (the prompt's
+  `brainSection` and the `describe_system` brain line) check the per-conversation `personal_knowledge`
+  tool-group toggle FIRST — mirroring `buildRunCapabilities`' `brainActive` — so a deselected group reads as
+  OFF, never as active; both also say groups have no repository or team brain
+  (`GROUP_REPOS_RETIRED_SENTENCE`). **Capture/consolidate** is the
+  `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` + `commit` —
+  there is NO separate "brain write" tool, so a
   capture is a repo write plus a commit (uncommitted = not persisted). It composes with the backfill
   loop: `request_info` ESCALATES a true unknown to the owner, `brain-ingest` RETAINS the answer.
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
@@ -120,10 +126,9 @@
   the `currentTruth` sentence) on every WRITE-capable run — owner/routine, shared-account teammate —
   and on no read-only one (plain teammate, consultation), because the avatar also
   edits `wiki/` directly with the repo tools, where a skill-only rule would never reach.
-- **Capture notice ("기억" chip):** a SUCCESSFUL `write_file`/`edit_file` under `wiki/` (personal or
-  group repo, incl. group-agent runs) fires `AgentEvents.onMemory` (`MemoryEvent`, gated in the tool
+- **Capture notice ("기억" chip):** a SUCCESSFUL `write_file`/`edit_file` under `wiki/` of the personal repo fires `AgentEvents.onMemory` (`MemoryEvent`, gated in the tool
   handlers via `isBrainNotePath`) → SSE `memory` (server-minted `id` so reattach replays dedupe) → a
-  `kind:"memory"` activity row (label "기억/그룹 기억 추가·갱신됨", detail = note path) that persists
+  `kind:"memory"` activity row (label "기억 추가·갱신됨", detail = note path) that persists
   through the normal activity snapshot. **Rendering is summary-line-only:** `ActivityTree` EXCLUDES
   memory rows from the tree; `ChatView.memoryChip` renders them as a 🧠 chip on the activity
   disclosure's `<summary>` (live + completed cards), so the capture is visible while COLLAPSED —

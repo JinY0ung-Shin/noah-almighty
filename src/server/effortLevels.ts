@@ -1,19 +1,16 @@
 /**
  * Registry of reasoning EFFORT levels a user can pick per conversation in the chat
- * composer, alongside the model tier. Each `id` is passed straight to the Claude
- * Agent SDK as `options.effort` (the SDK's `EffortLevel`), which guides how much
- * thinking/reasoning the model applies to the turn.
+ * composer, alongside the model. Each `id` is passed to pi as the
+ * response's `reasoningEffort`, which guides how much thinking/reasoning the
+ * model applies to the turn; every turn sends it, so a change applies to the
+ * same pi session from that turn on.
  *
- * The five ids mirror the SDK's `EffortLevel` union EXACTLY (verified against
- * @anthropic-ai/claude-agent-sdk sdk.d.ts):
- *   'low' | 'medium' | 'high' | 'xhigh' | 'max'
- * The SDK silently downgrades unsupported levels for the selected model (e.g.
- * `xhigh` → `high` on pre-Opus-4.7 models, `max` on models without max support),
- * so any id is always safe to send — no per-model gating needed here.
+ * The five ids ('low' | 'medium' | 'high' | 'xhigh' | 'max') are a subset of
+ * pi's REASONING_EFFORTS (the names come from the retired Agent SDK's
+ * `EffortLevel`); what a model does with a level it does not support is pi's
+ * call — no per-model gating here.
  *
- * Unlike the model tier, effort is INDEPENDENT of the env model pin
- * (`ANTHROPIC_MODEL`): pinning a concrete model does not lock effort, so the
- * composer keeps offering the effort picker even when the model picker is hidden.
+ * Effort is INDEPENDENT of the model.
  *
  * `label`/`description` are user-facing, so they are KOREAN (matching the
  * project's language split: user strings Korean, stable `id`s never localized).
@@ -21,11 +18,11 @@
  * the same labelKo/labelEn split `mcpToolGroups.ts` uses, so a Korean string
  * never leaks into the agent's English self-state.
  * This module is intentionally dependency-free so BOTH the server and the Svelte
- * client can import it (it is listed in `tsconfig.client.json` includes), mirroring
- * `modelTiers.ts` — the composer renders the same registry, avoiding drift.
+ * client can import it (it is listed in `tsconfig.client.json` includes) — the
+ * composer renders the same registry, avoiding drift.
  */
 export interface EffortLevel {
-  /** Effort id passed to the SDK as `options.effort`. */
+  /** Effort id passed to pi as `reasoningEffort`. */
   id: string;
   /** User-facing level name (Korean). */
   label: string;
@@ -72,9 +69,9 @@ export const EFFORT_LEVELS: EffortLevel[] = [
 export const EFFORT_LEVEL_IDS: string[] = EFFORT_LEVELS.map((e) => e.id);
 
 /**
- * The effort used when no choice applies. Matches the SDK's documented default
- * (`high` — deep reasoning), so leaving the picker untouched preserves today's
- * behavior exactly.
+ * The effort the composer and describe_system SHOW when no choice applies
+ * (`high` — deep reasoning; the retired SDK's documented default). An unset
+ * choice sends no effort to pi, which then applies its own default.
  */
 export const DEFAULT_EFFORT_LEVEL = "high";
 

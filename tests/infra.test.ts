@@ -29,7 +29,6 @@ import { loadConfig } from "../src/server/config.js";
 import { applyCustomGithubCa } from "../src/server/tlsCa.js";
 import { loadDotEnv } from "../src/server/loadEnv.js";
 import { createRateLimiter } from "../src/server/rateLimit.js";
-import { MODEL_TIERS, MODEL_TIER_IDS, isModelTier } from "../src/server/modelTiers.js";
 import {
   EXTERNAL_GIT_TOKEN_SECRET_NAME,
   INTERNAL_GIT_TOKEN_SECRET_NAME,
@@ -96,7 +95,7 @@ describe("routine run timeout config", () => {
     }
   }
 
-  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test" }).routineRunTimeoutMs;
+  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test", agentRuntime: "local" }).routineRunTimeoutMs;
 
   it("defaults to 30 minutes", () => {
     withEnv(undefined, () => expect(load()).toBe(30 * 60_000));
@@ -137,7 +136,7 @@ function withEnvVars(values: Record<string, string | undefined>, fn: () => void)
 
 describe("avatar task API run timeout config", () => {
   const withEnv = withEnvVars;
-  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test" });
+  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test", agentRuntime: "local" });
   const unset = { AVATAR_TASK_TIMEOUT_MINUTES: undefined, ROUTINE_RUN_TIMEOUT_MINUTES: undefined };
 
   it("defaults to 5 hours while routines keep 30 minutes", () => {
@@ -172,7 +171,7 @@ describe("avatar task API run timeout config", () => {
 });
 
 describe("routine concurrency config", () => {
-  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test" });
+  const load = () => loadConfig({ dataDir: tempDir, sessionSecret: "test", agentRuntime: "local" });
   const unset = { ROUTINE_MAX_CONCURRENT_RUNS: undefined, ROUTINE_MAX_CONCURRENT_RUNS_PER_USER: undefined };
 
   it("defaults to 10 routines server-wide and 2 per owner", () => {
@@ -196,60 +195,6 @@ describe("routine concurrency config", () => {
         expect(load().routineMaxConcurrentRunsPerUser).toBe(2);
       });
     }
-  });
-});
-
-describe("model tiers", () => {
-  it("registers the fable/opus/sonnet/haiku aliases with user-facing labels", () => {
-    expect(MODEL_TIER_IDS).toEqual(["fable", "opus", "sonnet", "haiku"]);
-    for (const tier of MODEL_TIERS) {
-      expect(tier.label.trim()).not.toBe("");
-      expect(tier.description.trim()).not.toBe("");
-    }
-  });
-
-  it("maps each tier to its ANTHROPIC_DEFAULT_<TIER>_MODEL env (omits unset)", () => {
-    const keys = [
-      "ANTHROPIC_DEFAULT_FABLE_MODEL",
-      "ANTHROPIC_DEFAULT_OPUS_MODEL",
-      "ANTHROPIC_DEFAULT_SONNET_MODEL",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    ];
-    const saved = keys.map((k) => process.env[k]);
-    try {
-      process.env.ANTHROPIC_DEFAULT_FABLE_MODEL = "claude-fable-5";
-      process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-opus-4-8";
-      process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-sonnet-4-6";
-      delete process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-      const config = loadConfig({ dataDir: tempDir, sessionSecret: "test" });
-      expect(config.defaultTierModels).toEqual({
-        fable: "claude-fable-5",
-        opus: "claude-opus-4-8",
-        sonnet: "claude-sonnet-4-6",
-      });
-      // Unset tier (haiku) is omitted — the app can't name the SDK's account default.
-      expect(config.defaultTierModels.haiku).toBeUndefined();
-    } finally {
-      keys.forEach((k, i) => {
-        if (saved[i] === undefined) delete process.env[k];
-        else process.env[k] = saved[i];
-      });
-    }
-  });
-
-  it("isModelTier accepts only known aliases", () => {
-    expect(isModelTier("fable")).toBe(true);
-    expect(isModelTier("opus")).toBe(true);
-    expect(isModelTier("sonnet")).toBe(true);
-    expect(isModelTier("haiku")).toBe(true);
-    // Full model ids, empty, garbage, and non-strings are rejected — the chat
-    // route falls those back to the server default so they never reach the SDK.
-    expect(isModelTier("claude-opus-4-8")).toBe(false);
-    expect(isModelTier("")).toBe(false);
-    expect(isModelTier("gpt-4")).toBe(false);
-    expect(isModelTier(undefined)).toBe(false);
-    expect(isModelTier(null)).toBe(false);
-    expect(isModelTier(42)).toBe(false);
   });
 });
 
@@ -898,7 +843,7 @@ describe("knowledge graph (wikilink extraction)", () => {
     fs.mkdirSync(root, { recursive: true });
     // The REAL seeder (fs-level writes only, no git): the vault it creates holds
     // nothing but wiki/index.md, wiki/log.md, wiki/_template.md and .gitkeep stubs.
-    expect(await writeRepoTemplate(root, "brain-empty", "personal")).toBe(true);
+    expect(await writeRepoTemplate(root, "brain-empty")).toBe(true);
 
     const g = await buildKnowledgeGraph(root);
     expect(g.noVault).toBeUndefined(); // the vault EXISTS — it is merely empty
@@ -1063,7 +1008,7 @@ ERc1OguGascDEMRZK6bhvTbsAV61YoK+xQ7lBWhPOPxrEACx21kqpKrPYQXCtCHs
 
   it("is a no-op when GITHUB_CA_CERT is unset", () => {
     const prevGit = process.env.GIT_SSL_CAINFO;
-    const applied = applyCustomGithubCa({ ...loadConfig(), githubCaCert: undefined }, silent);
+    const applied = applyCustomGithubCa({ ...loadConfig({ agentRuntime: "local" }), githubCaCert: undefined }, silent);
     expect(applied).toBe(false);
     expect(process.env.GIT_SSL_CAINFO).toBe(prevGit);
   });
@@ -1071,7 +1016,7 @@ ERc1OguGascDEMRZK6bhvTbsAV61YoK+xQ7lBWhPOPxrEACx21kqpKrPYQXCtCHs
   it("warns and returns false when the cert file is unreadable", () => {
     const warn = vi.fn();
     const applied = applyCustomGithubCa(
-      { ...loadConfig(), githubCaCert: "/no/such/internal-ca.pem" },
+      { ...loadConfig({ agentRuntime: "local" }), githubCaCert: "/no/such/internal-ca.pem" },
       { info: () => {}, warn },
     );
     expect(applied).toBe(false);
@@ -1086,7 +1031,7 @@ ERc1OguGascDEMRZK6bhvTbsAV61YoK+xQ7lBWhPOPxrEACx21kqpKrPYQXCtCHs
     delete process.env.GIT_SSL_CAINFO;
     const before = tls.getCACertificates("default").length;
 
-    const applied = applyCustomGithubCa({ ...loadConfig(), githubCaCert: caPath }, silent);
+    const applied = applyCustomGithubCa({ ...loadConfig({ agentRuntime: "local" }), githubCaCert: caPath }, silent);
 
     expect(applied).toBe(true);
     // git: every `git` execFile child inherits this.
@@ -1106,7 +1051,7 @@ ERc1OguGascDEMRZK6bhvTbsAV61YoK+xQ7lBWhPOPxrEACx21kqpKrPYQXCtCHs
     const prevGit = process.env.GIT_SSL_CAINFO;
     process.env.GIT_SSL_CAINFO = "/operator/explicit/bundle.pem";
 
-    applyCustomGithubCa({ ...loadConfig(), githubCaCert: caPath }, silent);
+    applyCustomGithubCa({ ...loadConfig({ agentRuntime: "local" }), githubCaCert: caPath }, silent);
     expect(process.env.GIT_SSL_CAINFO).toBe("/operator/explicit/bundle.pem");
 
     if (prevGit === undefined) delete process.env.GIT_SSL_CAINFO;

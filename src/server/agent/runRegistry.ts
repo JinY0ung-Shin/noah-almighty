@@ -2,10 +2,10 @@
  * In-memory registry of in-flight chat runs that are waiting on the user.
  *
  * The chat stream is one HTTP request (POST /api/chat/stream → SSE response),
- * but interactive tools (permission prompts, AskUserQuestion) need an answer
+ * but interactive prompts (AskUserQuestion, a waiting canvas) need an answer
  * that arrives on a SEPARATE request (POST /api/chat/respond). This registry
- * bridges the two: a blocking SDK callback parks a promise here keyed by
- * (runId, requestId); the respond endpoint resolves it.
+ * bridges the two: the run parks a promise here keyed by (runId, requestId);
+ * the respond endpoint resolves it.
  *
  * Single-process only — matches the rest of the app (in-process SQLite). If
  * the server is ever horizontally scaled this must move to a shared store.
@@ -26,12 +26,9 @@ export const CANCELLED = Symbol("cancelled");
 
 /**
  * How long an interactive prompt waits before auto-cancelling. Without this an
- * abandoned prompt (user closed the tab mid-permission) parks the run, its SDK
- * subprocess, and the conversation lock forever. Generous — the user may simply
- * be away from the tab. Exported because the PreToolUse hook matcher's CLI-side
- * budget (`timeout` in claudeAgent.ts) must stay ABOVE this: the CLI aborts SDK
- * callback hooks after its own timeout, and this registry must always settle a
- * parked prompt (answer / TTL / run end) before the CLI gives up on the hook.
+ * abandoned prompt (user closed the tab mid-question) parks the run, its pi
+ * response, and the conversation lock forever. Generous — the user may simply
+ * be away from the tab. Exported because both metacognition surfaces state it.
  */
 export const PROMPT_TTL_MS = 30 * 60 * 1000;
 
@@ -65,18 +62,9 @@ interface Run {
   ended: boolean;
   cancelled: boolean;
   /**
-   * True once the visible turn was finalized (done emitted) while the SDK
-   * session keeps running background work. The run stays open and attachable;
-   * a new POST for the conversation still 409s, with a background-specific
-   * message.
-   */
-  background: boolean;
-  /** Live background task count (from the SDK level signal), for snapshots. */
-  backgroundTasks: number;
-  /**
    * Mid-turn user messages for this run, when it has one (a local streaming
    * chat turn). `pushRunSteer` writes to it and the run loop drains it; absent
-   * on external-gateway runs, which have no CLI stdin to write to.
+   * on external-task-API runs, which take no mid-turn message.
    */
   steers?: SteerChannel;
 }
@@ -103,10 +91,6 @@ export interface RunSnapshot {
   lastEventId: number;
   pendingCount: number;
   cancelled: boolean;
-  /** The visible turn is done but background work keeps the run alive. */
-  background: boolean;
-  /** Live background task count while `background` is true. */
-  backgroundTasks: number;
 }
 
 const runs = new Map<string, Run>();
@@ -129,8 +113,6 @@ export function openRun(runId: string, userId: string, meta: RunMeta = {}): void
     nextEventId: 0,
     ended: false,
     cancelled: false,
-    background: false,
-    backgroundTasks: 0,
     steers: meta.steers,
   });
   if (meta.conversationId) {
@@ -290,24 +272,7 @@ function snapshotRun(runId: string, run: Run): RunSnapshot {
     lastEventId: run.nextEventId,
     pendingCount: run.pending.size,
     cancelled: run.cancelled,
-    background: run.background,
-    backgroundTasks: run.backgroundTasks,
   };
-}
-
-/**
- * Mark a run as having entered (or progressed through) its background phase:
- * the visible turn is finalized but the SDK session keeps running background
- * tasks. Called by the chat route at the first result boundary and on every
- * background-task level update.
- */
-export function markRunBackground(runId: string, taskCount: number): void {
-  const run = runs.get(runId);
-  if (!run || run.ended) {
-    return;
-  }
-  run.background = true;
-  run.backgroundTasks = Math.max(0, taskCount);
 }
 
 export function cancelRun(runId: string, userId: string): boolean {
@@ -317,7 +282,7 @@ export function cancelRun(runId: string, userId: string): boolean {
   }
   run.cancelled = true;
   run.abortController?.abort();
-  // Drop every mid-turn message that never reached the model, NOW: the SDK call
+  // Drop every mid-turn message that never reached the model, NOW: the pi call
   // may take a moment to unwind, and the viewer's `dropped` notices have to
   // precede the `cancelled` frame the chat route emits when it does.
   run.steers?.close();
@@ -328,7 +293,7 @@ export function cancelRun(runId: string, userId: string): boolean {
 }
 
 /**
- * Abort EVERY active run (graceful shutdown). Aborts each SDK call so the chat
+ * Abort EVERY active run (graceful shutdown). Aborts each pi call so the chat
  * handler's cancel path persists its streamed partial, then resolves parked
  * prompts so the runs can finish and the SSE responses end. No user scoping —
  * shutdown is global.
@@ -354,7 +319,7 @@ export function isRunCancelled(runId: string): boolean {
  * `ttlMs` defaults to the interactive PROMPT_TTL_MS. Pass a SHORT ttl when the
  * responder is software rather than a person (the browser bridge): a machine
  * that hasn't answered in seconds is gone, and parking such a request for half
- * an hour would pin the run, its subprocess, and the conversation lock.
+ * an hour would pin the run, its pi stream, and the conversation lock.
  */
 export function awaitResponse(
   runId: string,
@@ -367,7 +332,7 @@ export function awaitResponse(
   }
   if (run.cancelled || run.abortController?.signal.aborted) {
     // The deadline/cancel already released every parked prompt, and a prompt
-    // that arrives AFTER the abort (the SDK's last hook before teardown) must
+    // that arrives AFTER the abort (raced with the run's teardown) must
     // not park until closeRun — but its frame is already in the replay buffer,
     // so resolve it VISIBLY: without this a viewer who is attached or replays
     // the journal renders a modal no later frame dismisses.
@@ -393,14 +358,14 @@ export function awaitResponse(
 
 /**
  * Accept a MID-TURN user message ("steer") for a live run: the viewer typed
- * something while the avatar was still answering. The run's held-open prompt
- * generator picks it up and writes it to the CLI's stdin, which folds it into
- * the running turn after the next tool call (or starts it as the next turn).
+ * something while the avatar was still answering. pi folds it into the running
+ * turn at its next tool boundary; one it did not is sent, together with the
+ * rest, as the follow-up turn once the current answer is done.
  *
  * Scoped exactly like the other run endpoints — an unknown, ended, or
  * other-user run is `not_found` and says nothing more. The refusals map 1:1 to
  * the route's statuses:
- *  - `unsupported` the run has no channel at all (an external gateway avatar).
+ *  - `unsupported` the run has no channel at all (an external-task-API turn).
  *  - `closed`      the turn is wrapping up (or was stopped), so nothing more
  *                  can reach the model.
  *  - `too_many`    MAX_UNDELIVERED_STEERS are already waiting.
@@ -457,7 +422,7 @@ export function submitResponse(
     clearTimeout(pending.timeout);
   }
   // Tell every (re)connected client this prompt is answered, so a reconnect that
-  // replays the original permission/question event can dismiss the stale modal
+  // replays the original question/canvas event can dismiss the stale modal
   // instead of leaving it blocking (re-answering it would 404).
   emitRunEvent(runId, "prompt_resolved", { requestId });
   pending.resolve(value);
@@ -495,7 +460,7 @@ export function getRunPrompts(runId: string, userId: string): { event: string; d
   const run = runs.get(runId);
   if (!run || run.ended || run.userId !== userId) return [];
   return run.events.filter(frame => {
-    if (!["permission", "question", "plan_review", "canvas"].includes(frame.event)) return false;
+    if (!["question", "canvas"].includes(frame.event)) return false;
     const data = frame.data as { requestId?: string };
     return typeof data?.requestId === "string" && run.pending.has(data.requestId);
   }).map(({ event, data }) => ({ event, data }));

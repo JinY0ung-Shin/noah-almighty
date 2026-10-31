@@ -3,27 +3,25 @@
 //
 // Usage: node --use-system-ca mcp-http-bridge.mjs --config <file.json>
 //
-// WHY THIS EXISTS: the Agent SDK passes `options.mcpServers` to the CLI as a
-// `--mcp-config <json>` command-line ARGUMENT, world-readable via
-// /proc/<pid>/cmdline — and the agent's own Bash is a child of that CLI. An HTTP
-// server's auth header registered natively would sit right there. So the app
-// registers THIS script as a stdio server instead and hands it the URL + the
-// already-resolved headers in a mode-0600 file: only the file PATH is in argv.
-// The bridge reads the file, deletes it (one-shot handoff — same contract as
-// mcp-secret-wrapper.mjs), keeps the values in memory only (never in its env),
-// and relays JSON-RPC messages unchanged between the CLI (stdio) and the remote
-// server (Streamable HTTP, or legacy SSE).
+// WHY THIS EXISTS: Noah relays a remote HTTP MCP server (an admin 공용 server,
+// a plugin `.mcp.json` http/sse entry) to a pi run as an MCP client, and the
+// server's auth header must never sit in a child's argv (world-readable via
+// /proc/<pid>/cmdline). So Noah spawns THIS script as a stdio server and hands
+// it the URL + headers in a mode-0600 file: only the file PATH is in argv. The
+// bridge reads the file, deletes it (one-shot handoff), keeps the values in
+// memory only (never in its env), and relays JSON-RPC messages unchanged
+// between Noah (stdio) and the remote server (Streamable HTTP, or legacy SSE).
 //
 // Config: { url, transport: "http"|"sse", headers: {name: value}, redact: [..],
 // expandEnv?: true }. With `expandEnv` (set only for a plugin `.mcp.json` entry),
 // a `${VAR}` / `${VAR:-default}` still left in the URL or a header — a NON-vault
-// env name — expands from this process's env, matching the CLI's own
-// `--mcp-config` expansion. Admin-registered servers never expand env: every
+// env name — expands from this process's env, matching the usual shell-style
+// expansion. Admin-registered servers never expand env: every
 // reference there was resolved from the vault before the file was written.
 //
-// Errors go to stderr (the CLI's MCP log) with every header value and secret
+// Errors go to stderr (the relay's log) with every header value and secret
 // scrubbed; a failed upstream request is answered with a JSON-RPC error so the
-// CLI never waits on a request the remote never saw.
+// client never waits on a request the remote never saw.
 import fs from "node:fs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -57,7 +55,7 @@ function errorText(error) {
     const cause = error.cause instanceof Error ? ` (${error.cause.message})` : "";
     text = `${status}${error.message}${cause}`;
   }
-  // A remote error page can be large; the CLI shows this to the model. Scrub
+  // A remote error page can be large; the relay shows this to the model. Scrub
   // BEFORE truncating, so a cut can never leave half a secret behind.
   text = scrub(text);
   return text.length > 500 ? `${text.slice(0, 500)}…` : text;
@@ -205,7 +203,7 @@ process.on("unhandledRejection", (error) => log(`unhandled: ${errorText(error)}`
 try {
   // SSE opens its event stream and waits for the endpoint here; Streamable
   // HTTP only arms its abort controller. stdin is read only after this, so the
-  // CLI's initialize simply waits in the pipe until the upstream is ready.
+  // client's initialize simply waits in the pipe until the upstream is ready.
   await upstream.start();
 } catch (error) {
   fail(`cannot connect to the remote MCP server: ${errorText(error)}`);

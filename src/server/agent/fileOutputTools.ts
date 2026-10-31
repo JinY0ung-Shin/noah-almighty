@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import { DRAWIO_MEDIA_TYPE } from "../chatFiles.js";
 import {
@@ -21,7 +21,7 @@ export const FILE_OUTPUT_TOOL_NAMES = [
   "mcp__file_output__share_file",
 ] as const;
 /**
- * Registered on the SAME server but only for runs that pass runPlan's
+ * Registered on the SAME server but only for runs that pass runCapabilities'
  * `shareLinkToolActive` gate — so it is NOT part of FILE_OUTPUT_TOOL_NAMES,
  * which rides every run with file output (the create_repo precedent).
  */
@@ -32,20 +32,13 @@ export interface FileOutputToolsContext {
   shareFile: (request: ShareFileRequest) => Promise<FileOutputResult>;
   /**
    * The `pptx` skill's HTML→PPTX converter is installed in this deployment
-   * (the deck toolchain probe, passed by runPlan). Switches share_file's PPTX
+   * (the deck toolchain probe, passed by runCapabilities). Switches share_file's PPTX
    * sentence to the converter wording and enables the "no converter renders"
    * result note; absent/false keeps today's LibreOffice-only wording.
    */
   deckConverterInstalled?: boolean;
   /**
-   * The run has an active Craft app (runPlan): share_file's description names
-   * the image/PSD/.pcraft types, which the host then accepts — the request
-   * carries the same fact (`ShareFileRequest.craftFileTypes`, set by runPlan).
-   * Absent/false = the document types only, in the text AND the check.
-   */
-  craftFileTypes?: boolean;
-  /**
-   * Build `create_share_link` (runPlan's `shareLinkToolActive`: an interactive
+   * Build `create_share_link` (runCapabilities' `shareLinkToolActive`: an interactive
    * turn of the owner's own avatar whose host supplied `onShareLink`). Absent/
    * false = the tool does not exist in this run, and show_file/share_file are
    * unchanged either way.
@@ -67,16 +60,14 @@ export interface FileOutputToolsContext {
 
 type SharedFile = Extract<FileOutputResult, { behavior: "shown" }>;
 
-/** share_file's description; the PPTX sentence depends on the converter, the type list on an active Craft app. */
-function shareFileDescription(deckConverterInstalled: boolean, craftFileTypes: boolean): string {
+/** share_file's description; only the PPTX sentence depends on the converter. */
+function shareFileDescription(deckConverterInstalled: boolean): string {
   const pptxSentence = deckConverterInstalled
     ? "For a PPTX built by the `pptx` skill's converter, pass the built file IN PLACE (use `name` for the user-facing filename; never copy, rename or edit it after building) — the card's side panel then shows the converter's exact slide renders; for any other PPTX/DOCX/XLSX/PDF the server AUTOMATICALLY renders approximate page previews. Either way, do NOT render or publish slide images yourself for delivery. "
     : "For PPTX/DOCX/XLSX/PDF the server AUTOMATICALLY renders page previews into the card's side panel — do NOT render or publish slide images yourself for delivery. ";
   return (
     "Hand a generated document to the user as a DOWNLOAD CARD in the chat. " +
-    (craftFileTypes
-      ? "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio) — or a finished image/design file (PNG, JPEG, WebP, SVG, PSD, .pcraft), e.g. a Craft app result from craft/out/ (to merely SHOW an image inline, use show_file). "
-      : "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio). ") +
+    "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio). " +
     pptxSentence +
     "A shared .drawio file renders as an INTERACTIVE diagram in that same panel (client-side) — never export a diagram to PNG just to deliver it. " +
     "Pass the local file path from your working directory; never paste a local path or file:// URL into Markdown, because the browser cannot reach your filesystem and there is NO Bash workaround for delivering files. " +
@@ -261,7 +252,8 @@ function shareLinkResultText(
 
 // show_file/share_file are INTENTIONALLY NOT self-gated (like canvasTools):
 // REGISTRATION is the boundary — the server is only built when fileOutputActive
-// (request.cwd + events.onFile, see runPlan.ts), and outputs flow only to the
+// (request.cwd + events.onFile, see runCapabilities.ts; an unbuilt server is a
+// refusing stub on pi), and outputs flow only to the
 // run's own viewer. create_share_link is the exception: its URL reaches OUTSIDE
 // the conversation, so its handler refuses without the host callback, and the
 // host re-checks the run kind and conversation ownership on every call.
@@ -305,7 +297,7 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
     ),
     tool(
       "share_file",
-      shareFileDescription(deckConverterInstalled, ctx.craftFileTypes === true),
+      shareFileDescription(deckConverterInstalled),
       {
         path: z.string().min(1).max(4096).describe("File path, relative to the current working directory or absolute inside an allowed working root."),
         name: z.string().max(200).optional().describe("Download filename shown to the user (defaults to the file's basename). Keep the correct extension."),
@@ -346,8 +338,8 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
             },
             async (args) => {
               // The last line of defence if registration ever drifts (the
-              // mcp__ auto-allow runs before any owner check): no host
-              // callback, no link — and never a made-up one.
+              // tool list is a static catalog, so only this handler sees the
+              // live run): no host callback, no link — and never a made-up one.
               const createShareLink = ctx.createShareLink;
               if (!createShareLink) {
                 return text(`Share links are unavailable in this run. ${SHARE_LINK_BUTTON_REDIRECT}`, true);
@@ -392,7 +384,7 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
 }
 
 export function buildFileOutputServer(ctx: FileOutputToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: FILE_OUTPUT_SERVER_NAME,
     version: "1.0.0",
     tools: buildFileOutputTools(ctx),

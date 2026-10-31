@@ -27,10 +27,11 @@ import {
 import {
   PROMPT_TTL_MS,
 } from "../src/server/agent/runRegistry.js";
-import {
-  EMPTY_SDK_RESPONSE_MESSAGE,
-  resultErrorMessage,
-} from "../src/server/agent/claudeAgent.js";
+import { resultErrorMessage } from "../src/server/agent/runErrors.js";
+import { EMPTY_PI_RESPONSE_MESSAGE } from "../src/server/agent/pi/runPiAgent.js";
+import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import {
   commitAndPush,
   ensureClone,
@@ -45,11 +46,6 @@ import {
   REPO_SERVER_NAME,
   REPO_TOOL_NAMES,
 } from "../src/server/agent/repoTools.js";
-import {
-  buildGroupRepoTools,
-  GROUP_REPO_SERVER_NAME,
-  GROUP_REPO_TOOL_NAMES,
-} from "../src/server/agent/groupRepoTools.js";
 import {
   buildGitRepoTools,
   GIT_REPO_SERVER_NAME,
@@ -75,11 +71,6 @@ import { buildBrainTools, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } from "../src/ser
 import { NO_CHANGES, NO_GIT_TOKEN } from "../src/server/agent/repoToolKit.js";
 import { normalizeWikiPath } from "../src/server/agent/brainSearch.js";
 import {
-  buildGroupBrainTools,
-  GROUP_BRAIN_SERVER_NAME,
-  GROUP_BRAIN_TOOL_NAMES,
-} from "../src/server/agent/groupBrainTools.js";
-import {
   buildConfluenceTools,
   CONFLUENCE_SERVER_NAME,
   CONFLUENCE_TOOL_NAMES,
@@ -97,8 +88,7 @@ import {
 } from "../src/server/agent/webFetchTools.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../src/server/chatFiles.js";
 import type { DeckToolchainState } from "../src/server/deckRender.js";
-import { groupAgentAvatarId } from "../src/server/groupAgents.js";
-import { rewindTurnState } from "../src/server/agent/ownerState.js";
+import { piSandboxOwnerSentence, rewindTurnState } from "../src/server/agent/ownerState.js";
 import type { AgentRequest, AgentResponse, AppConfig } from "../src/server/types.js";
 
 import { gitInit, makeBareRemote, callTool } from "./helpers.js";
@@ -847,56 +837,6 @@ describe("web fetch tools", () => {
 });
 
 
-describe("mcp-secret-wrapper script", () => {
-  const wrapperPath = path.join(process.cwd(), "scripts", "mcp-secret-wrapper.mjs");
-
-  it("injects the secrets file into the child env, deletes the file, and passes stdio through", () => {
-    const dir = path.join(tempDir, "wrap1");
-    fs.mkdirSync(dir, { recursive: true });
-    const secretsFile = path.join(dir, "s.json");
-    fs.writeFileSync(secretsFile, JSON.stringify({ MY_API_KEY: "vault-value" }));
-    const out = execFileSync(process.execPath, [
-      wrapperPath,
-      "--secrets",
-      secretsFile,
-      "--",
-      process.execPath,
-      "-e",
-      "console.log(process.env.MY_API_KEY)",
-    ]).toString();
-    expect(out.trim()).toBe("vault-value");
-    // One-shot handoff: the plaintext file is consumed on read.
-    expect(fs.existsSync(secretsFile)).toBe(false);
-  });
-
-  it("fails loudly (instead of starting secret-less) when the secrets file is missing", () => {
-    expect(() =>
-      execFileSync(
-        process.execPath,
-        [wrapperPath, "--secrets", path.join(tempDir, "nope.json"), "--", process.execPath, "-e", "0"],
-        { stdio: "pipe" },
-      ),
-    ).toThrow();
-  });
-
-  it("propagates the child's exit code", () => {
-    const dir = path.join(tempDir, "wrap2");
-    fs.mkdirSync(dir, { recursive: true });
-    const secretsFile = path.join(dir, "s.json");
-    fs.writeFileSync(secretsFile, "{}");
-    try {
-      execFileSync(
-        process.execPath,
-        [wrapperPath, "--secrets", secretsFile, "--", process.execPath, "-e", "process.exit(7)"],
-        { stdio: "pipe" },
-      );
-      throw new Error("expected the wrapper to exit non-zero");
-    } catch (error) {
-      expect((error as { status?: number }).status).toBe(7);
-    }
-  });
-});
-
 describe("repo tools (knowledge-repo management)", () => {
   // A store + owner pointed at a local bare git remote, so commit/push works
   // offline. Returns the config so tools can resolve the clone path.
@@ -1081,7 +1021,7 @@ describe("repo tools (knowledge-repo management)", () => {
 
   it("shared account: an elevated teammate can WRITE + commit; create_repo stays owner-only", async () => {
     const s = setup("rt1c");
-    // The owner marks the account as shared (공용 계정) → claudeAgent passes
+    // The owner marks the account as shared (공용 계정) → runCapabilities passes
     // writeAccess = ownerToolAccess || (sharedAccount && elevatedToolAccess).
     s.store.updateProfile(s.ownerId, { sharedAccount: true });
     const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
@@ -1659,19 +1599,6 @@ describe("repo tools (knowledge-repo management)", () => {
     expect(await writeRepoTemplate(dir, "owner/my-knowledge")).toBe(false);
   });
 
-  it("writeRepoTemplate 'group' variant seeds a team-framed CLAUDE.md under the group cap", async () => {
-    const dir = path.join(tempDir, "rt-template-group");
-    fs.mkdirSync(dir, { recursive: true });
-    expect(await writeRepoTemplate(dir, "g/team", "group")).toBe(true);
-    const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
-    expect(claude).toContain("팀 공유 브레인");
-    // Group CLAUDE.md rides the smaller GROUP_CLAUDE_MD_CAP (4000) injection cap.
-    expect(Buffer.byteLength(claude, "utf8")).toBeLessThanOrEqual(4000);
-    // Same vault skeleton as personal.
-    expect(fs.existsSync(path.join(dir, "wiki/index.md"))).toBe(true);
-    expect(fs.existsSync(path.join(dir, "raw/.gitkeep"))).toBe(true);
-  });
-
   it("create_repo seeds the marketplace template as the repo's initial content", async () => {
     const s = setupNoRepo("rt-create-seed");
     s.store.setGitToken(s.ownerId, "tok");
@@ -1709,7 +1636,13 @@ describe("repo tools (knowledge-repo management)", () => {
 describe("git repo tools (general git repository management)", () => {
   function setup(dir: string) {
     const dataDir = path.join(tempDir, dir);
-    const { store, config } = createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    // The sandbox workspace mount the repo copies land in (open_repo / commit).
+    const { store, config } = createServices({
+      dataDir,
+      agentRuntime: "local",
+      sessionSecret: "t",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false, workspacesDir: path.join(tempDir, dir, "ws") },
+    });
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
     const seed = path.join(tempDir, dir, "seed");
@@ -1733,13 +1666,13 @@ describe("git repo tools (general git repository management)", () => {
       elevated: opts.elevated ?? true,
       config: s.config,
       conversationId: opts.conversationId ?? "conv-1",
+      piWorkspace: piWorkspaceFor(s.config, s.ownerId, opts.conversationId ?? "conv-1"),
     });
   }
 
-  // Under the single-surface model the avatar edits an OPENED working repo with
-  // NATIVE tools (Read/Edit/Bash), not MCP file tools. Tests mimic that by
-  // writing + committing directly in the server-side clone — exactly what the
-  // avatar's local Bash git does in the cwd before an MCP push.
+  // The avatar edits a sandbox COPY and `commit` saves it into Noah's clone (covered
+  // end to end in pi-workspace.test.ts). Tests that only exercise register/push
+  // stand in for that by committing directly in the server-side clone.
   function nativeCommit(clonePath: string, relPath: string, content: string, message: string) {
     const abs = path.join(clonePath, relPath);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -1762,6 +1695,7 @@ describe("git repo tools (general git repository management)", () => {
       "open_repo",
       "close_repo",
       "push",
+      "commit",
     ]);
   });
 
@@ -1778,13 +1712,15 @@ describe("git repo tools (general git repository management)", () => {
     expect(sync.isError).toBeFalsy();
     const open = await callTool(trustedTools, "open_repo", { name: "app" });
     expect(open.isError).toBeFalsy();
-    expect(open.content[0].text).toContain("working directory");
+    expect(open.content[0].text).toContain("Your working copy is at /workspace/repos/");
+    const untrusted = tools(s, { viewerIsOwner: false, elevated: false, conversationId: "conv-auth" });
+    expect((await callTool(untrusted, "open_repo", { name: "app" })).content[0].text).toContain("owner or a trusted user");
 
     const deniedRemove = await callTool(trustedTools, "remove_repo", { name: "app" });
     expect(deniedRemove.isError).toBe(true);
   });
 
-  it("registers, opens, pushes a native commit, and removes a general git repo", async () => {
+  it("registers, opens a sandbox copy, commits it, pushes, and removes a general git repo", async () => {
     const s = setup("gr-flow");
     // open_repo persists the working-repo selection on the conversation row, which
     // always exists in production before the model can call open_repo (chat touches
@@ -1797,15 +1733,22 @@ describe("git repo tools (general git repository management)", () => {
     expect(register.content[0].text).toContain("work");
     expect(s.store.listGitRepos(s.ownerId)).toHaveLength(1);
 
-    // Open the repo as the conversation's working directory (the avatar's entry point).
+    // Open the repo for this conversation: Noah copies it into the sandbox.
     const open = await callTool(ownerTools, "open_repo", { name: "work" });
     expect(open.isError).toBeFalsy();
-    expect(open.content[0].text).toContain("working directory");
+    const sandboxPath = /working copy is at (\S+) /.exec(open.content[0].text ?? "")?.[1] ?? "";
+    expect(sandboxPath).toMatch(/^\/workspace\/repos\/.+\/work$/);
     expect(getWorkspaceRepo(s.store, "conv-flow")).toBe("work");
 
-    // The avatar edits + commits natively in the opened working directory; push is MCP.
+    // The avatar edits the copy; commit saves it into Noah's clone; push is MCP.
+    const hostRoot = piWorkspaceFor(s.config, s.ownerId, "conv-flow").hostRoot!;
+    const copyDir = path.join(hostRoot, path.posix.relative("/workspace", sandboxPath));
+    fs.mkdirSync(path.join(copyDir, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(copyDir, "docs/runbook.md"), "# Runbook\n");
+    const commit = await callTool(ownerTools, "commit", { name: "work", message: "add runbook" });
+    expect(commit.isError).toBeFalsy();
+    expect(commit.content[0].text).toContain("1 file(s) written");
     const clonePath = gitRepoClonePath(s.ownerId, "work", s.config);
-    nativeCommit(clonePath, "docs/runbook.md", "# Runbook\n", "add runbook");
 
     const push = await callTool(ownerTools, "push", { name: "work" });
     expect(push.isError).toBeFalsy();
@@ -2006,6 +1949,26 @@ describe("system tools (avatar system management)", () => {
     return buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner });
   }
 
+  /** The config of a pi deployment (its models come from pi-gateway's live list, see offerModels). */
+  function piConfig(config: AppConfig): AppConfig {
+    return {
+      ...config,
+      agentRuntime: "pi",
+      pi: {
+        gatewayUrl: "http://pi-gateway.internal:8080",
+        apiKey: "pi-key",
+        deckSandbox: false,
+      },
+    };
+  }
+
+  /** pi-gateway offers exactly `ids` (`GET /v1/models`), already fetched once as a run would have. */
+  async function offerModels(s: ReturnType<typeof setup>, ids: string[]): Promise<void> {
+    const catalog = createPiModelCatalog({ listModels: async () => ids.map((id) => ({ id })) });
+    piServicesFor(s.store, s.config).models = catalog;
+    await catalog.list();
+  }
+
   it("exposes the documented server + tool names", () => {
     const s = setup("st0");
     expect(SYSTEM_SERVER_NAME).toBe("system");
@@ -2062,6 +2025,9 @@ describe("system tools (avatar system management)", () => {
     expect(res.content[0].text).not.toContain("private-key");
     // SSH key present → the dedicated status line reports SSH tools as active.
     expect(res.content[0].text).toContain("Remote SSH tools: enabled");
+    // Background tasks are disabled: no background-execution line any more.
+    expect(res.content[0].text).not.toContain("Background execution");
+    expect(res.content[0].text).not.toContain("run_in_background");
   });
 
   it("describe_system reports the live routine concurrency caps", async () => {
@@ -2119,9 +2085,12 @@ describe("system tools (avatar system management)", () => {
       {},
     )).content[0].text ?? "";
     expect(on).toContain("Mid-turn user messages: ENABLED");
-    // Mirrors buildSystemPromptAppend's standing line: same two instructions,
-    // so the avatar cannot read one surface and act against the other.
-    expect(on).toContain("between your tool calls");
+    // Mirrors the prompt's per-turn run-kind line (piRunKindParagraph): pi folds
+    // a message sent while the avatar works into the running turn at its next
+    // tool-call boundary, and it may change the task.
+    expect(on).toContain("is delivered DURING your work");
+    expect(on).toContain("at your next tool-call boundary");
+    expect(on).toContain("may change the task");
     expect(on).toContain("let the newest instruction win");
     expect(on).not.toContain("Mid-turn user messages: not available");
   });
@@ -2143,21 +2112,6 @@ describe("system tools (avatar system management)", () => {
     expect(colleague).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
     expect(colleague).toContain("Deployment capabilities for this run:");
 
-    const group = s.store.createGroup({ name: "팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
-    const avatarId = groupAgentAvatarId(group.id, agent.id);
-    const groupBody = await describeSystem({
-      avatarUserId: avatarId,
-      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-      viewerIsOwner: false,
-      config: s.config,
-      groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
-      rewind,
-    });
-    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
-    expect(groupBody).toContain(`- Conversation rewind (this turn): ${rewindTurnState(rewind)}`);
-
     // An unattended run never reports one — the prompt line's own gate.
     expect(await describeSystem({ ...s.baseCtx, viewerIsOwner: true, headless: true, rewind })).not.toContain(
       "Conversation rewind",
@@ -2178,12 +2132,12 @@ describe("system tools (avatar system management)", () => {
 
     expect(routine).toContain("This turn's origin: an UNATTENDED run");
     expect(routine).not.toContain("This turn's origin: interactive chat");
-    // buildSystemPromptAppend emits the task-API self-state ONLY from its owner
-    // branch, which a headless run never reaches — so this surface must skip it
-    // too, or the two disagree about the same run.
-    expect(routine).not.toContain("External task API:");
+    // The owner branch of buildSystemPromptAppend is the FROZEN prompt of every
+    // run kind of an owner conversation (a routine included), so it states the
+    // task-API self-state on a routine too — and this surface must agree.
+    expect(routine).toContain("External task API:");
 
-    // Control: the interactive run keeps it.
+    // …and so does the interactive run.
     const interactive = (await callTool(toolsFor(s), "describe_system", {}))
       .content[0].text ?? "";
     expect(interactive).toContain("External task API:");
@@ -2213,7 +2167,7 @@ describe("system tools (avatar system management)", () => {
       "the calling system gets an error instead of your result",
     );
     expect(external).toContain(
-      `A single pending question or permission request also expires after ${ttlMinutes} minutes without an answer`,
+      `A single pending question also expires after ${ttlMinutes} minutes without an answer`,
     );
     expect(external).toContain(
       "do the most important part first and say in your result what remains",
@@ -2232,8 +2186,13 @@ describe("system tools (avatar system management)", () => {
       "Each task may run for up to 90 minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES)",
     );
     expect(interactive).toContain(
-      `a single pending question or permission request expires after ${ttlMinutes} minutes without an answer`,
+      `a single pending question expires after ${ttlMinutes} minutes without an answer`,
     );
+    // pi has no permission prompts: neither line may promise one.
+    for (const body of [external, interactive]) {
+      expect(body).not.toContain("permission request");
+      expect(body).not.toContain("permission prompt");
+    }
     // Not an API run: the per-run budget stays out of the origin line.
     expect(interactive).toContain("This turn's origin: interactive chat");
     expect(interactive).not.toContain("This run has a hard wall-clock budget");
@@ -2276,7 +2235,7 @@ describe("system tools (avatar system management)", () => {
         "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it",
     );
 
-    // The absolute path, once runPlan hands it over.
+    // The absolute path, once runCapabilities hands it over.
     expect(imagesLineOf(await owner({ scratchWorkspaceDir: "/data/workspaces/a/c" }))).toContain(
       "files in the conversation scratch workspace (`/data/workspaces/a/c`) — ",
     );
@@ -2288,7 +2247,7 @@ describe("system tools (avatar system management)", () => {
     expect(imagesLineOf(await owner({ browserEnabled: true, visionEnabled: false }))).not.toContain("captures/");
     expect(imagesLineOf(await owner())).not.toContain("captures/");
 
-    // Confluence follows runPlan's ONE boolean (tools registered, viewer
+    // Confluence follows runCapabilities' ONE boolean (tools registered, viewer
     // elevated, URL + PAT, a workspace) — never re-derived here.
     const confluence =
       "mcp__confluence__get_attachment with `save_to_workspace: true` saves an attachment into `confluence/` (the result's `savedPath`)";
@@ -2310,19 +2269,16 @@ describe("system tools (avatar system management)", () => {
     );
   });
 
-  it("describe_system prints the images line on the non-owner and group-agent branches too", async () => {
+  it("describe_system prints the images line on the non-owner branch too", async () => {
     const s = setup("st-images-branches");
     const PLACE = "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it";
-    const READ_ONLY =
-      "This conversation cannot write files, so you can read them here but not place them into a deck, document or commit — the owner or a trusted teammate can";
-    // A trusted teammate's run (runPlan: canWriteFiles) can save Confluence
-    // attachments and place files; a plain colleague's can do neither — and
+    // Every run places files in its own sandbox; a trusted teammate's run can
+    // also save Confluence attachments, a plain colleague's cannot — and
     // neither ever has captures.
     const trusted = imagesLineOf(
       await describeText(s, {
         ...s.baseCtx,
         viewerIsOwner: false,
-        canWriteFiles: true,
         confluenceSaveToWorkspace: true,
         scratchWorkspaceDir: "/w/t",
       }),
@@ -2331,44 +2287,19 @@ describe("system tools (avatar system management)", () => {
     expect(trusted).toContain("`attachments/`");
     expect(trusted).toContain("`confluence/`");
     expect(trusted).toContain(PLACE);
-    const colleague = await describeText(s, { ...s.baseCtx, viewerIsOwner: false, canWriteFiles: false });
+    const colleague = await describeText(s, { ...s.baseCtx, viewerIsOwner: false });
     expect(colleague).toContain("Deployment capabilities for this run:");
     const colleagueLine = imagesLineOf(colleague);
     expect(colleagueLine).not.toContain("save_to_workspace");
     expect(colleagueLine).not.toContain("captures/");
-    // A read-only run is told the files exist and can be READ — never to copy them.
     expect(colleagueLine).toContain("images the user attaches to a message are staged in `attachments/`");
-    expect(colleagueLine).toContain(READ_ONLY);
-    expect(colleagueLine).not.toContain("copy that FILE");
-    // Unwired (no flag): a non-owner is not proven to write, so the same wording.
-    expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false }))).toContain(READ_ONLY);
-    // The owner's own run writes by construction; the flag still wins if stamped.
+    expect(colleagueLine).toContain(PLACE);
+    expect(colleagueLine).not.toContain("cannot write files");
     expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: true }))).toContain(PLACE);
     // A consultation is headless and non-owner.
     expect(imagesLineOf(await describeText(s, { ...s.baseCtx, viewerIsOwner: false, headless: true }))).toContain(
       "an unattended run receives no user attachments",
     );
-
-    // Group shared agent: attachments reach its threads; Confluence and the
-    // browser never register on that run kind.
-    const group = s.store.createGroup({ name: "팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
-    const avatarId = groupAgentAvatarId(group.id, agent.id);
-    const groupBody = await describeText(s, {
-      avatarUserId: avatarId,
-      owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-      viewerIsOwner: false,
-      config: s.config,
-      groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
-    });
-    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
-    const groupLine = imagesLineOf(groupBody);
-    expect(groupLine).toContain("`attachments/`");
-    expect(groupLine).not.toContain("captures/");
-    expect(groupLine).not.toContain("save_to_workspace");
-    // Every member of a group-agent run gets the elevated built-ins: it writes.
-    expect(groupLine).toContain(PLACE);
   });
 
   it("describe_system carries the browser read-cost contract on the CONNECTED branch", async () => {
@@ -2450,7 +2381,7 @@ describe("system tools (avatar system management)", () => {
   });
 
   it("describe_system reports canvas availability and the AskUserQuestion redirect", async () => {
-    // Mirrors runPlan's canvasActive: the runtime surface must not offer a
+    // Mirrors runCapabilities' canvasActive: the runtime surface must not offer a
     // canvas the run didn't register, and when it IS available it must carry
     // the same plain-question redirect the prompt guidance states.
     const s = setup("st-canvas");
@@ -2595,12 +2526,10 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
-  it("describe_system picks ONE tail: skill-disabled > read-only > no file output > allowed", async () => {
+  it("describe_system picks ONE tail: skill-disabled > no file output > allowed", async () => {
     const s = setup("st-deck-tails");
     const SKILL_OFF =
       "; the administrator disabled the `pptx` skill in this deployment, so do not build decks — say so if asked";
-    const READ_ONLY =
-      "; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can";
     const NO_OUTPUT = "; preview/download need an interactive chat turn";
     for (const toolchain of [deckState(), legacyDeckState()]) {
       const head = deckLineOf(await describeAs(s, { deckToolchain: toolchain, fileOutputEnabled: true }))
@@ -2609,11 +2538,9 @@ describe("system tools (avatar system management)", () => {
         deckLineOf(await describeAs(s, { deckToolchain: toolchain, ...ctx }));
 
       expect(await lineFor({ deckAuthoring: "skill-disabled", fileOutputEnabled: true })).toBe(`${head}${SKILL_OFF}`);
-      expect(await lineFor({ deckAuthoring: "read-only", fileOutputEnabled: true })).toBe(`${head}${READ_ONLY}`);
       expect(await lineFor({ deckAuthoring: "allowed", fileOutputEnabled: false })).toBe(`${head}${NO_OUTPUT}`);
       // Precedence among the tails.
       expect(await lineFor({ deckAuthoring: "skill-disabled", fileOutputEnabled: false })).toBe(`${head}${SKILL_OFF}`);
-      expect(await lineFor({ deckAuthoring: "read-only", fileOutputEnabled: false })).toBe(`${head}${READ_ONLY}`);
       // No file output never promises the skill workflow (the I10 pin).
       expect(await lineFor({ fileOutputEnabled: false })).not.toContain("`pptx` skill");
       // Undefined authoring = allowed.
@@ -2685,14 +2612,14 @@ describe("system tools (avatar system management)", () => {
     }
 
     // A tail that replaces the allowed guidance says nothing about interpreters: nothing runs here.
-    const readOnly = deckLineOf(
+    const skillOff = deckLineOf(
       await describeAs(s, {
         deckToolchain: deckState({ pythonPptxCommand: VENV }),
         fileOutputEnabled: true,
-        deckAuthoring: "read-only",
+        deckAuthoring: "skill-disabled",
       }),
     );
-    expect(readOnly).not.toContain(VENV);
+    expect(skillOff).not.toContain(VENV);
   });
 
   it("describe_system reports UNAVAILABLE with the NOT INSTALLED marker and no tail", async () => {
@@ -2706,7 +2633,6 @@ describe("system tools (avatar system management)", () => {
     for (const ctx of [
       { fileOutputEnabled: true },
       { fileOutputEnabled: false },
-      { deckAuthoring: "read-only" as const, fileOutputEnabled: true },
       { deckAuthoring: "skill-disabled" as const, fileOutputEnabled: true },
     ]) {
       expect(deckLineOf(await describeAs(s, { deckToolchain: state, ...ctx })), JSON.stringify(ctx)).toBe(expected);
@@ -2731,18 +2657,18 @@ describe("system tools (avatar system management)", () => {
     expect(failed).not.toContain("converter: INSTALLED");
   });
 
-  it("describe_system shows the deck line on the group-agent AND non-owner branches too", async () => {
+  it("describe_system shows the deck line on the non-owner branch too", async () => {
     const s = setup("st-deck-branches");
     s.store.setGitToken(s.owner.id, "ghp_secretvalue");
-    // Non-owner: a trusted teammate may build through this avatar, a plain
-    // colleague may not — the tail says which, and no owner state leaks.
+    // Non-owner: any colleague builds in their own sandbox unless the admin
+    // disabled the skill — the tail says which, and no owner state leaks.
     const colleague = (
       await callTool(
         buildSystemTools(s.store, {
           ...s.baseCtx,
           viewerIsOwner: false,
           deckToolchain: deckState(),
-          deckAuthoring: "read-only",
+          deckAuthoring: "skill-disabled",
           fileOutputEnabled: true,
         }),
         "describe_system",
@@ -2752,7 +2678,7 @@ describe("system tools (avatar system management)", () => {
     expect(colleague).toContain("conversation partner is not the owner");
     expect(colleague).toContain("Deployment capabilities for this run:");
     expect(deckLineOf(colleague)).toBe(
-      `${DECK_PREFIX}${CONVERTER_HEAD}; this conversation is read-only (no Bash/Write), so decks cannot be built here — the owner or a trusted teammate can`,
+      `${DECK_PREFIX}${CONVERTER_HEAD}; the administrator disabled the \`pptx\` skill in this deployment, so do not build decks — say so if asked`,
     );
     expect(colleague).not.toContain("Current avatar state:");
     expect(colleague).not.toContain("ghp_secretvalue");
@@ -2774,38 +2700,6 @@ describe("system tools (avatar system management)", () => {
     expect(deckLineOf((await callTool(toolsFor(s, false), "describe_system", {})).content[0].text ?? "")).toContain(
       "UNAVAILABLE",
     );
-
-    // Group shared agent: every member gets the elevated built-ins, so the SAME
-    // deck line as the owner block, inside the GROUP state block.
-    const group = s.store.createGroup({ name: "팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const agent = s.store.createGroupAgent(group.id, { displayName: "팀 에이전트", captureScope: "members" })!;
-    const avatarId = groupAgentAvatarId(group.id, agent.id);
-    const groupBody = (
-      await callTool(
-        buildSystemTools(s.store, {
-          avatarUserId: avatarId,
-          owner: { id: avatarId, username: "", displayName: "팀 에이전트" },
-          viewerIsOwner: false,
-          config: s.config,
-          groupAgent: { agentId: agent.id, actingUserId: s.owner.id },
-          deckToolchain: deckState({ selftest: "drift" }),
-          deckAuthoring: "allowed",
-          fileOutputEnabled: true,
-        }),
-        "describe_system",
-        {},
-      )
-    ).content[0].text ?? "";
-    expect(groupBody).toContain("Current GROUP SHARED-AGENT state:");
-    const groupLine = deckLineOf(groupBody);
-    expect(groupLine).toContain("converter: INSTALLED");
-    expect(groupLine).toContain("self-test: reference-render drift was recorded at image build");
-    expect(groupLine).toContain("`mcp__file_output__share_file` the built .pptx IN PLACE");
-    // It sits inside the group block (after the capability boundary), once.
-    expect(groupBody.indexOf("Capability boundary")).toBeLessThan(groupBody.indexOf(DECK_PREFIX));
-    expect(groupBody.split(DECK_PREFIX)).toHaveLength(2);
-    expect(groupBody).not.toContain("Current avatar state:");
   });
 
   it("describe_system reports the drawio viewer with file-output gating", async () => {
@@ -2861,8 +2755,9 @@ describe("system tools (avatar system management)", () => {
 
   it("reports the effective model, groups, profile visibility and pending requests", async () => {
     const s = setup("st-describe-full");
-    // No env model pin in tests → the admin override is the effective model.
-    s.store.setModelOverride("claude-test-model");
+    // No composer pick → the admin override pi offers is the effective model.
+    await offerModels(s, ["sonnet"]);
+    s.store.setModelOverride("sonnet");
     const group = s.store.createGroup({ name: "플랫폼팀" });
     s.store.addGroupMember(group.id, s.owner.id, "admin");
     s.store.addKnowledgeRequest(s.owner.id, { question: "다음 출시일은?", askerName: "동료" });
@@ -2870,8 +2765,8 @@ describe("system tools (avatar system management)", () => {
     const res = await callTool(toolsFor(s), "describe_system", {});
     expect(res.isError).toBeFalsy();
     const body = res.content[0].text;
-    expect(body).toContain("claude-test-model (admin setting)");
-    expect(body).toContain("플랫폼팀(admin, shared repository none)");
+    expect(body).toContain("sonnet (admin setting)");
+    expect(body).toContain("플랫폼팀(admin)");
     // New avatars default to group visibility.
     expect(body).toContain("group (discoverable by group teammates only)");
     expect(body).toContain("Remote SSH tools: disabled");
@@ -2883,15 +2778,15 @@ describe("system tools (avatar system management)", () => {
     const group = s.store.createGroup({ name: "지식전용팀" });
     s.store.addGroupMember(group.id, s.owner.id, "member");
     const before = await callTool(toolsFor(s), "describe_system", {});
-    expect(before.content[0].text).toContain("지식전용팀(member, shared repository none)");
+    expect(before.content[0].text).toContain("지식전용팀(member)");
     expect(before.content[0].text).toContain("Avatar consultation (mcp__avatars__ask_avatar): available");
 
     s.store.setGroupAvatarSharing(group.id, false);
     const after = await callTool(toolsFor(s), "describe_system", {});
     const body = after.content[0].text;
     // Per-group marker + the standing explanation of what "off" means.
-    expect(body).toContain("지식전용팀(member, shared repository none, avatar sharing off)");
-    expect(body).toContain('Groups marked "avatar sharing off" are knowledge-sharing-only');
+    expect(body).toContain("지식전용팀(member, avatar sharing off)");
+    expect(body).toContain('Groups marked "avatar sharing off" grant neither avatar visibility, mutual trust nor skill sharing');
     // Every group sharing-off ⇒ no teammate avatar is reachable for consultation.
     expect(body).toContain("none of the owner's groups share avatars");
   });
@@ -3102,8 +2997,8 @@ describe("system tools (avatar system management)", () => {
   });
 
   it("refuses EVERY read/write tool for a non-owner viewer", async () => {
-    // Handler-level owner gating is the safety boundary (the SDK still sees the
-    // names), so each tool must refuse on its own — a missing guard on one tool
+    // Handler-level owner gating is the safety boundary (pi's static tools/list still
+    // shows the names), so each tool must refuse on its own — a missing guard on one tool
     // would leak the owner's conversations, routines, or plugin list.
     const s = setup("st-deny-all");
     s.store.touchConversation(s.owner.id, "c-secret", s.owner.id, "비밀 대화");
@@ -3408,15 +3303,9 @@ describe("system tools (avatar system management)", () => {
     });
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: {
-        ...s.config,
-        autoCompactWindow: 120_000,
-        // ANTHROPIC_DEFAULT_OPUS_MODEL is set on this deployment, so the tier
-        // alias resolves to a concrete model the avatar can actually name.
-        defaultTierModels: { ...s.config.defaultTierModels, opus: "claude-opus-5" },
-      },
+      config: piConfig(s.config),
       viewerIsOwner: true,
-      selectedModelTier: "opus",
+      selectedModel: "pi-opus-5",
       selectedEffort: "low",
       enabledMcpToolGroups: [],
       activeRepoName: "acme/service",
@@ -3424,13 +3313,16 @@ describe("system tools (avatar system management)", () => {
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
 
     expect(body).toContain(
-      "Model in use: claude-opus-5 (opus) (chosen for this conversation in the composer)",
+      "Model in use: pi-opus-5 (chosen for this conversation in the composer)",
     );
     expect(body).not.toContain("claude-admin-default");
     expect(body).toContain("Reasoning effort: low (");
     expect(body).toContain("(chosen for this conversation)");
     expect(body).toContain("MCP tool groups enabled for this conversation: system management");
-    expect(body).toContain("Autocompact window: 120000 tokens (AUTO_COMPACT_WINDOW)");
+    // pi compacts on its own; the retired SDK knobs are never reported.
+    expect(body).toContain("Context compaction: automatic (pi-gateway summarizes the session");
+    expect(body).not.toContain("AUTO_COMPACT_WINDOW");
+    expect(body).not.toContain("MAX_TURNS");
     expect(body).toContain("Name: 노아");
     expect(body).toContain("Profile visibility: private (owner only)");
     expect(body).toContain("Shared (communal) account: yes");
@@ -3459,31 +3351,28 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("undefined");
   });
 
-  it("describe_system names the default tier's model, a bare tier alias, and an unknown effort", async () => {
+  it("describe_system names pi-gateway's default model, the local stub's default, and an unknown effort", async () => {
     const s = setup("st-model-fallbacks");
-    // No env pin, no composer pick, no admin override → the default tier, named
-    // through the operator's ANTHROPIC_DEFAULT_OPUS_MODEL.
+    // No composer pick, no admin override → pi-gateway's default model.
     const defaults = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: { ...s.config, defaultTierModels: { ...s.config.defaultTierModels, opus: "claude-opus-5" } },
+      config: piConfig(s.config),
       viewerIsOwner: true,
     });
     expect((await callTool(defaults, "describe_system", {})).content[0].text).toContain(
-      "Model in use: claude-opus-5 (opus) (default)",
+      "Model in use: pi-gateway's default model (default)",
     );
 
-    // A tier the operator pinned no concrete model for is reported as the alias
-    // alone (the SDK resolves it to an account default the app cannot name), and
-    // an effort id with no known label is echoed verbatim rather than dropped.
-    const bare = buildSystemTools(s.store, {
+    // The `local` stub has no pi; an effort id with no known label is echoed
+    // verbatim rather than dropped.
+    const local = buildSystemTools(s.store, {
       ...s.baseCtx,
       viewerIsOwner: true,
-      selectedModelTier: "sonnet",
       selectedEffort: "turbo",
     });
-    const body = (await callTool(bare, "describe_system", {})).content[0].text ?? "";
-    expect(body).toContain("Model in use: sonnet (chosen for this conversation in the composer)");
-    expect(body).toContain("Reasoning effort: turbo (chosen for this conversation)");
+    const localBody = (await callTool(local, "describe_system", {})).content[0].text ?? "";
+    expect(localBody).toContain("Model in use: the runtime's default model (default)");
+    expect(localBody).toContain("Reasoning effort: turbo (chosen for this conversation)");
   });
 
   it("describe_system pairs a CONNECTED browser with Confluence writes and a text-only model", async () => {
@@ -3532,6 +3421,55 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
+  it("describe_system's runtime line is always pi on a pi deployment, naming whose sandbox it is", async () => {
+    const s = setup("st-runtime-pi");
+    const config = piConfig(s.config);
+    const describe = async (ctx: SystemToolsContext) =>
+      (await callTool(buildSystemTools(s.store, ctx), "describe_system", {})).content[0].text ?? "";
+    const runtime = (body: string) => body.split("\n").find((line) => line.startsWith("- runtime: ")) ?? "";
+
+    // The owner's own run: pi, the owner's sandbox, no foreign-sandbox sentence.
+    const owner = runtime(await describe({
+      ...s.baseCtx,
+      config,
+      viewerIsOwner: true,
+      piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, conversationDir: "/workspace/c/conv-1", shellSecretNames: [] },
+    }));
+    expect(owner).toContain("- runtime: pi (pi-gateway). You run in THIS user's own Linux sandbox");
+    expect(owner).toContain("Work in this conversation's folder `/workspace/c/conv-1`");
+    expect(owner).toContain("Built-in tools: read/write/edit/ls/find/grep/bash");
+    expect(owner).not.toContain("NOT to the avatar owner");
+    expect(owner).not.toContain("teammate who asked");
+
+    // A colleague's chat: the non-owner branch carries the SAME runtime line, and
+    // it says the sandbox is the colleague's own (piSandboxOwnerSentence).
+    const colleague = runtime(await describe({
+      ...s.baseCtx,
+      config,
+      viewerIsOwner: false,
+      piRuntime: { sandboxOwner: "viewer", readOnlyBuiltins: true, conversationDir: "/workspace/c/conv-2", shellSecretNames: [] },
+    }));
+    expect(colleague).toContain("- runtime: pi (pi-gateway)");
+    expect(colleague).toContain(piSandboxOwnerSentence("viewer"));
+
+    // A consultation: a fresh sandbox of its own, owned by nobody, in its run folder.
+    const asker = runtime(await describe({
+      ...s.baseCtx,
+      config,
+      viewerIsOwner: false,
+      piRuntime: { sandboxOwner: "nobody", readOnlyBuiltins: false, conversationDir: "/workspace/c/run-ask", shellSecretNames: [] },
+    }));
+    expect(asker).toContain(piSandboxOwnerSentence("nobody"));
+    expect(asker).toContain("You run in a temporary Linux sandbox made for this one run: no sudo, nothing in it persists");
+    expect(asker).not.toContain("THIS user's own Linux sandbox");
+    expect(asker).toContain("Work in this run's folder `/workspace/c/run-ask`");
+
+    // No Claude CLI / SDK wording survives on either branch.
+    for (const line of [owner, colleague, asker]) {
+      expect(line).not.toMatch(/Claude Agent SDK|Claude Code CLI|runtime: claude/);
+    }
+  });
+
   it("reports shared egress scope even when the web tool group is off", async () => {
     const s = setup("st-egress");
     vi.stubEnv("NOAH_EGRESS_POLICY", "domain-proxy");
@@ -3542,27 +3480,70 @@ describe("system tools (avatar system management)", () => {
         enabledMcpToolGroups: [],
       });
       const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-      expect(body).toContain("shared domain-proxy policy for all local avatars");
-      expect(body).toContain("User-PC browser traffic is outside this boundary");
+      expect(body).toContain("shared domain-proxy policy for Noah's server and the tools running there");
+      expect(body).toContain("User-PC browser traffic is outside both boundaries");
       expect(body).toContain("not independently audited");
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it("describe_system reports an env model pin as outranking the composer pick", async () => {
-    const s = setup("st-env-pin");
+  it("on a pi run, reports the sandbox shell outside Noah's egress proxy, behind pi's allowlist", async () => {
+    const s = setup("st-egress-pi");
+    vi.stubEnv("NOAH_EGRESS_POLICY", "domain-proxy");
+    try {
+      const tools = buildSystemTools(s.store, {
+        ...s.baseCtx,
+        viewerIsOwner: true,
+        piRuntime: { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretNames: [] },
+      });
+      const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
+      expect(body).toContain("NOT your sandbox shell: bash/curl/Python go only through pi-gateway's own egress proxy");
+      expect(body).toContain("SANDBOX_EGRESS_ALLOW");
+      expect(body).not.toContain("policy for all local avatars, server tools and shell commands");
+      expect(body).not.toContain("no network, no sudo");
+      const manual = (await callTool(tools, "read_manual", { topic: "network-policy" })).content[0].text ?? "";
+      expect(manual).toContain("## The avatar's sandbox shell (pi runtime)");
+      expect(manual).not.toContain("AGENT_RUNTIME=pi");
+      expect(manual).toContain("`SANDBOX_EGRESS_ALLOW`");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("describe_system reports pi's default model when the stored admin override is not offered (review-2 M2)", async () => {
+    const s = setup("st-admin-model-ignored");
+    await offerModels(s, ["pi-opus-5"]);
+    // An SDK-era deployment's concrete Claude id, kept across the upgrade.
+    s.store.setModelOverride("claude-opus-4-1-20250805");
+    const tools = buildSystemTools(s.store, { ...s.baseCtx, config: piConfig(s.config), viewerIsOwner: true });
+    const body = (await callTool(tools, "describe_system", {})).content[0].text;
+    expect(body).toContain(
+      "Model in use: pi-gateway's default model (default — the admin model setting 'claude-opus-4-1-20250805' is not a model pi-gateway currently offers, so it is ignored)",
+    );
+    expect(body).not.toContain("(admin setting)");
+  });
+
+  it("describe_system names the admin model override when the composer picked none", async () => {
+    // There is no env model hard lock any more (ANTHROPIC_MODEL is retired):
+    // without a composer pick the admin override decides, while pi offers it.
+    const s = setup("st-admin-model");
+    await offerModels(s, ["pi-opus-5", "pi-long-1m"]);
+    s.store.setModelOverride("pi-long-1m");
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: { ...s.config, anthropicModel: "claude-env-pinned", confluenceUrl: "https://confluence.internal" },
+      config: {
+        ...piConfig(s.config),
+        confluenceUrl: "https://confluence.internal",
+      },
       viewerIsOwner: true,
-      selectedModelTier: "sonnet",
     });
     s.store.setUserSecret(s.owner.id, "CONFLUENCE_PERSONAL_ACCESS_TOKEN", "pat");
 
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-    expect(body).toContain("Model in use: claude-env-pinned (pinned via environment variable)");
+    expect(body).toContain("Model in use: pi-long-1m (admin setting)");
     expect(body).not.toContain("chosen for this conversation in the composer");
+    expect(body).not.toContain("pinned via environment variable");
     expect(body).toContain("Confluence host: set (mcp__confluence__* is READ-ONLY");
     // No browser this run → the write route is named as unavailable, not offered.
     expect(body).toContain("writing would need browser control, which is unavailable in this run");
@@ -3577,67 +3558,42 @@ describe("system tools (avatar system management)", () => {
     });
     s.store.setUserSecret(s.owner.id, "GRAFANA_TOKEN", "shell-secret-value");
     s.store.setUserSecret(s.owner.id, "VAULT_ONLY", "never-in-shell");
+    s.store.setUserSecret(s.owner.id, "HTTPS_PROXY", "reserved-name-value");
     expect(s.store.setSecretShellExpose(s.owner.id, "GRAFANA_TOKEN", true)).toBe(true);
+    expect(s.store.setSecretShellExpose(s.owner.id, "HTTPS_PROXY", true)).toBe(true);
 
-    const body = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    // The run's plan exported GRAFANA_TOKEN to bash (pi sandbox_env); pi refuses HTTPS_PROXY.
+    const tools = buildSystemTools(s.store, {
+      ...s.baseCtx,
+      viewerIsOwner: true,
+      piRuntime: { sandboxOwner: "owner", readOnlyBuiltins: false, shellSecretNames: ["GRAFANA_TOKEN"] },
+    });
+    const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
     expect(body).toContain("intro set");
     expect(body).toContain("#쿠버네티스 #관측성");
-    expect(body).toContain("Shell-exposed secrets: `GRAFANA_TOKEN`");
+    expect(body).toContain("Shell-exposed secrets: `GRAFANA_TOKEN` is set to 셸 노출 and present as `$NAME` environment variables in every `bash` command of this run");
+    expect(body).toContain("`HTTPS_PROXY` is set to 셸 노출 but NOT in the shell — the sandbox reserves that name");
     // The non-exposed secret is still NAMED in the secret list but never in the
     // shell line, and no value ever appears.
     expect(body).toContain("`VAULT_ONLY`");
+    const shellLine = body.split("\n").find((line) => line.startsWith("- Shell-exposed secrets:")) ?? "";
+    expect(shellLine).not.toContain("VAULT_ONLY");
     expect(body).not.toContain("shell-secret-value");
     expect(body).not.toContain("never-in-shell");
   });
 
-  it("describe_system counts only the groups whose shared repository is connected", async () => {
+  it("describe_system says groups have no repository or team brain, and lists the groups", async () => {
     const s = setup("st-team-brain");
-    const withRepo = s.store.createGroup({ name: "플랫폼팀" });
-    const withoutRepo = s.store.createGroup({ name: "지식전용팀" });
-    s.store.addGroupMember(withRepo.id, s.owner.id, "member");
-    s.store.addGroupMember(withoutRepo.id, s.owner.id, "member");
-
-    const before = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
-    expect(before).toContain("Team second brain: none (no group has a connected shared repository)");
-
-    s.store.setGroupKnowledgeRepo(withRepo.id, "acme/team-knowledge", "main");
-    const after = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
-    expect(after).toContain("Team second brain: 1 group(s) expose `mcp__group_brain__search`");
-    expect(after).toContain("플랫폼팀(member, shared repository connected)");
-    expect(after).toContain("지식전용팀(member, shared repository none)");
-
-    // The per-conversation tool group wins over the repo count: deselecting
-    // 그룹 지식 makes runPlan skip mcp__group_brain__*/mcp__group_repo__*, so the
-    // report must not keep advertising a search tool this turn cannot call.
-    // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
-    const groupOff = (await callTool(
-      buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, enabledMcpToolGroups: [] }),
-      "describe_system",
-      {},
-    )).content[0].text ?? "";
-    expect(groupOff).toContain("Team second brain: OFF for this conversation (group knowledge tool group deselected)");
-    expect(groupOff).not.toContain("group(s) expose `mcp__group_brain__search`");
-  });
-
-  it("describe_system fails closed when a shared group agent's group is gone", async () => {
-    // The route authorized the run at start; a group deleted since then must not
-    // fall through to the owner block (which would report the owner's own repo,
-    // secrets, and routines to every member of a vanished group).
-    const s = setup("st-groupagent-missing");
-    const tools = buildSystemTools(s.store, {
-      ...s.baseCtx,
-      viewerIsOwner: false,
-      groupAgent: { agentId: "group:ghost:agent", actingUserId: s.owner.id },
-    });
-    s.store.setKnowledgeRepo(s.owner.id, "owner/knowledge", "main");
-
-    const res = await callTool(tools, "describe_system", {});
-    expect(res.isError).toBeFalsy();
-    const body = res.content[0].text ?? "";
-    expect(body).toContain("Noah Almighty avatar-chat system summary");
-    expect(body).toContain("group no longer exists");
-    expect(body).not.toContain("Current avatar state:");
-    expect(body).not.toContain("owner/knowledge");
+    const sharing = s.store.createGroup({ name: "플랫폼팀" });
+    const quiet = s.store.createGroup({ name: "조용한팀" });
+    s.store.addGroupMember(sharing.id, s.owner.id, "member");
+    s.store.addGroupMember(quiet.id, s.owner.id, "admin");
+    s.store.setGroupAvatarSharing(quiet.id, false);
+    const text = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(text).toContain("- Group knowledge repositories and team brain: none — Groups have NO shared knowledge repository");
+    expect(text).toContain("`mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist");
+    expect(text).toContain("플랫폼팀(member)");
+    expect(text).toContain("조용한팀(admin, avatar sharing off)");
   });
 });
 
@@ -3972,14 +3928,14 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
       store,
       config,
       { askerUserId: askerId, askerName: "질문자", targetUsername: "peer", question: "q" },
-      { run: async () => respond(EMPTY_SDK_RESPONSE_MESSAGE) },
+      { run: async () => respond(EMPTY_PI_RESPONSE_MESSAGE) },
     );
     expect(outcome).toMatchObject({ ok: false, reason: "empty" });
   });
 
   it("maps an in-band error result to failed instead of relaying the fallback text", async () => {
-    // error_max_turns doesn't throw — runClaudeAgent substitutes a Korean
-    // fallback into `text` and sets `resultError`. That must never come back
+    // An in-band error result doesn't throw — runPiAgent substitutes a Korean
+    // fallback (resultErrorMessage) into `text` and sets `resultError`. That must never come back
     // to the asker as the teammate's "answer".
     const { store, config, askerId } = setup("ask-error-result");
     const outcome = await askAvatar(
@@ -4057,132 +4013,6 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
   });
 });
 
-
-describe("group repo tools (mcp__group_repo__*)", () => {
-  function setup(dir: string, opts: { role?: "admin" | "member" } = {}) {
-    const dataDir = path.join(tempDir, dir);
-    const { store, config } = createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    store.setGitToken(owner.id, "tkn"); // satisfies the commit token guard; ignored for file remotes
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, opts.role ?? "admin");
-    const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
-    const seed = path.join(tempDir, dir, "seed");
-    gitInit(seed);
-    const g = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
-    g("branch", "-M", "main");
-    g("remote", "add", "origin", remote);
-    g("push", "-q", "origin", "main");
-    store.setGroupKnowledgeRepo(group.id, remote, "main");
-    return {
-      store,
-      config,
-      ownerId: owner.id,
-      owner: { id: owner.id, username: "owner", displayName: "Owner" },
-      group,
-      remote,
-    };
-  }
-
-  function tools(s: ReturnType<typeof setup>, opts: { viewerIsOwner?: boolean } = {}) {
-    return buildGroupRepoTools(s.store, {
-      avatarUserId: s.ownerId,
-      owner: s.owner,
-      viewerIsOwner: opts.viewerIsOwner ?? true,
-      config: s.config,
-    });
-  }
-
-  it("exposes the documented server + tool names", () => {
-    expect(GROUP_REPO_SERVER_NAME).toBe("group_repo");
-    expect(GROUP_REPO_TOOL_NAMES).toContain("mcp__group_repo__write_file");
-    expect(tools(setup("gp-names")).map((t) => t.name)).toEqual([
-      "list_groups",
-      "list_files",
-      "read_file",
-      "write_file",
-      "edit_file",
-      "delete_file",
-      "move_file",
-      "scaffold_skill",
-      "commit",
-      "create_repo",
-    ]);
-  });
-
-  it("lets a group admin edit_file but refuses a member", async () => {
-    const s = setup("gp-edit");
-    await callTool(tools(s), "write_file", { group: "Team", path: "docs/n.md", content: "one two one" });
-    const edited = await callTool(tools(s), "edit_file", {
-      group: "Team",
-      path: "docs/n.md",
-      old_string: "two",
-      new_string: "three",
-    });
-    expect(edited.isError).toBeFalsy();
-    expect(edited.content[0].text).toContain("1 replacement");
-    const rd = await callTool(tools(s), "read_file", { group: "Team", path: "docs/n.md" });
-    expect(rd.content[0].text).toBe("one three one");
-
-    const sm = setup("gp-edit-m", { role: "member" });
-    const denied = await callTool(tools(sm), "edit_file", {
-      group: "Team",
-      path: "docs/n.md",
-      old_string: "a",
-      new_string: "b",
-    });
-    expect(denied.isError).toBe(true);
-    expect(denied.content[0].text).toContain("Only a group admin can modify");
-  });
-
-  it("is owner-only (a non-owner viewer is refused)", async () => {
-    const s = setup("gp-owner");
-    const res = await callTool(tools(s, { viewerIsOwner: false }), "list_groups", {});
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("can only be used by the avatar owner");
-  });
-
-  it("lets a group admin write + commit; a member can read but not write", async () => {
-    const s = setup("gp-admin");
-    const w = await callTool(tools(s), "write_file", { group: "Team", path: "docs/note.md", content: "hi" });
-    expect(w.isError).toBeFalsy();
-    const c = await callTool(tools(s), "commit", { group: "Team", message: "add note" });
-    expect(c.isError).toBeFalsy();
-    expect(c.content[0].text).toContain("Committed and pushed the changes");
-    const r = await callTool(tools(s), "read_file", { group: "Team", path: "docs/note.md" });
-    expect(r.content[0].text).toBe("hi");
-
-    // An admin can rename and delete.
-    const mv = await callTool(tools(s), "move_file", { group: "Team", from: "docs/note.md", to: "docs/renamed.md" });
-    expect(mv.isError).toBeFalsy();
-    expect(mv.content[0].text).toContain("Moved docs/note.md → docs/renamed.md");
-    const del = await callTool(tools(s), "delete_file", { group: "Team", path: "docs/renamed.md" });
-    expect(del.isError).toBeFalsy();
-    expect(del.content[0].text).toContain("Deleted docs/renamed.md");
-    const lsAfter = await callTool(tools(s), "list_files", { group: "Team" });
-    expect(lsAfter.content[0].text).not.toContain("docs/renamed.md");
-
-    const sm = setup("gp-member", { role: "member" });
-    const list = await callTool(tools(sm), "list_files", { group: "Team" });
-    expect(list.isError).toBeFalsy();
-    const denied = await callTool(tools(sm), "write_file", { group: "Team", path: "x.md", content: "no" });
-    expect(denied.isError).toBe(true);
-    expect(denied.content[0].text).toContain("Only a group admin can modify");
-    const deniedDel = await callTool(tools(sm), "delete_file", { group: "Team", path: "docs/note.md" });
-    expect(deniedDel.isError).toBe(true);
-    expect(deniedDel.content[0].text).toContain("Only a group admin can modify");
-    const deniedMv = await callTool(tools(sm), "move_file", { group: "Team", from: "docs/note.md", to: "docs/y.md" });
-    expect(deniedMv.isError).toBe(true);
-    expect(deniedMv.content[0].text).toContain("Only a group admin can modify");
-  });
-
-  it("rejects an unknown group", async () => {
-    const s = setup("gp-unknown");
-    const res = await callTool(tools(s), "list_files", { group: "Nope" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("Could not find a group with that name/ID");
-  });
-});
 
 describe("canvas tools (#50)", () => {
   it("exposes the documented server + tool names", () => {
@@ -4291,11 +4121,12 @@ describe("canvas tools (#50)", () => {
     expect(called).toBe(true);
   });
 
-  it("awaits input and reports the submission when controls are declared", async () => {
+  it("never awaits input: declared controls render async and the submission is the next message", async () => {
+    let captured: CanvasRequest | null = null;
     const tools = buildCanvasTools({
       emitCanvas: async (req): Promise<CanvasResult> => {
-        expect(req.awaitInput).toBe(true);
-        return { behavior: "submitted", values: { pick: "A" } };
+        captured = req;
+        return { behavior: "shown" };
       },
     });
     const res = await callTool(tools, "show", {
@@ -4303,9 +4134,12 @@ describe("canvas tools (#50)", () => {
       content: "고르세요",
       contentType: "markdown",
       controls: [{ type: "buttons", id: "pick", options: [{ label: "A" }, { label: "B" }] }],
+      wait: true,
     });
     expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain("pick: A");
+    expect(captured!.awaitInput).toBe(false);
+    expect(captured!.interaction).toBe("async");
+    expect(res.content[0].text).toContain("arrives as their NEXT message");
   });
 
   it("reports a cancellation", async () => {
@@ -4462,55 +4296,6 @@ describe("brain tools (personal second brain search)", () => {
   });
 });
 
-describe("group brain tools (team second brain search)", () => {
-  function setup(dir: string) {
-    const { store, config } = createServices({ dataDir: path.join(tempDir, dir), agentRuntime: "local", sessionSecret: "t" });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    return { store, config, owner };
-  }
-  const tools = (s: ReturnType<typeof setup>, viewerIsOwner = true) =>
-    buildGroupBrainTools(s.store, { avatarUserId: s.owner.id, viewerIsOwner, config: s.config });
-
-  it("exposes the documented server + tool names", () => {
-    const s = setup("gb-names");
-    expect(GROUP_BRAIN_SERVER_NAME).toBe("group_brain");
-    expect(GROUP_BRAIN_TOOL_NAMES).toEqual(["mcp__group_brain__search", "mcp__group_brain__get_note"]);
-    expect(tools(s).map((t) => t.name)).toEqual(["search", "get_note"]);
-  });
-
-  it("refuses for a non-owner viewer", async () => {
-    const s = setup("gb-owner");
-    const res = await callTool(tools(s, false), "search", { group: "x", query: "q" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("avatar owner");
-  });
-
-  it("blocks searching a group the owner is NOT a member of (cross-tenant gate)", async () => {
-    const s = setup("gb-cross");
-    const a = s.store.createGroup({ name: "A", createdBy: null });
-    s.store.addGroupMember(a.id, s.owner.id, "member");
-    s.store.setGroupKnowledgeRepo(a.id, "/tmp/a-repo", "main");
-    // Group B has a connected repo but the owner is NOT a member — must be unreachable
-    // BY NAME and BY ID (resolveGroup only searches the owner's own memberships).
-    const b = s.store.createGroup({ name: "B", createdBy: null });
-    s.store.setGroupKnowledgeRepo(b.id, "/tmp/b-repo", "main");
-    const byName = await callTool(tools(s), "search", { group: "B", query: "q" });
-    expect(byName.isError).toBe(true);
-    expect(byName.content[0].text).toContain("Could not find a group");
-    const byId = await callTool(tools(s), "search", { group: b.id, query: "q" });
-    expect(byId.content[0].text).toContain("Could not find a group");
-  });
-
-  it("returns NO_REPO for an owner's group that has no shared repo", async () => {
-    const s = setup("gb-norepo");
-    const g = s.store.createGroup({ name: "NoRepo", createdBy: null });
-    s.store.addGroupMember(g.id, s.owner.id, "member");
-    const res = await callTool(tools(s), "search", { group: "NoRepo", query: "q" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("does not have a shared knowledge repository");
-  });
-});
-
 describe("system conversation-read tools + brain self-state", () => {
   function setup(dir: string) {
     const { store, config } = createServices({ dataDir: path.join(tempDir, dir), agentRuntime: "local", sessionSecret: "t" });
@@ -4564,7 +4349,7 @@ describe("system conversation-read tools + brain self-state", () => {
     expect(on.content[0].text).toContain("Second brain (personal): active");
 
     // A connected repo is NOT enough: with the 개인 지식 tool group deselected
-    // runPlan's `brainActive` is false, so no brain recall/capture tool is
+    // runCapabilities' `brainActive` is false, so no brain recall/capture tool is
     // registered and the report must say OFF rather than active.
     // (`[]` means "only system" — effectiveMcpToolGroups always injects it.)
     const groupOff = await callTool(
@@ -4622,29 +4407,12 @@ describe("normalizeWikiPath (shared wiki-scope guard)", () => {
     const res = await callTool(tools, "get_note", { path: "raw/secret.md" });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("mcp__repo__read_file");
-    expect(res.content[0].text).not.toContain("mcp__group_repo__read_file");
-  });
-
-  it("the group get_note refusal points at mcp__group_repo__read_file", async () => {
-    const { store, config } = createServices({
-      dataDir: path.join(tempDir, "wikiguard-group"),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "member");
-    store.setGroupKnowledgeRepo(group.id, "/tmp/g-repo", "main");
-    const tools = buildGroupBrainTools(store, { avatarUserId: owner.id, viewerIsOwner: true, config });
-    const res = await callTool(tools, "get_note", { group: "Team", path: "raw/secret.md" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("mcp__group_repo__read_file");
   });
 });
 
-describe("repoToolKit commit messages shared across personal + group servers", () => {
+describe("repoToolKit commit messages", () => {
   // A connected repo WITHOUT a git token → commit must hit the `!c.token` guard
-  // and return the byte-identical NO_GIT_TOKEN constant in BOTH servers.
+  // and return the NO_GIT_TOKEN constant verbatim.
   function makeRemoteWithMain(dir: string) {
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
     const seed = path.join(tempDir, dir, "seed");
@@ -4677,28 +4445,6 @@ describe("repoToolKit commit messages shared across personal + group servers", (
     expect(NO_GIT_TOKEN).toBe("To push, please first register an internal Git token (GIT_TOKEN) in settings.");
   });
 
-  it("group commit with no git token returns NO_GIT_TOKEN verbatim (same wording)", async () => {
-    const { store, config } = createServices({
-      dataDir: path.join(tempDir, "notoken-group"),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "admin"); // admin so it passes the role gate to the token check
-    const remote = makeRemoteWithMain("notoken-group");
-    store.setGroupKnowledgeRepo(group.id, remote, "main"); // connected, but owner has NO git token
-    const tools = buildGroupRepoTools(store, {
-      avatarUserId: owner.id,
-      owner: { id: owner.id, username: "owner", displayName: "Owner" },
-      viewerIsOwner: true,
-      config,
-    });
-    const res = await callTool(tools, "commit", { group: "Team", message: "m" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toBe(NO_GIT_TOKEN);
-  });
-
   it("personal commit with no changes returns NO_CHANGES verbatim", async () => {
     const { store, config } = createServices({
       dataDir: path.join(tempDir, "nochanges-personal"),
@@ -4724,32 +4470,9 @@ describe("repoToolKit commit messages shared across personal + group servers", (
     expect(NO_CHANGES).toBe("There are no changes to commit.");
   });
 
-  it("group commit with no changes returns NO_CHANGES verbatim (same wording)", async () => {
-    const { store, config } = createServices({
-      dataDir: path.join(tempDir, "nochanges-group"),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    store.setGitToken(owner.id, "tok");
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "admin");
-    const remote = makeRemoteWithMain("nochanges-group");
-    store.setGroupKnowledgeRepo(group.id, remote, "main");
-    const tools = buildGroupRepoTools(store, {
-      avatarUserId: owner.id,
-      owner: { id: owner.id, username: "owner", displayName: "Owner" },
-      viewerIsOwner: true,
-      config,
-    });
-    await callTool(tools, "list_files", { group: "Team" });
-    const res = await callTool(tools, "commit", { group: "Team", message: "m" });
-    expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toBe(NO_CHANGES);
-  });
 });
 
-describe("create_repo shared validation/token guards (personal vs group wording)", () => {
+describe("create_repo validation/token guards", () => {
   it("personal create_repo no-token message includes the repo-creation parenthetical", async () => {
     const { store, config } = createServices({
       dataDir: path.join(tempDir, "create-notoken-personal"),
@@ -4774,29 +4497,7 @@ describe("create_repo shared validation/token guards (personal vs group wording)
     expect(res.content[0].text).toContain("(A token with repo-creation permission is required.)");
   });
 
-  it("group create_repo no-token message OMITS the repo-creation parenthetical", async () => {
-    const { store, config } = createServices({
-      dataDir: path.join(tempDir, "create-notoken-group"),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "admin");
-    const tools = buildGroupRepoTools(store, {
-      avatarUserId: owner.id,
-      owner: { id: owner.id, username: "owner", displayName: "Owner" },
-      viewerIsOwner: true,
-      config,
-    });
-    const res = await callTool(tools, "create_repo", { group: "Team", name: "x" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("internal Git token (GIT_TOKEN)");
-    // Group does NOT carry the personal parenthetical — the difference is preserved.
-    expect(res.content[0].text).not.toContain("repo-creation permission is required");
-  });
-
-  it("invalid repo name returns the byte-identical letters/digits refusal on BOTH servers", async () => {
+  it("invalid repo name returns the byte-identical letters/digits refusal", async () => {
     const expected = "The repository name may only use letters/digits and the characters - _ .";
 
     const ps = createServices({
@@ -4815,85 +4516,12 @@ describe("create_repo shared validation/token guards (personal vs group wording)
     expect(personal.isError).toBe(true);
     expect(personal.content[0].text).toBe(expected);
 
-    const gs = createServices({
-      dataDir: path.join(tempDir, "create-badname-group"),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const gOwner = gs.store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    gs.store.setGitToken(gOwner.id, "tok");
-    const group = gs.store.createGroup({ name: "Team", createdBy: null });
-    gs.store.addGroupMember(group.id, gOwner.id, "admin");
-    const groupTools = buildGroupRepoTools(gs.store, {
-      avatarUserId: gOwner.id,
-      owner: { id: gOwner.id, username: "owner", displayName: "Owner" },
-      viewerIsOwner: true,
-      config: gs.config,
-    });
-    const grp = await callTool(groupTools, "create_repo", { group: "Team", name: "bad name!" });
-    expect(grp.isError).toBe(true);
-    expect(grp.content[0].text).toBe(expected);
-  });
-});
-
-describe("resolveOwnerGroup scoping via a group tool", () => {
-  function setup(dir: string) {
-    const { store, config } = createServices({
-      dataDir: path.join(tempDir, dir),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    return { store, config, owner };
-  }
-  const groupBrain = (s: ReturnType<typeof setup>) =>
-    buildGroupBrainTools(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config });
-
-  it("resolves an owner group by ID and by case-insensitive name", async () => {
-    const s = setup("resolve-ok");
-    const g = s.store.createGroup({ name: "Platform Team", createdBy: null });
-    s.store.addGroupMember(g.id, s.owner.id, "member");
-    s.store.setGroupKnowledgeRepo(g.id, "/tmp/platform-repo", "main");
-
-    // Resolve by exact ID: the group resolves, so we pass the resolve gate and
-    // proceed to the clone (a /tmp path → load failure, NOT a NO_SUCH_GROUP).
-    const byId = await callTool(groupBrain(s), "search", { group: g.id, query: "q" });
-    expect(byId.content[0].text).not.toContain("Could not find a group");
-
-    // Resolve by name, case-insensitively.
-    const byName = await callTool(groupBrain(s), "search", { group: "platform team", query: "q" });
-    expect(byName.content[0].text).not.toContain("Could not find a group");
-
-    const byNameUpper = await callTool(groupBrain(s), "search", { group: "PLATFORM TEAM", query: "q" });
-    expect(byNameUpper.content[0].text).not.toContain("Could not find a group");
-  });
-
-  it("returns NO_SUCH_GROUP for an unknown group and for a group the owner is not in", async () => {
-    const s = setup("resolve-miss");
-    // A group the owner DOES belong to, plus one they do NOT.
-    const mine = s.store.createGroup({ name: "Mine", createdBy: null });
-    s.store.addGroupMember(mine.id, s.owner.id, "member");
-    const foreign = s.store.createGroup({ name: "Foreign", createdBy: null });
-    s.store.setGroupKnowledgeRepo(foreign.id, "/tmp/foreign-repo", "main");
-
-    const unknown = await callTool(groupBrain(s), "search", { group: "Nope", query: "q" });
-    expect(unknown.isError).toBe(true);
-    expect(unknown.content[0].text).toContain("Could not find a group");
-
-    // The foreign group is unreachable BY NAME and BY ID — scoping is the owner's
-    // own memberships only, never a cross-tenant read of another team's repo.
-    const foreignByName = await callTool(groupBrain(s), "search", { group: "Foreign", query: "q" });
-    expect(foreignByName.isError).toBe(true);
-    expect(foreignByName.content[0].text).toContain("Could not find a group");
-    const foreignById = await callTool(groupBrain(s), "search", { group: foreign.id, query: "q" });
-    expect(foreignById.isError).toBe(true);
-    expect(foreignById.content[0].text).toContain("Could not find a group");
   });
 });
 
 /**
  * A browser tool's zod shape. `callTool` invokes the handler directly and never
- * runs the SDK's schema pass, so a cap that lives only in the schema has to be
+ * runs the MCP server's schema pass, so a cap that lives only in the schema has to be
  * asserted on the schema itself.
  */
 function browserSchema(
@@ -5100,7 +4728,7 @@ describe("browser bridge tools", () => {
   });
 
   it("bounds the snapshot scope arguments in the schema, where the model is actually stopped", async () => {
-    // callTool invokes the handler directly, bypassing the SDK's zod pass, so
+    // callTool invokes the handler directly, bypassing the MCP server's zod pass, so
     // these caps are only ever enforced by the schema — assert them there.
     const schema = browserSchema(buildBrowserTools({ execute: ok(), allowed: true }), "snapshot");
     expect(schema.maxChars.safeParse(100).success).toBe(false);

@@ -1,8 +1,9 @@
 // The 할 일 snapshot the system prompt states: the owner's list FROZEN at a
 // conversation's first to-do-capable turn and never refreshed (user decision
-// 2026-10-10). The append is re-rendered on every turn (`snapshot: false`), so
-// anything in it that moved between turns would invalidate the cached prompt
-// prefix and re-bill the whole history; a value written once per conversation
+// 2026-10-10). The append is FROZEN per conversation (`conversations.pi_instructions`,
+// re-sent verbatim whenever a pi session starts), so anything in it that moved
+// between turns would be stated wrong for the rest of the thread (and would
+// change the cached prompt prefix); a value written once per conversation
 // cannot move. The live state stays where caching does not care:
 // describe_system and the header of every to-do tool result.
 import logger from "../logger.js";

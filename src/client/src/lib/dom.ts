@@ -55,8 +55,8 @@ export async function downscaleImageToDataUrl(
 
 // First image file in a clipboard: prefer items (covers screenshots/copied
 // images), fall back to files (some browsers only populate one of the two for
-// a pasted image). Shared by the profile photo and external-avatar photo
-// Ctrl+V handlers; ChatView's multi-file composer paste stays separate.
+// a pasted image). Used by the profile photo Ctrl+V handler; ChatView's
+// multi-file composer paste stays separate.
 export function pastedImageFile(clipboard: DataTransfer | null): File | null {
   if (!clipboard) return null;
   const fromItems = Array.from(clipboard.items || [])
@@ -175,7 +175,7 @@ export function autosize(node: HTMLTextAreaElement, _value?: string) {
 // `onOutside` fires on a document pointerdown whose target is neither inside the
 // node nor matching the `ignore` selector (the toggle button that opened it —
 // excluded so its own click handler does the toggle instead of double-firing).
-// Used for the composer's group-knowledge / MCP-tool panels. Because the panel
+// Used for the composer's MCP-tool panel. Because the panel
 // mounts only once it's open, the opening click's pointerdown has already
 // finished before the listener attaches, so it can't immediately self-close.
 export function clickOutside(

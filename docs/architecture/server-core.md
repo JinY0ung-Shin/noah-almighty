@@ -64,7 +64,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `retirePersonalAgents` (`src/server/retirePersonalAgents.ts` + the `store/retiredPersonalAgents.ts` mixin,
   called from `index.ts` right after `createServices()` — before `createApp`, `listen` and the routine
   scheduler, which would otherwise run a bot-bound routine as the owner) clears what an existing deployment
-  still holds: every `personal:`-bound conversation (messages, canvases, share links, task rows,
+  still holds (files QUARANTINED, not deleted, after a DB backup — see "Retirement backup and quarantine"
+  below): every `personal:`-bound conversation (messages, canvases, share links, task rows,
   notifications) and any other row keyed by a bot avatar id, bot-bound `routine_jobs` rows, then `DROP`s
   `bot_tasks` and `personal_agents`. Disk first: bot avatar images, workspace trees and bot-workspace SDK
   project dirs are found by NAME prefix (`avatars/personal:*`, `workspaces/personal-*`, both spellings of the
@@ -87,6 +88,116 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   reserved FOREVER. It never touches the `agents/<dir>/` folders the bots left in users' knowledge repos (the
   users' own git content); the unused `routine_jobs.personal_agent_id` column stays on old DBs, like other
   retired columns.
+- **The retired external avatars (oh-my-gateway, removed 2026-10-29) are purged at boot the same way.**
+  `retireExternalAvatars` (`src/server/retireExternalAvatars.ts` + the `store/retiredExternalAvatars.ts`
+  mixin, called from `index.ts` right after `retirePersonalAgents`) deletes ALL external-avatar history (rows
+  after the DB backup; files are quarantined, see below)
+  (user decision D4 — the old "revocation preserves history" promise is void): every conversation whose
+  avatar id starts with `external:` gets `deleteConversation`'s cascade (messages, canvases, share links,
+  `avatar_tasks`, notifications, routine rows pointing into it), plus any other row keyed by an `external:`
+  avatar id; each thread's `chat-images/`/`chat-files/` media and its server-written workspace copies;
+  every `avatars/external:*` profile image and `workspaces/external-*` tree (found by NAME prefix); the
+  `external_agents_registry_v1`
+  `app_config` row; and `DROP TABLE external_avatar_images`. `conversations.external_endpoint` stays as
+  a dead column, like other retired columns. Media dirs that fail to delete are kept PENDING
+  (`retired:external_avatars:pending`) and retried every boot; a pass with ZERO failures stamps the
+  `retired:external_avatars` marker (read by EXISTENCE). A marked boot returns at once unless a pending
+  row exists or the `external_avatar_images` table re-appears (an older release booted after the stamp),
+  which re-runs the full purge — so the `external:` prefix, that table name and the registry key stay
+  reserved FOREVER. A still-set `EXTERNAL_AGENTS_JSON` is ignored with one boot warning. Tests:
+  `tests/retire-external-avatars.test.ts`. The no-follow removal / listing / failure-tally primitives every
+  retirement uses (now: the no-follow QUARANTINE move) live in `src/server/retiredFiles.ts`.
+- **The retired group shared agents (removed 2026-10-29) are purged at boot the same way.**
+  `retireGroupAgents` (`src/server/retireGroupAgents.ts` + the `store/retiredGroupAgents.ts` mixin, called
+  from `index.ts` right after `retireExternalAvatars`) deletes ALL group-agent history (decision D4; rows
+  after the DB backup, files quarantined — see below): every
+  conversation whose avatar id starts with `group:` (`group:<groupId>:<agentId>`, or the pre-multi
+  `group:<groupId>`) gets `deleteConversation`'s cascade (messages, canvases, share links, `avatar_tasks`,
+  notifications, routine rows pointing into it), plus any other row keyed by a `group:` avatar id
+  (`routine_jobs`, `avatar_notifications`, `knowledge_requests`); each thread's `chat-images/`/`chat-files/`
+  media, its server-written workspace copies and its SDK session artifacts (matched by session id); every
+  `avatars/group:*` profile image, `workspaces/group-*` tree and SDK project folder of a
+  `<workspaces>/group-…` cwd (both spellings of the workspaces root, found by NAME prefix). The same purge
+  transaction `DROP`s `group_agents`, `group_agents_legacy` and `idx_group_agents_group`. Row-keyed failures
+  are kept PENDING (`retired:group_agents:pending`, the personal-bot document shape) and retried every boot;
+  a pass with ZERO failures stamps `retired:group_agents` (read by EXISTENCE). A marked boot returns at once
+  unless a pending row exists or a retired table re-appears (an older release booted after the stamp), which
+  re-runs the full purge — so the `group:` avatar-id prefix, the `group-` workspace prefix, the two table
+  names, the index name and both marker keys stay reserved FOREVER. Groups, members and
+  audit rows are untouched; AdminView keeps the `group_agent_create/delete/update/image` labels for retained
+  audit rows. The row-keyed helpers (pending document, session-artifact sweep, name-prefix sweep) are shared
+  with the personal-bot retirement in `src/server/retiredSessionFiles.ts`. `migrateGroupAgentsMulti` and the
+  boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its rows. Tests:
+  `tests/retire-group-agents.test.ts`.
+- **Group knowledge repositories are RETIRED (2026-10-30, user decision).** Groups stay only as the
+  avatar-sharing / trust / skill-sharing (+ admin tool policy) unit. Behind `retirementGate()` (DB backup
+  first — `retirementDataPresent` counts a `RETIRED_COLUMNS` entry only while it holds a value), `migrate()`
+  drops `groups.knowledge_repo`/`knowledge_branch`/`knowledge_selected`, `users.group_knowledge_off_default`
+  and `conversations.group_knowledge_off` (`dropColumnIfPresent`); every name is reserved forever.
+  `retireGroupKnowledgeRepos.ts` (boot, after the Craft step) quarantines Noah's clones
+  `<dataDir>/group-knowledge` whole into `retired/<stamp>/group-knowledge` and stamps
+  `retired:group_knowledge_repos`; a refused move (EXDEV included) is retried next boot. The remote
+  repositories are never touched. Removed with it: `groupKnowledgeRepo.ts`, `groupRepoTools.ts`
+  (`mcp__group_repo__*`), the `/api/me/groups/:id/knowledge-repo*` routes, `PUT /api/me/group-knowledge-default`,
+  group skill roots / group CLAUDE.md in `loadAgentPluginRoots`/`loadKnowledgeRepoMemory`, the
+  `group_knowledge` MCP tool group (a saved selection or group policy naming it is filtered by
+  `normalizeMcpToolGroups`), the composer's 그룹 지식 toggle and the 그룹 카드 repo section. AdminView keeps
+  the `group_repo_*` audit labels for retained rows. A `group-<name>` skill root an older build copied into a
+  sandbox is pruned like any unused root (`piSkills.ts`). Tests: `tests/retire-group-knowledge-repos.test.ts`.
+- **The retired Claude Agent SDK runtime (removed 2026-10-29, decision U8) leaves CLI state behind.** Through
+  `retirementGate()` (DB backup first): the `claude_oauth_token` app_config key (the old `claude setup-token`
+  subscription token) and the skill-discovery cache key (`skill_discovery_cache`) are deleted and both names are
+  reserved forever; `<dataDir>/agent-sessions` (the CLI transcripts, `config.agentSessionsDir` — kept only as the
+  path this step reads) is QUARANTINED to `<dataDir>/retired/<stamp>/agent-sessions` by a boot step, never
+  deleted, and a clean pass stamps `retired:agent_sessions`. Old CLI session ids and resume points in
+  `conversations.agent_session_id` / `messages.sdk_*` are left as they are: the pi runner ignores any value that is
+  not a `resp_…` id and starts a new session from the text history.
+- **Retirement backup and quarantine (user decision 2026-10-29): no retirement ever deletes a FILE, and
+  none deletes a ROW before the whole DB is backed up.** One per-boot gate in `StoreBase`
+  (`retirementGate()`, helpers in `src/server/store/retirementBackup.ts`) carries a UTC stamp
+  (`2026-10-29T03-04-05.678Z-<6 hex>`) shared by both halves:
+  - **DB backup.** The gate is asked in the `Store` constructor BEFORE `migrate()` and again by every boot
+    purge. When `retirementDataPresent` (read-only, schema-defensive, safe pre-migrate) finds anything a
+    retirement would delete — a retired table (`server_agents`, `server_agent_sessions`, `group_agents`,
+    `group_agents_legacy`, `external_avatar_images`, `personal_agents`, `bot_tasks`,
+    `avatar_trusted_users`), a retired `app_config` key (`server_agents_enabled`,
+    `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`, the
+    three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
+    `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, or a bot-bound routine — the
+    first ask copies the DB with `VACUUM INTO` (synchronous, WAL included) to
+    `<dataDir>/backups/pre-retire-<stamp>.db`: the file is created empty at 0600 first, the folder 0700 and
+    never a link, the copy re-opened read-only and its schema count compared. One `warn` line logs path and
+    size. A clean DB, and one whose every retirement already finished, is never backed up. **A failed backup
+    HOLDS the boot**: `migrate()` skips every retired drop/delete below its gate, and every boot purge
+    (`openRetirementSweep` → null) returns without moving, purging or stamping anything; one `error` line
+    says so, the app keeps serving, and the next boot retries with a new stamp. Only the failed attempt's
+    own partial file is removed. While held, `listDueRoutineJobs` also skips rows with
+    `routine_jobs.personal_agent_id` set, so a bot-bound routine can never fire as its owner. Retired
+    external/group threads stay visible until a backup succeeds.
+  - **Quarantine.** Every file or tree a retirement removed before is now MOVED by `quarantineRetired`
+    (`src/server/retiredFiles.ts`) to `<dataDir>/retired/<stamp>/<path relative to dataDir>`, one
+    `rename`, parents created 0700: chat media, server-written workspace copies
+    (`quarantineConversationWorkspaceCopies`, `retiredSessionFiles.ts`, run AFTER the name-prefix sweep so
+    copies travel with their avatar's tree), SDK session artifacts, avatar images, workspace trees, SDK
+    project folders and `runtime/craft-purge`. A link is moved AS a link (never followed, its target
+    untouched); a quarantine root or folder on the way that is a link, a target outside `dataDir` or inside
+    `backups/`/`retired/` are refused. A folder whose destination this boot already filled (a transcript
+    moved by session id, then its project folder by name) is merged entry by entry and only the emptied
+    folder is removed. A read-only top folder gets u+w for the rename and its mode back after. **EXDEV is
+    never copied and deleted**: the item stays, is counted as a failure (pending list as before, marker
+    withheld) with a warning, and later boots retry. The pi runtime's sandbox copies of retired threads
+    (`PI_WORKSPACES_DIR`, outside `dataDir`) are left in place: no released build ran a retired kind on pi.
+  - **Manual cleanup only.** Noah never reads, serves, lists, sweeps or prunes `backups/` or `retired/` (no
+    static route reaches `dataDir`, no code lists `dataDir` itself, account deletion sweeps only its named
+    per-user namespaces — so a deleted user's data in either folder stays until the operator removes it).
+    Both hold FULL user data — conversations, encrypted secrets (readable with the deployment's
+    SESSION_SECRET), files — so keep the data volume's permissions owner-only (agent shells run in pi
+    sandboxes, which never mount `dataDir`). Restore: stop Noah, replace `noah-almighty.db` (and delete its `-wal`/`-shm`) with the
+    backup, move the wanted items from `retired/<stamp>/` back to the same relative paths, start an OLDER
+    release (this one would retire them again). Delete when satisfied: `rm -rf <dataDir>/retired/<stamp>
+    <dataDir>/backups/pre-retire-<stamp>.db` (a read-only tree inside may need `chmod -R u+w` first).
+    Operator text: README "Retirement backups and quarantine". Tests: `tests/retire-backup.test.ts` plus
+    the quarantine expectations in every `tests/retire-*.test.ts`.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`
@@ -101,24 +212,13 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `browser_password_only`). They still surface on `User` (`shellExposedSecretNames`, `browserSecrets`)
   via `toUser`, and a security-relevant one gets its own audit action. Detail →
   [`secrets-ssh.md`](secrets-ssh.md).
-- **Per-conversation group-knowledge toggle (owner-only):** `conversations.group_knowledge_off` (JSON
-  OFF-set; NULL/`[]` = every group ON) + `get/setConversationGroupKnowledgeOff`. The CLIENT owns the
-  selection and sends it on each chat POST (`groupKnowledgeOff`) — there is NO per-conversation PATCH
-  endpoint, so it works from a brand-new chat with no row. The chat route turns it into ONE
-  `disabledGroupIds` set that filters BOTH `loadAgentPluginRoots` group skill roots AND
-  `loadKnowledgeRepoMemory` group CLAUDE.md, and persists it on the row. Colleague turns ignore it
-  (always all-on); routines pass no filter.
-- **Per-USER default group-knowledge OFF-set:** `users.group_knowledge_off_default` (JSON OFF-set,
-  `[]`=all on) + `setGroupKnowledgeOffDefault`, on `User.groupKnowledgeOffDefault`, written by
-  `PUT /api/me/group-knowledge-default`. The composer toggle saves here so the choice SEEDS every NEW
-  conversation — crucially the **auto-greeting**, which fires before any toggle interaction. Client seeds
-  new panes via `defaultGroupKnowledgeOff(avatar)` (own avatar only). Existing conversations still load
-  their persisted per-conversation value, which overrides the default for that chat.
 - **The composer model/effort/MCP-tool-group pickers remember the owner's last choice** via per-user
-  defaults (`users.model_default` / `effort_default` / `mcp_tool_groups_default`), mirroring
-  `group_knowledge_off_default`. The setter `store.setChatDefaults` + `PUT /api/me/chat-defaults` write
+  defaults (`users.model_default` / `effort_default` / `mcp_tool_groups_default`). (The group-knowledge
+  OFF-sets that once sat next to them — `conversations.group_knowledge_off`,
+  `users.group_knowledge_off_default`, `PUT /api/me/group-knowledge-default` — were retired with group
+  knowledge repos, see below.) The setter `store.setChatDefaults` + `PUT /api/me/chat-defaults` write
   them; `toUser` exposes `modelDefault`/`effortDefault`/`mcpToolGroupsDefault` (null = never chosen →
-  fall back to the hardcoded server/SDK default; for MCP, `[]` = explicitly all-off as a remembered
+  fall back to the hardcoded server default; for MCP, `[]` = explicitly all-off as a remembered
   choice). The client seeds new panes from these in `makePane`; the per-conversation `selected_*` value
   still overrides them when resuming an existing thread.
 - **What's-new (release notes) notice (#whats-new):** `src/server/releaseNotes.ts` is the shared registry

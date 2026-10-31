@@ -1,27 +1,22 @@
 import type {
   AgentRewindInfo,
   AppConfig,
-  CraftAppRunState,
-  CraftRunState,
-  CraftUnavailableReason,
-  GroupAgentState,
-  OwnerServerAgentSummary,
-  ServerAgentsUnavailableReason,
+  PiSandboxOwner,
   SharedMcpRunState,
   UserGroupMembership,
 } from "../types.js";
-import { groupAgentCaptureAllowed } from "../groupAgents.js";
 import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
-import { craftAppById } from "../../shared/craftApps.js";
-import { sanitizeCraftRunnerText } from "../craftRunner.js";
+import { modelOverrideState } from "../modelOverride.js";
+import { catalogModelIds } from "./pi/modelCatalog.js";
+import { piServicesFor } from "./pi/piRuntime.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
  *
- * The root CLAUDE.md mandates that buildPrompt's owner self-state (claudeAgent.ts)
+ * The root CLAUDE.md mandates that buildPrompt's owner self-state (promptBuilder.ts)
  * and the `describe_system` tool (systemTools.ts) report the SAME runtime facts.
  * This is the single place that reads those facts from the live `store` + `config`
  * so the two call sites can't drift in WHAT they read; each caller still FORMATS
@@ -40,10 +35,11 @@ import { sanitizeCraftRunnerText } from "../craftRunner.js";
  * `secretNames` only and leaves the Confluence derivation to each caller, so
  * neither output changes.
  *
- * NOTE on model: this exposes the raw resolution inputs (`anthropicModel` env pin,
- * `modelOverride` admin setting) — env pin > admin override > SDK default — not a
- * formatted label, since describe_system renders its own label and buildPrompt
- * does not surface the model at all.
+ * NOTE on model: this exposes the raw resolution input (`modelOverride` admin
+ * setting, checked against pi-gateway's last fetched model list) — composer pick
+ * > admin override > pi-gateway's default model — not a formatted label, since
+ * describe_system renders its own label and buildPrompt does not surface the
+ * model at all.
  */
 export interface OwnerState {
   /** Active personal keys for the external task API (POST /api/v1/avatar/tasks). */
@@ -66,7 +62,7 @@ export interface OwnerState {
    * them as fact.
    */
   browserSecrets: BrowserSecretPolicy[];
-  /** Groups the owner belongs to, with role + shared-repo flag per group. */
+  /** Groups the owner belongs to, with role + avatar-sharing flag per group. */
   groups: UserGroupMembership[];
   /** Number of general (work/code) git repos the owner has registered. */
   gitRepoCount: number;
@@ -78,10 +74,10 @@ export interface OwnerState {
   sharedSkillCount: number;
   /** Total times teammates learned this owner's skills (전수된 횟수, all skills). */
   sharedSkillLearnTotal: number;
-  /** Env-pinned model (`ANTHROPIC_MODEL`); wins over the admin override. */
-  anthropicModel?: string;
-  /** Admin-selected model override; used when no env pin is set. */
+  /** Admin-selected model override runs use when the conversation picked none (null: none, or ignored). */
   modelOverride: string | null;
+  /** A stored override pi-gateway does not currently offer — ignored, runs use pi-gateway's default model. */
+  modelOverrideIgnored: string | null;
   /** Experimental (beta) feature keys the owner enabled for this avatar (#50). */
   experimentalFeatures: string[];
   /**
@@ -98,13 +94,6 @@ export interface OwnerState {
    * (agent/todoSnapshot.ts), never these live numbers.
    */
   todos: TodoSnapshot;
-  /**
-   * The owner's registered 서버 에이전트 (enabled or not), STABLE fields only —
-   * both surfaces list them: the prompt (where the avatar learns what it can
-   * delegate to) and describe_system, which adds the LIVE install state and
-   * sessions from the store itself.
-   */
-  serverAgents: OwnerServerAgentSummary[];
 }
 
 /**
@@ -129,7 +118,7 @@ export function summarizeOwnerState(
     shellExposedSecretNames: store.listShellExposedSecretNames(avatarUserId),
     browserSecrets: store.listBrowserSecretPolicies(avatarUserId),
     groups: store.listUserGroups(avatarUserId),
-    // Lazy: only describe_system reads these; the buildPrompt/runClaudeAgent path
+    // Lazy: only describe_system reads these; the prompt (buildSystemPromptAppend) path
     // never accesses them, so defer the store queries until a consumer reads them.
     get gitRepoCount() {
       return store.listGitRepos(avatarUserId).length;
@@ -148,8 +137,10 @@ export function summarizeOwnerState(
     get sharedSkillLearnTotal() {
       return store.countSkillLearnsForOwner(avatarUserId);
     },
-    anthropicModel: config.anthropicModel,
-    modelOverride: store.getModelOverride(),
+    ...(() => {
+      const override = modelOverrideState(store, catalogModelIds(piServicesFor(store, config).models.peek()));
+      return { modelOverride: override.effective, modelOverrideIgnored: override.ignored };
+    })(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),
     sharedAccount: store.isSharedAccount(avatarUserId),
     // Lazy like the counts above: only describe_system reads it (the prompt stays static).
@@ -157,16 +148,6 @@ export function summarizeOwnerState(
       const todayKst = kstDateString();
       return { todayKst, counts: store.countTodos(avatarUserId, todayKst) };
     },
-    // Eager: runPlan's registration gate reads it on every owner run (≤30 rows).
-    serverAgents: store.listServerAgents(avatarUserId).map((server) => ({
-      name: server.name,
-      host: server.host,
-      port: server.port,
-      username: server.username,
-      role: server.role,
-      access: server.access,
-      enabled: server.enabled,
-    })),
   };
 }
 
@@ -203,81 +184,68 @@ export function gettingStartedGaps(
 }
 
 /**
- * Inert OwnerState for runs that have NO owner (group shared agents): every
- * user-scoped fact reads empty/false, so no personal capability can leak into
- * a gate or prompt even by accident — the group-agent run derives its actual
- * state from `summarizeGroupAgentState` below, never from this. Config-scoped
- * model facts stay real (they aren't personal).
+ * What the admin built-in-tool disables mean on pi (review L6). pi has none of
+ * WebFetch/WebSearch/NotebookEdit, and its own subagent tool (`Agent`) cannot
+ * be switched off per request (design P1), so the subagent toggle is the
+ * model's to honor.
+ * Mirrored by describe_system's admin-disabled line.
  */
-export function emptyOwnerState(store: Store, config: AppConfig): OwnerState {
-  return {
-    avatarApiKeyCount: 0,
-    knowledgeRepoConfigured: false,
-    knowledgeRepo: { repo: null, branch: null },
-    gitTokenSet: false,
-    secretNames: [],
-    shellExposedSecretNames: [],
-    browserSecrets: [],
-    groups: [],
-    gitRepoCount: 0,
-    openRequestCount: 0,
-    learnableSkillCount: 0,
-    sharedSkillCount: 0,
-    sharedSkillLearnTotal: 0,
-    anthropicModel: config.anthropicModel,
-    modelOverride: store.getModelOverride(),
-    experimentalFeatures: [],
-    sharedAccount: false,
-    todos: { todayKst: kstDateString(), counts: { open: 0, inProgress: 0, overdue: 0, dueToday: 0, done: 0, dropped: 0 } },
-    serverAgents: [],
-  };
+export function piAdminDisabledToolsNote(disabledTools: readonly string[]): string {
+  if (!disabledTools.some((name) => name === "Agent" || name === "Task")) return "";
+  return " On this runtime that subagent switch is NOT enforced by a tool gate (pi's own `Agent` tool stays callable), so honor it yourself: never spawn a subagent with `Agent`; do the work in this run.";
 }
 
-/** Read the group agent's current self-state (`GroupAgentState`, types.ts — the
- *  group analogue of OwnerState with the same both-consumers invariant: it feeds
- *  BOTH the group-agent prompt branch AND describe_system's group ctx). Repo
- *  facts come from the GROUP row; the git token is the ACTING member's (groups
- *  own no credentials — capture pushes borrow it). Null when the agent/group is
- *  gone. */
-export function summarizeGroupAgentState(
-  store: Store,
-  config: AppConfig,
-  agentId: string,
-  actingUserId: string,
-): GroupAgentState | null {
-  const agent = store.getGroupAgentById(agentId);
-  const group = agent ? store.getGroup(agent.groupId) : null;
-  if (!agent || !group) {
-    return null;
+/**
+ * Whose sandbox a run's built-in tools work in (`PiRuntimeFacts.sandboxOwner`),
+ * ONE text for both metacognition surfaces (the prompt's runtime section and
+ * describe_system's runtime line). Empty for the owner's own runs: "this
+ * user's sandbox" already says it. A colleague's run is also READ-ONLY
+ * (`readOnlyBuiltins` is true exactly then), and this sentence says so.
+ */
+export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): string {
+  if (owner === "viewer") {
+    return "This sandbox belongs to the person you are talking to, a colleague — NOT to the avatar owner — and this session is READ-ONLY there: your only built-in tools are `read`, `ls`, `find` and `grep` (pi left out `write`, `edit` and `bash`), they see only that colleague's own files, never the owner's, and you cannot create or change a file or run a program in this conversation. Put what you produce in your reply instead; for work that needs a shell or a new file, the colleague can ask their OWN avatar. The owner's knowledge and repositories are reachable only through the Noah tools this run lists, which refuse anything reserved for the owner.";
   }
-  const groupId = agent.groupId;
-  // Live role — null once the member has been removed mid-turn. FAIL CLOSED
-  // (never default to "member"): describe_system must not report capture as
-  // allowed while the group-repo tools are already refusing the same user.
-  const viewerRole = store.groupRoleFor(actingUserId, groupId);
-  const repo = store.getGroupKnowledgeRepo(groupId);
-  return {
-    groupId,
-    agentId: agent.id,
-    displayName: agent.displayName,
-    groupName: group.name,
-    enabled: agent.enabled,
-    captureScope: agent.captureScope,
-    viewerRole,
-    captureAllowed:
-      viewerRole !== null && groupAgentCaptureAllowed(agent, viewerRole),
-    knowledgeRepoConfigured: Boolean(repo.repo),
-    knowledgeRepo: { repo: repo.repo, branch: repo.branch },
-    viewerGitTokenSet: Boolean(store.getGitToken(actingUserId)),
-    personaSet: Boolean(agent.persona.trim()),
-    // Live membership REQUIRED even for system admins (every in-run group tool
-    // fails closed on removal); the update_profile handler applies the same gate.
-    selfConfigAllowed:
-      viewerRole !== null &&
-      (viewerRole === "admin" || store.isAdmin(actingUserId)),
-    anthropicModel: config.anthropicModel,
-    modelOverride: store.getModelOverride(),
-  };
+  if (owner === "nobody") {
+    return "This consultation runs in a FRESH, EMPTY, temporary sandbox created for this one run and owned by nobody — neither your owner's nor the asking teammate's: it starts with no files and no secrets (no 셸 노출 secret reaches a consultation's shell), nothing you write there reaches the answer, and it is deleted when the run ends. Answer from your owner's knowledge through the Noah recall tools this run lists.";
+  }
+  return "";
+}
+
+/**
+ * A run nobody can answer (`PiRuntimeFacts.nonInteractive`: a scheduled
+ * routine, an avatar consultation, a profile generator) has a pi session
+ * started `interactive: false`, so AskUserQuestion is not among its tools.
+ * ONE text for both metacognition surfaces (the prompt's per-turn run-kind
+ * note and describe_system's runtime line).
+ */
+export const PI_NO_ASK_USER_SENTENCE =
+  "`AskUserQuestion` is not available in this run: its session was started without it because nobody can answer.";
+
+/**
+ * The owner's shell-secret state (pi `sandbox_env`, design P4), ONE text for
+ * both metacognition surfaces (the prompt's secrets section and describe_system's
+ * shell-secret line). `exported` is what this run's bash receives
+ * (`PiRuntimeFacts.shellSecretNames`), `flagged` what the owner set to 셸 노출;
+ * a flagged name pi refuses (sandbox-reserved, or past its size cap) is named
+ * as not exported.
+ */
+export function shellSecretsSentence(exported: readonly string[], flagged: readonly string[]): string {
+  const list = (names: readonly string[]) => names.map((name) => `\`${name}\``).join(", ");
+  const withheld = flagged.filter((name) => !exported.includes(name));
+  const parts: string[] = [];
+  if (exported.length > 0) {
+    parts.push(
+      `${list(exported)} ${exported.length === 1 ? "is" : "are"} set to 셸 노출 and present as \`$NAME\` environment variables in every \`bash\` command of this run — use them INSIDE commands (e.g. \`curl -H "Authorization: Bearer $${exported[0]}"\`) and never print, echo or write a value: pi and Noah replace it with [REDACTED] in every tool result`,
+    );
+  }
+  if (withheld.length > 0) {
+    parts.push(
+      `${list(withheld)} ${withheld.length === 1 ? "is" : "are"} set to 셸 노출 but NOT in the shell — the sandbox reserves that name (PATH, HOME, *_PROXY, LD_*, BASH*, LC_* and the like) or the shell's secret budget (64 names, 256 KiB) is full; the owner can rename the secret`,
+    );
+  }
+  if (parts.length === 0) return "no secret is set to 셸 노출, so the sandbox shell holds none";
+  return parts.join("; ");
 }
 
 /**
@@ -312,43 +280,20 @@ export function rewindTurnState(rewind: AgentRewindInfo): string {
   );
 }
 
-/**
- * Why an owner run has no server-agent tools (runPlan's
- * `serverAgentsUnavailable`). ONE text for both metacognition surfaces — the
- * prompt's server-agent line and describe_system's — each adds its own label.
- */
-export function serverAgentsUnavailableText(reason: ServerAgentsUnavailableReason): string {
-  switch (reason) {
-    case "admin_disabled":
-      return "the system administrator has not enabled server agents on this Noah deployment (Admin → 시스템 → 서버 에이전트; off by default because a remote run hands the deployment's model credentials to the registrant's server) — the owner can still register servers and trust host keys, but checks and delegations stay off until an admin enables it";
-    case "egress_blocked":
-      return "this deployment's egress policy blocks direct outbound connections, so SSH (and with it every server agent) is unavailable";
-    case "ssh_group_unavailable":
-      // Deliberately policy-neutral (the avatar is never told a tool policy exists),
-      // but never "off in this conversation": the composer cannot turn it on.
-      return "the SSH tool group is not available to this account's runs — it is not a conversation setting, so do not suggest re-enabling a tool group in the composer";
-    case "no_servers":
-      return "no server is registered — the owner adds one in Settings → 권한·연결 → 서버 에이전트";
-    case "no_ssh_key":
-      return "the owner has no SSH_PRIVATE_KEY secret — generate or register one first (Settings → 권한·연결 → 시크릿)";
-    case "all_disabled":
-      return "every registered server is disabled in Settings → 권한·연결 → 서버 에이전트";
-    case "ssh_group_off":
-      return "the SSH tool group is OFF for this conversation (server agents ride it)";
-  }
-}
-
 /** Product-wide UI capability; never reads private DM content or presence into agent context. */
 export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in users across groups via the 메시지 dock at the bottom-right corner of the screen (a collapsible chat window available on every view). It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";
 
 /**
- * 공용 MCP 서버 lines (runPlan's `planSharedMcpRun` states) — ONE wording for
- * both metacognition surfaces: the prompt's standing section and
- * describe_system. Slot/secret names ride only owner runs (runPlan strips them
- * for everyone else, like the prompt's secret-name list), so a teammate hears
- * that something is missing, never which.
+ * 공용 MCP 서버 lines (`planSharedMcpRun` states) — ONE wording for both
+ * metacognition surfaces: the prompt's standing section and describe_system.
+ * Slot/secret names ride only owner runs (the plan strips them for everyone
+ * else, like the prompt's secret-name list), so a teammate hears that
+ * something is missing, never which. Noah relays every active one under the
+ * `shared` broker id (`mcp__shared__<name>__<tool>`).
  */
-export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
+export function sharedMcpServerLines(
+  states: SharedMcpRunState[],
+): string[] {
   const fix =
     "If the user wants it, tell them to open Settings → 권한·연결 → 시크릿, find this server under 공용 MCP 서버 and pick which of their own secrets to connect (adding the secret first if needed); it applies from their next message.";
   return states.map((state) => {
@@ -357,7 +302,7 @@ export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
     const head = `\`${state.name}\`${label}${about}`;
     switch (state.status) {
       case "active":
-        return `${head}: available in this run as \`mcp__${state.name}__*\`.`;
+        return `${head}: available in this run as \`mcp__shared__${state.name}__<tool>\` (relayed by Noah).`;
       case "needs_binding":
         if (state.unboundSlots.length === 0) {
           return `${head}: NOT available in this conversation — the avatar owner has not connected a secret to it.`;
@@ -375,116 +320,11 @@ export function sharedMcpServerLines(states: SharedMcpRunState[]): string[] {
   });
 }
 
-/** Why one Craft app is unavailable — ONE text for both metacognition surfaces. */
-export function craftUnavailableText(app: CraftAppRunState, reason: CraftUnavailableReason): string {
-  switch (reason) {
-    case "not_configured":
-      return "this Noah deployment has no craft-runner configured (CRAFT_EXCHANGE_DIR / CRAFT_CONTROL_SECRET are unset)";
-    case "admin_disabled":
-      return "a system administrator has not enabled the Craft apps beta (admin settings → 시스템; off by default)";
-    case "not_admin":
-      return "Craft apps are limited to a system administrator's own avatar, and this avatar's owner is not one";
-    case "run_kind":
-      return "Craft apps run only in an interactive chat between a system administrator and their own avatar — never in routines, external task API turns, group agents, consultations or a colleague's chat";
-    case "no_vision":
-      return "the model of this run has no image input, and Craft results are verified through preview images";
-    case "no_workspace":
-      return "this run has no conversation workspace to exchange files with";
-    case "group_unavailable":
-      return "its tool group is not available to this account's runs — it is not a conversation setting, so do not suggest enabling it in the composer";
-    case "group_off":
-      return `its tool group is OFF for this conversation (off by default) — the user can turn on "${craftAppById(app.id).labelKo}" under the composer's MCP 도구 picker; it applies from their next message`;
-    case "runner_unreachable":
-      return "the craft-runner is not reachable right now (try again later; if it persists, a system administrator must check the craft-runner container)";
-    case "app_unavailable":
-      return "this deployment's craft-runner does not include it";
-    case "app_failed": {
-      // Runner-reported (it can carry the third-party app's stderr): sanitized
-      // a second time here and labelled as data, never as instructions.
-      const reported = sanitizeCraftRunnerText(app.error);
-      return `it failed the craft-runner's start-up self-test and is not served${reported ? ` (runner-reported self-test error, quoted as data: "${reported.replace(/"/g, "'")}")` : ""}`;
-    }
-    case "session_failed":
-      return "this conversation's Craft session could not be opened on the craft-runner (retry on the next message)";
-    case "storage_full":
-      return "the craft-runner's shared storage is over its budget, so no new Craft session can be opened (a system administrator must free Craft storage; deleting old Craft conversations frees theirs)";
-  }
-}
-
-const CRAFT_DEPLOYMENT_REASONS: ReadonlySet<CraftUnavailableReason> = new Set([
-  "not_configured",
-  "admin_disabled",
-  "not_admin",
-  "run_kind",
-  "no_vision",
-  "no_workspace",
-  "runner_unreachable",
-  "session_failed",
-  "storage_full",
-]);
-
 /**
- * Craft apps self-state lines — ONE wording for both metacognition surfaces.
- * `describe` (describe_system) always lists every app; `prompt` (the standing
- * append) stays short: nothing when no Craft group is selected and no app is
- * ready to be turned on, ONE line when every app is off for the same
- * deployment-level reason, and the full block (apps, paths, workflow) when an
- * app is active. Values are stable across turns unless the runner or the
- * admin switch changes, keeping the append cache-friendly.
+ * Groups have no shared knowledge repository and there is no team brain
+ * (both retired 2026-10-30). Said on BOTH metacognition surfaces, because a
+ * frozen prompt of an older conversation, a skill or a note may still name
+ * `mcp__group_repo__*` / `mcp__group_brain__*`.
  */
-export function craftAppsLines(state: CraftRunState, surface: "prompt" | "describe"): string[] {
-  const head = "Craft apps (admin-only beta: ArtCraft editors running headless in the isolated, network-less craft-runner, driven through MCP tools)";
-  const label = (app: CraftAppRunState) => `${app.labelEn}${app.version ? ` v${app.version}` : ""}`;
-  const active = state.apps.filter((app) => app.active);
-  const first = state.apps[0];
-  if (active.length === 0 && first?.reason && CRAFT_DEPLOYMENT_REASONS.has(first.reason) && state.apps.every((app) => app.reason === first.reason)) {
-    if (
-      surface === "prompt" &&
-      !state.selected &&
-      first.reason !== "runner_unreachable" &&
-      first.reason !== "session_failed" &&
-      first.reason !== "storage_full"
-    ) {
-      return [];
-    }
-    return [`${head}: not available in this run — ${craftUnavailableText(first, first.reason)}.`];
-  }
-  if (surface === "prompt" && active.length === 0 && !state.selected) {
-    const ready = state.apps.filter((app) => app.reason === "group_off" && app.status === "ready");
-    return ready.length > 0
-      ? [
-          `${head}: ${ready.map(label).join(", ")} ${ready.length === 1 ? "is" : "are"} ready on this deployment but OFF for this conversation (Craft tool groups are off by default). If the user wants that kind of editing, tell them to turn on ${ready.map((app) => `"${craftAppById(app.id).labelKo}"`).join(" / ")} under the composer's MCP 도구 picker; it applies from their next message.`,
-        ]
-      : [];
-  }
-  const lines = [`${head}:`];
-  for (const app of state.apps) {
-    if (surface === "prompt" && !app.active && app.reason === "app_unavailable") continue;
-    lines.push(
-      app.active
-        ? `- ${label(app)}: available in this run as \`mcp__${app.id}__*\`${app.tools ? ` (${app.tools} tools)` : ""}.`
-        : `- ${label(app)}: not available — ${craftUnavailableText(app, app.reason ?? "session_failed")}.`,
-    );
-  }
-  if (state.session && active.length > 0) {
-    const { inDir, outDir } = state.session;
-    lines.push(
-      `- Files: the apps read \`${inDir}/\` (inputs) and \`${outDir}/\`, and WRITE only under \`${outDir}/\` — never pass them a workspace path. ` +
-        `At the start of every message your workspace inputs are mirrored in: \`${inDir}/attachments/\` = workspace attachments/, \`${inDir}/captures/\` = captures/, \`${inDir}/confluence/\` = confluence/, \`${inDir}/craft-out/\` = earlier results (craft/out/). ` +
-        `For any other workspace file call \`mcp__craft_files__stage\` first and open the path it returns (under \`${inDir}/staged/\`).`,
-      `- Results: save into \`${outDir}/\`; after every Craft call it is mirrored into your workspace at \`${state.workspaceOutDir ?? "craft/out"}/\` (\`${outDir}/x.png\` ↔ craft/out/x.png). Deliver a result with \`mcp__file_output__share_file\` on the craft/out/ path — it accepts .png/.jpg/.webp/.svg/.psd/.pcraft. craft/out/ is a server-managed mirror: do not put your own files there.`,
-      ...(state.storage.exchangeFull
-        ? [
-            "- Storage: the craft-runner's shared storage is over its budget, so this message's workspace inputs were NOT mirrored into the session, `mcp__craft_files__stage` refuses, and the runner refuses Craft app calls until a system administrator frees space (deleting old Craft conversations frees theirs). Results already in craft/out/ can still be delivered — tell the user why new edits cannot run now.",
-          ]
-        : []),
-      ...(state.storage.workspaceOutFull
-        ? [
-            "- Storage: craft/out/ in your workspace reached its 2 GB cap, so newer Craft results were NOT copied there and cannot be delivered with share_file. Tell the user; a new conversation starts with an empty craft/out/.",
-          ]
-        : []),
-      "- Verify every edit with the app's preview tool (PhotoCraft: `render_preview`) before telling the user it is done — never claim success unverified. Preview images are also shown to the user in the side panel automatically, so do not re-send them. Follow the `craft-apps` skill for the workflow and command tips.",
-    );
-  }
-  return lines;
-}
+export const GROUP_REPOS_RETIRED_SENTENCE =
+  "Groups have NO shared knowledge repository and there is no team brain: both were removed, so the `mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist. If an earlier message, a skill or a note names them, say group repositories were removed and use the owner's personal repository (`mcp__repo__*`) or skill sharing (`mcp__skill_exchange__*`) instead — never look for a workaround.";

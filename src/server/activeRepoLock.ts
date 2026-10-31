@@ -1,8 +1,10 @@
 /**
  * Minimal in-memory serialization for the "active repo workspace" feature (#47).
  *
- * When a conversation opens a registered git repo as its active workspace, the
- * SDK's cwd becomes that repo's single local clone and the avatar edits the
+ * Used only by the `local` stub now: a pi run works on its sandbox COPY and
+ * takes no lock (see `activeRepoResolve.ts`). When a `local` conversation opens
+ * a registered git repo as its active workspace, the run's cwd becomes that
+ * repo's single local clone and the avatar edits the
  * working tree with native tools. Two different conversations doing that against
  * the SAME clone would stomp each other's working tree (the per-tool
  * `withRepoLock` in gitRepos.ts only guards the MCP git ops, not native edits).

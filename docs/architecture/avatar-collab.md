@@ -23,20 +23,37 @@
   `modelFallback: true`, a 3-min wall clock (`AVATAR_ASK_TIMEOUT_MS`), an 8k-char answer cap
   (`AVATAR_ASK_ANSWER_CAP` — the answer is another user's model output entering the asker's context, so
   it's bounded like the directory bio), and the OUTER run's abort signal propagated in.
-- **Machine-initiated ⇒ STRICTLY read-only, beyond what a human teammate turn gets** (`consultationRun`
-  in claudeAgent.ts): the shared-account write-widening is withheld (`repoWriteAccess`'s
-  `sharedAccount && elevatedToolAccess` arm adds `&& !consultationRun` — no human sees the request, so
-  no unattended write+commit into a communal repo), plugin MCP servers are NOT lifted at all
-  (third-party servers can't self-gate per viewer; registration is their only gate) and neither
-  plugin-secret injection nor shell secret exposure happens. The target keeps skills (prompt-level) but
-  answers with recall tools only; the consultation prompt branch states the read-only level and the
-  `brainSection` "consultation" mode never invites capture, even on a shared account.
+- **Where it runs:** on pi like every run, with pi's full built-ins (not `read_only`: nothing of anyone's is in
+  its sandbox) — but in a FRESH, EMPTY sandbox of its own, never the asker's or the target's (user decision
+  2026-10-30, review-2 H1). The run is driven by the TARGET's authored content (persona, knowledge-repo
+  `CLAUDE.md`, recalled notes, captured third-party pages) with nobody watching; in the asker's sandbox that text
+  could read the asker's conversation files, tamper with the asker's repo copies (committed later as the asker)
+  and file what it read to the target via `request_info`. So `runPiAgent` mints a principal no user has
+  (`beginPiConsultationSandbox` → `consult-<24 random hex>`, pi's user-id pattern), runs there, and removes its
+  `u-<key>` folder (descriptor-pinned, no link followed) plus Noah's repo-copy records when the run ends
+  (`endPiConsultationSandbox`); a record under `<dataDir>/pi-consultation-sandboxes/` lets the boot sweep one a
+  crash left (`sweepPiConsultationSandboxes`). `piRunPrincipal` REFUSES a consultation request, so no caller
+  can fall back to a user's sandbox. pi's sandbox container is not Noah's to stop: sandboxd reaps it once idle
+  (`SANDBOX_IDLE_SECONDS`, 15 min by default). Cost: every consultation cold-starts a sandbox container (~300 ms
+  on the dev box, before the model's first token). `viewerUserId` stays the asker — it is who the MCP gates see
+  (trust, `request_info` attribution), not whose files the shell gets. The run folder is `/workspace/c/run-ask`
+  with no stored session and no frozen instructions row. `request_info` stays: with an empty sandbox there is
+  nothing of the asker's to exfiltrate through it, and filing a gap with the asker attributed is its purpose.
+- **Machine-initiated ⇒ read-only toward the TARGET's data, beyond what a human teammate turn gets**
+  (`consultationRun` in `runCapabilities.ts`): the shared-account write-widening is withheld
+  (`repoWriteAccess`'s `sharedAccount && elevatedToolAccess` arm adds `&& !consultationRun` — no human sees the
+  request, so no unattended write+commit into a communal repo), no plugin `.mcp.json` or 공용 MCP server is
+  relayed at all (third-party servers can't self-gate per viewer; registration is their only gate), and no
+  vault value reaches any child. The target keeps skills (prompt-level) but answers with recall MCP tools only
+  (`mcpAllowedTools` + handler self-gates); the consultation prompt branch and describe_system state what the
+  run has, that its sandbox is an empty temporary one owned by nobody (`sandboxOwner: "nobody"`), and the `brainSection` "consultation" mode never invites
+  capture, even on a shared account.
 - **Per-turn budget:** the tool closure in `avatarDirectoryTools.ts` counts consultations and refuses
-  past `AVATAR_ASK_MAX_PER_TURN` (5) — each consult is a full agent subprocess with its own model calls,
+  past `AVATAR_ASK_MAX_PER_TURN` (5) — each consult is a full pi run with its own model calls,
   so an unbounded loop would be a cost amplifier on the shared deployment credentials.
-- **In-band error results never masquerade as answers:** `runClaudeAgent` doesn't throw on an error
+- **In-band error results never masquerade as answers:** `runPiAgent` doesn't throw on an error
   *result* — it substitutes a Korean fallback into `response.text` (`resultErrorMessage(subtype)`, or
-  `EMPTY_SDK_RESPONSE_MESSAGE` for an empty success). `AgentResponse.resultError` now carries the error
+  `EMPTY_PI_RESPONSE_MESSAGE` for an empty success). `AgentResponse.resultError` now carries the error
   subtype (set only when nothing real streamed), and `askAvatar` maps it to a `failed` outcome — and the
   exported empty sentinel to `empty` — instead of relaying user-facing Korean as the teammate's claim.
 - **Depth guard = `AgentRequest.avatarConsultation`:** set only by `askAvatar`. A consultation run never
@@ -44,9 +61,12 @@
   consultation framing in `promptBuilder.ts`, NOT the routine one (which would claim owner-level
   permissions this run doesn't have).
 - **Registration:** `avatarAskActive` (= `avatars` group enabled && `ownerToolAccess` &&
-  `!avatarConsultation`) drives the `allowedTools` entry AND the ctx executor injection byte-identically;
+  `!avatarConsultation`) drives the `mcpAllowedTools` entry AND the ctx executor injection byte-identically;
   the tool joins the server's tool list only when the executor is present, and the handler still
   self-gates on `viewerIsOwner`. Timeout on a busy model returns the PARTIAL streamed text in the error.
+  In an interactive chat the call does not wait: it returns `Consultation ask-<id> … started in the background`
+  and the answer arrives later as its own message (`agent/pi/asyncJobs.ts`); unattended runs (routines, task API) keep
+  the waiting call. Mechanics → [`pi-runtime.md`](pi-runtime.md) "Asynchronous tools".
 - **Nothing persists on the target's side** — deliberate: a teammate chatting with your avatar in the UI
   leaves you no transcript either, and the intro/hashtag headless runs persist nothing. The exchange
   lives in the ASKER's conversation; durable retention is the asker's own `brain-ingest` capture (the
@@ -224,8 +244,7 @@
   own shares are never "learnable" (managed via `listSharedSkillsByOwner`). Keep the two SQL fragments in
   lockstep — the ONLY sanctioned divergence is the per-skill group-channel block above, which narrows the
   teammate relation for one (owner, skill) without touching avatar visibility.
-- **Transfer plumbing lives in `skillTransfer.ts`** (server root, NOT knowledgeRepo.ts — it imports both
-  knowledgeRepo and agent/skillDiscovery without cycles): `listRepoSkills` (scan `skills/<dir>/SKILL.md`),
+- **Transfer plumbing lives in `skillTransfer.ts`** (server root, NOT knowledgeRepo.ts, which it imports): `listRepoSkills` (scan `skills/<dir>/SKILL.md`),
   `copySkillDir` (lstat walk — symlinks SKIPPED never followed, 512KB/file + 4MB + 200 files + depth 8
   caps, containment via the exported `resolveInRepo`/`realpathContained`), `learnSkillIntoRepo`
   (ensureClone both → copy → rewrite identity → `ensureMarketplaceManifest` → `commitAndPush`).
@@ -237,10 +256,9 @@
   (`LEARN_ERROR_KO`, 409 drives the client's rename flow) and to English redirects in
   `skillExchangeTools.decodeLearnError`.
 - **Registration:** `skillExchangeActive` (= `avatars` group enabled && `ownerToolAccess`) drives
-  `allowedTools` + `mcpServers` byte-identically; every handler ALSO self-gates on `viewerIsOwner`
+  `mcpAllowedTools` + `inProcessMcpServers` byte-identically; every handler ALSO self-gates on `viewerIsOwner`
   (find included — the listing is the OWNER's group view, and a trusted teammate driving this avatar has
-  their own avatar for their view). Group-agent runs are excluded twice over (avatars family forced off +
-  `ownerToolAccess=false`). Owner routines keep the tools.
+  their own avatar for their view). Owner routines keep the tools.
 - **Metacognition:** `OwnerState.learnableSkillCount`/`sharedSkillCount` (lazy getters) feed BOTH the
   standing prompt section (promptBuilder, inside the avatars-group block, re-deriving the registration
   gate) and `describe_system`'s "Skill exchange" line. A LEARNED skill only LOADS on the NEXT
@@ -269,7 +287,7 @@
   (INVALID_PATH/FILE_TOO_LARGE/NOT_A_FILE/SKILL_EXISTS sentinels), `decodeExecError(err, {redactToken?,
   fallback?})` (git/gh stderr + `scrubGitError`). Use these; don't reintroduce a local `text()`.
 - **`repoToolKit.ts`** — the shared guard→resolve→ensureClone→decode skeleton for skill/file CRUD used by
-  `repoTools` (owner-only) and `groupRepoTools` (owner + group + admin-role write gate). `commit` handlers
+  `repoTools` (owner-only; `groupRepoTools` shared it until group knowledge repos were retired). `commit` handlers
   and `create_repo` are intentionally NOT folded in. `OWNER_ONLY` here =
   `'This tool can only be used by the avatar owner.'`; **`systemTools` has a DIFFERENT `OWNER_ONLY` string**
   (`…in a conversation the avatar owner is participating in.`).
@@ -280,5 +298,5 @@
   `buildPrompt` blanks secrets/groups to `[]` unless `ownerToolAccess`). When you add a self-state fact to
   one consumer, add it to `OwnerState` and the other.
 - **Owner identity:** the `AgentOwner` type (`{id, username, displayName, alias?}`) lives in `../types.ts`
-  and the descriptor is built ONCE in `runClaudeAgent` and passed to all tool servers. Don't re-declare
+  and the descriptor is built ONCE in `buildRunCapabilities` and passed to all tool servers. Don't re-declare
   the shape or rebuild the literal per server.

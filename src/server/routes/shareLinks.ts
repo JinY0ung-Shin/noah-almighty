@@ -149,9 +149,8 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
         apiError(res, 400, "유효 기간은 1일, 7일, 30일 중에서 선택해 주세요.");
         return;
       }
-      // Not the owner, no such conversation, or a thread that cannot share
-      // (group-agent member threads; a colleague thread whose avatar is out of
-      // reach) — all the SAME 404.
+      // Not the owner, no such conversation, or a thread that cannot share (a
+      // colleague thread whose avatar is out of reach) — all the SAME 404.
       if (!shareableThread(store, ownerUserId, conversationId)) {
         apiError(res, 404, "파일을 찾을 수 없습니다.");
         return;

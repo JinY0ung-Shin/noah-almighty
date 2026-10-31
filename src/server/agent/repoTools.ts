@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig } from "../types.js";
@@ -105,7 +105,7 @@ export interface RepoToolsContext {
 /** MCP server name; tools surface to the model as `mcp__repo__<tool>`. */
 export const REPO_SERVER_NAME = "repo";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const REPO_TOOL_NAMES = [
   "mcp__repo__list_files",
   "mcp__repo__read_file",
@@ -306,7 +306,7 @@ async function reconcileSharesAfterCommit(
 
 const OWNER_ONLY = REPO_OWNER_ONLY;
 const NO_REPO =
-  "No knowledge repository is connected yet. If you are the owner, first create and connect a new repository with the `create_repo` tool, then try again. (If you already have a repo you've been using, you can also connect it directly in settings.) Do not walk through manual setup steps — use `create_repo`.";
+  "No knowledge repository is connected yet. If you are the owner, first create and connect a new repository with the `mcp__repo__create_repo` tool, then try again. (If you already have a repo you've been using, you can also connect it directly in settings.) Do not walk through manual setup steps — use `mcp__repo__create_repo`.";
 
 /**
  * Build the knowledge-repo management tool definitions bound to a single
@@ -370,7 +370,7 @@ export function buildRepoTools(
     ),
     tool(
       "write_file",
-      `Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
+      `Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
       {
         path: z.string().describe("Path relative to the repository root"),
         content: z.string().describe("The full file content"),
@@ -381,7 +381,7 @@ export function buildRepoTools(
           ensureClone,
           writeRepoFile,
           args,
-          (path) => `Saved the file ${path}. (Not committed yet — push it with the commit tool.)`,
+          (path) => `Saved the file ${path}. (Not committed yet — push it with mcp__repo__commit.)`,
         );
         if (!out.isError && isBrainNotePath(args.path)) {
           ctx.onMemory?.({ action: "add", path: args.path });
@@ -391,7 +391,7 @@ export function buildRepoTools(
     ),
     tool(
       "edit_file",
-      `Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. \`old_string\` must match the file exactly (including whitespace/indentation) and be unique, unless you set \`replace_all\`. Changes apply only to the working tree, and **until you commit & push with the commit tool they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
+      `Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over mcp__repo__write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. \`old_string\` must match the file exactly (including whitespace/indentation) and be unique, unless you set \`replace_all\`. Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
       {
         path: z.string().describe("Path relative to the repository root"),
         old_string: z.string().describe("The exact text to replace (must be unique in the file unless replace_all is true)"),
@@ -408,7 +408,7 @@ export function buildRepoTools(
           editRepoFile,
           args,
           (path, count) =>
-            `Edited ${path} (${count} replacement${count === 1 ? "" : "s"}). (Not committed yet — push it with the commit tool.)`,
+            `Edited ${path} (${count} replacement${count === 1 ? "" : "s"}). (Not committed yet — push it with mcp__repo__commit.)`,
         );
         if (!out.isError && isBrainNotePath(args.path)) {
           ctx.onMemory?.({ action: "update", path: args.path });
@@ -418,7 +418,7 @@ export function buildRepoTools(
     ),
     tool(
       "delete_file",
-      `Delete a file OR a whole directory (e.g. an entire skill folder \`skills/<name>\`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with the commit tool it is not removed from the remote** and may reappear on the next sync. ${writeGate}`,
+      `Delete a file OR a whole directory (e.g. an entire skill folder \`skills/<name>\`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with mcp__repo__commit it is not removed from the remote** and may reappear on the next sync. ${writeGate}`,
       { path: z.string().describe("Path relative to the repository root — a file (skills/foo/SKILL.md) or a directory (skills/foo)") },
       (args) =>
         runDeleteFile(
@@ -426,7 +426,7 @@ export function buildRepoTools(
           ensureClone,
           deleteRepoFile,
           args.path,
-          (path) => `Deleted ${path}. (Not committed yet — push it with the commit tool.)`,
+          (path) => `Deleted ${path}. (Not committed yet — push it with mcp__repo__commit.)`,
         ),
     ),
     tool(
@@ -442,12 +442,12 @@ export function buildRepoTools(
           ensureClone,
           moveRepoFile,
           args,
-          (from, to) => `Moved ${from} → ${to}. (Not committed yet — push it with the commit tool.)`,
+          (from, to) => `Moved ${from} → ${to}. (Not committed yet — push it with mcp__repo__commit.)`,
         ),
     ),
     tool(
       "scaffold_skill",
-      `Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with write_file and push with commit, and from the next conversation the avatar can use that skill. ${writeGate}`,
+      `Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with mcp__repo__write_file and push with mcp__repo__commit, and from the next conversation the avatar can use that skill. ${writeGate}`,
       {
         name: z.string().describe("Skill name (e.g. deploy-runbook)"),
         description: z.string().optional().describe("One-line description of the skill"),
@@ -540,7 +540,7 @@ export function buildRepoTools(
   }
   const createTool = tool(
     "create_repo",
-    `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with scaffold_skill → write_file → commit. (owner only)`,
+    `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try mcp__repo__scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with mcp__repo__scaffold_skill → mcp__repo__write_file → mcp__repo__commit. (owner only)`,
     {
       name: z.string().describe("New repository name (letters/digits and - _ . only, e.g. my-knowledge)"),
       org: z.string().optional().describe("GitHub organization to create the repo under (e.g. acme). Omit to create under the owner's personal account."),
@@ -610,8 +610,8 @@ export function buildRepoTools(
         const kind = result.isPrivate ? "private" : "public";
         return text(
           seeded
-            ? `Created the ${kind} knowledge repository \`${result.fullName}\` and initialized it with the default template (Claude plugin marketplace: \`.claude-plugin/marketplace.json\` + README + a root \`CLAUDE.md\` that is injected as standing guidance every conversation). Edit \`CLAUDE.md\` for always-apply rules, add your first skill with \`scaffold_skill\`, and push with \`commit\`.`
-            : `Created and connected the ${kind} knowledge repository \`${result.fullName}\`.${seedNote} Create your first skill with \`scaffold_skill\`, then push with \`commit\`.`,
+            ? `Created the ${kind} knowledge repository \`${result.fullName}\` and initialized it with the default template (Claude plugin marketplace: \`.claude-plugin/marketplace.json\` + README + a root \`CLAUDE.md\` that is injected as standing guidance every conversation). Edit \`CLAUDE.md\` for always-apply rules, add your first skill with \`mcp__repo__scaffold_skill\`, and push with \`mcp__repo__commit\`.`
+            : `Created and connected the ${kind} knowledge repository \`${result.fullName}\`.${seedNote} Create your first skill with \`mcp__repo__scaffold_skill\`, then push with \`mcp__repo__commit\`.`,
         );
       } catch (error) {
         return text(createRepoCatchMessage(targetHost, error), true);
@@ -631,7 +631,7 @@ export function buildRepoServer(
   ctx: RepoToolsContext,
   opts: { allowCreate?: boolean } = {},
 ) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: REPO_SERVER_NAME,
     version: "0.1.0",
     tools: buildRepoTools(store, ctx, opts),

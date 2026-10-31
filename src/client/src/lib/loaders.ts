@@ -52,7 +52,6 @@ export async function loadMessages(
   conversationId: string,
 ): Promise<{
   messages: StoredMessage[];
-  groupKnowledgeOff: string[];
   selectedModel?: string | null;
   selectedEffort?: string | null;
   selectedMcpToolGroups?: import("../../../shared/mcpToolGroups").McpToolGroupId[] | null;

@@ -160,11 +160,9 @@
     return $appState.chatPanes.some((pane) => pane.conversationId === id && pane.streaming);
   }
 
-  // Live-run badge text from the last conversation-list load ("" = idle). The two
-  // states carry their OWN wording, not just their own dot colour.
+  // Live-run badge text from the last conversation-list load ("" = idle).
   function activeRunLabel(conversation: ConversationSummary): string {
-    if (!conversation.activeRun) return "";
-    return conversation.activeRun.background ? "백그라운드 작업 중" : "응답 생성 중";
+    return conversation.activeRun ? "응답 생성 중" : "";
   }
 
   function conversationDomId(id: string, suffix: string): string {
@@ -804,11 +802,7 @@
                     <!-- The run is still going with this conversation closed; the
                          button's aria-label carries the same words (its label
                          overrides this content for screen readers). -->
-                    <span
-                      class="conv-live"
-                      data-kind={conversation.activeRun?.background ? "background" : "streaming"}
-                      title={liveLabel}
-                    >
+                    <span class="conv-live" title={liveLabel}>
                       <span class="conv-live-dot" aria-hidden="true"></span>
                       <span class="conv-live-text">{liveLabel}</span>
                     </span>

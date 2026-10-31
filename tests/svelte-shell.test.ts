@@ -24,7 +24,6 @@ const user = {
   knowledgeRepo: null,
   knowledgeBranch: null,
   knowledgeSelected: null,
-  groupKnowledgeOffDefault: [],
   modelDefault: null,
   effortDefault: null,
   mcpToolGroupsDefault: null,
@@ -182,8 +181,8 @@ describe("Shell conversation live-run badge", () => {
   it("names the running state in words, and leaves an idle row bare", async () => {
     setDesktopViewport(true);
     const conversations: ConversationSummary[] = [
-      { ...row, id: "conv-bg", title: "빌드", activeRun: { background: true } },
-      { ...row, id: "conv-fg", title: "요약", activeRun: { background: false } },
+      { ...row, id: "conv-bg", title: "빌드", activeRun: {} },
+      { ...row, id: "conv-fg", title: "요약", activeRun: {} },
       { ...row, id: "conv-idle", title: "지난 대화", activeRun: null },
       // An older server that doesn't send the field at all.
       { ...row, id: "conv-legacy", title: "옛 대화" },
@@ -198,22 +197,18 @@ describe("Shell conversation live-run badge", () => {
 
     // The badge text rides the row button's accessible name — its aria-label
     // overrides the badge markup for screen readers.
-    await screen.findByRole("button", { name: "대화 열기: 빌드 · 백그라운드 작업 중" });
+    await screen.findByRole("button", { name: "대화 열기: 빌드 · 응답 생성 중" });
     expect(screen.getByRole("button", { name: "대화 열기: 요약 · 응답 생성 중" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "대화 열기: 지난 대화" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "대화 열기: 옛 대화" })).toBeTruthy();
 
     const badges = [...document.querySelectorAll(".conv-live")];
-    expect(badges.map((badge) => badge.getAttribute("data-kind"))).toEqual([
-      "background",
-      "streaming",
-    ]);
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
-      "백그라운드 작업 중",
+      "응답 생성 중",
       "응답 생성 중",
     ]);
     expect(badges.map((badge) => badge.getAttribute("title"))).toEqual([
-      "백그라운드 작업 중",
+      "응답 생성 중",
       "응답 생성 중",
     ]);
   });
