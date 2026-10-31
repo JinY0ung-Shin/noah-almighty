@@ -141,13 +141,6 @@ export interface AppConfig {
   pi?: PiRuntimeConfig;
 }
 
-/** One composer tier (or concrete model id) → the pi model a NEW pi session uses. */
-export interface PiModelMapping {
-  model: string;
-  /** Context window for the usage badge (pi does not report it yet — design P5). */
-  contextWindow?: number;
-}
-
 /**
  * What a run on pi-gateway really has, stamped by the capability plan onto BOTH
  * metacognition surfaces (`AgentRequest.piRuntime` → the prompt's pi section,
@@ -280,8 +273,6 @@ export interface PiRuntimeConfig {
    * the only barrier, so the operator must bind/firewall the port.
    */
   mcpAllowedCidrs?: string[];
-  /** Tier / model id → pi model (env `PI_MODEL_MAP`, JSON). Unmapped → pi's default model. */
-  modelMap: Record<string, PiModelMapping>;
   /** The sandbox image carries the deck toolchain (env `PI_DECK_SANDBOX`). */
   deckSandbox: boolean;
 }
@@ -337,7 +328,7 @@ export interface User {
    * The owner's remembered chat-composer defaults, seeding every NEW conversation
    * so the picker's last choice persists across conversations. `null` = never
    * chosen → a new conversation falls back to the hardcoded server default.
-   * `modelDefault` is a model-tier alias; `effortDefault` a reasoning-effort level;
+   * `modelDefault` is a pi model id (unknown to pi's current list = default); `effortDefault` a reasoning-effort level;
    * `mcpToolGroupsDefault` the enabled MCP tool groups (`null` = every group on,
    * `[]` = explicitly all off). The per-conversation `selected_*` value still
    * overrides these for an already-started conversation.
@@ -1389,17 +1380,18 @@ export interface AgentRequest {
    */
   autoApprove?: boolean;
   /**
-   * User-chosen model TIER (alias `opus`/`sonnet`/`haiku`) for this conversation,
-   * from the chat composer. Resolved in `runCapabilities.ts` (this tier, then the
-   * admin override, then the default tier); the concrete pi model is the
-   * operator's call via PI_MODEL_MAP. Unset → server default resolution. (See modelTiers.ts.)
+   * User-chosen pi model id for this conversation, from the chat composer (an
+   * id from pi-gateway's live model list, `agent/pi/modelCatalog.ts`). Resolved
+   * in `runCapabilities.ts`: this pick if pi still offers it, then the admin
+   * override if pi offers it, else pi-gateway's default model (no model is sent).
+   * Unset → that same resolution without a pick.
    */
-  modelTier?: string;
+  model?: string;
   /**
    * User-chosen reasoning EFFORT level (`low`/`medium`/`high`/`xhigh`/`max`) for
    * this conversation, from the chat composer. Passed to pi as the response's
    * `reasoningEffort`; pi fixes it per session, so a change starts a new session
-   * from the text history. Independent of the model tier. Unknown/unset → no
+   * from the text history. Independent of the model. Unknown/unset → no
    * effort is sent and pi applies its own default. (See effortLevels.ts.)
    */
   effort?: string;
@@ -1420,10 +1412,10 @@ export interface AgentRequest {
   adminBlockedMcpToolGroups?: McpToolGroupId[];
   /**
    * Opt into model fallback: when the run fails on a transient model/server-side
-   * error (overload/5xx/429/network), retry on the next-lower tier down the chain
-   * (resolved model → … → haiku). Set ONLY for scheduled routines — headless runs
-   * have no live stream, so re-running is clean. An env-pinned `ANTHROPIC_MODEL`
-   * is a hard lock and disables fallback. Unset → single attempt (chat behavior).
+   * error (overload/5xx/429/network), retry ONCE on pi-gateway's default model
+   * (`[resolved model, default]`, deduped — a run already on the default gets one
+   * attempt). Set only for unattended runs (routines, consultations) — headless
+   * runs have no live stream, so re-running is clean. Unset → single attempt (chat behavior).
    */
   modelFallback?: boolean;
   /**

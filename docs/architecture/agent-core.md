@@ -12,8 +12,8 @@ and the e2e harness; any other value, `claude` included, stops the boot). `runAg
 every non-local run to `runPiAgent` (`agent/pi/runPiAgent.ts`); the sandbox principal is `piRunPrincipal(request)`
 (`viewerUserId ?? avatar.id`). Runner, session, sandbox and endpoint mechanics → [pi-runtime.md](pi-runtime.md).
 - `runCapabilities.ts` — **the ONE capability plan** (design N1): `buildRunCapabilities` (tool access
-  `deriveAgentToolAccess`, MCP families `planMcpToolFamilies`, the in-process MCP servers, model chain
-  `buildModelFallbackChain`, describe_system's ctx, `mcpAllowedTools`) and `stampPromptRequest` (the request as the
+  `deriveAgentToolAccess`, MCP families `planMcpToolFamilies`, the in-process MCP servers, the model and its
+  fallback chain over pi's live list (`pi/modelCatalog.ts`), describe_system's ctx, `mcpAllowedTools`) and `stampPromptRequest` (the request as the
   prompt builder sees it). The setup half declares **no `let`** — it is pure derivation over
   store/config/plugins; every accumulator lives in the runner.
 - `promptBuilder.ts` — `buildSystemPromptAppend` + `buildUserPrompt` + compatibility `buildPrompt` +

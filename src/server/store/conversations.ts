@@ -421,9 +421,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * The user-chosen model TIER (alias) for this conversation, or null when none
-     * was picked (use the server default resolution). Owner-scoped so a guessed
-     * conversation id can't read another owner's setting.
+     * The user-chosen pi model id for this conversation, or null when none was
+     * picked (use the default resolution; a stored id pi no longer offers reads
+     * as unset at run time). Owner-scoped so a guessed conversation id can't
+     * read another owner's setting.
      */
     getConversationModel(ownerId: string, conversationId: string): string | null {
       const row = this.db
@@ -434,12 +435,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Set (or clear, when `tier` is null/empty) the conversation's chosen model tier.
-     * No-op when the conversation isn't the owner's. Callers validate the tier
-     * against the registry (`isModelTier`) before persisting.
+     * Set (or clear, when `model` is null/empty) the conversation's chosen model.
+     * No-op when the conversation isn't the owner's. Stored as sent: the run
+     * checks it against pi-gateway's live list (runCapabilities).
      */
-    setConversationModel(ownerId: string, conversationId: string, tier: string | null): void {
-      const next = tier && tier.trim() ? tier.trim() : null;
+    setConversationModel(ownerId: string, conversationId: string, model: string | null): void {
+      const next = model && model.trim() ? model.trim() : null;
       this.db
         .prepare("UPDATE conversations SET selected_model = ? WHERE id = ? AND owner_user_id = ?")
         .run(next, conversationId, ownerId);
@@ -447,8 +448,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
 
     /**
      * The user-chosen reasoning EFFORT level for this conversation, or null when
-     * none was picked (use the runtime default). Owner-scoped, mirroring the model
-     * tier above.
+     * none was picked (use the runtime default). Owner-scoped, mirroring the
+     * model above.
      */
     getConversationEffort(ownerId: string, conversationId: string): string | null {
       const row = this.db

@@ -45,7 +45,7 @@ const avatar = {
   plugins: [],
 } as unknown as AvatarDetail;
 
-function pane(modelTier: string): ChatPane {
+function pane(model: string): ChatPane {
   return {
     id: "pane-1",
     avatar,
@@ -61,24 +61,24 @@ function pane(modelTier: string): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    modelTier,
+    model,
   } as unknown as ChatPane;
 }
 
-/** Two tiers so the pane's own pick — not the deployment default — decides vision. */
-function seed(modelTier: string): void {
+/** Two models so the pane's own pick — not the default model — decides vision. */
+function seed(model: string): void {
   replaceState({
     avatars: [],
-    chatPanes: [pane(modelTier)],
+    chatPanes: [pane(model)],
     activePaneId: "pane-1",
     view: "chat",
     bootstrap: {
       visionEnabled: true,
       modelSelection: {
         defaultVision: true,
-        tiers: [
-          { id: "seeing", label: "Seeing", description: "", model: "m-1", vision: true },
-          { id: "blind", label: "Blind", description: "", model: "m-2", vision: false },
+        models: [
+          { id: "seeing", server: "vllm-a", vision: true },
+          { id: "blind", server: null, vision: false },
         ],
       },
     },
@@ -167,18 +167,62 @@ describe("composer image attach in file mode", () => {
     const { container } = render(ChatView);
     expect(attachLabel(container).title).toBe("이미지 첨부");
   });
+
+  it("treats a pick pi no longer offers as the default model (vision included)", () => {
+    seed("opus");
+    const { container } = render(ChatView);
+    expect(attachLabel(container).title).toBe("이미지 첨부");
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    expect(select.value).toBe("");
+  });
 });
 
 describe("composer model picker", () => {
-  it("is always pickable and names each tier's mapped model (there is no server lock)", () => {
-    seed("seeing");
+  it("offers pi's default model first, then every pi model by id", () => {
+    seed("blind");
     const { container } = render(ChatView);
     const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
     expect(select).toBeTruthy();
     expect(select.disabled).toBe(false);
     expect(select.title).toBe("이 대화에서 다음 메시지부터 사용할 모델을 고릅니다");
-    expect([...select.options].map((o) => o.textContent?.trim())).toEqual(["Seeing · m-1", "Blind · m-2"]);
+    expect([...select.options].map((o) => [o.value, o.textContent?.trim()])).toEqual([
+      ["", "기본 모델"],
+      ["seeing", "seeing"],
+      ["blind", "blind"],
+    ]);
+    expect(select.value).toBe("blind");
     expect(container.textContent).not.toContain("고정되어 있습니다");
+  });
+
+  it("is hidden when pi offers no models", () => {
+    replaceState({
+      avatars: [],
+      chatPanes: [pane("")],
+      activePaneId: "pane-1",
+      view: "chat",
+      bootstrap: { visionEnabled: true, modelSelection: { defaultVision: true, models: [] } },
+    } as unknown as Parameters<typeof replaceState>[0]);
+    const { container } = render(ChatView);
+    expect(container.querySelector('select[aria-label="이 대화에 사용할 모델"]')).toBeNull();
+  });
+
+  it("picking a model writes it through as the remembered default; 기본 모델 clears it", async () => {
+    seed("blind");
+    const { container } = render(ChatView);
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockClear();
+
+    await fireEvent.change(select, { target: { value: "seeing" } });
+    expect(readState().chatPanes[0].model).toBe("seeing");
+    await fireEvent.change(select, { target: { value: "" } });
+    expect(readState().chatPanes[0].model).toBeUndefined();
+    expect(get(toasts).some((t) => t.message.includes("모델을 기본 모델(으)로 변경했습니다"))).toBe(true);
+
+    const bodies = fetchMock.mock.calls
+      .filter(([url]) => String(url).includes("/api/me/chat-defaults"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies).toEqual([{ model: "seeing" }, { model: null }]);
   });
 });
 

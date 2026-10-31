@@ -10,6 +10,8 @@ import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
 import { modelOverrideState } from "../modelOverride.js";
+import { catalogModelIds } from "./pi/modelCatalog.js";
+import { piServicesFor } from "./pi/piRuntime.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -34,9 +36,10 @@ import { modelOverrideState } from "../modelOverride.js";
  * neither output changes.
  *
  * NOTE on model: this exposes the raw resolution input (`modelOverride` admin
- * setting) — user tier > admin override > default tier — not a formatted
- * label, since describe_system renders its own label and buildPrompt does not
- * surface the model at all.
+ * setting, checked against pi-gateway's last fetched model list) — composer pick
+ * > admin override > pi-gateway's default model — not a formatted label, since
+ * describe_system renders its own label and buildPrompt does not surface the
+ * model at all.
  */
 export interface OwnerState {
   /** Active personal keys for the external task API (POST /api/v1/avatar/tasks). */
@@ -71,9 +74,9 @@ export interface OwnerState {
   sharedSkillCount: number;
   /** Total times teammates learned this owner's skills (전수된 횟수, all skills). */
   sharedSkillLearnTotal: number;
-  /** Admin-selected model override runs use when the conversation picked no tier (null: none, or ignored). */
+  /** Admin-selected model override runs use when the conversation picked none (null: none, or ignored). */
   modelOverride: string | null;
-  /** A stored override that is neither a tier nor a `PI_MODEL_MAP` key — ignored, runs use the default tier. */
+  /** A stored override pi-gateway does not currently offer — ignored, runs use pi-gateway's default model. */
   modelOverrideIgnored: string | null;
   /** Experimental (beta) feature keys the owner enabled for this avatar (#50). */
   experimentalFeatures: string[];
@@ -135,7 +138,7 @@ export function summarizeOwnerState(
       return store.countSkillLearnsForOwner(avatarUserId);
     },
     ...(() => {
-      const override = modelOverrideState(store, config);
+      const override = modelOverrideState(store, catalogModelIds(piServicesFor(store, config).models.peek()));
       return { modelOverride: override.effective, modelOverrideIgnored: override.ignored };
     })(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),

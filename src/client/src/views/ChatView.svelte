@@ -20,6 +20,7 @@
     consultationLabel,
     steerBadgeLabel,
     messageKey,
+    knownModel,
     newChat,
     openFileTab,
     regenerate,
@@ -53,7 +54,6 @@
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
-  import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
   import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
   import {
     DEFAULT_MCP_TOOL_GROUPS,
@@ -211,13 +211,17 @@
   }
 
   function hasModelPicker(): boolean {
-    return Boolean($appState.bootstrap?.modelSelection?.tiers.length);
+    return Boolean($appState.bootstrap?.modelSelection?.models.length);
   }
 
-  function currentModelTier(item: ChatPane): string {
-    const tiers = $appState.bootstrap?.modelSelection?.tiers || [];
-    const selected = item.modelTier ?? DEFAULT_MODEL_TIER;
-    return tiers.some((tier) => tier.id === selected) ? selected : DEFAULT_MODEL_TIER;
+  // The pane's pi model id as the picker shows it; "" = pi-gateway's default
+  // model (also for a stored id pi no longer offers).
+  function currentModel(item: ChatPane): string {
+    return knownModel(item.model, $appState.bootstrap?.modelSelection?.models ?? []);
+  }
+
+  function modelLabel(model: string): string {
+    return model || "기본 모델";
   }
 
   function hasEffortPicker(): boolean {
@@ -232,9 +236,8 @@
     return true;
   }
 
-  function modelTierLabel(item: ChatPane): string {
-    const tierId = currentModelTier(item);
-    return $appState.bootstrap?.modelSelection?.tiers.find((tier) => tier.id === tierId)?.label ?? tierId;
+  function currentModelLabel(item: ChatPane): string {
+    return modelLabel(currentModel(item));
   }
 
   function effortLabel(item: ChatPane): string {
@@ -406,7 +409,7 @@
 
   function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
     const parts: string[] = [];
-    if (hasModelPicker()) parts.push(modelTierLabel(item));
+    if (hasModelPicker()) parts.push(currentModelLabel(item));
     if (hasEffortPicker()) parts.push(`강도 ${effortLabel(item)}`);
     parts.push(mcpToolsLabel(item, adminBlocked));
     return parts.join(" · ");
@@ -508,16 +511,17 @@
     return { dataUrl, mediaType };
   }
 
-  // Vision support for the model THIS pane would use: pane pick > my saved
-  // default > deployment default. Mirrors the server's resolution (which also
-  // enforces it on upload); a server without a picker falls back to the global flag.
+  // Vision support for the model THIS pane would use: the pane's pick when pi
+  // still offers it, else the default model's (admin override / pi default).
+  // Mirrors the server's resolution (which also enforces it on upload); a server
+  // without a picker falls back to the global flag.
   function paneVisionEnabled(item: ChatPane, state: ReturnType<typeof readState> = readState()): boolean {
     const boot = state.bootstrap;
     if (!boot) return true;
     const sel = boot.modelSelection;
     if (!sel) return boot.visionEnabled !== false;
-    const tier = item.modelTier || state.user?.modelDefault || "";
-    const entry = tier ? sel.tiers.find((t) => t.id === tier) : undefined;
+    const model = knownModel(item.model, sel.models);
+    const entry = model ? sel.models.find((m) => m.id === model) : undefined;
     if (entry) return entry.vision !== false;
     return (sel.defaultVision ?? boot.visionEnabled) !== false;
   }
@@ -985,25 +989,23 @@
     }
   }
 
-  // Model tier picked in the composer. It lives on
-  // the pane and rides the next chat POST (which persists it per-conversation), AND
-  // writes through to the owner's remembered default so the choice seeds the next
-  // new conversation. The picker has no "default" option — every value is a real
-  // tier (the default is Opus, applied server-side when never chosen).
-  function setModelTier(item: ChatPane, tier: string) {
+  // pi model picked in the composer ("" = pi-gateway's default model). It lives
+  // on the pane and rides the next chat POST (which persists it per-conversation),
+  // AND writes through to the owner's remembered default so the choice seeds the
+  // next new conversation.
+  function setModel(item: ChatPane, model: string) {
     updateState((state) => {
       const target = state.chatPanes.find((p) => p.id === item.id);
-      if (target) target.modelTier = tier;
-      if (state.user) state.user.modelDefault = tier;
+      if (target) target.model = model || undefined;
+      if (state.user) state.user.modelDefault = model || null;
     });
-    const label = $appState.bootstrap?.modelSelection?.tiers.find((t) => t.id === tier)?.label;
-    notify(`모델을 ${label ?? tier}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`, "info");
-    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ model: tier }) }).catch((err) =>
+    notify(`모델을 ${modelLabel(model)}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`, "info");
+    api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ model: model || null }) }).catch((err) =>
       notify(`기본 모델을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
     );
   }
 
-  // Reasoning effort, mirroring setModelTier: lives on the pane, rides the next chat
+  // Reasoning effort, mirroring setModel: lives on the pane, rides the next chat
   // POST (per-conversation), and writes through to the remembered per-user default.
   // Every value is a real level (the default is "높음"/high when never chosen).
   function setEffort(item: ChatPane, effort: string) {
@@ -1618,17 +1620,18 @@
                   <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet)}</span>
                 </button>
                 <span id={paneDomId("composer-controls", item.id)} class="composer-controls" class:open={composerSettingsOpenPaneId === item.id}>
-                  {#if $appState.bootstrap?.modelSelection?.tiers.length}
+                  {#if $appState.bootstrap?.modelSelection?.models.length}
                     <select
                       class="composer-model-select"
                       aria-label="이 대화에 사용할 모델"
                       title="이 대화에서 다음 메시지부터 사용할 모델을 고릅니다"
-                      value={currentModelTier(item)}
-                      on:change={(event) => setModelTier(item, event.currentTarget.value)}
+                      value={currentModel(item)}
+                      on:change={(event) => setModel(item, event.currentTarget.value)}
                     >
-                      {#each $appState.bootstrap.modelSelection.tiers as tier (tier.id)}
-                        <option value={tier.id} title={tier.model ? `${tier.description}\n(${tier.model})` : tier.description}>
-                          {tier.label}{tier.model ? ` · ${tier.model}` : ""}
+                      <option value="" title="pi-gateway가 정한 기본 모델을 사용합니다">기본 모델</option>
+                      {#each $appState.bootstrap.modelSelection.models as model (model.id)}
+                        <option value={model.id} title={model.server ? `${model.id}\n(${model.server})` : model.id}>
+                          {model.id}
                         </option>
                       {/each}
                     </select>

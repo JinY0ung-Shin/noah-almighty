@@ -96,7 +96,7 @@ async function runRoutineJobNow(
   // (nothing else can reach it — routines have no cancel route).
   //
   // NOTE this is a budget for the WHOLE run, including every model-fallback attempt
-  // (`modelFallback: true` retries opus→sonnet→haiku INSIDE runPiAgent) and the
+  // (`modelFallback: true` retries once on pi-gateway's default model INSIDE runPiAgent) and the
   // lost-session self-heal retry — the controller is created here, outside that
   // loop. A slow first attempt therefore starves the rest of the chain.
   const timeoutMs = config.routineRunTimeoutMs;
@@ -212,8 +212,8 @@ async function runRoutineJobNow(
         allowHeadlessTools: true,
         autoApprove: true,
         // Routines run unattended on a schedule: if the chosen model is
-        // overloaded/erroring server-side, fall back down the tier chain
-        // (opus→sonnet→haiku) rather than failing the whole run.
+        // overloaded/erroring server-side, retry once on pi-gateway's default
+        // model rather than failing the whole run.
         modelFallback: true,
         knowledgeMemory,
       },

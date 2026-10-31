@@ -84,7 +84,7 @@
   bounded loop rather than trusting one pass: the fit is computed on the ROUNDED bitmap size, and a
   single pixel of rounding can put the result back over a 28px patch boundary. The target is the STANDARD
   tier for EVERY model, because the serving model's tier is NOT knowable here — the composer's model
-  choices are admin-mapped tier ALIASES onto concrete models (`modelVisionPolicy.ts`, `visionForModel`)
+  choices are pi-gateway's model ids with only an admin vision flag (`modelVisionPolicy.ts`, `visionForModel`)
   — and standard is the one answer that is exact for every Claude model, costing only fidelity on tall
   viewports for a high-resolution-tier one (the common 1920×1080 viewport already fits at 1400×788 =
   1450 tokens, unchanged; tier-aware fitting is a backlog item). ELEMENT and fullPage captures are

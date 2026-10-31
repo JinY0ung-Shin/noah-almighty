@@ -106,10 +106,11 @@ which check owner/group trust themselves.
   unpublished avatars. An avatar can look up other avatars' capabilities mid-chat
   (the shared read-only `mcp__avatars__search_avatars` tool) and point you to a
   better-suited teammate when a request is outside its own expertise.
-- **Per-conversation model picker**: the chat composer lets any user choose a model
-  tier (Fable / Opus / Sonnet / Haiku) per conversation; the choice persists on the conversation
-  and rides each turn. **Opus is the default** when nothing is picked. Operators map every
-  tier to a pi-gateway model id with `PI_MODEL_MAP` (the picker shows the mapped id).
+- **Per-conversation model picker**: the chat composer lists the models pi-gateway offers right now
+  (its live `GET /v1/models`, configured on pi's admin LLM page) plus **기본 모델**, pi-gateway's default
+  model, which runs when nothing is picked. The choice persists on the conversation and rides each turn;
+  a stored pick pi stops offering quietly runs the default. An admin may set a deployment-wide model
+  (관리자 → 시스템 → 모델) and per-model image-input support.
 - **Per-user sandboxes, tiered data access**: each run executes in the ACTING user's own pi
   sandbox with the full tool set (shell, files) — a colleague chatting with your avatar works in
   the colleague's sandbox, never yours. What separates owners, group co-members (avatar-sharing
@@ -163,8 +164,8 @@ never copied into this repository.
 ### First boot
 
 1. **Write Noah's `.env`:** `cp .env.example .env`, then set at least `SESSION_SECRET`, `PI_GATEWAY_HOME`
-   (pi's data root, e.g. `/srv/pi-gateway`; `PI_GATEWAY_SECRETS` only when it is not `$PI_GATEWAY_HOME/secrets`)
-   and `PI_MODEL_MAP`. Values in Noah's `.env` win over pi-gateway's `.env` inside pi's compose file too, so
+   (pi's data root, e.g. `/srv/pi-gateway`; `PI_GATEWAY_SECRETS` only when it is not `$PI_GATEWAY_HOME/secrets`).
+   Values in Noah's `.env` win over pi-gateway's `.env` inside pi's compose file too, so
    the keys both read (`LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
    `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`) must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a
    **host** path.
@@ -200,7 +201,8 @@ never copied into this repository.
 4. **Configure the LLM in pi-gateway:** open pi's admin page (`http://127.0.0.1:8080/admin` on the host by
    default; key: `$PI_GATEWAY_SECRETS/gateway/admin_api_key`) → **LLM**, add the corporate LLM server and its
    models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
-   pi's `llm_not_configured`. Map Noah's composer tiers to those model ids with `PI_MODEL_MAP`.
+   pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
+   picks none runs pi's default model).
 5. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
 
 ### What the stack wires up
@@ -358,7 +360,7 @@ included.
 
 1. Tag the running image for rollback (as above).
 2. Check out the pi-gateway submodule (`git submodule update --init`).
-3. In `.env`: add `PI_GATEWAY_HOME` (and `PI_GATEWAY_SECRETS` if not the default) and `PI_MODEL_MAP`; set
+3. In `.env`: add `PI_GATEWAY_HOME` (and `PI_GATEWAY_SECRETS` if not the default), delete `PI_MODEL_MAP` (retired); set
    `NODE_EXTRA_CA_CERTS` to the CA's **host** path or remove it (the old in-image path
    `/usr/local/share/ca-certificates/extra-proxy-ca.crt` does not exist on the host and stops `up`); remove
    `AGENT_RUNTIME`, `DECK_CONVERTER`, `UV_DEFAULT_INDEX`/`UV_INDEX` and the Claude-SDK-only keys (`ANTHROPIC_*`,
@@ -422,7 +424,7 @@ backup and quarantine).
 | `PI_WORKSPACES_DIR` | Path of pi's `$PI_GATEWAY_HOME/workspaces` as Noah sees it (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. **Fixed by docker-compose.yml** (`/srv/pi-workspaces`, a bind mount of `$PI_GATEWAY_HOME/workspaces`). |
 | `NOAH_MCP_PUBLIC_URL` | The base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (registered by the `pi-setup` service through `scripts/pi-register-mcp.mjs`, logged at boot). Compose default `http://noah-almighty:<PORT>`; set it (with `NOAH_MCP_HOST_ALIAS`) only for native TLS. |
 | `NOAH_MCP_ALLOWED_CIDRS` | Comma-separated addresses/CIDRs (IPv4/IPv6) allowed to reach `/mcp/<server>`, matched on the TCP peer (never `X-Forwarded-For`); others get 403 before the token is read. An invalid entry stops the boot. Compose default: the broker's pinned address, `${NOAH_MCP_BROKER_IP}/32`. Unset (native run) = open — then bind/firewall the port to the broker's network. |
-| `PI_MODEL_MAP` | **Required.** JSON, composer tier → pi model id, or `{"model": "...", "contextWindow": N}` (the window feeds the context badge). Every tier (`fable`, `opus`, `sonnet`, `haiku`) must be mapped: it is the only tier → model source, model fallbacks included. Malformed or incomplete → the boot stops. The models themselves (and their credentials) are configured in pi-gateway. |
+| `PI_MODEL_MAP` | **Retired** — the composer now offers pi-gateway's live model list (2026-10-31). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. Stored picks that named a tier (`opus`, `sonnet`, …) are not migrated: they run pi-gateway's default model until a model is picked again, and an admin model setting naming a tier is reported as ignored (관리자 → 시스템). |
 | `PI_DECK_SANDBOX` | `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). **Fixed to `true` by docker-compose.yml**, which builds and wires that image. |
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
 | `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default the `./vendor/pi-gateway` submodule), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |

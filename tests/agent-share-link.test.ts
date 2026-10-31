@@ -108,7 +108,6 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
     pi: {
       gatewayUrl: "http://pi.invalid",
       apiKey: "k",
-      modelMap: {},
       deckSandbox: false,
       workspacesDir: path.join(tempDir, dir, "pi-ws"),
     },

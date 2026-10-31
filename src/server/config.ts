@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentRuntime, AppConfig, PiModelMapping, PiRuntimeConfig } from "./types.js";
+import type { AgentRuntime, AppConfig, PiRuntimeConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
-import { MODEL_TIER_IDS } from "./modelTiers.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 import { assertProcFdPinning } from "./pinnedFs.js";
 
@@ -23,66 +22,10 @@ function parseRuntime(value: string): AgentRuntime {
   if (runtime === "claude") {
     throw new Error(
       "AGENT_RUNTIME=claude is no longer supported: the Claude Agent SDK runner was removed and pi-gateway is the only agent runtime. " +
-        "Set AGENT_RUNTIME=pi (or remove it) and configure PI_GATEWAY_URL, PI_GATEWAY_API_KEY and PI_MODEL_MAP (docs/architecture/pi-runtime.md).",
+        "Set AGENT_RUNTIME=pi (or remove it) and configure PI_GATEWAY_URL and PI_GATEWAY_API_KEY (docs/architecture/pi-runtime.md).",
     );
   }
   throw new Error(`AGENT_RUNTIME must be "pi" or "local" (got "${value}").`);
-}
-
-/**
- * `PI_MODEL_MAP`: a JSON object from a composer tier (or a concrete model id an
- * admin override pins) to the pi model a NEW pi session uses — a model id
- * string, or `{ "model": "<id>", "contextWindow": <tokens> }`. It is the ONLY
- * tier → model source (a routine's fallback chain walks the tiers through it
- * too), so it is REQUIRED and must map every composer tier; a typo or a gap
- * would silently run sessions on pi's default model, so anything malformed or
- * missing stops the boot instead of being dropped.
- */
-export function parsePiModelMap(value: string): Record<string, PiModelMapping> {
-  if (!value) {
-    throw new Error(
-      `AGENT_RUNTIME=pi requires PI_MODEL_MAP: a JSON object mapping every composer tier (${MODEL_TIER_IDS.join(", ")}) to a pi model id, e.g. {"opus":"anthropic/claude-opus-5-5",…}.`,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("PI_MODEL_MAP must be a JSON object (tier → pi model id).");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("PI_MODEL_MAP must be a JSON object (tier → pi model id).");
-  }
-  const map: Record<string, PiModelMapping> = {};
-  for (const [key, entry] of Object.entries(parsed as Record<string, unknown>)) {
-    const tier = key.trim();
-    if (!tier) throw new Error("PI_MODEL_MAP has an empty key.");
-    if (typeof entry === "string" && entry.trim()) {
-      map[tier] = { model: entry.trim() };
-      continue;
-    }
-    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-      const { model, contextWindow } = entry as { model?: unknown; contextWindow?: unknown };
-      const windowOk =
-        contextWindow === undefined ||
-        (typeof contextWindow === "number" && Number.isInteger(contextWindow) && contextWindow > 0);
-      if (typeof model === "string" && model.trim() && windowOk) {
-        map[tier] = {
-          model: model.trim(),
-          ...(typeof contextWindow === "number" ? { contextWindow } : {}),
-        };
-        continue;
-      }
-    }
-    throw new Error(
-      `PI_MODEL_MAP["${tier}"] must be a model id string or {"model": "<id>", "contextWindow": <positive integer>}.`,
-    );
-  }
-  const missing = MODEL_TIER_IDS.filter((tier) => !map[tier]);
-  if (missing.length > 0) {
-    throw new Error(`PI_MODEL_MAP must map every composer tier; missing: ${missing.join(", ")}.`);
-  }
-  return map;
 }
 
 /**
@@ -114,9 +57,11 @@ function readPiGatewayApiKey(): string {
 }
 
 /**
- * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL,
- * service key and model map are REQUIRED there: without them every run would
- * fail, so the boot refuses instead.
+ * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL and
+ * service key are REQUIRED there: without them every run would fail, so the
+ * boot refuses instead. The models come from pi's live list (`GET /v1/models`,
+ * `agent/pi/modelCatalog.ts`); the retired `PI_MODEL_MAP` is not read
+ * (`warnRetiredModelMapEnv`).
  */
 function loadPiRuntimeConfig(): PiRuntimeConfig {
   const gatewayUrl = env("PI_GATEWAY_URL");
@@ -142,7 +87,6 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
     ...(workspacesDir ? { workspacesDir: path.resolve(workspacesDir) } : {}),
     ...(env("NOAH_MCP_PUBLIC_URL") ? { mcpPublicUrl: env("NOAH_MCP_PUBLIC_URL") } : {}),
     ...(mcpAcl ? { mcpAllowedCidrs: mcpAcl.cidrs } : {}),
-    modelMap: parsePiModelMap(env("PI_MODEL_MAP")),
     deckSandbox: ["true", "1", "on"].includes(env("PI_DECK_SANDBOX").toLowerCase()),
   };
 }

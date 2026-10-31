@@ -35,7 +35,7 @@ export function createServices(configOverrides: Partial<AppConfig> = {}): AppSer
   const store = new Store(config);
   // The model pi last reported (`response.created`, AgentEvents.onModel). Null
   // until the first run reports one; the admin "system info" view surfaces it
-  // alongside the PI_MODEL_MAP so an operator can confirm what actually ran. Held in a
+  // alongside pi-gateway's model list so an operator can confirm what actually ran. Held in a
   // small mutable box so every run path can write it and the admin router read it.
   let observedModelValue: string | null = null;
   const observedModel: ObservedModelHolder = {

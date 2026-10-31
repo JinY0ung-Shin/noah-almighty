@@ -13,6 +13,8 @@ import { scrubGitError } from "../marketplace.js";
 import { Store } from "../store.js";
 import type { AppConfig, AvatarVisibility, PluginRoot } from "../types.js";
 import { runAgentStream } from "../agent/index.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
+import { catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { workspaceDirFor } from "../workspace.js";
 import type { ScheduleError } from "../routineSchedule.js";
 import type { AuthenticatedRequest } from "../auth.js";
@@ -135,6 +137,24 @@ export function isAvatarVisibility(value: unknown): value is AvatarVisibility {
 
 export function apiError(res: Response, status: number, message: string): void {
   res.status(status).json({ error: message });
+}
+
+/** 503 body of a model WRITE while pi-gateway's model list cannot be read. */
+export const PI_MODELS_UNAVAILABLE_MESSAGE = "pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+
+/**
+ * The model ids a WRITE (composer default, admin override, vision policy) may
+ * store: pi-gateway's live list (`agent/pi/modelCatalog.ts`). Null — after
+ * answering 503 — when pi has never answered and cannot be reached now, so the
+ * caller stops instead of rejecting every id as unknown. Empty on the `local` stub.
+ */
+export async function offeredModelIdsOr503(store: Store, config: AppConfig, res: Response): Promise<string[] | null> {
+  const snapshot = await piServicesFor(store, config).models.snapshot();
+  if (!snapshot.available) {
+    apiError(res, 503, PI_MODELS_UNAVAILABLE_MESSAGE);
+    return null;
+  }
+  return catalogModelIds(snapshot.models);
 }
 
 /**

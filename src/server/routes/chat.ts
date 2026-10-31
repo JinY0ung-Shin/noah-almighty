@@ -39,6 +39,7 @@ import {
   MAX_CANVAS_CONTENT_CHARS,
 } from "../agent/canvasTools.js";
 import { redactSecretValues } from "../agent/secretRedaction.js";
+import { isRecord } from "../agent/agentUtils.js";
 import {
   DEFAULT_MCP_TOOL_GROUPS,
   normalizeMcpToolGroups,
@@ -100,13 +101,8 @@ import {
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import {
-  isModelTier,
-  modelTierLabel,
-  MODEL_TIERS,
-  DEFAULT_MODEL_TIER,
-} from "../modelTiers.js";
 import { effectiveModelOverride } from "../modelOverride.js";
+import { MAX_MODEL_ID_CHARS, catalogModel, catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   attachRunClient,
@@ -124,7 +120,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
-import { piRunWorkspace, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
+import { piRunWorkspace, piServicesFor, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
   apiError,
@@ -756,7 +752,7 @@ export interface ChatTurnContext {
    * live stop button, so it stays un-deadlined.
    */
   unattendedDeadlineMs?: number;
-  /** Fall down the model tier chain on transient failures (unattended runs). */
+  /** Retry once on pi-gateway's default model on transient failures (unattended runs). */
   modelFallback?: boolean;
   /** The user message is already stored (an earlier, re-queued attempt wrote it). */
   skipUserMessagePersist?: boolean;
@@ -812,28 +808,6 @@ export async function executeChatTurn(
   const requestedModel = ctx.requestedModel ?? null;
   const requestedEffort = ctx.requestedEffort ?? null;
   const requestedMcpToolGroups = ctx.requestedMcpToolGroups ?? null;
-  // Effective vision for THIS turn's model, mirroring runCapabilities'
-  // resolution chain (this turn's tier pick > stored tier > admin override >
-  // default) against the admin per-tier policy. Gates the
-  // upload below AND the regenerate image re-feed; the run itself
-  // recomputes the same value.
-  const turnModel =
-    (requestedModel === null
-      ? store.getConversationModel(ownerUserId, conversationId)
-      : requestedModel || null) ??
-    effectiveModelOverride(store, config) ??
-    DEFAULT_MODEL_TIER;
-  const turnVisionEnabled = visionForModel(
-    turnModel,
-    store.getModelVisionPolicy(),
-    config.visionEnabled,
-  );
-  // Text-only model for this turn ("file mode"): images are NOT rejected. As on
-  // every local image turn they are staged as FILES in the conversation scratch
-  // workspace (below), and here the model receives ONLY their paths
-  // (buildUserPrompt), never image content blocks (which would 400 the whole
-  // turn at the API layer).
-  const imageFileMode = decodedImages.length > 0 && !turnVisionEnabled;
   const conversationMcpToolGroups = requestedMcpToolGroups ??
     store.getConversationMcpToolGroups(ownerUserId, conversationId) ?? [
       ...DEFAULT_MCP_TOOL_GROUPS,
@@ -932,6 +906,30 @@ export async function executeChatTurn(
       };
     }
   }
+
+  // This turn's model, mirroring runCapabilities' resolution (this turn's pick >
+  // stored pick > admin override > pi-gateway's default model, each only while
+  // pi offers it — its live list, read AFTER the rewind plan above). Its vision
+  // (admin per-model policy ∘ MODEL_VISION) gates the upload below AND the
+  // regenerate image re-feed; the run itself recomputes the same value. It also
+  // names the model a transient failure bubble blames.
+  const piModels = await piServicesFor(store, config).models.list();
+  const turnModel =
+    catalogModel(
+      piModels,
+      requestedModel === null ? store.getConversationModel(ownerUserId, conversationId) : requestedModel,
+    ) ?? effectiveModelOverride(store, catalogModelIds(piModels)) ?? undefined;
+  const turnVisionEnabled = visionForModel(
+    turnModel,
+    store.getModelVisionPolicy(),
+    config.visionEnabled,
+  );
+  // Text-only model for this turn ("file mode"): images are NOT rejected. As on
+  // every local image turn they are staged as FILES in the conversation scratch
+  // workspace (below), and here the model receives ONLY their paths
+  // (buildUserPrompt), never image content blocks (which would 400 the whole
+  // turn at the API layer).
+  const imageFileMode = decodedImages.length > 0 && !turnVisionEnabled;
 
   // Working repository: the avatar opens one registered git repo (via
   // `mcp__git_repo__open_repo`); on pi it edits/tests its sandbox COPY with the
@@ -1100,7 +1098,7 @@ export async function executeChatTurn(
         requestedModel || null,
       );
     }
-    // Persist the chosen effort level (same semantics as the model tier above).
+    // Persist the chosen effort level (same semantics as the model above).
     if (requestedEffort !== null) {
       store.setConversationEffort(
         ownerUserId,
@@ -1445,15 +1443,15 @@ export async function executeChatTurn(
       // scheduler via `loadAgentPluginRoots` so the two can't drift. Tolerate
       // clone/resolve fails.
       const pluginWarnings: string[] = [];
-      // Model tier for this turn: this turn's pick if the client sent one ("" =
-      // explicit reset to default), else the stored value (mapped to a pi model
-      // through PI_MODEL_MAP downstream).
-      const conversationModelTier =
+      // Model pick for this turn: this turn's pick if the client sent one ("" =
+      // explicit reset to default), else the stored value. runCapabilities
+      // applies it only while pi-gateway offers it (else the override / pi's default).
+      const conversationModel =
         requestedModel === null
           ? store.getConversationModel(ownerUserId, conversationId)
           : requestedModel || null;
       // Effort for this turn: this turn's pick if sent ("" = reset to default),
-      // else the stored value. Mirrors the model tier resolution above.
+      // else the stored value. Mirrors the model resolution above.
       const conversationEffort =
         requestedEffort === null
           ? store.getConversationEffort(ownerUserId, conversationId)
@@ -1510,7 +1508,7 @@ export async function executeChatTurn(
           imageFiles: requestImageFiles.length
             ? requestImageFiles
             : undefined,
-          modelTier: conversationModelTier ?? undefined,
+          model: conversationModel ?? undefined,
           effort: conversationEffort ?? undefined,
           mcpToolGroups: effectiveMcpToolGroupsForRun,
           viewerUserId: ownerUserId,
@@ -1527,7 +1525,7 @@ export async function executeChatTurn(
               ? []
               : store.sharedGroupNames(ownerUserId, avatar.id),
           autoApprove: true,
-          // Unattended work (the task API) falls down the tier chain on a
+          // Unattended work (the task API) retries once on pi-gateway's default model on a
           // transient model failure, exactly like a routine — there is no live
           // viewer to hand the "try another model" nudge to.
           ...(ctx.modelFallback ? { modelFallback: true } : {}),
@@ -2587,9 +2585,16 @@ export async function executeChatTurn(
       // Scrub before logging too: a git auth failure carries the token in its
       // argv (`http.extraHeader`), which pino's `err` serializer would emit.
       const detail = scrubGitError(error);
+      // pi's own English detail (`upstreamMessage`, logs only) — the Korean
+      // `detail` alone cannot tell an overload from a rejected request.
+      const upstream =
+        isRecord(error) && typeof error.upstreamMessage === "string" && error.upstreamMessage
+          ? { upstream: error.upstreamMessage, ...(typeof error.code === "string" ? { upstreamCode: error.code } : {}) }
+          : {};
       logger.error(
         {
           detail,
+          ...upstream,
           userId: ownerUserId,
           avatarId: avatar.id,
           conversationId,
@@ -2600,22 +2605,21 @@ export async function executeChatTurn(
       audit({ action: "chat", detail, status: "error" });
       // When a TRANSIENT model/server failure ends the turn (overload, rate-limit,
       // 5xx, timeout), nudge the user to switch models. Chat never auto-falls-back (a live viewer
-      // is watching the stream — only headless routines retry on a lower tier), so
+      // is watching the stream — only unattended runs retry on pi's default model), so
       // this is how a stuck model gets unblocked. Every other failure gets a Korean
       // lead with `detail` appended: the runtime's own text is English, so it can never
       // be the whole bubble. The technical `detail` still goes to logs/audit above.
-      const failedTier =
-        store.getConversationModel(ownerUserId, conversationId) ??
-        DEFAULT_MODEL_TIER;
-      const alternatives = MODEL_TIERS.filter((t) => t.id !== failedTier)
-        .map((t) => t.label)
+      const failedModelLabel = turnModel ? `${turnModel} 모델` : "기본 모델";
+      const alternatives = piModels
+        .map((model) => model.id)
+        .filter((id) => id !== turnModel)
         .join(", ");
       // OUR deadline wins the message: an abort reads as the user's doing, and
       // no user was there to press stop on an unattended task.
       const userFacing = timedOut
         ? unattendedTimeoutMessage(ctx.unattendedDeadlineMs ?? 0)
         : isRetryableModelError(error)
-          ? `지금 ${modelTierLabel(failedTier)} 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델(${alternatives})로 바꿔 다시 시도해 보세요.`
+          ? `지금 ${failedModelLabel}이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델${alternatives ? `(${alternatives})` : ""}로 바꿔 다시 시도해 보세요.`
           : detail.trim()
             ? `응답 생성 중 오류가 발생했습니다: ${detail}`
             : "응답 생성 중 오류가 발생했습니다.";
@@ -2769,8 +2773,8 @@ export function createChatRouter({
       }
       res.json({
         messages: store.listMessages(req.user!.id, conversationId),
-        // The user's chosen model tier for this conversation (null = server default),
-        // so the composer picker restores on reload.
+        // The user's chosen pi model id for this conversation (null = default; one
+        // pi no longer offers also reads as default), so the composer picker restores on reload.
         selectedModel: store.getConversationModel(req.user!.id, conversationId),
         // The user's chosen effort level for this conversation (null = runtime default),
         // so the composer picker restores on reload.
@@ -3105,25 +3109,27 @@ export function createChatRouter({
         return;
       }
       const { avatar, viewerIsOwner } = resolved.target;
-      // Per-conversation model tier chosen in the composer (all viewers, not just
-      // the owner). A known tier alias applies; "" clears back to the server default;
-      // anything else (incl. nothing sent) → null = keep whatever is already stored.
+      // Per-conversation pi model id chosen in the composer (all viewers, not just
+      // the owner). A sent id is stored as is — NOT checked against pi's list here,
+      // so a pick survives pi being briefly unreachable; the run applies it only
+      // while pi offers it (else the admin override / pi's default model). ""
+      // clears back to the default; nothing sent → null = keep whatever is stored.
       // The client owns this and sends it on each turn, so it works from a brand-new
       // chat with no row yet. The composer ALSO writes the choice to a per-user
-      // default (PUT /api/me/chat-defaults → users.model_default) that seeds the next
-      // new conversation's pane; this per-conversation value still overrides that
-      // default for an already-started thread.
+      // default (PUT /api/me/chat-defaults → users.model_default, validated there)
+      // that seeds the next new conversation's pane; this per-conversation value
+      // still overrides that default for an already-started thread.
       const rawModel = safeString(req.body?.model);
       const requestedModel: string | null =
         req.body?.model === undefined || req.body?.model === null
           ? null
-          : isModelTier(rawModel)
+          : rawModel.length <= MAX_MODEL_ID_CHARS
             ? rawModel
-            : ""; // sent but not a known tier (incl. empty) → clear to default
+            : ""; // not a plausible model id → clear to default
 
-      // Per-conversation reasoning effort, same client-owned model as the tier
-      // above: a known level applies; "" clears back to the runtime default; nothing
-      // sent → null = keep whatever is already stored. Like the tier, the composer
+      // Per-conversation reasoning effort, client-owned like the model above: a
+      // known level applies; "" clears back to the runtime default; nothing sent
+      // → null = keep whatever is already stored. Like the model, the composer
       // also writes a per-user default (users.effort_default) that seeds new panes.
       const rawEffort = safeString(req.body?.effort);
       const requestedEffort: string | null =

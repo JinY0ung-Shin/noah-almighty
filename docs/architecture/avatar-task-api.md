@@ -141,7 +141,7 @@ off a `WeakMap` keyed by `AppServices`, so a test's second app never shares a qu
   a long or hung task holds its owner's only slot, and one of the four, for up to the full budget, so
   the cancel route is the lever for stuck work. A single parked prompt still expires after
   `PROMPT_TTL_MS` (30 min) regardless of the run budget.
-  `modelFallback: true` walks down the model tiers on a transient model failure (nobody
+  `modelFallback: true` retries once on pi-gateway's default model on a transient model failure (nobody
   is there to switch models — the routine scheduler's reasoning). The run is NOT `headless`: an
   AskUserQuestion (`question`) or a blocking canvas (`canvas`) still parks, answerable from Noah or through
   `/respond`; there is no `permission` prompt kind any more (nothing on pi asks for tool approval), and

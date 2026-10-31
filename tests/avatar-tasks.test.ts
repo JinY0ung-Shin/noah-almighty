@@ -396,7 +396,7 @@ describe("avatar task API", () => {
     const fresh = (await call("post", endpoint).send({ message: "기본값" }).expect(202)).body.task;
     dispatchAvatarTasks(services);
     await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, fresh.id)?.status).toBe("succeeded"));
-    expect(H.requests[0]).toMatchObject({ modelTier: "haiku", effort: "low", mcpToolGroups: ["web", "system"] });
+    expect(H.requests[0]).toMatchObject({ model: "haiku", effort: "low", mcpToolGroups: ["web", "system"] });
     // A non-null request is persisted onto the thread, exactly as a first
     // interactive turn would leave it.
     expect(services.store.getConversationMcpToolGroups(user.id, fresh.conversationId)).toEqual(["web"]);
@@ -407,7 +407,7 @@ describe("avatar task API", () => {
     const next = (await call("post", endpoint).send({ message: "이어서", conversationId: fresh.conversationId }).expect(202)).body.task;
     dispatchAvatarTasks(services);
     await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, next.id)?.status).toBe("succeeded"));
-    expect(H.requests[1]).toMatchObject({ modelTier: "sonnet", mcpToolGroups: ["canvas", "system"] });
+    expect(H.requests[1]).toMatchObject({ model: "sonnet", mcpToolGroups: ["canvas", "system"] });
   });
 
   it("treats a blank Idempotency-Key as no key at all", async () => {

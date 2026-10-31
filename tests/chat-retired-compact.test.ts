@@ -48,7 +48,7 @@ const getTempDir = withTempDir("retired-compact", () => {
 });
 
 async function boot() {
-  const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false }, sessionSecret: "test" });
+  const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false }, sessionSecret: "test" });
   const app = createApp(services);
   const agent = request.agent(app);
   const res = await signup(agent, "owner").expect(201);

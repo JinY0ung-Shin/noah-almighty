@@ -119,12 +119,6 @@ export function isLostPiSession(error: unknown): error is PiGatewayError {
   );
 }
 
-/** The pi model a NEW session uses for a Noah tier / model id (unmapped → pi's default model). */
-function piModelFor(config: AppConfig, model: string | undefined): { model?: string; contextWindow?: number } {
-  const mapped = model ? config.pi?.modelMap[model] : undefined;
-  return mapped ? { model: mapped.model, ...(mapped.contextWindow ? { contextWindow: mapped.contextWindow } : {}) } : {};
-}
-
 /** Noah's effort ids are a subset of pi's REASONING_EFFORTS (low…max). */
 function piEffortFor(effort: string | undefined): PiReasoningEffort | undefined {
   return isEffortLevel(effort) ? (effort as PiReasoningEffort) : undefined;
@@ -242,11 +236,12 @@ async function runPiAgentAs(
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
   const effort = piEffortFor(capabilities.userEffort);
-  // The model chain is the capability plan's tier chain (one entry unless the run opted
-  // into fallback); each entry maps to the pi model a FRESH session uses.
-  const chain = capabilities.modelChain.map((model) => ({ noah: model, ...piModelFor(config, model) }));
+  // The model chain is the capability plan's (one entry unless the run opted into
+  // fallback): each entry is a pi model id sent as is, or undefined = pi-gateway's
+  // default model (no `model` sent). Each attempt runs in a FRESH session.
+  const chain = capabilities.modelChain;
   let attempt = 0;
-  const profileOf = (index: number) => `${chain[index]?.model ?? ""}|${effort ?? ""}`;
+  const profileOf = (index: number) => `${chain[index] ?? ""}|${effort ?? ""}`;
 
   // ---- session ------------------------------------------------------------
   const resumeCandidate = request.resumeSessionAt ?? request.resumeSessionId;
@@ -338,7 +333,6 @@ async function runPiAgentAs(
   });
 
   const steers = events?.steers;
-  const contextWindow = chain[0]?.contextWindow;
   // Whether the CURRENT pi request already showed the user anything (text, a
   // question): an empty turn is only retried while nothing has.
   let attemptShowedOutput = false;
@@ -385,7 +379,7 @@ async function runPiAgentAs(
       // One pi response (+ its AskUserQuestion round trips).
       for (;;) {
         const fresh = !previous;
-        const current = chain[attempt] ?? {};
+        const currentModel = chain[attempt];
         attemptShowedOutput = false;
         const piRequest: PiResponseRequest = {
           user: principal,
@@ -393,7 +387,7 @@ async function runPiAgentAs(
           ...(fresh
             ? {
                 instructions: frozenInstructions(),
-                ...(current.model ? { model: current.model } : {}),
+                ...(currentModel ? { model: currentModel } : {}),
                 ...(effort ? { reasoningEffort: effort } : {}),
                 ...(capabilities.piRuntimeFacts.readOnlyBuiltins ? { readOnly: true } : {}),
               }
@@ -412,7 +406,6 @@ async function runPiAgentAs(
               ...(signal ? { signal } : {}),
               onRetry: () => events?.onStatus?.("pi-gateway가 바빠서 잠시 후 다시 시도하는 중…"),
             },
-            ...(contextWindow ? { contextWindow } : {}),
           });
           if (fresh && conversationId) {
             store.setConversationPiSessionProfile(principal, conversationId, piSessionKey(result.responseId), profileOf(attempt));
@@ -455,12 +448,12 @@ async function runPiAgentAs(
           if (retryable && attempt + 1 < chain.length) {
             attempt += 1;
             agentLogger.warn(
-              { conversationId, from: chain[attempt - 1]?.noah, to: chain[attempt]?.noah, detail: String(error) },
+              { conversationId, from: chain[attempt - 1] ?? null, to: chain[attempt] ?? null, detail: String(error) },
               "model fallback after transient error",
             );
             previous = undefined;
             events?.onThinkingReset?.();
-            events?.onStatus?.(`모델을 ${chain[attempt]?.noah}(으)로 전환해 다시 시도 중…`);
+            events?.onStatus?.(`모델을 ${chain[attempt] ?? "기본 모델"}(으)로 전환해 다시 시도 중…`);
             continue;
           }
           throw error;
@@ -548,7 +541,7 @@ async function runPiAgentAs(
     {
       avatarId: request.avatar.id,
       runtime: "pi",
-      model: chain[attempt]?.model ?? null,
+      model: chain[attempt] ?? null,
       modelFellBack: attempt > 0,
       textLength: text.length,
       durationMs: Date.now() - capabilities.agentStart,

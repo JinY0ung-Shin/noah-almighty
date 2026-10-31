@@ -124,7 +124,7 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
 | no mid-turn input (P2) | steers queue; when the pi response completes ALL undelivered ones go as ONE follow-up turn on the same run (`onTurnResult({steerPending:true})` → the route's `turn_end` row, then `delivered`/`completed`) | prompt mid-turn line + describe_system say "arrives as the NEXT turn, after your current answer"; the composer always says "지금 답변이 끝난 뒤 이어서 전달됩니다" (the `open` frame carries no delivery mode); the delivered row's badge is position-based (`steerBadgeLabel`: "답변 뒤 전달" after an assistant row — the retired CLI runner's mid-turn rows still read "응답 중 전달") |
 | model/effort fixed per session (P3) | per-session profile `model\|effort` in `conversations.pi_session_profiles` (JSON map keyed by the session part of `resp_<session>_<n>`, newest 32); a mismatch starts a new session from history, status line `모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…` | runtime line + `Session note` in the turn input |
 | no sandbox secrets (P4) | shell-exposed secrets are NOT exported; owner runs still go to pi | secrets section + describe_system's shell-secret line say UNAVAILABLE with the names |
-| context window (P5) | from `PI_MODEL_MAP[tier].contextWindow`; no compaction chip | — |
+| context window (P5) | unknown (pi's model list carries none): the usage badge shows output tokens only; no compaction chip | — |
 | subagents (P6) | flat: pi's `Agent` is one card | — |
 | no per-session cwd (P1) | the model is told to work in `/workspace/c/<seg>/` with absolute paths (prompt + describe_system + refusal redirects); Noah creates the folder 0700 | both |
 | no WebSearch | not registered; stated | both |
@@ -432,23 +432,44 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual
   topic say exactly that.
 
+## Models (`agent/pi/modelCatalog.ts`)
+
+pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy}`) is the ONLY model
+source (user decision 2026-10-31): the composer picker, the per-user default, the admin override
+(`PUT /api/admin/model`) and the vision policy (`PUT /api/admin/model-vision-policy`, keyed by model id) all name pi
+model ids; none = pi-gateway's DEFAULT model (picked on pi's admin LLM page), and then Noah sends no `model` at all.
+`piServicesFor(store, config).models` is one catalog per app instance: a 60 s cache, one in-flight fetch for every
+caller (5 s timeout), stale-on-error (a failed refresh keeps the last good list; retried after 5 s); never fetched
+successfully → empty, and the `local` stub's is always empty (the client then hides the picker).
+
+- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else the admin override if pi
+  offers it, else the default. A stored value pi does not offer (a legacy tier alias like `opus`, a model pi dropped,
+  an SDK-era Claude id) reads as unset — no migration rewrites old values; a stored override pi does not offer is
+  warned once per value (`modelOverride.ts`, review-2 M2) and `GET /api/admin/system` reports `modelOverrideIgnored`.
+  describe_system names the id and its source (`… (chosen for this conversation in the composer)` / `(admin setting)`
+  / `pi-gateway's default model (default)`, plus the ignored-override note).
+- **Fallback** (`request.modelFallback`, unattended runs): `[resolved, default]`, so ONE retry on pi's default model
+  in a fresh session; a run already on the default gets one attempt.
+- **Writes** validate against the list: an unknown non-empty id → 400, pi never reachable → 503 (`offeredModelIdsOr503`,
+  `routes/_shared.ts`). The chat stream's `model` is NOT validated: it is stored as sent ("" clears), so a pick
+  survives pi being briefly unreachable, and the run applies it only while pi offers it.
+- `GET /api/bootstrap` → `modelSelection: { models: [{id, server, vision}], defaultVision }` (`server` = pi's
+  `owned_by`); `GET /api/admin/system` → `piModels`, `modelOverride`, `modelOverrideIgnored`, `modelOverrideChoices`
+  (= the ids), `modelVisionPolicy`, `observedModel`.
+- **`PI_MODEL_MAP` is RETIRED** with the composer tier registry (`modelTiers.ts`, deleted): no longer read; while it
+  is still set every boot logs one warning (`warnRetiredModelMapEnv`).
+
 ## Env (config.ts → `AppConfig.pi`)
 
 `AGENT_RUNTIME` (`pi` default, `local` stub; anything else stops the boot), `PI_GATEWAY_URL` + the service key
 (required): inline `PI_GATEWAY_API_KEY` (in `SERVER_ONLY_SECRET_ENV_NAMES`) OR `PI_GATEWAY_API_KEY_FILE` (read and
 trimmed by `readPiGatewayApiKey`; both set, an unreadable or empty file, or a second line stops the boot; the key never
-enters `process.env` — the bundled compose stack sets only the file), `PI_MODEL_MAP` (required, validated JSON that must map every
-composer tier — fable/opus/sonnet/haiku; it is the ONLY tier→model source, and model fallback chains map through it;
-malformed or incomplete stops the boot; the admin model override (`PUT /api/admin/model`) accepts only a tier or a
-`PI_MODEL_MAP` key, and a stored value that is neither — an SDK-era Claude id kept across the upgrade, a typo — is
-IGNORED at run time with one warn log, the run using the default tier and describe_system saying so, while
-`GET /api/admin/system` reports `modelOverrideIgnored`; `modelOverride.ts`, review-2 M2), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`, `NOAH_MCP_ALLOWED_CIDRS` (optional
-`/mcp` peer allowlist), `PI_DECK_SANDBOX`.
+enters `process.env` — the bundled compose stack sets only the file), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`,
+`NOAH_MCP_ALLOWED_CIDRS` (optional `/mcp` peer allowlist), `PI_DECK_SANDBOX`.
 
-Removed with the SDK runner: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (the old hard lock — the composer's models endpoint
-has no `locked` any more and reports each tier's pi model id), `ANTHROPIC_DEFAULT_*_MODEL`, `AUTO_COMPACT_WINDOW`,
-`MAX_TURNS`, `READONLY_TOOLS`. Model credentials live in pi-gateway only (D7). The admin 시스템 panel
-(`GET /api/admin/system`) shows `piModelMap` (tier → pi model id) and a `skillDiscovery` list read from the bundled
+Removed with the SDK runner: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (the old hard lock), `ANTHROPIC_DEFAULT_*_MODEL`,
+`AUTO_COMPACT_WINDOW`, `MAX_TURNS`, `READONLY_TOOLS`. Model credentials live in pi-gateway only (D7). The admin 시스템
+panel (`GET /api/admin/system`) shows `piModels` (pi's live list) and a `skillDiscovery` list read from the bundled
 default-skills root (`listPluginRootSkills`, `agent/skillCatalog.ts`); `PUT/DELETE /api/admin/claude-token` are gone.
 
 ## Existing deployments

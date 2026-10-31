@@ -7,6 +7,8 @@ import {
   loadDefaultPluginRoots,
   resolvePluginRoots,
 } from "../src/server/plugins.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import { parseSse, shareGroup, signup, withTempDir } from "./helpers.js";
 
 let tempDir: string;
@@ -91,21 +93,40 @@ describe("noah-almighty platform", () => {
     expect(res.body.githubHost).toBe("github.enterprise.local");
   });
 
-  it("surfaces per-tier vision support in the bootstrap model selection", async () => {
+  it("offers pi-gateway's live models in the bootstrap model selection, with per-model vision", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "local",
+      agentRuntime: "pi",
       sessionSecret: "test",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
     });
-    services.store.setModelVisionPolicy({ haiku: false });
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "m-a", ownedBy: "anthropic" }, { id: "m-b" }],
+    });
+    services.store.setModelVisionPolicy({ "m-b": false });
     const app = createApp(services);
-    const res = await request(app).get("/api/bootstrap").expect(200);
+    let res = await request(app).get("/api/bootstrap").expect(200);
     expect(res.body.visionEnabled).toBe(true);
-    const tiers = res.body.modelSelection.tiers as Array<{ id: string; vision: boolean }>;
-    expect(tiers.find((t) => t.id === "haiku")?.vision).toBe(false);
-    expect(tiers.find((t) => t.id === "opus")?.vision).toBe(true);
-    // Default tier (opus) has no explicit entry → inherits the on default.
-    expect(res.body.modelSelection.defaultVision).toBe(true);
+    expect(res.body.modelSelection).toEqual({
+      models: [
+        { id: "m-a", server: "anthropic", vision: true },
+        { id: "m-b", server: null, vision: false },
+      ],
+      // Nothing picked, no override → pi-gateway's default model inherits MODEL_VISION.
+      defaultVision: true,
+    });
+    // The admin override pi offers decides the default's vision.
+    services.store.setModelOverride("m-b");
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.defaultVision).toBe(false);
+    services.store.close();
+  });
+
+  it("offers no models on the local stub (the client hides the picker)", async () => {
+    const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
+    const res = await request(createApp(services)).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection).toEqual({ models: [], defaultVision: true });
+    services.store.close();
   });
 
   it("hides the browser-bridge Multimedia notice by default and serves any signed-in user", async () => {
@@ -987,7 +1008,7 @@ describe("noah-almighty platform", () => {
     const app = createApp(
       createServices({
         dataDir: tempDir,
-        agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false },
+        agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
         sessionSecret: "test",
         defaultPluginsDir: pluginsDir,
       }),
@@ -1097,8 +1118,8 @@ describe("noah-almighty platform", () => {
     await signup(admin, "boss").expect(201);
     const res = await admin.get("/api/admin/system").expect(200);
     expect(res.body.system.agentRuntime).toBe("local");
-    // The local stub maps no tier to a pi model, and never reports one.
-    expect(res.body.system.piModelMap).toEqual({});
+    // The local stub has no pi, so no models, and never reports one.
+    expect(res.body.system.piModels).toEqual([]);
     expect(res.body.system.observedModel).toBeNull();
     expect(
       res.body.system.hexSshTools.map((t: { name: string }) => t.name),
@@ -1180,24 +1201,26 @@ describe("noah-almighty platform", () => {
     await member.put("/api/admin/tool-skill-policy").send({ policy }).expect(403);
   });
 
-  it("reports the tier → pi model map from PI_MODEL_MAP", async () => {
+  it("reports pi-gateway's live model list, never the retired PI_MODEL_MAP", async () => {
     const services = createServices({
       dataDir: tempDir,
       agentRuntime: "pi",
       sessionSecret: "test",
-      pi: {
-        gatewayUrl: "http://pi.invalid",
-        apiKey: "k",
-        modelMap: { fable: { model: "f" }, opus: { model: "o", contextWindow: 1000 }, sonnet: { model: "s" }, haiku: { model: "h" }, "pin-x": { model: "x" } },
-        deckSandbox: false,
-      },
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
+    });
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "deepseek/v3", ownedBy: "deepseek" }, { id: "qwen/coder" }],
     });
     const admin = request.agent(createApp(services));
     await signup(admin, "boss").expect(201);
     const res = await admin.get("/api/admin/system").expect(200);
     expect(res.body.system.agentRuntime).toBe("pi");
-    // Tiers only — a concrete-id key is an admin-override target, not a tier row.
-    expect(res.body.system.piModelMap).toEqual({ fable: "f", opus: "o", sonnet: "s", haiku: "h" });
+    expect(res.body.system.piModels).toEqual([
+      { id: "deepseek/v3", server: "deepseek" },
+      { id: "qwen/coder", server: null },
+    ]);
+    expect(res.body.system.modelOverrideChoices).toEqual(["deepseek/v3", "qwen/coder"]);
+    expect(res.body.system).not.toHaveProperty("piModelMap");
     services.store.close();
   });
 

@@ -72,7 +72,6 @@ import {
   buildUserPrompt,
 } from "../src/server/agent/promptBuilder.js";
 import {
-  buildModelFallbackChain,
   deriveAgentToolAccess,
   mcpInjectableSecretEnv,
 } from "../src/server/agent/runCapabilities.js";
@@ -106,7 +105,7 @@ import {
 let tempDir: string;
 
 // A pi runtime that never reaches a gateway: only the config-driven paths run.
-const PI_TEST_CONFIG = { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false };
+const PI_TEST_CONFIG = { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false };
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "noah-units-"));
@@ -3268,24 +3267,6 @@ process.stdin.on("data", (chunk) => {
 });
 
 describe("model fallback (routines)", () => {
-  it("walks DOWN the tier order from the resolved model", () => {
-    expect(buildModelFallbackChain("opus")).toEqual([
-      "opus",
-      "sonnet",
-      "haiku",
-    ]);
-    expect(buildModelFallbackChain("sonnet")).toEqual(["sonnet", "haiku"]);
-    expect(buildModelFallbackChain("haiku")).toEqual(["haiku"]);
-  });
-
-  it("tries a concrete (non-tier) primary first, then the lower tiers", () => {
-    expect(buildModelFallbackChain("claude-opus-4-8")).toEqual([
-      "claude-opus-4-8",
-      "sonnet",
-      "haiku",
-    ]);
-  });
-
   it("treats overload / 5xx / rate-limit / network errors as retryable", () => {
     expect(isRetryableModelError(new Error("Overloaded"))).toBe(true);
     expect(isRetryableModelError(new Error("API error 529"))).toBe(true);

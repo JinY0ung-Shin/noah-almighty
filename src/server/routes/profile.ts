@@ -4,7 +4,6 @@ import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { listSkillsInRoots } from "../plugins.js";
 import { normalizeHashtags } from "../store.js";
-import { isModelTier } from "../modelTiers.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   type McpToolGroupId,
@@ -19,6 +18,7 @@ import {
   describeAvatarEquipment,
   isAvatarVisibility,
   resolveAvatarSkillSources,
+  offeredModelIdsOr503,
   runHeadlessAvatarPrompt,
   safeString,
   saveAvatarImageFile,
@@ -111,7 +111,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
-  // Owner's remembered chat-composer defaults (model tier / reasoning effort / MCP
+  // Owner's remembered chat-composer defaults (pi model id / reasoning effort / MCP
   // tool groups). The composer pickers write here so each choice seeds the NEXT new
   // conversation — the per-conversation `selected_*` value (chat POST) still
   // overrides it for an already-started conversation. Each field is optional: omit
@@ -120,7 +120,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
   router.put(
     "/api/me/chat-defaults",
     requireAuth(store),
-    (req: AuthenticatedRequest, res) => {
+    async (req: AuthenticatedRequest, res) => {
       const patch: {
         model?: string | null;
         effort?: string | null;
@@ -129,10 +129,16 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       if (req.body?.model !== undefined) {
         const raw = req.body.model;
         if (raw === null || raw === "") patch.model = null;
-        else if (isModelTier(raw)) patch.model = raw;
         else {
-          apiError(res, 400, "알 수 없는 모델입니다.");
-          return;
+          // A model pi-gateway offers right now (its live list); a pick it later
+          // stops offering reads as the default when a conversation starts.
+          const offered = await offeredModelIdsOr503(store, config, res);
+          if (!offered) return;
+          if (typeof raw !== "string" || !offered.includes(raw)) {
+            apiError(res, 400, "알 수 없는 모델입니다.");
+            return;
+          }
+          patch.model = raw;
         }
       }
       if (req.body?.effort !== undefined) {

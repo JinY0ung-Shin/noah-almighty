@@ -249,7 +249,7 @@ export interface RoutineJobRow {
 
 /** app_config key: how self-service signups are gated ("open" | "closed" | "approval"). */
 export const SIGNUP_MODE_KEY = "signup_mode";
-/** app_config key: admin-selected agent model (a composer tier or a `PI_MODEL_MAP` key). */
+/** app_config key: admin-selected agent model (a pi model id from pi-gateway's live list). */
 export const MODEL_OVERRIDE_KEY = "agent_model_override";
 
 /**
@@ -771,14 +771,14 @@ export class StoreBase {
       "is_routine",
       "INTEGER NOT NULL DEFAULT 0",
     );
-    // Per-conversation model TIER chosen by the user in the chat composer: a
-    // tier alias (`opus`/`sonnet`/`haiku`) or NULL = use the server default
-    // resolution. The tier resolves to a concrete pi model via the operator's
-    // PI_MODEL_MAP (see modelTiers.ts).
+    // Per-conversation model chosen by the user in the chat composer: a pi
+    // model id from pi-gateway's live list (agent/pi/modelCatalog.ts) or NULL =
+    // the default resolution. A value pi no longer offers (incl. a legacy tier
+    // alias like `opus`) reads as unset at run time — never migrated.
     this.addColumnIfMissing("conversations", "selected_model", "TEXT");
     // Per-conversation reasoning EFFORT level chosen in the composer
     // (`low`/`medium`/`high`/`xhigh`/`max`) or NULL = pi's default. Passed to pi
-    // as `reasoningEffort`; independent of the model tier (see effortLevels.ts).
+    // as `reasoningEffort`; independent of the model (see effortLevels.ts).
     this.addColumnIfMissing("conversations", "selected_effort", "TEXT");
     // Per-conversation MCP tool group selection from the chat composer. NULL means
     // every default group is enabled; a JSON array (including []) is an explicit

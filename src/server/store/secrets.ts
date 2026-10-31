@@ -505,8 +505,8 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     /**
-     * Admin-managed per-model-tier vision policy (`{tierId: boolean}`; absent
-     * tier = inherit the MODEL_VISION deployment default). Missing/corrupt/
+     * Admin-managed per-model vision policy (`{piModelId: boolean}`; an absent
+     * model = inherit the MODEL_VISION deployment default). Missing/corrupt/
      * unreadable → empty map, i.e. everything inherits — the safe pre-feature
      * behavior.
      */

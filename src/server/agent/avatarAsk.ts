@@ -181,8 +181,8 @@ export async function askAvatar(
         // recall + request_info (so it can escalate a true unknown to ITS owner).
         mcpToolGroups: ["personal_knowledge"],
         knowledgeMemory,
-        // Headless with no live stream — transient model errors retry down the
-        // tier chain like routines do.
+        // Headless with no live stream — a transient model error retries once
+        // on pi-gateway's default model like routines do.
         modelFallback: true,
       },
       pluginRoots,

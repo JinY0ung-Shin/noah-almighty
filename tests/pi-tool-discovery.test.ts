@@ -30,7 +30,7 @@ import { withTempDir } from "./helpers.js";
 
 const dir = withTempDir("pi-tool-discovery");
 
-const PI: PiRuntimeConfig = { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false };
+const PI: PiRuntimeConfig = { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false };
 
 let services: ReturnType<typeof createServices> | undefined;
 const servers: http.Server[] = [];

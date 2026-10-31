@@ -30,6 +30,8 @@ import {
 import { resultErrorMessage } from "../src/server/agent/runErrors.js";
 import { EMPTY_PI_RESPONSE_MESSAGE } from "../src/server/agent/pi/runPiAgent.js";
 import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import {
   commitAndPush,
   ensureClone,
@@ -1639,7 +1641,7 @@ describe("git repo tools (general git repository management)", () => {
       dataDir,
       agentRuntime: "local",
       sessionSecret: "t",
-      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false, workspacesDir: path.join(tempDir, dir, "ws") },
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false, workspacesDir: path.join(tempDir, dir, "ws") },
     });
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
@@ -1947,18 +1949,24 @@ describe("system tools (avatar system management)", () => {
     return buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner });
   }
 
-  /** The config of a pi deployment whose PI_MODEL_MAP maps `models` (tier/key → pi model id). */
-  function piConfig(config: AppConfig, models: Record<string, string> = {}): AppConfig {
+  /** The config of a pi deployment (its models come from pi-gateway's live list, see offerModels). */
+  function piConfig(config: AppConfig): AppConfig {
     return {
       ...config,
       agentRuntime: "pi",
       pi: {
         gatewayUrl: "http://pi-gateway.internal:8080",
         apiKey: "pi-key",
-        modelMap: Object.fromEntries(Object.entries(models).map(([key, model]) => [key, { model }])),
         deckSandbox: false,
       },
     };
+  }
+
+  /** pi-gateway offers exactly `ids` (`GET /v1/models`), already fetched once as a run would have. */
+  async function offerModels(s: ReturnType<typeof setup>, ids: string[]): Promise<void> {
+    const catalog = createPiModelCatalog({ listModels: async () => ids.map((id) => ({ id })) });
+    piServicesFor(s.store, s.config).models = catalog;
+    await catalog.list();
   }
 
   it("exposes the documented server + tool names", () => {
@@ -2746,7 +2754,8 @@ describe("system tools (avatar system management)", () => {
 
   it("reports the effective model, groups, profile visibility and pending requests", async () => {
     const s = setup("st-describe-full");
-    // No env model pin in tests → the admin override is the effective model.
+    // No composer pick → the admin override pi offers is the effective model.
+    await offerModels(s, ["sonnet"]);
     s.store.setModelOverride("sonnet");
     const group = s.store.createGroup({ name: "플랫폼팀" });
     s.store.addGroupMember(group.id, s.owner.id, "admin");
@@ -3293,10 +3302,9 @@ describe("system tools (avatar system management)", () => {
     });
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
-      // PI_MODEL_MAP maps the tier, so the avatar can name the pi model it runs on.
-      config: piConfig(s.config, { opus: "pi-opus-5" }),
+      config: piConfig(s.config),
       viewerIsOwner: true,
-      selectedModelTier: "opus",
+      selectedModel: "pi-opus-5",
       selectedEffort: "low",
       enabledMcpToolGroups: [],
       activeRepoName: "acme/service",
@@ -3304,7 +3312,7 @@ describe("system tools (avatar system management)", () => {
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
 
     expect(body).toContain(
-      "Model in use: pi-opus-5 (opus) (chosen for this conversation in the composer)",
+      "Model in use: pi-opus-5 (chosen for this conversation in the composer)",
     );
     expect(body).not.toContain("claude-admin-default");
     expect(body).toContain("Reasoning effort: low (");
@@ -3342,31 +3350,28 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("undefined");
   });
 
-  it("describe_system names the default tier's model, a bare tier alias, and an unknown effort", async () => {
+  it("describe_system names pi-gateway's default model, the local stub's default, and an unknown effort", async () => {
     const s = setup("st-model-fallbacks");
-    // No composer pick, no admin override → the default tier, named through
-    // the operator's PI_MODEL_MAP.
+    // No composer pick, no admin override → pi-gateway's default model.
     const defaults = buildSystemTools(s.store, {
       ...s.baseCtx,
-      config: piConfig(s.config, { opus: "pi-opus-5" }),
+      config: piConfig(s.config),
       viewerIsOwner: true,
     });
     expect((await callTool(defaults, "describe_system", {})).content[0].text).toContain(
-      "Model in use: pi-opus-5 (opus) (default)",
+      "Model in use: pi-gateway's default model (default)",
     );
 
-    // A tier with no PI_MODEL_MAP entry (the `local` stub has no map at all) is
-    // reported as the alias alone, and an effort id with no known label is
-    // echoed verbatim rather than dropped.
-    const bare = buildSystemTools(s.store, {
+    // The `local` stub has no pi; an effort id with no known label is echoed
+    // verbatim rather than dropped.
+    const local = buildSystemTools(s.store, {
       ...s.baseCtx,
       viewerIsOwner: true,
-      selectedModelTier: "sonnet",
       selectedEffort: "turbo",
     });
-    const body = (await callTool(bare, "describe_system", {})).content[0].text ?? "";
-    expect(body).toContain("Model in use: sonnet (chosen for this conversation in the composer)");
-    expect(body).toContain("Reasoning effort: turbo (chosen for this conversation)");
+    const localBody = (await callTool(local, "describe_system", {})).content[0].text ?? "";
+    expect(localBody).toContain("Model in use: the runtime's default model (default)");
+    expect(localBody).toContain("Reasoning effort: turbo (chosen for this conversation)");
   });
 
   it("describe_system pairs a CONNECTED browser with Confluence writes and a text-only model", async () => {
@@ -3417,7 +3422,7 @@ describe("system tools (avatar system management)", () => {
 
   it("describe_system's runtime line is always pi on a pi deployment, naming whose sandbox it is", async () => {
     const s = setup("st-runtime-pi");
-    const config = piConfig(s.config, { opus: "pi-opus-5" });
+    const config = piConfig(s.config);
     const describe = async (ctx: SystemToolsContext) =>
       (await callTool(buildSystemTools(s.store, ctx), "describe_system", {})).content[0].text ?? "";
     const runtime = (body: string) => body.split("\n").find((line) => line.startsWith("- runtime: ")) ?? "";
@@ -3505,27 +3510,29 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
-  it("describe_system reports the default tier when the stored admin override is unmapped (review-2 M2)", async () => {
+  it("describe_system reports pi's default model when the stored admin override is not offered (review-2 M2)", async () => {
     const s = setup("st-admin-model-ignored");
+    await offerModels(s, ["pi-opus-5"]);
     // An SDK-era deployment's concrete Claude id, kept across the upgrade.
     s.store.setModelOverride("claude-opus-4-1-20250805");
-    const tools = buildSystemTools(s.store, { ...s.baseCtx, config: piConfig(s.config, { opus: "pi-opus-5" }), viewerIsOwner: true });
+    const tools = buildSystemTools(s.store, { ...s.baseCtx, config: piConfig(s.config), viewerIsOwner: true });
     const body = (await callTool(tools, "describe_system", {})).content[0].text;
     expect(body).toContain(
-      "pi-opus-5 (opus) (default — the admin model setting 'claude-opus-4-1-20250805' is neither a tier nor a PI_MODEL_MAP key, so it is ignored)",
+      "Model in use: pi-gateway's default model (default — the admin model setting 'claude-opus-4-1-20250805' is not a model pi-gateway currently offers, so it is ignored)",
     );
     expect(body).not.toContain("(admin setting)");
   });
 
-  it("describe_system names the admin model override (a PI_MODEL_MAP key) when the composer picked none", async () => {
+  it("describe_system names the admin model override when the composer picked none", async () => {
     // There is no env model hard lock any more (ANTHROPIC_MODEL is retired):
-    // without a composer pick the admin override decides, named through PI_MODEL_MAP.
+    // without a composer pick the admin override decides, while pi offers it.
     const s = setup("st-admin-model");
-    s.store.setModelOverride("big-context");
+    await offerModels(s, ["pi-opus-5", "pi-long-1m"]);
+    s.store.setModelOverride("pi-long-1m");
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
       config: {
-        ...piConfig(s.config, { opus: "pi-opus-5", "big-context": "pi-long-1m" }),
+        ...piConfig(s.config),
         confluenceUrl: "https://confluence.internal",
       },
       viewerIsOwner: true,
@@ -3533,7 +3540,7 @@ describe("system tools (avatar system management)", () => {
     s.store.setUserSecret(s.owner.id, "CONFLUENCE_PERSONAL_ACCESS_TOKEN", "pat");
 
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-    expect(body).toContain("Model in use: pi-long-1m (big-context) (admin setting)");
+    expect(body).toContain("Model in use: pi-long-1m (admin setting)");
     expect(body).not.toContain("chosen for this conversation in the composer");
     expect(body).not.toContain("pinned via environment variable");
     expect(body).toContain("Confluence host: set (mcp__confluence__* is READ-ONLY");

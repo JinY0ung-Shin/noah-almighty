@@ -7,7 +7,8 @@ import {
 import logger from "../logger.js";
 import { createRateLimiter } from "../rateLimit.js";
 import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_shared.js";
-import { DEFAULT_MODEL_TIER, MODEL_TIERS } from "../modelTiers.js";
+import { catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { effectiveModelOverride } from "../modelOverride.js";
 import { visionForModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
@@ -145,7 +146,11 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
 
   // First-run probe: when no account exists yet, the client shows the
   // admin-account setup screen instead of the normal login.
-  router.get("/api/bootstrap", (_req, res) => {
+  router.get("/api/bootstrap", async (_req, res) => {
+    // pi-gateway's live model list (cached; empty on the `local` stub and while
+    // pi has never answered — the client then hides the picker).
+    const models = await piServicesFor(store, config).models.list();
+    const visionPolicy = store.getModelVisionPolicy();
     res.json({
       needsSetup: !store.hasAnyUser(),
       githubHost: config.githubHost,
@@ -155,26 +160,26 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // Lets onboarding show the Confluence PAT field only when the deployment
       // has a Confluence host configured (the PAT is useless otherwise).
       confluenceConfigured: Boolean(config.confluenceUrl),
-      // Deployment default for image input (MODEL_VISION). Per-TIER support
-      // rides on modelSelection.tiers[].vision below; this global remains the
-      // fallback when no tier resolves.
+      // Deployment default for image input (MODEL_VISION). Per-MODEL support
+      // rides on modelSelection.models[].vision below; this global remains the
+      // fallback when no model resolves.
       visionEnabled: config.visionEnabled,
-      // Per-conversation model picker: the selectable tiers. The pi model each
-      // tier runs is the operator's call via PI_MODEL_MAP (see modelTiers.ts).
+      // Per-conversation model picker: the models pi-gateway offers right now.
+      // A pick is a pi model id; none (or one pi stopped offering) runs the
+      // admin override, else pi-gateway's default model.
       modelSelection: {
-        // Each tier carries the pi model id PI_MODEL_MAP maps it to (null on the
-        // `local` stub), plus whether that tier accepts image input (admin
-        // per-tier policy ∘ MODEL_VISION).
-        tiers: MODEL_TIERS.map((tier) => ({
-          ...tier,
-          model: config.pi?.modelMap[tier.id]?.model ?? null,
-          vision: visionForModel(tier.id, store.getModelVisionPolicy(), config.visionEnabled),
+        // `server` is pi's `owned_by`; `vision` the admin per-model policy ∘ MODEL_VISION.
+        models: models.map((model) => ({
+          id: model.id,
+          server: model.server,
+          vision: visionForModel(model.id, visionPolicy, config.visionEnabled),
         })),
         // Vision of the model a conversation gets when the user picked nothing:
-        // admin override > default tier (mirrors runCapabilities).
+        // the admin override when pi offers it, else pi-gateway's default model
+        // (mirrors runCapabilities).
         defaultVision: visionForModel(
-          effectiveModelOverride(store, config) ?? DEFAULT_MODEL_TIER,
-          store.getModelVisionPolicy(),
+          effectiveModelOverride(store, catalogModelIds(models)),
+          visionPolicy,
           config.visionEnabled,
         ),
       },

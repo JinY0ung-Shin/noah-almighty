@@ -255,7 +255,6 @@ describe(".env.example — bundled pi-gateway", () => {
       "PI_GATEWAY_DIR",
       "PI_GATEWAY_HOME",
       "PI_GATEWAY_SECRETS",
-      "PI_MODEL_MAP",
       "NOAH_MCP_SUBNET",
       "NOAH_MCP_BROKER_IP",
       "NOAH_MCP_PUBLIC_URL",
@@ -268,5 +267,7 @@ describe(".env.example — bundled pi-gateway", () => {
     }
     // PI_GATEWAY_HOME is required, so it is set (not commented) in the example.
     expect(env).toMatch(/^PI_GATEWAY_HOME=\/srv\/pi-gateway$/m);
+    // The retired PI_MODEL_MAP is gone (models come from pi-gateway's live list).
+    expect(documented("PI_MODEL_MAP")).toBe(false);
   });
 });

@@ -19,7 +19,6 @@ import {
 } from "./browserBridge";
 import { isCompactCommandText, resolveTypedSlashCommand } from "./slash";
 import { noteTodoToolEnd, noteTodoToolStart } from "./todos";
-import { DEFAULT_MODEL_TIER } from "../../../server/modelTiers";
 import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
 import {
   MCP_TOOL_LABELS,
@@ -120,6 +119,24 @@ function objectParticle(noun: string): string {
   return (last - 0xac00) % 28 === 0 ? "를" : "을";
 }
 
+/**
+ * The pi model a pane runs on, as the composer shows it: the pick when
+ * pi-gateway currently offers it, else "" (= pi-gateway's default model) —
+ * an unset pick, a legacy tier id or a model pi dropped all behave as default.
+ */
+export function knownModel(
+  model: string | null | undefined,
+  models = readState().bootstrap?.modelSelection?.models ?? [],
+): string {
+  return model && models.some((m) => m.id === model) ? model : "";
+}
+
+/** The chat-stream `model` for a pane: `knownModel`, except with no catalog to judge by. */
+function sendableModel(model: string | undefined): string {
+  const models = readState().bootstrap?.modelSelection?.models ?? [];
+  return models.length ? knownModel(model, models) : (model ?? "");
+}
+
 function makePane(
   avatar: AvatarDetail,
   conversationId = newId(),
@@ -150,7 +167,7 @@ function makePane(
     // choice carries to a new conversation (null/undefined = fall back to the
     // hardcoded server/SDK default). selectConversation() overrides these with the
     // per-conversation stored value when resuming an existing thread.
-    modelTier: readState().user?.modelDefault ?? undefined,
+    model: readState().user?.modelDefault ?? undefined,
     effort: readState().user?.effortDefault ?? undefined,
     mcpToolGroups: readState().user?.mcpToolGroupsDefault
       ? [...readState().user!.mcpToolGroupsDefault!]
@@ -1092,9 +1109,11 @@ export async function sendMessage(
         regenerate: opts.regenerate === true,
         ...(rewindFromMessageId ? { rewindFromMessageId } : {}),
         multiSession: readState().chatPanes.length > 1,
-        // Model tier / reasoning effort / MCP groups: the pane is seeded from
-        // remembered defaults, then persisted per conversation.
-        model: pane.modelTier || DEFAULT_MODEL_TIER,
+        // Model / reasoning effort / MCP groups: the pane is seeded from
+        // remembered defaults, then persisted per conversation. A pick pi no
+        // longer offers goes out as "" (= pi's default); with no catalog at all
+        // (pi unreachable at page load) the stored pick passes through untouched.
+        model: sendableModel(pane.model),
         effort: pane.effort || DEFAULT_EFFORT_LEVEL,
         mcpToolGroups: pane.mcpToolGroups ?? DEFAULT_MCP_TOOL_GROUPS,
         // Staged image attachments (data URLs). The server reuses our id as the
@@ -3205,7 +3224,7 @@ function applyLoadedConversation(
   loaded: Awaited<ReturnType<typeof loadMessages>>,
 ): void {
   applyLoadedTranscript(target, loaded);
-  target.modelTier = loaded.selectedModel || undefined;
+  target.model = loaded.selectedModel || undefined;
   target.effort = loaded.selectedEffort || undefined;
   target.mcpToolGroups = loaded.selectedMcpToolGroups ?? [
     ...DEFAULT_MCP_TOOL_GROUPS,

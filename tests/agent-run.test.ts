@@ -8,12 +8,12 @@ import { withTempDir } from "./helpers.js";
 
 import { createServices } from "../src/server/app.js";
 import {
-  buildModelFallbackChain,
   buildRunCapabilities,
   stampPromptRequest,
 } from "../src/server/agent/runCapabilities.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
-import { piEphemeralRunKey, piRunPrincipal } from "../src/server/agent/pi/piRuntime.js";
+import { piEphemeralRunKey, piRunPrincipal, piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { EMPTY_PI_RESPONSE_MESSAGE, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import {
@@ -24,7 +24,6 @@ import {
 } from "../src/server/agent/pi/responsesClient.js";
 import { resultErrorMessage } from "../src/server/agent/runErrors.js";
 import { redactSecretValues } from "../src/server/agent/secretRedaction.js";
-import { DEFAULT_MODEL_TIER } from "../src/server/modelTiers.js";
 import {
   attachRunClient,
   awaitResponse,
@@ -72,8 +71,11 @@ const getTempDir = withTempDir("agent-run", () => {
   tempDir = getTempDir();
 });
 
+/** The models the fake pi-gateway offers (`GET /v1/models`) unless a test passes its own. */
+const PI_MODELS = ["m-opus", "m-sonnet", "m-haiku"];
+
 /** Fresh services + an owner user + a realistic owner AgentRequest, over the per-test temp dir. */
-function setup(configOverrides: Partial<AppConfig> = {}) {
+function setup(configOverrides: Partial<AppConfig> = {}, models: string[] = PI_MODELS) {
   const { config, store } = createServices({
     dataDir: tempDir,
     agentRuntime: "pi",
@@ -82,11 +84,14 @@ function setup(configOverrides: Partial<AppConfig> = {}) {
     pi: {
       gatewayUrl: "http://pi.invalid",
       apiKey: "k",
-      modelMap: { opus: { model: "m-opus" }, sonnet: { model: "m-sonnet" }, haiku: { model: "m-haiku" } },
       deckSandbox: false,
       workspacesDir: path.join(tempDir, "pi-ws"),
     },
     ...configOverrides,
+  });
+  // Every route and run reads the process's catalog; serve it from the fake list.
+  piServicesFor(store, config).models = createPiModelCatalog({
+    listModels: async () => models.map((id) => ({ id, ownedBy: "fake" })),
   });
   const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
   const cwd = path.join(tempDir, "ws");
@@ -202,8 +207,9 @@ describe("run capability plan", () => {
   it("registers the default families for a plain owner, and no server it has no sink or setup for", async () => {
     const env = setup();
     const run = await plan(env, env.baseRequest);
-    expect(run.caps.effectiveModel).toBe(DEFAULT_MODEL_TIER);
-    expect(run.caps.modelChain).toEqual([DEFAULT_MODEL_TIER]);
+    // No pick, no override → pi-gateway's default model (no model id at all).
+    expect(run.caps.effectiveModel).toBeUndefined();
+    expect(run.caps.modelChain).toEqual([undefined]);
     expect(run.servers).toEqual(
       expect.arrayContaining(["knowledge", "repo", "system", "todo", "confluence", "avatars", "git_repo"]),
     );
@@ -229,17 +235,17 @@ describe("run capability plan", () => {
     expect(run.stamped.adminDisabledTools).toEqual(["WebFetch"]);
   });
 
-  it("plumbs the model tier, effort, and MCP tool-group selection into the run", async () => {
+  it("plumbs the model, effort, and MCP tool-group selection into the run", async () => {
     const env = setup();
-    const request: AgentRequest = { ...env.baseRequest, modelTier: "sonnet", effort: "high", mcpToolGroups: ["system"] };
+    const request: AgentRequest = { ...env.baseRequest, model: "m-sonnet", effort: "high", mcpToolGroups: ["system"] };
     const run = await plan(env, request);
-    expect(run.caps.effectiveModel).toBe("sonnet");
+    expect(run.caps.effectiveModel).toBe("m-sonnet");
     expect(run.caps.userEffort).toBe("high");
     // Only the `system` group enabled → only the system family is registered:
     // the system server plus, on this owner run, the to-do server riding it.
     expect(run.servers).toEqual(["system", "todo"]);
 
-    // …and the gateway receives the tier's mapped pi model and the effort.
+    // …and the gateway receives the picked pi model id as is, and the effort.
     const { client, requests } = fakeClient([() => textTurn("resp_t_1", "ok")]);
     await runPiAgent(request, [], env.config, env.store, makeEvents(), undefined, { client });
     expect(requests[0]).toMatchObject({ model: "m-sonnet", reasoningEffort: "high" });
@@ -424,10 +430,10 @@ describe("pi run loop (fake gateway)", () => {
     headless: true,
     allowHeadlessTools: true,
     modelFallback: true,
-    modelTier: "opus",
+    model: "m-opus",
   });
 
-  it("falls back down the chain on a transient error, says so, and resets the reasoning view", async () => {
+  it("falls back once onto pi-gateway's default model on a transient error, says so, and resets the reasoning view", async () => {
     const env = setup();
     const events = makeEvents();
     const { client, requests } = fakeClient([
@@ -438,37 +444,45 @@ describe("pi run loop (fake gateway)", () => {
       client,
       retry: { attempts: 1 },
     });
-    expect(requests.map((r) => r.model)).toEqual(["m-opus", "m-sonnet"]);
-    expect(events.onStatus).toHaveBeenCalledWith("모델을 sonnet(으)로 전환해 다시 시도 중…");
+    expect(requests.map((r) => r.model)).toEqual(["m-opus", undefined]);
+    expect(events.onStatus).toHaveBeenCalledWith("모델을 기본 모델(으)로 전환해 다시 시도 중…");
     expect(events.onThinkingReset).toHaveBeenCalledTimes(1);
     expect(response.text).toBe("fell back");
   });
 
-  it("an admin-override (non-tier) primary falls back onto the tiers", () => {
-    expect(buildModelFallbackChain("noah-custom-model")).toEqual(["noah-custom-model", "sonnet", "haiku"]);
-    expect(buildModelFallbackChain("opus")).toEqual(["opus", "sonnet", "haiku"]);
-    expect(buildModelFallbackChain("haiku")).toEqual(["haiku"]);
-  });
-
-  it("uses the admin override as the run's model and chains from it", async () => {
+  it("resolves pick > admin override > pi's default, each only while pi offers it", async () => {
     const env = setup();
-    env.config.pi!.modelMap["noah-custom-model"] = { model: "m-custom" };
-    env.store.setModelOverride("noah-custom-model");
-    const run = await plan(env, { ...routine(env), modelTier: undefined });
-    expect(run.caps.effectiveModel).toBe("noah-custom-model");
-    expect(run.caps.modelChain).toEqual(["noah-custom-model", "sonnet", "haiku"]);
+    env.store.setModelOverride("m-haiku");
+    // A pick pi offers wins over the override.
+    expect((await plan(env, routine(env))).caps).toMatchObject({ effectiveModel: "m-opus", userModel: "m-opus" });
+    // No pick, or one pi does not offer (a legacy tier alias) → the override, chained onto the default.
+    for (const model of [undefined, "opus"]) {
+      const run = await plan(env, { ...routine(env), model });
+      expect(run.caps.effectiveModel).toBe("m-haiku");
+      expect(run.caps.userModel).toBeUndefined();
+      expect(run.caps.modelChain).toEqual(["m-haiku", undefined]);
+    }
   });
 
-  it("ignores a stored override that is neither a tier nor a PI_MODEL_MAP key (review-2 M2)", async () => {
+  it("ignores a stored override pi-gateway does not offer, and a run on the default gets ONE attempt (review-2 M2)", async () => {
     const env = setup();
     // An SDK-era deployment's concrete Claude id, kept across the upgrade.
     env.store.setModelOverride("claude-opus-4-1-20250805");
-    const run = await plan(env, { ...routine(env), modelTier: undefined });
-    expect(run.caps.effectiveModel).toBe("opus");
-    expect(run.caps.modelChain).toEqual(["opus", "sonnet", "haiku"]);
+    const run = await plan(env, { ...routine(env), model: undefined });
+    expect(run.caps.effectiveModel).toBeUndefined();
+    expect(run.caps.modelChain).toEqual([undefined]);
+    expect(run.caps.ownerState.modelOverrideIgnored).toBe("claude-opus-4-1-20250805");
   });
 
-  it("does NOT fall back on a non-retryable error even when the chain has more tiers", async () => {
+  it("treats every stored model as the default while pi's list is unavailable", async () => {
+    const env = setup({}, []);
+    env.store.setModelOverride("m-haiku");
+    const run = await plan(env, routine(env));
+    expect(run.caps.effectiveModel).toBeUndefined();
+    expect(run.caps.modelChain).toEqual([undefined]);
+  });
+
+  it("does NOT fall back on a non-retryable error even when the chain has a default to fall back on", async () => {
     const env = setup();
     const { client, requests } = fakeClient([() => new PiGatewayError("bad_request", { status: 400, code: "invalid_input" })]);
     await expect(

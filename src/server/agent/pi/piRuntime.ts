@@ -10,6 +10,7 @@ import type { AgentRequest, AppConfig } from "../../types.js";
 import type { Store } from "../../store.js";
 import { McpRunRegistry } from "../../mcpHttp/endpoint.js";
 import { PI_USER_ID_PATTERN, createPiResponsesClient, type PiResponsesClient } from "./responsesClient.js";
+import { createPiModelCatalog, type PiModelCatalog } from "./modelCatalog.js";
 import {
   deletePiUserWorkspace,
   ensurePiConversationDir,
@@ -178,22 +179,27 @@ export interface PiServices {
   registry: McpRunRegistry;
   /** Null when the runtime is not configured (the `local` stub). */
   client: PiResponsesClient | null;
+  /** pi-gateway's live model list over `client` (always empty on the `local` stub). Tests may replace it. */
+  models: PiModelCatalog;
 }
 
 const services = new WeakMap<Store, PiServices>();
 
 /**
- * The run-token registry and gateway client for one app instance, keyed by its
- * Store (one per `createServices`): `createApp` mounts the `/mcp` router on the
- * same registry the runner registers tokens in, without threading it through
- * every `runAgentStream` caller.
+ * The run-token registry, gateway client and model catalog for one app
+ * instance, keyed by its Store (one per `createServices`): `createApp` mounts
+ * the `/mcp` router on the same registry the runner registers tokens in, and
+ * every route and run reads the same cached model list, without threading them
+ * through every `runAgentStream` caller.
  */
 export function piServicesFor(store: Store, config: AppConfig): PiServices {
   let entry = services.get(store);
   if (!entry) {
+    const client = config.pi ? createPiResponsesClient({ baseUrl: config.pi.gatewayUrl, serviceKey: config.pi.apiKey }) : null;
     entry = {
       registry: new McpRunRegistry(),
-      client: config.pi ? createPiResponsesClient({ baseUrl: config.pi.gatewayUrl, serviceKey: config.pi.apiKey }) : null,
+      client,
+      models: createPiModelCatalog(client),
     };
     services.set(store, entry);
   }

@@ -80,7 +80,8 @@ async function mockApp(page: Page): Promise<void> {
         signupMode: "open",
         confluenceConfigured: false,
         modelSelection: {
-          tiers: [{ id: "default", label: "기본", description: "균형", model: null }],
+          models: [{ id: "pi/default-model", server: null, vision: true }],
+          defaultVision: true,
         },
         effortSelection: {
           levels: [{ id: "high", label: "높음", description: "기본 강도" }],

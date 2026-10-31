@@ -140,7 +140,6 @@ async function boot() {
     pi: {
       gatewayUrl: "http://pi.invalid",
       apiKey: "k",
-      modelMap: {},
       deckSandbox: false,
       workspacesDir: path.join(tempDir, "pi-ws"),
     },

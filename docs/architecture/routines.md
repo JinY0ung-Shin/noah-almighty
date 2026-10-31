@@ -25,19 +25,20 @@
   + avatar plugins + the personal knowledge-repo roots. Both `routes/chat.ts` and `scheduler.ts` call
   it, so they can't drift; `local` runtime returns `[]`. On pi the runner syncs those roots into the owner's
   sandbox (`materializePiSkills`, [`pi-runtime.md`](pi-runtime.md) "Skills").
-- **Routines fall back down the model tier chain on transient failures.** The scheduler sets
-  `AgentRequest.modelFallback: true` (routines ONLY — headless, no live stream; chat never sets it).
-  `buildRunCapabilities` builds a chain from the resolved model DOWN the tier order (`buildModelFallbackChain`:
-  opus→sonnet→haiku; a concrete admin-override id → [id, sonnet, haiku]), each tier mapped to a pi model
-  through `PI_MODEL_MAP`, and `runPiAgent` moves to the next entry — in a FRESH pi session (a routine has no
-  history to lose) — when the attempt fails transiently (a failed pi response other than a 500, or a
-  retryable gateway error; never on abort; a busy gateway at stream open is retried with backoff first).
+- **Routines retry ONCE on pi-gateway's default model on transient failures.** The scheduler sets
+  `AgentRequest.modelFallback: true` (unattended runs ONLY — routines, the task API, consultations; headless or
+  no live viewer; interactive chat never sets it). `buildRunCapabilities` builds the chain `[resolved model,
+  pi's default]` (a run already on the default gets ONE attempt — retrying the model that just failed is no
+  fallback; [`pi-runtime.md`](pi-runtime.md) "Models"), and `runPiAgent` moves to the default — in a FRESH pi
+  session (a routine has no history to lose) — when the attempt fails transiently (a failed pi response other
+  than a 500, or a retryable gateway error; never on abort; a busy gateway at stream open is retried with
+  backoff first).
   In-band error *results* (e.g. `error_max_turns`) don't fall back. The completed-run log carries
   `model` + `modelFellBack`.
 - **A routine has a HARD wall-clock deadline (default 30 min), and it is the budget for the WHOLE run** —
   `config.routineRunTimeoutMs` (env `ROUTINE_RUN_TIMEOUT_MINUTES`, clamped to a 1-minute floor; `0` does
   NOT disable it, unlike `PLUGIN_AUTO_REFRESH_MINUTES`), armed by one `AbortController` created per run
-  OUTSIDE the runner. So all model-fallback attempts (opus→sonnet→haiku) plus the lost-session heal SHARE
+  OUTSIDE the runner. So both model attempts (the pick, then pi's default) plus the lost-session heal SHARE
   that budget; a slow first attempt starves the rest of the chain. There is no Noah-side turn cap any more
   (`MAX_TURNS` left with the SDK runner); pi's own tool-call limit ends a turn as `error_max_turns`.
 - **The deadline doubles as the max hang of the manual-run HTTP request.** `POST /api/me/routines/:id/run`

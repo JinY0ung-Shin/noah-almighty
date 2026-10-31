@@ -1,6 +1,6 @@
 /**
  * Registry of reasoning EFFORT levels a user can pick per conversation in the chat
- * composer, alongside the model tier. Each `id` is passed to pi as the
+ * composer, alongside the model. Each `id` is passed to pi as the
  * response's `reasoningEffort`, which guides how much thinking/reasoning the
  * model applies to the turn; pi fixes it per session, so a change starts a new
  * session from the text history.
@@ -10,7 +10,7 @@
  * `EffortLevel`); what a model does with a level it does not support is pi's
  * call — no per-model gating here.
  *
- * Effort is INDEPENDENT of the model tier.
+ * Effort is INDEPENDENT of the model.
  *
  * `label`/`description` are user-facing, so they are KOREAN (matching the
  * project's language split: user strings Korean, stable `id`s never localized).
@@ -18,8 +18,8 @@
  * the same labelKo/labelEn split `mcpToolGroups.ts` uses, so a Korean string
  * never leaks into the agent's English self-state.
  * This module is intentionally dependency-free so BOTH the server and the Svelte
- * client can import it (it is listed in `tsconfig.client.json` includes), mirroring
- * `modelTiers.ts` — the composer renders the same registry, avoiding drift.
+ * client can import it (it is listed in `tsconfig.client.json` includes) — the
+ * composer renders the same registry, avoiding drift.
  */
 export interface EffortLevel {
   /** Effort id passed to pi as `reasoningEffort`. */

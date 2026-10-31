@@ -253,7 +253,6 @@ describe.skipIf(!LIVE)("runPiAgent live (e2e instance)", () => {
         gatewayUrl: env.PI_E2E_URL!,
         apiKey: env.PI_E2E_API_KEY!,
         ...(env.PI_E2E_WORKSPACES ? { workspacesDir: env.PI_E2E_WORKSPACES } : {}),
-        modelMap: { opus: { model: "fake-model", contextWindow: 131072 } },
         deckSandbox: false,
       },
     });

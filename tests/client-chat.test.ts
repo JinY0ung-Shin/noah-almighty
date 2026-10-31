@@ -1212,7 +1212,7 @@ describe("opening a seeded or brand-new chat", () => {
               response: { kind: "text", runtime: "claude", text: "", usage: { inputTokens: 0, outputTokens: 0 } },
             },
           ],
-          selectedModel: "opus",
+          selectedModel: "deepseek/v3",
           selectedEffort: "high",
           selectedMcpToolGroups: ["git_repo", "web"],
           // The same artifact is persisted once per version; only the last entry
@@ -1238,7 +1238,7 @@ describe("opening a seeded or brand-new chat", () => {
     expect(s.currentAvatar?.id).toBe("av9");
     expect(added).toMatchObject({
       conversationId: "c9",
-      modelTier: "opus",
+      model: "deepseek/v3",
       effort: "high",
       mcpToolGroups: ["git_repo", "web"],
       sideTab: null,
@@ -1323,6 +1323,41 @@ describe("sendMessage: slash literals, staged images, failure modes", () => {
 
     await sendMessage(id, "/summarize");
     expect(bodies[1].message).toBe("/summarize");
+  });
+
+  it("sends the pane's pi model, and \"\" (pi's default) for a pick pi no longer offers", async () => {
+    const id = seedPane({ model: "deepseek/v3" });
+    const sentModels: unknown[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        sentModels.push(body(init).model);
+        return sseRes(doneWith("ok"));
+      }
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    const catalog = (ids: string[]) =>
+      updateState((s) => {
+        s.bootstrap = {
+          needsSetup: false,
+          githubHost: "",
+          signupMode: "open",
+          confluenceConfigured: false,
+          modelSelection: { models: ids.map((m) => ({ id: m, server: null, vision: true })) },
+        };
+      });
+
+    catalog(["deepseek/v3", "qwen/coder"]);
+    await sendMessage(id, "하나");
+    // A legacy tier id is not a pi model: it runs on the default, never on a guess.
+    updateState((s) => void (s.chatPanes.find((p) => p.id === id)!.model = "opus"));
+    await sendMessage(id, "둘");
+    // No catalog to judge by (pi unreachable at page load): the stored pick passes through.
+    catalog([]);
+    await sendMessage(id, "셋");
+    updateState((s) => void (s.chatPanes.find((p) => p.id === id)!.model = undefined));
+    await sendMessage(id, "넷");
+    expect(sentModels).toEqual(["deepseek/v3", "", "opus", ""]);
   });
 
   it("falls back to the status code when a failed send carries no readable message", async () => {
@@ -3640,7 +3675,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
   it("keeps a model/effort/tool pick made WHILE a regenerate run streamed through the run-end re-read", async () => {
     const id = seedPane({
       conversationId: "c",
-      modelTier: "opus",
+      model: "deepseek/v3",
       effort: "high",
       messages: [row("u1", "user", "질문"), row("a1", "assistant", "예전 답")],
     });
@@ -3659,7 +3694,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
         return jsonRes({
           messages: [row("u1", "user", "질문"), row("n1", "assistant", "새 답")],
           canvases: [],
-          selectedModel: "opus",
+          selectedModel: "deepseek/v3",
           selectedEffort: "high",
           selectedMcpToolGroups: ["system"],
         });
@@ -3671,7 +3706,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     // Picked mid-run: "다음 메시지부터 적용됩니다".
     updateState((s) => {
       const target = s.chatPanes.find((p) => p.id === id)!;
-      target.modelTier = "haiku";
+      target.model = "qwen/coder";
       target.effort = "low";
       target.mcpToolGroups = ["system", "browser"] as any;
     });
@@ -3682,14 +3717,14 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     // The transcript was re-read …
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "n1"]);
     // … and every selection is still the viewer's.
-    expect(pane(id)).toMatchObject({ modelTier: "haiku", effort: "low" });
+    expect(pane(id)).toMatchObject({ model: "qwen/coder", effort: "low" });
     expect(pane(id).mcpToolGroups).toEqual(["system", "browser"]);
   });
 
   it("keeps a pick made before an edit the server refused, through the refusal re-read", async () => {
     const id = seedPane({
       conversationId: "c",
-      modelTier: "haiku",
+      model: "qwen/coder",
       messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
     });
     useFetch((url) => {
@@ -3699,7 +3734,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
         return jsonRes({
           messages: [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "다른 탭")],
           canvases: [],
-          selectedModel: "opus",
+          selectedModel: "deepseek/v3",
         });
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
@@ -3710,7 +3745,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     await confirmNext(true);
     await sending;
     await waitFor(() => pane(id).messages.length === 3);
-    expect(pane(id).modelTier).toBe("haiku");
+    expect(pane(id).model).toBe("qwen/coder");
     expect(pane(id).rewindEdit).toEqual({ messageId: "u1", draft: "고친 질문" });
   });
 

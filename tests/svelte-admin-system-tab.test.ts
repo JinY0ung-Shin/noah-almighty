@@ -5,7 +5,7 @@
 //    load()'s continuation reads them — the f168116 guards skipped that first
 //    seed, leaving hexPolicy = {} so the tab crashed blank on
 //    hexPolicy[role.key][tool.name] and the saved model override rendered as
-//    an empty input whose save button would DELETE the override.
+//    an empty select whose save button would DELETE the override.
 // 2. A manual 새로고침 must still preserve unsaved edits (f168116's intent).
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,8 +24,13 @@ function json(body: unknown, status = 200): Response {
 // policy key never matches the unseeded (empty) checkbox matrix.
 const system = {
   agentRuntime: "pi",
-  piModelMap: { fable: "pi-fable", opus: "pi-opus", sonnet: "pi-sonnet", haiku: "pi-haiku" },
-  modelOverride: "opus",
+  piModels: [
+    { id: "deepseek/v3", server: "vllm-a" },
+    { id: "qwen/coder", server: null },
+  ],
+  modelOverride: "deepseek/v3",
+  modelOverrideIgnored: false,
+  modelOverrideChoices: ["deepseek/v3", "qwen/coder"],
   observedModel: null,
   confluenceConfigured: false,
   visionDefault: true,
@@ -74,6 +79,12 @@ async function openSystemTab(): Promise<void> {
   await screen.findByText("시스템 정보");
 }
 
+function modelSelect(): HTMLSelectElement {
+  const el = document.querySelector<HTMLSelectElement>('select[name="model"]');
+  expect(el).toBeTruthy();
+  return el!;
+}
+
 describe("admin 시스템 tab seeding", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -88,20 +99,20 @@ describe("admin 시스템 tab seeding", () => {
     expect((screen.getByLabelText("같은 그룹원 원격 명령 실행") as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText("일반 동료 원격 파일 읽기") as HTMLInputElement).checked).toBe(false);
 
-    // The saved model override seeds the input — an empty input here offers a
+    // The saved model override seeds the select — an empty value here offers a
     // "기본값 사용" save that would silently delete the stored override.
-    const modelInput = screen.getByPlaceholderText("opus (비우면 기본 티어)") as HTMLInputElement;
-    expect(modelInput.value).toBe("opus");
+    expect(modelSelect().value).toBe("deepseek/v3");
+    expect([...modelSelect().options].map((o) => o.value)).toEqual(["", "deepseek/v3", "qwen/coder"]);
   });
 
-  it("shows the pi runtime and its tier → model map, and nothing of the retired SDK setup", async () => {
+  it("shows the pi runtime and pi's live model list, and nothing of the retired SDK setup", async () => {
     await openSystemTab();
 
     expect(screen.getByText("pi-gateway")).toBeTruthy();
-    expect(screen.getByText("모델 매핑")).toBeTruthy();
-    expect(screen.getByTitle("Opus 티어 → pi 모델").textContent).toContain("pi-opus");
-    // The per-tier vision rows name the mapped pi model too.
-    expect(screen.getAllByText("pi-haiku").length).toBeGreaterThan(0);
+    expect(screen.getByText("pi 모델")).toBeTruthy();
+    expect(screen.getByTitle("제공: vllm-a").textContent).toBe("deepseek/v3");
+    // The per-model vision rows are keyed by pi model id.
+    expect(screen.getByLabelText("qwen/coder 이미지 입력 지원")).toBeTruthy();
     expect(screen.getByText("기본 스킬 플러그인에서 찾은 스킬 1개입니다.")).toBeTruthy();
     const text = document.body.textContent || "";
     for (const retired of ["구독 로그인", "setup-token", "인증 방식", "읽기 전용 도구", "ANTHROPIC", "SDK", "CLI v"]) {
@@ -112,11 +123,21 @@ describe("admin 시스템 tab seeding", () => {
     expect(calls.some((c) => c.url.includes("/api/admin/claude-token"))).toBe(false);
   });
 
-  it("says when there is no model map (the local stub)", async () => {
-    stubAdminFetch({ agentRuntime: "local", piModelMap: {} });
+  it("says when there are no models (the local stub)", async () => {
+    stubAdminFetch({ agentRuntime: "local", piModels: [], modelOverride: null, modelOverrideChoices: [] });
     await openSystemTab();
     expect(screen.getByText("로컬 스텁")).toBeTruthy();
     expect(screen.getByText("없음 (로컬 스텁)")).toBeTruthy();
+  });
+
+  it("shows a stored override pi no longer offers as ignored, without pretending it is selectable", async () => {
+    stubAdminFetch({ modelOverride: "opus", modelOverrideIgnored: true });
+    await openSystemTab();
+    expect(modelSelect().value).toBe("opus");
+    const stale = [...modelSelect().options].find((o) => o.value === "opus")!;
+    expect(stale.disabled).toBe(true);
+    expect(stale.textContent).toContain("현재 제공되지 않음");
+    expect(document.getElementById("admin-model-status")?.textContent).toContain("무시하고 기본 모델을 사용 중");
   });
 
   it("keeps unsaved policy edits across a manual 새로고침", async () => {

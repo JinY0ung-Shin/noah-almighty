@@ -15,7 +15,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createApp, createServices } from "../src/server/app.js";
-import { loadConfig, parsePiModelMap } from "../src/server/config.js";
+import { loadConfig } from "../src/server/config.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import type { AgentRequest, PiRuntimeConfig } from "../src/server/types.js";
 import type { AgentEvents } from "../src/server/agent/events.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
@@ -28,6 +29,7 @@ import {
   piEphemeralRunKey,
   piRunPrincipal,
   piRunWorkspace,
+  piServicesFor,
   sweepPiConsultationSandboxes,
 } from "../src/server/agent/pi/piRuntime.js";
 import { askAvatar } from "../src/server/agent/avatarAsk.js";
@@ -99,7 +101,6 @@ function questionTurn(id: string, callId: string): PiStreamEvent[] {
 const PI: PiRuntimeConfig = {
   gatewayUrl: "http://pi.invalid",
   apiKey: "service-key",
-  modelMap: { opus: { model: "m-opus", contextWindow: 200_000 }, sonnet: { model: "m-sonnet" } },
   deckSandbox: false,
 };
 
@@ -117,6 +118,10 @@ function setup() {
     pi: { ...PI, workspacesDir: path.join(dir(), "ws") },
   });
   const { store, config } = services;
+  // The models the fake pi-gateway offers (`GET /v1/models`).
+  piServicesFor(store, config).models = createPiModelCatalog({
+    listModels: async () => [{ id: "m-opus" }, { id: "m-sonnet" }],
+  });
   const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
   store.touchConversation(owner.id, "conv-1", owner.id, "hello");
   const base = (over: Partial<AgentRequest> = {}): AgentRequest => ({
@@ -296,7 +301,7 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     expect(req!.instructions).toContain("this session is READ-ONLY there");
     expect(req!.instructions).toContain("Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore).");
     expect(req!.instructions).not.toContain("`bash` (run programs");
-    expect(store.getConversationPiSessionProfile(mate.id, "conv-m", "m1")).toBe("m-opus|");
+    expect(store.getConversationPiSessionProfile(mate.id, "conv-m", "m1")).toBe("|");
     // The continued session already is read_only; only a new session carries the flag.
     await turn("resp_m1_1");
     expect(requests[1]!.previousResponseId).toBe("resp_m1_1");
@@ -325,17 +330,18 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
 });
 
 describe("runPiAgent", () => {
-  it("first turn: frozen instructions, model + context window from PI_MODEL_MAP, session id doubles as the resume point", async () => {
+  it("first turn: frozen instructions, no pick → pi's default model (no model, no context window), session id doubles as the resume point", async () => {
     const { store, config, owner, base } = setup();
     const { client, requests } = fakeClient([() => textTurn("resp_s1_1", "Hello!")]);
     const { events, calls } = recorder({ steers: new SteerChannel() });
     const response = await runPiAgent(base(), [], config, store, events, new AbortController(), { client });
 
     expect(response).toMatchObject({ runtime: "pi", text: "Hello!" });
-    expect(response.usage).toMatchObject({ inputTokens: 120, outputTokens: 7, contextWindow: 200_000 });
+    expect(response.usage).toMatchObject({ outputTokens: 7 });
+    expect(response.usage).not.toHaveProperty("contextWindow");
     const [req] = requests;
     expect(req!.user).toBe(owner.id);
-    expect(req!.model).toBe("m-opus");
+    expect(req!.model).toBeUndefined();
     expect(req!.previousResponseId).toBeUndefined();
     expect(req!.headers?.[PI_RUN_TOKEN_HEADER]).toMatch(/^nrt_/);
     // The pi append: runtime facts + the conversation folder, and no per-turn lines.
@@ -354,7 +360,7 @@ describe("runPiAgent", () => {
     expect(of(calls, "turnResult")).toEqual([expect.objectContaining({ text: "Hello!", steerPending: false })]);
     // Frozen per conversation (D2), and the session's profile recorded (P3).
     expect(store.ensureConversationPiInstructions(owner.id, "conv-1", () => "never")).toBe(req!.instructions);
-    expect(store.getConversationPiSessionProfile(owner.id, "conv-1", "s1")).toBe("m-opus|");
+    expect(store.getConversationPiSessionProfile(owner.id, "conv-1", "s1")).toBe("|");
     // The conversation folder exists on the host side, 0700.
     const hostDir = piWorkspaceFor(config, owner.id, "conv-1").hostConversationDir!;
     expect(fs.statSync(hostDir).mode & 0o777).toBe(0o700);
@@ -447,7 +453,7 @@ describe("runPiAgent", () => {
     const { events, calls } = recorder();
     await runPiAgent(
       base({
-        modelTier: "sonnet",
+        model: "m-sonnet",
         resumeSessionId: "resp_s1_4",
         conversationHistory: [
           { role: "user", content: "q1" },
@@ -690,14 +696,14 @@ describe("runPiAgent", () => {
     expect(follow.requests).toHaveLength(2);
   });
 
-  it("walks the model fallback chain with a fresh session per attempt", async () => {
+  it("falls back once onto pi-gateway's default model with a fresh session", async () => {
     const { store, config, base } = setup();
     const { client, requests } = fakeClient([
       () => new PiGatewayError("unavailable", { status: 503, retryable: true }),
-      () => textTurn("resp_f_1", "from sonnet"),
+      () => textTurn("resp_f_1", "from the default"),
     ]);
     const response = await runPiAgent(
-      base({ headless: true, allowHeadlessTools: true, modelFallback: true }),
+      base({ headless: true, allowHeadlessTools: true, modelFallback: true, model: "m-opus" }),
       [],
       config,
       store,
@@ -705,9 +711,29 @@ describe("runPiAgent", () => {
       undefined,
       { client, retry: { attempts: 1 } },
     );
-    expect(response.text).toBe("from sonnet");
-    expect(requests.map((r) => r.model)).toEqual(["m-opus", "m-sonnet"]);
+    expect(response.text).toBe("from the default");
+    expect(requests.map((r) => r.model)).toEqual(["m-opus", undefined]);
     expect(requests.every((r) => r.instructions && !r.previousResponseId)).toBe(true);
+  });
+
+  it("never falls back onto the model it just failed on: a run already on pi's default gets one attempt", async () => {
+    const { store, config, base } = setup();
+    const { client, requests } = fakeClient([
+      () => new PiGatewayError("unavailable", { status: 503, retryable: true }),
+      () => textTurn("resp_d_1", "same default model again"),
+    ]);
+    const outcome = await runPiAgent(
+      // A legacy tier alias pi does not offer reads as the default.
+      base({ headless: true, allowHeadlessTools: true, modelFallback: true, model: "opus" }),
+      [],
+      config,
+      store,
+      undefined,
+      undefined,
+      { client, retry: { attempts: 1 } },
+    ).catch((error: unknown) => error);
+    expect(requests.map((r) => r.model)).toEqual([undefined]);
+    expect(outcome).toBeInstanceOf(Error);
   });
 
   it("serves EVERY Noah server to the broker: the full catalog listed, calls gated per run", async () => {
@@ -933,25 +959,6 @@ describe("pi prompt variant", () => {
 // ---- config, app mount, registration script ----------------------------------------------------
 
 describe("pi config", () => {
-  it("parses and validates PI_MODEL_MAP", () => {
-    expect(
-      parsePiModelMap('{"fable":"m0","opus":"m1","sonnet":{"model":"m2","contextWindow":1000},"haiku":"m3","pinned-id":"m4"}'),
-    ).toEqual({
-      fable: { model: "m0" },
-      opus: { model: "m1" },
-      sonnet: { model: "m2", contextWindow: 1000 },
-      haiku: { model: "m3" },
-      "pinned-id": { model: "m4" },
-    });
-    // Required, and the ONLY tier → model source: every composer tier must be mapped.
-    expect(() => parsePiModelMap("")).toThrow(/requires PI_MODEL_MAP/);
-    expect(() => parsePiModelMap('{"opus":"m1"}')).toThrow(/missing: fable, sonnet, haiku/);
-    expect(() => parsePiModelMap("[1]")).toThrow(/JSON object/);
-    expect(() => parsePiModelMap("{oops")).toThrow(/JSON object/);
-    expect(() => parsePiModelMap('{"opus":{"model":"m","contextWindow":-1}}')).toThrow(/PI_MODEL_MAP\["opus"\]/);
-    expect(() => parsePiModelMap('{"opus":""}')).toThrow(/PI_MODEL_MAP\["opus"\]/);
-  });
-
   it("AGENT_RUNTIME=pi requires the gateway URL and service key", () => {
     const saved = { ...process.env };
     try {
@@ -963,16 +970,14 @@ describe("pi config", () => {
       process.env.PI_GATEWAY_API_KEY = "k";
       process.env.PI_WORKSPACES_DIR = "/srv/pi/workspaces";
       process.env.PI_DECK_SANDBOX = "true";
-      delete process.env.PI_MODEL_MAP;
-      expect(() => loadConfig({ dataDir: dir() })).toThrow(/requires PI_MODEL_MAP/);
-      process.env.PI_MODEL_MAP = '{"fable":"f","opus":"anthropic/claude-opus","sonnet":"s","haiku":"h"}';
+      // A leftover PI_MODEL_MAP — even a malformed one — no longer affects the config.
+      process.env.PI_MODEL_MAP = "{oops";
       const config = loadConfig({ dataDir: dir() });
       expect(config.agentRuntime).toBe("pi");
       expect(config.pi).toEqual({
         gatewayUrl: "http://pi:8080",
         apiKey: "k",
         workspacesDir: "/srv/pi/workspaces",
-        modelMap: { fable: { model: "f" }, opus: { model: "anthropic/claude-opus" }, sonnet: { model: "s" }, haiku: { model: "h" } },
         deckSandbox: true,
       });
       // pi is the default runtime.
@@ -992,13 +997,11 @@ describe("pi config", () => {
 });
 
 describe("PI_GATEWAY_API_KEY_FILE", () => {
-  const MAP = '{"fable":"f","opus":"o","sonnet":"s","haiku":"h"}';
   function withPiEnv(vars: Record<string, string | undefined>, fn: () => void) {
     const saved = { ...process.env };
     try {
       process.env.AGENT_RUNTIME = "pi";
       process.env.PI_GATEWAY_URL = "http://gateway:8080";
-      process.env.PI_MODEL_MAP = MAP;
       delete process.env.PI_GATEWAY_API_KEY;
       delete process.env.PI_GATEWAY_API_KEY_FILE;
       for (const [name, value] of Object.entries(vars)) {

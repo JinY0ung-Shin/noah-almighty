@@ -35,6 +35,8 @@ import type { PiSkillPlan } from "./pi/piSkills.js";
 import type { PiAsyncJobs } from "./pi/asyncJobs.js";
 import { planPiMcpProxies, type PiMcpProxyPlan } from "./pi/mcpProxies.js";
 import { PI_NOAH_SERVER_NAMES } from "./pi/mcpCatalog.js";
+import { catalogModel, catalogModelIds } from "./pi/modelCatalog.js";
+import { piServicesFor } from "./pi/piRuntime.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
 import { normalizeGitRepoName } from "../gitRepos.js";
 import { visionForModel } from "../modelVisionPolicy.js";
@@ -53,11 +55,6 @@ import {
   viewerClassForAgentRequest,
   type HexSshViewerClass,
 } from "../hexSshPolicy.js";
-import {
-  isModelTier,
-  DEFAULT_MODEL_TIER,
-  MODEL_TIER_IDS,
-} from "../modelTiers.js";
 import { effectiveModelOverride } from "../modelOverride.js";
 import { isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
@@ -231,23 +228,6 @@ export function conversationScratchDir(
 }
 
 /**
- * The ordered list of models to try for a run. Walks DOWN the tier order
- * (opus→sonnet→haiku) starting from the resolved model, so a transient failure
- * on the primary falls back to a lighter tier. A concrete (non-tier) primary —
- * e.g. an admin override pinned to a specific model id — is tried first, then
- * the lower tiers. Callers gate this on `modelFallback` + no env pin.
- */
-export function buildModelFallbackChain(primary: string): string[] {
-  const idx = MODEL_TIER_IDS.indexOf(primary);
-  if (idx >= 0) {
-    return MODEL_TIER_IDS.slice(idx);
-  }
-  return [primary, "sonnet", "haiku"].filter(
-    (model, i, arr) => arr.indexOf(model) === i,
-  );
-}
-
-/**
  * What the pi runner hands the plan (docs/architecture/pi-runtime.md). Servers
  * that exist only as processes or remote endpoints (hex-ssh, plugin
  * `.mcp.json`, admin 공용 MCP) are relayed by Noah as an MCP client
@@ -416,30 +396,30 @@ export async function buildRunCapabilities(
   const browserToolsEnabled = familyPlan.browser;
   const systemToolsEnabled = familyPlan.system;
   const registeredMcpToolGroups = familyPlan.registered;
-  // Effective model: the user's per-conversation tier pick (mapped to a pi model
-  // by the operator's PI_MODEL_MAP), otherwise the admin-selected override,
-  // otherwise the DEFAULT tier (opus). Unknown tiers are ignored so a
-  // stale/garbage value can never become a model id — and so is a stored
-  // override that is neither a tier nor a PI_MODEL_MAP key (modelOverride.ts).
-  const userModelTier = isModelTier(request.modelTier)
-    ? request.modelTier
-    : undefined;
+  // Effective model: the user's per-conversation pick, otherwise the
+  // admin-selected override, otherwise pi-gateway's DEFAULT model (undefined —
+  // no `model` is sent). Each must be a model pi-gateway CURRENTLY offers
+  // (its live list, `pi/modelCatalog.ts`): a stale pick, a legacy tier alias
+  // or an override pi dropped reads as unset, so a garbage value can never
+  // become a model id (modelOverride.ts).
+  const piModels = await piServicesFor(store, config).models.list();
+  const userModel = catalogModel(piModels, request.model);
   // User-chosen reasoning effort for this conversation. Unknown/unset → no
   // effort is sent, so pi applies its own default.
   const userEffort = isEffortLevel(request.effort) ? request.effort : undefined;
-  const effectiveModel =
-    userModelTier ??
-    effectiveModelOverride(store, config) ??
-    DEFAULT_MODEL_TIER;
+  const effectiveModel: string | undefined =
+    userModel ?? effectiveModelOverride(store, catalogModelIds(piModels)) ?? undefined;
   // Model fallback chain (unattended runs — `request.modelFallback`): on a
-  // transient model/server error, retry down the tier order from the resolved
-  // model, each tier through PI_MODEL_MAP and on a fresh pi session. Otherwise
-  // the chain is just the single resolved model (chat behavior).
-  const modelChain = request.modelFallback ? buildModelFallbackChain(effectiveModel) : [effectiveModel];
-  // Effective vision for the model THIS run resolved to: the admin per-tier
-  // policy for tier aliases, the deployment default (MODEL_VISION) otherwise.
-  // Drives the no-vision prompt section, the Confluence image-block gate, and
-  // describe_system.
+  // transient model/server error, retry ONCE on pi-gateway's default model in a
+  // fresh pi session. A run already on the default gets one attempt (retrying
+  // the model that just failed is no fallback). Otherwise the chain is just the
+  // single resolved model (chat behavior).
+  const modelChain: (string | undefined)[] =
+    request.modelFallback && effectiveModel !== undefined ? [effectiveModel, undefined] : [effectiveModel];
+  // Effective vision for the model THIS run resolved to: the admin per-model
+  // policy, the deployment default (MODEL_VISION) for an unset model and for
+  // pi-gateway's default model. Drives the no-vision prompt section, the
+  // Confluence image-block gate, and describe_system.
   const runVisionEnabled = visionForModel(
     effectiveModel,
     store.getModelVisionPolicy(),
@@ -460,7 +440,7 @@ export async function buildRunCapabilities(
       hexSshAllowedToolCount: hexSshAllowedTools.length,
       enabledMcpToolGroups,
       adminBlockedMcpToolGroups,
-      model: effectiveModel,
+      model: effectiveModel ?? null,
     },
     "agent run started",
   );
@@ -771,7 +751,7 @@ export async function buildRunCapabilities(
     owner,
     viewerIsOwner: ownerToolAccess,
     config,
-    selectedModelTier: userModelTier,
+    selectedModel: userModel,
     selectedEffort: userEffort,
     // The REGISTERED set (not the raw selection).
     enabledMcpToolGroups: registeredMcpToolGroups,
@@ -1222,7 +1202,7 @@ export async function buildRunCapabilities(
     injectableSecretEnv,
     browserSecretPolicies,
     effectiveModel,
-    userModelTier,
+    userModel,
     userEffort,
     modelChain,
     runVisionEnabled,

@@ -29,7 +29,6 @@ import { loadConfig } from "../src/server/config.js";
 import { applyCustomGithubCa } from "../src/server/tlsCa.js";
 import { loadDotEnv } from "../src/server/loadEnv.js";
 import { createRateLimiter } from "../src/server/rateLimit.js";
-import { MODEL_TIERS, MODEL_TIER_IDS, isModelTier } from "../src/server/modelTiers.js";
 import {
   EXTERNAL_GIT_TOKEN_SECRET_NAME,
   INTERNAL_GIT_TOKEN_SECRET_NAME,
@@ -196,31 +195,6 @@ describe("routine concurrency config", () => {
         expect(load().routineMaxConcurrentRunsPerUser).toBe(2);
       });
     }
-  });
-});
-
-describe("model tiers", () => {
-  it("registers the fable/opus/sonnet/haiku aliases with user-facing labels", () => {
-    expect(MODEL_TIER_IDS).toEqual(["fable", "opus", "sonnet", "haiku"]);
-    for (const tier of MODEL_TIERS) {
-      expect(tier.label.trim()).not.toBe("");
-      expect(tier.description.trim()).not.toBe("");
-    }
-  });
-
-  it("isModelTier accepts only known aliases", () => {
-    expect(isModelTier("fable")).toBe(true);
-    expect(isModelTier("opus")).toBe(true);
-    expect(isModelTier("sonnet")).toBe(true);
-    expect(isModelTier("haiku")).toBe(true);
-    // Full model ids, empty, garbage, and non-strings are rejected — the chat
-    // route falls those back to the server default so they never reach the runtime.
-    expect(isModelTier("claude-opus-4-8")).toBe(false);
-    expect(isModelTier("")).toBe(false);
-    expect(isModelTier("gpt-4")).toBe(false);
-    expect(isModelTier(undefined)).toBe(false);
-    expect(isModelTier(null)).toBe(false);
-    expect(isModelTier(42)).toBe(false);
   });
 });
 

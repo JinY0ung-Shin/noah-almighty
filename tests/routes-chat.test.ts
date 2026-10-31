@@ -104,6 +104,8 @@ import { acquireActiveRepo, releaseActiveRepo } from "../src/server/activeRepoLo
 import { buildUserPrompt } from "../src/server/agent/promptBuilder.js";
 import { gitRepoClonePath } from "../src/server/gitRepos.js";
 import { SERVER_WORKSPACE_COPY_DIRS, workspaceDirFor } from "../src/server/workspace.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 
 let tempDir: string;
 const getTempDir = withTempDir("routes-chat", () => {
@@ -120,13 +122,19 @@ const getTempDir = withTempDir("routes-chat", () => {
 const PI_CONFIG: NonNullable<AppConfig["pi"]> = {
   gatewayUrl: "http://pi.invalid",
   apiKey: "test-key",
-  modelMap: {},
   deckSandbox: false,
 };
 
 function boot() {
   const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
   return { services, app: createApp(services), store: services.store, config: services.config };
+}
+
+/** pi-gateway offers exactly `ids` (`GET /v1/models`) to every route and run of `services`. */
+function offerModels(services: ReturnType<typeof createServices>, ids: string[]): void {
+  piServicesFor(services.store, services.config).models = createPiModelCatalog({
+    listModels: async () => ids.map((id) => ({ id })),
+  });
 }
 
 /** Extract the session cookie(s) from a signup response for raw-http reuse. */
@@ -635,13 +643,14 @@ describe("chat-stream request validation", () => {
     expect(stored?.attachments?.[0].kind).toBe("image");
   });
 
-  it("picks image content blocks vs staged files by the per-tier vision policy of this turn's model", async () => {
+  it("picks image content blocks vs staged files by the per-model vision policy of this turn's model", async () => {
     const services = createServices({
       dataDir: tempDir,
       agentRuntime: "pi",
       pi: PI_CONFIG,
       sessionSecret: "test",
     });
+    offerModels(services, ["sonnet", "opus"]);
     services.store.setModelVisionPolicy({ sonnet: false });
     const app = createApp(services);
     const owner = request.agent(app);
@@ -662,7 +671,7 @@ describe("chat-stream request validation", () => {
     expect(staged.startsWith(path.join(workspaceDirFor(services.config, ownerId, "conv-tv"), "attachments") + path.sep)).toBe(true);
     expect(fs.readFileSync(staged)).toEqual(PNG_BYTES);
 
-    // A vision tier (no explicit entry → inherits the on default) still feeds the
+    // A vision model (no explicit entry → inherits the on default) still feeds the
     // model image content blocks — AND stages the same upload as a workspace
     // file, so an image the avatar sees is also one it can place into a deck.
     await owner
@@ -683,6 +692,7 @@ describe("chat-stream request validation", () => {
 
   it("stages the anchor's images as files on a vision re-feed too (regenerate and edit-rewind)", async () => {
     const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
+    offerModels(services, ["sonnet", "opus"]);
     services.store.setModelVisionPolicy({ sonnet: false });
     const app = createApp(services);
     const owner = request.agent(app);
@@ -718,7 +728,7 @@ describe("chat-stream request validation", () => {
     expect(edit.images).toHaveLength(1);
     expect(edit.imageFiles).toEqual([{ path: staged, mediaType: "image/png", name: "shot.png" }]);
 
-    // A text-only tier re-feeds the SAME staged files and no image blocks.
+    // A text-only model re-feeds the SAME staged files and no image blocks.
     const replacement = services.store.listMessages(ownerId, "conv-rf").find((m) => m.role === "user")!;
     await owner
       .post("/api/chat/stream")
@@ -875,7 +885,8 @@ describe("per-conversation preferences persist + feed the agent", () => {
       })
       .expect(200);
 
-    expect(H.requests[0].modelTier).toBe("sonnet");
+    // The pick rides the run as sent; the run checks it against pi's list.
+    expect(H.requests[0].model).toBe("sonnet");
     expect(H.requests[0].effort).toBe("medium");
 
     const msgs = await owner.get("/api/messages?conversationId=conv-prefs").expect(200);
@@ -1517,7 +1528,8 @@ describe("chat error handling", () => {
   });
 
   it("nudges the user to switch models on a retryable failure, keeping the streamed partial + thinking", async () => {
-    const { store, app } = boot();
+    const { services, store, app } = boot();
+    offerModels(services, ["deepseek/v3", "qwen/coder", "glm-4"]);
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "err2").expect(201)).body.user.id as string;
     H.retryable = true;
@@ -1527,13 +1539,34 @@ describe("chat error handling", () => {
       throw new Error("overloaded");
     };
 
-    const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-err2", message: "가라" }).expect(200);
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-err2", message: "가라", model: "qwen/coder" })
+      .expect(200);
     const errData = parseSse(res.text).find((f) => f.event === "error")!.data as { error: string };
-    expect(errData.error).toContain("일시적으로"); // Korean model-switch nudge, not the raw runner error
+    // Korean model-switch nudge naming the failed model and the OTHER models pi offers.
+    expect(errData.error).toBe(
+      "지금 qwen/coder 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델(deepseek/v3, glm-4)로 바꿔 다시 시도해 보세요.",
+    );
 
     const assistant = store.listMessages(ownerId, "conv-err2").find((m) => m.role === "assistant")!;
     expect(assistant.content.startsWith("부분 결과")).toBe(true);
     expect(assistant.response?.thinking).toBe("생각");
+  });
+
+  it("names pi's default model in the nudge, and omits the list when pi offers no other model", async () => {
+    const { app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "err3").expect(201)).body.user.id as string;
+    H.retryable = true;
+    H.impl = async () => {
+      throw new Error("overloaded");
+    };
+    const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-err3", message: "가라" }).expect(200);
+    const errData = parseSse(res.text).find((f) => f.event === "error")!.data as { error: string };
+    expect(errData.error).toBe(
+      "지금 기본 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델로 바꿔 다시 시도해 보세요.",
+    );
   });
 });
 

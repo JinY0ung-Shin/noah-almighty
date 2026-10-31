@@ -225,8 +225,8 @@ export interface ChatPane {
    * serving URL (`/api/conversations/:id/images/:imageId`).
    */
   localImages?: Record<string, string>;
-  /** User-chosen model TIER alias for this conversation; "" / undefined = server default. */
-  modelTier?: string;
+  /** User-chosen pi model id for this conversation; "" / undefined = pi-gateway's default model. */
+  model?: string;
   /** User-chosen reasoning effort level for this conversation; "" / undefined = SDK default (high). */
   effort?: string;
   /** MCP tool groups enabled for this conversation; defaults to every group. */
@@ -341,6 +341,16 @@ export interface PromptRequest {
   data: any;
 }
 
+/** One model pi-gateway currently offers (`GET /api/bootstrap` → `modelSelection.models`). */
+export interface PiModelOption {
+  /** pi model id — the value stored per conversation / per user and sent to the server. */
+  id: string;
+  /** pi's `owned_by` (the serving backend), if reported. */
+  server: string | null;
+  /** Whether this model accepts image input (admin per-model policy ∘ MODEL_VISION). */
+  vision: boolean;
+}
+
 export interface BootstrapInfo {
   needsSetup: boolean;
   githubHost: string;
@@ -353,17 +363,13 @@ export interface BootstrapInfo {
    */
   visionEnabled?: boolean;
   /**
-   * Per-conversation model picker config: the selectable tiers. Optional for
-   * forward-compat with an older server that omits it.
+   * Per-conversation model picker config: pi-gateway's live model list. Empty
+   * under the local stub or when pi is unreachable (the picker is hidden).
+   * Optional for forward-compat with an older server that omits it.
    */
   modelSelection?: {
-    /** Each tier + the pi model id it maps to (`PI_MODEL_MAP`; null under the local stub). */
-    tiers: (import("../../../server/modelTiers").ModelTier & {
-      model: string | null;
-      /** Whether this tier's model accepts image input (admin per-tier policy). */
-      vision?: boolean;
-    })[];
-    /** Vision of the model used when the user picked no tier (admin override/default). */
+    models: PiModelOption[];
+    /** Vision of the model used when the user picked none (admin override/pi default). */
     defaultVision?: boolean;
   };
   /**

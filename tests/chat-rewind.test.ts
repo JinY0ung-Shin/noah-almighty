@@ -95,7 +95,6 @@ const PNG = Buffer.from(
 const PI_CONFIG: NonNullable<AppConfig["pi"]> = {
   gatewayUrl: "http://pi.invalid",
   apiKey: "test-key",
-  modelMap: {},
   deckSandbox: false,
 };
 

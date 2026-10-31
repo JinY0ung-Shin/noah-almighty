@@ -39,7 +39,6 @@ describe("placing an image file follows the run's read-only fact, on both metaco
       pi: {
         gatewayUrl: "http://pi.invalid",
         apiKey: "k",
-        modelMap: {},
         deckSandbox: false,
         workspacesDir: path.join(tempDir, "pi-ws"),
       },

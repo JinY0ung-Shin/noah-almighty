@@ -266,7 +266,7 @@ describe("prompt admin-disabled note", () => {
   });
 });
 
-// ---- per-model-tier vision policy (modelVisionPolicy.ts) ----
+// ---- per-model vision policy (modelVisionPolicy.ts) ----
 import {
   normalizeModelVisionPolicy,
   parseModelVisionPolicy,
@@ -274,28 +274,32 @@ import {
 } from "../src/server/modelVisionPolicy.js";
 
 describe("model vision policy", () => {
-  it("normalize keeps only known tiers with strict-boolean values", () => {
+  it("normalize keeps model-id keys with strict-boolean values", () => {
     expect(normalizeModelVisionPolicy(null)).toEqual({});
     expect(normalizeModelVisionPolicy("junk")).toEqual({});
-    expect(normalizeModelVisionPolicy({ opus: true, haiku: "no", gpt: false })).toEqual({ opus: true });
+    expect(normalizeModelVisionPolicy({ "deepseek/v3": true, haiku: "no", " pad": false, "": true })).toEqual({
+      "deepseek/v3": true,
+    });
   });
 
-  it("parse rejects unknown tiers, non-boolean values, and non-object shapes", () => {
-    expect(parseModelVisionPolicy({ opus: false })).toEqual({ opus: false });
-    expect(parseModelVisionPolicy({})).toEqual({});
-    expect(parseModelVisionPolicy({ gpt: true })).toBeNull();
-    expect(parseModelVisionPolicy({ opus: 1 })).toBeNull();
-    expect(parseModelVisionPolicy([])).toBeNull();
-    expect(parseModelVisionPolicy(null)).toBeNull();
+  it("parse accepts only models pi-gateway offers, strict booleans, and plain objects", () => {
+    const offered = ["deepseek/v3", "qwen/coder"];
+    expect(parseModelVisionPolicy({ "qwen/coder": false }, offered)).toEqual({ "qwen/coder": false });
+    expect(parseModelVisionPolicy({}, offered)).toEqual({});
+    expect(parseModelVisionPolicy({ opus: true }, offered)).toBeNull();
+    expect(parseModelVisionPolicy({ "qwen/coder": 1 }, offered)).toBeNull();
+    expect(parseModelVisionPolicy([], offered)).toBeNull();
+    expect(parseModelVisionPolicy(null, offered)).toBeNull();
   });
 
-  it("visionForModel: tiers consult the policy; concrete ids and unset tiers inherit the default", () => {
-    const policy = { sonnet: false };
-    expect(visionForModel("sonnet", policy, true)).toBe(false);
-    expect(visionForModel("opus", policy, true)).toBe(true);
-    expect(visionForModel("opus", policy, false)).toBe(false);
-    expect(visionForModel("claude-opus-4-8", policy, true)).toBe(true);
+  it("visionForModel: a set model consults the policy; unset models and pi's default inherit", () => {
+    const policy = { "qwen/coder": false };
+    expect(visionForModel("qwen/coder", policy, true)).toBe(false);
+    expect(visionForModel("deepseek/v3", policy, true)).toBe(true);
+    expect(visionForModel("deepseek/v3", policy, false)).toBe(false);
     expect(visionForModel(null, policy, false)).toBe(false);
     expect(visionForModel(undefined, policy, true)).toBe(true);
+    // Prototype keys are never policy entries.
+    expect(visionForModel("constructor", policy, true)).toBe(true);
   });
 });

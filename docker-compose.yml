@@ -58,7 +58,7 @@ services:
       args: *noah-build-args
     ports:
       - "${PORT:-48787}:${PORT:-48787}"
-    # The whole .env is injected into the container (SESSION_SECRET, SECURE_COOKIES, PI_MODEL_MAP,
+    # The whole .env is injected into the container (SESSION_SECRET, SECURE_COOKIES,
     # GITHUB_HOST, …). If SESSION_SECRET is missing the server throws on boot (NODE_ENV=production).
     # The model credentials live in pi-gateway (its admin LLM page), never here.
     env_file:

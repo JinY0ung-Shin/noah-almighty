@@ -52,7 +52,7 @@ const getTempDir = withTempDir("canvas-park-repro", () => {
 });
 
 function boot() {
-  const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false }, sessionSecret: "test" });
+  const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false }, sessionSecret: "test" });
   return { services, app: createApp(services), store: services.store };
 }
 

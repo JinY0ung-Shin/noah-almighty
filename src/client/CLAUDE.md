@@ -36,7 +36,7 @@ Durable principles for this layer:
 - **There IS a shared layer — reach for it before hand-mirroring.** `src/shared/*`
   (`mcpToolGroups.ts`, `sdkToolPresentation.ts`) is imported by BOTH sides, and `tsconfig.client.json`'s
   `include` list is the whitelist of server modules the client may import directly (`server/types.ts`,
-  `modelTiers`, `effortLevels`, `experimentalFeatures`, `releaseNotes`). New cross-boundary code goes
+  `effortLevels`, `experimentalFeatures`, `releaseNotes`). New cross-boundary code goes
   there, never a second copy. Only LEGACY mirrors remain (`normalizeTags` vs the server's
   `normalizeHashtags`, repo-href in `lib/format.ts`) — update those in lockstep, don't add more.
 - **A status indicator that only STATES a problem is a dead end — make it the way to the fix.** The

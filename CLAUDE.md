@@ -251,9 +251,8 @@ These are the invariants the project is built around. New work should reinforce 
   later in PowerPoint.
 - **pi-gateway is the ONLY agent runtime; Noah stays the BFF and the gatekeeper.** The Claude Agent SDK / Claude
   Code CLI runner is RETIRED (U8, 2026-10-29): `AGENT_RUNTIME` is `pi` (default; `PI_GATEWAY_URL`,
-  the service key (`PI_GATEWAY_API_KEY`, or `PI_GATEWAY_API_KEY_FILE` — never both) and a `PI_MODEL_MAP` covering
-  every composer tier are required — it is the ONLY
-  tier→model source) or `local` (the deterministic stub for tests and the e2e harness); anything else stops the
+  the service key (`PI_GATEWAY_API_KEY`, or `PI_GATEWAY_API_KEY_FILE` — never both) are required) or `local` (the
+  deterministic stub for tests and the e2e harness); anything else stops the
   boot. Every run goes to `runPiAgent` in ONE sandbox principal, `piRunPrincipal` = whoever the run executes AS
   (`viewerUserId ?? avatar.id`: the viewer of a colleague chat, the owner of a routine/task/generator). An avatar
   CONSULTATION is nobody's: it runs in a FRESH, EMPTY sandbox of its own (`consult-<random>`,
@@ -280,7 +279,13 @@ These are the invariants the project is built around. New work should reinforce 
   never wait — the answer or submission arrives as a later message. The retired runner's leftovers on existing
   deployments go through `retirementGate()`: the `claude_oauth_token` and skill-discovery cache keys are deleted
   and reserved forever, `<dataDir>/agent-sessions` (CLI transcripts) is quarantined, and old CLI session ids are
-  ignored (the next turn continues from the text history). Mechanics → `docs/architecture/pi-runtime.md`.
+  ignored (the next turn continues from the text history). **The models are pi-gateway's LIVE list** (`GET /v1/models`,
+  `agent/pi/modelCatalog.ts`, user decision 2026-10-31): a model value anywhere (composer pick, per-user default,
+  admin override, vision-policy key) is a pi model id, none = pi-gateway's default model (Noah sends no `model`), and
+  a stored value pi does not currently offer (a legacy tier alias like `opus`) reads as that default — never
+  migrated. Writes validate against the list (400 unknown, 503 unreachable); the chat stream stores a pick as sent.
+  The tier registry and `PI_MODEL_MAP` are RETIRED (a still-set `PI_MODEL_MAP` only logs a boot warning); an
+  unattended run's fallback is ONE retry on the default. Mechanics → `docs/architecture/pi-runtime.md`.
 - **할 일 is ONE per-user list behind ONE store.** The 할 일 tab, the chat overlay (toggled under the
   composer) and the owner's avatar all write `todo_items` through `store/todos.ts`, validated by the pure
   `src/server/todos.ts` (error CODES, Korean/English maps per channel); wire types, limits and the ONE

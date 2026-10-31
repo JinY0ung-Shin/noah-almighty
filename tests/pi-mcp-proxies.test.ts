@@ -105,7 +105,7 @@ async function eventually(check: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-const PI: PiRuntimeConfig = { gatewayUrl: "http://pi.invalid", apiKey: "service-key", modelMap: {}, deckSandbox: false };
+const PI: PiRuntimeConfig = { gatewayUrl: "http://pi.invalid", apiKey: "service-key", deckSandbox: false };
 
 let services: ReturnType<typeof createServices> | undefined;
 afterEach(() => {

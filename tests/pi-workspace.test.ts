@@ -39,7 +39,7 @@ import { PiAsyncJobs } from "../src/server/agent/pi/asyncJobs.js";
 
 const dir = withTempDir("pi-workspace");
 
-const PI: PiRuntimeConfig = { gatewayUrl: "http://pi.invalid", apiKey: "k", modelMap: {}, deckSandbox: false };
+const PI: PiRuntimeConfig = { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false };
 
 let services: ReturnType<typeof createServices> | undefined;
 afterEach(() => {

@@ -9,7 +9,6 @@
   import { goView } from "../lib/nav";
   import { appState, notify, replaceState, updateState } from "../lib/state";
   import { timeLabel } from "../lib/format";
-  import { MODEL_TIERS } from "../../../server/modelTiers";
   import type { AdminTab, AdminUserSummary, SignupMode } from "../lib/types";
 
   let loading = true;
@@ -198,6 +197,10 @@
   }
   $: stats = $appState.adminStats;
   $: savedModelOverride = String(sys.modelOverride || "");
+  $: modelChoices = (Array.isArray(sys.modelOverrideChoices) ? sys.modelOverrideChoices : []) as string[];
+  // A stored override pi no longer offers stays selectable as-is (disabled) so
+  // the select shows what is saved instead of silently jumping to the default.
+  $: modelSavedUnavailable = Boolean(savedModelOverride && !modelChoices.includes(savedModelOverride));
   $: modelValueTrimmed = modelInput.trim();
   $: modelDirty = modelValueTrimmed !== savedModelOverride;
   $: modelCanSave = Boolean(!modelBusy && modelDirty);
@@ -208,12 +211,12 @@
       : modelDirty
         ? modelValueTrimmed
           ? "저장하지 않은 모델 변경 사항이 있습니다."
-          : "저장하면 기본 티어로 되돌립니다."
+          : "저장하면 pi-gateway 기본 모델로 되돌립니다."
         : savedModelOverride
           ? sys.modelOverrideIgnored
-            ? "저장된 값이 티어 이름도 PI_MODEL_MAP 키도 아니어서 무시하고 기본 티어를 사용 중입니다. 다시 지정하거나 비워 주세요."
+            ? "저장된 모델을 지금 pi-gateway가 제공하지 않아 무시하고 기본 모델을 사용 중입니다. 다른 모델을 고르거나 해제해 주세요."
             : "저장됨"
-          : "기본 티어 사용 중";
+          : "pi-gateway 기본 모델 사용 중";
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
@@ -250,10 +253,10 @@
 
   // Vision has a draft but no explicit dirty flag; derive one so a manual refresh
   // can preserve unsaved vision-policy edits (see load()).
-  $: visionDirty = MODEL_TIERS.some((tier) => {
+  $: visionDirty = piModels.some((model) => {
     const saved = (unwrapSystem($appState.adminSystem).modelVisionPolicy || {}) as Record<string, boolean>;
-    const savedVal = tier.id in saved ? (saved[tier.id] ? "on" : "off") : "default";
-    return (visionPolicyDraft[tier.id] ?? "default") !== savedVal;
+    const savedVal = model.id in saved ? (saved[model.id] ? "on" : "off") : "default";
+    return (visionPolicyDraft[model.id] ?? "default") !== savedVal;
   });
 
   // overview stat cards
@@ -386,27 +389,21 @@
     }
   }
 
-  // ---- system: per-tier vision policy ----
-  // Draft: tier id → "default" (inherit MODEL_VISION) | "on" | "off".
+  // ---- system: per-model vision policy ----
+  // Draft: pi model id → "default" (inherit MODEL_VISION) | "on" | "off".
   let visionPolicyDraft: Record<string, "default" | "on" | "off"> = {};
   let visionBusy = false;
   $: visionDefaultLabel = sys.visionDefault === false ? "미지원" : "지원";
-  // The pi model each tier maps to (PI_MODEL_MAP): the admin payload's
-  // `piModelMap`, else the bootstrap tiers the composer picker already uses.
-  // Missing = unmapped (the local stub has no models).
-  $: piModelMap = (sys.piModelMap && typeof sys.piModelMap === "object" ? sys.piModelMap : {}) as Record<string, string>;
-  $: tierModelById = new Map<string, string | null>(
-    MODEL_TIERS.map((tier) => [
-      tier.id,
-      piModelMap[tier.id] || $appState.bootstrap?.modelSelection?.tiers.find((t) => t.id === tier.id)?.model || null,
-    ]),
-  );
+  // pi-gateway's live model list (empty under the local stub or when pi is unreachable).
+  $: piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as { id: string; server: string | null }[];
 
   function syncVisionPolicyFromSys() {
-    const saved = (unwrapSystem($appState.adminSystem).modelVisionPolicy || {}) as Record<string, boolean>;
+    const current = unwrapSystem($appState.adminSystem);
+    const saved = (current.modelVisionPolicy || {}) as Record<string, boolean>;
+    const models = (Array.isArray(current.piModels) ? current.piModels : []) as { id: string }[];
     const draft: Record<string, "default" | "on" | "off"> = {};
-    for (const tier of MODEL_TIERS) {
-      draft[tier.id] = tier.id in saved ? (saved[tier.id] ? "on" : "off") : "default";
+    for (const model of models) {
+      draft[model.id] = model.id in saved ? (saved[model.id] ? "on" : "off") : "default";
     }
     visionPolicyDraft = draft;
   }
@@ -414,10 +411,10 @@
   async function saveVisionPolicy() {
     if (visionBusy) return;
     const policy: Record<string, boolean> = {};
-    for (const tier of MODEL_TIERS) {
-      const pick = visionPolicyDraft[tier.id];
-      if (pick === "on") policy[tier.id] = true;
-      else if (pick === "off") policy[tier.id] = false;
+    for (const model of piModels) {
+      const pick = visionPolicyDraft[model.id];
+      if (pick === "on") policy[model.id] = true;
+      else if (pick === "off") policy[model.id] = false;
     }
     visionBusy = true;
     try {
@@ -436,7 +433,7 @@
   async function saveModel() {
     if (modelBusy || !modelDirty) return;
     const value = modelValueTrimmed;
-    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. 기본 티어를 사용합니다.";
+    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. pi-gateway 기본 모델을 사용합니다.";
     modelBusy = true;
     modelError = "";
     try {
@@ -799,13 +796,13 @@
                   <span class="sys-val"><span class="tag mono">{sys.agentRuntime === "pi" ? "pi-gateway" : "로컬 스텁"}</span></span>
                 </div>
                 <div class="sys-row">
-                  <span class="sys-key muted">모델 매핑</span>
+                  <span class="sys-key muted">pi 모델</span>
                   <span class="sys-val">
-                    {#if Object.keys(piModelMap).length}
-                      {#each MODEL_TIERS as tier (tier.id)}
-                        {#if piModelMap[tier.id]}<span class="tag mono" title={`${tier.label} 티어 → pi 모델`}>{tier.label} → {piModelMap[tier.id]}</span>{" "}{/if}
+                    {#if piModels.length}
+                      {#each piModels as model (model.id)}
+                        <span class="tag mono" title={model.server ? `제공: ${model.server}` : undefined}>{model.id}</span>{" "}
                       {/each}
-                    {:else}<span class="muted">없음 (로컬 스텁)</span>{/if}
+                    {:else}<span class="muted">{sys.agentRuntime === "pi" ? "없음 — pi-gateway 모델 목록을 불러오지 못했습니다 (기본 모델로 실행)" : "없음 (로컬 스텁)"}</span>{/if}
                   </span>
                 </div>
                 <div class="sys-row">
@@ -828,22 +825,28 @@
               <div class="panel-section-head">
                 <div>
                   <h3>아바타 모델</h3>
-                  <p class="muted">대화에서 모델을 고르지 않았을 때 사용할 모델을 지정합니다. 비워 두면 기본 티어를 사용합니다. 티어 이름(예: opus, sonnet, haiku) 또는 PI_MODEL_MAP에 등록된 키를 입력하면 PI_MODEL_MAP을 거쳐 pi 모델로 연결됩니다.</p>
+                  <p class="muted">대화에서 모델을 고르지 않았을 때 사용할 모델을 지정합니다. 목록은 pi-gateway가 지금 제공하는 모델이며, 지정하지 않으면 pi-gateway 기본 모델을 사용합니다.</p>
                 </div>
               </div>
               <form class="settings-form" on:submit|preventDefault={saveModel}>
                 <label class="field">
-                  <span>모델 이름</span>
-                  <input
+                  <span>모델</span>
+                  <select
                     name="model"
                     bind:value={modelInput}
-                    placeholder="opus (비우면 기본 티어)"
-                    autocomplete="off"
                     aria-describedby={modelStatusId}
                     aria-invalid={modelError ? "true" : undefined}
                     disabled={modelBusy}
-                    on:input={() => (modelError = "")}
-                  />
+                    on:change={() => (modelError = "")}
+                  >
+                    <option value="">기본 모델 사용</option>
+                    {#if modelSavedUnavailable}
+                      <option value={savedModelOverride} disabled>{savedModelOverride} (현재 제공되지 않음)</option>
+                    {/if}
+                    {#each modelChoices as choice (choice)}
+                      <option value={choice}>{choice}</option>
+                    {/each}
+                  </select>
                 </label>
                 <div class="settings-save-row">
                   <span id={modelStatusId} class="settings-save-status" class:dirty={modelDirty && !modelBusy && !modelError} class:pending={modelBusy} class:invalid={Boolean(modelError) || Boolean(!modelDirty && savedModelOverride && sys.modelOverrideIgnored)} role="status" aria-live="polite">{modelStatus}</span>
@@ -852,37 +855,35 @@
               </form>
             </section>
 
-            <!-- per-tier vision (image input) policy -->
+            <!-- per-model vision (image input) policy -->
             <section class="settings-card">
               <div class="panel-section-head">
                 <div>
                   <h3>모델별 이미지 입력(비전)</h3>
                   <p class="muted">
-                    모델 티어별 이미지 입력 지원 여부를 지정합니다. "기본값"은 배포 환경설정(MODEL_VISION, 현재 {visionDefaultLabel})을 따릅니다.
+                    pi 모델별 이미지 입력 지원 여부를 지정합니다. "기본값"은 배포 환경설정(MODEL_VISION, 현재 {visionDefaultLabel})을 따릅니다.
                     미지원으로 설정된 모델을 쓰는 대화에서는 이미지 첨부가 차단되고, 아바타의 이미지/PDF 파일 읽기가 거부되며, 아바타에게도 그 사실이 안내됩니다.
                   </p>
                 </div>
               </div>
               <form class="settings-form" on:submit|preventDefault={saveVisionPolicy}>
-                {#each MODEL_TIERS as tier (tier.id)}
+                {#each piModels as model (model.id)}
                   <label class="field">
                     <span>
-                      {tier.label}
-                      {#if tierModelById.get(tier.id)}
-                        <span class="muted mono">{tierModelById.get(tier.id)}</span>
-                      {:else}
-                        <span class="muted">(매핑 없음 — PI_MODEL_MAP에 이 티어가 없습니다)</span>
-                      {/if}
+                      <span class="mono">{model.id}</span>
+                      {#if model.server}<span class="muted">{model.server}</span>{/if}
                     </span>
-                    <select bind:value={visionPolicyDraft[tier.id]} disabled={visionBusy} aria-label={`${tier.label} 이미지 입력 지원`}>
+                    <select bind:value={visionPolicyDraft[model.id]} disabled={visionBusy} aria-label={`${model.id} 이미지 입력 지원`}>
                       <option value="default">기본값 ({visionDefaultLabel})</option>
                       <option value="on">지원</option>
                       <option value="off">미지원</option>
                     </select>
                   </label>
+                {:else}
+                  <p class="muted">{sys.agentRuntime === "pi" ? "pi-gateway 모델 목록을 불러오지 못해 설정할 모델이 없습니다." : "로컬 스텁에는 설정할 모델이 없습니다."}</p>
                 {/each}
                 <div class="settings-save-row">
-                  <button class="primary" type="submit" disabled={visionBusy}>{visionBusy ? "저장 중…" : "저장"}</button>
+                  <button class="primary" type="submit" disabled={visionBusy || !piModels.length}>{visionBusy ? "저장 중…" : "저장"}</button>
                 </div>
               </form>
             </section>

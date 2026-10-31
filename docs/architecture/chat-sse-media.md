@@ -166,11 +166,11 @@
   the stored session unless it is a rewind, whose resume point the route already chose). A rewind/regenerate
   re-reads its ANCHOR row's stored attachments from disk (`readChatImages`). `express.json` limit was bumped
   3mb→40mb. Conversation delete sweeps the image dir (`deleteConversationImages`).
-- **Vision gating is PER-RUN, per-model-tier** (`modelVisionPolicy.ts`): effective vision =
-  admin per-tier policy (`app_config` row `model_vision_policy`, admin panel "모델별 이미지 입력";
-  `{tierId: boolean}`, absent tier inherits) ∘ deployment default (`MODEL_VISION=off` env). Resolution
-  mirrors the model chain (user tier > admin override > default; a concrete model id can't consult the tier
-  policy → deployment default). When the RUN's model is text-only, every path that
+- **Vision gating is PER-RUN, per-model** (`modelVisionPolicy.ts`): effective vision =
+  admin per-model policy (`app_config` row `model_vision_policy`, admin panel "모델별 이미지 입력";
+  `{piModelId: boolean}`, an absent model inherits) ∘ deployment default (`MODEL_VISION=off` env). Resolution
+  mirrors the run's model (composer pick > admin override, each only while pi offers it > pi-gateway's default
+  model, which always takes the deployment default; [`pi-runtime.md`](pi-runtime.md) "Models"). When the RUN's model is text-only, every path that
   would put image bytes in MODEL input is cut off BEFORE the API can 400 the whole turn — but the
   UPLOAD itself is NOT rejected: it becomes **file mode** (`imageFileMode` in routes/chat.ts). The
   bytes are persisted exactly as in vision mode (same bubble/attachment rows), a copy is staged into the
@@ -179,7 +179,7 @@
   shared by the fresh turn and regenerate), and the model is told only the PATHS as plain prompt text
   (`AgentRequest.imageFiles` → `buildUserPrompt`), never image content blocks. Regenerate re-stages the
   same way instead of skipping the re-feed. The composer therefore does not hide the attach UI for a
-  text-only tier — in file mode it sends the ORIGINALS (no downscale, since nothing is fed to the model).
+  text-only model — in file mode it sends the ORIGINALS (no downscale, since nothing is fed to the model).
   Confluence tools return a note instead of MCP image blocks (per-run `ctx.visionEnabled`). The standing
   prompt (`noVisionSection`, pointing at the staged files) + describe_system tell the model not to read the
   images themselves (`pdftotext` for PDFs, `show_file` to show the USER). Since the SDK's PreToolUse `Read`

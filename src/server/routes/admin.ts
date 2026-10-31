@@ -21,12 +21,14 @@ import {
 } from "../../shared/mcpToolGroups.js";
 import { listPluginRootSkills } from "../agent/skillCatalog.js";
 import { loadDefaultPluginRoots } from "../plugins.js";
-import { MODEL_TIER_IDS } from "../modelTiers.js";
-import { isAcceptedModelOverride, modelOverrideChoices, modelOverrideState } from "../modelOverride.js";
+import { modelOverrideState } from "../modelOverride.js";
+import { catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
 import {
   apiError,
   avatarDir,
   isAvatarVisibility,
+  offeredModelIdsOr503,
   safeString,
   MIN_PASSWORD_LENGTH,
   type RouterDeps,
@@ -40,8 +42,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   registerAdminEgressRoutes(router, deps);
 
-  // System/runtime info: the runtime, the tier → pi model mapping (PI_MODEL_MAP),
-  // the model the last run reported (observed), and the policy catalogs.
+  // System/runtime info: the runtime, the models pi-gateway offers (its live
+  // list), the model the last run reported (observed), and the policy catalogs.
   // Read-only; admin-gated.
   router.get("/api/admin/system", requireAuth(store), requireAdmin, async (_req, res) => {
     // Global skill list for the tool/skill policy card: the bundled
@@ -55,16 +57,14 @@ export function createAdminRouter(deps: RouterDeps): Router {
       logger.warn({ err: error }, "default plugin roots could not be listed for the skill policy");
     }
     const skillDiscovery = { fetchedAt: new Date().toISOString(), skills: listPluginRootSkills(rootPaths) };
-    const piModelMap: Record<string, string> = {};
-    for (const tier of MODEL_TIER_IDS) {
-      const mapped = config.pi?.modelMap[tier]?.model;
-      if (mapped) piModelMap[tier] = mapped;
-    }
+    // pi-gateway's live model list (cached, stale-on-error); empty on the
+    // `local` stub and while pi has never answered.
+    const piModels = await piServicesFor(store, config).models.list();
+    const piModelIds = catalogModelIds(piModels);
     res.json({
       system: {
         agentRuntime: config.agentRuntime,
-        // Tier → pi model id (PI_MODEL_MAP); empty on the `local` stub.
-        piModelMap,
+        piModels,
         observedModel: observedModel.get(),
         confluenceConfigured: Boolean(config.confluenceUrl),
         hexSshTools: HEX_SSH_TOOL_INFOS,
@@ -76,14 +76,14 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
-        // Admin-selected model override (a tier or a PI_MODEL_MAP key), and
-        // whether the stored one is IGNORED (saved before validation — e.g. an
-        // SDK-era Claude model id — so runs use the default tier instead).
+        // Admin-selected model override (a pi model id), and whether the stored
+        // one is IGNORED (pi no longer offers it — a dropped model, an SDK-era
+        // Claude id, a retired tier alias — so runs use pi-gateway's default model).
         modelOverride: store.getModelOverride(),
-        modelOverrideIgnored: modelOverrideState(store, config).ignored !== null,
-        modelOverrideChoices: modelOverrideChoices(config),
-        // Per-model-tier vision policy (+ the deployment default an unset tier
-        // inherits) — the panel renders one selector per tier.
+        modelOverrideIgnored: modelOverrideState(store, piModelIds).ignored !== null,
+        modelOverrideChoices: piModelIds,
+        // Per-model vision policy, keyed by pi model id (+ the deployment default
+        // an unset model inherits) — the panel renders one selector per model.
         modelVisionPolicy: store.getModelVisionPolicy(),
         visionDefault: config.visionEnabled,
       },
@@ -523,18 +523,19 @@ export function createAdminRouter(deps: RouterDeps): Router {
     res.json({ signupMode: mode });
   });
 
-  // Admin-selected agent model: used when a conversation picked no tier
-  // (runCapabilities.ts), mapped to a pi model through PI_MODEL_MAP — so only a
-  // tier name or a PI_MODEL_MAP key is accepted (review-2 M2; anything else
-  // would silently run on pi's own default model).
-  router.put("/api/admin/model", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
+  // Admin-selected agent model: used when a conversation picked none
+  // (runCapabilities.ts). Only a model pi-gateway offers right now is accepted
+  // (review-2 M2; anything else would silently run on pi's own default model).
+  router.put("/api/admin/model", requireAuth(store), requireAdmin, async (req: AuthenticatedRequest, res) => {
     const model = safeString(req.body?.model);
     if (!model) {
       apiError(res, 400, "모델 이름을 입력해 주세요.");
       return;
     }
-    if (!isAcceptedModelOverride(config, model)) {
-      apiError(res, 400, `티어 이름 또는 PI_MODEL_MAP에 있는 이름만 지정할 수 있습니다: ${modelOverrideChoices(config).join(", ")}`);
+    const offered = await offeredModelIdsOr503(store, config, res);
+    if (!offered) return;
+    if (!offered.includes(model)) {
+      apiError(res, 400, `pi-gateway가 제공하는 모델만 지정할 수 있습니다: ${offered.join(", ") || "(없음)"}`);
       return;
     }
     store.setModelOverride(model);
@@ -550,11 +551,16 @@ export function createAdminRouter(deps: RouterDeps): Router {
     res.json({ ok: true });
   });
 
-  // Per-model-tier vision policy: which composer tiers accept image input.
-  // Body: { policy: { opus?: boolean, sonnet?: boolean, haiku?: boolean } } —
-  // a tier ABSENT from the map inherits the MODEL_VISION deployment default.
-  router.put("/api/admin/model-vision-policy", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const policy = parseModelVisionPolicy(req.body?.policy);
+  // Per-model vision policy: which of pi-gateway's models accept image input.
+  // Body: { policy: { [piModelId]: boolean } } — every key a model pi offers
+  // right now; a model ABSENT from the map inherits the MODEL_VISION default.
+  router.put("/api/admin/model-vision-policy", requireAuth(store), requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const raw = req.body?.policy;
+    // An empty policy names no model, so it needs no model list.
+    const needsCatalog = raw && typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length > 0;
+    const offered = needsCatalog ? await offeredModelIdsOr503(store, config, res) : [];
+    if (!offered) return;
+    const policy = parseModelVisionPolicy(raw, offered);
     if (!policy) {
       apiError(res, 400, "모델별 비전 정책 형식이 올바르지 않습니다.");
       return;
@@ -564,7 +570,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
       req,
       "set_model_vision_policy",
       Object.entries(saved)
-        .map(([tier, vision]) => `${tier}=${vision ? "on" : "off"}`)
+        .map(([model, vision]) => `${model}=${vision ? "on" : "off"}`)
         .join(", ") || "(all inherit default)",
     );
     logger.info({ actorId: req.user!.id, policy: saved }, "model vision policy set");

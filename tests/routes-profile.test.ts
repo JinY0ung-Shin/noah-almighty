@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
 import { CURRENT_RELEASE_ID } from "../src/server/releaseNotes.js";
 import { signup, withTempDir } from "./helpers.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 
 // Coverage target: src/server/routes/profile.ts — the owner's profile + settings
 // endpoints (PATCH /api/me field round-trips, group-knowledge/chat-composer
@@ -17,12 +19,18 @@ const getTempDir = withTempDir("routes-profile", () => {
   tempDir = getTempDir();
 });
 
-function testApp() {
+/** The app; `models` = what pi-gateway offers (`GET /v1/models`) when a test needs a model list. */
+function testApp(models?: string[]) {
   const services = createServices({
     dataDir: tempDir,
     agentRuntime: "local",
     sessionSecret: "test",
   });
+  if (models) {
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => models.map((id) => ({ id })),
+    });
+  }
   return createApp(services);
 }
 
@@ -127,16 +135,17 @@ describe("POST /api/me/release-seen", () => {
 
 describe("PUT /api/me/chat-defaults", () => {
   it("validates and stores model / effort / mcpToolGroups independently", async () => {
-    const app = testApp();
+    const app = testApp(["deepseek/v3"]);
     const { agent } = await newUser(app, "cd-owner");
 
-    // model: unknown tier → 400; a known tier → stored; null → cleared.
+    // model: one pi-gateway does not offer (incl. a retired tier alias) → 400; an offered id → stored; null → cleared.
     await agent.put("/api/me/chat-defaults").send({ model: "bogus" }).expect(400);
+    await agent.put("/api/me/chat-defaults").send({ model: "opus" }).expect(400);
     const m = await agent
       .put("/api/me/chat-defaults")
-      .send({ model: "opus" })
+      .send({ model: "deepseek/v3" })
       .expect(200);
-    expect(m.body.user.modelDefault).toBe("opus");
+    expect(m.body.user.modelDefault).toBe("deepseek/v3");
     const mCleared = await agent
       .put("/api/me/chat-defaults")
       .send({ model: null })
@@ -178,19 +187,19 @@ describe("PUT /api/me/chat-defaults", () => {
   });
 
   it("applies all three fields in one request and leaves omitted fields untouched", async () => {
-    const app = testApp();
+    const app = testApp(["deepseek/v3"]);
     const { agent } = await newUser(app, "cd-combo");
 
     await agent
       .put("/api/me/chat-defaults")
-      .send({ model: "opus", effort: "low", mcpToolGroups: ["system"] })
+      .send({ model: "deepseek/v3", effort: "low", mcpToolGroups: ["system"] })
       .expect(200);
     // A follow-up that omits `model` must NOT reset it.
     const res = await agent
       .put("/api/me/chat-defaults")
       .send({ effort: "max" })
       .expect(200);
-    expect(res.body.user.modelDefault).toBe("opus");
+    expect(res.body.user.modelDefault).toBe("deepseek/v3");
     expect(res.body.user.effortDefault).toBe("max");
     expect(res.body.user.mcpToolGroupsDefault).toEqual(["system"]);
   });

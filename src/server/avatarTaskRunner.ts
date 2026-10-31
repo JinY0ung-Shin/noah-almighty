@@ -86,8 +86,8 @@ async function runTask(services: AppServices, task: AvatarTask, attempts: number
       conversationId: task.conversationId, agentMessage: task.message, displayMessage: task.message,
       images: [], regenerate: false, skipUserMessagePersist: task.userMessagePersisted, ...requested,
       unattendedDeadlineMs: config.avatarTaskRunTimeoutMs,
-      // Unattended: nobody can switch models, so fall down the tier chain on a
-      // transient model failure (same reasoning as the routine scheduler).
+      // Unattended: nobody can switch models, so retry once on pi-gateway's
+      // default model on a transient model failure (same reasoning as the routine scheduler).
       modelFallback: true,
       // Provenance stamp — never capability; the run stays a full owner run.
       externalTaskId: task.id,
