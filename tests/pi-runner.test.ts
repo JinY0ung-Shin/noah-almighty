@@ -34,7 +34,7 @@ import {
 } from "../src/server/agent/pi/piRuntime.js";
 import { askAvatar } from "../src/server/agent/avatarAsk.js";
 import { PI_NO_ASK_USER_SENTENCE, piSandboxOwnerSentence } from "../src/server/agent/ownerState.js";
-import { isPiResponseId, piSessionKey, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
+import { isPiResponseId, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import { piConversationSegment, piHostPath, piUserKey, piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { PiGatewayError, type PiResponseRequest, type PiResponsesClient, type PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
@@ -308,7 +308,6 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     expect(req!.instructions).toContain("this session is READ-ONLY there");
     expect(req!.instructions).toContain("Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore).");
     expect(req!.instructions).not.toContain("`bash` (run programs");
-    expect(store.getConversationPiSessionProfile(mate.id, "conv-m", "m1")).toBe("|");
     // The continued session already is read_only; only a new session carries the flag.
     await turn("resp_m1_1");
     expect(requests[1]!.previousResponseId).toBe("resp_m1_1");
@@ -391,9 +390,8 @@ describe("runPiAgent", () => {
     expect(of(calls, "session")).toEqual(["resp_s1_1"]);
     expect(of(calls, "resume")).toEqual([{ sessionId: "resp_s1_1", uuid: "resp_s1_1" }]);
     expect(of(calls, "turnResult")).toEqual([expect.objectContaining({ text: "Hello!", steerPending: false })]);
-    // Frozen per conversation (D2), and the session's profile recorded (P3).
+    // Frozen per conversation (D2).
     expect(store.ensureConversationPiInstructions(owner.id, "conv-1", () => "never")).toBe(req!.instructions);
-    expect(store.getConversationPiSessionProfile(owner.id, "conv-1", "s1")).toBe("|");
     // The conversation folder exists on the host side, 0700.
     const hostDir = piWorkspaceFor(config, owner.id, "conv-1").hostConversationDir!;
     expect(fs.statSync(hostDir).mode & 0o777).toBe(0o700);
@@ -479,20 +477,20 @@ describe("runPiAgent", () => {
     expect(two.requests[0]!.instructions).not.toContain("A brand-new persona");
   });
 
-  it("a model change starts a new session from the text history and says so", async () => {
-    const { store, config, owner, base } = setup();
-    store.setConversationPiSessionProfile(owner.id, "conv-1", "s1", "m-opus|");
-    const { client, requests } = fakeClient([() => textTurn("resp_s9_1", "switched")]);
+  it("a model/effort change continues the same session with the new settings; 기본 모델 is named by pi's default id", async () => {
+    const { store, config, base } = setup();
+    piServicesFor(store, config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "m-opus", default: true }, { id: "m-sonnet" }],
+    });
+    await piServicesFor(store, config).models.list();
+    const { client, requests } = fakeClient([() => textTurn("resp_s1_5", "switched"), () => textTurn("resp_s1_6", "default")]);
     const { events, calls } = recorder();
+    const history = [
+      { role: "user" as const, content: "q1" },
+      { role: "assistant" as const, content: "a1 from opus" },
+    ];
     await runPiAgent(
-      base({
-        model: "m-sonnet",
-        resumeSessionId: "resp_s1_4",
-        conversationHistory: [
-          { role: "user", content: "q1" },
-          { role: "assistant", content: "a1 from opus" },
-        ],
-      }),
+      base({ model: "m-sonnet", effort: "low", resumeSessionId: "resp_s1_4", conversationHistory: history }),
       [],
       config,
       store,
@@ -500,14 +498,14 @@ describe("runPiAgent", () => {
       undefined,
       { client },
     );
-    const [req] = requests;
-    expect(req!.previousResponseId).toBeUndefined();
-    expect(req!.model).toBe("m-sonnet");
-    expect(req!.instructions).toBeTruthy();
-    expect(inputText(req!)).toContain("Session note: the model or reasoning effort changed");
-    expect(inputText(req!)).toContain("a1 from opus");
-    expect(of(calls, "status")).toContain("모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…");
-    expect(store.getConversationPiSessionProfile(owner.id, "conv-1", "s9")).toBe("m-sonnet|");
+    expect(requests[0]).toMatchObject({ previousResponseId: "resp_s1_4", model: "m-sonnet", reasoningEffort: "low" });
+    expect(requests[0]!.instructions).toBeUndefined();
+    expect(inputText(requests[0]!)).not.toContain("Session note");
+    expect(inputText(requests[0]!)).not.toContain("a1 from opus");
+    expect(of(calls, "status").filter((line) => String(line).includes("세션"))).toEqual([]);
+    // No pick on a continuing turn: omitting `model` would keep the session's, so pi's default is sent by id.
+    await runPiAgent(base({ resumeSessionId: "resp_s1_5", conversationHistory: history }), [], config, store, undefined, undefined, { client });
+    expect(requests[1]).toMatchObject({ previousResponseId: "resp_s1_5", model: "m-opus" });
   });
 
   it("a rewind forks at the kept row's response id and states the rewind in the turn input", async () => {
@@ -749,6 +747,37 @@ describe("runPiAgent", () => {
     expect(requests.every((r) => r.instructions && !r.previousResponseId)).toBe(true);
   });
 
+  it("a fallback on a continuing turn stays in the session when pi's default can be named, else starts a new one", async () => {
+    const { store, config, base } = setup();
+    const turn = async (models: { id: string; default?: true }[]) => {
+      piServicesFor(store, config).models = createPiModelCatalog({ listModels: async () => models });
+      const { client, requests } = fakeClient([
+        () => new PiGatewayError("unavailable", { status: 503, retryable: true }),
+        () => textTurn("resp_f_2", "from the default"),
+      ]);
+      await runPiAgent(
+        base({ headless: true, allowHeadlessTools: true, modelFallback: true, model: "m-sonnet", resumeSessionId: "resp_f_1" }),
+        [],
+        config,
+        store,
+        undefined,
+        undefined,
+        { client, retry: { attempts: 1 } },
+      );
+      return requests;
+    };
+    const named = await turn([{ id: "m-opus", default: true }, { id: "m-sonnet" }]);
+    expect(named.map((r) => [r.model, r.previousResponseId])).toEqual([
+      ["m-sonnet", "resp_f_1"],
+      ["m-opus", "resp_f_1"],
+    ]);
+    const unnamed = await turn([{ id: "m-opus" }, { id: "m-sonnet" }]);
+    expect(unnamed.map((r) => [r.model, r.previousResponseId])).toEqual([
+      ["m-sonnet", "resp_f_1"],
+      [undefined, undefined],
+    ]);
+  });
+
   it("never falls back onto the model it just failed on: a run already on pi's default gets one attempt", async () => {
     const { store, config, base } = setup();
     const { client, requests } = fakeClient([
@@ -879,7 +908,6 @@ describe("pi workspace + ids", () => {
   it("recognizes pi response ids", () => {
     expect(isPiResponseId("resp_3f2a-11_4")).toBe(true);
     expect(isPiResponseId("4f0e0c8e-sdk")).toBe(false);
-    expect(piSessionKey("resp_3f2a-11_4")).toBe("3f2a-11");
   });
 });
 

@@ -2,8 +2,8 @@
  * Registry of reasoning EFFORT levels a user can pick per conversation in the chat
  * composer, alongside the model. Each `id` is passed to pi as the
  * response's `reasoningEffort`, which guides how much thinking/reasoning the
- * model applies to the turn; pi fixes it per session, so a change starts a new
- * session from the text history.
+ * model applies to the turn; every turn sends it, so a change applies to the
+ * same pi session from that turn on.
  *
  * The five ids ('low' | 'medium' | 'high' | 'xhigh' | 'max') are a subset of
  * pi's REASONING_EFFORTS (the names come from the retired Agent SDK's

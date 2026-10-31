@@ -146,8 +146,7 @@ export interface AppConfig {
  * metacognition surfaces (`AgentRequest.piRuntime` → the prompt's pi section,
  * `SystemToolsContext.piRuntime` → describe_system). Its presence alone says
  * "this run executes in the user's pi sandbox": a mid-turn message arrives only
- * after the current answer, a model/effort switch starts a new session from the
- * stored text history, and hex-ssh, plugin `.mcp.json` and 공용 MCP servers are
+ * after the current answer, and hex-ssh, plugin `.mcp.json` and 공용 MCP servers are
  * relayed by Noah as an MCP client (`mcpProxies`, `agent/pi/mcpProxies.ts`).
  */
 export interface PiRuntimeFacts {
@@ -1397,9 +1396,9 @@ export interface AgentRequest {
   model?: string;
   /**
    * User-chosen reasoning EFFORT level (`low`/`medium`/`high`/`xhigh`/`max`) for
-   * this conversation, from the chat composer. Passed to pi as the response's
-   * `reasoningEffort`; pi fixes it per session, so a change starts a new session
-   * from the text history. Independent of the model. Unknown/unset → no
+   * this conversation, from the chat composer. Passed to pi as every turn's
+   * `reasoningEffort`; a change applies to the same session from that turn on.
+   * Independent of the model. Unknown/unset → no
    * effort is sent and pi applies its own default. (See effortLevels.ts.)
    */
   effort?: string;

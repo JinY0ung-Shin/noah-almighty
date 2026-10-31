@@ -574,7 +574,6 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
     "No WebSearch (use mcp__web__fetch for a known URL). " +
     (pi?.nonInteractive ? `${PI_NO_ASK_USER_SENTENCE} ` : "") +
     "hex-ssh, plugin `.mcp.json` and admin 공용 MCP servers are relayed by Noah as `mcp__hex-ssh__<tool>`, `mcp__plugins__<server>__<tool>` and `mcp__shared__<server>__<tool>` (the `mcp__<server>__<tool>` form resolves too); the session's tool list is read when the pi session starts, so a server connected since appears only in a later session and a removed one is refused. " +
-    "A model or reasoning-effort change starts a NEW session that continues from the saved text history (earlier tool results are not carried over). " +
     "The system prompt is fixed when the conversation starts, so this tool is the source of CURRENT state"
   );
 }

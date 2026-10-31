@@ -237,7 +237,7 @@ describe.skipIf(!LIVE)("pi-gateway live (e2e instance)", () => {
 
 // ---- runPiAgent end to end (lane I1) --------------------------------------------------------------
 // Noah's real runner against the real gateway: frozen instructions, continuation, an effort change
-// starting a new session from the text history, and steers delivered as a follow-up turn. MCP calls
+// continuing the SAME session (P3), and steers delivered as a follow-up turn. MCP calls
 // through the broker are covered by the harness (~/.noah-work/pi-e2e/noah-harness, S08): the broker's
 // Noah server ids point at the harness Noah, not at this test process.
 describe.skipIf(!LIVE)("runPiAgent live (e2e instance)", () => {
@@ -342,12 +342,12 @@ describe.skipIf(!LIVE)("runPiAgent live (e2e instance)", () => {
     expect(reqs).toHaveLength(5);
     const system = (i: number) => textOf(reqs[i]!.body.messages[0]!.content);
     expect(system(0)).toContain("Runtime: your own pi sandbox");
-    expect(system(2)).toBe(system(0)); // the frozen prompt reused by the new session
-    // Turn 2 continued the session; turn 3 (effort changed) started a new one from the text history.
+    expect(system(2)).toBe(system(0)); // the frozen prompt, same session
+    // Turn 2 continued the session; turn 3 (effort changed) continued it too, on the new effort (P3).
     expect(reqs[1]!.body.messages.some((m) => m.role === "assistant" && textOf(m.content).includes("first"))).toBe(true);
     const third = reqs[2]!.body.messages;
-    expect(third.filter((m) => m.role === "assistant")).toHaveLength(0);
-    expect(textOf(third.at(-1)!.content)).toContain("Session note: the model or reasoning effort changed");
+    expect(third.some((m) => m.role === "assistant" && textOf(m.content).includes("second"))).toBe(true);
+    expect(textOf(third.at(-1)!.content)).not.toContain("Session note");
     expect(textOf(reqs[4]!.body.messages.at(-1)!.content)).toContain("steered text");
     await fake("/_fake/reset", { key });
   });

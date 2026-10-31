@@ -276,18 +276,21 @@ These are the invariants the project is built around. New work should reinforce 
   **A new server joins `PI_MCP_SERVER_NAMES` (`agent/pi/mcpCatalog.ts`) AND `scripts/pi-register-mcp.mjs`**; the
   bundled one-shot `pi-setup` service re-runs the script on every `docker compose up`. The prompt is FROZEN per conversation (D2, `conversations.pi_instructions`,
   sent only when a pi session starts; per-turn facts ride the user input). Every gap pi has is stated on BOTH
-  metacognition surfaces: a model/effort change starts a new session from history, shell-exposed secrets are
+  metacognition surfaces: shell-exposed secrets are
   unavailable, no WebSearch, relayed tool lists are per session, and `ask_avatar` (interactive chat) / canvas
-  never wait — the answer or submission arrives as a later message. The retired runner's leftovers on existing
+  never wait — the answer or submission arrives as a later message. A model/effort change is NOT a gap: every turn
+  sends the current model and effort and pi switches the SAME session (P3; `conversations.pi_session_profiles` is
+  retired through `RETIRED_COLUMNS`, reserved forever). The retired runner's leftovers on existing
   deployments go through `retirementGate()`: the `claude_oauth_token` and skill-discovery cache keys are deleted
   and reserved forever, `<dataDir>/agent-sessions` (CLI transcripts) is quarantined, and old CLI session ids are
   ignored (the next turn continues from the text history). **The models are pi-gateway's LIVE list** (`GET /v1/models`,
   `agent/pi/modelCatalog.ts`, user decision 2026-10-31): a model value anywhere (composer pick, per-user default,
-  admin override, vision-policy key) is a pi model id, none = pi-gateway's default model (Noah sends no `model`), and
+  admin override, vision-policy key) is a pi model id, none = pi-gateway's default model (a new session sends no
+  `model`; a continuing turn names the id pi's list marks `default`), and
   a stored value pi does not currently offer (a legacy tier alias like `opus`) reads as that default — never
   migrated. Writes validate against the list (400 unknown, 503 unreachable); the chat stream stores a pick as sent.
   The tier registry and `PI_MODEL_MAP` are RETIRED (a still-set `PI_MODEL_MAP` only logs a boot warning); an
-  unattended run's fallback is ONE retry on the default. Mechanics → `docs/architecture/pi-runtime.md`.
+  unattended run's fallback is ONE retry on the default, in the same session. Mechanics → `docs/architecture/pi-runtime.md`.
 - **할 일 is ONE per-user list behind ONE store.** The 할 일 tab, the chat overlay (toggled under the
   composer) and the owner's avatar all write `todo_items` through `store/todos.ts`, validated by the pure
   `src/server/todos.ts` (error CODES, Korean/English maps per channel); wire types, limits and the ONE

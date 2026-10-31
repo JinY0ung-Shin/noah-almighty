@@ -410,8 +410,8 @@ export async function buildRunCapabilities(
   const effectiveModel: string | undefined =
     userModel ?? effectiveModelOverride(store, catalogModelIds(piModels)) ?? undefined;
   // Model fallback chain (unattended runs — `request.modelFallback`): on a
-  // transient model/server error, retry ONCE on pi-gateway's default model in a
-  // fresh pi session. A run already on the default gets one attempt (retrying
+  // transient model/server error, retry ONCE on pi-gateway's default model in the
+  // same pi session. A run already on the default gets one attempt (retrying
   // the model that just failed is no fallback). Otherwise the chain is just the
   // single resolved model (chat behavior).
   const modelChain: (string | undefined)[] =

@@ -28,12 +28,12 @@
  *     at stream open retry with backoff; an empty turn (`empty_response`, not
  *     committed by pi) is re-sent once while nothing was shown (a queued steer
  *     waits and follows as its own turn); a model fallback chain (routines,
- *     the task API) gives each attempt a fresh session.
+ *     the task API) continues the same session on the next model.
  *  5. pi has no mid-turn input (design P2): steers queue, and once the current
  *     pi response completes they are delivered TOGETHER as a follow-up turn on
  *     the same run (the route's `turn_end` contract).
- *  6. A model/effort change starts a new session from the text history (pi
- *     fixes both per session, design P3); the user hears it on the status line.
+ *  6. Every turn sends the current model and effort, so a change applies to
+ *     the SAME session from that turn on (pi switches it, design P3).
  *  7. hex-ssh, plugin `.mcp.json` and 공용 MCP servers are relayed by Noah as an
  *     MCP client (`mcpProxies.ts`, stable ids `hex-ssh`/`plugins`/`shared`);
  *     every Noah MCP result is redacted at the endpoint with the run's set.
@@ -99,16 +99,11 @@ export function isPiResponseId(value: string | undefined | null): value is strin
   return typeof value === "string" && /^resp_[A-Za-z0-9-]+_\d+$/.test(value);
 }
 
-/** The session part of a response id (the key of the per-session model/effort profile). */
-export function piSessionKey(responseId: string): string {
-  return responseId.replace(/^resp_/, "").replace(/_\d+$/, "");
-}
-
 /**
  * A continued session pi cannot run: unknown (404), in a state that does not
- * match (409), or pinned to a model pi no longer has (400
- * `model_not_configured` — pi fixes a session's model at creation, so only a
- * new session can recover). Each self-heals once from the text history.
+ * match (409), or on a model pi no longer has while the turn names none (400
+ * `model_not_configured` — pi's default model could not be named). Each
+ * self-heals once from the text history.
  */
 export function isLostPiSession(error: unknown): error is PiGatewayError {
   return (
@@ -238,23 +233,20 @@ async function runPiAgentAs(
   const effort = piEffortFor(capabilities.userEffort);
   // The model chain is the capability plan's (one entry unless the run opted into
   // fallback): each entry is a pi model id sent as is, or undefined = pi-gateway's
-  // default model (no `model` sent). Each attempt runs in a FRESH session.
+  // default model. Every turn sends its model and effort, so a change (or a
+  // fallback) applies to the SAME session from that turn on (pi switches it, P3).
   const chain = capabilities.modelChain;
   let attempt = 0;
-  const profileOf = (index: number) => `${chain[index] ?? ""}|${effort ?? ""}`;
+  // A new session omits `model` for pi's default; a continuing turn that sent
+  // none would stay on the session's model, so it names the default by its id
+  // (`default` in pi's model list). Unknown → omitted: the session keeps its model.
+  const piModelFor = (model: string | undefined, fresh: boolean): string | undefined =>
+    model ?? (fresh ? undefined : services.models.peek().find((entry) => entry.default)?.id);
 
   // ---- session ------------------------------------------------------------
   const resumeCandidate = request.resumeSessionAt ?? request.resumeSessionId;
   let previous: string | undefined = isPiResponseId(resumeCandidate) ? resumeCandidate : undefined;
-  let newSessionReason: "model_changed" | "session_lost" | undefined;
-  if (conversationId && previous) {
-    const known = store.getConversationPiSessionProfile(principal, conversationId, piSessionKey(previous));
-    if (known !== null && known !== profileOf(0)) {
-      previous = undefined;
-      newSessionReason = "model_changed";
-      events?.onStatus?.("모델 또는 사고 강도가 바뀌어 새 세션에서 이전 대화 기록으로 이어갑니다…");
-    }
-  }
+  let sessionLost = false;
   // ---- input --------------------------------------------------------------
   const stagedFiles = request.imageFiles?.length ? stagePiAttachmentFiles(workspace, request.imageFiles) : [];
   const userRequest: AgentRequest = { ...promptRequest, imageFiles: stagedFiles.length ? stagedFiles : undefined };
@@ -262,7 +254,7 @@ async function runPiAgentAs(
     [
       buildPiTurnPreamble(promptRequest, {
         now: now(),
-        ...(fresh && newSessionReason ? { newSessionReason } : {}),
+        ...(fresh && sessionLost ? { sessionLost: true } : {}),
         // A fresh session's text history already ends with the stopped row.
         ...(fresh ? {} : { continuedAfterStop: true }),
       }),
@@ -379,16 +371,16 @@ async function runPiAgentAs(
       // One pi response (+ its AskUserQuestion round trips).
       for (;;) {
         const fresh = !previous;
-        const currentModel = chain[attempt];
+        const model = piModelFor(chain[attempt], fresh);
         attemptShowedOutput = false;
         const piRequest: PiResponseRequest = {
           user: principal,
           input: input ?? { kind: "prompt", text: firstInputText(fresh), ...(images.length ? { images } : {}) },
+          ...(model ? { model } : {}),
+          ...(effort ? { reasoningEffort: effort } : {}),
           ...(fresh
             ? {
                 instructions: frozenInstructions(),
-                ...(currentModel ? { model: currentModel } : {}),
-                ...(effort ? { reasoningEffort: effort } : {}),
                 ...(capabilities.piRuntimeFacts.readOnlyBuiltins ? { readOnly: true } : {}),
                 ...(capabilities.piRuntimeFacts.nonInteractive ? { interactive: false } : {}),
               }
@@ -408,9 +400,6 @@ async function runPiAgentAs(
               onRetry: () => events?.onStatus?.("pi-gateway가 바빠서 잠시 후 다시 시도하는 중…"),
             },
           });
-          if (fresh && conversationId) {
-            store.setConversationPiSessionProfile(principal, conversationId, piSessionKey(result.responseId), profileOf(attempt));
-          }
           break;
         } catch (error) {
           if (signal?.aborted || input) throw error;
@@ -421,7 +410,7 @@ async function runPiAgentAs(
             healed = true;
             agentLogger.warn({ conversationId, previous, kind: error.kind, code: error.code }, "pi session missing; retrying with stored history");
             previous = undefined;
-            newSessionReason = "session_lost";
+            sessionLost = true;
             continue;
           }
           // pi fails a turn with no text, reasoning or tool call as
@@ -452,7 +441,9 @@ async function runPiAgentAs(
               { conversationId, from: chain[attempt - 1] ?? null, to: chain[attempt] ?? null, detail: String(error) },
               "model fallback after transient error",
             );
-            previous = undefined;
+            // pi never commits the failed turn: the same session continues on
+            // the next model — unless pi's default cannot be named (a new one then).
+            if (!piModelFor(chain[attempt], false)) previous = undefined;
             events?.onThinkingReset?.();
             events?.onStatus?.(`모델을 ${chain[attempt] ?? "기본 모델"}(으)로 전환해 다시 시도 중…`);
             continue;
