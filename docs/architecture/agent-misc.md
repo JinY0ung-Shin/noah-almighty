@@ -20,7 +20,8 @@
   when the owner stored `SSH_PRIVATE_KEY` AND the current viewer class has at least one allowed hex-ssh tool
   (`sshActive`). Noah spawns `scripts/hex-ssh-policy-proxy.mjs`, which runs the upstream command from
   `config.hexSshCommand` (`HEX_SSH_COMMAND`, default `hex-ssh-mcp`) and filters `tools/list` by
-  `HEX_SSH_ALLOWED_TOOLS`. The per-viewer-class allowlist holds three times: that proxy, the relay pool
+  `HEX_SSH_ALLOWED_TOOLS` (it also refuses and strips the local-path arguments `privateKeyPath`/`localPath` and
+  passes `SSH_PRIVATE_KEY` on only as key text — `secrets-ssh.md`, review R6). The per-viewer-class allowlist holds three times: that proxy, the relay pool
   (`allowTool` filters `tools/list` AND refuses `tools/call`), and the `/mcp` endpoint's `allowCall`. Model-facing
   names stay `mcp__hex-ssh__<tool>`. The upstream package is installed into the image at build time, not via
   runtime `npx`.

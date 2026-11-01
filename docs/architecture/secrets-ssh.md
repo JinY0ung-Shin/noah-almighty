@@ -126,7 +126,14 @@
   offered (review #1, 2026-11-01): left out of `HEX_SSH_TOOLS` (stored policies drop them on read), filtered by the
   relay's `allowTool`, and refused by the policy proxy whatever its allowlist (`HEX_SSH_NEVER_OFFERED_TOOLS`); both
   surfaces say there is no local↔remote transfer (`HEX_SSH_NO_TRANSFER_SENTENCE`). A future transfer tool must be
-  Noah's own, reading the sandbox through `PinnedDir`. Likewise every file Noah reads OUT of a user-pushed clone
+  Noah's own, reading the sandbox through `PinnedDir`. The same holds for ARGUMENTS (review R6): every offered
+  hex-ssh 1.9.2 tool takes `privateKeyPath`, read with `readFileSync` in Noah's container (existence oracle, auth
+  with any key on Noah's disk, a `/dev/zero` hang), so the policy proxy answers any call carrying `privateKeyPath`
+  (or `localPath`) with an English tool error that says to call again without it, and strips both from every listed
+  input schema — the model never sees them, so no metacognition sentence is needed. The key reaches hex-ssh ONLY as
+  `SSH_PRIVATE_KEY` env TEXT: hex-ssh reads any value not starting with `-----` as a PATH, so the proxy passes it
+  on trimmed when it is key text and drops it otherwise. known_hosts / ssh_config locations are env-only
+  (`KNOWN_HOSTS_PATH` is Noah's per-user trust file; `SSH_CONFIG_PATH` is not set by Noah). Likewise every file Noah reads OUT of a user-pushed clone
   (CLAUDE.md, manifests, `.mcp.json`, SKILL.md) goes through `plugins.ts` `readTextBelow` (no link below the root,
   final component O_NOFOLLOW), a marketplace source must stay inside its repo (`containedPluginDir`), and a linked
   `<root>/skills` is never synced (`piSkills.ts` `skillDirsOf`). Phase 0 hardening (2026-10-28) still applies to them:

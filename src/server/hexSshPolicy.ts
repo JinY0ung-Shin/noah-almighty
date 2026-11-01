@@ -28,6 +28,15 @@ export type HexSshTool = (typeof HEX_SSH_TOOLS)[number];
  * the policy proxy itself (`scripts/hex-ssh-policy-proxy.mjs`), whatever its
  * allowlist says. A future transfer tool must be Noah's own, reading the sandbox
  * through `PinnedDir`, never a path handed to hex-ssh.
+ *
+ * The same rule covers ARGUMENTS of the offered tools: every hex-ssh 1.9.2 tool
+ * takes `privateKeyPath`, which hex-ssh reads with readFileSync in Noah's
+ * container (an existence oracle over Noah's disk, SSH auth with any key file on
+ * it, a `/dev/zero` hang). The policy proxy refuses any call carrying it (or
+ * `localPath`) and strips both from every listed input schema; Noah supplies the
+ * key only through the child's env (`SSH_PRIVATE_KEY`, passed on only as key
+ * TEXT — hex-ssh would read any other value as a path too). known_hosts and
+ * ssh_config locations are env-only (`KNOWN_HOSTS_PATH`, `SSH_CONFIG_PATH`).
  */
 export const HEX_SSH_NEVER_OFFERED_TOOLS = ["ssh-upload", "ssh-download"] as const;
 

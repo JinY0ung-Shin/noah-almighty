@@ -450,6 +450,89 @@ describe("PiMcpProxyPool", () => {
   });
 });
 
+// ---- hex-ssh never takes a local path (review R6) ------------------------------------------------
+
+/**
+ * A stand-in for hex-ssh 1.9.2: every tool has its connection props
+ * (`privateKeyPath` included); `args` echoes the arguments it RECEIVED, `keyenv`
+ * the SSH_PRIVATE_KEY it was started with.
+ */
+const HEX_FAKE = `
+import readline from "node:readline";
+const conn = { host: { type: "string" }, user: { type: "string" }, privateKeyPath: { type: "string", description: "Path to SSH private key (optional)" }, port: { type: "number" } };
+const tools = [
+  { name: "ssh-read-lines", inputSchema: { type: "object", properties: { ...conn, filePath: { type: "string" } }, required: ["host", "filePath"] } },
+  { name: "remote-ssh", inputSchema: { type: "object", properties: { ...conn, command: { type: "string" } }, required: ["host", "privateKeyPath", "command"] } },
+  { name: "ssh-upload", inputSchema: { type: "object", properties: { ...conn, localPath: { type: "string" } } } },
+];
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  let m; try { m = JSON.parse(line); } catch { return; }
+  if (m.method === "initialize") return send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "hex-fake", version: "1" } } });
+  if (m.method === "tools/list") return send({ jsonrpc: "2.0", id: m.id, result: { tools } });
+  if (m.method === "tools/call") {
+    const text = m.params.arguments?.command === "keyenv" ? JSON.stringify(process.env.SSH_PRIVATE_KEY ?? null) : "saw " + JSON.stringify(m.params.arguments ?? {});
+    return send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text }] } });
+  }
+  if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+rl.on("close", () => process.exit(0));
+`;
+
+describe("hex-ssh local-path arguments (review R6)", () => {
+  const pools: PiMcpProxyPool[] = [];
+  afterEach(async () => {
+    await Promise.allSettled(pools.splice(0).map((pool) => pool.close()));
+  });
+  async function hexPool(config: ReturnType<typeof setup>["config"], key: string) {
+    const file = path.join(dir(), `hex-fake-${randomUUID().slice(0, 6)}.mjs`);
+    fs.writeFileSync(file, HEX_FAKE);
+    const plan = await planPiMcpProxies(
+      planInput(
+        { ...config, hexSshCommand: `${process.execPath} ${file}` },
+        { sshActive: true, sshSecrets: { SSH_PRIVATE_KEY: key }, hexSshAllowedTools: ["ssh-read-lines", "remote-ssh"] },
+      ),
+    );
+    const pool = new PiMcpProxyPool(plan.upstreams);
+    pools.push(pool);
+    return pool;
+  }
+  const PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n";
+  const text = (result: Awaited<ReturnType<PiMcpProxyPool["callTool"]>>) => (result.content[0] as { text: string }).text;
+
+  it("strips privateKeyPath from every listed schema and refuses a call carrying it before hex-ssh sees it", async () => {
+    const pool = await hexPool(setup().config, PEM);
+    const tools = await pool.listTools("hex-ssh");
+    expect(tools.map((t) => t.name).sort()).toEqual(["remote-ssh", "ssh-read-lines"]);
+    for (const tool of tools) {
+      expect(Object.keys(tool.inputSchema.properties ?? {})).not.toContain("privateKeyPath");
+      expect(tool.inputSchema.required ?? []).not.toContain("privateKeyPath");
+      expect(Object.keys(tool.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["host", "user", "port"]));
+    }
+    expect(tools.find((t) => t.name === "remote-ssh")!.inputSchema.required).toEqual(["host", "command"]);
+
+    for (const value of ["/data/noah.db", "/dev/zero", ""]) {
+      const refused = await pool.callTool("hex-ssh", "ssh-read-lines", { host: "h", filePath: "/etc/hosts", privateKeyPath: value });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toBe(
+        "hex-ssh does not accept 'privateKeyPath': hex-ssh runs on Noah's server, not in your sandbox, so a local path would name a file on Noah's disk. Noah supplies the SSH key itself (the owner's SSH_PRIVATE_KEY secret). Call 'ssh-read-lines' again without 'privateKeyPath'.",
+      );
+    }
+    // Without it the call goes through untouched.
+    const ok = await pool.callTool("hex-ssh", "ssh-read-lines", { host: "h", filePath: "/etc/hosts" });
+    expect(text(ok)).toBe('saw {"host":"h","filePath":"/etc/hosts"}');
+  });
+
+  it("passes SSH_PRIVATE_KEY on only as key text, never as a path hex-ssh would read", async () => {
+    const { config } = setup();
+    const keyEnv = async (key: string) => text(await (await hexPool(config, key)).callTool("hex-ssh", "remote-ssh", { host: "h", command: "keyenv" }));
+    expect(await keyEnv(PEM)).toBe(JSON.stringify(PEM));
+    expect(await keyEnv(`\n  ${PEM}`)).toBe(JSON.stringify(PEM));
+    expect(await keyEnv("/home/node/.ssh/other_user_key")).toBe("null");
+  });
+});
+
 // ---- tools/list pagination is bounded (review #10) ------------------------------------------------
 
 /**
