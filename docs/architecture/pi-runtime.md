@@ -131,11 +131,15 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
 6. **Errors** — 404/409 on a continued session, or 400 `model_not_configured` (the operator removed the session's
    model from pi and the turn could not name pi's default; `isLostPiSession`) → once, a new session from history
    (status-free, the model is told in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). An empty turn —
-   pi's `empty_response` (no text, reasoning or tool call; pi does NOT commit it) — is re-sent ONCE as the same
-   request (same `previous_response_id`, or the same fresh session; status line `모델이 빈 응답을 보내 한 번 더 시도하는 중…`),
-   never once a text delta, a question or a mid-turn steer reached the user, or for a steer follow-up turn. A model
-   fallback chain (routines, task API: `modelFallback`) retries the uncommitted turn on the next model in the SAME
-   session (a new one only when pi's default cannot be named).
+   pi's `empty_response` (no text, reasoning or file output — a tool call alone does not count; pi does NOT commit it)
+   — is re-sent ONCE as the same request (same `previous_response_id`, or the same fresh session; status line
+   `모델이 빈 응답을 보내 한 번 더 시도하는 중…`), never for a steer follow-up turn. A model fallback chain (routines,
+   task API: `modelFallback`) retries the uncommitted turn on the next model in the SAME session (a new one only when
+   pi's default cannot be named). All three recoveries (heal, empty retry, fallback) re-send the attempt, and pi
+   rewound the failed turn, so none runs once the attempt SHOWED something (a text delta, a question — answered or
+   not — or a delivered steer) or ACTED (`onToolStart`/`onAgentStart`: a tool ran or a subagent started) —
+   `attemptRepeatable` in `runPiAgent`; the failure then stands (review #14). Trade-off: a routine loses its fallback
+   once a tool ran.
 7. **Stop / failure** — a stop `cancel`s the live response, so pi COMMITS the partial turn (`incomplete`) and the runner
    reports its id. The chat route's cancel and error paths keep that id as `agent_session_id` (`sessionAfterAbort`):
    the next turn continues it, and the stopped row already shows the same partial. They clear it (history rebuild —

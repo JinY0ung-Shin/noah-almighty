@@ -26,9 +26,10 @@
  *     session id and the row's resume point, so a rewind forks from it.
  *  4. A lost session (404/409) self-heals once from the text history; 503/429
  *     at stream open retry with backoff; an empty turn (`empty_response`, not
- *     committed by pi) is re-sent once while nothing was shown (a steer pi
- *     already delivered counts as shown); a model fallback chain (routines,
- *     the task API) continues the same session on the next model.
+ *     committed by pi) is re-sent once; a model fallback chain (routines, the
+ *     task API) continues the same session on the next model. Each of these
+ *     re-sends the attempt, so none runs once it showed anything (text, a
+ *     question, a delivered steer) or acted (a tool, a subagent).
  *  5. Mid-turn messages (design P2): a steer is handed to the RUNNING pi
  *     response (`runPiTurn`), which delivers it at its next tool boundary; one
  *     pi did not deliver before the response ended is sent, together with the
@@ -337,6 +338,13 @@ async function runPiAgentAs(
   // Whether the CURRENT pi request already showed the user anything (text, a
   // question): an empty turn is only retried while nothing has.
   let attemptShowedOutput = false;
+  // Whether it already ACTED: ran a tool or started a subagent. pi rewinds a
+  // failed turn, so a re-sent attempt would run those side effects again with
+  // no record of the first run (a second add_todos, DM, push).
+  let attemptActed = false;
+  // Only an attempt that neither showed nor did anything may be sent again
+  // (the empty-turn retry, a model fallback, the lost-session heal).
+  const attemptRepeatable = (): boolean => !attemptShowedOutput && !attemptActed;
   // A steer pi delivered mid-turn is persisted and shown, and pi rewinds a
   // failed turn with it inside: that attempt is never silently re-sent.
   steers?.onChange((record) => {
@@ -360,6 +368,16 @@ async function runPiAgentAs(
           },
         }
       : {}),
+    // Always wrapped (even for a host without the callback): the run itself
+    // needs to know a tool ran.
+    onToolStart: (event) => {
+      attemptActed = true;
+      events?.onToolStart?.(event);
+    },
+    onAgentStart: (event) => {
+      attemptActed = true;
+      events?.onAgentStart?.(event);
+    },
     ...(events?.onTextFold
       ? {
           onTextFold: (text: string) => {
@@ -387,6 +405,7 @@ async function runPiAgentAs(
         const fresh = !previous;
         const model = piModelFor(chain[attempt], fresh);
         attemptShowedOutput = false;
+        attemptActed = false;
         const piRequest: PiResponseRequest = {
           user: principal,
           input: input ?? { kind: "prompt", text: firstInputText(fresh), ...(images.length ? { images } : {}) },
@@ -420,6 +439,10 @@ async function runPiAgentAs(
           break;
         } catch (error) {
           if (signal?.aborted || input) throw error;
+          // Every recovery below re-sends this attempt's input, so none runs
+          // once the attempt showed the user something, ran a tool, started a
+          // subagent or had a question answered: the failure stands.
+          if (!attemptRepeatable()) throw error;
           // The stored session is gone (pi restarted with a wiped DB, another
           // user's id, a session stuck on a question) or can no longer run (the
           // operator removed its model from pi): rebuild from history once.
@@ -430,20 +453,16 @@ async function runPiAgentAs(
             sessionLost = true;
             continue;
           }
-          // pi fails a turn with no text, reasoning or tool call as
-          // `empty_response` and does NOT commit it, so the same request (same
-          // previous_response_id, or the same fresh session) runs once more — the
-          // retired SDK runner's one empty-turn retry. Never once the user saw
-          // output, and never for a follow-up turn (`input`, refused above). A
+          // pi fails a turn with no text, reasoning or file output as
+          // `empty_response` (a tool call alone does not count) and does NOT
+          // commit it, so the same request (same previous_response_id, or the
+          // same fresh session) runs once more — the retired SDK runner's one
+          // empty-turn retry. Never once the attempt showed or did anything, and
+          // never for a follow-up turn (`input`; both refused above). A
           // steer still queued simply waits: once the retried turn completes it
           // is delivered as the follow-up turn below, as it would have been
           // after a non-empty answer (review-2 L2).
-          if (
-            !emptyRetried &&
-            error instanceof PiTurnFailedError &&
-            error.code === "empty_response" &&
-            !attemptShowedOutput
-          ) {
+          if (!emptyRetried && error instanceof PiTurnFailedError && error.code === "empty_response") {
             emptyRetried = true;
             agentLogger.warn({ conversationId, previous: previous ?? null }, "pi returned an empty turn; retrying once");
             events?.onStatus?.("모델이 빈 응답을 보내 한 번 더 시도하는 중…");

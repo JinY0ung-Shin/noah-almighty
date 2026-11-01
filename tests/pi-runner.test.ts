@@ -843,6 +843,87 @@ describe("runPiAgent", () => {
     expect(follow.requests).toHaveLength(2);
   });
 
+  it("never re-sends an attempt that ran a tool, started a subagent or had a question answered (review #14)", async () => {
+    const { store, config, base } = setup();
+    const failed = (id: string, code: string, before: PiStreamEvent[] = []): PiStreamEvent[] => [
+      ev("response.created", { response: { id, model: "fake-model", status: "in_progress" } }),
+      ...before,
+      ev("response.failed", { response: { id, status: "failed", error: { code, message: code } } }),
+    ];
+    const toolRan = [
+      ev("response.tool_use_started", { tool_use_id: "t1", name: "mcp__todo__add_todos" }),
+      ev("response.tool_use", { tool_use_id: "t1", name: "mcp__todo__add_todos", input: { items: [{ title: "x" }] } }),
+      ev("response.tool_result", { tool_use_id: "t1", content: "added", is_error: false }),
+    ];
+    const subagent = [
+      ev("response.tool_use_started", { tool_use_id: "a1", name: "Agent" }),
+      ev("response.tool_use", { tool_use_id: "a1", name: "Agent", input: { description: "look", prompt: "p", subagent_type: "general-purpose" } }),
+      ev("response.tool_result", { tool_use_id: "a1", content: "done", is_error: false }),
+    ];
+
+    // Positive control: an empty turn that did nothing is still retried once.
+    const plain = fakeClient([() => failed("resp_t_2", "empty_response"), () => textTurn("resp_t_3", "ok")]);
+    await runPiAgent(base({ resumeSessionId: "resp_t_1" }), [], config, store, undefined, undefined, { client: plain.client });
+    expect(plain.requests).toHaveLength(2);
+
+    // A tool ran (silently, no text) and the turn came back empty: no retry,
+    // even for a host without onToolStart; the host's callback still fires.
+    for (const events of [undefined, recorder({ onToolStart: () => undefined }).events]) {
+      const tool = fakeClient([() => failed("resp_t_2", "empty_response", toolRan), () => textTurn("resp_t_3", "again")]);
+      await expect(
+        runPiAgent(base({ resumeSessionId: "resp_t_1" }), [], config, store, events, undefined, { client: tool.client }),
+      ).rejects.toMatchObject({ code: "empty_response" });
+      expect(tool.requests).toHaveLength(1);
+    }
+    const toolStarts: unknown[] = [];
+    const seen = fakeClient([() => failed("resp_t_2", "empty_response", toolRan)]);
+    await runPiAgent(base({ resumeSessionId: "resp_t_1" }), [], config, store, recorder({ onToolStart: (e) => void toolStarts.push(e) }).events, undefined, {
+      client: seen.client,
+    }).catch(() => undefined);
+    expect(toolStarts).toHaveLength(1);
+
+    // A subagent started: same.
+    const agent = fakeClient([() => failed("resp_t_2", "empty_response", subagent), () => textTurn("resp_t_3", "again")]);
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_t_1" }), [], config, store, undefined, undefined, { client: agent.client }),
+    ).rejects.toMatchObject({ code: "empty_response" });
+    expect(agent.requests).toHaveLength(1);
+
+    // Model fallback (a routine on a non-default model): a tool ran, then an
+    // in-band rate_limit failure — no second attempt on the default model.
+    const routine = base({ headless: true, allowHeadlessTools: true, modelFallback: true, model: "m-opus" });
+    const fallback = fakeClient([() => failed("resp_t_2", "rate_limit", toolRan), () => textTurn("resp_t_3", "from the default")]);
+    await expect(runPiAgent(routine, [], config, store, undefined, undefined, { client: fallback.client })).rejects.toMatchObject({
+      code: "rate_limit",
+    });
+    expect(fallback.requests).toHaveLength(1);
+    // …while the same failure before anything ran still falls back (control).
+    const clean = fakeClient([() => failed("resp_t_2", "rate_limit"), () => textTurn("resp_t_3", "from the default")]);
+    expect((await runPiAgent(routine, [], config, store, undefined, undefined, { client: clean.client })).text).toBe("from the default");
+    expect(clean.requests.map((r) => r.model)).toEqual(["m-opus", undefined]);
+
+    // A question was answered, then the continuation failed: neither the
+    // fallback nor the lost-session heal asks it again.
+    const asked = async (second: Step, request: AgentRequest) => {
+      const questions: unknown[] = [];
+      const { client, requests } = fakeClient([() => questionTurn("resp_t_2", "call_1"), second, () => textTurn("resp_t_9", "again")]);
+      const events = recorder({
+        onQuestion: async (q) => {
+          questions.push(q);
+          return { behavior: "completed", result: { answers: { "Color?": "Blue" } } };
+        },
+      }).events;
+      await expect(runPiAgent(request, [], config, store, events, undefined, { client, retry: { attempts: 1 } })).rejects.toBeInstanceOf(Error);
+      return { questions, requests };
+    };
+    const afterFallback = await asked(() => failed("resp_t_3", "rate_limit"), { ...routine, externalTaskApi: true, headless: false });
+    expect(afterFallback.questions).toHaveLength(1);
+    expect(afterFallback.requests).toHaveLength(2);
+    const afterHeal = await asked(() => new PiGatewayError("not_found", { status: 404 }), base({ resumeSessionId: "resp_t_1" }));
+    expect(afterHeal.questions).toHaveLength(1);
+    expect(afterHeal.requests).toHaveLength(2);
+  });
+
   it("falls back once onto pi-gateway's default model with a fresh session", async () => {
     const { store, config, base } = setup();
     const { client, requests } = fakeClient([
