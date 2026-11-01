@@ -184,15 +184,22 @@ function knowledgeRepoSection(
  * `mode` tailors permission scope:
  *  - `owner`    — full surface incl. register_repo/remove_repo.
  *  - `teammate` — elevated trusted user: NO register_repo/remove_repo
- *                 (registration/removal is owner-only); the copy is made in the
- *                 teammate's OWN sandbox.
+ *                 (registration/removal is owner-only) and NO copy — the
+ *                 teammate reads the owner's clone through the git_repo read
+ *                 tools (review #11).
  */
 function gitRepoWorkflowSection(
   mode: "owner" | "teammate",
 ): string {
-  const scope = mode === "teammate"
-    ? "Use the owner's already-registered repos via `mcp__git_repo__list_repos`; **registering or removing** a repository is owner-only. "
-    : "Register work/code repositories with `mcp__git_repo__register_repo`, or select one with `mcp__git_repo__list_repos`. ";
+  if (mode === "teammate") {
+    // A colleague's conversation runs in THEIR read-only sandbox: the owner's
+    // repo is never copied there (review #11), it is read through MCP tools.
+    return "General **git repo work** is separate from personal knowledge. BEFORE repository work read `mcp__system__read_manual` topic `git-repositories`. " +
+      "Use the owner's already-registered repos via `mcp__git_repo__list_repos`; **registering or removing** a repository is owner-only. " +
+      "This conversation does not run in the owner's sandbox, so the owner's repositories are never copied into yours: read one with `mcp__git_repo__list_files` / `mcp__git_repo__read_file` / `mcp__git_repo__grep` (by name; `mcp__git_repo__open_repo` just selects it for the conversation). You cannot edit or commit it from here — tell the user what to change so the owner can do it in their own conversation. " +
+      "Remote sync/push stays MCP-only. These tools do not manage GitHub issues/PRs/releases.";
+  }
+  const scope = "Register work/code repositories with `mcp__git_repo__register_repo`, or select one with `mcp__git_repo__list_repos`. ";
   return "General **git repo work** is separate from personal knowledge. BEFORE repository work read `mcp__system__read_manual` topic `git-repositories`. " +
     scope + "`mcp__git_repo__open_repo` copies the repo into your sandbox and returns the copy's path — usable in the same turn, and the selection persists for the conversation. Edit and test the copy with your built-in tools; save with `mcp__git_repo__commit` (git commits made inside the sandbox are not saved), then `mcp__git_repo__push`; `close_repo` ends the selection. " +
     "Remote sync/push stays MCP-only. Public reads may work without a token; push requires write permission. These tools do not manage GitHub issues/PRs/releases.";
@@ -642,11 +649,14 @@ function imageFilesSection(request: AgentRequest): string | null {
  */
 function piActiveRepoTurnLine(request: AgentRequest): string | null {
   const name = request.activeRepoName?.trim();
-  const piCopy = request.piRuntime?.activeRepoDir;
-  if (!name || !piCopy || !mcpToolGroupEnabled(request, "git_repo")) return null;
-  if (request.piRuntime?.readOnlyBuiltins) {
-    return `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Its copy is \`${piCopy}/\` in this sandbox, but this conversation is read-only (no write/edit/bash): read it with \`read\`/\`ls\`/\`find\`/\`grep\` and absolute paths; you cannot edit, test or commit it here.`;
+  const pi = request.piRuntime;
+  if (!name || !pi || !mcpToolGroupEnabled(request, "git_repo")) return null;
+  if (pi.sandboxOwner === "viewer" || pi.sandboxOwner === "nobody") {
+    // Not the owner's sandbox: no copy of the owner's repo exists here (review #11).
+    return `**Working repository (this turn)**: the avatar owner's registered git repository '${name}' is open for this conversation, but this conversation does not run in the owner's sandbox, so there is NO copy of it in yours and no /workspace path to it: read it with \`mcp__git_repo__list_files\` / \`mcp__git_repo__read_file\` / \`mcp__git_repo__grep\` (name='${name}'). You cannot edit, commit or push it from here — to change it, tell the user what to change so the owner can do it in their own conversation.`;
   }
+  const piCopy = pi.activeRepoDir;
+  if (!piCopy) return null;
   return (
     `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it, but never checkout/switch/reset/rebase there (commit refuses a copy whose git HEAD left the commit Noah gave it). ` +
     `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +

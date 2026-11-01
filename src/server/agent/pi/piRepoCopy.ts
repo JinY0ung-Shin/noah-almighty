@@ -50,8 +50,8 @@ const READBACK_MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_DEPTH = 64;
 const MAX_COMMIT_MESSAGE_CHARS = 10_000;
 
-/** A path segment for the owner id (UUIDs pass; anything else is hashed). */
-function ownerSegment(ownerId: string): string {
+/** A path segment for the owner id (UUIDs pass; anything else is hashed): `repos/<seg>` and the record prefix. */
+export function piRepoOwnerSegment(ownerId: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(ownerId)
     ? ownerId
     : `h-${createHash("sha256").update(ownerId, "utf8").digest("hex").slice(0, 32)}`;
@@ -59,13 +59,13 @@ function ownerSegment(ownerId: string): string {
 
 /** `/workspace/repos/<owner-seg>/<name>` — what the model is told. */
 export function piRepoCopySandboxPath(ownerId: string, name: string): string {
-  return path.posix.join(PI_SANDBOX_ROOT, "repos", ownerSegment(ownerId), name);
+  return path.posix.join(PI_SANDBOX_ROOT, "repos", piRepoOwnerSegment(ownerId), name);
 }
 
 /** `repos/<owner-seg>` of the viewer's sandbox, pinned (created 0700 with `create`); null when unusable. */
 function pinnedCopyParent(workspace: PiWorkspace, ownerId: string, create: boolean): PinnedDir | null {
   if (!workspace.hostRoot) return null;
-  return piSandboxDir(workspace, ["repos", ownerSegment(ownerId)], { create, mode: 0o700 });
+  return piSandboxDir(workspace, ["repos", piRepoOwnerSegment(ownerId)], { create, mode: 0o700 });
 }
 
 /** The copy folder itself, pinned; null when missing or not a plain folder. */
@@ -92,11 +92,11 @@ interface CopyState {
 }
 
 function statePath(config: AppConfig, principal: string, ownerId: string, name: string): string {
-  return path.join(config.dataDir, "pi-repo-copies", piUserKey(principal), `${ownerSegment(ownerId)}--${name}.json`);
+  return path.join(config.dataDir, "pi-repo-copies", piUserKey(principal), `${piRepoOwnerSegment(ownerId)}--${name}.json`);
 }
 
 /** Every Noah-side copy record of one user (account deletion sweeps it). */
-export function piRepoCopyStateDir(config: AppConfig, principal: string): string {
+export function piRepoCopyStateDir(config: Pick<AppConfig, "dataDir">, principal: string): string {
   return path.join(config.dataDir, "pi-repo-copies", piUserKey(principal));
 }
 

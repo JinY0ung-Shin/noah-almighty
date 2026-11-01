@@ -298,8 +298,26 @@ start → `locked`, and `open_repo`/`sync_repo`/`commit` of another conversation
 persistent HOLDER in the copy record (`claimPiRepoCopy`: another conversation may take the copy over only while it
 is clean, or once the holder no longer has the repo open; else turn start → `held`, the tools refuse). The chat route
 answers both with 409, the scheduler skips the routine (`ROUTINE_REPO_BUSY`).
-A trusted colleague gets their own copy in their sandbox. Both surfaces: the prompt's working-repo section and
-describe_system's working-repo line name the copy path and the commit → push flow (`PiRuntimeFacts.activeRepoDir`).
+Both surfaces: the prompt's working-repo section and describe_system's working-repo line name the copy path and the
+commit → push flow (`PiRuntimeFacts.activeRepoDir`, set only when `sandboxOwner === "owner"`).
+
+**No copy outside the owner's sandbox (review #11, user decision 2026-11-01).** A run whose sandbox is not the
+avatar owner's — a trusted colleague's chat — never gets a copy of the owner's repository (it used to: working tree
+AND `.git`, history included, in the colleague's persistent sandbox, outliving the trust that made it). `open_repo`
+only selects the repo for the conversation, turn start (`resolveActiveWorkspaceRepo`) only ensures the clone (no
+copy, no copy lock), and the colleague reads Noah's canonical clone through `mcp__git_repo__list_files` /
+`read_file` / `grep` (`GIT_REPO_READ_TOOL_NAMES`, `gitRepoRead.ts`: every path component lstat-checked, links never
+followed, `..`/`.git` refused, 1 MB / 2 000-line / 1 000-entry caps; `grep` is `git grep --cached` in the clone,
+64 KB / 30 s). They sit on every git_repo server (static catalog), `mcpAllowedTools` admits them only when
+`sandboxOwner !== "owner"`, and each handler re-checks `elevated`, not-the-owner's-sandbox and the repo still
+registered. `commit` refuses with a redirect; `sync_repo`/`push` act on the clone as before. The per-turn line, the
+frozen teammate git section and describe_system's pi lines point the colleague at the read tools, never a
+`/workspace` path. Existing colleague copies are retired at boot by `retirePiColleagueRepoCopies`
+(`retirementGate` + marker `retired:pi_colleague_repo_copies`): every `u-<key>/repos/<seg>` whose `<seg>` is not
+that user's own is moved — one rename through pinned folders, never followed or deleted — to
+`<PI_WORKSPACES_DIR>/.noah-retired/<stamp>/u-<key>/repos/<seg>` (same filesystem, so no EXDEV; pi's sandboxd mounts
+only `u-<24 hex>`, so no sandbox can reach it; reserved forever, never pruned — the operator's to clean up), and the
+matching `pi-repo-copies` records go to `<dataDir>/retired/<stamp>/` (`quarantineRetired`).
 
 ## Decks
 

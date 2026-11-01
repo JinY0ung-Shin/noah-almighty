@@ -317,6 +317,7 @@ export async function buildRunCapabilities(
     GIT_REPO_SERVER_NAME,
     GIT_REPO_TOOL_NAMES,
     GIT_REPO_PI_COMMIT_TOOL_NAME,
+    GIT_REPO_READ_TOOL_NAMES,
   } = await import("./gitRepoTools.js");
   const { buildSkillsServer, SKILLS_SERVER_NAME, SKILLS_TOOL_NAMES } =
     await import("./skillsTools.js");
@@ -774,7 +775,9 @@ export async function buildRunCapabilities(
         skills: (runOptions.piSkills?.entries ?? []).map((entry) => ({ ...entry })),
         ...(runOptions.piSkills?.omitted ? { skillsOmitted: runOptions.piSkills.omitted } : {}),
         // The open working repo's SANDBOX copy (design D1) — where the model works.
-        ...(request.activeRepoName && gitRepoToolsEnabled
+        // Only in the OWNER's own sandbox: a colleague's run has no copy and reads
+        // the repo through the git_repo read tools (review #11).
+        ...(request.activeRepoName && gitRepoToolsEnabled && sandboxOwner === "owner"
           ? { activeRepoDir: piRepoCopySandboxPath(request.avatar.id, normalizeGitRepoName(request.activeRepoName)) }
           : {}),
       };
@@ -1203,6 +1206,8 @@ export async function buildRunCapabilities(
       ...(gitRepoToolsEnabled ? GIT_REPO_TOOL_NAMES : []),
       // The sandbox copy's commit (registered by the pi git_repo build).
       ...(gitRepoToolsEnabled ? [GIT_REPO_PI_COMMIT_TOOL_NAME] : []),
+      // Read tools over the owner's clone: runs NOT in the owner's sandbox (review #11).
+      ...(gitRepoToolsEnabled && sandboxOwner !== "owner" ? GIT_REPO_READ_TOOL_NAMES : []),
       ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
       ...(brainActive ? BRAIN_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),

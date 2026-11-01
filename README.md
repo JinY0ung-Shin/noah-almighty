@@ -398,6 +398,10 @@ are cleaned out of an existing deployment at boot. Before any of that deletes da
   path relative to `APP_DATA_DIR` (chat media, workspace trees and copies, SDK session files, avatar
   images, `runtime/craft-purge`). A symlink is moved as a link; its target is never touched. An item
   on another filesystem (EXDEV) is left in place, logged, and retried on later boots.
+- **moves trusted colleagues' copies of other users' repositories** (made by older releases in the
+  colleague's own pi sandbox) to `PI_WORKSPACES_DIR/.noah-retired/<same stamp>/u-<key>/repos/<owner>`
+  — on the sandbox volume, outside every sandbox mount — once; colleagues now read the owner's repository
+  through read-only tools instead. Clean it up like `retired/`.
 
 If the backup fails (disk full, `backups` is not a folder or is a symlink), the boot logs
 `database backup before retirement FAILED` and skips EVERY retirement step — nothing is dropped, purged

@@ -44,8 +44,10 @@ export type ActiveRepoResolution =
  * repo NAME. The `elevated` gate is belt-and-suspenders: open_repo is itself
  * elevated-only, but trust may have changed since the repo was opened.
  *
- * A pi run (`piWorkspace` set) never works in this clone: it works on its
- * sandbox COPY (design D1, `agent/pi/piRepoCopy.ts`), made here when missing
+ * A pi run (`piWorkspace` set) never works in this clone. A run in someone
+ * else's sandbox than the owner's (a trusted colleague's chat) gets no copy at
+ * all (review #11): it reads the clone through the git_repo read tools. The
+ * OWNER's run works on its sandbox COPY (design D1, `agent/pi/piRepoCopy.ts`), made here when missing
  * (an existing one is left alone — the agent's uncommitted edits stay, and a
  * commit from a stale copy is refused by `mcp__git_repo__commit`). That copy is
  * ONE per (principal, owner, repo), shared by every conversation of the
@@ -86,6 +88,18 @@ export async function resolveActiveWorkspaceRepo(opts: {
   }
 
   const clonePath = gitRepoClonePath(avatar.id, repoCtx.name, config);
+  if (piWorkspace && piWorkspace.principal !== avatar.id) {
+    // A trusted colleague's run (their own read-only sandbox): the owner's repo
+    // is NEVER copied there (review #11) — the turn names it and the colleague
+    // reads Noah's clone through mcp__git_repo__list_files/read_file/grep. No
+    // copy, so nothing to lock or claim; only the clone must exist.
+    try {
+      const cwd = await ensureGitRepoClone(repoCtx);
+      return { kind: "ok", cwd, repoName: repoCtx.name, release: () => {} };
+    } catch (error) {
+      return { kind: "error", reason: "open_failed", detail: scrubGitError(error) };
+    }
+  }
   if (piWorkspace) {
     const ref = { config, workspace: piWorkspace, ownerId: avatar.id, name: repoCtx.name, clonePath };
     const lockKey = piRepoCopyLockKey(ref);

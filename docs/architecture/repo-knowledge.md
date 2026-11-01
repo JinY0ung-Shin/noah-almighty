@@ -58,7 +58,9 @@
   `git_repositories` table (`get/list/upsert/delete/markGitRepoSynced`), plumbing in `gitRepos.ts`, MCP
   server in `agent/gitRepoTools.ts`. **Single working-surface model (NOT MCP file CRUD):** owner-only
   `register_repo`/`remove_repo`; owner OR trusted may `sync_repo`/`push` (remote git) and
-  `open_repo`/`close_repo`. There are **NO status/list_files/read_file/write_file/delete_file/diff MCP tools** —
+  `open_repo`/`close_repo`. There are **NO status/write_file/delete_file/diff MCP tools** (the read-only
+  `list_files`/`read_file`/`grep` exist ONLY for a run outside the owner's sandbox — a trusted colleague's chat, which
+  never gets a copy, review #11; see [`pi-runtime.md`](pi-runtime.md) "Working repositories") —
   the avatar OPENS one repo as the conversation's **working directory** (`open_repo`), edits/tests its sandbox
   copy with NATIVE tools (read/edit/bash, local git for status/diff/log), and saves with `mcp__git_repo__commit`
   (`GIT_REPO_PI_COMMIT_TOOL_NAME`), which reads the copy back into the canonical clone. Each tool self-gates

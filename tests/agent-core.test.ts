@@ -3157,16 +3157,18 @@ describe("buildPrompt", () => {
     expect(buildSystemPromptAppend(req(over))).not.toContain("Working repository");
   });
 
-  it("injects working-repository guidance for a trusted user too", () => {
-    expect(
-      turn({
-        viewerIsOwner: false,
-        elevated: true,
-        viewerName: "김철수",
-        activeRepoName: "myrepo",
-        piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretNames: [] },
-      }),
-    ).toContain("**Working repository (this turn)**");
+  it("injects working-repository guidance for a trusted user too — read tools, never a copy (review #11)", () => {
+    const t = turn({
+      viewerIsOwner: false,
+      elevated: true,
+      viewerName: "김철수",
+      activeRepoName: "myrepo",
+      piRuntime: { sandboxOwner: "viewer", readOnlyBuiltins: true, shellSecretNames: [] },
+    });
+    expect(t).toContain("**Working repository (this turn)**");
+    expect(t).toContain("there is NO copy of it in yours");
+    expect(t).toContain("`mcp__git_repo__list_files` / `mcp__git_repo__read_file` / `mcp__git_repo__grep` (name='myrepo')");
+    expect(t).not.toContain("Your working copy is");
   });
 
   it("omits working-repository guidance when no repo copy is open", () => {

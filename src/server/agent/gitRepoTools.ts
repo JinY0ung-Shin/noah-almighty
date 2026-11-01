@@ -20,6 +20,7 @@ import {
   type PiRepoCopyRef,
 } from "./pi/piRepoCopy.js";
 import { activeRepoHolder } from "../activeRepoLock.js";
+import { RepoReadError, grepRepo, listRepoFiles, readRepoFile } from "../gitRepoRead.js";
 import {
   configureGitRepoIdentity,
   defaultGitRepoName,
@@ -80,6 +81,19 @@ export const GIT_REPO_TOOL_NAMES = [
 /** Commit the sandbox copy's working tree into Noah's clone. */
 export const GIT_REPO_PI_COMMIT_TOOL_NAME = "mcp__git_repo__commit";
 
+/**
+ * Read-only access to the owner's canonical clone for a run whose sandbox is
+ * NOT the owner's (a trusted colleague's chat): no copy of the owner's repo is
+ * ever made there (review #11, user decision 2026-11-01). Registered on every
+ * git_repo server (the static catalog lists them); `mcpAllowedTools` admits
+ * them only on such runs, and the handlers re-check the same.
+ */
+export const GIT_REPO_READ_TOOL_NAMES = [
+  "mcp__git_repo__list_files",
+  "mcp__git_repo__read_file",
+  "mcp__git_repo__grep",
+] as const;
+
 const OWNER_ONLY = "This tool can only be used in a conversation the avatar owner is taking part in.";
 const ELEVATED_ONLY = "This git repo tool can only be used in a conversation with the avatar owner or a trusted user.";
 
@@ -121,9 +135,18 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     }
     return null;
   };
-  // The viewer's copy of one of the OWNER's repos.
+  /**
+   * Whether this run works in the avatar OWNER's own sandbox (owner chat,
+   * routine, task API). Anyone else's run — a colleague chatting with the
+   * owner's avatar — gets NO copy of the owner's repo in their sandbox: it reads
+   * the canonical clone through the read tools below instead (review #11).
+   */
+  const ownSandbox = ctx.piWorkspace ? ctx.piWorkspace.principal === ctx.avatarUserId : ctx.viewerIsOwner;
+  const readToolsRedirect = (name: string) =>
+    `read it with mcp__git_repo__list_files / mcp__git_repo__read_file / mcp__git_repo__grep (name='${name}') — there is no copy of it in your sandbox and no /workspace path to it`;
+  // The owner's sandbox copy of one of the OWNER's repos (none on anyone else's run).
   const copyRef = (name: string): PiRepoCopyRef | null =>
-    ctx.piWorkspace
+    ctx.piWorkspace && ownSandbox
       ? {
           config: ctx.config,
           workspace: ctx.piWorkspace,
@@ -162,6 +185,26 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     `${lead}: the git HEAD of your sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, name)} is no longer on the commit Noah gave it (base ${status.base.slice(0, 8)}, copy HEAD ${status.tip ? status.tip.slice(0, 8) : "unreadable"}) — a checkout, switch, reset or rebase in the sandbox replaced its files with another state, and applying them would silently undo other work. Nothing was applied. If you only switched branches, switch the copy back to the branch it was on (your uncommitted edits ride along) and try again; otherwise call mcp__git_repo__open_repo with name='${name}' for a fresh copy (this one is moved aside, not deleted) and redo the edits there. Never checkout/switch/reset/rebase in the copy.`;
   const NO_PI_WORKSPACE =
     "This run cannot reach your sandbox workspace from Noah (the workspace mount is not configured), so the repository cannot be copied in or committed from it.";
+  /**
+   * The read tools' gate: elevated, NOT the owner's own sandbox (the owner
+   * works on its copy), and the repo still registered for the avatar owner —
+   * then the canonical clone (made if missing, never synced here). Returns the
+   * clone path or a refusal.
+   */
+  const readableClone = async (name: string): Promise<{ clone: string; name: string } | ReturnType<typeof text>> => {
+    const denied = elevatedGuard();
+    if (denied) return denied;
+    if (ownSandbox && ctx.piWorkspace) {
+      return text(
+        "On the avatar owner's own runs a repository is read from its sandbox copy: call mcp__git_repo__open_repo and read the copy it reports with your built-in tools. These read tools are for a conversation that has no copy (a trusted colleague's).",
+        true,
+      );
+    }
+    const repoCtx = ownerRepoContext(name);
+    return { clone: await ensureGitRepoClone(repoCtx), name: repoCtx.name };
+  };
+  const readFailure = (error: unknown) =>
+    text(error instanceof RepoReadError ? error.message : `Could not read the repository: ${errorMessage(error)}`, true);
 
   const tools = [
     tool(
@@ -281,7 +324,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "open_repo",
-      "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy (never checkout/switch/reset/rebase there — commit refuses a copy whose git HEAD left the commit Noah gave it), but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state is moved aside to a new `<name>.prev-<UTC stamp>` folder (never deleted) and replaced. The selection persists for this conversation (later turns are told the path) until close_repo. (owner / trusted user only)",
+      "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy (never checkout/switch/reset/rebase there — commit refuses a copy whose git HEAD left the commit Noah gave it), but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state is moved aside to a new `<name>.prev-<UTC stamp>` folder (never deleted) and replaced. The selection persists for this conversation (later turns are told the path) until close_repo. In a trusted colleague's conversation (not the owner's sandbox) NO copy is made: the repo is selected for reading through `mcp__git_repo__list_files`/`read_file`/`grep`. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = elevatedGuard();
@@ -291,6 +334,14 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         }
         try {
           const repoCtx = ownerRepoContext(args.name);
+          if (!ownSandbox) {
+            // A colleague's run: select the repo, never copy it into their sandbox.
+            await ensureGitRepoClone(repoCtx);
+            setWorkspaceRepo(store, ctx.conversationId, repoCtx.name);
+            return text(
+              `Opened '${repoCtx.name}' for reading in this conversation. It is the avatar owner's repository and this conversation does not run in the owner's sandbox, so no copy is made: ${readToolsRedirect(repoCtx.name)}. You cannot edit, commit or push it from here; to change it, tell the user what to change so the owner can do it in their own conversation.`,
+            );
+          }
           const ref = copyRef(repoCtx.name);
           if (!ref) return text(NO_PI_WORKSPACE, true);
           const refused = await copyAccessRefusal(ref);
@@ -369,6 +420,12 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           if (denied) return denied;
           try {
             const repoCtx = ownerRepoContext(args.name);
+            if (!ownSandbox) {
+              return text(
+                `Not committed: '${repoCtx.name}' is the avatar owner's repository and this conversation does not run in the owner's sandbox, so it has no copy to commit from and cannot change the repository. ${readToolsRedirect(repoCtx.name).replace(/^r/, "R")}; to change it, tell the user what to change so the owner can do it in their own conversation.`,
+                true,
+              );
+            }
             const ref = copyRef(repoCtx.name);
             if (!ref) return text(NO_PI_WORKSPACE, true);
             const refused = await copyAccessRefusal(ref);
@@ -409,6 +466,61 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           }
         },
       ),
+    tool(
+      "list_files",
+      "List the files of one of the avatar owner's registered repositories (its current committed state in Noah's clone) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. `path` narrows to a folder (default: the whole repo); links are shown but never followed, `.git` is not listed. Read-only. (trusted colleague only — the owner reads its own sandbox copy instead)",
+      {
+        name: z.string().describe("Registered repo name"),
+        path: z.string().optional().describe("A folder inside the repo (default: the root)"),
+      },
+      async (args) => {
+        try {
+          const clone = await readableClone(args.name);
+          if ("content" in clone) return clone;
+          return text(`'${clone.name}': ${listRepoFiles(clone.clone, args.path ?? "")}`);
+        } catch (error) {
+          return readFailure(error);
+        }
+      },
+    ),
+    tool(
+      "read_file",
+      "Read a text file of one of the avatar owner's registered repositories (its current committed state in Noah's clone) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns lines `offset`..`offset+limit-1` (1-based; default the first 2000) and says how to continue; files over 1 MB, binary files, links and `.git` are refused. Read-only. (trusted colleague only)",
+      {
+        name: z.string().describe("Registered repo name"),
+        path: z.string().describe("The file's path inside the repo, e.g. src/index.ts"),
+        offset: z.number().int().min(1).optional().describe("First line to return (1-based, default 1)"),
+        limit: z.number().int().min(1).max(5000).optional().describe("How many lines (default 2000)"),
+      },
+      async (args) => {
+        try {
+          const clone = await readableClone(args.name);
+          if ("content" in clone) return clone;
+          return text(readRepoFile(clone.clone, args.path, args.offset ?? 1, args.limit ?? 2000));
+        } catch (error) {
+          return readFailure(error);
+        }
+      },
+    ),
+    tool(
+      "grep",
+      "Search one of the avatar owner's registered repositories (its committed files in Noah's clone) for an extended regular expression when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns `path:line:text` matches (binary files skipped, output capped); `path` narrows to a file or folder. Read-only. (trusted colleague only)",
+      {
+        name: z.string().describe("Registered repo name"),
+        pattern: z.string().describe("An extended (POSIX ERE) regular expression"),
+        path: z.string().optional().describe("A file or folder inside the repo to search (default: everything)"),
+        ignoreCase: z.boolean().optional().describe("Match case-insensitively"),
+      },
+      async (args) => {
+        try {
+          const clone = await readableClone(args.name);
+          if ("content" in clone) return clone;
+          return text(`'${clone.name}': ${await grepRepo(clone.clone, args.pattern, args.path ?? "", args.ignoreCase ?? false)}`);
+        } catch (error) {
+          return readFailure(error);
+        }
+      },
+    ),
   ];
 }
 

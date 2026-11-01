@@ -1696,6 +1696,10 @@ describe("git repo tools (general git repository management)", () => {
       "close_repo",
       "push",
       "commit",
+      // Read tools over the owner's clone for a colleague's run (review #11).
+      "list_files",
+      "read_file",
+      "grep",
     ]);
   });
 

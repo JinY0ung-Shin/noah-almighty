@@ -13,6 +13,7 @@ import { cancelAllRuns } from "./agent/runRegistry.js";
 import { applyCustomGithubCa } from "./tlsCa.js";
 import { retireCraftApps } from "./retireCraftApps.js";
 import { retireGroupKnowledgeRepos } from "./retireGroupKnowledgeRepos.js";
+import { retirePiColleagueRepoCopies } from "./retirePiColleagueRepoCopies.js";
 import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import { sweepPiConsultationSandboxes } from "./agent/pi/piRuntime.js";
@@ -55,6 +56,10 @@ retireCraftApps(services);
 // (<dataDir>/group-knowledge); quarantine the whole folder once (best effort; a
 // marker ends it). The remote repositories are never touched.
 retireGroupKnowledgeRepos(services);
+// Trusted colleagues no longer get a copy of the owner's repository in their own
+// sandbox (review #11): move the existing ones out of every sandbox's reach once,
+// before any run can read them (best effort; a marker ends it).
+retirePiColleagueRepoCopies(services);
 // The removed Claude Agent SDK runner's CLI transcripts (<dataDir>/agent-sessions):
 // quarantine the whole folder once, after the retirements above took their own
 // transcripts out of it (best effort; a marker ends it).

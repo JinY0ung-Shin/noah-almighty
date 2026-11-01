@@ -658,6 +658,12 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
         ? "mcp__avatars__ask_avatar returns at once with a consultation id and its answer arrives later as its own message (at your next tool-call boundary while you are still working, else right after your current answer; the run stays open for it)"
         : "mcp__avatars__ask_avatar (when available) waits for the answer in this run"
     }; a canvas never waits — its submission arrives as the user's next message`,
+    // Not the owner's sandbox (a colleague's chat): the open repo has NO copy here (review #11).
+    ...(ctx.activeRepoName && !pi.activeRepoDir && (pi.sandboxOwner === "viewer" || pi.sandboxOwner === "nobody")
+      ? [
+          `- Working repository: '${ctx.activeRepoName}' (the avatar owner's) is open for this conversation, but this run is not in the owner's sandbox, so there is NO copy of it in yours and no /workspace path to it — read it with mcp__git_repo__list_files / mcp__git_repo__read_file / mcp__git_repo__grep (name='${ctx.activeRepoName}'); it cannot be edited, committed or pushed from here`,
+        ]
+      : []),
     ...(pi.activeRepoDir
       ? [
           `- Working repository copy: ${pi.activeRepoDir}/ (a copy of '${ctx.activeRepoName ?? "?"}' in your sandbox; save with mcp__git_repo__commit, then mcp__git_repo__push — git commits made inside the sandbox are not saved, and commit refuses a copy whose git HEAD left the commit Noah gave it, so never checkout/switch/reset/rebase there)`,

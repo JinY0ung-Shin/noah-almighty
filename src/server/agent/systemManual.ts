@@ -303,7 +303,7 @@ General Git repositories hold code/work projects. They are distinct from the ded
 5. close_repo returns subsequent runs to the conversation's scratch workspace. It does not delete the remote repository.
 
 ## Boundaries
-Registration/removal are owner operations. Eligible elevated teammates can have working-repository operations but do not thereby gain settings ownership. A busy repository can be locked by another run; use the returned conflict information instead of opening parallel writers.
+Registration/removal are owner operations. Eligible elevated teammates can have working-repository operations but do not thereby gain settings ownership. A trusted colleague's conversation does not run in the owner's sandbox, so the owner's repository is NEVER copied into the colleague's: open_repo only selects it, it is read with mcp__git_repo__list_files / mcp__git_repo__read_file / mcp__git_repo__grep, and it cannot be edited or committed from there (sync_repo still works). A busy repository can be locked by another run; use the returned conflict information instead of opening parallel writers.
 The agent shell intentionally has no Git credentials. Do not fall back to Bash git push/gh authentication or ask for tokens in chat. Personal knowledge changes use mcp__repo__* and work repositories use mcp__git_repo__*.
 
 Example: "등록한 backend 저장소를 열고 이 오류를 수정해줘. 변경 내용을 검토한 뒤 푸시해줘."

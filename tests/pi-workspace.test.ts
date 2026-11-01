@@ -362,31 +362,63 @@ describe("working-repo copy (D1)", () => {
     expect((await callTool(owner, "commit", { name: "app", message: "again" })).content[0].text).toContain("Nothing to commit");
   });
 
-  it("a colleague works on their own copy; a commit over a moved base is refused with a re-open redirect", async () => {
+  it("a colleague gets NO copy: open_repo only selects, the read tools serve the owner's clone, commit refuses (review #11)", async () => {
     const s = repoSetup();
     const owner = s.tools({ id: s.owner.id, owner: true }, "conv-1");
     const mate = s.tools({ id: s.mate.id, owner: false }, "conv-m");
     await callTool(owner, "register_repo", { repo: s.remote, name: "app", branch: "main" });
-    await callTool(owner, "open_repo", { name: "app" });
-    await callTool(mate, "open_repo", { name: "app" });
-    const ownerCopy = path.join(piWorkspaceFor(s.config, s.owner.id, "conv-1").hostRoot!, "repos", s.owner.id, "app");
-    const mateCopy = path.join(piWorkspaceFor(s.config, s.mate.id, "conv-m").hostRoot!, "repos", s.owner.id, "app");
-    expect(ownerCopy).not.toBe(mateCopy);
-    fs.writeFileSync(path.join(ownerCopy, "README.md"), "owner");
-    fs.writeFileSync(path.join(mateCopy, "README.md"), "mate");
-    expect((await callTool(owner, "commit", { name: "app", message: "owner first" })).isError).toBeFalsy();
-    const refused = await callTool(mate, "commit", { name: "app", message: "mate second" });
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toContain("mcp__git_repo__open_repo");
-    // Re-open: the stale copy moves aside, a fresh one carries the owner's commit.
-    const reopen = await callTool(mate, "open_repo", { name: "app" });
-    expect(reopen.content[0].text).toMatch(/moved to \S+\/app\.prev-\d{8}T\d{6}Z/);
-    expect(fs.readFileSync(path.join(mateCopy, "README.md"), "utf8")).toBe("owner");
-    const prev = fs.readdirSync(path.dirname(mateCopy)).find((name) => name.startsWith("app.prev-"))!;
-    expect(fs.readFileSync(path.join(path.dirname(mateCopy), prev, "README.md"), "utf8")).toBe("mate");
-    // sync is refused while the copy has uncommitted work.
-    fs.writeFileSync(path.join(mateCopy, "README.md"), "mate again");
-    expect((await callTool(mate, "sync_repo", { name: "app" })).content[0].text).toContain("uncommitted file change");
+    const clone = path.join(s.config.dataDir, "git-repos", s.owner.id, "app");
+    fs.symlinkSync("/etc/passwd", path.join(clone, "leak")); // a committed link in the owner's tree
+    const mateRoot = piWorkspaceFor(s.config, s.mate.id, "conv-m").hostRoot!;
+
+    const open = await callTool(mate, "open_repo", { name: "app" });
+    expect(open.isError).toBeFalsy();
+    expect(open.content[0].text).toContain("no copy is made");
+    expect(open.content[0].text).toContain("mcp__git_repo__read_file");
+    expect(s.store.getConversationWorkingRepo("conv-m")).toBe("app");
+    expect(fs.existsSync(path.join(mateRoot, "repos"))).toBe(false);
+
+    const list = (await callTool(mate, "list_files", { name: "app" })).content[0].text;
+    expect(list).toContain("README.md");
+    expect(list).toContain("leak -> (link, not followed)");
+    expect(list).not.toContain(".git/");
+    expect((await callTool(mate, "read_file", { name: "app", path: "README.md" })).content[0].text).toContain("hello");
+    expect((await callTool(mate, "grep", { name: "app", pattern: "hel+o" })).content[0].text).toContain("README.md:1:hello");
+    for (const bad of ["leak", "../app/README.md", ".git/config", "missing.txt"]) {
+      expect((await callTool(mate, "read_file", { name: "app", path: bad })).isError).toBe(true);
+    }
+    expect((await callTool(mate, "read_file", { name: "nope", path: "README.md" })).content[0].text).toContain("Could not find a registered git repo");
+    const untrusted = buildGitRepoTools(s.store, {
+      avatarUserId: s.owner.id,
+      owner: { id: s.owner.id, username: "owner", displayName: "Owner" },
+      viewerIsOwner: false,
+      elevated: false,
+      config: s.config,
+      conversationId: "conv-m",
+      piWorkspace: piWorkspaceFor(s.config, s.mate.id, "conv-m"),
+    });
+    expect((await callTool(untrusted, "read_file", { name: "app", path: "README.md" })).content[0].text).toContain("owner or a trusted user");
+    // The owner reads its own copy instead.
+    expect((await callTool(owner, "read_file", { name: "app", path: "README.md" })).content[0].text).toContain("sandbox copy");
+
+    const commit = await callTool(mate, "commit", { name: "app", message: "mate" });
+    expect(commit.isError).toBe(true);
+    expect(commit.content[0].text).toContain("has no copy to commit from");
+    // sync still refreshes Noah's clone; still no copy appears.
+    expect((await callTool(mate, "sync_repo", { name: "app" })).isError).toBeFalsy();
+
+    // Turn start: no copy, no copy lock.
+    const resolved = await resolveActiveWorkspaceRepo({
+      store: s.store,
+      config: s.config,
+      avatar: { id: s.owner.id, displayName: "Owner", alias: "" },
+      conversationId: "conv-m",
+      elevated: true,
+      gitRepoToolsEnabled: true,
+      piWorkspace: piWorkspaceFor(s.config, s.mate.id, "conv-m"),
+    });
+    expect(resolved).toMatchObject({ kind: "ok", repoName: "app" });
+    expect(fs.existsSync(path.join(mateRoot, "repos"))).toBe(false);
   });
 
   it("ensure keeps a current copy and its uncommitted edits", async () => {
@@ -592,6 +624,29 @@ describe("run capabilities on pi", () => {
     expect(piSandboxDeckToolchain({ defaultPluginsDir: "", pi: undefined }).converter).toBe(false);
   });
 
+  it("a colleague's run with a repo open has no copy path and is pointed at the read tools on every surface (review #11)", async () => {
+    const { store, config, owner, mate } = setup();
+    const asMate = { viewerUserId: mate.id, viewerIsOwner: false, elevated: true, activeRepoName: "app" };
+    const caps = await buildRunCapabilities(request(owner, asMate), [], config, store, undefined, undefined, () => 0, {});
+    expect(caps.piRuntimeFacts?.sandboxOwner).toBe("viewer");
+    expect(caps.piRuntimeFacts?.activeRepoDir).toBeUndefined();
+    expect(caps.mcpAllowedTools).toEqual(expect.arrayContaining(["mcp__git_repo__list_files", "mcp__git_repo__read_file", "mcp__git_repo__grep"]));
+    const stamped = stampPromptRequest(request(owner, asMate), caps, config, undefined);
+    const turn = buildPiTurnPreamble(stamped);
+    expect(turn).toContain("there is NO copy of it in yours and no /workspace path to it");
+    expect(turn).toContain("`mcp__git_repo__read_file`");
+    expect(turn).not.toContain("/workspace/repos/");
+    expect(buildSystemPromptAppend(stamped)).toContain("the owner's repositories are never copied into yours");
+    const describe = (await callServerTool(caps.inProcessMcpServers.system, "describe_system", {})).content[0]!.text;
+    expect(describe).toContain("there is NO copy of it in yours");
+    expect(describe).not.toContain("/workspace/repos/");
+
+    // The owner's own run keeps its copy and is never offered the read tools.
+    const ownerCaps = await buildRunCapabilities(request(owner, { activeRepoName: "app" }), [], config, store, undefined, undefined, () => 0, {});
+    expect(ownerCaps.mcpAllowedTools).not.toContain("mcp__git_repo__read_file");
+    expect(ownerCaps.piRuntimeFacts?.activeRepoDir).toBe(piRepoCopySandboxPath(owner.id, "app"));
+  });
+
   it("the static catalog lists the skills server and the pi git_repo wording", async () => {
     const { store, config } = setup();
     expect(PI_MCP_SERVER_NAMES).toContain("skills");
@@ -599,6 +654,7 @@ describe("run capabilities on pi", () => {
     expect(catalog.skills.map((t) => t.name)).toEqual(["read"]);
     const gitTools = catalog.git_repo.map((t) => t.name);
     expect(gitTools).toContain("commit");
+    expect(gitTools).toEqual(expect.arrayContaining(["list_files", "read_file", "grep"]));
     expect(catalog.git_repo.find((t) => t.name === "open_repo")?.description).toContain("/workspace/repos/");
   });
 });

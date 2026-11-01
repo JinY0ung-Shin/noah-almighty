@@ -55,7 +55,8 @@ These are the invariants the project is built around. New work should reinforce 
   the whole DB is first copied to `<dataDir>/backups/pre-retire-<stamp>.db` (0600), and if that backup
   fails EVERY destructive step is held until a later boot. Files are never deleted, only renamed
   no-follow into `<dataDir>/retired/<stamp>/` (`quarantineRetired`; EXDEV stays pending, never
-  copy+delete). Noah never prunes either folder — cleanup is the operator's (user decision 2026-10-29).
+  copy+delete; a file on the pi SANDBOX volume moves within it, to `<PI_WORKSPACES_DIR>/.noah-retired/<stamp>/`,
+  which no sandbox mounts). Noah never prunes these folders — cleanup is the operator's (user decision 2026-10-29).
   **A new retirement goes through the same gate and quarantine helpers.**
 - **Skill sharing rides the avatar-discovery boundary — never wider.** A shared skill (metadata row in
   `shared_skills`; content stays in the owner's knowledge repo) is browsable/learnable EXACTLY where the
@@ -275,7 +276,9 @@ These are the invariants the project is built around. New work should reinforce 
   without a conversation works in a `/workspace/c/<run-…>/` folder (no stored session, no frozen prompt row; a
   generator's folder is reused in the owner's sandbox, a consultation's goes with its sandbox).
   Noah never executes git or agent-authored code from a sandbox dir: a working repo is a sandbox COPY whose
-  working tree `commit` reads back into the canonical clone (git runs there, `serverGitEnv`), and a stdio plugin
+  working tree `commit` reads back into the canonical clone (git runs there, `serverGitEnv`) — made ONLY in the
+  owner's own sandbox: a colleague's run never gets one and reads the clone through the self-gating
+  `mcp__git_repo__list_files`/`read_file`/`grep` (user decision 2026-11-01) — and a stdio plugin
   MCP server spawns only from the plugins bundled with Noah — every agent-editable root (knowledge repo, group
   repos, installed plugin repos the agent can push to) is skipped and both surfaces say why. Noah's tools reach
   pi's broker over `/mcp/<server>`, whose ONLY auth is the per-run bearer token (session cookies never count).

@@ -187,6 +187,10 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     never copied and deleted**: the item stays, is counted as a failure (pending list as before, marker
     withheld) with a warning, and later boots retry. The pi runtime's sandbox copies of retired threads
     (`PI_WORKSPACES_DIR`, outside `dataDir`) are left in place: no released build ran a retired kind on pi.
+    The ONE sandbox-volume retirement, trusted colleagues' repo copies (`retirePiColleagueRepoCopies`, review #11),
+    moves within that volume instead — to `<PI_WORKSPACES_DIR>/.noah-retired/<stamp>/`, which no sandbox mounts
+    (pi mounts only `u-<24 hex>`), through pinned folders, never followed; same gate, marker and never-delete rule.
+    Noah never prunes `.noah-retired/` either.
   - **Manual cleanup only.** Noah never reads, serves, lists, sweeps or prunes `backups/` or `retired/` (no
     static route reaches `dataDir`, no code lists `dataDir` itself, account deletion sweeps only its named
     per-user namespaces — so a deleted user's data in either folder stays until the operator removes it).
