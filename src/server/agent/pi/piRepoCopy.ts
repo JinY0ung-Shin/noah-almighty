@@ -516,8 +516,9 @@ function isPrevName(entry: string, name: string): boolean {
  * agent's content too (`.env.local`, notes in an ignored folder, a link it
  * made, a `git stash`, a local commit or branch), so a delete also needs:
  * - the copy's git HEAD exactly ON the base (not a sandbox commit above it);
- * - every ref tip in its `.git` a commit Noah's clone has (no stash, no
- *   sandbox-only branch or commit);
+ * - every ref tip and reflog entry in its `.git` a commit Noah's clone has
+ *   (no stash, no sandbox-only branch, commit or `reset --hard`-undone
+ *   commit), and no linked worktree ({@link copyRefTips});
  * - no file, deletion or skipped entry against the base tree
  *   (`readBackAgainstBase`);
  * - nothing else in the copy at all, ignored or not: every entry outside the
@@ -541,54 +542,134 @@ async function existingDisposable(clone: string, parent: PinnedDir, name: string
   }
 }
 
-/** Every ref tip in the copy's `.git` (loose refs and `packed-refs`); null when they cannot all be read as plain data. */
+/**
+ * Every commit the copy's `.git` can still reach on its own, read as DATA
+ * (Noah never runs git in the copy): loose ref tips, `packed-refs` lines and
+ * the new side of every reflog entry (`logs/**` — a commit undone by
+ * `reset --hard` lives on only there). Null — "not provably disposable" —
+ * whenever that set cannot be read completely as plain data. Only an entry
+ * git itself reads as ABSENT counts as "none": a missing `packed-refs`,
+ * `logs` or `worktrees`. A `.git/refs` that is not a plain folder (missing
+ * too: git would not take the folder for a repository at all), a
+ * `packed-refs`/`logs` entry that is a link, a special file or over its cap,
+ * garbage in a ref or reflog line, any linked worktree (`worktrees/<id>` keeps
+ * its own HEAD, index and reflog, whose commits no ref here names) and the
+ * reftable backend all mean null.
+ */
 function copyRefTips(copy: PinnedDir): string[] | null {
-  const tips: string[] = [];
-  const refs = copy.dir([".git", "refs"]);
-  if (refs) {
-    try {
-      const walk = (folder: PinnedDir, depth: number): boolean => {
-        if (depth > MAX_DEPTH) return false;
-        for (const entry of folder.list()) {
-          if (entry.isDirectory()) {
-            const sub = folder.dir([entry.name]);
-            if (!sub) return false;
-            try {
-              if (!walk(sub, depth + 1)) return false;
-            } finally {
-              sub.close();
-            }
-          } else if (entry.isFile()) {
-            const value = folder.readFile(entry.name, 4096)?.toString("utf8").trim();
-            if (value && /^ref:\s*refs\/\S+$/.test(value)) continue; // a symbolic ref (origin/HEAD): its target is a ref of its own
-            if (!value || !SHA_RE.test(value)) return false; // garbage: unprovable
-            tips.push(value);
-          } else {
-            return false;
-          }
-          if (tips.length > REFS_MAX) return false;
-        }
-        return true;
-      };
-      if (!walk(refs, 0)) return null;
-    } catch {
-      return null;
-    } finally {
-      refs.close();
+  const gitDir = copy.dir([".git"]);
+  if (!gitDir) return null;
+  try {
+    if (gitDir.kind("refs") !== "dir" || gitDir.kind("reftable") !== "missing") return null;
+    const worktrees = gitDir.kind("worktrees");
+    if (worktrees !== "missing") {
+      const folder = worktrees === "dir" ? gitDir.dir(["worktrees"]) : null;
+      if (!folder) return null;
+      try {
+        if (folder.list().length > 0) return null;
+      } finally {
+        folder.close();
+      }
     }
+    const tips: string[] = [];
+    const loose = walkGitFiles(gitDir, "refs", { files: REFS_MAX, fileBytes: 4096, bytes: Number.MAX_SAFE_INTEGER }, (data) => {
+      const value = data.toString("utf8").trim();
+      if (/^ref:\s*refs\/\S+$/.test(value)) return true; // a symbolic ref (origin/HEAD): its target is a ref of its own
+      if (!SHA_RE.test(value)) return false; // garbage: unprovable
+      tips.push(value);
+      return true;
+    });
+    if (!loose) return null;
+    const packedKind = gitDir.kind("packed-refs");
+    if (packedKind !== "missing") {
+      const packed = packedKind === "file" ? gitDir.readFile("packed-refs", PACKED_REFS_MAX_BYTES) : null;
+      if (!packed) return null; // a link, a special file, over the cap, or swapped since the lstat
+      for (const line of packed.toString("utf8").split("\n")) {
+        const sha = /^\^?([0-9a-f]{40}(?:[0-9a-f]{24})?)(?:\s|$)/.exec(line.trim())?.[1];
+        if (sha) tips.push(sha);
+        if (tips.length > REFS_MAX) return null;
+      }
+    }
+    let reflogEntries = 0;
+    const logs = walkGitFiles(gitDir, "logs", { files: REFLOG_MAX_FILES, fileBytes: REFLOG_MAX_BYTES, bytes: REFLOG_MAX_BYTES }, (data) => {
+      for (const line of data.toString("utf8").split("\n")) {
+        if (!line.trim()) continue;
+        reflogEntries += 1;
+        if (reflogEntries > REFLOG_MAX_ENTRIES) return false;
+        const sha = /^[0-9a-f]+ ([0-9a-f]+) /.exec(line)?.[1];
+        if (!sha || !SHA_RE.test(sha)) return false; // garbage: unprovable
+        if (!/^0+$/.test(sha)) tips.push(sha); // an all-zero new side is a deletion: it names no commit
+      }
+      return true;
+    });
+    return logs ? tips : null;
+  } catch {
+    return null;
+  } finally {
+    gitDir.close();
   }
-  const packed = readCopyGitFile(copy, ["packed-refs"], PACKED_REFS_MAX_BYTES)?.toString("utf8") ?? "";
-  for (const line of packed.split("\n")) {
-    const sha = /^\^?([0-9a-f]{40}(?:[0-9a-f]{24})?)(?:\s|$)/.exec(line.trim())?.[1];
-    if (sha) tips.push(sha);
-    if (tips.length > REFS_MAX) return null;
+}
+
+/**
+ * Feed every regular file below `.git/<top>` (absent = nothing) to `onFile`,
+ * every folder pinned and every file read no-follow. False when `top` or
+ * anything below it is a link or special file, a folder cannot be opened, a
+ * file passes `caps.fileBytes`, the walk passes `caps.files` files or
+ * `caps.bytes` bytes in all, or `onFile` refuses.
+ */
+function walkGitFiles(
+  gitDir: PinnedDir,
+  top: string,
+  caps: { files: number; fileBytes: number; bytes: number },
+  onFile: (data: Buffer) => boolean,
+): boolean {
+  const kind = gitDir.kind(top);
+  if (kind === "missing") return true;
+  if (kind !== "dir") return false;
+  let files = 0;
+  let bytes = 0;
+  const walk = (folder: PinnedDir, depth: number): boolean => {
+    if (depth > MAX_DEPTH) return false;
+    for (const entry of folder.list()) {
+      if (entry.isDirectory()) {
+        const sub = folder.dir([entry.name]);
+        if (!sub) return false;
+        try {
+          if (!walk(sub, depth + 1)) return false;
+        } finally {
+          sub.close();
+        }
+      } else if (entry.isFile()) {
+        files += 1;
+        if (files > caps.files) return false;
+        const data = folder.readFile(entry.name, Math.min(caps.fileBytes, caps.bytes - bytes));
+        if (!data) return false; // over a cap, or swapped since the listing
+        bytes += data.length;
+        if (!onFile(data)) return false;
+      } else {
+        return false;
+      }
+    }
+    return true;
+  };
+  const root = gitDir.dir([top]);
+  if (!root) return false;
+  try {
+    return walk(root, 0);
+  } catch {
+    return false;
+  } finally {
+    root.close();
   }
-  return tips;
 }
 
 const REFS_MAX = 2000;
+/** Caps of the reflog read (`.git/logs/**`): past any of them the copy is not provably disposable. */
+const REFLOG_MAX_FILES = 2000;
+const REFLOG_MAX_BYTES = 16 * 1024 * 1024;
+const REFLOG_MAX_ENTRIES = 50_000;
 
-/** Every ref tip of the copy is an object Noah's clone has: no stash, no sandbox-only branch or commit. */
+/** Every ref tip and reflog entry of the copy is an object Noah's clone has: no stash, no sandbox-only branch or commit. */
 async function copyRefsKnown(clone: string, copy: PinnedDir): Promise<boolean> {
   const tips = copyRefTips(copy);
   if (!tips) return false;

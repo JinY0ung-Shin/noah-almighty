@@ -282,6 +282,107 @@ describe("a replaced copy is deleted only when it holds nothing but its base (re
   });
 });
 
+describe("the disposable proof never reads an odd or partial .git as 'nothing there' (review R3 follow-up)", () => {
+  /** A registered, opened `app` plus the helpers every case below shares. */
+  async function opened() {
+    const s = repoSetup();
+    expect((await callTool(s.tools, "register_repo", { repo: s.remote, name: "app", branch: "main" })).isError).toBeFalsy();
+    expect((await callTool(s.tools, "open_repo", { name: "app" })).isError).toBeFalsy();
+    const repos = path.dirname(s.copy);
+    const gitDir = path.join(s.copy, ".git");
+    const base = g(s.clone, "rev-parse", "HEAD");
+    const prevs = () => fs.readdirSync(repos).filter((name) => name.startsWith("app.prev"));
+    const sync = async () => {
+      const result = await callTool(s.tools, "sync_repo", { name: "app" });
+      expect(result.isError).toBeFalsy();
+      return /moved to (\S+?), where it stays until remove_repo/.exec(result.content[0].text ?? "")?.[1];
+    };
+    // The replaced copy went to a stamped folder that still holds `commit` (a loose object).
+    const movedAsideHolding = async (commit: string) => {
+      const before = prevs().length;
+      const previousPath = await sync();
+      expect(previousPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z(-\d+)?$/);
+      expect(prevs()).toHaveLength(before + 1);
+      const saved = path.join(repos, path.basename(previousPath!));
+      expect(fs.existsSync(path.join(saved, ".git", "objects", commit.slice(0, 2), commit.slice(2)))).toBe(true);
+    };
+    // Work that lives only in a stash: HEAD detached at the base (readable without any ref), the
+    // working tree back on the base, and no reflog — so the stash ref is the ONLY thing naming it.
+    const stashOnly = () => {
+      s.inCopy("checkout", "-q", "--detach");
+      fs.writeFileSync(path.join(s.copy, "shared.md"), "stashed edit");
+      s.inCopy("stash", "-q");
+      const stash = s.inCopy("rev-parse", "refs/stash");
+      fs.rmSync(path.join(gitDir, "logs"), { recursive: true, force: true });
+      return stash;
+    };
+    // The stash named only in packed-refs (made a FIFO / a link by the caller).
+    const packedOnly = () => {
+      const stash = stashOnly();
+      fs.unlinkSync(path.join(gitDir, "refs", "stash"));
+      const packed = path.join(gitDir, "packed-refs");
+      const existing = fs.existsSync(packed) ? fs.readFileSync(packed, "utf8") : "";
+      fs.rmSync(packed, { force: true });
+      fs.writeFileSync(path.join(gitDir, "packed-refs.real"), `${existing}${stash} refs/stash\n`);
+      return { stash, packed };
+    };
+    return { s, gitDir, base, prevs, sync, movedAsideHolding, stashOnly, packedOnly };
+  }
+
+  it("a .git/refs replaced by a link: its refs/stash is not skipped", async () => {
+    const { gitDir, movedAsideHolding, stashOnly } = await opened();
+    const lost = stashOnly();
+    fs.renameSync(path.join(gitDir, "refs"), path.join(gitDir, "refs-real"));
+    fs.symlinkSync("refs-real", path.join(gitDir, "refs"));
+    await movedAsideHolding(lost);
+  });
+
+  it("a packed-refs that is a FIFO is unreadable, not empty", async () => {
+    const { movedAsideHolding, packedOnly } = await opened();
+    const fifo = packedOnly();
+    execFileSync("mkfifo", [fifo.packed]);
+    await movedAsideHolding(fifo.stash);
+  });
+
+  it("a packed-refs that is a link is unreadable, not empty", async () => {
+    const { movedAsideHolding, packedOnly } = await opened();
+    const linked = packedOnly();
+    fs.symlinkSync("packed-refs.real", linked.packed);
+    await movedAsideHolding(linked.stash);
+  });
+
+  it("a commit made in a `git worktree add` checkout (only .git/worktrees/<id>/HEAD names it)", async () => {
+    const { s, movedAsideHolding } = await opened();
+    const worktree = path.join(dir(), "wt");
+    s.inCopy("worktree", "add", "-q", "--detach", worktree);
+    fs.writeFileSync(path.join(worktree, "wt.txt"), "worktree work");
+    const inWorktree = (...a: string[]) =>
+      execFileSync("git", ["-C", worktree, "-c", "user.name=a", "-c", "user.email=a@x", "-c", "commit.gpgsign=false", ...a], { stdio: "pipe" })
+        .toString()
+        .trim();
+    inWorktree("add", "-A");
+    inWorktree("commit", "-q", "-m", "worktree-only");
+    await movedAsideHolding(inWorktree("rev-parse", "HEAD"));
+  });
+
+  it("a sandbox commit undone with `reset --hard <base>` (only the reflog names it); a pristine copy is still deleted", async () => {
+    const { s, base, prevs, sync, movedAsideHolding } = await opened();
+    fs.writeFileSync(path.join(s.copy, "local.txt"), "local");
+    s.inCopy("add", "-A");
+    s.inCopy("commit", "-q", "-m", "reflog-only");
+    const lost = s.inCopy("rev-parse", "HEAD");
+    s.inCopy("reset", "-q", "--hard", base);
+    expect(fs.existsSync(path.join(s.copy, "local.txt"))).toBe(false);
+    await movedAsideHolding(lost);
+
+    // Control: a pristine copy (its reflog copied from Noah's clone, plus a detach on the base) is still deleted.
+    s.inCopy("checkout", "-q", "--detach");
+    const count = prevs().length;
+    expect(await sync()).toBeUndefined();
+    expect(prevs()).toHaveLength(count);
+  });
+});
+
 describe("re-opening after another conversation's commit does not pile up copies (review R4)", () => {
   it("open_repo deletes a stale copy that holds nothing but its base, and moves aside one with ignored content", async () => {
     const s = repoSetup();

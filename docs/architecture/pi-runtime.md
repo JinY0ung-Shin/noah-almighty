@@ -282,10 +282,15 @@ tracked + untracked-not-ignored files and `.git`, plain files, links never copie
 decides whether someone's work is in the way. Deleting a replaced copy needs more (`existingDisposable`, review R3):
 the read-back walk prunes ignored folders and skips links, so ignored content (`.env.local`, notes in an ignored
 folder, build output), links, a `git stash` or a sandbox commit/branch would otherwise be judged clean and lost. A
-delete therefore also requires the copy's HEAD EXACTLY on its base, every ref tip in its `.git` a commit Noah's
-clone has (`git cat-file --batch-check` in the clone; refs read as data), no skipped entry against the base tree,
-and a full walk (ignore rules NOT applied) finding nothing but folders and base-tree files outside the top `.git`.
-Anything unreadable or over a cap counts as content.
+delete therefore also requires the copy's HEAD EXACTLY on its base, every ref tip AND the new side of every reflog
+entry (`.git/logs/**` — a commit undone by `reset --hard` lives on only there) a commit Noah's clone has
+(`git cat-file --batch-check` in the clone; refs and reflogs read as data, never git in the copy), no linked worktree
+(any `.git/worktrees/<id>`: its HEAD names commits no ref here does) and no reftable backend, no skipped entry
+against the base tree, and a full walk (ignore rules NOT applied) finding nothing but folders and base-tree files
+outside the top `.git`. Anything unreadable or over a cap counts as content, and "absent" means only what git itself
+reads as absent: a missing `packed-refs`/`logs`/`worktrees` is none, but a `.git/refs` that is missing or not a
+plain folder, or a `packed-refs`/`logs` that is a link, a special file or over its cap, is unprovable, never empty
+(a stale copy whose reflog names a commit the clone has since pruned is therefore moved aside — the safe direction).
 A replaced copy (open_repo `keep` AND sync `refresh` alike — review R4: keep mode used to move even a pristine copy aside, so every re-open after another conversation's commit left a full copy, `.git` included) is NEVER deleted unless proven disposable (review #13): it moves to a new `<name>.prev-<UTC stamp>`
 (`-2`… when taken), older ones are never touched or replaced, and only `remove_repo` (or account deletion) clears
 them — BOTH metacognition surfaces, the open_repo description and the manual say exactly that (`PI_REPO_REPLACED_COPY_SENTENCE`), never "never deleted". `git ls-files` listings are streamed (`gitListZ`, no exec buffer) and capped at the copy's file cap (review #15).
