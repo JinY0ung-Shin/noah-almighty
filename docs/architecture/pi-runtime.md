@@ -214,7 +214,7 @@ component by NAME:
 - **Users:** skill sync (a planted link → this run lists the skills `via: "mcp"` and says so in `failures`),
   `ensurePiConversationDir`, the D3 move (destination side), attachment staging (`stageChatImageFilesFromAttachments`
   / `stagePiAttachmentFiles`), browser captures, Confluence `save_to_workspace` (`workspaceAnchor` = the user
-  root), the rewind cascade (`deleteStagedAttachmentCopies`), repo copies + `.prev` + the commit's `.git` refresh,
+  root), the rewind cascade (`deleteStagedAttachmentCopies`), repo copies + `.prev*` + the commit's `.git` refresh,
   conversation and account deletion. The generic writers take an `anchor` (the deepest folder the agent cannot
   replace) — the pi user root, or the scratch workspace itself when Noah cannot reach the sandbox workspaces (no
   `PI_WORKSPACES_DIR`: the route stages into Noah's own `dataDir/workspaces` folder, which the sandbox cannot see).
@@ -272,11 +272,21 @@ tracked + untracked-not-ignored files and `.git`, plain files, links never copie
 
 | Tool (pi wording in the static catalog) | Behavior |
 |---|---|
-| `open_repo` | ensures the clone + identity, makes/keeps the copy (`keep`: an existing copy made from the current HEAD stays, edits and all; a stale one moves to `<name>.prev`), returns the sandbox path — usable THIS turn |
+| `open_repo` | ensures the clone + identity, makes/keeps the copy (`keep`: an existing copy made from the current HEAD whose own git HEAD is still on that base stays, edits and all; a stale or diverged one moves to a NEW `<name>.prev-<UTC stamp>`), returns the sandbox path — usable THIS turn |
 | `commit` (pi only, `GIT_REPO_PI_COMMIT_TOOL_NAME`) | reads the copy's WORKING TREE back (lstat walk, `.git` skipped at every level, links/specials skipped and reported, ignore rules from the CANONICAL clone via `git check-ignore`, tracked files under ignored folders still compared; caps 100 000 entries / 20 000 changed files / 256 MB / 64 MB per file), writes changed files into the clone (never through a tracked link or onto a folder), deletes files gone from the copy, `git add -A` + `git commit` there, then replaces the copy's `.git` with a fresh copy of the clone's (sandbox `git status` is clean again) |
-| `sync_repo` | refused while the copy has uncommitted changes; else syncs the clone and refreshes the copy |
+| `sync_repo` | refused while the copy has uncommitted changes (`copyHasChanges`: measured against the copy's BASE tree even after the clone moved — `readBackAgainstBase`, `git ls-tree` + blob hashes, never git in the copy — and always for a diverged copy); else syncs the clone and refreshes the copy, deleting the replaced copy only when it is re-proven clean (`discardIfClean`), else moving it aside |
 | `push` | pushes the clone (= what `commit` saved; sandbox-local git commits are never read) and notes uncommitted copy changes |
-| `remove_repo` / `close_repo` | remove the viewer's copy + record / keep the copy |
+| `remove_repo` / `close_repo` | remove the viewer's copy, every `<name>.prev*` and the record / keep the copy |
+
+A replaced copy is NEVER deleted unless proven clean (review #13): it moves to a new `<name>.prev-<UTC stamp>`
+(`-2`… when taken), older ones are never touched or replaced, and only `remove_repo` (or account deletion) clears
+them. `git ls-files` listings are streamed (`gitListZ`, no exec buffer) and capped at the copy's file cap (review #15).
+
+`commit` also refuses a copy whose OWN git HEAD left its base (`diverged`, review #6): Noah reads the copy's `.git`
+as DATA (`readCopyGitTip`: HEAD → loose ref → `packed-refs`) and walks LOOSE commit objects' parents
+(`copyDescendsFromBase`, zlib, 1 MiB / 1 000 steps) until the base, so sandbox-local commits on the base still
+commit their files, while a checkout/switch/reset/rebase there (whose tree would undo other work) is refused and
+both surfaces say never to do that. Residual: `git checkout <branch> -- .` looks like ordinary edits.
 
 Each copy's BASE commit is recorded Noah-side (`dataDir/pi-repo-copies/<user-key>/<owner-seg>--<name>.json`, never
 in the sandbox). `commit` over a moved base (another conversation or a colleague committed, a sync pulled) is

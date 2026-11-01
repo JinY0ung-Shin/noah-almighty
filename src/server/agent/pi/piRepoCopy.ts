@@ -242,8 +242,13 @@ const LS_FILES_MAX_BYTES = 64 * 1024 * 1024;
  * killed and the copy refused as too large.
  */
 function lsFiles(clone: string, args: string[]): Promise<string[]> {
+  return gitListZ(clone, ["ls-files", "-z", ...args]);
+}
+
+/** A NUL-separated git listing of the canonical clone, streamed and capped like {@link lsFiles}. */
+function gitListZ(clone: string, args: string[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", clone, "ls-files", "-z", ...args], {
+    const child = spawn("git", ["-C", clone, ...args], {
       env: serverGitEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -257,7 +262,7 @@ function lsFiles(clone: string, args: string[]): Promise<string[]> {
       refused = error;
       child.kill("SIGKILL");
     };
-    const timer = setTimeout(() => stop(new Error("git ls-files timed out.")), 120_000);
+    const timer = setTimeout(() => stop(new Error(`git ${args[0]} timed out.`)), 120_000);
     child.stdout.on("data", (chunk: Buffer) => {
       if (refused) return; // keep draining: the pipe must not fill while git is killed
       bytes += chunk.length;
@@ -276,7 +281,7 @@ function lsFiles(clone: string, args: string[]): Promise<string[]> {
       clearTimeout(timer);
       if (refused) reject(refused);
       else if (code === 0) resolve(Buffer.concat(chunks).toString("utf8").split("\0").filter(Boolean));
-      else reject(new Error(`git ls-files failed: ${err.trim().slice(0, 2000) || `exit ${code}`}`));
+      else reject(new Error(`git ${args[0]} failed: ${err.trim().slice(0, 2000) || `exit ${code}`}`));
     });
   });
 }
@@ -470,18 +475,56 @@ export interface EnsuredCopy {
  * is replaced, so open_repo is the way out of one) — the agent's uncommitted
  * work stays; `when-missing` (turn
  * start) never touches an existing copy; `refresh` (after a sync) always
- * writes a fresh one. A copy that is replaced is first moved aside to
- * `<name>.prev` (replacing an older one) so no edit is silently lost.
- * Serialized with every other operation on the canonical clone.
+ * writes a fresh one. A copy that is replaced is NEVER deleted unless it is
+ * proven clean: with `discardIfClean` (sync_repo, which refused a dirty copy
+ * just before) a copy whose git HEAD is on its base and whose files match the
+ * base tree is removed; every other one is moved aside to a NEW
+ * `<name>.prev-<UTC stamp>` (older ones are never touched), so no edit is
+ * ever silently lost. Serialized with every other operation on the canonical
+ * clone.
  */
 export function ensurePiRepoCopy(
   ref: PiRepoCopyRef,
   mode: "keep" | "when-missing" | "refresh",
+  options: { discardIfClean?: boolean } = {},
 ): Promise<EnsuredCopy> {
-  return withRepoLock(ref.clonePath, () => ensureCopyLocked(ref, mode));
+  return withRepoLock(ref.clonePath, () => ensureCopyLocked(ref, mode, options.discardIfClean ?? false));
 }
 
-async function ensureCopyLocked(ref: PiRepoCopyRef, mode: "keep" | "when-missing" | "refresh"): Promise<EnsuredCopy> {
+/** `<name>.prev-YYYYMMDDTHHMMSSZ` (`-2`, `-3`… when taken) — never an existing name. */
+function freePrevName(parent: PinnedDir, name: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const base = `${name}.prev-${stamp}`;
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = index === 1 ? base : `${base}-${index}`;
+    if (parent.kind(candidate) === "missing") return candidate;
+  }
+  return `${base}-${randomBytes(4).toString("hex")}`;
+}
+
+/** The moved-aside copies of `name` in its `repos/<owner>` folder: the legacy `<name>.prev` and every stamped one. */
+function isPrevName(entry: string, name: string): boolean {
+  return entry === `${name}.prev` || (entry.startsWith(`${name}.prev-`) && /^\d{8}T\d{6}Z(-[0-9a-z]+)?$/.test(entry.slice(name.length + 6)));
+}
+
+/** The existing copy `name` is proven clean against `base`: HEAD on the base and no file differing from the base tree. */
+async function existingCleanAgainst(clone: string, parent: PinnedDir, name: string, base: string): Promise<boolean> {
+  const copy = parent.dir([name]);
+  if (!copy) return false;
+  try {
+    if (!copyOnBase(copy, base).ok) return false;
+    const changes = await readBackAgainstBase(clone, copy, base).catch(() => null);
+    return changes !== null && changes.writes.length === 0 && changes.deletes.length === 0;
+  } finally {
+    copy.close();
+  }
+}
+
+async function ensureCopyLocked(
+  ref: PiRepoCopyRef,
+  mode: "keep" | "when-missing" | "refresh",
+  discardIfClean: boolean,
+): Promise<EnsuredCopy> {
   if (!ref.workspace.hostRoot) {
     throw new Error("The sandbox workspace mount is not configured, so the repository cannot be copied into the sandbox.");
   }
@@ -510,14 +553,16 @@ async function ensureCopyLocked(ref: PiRepoCopyRef, mode: "keep" | "when-missing
     }
     tmp.close();
     let previousPath: string | undefined;
-    if (existing !== "missing") {
-      parent.remove(`${ref.name}.prev`);
-      if (existing === "dir") {
-        parent.rename(ref.name, `${ref.name}.prev`);
-        previousPath = `${sandboxPath}.prev`;
-      } else {
+    if (existing === "dir" || existing === "file") {
+      if (existing === "dir" && discardIfClean && state && (await existingCleanAgainst(ref.clonePath, parent, ref.name, state.base))) {
         parent.remove(ref.name);
+      } else {
+        const prevName = freePrevName(parent, ref.name);
+        parent.rename(ref.name, prevName);
+        previousPath = path.posix.join(path.posix.dirname(sandboxPath), prevName);
       }
+    } else if (existing !== "missing") {
+      parent.remove(ref.name); // a link (never its target) or a special file where the copy belongs
     }
     parent.rename(tmpName, ref.name);
     writeState(stateFile, { base: head, copiedAt: new Date().toISOString(), ...(state?.holder ? { holder: state.holder } : {}) });
@@ -552,48 +597,11 @@ export interface CopyChanges {
  * skipped instead of read through.
  */
 async function readBack(clone: string, pinned: PinnedDir): Promise<CopyChanges> {
-  const copyReal = pinned.realPath();
-  if (!copyReal) throw new Error("The working copy could not be resolved; open the repository again.");
-  const copy = pinned.base(); // for lstat-only checks and the verified reads below
-  const real = (rel: string): string => (rel ? path.join(copyReal, ...rel.split("/")) : copyReal);
   const tracked = new Set([
     ...(await lsFiles(clone, ["--cached"])),
     ...(await lsFiles(clone, ["--others", "--exclude-standard"])),
   ]);
-  const seen = new Set<string>();
-  const skipped: string[] = [];
-  let entries = 0;
-  let level: string[] = [""];
-  for (let depth = 0; level.length > 0 && depth <= MAX_DEPTH; depth += 1) {
-    const files: string[] = [];
-    const dirs: string[] = [];
-    for (const dirRel of level) {
-      const names = listDirVerified(pinned.descendant(dirRel), real(dirRel));
-      if (!names) {
-        if (dirRel) skipped.push(dirRel); // swapped for a link (or gone) since it was listed
-        continue;
-      }
-      for (const entry of names) {
-        if (entry.name === ".git") continue;
-        entries += 1;
-        if (entries > READBACK_MAX_ENTRIES) {
-          throw new Error(
-            `The working copy has more than ${READBACK_MAX_ENTRIES} entries outside ignored folders; remove build output or add it to .gitignore, then commit again.`,
-          );
-        }
-        const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
-        if (entry.isSymbolicLink()) skipped.push(rel);
-        else if (entry.isDirectory()) dirs.push(rel);
-        else if (entry.isFile()) files.push(rel);
-        else skipped.push(rel);
-      }
-    }
-    const ignored = await checkIgnored(clone, [...files, ...dirs.map((rel) => `${rel}/`)]);
-    for (const rel of files) if (!ignored.has(rel)) seen.add(rel);
-    level = dirs.filter((rel) => !ignored.has(`${rel}/`) && !ignored.has(rel));
-  }
-  // A tracked file under a pruned (ignored) folder is still part of the commit.
-  for (const rel of tracked) if (!seen.has(rel) && kindNoFollow(copy, rel) === "file") seen.add(rel);
+  const { seen, skipped, copy, real } = await walkCopy(clone, pinned, tracked);
 
   const writes: CopyChanges["writes"] = [];
   let bytes = 0;
@@ -638,6 +646,107 @@ async function readBack(clone: string, pinned: PinnedDir): Promise<CopyChanges> 
   return { writes, deletes, skipped: [...new Set(skipped)] };
 }
 
+/**
+ * The copy's working tree against its BASE commit's tree (`git ls-tree` in the
+ * canonical clone; the copy's files hashed as git blobs, never through git) —
+ * what the agent changed since the copy was made, measurable even after the
+ * canonical clone MOVED (another conversation committed, a sync pulled), when
+ * {@link readBack} against the clone's working tree would mix in the other
+ * work. Same walk, links and caps as readBack; for "has it uncommitted work?"
+ * only (its writes are never applied).
+ */
+async function readBackAgainstBase(clone: string, pinned: PinnedDir, base: string): Promise<CopyChanges> {
+  const tree = new Map<string, { mode: string; sha: string }>();
+  for (const line of await gitListZ(clone, ["ls-tree", "-r", "-z", "--full-tree", base])) {
+    const match = /^(\d{6}) \w+ ([0-9a-f]+)\t(.+)$/s.exec(line);
+    if (match) tree.set(match[3]!, { mode: match[1]!, sha: match[2]! });
+  }
+  const { seen, skipped, copy, real } = await walkCopy(clone, pinned, new Set(tree.keys()));
+  const algorithm = base.length === 64 ? "sha256" : "sha1";
+  const isFileMode = (mode: string) => mode === "100644" || mode === "100755";
+  const writes: CopyChanges["writes"] = [];
+  for (const rel of seen) {
+    const source = under(copy, rel);
+    const entry = tree.get(rel);
+    if (!source || (entry && !isFileMode(entry.mode))) {
+      skipped.push(rel); // a link / gitlink in the base: never compared
+      continue;
+    }
+    const exec = (fs.lstatSync(source).mode & 0o111) !== 0;
+    if (entry && (entry.mode === "100755") === exec && blobHash(source, real(rel), algorithm) === entry.sha) continue;
+    if (writes.length + 1 > READBACK_MAX_FILES) {
+      throw new Error(`The working copy differs from its base in more than ${READBACK_MAX_FILES} files.`);
+    }
+    writes.push({ rel, source, real: real(rel), exec });
+  }
+  const deletes: string[] = [];
+  for (const [rel, entry] of tree) {
+    if (seen.has(rel) || !isFileMode(entry.mode)) continue;
+    const inCopy = kindNoFollow(copy, rel);
+    if (inCopy === "missing") deletes.push(rel);
+    else if (inCopy !== "file") skipped.push(rel);
+  }
+  return { writes, deletes, skipped: [...new Set(skipped)] };
+}
+
+/** The git blob id of a sandbox file (verified read); throws when it cannot be read. */
+function blobHash(source: string, sourceReal: string, algorithm: "sha1" | "sha256"): string {
+  const data = readFileVerified(source, sourceReal, READBACK_MAX_FILE_BYTES);
+  if (!data) throw new Error("A file of the working copy could not be read.");
+  return createHash(algorithm).update(`blob ${data.length}\0`).update(data).digest("hex");
+}
+
+/**
+ * The shared walk of {@link readBack} / {@link readBackAgainstBase}: the copy's
+ * files outside ignored folders (plus every `tracked` file inside one), and
+ * what was skipped (links, specials, folders swapped mid-walk).
+ */
+async function walkCopy(
+  clone: string,
+  pinned: PinnedDir,
+  tracked: Set<string>,
+): Promise<{ seen: Set<string>; skipped: string[]; copy: string; real: (rel: string) => string }> {
+  const copyReal = pinned.realPath();
+  if (!copyReal) throw new Error("The working copy could not be resolved; open the repository again.");
+  const copy = pinned.base(); // for lstat-only checks and the verified reads below
+  const real = (rel: string): string => (rel ? path.join(copyReal, ...rel.split("/")) : copyReal);
+  const seen = new Set<string>();
+  const skipped: string[] = [];
+  let entries = 0;
+  let level: string[] = [""];
+  for (let depth = 0; level.length > 0 && depth <= MAX_DEPTH; depth += 1) {
+    const files: string[] = [];
+    const dirs: string[] = [];
+    for (const dirRel of level) {
+      const names = listDirVerified(pinned.descendant(dirRel), real(dirRel));
+      if (!names) {
+        if (dirRel) skipped.push(dirRel); // swapped for a link (or gone) since it was listed
+        continue;
+      }
+      for (const entry of names) {
+        if (entry.name === ".git") continue;
+        entries += 1;
+        if (entries > READBACK_MAX_ENTRIES) {
+          throw new Error(
+            `The working copy has more than ${READBACK_MAX_ENTRIES} entries outside ignored folders; remove build output or add it to .gitignore, then commit again.`,
+          );
+        }
+        const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
+        if (entry.isSymbolicLink()) skipped.push(rel);
+        else if (entry.isDirectory()) dirs.push(rel);
+        else if (entry.isFile()) files.push(rel);
+        else skipped.push(rel);
+      }
+    }
+    const ignored = await checkIgnored(clone, [...files, ...dirs.map((rel) => `${rel}/`)]);
+    for (const rel of files) if (!ignored.has(rel)) seen.add(rel);
+    level = dirs.filter((rel) => !ignored.has(`${rel}/`) && !ignored.has(rel));
+  }
+  // A tracked file under a pruned (ignored) folder is still part of the commit.
+  for (const rel of tracked) if (!seen.has(rel) && kindNoFollow(copy, rel) === "file") seen.add(rel);
+  return { seen, skipped, copy, real };
+}
+
 /** The sandbox file (verified read) holds the same bytes as the canonical one. */
 function sameBytes(source: string, sourceReal: string, canonical: string): boolean {
   try {
@@ -650,7 +759,12 @@ function sameBytes(source: string, sourceReal: string, canonical: string): boole
 
 export type CopyStatus =
   | { kind: "no_copy" }
-  | { kind: "moved"; base: string; head: string }
+  /**
+   * Noah's clone moved past the copy's base. `changes` is the copy against
+   * its BASE tree (readBackAgainstBase); null when that could not be measured
+   * — treated as uncommitted work.
+   */
+  | { kind: "moved"; base: string; head: string; changes: CopyChanges | null }
   /** The copy's git HEAD left its base (checkout/switch/reset/rebase there): its files are another state's. */
   | { kind: "diverged"; base: string; tip: string | null }
   | { kind: "ok"; base: string; changes: CopyChanges };
@@ -665,12 +779,37 @@ export function piRepoCopyStatus(ref: PiRepoCopyRef): Promise<CopyStatus> {
       const onBase = copyOnBase(copy, state.base);
       if (!onBase.ok) return { kind: "diverged", base: state.base, tip: onBase.tip };
       const head = await headOf(ref.clonePath);
-      if (head !== state.base) return { kind: "moved", base: state.base, head };
+      if (head !== state.base) {
+        const changes = await readBackAgainstBase(ref.clonePath, copy, state.base).catch(() => null);
+        return { kind: "moved", base: state.base, head, changes };
+      }
       return { kind: "ok", base: state.base, changes: await readBack(ref.clonePath, copy) };
     } finally {
       copy.close();
     }
   });
+}
+
+/**
+ * How many uncommitted file changes the copy holds: 0 = clean (or no copy),
+ * null = it holds work that cannot be counted (a diverged copy, or a moved one
+ * whose base diff could not be read) — treat as uncommitted.
+ */
+export function copyChangeCount(status: CopyStatus): number | null {
+  switch (status.kind) {
+    case "no_copy":
+      return 0;
+    case "diverged":
+      return null;
+    case "moved":
+    case "ok":
+      return status.changes ? status.changes.writes.length + status.changes.deletes.length : null;
+  }
+}
+
+/** The copy holds uncommitted work (anything but a proven-clean copy). The ONE test sync, claim and push use. */
+export function copyHasChanges(status: CopyStatus): boolean {
+  return copyChangeCount(status) !== 0;
 }
 
 /**
@@ -689,7 +828,8 @@ export type CopyClaim = { kind: "ok" } | { kind: "held"; holder: string };
  * shared by all of the principal's conversations and its edits carry no
  * conversation, so another conversation's claim is honoured while that
  * conversation still has the repo open (`holderStillOpen`) AND the copy holds
- * uncommitted changes (or its base moved, so its state cannot be read): taking
+ * uncommitted changes (`copyHasChanges`, measured against the copy's base even
+ * after Noah's clone moved; a diverged copy counts as changed): taking
  * it over then would commit, or move aside, someone else's half-done work.
  * A clean copy, a closed/deleted holder or no copy at all is taken over.
  */
@@ -702,9 +842,7 @@ export async function claimPiRepoCopy(
   const state = readState(stateFile);
   if (!state) return { kind: "ok" };
   if (state.holder && state.holder !== conversationId && holderStillOpen(state.holder)) {
-    const status = await piRepoCopyStatus(ref);
-    const clean = status.kind === "no_copy" || (status.kind === "ok" && status.changes.writes.length === 0 && status.changes.deletes.length === 0);
-    if (!clean) return { kind: "held", holder: state.holder };
+    if (copyHasChanges(await piRepoCopyStatus(ref))) return { kind: "held", holder: state.holder };
   }
   if (state.holder !== conversationId) {
     await withRepoLock(ref.clonePath, async () => {
@@ -800,13 +938,19 @@ export function commitPiRepoCopy(ref: PiRepoCopyRef, message: string): Promise<C
   });
 }
 
-/** Remove the viewer's copy (and its record) of a repo that was unregistered. Best effort. */
+/** Remove the viewer's copy, every moved-aside `<name>.prev*` of it, and its record (a repo that was unregistered). Best effort. */
 export function removePiRepoCopy(ref: Omit<PiRepoCopyRef, "clonePath">): void {
   const parent = pinnedCopyParent(ref.workspace, ref.ownerId, false);
   if (parent) {
     try {
       parent.remove(ref.name);
-      parent.remove(`${ref.name}.prev`);
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = parent.list();
+      } catch {
+        /* unreadable: nothing more to remove */
+      }
+      for (const entry of entries) if (isPrevName(entry.name, ref.name)) parent.remove(entry.name);
     } finally {
       parent.close();
     }

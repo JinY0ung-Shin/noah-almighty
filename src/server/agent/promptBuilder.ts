@@ -650,7 +650,7 @@ function piActiveRepoTurnLine(request: AgentRequest): string | null {
   return (
     `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it, but never checkout/switch/reset/rebase there (commit refuses a copy whose git HEAD left the commit Noah gave it). ` +
     `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
-    "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no git credentials (and no network beyond the pi operator's allowlist), so never fetch, pull or push from it."
+    "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is moved aside to a new `<name>.prev-<UTC stamp>` folder, never deleted) and redo the edits there. The sandbox has no git credentials (and no network beyond the pi operator's allowlist), so never fetch, pull or push from it."
   );
 }
 

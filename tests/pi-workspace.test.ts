@@ -380,9 +380,10 @@ describe("working-repo copy (D1)", () => {
     expect(refused.content[0].text).toContain("mcp__git_repo__open_repo");
     // Re-open: the stale copy moves aside, a fresh one carries the owner's commit.
     const reopen = await callTool(mate, "open_repo", { name: "app" });
-    expect(reopen.content[0].text).toContain(".prev");
+    expect(reopen.content[0].text).toMatch(/moved to \S+\/app\.prev-\d{8}T\d{6}Z/);
     expect(fs.readFileSync(path.join(mateCopy, "README.md"), "utf8")).toBe("owner");
-    expect(fs.readFileSync(`${mateCopy}.prev/README.md`, "utf8")).toBe("mate");
+    const prev = fs.readdirSync(path.dirname(mateCopy)).find((name) => name.startsWith("app.prev-"))!;
+    expect(fs.readFileSync(path.join(path.dirname(mateCopy), prev, "README.md"), "utf8")).toBe("mate");
     // sync is refused while the copy has uncommitted work.
     fs.writeFileSync(path.join(mateCopy, "README.md"), "mate again");
     expect((await callTool(mate, "sync_repo", { name: "app" })).content[0].text).toContain("uncommitted file change");

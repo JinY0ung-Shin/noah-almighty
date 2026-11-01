@@ -172,3 +172,62 @@ describe("a copy whose git HEAD left its base (review #6)", () => {
     expect((await callTool(s.tools, "commit", { name: "app", message: "noop" })).content[0].text).toContain("Nothing to commit");
   });
 });
+
+describe("uncommitted edits survive a moved clone, sync and re-open (review #13)", () => {
+  it("sync refuses a dirty copy after Noah's clone moved; moved-aside copies are never replaced or deleted", async () => {
+    const s = repoSetup();
+    expect((await callTool(s.tools, "register_repo", { repo: s.remote, name: "app", branch: "main" })).isError).toBeFalsy();
+    expect((await callTool(s.tools, "open_repo", { name: "app" })).isError).toBeFalsy();
+    fs.writeFileSync(path.join(s.copy, "shared.md"), "owner's uncommitted edit");
+    fs.writeFileSync(path.join(s.copy, "agent-notes.md"), "notes");
+
+    // Upstream moves, and someone else's sync pulls it into Noah's clone.
+    const upstream = (file: string) => {
+      g(s.seed, "checkout", "-q", "main");
+      fs.writeFileSync(path.join(s.seed, file), "upstream");
+      g(s.seed, "add", "-A");
+      g(s.seed, "commit", "-q", "-m", `upstream ${file}`);
+      g(s.seed, "push", "-q", "origin", "main");
+      g(s.clone, "pull", "-q", "--rebase", "origin", "main");
+    };
+    upstream("upstream-1.txt");
+
+    // Case 1 — sync must not move the edits aside and then destroy them.
+    const sync = await callTool(s.tools, "sync_repo", { name: "app" });
+    expect(sync.isError).toBe(true);
+    expect(sync.content[0].text).toContain("2 uncommitted file change(s) made on an older state");
+    expect(fs.readFileSync(path.join(s.copy, "shared.md"), "utf8")).toBe("owner's uncommitted edit");
+
+    // Case 2 — commit is refused (moved); open_repo moves the copy to a STAMPED folder.
+    expect((await callTool(s.tools, "commit", { name: "app", message: "x" })).content[0].text).toContain(".prev-<UTC stamp>");
+    const reopen = await callTool(s.tools, "open_repo", { name: "app" });
+    const prevPath = /moved to (\S+); re-apply/.exec(reopen.content[0].text ?? "")?.[1];
+    expect(prevPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z$/);
+    const repos = path.dirname(s.copy);
+    const prevs = () => fs.readdirSync(repos).filter((name) => name.startsWith("app.prev")).sort();
+    expect(prevs()).toEqual([path.basename(prevPath!)]);
+    const saved = path.join(repos, prevs()[0]!);
+    expect(fs.readFileSync(path.join(saved, "shared.md"), "utf8")).toBe("owner's uncommitted edit");
+
+    // A sync of the (clean) fresh copy succeeds and discards only that clean copy.
+    upstream("upstream-2.txt");
+    const synced = await callTool(s.tools, "sync_repo", { name: "app" });
+    expect(synced.isError).toBeFalsy();
+    expect(synced.content[0].text).not.toContain("moved to");
+    expect(fs.existsSync(path.join(s.copy, "upstream-2.txt"))).toBe(true);
+    expect(prevs()).toEqual([path.basename(prevPath!)]);
+    expect(fs.readFileSync(path.join(saved, "agent-notes.md"), "utf8")).toBe("notes");
+
+    // Another stale re-open adds a second folder; the first one is untouched.
+    fs.writeFileSync(path.join(s.copy, "second.md"), "second");
+    upstream("upstream-3.txt");
+    await new Promise((resolve) => setTimeout(resolve, 1100)); // a distinct stamp (the name also dedupes)
+    await callTool(s.tools, "open_repo", { name: "app" });
+    expect(prevs()).toHaveLength(2);
+    expect(fs.readFileSync(path.join(saved, "shared.md"), "utf8")).toBe("owner's uncommitted edit");
+
+    // remove_repo takes the copy and every moved-aside folder with it.
+    await callTool(s.tools, "remove_repo", { name: "app" });
+    expect(fs.readdirSync(repos)).toEqual([]);
+  });
+});

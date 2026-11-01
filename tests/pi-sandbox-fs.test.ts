@@ -301,14 +301,17 @@ describe("sandbox filesystem operations never follow a planted link (review C1)"
       expect(w.snapshot()).toEqual(r.before);
     });
 
-    it("a refresh replaces a planted `<name>.prev` link without following it, and the read-back skips links", async () => {
+    it("a refresh never follows a planted `<name>.prev` link, and the read-back skips links", async () => {
       const w = world();
       const r = repo(w);
       await ensurePiRepoCopy(r.ref, "keep");
       const copy = path.join(w.attacker.hostRoot!, "repos", "owner-1", "app");
       fs.symlinkSync(r.victimCopy, `${copy}.prev`);
-      await ensurePiRepoCopy(r.ref, "refresh");
-      expect(fs.lstatSync(`${copy}.prev`).isDirectory()).toBe(true);
+      const refreshed = await ensurePiRepoCopy(r.ref, "refresh");
+      // The replaced copy goes to a NEW stamped folder; the planted link is left alone.
+      expect(refreshed.previousPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z$/);
+      expect(fs.lstatSync(path.join(path.dirname(copy), path.basename(refreshed.previousPath!))).isDirectory()).toBe(true);
+      expect(fs.lstatSync(`${copy}.prev`).isSymbolicLink()).toBe(true);
       expect(w.snapshot()).toEqual(r.before);
 
       const outside = path.join(w.base, "outside");
@@ -320,6 +323,7 @@ describe("sandbox filesystem operations never follow a planted link (review C1)"
       expect(execFileSync("git", ["-C", r.ref.clonePath, "ls-files"]).toString()).not.toContain("secret");
       removePiRepoCopy(r.ref);
       expect(fs.existsSync(copy)).toBe(false);
+      expect(fs.readdirSync(path.dirname(copy))).toEqual([]); // every .prev* too (the link unlinked, not followed)
       expect(fs.readFileSync(path.join(outside, "secret.txt"), "utf8")).toBe("SECRET");
       expect(w.snapshot()).toEqual(r.before);
     });
