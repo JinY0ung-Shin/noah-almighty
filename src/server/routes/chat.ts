@@ -68,7 +68,7 @@ import {
   type DecodedChatImage,
   type DecodeError,
 } from "../chatImages.js";
-import { visionForModel } from "../modelVisionPolicy.js";
+import { visionForCatalogModel } from "../modelVisionPolicy.js";
 import { isPreviewableExtension, renderDocumentPreviews } from "../deckRender.js";
 import { loadConverterPreviews } from "../deckPreview.js";
 import {
@@ -910,16 +910,18 @@ export async function executeChatTurn(
   // This turn's model, mirroring runCapabilities' resolution (this turn's pick >
   // stored pick > admin override > pi-gateway's default model, each only while
   // pi offers it — its live list, read AFTER the rewind plan above). Its vision
-  // (admin per-model policy ∘ MODEL_VISION) gates the upload below AND the
-  // regenerate image re-feed; the run itself recomputes the same value. It also
-  // names the model a transient failure bubble blames.
+  // (pi's image setting ∘ admin per-model policy ∘ MODEL_VISION, pi's default
+  // model looked up by its id — visionForCatalogModel) gates the upload below
+  // AND the regenerate image re-feed; the run itself recomputes the same value.
+  // It also names the model a transient failure bubble blames.
   const piModels = await piServicesFor(store, config).models.list();
   const turnModel =
     catalogModel(
       piModels,
       requestedModel === null ? store.getConversationModel(ownerUserId, conversationId) : requestedModel,
     ) ?? effectiveModelOverride(store, catalogModelIds(piModels)) ?? undefined;
-  const turnVisionEnabled = visionForModel(
+  const turnVisionEnabled = visionForCatalogModel(
+    piModels,
     turnModel,
     store.getModelVisionPolicy(),
     config.visionEnabled,

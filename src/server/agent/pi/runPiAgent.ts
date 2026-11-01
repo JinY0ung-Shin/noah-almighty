@@ -61,6 +61,7 @@ import {
 } from "../promptBuilder.js";
 import { resultErrorMessage } from "../runErrors.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog, piKnownTools } from "./mcpCatalog.js";
+import { catalogDefaultModelId } from "./modelCatalog.js";
 import {
   PI_RUN_TOKEN_HEADER,
   beginPiConsultationSandbox,
@@ -245,7 +246,7 @@ async function runPiAgentAs(
   // none would stay on the session's model, so it names the default by its id
   // (`default` in pi's model list). Unknown → omitted: the session keeps its model.
   const piModelFor = (model: string | undefined, fresh: boolean): string | undefined =>
-    model ?? (fresh ? undefined : services.models.peek().find((entry) => entry.default)?.id);
+    model ?? (fresh ? undefined : catalogDefaultModelId(services.models.peek()));
 
   // ---- session ------------------------------------------------------------
   const resumeCandidate = request.resumeSessionAt ?? request.resumeSessionId;

@@ -202,7 +202,8 @@ never copied into this repository.
    default; key: `$PI_GATEWAY_SECRETS/gateway/admin_api_key`) → **LLM**, add the corporate LLM server and its
    models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
    pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
-   picks none runs pi's default model).
+   picks none runs pi's default model). A model whose **image** input is off there is text-only in Noah too
+   (attached images reach it as files; Noah's per-model vision setting can only turn vision off).
 5. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
 
 ### What the stack wires up

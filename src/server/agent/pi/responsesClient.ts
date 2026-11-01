@@ -455,6 +455,11 @@ export interface PiModel {
   ownedBy?: string;
   /** pi-gateway's default model (the one a new session without `model` runs). */
   default?: true;
+  /**
+   * Whether pi's `input` lists `image` (pi 400s `unsupported_image_input`
+   * otherwise). Absent when pi sent no `input` (an older pi): unknown.
+   */
+  imageInput?: boolean;
 }
 
 export interface PiFileContent {
@@ -708,6 +713,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
           id: m.id as string,
           ...(typeof m.owned_by === "string" ? { ownedBy: m.owned_by } : {}),
           ...(m.default === true ? { default: true as const } : {}),
+          ...(Array.isArray(m.input) ? { imageInput: m.input.includes("image") } : {}),
         }));
     },
     async fileContent(path, user, signal) {

@@ -1,4 +1,4 @@
-import { MAX_MODEL_ID_CHARS } from "./agent/pi/modelCatalog.js";
+import { MAX_MODEL_ID_CHARS, catalogDefaultModelId, type CatalogModel } from "./agent/pi/modelCatalog.js";
 
 /**
  * Admin-managed per-MODEL vision policy: which of pi-gateway's models accept
@@ -6,9 +6,12 @@ import { MAX_MODEL_ID_CHARS } from "./agent/pi/modelCatalog.js";
  * vision support — a deployment-wide `MODEL_VISION` flag alone is too coarse.
  *
  * Shape: `{ [piModelId]: boolean }`. A model PRESENT in the map is explicitly
- * set; an ABSENT model (and pi-gateway's default model when nothing is picked
- * and no override applies) inherits the deployment default
- * (`config.visionEnabled`, env `MODEL_VISION`). Stored as one JSON `app_config`
+ * set; an ABSENT model inherits the deployment default (`config.visionEnabled`,
+ * env `MODEL_VISION`). pi-gateway's default model (nothing picked, no override)
+ * is looked up by its id like any other. Above both sits pi's own LLM setting:
+ * a model pi reports without image input is text-only whatever this map or
+ * MODEL_VISION say ({@link visionForCatalogModel}) — the policy can turn a
+ * vision model OFF, never a text-only one on. Stored as one JSON `app_config`
  * row, mirroring the tool/skill policy (missing/corrupt → empty map =
  * everything inherits). Entries for models pi later drops stay stored and are
  * simply never consulted.
@@ -57,9 +60,10 @@ export function parseModelVisionPolicy(raw: unknown, catalogIds: readonly string
 }
 
 /**
- * Effective vision for the model a run resolved to: a pi model id consults the
- * policy (an unset model inherits the deployment default); `undefined`/null —
- * pi-gateway's default model — always uses the deployment default.
+ * The admin policy alone: a pi model id consults the policy (an unset model
+ * inherits the deployment default); no id → the deployment default. A run's
+ * model goes through {@link visionForCatalogModel}, which also names pi's
+ * default model and honors pi's own image setting.
  */
 export function visionForModel(
   model: string | null | undefined,
@@ -70,4 +74,28 @@ export function visionForModel(
     return policy[model];
   }
   return deploymentDefault;
+}
+
+/**
+ * Vision of the model a run resolves to, against pi-gateway's live list:
+ * `model` undefined/null is pi's DEFAULT model, looked up by the id its list
+ * marks `default` (so the admin policy for that model applies too). A model pi
+ * reports without image input (`imageInput: false`) is text-only — pi would
+ * 400 an image — regardless of the policy and MODEL_VISION; otherwise
+ * {@link visionForModel} decides. pi silent on input (an older pi) → the policy
+ * alone, as before. The chat route, the capability plan and the bootstrap all
+ * call this, so the upload mode, both metacognition surfaces and the composer
+ * agree.
+ */
+export function visionForCatalogModel(
+  models: readonly CatalogModel[],
+  model: string | null | undefined,
+  policy: ModelVisionPolicy,
+  deploymentDefault: boolean,
+): boolean {
+  const id = model || catalogDefaultModelId(models);
+  if (id && models.find((entry) => entry.id === id)?.imageInput === false) {
+    return false;
+  }
+  return visionForModel(id, policy, deploymentDefault);
 }

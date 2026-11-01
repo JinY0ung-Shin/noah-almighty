@@ -690,6 +690,46 @@ describe("chat-stream request validation", () => {
     expect(Buffer.from(vision.images![0].data, "base64")).toEqual(PNG_BYTES);
   });
 
+  it("sends a 기본 모델 image turn as FILES when pi's default model is text-only, by policy or by pi's own setting (review #12)", async () => {
+    const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
+    const app = createApp(services);
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "defaultvision").expect(201)).body.user.id as string;
+    const turn = async (conversationId: string) => {
+      H.requests.length = 0;
+      await owner
+        .post("/api/chat/stream")
+        .send({ avatarId: ownerId, conversationId, message: "이미지", images: [PNG_DATA_URL] })
+        .expect(200);
+      expect(H.requests).toHaveLength(1);
+      return H.requests[0]!;
+    };
+    // The admin set pi's default model 미지원; MODEL_VISION stays on.
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "text-llm", default: true }, { id: "vis-llm" }],
+    });
+    services.store.setModelVisionPolicy({ "text-llm": false });
+    let r = await turn("conv-dv1");
+    expect(r.images).toBeUndefined();
+    expect(r.imageFiles).toHaveLength(1);
+    // pi reports the default model without image input: the 지원 policy cannot turn it on.
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "text-llm", default: true, imageInput: false }, { id: "vis-llm", imageInput: true }],
+    });
+    services.store.setModelVisionPolicy({ "text-llm": true });
+    r = await turn("conv-dv2");
+    expect(r.images).toBeUndefined();
+    expect(r.imageFiles).toHaveLength(1);
+    // Control: the vision model still gets image blocks.
+    services.store.setModelVisionPolicy({});
+    H.requests.length = 0;
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-dv3", message: "이미지", model: "vis-llm", images: [PNG_DATA_URL] })
+      .expect(200);
+    expect(H.requests[0]!.images).toHaveLength(1);
+  });
+
   it("stages the anchor's images as files on a vision re-feed too (regenerate and edit-rewind)", async () => {
     const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
     offerModels(services, ["sonnet", "opus"]);

@@ -22,6 +22,12 @@ export interface CatalogModel {
   server: string | null;
   /** pi-gateway's default model — the id a continuing turn sends to switch to "기본 모델" (P3). */
   default?: true;
+  /**
+   * pi's LLM setting for image input: false = text-only (pi 400s an image),
+   * true = accepted. Absent = pi did not say (an older pi) → Noah's own policy
+   * decides alone (modelVisionPolicy.ts `visionForCatalogModel`).
+   */
+  imageInput?: boolean;
 }
 
 /** What one lookup knows: the models, and whether that list came from pi at all. */
@@ -82,7 +88,12 @@ export function createPiModelCatalog(
           const id = model.id.trim();
           if (!id || seen.has(id)) continue;
           seen.add(id);
-          good.push({ id, server: model.ownedBy?.trim() || null, ...(model.default ? { default: true as const } : {}) });
+          good.push({
+            id,
+            server: model.ownedBy?.trim() || null,
+            ...(model.default ? { default: true as const } : {}),
+            ...(model.imageInput !== undefined ? { imageInput: model.imageInput } : {}),
+          });
         }
         lastFetchFailed = false;
         freshUntil = now() + ttlMs;
@@ -116,6 +127,11 @@ export function createPiModelCatalog(
 /** The ids of `models`, for membership checks. */
 export function catalogModelIds(models: readonly CatalogModel[]): string[] {
   return models.map((model) => model.id);
+}
+
+/** The id of pi-gateway's default model (`default: true` in its list); undefined when pi named none. */
+export function catalogDefaultModelId(models: readonly CatalogModel[]): string | undefined {
+  return models.find((model) => model.default)?.id;
 }
 
 /** `value` when it names a model in `models`, else undefined (unset / unknown → pi's default model). */

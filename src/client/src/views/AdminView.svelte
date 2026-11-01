@@ -395,7 +395,8 @@
   let visionBusy = false;
   $: visionDefaultLabel = sys.visionDefault === false ? "미지원" : "지원";
   // pi-gateway's live model list (empty under the local stub or when pi is unreachable).
-  $: piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as { id: string; server: string | null }[];
+  // `imageInput: false` = pi's own LLM setting has image input off: always text-only here.
+  $: piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as { id: string; server: string | null; imageInput?: boolean }[];
 
   function syncVisionPolicyFromSys() {
     const current = unwrapSystem($appState.adminSystem);
@@ -862,7 +863,8 @@
                   <h3>모델별 이미지 입력(비전)</h3>
                   <p class="muted">
                     pi 모델별 이미지 입력 지원 여부를 지정합니다. "기본값"은 배포 환경설정(MODEL_VISION, 현재 {visionDefaultLabel})을 따릅니다.
-                    미지원으로 설정된 모델을 쓰는 대화에서는 이미지 첨부가 차단되고, 아바타의 이미지/PDF 파일 읽기가 거부되며, 아바타에게도 그 사실이 안내됩니다.
+                    pi-gateway의 LLM 설정에서 이미지 입력을 켜지 않은 모델은 여기 설정과 관계없이 미지원입니다.
+                    미지원으로 설정된 모델을 쓰는 대화에서는 첨부한 이미지는 파일로만 전달되고, 아바타의 이미지/PDF 파일 읽기가 거부되며, 아바타에게도 그 사실이 안내됩니다.
                   </p>
                 </div>
               </div>
@@ -872,8 +874,13 @@
                     <span>
                       <span class="mono">{model.id}</span>
                       {#if model.server}<span class="muted">{model.server}</span>{/if}
+                      {#if model.imageInput === false}<span class="muted">pi-gateway LLM 설정에서 이미지 입력이 꺼져 있어 항상 미지원</span>{/if}
                     </span>
-                    <select bind:value={visionPolicyDraft[model.id]} disabled={visionBusy} aria-label={`${model.id} 이미지 입력 지원`}>
+                    <select
+                      bind:value={visionPolicyDraft[model.id]}
+                      disabled={visionBusy || model.imageInput === false}
+                      aria-label={`${model.id} 이미지 입력 지원`}
+                    >
                       <option value="default">기본값 ({visionDefaultLabel})</option>
                       <option value="on">지원</option>
                       <option value="off">미지원</option>

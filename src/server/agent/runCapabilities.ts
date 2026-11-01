@@ -40,7 +40,7 @@ import { piServicesFor } from "./pi/piRuntime.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
 import { piSandboxEnvOf } from "./pi/responsesClient.js";
 import { normalizeGitRepoName } from "../gitRepos.js";
-import { visionForModel } from "../modelVisionPolicy.js";
+import { visionForCatalogModel } from "../modelVisionPolicy.js";
 import { readWorkspaceImage } from "../chatImages.js";
 import {
   stageClipboardImage as stageClipboardImageBytes,
@@ -417,11 +417,14 @@ export async function buildRunCapabilities(
   // single resolved model (chat behavior).
   const modelChain: (string | undefined)[] =
     request.modelFallback && effectiveModel !== undefined ? [effectiveModel, undefined] : [effectiveModel];
-  // Effective vision for the model THIS run resolved to: the admin per-model
-  // policy, the deployment default (MODEL_VISION) for an unset model and for
-  // pi-gateway's default model. Drives the no-vision prompt section, the
-  // Confluence image-block gate, and describe_system.
-  const runVisionEnabled = visionForModel(
+  // Effective vision for the model THIS run resolved to (pi's default model by
+  // its catalog id): text-only when pi reports the model without image input,
+  // else the admin per-model policy, else the deployment default (MODEL_VISION)
+  // — visionForCatalogModel, the same call as the chat route's upload mode and
+  // the bootstrap. Drives the no-vision prompt section, the Confluence
+  // image-block gate, and describe_system.
+  const runVisionEnabled = visionForCatalogModel(
+    piModels,
     effectiveModel,
     store.getModelVisionPolicy(),
     config.visionEnabled,

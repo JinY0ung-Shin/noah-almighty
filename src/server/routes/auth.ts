@@ -10,7 +10,7 @@ import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_s
 import { catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { effectiveModelOverride } from "../modelOverride.js";
-import { visionForModel } from "../modelVisionPolicy.js";
+import { visionForCatalogModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 
 // ---- Auth ------------------------------------------------------------
@@ -168,16 +168,18 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // A pick is a pi model id; none (or one pi stopped offering) runs the
       // admin override, else pi-gateway's default model.
       modelSelection: {
-        // `server` is pi's `owned_by`; `vision` the admin per-model policy ∘ MODEL_VISION.
+        // `server` is pi's `owned_by`; `vision` pi's image setting ∘ the admin
+        // per-model policy ∘ MODEL_VISION (visionForCatalogModel).
         models: models.map((model) => ({
           id: model.id,
           server: model.server,
-          vision: visionForModel(model.id, visionPolicy, config.visionEnabled),
+          vision: visionForCatalogModel(models, model.id, visionPolicy, config.visionEnabled),
         })),
         // Vision of the model a conversation gets when the user picked nothing:
         // the admin override when pi offers it, else pi-gateway's default model
-        // (mirrors runCapabilities).
-        defaultVision: visionForModel(
+        // by its id (mirrors runCapabilities and the chat route).
+        defaultVision: visionForCatalogModel(
+          models,
           effectiveModelOverride(store, catalogModelIds(models)),
           visionPolicy,
           config.visionEnabled,

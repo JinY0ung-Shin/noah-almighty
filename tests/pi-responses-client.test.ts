@@ -366,10 +366,33 @@ describe("cancel / models / files", () => {
       res.end("# hi\n");
     };
     await expect(client({ baseUrl: `${baseUrl}/` }).listModels()).resolves.toEqual([{ id: "fake-model", ownedBy: "fake", default: true }]);
+    // pi's per-model image input (absent on an older pi = unknown, never a guess).
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          object: "list",
+          data: [
+            { id: "text", object: "model", input: ["text"] },
+            { id: "eyes", object: "model", input: ["text", "image"] },
+            { id: "older", object: "model" },
+          ],
+        }),
+      );
+    };
+    await expect(client().listModels()).resolves.toEqual([
+      { id: "text", imageInput: false },
+      { id: "eyes", imageInput: true },
+      { id: "older" },
+    ]);
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "text/markdown" });
+      res.end("# hi\n");
+    };
     const file = await client().fileContent("/workspace/c/conv1/report.md", "u1");
     expect(file.bytes.toString()).toBe("# hi\n");
     expect(file.contentType).toBe("text/markdown");
-    expect(seen[1]!.url).toBe("/v1/files/content?path=%2Fworkspace%2Fc%2Fconv1%2Freport.md&user=u1");
+    expect(seen.at(-1)!.url).toBe("/v1/files/content?path=%2Fworkspace%2Fc%2Fconv1%2Freport.md&user=u1");
   });
 });
 

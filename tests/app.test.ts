@@ -9,6 +9,7 @@ import {
 } from "../src/server/plugins.js";
 import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
 import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
+import type { PiModel } from "../src/server/agent/pi/responsesClient.js";
 import { parseSse, shareGroup, signup, withTempDir } from "./helpers.js";
 
 let tempDir: string;
@@ -119,6 +120,43 @@ describe("noah-almighty platform", () => {
     services.store.setModelOverride("m-b");
     res = await request(app).get("/api/bootstrap").expect(200);
     expect(res.body.modelSelection.defaultVision).toBe(false);
+    services.store.close();
+  });
+
+  it("judges the default model's vision by its pi id, and never offers vision for a model pi reports text-only (review #12)", async () => {
+    const services = createServices({
+      dataDir: tempDir,
+      agentRuntime: "pi",
+      sessionSecret: "test",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
+    });
+    const offer = (models: PiModel[]) => {
+      piServicesFor(services.store, services.config).models = createPiModelCatalog({ listModels: async () => models });
+    };
+    const app = createApp(services);
+    // pi's default model is set 미지원 in the admin policy: 기본 모델 is text-only too.
+    offer([{ id: "text-llm", default: true }, { id: "vis-llm" }]);
+    services.store.setModelVisionPolicy({ "text-llm": false });
+    let res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.defaultVision).toBe(false);
+    // pi's own LLM setting says text-only: no policy (nor MODEL_VISION on) turns it on.
+    offer([
+      { id: "plain", default: true, imageInput: false },
+      { id: "eyes", imageInput: true },
+      { id: "older-pi" },
+    ]);
+    services.store.setModelVisionPolicy({ plain: true, eyes: false });
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection).toEqual({
+      models: [
+        { id: "plain", server: null, vision: false },
+        // The policy may still turn a vision model off…
+        { id: "eyes", server: null, vision: false },
+        // …and pi silent on input (an older pi) leaves the policy / MODEL_VISION in charge.
+        { id: "older-pi", server: null, vision: true },
+      ],
+      defaultVision: false,
+    });
     services.store.close();
   });
 

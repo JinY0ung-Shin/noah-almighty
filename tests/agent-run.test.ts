@@ -18,6 +18,7 @@ import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { EMPTY_PI_RESPONSE_MESSAGE, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import {
   PiGatewayError,
+  type PiModel,
   type PiResponseRequest,
   type PiResponsesClient,
   type PiStreamEvent,
@@ -184,6 +185,27 @@ const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req
 // The capability plan: which Noah servers and tools a run class gets
 // ===========================================================================
 describe("run capability plan", () => {
+  it("resolves a run on pi's default model to that model's vision, and pi's text-only setting wins (review #12)", async () => {
+    const env = setup();
+    const offer = (models: PiModel[]) => {
+      piServicesFor(env.store, env.config).models = createPiModelCatalog({ listModels: async () => models });
+    };
+    offer([{ id: "text-llm", default: true }, { id: "vis-llm" }]);
+    env.store.setModelVisionPolicy({ "text-llm": false });
+    let run = await plan(env, env.baseRequest);
+    expect(run.caps.runVisionEnabled).toBe(false);
+    expect(run.append).toContain("**No image input**");
+    offer([{ id: "text-llm", default: true, imageInput: false }, { id: "vis-llm", imageInput: true }]);
+    env.store.setModelVisionPolicy({ "text-llm": true });
+    run = await plan(env, env.baseRequest);
+    expect(run.caps.runVisionEnabled).toBe(false);
+    expect(run.append).toContain("**No image input**");
+    // Control: the vision model the user picked keeps vision.
+    run = await plan(env, { ...env.baseRequest, model: "vis-llm" });
+    expect(run.caps.runVisionEnabled).toBe(true);
+    expect(run.append).not.toContain("**No image input**");
+  });
+
   it("retains system tools when an old admin policy blocks every optional group", async () => {
     const env = setup();
     vi.spyOn(env.store, "allowedMcpToolGroupsForUser").mockReturnValue([]);

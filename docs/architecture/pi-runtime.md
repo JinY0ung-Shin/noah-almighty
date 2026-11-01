@@ -500,7 +500,7 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 
 ## Models (`agent/pi/modelCatalog.ts`)
 
-pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy, default?}`) is the ONLY model
+pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy, default?, imageInput?}`) is the ONLY model
 source (user decision 2026-10-31): the composer picker, the per-user default, the admin override
 (`PUT /api/admin/model`) and the vision policy (`PUT /api/admin/model-vision-policy`, keyed by model id) all name pi
 model ids; none = pi-gateway's DEFAULT model (picked on pi's admin LLM page): a new session sends no `model`, a
@@ -515,6 +515,12 @@ successfully → empty, and the `local` stub's is always empty (the client then 
   warned once per value (`modelOverride.ts`, review-2 M2) and `GET /api/admin/system` reports `modelOverrideIgnored`.
   describe_system names the id and its source (`… (chosen for this conversation in the composer)` / `(admin setting)`
   / `pi-gateway's default model (default)`, plus the ignored-override note).
+- **Vision** (review #12): pi's `/v1/models` entry carries `input` (`["text"]` / `["text","image"]`, parsed to
+  `imageInput`; absent on an older pi = unknown). `visionForCatalogModel` makes a model pi reports without `image`
+  text-only regardless of the admin policy and `MODEL_VISION` (pi would 400 `unsupported_image_input`), and resolves
+  pi's default model by its catalog id (`catalogDefaultModelId`) so the policy for it applies. The admin panel shows
+  such a model as always 미지원. Image turns on a text-only model go file mode (`chat-sse-media.md`). No 400 retry:
+  Noah ships with its pi (U9), and a pi without the field keeps the old behaviour.
 - **Fallback** (`request.modelFallback`, unattended runs): `[resolved, default]`, so ONE retry on pi's default model
   in the same session; a run already on the default gets one attempt.
 - **Writes** validate against the list: an unknown non-empty id → 400, pi never reachable → 503 (`offeredModelIdsOr503`,

@@ -184,11 +184,14 @@
   the stored session unless it is a rewind, whose resume point the route already chose). A rewind/regenerate
   re-reads its ANCHOR row's stored attachments from disk (`readChatImages`). `express.json` limit was bumped
   3mb→40mb. Conversation delete sweeps the image dir (`deleteConversationImages`).
-- **Vision gating is PER-RUN, per-model** (`modelVisionPolicy.ts`): effective vision =
-  admin per-model policy (`app_config` row `model_vision_policy`, admin panel "모델별 이미지 입력";
-  `{piModelId: boolean}`, an absent model inherits) ∘ deployment default (`MODEL_VISION=off` env). Resolution
-  mirrors the run's model (composer pick > admin override, each only while pi offers it > pi-gateway's default
-  model, which always takes the deployment default; [`pi-runtime.md`](pi-runtime.md) "Models"). When the RUN's model is text-only, every path that
+- **Vision gating is PER-RUN, per-model** (`modelVisionPolicy.ts` `visionForCatalogModel`): effective vision =
+  pi's own image setting (`input` in pi's `/v1/models`: a model without `image` is text-only, whatever comes next)
+  ∘ admin per-model policy (`app_config` row `model_vision_policy`, admin panel "모델별 이미지 입력";
+  `{piModelId: boolean}`, an absent model inherits; it can turn a vision model OFF, never a text-only one on) ∘
+  deployment default (`MODEL_VISION=off` env). Resolution mirrors the run's model (composer pick > admin override,
+  each only while pi offers it > pi-gateway's default model, looked up by the id pi marks `default` — review #12;
+  [`pi-runtime.md`](pi-runtime.md) "Models"). The chat route (upload mode), the capability plan (both metacognition
+  surfaces) and the bootstrap (`models[].vision`, `defaultVision`) make the SAME call. When the RUN's model is text-only, every path that
   would put image bytes in MODEL input is cut off BEFORE the API can 400 the whole turn — but the
   UPLOAD itself is NOT rejected: it becomes **file mode** (`imageFileMode` in routes/chat.ts). The
   bytes are persisted exactly as in vision mode (same bubble/attachment rows), a copy is staged into the
