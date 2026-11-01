@@ -18,6 +18,7 @@ import { git } from "./repoGitCore.js";
 import { resolveShareCopy } from "../shared/skillOriginMatch.js";
 import { SKILL_MD_READ_BYTES, parseSkillMdHead } from "./agent/skillCatalog.js";
 import { fdPathIs } from "./pinnedFs.js";
+import logger from "./logger.js";
 import type { SharedSkill, SharedSkillManifest } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -174,23 +175,79 @@ function hasSkillMd(repoRoot: string, slug: string): boolean {
 }
 
 /**
+ * What `<repo>/skills` is: a plain folder reached through no link ("dir"),
+ * ABSENT (the repo simply has no skills), or anything else ("unreadable") — a
+ * link (even one pointing inside the repo), a file, a special file, a folder
+ * that cannot be listed, or a repo root that cannot be resolved.
+ */
+function skillsDirProbe(repoRoot: string): "dir" | "absent" | "unreadable" {
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(repoRoot);
+  } catch {
+    return "unreadable";
+  }
+  const dir = path.join(realRoot, SKILL_DIR);
+  let stat: fs.Stats | undefined;
+  try {
+    stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+  } catch {
+    return "unreadable";
+  }
+  if (!stat) {
+    return "absent";
+  }
+  if (!stat.isDirectory()) {
+    return "unreadable";
+  }
+  try {
+    fs.accessSync(dir, fs.constants.R_OK | fs.constants.X_OK);
+  } catch {
+    return "unreadable";
+  }
+  return "dir";
+}
+
+/**
+ * True when `<repo>/skills` EXISTS but is not a plain folder readable through
+ * no link (see skillsDirProbe). Its skills then cannot be read — the share and
+ * learn reads never follow the link — but they were not DELETED either, so
+ * nothing may treat the empty listing as "every skill is gone" and revoke the
+ * owner's shares (the reconcile, a teammate's preview/learn prune).
+ */
+export function skillsDirUnreadable(repoRoot: string): boolean {
+  return skillsDirProbe(repoRoot) === "unreadable";
+}
+
+/**
  * Enumerate the skills of one repo working tree by scanning
  * `skills/<dir>/SKILL.md` (the shareable set — bundled/plugin skills are
  * deliberately NOT included; everyone already has the bundles, and plugins are
  * shared by installing the same plugin). Tolerant: no skills dir → []. A link
  * anywhere (`skills` itself, a `<dir>`, a SKILL.md) leaves that part out — the
- * link could name another user's clone.
+ * link could name another user's clone. A caller that must tell "no skills"
+ * from "skills/ cannot be read" uses {@link skillsDirUnreadable} (the reconcile
+ * reads the strict form directly).
  */
 export function listRepoSkills(repoRoot: string): RepoSkillEntry[] {
-  const dir = skillsDirNoLink(repoRoot);
-  if (!dir) {
+  return listRepoSkillsStrict(repoRoot) ?? [];
+}
+
+/** listRepoSkills, but null when `skills/` exists and is not a plain folder listable through no link. */
+function listRepoSkillsStrict(repoRoot: string): RepoSkillEntry[] | null {
+  const probe = skillsDirProbe(repoRoot);
+  if (probe === "absent") {
     return [];
+  }
+  const dir = probe === "dir" ? skillsDirNoLink(repoRoot) : null;
+  if (!dir) {
+    return null;
   }
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return [];
+    return null;
   }
   const out: RepoSkillEntry[] = [];
   for (const entry of entries) {
@@ -530,6 +587,12 @@ export interface SharedSkillReconcileResult {
   unshared: string[];
   /** Rows unshared because the dir became a LEARNED copy (chain drain). */
   drained: string[];
+  /**
+   * Set when `skills/` exists but is not a plain folder readable through no
+   * link (a symlink — even one into the repo — a file, an unreadable folder):
+   * nothing was reconciled and every share row was left exactly as it was.
+   */
+  skillsDirUnreadable?: true;
 }
 
 /** The row fields a rename match needs — both SharedSkill and its listing fit. */
@@ -925,7 +988,20 @@ export async function reconcileOwnerSharedSkills(
   if (!fs.existsSync(path.join(repoRoot, ".git"))) {
     return result;
   }
-  const skills = listRepoSkills(repoRoot);
+  // A `skills/` that exists but cannot be read through no link (a symlink, even
+  // one into the repo; a file; an unreadable folder) lists as nothing — and
+  // "nothing" here would unshare every row. The skills were not deleted, only
+  // made unreadable, so the rows stay exactly as they are (no unshare, no
+  // re-snapshot) until `skills/` is a plain folder again.
+  const skills = listRepoSkillsStrict(repoRoot);
+  if (!skills) {
+    logger.warn(
+      { ownerUserId, shares: rows.length },
+      "skill-share reconcile skipped: the knowledge repo's skills/ is not a plain folder (a link or unreadable); shares left as they are",
+    );
+    result.skillsDirUnreadable = true;
+    return result;
+  }
   const bySlug = new Map(skills.map((entry) => [entry.slug, entry]));
   const hashOf = hashCache(repoRoot);
 
@@ -1063,8 +1139,14 @@ export async function rescueSharedSkillRename(
   // common answer — give it with one stat instead of parsing every skill's
   // frontmatter (listRepoSkills reads each SKILL.md). The SKILL.md-exists test
   // is listRepoSkills' membership rule for one slug.
-  if (hasSkillMd(repoRoot, row.skillName) || !fs.existsSync(path.join(repoRoot, ".git"))) {
-    return null; // the dir is present (so this was no rename), or the clone is mid-rebuild
+  if (
+    hasSkillMd(repoRoot, row.skillName) ||
+    !fs.existsSync(path.join(repoRoot, ".git")) ||
+    skillsDirUnreadable(repoRoot)
+  ) {
+    // The dir is present (so this was no rename), the clone is mid-rebuild, or
+    // `skills/` cannot be read through no link (nothing can be followed there).
+    return null;
   }
   const bySlug = new Map(listRepoSkills(repoRoot).map((entry) => [entry.slug, entry]));
   const move = (await resolveSkillDirMoves(repoRoot, new Set([row.skillName]))).get(

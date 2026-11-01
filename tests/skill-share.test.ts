@@ -15,6 +15,7 @@ import {
   readRepoSkill,
   readSkillOrigin,
   reconcileOwnerSharedSkills,
+  skillsDirUnreadable,
 } from "../src/server/skillTransfer.js";
 import { buildRepoTools } from "../src/server/agent/repoTools.js";
 import { buildSkillExchangeTools } from "../src/server/agent/skillExchangeTools.js";
@@ -1203,6 +1204,47 @@ describe("shared-skill reconciliation", () => {
     expect(store.listSharedSkillsByOwner("u1")).toHaveLength(0);
     // Learn history is keyed by (owner, skill name) and outlives the row.
     expect(store.skillLearnCounts("u1")).toEqual({ gone: 1 });
+  });
+
+  it("leaves every share as it is when skills/ is a link (even into the repo), and still revokes an absent one", async () => {
+    const { store } = bootstrap();
+    const root = makeRepo("recon-linked-skills", {
+      "pptx-report": { "SKILL.md": skillMd("pptx-report", "v1") },
+      notes: { "SKILL.md": skillMd("notes", "n1") },
+    });
+    share(store, root, "u1", "pptx-report");
+    share(store, root, "u1", "notes");
+    const before = store.listSharedSkillsByOwner("u1");
+    expect(before).toHaveLength(2);
+
+    // The owner's repo now keeps the skills in an in-repo folder behind a
+    // `skills -> vault/skills` link, committed like any other change.
+    fs.mkdirSync(path.join(root, "vault"));
+    fs.renameSync(path.join(root, "skills"), path.join(root, "vault", "skills"));
+    fs.symlinkSync("vault/skills", path.join(root, "skills"));
+    commitTree(root, "keep skills under vault/");
+
+    // Unreadable is not deleted: nothing is unshared or re-snapshotted.
+    const result = await reconcileOwnerSharedSkills(store, root, "u1");
+    expect(store.listSharedSkillsByOwner("u1")).toEqual(before);
+    expect(result).toEqual({
+      resnapshotted: [],
+      renamed: [],
+      unshared: [],
+      drained: [],
+      skillsDirUnreadable: true,
+    });
+    // …while the link is still never followed for content.
+    expect(listRepoSkills(root)).toEqual([]);
+    expect(readRepoSkill(root, "pptx-report")).toBeNull();
+    expect(skillsDirUnreadable(root)).toBe(true);
+
+    // Control: a skills/ that is simply ABSENT is the old revoke.
+    fs.unlinkSync(path.join(root, "skills"));
+    commitTree(root, "drop the link");
+    expect(skillsDirUnreadable(root)).toBe(false);
+    expect((await reconcileOwnerSharedSkills(store, root, "u1")).unshared.sort()).toEqual(["notes", "pptx-report"]);
+    expect(store.listSharedSkillsByOwner("u1")).toHaveLength(0);
   });
 
   it("follows a committed directory rename, carrying the row along", async () => {
@@ -2456,6 +2498,38 @@ describe("mcp skill_exchange tools", () => {
     });
     expect(dup.isError).toBe(true);
     expect(dup.content[0].text).toContain("new_name");
+  });
+
+  it("learn_skill keeps the share when the sharer's skills/ is a link, and copies nothing through it", { timeout: 30_000 }, async () => {
+    const { app, store, config } = bootstrap();
+    const admin = await newUser(app, "admin");
+    const sharer = await newUser(app, "sharer");
+    const mate = await newUser(app, "mate");
+    await shareGroup(admin.agent, ["sharer", "mate"]);
+    store.setKnowledgeRepo(sharer.userId, seedSkillRemote("linked-sharer"), "main");
+    store.setKnowledgeRepo(
+      mate.userId,
+      seedRemote("linked-mate", { ".claude-plugin/marketplace.json": JSON.stringify({ name: "m", plugins: [] }) }),
+      "main",
+    );
+    store.shareSkill(sharer.userId, { skillName: "pptx-report", displayName: "pptx-report", description: "" });
+    // The sharer moves the skills under an in-repo folder behind a `skills` link.
+    const seed = path.join(tempDir, "linked-sharer-seed");
+    fs.mkdirSync(path.join(seed, "vault"));
+    fs.renameSync(path.join(seed, "skills"), path.join(seed, "vault", "skills"));
+    fs.symlinkSync("vault/skills", path.join(seed, "skills"));
+    const g = gitIn(seed);
+    g("add", "-A");
+    g("commit", "-q", "-m", "skills behind a link");
+    g("push", "-q", "origin", "HEAD:main");
+
+    const tools = toolsFor(store, config, mate.userId, "mate");
+    const refused = await callTool(tools, "learn_skill", { owner_username: "sharer", skill_name: "pptx-report" });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain("is not a plain folder");
+    expect(store.listSharedSkillsByOwner(sharer.userId).map((s) => s.skillName)).toEqual(["pptx-report"]);
+    const mateRoot = await ensureClone(knowledgeRepoContextFor(store, mate.userId, config)!);
+    expect(fs.existsSync(path.join(mateRoot, "skills", "pptx-report"))).toBe(false);
   });
 
   it("learn_skill update:true resolves the learner's copy and refuses ambiguity", { timeout: 30_000 }, async () => {

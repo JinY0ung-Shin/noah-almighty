@@ -259,6 +259,9 @@ export async function createRemoteRepo(
  * (empty when the commit touched no shared skill).
  */
 function reconcileNote(result: SharedSkillReconcileResult): string {
+  if (result.skillsDirUnreadable) {
+    return "\nShared skills were NOT reconciled with this commit: skills/ in the knowledge repository is not a plain folder (a symlink — even one inside the repository — or unreadable), and Noah never reads skills through a link. Every share was left exactly as it was, but teammates cannot preview or learn those skills until skills/ is a plain folder again. Tell the owner so.";
+  }
   const parts = [
     ...result.renamed.map((r) => `the share follows the rename ${r.from} → ${r.to}`),
     ...result.unshared.map((name) => `${name} is no longer shared (its directory was deleted)`),

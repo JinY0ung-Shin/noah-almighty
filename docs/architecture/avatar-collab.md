@@ -164,7 +164,15 @@
   `fs.rename` and leaves it unstaged, where a plain `git diff HEAD` would see only the deletion and
   revoke a rename the avatar is about to commit. The pass is a no-op when `repoRoot/.git` is missing
   (a clone mid-rebuild must never read as "every share was deleted") and both owner-side callers hold
-  `withRepoLock` around it, since `ensureClone` may be removing the very tree it reads.
+  `withRepoLock` around it, since `ensureClone` may be removing the very tree it reads. For the same
+  reason a `skills/` that EXISTS but is not a plain folder readable through no link — a symlink, even one
+  pointing inside the repo, a file, an unreadable folder (`skillsDirUnreadable`) — is UNREADABLE, not
+  empty: `listRepoSkills` still lists nothing through it (no content ever crosses the link), but the
+  reconcile returns `skillsDirUnreadable: true` without unsharing or re-snapshotting anything (a
+  `logger.warn` line; the commit hook tells the avatar), the 내 아바타의 스킬 공유 card shows a Korean
+  warning instead of the empty-repo note (`/mine` adds `skillsDirUnreadable: true` only when set), and a
+  teammate's preview or learn answers 409 / an English redirect instead of pruning the row. Only an
+  ABSENT `skills/` (or a missing slug dir in a readable one) is a deletion.
 - **Learners heal themselves; viewers never reorder.** A learner's origin marker records the source
   name at learn time, so after a rename it names the OLD one. Every place a marker is matched against a
   listing — `learnSkillIntoRepo`'s update authorization, the MCP `learn_skill {update:true}` slug

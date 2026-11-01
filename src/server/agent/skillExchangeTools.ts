@@ -21,6 +21,7 @@ import {
   readSkillOrigin,
   rescueSharedSkillRename,
   SkillIsLearnedCopyError,
+  skillsDirUnreadable,
   unlinkSkillOrigin,
 } from "../skillTransfer.js";
 import { resolveShareCopy } from "../../shared/skillOriginMatch.js";
@@ -299,6 +300,17 @@ export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext)
           // is gone (and no rename explains it), or the row points at a linked
           // copy. The agent surface and the 스킬 배우기 tab must tell the same
           // story about a dead share, whichever one runs into it first.
+          // …except when the sharer's skills/ is merely UNREADABLE (a link, even
+          // one into their repo): nothing was deleted, so the share stays.
+          if (
+            message === "SKILL_NOT_FOUND" &&
+            skillsDirUnreadable(knowledgeClonePath(listing.ownerUserId, ctx.config))
+          ) {
+            return text(
+              `@${listing.owner.username}'s "${listing.skillName}" cannot be read right now: skills/ in their knowledge repository is not a plain folder (a link or unreadable), and Noah never reads skills through a link. The share stays; tell the user it can be learned once @${listing.owner.username} restores skills/ as a plain folder.`,
+              true,
+            );
+          }
           if (message === "SKILL_NOT_FOUND" || message === "SKILL_IS_LEARNED_COPY") {
             store.unshareSkill(listing.ownerUserId, listing.skillName);
           }
