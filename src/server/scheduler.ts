@@ -154,7 +154,7 @@ async function runRoutineJobNow(
       activeRepoCwd = repoResolution.cwd;
       activeRepoName = repoResolution.repoName;
       releaseActiveRepoLock = repoResolution.release;
-    } else if (repoResolution.kind === "error" && repoResolution.reason === "locked") {
+    } else if (repoResolution.kind === "error" && (repoResolution.reason === "locked" || repoResolution.reason === "held")) {
       // Another conversation is working in this repo's clone right now.
       // Running anyway would do the routine's work WITHOUT the repo it was set
       // up for — and record success. Skip instead: nothing has been written,

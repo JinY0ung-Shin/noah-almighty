@@ -7,13 +7,17 @@ import { setWorkspaceRepo } from "../repoWorkspace.js";
 import { commitIdentityFor } from "../knowledgeRepo.js";
 import type { PiWorkspace } from "./pi/piWorkspace.js";
 import {
+  claimPiRepoCopy,
   commitPiRepoCopy,
   ensurePiRepoCopy,
+  piRepoCopyLockKey,
   piRepoCopySandboxPath,
   piRepoCopyStatus,
   removePiRepoCopy,
+  setPiRepoCopyHolder,
   type PiRepoCopyRef,
 } from "./pi/piRepoCopy.js";
+import { activeRepoHolder } from "../activeRepoLock.js";
 import {
   configureGitRepoIdentity,
   defaultGitRepoName,
@@ -126,6 +130,31 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           clonePath: gitRepoClonePath(ctx.avatarUserId, name, ctx.config),
         }
       : null;
+  /**
+   * The copy is ONE per (principal, owner, repo), shared by all of the
+   * principal's conversations (activeRepoResolve.ts): refuse while another
+   * conversation's RUN holds it, or while another conversation that still has
+   * the repo open left uncommitted changes in it — committing, syncing or
+   * re-copying then would take that conversation's half-done work. Null = go.
+   */
+  const copyAccessRefusal = async (ref: PiRepoCopyRef): Promise<ReturnType<typeof text> | null> => {
+    const conversationId = ctx.conversationId ?? "";
+    const running = activeRepoHolder(piRepoCopyLockKey(ref));
+    if (running && running !== conversationId) {
+      return text(
+        `'${ref.name}': another conversation's run is working on this sandbox copy right now, so this conversation cannot change, commit or sync it. Tell the user and try again after that run ends.`,
+        true,
+      );
+    }
+    const claim = await claimPiRepoCopy(ref, conversationId, (holder) => store.getConversationWorkingRepo(holder) === ref.name);
+    if (claim.kind === "held") {
+      return text(
+        `'${ref.name}': the sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, ref.name)} holds uncommitted changes from another conversation that still has this repository open, so this conversation must not commit, sync or re-copy it. Do not edit that copy. Tell the user to commit those changes (or close_repo) in that other conversation first.`,
+        true,
+      );
+    }
+    return null;
+  };
   const NO_PI_WORKSPACE =
     "This run cannot reach your sandbox workspace from Noah (the workspace mount is not configured), so the repository cannot be copied in or committed from it.";
 
@@ -189,6 +218,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           const repoCtx = ownerRepoContext(args.name);
           const ref = copyRef(repoCtx.name);
           if (ref) {
+            const refused = await copyAccessRefusal(ref);
+            if (refused) return refused;
             const status = await piRepoCopyStatus(ref);
             if (status.kind === "ok" && (status.changes.writes.length > 0 || status.changes.deletes.length > 0)) {
               return text(
@@ -246,9 +277,12 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           const repoCtx = ownerRepoContext(args.name);
           const ref = copyRef(repoCtx.name);
           if (!ref) return text(NO_PI_WORKSPACE, true);
+          const refused = await copyAccessRefusal(ref);
+          if (refused) return refused;
           await ensureGitRepoClone(repoCtx);
           await configureGitRepoIdentity(repoCtx, commitIdentityFor(store, ctx.owner));
           const copy = await ensurePiRepoCopy(ref, "keep");
+          await setPiRepoCopyHolder(ref, ctx.conversationId);
           setWorkspaceRepo(store, ctx.conversationId, repoCtx.name);
           return text(
             `Opened '${repoCtx.name}'. Your working copy is at ${copy.sandboxPath} (${copy.outcome === "kept" ? "your existing copy was kept — it is current" : "a fresh copy of the current state"}).` +
@@ -322,6 +356,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
             const repoCtx = ownerRepoContext(args.name);
             const ref = copyRef(repoCtx.name);
             if (!ref) return text(NO_PI_WORKSPACE, true);
+            const refused = await copyAccessRefusal(ref);
+            if (refused) return refused;
             await ensureGitRepoClone(repoCtx);
             await configureGitRepoIdentity(repoCtx, commitIdentityFor(store, ctx.owner));
             const outcome = await commitPiRepoCopy(ref, args.message);

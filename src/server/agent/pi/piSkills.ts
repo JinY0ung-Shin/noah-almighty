@@ -123,11 +123,19 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 40) || "root";
 }
 
-/** Skill directories of a root: `<root>/skills/<dir>/SKILL.md` (real folders only). */
+/**
+ * Skill directories of a root: `<root>/skills/<dir>/SKILL.md` (real folders
+ * only). `<root>/skills` ITSELF must be a real folder too: a committed
+ * `skills -> ../<another user>/skills` link would otherwise make readdir, the
+ * sandbox copy (`walk`/`writeRoot`) and mcp__skills__read (whose sources are
+ * these folders) all read through it into someone else's private skills.
+ */
 function skillDirsOf(root: string): string[] {
+  const skillsDir = path.join(root, "skills");
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(path.join(root, "skills"), { withFileTypes: true });
+    if (!fs.lstatSync(skillsDir).isDirectory()) return [];
+    entries = fs.readdirSync(skillsDir, { withFileTypes: true });
   } catch {
     return [];
   }

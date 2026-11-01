@@ -265,8 +265,13 @@ tracked + untracked-not-ignored files and `.git`, plain files, links never copie
 Each copy's BASE commit is recorded Noah-side (`dataDir/pi-repo-copies/<user-key>/<owner-seg>--<name>.json`, never
 in the sandbox). `commit` over a moved base (another conversation or a colleague committed, a sync pulled) is
 refused with a redirect to re-open (last writer wins, never silently over a newer base). Turn start
-(`resolveActiveWorkspaceRepo` with `piWorkspace`) only creates a MISSING copy and takes no per-clone run lock (Noah's
-git ops are serialized per operation by `withRepoLock`, so two pi conversations can work on their copies at once).
+(`resolveActiveWorkspaceRepo` with `piWorkspace`) only creates a MISSING copy. The copy is ONE per (principal, owner,
+repo) and its edits carry no conversation, so two guards keep one conversation from committing another's half-done
+work (review #5, 2026-11-01): a RUN lock on the copy (`piRepoCopyLockKey` in the in-memory `activeRepoLock`; turn
+start → `locked`, and `open_repo`/`sync_repo`/`commit` of another conversation refuse while it is held) and a
+persistent HOLDER in the copy record (`claimPiRepoCopy`: another conversation may take the copy over only while it
+is clean, or once the holder no longer has the repo open; else turn start → `held`, the tools refuse). The chat route
+answers both with 409, the scheduler skips the routine (`ROUTINE_REPO_BUSY`).
 A trusted colleague gets their own copy in their sandbox. Both surfaces: the prompt's working-repo section and
 describe_system's working-repo line name the copy path and the commit → push flow (`PiRuntimeFacts.activeRepoDir`).
 

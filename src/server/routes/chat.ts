@@ -1000,6 +1000,12 @@ export async function executeChatTurn(
                 message:
                   "이 저장소는 다른 대화에서 작업 중입니다. 잠시 후 다시 시도해 주세요.",
               }
+            : repoResolution.reason === "held"
+              ? {
+                  status: 409,
+                  message:
+                    "이 저장소의 작업 사본에 다른 대화가 저장(커밋)하지 않은 변경이 남아 있습니다. 그 대화에서 변경을 커밋하거나 저장소를 닫은 뒤 다시 시도해 주세요.",
+                }
             : {
                 status: 502,
                 message: `저장소 작업공간을 열지 못했습니다: ${repoResolution.detail ?? ""}`,

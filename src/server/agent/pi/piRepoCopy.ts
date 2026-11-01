@@ -81,6 +81,13 @@ function pinnedCopy(workspace: PiWorkspace, ownerId: string, name: string): Pinn
 interface CopyState {
   base: string;
   copiedAt: string;
+  /**
+   * The conversation that last claimed this copy (`claimPiRepoCopy`). One copy
+   * serves every conversation of the principal, so edits are not attributable
+   * to a conversation: a different one may take the copy over only while it is
+   * clean (or once the holder no longer has the repo open).
+   */
+  holder?: string;
 }
 
 function statePath(config: AppConfig, principal: string, ownerId: string, name: string): string {
@@ -96,7 +103,11 @@ function readState(file: string): CopyState | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<CopyState>;
     return typeof parsed.base === "string" && /^[0-9a-f]{40,64}$/.test(parsed.base)
-      ? { base: parsed.base, copiedAt: String(parsed.copiedAt ?? "") }
+      ? {
+          base: parsed.base,
+          copiedAt: String(parsed.copiedAt ?? ""),
+          ...(typeof parsed.holder === "string" && parsed.holder ? { holder: parsed.holder } : {}),
+        }
       : null;
   } catch {
     return null;
@@ -121,13 +132,33 @@ async function lsFiles(clone: string, args: string[]): Promise<string[]> {
   return stdout.split("\0").filter(Boolean);
 }
 
-/** `git check-ignore --stdin -z` in the canonical clone: which of `paths` its ignore rules exclude. */
+/**
+ * `git check-ignore --stdin -z` in the canonical clone: which of `paths` its
+ * ignore rules exclude. The names come from the SANDBOX, so git must take each
+ * one literally and must not refuse it:
+ * - every path is sent as `./<rel>` (and the prefix stripped from the
+ *   answer): a file named `:!x` / `:(x)y` is then a path, not pathspec magic
+ *   (which made git die with exit 128 — check-ignore rejects
+ *   GIT_LITERAL_PATHSPECS, so the prefix is the way);
+ * - `--no-index`: no "is in submodule" refusal for a path under a gitlink
+ *   (a tracked file is put back by `readBack` anyway, so the index adds nothing);
+ * - a path with a LINK on the way in the clone ("beyond a symbolic link") is
+ *   never asked — it is reported not-ignored, and `readBack` skips it because
+ *   it is never written through a link.
+ * And git may exit before reading all of stdin: the stdin 'error' (EPIPE) is
+ * swallowed so it cannot become an uncaught exception that takes the whole
+ * server down; the exit code decides.
+ */
 function checkIgnored(clone: string, paths: string[]): Promise<Set<string>> {
-  if (paths.length === 0) return Promise.resolve(new Set());
+  const asked = paths.filter((rel) => kindNoFollow(clone, rel.replace(/\/+$/, "")) !== "other");
+  if (asked.length === 0) return Promise.resolve(new Set());
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", clone, "check-ignore", "--stdin", "-z"], {
+    const child = spawn("git", ["-C", clone, "check-ignore", "--no-index", "--stdin", "-z"], {
       env: serverGitEnv(),
       stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin.on("error", () => {
+      /* EPIPE: git exited early — the 'close' handler reports its exit code */
     });
     let out = "";
     let err = "";
@@ -141,10 +172,10 @@ function checkIgnored(clone: string, paths: string[]): Promise<Set<string>> {
     child.on("close", (code) => {
       clearTimeout(timer);
       // 0 = some ignored, 1 = none ignored, anything else = a real failure.
-      if (code === 0 || code === 1) resolve(new Set(out.split("\0").filter(Boolean)));
+      if (code === 0 || code === 1) resolve(new Set(out.split("\0").filter(Boolean).map((rel) => rel.replace(/^\.\//, ""))));
       else reject(new Error(`git check-ignore failed: ${err.trim() || `exit ${code}`}`));
     });
-    child.stdin.end(paths.join("\0") + "\0");
+    child.stdin.end(asked.map((rel) => `./${rel}`).join("\0") + "\0");
   });
 }
 
@@ -338,7 +369,7 @@ async function ensureCopyLocked(ref: PiRepoCopyRef, mode: "keep" | "when-missing
       }
     }
     parent.rename(tmpName, ref.name);
-    writeState(stateFile, { base: head, copiedAt: new Date().toISOString() });
+    writeState(stateFile, { base: head, copiedAt: new Date().toISOString(), ...(state?.holder ? { holder: state.holder } : {}) });
     return { sandboxPath, outcome: "created", base: head, ...(previousPath ? { previousPath } : {}) };
   } finally {
     parent.close();
@@ -487,6 +518,57 @@ export function piRepoCopyStatus(ref: PiRepoCopyRef): Promise<CopyStatus> {
   });
 }
 
+/**
+ * In-run lock key of one sandbox copy (`activeRepoLock.ts`): the copy is
+ * per (principal, owner, repo), shared by every conversation of that principal.
+ */
+export function piRepoCopyLockKey(ref: Pick<PiRepoCopyRef, "workspace" | "ownerId" | "name">): string {
+  return `pi-copy\0${ref.workspace.principal}\0${ref.ownerId}\0${ref.name}`;
+}
+
+export type CopyClaim = { kind: "ok" } | { kind: "held"; holder: string };
+
+/**
+ * Claim the copy for `conversationId` BEFORE that conversation works on it
+ * (turn start with the repo open, open_repo, sync_repo, commit). The copy is
+ * shared by all of the principal's conversations and its edits carry no
+ * conversation, so another conversation's claim is honoured while that
+ * conversation still has the repo open (`holderStillOpen`) AND the copy holds
+ * uncommitted changes (or its base moved, so its state cannot be read): taking
+ * it over then would commit, or move aside, someone else's half-done work.
+ * A clean copy, a closed/deleted holder or no copy at all is taken over.
+ */
+export async function claimPiRepoCopy(
+  ref: PiRepoCopyRef,
+  conversationId: string,
+  holderStillOpen: (holder: string) => boolean,
+): Promise<CopyClaim> {
+  const stateFile = statePath(ref.config, ref.workspace.principal, ref.ownerId, ref.name);
+  const state = readState(stateFile);
+  if (!state) return { kind: "ok" };
+  if (state.holder && state.holder !== conversationId && holderStillOpen(state.holder)) {
+    const status = await piRepoCopyStatus(ref);
+    const clean = status.kind === "no_copy" || (status.kind === "ok" && status.changes.writes.length === 0 && status.changes.deletes.length === 0);
+    if (!clean) return { kind: "held", holder: state.holder };
+  }
+  if (state.holder !== conversationId) {
+    await withRepoLock(ref.clonePath, async () => {
+      const current = readState(stateFile);
+      if (current) writeState(stateFile, { ...current, holder: conversationId });
+    });
+  }
+  return { kind: "ok" };
+}
+
+/** Record `conversationId` as the holder of a copy that was just made (no-op without a record). */
+export function setPiRepoCopyHolder(ref: PiRepoCopyRef, conversationId: string): Promise<void> {
+  return withRepoLock(ref.clonePath, async () => {
+    const stateFile = statePath(ref.config, ref.workspace.principal, ref.ownerId, ref.name);
+    const current = readState(stateFile);
+    if (current && current.holder !== conversationId) writeState(stateFile, { ...current, holder: conversationId });
+  });
+}
+
 export type CommitOutcome =
   | { kind: "no_copy" }
   | { kind: "moved"; base: string; head: string }
@@ -543,7 +625,7 @@ export function commitPiRepoCopy(ref: PiRepoCopyRef, message: string): Promise<C
           gitDir.close();
         }
       }
-      writeState(stateFile, { base: commit, copiedAt: new Date().toISOString() });
+      writeState(stateFile, { base: commit, copiedAt: new Date().toISOString(), ...(state.holder ? { holder: state.holder } : {}) });
       return {
         kind: "committed",
         commit,

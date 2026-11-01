@@ -115,7 +115,15 @@
   principal's pi sandbox — so the old hole (any agent Bash reading the shared data volume and other runs'
   environ) is gone structurally. What still runs as Noah's `node` uid is Noah itself and the children it spawns:
   the hex-ssh policy proxy + upstream, stdio servers of the BUNDLED plugins, and `mcp-http-bridge.mjs`. None of
-  them is agent-authored. Phase 0 hardening (2026-10-28) still applies to them:
+  them is agent-authored — but one that takes a LOCAL PATH from the model would hand the agent Noah's filesystem
+  (the DB, pi's service-key file, every sandbox and repo copy). So hex-ssh's `ssh-upload`/`ssh-download` are never
+  offered (review #1, 2026-11-01): left out of `HEX_SSH_TOOLS` (stored policies drop them on read), filtered by the
+  relay's `allowTool`, and refused by the policy proxy whatever its allowlist (`HEX_SSH_NEVER_OFFERED_TOOLS`); both
+  surfaces say there is no local↔remote transfer (`HEX_SSH_NO_TRANSFER_SENTENCE`). A future transfer tool must be
+  Noah's own, reading the sandbox through `PinnedDir`. Likewise every file Noah reads OUT of a user-pushed clone
+  (CLAUDE.md, manifests, `.mcp.json`, SKILL.md) goes through `plugins.ts` `readTextBelow` (no link below the root,
+  final component O_NOFOLLOW), a marketplace source must stay inside its repo (`containedPluginDir`), and a linked
+  `<root>/skills` is never synced (`piSkills.ts` `skillDirsOf`). Phase 0 hardening (2026-10-28) still applies to them:
   - **node and tini are execute-only** (`chmod 0711` in the Dockerfile), so every process running node —
     the server, the relays/bridges — is non-dumpable: its `/proc/<pid>/environ` and memory are unreadable to
     other processes of the same uid. PID 1 holds the container's full environment, so it is the image's own tini,

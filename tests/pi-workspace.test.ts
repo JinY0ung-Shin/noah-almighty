@@ -27,6 +27,8 @@ import { PRUNE_GRACE_MS, materializePiSkills, rewriteSkillMarkdown } from "../sr
 import { buildSkillsTools } from "../src/server/agent/skillsTools.js";
 import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopySandboxPath } from "../src/server/agent/pi/piRepoCopy.js";
 import { buildGitRepoTools, GIT_REPO_PI_COMMIT_TOOL_NAME } from "../src/server/agent/gitRepoTools.js";
+import { resolveActiveWorkspaceRepo } from "../src/server/activeRepoResolve.js";
+import { setWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildRunCapabilities, stampPromptRequest } from "../src/server/agent/runCapabilities.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { deckCapabilityLine } from "../src/server/agent/systemTools.js";
@@ -404,6 +406,60 @@ describe("working-repo copy (D1)", () => {
     expect((await ensurePiRepoCopy(ref, "when-missing")).outcome).toBe("kept");
     expect(fs.readFileSync(path.join(copy, "README.md"), "utf8")).toBe("wip");
     await expect(commitPiRepoCopy(ref, "  ")).rejects.toThrow("commit message");
+  });
+
+  it("one copy, several conversations: a run holds it, and uncommitted edits stay with the conversation that made them (review #5)", async () => {
+    const s = repoSetup();
+    s.store.touchConversation(s.owner.id, "conv-2", s.owner.id, "routine thread");
+    const chat = s.tools({ id: s.owner.id, owner: true }, "conv-1");
+    const routine = s.tools({ id: s.owner.id, owner: true }, "conv-2");
+    await callTool(chat, "register_repo", { repo: s.remote, name: "app", branch: "main" });
+    expect((await callTool(chat, "open_repo", { name: "app" })).isError).toBeFalsy();
+    const copy = path.join(piWorkspaceFor(s.config, s.owner.id, "conv-1").hostRoot!, "repos", s.owner.id, "app");
+    fs.writeFileSync(path.join(copy, "README.md"), "chat half-done");
+
+    // Another conversation of the same principal shares that copy: it must not
+    // commit, sync or re-copy the chat's uncommitted work.
+    setWorkspaceRepo(s.store, "conv-2", "app");
+    for (const [tool, args] of [["commit", { name: "app", message: "routine" }], ["sync_repo", { name: "app" }], ["open_repo", { name: "app" }]] as const) {
+      const refused = await callTool(routine, tool, args);
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("uncommitted changes from another conversation");
+    }
+    const avatar = { id: s.owner.id, displayName: "Owner", alias: "" };
+    const resolve = (conversationId: string) =>
+      resolveActiveWorkspaceRepo({
+        store: s.store,
+        config: s.config,
+        avatar,
+        conversationId,
+        elevated: true,
+        gitRepoToolsEnabled: true,
+        piWorkspace: piWorkspaceFor(s.config, s.owner.id, conversationId),
+      });
+    expect(await resolve("conv-2")).toMatchObject({ kind: "error", reason: "held" });
+
+    // While the chat's RUN holds the copy, another conversation is locked out entirely.
+    const chatRun = await resolve("conv-1");
+    expect(chatRun.kind).toBe("ok");
+    expect(await resolve("conv-2")).toMatchObject({ kind: "error", reason: "locked" });
+    const busy = await callTool(routine, "commit", { name: "app", message: "routine" });
+    expect(busy.content[0].text).toContain("another conversation's run");
+    expect((await callTool(chat, "commit", { name: "app", message: "chat" })).isError).toBeFalsy();
+    if (chatRun.kind === "ok") chatRun.release();
+
+    // Clean again: the routine takes the copy over, and the chat's commit kept its own message.
+    const routineRun = await resolve("conv-2");
+    expect(routineRun.kind).toBe("ok");
+    if (routineRun.kind === "ok") routineRun.release();
+    expect(s.g(path.join(s.config.dataDir, "git-repos", s.owner.id, "app"), "log", "-1", "--format=%s")).toBe("chat");
+
+    // A holder that closed the repo no longer blocks anyone.
+    fs.writeFileSync(path.join(copy, "README.md"), "routine wip");
+    setWorkspaceRepo(s.store, "conv-2", null);
+    const reclaimed = await resolve("conv-1");
+    expect(reclaimed.kind).toBe("ok");
+    if (reclaimed.kind === "ok") reclaimed.release();
   });
 });
 

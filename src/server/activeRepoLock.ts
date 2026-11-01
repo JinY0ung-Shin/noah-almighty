@@ -1,8 +1,12 @@
 /**
  * Minimal in-memory serialization for the "active repo workspace" feature (#47).
  *
- * Used only by the `local` stub now: a pi run works on its sandbox COPY and
- * takes no lock (see `activeRepoResolve.ts`). When a `local` conversation opens
+ * Keys are clone paths for the `local` stub and `piRepoCopyLockKey` for a pi
+ * run, which works on its principal's sandbox COPY — one copy per (principal,
+ * owner, repo), shared by all of that principal's conversations, so two runs
+ * of different conversations must not edit and commit it at once (see
+ * `activeRepoResolve.ts`; the git_repo tools refuse while another
+ * conversation's run holds it). When a `local` conversation opens
  * a registered git repo as its active workspace, the run's cwd becomes that
  * repo's single local clone and the avatar edits the
  * working tree with native tools. Two different conversations doing that against
@@ -46,4 +50,9 @@ export function releaseActiveRepo(clonePath: string, conversationId: string): vo
   if (heldBy.get(clonePath) === conversationId) {
     heldBy.delete(clonePath);
   }
+}
+
+/** The conversation holding `key` right now, or null. */
+export function activeRepoHolder(key: string): string | null {
+  return heldBy.get(key) ?? null;
 }

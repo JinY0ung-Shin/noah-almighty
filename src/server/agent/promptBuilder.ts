@@ -1,6 +1,7 @@
 import type { AgentRequest, TodoPromptSnapshot } from "../types.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import { normalizeGithubHost } from "../marketplace.js";
+import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
 import { kstDateTimeString } from "../routineSchedule.js";
 import {
   DIRECT_MESSAGE_STATE,
@@ -835,6 +836,7 @@ function piRelayedMcpSentence(pi: NonNullable<AgentRequest["piRuntime"]>): strin
   const skipped = pi.mcpProxies?.skippedPluginServers ?? [];
   return (
     "Remote and third-party MCP tools are relayed by Noah under fixed server names: hex-ssh as `mcp__hex-ssh__<tool>`, a plugin `.mcp.json` server `<name>` as `mcp__plugins__<name>__<tool>`, an admin-registered shared MCP server `<name>` as `mcp__shared__<name>__<tool>` (the `mcp__<name>__<tool>` form a skill may use resolves to the same tool). " +
+    (pi.mcpProxies?.hexSsh ? HEX_SSH_NO_TRANSFER_SENTENCE : "") +
     (plugins.length ? `Plugin MCP servers in this conversation: ${plugins.map((name) => `\`${name}\``).join(", ")}. ` : "") +
     (skipped.length
       ? `Plugin MCP servers left out (their tools do not exist here; say so instead of working around it): ${skipped.map((s) => `\`${s.name}\` (${s.reason})`).join("; ")}. `

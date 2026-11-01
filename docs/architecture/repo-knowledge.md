@@ -75,8 +75,10 @@
   **One shared resolver, `activeRepoResolve.ts` `resolveActiveWorkspaceRepo`, is used by BOTH the chat
   route (turn start) AND the routine scheduler (before a headless run)** so they can't drift: it reads
   the selection → resolves/ensures the canonical clone (no sync) → configures commit identity, and with the
-  run's `piWorkspace` only creates a MISSING sandbox copy (no per-clone run lock; Noah's own git ops are serialized
-  per operation by `withRepoLock`). The avatar works on that COPY in its principal's sandbox,
+  run's `piWorkspace` only creates a MISSING sandbox copy. That copy is ONE per (principal, owner, repo), shared by
+  all of the principal's conversations, so the pi branch takes the run lock on the COPY (`piRepoCopyLockKey` in
+  `activeRepoLock.ts` → `locked`) and claims it (`claimPiRepoCopy` → `held` while another conversation that still has
+  the repo open left uncommitted changes); the chat route answers 409 and the scheduler skips with `ROUTINE_REPO_BUSY`. The avatar works on that COPY in its principal's sandbox,
   `/workspace/repos/<owner-seg>/<name>/` (design D1): native read/edit/bash + LOCAL git for status/diff/log there,
   while `commit` (reads the copy's working tree back into the canonical clone and commits THERE), `push` and
   `sync_repo` stay MCP. `open_repo` returns the copy's sandbox path and takes effect THIS turn. `open_repo` needs

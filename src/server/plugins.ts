@@ -9,6 +9,7 @@ import {
   type KnowledgeRepoContext,
 } from "./knowledgeRepo.js";
 import logger from "./logger.js";
+import { readRegularFileAsync } from "./chatImages.js";
 import { mcpHttpBridgeServerDef, type McpHttpBridgeConfig } from "./sharedMcpServers.js";
 import type { Store } from "./store.js";
 import type {
@@ -60,15 +61,43 @@ function isPluginRefreshDue(plugin: Pick<Plugin, "lastSyncedAt">, intervalMs: nu
 
 /** The plugin name a repo subdirectory advertises (its `plugin.json` `name`). */
 async function pluginNameAt(dir: string): Promise<string | null> {
-  const manifest = await readJson<{ name?: string }>(
-    path.join(dir, ".claude-plugin", "plugin.json"),
-  );
+  const manifest = await readJson<{ name?: string }>(dir, path.join(dir, ".claude-plugin", "plugin.json"));
   return typeof manifest?.name === "string" ? manifest.name : null;
 }
 
-async function readJson<T>(file: string): Promise<T | null> {
+/** Cap on any one text file Noah reads out of a cloned repo (manifests, SKILL.md, CLAUDE.md). */
+const REPO_TEXT_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Text of `file`, which must be a REGULAR file reached from `root` through NO
+ * link — else null. Every file Noah reads out of a cloned repo goes through
+ * here: the content is user-pushed, and git checks a committed symlink out as a
+ * real link, so a plain `readFile` would follow `CLAUDE.md -> /run/secrets/…`
+ * or `.mcp.json -> ../<another user>/.mcp.json` straight out of the clone (into
+ * the frozen prompt, a relayed MCP definition, the skill index). The opened
+ * descriptor must resolve to exactly `<realpath(root)>/<rel>` (`fdPathIs`), so a
+ * link at ANY component below `root` fails, and the final one is O_NOFOLLOW.
+ * `root` itself is trusted: callers pass a clone / plugin root Noah resolved
+ * (marketplace sources are contained by `containedPluginDir`).
+ */
+async function readTextBelow(root: string, file: string, maxBytes: number = REPO_TEXT_MAX_BYTES): Promise<string | null> {
+  const rel = path.relative(path.resolve(root), path.resolve(file));
+  if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  let realRoot: string;
   try {
-    return JSON.parse(await fs.readFile(file, "utf8")) as T;
+    realRoot = await fs.realpath(root);
+  } catch {
+    return null;
+  }
+  const read = await readRegularFileAsync(path.join(realRoot, rel), maxBytes);
+  return "buffer" in read ? read.buffer.toString("utf8") : null;
+}
+
+async function readJson<T>(root: string, file: string): Promise<T | null> {
+  const raw = await readTextBelow(root, file);
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as T;
   } catch {
     return null;
   }
@@ -97,7 +126,8 @@ export const APP_MANAGED_MCP_SERVERS = ["hex-ssh"] as const;
  */
 export async function stripManagedMcpServers(rootDir: string): Promise<boolean> {
   const file = path.join(rootDir, ".mcp.json");
-  const config = await readJson<Record<string, unknown>>(file);
+  // readJson refuses a linked .mcp.json, so the write below never goes through a link.
+  const config = await readJson<Record<string, unknown>>(rootDir, file);
   if (!config || typeof config !== "object") {
     return false;
   }
@@ -135,7 +165,7 @@ export type PluginMcpServerDef = Record<string, unknown>;
 export async function readPluginMcpServers(
   rootDir: string,
 ): Promise<Record<string, PluginMcpServerDef>> {
-  const config = await readJson<Record<string, unknown>>(path.join(rootDir, ".mcp.json"));
+  const config = await readJson<Record<string, unknown>>(rootDir, path.join(rootDir, ".mcp.json"));
   if (!config || typeof config !== "object") {
     return {};
   }
@@ -261,6 +291,26 @@ export async function liftPluginMcpServers(
   return { servers };
 }
 
+/**
+ * A marketplace entry's relative `source` resolved INSIDE the repo: the target
+ * must lie below `repoRoot` and be reached through no link (its realpath is
+ * exactly `<realpath(repoRoot)>/<rel>`), else null. Without this a pushed
+ * `"source": "../../plugins/<victim>/<repo>"` (or a `plugins -> ../..` link)
+ * made another user's clone a plugin root of this user's runs.
+ */
+async function containedPluginDir(repoRoot: string, source: string): Promise<string | null> {
+  const abs = path.resolve(repoRoot, source);
+  const rel = path.relative(path.resolve(repoRoot), abs);
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  try {
+    const realRoot = await fs.realpath(repoRoot);
+    if ((await fs.realpath(abs)) !== path.join(realRoot, rel)) return null;
+  } catch {
+    return null;
+  }
+  return abs;
+}
+
 async function isPluginDir(dir: string): Promise<boolean> {
   return pathExists(path.join(dir, ".claude-plugin", "plugin.json"));
 }
@@ -300,6 +350,7 @@ async function enumerateMarketplacePlugins(repoRoot: string): Promise<Marketplac
     return { kind: "single" };
   }
   const manifest = await readJson<MarketplaceManifest>(
+    repoRoot,
     path.join(repoRoot, ".claude-plugin", "marketplace.json"),
   );
   if (manifest && Array.isArray(manifest.plugins)) {
@@ -307,7 +358,13 @@ async function enumerateMarketplacePlugins(repoRoot: string): Promise<Marketplac
     for (const entry of manifest.plugins) {
       const source = entry?.source;
       if (typeof source === "string" && source.startsWith(".")) {
-        const abs = path.resolve(repoRoot, source);
+        const abs = await containedPluginDir(repoRoot, source);
+        if (!abs) {
+          // `../` out of the repo, or a link on the way: never a plugin root (it
+          // could name another user's clone — their skills, .mcp.json credentials).
+          entries.push({ entry, dir: null, loadable: false });
+          continue;
+        }
         entries.push({ entry, dir: { abs, source }, loadable: await isPluginDir(abs) });
       } else {
         entries.push({ entry, dir: null, loadable: false });
@@ -355,13 +412,9 @@ function parseSkillFrontmatter(text: string): { name?: string; description?: str
 }
 
 /** Read one skill's `SKILL.md` frontmatter into a SkillInfo, or null if absent/invalid. */
-async function readSkill(skillDir: string, source: string): Promise<SkillInfo | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-  } catch {
-    return null;
-  }
+async function readSkill(root: string, skillDir: string, source: string): Promise<SkillInfo | null> {
+  const raw = await readTextBelow(root, path.join(skillDir, "SKILL.md"));
+  if (raw === null) return null;
   const fm = parseSkillFrontmatter(raw);
   const name = fm?.name?.trim() || path.basename(skillDir);
   const description = fm?.description?.trim() ?? "";
@@ -385,7 +438,7 @@ export async function listSkillsInRoots(
     // points directly at `./skills/<name>`. readSkill returns null when there's
     // no SKILL.md at the root, so this is a no-op for default/owner plugin roots
     // (whose skills live one level down under `skills/`, handled below).
-    const selfSkill = await readSkill(root.path, root.source);
+    const selfSkill = await readSkill(root.path, root.path, root.source);
     if (selfSkill && !byName.has(selfSkill.name)) {
       byName.set(selfSkill.name, selfSkill);
     }
@@ -401,7 +454,7 @@ export async function listSkillsInRoots(
       if (!entry.isDirectory()) {
         continue;
       }
-      const skill = await readSkill(path.join(skillsDir, entry.name), root.source);
+      const skill = await readSkill(root.path, path.join(skillsDir, entry.name), root.source);
       if (skill && !byName.has(skill.name)) {
         byName.set(skill.name, skill);
       }
@@ -642,7 +695,8 @@ export interface KnowledgeRepoMemory {
 /** Read a repo-root CLAUDE.md (trimmed, capped). Returns null when missing/empty. */
 async function readRepoClaudeMd(repoRoot: string, cap: number): Promise<string | null> {
   try {
-    const raw = (await fs.readFile(path.join(repoRoot, "CLAUDE.md"), "utf8")).trim();
+    // No-link read: a committed `CLAUDE.md -> /run/secrets/…` must not land in the frozen prompt.
+    const raw = (await readTextBelow(repoRoot, path.join(repoRoot, "CLAUDE.md")))?.trim();
     if (!raw) {
       return null;
     }

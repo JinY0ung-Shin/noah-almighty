@@ -356,7 +356,7 @@ Shell exposure is a per-secret opt-in: an enabled custom secret is an environmen
 1. Generate/configure SSH_PRIVATE_KEY using Noah's key controls. Install the PUBLIC key on the intended remote account; keep the private key in Noah's vault.
 2. Register and verify the target host's fingerprint through host-trust controls/tools. Confirm the fingerprint through a trusted channel before trusting it.
 3. Enable the SSH tool group and ask for a specific task, host and user, for example "등록한 서버의 최근 서비스 오류 로그를 확인해줘".
-4. Use the dedicated SSH tools allowed by the deployment policy. Verify host/user/path before changes and inspect their returned results.
+4. Use the dedicated SSH tools allowed by the deployment policy. Verify host/user/path before changes and inspect their returned results. There is no local↔remote file transfer (no ssh-upload/ssh-download): hex-ssh runs on Noah's server and cannot see the sandbox, so write remote files with ssh-write-chunk/ssh-edit-block.
 
 ## Troubleshooting
 No tools: check key presence, SSH group selection, current role and deployment policy. Host verification failure: verify host trust; do not bypass it. Authentication failure: check remote account/public-key installation. Network failure: SSH runs from the Noah server, so the server must be able to reach the host. The user's browser being able to reach an intranet host does not prove server-side SSH reachability.`,

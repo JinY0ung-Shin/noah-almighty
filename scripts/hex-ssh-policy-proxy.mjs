@@ -3,6 +3,10 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 
 const allowedTools = parseAllowedTools(process.env.HEX_SSH_ALLOWED_TOOLS);
+// Refused whatever the allowlist says (even "*"): hex-ssh runs in Noah's
+// container, so its local-path tools would read/write Noah's own filesystem
+// (src/server/hexSshPolicy.ts HEX_SSH_NEVER_OFFERED_TOOLS — keep in sync).
+const NEVER_ALLOWED = new Set(["ssh-upload", "ssh-download"]);
 const upstreamCommand = process.env.HEX_SSH_UPSTREAM_COMMAND || "hex-ssh-mcp";
 
 const upstream = spawn(upstreamCommand, {
@@ -87,6 +91,7 @@ function parseAllowedTools(raw) {
 }
 
 function isAllowed(toolName) {
+  if (NEVER_ALLOWED.has(toolName)) return false;
   return allowedTools === null || allowedTools.has(toolName);
 }
 

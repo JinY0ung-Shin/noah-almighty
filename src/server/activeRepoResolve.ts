@@ -11,7 +11,7 @@ import { scrubGitError } from "./marketplace.js";
 import type { AppConfig } from "./types.js";
 import type { Store } from "./store.js";
 import type { PiWorkspace } from "./agent/pi/piWorkspace.js";
-import { ensurePiRepoCopy } from "./agent/pi/piRepoCopy.js";
+import { claimPiRepoCopy, ensurePiRepoCopy, piRepoCopyLockKey, setPiRepoCopyHolder } from "./agent/pi/piRepoCopy.js";
 
 /** Identity needed to stamp commits made in the opened clone. */
 export interface ActiveRepoAvatar {
@@ -30,7 +30,7 @@ export interface ActiveRepoAvatar {
 export type ActiveRepoResolution =
   | { kind: "none" }
   | { kind: "ok"; cwd: string; repoName: string; release: () => void }
-  | { kind: "error"; reason: "not_found" | "locked" | "open_failed"; detail?: string };
+  | { kind: "error"; reason: "not_found" | "locked" | "held" | "open_failed"; detail?: string };
 
 /**
  * Resolve the working repo a conversation opened (via `mcp__git_repo__open_repo`)
@@ -47,10 +47,13 @@ export type ActiveRepoResolution =
  * A pi run (`piWorkspace` set) never works in this clone: it works on its
  * sandbox COPY (design D1, `agent/pi/piRepoCopy.ts`), made here when missing
  * (an existing one is left alone — the agent's uncommitted edits stay, and a
- * commit from a stale copy is refused by `mcp__git_repo__commit`). So no
- * per-clone run lock is taken: Noah's own git operations on the clone are
- * serialized per operation (`withRepoLock`), and two pi conversations may
- * work on their copies at once.
+ * commit from a stale copy is refused by `mcp__git_repo__commit`). That copy is
+ * ONE per (principal, owner, repo), shared by every conversation of the
+ * principal, so a pi run takes the run lock on the COPY (`piRepoCopyLockKey`,
+ * `locked` while another conversation's run holds it) and claims it
+ * (`claimPiRepoCopy`, `held` while another conversation that still has the
+ * repo open left uncommitted changes in it) — otherwise a routine could commit
+ * a chat's half-done edits under its own message.
  */
 export async function resolveActiveWorkspaceRepo(opts: {
   store: Store;
@@ -84,7 +87,17 @@ export async function resolveActiveWorkspaceRepo(opts: {
 
   const clonePath = gitRepoClonePath(avatar.id, repoCtx.name, config);
   if (piWorkspace) {
+    const ref = { config, workspace: piWorkspace, ownerId: avatar.id, name: repoCtx.name, clonePath };
+    const lockKey = piRepoCopyLockKey(ref);
+    if (!acquireActiveRepo(lockKey, conversationId)) {
+      return { kind: "error", reason: "locked" };
+    }
     try {
+      const claim = await claimPiRepoCopy(ref, conversationId, (holder) => store.getConversationWorkingRepo(holder) === repoCtx.name);
+      if (claim.kind === "held") {
+        releaseActiveRepo(lockKey, conversationId);
+        return { kind: "error", reason: "held" };
+      }
       const cwd = await ensureGitRepoClone(repoCtx);
       const owner = store.getUserById(avatar.id);
       await configureGitRepoIdentity(
@@ -96,9 +109,11 @@ export async function resolveActiveWorkspaceRepo(opts: {
           alias: avatar.alias,
         }),
       );
-      await ensurePiRepoCopy({ config, workspace: piWorkspace, ownerId: avatar.id, name: repoCtx.name, clonePath }, "when-missing");
-      return { kind: "ok", cwd, repoName: repoCtx.name, release: () => undefined };
+      await ensurePiRepoCopy(ref, "when-missing");
+      await setPiRepoCopyHolder(ref, conversationId);
+      return { kind: "ok", cwd, repoName: repoCtx.name, release: () => releaseActiveRepo(lockKey, conversationId) };
     } catch (error) {
+      releaseActiveRepo(lockKey, conversationId);
       return { kind: "error", reason: "open_failed", detail: scrubGitError(error) };
     }
   }

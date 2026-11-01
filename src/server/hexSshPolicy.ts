@@ -7,8 +7,6 @@ export const HEX_SSH_TOOLS = [
   "ssh-edit-block",
   "ssh-search-code",
   "ssh-write-chunk",
-  "ssh-upload",
-  "ssh-download",
   "ssh-verify",
   "ssh-capabilities",
   "ssh-session-open",
@@ -19,6 +17,23 @@ export const HEX_SSH_TOOLS = [
 ] as const;
 
 export type HexSshTool = (typeof HEX_SSH_TOOLS)[number];
+
+/**
+ * hex-ssh tools Noah NEVER offers. hex-ssh runs in Noah's container, not in the
+ * run principal's sandbox, so its local-path tools would read and write NOAH's
+ * filesystem (the DB, pi's service-key file, every user's sandbox and repo copy,
+ * other runs' /proc/<pid>/environ) while the agent's real files under /workspace
+ * are invisible to it. They are left out of HEX_SSH_TOOLS (so no stored policy can
+ * grant them — `normalizeHexSshToolPolicy` drops unknown names) AND refused by
+ * the policy proxy itself (`scripts/hex-ssh-policy-proxy.mjs`), whatever its
+ * allowlist says. A future transfer tool must be Noah's own, reading the sandbox
+ * through `PinnedDir`, never a path handed to hex-ssh.
+ */
+export const HEX_SSH_NEVER_OFFERED_TOOLS = ["ssh-upload", "ssh-download"] as const;
+
+/** Agent-facing: why there is no local↔remote file transfer (BOTH metacognition surfaces). */
+export const HEX_SSH_NO_TRANSFER_SENTENCE =
+  "hex-ssh has no local↔remote file transfer (ssh-upload/ssh-download are not offered): it runs on Noah's server, not in your sandbox, so it cannot see your /workspace files — write a remote file with ssh-write-chunk/ssh-edit-block and read one with ssh-read-lines. ";
 export type HexSshViewerClass = "owner" | "trusted" | "colleague";
 export type HexSshToolPolicy = Record<HexSshViewerClass, HexSshTool[]>;
 
@@ -37,8 +52,6 @@ export const HEX_SSH_TOOL_INFOS: HexSshToolInfo[] = [
   { name: "ssh-session-exec", label: "세션 명령 실행", category: "execute" },
   { name: "ssh-edit-block", label: "원격 파일 수정", category: "write" },
   { name: "ssh-write-chunk", label: "원격 파일 쓰기", category: "write" },
-  { name: "ssh-upload", label: "로컬 파일 업로드", category: "write" },
-  { name: "ssh-download", label: "원격 파일 다운로드", category: "write" },
   { name: "ssh-session-open", label: "세션 열기", category: "session" },
   { name: "ssh-session-read", label: "세션 출력 읽기", category: "session" },
   { name: "ssh-session-close", label: "세션 닫기", category: "session" },

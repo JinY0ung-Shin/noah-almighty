@@ -1,3 +1,4 @@
+import { DEFAULT_HEX_SSH_TOOL_POLICY, HEX_SSH_TOOLS, normalizeHexSshToolPolicy } from "../src/server/hexSshPolicy.js";
 import {
   execFileSync,
   spawn,
@@ -3263,6 +3264,68 @@ process.stdin.on("data", (chunk) => {
         code: -32603,
         message: "hex-ssh tool 'remote-ssh' is not allowed by policy",
       });
+    } finally {
+      proxy.kill();
+    }
+  });
+  it("never offers ssh-upload/ssh-download, even under a '*' allowlist (they would touch Noah's own filesystem)", async () => {
+    expect(HEX_SSH_TOOLS).not.toContain("ssh-upload");
+    expect(DEFAULT_HEX_SSH_TOOL_POLICY.owner).not.toContain("ssh-download");
+    // A stored policy from before the removal loses them on read.
+    expect(normalizeHexSshToolPolicy({ owner: ["ssh-upload", "remote-ssh", "ssh-download"], trusted: [], colleague: [] }).owner).toEqual([
+      "remote-ssh",
+    ]);
+    const upstreamPath = path.join(tempDir, "fake-hex-upstream-transfer.mjs");
+    fs.writeFileSync(
+      upstreamPath,
+      `
+process.stdin.setEncoding("utf8");
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).trim();
+    buffer = buffer.slice(newline + 1);
+    if (!line) continue;
+    const msg = JSON.parse(line);
+    if (msg.method === "tools/list") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: {
+          tools: [
+            { name: "ssh-read-lines", inputSchema: { type: "object" } },
+            { name: "ssh-upload", inputSchema: { type: "object" } },
+            { name: "ssh-download", inputSchema: { type: "object" } }
+          ]
+        }
+      }) + "\\n");
+    } else if (msg.method === "tools/call") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: { content: [{ type: "text", text: "called " + msg.params.name }] }
+      }) + "\\n");
+    } else {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }) + "\\n");
+    }
+  }
+});
+`,
+    );
+    const proxy = spawn(process.execPath, [path.join(process.cwd(), "scripts", "hex-ssh-policy-proxy.mjs")], {
+      env: { ...process.env, HEX_SSH_UPSTREAM_COMMAND: `${process.execPath} ${upstreamPath}`, HEX_SSH_ALLOWED_TOOLS: "*" },
+    });
+    try {
+      const rpc = rpcClient(proxy);
+      const listed = await rpc.request("tools/list", {});
+      expect((listed.result as { tools: { name: string }[] }).tools.map((tool) => tool.name)).toEqual(["ssh-read-lines"]);
+      for (const name of ["ssh-upload", "ssh-download"]) {
+        const blocked = await rpc.request("tools/call", { name, arguments: { localPath: "/run/secrets/pi_gateway_api_key" } });
+        expect(blocked.error).toMatchObject({ message: `hex-ssh tool '${name}' is not allowed by policy` });
+      }
     } finally {
       proxy.kill();
     }

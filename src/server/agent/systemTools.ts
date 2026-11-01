@@ -19,6 +19,7 @@ import type {
   SharedMcpRunState,
 } from "../types.js";
 import { text } from "./mcpTools.js";
+import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
 import { EFFORT_LEVELS } from "../effortLevels.js";
 import {
   gettingStartedGaps,
@@ -852,7 +853,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                 ? "enabled (SSH_PRIVATE_KEY set)"
                 : "disabled (no SSH_PRIVATE_KEY secret)"
               : ctx.sshEnabled
-                ? `enabled — the hex-ssh tools are registered for this run${webProxy.egressPolicy === "domain-proxy" ? ", but this deployment's egress policy blocks direct outbound connections, so SSH connections will fail" : ""}`
+                ? `enabled — the hex-ssh tools are registered for this run${webProxy.egressPolicy === "domain-proxy" ? ", but this deployment's egress policy blocks direct outbound connections, so SSH connections will fail" : ""}. ${HEX_SSH_NO_TRANSFER_SENTENCE.trim()}`
                 : `disabled for this run — ${
                     !secretNames.includes("SSH_PRIVATE_KEY")
                       ? "no SSH_PRIVATE_KEY secret"

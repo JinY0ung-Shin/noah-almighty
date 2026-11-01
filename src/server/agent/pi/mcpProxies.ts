@@ -38,7 +38,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AppConfig, PiProxiedMcpFacts, PluginRoot } from "../../types.js";
-import { HEX_SSH_SERVER_NAME } from "../../hexSshPolicy.js";
+import { HEX_SSH_NEVER_OFFERED_TOOLS, HEX_SSH_SERVER_NAME } from "../../hexSshPolicy.js";
 import { liftPluginMcpServers } from "../../plugins.js";
 import { GIT_CREDENTIAL_ENV_NAMES, scrubServerOnlySecretEnv } from "../../secretPolicy.js";
 import { sanitizeName } from "../../marketplace.js";
@@ -245,6 +245,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
   // it itself).
   if (input.sshActive) {
     const allowed = new Set(input.hexSshAllowedTools);
+    const neverOffered = new Set<string>(HEX_SSH_NEVER_OFFERED_TOOLS);
     upstreams.push({
       proxy: HEX_SSH_SERVER_NAME,
       name: HEX_SSH_SERVER_NAME,
@@ -258,7 +259,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
         HEX_SSH_ALLOWED_TOOLS: input.hexSshAllowedTools.join(","),
         ...input.sshSecrets,
       },
-      allowTool: (tool) => allowed.has(tool),
+      allowTool: (tool) => allowed.has(tool) && !neverOffered.has(tool),
     });
     facts.hexSsh = true;
   }
