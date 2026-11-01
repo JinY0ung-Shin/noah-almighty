@@ -361,8 +361,17 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   relayed-tools line (`piKnownTools` → `relayedFailures`) says "did not answer in time" only for a timeout, names a
   failed one, and lists refused ones as final; `onListFailure` keeps `PiProxiedMcpFacts.listFailures` live for
   describe_system's relay line. A failure reason is always Noah's own text, never the upstream's error message
-  (it lands in the frozen instructions). Residual: ONE oversized page is still parsed by the SDK before the byte cap
-  sees it.
+  (it lands in the frozen instructions).
+- **One message is bounded too (review R5).** The byte cap above runs only after a page is parsed, and the SDK's
+  stdio reader buffers a line until its newline, so every child Noah reads (the pool, the admin connection check)
+  uses `BoundedStdioClientTransport` (`agent/pi/boundedStdioTransport.ts`): a stdout line past
+  `MCP_RELAY_MESSAGE_MAX_BYTES` (8 MiB — a few-MiB result such as a base64 screenshot or a long file read fits; a
+  page of tool definitions is capped at 2 MiB anyway) is dropped while it arrives and the child is stopped. A listing
+  cut that way REFUSES the source ("it sent a single MCP message larger than 8 MiB"); a cut `tools/call` answers
+  Noah's own redirect (ask for less, do not repeat unchanged) and the next call starts the child afresh (a bridge
+  cannot restart: its config was one-shot). The bridge enforces the same default on the REMOTE side (below and
+  `secrets-ssh.md`), so through it this guard is the backstop. The subclass swaps the SDK's private `_readBuffer`
+  and throws at construction if that field changes shape — an SDK bump fails the relay tests, never the cap.
 - **Redaction (`piRedactions`)**: the relays' secrets (the whole injectable vault once any of it reached a child,
   credential-looking bridge headers + their bare tokens via `mcpBridgeRedactions`, the
   SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`), every browser-typeable secret value and the

@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { BoundedStdioClientTransport, MCP_RELAY_MESSAGE_MAX_BYTES } from "./boundedStdioTransport.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   CallToolRequestSchema,
@@ -76,6 +76,12 @@ const LIST_DEADLINE_MS = 10_000;
 export const LIST_MAX_PAGES = 50;
 export const LIST_MAX_TOOLS = 1000;
 export const LIST_MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * A single message (one stdout line of a child) past this stops the child
+ * before Noah buffers it (`boundedStdioTransport.ts`, which explains the size);
+ * the bridge cuts a remote reply at the same size.
+ */
+const MESSAGE_MAX_MIB = MCP_RELAY_MESSAGE_MAX_BYTES / (1024 * 1024);
 /** Upstream call budget; the broker's per-server timeout cuts first and cancels. */
 const CALL_TIMEOUT_MS = 600_000;
 /** SSH vault names that are credentials (SSH_USER / ALLOWED_HOSTS are not — redacting them would shred output). */
@@ -380,7 +386,7 @@ export async function planPiMcpProxies(input: PiMcpProxyInput): Promise<PiMcpPro
 
 interface Connected {
   client: Client;
-  transport: StdioClientTransport;
+  transport: BoundedStdioClientTransport;
   tools?: Tool[];
   /** The ONE listing in flight: concurrent `tools/list`s share it (a failed one is not kept). */
   listing?: Promise<Tool[]>;
@@ -417,6 +423,8 @@ export interface PiMcpProxyPoolOptions {
   listDeadlineMs?: number;
   /** Called with EVERY current listing failure whenever that set changes (describe_system's live line). */
   onListFailure?: (failures: PiListFailure[]) => void;
+  /** The per-message cap (tests); MCP_RELAY_MESSAGE_MAX_BYTES otherwise. */
+  maxMessageBytes?: number;
 }
 
 /**
@@ -424,7 +432,7 @@ export interface PiMcpProxyPoolOptions {
  */
 export class PiMcpProxyPool {
   private readonly connections = new Map<PiMcpUpstream, Promise<Connected>>();
-  private readonly transports = new Set<StdioClientTransport>();
+  private readonly transports = new Set<BoundedStdioClientTransport>();
   private closed = false;
   private closing: Promise<void> | null = null;
   /** Aborted by `close`: stops every listing in flight. */
@@ -490,13 +498,16 @@ export class PiMcpProxyPool {
       fs.mkdirSync(path.dirname(upstream.handoff.path), { recursive: true, mode: 0o700 });
       fs.writeFileSync(upstream.handoff.path, upstream.handoff.content, { mode: 0o600 });
     }
-    const transport = new StdioClientTransport({
-      command: upstream.command,
-      args: upstream.args,
-      env: upstream.env,
-      ...(upstream.cwd ? { cwd: upstream.cwd } : {}),
-      stderr: "pipe",
-    });
+    const transport = new BoundedStdioClientTransport(
+      {
+        command: upstream.command,
+        args: upstream.args,
+        env: upstream.env,
+        ...(upstream.cwd ? { cwd: upstream.cwd } : {}),
+        stderr: "pipe",
+      },
+      this.options.maxMessageBytes,
+    );
     let stderr = "";
     transport.stderr?.on("data", (chunk) => {
       if (stderr.length < 4000) stderr += String(chunk);
@@ -557,10 +568,16 @@ export class PiMcpProxyPool {
     let bytes = 0;
     let cursor: string | undefined;
     for (let page = 1; ; page += 1) {
-      const result = await connected.client.listTools(cursor !== undefined ? { cursor } : undefined, {
-        signal,
-        timeout: this.listDeadlineMs,
-      });
+      let result: Awaited<ReturnType<Client["listTools"]>>;
+      try {
+        result = await connected.client.listTools(cursor !== undefined ? { cursor } : undefined, {
+          signal,
+          timeout: this.listDeadlineMs,
+        });
+      } catch (error) {
+        if (connected.transport.oversized) throw new ListRefused(`it ${this.oversizedPhrase()}`);
+        throw error;
+      }
       const pageTools = Array.isArray(result.tools) ? result.tools : [];
       bytes += Buffer.byteLength(JSON.stringify(pageTools));
       tools.push(...pageTools);
@@ -574,6 +591,12 @@ export class PiMcpProxyPool {
       cursor = next;
     }
     return tools.filter((tool) => upstream.allowTool?.(tool.name) ?? true);
+  }
+
+  /** "sent a single MCP message larger than 8 MiB" — the subject is the caller's. */
+  private oversizedPhrase(): string {
+    const bytes = this.options.maxMessageBytes ?? MCP_RELAY_MESSAGE_MAX_BYTES;
+    return `sent a single MCP message larger than ${bytes === MCP_RELAY_MESSAGE_MAX_BYTES ? `${MESSAGE_MAX_MIB} MiB` : `${bytes} bytes`}`;
   }
 
   /** Refuse a source for the rest of the run and stop its child. */
@@ -669,6 +692,12 @@ export class PiMcpProxyPool {
       // A legacy `toolResult` reply: hand it over as text.
       return { content: [{ type: "text", text: JSON.stringify((result as { toolResult?: unknown }).toolResult ?? result) }] };
     } catch (error) {
+      if (connected.transport.oversized) {
+        // Noah's own words: nothing of the oversized message reaches the model.
+        return errorResult(
+          `MCP server '${hit.upstream.name}' ${this.oversizedPhrase()} (the most Noah relays), so Noah stopped it. Ask for less at once (a narrower query, a smaller page, range or limit); do not repeat the same call unchanged.`,
+        );
+      }
       return errorResult(`MCP server '${hit.upstream.name}' failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 800));
     }
   }

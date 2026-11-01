@@ -647,6 +647,91 @@ describe("relayed tools/list pagination is bounded (review #10)", () => {
   });
 });
 
+// ---- one stdout line is bounded (review R5) -------------------------------------------------------
+
+/**
+ * A stdio MCP server whose replies are as large as asked: `sized {bytes}`
+ * answers with a text of that many bytes, `endless` writes one line that never
+ * ends, and BLOAT_MODE=huge-list makes its tools/list one 9 MiB message.
+ */
+const BLOAT_SERVER = `
+import readline from "node:readline";
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  let m; try { m = JSON.parse(line); } catch { return; }
+  if (m.method === "initialize") return send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "bloat", version: "1" } } });
+  if (m.method === "tools/list") {
+    const description = process.env.BLOAT_MODE === "huge-list" ? "d".repeat(9 * 1024 * 1024) : "sized or endless";
+    return send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "sized", description, inputSchema: { type: "object" } }, { name: "endless", inputSchema: { type: "object" } }] } });
+  }
+  if (m.method === "tools/call" && m.params.name === "endless") {
+    const chunk = '{"jsonrpc":"2.0","id":' + m.id + ',"result":{"content":[{"type":"text","text":"' + "z".repeat(1024 * 1024);
+    process.stdout.write(chunk.slice(0, 64));
+    const pump = () => { while (process.stdout.write("z".repeat(1024 * 1024))); process.stdout.once("drain", pump); };
+    return pump();
+  }
+  if (m.method === "tools/call") return send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "x".repeat(Number(m.params.arguments?.bytes ?? 0)) }] } });
+  if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+rl.on("close", () => process.exit(0));
+`;
+
+describe("a relayed child's single message is bounded (review R5)", () => {
+  const pools: PiMcpProxyPool[] = [];
+  afterEach(async () => {
+    await Promise.allSettled(pools.splice(0).map((pool) => pool.close()));
+  });
+  function bloat(mode = "") {
+    const file = path.join(dir(), `bloat-${randomUUID().slice(0, 6)}.mjs`);
+    fs.writeFileSync(file, BLOAT_SERVER);
+    const upstream: PiMcpUpstream = { proxy: "plugins", name: "bloat", command: process.execPath, args: [file], env: { BLOAT_MODE: mode } };
+    const created = new PiMcpProxyPool([upstream]);
+    pools.push(created);
+    return created;
+  }
+
+  it("a large result within the cap still arrives whole; one past the cap stops the child with Noah's own error, and the next call starts afresh", async () => {
+    const proxies = bloat();
+    const big = 5 * 1024 * 1024;
+    const ok = await proxies.callTool("plugins", "bloat__sized", { bytes: big });
+    expect(ok.isError).toBeFalsy();
+    expect((ok.content[0] as { text: string }).text).toHaveLength(big);
+    const firstPid = proxies.childPids[0]!;
+
+    const tooBig = await proxies.callTool("plugins", "bloat__sized", { bytes: 9 * 1024 * 1024 });
+    expect(tooBig.isError).toBe(true);
+    const text = (tooBig.content[0] as { text: string }).text;
+    expect(text).toBe(
+      "MCP server 'bloat' sent a single MCP message larger than 8 MiB (the most Noah relays), so Noah stopped it. Ask for less at once (a narrower query, a smaller page, range or limit); do not repeat the same call unchanged.",
+    );
+    await eventually(() => !alive(firstPid));
+    // Not refused: one oversized result says nothing about the server's next answer.
+    const again = await proxies.callTool("plugins", "bloat__sized", { bytes: 3 });
+    expect(again.content).toEqual([{ type: "text", text: "xxx" }]);
+  }, 30_000);
+
+  it("a line that never ends is cut at the cap instead of growing Noah's heap", async () => {
+    const proxies = bloat();
+    const started = Date.now();
+    const result = await proxies.callTool("plugins", "bloat__endless", {});
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("larger than 8 MiB");
+    expect(JSON.stringify(result)).not.toContain("zzzz");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    await eventually(() => proxies.childPids.length === 0);
+  }, 30_000);
+
+  it("a tools/list sent as one message past the cap refuses the source for the run", async () => {
+    const proxies = bloat("huge-list");
+    const report = await proxies.listToolsReport("plugins");
+    expect(report.tools).toEqual([]);
+    expect(report.failed).toEqual([{ name: "bloat", kind: "refused", reason: "it sent a single MCP message larger than 8 MiB" }]);
+    const call = await proxies.callTool("plugins", "bloat__sized", { bytes: 1 });
+    expect(JSON.stringify(call)).toContain("MCP server 'bloat' is refused for this run: it sent a single MCP message larger than 8 MiB");
+  }, 30_000);
+});
+
 // ---- one pi run through the endpoint -------------------------------------------------------------
 
 describe("runPiAgent relays + redaction", () => {

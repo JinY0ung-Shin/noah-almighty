@@ -354,6 +354,12 @@ export interface McpHttpBridgeConfig {
    */
   vault?: Record<string, string>;
   expandEnv?: boolean;
+  /**
+   * Largest single message relayed either way (tests only). Unset, the bridge
+   * uses its 8 MiB default — `MCP_RELAY_MESSAGE_MAX_BYTES`, the same cap Noah's
+   * stdout reader applies (`agent/pi/boundedStdioTransport.ts`).
+   */
+  maxMessageBytes?: number;
 }
 
 /**

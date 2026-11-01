@@ -249,7 +249,7 @@ export async function checkSharedMcpServer(
     return { ok: false, tools: [], missingSecrets: [], error: "확인할 수 없는 서버입니다." };
   }
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const { BoundedStdioClientTransport } = await import("../agent/pi/boundedStdioTransport.js");
   const secretsDir = path.join(dataDir, "runtime", "mcp-secrets");
   fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
   const configFile = path.join(secretsDir, `check-${randomUUID()}.json`);
@@ -263,7 +263,8 @@ export async function checkSharedMcpServer(
   // The same env a run's relayed child starts from (no git credentials, no
   // server-only secrets).
   const env = piProxyBaseEnv();
-  const transport = new StdioClientTransport({ command: def.command, args: def.args, env, stderr: "pipe" });
+  // Bounded like a run's relay: one huge line from the bridge never piles up in Noah.
+  const transport = new BoundedStdioClientTransport({ command: def.command, args: def.args, env, stderr: "pipe" });
   transport.stderr?.on("data", (chunk) => {
     if (stderr.length < 4000) stderr += String(chunk);
   });

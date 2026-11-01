@@ -57,7 +57,13 @@
   them. It relays
   JSON-RPC transport-to-transport (sets the negotiated protocol version from the initialize response, orders
   notifications before later sends, answers a failed upstream request with a scrubbed JSON-RPC error, scrubbing
-  BEFORE truncating). Bound vault values join the run's redaction set (`piRedactions`), and so does every credential-looking
+  BEFORE truncating, and answers every request exactly once). **It caps one message at 8 MiB** (`maxMessageBytes`,
+  default = Noah's `MCP_RELAY_MESSAGE_MAX_BYTES`, a test keeps them equal; review R5): its `fetch` counts every
+  upstream body as it streams — a JSON reply in total, an SSE stream per event — and cuts it past the cap, and every
+  message is re-checked after serialization before it reaches stdout. An oversized reply answers ITS request with
+  Noah's own English JSON-RPC error (never the remote's text) and the bridge relays on; an oversized message on a
+  stream that names no request (the standalone GET stream, legacy SSE) answers every pending request that way and
+  ends the bridge. Bound vault values join the run's redaction set (`piRedactions`), and so does every credential-looking
   bridged header value (`<server>:<header>` — a narrow name match, never an unresolved `${…}` template — plus the
   bare token after a `Bearer`/`Basic`/`Token` scheme word, and each slot's trimmed value as sent). Every ENABLED admin
   server reserves its name for the run, mounted or not: a same-named plugin server is dropped (status-line
