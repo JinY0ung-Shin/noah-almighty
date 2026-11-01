@@ -564,10 +564,19 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 pi-gateway's own admin panel (LLM servers and models, the default model, prompts, MCP, tools, history, its test
 chat) is served on Noah's port at `/admin` — pi's OWN path, because its UI hard-codes `/admin/` and `/admin/api`
 (Vite `base`), and Noah's SPA uses `#/…` hash routes, so the server path is free. `/settings/pi` redirects there.
-The operator is the same person as Noah's admin (user decision 2026-11-01), so Noah's admin session IS pi admin:
+The operator is the same person as Noah's admin (user decision 2026-11-01), so Noah's admin session IS pi admin —
+and pi's admin may act as ANY pi user: read every user's pi history (`history/<id>`), read files from any user's
+sandbox (`chat/file?user=`), and run the test chat — full bash — in any user's sandbox. **Granting someone Noah's
+`admin` role grants that too.**
 
 - **Gate** — every `/admin` request resolves the Noah session first; anonymous/non-admin → `/` (page) or pi's
-  error shape 401/403 (API), and nothing is forwarded.
+  error shape 403 (API; never 401 — pi's UI answers a 401 with its own key login form, which cannot fix a missing
+  Noah session and would invite pasting pi's key), and nothing is forwarded.
+- **Target** — only an origin-form target under lowercase `/admin` with no `.`/`..` segment (plain or
+  percent-encoded), no encoded slash or backslash and no raw backslash goes on, and the resolved URL is re-checked (pi's origin, path
+  still under `/admin`); else 404. Express matches the mount case-insensitively and keeps `..` and an
+  absolute-form target (`GET http://evil/admin/…`) in `originalUrl` — resolving that against pi's URL would send
+  the admin key off pi's `/admin` tree or to another host.
 - **Key** — Noah's cookies, any client `Authorization` and client `X-Forwarded-*` are stripped; pi's admin key
   (`PiRuntimeConfig.adminApiKey`, `PI_GATEWAY_ADMIN_API_KEY_FILE` ONLY — an inline `PI_GATEWAY_ADMIN_API_KEY` stops
   the boot) is injected as `Authorization: Bearer`. Without the key `/admin` answers a Korean 503.
@@ -575,12 +584,16 @@ The operator is the same person as Noah's admin (user decision 2026-11-01), so N
   Noah checks instead: a non-GET/HEAD/OPTIONS call needs `Sec-Fetch-Site: same-origin` (or, without it, an
   `Origin` whose host is the request's Host; the scheme is not compared, for TLS-terminating proxies) AND
   `X-Admin-Request: 1`.
-- **Local answers** — `POST /admin/api/login|logout` are answered `{ok:true}` by Noah: forwarding a typed key would
-  count failures against Noah's ONE address in pi's lockout, and there is no pi session to end.
+- **Local answers** — `POST /admin/api/login|logout` never reach pi: forwarding a typed key would count failures
+  against Noah's ONE address in pi's lockout, and there is no pi session to end. Logout answers `{ok:true}`; login
+  answers a Korean 400 (`noah_proxied`: sign in to Noah and reload) — the form only shows when something else
+  failed, so a typed key is never treated as a fix.
 - **Streaming** — mounted BEFORE `express.json` and Noah's security-header middleware: bodies stream both ways
   (pi's test chat is SSE; no timeout once headers arrived, 60 s before), pi's own CSP/X-Frame-Options reach its UI,
   pi's `Set-Cookie` is dropped. Upstream down → 502 (Korean).
-- **Audit** — every forwarded write is an audit row `pi_admin_proxy` with `METHOD path` only (no query, no body).
+- **Audit** — every forwarded write AND every read of one user's data (`GET history/<id>`, `GET chat/file`) is an
+  audit row `pi_admin_proxy` with `METHOD path` only (no query, no body; `chat/file` adds `user=`). A write whose
+  browser left before pi answered is recorded as an error marked 반영 여부 미확인 (pi may have applied it).
 - **What does not stick** — `pi-setup` re-applies Noah's prompt `noah` (`scripts/pi-system-prompt.md`), its MCP
   broker entries and the disabled `request_admin`/`present_file` on every `docker compose up`, so edits to those in
   the panel last only until then; the repository stays their source of truth. Everything else (LLM settings,

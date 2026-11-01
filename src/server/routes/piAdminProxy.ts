@@ -25,8 +25,17 @@ import type { RouterDeps } from "./_shared.js";
  * - Bodies stream both ways (pi's admin chat is SSE), pi's own security headers
  *   (CSP, X-Frame-Options) pass through — this router is mounted before Noah's
  *   header middleware and the JSON parser — and `Set-Cookie` is dropped.
- * - Every forwarded mutating call is audited as `pi_admin_proxy` (method + path,
- *   never the query or body).
+ * - Only pi's `/admin` tree is reachable, and only pi's own origin: the request
+ *   target must be an origin-form path under lowercase `/admin` with no dot
+ *   segment (plain or percent-encoded) and no encoded slash, and the resolved
+ *   upstream URL is re-checked (same origin as `PI_GATEWAY_URL`, path still under
+ *   `/admin`) — an absolute-form target (`GET http://evil/admin/…`) or
+ *   `/admin/../v1/…` would otherwise carry the admin key off the tree or off pi.
+ * - A Noah admin is pi's admin: pi lets its admin act as ANY pi user (history,
+ *   `chat/file`, an admin chat runs bash in that user's sandbox). Every forwarded
+ *   mutating call, and every read of a user's data (`history/<id>`, `chat/file`),
+ *   is audited as `pi_admin_proxy` (method + path, never the query values or body —
+ *   except `chat/file`'s `user`, which names whose sandbox was read).
  *
  * Settings pi-setup re-applies on every `docker compose up` (Noah's prompt
  * `noah`, its MCP registrations, the disabled pi tools) are overwritten there:
@@ -73,6 +82,39 @@ const DISABLED_PAGE = `<!doctype html><html lang="ko"><meta charset="utf-8"><tit
 
 function isApiPath(pathname: string): boolean {
   return pathname === API_PREFIX || pathname.startsWith(`${API_PREFIX}/`);
+}
+
+function underAdmin(pathname: string): boolean {
+  return pathname === PREFIX || pathname.startsWith(`${PREFIX}/`);
+}
+
+/**
+ * The raw request target is safe to append to pi's origin: origin-form (one
+ * leading `/`, so neither absolute-form nor `//host`), under lowercase `/admin`,
+ * no backslash, no encoded slash/backslash, and no `.`/`..` segment in any
+ * spelling. Anything else is refused before resolution.
+ */
+function safeAdminTarget(originalUrl: string): boolean {
+  if (!originalUrl.startsWith("/") || originalUrl.startsWith("//") || originalUrl.includes("\\")) return false;
+  const rawPath = originalUrl.split("?")[0];
+  if (!underAdmin(rawPath)) return false;
+  if (/%(2f|5c)/i.test(rawPath)) return false;
+  return rawPath.split("/").every((segment) => {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return false;
+    }
+    return decoded !== "." && decoded !== "..";
+  });
+}
+
+/** pi admin reads that open ONE user's data — audited like a write. */
+function readsUserData(method: string, pathname: string): boolean {
+  if (method !== "GET") return false;
+  if (pathname === `${API_PREFIX}/chat/file`) return true;
+  return /^\/admin\/api\/history\/[^/]+$/.test(pathname) && pathname !== `${API_PREFIX}/history/retention`;
 }
 
 /** pi's admin error shape, so its UI shows the message (`{ error: { code, message } }`). */
@@ -123,13 +165,23 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
 
   router.use(PREFIX, (req: AuthenticatedRequest, res) => {
     const pathname = req.originalUrl.split("?")[0];
+    // Express matches `/admin` case-insensitively and leaves `..` in originalUrl;
+    // only a plain lowercase `/admin` tree path goes any further.
+    if (!safeAdminTarget(req.originalUrl)) {
+      req.resume();
+      res.status(404).type("text/plain; charset=utf-8").send("Not found");
+      return;
+    }
     const api = isApiPath(pathname);
 
     const user = store.getUserBySessionToken(sessionTokenFromRequest(req));
     if (!user || !user.roles.includes("admin")) {
       if (api) {
+        // Never 401: pi's UI answers a 401 with its OWN key login form, which
+        // cannot help here (Noah's session is what is missing) and would invite
+        // pasting pi's admin key into it.
         if (user) piError(res, 403, "forbidden", "Noah 관리자만 사용할 수 있습니다.");
-        else piError(res, 401, "unauthorized", "Noah에 관리자로 로그인해 주세요.");
+        else piError(res, 403, "noah_session_required", "Noah 로그인이 만료되었습니다. Noah에 관리자로 다시 로그인한 뒤 이 화면을 새로고침해 주세요.");
       } else {
         res.redirect(302, "/");
       }
@@ -155,14 +207,35 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
     }
 
     // Answered locally (see the module comment): bearer auth needs no pi session.
-    if (req.method === "POST" && (pathname === `${API_PREFIX}/login` || pathname === `${API_PREFIX}/logout`)) {
+    // A login form only shows when something else failed, so a typed key is
+    // never accepted as if it fixed anything.
+    if (req.method === "POST" && pathname === `${API_PREFIX}/login`) {
+      req.resume();
+      piError(
+        res,
+        400,
+        "noah_proxied",
+        "여기서는 pi 관리자 키를 입력하지 않습니다. Noah가 관리자 세션으로 대신 인증하니, Noah에 관리자로 로그인한 뒤 이 화면을 새로고침해 주세요.",
+      );
+      return;
+    }
+    if (req.method === "POST" && pathname === `${API_PREFIX}/logout`) {
       req.resume();
       res.setHeader("cache-control", "no-store");
       res.json({ ok: true });
       return;
     }
 
-    const target = new URL(req.originalUrl, config.pi.gatewayUrl);
+    const gatewayOrigin = new URL(config.pi.gatewayUrl).origin;
+    const target = new URL(req.originalUrl, gatewayOrigin);
+    if (target.origin !== gatewayOrigin || !underAdmin(target.pathname)) {
+      req.resume();
+      res.status(404).type("text/plain; charset=utf-8").send("Not found");
+      return;
+    }
+    const audited = mutating || readsUserData(req.method, pathname);
+    const userParam = pathname === `${API_PREFIX}/chat/file` ? target.searchParams.get("user") : null;
+    const auditDetail = `${req.method} ${pathname}${userParam ? ` (user=${userParam.slice(0, 128)})` : ""}`;
     const client = target.protocol === "https:" ? https : http;
     const upstream = client.request(target, {
       method: req.method,
@@ -175,9 +248,7 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
     upstream.on("response", (piRes) => {
       upstream.setTimeout(0);
       const status = piRes.statusCode ?? 502;
-      if (mutating) {
-        auditAs(req, "pi_admin_proxy", `${req.method} ${pathname}`, status < 400 ? "success" : "error");
-      }
+      if (audited) auditAs(req, "pi_admin_proxy", auditDetail, status < 400 ? "success" : "error");
       res.status(status);
       for (const [name, value] of Object.entries(piRes.headers)) {
         if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
@@ -188,13 +259,20 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       piRes.on("error", () => res.destroy());
     });
 
+    let clientGone = false;
     upstream.on("error", (error) => {
+      if (clientGone) {
+        // The browser left before pi answered: pi may still have applied a write,
+        // so the audit row says the outcome is unknown rather than a plain failure.
+        if (audited) auditAs(req, "pi_admin_proxy", `${auditDetail} — 응답 전에 연결 끊김(반영 여부 미확인)`, "error");
+        return;
+      }
       logger.warn({ err: error.message, path: pathname }, "pi admin proxy: upstream failed");
       if (res.headersSent) {
         res.destroy();
         return;
       }
-      if (mutating) auditAs(req, "pi_admin_proxy", `${req.method} ${pathname}`, "error");
+      if (audited) auditAs(req, "pi_admin_proxy", auditDetail, "error");
       if (api) {
         piError(res, 502, "upstream_unreachable", "pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
       } else {
@@ -204,7 +282,10 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
 
     // The browser went away (a cancelled chat stream): stop pi's side too.
     res.on("close", () => {
-      if (!res.writableFinished) upstream.destroy();
+      if (!res.writableFinished) {
+        if (!res.headersSent) clientGone = true;
+        upstream.destroy();
+      }
     });
 
     req.pipe(upstream);

@@ -89,6 +89,13 @@ function boot(
   return { services, app: createApp(services) };
 }
 
+/** The admin's ("boss", see users()) session cookie, from a fresh login. */
+async function adminCookie(app: ReturnType<typeof createApp>): Promise<string[]> {
+  const res = await request(app).post("/api/auth/login").send({ username: "boss", password: "password123" });
+  const set = res.headers["set-cookie"] as unknown as string[] | undefined;
+  return (set ?? []).map((c) => c.split(";")[0]);
+}
+
 async function users(app: ReturnType<typeof createApp>) {
   const admin = request.agent(app);
   await signup(admin, "boss").expect(201); // the first signup is the admin
@@ -104,8 +111,9 @@ describe("pi admin panel proxy (/admin)", () => {
 
     const anonPage = await request(app).get("/admin/").expect(302);
     expect(anonPage.headers.location).toBe("/");
-    const anonApi = await request(app).get("/admin/api/session").expect(401);
-    expect(anonApi.body.error.code).toBe("unauthorized");
+    // Never 401: pi's UI would answer it with its own key login form.
+    const anonApi = await request(app).get("/admin/api/session").expect(403);
+    expect(anonApi.body.error.code).toBe("noah_session_required");
 
     const memberPage = await member.get("/admin/").expect(302);
     expect(memberPage.headers.location).toBe("/");
@@ -192,14 +200,78 @@ describe("pi admin panel proxy (/admin)", () => {
     expect(res.text).toBe("data: one\n\ndata: two\n\n");
   });
 
-  it("answers pi's login/logout itself (bearer needs no pi session)", async () => {
+  it("answers pi's login/logout itself (bearer needs no pi session) and never takes a typed key", async () => {
     const { app } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
     const { admin } = await users(app);
-    for (const p of ["/admin/api/login", "/admin/api/logout"]) {
-      const res = await admin.post(p).set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").send({ apiKey: "typed" }).expect(200);
-      expect(res.body).toEqual({ ok: true });
-    }
+    const login = await admin
+      .post("/admin/api/login")
+      .set("Sec-Fetch-Site", "same-origin")
+      .set("X-Admin-Request", "1")
+      .send({ apiKey: "typed" })
+      .expect(400);
+    expect(login.body.error.code).toBe("noah_proxied");
+    const logout = await admin.post("/admin/api/logout").set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").expect(200);
+    expect(logout.body).toEqual({ ok: true });
     expect(seen).toHaveLength(0);
+  });
+
+  it("forwards only pi's /admin tree on pi's own origin (dot segments, encoded slashes, case, absolute-form)", async () => {
+    const { app } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    await users(app);
+    // Raw requests: an HTTP client library would normalize the dot segments away.
+    const cookie = (await adminCookie(app)).join("; ");
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+    const rawGet = (target: string) =>
+      new Promise<number>((resolve, reject) => {
+        const req = http.request({ host: "127.0.0.1", port, method: "GET", path: target, headers: { cookie } });
+        req.on("response", (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.on("error", reject);
+        req.end();
+      });
+    try {
+      expect(await rawGet("/admin/api/session")).toBe(200); // the control: this one IS forwarded
+      expect(seen).toHaveLength(1);
+      for (const target of [
+        "/admin/../v1/models",
+        "/admin/%2e%2e/v1/models",
+        "/admin/api/%2E%2E/%2e%2e/v1/models",
+        "/admin/api/..%2fv1",
+        "/admin/./api/session",
+        "/ADMIN/api/session",
+        "/Admin/",
+        // Absolute-form target: Express routes it by its path, but the key must
+        // never follow it to another host.
+        "http://evil.example/admin/api/session",
+        `${piUrl}/admin/api/session`,
+      ]) {
+        const status = await rawGet(target);
+        if (status !== 404) throw new Error(`${target} was answered ${status}`);
+      }
+      expect(seen).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("audits an admin's reads of one user's pi data (history, sandbox files)", async () => {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    await admin.get("/admin/api/history/resp_123");
+    await admin.get("/admin/api/chat/file?user=u-alice&path=%2Fworkspace%2Fsecret.txt");
+    await admin.get("/admin/api/history/retention");
+    await admin.get("/admin/api/session");
+    const adminId = services.store.listUsers().find((u) => u.username === "boss")!.id;
+    const details = services.store
+      .listAudit(adminId, true)
+      .filter((row) => row.action === "pi_admin_proxy")
+      .map((row) => row.detail)
+      .sort();
+    expect(details).toEqual(["GET /admin/api/chat/file (user=u-alice)", "GET /admin/api/history/resp_123"]);
   });
 
   it("says so in Korean when no admin key is configured, or pi is unreachable", async () => {

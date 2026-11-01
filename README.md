@@ -374,9 +374,11 @@ included.
    `NODE_EXTRA_CA_CERTS` to the CA's **host** path or remove it (the old in-image path
    `/usr/local/share/ca-certificates/extra-proxy-ca.crt` does not exist on the host and stops `up`); remove
    `AGENT_RUNTIME`, `DECK_CONVERTER`, `UV_DEFAULT_INDEX`/`UV_INDEX` and the Claude-SDK-only keys (`ANTHROPIC_*`,
-   `MAX_TURNS`, `AUTO_COMPACT_WINDOW`, `READONLY_TOOLS`) — Noah ignores them. Move the model endpoint and its
-   credentials to pi-gateway's LLM page; the admin UI's Claude subscription token is gone.
-4. `sudo docker/pi/setup-host.sh` (First boot step 2), `docker compose up -d --build`, then configure the LLM
+   `MAX_TURNS`, `AUTO_COMPACT_WINDOW`, `READONLY_TOOLS`, `MODEL_VISION`) — Noah ignores them. Move the model endpoint and its
+   credentials to pi-gateway's LLM page; the admin UI's Claude subscription token, model override and per-model
+   vision policy are gone (pi's LLM page sets the default model and each model's image input).
+4. `sudo docker/pi/setup-host.sh` (First boot step 2 — REQUIRED before `up`: it also writes Noah's copy of pi's admin
+   key, a compose secret; without the file `docker compose up` fails), `docker compose up -d --build`, then configure the LLM
    in pi (First boot step 4).
 5. **Rollback** to the SDK-era release: `git checkout` that release, re-tag the old image as `latest`, and
    `docker compose up -d --no-build noah-almighty`. pi's services keep running until

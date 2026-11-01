@@ -393,7 +393,9 @@ These are the invariants the project is built around. New work should reinforce 
   Noah); ONE pi-gateway per Docker daemon (sandboxd reaps every `pi-gateway.instance=default` sandbox); the
   egress overlay (`docker-compose.egress.yml`) is NOT supported with the bundle (its firewall blocks pi's
   gateway). pi's admin panel is served on Noah's port at `/admin` to Noah ADMINS (`routes/piAdminProxy.ts`, pi's
-  admin key injected, same-origin writes only, audited) — what `pi-setup` applies (prompt `noah`, MCP entries) is
+  admin key injected, only pi's `/admin` tree on pi's origin, same-origin writes only, writes and per-user reads
+  audited) — so Noah's `admin` role IS pi admin, which can read any user's pi history and sandbox files and run
+  bash in any user's sandbox — what `pi-setup` applies (prompt `noah`, MCP entries) is
   re-applied on every `up`, so the repo stays its source. A pi-gateway bump moves the submodule to a PUSHED commit and re-runs the dind boot test (`build-run-verify.md`).
 - **Project name diverges by layer:** display "Noah Almighty", code slug `noah-almighty`, working dir
   `avatar-chat`. Grep both old/new slugs when auditing names.
