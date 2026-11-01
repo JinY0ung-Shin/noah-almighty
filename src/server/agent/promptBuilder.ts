@@ -810,17 +810,32 @@ function piKnownToolsSection(request: AgentRequest): string | null {
   const known = request.piRuntime?.knownTools;
   if (!known || known.noah.length + known.relayed.length === 0) return null;
   const line = (tool: { name: string; required: string[] }) => `${tool.name}(${tool.required.join(", ")})`;
+  const failures = known.relayedFailures ?? [];
+  const named = (kind: string) =>
+    failures
+      .filter((failure) => failure.kind === kind)
+      .map((failure) => `\`${failure.name}\` (${failure.reason})`)
+      .join("; ");
+  const timedOut = failures.some((failure) => failure.kind === "timeout") || (known.relayedIncomplete && failures.length === 0);
+  const unread = named("error");
+  const refused = named("refused");
   return [
     "**Known Noah tool names** — the tools this conversation had when it started, with their REQUIRED arguments in parentheses (optional ones are in each tool's schema). " +
       "Call them directly with `mcp_call` `{name: \"<exact name below>\", arguments: {…}}` — no `mcp_search` needed; a call with a missing or wrong argument comes back with the tool's full schema, so fix it from there. " +
       "A tool not listed here may have been enabled since: find it with `mcp_search`. A listed tool can still be refused on a turn that lacks it (`mcp__system__describe_system` is authoritative).",
     ...known.noah.map(line),
-    ...(known.relayed.length || known.relayedIncomplete
+    ...(known.relayed.length || known.relayedIncomplete || failures.length
       ? [
           "Relayed tools (hex-ssh, plugin and shared MCP servers) as listed when this conversation started" +
-            (known.relayedIncomplete ? " — at least one server did not answer in time, so search for its tools" : "") +
+            (timedOut ? " — at least one server did not answer in time, so search for its tools" : "") +
+            (unread ? ` — could not be listed (search for their tools later): ${unread}` : "") +
             "; a server or tool connected later is not here, so find it with `mcp_search`:",
           ...known.relayed.map(line),
+          ...(refused
+            ? [
+                `Relayed servers REFUSED for this run (their tool list broke Noah's limits, so none of their tools exist or can be called; tell the user instead of working around it): ${refused}.`,
+              ]
+            : []),
         ]
       : []),
   ].join("\n");

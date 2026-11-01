@@ -232,6 +232,8 @@ export interface PiKnownTools {
   relayed: PiKnownTool[];
   /** A relay source this run has that could not be listed in time (its tools are searchable later). */
   relayedIncomplete: boolean;
+  /** Relay sources whose listing failed at that turn (a `refused` one stays refused for the run). */
+  relayedFailures?: PiListFailure[];
 }
 
 export interface PiKnownTool {
@@ -247,6 +249,21 @@ export interface PiProxiedMcpFacts {
   pluginServers: string[];
   /** Plugin servers left out, and why (English, model-facing). */
   skippedPluginServers: { name: string; reason: string }[];
+  /**
+   * Relayed sources whose `tools/list` failed in this run, kept LIVE by the
+   * run's proxy pool (`onListFailure`): `refused` is final for the run (its
+   * tools are refused), `timeout`/`error` may list on a later try.
+   */
+  listFailures?: PiListFailure[];
+}
+
+/** One relayed source whose `tools/list` failed (see {@link PiProxiedMcpFacts.listFailures}). */
+export interface PiListFailure {
+  /** The source: a plugin / shared server name, or `hex-ssh`. */
+  name: string;
+  /** Why, model-facing English. */
+  reason: string;
+  kind: "timeout" | "refused" | "error";
 }
 
 /** One skill a pi run can use (see {@link PiRuntimeFacts.skills}). */

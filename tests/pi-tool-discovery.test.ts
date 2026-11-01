@@ -245,7 +245,7 @@ describe("runPiAgent tool discovery", () => {
     const { store, config } = setup();
     const catalog = await noahMcpCatalog(store, config);
     const allowed = new Set(["mcp__todo__list_todos", "mcp__system__describe_system", "mcp__todo__add_todos"]);
-    const none = { listToolsReport: async () => ({ tools: [], failedSources: 0 }) };
+    const none = { listToolsReport: async () => ({ tools: [], failed: [] }) };
     const a = await piKnownTools(catalog, allowed, none, []);
     const b = await piKnownTools(catalog, new Set([...allowed].reverse()), none, []);
     expect(a).toEqual(b);
@@ -259,8 +259,11 @@ describe("runPiAgent tool discovery", () => {
     const proxies = {
       listToolsReport: async (proxy: string) =>
         proxy === "hex-ssh"
-          ? { tools: [{ name: "remote-ssh", inputSchema: { type: "object" as const, required: ["host", "command"] } }], failedSources: 0 }
-          : { tools: [{ name: "srv__do.it", inputSchema: { type: "object" as const } }], failedSources: 1 },
+          ? { tools: [{ name: "remote-ssh", inputSchema: { type: "object" as const, required: ["host", "command"] } }], failed: [] }
+          : {
+              tools: [{ name: "srv__do.it", inputSchema: { type: "object" as const } }],
+              failed: [{ name: "slow", kind: "timeout" as const, reason: "it did not list its tools within 10 s" }],
+            },
     };
     const known = await piKnownTools(catalog, new Set(), proxies, [{ proxy: "plugins" }, { proxy: "hex-ssh" }]);
     expect(known.relayed).toEqual([
@@ -278,6 +281,32 @@ describe("runPiAgent tool discovery", () => {
     expect(text).toContain("\nmcp__hex-ssh__remote-ssh(host, command)\n");
     expect(text).toContain("at least one server did not answer in time, so search for its tools");
     expect(text).toContain("a server or tool connected later is not here, so find it with `mcp_search`");
+  });
+
+  it("only a timed-out source says 'did not answer in time'; a failed one is named, a refused one is final (review #10)", async () => {
+    const { store, config } = setup();
+    const catalog = await noahMcpCatalog(store, config);
+    const proxies = {
+      listToolsReport: async () => ({
+        tools: [],
+        failed: [
+          { name: "broken", kind: "error" as const, reason: "it did not start or answered its tools/list with an error" },
+          { name: "pager", kind: "refused" as const, reason: "its tools/list repeated a pagination cursor, so its listing would never end" },
+        ],
+      }),
+    };
+    const known = await piKnownTools(catalog, new Set(["mcp__system__describe_system"]), proxies, [{ proxy: "plugins" }]);
+    expect(known.relayedIncomplete).toBe(true); // `broken` may still list later
+    const text = buildSystemPromptAppend({
+      message: "m",
+      avatar: { id: "o", displayName: "O", alias: "", persona: "" },
+      viewerIsOwner: true,
+      piRuntime: { shellSecretNames: [], readOnlyBuiltins: false, knownTools: known },
+    });
+    expect(text).not.toContain("did not answer in time");
+    expect(text).toContain("could not be listed (search for their tools later): `broken` (it did not start");
+    expect(text).toContain("Relayed servers REFUSED for this run");
+    expect(text).toContain("`pager` (its tools/list repeated a pagination cursor");
   });
 });
 

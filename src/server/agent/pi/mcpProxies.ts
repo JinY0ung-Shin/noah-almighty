@@ -37,7 +37,7 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { AppConfig, PiProxiedMcpFacts, PluginRoot } from "../../types.js";
+import type { AppConfig, PiListFailure, PiProxiedMcpFacts, PluginRoot } from "../../types.js";
 import { HEX_SSH_NEVER_OFFERED_TOOLS, HEX_SSH_SERVER_NAME } from "../../hexSshPolicy.js";
 import { liftPluginMcpServers } from "../../plugins.js";
 import { GIT_CREDENTIAL_ENV_NAMES, scrubServerOnlySecretEnv } from "../../secretPolicy.js";
@@ -61,8 +61,21 @@ export type PiProxyServerName = (typeof PI_PROXY_SERVER_NAMES)[number];
 
 /** `<server>__<tool>` inside an aggregate (`plugins`, `shared`). */
 const SEPARATOR = "__";
-/** One source's `tools/list` at session build (pi skips a whole server after 15 s). */
+/**
+ * One source's `tools/list` at session build: ONE deadline over the start and
+ * EVERY page (pi skips a whole server after 15 s).
+ */
 const LIST_DEADLINE_MS = 10_000;
+/**
+ * A source's `tools/list` is REFUSED for the run (fail closed: no tool of it is
+ * listed or callable) past any of these. The upstream controls the pages, so
+ * without them a server repeating its `nextCursor` kept Noah fetching and
+ * holding pages until the process ran out of memory (review #10). Truncating
+ * instead would leave unlisted tools blind-callable.
+ */
+export const LIST_MAX_PAGES = 50;
+export const LIST_MAX_TOOLS = 1000;
+export const LIST_MAX_BYTES = 2 * 1024 * 1024;
 /** Upstream call budget; the broker's per-server timeout cuts first and cancels. */
 const CALL_TIMEOUT_MS = 600_000;
 /** SSH vault names that are credentials (SSH_USER / ALLOWED_HOSTS are not — redacting them would shred output). */
@@ -369,10 +382,41 @@ interface Connected {
   client: Client;
   transport: StdioClientTransport;
   tools?: Tool[];
+  /** The ONE listing in flight: concurrent `tools/list`s share it (a failed one is not kept). */
+  listing?: Promise<Tool[]>;
 }
 
 function errorResult(message: string): CallToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/** A listing past a cap or with a repeated cursor: the source is refused for the run. */
+class ListRefused extends Error {}
+
+/** `promise`, or the signal's abort reason as soon as it fires (the work itself is stopped by the same signal). */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+export interface PiMcpProxyPoolOptions {
+  /** The per-source `tools/list` deadline (tests). */
+  listDeadlineMs?: number;
+  /** Called with EVERY current listing failure whenever that set changes (describe_system's live line). */
+  onListFailure?: (failures: PiListFailure[]) => void;
 }
 
 /**
@@ -383,8 +427,19 @@ export class PiMcpProxyPool {
   private readonly transports = new Set<StdioClientTransport>();
   private closed = false;
   private closing: Promise<void> | null = null;
+  /** Aborted by `close`: stops every listing in flight. */
+  private readonly abort = new AbortController();
+  /** Sources refused for the run (a listing past a cap), and why. */
+  private readonly refused = new Map<PiMcpUpstream, string>();
+  private readonly listFailures = new Map<PiMcpUpstream, PiListFailure>();
+  private readonly listDeadlineMs: number;
 
-  constructor(private readonly upstreams: readonly PiMcpUpstream[]) {}
+  constructor(
+    private readonly upstreams: readonly PiMcpUpstream[],
+    private readonly options: PiMcpProxyPoolOptions = {},
+  ) {
+    this.listDeadlineMs = options.listDeadlineMs ?? LIST_DEADLINE_MS;
+  }
 
   private sources(proxy: PiProxyServerName): PiMcpUpstream[] {
     return this.upstreams.filter((upstream) => upstream.proxy === proxy);
@@ -416,6 +471,8 @@ export class PiMcpProxyPool {
 
   private connect(upstream: PiMcpUpstream): Promise<Connected> {
     if (this.closed) return Promise.reject(new Error("the run's MCP proxies are closed"));
+    const refusal = this.refused.get(upstream);
+    if (refusal) return Promise.reject(new ListRefused(refusal));
     let pending = this.connections.get(upstream);
     if (!pending) {
       pending = this.start(upstream);
@@ -451,7 +508,7 @@ export class PiMcpProxyPool {
     };
     const client = new Client({ name: "noah-pi-proxy", version: "1.0.0" });
     try {
-      await client.connect(transport, { timeout: LIST_DEADLINE_MS });
+      await client.connect(transport, { timeout: this.listDeadlineMs });
     } catch (error) {
       this.transports.delete(transport);
       await transport.close().catch(() => undefined);
@@ -471,51 +528,107 @@ export class PiMcpProxyPool {
     return { client, transport };
   }
 
-  private async toolsOf(upstream: PiMcpUpstream): Promise<Tool[]> {
-    const connected = await this.connect(upstream);
-    if (!connected.tools) {
-      const tools: Tool[] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await connected.client.listTools(cursor ? { cursor } : undefined, { timeout: LIST_DEADLINE_MS });
-        tools.push(...page.tools);
-        cursor = page.nextCursor;
-      } while (cursor);
-      connected.tools = tools.filter((tool) => upstream.allowTool?.(tool.name) ?? true);
+  /**
+   * A source's tools, listed ONCE per connection (memoized; a listing that
+   * failed is not kept, so a slow server is asked again later), within the
+   * caller's `signal` (the pool's close + one deadline over every page).
+   */
+  private async toolsOf(upstream: PiMcpUpstream, signal: AbortSignal): Promise<Tool[]> {
+    const connected = await untilAborted(this.connect(upstream), signal);
+    if (connected.tools) return connected.tools;
+    if (!connected.listing) {
+      const listing = this.fetchTools(connected, upstream, signal).then((tools) => {
+        connected.tools = tools;
+        return tools;
+      });
+      connected.listing = listing;
+      listing.catch((error: unknown) => {
+        if (connected.listing === listing) connected.listing = undefined;
+        if (error instanceof ListRefused) this.refuse(upstream, connected, error.message);
+      });
     }
-    return connected.tools;
+    return untilAborted(connected.listing, signal);
   }
 
-  /** `tools/list` of one proxy server: every source in parallel, a slow or failed one left out. */
+  /** Every page of one source's `tools/list`, bounded by the LIST_MAX_* caps and a repeated-cursor check. */
+  private async fetchTools(connected: Connected, upstream: PiMcpUpstream, signal: AbortSignal): Promise<Tool[]> {
+    const tools: Tool[] = [];
+    const seen = new Set<string>();
+    let bytes = 0;
+    let cursor: string | undefined;
+    for (let page = 1; ; page += 1) {
+      const result = await connected.client.listTools(cursor !== undefined ? { cursor } : undefined, {
+        signal,
+        timeout: this.listDeadlineMs,
+      });
+      const pageTools = Array.isArray(result.tools) ? result.tools : [];
+      bytes += Buffer.byteLength(JSON.stringify(pageTools));
+      tools.push(...pageTools);
+      if (tools.length > LIST_MAX_TOOLS) throw new ListRefused(`its tools/list returned more than ${LIST_MAX_TOOLS} tools`);
+      if (bytes > LIST_MAX_BYTES) throw new ListRefused(`its tools/list returned more than ${LIST_MAX_BYTES / (1024 * 1024)} MiB of tool definitions`);
+      const next = result.nextCursor;
+      if (next === undefined || next === "") break;
+      if (seen.has(next)) throw new ListRefused("its tools/list repeated a pagination cursor, so its listing would never end");
+      if (page >= LIST_MAX_PAGES) throw new ListRefused(`its tools/list did not end within ${LIST_MAX_PAGES} pages`);
+      seen.add(next);
+      cursor = next;
+    }
+    return tools.filter((tool) => upstream.allowTool?.(tool.name) ?? true);
+  }
+
+  /** Refuse a source for the rest of the run and stop its child. */
+  private refuse(upstream: PiMcpUpstream, connected: Connected, reason: string): void {
+    if (this.refused.has(upstream)) return;
+    this.refused.set(upstream, reason);
+    this.connections.delete(upstream);
+    void connected.client.close().catch(() => undefined);
+  }
+
+  private noteListOutcome(upstream: PiMcpUpstream, failure: PiListFailure | null): void {
+    const before = this.listFailures.get(upstream);
+    if (failure) this.listFailures.set(upstream, failure);
+    else this.listFailures.delete(upstream);
+    if (before?.kind === failure?.kind && before?.reason === failure?.reason) return;
+    this.options.onListFailure?.([...this.listFailures.values()]);
+  }
+
+  /** `tools/list` of one proxy server: every source in parallel, a slow, failed or refused one left out. */
   async listTools(proxy: PiProxyServerName): Promise<Tool[]> {
     return (await this.listToolsReport(proxy)).tools;
   }
 
-  /** {@link listTools} plus how many sources were left out (the frozen prompt says its list is partial). */
-  async listToolsReport(proxy: PiProxyServerName): Promise<{ tools: Tool[]; failedSources: number }> {
+  /** {@link listTools} plus the sources left out and why (the frozen prompt names them). */
+  async listToolsReport(proxy: PiProxyServerName): Promise<{ tools: Tool[]; failed: PiListFailure[] }> {
     const sources = this.sources(proxy);
+    // ONE deadline per source over its start and every page; close() aborts them all.
+    const deadlines = sources.map(() => AbortSignal.timeout(this.listDeadlineMs));
     const listed = await Promise.allSettled(
-      sources.map((upstream) =>
-        Promise.race([
-          this.toolsOf(upstream),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("tools/list timed out")), LIST_DEADLINE_MS).unref()),
-        ]),
-      ),
+      sources.map((upstream, index) => this.toolsOf(upstream, AbortSignal.any([this.abort.signal, deadlines[index]!]))),
     );
     const out: Tool[] = [];
-    let failedSources = 0;
+    const failed: PiListFailure[] = [];
     listed.forEach((result, index) => {
       const upstream = sources[index]!;
       if (result.status === "rejected") {
-        failedSources += 1;
-        log.warn({ proxy, server: upstream.name, err: String(result.reason) }, "pi mcp proxy: tools/list failed; source skipped");
+        const error: unknown = result.reason;
+        const refusal = this.refused.get(upstream);
+        const failure: PiListFailure = refusal
+          ? { name: upstream.name, kind: "refused", reason: refusal }
+          : deadlines[index]!.aborted
+            ? { name: upstream.name, kind: "timeout", reason: `it did not list its tools within ${Math.round(this.listDeadlineMs / 1000)} s` }
+            : // Never the upstream's own error text: this reason reaches the frozen instructions.
+              { name: upstream.name, kind: "error", reason: "it did not start or answered its tools/list with an error" };
+        failed.push(failure);
+        if (!this.closed) this.noteListOutcome(upstream, failure);
+        log.warn({ proxy, server: upstream.name, kind: failure.kind, err: String(error) }, "pi mcp proxy: tools/list failed; source skipped");
         return;
       }
+      this.noteListOutcome(upstream, null);
       for (const tool of result.value) {
         out.push(proxy === HEX_SSH_SERVER_NAME ? tool : { ...tool, name: `${upstream.name}${SEPARATOR}${tool.name}` });
       }
     });
-    return { tools: out, failedSources };
+    return { tools: out, failed };
   }
 
   async callTool(
@@ -532,6 +645,12 @@ export class PiMcpProxyPool {
     }
     if (hit.upstream.allowTool && !hit.upstream.allowTool(hit.tool)) {
       return errorResult(`Tool '${hit.tool}' is not allowed by the deployment's policy for this conversation. Do not retry it.`);
+    }
+    const refusal = this.refused.get(hit.upstream);
+    if (refusal) {
+      return errorResult(
+        `MCP server '${hit.upstream.name}' is refused for this run: ${refusal}. None of its tools can be called here; tell the user the server's tool list needs fixing (by whoever maintains that server) and do not retry or work around it.`,
+      );
     }
     let connected: Connected;
     try {
@@ -581,6 +700,7 @@ export class PiMcpProxyPool {
   close(): Promise<void> {
     if (!this.closing) {
       this.closed = true;
+      this.abort.abort(new Error("the run's MCP proxies are closed"));
       const pending = [...this.connections.values()];
       this.connections.clear();
       this.closing = Promise.allSettled(

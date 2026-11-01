@@ -12,6 +12,7 @@ import type {
   AgentOwner,
   AgentRewindInfo,
   AppConfig,
+  PiListFailure,
   PiRuntimeFacts,
   Plugin,
   RoutineJob,
@@ -581,6 +582,26 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
 }
 
 /**
+ * The relayed sources whose `tools/list` failed in THIS run (live, from the
+ * proxy pool's `onListFailure`): a refused one is final, the others may list
+ * on a later try. Mirrored by the frozen prompt's relayed-tools line.
+ */
+function relayListFailuresClause(failures: readonly PiListFailure[]): string {
+  const of = (kind: PiListFailure["kind"]) =>
+    failures
+      .filter((failure) => failure.kind === kind)
+      .map((failure) => `\`${failure.name}\` (${failure.reason})`)
+      .join("; ");
+  const refused = of("refused");
+  const pending = [of("timeout"), of("error")].filter(Boolean).join("; ");
+  return (
+    (refused
+      ? `; REFUSED for this run (its tool list broke Noah's limits; none of its tools can be called — tell the user, do not work around it): ${refused}`
+      : "") + (pending ? `; tool list not read yet (may list on a later try — search for its tools): ${pending}` : "")
+  );
+}
+
+/**
  * pi lines (both viewer branches): the skills this run has — mirrored by the
  * prompt's skill index (promptBuilder piSkillsSection) — and where the open
  * working repo's sandbox copy is (design D1). Empty without pi facts.
@@ -618,7 +639,7 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
       pi.mcpProxies?.skippedPluginServers.length
         ? `; left out (their tools do not exist here): ${pi.mcpProxies.skippedPluginServers.map((s) => `\`${s.name}\` (${s.reason})`).join("; ")}`
         : ""
-    }. Their secrets stay in Noah and never enter your sandbox`,
+    }${relayListFailuresClause(pi.mcpProxies?.listFailures ?? [])}. Their secrets stay in Noah and never enter your sandbox`,
     ...(pi.callableNoahTools
       ? [
           `- Noah tools callable in this run (call any of them directly with mcp_call by this exact name; mcp_search is only for a tool not named here or in your instructions, with an English query of service id + action): ${

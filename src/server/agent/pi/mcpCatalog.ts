@@ -26,7 +26,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { AgentOwner, AppConfig, PiKnownTool, PiKnownTools } from "../../types.js";
+import type { AgentOwner, AppConfig, PiKnownTool, PiKnownTools, PiListFailure } from "../../types.js";
 import type { Store } from "../../store.js";
 import { piSandboxDeckToolchain } from "../../deckRender.js";
 import { buildFileOutputServer, FILE_OUTPUT_SERVER_NAME } from "../fileOutputTools.js";
@@ -246,13 +246,20 @@ export async function piKnownTools(
     }
   }
   const relayed: PiKnownTool[] = [];
+  const relayedFailures: PiListFailure[] = [];
   let relayedIncomplete = false;
   for (const proxy of PI_PROXY_SERVER_NAMES) {
     if (!upstreams.some((upstream) => upstream.proxy === proxy)) continue;
-    const report = await proxies.listToolsReport(proxy).catch(() => ({ tools: [] as Tool[], failedSources: 1 }));
-    if (report.failedSources > 0) relayedIncomplete = true;
+    const report = await proxies.listToolsReport(proxy).catch(() => ({
+      tools: [] as Tool[],
+      failed: [{ name: proxy, kind: "error" as const, reason: "its tool list could not be read" }],
+    }));
+    // Only a source that may still answer makes the list "incomplete"; a
+    // refused one is named instead (its tools do not exist in this run).
+    if (report.failed.some((failure) => failure.kind !== "refused")) relayedIncomplete = true;
+    relayedFailures.push(...report.failed);
     for (const tool of report.tools) relayed.push({ name: piToolName(proxy, tool.name), required: requiredOf(tool) });
   }
   relayed.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  return { noah, relayed, relayedIncomplete };
+  return { noah, relayed, relayedIncomplete, ...(relayedFailures.length ? { relayedFailures } : {}) };
 }

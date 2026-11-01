@@ -18,14 +18,22 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServices } from "../src/server/app.js";
-import type { AgentRequest, PiRuntimeConfig, SharedMcpServer } from "../src/server/types.js";
+import type { AgentRequest, PiListFailure, PiRuntimeConfig, SharedMcpServer } from "../src/server/types.js";
 import type { AgentEvents } from "../src/server/agent/events.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
 import { McpRunRegistry, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
 import { PI_MCP_SERVER_NAMES } from "../src/server/agent/pi/mcpCatalog.js";
 import { PI_RUN_TOKEN_HEADER } from "../src/server/agent/pi/piRuntime.js";
 import { runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
-import { PiMcpProxyPool, planPiMcpProxies, type PiMcpProxyInput } from "../src/server/agent/pi/mcpProxies.js";
+import {
+  LIST_MAX_BYTES,
+  LIST_MAX_PAGES,
+  LIST_MAX_TOOLS,
+  PiMcpProxyPool,
+  planPiMcpProxies,
+  type PiMcpProxyInput,
+  type PiMcpUpstream,
+} from "../src/server/agent/pi/mcpProxies.js";
 import { PiAsyncJobs } from "../src/server/agent/pi/asyncJobs.js";
 import type { PiResponseRequest, PiResponsesClient, PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
 import { buildCanvasTools } from "../src/server/agent/canvasTools.js";
@@ -439,6 +447,203 @@ describe("PiMcpProxyPool", () => {
     const proxyPids = pool.childPids;
     await pool.close();
     await eventually(() => !alive(upstreamPid) && proxyPids.every((pid) => !alive(pid)));
+  });
+});
+
+// ---- tools/list pagination is bounded (review #10) ------------------------------------------------
+
+/**
+ * A stdio MCP server whose `tools/list` pagination is chosen by PAGE_MODE; every
+ * `tools/list` it receives bumps the counter in COUNT_FILE (the regression
+ * proof: once the pool gave up, that counter must stop growing).
+ */
+const PAGER_SERVER = `
+import fs from "node:fs";
+import readline from "node:readline";
+const mode = process.env.PAGE_MODE;
+let calls = 0;
+const tool = (name, bytes = 16) => ({ name, description: "d".repeat(bytes), inputSchema: { type: "object" } });
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  let m; try { m = JSON.parse(line); } catch { return; }
+  if (m.method === "initialize") return send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "pager", version: "1" } } });
+  if (m.method === "tools/list") {
+    calls += 1;
+    fs.writeFileSync(process.env.COUNT_FILE, String(calls));
+    const page = m.params && m.params.cursor ? Number(String(m.params.cursor).split("-")[1]) : 0;
+    const next = "p-" + (page + 1);
+    let result;
+    if (mode === "repeat") result = { tools: [tool("t" + calls)], nextCursor: "again" };
+    else if (mode === "endless" || mode === "slow") result = { tools: [tool("t" + calls)], nextCursor: next };
+    else if (mode === "many") result = { tools: Array.from({ length: 30 }, (_, i) => tool("t" + page + "_" + i)), nextCursor: next };
+    else if (mode === "big") result = { tools: [tool("t" + calls, 300 * 1024)], nextCursor: next };
+    else result = page === 0 ? { tools: [tool("a")], nextCursor: next } : { tools: [tool("b")] };
+    const reply = () => send({ jsonrpc: "2.0", id: m.id, result });
+    return mode === "slow" ? setTimeout(reply, 250) : reply();
+  }
+  if (m.method === "tools/call") return send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "called " + m.params.name }] } });
+  if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+rl.on("close", () => process.exit(0));
+`;
+
+function pager(mode: string) {
+  const file = path.join(dir(), `pager-${randomUUID().slice(0, 6)}.mjs`);
+  fs.writeFileSync(file, PAGER_SERVER);
+  const countFile = path.join(dir(), `pager-count-${randomUUID().slice(0, 6)}`);
+  const calls = () => (fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, "utf8")) : 0);
+  const upstream: PiMcpUpstream = {
+    proxy: "plugins",
+    name: "pager",
+    command: process.execPath,
+    args: [file],
+    env: { PAGE_MODE: mode, COUNT_FILE: countFile },
+  };
+  return { upstream, calls, file, countFile };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("relayed tools/list pagination is bounded (review #10)", () => {
+  const pools: PiMcpProxyPool[] = [];
+  afterEach(async () => {
+    await Promise.allSettled(pools.splice(0).map((pool) => pool.close()));
+  });
+  function pool(upstreams: PiMcpUpstream[], options: ConstructorParameters<typeof PiMcpProxyPool>[1] = {}) {
+    const created = new PiMcpProxyPool(upstreams, options);
+    pools.push(created);
+    return created;
+  }
+
+  it("a repeated cursor is refused after two pages, the upstream is left alone, and its tools are refused with a redirect", async () => {
+    const { upstream, calls } = pager("repeat");
+    const reported: PiListFailure[][] = [];
+    const proxies = pool([upstream], { listDeadlineMs: 4_000, onListFailure: (failures) => reported.push(failures) });
+    const started = Date.now();
+    const report = await proxies.listToolsReport("plugins");
+    const elapsed = Date.now() - started;
+    // The regression proof: the upstream call counter stops growing.
+    const frozen = calls();
+    await sleep(500);
+    expect({ frozen, later: calls() }).toEqual({ frozen: expect.any(Number), later: frozen });
+    expect(frozen).toBeLessThanOrEqual(2);
+    expect(elapsed).toBeLessThan(3_000);
+    expect(report.tools).toEqual([]);
+    expect(report.failed).toEqual([{ name: "pager", kind: "refused", reason: expect.stringContaining("repeated a pagination cursor") }]);
+    // Memoized: a later listing (pi's session build, mcp_search) asks nothing new.
+    expect((await proxies.listToolsReport("plugins")).failed.map((f) => f.kind)).toEqual(["refused"]);
+    expect(calls()).toBe(frozen);
+    expect(reported.at(-1)).toEqual([expect.objectContaining({ name: "pager", kind: "refused" })]);
+    const call = await proxies.callTool("plugins", "pager__t1", {});
+    expect(call.isError).toBe(true);
+    expect(JSON.stringify(call)).toContain("MCP server 'pager' is refused for this run: its tools/list repeated a pagination cursor");
+    expect(JSON.stringify(call)).toContain("do not retry");
+    // The refused source's child is stopped.
+    await eventually(() => proxies.childPids.length === 0);
+    // (A long budget so the unbounded loop's outcome — not a test timeout — is what fails without the caps.)
+  }, 20_000);
+
+  it("refuses past the page, tool and byte caps", async () => {
+    const endless = pager("endless");
+    const many = pager("many");
+    const big = pager("big");
+    const proxies = pool([
+      { ...endless.upstream, name: "endless" },
+      { ...many.upstream, name: "many" },
+      { ...big.upstream, name: "big" },
+    ]);
+    const report = await proxies.listToolsReport("plugins");
+    expect(report.tools).toEqual([]);
+    const reasons = Object.fromEntries(report.failed.map((f) => [f.name, `${f.kind}: ${f.reason}`]));
+    expect(reasons).toEqual({
+      endless: `refused: its tools/list did not end within ${LIST_MAX_PAGES} pages`,
+      many: `refused: its tools/list returned more than ${LIST_MAX_TOOLS} tools`,
+      big: `refused: its tools/list returned more than ${LIST_MAX_BYTES / (1024 * 1024)} MiB of tool definitions`,
+    });
+    expect(endless.calls()).toBe(LIST_MAX_PAGES);
+    expect(many.calls()).toBe(Math.ceil((LIST_MAX_TOOLS + 1) / 30));
+    expect(big.calls()).toBe(Math.ceil((LIST_MAX_BYTES + 1) / (300 * 1024)));
+  });
+
+  it("one deadline covers every page: a slow pager times out and STOPS; a timeout is not cached", async () => {
+    const { upstream, calls } = pager("slow");
+    const proxies = pool([upstream], { listDeadlineMs: 1_000 });
+    const report = await proxies.listToolsReport("plugins");
+    expect(report.failed).toEqual([{ name: "pager", kind: "timeout", reason: "it did not list its tools within 1 s" }]);
+    const atTimeout = calls();
+    expect(atTimeout).toBeGreaterThan(1);
+    await sleep(700);
+    expect(calls()).toBe(atTimeout);
+    // A timeout is not final: the next listing asks again, and calls are not refused.
+    await proxies.listToolsReport("plugins");
+    expect(calls()).toBeGreaterThan(atTimeout);
+    expect(JSON.stringify(await proxies.callTool("plugins", "pager__t1", {}))).toContain("called t1");
+  });
+
+  it("close aborts a listing in flight", async () => {
+    const { upstream, calls } = pager("slow");
+    const proxies = pool([upstream], { listDeadlineMs: 30_000 });
+    const pending = proxies.listToolsReport("plugins");
+    await eventually(() => calls() >= 2);
+    const started = Date.now();
+    await proxies.close();
+    const report = await pending;
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(report.failed.map((f) => f.name)).toEqual(["pager"]);
+    const atClose = calls();
+    await sleep(600);
+    expect(calls()).toBe(atClose);
+  });
+
+  it("a normal paginated list works and is listed once", async () => {
+    const { upstream, calls } = pager("two");
+    const reported: PiListFailure[][] = [];
+    const proxies = pool([upstream], { onListFailure: (failures) => reported.push(failures) });
+    const [first, second] = await Promise.all([proxies.listToolsReport("plugins"), proxies.listToolsReport("plugins")]);
+    expect(first).toEqual({ tools: [expect.objectContaining({ name: "pager__a" }), expect.objectContaining({ name: "pager__b" })], failed: [] });
+    expect(second.tools.map((t) => t.name)).toEqual(["pager__a", "pager__b"]);
+    expect((await proxies.listTools("plugins")).map((t) => t.name)).toEqual(["pager__a", "pager__b"]);
+    expect(calls()).toBe(2);
+    expect(reported).toEqual([]);
+  });
+
+  it("a run names the refused server on BOTH metacognition surfaces (frozen prompt + live describe_system)", async () => {
+    const { store, config, base } = setup();
+    const { file, countFile } = pager("repeat");
+    const root = writePluginRoot(path.join(config.defaultPluginsDir, "bundled"), {
+      pager: { command: process.execPath, args: [file], env: { PAGE_MODE: "repeat", COUNT_FILE: countFile } },
+    });
+    const registry = new McpRunRegistry();
+    const broker = await brokerSide(registry);
+    const seen: Record<string, unknown> = {};
+    try {
+      const { client, requests } = fakeClient([
+        async (req) => {
+          const token = req.headers![PI_RUN_TOKEN_HEADER]!;
+          const plugins = await broker.connect("plugins", token);
+          seen.pluginTools = (await plugins.listTools()).tools.map((t) => t.name);
+          seen.call = await plugins.callTool({ name: "pager__t1", arguments: {} });
+          const system = await broker.connect("system", token);
+          seen.describe = await system.callTool({ name: "describe_system", arguments: {} });
+          return textTurn("resp_r_1", "done");
+        },
+      ]);
+      await runPiAgent(base({ mcpToolGroups: ["system"] }), [{ type: "local", path: root }], config, store, { steers: new SteerChannel() }, undefined, {
+        client,
+        registry,
+      });
+      expect(requests[0]!.instructions).toContain(
+        "Relayed servers REFUSED for this run (their tool list broke Noah's limits, so none of their tools exist or can be called; tell the user instead of working around it): `pager` (its tools/list repeated a pagination cursor",
+      );
+      expect(requests[0]!.instructions).not.toContain("did not answer in time");
+    } finally {
+      await broker.close();
+    }
+    expect(seen.pluginTools).toEqual([]);
+    expect(JSON.stringify(seen.call)).toContain("MCP server 'pager' is refused for this run");
+    expect(JSON.stringify(seen.describe)).toContain("REFUSED for this run (its tool list broke Noah's limits; none of its tools can be called");
+    expect(Number(fs.readFileSync(countFile, "utf8"))).toBeLessThanOrEqual(2);
   });
 });
 

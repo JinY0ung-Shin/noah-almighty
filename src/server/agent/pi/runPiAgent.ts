@@ -274,7 +274,13 @@ async function runPiAgentAs(
   const allowedTools = new Set(capabilities.mcpAllowedTools);
   const built = capabilities.inProcessMcpServers as Record<string, McpServerSource | undefined>;
   // Relayed servers: children start on first use, all closed at run end.
-  const proxies = new PiMcpProxyPool(capabilities.piMcpProxies?.upstreams ?? []);
+  // A failed relayed listing reaches describe_system live (the facts object both surfaces read).
+  const proxyFacts = capabilities.piMcpProxies?.facts;
+  const proxies = new PiMcpProxyPool(capabilities.piMcpProxies?.upstreams ?? [], {
+    onListFailure: (failures) => {
+      if (proxyFacts) proxyFacts.listFailures = failures;
+    },
+  });
   const proxyNames = new Set<string>(PI_PROXY_SERVER_NAMES);
   const servers: Record<string, McpServerSource> = {};
   for (const name of PI_MCP_SERVER_NAMES) {

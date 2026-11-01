@@ -317,6 +317,20 @@ on the run endpoint. Broker ids are global and pi freezes a session's tool list,
   rather than failing the whole id within pi's 15 s). `finally` closes every client (stdin EOF → SIGTERM →
   SIGKILL; the policy proxy now also exits on stdin EOF) with a 0.5 s grace before the run returns; the close keeps
   going after. A closed pool refuses calls instead of respawning. Tests prove no process outlives it.
+- **`tools/list` is bounded and fails CLOSED (review #10).** The upstream controls pagination, and a server repeating
+  its `nextCursor` once kept Noah fetching and holding pages until the process ran out of memory (every re-list
+  started another loop). Now: ONE deadline per source over its start and every page plus the pool's own
+  AbortSignal (`close` aborts every listing in flight) are passed to each `listTools` request; a source's listing is
+  memoized per connection (concurrent lists share it; a failed one is not kept, so a timeout is asked again later);
+  past `LIST_MAX_PAGES` 50, `LIST_MAX_TOOLS` 1000 or `LIST_MAX_BYTES` 2 MiB, or on a repeated cursor, the source is
+  REFUSED for the run — its child is closed, `connect` refuses it, and `callTool` answers an English redirect (tell
+  the user, do not retry). Truncating instead was rejected: the unlisted tools would stay blind-callable.
+  `listToolsReport` returns `{tools, failed: {name, reason, kind: timeout|refused|error}[]}`; the frozen prompt's
+  relayed-tools line (`piKnownTools` → `relayedFailures`) says "did not answer in time" only for a timeout, names a
+  failed one, and lists refused ones as final; `onListFailure` keeps `PiProxiedMcpFacts.listFailures` live for
+  describe_system's relay line. A failure reason is always Noah's own text, never the upstream's error message
+  (it lands in the frozen instructions). Residual: ONE oversized page is still parsed by the SDK before the byte cap
+  sees it.
 - **Redaction (`piRedactions`)**: the relays' secrets (the whole injectable vault once any of it reached a child,
   credential-looking bridge headers + their bare tokens via `mcpBridgeRedactions`, the
   SSH key/passphrase/password — never `SSH_USER`/`ALLOWED_HOSTS`), every browser-typeable secret value and the
@@ -387,7 +401,7 @@ Measured without a model, then mitigated Noah-side:
 
 | Mitigation | Where | Notes |
 |---|---|---|
-| **Known Noah tool names** in the frozen prompt | `piKnownTools` (`mcpCatalog.ts`) → `PiRuntimeFacts.knownTools` → `piKnownToolsSection` | Built only while the conversation has no `pi_instructions` (its first pi turn): every tool of THIS run (`mcpAllowedTools` ∩ catalog), one line `mcp__<server>__<tool>(<required args>)`, catalog order (servers as `PI_NOAH_SERVER_NAMES`, tools in registration order), then relayed tools read from the run's proxy pool (`listToolsReport`, pi's name sanitizing, sorted; a source that did not answer is flagged). Frozen with the rest (D2): a later tool is found with `mcp_search`, a listed one may be refused (describe_system is authoritative). ≈3.4k chars for all 99 Noah tools |
+| **Known Noah tool names** in the frozen prompt | `piKnownTools` (`mcpCatalog.ts`) → `PiRuntimeFacts.knownTools` → `piKnownToolsSection` | Built only while the conversation has no `pi_instructions` (its first pi turn): every tool of THIS run (`mcpAllowedTools` ∩ catalog), one line `mcp__<server>__<tool>(<required args>)`, catalog order (servers as `PI_NOAH_SERVER_NAMES`, tools in registration order), then relayed tools read from the run's proxy pool (`listToolsReport`, pi's name sanitizing, sorted; a source that timed out or failed is flagged, a refused one named as final — see "Proxied MCP servers"). Frozen with the rest (D2): a later tool is found with `mcp_search`, a listed one may be refused (describe_system is authoritative). ≈3.4k chars for all 99 Noah tools |
 | Query line | `MCP_SEARCH_QUERY_LINE` (`piRuntimeSection`) | English, service id + action — tool text is English and keyword-matched |
 | Callable-now mirror | describe_system `piRunLines` ← `PiRuntimeFacts.callableNoahTools` (set after `mcpAllowedTools`) | live list of exact names |
 | Full sibling names | prompt, manual, skills, tool descriptions, errors | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs git_repo) |
