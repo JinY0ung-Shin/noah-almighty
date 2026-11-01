@@ -31,6 +31,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import type { AppConfig } from "../../types.js";
 import { serverGitEnv } from "../../marketplace.js";
 import { git } from "../../repoGitCore.js";
@@ -124,6 +125,110 @@ function writeState(file: string, state: CopyState): void {
 async function headOf(clone: string): Promise<string> {
   const { stdout } = await git(clone, ["rev-parse", "HEAD"]);
   return stdout.trim();
+}
+
+const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+/** Caps of reading the copy's `.git` as data. */
+const GIT_DATA_MAX_BYTES = 1024 * 1024;
+const PACKED_REFS_MAX_BYTES = 16 * 1024 * 1024;
+const ANCESTRY_MAX_STEPS = 1000;
+
+/** A file below the copy's `.git` (plain segments), every folder pinned and the file read no-follow; null when absent/odd. */
+function readCopyGitFile(copy: PinnedDir, parts: string[], maxBytes: number): Buffer | null {
+  const folder = copy.dir([".git", ...parts.slice(0, -1)]);
+  if (!folder) return null;
+  try {
+    return folder.readFile(parts[parts.length - 1]!, maxBytes);
+  } finally {
+    folder.close();
+  }
+}
+
+/**
+ * The commit the sandbox copy's git HEAD points at, read from its `.git` as
+ * DATA — Noah never runs git in the copy (its config, hooks and filters are
+ * the agent's): `HEAD` → a detached sha, or `ref: refs/...` → that loose ref,
+ * else its `packed-refs` line. Null when HEAD is unreadable, unborn, or not
+ * plain files (a gitfile, a link) — none of which can be shown to be on the base.
+ */
+export function readCopyGitTip(copy: PinnedDir): string | null {
+  const head = readCopyGitFile(copy, ["HEAD"], 4096)?.toString("utf8").trim();
+  if (!head) return null;
+  if (SHA_RE.test(head)) return head;
+  const ref = /^ref:\s*(refs\/\S+)$/.exec(head)?.[1];
+  if (!ref) return null;
+  const parts = ref.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) return null;
+  const loose = readCopyGitFile(copy, ["refs", ...parts.slice(1)], 4096)?.toString("utf8").trim();
+  if (loose && SHA_RE.test(loose)) return loose;
+  const packed = readCopyGitFile(copy, ["packed-refs"], PACKED_REFS_MAX_BYTES)?.toString("utf8") ?? "";
+  for (const line of packed.split("\n")) {
+    const [sha, name] = line.trim().split(" ");
+    if (name === ref && sha && SHA_RE.test(sha)) return sha;
+  }
+  return null;
+}
+
+/** The parents of a LOOSE commit object in the copy's `.git`; null when it is not loose, not a commit, or over the cap. */
+function looseCommitParents(copy: PinnedDir, sha: string): string[] | null {
+  const raw = readCopyGitFile(copy, ["objects", sha.slice(0, 2), sha.slice(2)], GIT_DATA_MAX_BYTES);
+  if (!raw) return null;
+  let data: Buffer;
+  try {
+    data = zlib.inflateSync(raw, { maxOutputLength: GIT_DATA_MAX_BYTES });
+  } catch {
+    return null;
+  }
+  const nul = data.indexOf(0);
+  if (nul < 0 || !data.subarray(0, nul).toString("latin1").startsWith("commit ")) return null;
+  const parents: string[] = [];
+  for (const line of data.subarray(nul + 1).toString("utf8").split("\n")) {
+    if (line === "") break; // end of the header
+    const parent = /^parent ([0-9a-f]+)$/.exec(line)?.[1];
+    if (parent && SHA_RE.test(parent)) parents.push(parent);
+  }
+  return parents;
+}
+
+/**
+ * Whether `tip` is `base` or a descendant of it through commits made in the
+ * sandbox — which git writes as LOOSE objects. The walk reads objects as data
+ * (zlib only, capped), never through git, and gives up (false) on anything it
+ * cannot read: a packed or missing commit, or more than ANCESTRY_MAX_STEPS.
+ */
+export function copyDescendsFromBase(copy: PinnedDir, tip: string, base: string): boolean {
+  const queue = [tip];
+  const seen = new Set<string>();
+  let steps = 0;
+  while (queue.length > 0) {
+    const sha = queue.shift()!;
+    if (sha === base) return true;
+    if (seen.has(sha)) continue;
+    seen.add(sha);
+    steps += 1;
+    if (steps > ANCESTRY_MAX_STEPS) return false;
+    const parents = looseCommitParents(copy, sha);
+    if (!parents) return false; // an unprovable branch: refuse rather than guess
+    queue.push(...parents);
+  }
+  return false;
+}
+
+/** {@link copyOnBase} for the copy folder `name` of a pinned `repos/<owner>`. */
+function existingOnBase(parent: PinnedDir, name: string, base: string): boolean {
+  const copy = parent.dir([name]);
+  if (!copy) return false;
+  try {
+    return copyOnBase(copy, base).ok;
+  } finally {
+    copy.close();
+  }
+}
+
+/** The copy's git HEAD is still on its base (the base itself, or sandbox commits on top of it). */
+function copyOnBase(copy: PinnedDir, base: string): { ok: true } | { ok: false; tip: string | null } {
+  const tip = readCopyGitTip(copy);
+  return tip && (tip === base || copyDescendsFromBase(copy, tip, base)) ? { ok: true } : { ok: false, tip };
 }
 
 /** Byte guard on one `git ls-files` listing (far above COPY_MAX_FILES real paths). */
@@ -361,7 +466,9 @@ export interface EnsuredCopy {
 /**
  * Make sure the viewer's sandbox has a copy of the repo. `keep` (turn start,
  * open_repo) leaves an existing copy alone when it was made from the current
- * canonical HEAD — the agent's uncommitted work stays; `when-missing` (turn
+ * canonical HEAD and its own git HEAD is still on that base (a diverged copy
+ * is replaced, so open_repo is the way out of one) — the agent's uncommitted
+ * work stays; `when-missing` (turn
  * start) never touches an existing copy; `refresh` (after a sync) always
  * writes a fresh one. A copy that is replaced is first moved aside to
  * `<name>.prev` (replacing an older one) so no edit is silently lost.
@@ -388,7 +495,7 @@ async function ensureCopyLocked(ref: PiRepoCopyRef, mode: "keep" | "when-missing
   if (!parent) throw new Error("The sandbox folder for repository copies is not a plain folder; remove it and retry.");
   try {
     const existing = parent.kind(ref.name);
-    if (existing === "dir" && state && (mode === "when-missing" || (mode === "keep" && state.base === head))) {
+    if (existing === "dir" && state && (mode === "when-missing" || (mode === "keep" && state.base === head && existingOnBase(parent, ref.name, state.base)))) {
       return { sandboxPath, outcome: "kept", base: state.base };
     }
     const tmpName = `.${ref.name}.tmp-${randomBytes(4).toString("hex")}`;
@@ -544,6 +651,8 @@ function sameBytes(source: string, sourceReal: string, canonical: string): boole
 export type CopyStatus =
   | { kind: "no_copy" }
   | { kind: "moved"; base: string; head: string }
+  /** The copy's git HEAD left its base (checkout/switch/reset/rebase there): its files are another state's. */
+  | { kind: "diverged"; base: string; tip: string | null }
   | { kind: "ok"; base: string; changes: CopyChanges };
 
 /** Where the copy stands against the canonical clone (no writes anywhere). */
@@ -553,6 +662,8 @@ export function piRepoCopyStatus(ref: PiRepoCopyRef): Promise<CopyStatus> {
     const copy = state ? pinnedCopy(ref.workspace, ref.ownerId, ref.name) : null;
     if (!copy || !state) return { kind: "no_copy" };
     try {
+      const onBase = copyOnBase(copy, state.base);
+      if (!onBase.ok) return { kind: "diverged", base: state.base, tip: onBase.tip };
       const head = await headOf(ref.clonePath);
       if (head !== state.base) return { kind: "moved", base: state.base, head };
       return { kind: "ok", base: state.base, changes: await readBack(ref.clonePath, copy) };
@@ -616,13 +727,17 @@ export function setPiRepoCopyHolder(ref: PiRepoCopyRef, conversationId: string):
 export type CommitOutcome =
   | { kind: "no_copy" }
   | { kind: "moved"; base: string; head: string }
+  | { kind: "diverged"; base: string; tip: string | null }
   | { kind: "nothing" ; skipped: string[] }
   | { kind: "committed"; commit: string; written: number; deleted: number; skipped: string[] };
 
 /**
  * Apply the copy's working tree to the canonical clone and commit it there
  * (`git add -A` + `git commit`, `serverGitEnv`), refusing when the canonical
- * clone moved since the copy's base. On success the copy's `.git` is replaced
+ * clone moved since the copy's base, or when the copy's OWN git HEAD left that
+ * base (`diverged`: a checkout/switch/reset/rebase in the sandbox swapped the
+ * working tree for another state, and applying it would silently undo other
+ * work — commits made in the sandbox ON the base are fine). On success the copy's `.git` is replaced
  * by a fresh copy of the canonical one (so `git status` in the sandbox is clean
  * again) and the new HEAD becomes its base.
  */
@@ -640,6 +755,8 @@ export function commitPiRepoCopy(ref: PiRepoCopyRef, message: string): Promise<C
     const copy = state ? pinnedCopy(ref.workspace, ref.ownerId, ref.name) : null;
     if (!copy || !state) return { kind: "no_copy" };
     try {
+      const onBase = copyOnBase(copy, state.base);
+      if (!onBase.ok) return { kind: "diverged", base: state.base, tip: onBase.tip };
       const head = await headOf(ref.clonePath);
       if (head !== state.base) return { kind: "moved", base: state.base, head };
       const changes = await readBack(ref.clonePath, copy);

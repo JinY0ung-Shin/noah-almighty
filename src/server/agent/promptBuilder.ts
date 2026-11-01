@@ -135,7 +135,7 @@ export const GIT_MCP_ONLY_GUIDANCE =
   "**Remote git work goes through MCP tools ONLY**: remote git operations such as clone/pull/push/fetch MUST be performed exclusively via the dedicated MCP tools (`mcp__repo__*` for the personal knowledge repository, `mcp__git_repo__*` for general repos). " +
   "Git credentials are injected by the server into those tools only and are NOT present in your shell — running `git clone`/`git push`/`gh` via Bash cannot authenticate. " +
   "If an MCP remote-git tool fails, do NOT work around it or retry with Bash git; instead resolve the cause shown in the failure message (token/permission/branch/URL) or report it to the user. " +
-  "In the sandbox copy of a repo you opened with `open_repo`, native git works for local inspection and diffs, but a commit made there is NOT saved — save with `mcp__git_repo__commit`; remote operations still stay MCP-only.";
+  "In the sandbox copy of a repo you opened with `open_repo`, native git works for local inspection and diffs, but a commit made there is NOT saved — save with `mcp__git_repo__commit`; never checkout/switch/reset/rebase in that copy (commit refuses a copy whose git HEAD left the commit Noah gave it); remote operations still stay MCP-only.";
 
 /**
  * Personal knowledge-repository section of the owner prompt: either how to
@@ -648,7 +648,7 @@ function piActiveRepoTurnLine(request: AgentRequest): string | null {
     return `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Its copy is \`${piCopy}/\` in this sandbox, but this conversation is read-only (no write/edit/bash): read it with \`read\`/\`ls\`/\`find\`/\`grep\` and absolute paths; you cannot edit, test or commit it here.`;
   }
   return (
-    `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it. ` +
+    `**Working repository (this turn)**: the registered git repository '${name}' is open for this conversation. Your working copy is \`${piCopy}/\` in your sandbox (working tree and .git as plain files) — edit and test it there with absolute paths; \`git status\`/\`diff\`/\`log\` work in it, but never checkout/switch/reset/rebase there (commit refuses a copy whose git HEAD left the commit Noah gave it). ` +
     `Git commits you make inside the sandbox are NOT saved anywhere: to save, call \`mcp__git_repo__commit\` (name='${name}', message) — Noah reads the copy's files back into its own clone and commits there — then \`mcp__git_repo__push\`. \`mcp__git_repo__sync_repo\` pulls upstream changes and refreshes the copy (commit first). ` +
     "If commit says the repository moved since your copy was made, call `mcp__git_repo__open_repo` again for a fresh copy (yours is kept as `<name>.prev`) and redo the edits there. The sandbox has no git credentials (and no network beyond the pi operator's allowlist), so never fetch, pull or push from it."
   );

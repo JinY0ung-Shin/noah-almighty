@@ -67,6 +67,7 @@ import {
   isShellExposableSecret,
 } from "../src/server/secretPolicy.js";
 import {
+  GIT_MCP_ONLY_GUIDANCE,
   buildPiTurnPreamble,
   buildPrompt,
   buildSystemPromptAppend,
@@ -3149,6 +3150,9 @@ describe("buildPrompt", () => {
     expect(t).toContain("mcp__git_repo__commit");
     expect(t).toContain("mcp__git_repo__push");
     expect(t).not.toContain("mcp__git_repo__write_file");
+    // Review #6: a checkout/reset in the copy makes commit refuse it, so the turn says so.
+    expect(t).toContain("never checkout/switch/reset/rebase there");
+    expect(GIT_MCP_ONLY_GUIDANCE).toContain("never checkout/switch/reset/rebase in that copy");
     // A per-turn fact: never frozen into the append.
     expect(buildSystemPromptAppend(req(over))).not.toContain("Working repository");
   });
