@@ -761,6 +761,7 @@ export async function buildRunCapabilities(
         shellSecretNames: Object.keys(piSandboxEnv),
         // The skill index (materialized files, or mcp__skills__read entries).
         skills: (runOptions.piSkills?.entries ?? []).map((entry) => ({ ...entry })),
+        ...(runOptions.piSkills?.omitted ? { skillsOmitted: runOptions.piSkills.omitted } : {}),
         // The open working repo's SANDBOX copy (design D1) — where the model works.
         ...(request.activeRepoName && gitRepoToolsEnabled
           ? { activeRepoDir: piRepoCopySandboxPath(request.avatar.id, normalizeGitRepoName(request.activeRepoName)) }

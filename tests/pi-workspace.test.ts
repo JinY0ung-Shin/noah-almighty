@@ -575,7 +575,7 @@ describe("run capabilities on pi", () => {
       undefined,
       () => 0,
       {
-        piSkills: { entries: [], mcpSources: new Map([["knowledge/mine", dir()]]), failures: [] },
+        piSkills: { entries: [], mcpSources: new Map([["knowledge/mine", dir()]]), failures: [], omitted: 0 },
       },
     );
     expect(caps.deckToolchain).toMatchObject({ converter: true, limits: { maxConcurrent: 1 } });

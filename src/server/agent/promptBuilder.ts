@@ -860,6 +860,11 @@ function piAsyncToolsSentence(request: AgentRequest): string {
   );
 }
 
+/** The index is capped (`MAX_INDEX_ENTRIES`, pi/piSkills.ts): how many skills it left out and how to find them (describe_system says the same). */
+function piSkillsOmittedLine(omitted: number): string {
+  return `- … and ${omitted} more skill${omitted === 1 ? "" : "s"} not listed (the index is capped): list the skill folders under /workspace/.noah/ (\`ls\`) to find one, or call \`mcp__skills__read\` with any id for the full list of the owner's served skills.`;
+}
+
 /**
  * The pi skill index (docs/architecture/pi-runtime.md "Skills"): pi does not
  * load plugin skill roots, so Noah copies the run's skills into the sandbox
@@ -883,6 +888,7 @@ function piSkillsSection(request: AgentRequest): string | null {
           ...served.map((skill) => line(skill, `mcp__skills__read skill \`${skill.root}/${skill.dir}\``)),
         ]
       : []),
+    ...(request.piRuntime?.skillsOmitted ? [piSkillsOmittedLine(request.piRuntime.skillsOmitted)] : []),
   ].join("\n");
 }
 

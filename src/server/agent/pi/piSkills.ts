@@ -62,8 +62,8 @@ export const PI_SKILLS_SANDBOX_DIR = path.posix.join(PI_SANDBOX_ROOT, ".noah", "
 /** Where a non-owner run's (bundled, public) skills live: never pruned by those runs. */
 export const PI_SHARED_SKILLS_SANDBOX_DIR = path.posix.join(PI_SANDBOX_ROOT, ".noah", "skills-shared");
 const MANIFEST = ".noah-sync.json";
-/** Bump when the copy/rewrite rules change, so every sandbox re-syncs once. */
-const SYNC_VERSION = 1;
+/** Bump when the copy/rewrite rules change, so every sandbox re-syncs once (2: self-skill roots). */
+const SYNC_VERSION = 2;
 /**
  * How long a root another run used stays when an owner run prunes: longer than
  * the longest single run (the task API's 5 h budget), so no in-flight turn
@@ -75,7 +75,7 @@ const ROOT_MAX_FILES = 5_000;
 const ROOT_MAX_BYTES = 128 * 1024 * 1024;
 const FILE_MAX_BYTES = 32 * 1024 * 1024;
 const MAX_DEPTH = 12;
-const MAX_INDEX_ENTRIES = 80;
+export const MAX_INDEX_ENTRIES = 80;
 const MAX_DESCRIPTION_CHARS = 300;
 
 export type PiSkillEntry = PiSkillIndexEntry;
@@ -86,6 +86,8 @@ export interface PiSkillPlan {
   mcpSources: Map<string, string>;
   /** Roots that could not be written (logged; the run still starts). */
   failures: string[];
+  /** Skills the run has but the index left out ({@link MAX_INDEX_ENTRIES}); both surfaces say "N more". */
+  omitted: number;
 }
 
 export type PiPluginRootKind = "default" | "knowledge" | "plugin" | "other";
@@ -123,33 +125,82 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 40) || "root";
 }
 
+/** One skill folder a root contributes. */
+interface SkillDir {
+  /** Its folder name: the `<dir>` of the `<root>/<dir>` id. */
+  dir: string;
+  /** Host folder holding its SKILL.md. */
+  abs: string;
+  /** The root IS this skill (SKILL.md at the root): its `.claude-plugin/` manifest is not copied. */
+  self: boolean;
+}
+
+function lstatKind(file: string): "dir" | "file" | "other" | null {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isDirectory() ? "dir" : stat.isFile() ? "file" : "other";
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Skill directories of a root: `<root>/skills/<dir>/SKILL.md` (real folders
- * only). `<root>/skills` ITSELF must be a real folder too: a committed
- * `skills -> ../<another user>/skills` link would otherwise make readdir, the
- * sandbox copy (`walk`/`writeRoot`) and mcp__skills__read (whose sources are
- * these folders) all read through it into someone else's private skills.
+ * True when no component of `root` below the folder Noah owns for it (the
+ * data dir, or the bundled plugins dir) is a link — so a root can never read
+ * through a committed `skills -> ../<another user>` link into
+ * someone else's files. (A symlinked data dir itself is the operator's and
+ * stays allowed.) `resolvePluginRoots` already refuses a marketplace source
+ * with a link on the way (`containedPluginDir`); this is the copy's own check.
  */
-function skillDirsOf(root: string): string[] {
+function noLinkBelowBase(config: AppConfig, root: string): boolean {
+  const resolved = path.resolve(root);
+  const base = [config.defaultPluginsDir, config.dataDir]
+    .filter((dir): dir is string => Boolean(dir))
+    .map((dir) => path.resolve(dir))
+    .find((dir) => inside(dir, resolved));
+  try {
+    const expected = base ? path.join(fs.realpathSync(base), path.relative(base, resolved)) : resolved;
+    return fs.realpathSync(resolved) === expected;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Skill folders of a root, real folders only (the root itself included, see
+ * {@link noLinkBelowBase}):
+ *  - the root ITSELF when it holds a SKILL.md — the layout Noah's own
+ *    knowledge-repo marketplace produces (`scaffoldSkill`, learned skills:
+ *    each plugin source is `./skills/<slug>`, so the resolved root is the
+ *    skill), mirroring `listSkillsInRoots`' self-skill branch;
+ *  - then `<root>/skills/<dir>/SKILL.md`. `<root>/skills` ITSELF must be a
+ *    real folder too: a committed `skills -> ../<another user>/skills` link
+ *    would otherwise make readdir, the sandbox copy (`walk`/`writeRoot`) and
+ *    mcp__skills__read (whose sources are these folders) all read through it
+ *    into someone else's private skills.
+ */
+function skillDirsOf(config: AppConfig, root: string): SkillDir[] {
+  const out: SkillDir[] = [];
+  if (lstatKind(root) !== "dir" || !noLinkBelowBase(config, root)) return out;
+  const self = path.basename(path.resolve(root));
+  if (self && !self.startsWith(".") && lstatKind(path.join(root, "SKILL.md")) === "file") {
+    out.push({ dir: self, abs: path.resolve(root), self: true });
+  }
   const skillsDir = path.join(root, "skills");
   let entries: fs.Dirent[];
   try {
-    if (!fs.lstatSync(skillsDir).isDirectory()) return [];
+    if (!fs.lstatSync(skillsDir).isDirectory()) return out;
     entries = fs.readdirSync(skillsDir, { withFileTypes: true });
   } catch {
-    return [];
+    return out;
   }
-  return entries
+  const nested = entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => entry.name)
-    .filter((dir) => {
-      try {
-        return fs.lstatSync(path.join(root, "skills", dir, "SKILL.md")).isFile();
-      } catch {
-        return false;
-      }
-    })
-    .sort();
+    .filter((dir) => lstatKind(path.join(skillsDir, dir, "SKILL.md")) === "file")
+    .sort()
+    .map((dir) => ({ dir, abs: path.join(path.resolve(root), "skills", dir), self: false }));
+  return [...out, ...nested];
 }
 
 interface WalkedFile {
@@ -160,8 +211,11 @@ interface WalkedFile {
   mode: number;
 }
 
-/** lstat walk of one folder: links and specials never followed, SKIP_NAMES pruned. */
-function walk(dir: string, budget: { files: number; bytes: number }): WalkedFile[] {
+/**
+ * lstat walk of one folder: links and specials never followed, SKIP_NAMES
+ * pruned (and the top-level `.claude-plugin/` of a self-skill root).
+ */
+function walk(dir: string, budget: { files: number; bytes: number }, selfSkill = false): WalkedFile[] {
   const out: WalkedFile[] = [];
   const visit = (abs: string, rel: string, depth: number): void => {
     if (depth > MAX_DEPTH) return;
@@ -172,7 +226,7 @@ function walk(dir: string, budget: { files: number; bytes: number }): WalkedFile
       return;
     }
     for (const entry of entries) {
-      if (SKIP_NAMES.has(entry.name)) continue;
+      if (SKIP_NAMES.has(entry.name) || (selfSkill && depth === 0 && entry.name === ".claude-plugin")) continue;
       const childAbs = path.join(abs, entry.name);
       const childRel = rel ? `${rel}/${entry.name}` : entry.name;
       let stat: fs.Stats;
@@ -239,7 +293,7 @@ function readManifest(skills: PinnedDir): Manifest {
  * exclusively, so a link the sandbox races into the fresh folder is never
  * written through (the copy fails instead).
  */
-function writeRoot(source: string, dirs: string[], target: PinnedDir, sandboxRoot: string): void {
+function writeRoot(skillDirs: SkillDir[], target: PinnedDir, sandboxRoot: string): void {
   const budget = { files: 0, bytes: 0 };
   const folders = new Map<string, PinnedDir>();
   const folderOf = (parts: string[]): PinnedDir => {
@@ -254,9 +308,9 @@ function writeRoot(source: string, dirs: string[], target: PinnedDir, sandboxRoo
     return folder;
   };
   try {
-    for (const dir of dirs) {
+    for (const { dir, abs, self } of skillDirs) {
       const skillSandboxDir = path.posix.join(sandboxRoot, dir);
-      for (const file of walk(path.join(source, "skills", dir), budget)) {
+      for (const file of walk(abs, budget, self)) {
         const parts = [dir, ...file.rel.split("/")];
         const name = parts.pop()!;
         const folder = folderOf(parts);
@@ -354,31 +408,43 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
   const now = input.now ?? Date.now();
   const sandboxDir = ownerRun ? PI_SKILLS_SANDBOX_DIR : PI_SHARED_SKILLS_SANDBOX_DIR;
   const disabled = new Set(input.disabledSkills);
-  const plan: PiSkillPlan = { entries: [], mcpSources: new Map(), failures: [] };
-  const used = new Set<string>();
+  const plan: PiSkillPlan = { entries: [], mcpSources: new Map(), failures: [], omitted: 0 };
   // Roots this run knows the admin policy left with no skill: removed at once.
   const emptied = new Set<string>();
-  const roots: { label: string; source: string; dirs: string[]; local: boolean }[] = [];
+  // Roots are GROUPED by label: Noah's knowledge marketplace resolves to one
+  // root PER skill (`<clone>/skills/<slug>`), and every one of them must keep
+  // the stable id `knowledge/<slug>` whatever order the roots come in — never
+  // a load-order `knowledge-2`. A folder name two roots of one label share:
+  // the first wins, the other is reported.
+  const groups = new Map<string, { label: string; skills: SkillDir[]; local: boolean }>();
   for (const root of pluginRoots) {
     const source = path.resolve(root.path);
     const kind = piPluginRootKind(config, source);
     const pluginName = pluginNameOf(source);
-    let label = kind === "default" || kind === "knowledge" ? kind : `${kind}-${slug(pluginName ?? path.basename(source))}`;
-    for (let n = 2; used.has(label); n += 1) label = `${label.replace(/-\d+$/, "")}-${n}`;
-    used.add(label);
-    const dirs = skillDirsOf(source).filter((dir) => {
-      const meta = skillMdMeta(path.join(source, "skills", dir, "SKILL.md"));
-      return !isDisabled(disabled, meta.name || dir, dir, pluginName);
-    });
-    if (dirs.length === 0) {
-      emptied.add(label);
-      continue;
+    const label = kind === "default" || kind === "knowledge" ? kind : `${kind}-${slug(pluginName ?? path.basename(source))}`;
+    let group = groups.get(label);
+    if (!group) {
+      // A colleague's sandbox only ever receives the bundled (public) skills;
+      // with no usable skills folder (unmounted, or a link/file planted there)
+      // every root is read through mcp__skills__read instead.
+      group = { label, skills: [], local: skills !== null && (ownerRun || kind === "default") };
+      groups.set(label, group);
     }
-    // A colleague's sandbox only ever receives the bundled (public) skills;
-    // with no usable skills folder (unmounted, or a link/file planted there)
-    // every root is read through mcp__skills__read instead.
-    roots.push({ label, source, dirs, local: skills !== null && (ownerRun || kind === "default") });
+    for (const skill of skillDirsOf(config, source)) {
+      const meta = skillMdMeta(path.join(skill.abs, "SKILL.md"));
+      if (isDisabled(disabled, meta.name || skill.dir, skill.dir, pluginName)) continue;
+      if (group.skills.some((known) => known.dir === skill.dir)) {
+        plan.failures.push(`${label}/${skill.dir}: another root of '${label}' already has a skill folder of that name; ${skill.abs} is left out`);
+        continue;
+      }
+      group.skills.push(skill);
+    }
   }
+  const roots = [...groups.values()].filter((group) => {
+    if (group.skills.length > 0) return true;
+    emptied.add(group.label);
+    return false;
+  });
   if (workspace.hostRoot && !skills) {
     plan.failures.push(
       `${path.posix.relative(PI_SANDBOX_ROOT, sandboxDir)}: not a plain folder in the sandbox (a link or a file there is never followed); skills are read through mcp__skills__read this run`,
@@ -396,9 +462,9 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
       const target = skills.entry(root.label);
       try {
         const sourceFp = fingerprint(
-          [String(SYNC_VERSION), root.label, ...root.dirs],
-          root.dirs.flatMap((dir) =>
-            walk(path.join(root.source, "skills", dir), { files: 0, bytes: 0 }).map((file) => ({ ...file, rel: `${dir}/${file.rel}` })),
+          [String(SYNC_VERSION), root.label, ...root.skills.map((skill) => skill.dir)],
+          root.skills.flatMap(({ dir, abs, self }) =>
+            walk(abs, { files: 0, bytes: 0 }, self).map((file) => ({ ...file, rel: `${dir}/${file.rel}` })),
           ),
         );
         const destFp = () => fingerprint([], walk(target, { files: 0, bytes: 0 }));
@@ -410,7 +476,7 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
             const tmp = skills.dir([tmpName], { create: true, mode: 0o755 });
             if (!tmp) throw new Error(`could not create a staging folder in ${path.posix.basename(sandboxDir)}`);
             try {
-              writeRoot(root.source, root.dirs, tmp, sandboxRoot);
+              writeRoot(root.skills, tmp, sandboxRoot);
             } finally {
               tmp.close();
             }
@@ -427,8 +493,8 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
         continue;
       }
     }
-    for (const dir of root.dirs) {
-      const meta = skillMdMeta(path.join(root.source, "skills", dir, "SKILL.md"));
+    for (const { dir, abs } of root.skills) {
+      const meta = skillMdMeta(path.join(abs, "SKILL.md"));
       const entry: PiSkillEntry = {
         root: root.label,
         dir,
@@ -437,8 +503,9 @@ function materializeInto(input: MaterializeInput, skills: PinnedDir | null): PiS
         via: root.local ? "file" : "mcp",
         ...(root.local ? { skillMd: path.posix.join(sandboxRoot, dir, "SKILL.md") } : {}),
       };
-      if (!root.local) plan.mcpSources.set(`${root.label}/${dir}`, path.join(root.source, "skills", dir));
+      if (!root.local) plan.mcpSources.set(`${root.label}/${dir}`, abs);
       if (plan.entries.length < MAX_INDEX_ENTRIES) plan.entries.push(entry);
+      else plan.omitted += 1;
     }
   }
 

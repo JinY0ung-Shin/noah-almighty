@@ -195,6 +195,8 @@ export interface PiRuntimeFacts {
    * Admin-disabled skills are never in it.
    */
   skills?: PiSkillIndexEntry[];
+  /** Skills the run has beyond the index cap (`MAX_INDEX_ENTRIES`): both surfaces say "N more not listed". */
+  skillsOmitted?: number;
   /** Sandbox path of the open working repo's COPY (`/workspace/repos/<owner>/<name>`, design D1). */
   activeRepoDir?: string;
   /** The servers Noah relays as an MCP client on this run (`agent/pi/mcpProxies.ts`). */

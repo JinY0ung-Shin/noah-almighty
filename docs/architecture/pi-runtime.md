@@ -223,9 +223,21 @@ component by NAME:
 ## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)
 
 pi does not load Claude Code plugin roots. Each pi turn `materializePiSkills` syncs the run's `pluginRoots` into
-`/workspace/.noah/skills/<root>/<skill>/` (`<root>` = `default`, `knowledge`, `group-<plugin name>`, `plugin-<plugin name>`) and
+`/workspace/.noah/skills/<root>/<skill>/` (`<root>` = `default`, `knowledge`, `plugin-<plugin name>`, `other-<name>`) and
 returns the index the prompt (`piSkillsSection`, frozen with the instructions — a skill added later loads from the
-next conversation) and describe_system (`piRunLines`, live) both state (`PiRuntimeFacts.skills`).
+next conversation) and describe_system (`piRunLines`, live) both state (`PiRuntimeFacts.skills`). The index holds
+80 entries (`MAX_INDEX_ENTRIES`); past that both surfaces say "N more not listed" (`PiRuntimeFacts.skillsOmitted`).
+
+- **Skill folders of a root (`skillDirsOf`, review #8)** mirror `listSkillsInRoots`: the root ITSELF when it holds a
+  SKILL.md — the layout Noah's own knowledge marketplace produces (`scaffoldSkill` and learned skills put
+  `skills/<slug>/SKILL.md` + `skills/<slug>/.claude-plugin/plugin.json` in the repo and list `./skills/<slug>` in
+  `marketplace.json`, so `resolvePluginRoots` hands ONE root per skill) — then `<root>/skills/<dir>/SKILL.md`. A
+  self-skill's `.claude-plugin/` is not copied. Roots are GROUPED by `<root>` label, so every knowledge skill keeps
+  the stable id `knowledge/<slug>` in any root order (never a load-order `knowledge-2`); a folder name two roots of one
+  label share goes to the first, the other is logged as a failure. Links never count: the root, its SKILL.md,
+  `<root>/skills` and every component of the root below the data dir / bundled plugins dir must be real folders
+  (`noLinkBelowBase`; `resolvePluginRoots`' `containedPluginDir` refuses such a marketplace source too).
+  `SYNC_VERSION` 2 made every sandbox re-sync once.
 
 - **Owner runs** (chat, routine, task API, generators — principal = the avatar's owner) copy every root into
   `.noah/skills/`. A **non-owner run** (a colleague in their OWN sandbox, a consultation in its fresh one) gets only the

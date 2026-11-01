@@ -603,6 +603,9 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
             served.length
               ? `${served.length} of the avatar owner's skills served read-only by mcp__skills__read (${names(served)}) — not in your sandbox`
               : "",
+            pi.skillsOmitted
+              ? `${pi.skillsOmitted} more not listed (the index is capped; list the skill folders under /workspace/.noah/, or call mcp__skills__read with any id for the owner's served ones)`
+              : "",
           ]
             .filter(Boolean)
             .join("; ")
