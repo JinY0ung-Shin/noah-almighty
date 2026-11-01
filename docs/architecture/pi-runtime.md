@@ -590,26 +590,30 @@ The operator is the same person as Noah's admin (user decision 2026-11-01), so N
 ## Models (`agent/pi/modelCatalog.ts`)
 
 pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy, default?, imageInput?, reasoning?}`) is the ONLY model
-source (user decision 2026-10-31): the composer picker, the per-user default, the admin override
-(`PUT /api/admin/model`) and the vision policy (`PUT /api/admin/model-vision-policy`, keyed by model id) all name pi
-model ids; none = pi-gateway's DEFAULT model (picked on pi's admin LLM page): a new session sends no `model`, a
-continuing turn sends the id pi marks `default: true` (omitting it there would keep the session's model).
+source (user decision 2026-10-31): the composer picker and the per-user default name pi model ids; none =
+pi-gateway's DEFAULT model (picked on pi's admin LLM page): a new session sends no `model`, a continuing turn sends
+the id pi marks `default: true` (omitting it there would keep the session's model). **Noah has no LLM settings of its
+own** (user decision 2026-11-01): the admin model override (`PUT/DELETE /api/admin/model`), the per-model vision
+policy (`PUT /api/admin/model-vision-policy`) and `MODEL_VISION` are RETIRED — pi's admin LLM page owns the default
+model, each model's image input and efforts. Their `app_config` keys (`agent_model_override`, `model_vision_policy`)
+are deleted behind `retirementGate()` and reserved forever; their audit labels stay for old rows; a still-set
+`MODEL_VISION` only logs a boot warning (`warnRetiredModelEnv`). The admin 시스템 tab lists pi's models read-only and
+links to pi's admin page.
 `piServicesFor(store, config).models` is one catalog per app instance: a 60 s cache, one in-flight fetch for every
 caller (5 s timeout), stale-on-error (a failed refresh keeps the last good list; retried after 5 s); never fetched
 successfully → empty, and the `local` stub's is always empty (the client then hides the picker).
 
-- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else the admin override if pi
-  offers it, else the default. A stored value pi does not offer (a legacy tier alias like `opus`, a model pi dropped,
-  an SDK-era Claude id) reads as unset — no migration rewrites old values; a stored override pi does not offer is
-  warned once per value (`modelOverride.ts`, review-2 M2) and `GET /api/admin/system` reports `modelOverrideIgnored`.
-  describe_system names the id and its source (`… (chosen for this conversation in the composer)` / `(admin setting)`
-  / `pi-gateway's default model (default)`, plus the ignored-override note).
+- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else pi's default. A stored
+  value pi does not offer (a legacy tier alias like `opus`, a model pi dropped, an SDK-era Claude id) reads as unset —
+  no migration rewrites old values. describe_system names the id and its source (`… (chosen for this conversation in
+  the composer)` / `pi-gateway's default model (default — chosen on pi-gateway's admin LLM page; …)`).
 - **Vision** (review #12): pi's `/v1/models` entry carries `input` (`["text"]` / `["text","image"]`, parsed to
-  `imageInput`; absent on an older pi = unknown). `visionForCatalogModel` makes a model pi reports without `image`
-  text-only regardless of the admin policy and `MODEL_VISION` (pi would 400 `unsupported_image_input`), and resolves
-  pi's default model by its catalog id (`catalogDefaultModelId`) so the policy for it applies. The admin panel shows
-  such a model as always 미지원. Image turns on a text-only model go file mode (`chat-sse-media.md`). No 400 retry:
-  Noah ships with its pi (U9), and a pi without the field keeps the old behaviour.
+  `imageInput`; absent on an older pi = unknown). `visionForCatalogModel` (`modelCatalog.ts`) is pi's setting ALONE:
+  only `imageInput: false` makes a model text-only (pi would 400 `unsupported_image_input`); a model pi did not
+  describe, an id not in the list and an empty list (the `local` stub, pi never answered) read as vision ON — the
+  pre-retirement default, so a wrong guess shows as pi's visible 400 rather than a silently image-less turn. pi's
+  default model is resolved by its catalog id (`catalogDefaultModelId`). Image turns on a text-only model go file
+  mode (`chat-sse-media.md`). No 400 retry: Noah ships with its pi (U9).
 - **Effort** (review #9): pi's entry carries `reasoning` — `{efforts, default_effort}` for a reasoning model (pi 400s
   `unsupported_reasoning_effort` for any other effort; its default list stops at `high`), `null` for one that does not
   reason (pi ignores the effort), absent on an older pi. `effortForModel` (`effortLevels.ts`, shared with the client)
@@ -626,10 +630,10 @@ successfully → empty, and the `local` stub's is always empty (the client then 
   `routes/_shared.ts`). The chat stream's `model` is NOT validated: it is stored as sent ("" clears), so a pick
   survives pi being briefly unreachable, and the run applies it only while pi offers it.
 - `GET /api/bootstrap` → `modelSelection: { models: [{id, server, vision, reasoning?}], defaultVision, defaultReasoning? }` (`server` = pi's
-  `owned_by`); `GET /api/admin/system` → `piModels`, `modelOverride`, `modelOverrideIgnored`, `modelOverrideChoices`
-  (= the ids), `modelVisionPolicy`, `observedModel`.
+  `owned_by`; the retired deployment-wide `visionEnabled` is no longer sent); `GET /api/admin/system` → `piModels`
+  (read-only: `{id, server, default?, imageInput?, reasoning?}`), `observedModel`.
 - **`PI_MODEL_MAP` is RETIRED** with the composer tier registry (`modelTiers.ts`, deleted): no longer read; while it
-  is still set every boot logs one warning (`warnRetiredModelMapEnv`).
+  is still set every boot logs one warning (`warnRetiredModelEnv`, which also warns for `MODEL_VISION`).
 
 ## Env (config.ts → `AppConfig.pi`)
 

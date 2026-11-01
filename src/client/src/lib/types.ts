@@ -347,7 +347,7 @@ export interface PiModelOption {
   id: string;
   /** pi's `owned_by` (the serving backend), if reported. */
   server: string | null;
-  /** Whether this model accepts image input (pi's image setting ∘ admin per-model policy ∘ MODEL_VISION). */
+  /** Whether this model accepts image input (pi-gateway's per-model image setting). */
   vision: boolean;
   /** pi's reasoning efforts for this model (null = it does not reason; absent = unknown). */
   reasoning?: import("../../../server/effortLevels").ModelEffortSupport | null;
@@ -359,19 +359,13 @@ export interface BootstrapInfo {
   signupMode: "open" | "closed" | "approval";
   confluenceConfigured: boolean;
   /**
-   * False when the deployment's model is text-only (MODEL_VISION=off): the
-   * composer hides the image-attach UI. Optional for older servers (absent =
-   * assume vision).
-   */
-  visionEnabled?: boolean;
-  /**
    * Per-conversation model picker config: pi-gateway's live model list. Empty
    * under the local stub or when pi is unreachable (the picker is hidden).
    * Optional for forward-compat with an older server that omits it.
    */
   modelSelection?: {
     models: PiModelOption[];
-    /** Vision of the model used when the user picked none (admin override/pi default). */
+    /** Vision of the model used when the user picked none (pi-gateway's default model). */
     defaultVision?: boolean;
     /** That model's reasoning efforts, like `PiModelOption.reasoning`. */
     defaultReasoning?: import("../../../server/effortLevels").ModelEffortSupport | null;

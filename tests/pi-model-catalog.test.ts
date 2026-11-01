@@ -5,13 +5,15 @@ import {
   catalogDefaultModelId,
   catalogEffortSupport,
   createPiModelCatalog,
-  warnRetiredModelMapEnv,
+  visionForCatalogModel,
+  warnRetiredModelEnv,
 } from "../src/server/agent/pi/modelCatalog.js";
 import { effortForModel } from "../src/server/effortLevels.js";
 import type { PiModel } from "../src/server/agent/pi/responsesClient.js";
 
 // pi-gateway's live model list (agent/pi/modelCatalog.ts): the only model
-// source the composer, the admin override/vision policy and every run read.
+// source the composer and every run read (Noah's own model override and vision
+// policy are retired — pi's admin LLM page owns both).
 
 /** A scripted `GET /v1/models`: each call takes the next answer (a list, or an Error to throw). */
 function scriptedPi(answers: (PiModel[] | Error)[]) {
@@ -104,19 +106,55 @@ describe("pi model catalog", () => {
   });
 });
 
-describe("PI_MODEL_MAP retirement", () => {
+describe("retired model env vars", () => {
   it("warns once per boot while PI_MODEL_MAP is still set, and never reads it", () => {
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
     try {
-      warnRetiredModelMapEnv({});
-      warnRetiredModelMapEnv({ PI_MODEL_MAP: "  " });
+      warnRetiredModelEnv({});
+      warnRetiredModelEnv({ PI_MODEL_MAP: "  " });
       expect(warn).not.toHaveBeenCalled();
-      warnRetiredModelMapEnv({ PI_MODEL_MAP: '{"opus":"m1"}' });
+      warnRetiredModelEnv({ PI_MODEL_MAP: '{"opus":"m1"}' });
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0]![0])).toContain("PI_MODEL_MAP is set but ignored");
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("warns once per boot while MODEL_VISION is still set (pi's admin LLM page owns image input)", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    try {
+      warnRetiredModelEnv({ MODEL_VISION: " " });
+      expect(warn).not.toHaveBeenCalled();
+      warnRetiredModelEnv({ MODEL_VISION: "off" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain("MODEL_VISION is set but ignored");
+      warn.mockClear();
+      warnRetiredModelEnv({ MODEL_VISION: "on", PI_MODEL_MAP: "{}" });
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("visionForCatalogModel — pi's image setting alone", () => {
+  const models = [
+    { id: "eyes", server: null, default: true as const, imageInput: true },
+    { id: "text-llm", server: null, imageInput: false },
+    { id: "older", server: null },
+  ];
+  it("follows pi's per-model image input; undefined is pi's default model by its id", () => {
+    expect(visionForCatalogModel(models, "eyes")).toBe(true);
+    expect(visionForCatalogModel(models, "text-llm")).toBe(false);
+    expect(visionForCatalogModel(models, undefined)).toBe(true);
+    expect(visionForCatalogModel([{ ...models[0]!, imageInput: false }], null)).toBe(false);
+  });
+  it("reads vision ON wherever pi said nothing: an undescribed model, an unknown id, an empty list", () => {
+    expect(visionForCatalogModel(models, "older")).toBe(true);
+    expect(visionForCatalogModel(models, "gone")).toBe(true);
+    expect(visionForCatalogModel([], undefined)).toBe(true);
+    expect(visionForCatalogModel([{ id: "x", server: null, imageInput: false }], undefined)).toBe(true);
   });
 });
 

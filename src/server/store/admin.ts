@@ -12,7 +12,6 @@ import {
   type Constructor,
   type StoreBase,
   type UserRow,
-  MODEL_OVERRIDE_KEY,
   PRESENCE_WINDOW_MS,
   SIGNUP_MODE_KEY,
   now,
@@ -190,20 +189,6 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     setSignupMode(mode: SignupMode): void {
       this.setAppSecret(SIGNUP_MODE_KEY, mode);
-    }
-
-    /** Admin-selected agent model (UI), or null if unset. Env ANTHROPIC_MODEL wins. */
-    getModelOverride(): string | null {
-      const raw = this.getAppSecret(MODEL_OVERRIDE_KEY);
-      return raw && raw.trim() ? raw.trim() : null;
-    }
-
-    setModelOverride(model: string): void {
-      this.setAppSecret(MODEL_OVERRIDE_KEY, model.trim());
-    }
-
-    clearModelOverride(): void {
-      this.deleteAppSecret(MODEL_OVERRIDE_KEY);
     }
 
     deleteUser(id: string): boolean {

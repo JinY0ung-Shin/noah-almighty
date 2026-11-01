@@ -2759,17 +2759,16 @@ describe("system tools (avatar system management)", () => {
 
   it("reports the effective model, groups, profile visibility and pending requests", async () => {
     const s = setup("st-describe-full");
-    // No composer pick → the admin override pi offers is the effective model.
+    // The composer pick is the effective model.
     await offerModels(s, ["sonnet"]);
-    s.store.setModelOverride("sonnet");
     const group = s.store.createGroup({ name: "플랫폼팀" });
     s.store.addGroupMember(group.id, s.owner.id, "admin");
     s.store.addKnowledgeRequest(s.owner.id, { question: "다음 출시일은?", askerName: "동료" });
 
-    const res = await callTool(toolsFor(s), "describe_system", {});
+    const res = await callTool(buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, selectedModel: "sonnet" }), "describe_system", {});
     expect(res.isError).toBeFalsy();
     const body = res.content[0].text;
-    expect(body).toContain("sonnet (admin setting)");
+    expect(body).toContain("sonnet (chosen for this conversation in the composer)");
     expect(body).toContain("플랫폼팀(admin)");
     // New avatars default to group visibility.
     expect(body).toContain("group (discoverable by group teammates only)");
@@ -3298,7 +3297,8 @@ describe("system tools (avatar system management)", () => {
     // The avatar has to report what it ACTUALLY runs with this turn, not the
     // deployment default — the composer's per-conversation picks win.
     const s = setup("st-run-facts");
-    s.store.setModelOverride("claude-admin-default");
+    // What an older release's admin override left behind is never reported.
+    s.store.setAppSecret("agent_model_override", "claude-admin-default");
     s.store.updateProfile(s.owner.id, {
       alias: "노아",
       visibility: "private",
@@ -3357,14 +3357,14 @@ describe("system tools (avatar system management)", () => {
 
   it("describe_system names pi-gateway's default model, the local stub's default, and an unknown effort", async () => {
     const s = setup("st-model-fallbacks");
-    // No composer pick, no admin override → pi-gateway's default model.
+    // No composer pick → pi-gateway's default model, chosen on pi's admin LLM page.
     const defaults = buildSystemTools(s.store, {
       ...s.baseCtx,
       config: piConfig(s.config),
       viewerIsOwner: true,
     });
     expect((await callTool(defaults, "describe_system", {})).content[0].text).toContain(
-      "Model in use: pi-gateway's default model (default)",
+      "Model in use: pi-gateway's default model (default — chosen on pi-gateway's admin LLM page; the user can pick another model for this conversation in the composer)",
     );
 
     // The `local` stub has no pi; an effort id with no known label is echoed
@@ -3515,25 +3515,12 @@ describe("system tools (avatar system management)", () => {
     }
   });
 
-  it("describe_system reports pi's default model when the stored admin override is not offered (review-2 M2)", async () => {
-    const s = setup("st-admin-model-ignored");
-    await offerModels(s, ["pi-opus-5"]);
-    // An SDK-era deployment's concrete Claude id, kept across the upgrade.
-    s.store.setModelOverride("claude-opus-4-1-20250805");
-    const tools = buildSystemTools(s.store, { ...s.baseCtx, config: piConfig(s.config), viewerIsOwner: true });
-    const body = (await callTool(tools, "describe_system", {})).content[0].text;
-    expect(body).toContain(
-      "Model in use: pi-gateway's default model (default — the admin model setting 'claude-opus-4-1-20250805' is not a model pi-gateway currently offers, so it is ignored)",
-    );
-    expect(body).not.toContain("(admin setting)");
-  });
-
-  it("describe_system names the admin model override when the composer picked none", async () => {
-    // There is no env model hard lock any more (ANTHROPIC_MODEL is retired):
-    // without a composer pick the admin override decides, while pi offers it.
+  it("describe_system never names a retired admin model override: no pick runs pi's default model", async () => {
+    // There is no env model hard lock (ANTHROPIC_MODEL) and no admin override any
+    // more: without a composer pick pi-gateway's default model runs.
     const s = setup("st-admin-model");
     await offerModels(s, ["pi-opus-5", "pi-long-1m"]);
-    s.store.setModelOverride("pi-long-1m");
+    s.store.setAppSecret("agent_model_override", "pi-long-1m");
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
       config: {
@@ -3545,7 +3532,9 @@ describe("system tools (avatar system management)", () => {
     s.store.setUserSecret(s.owner.id, "CONFLUENCE_PERSONAL_ACCESS_TOKEN", "pat");
 
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-    expect(body).toContain("Model in use: pi-long-1m (admin setting)");
+    expect(body).toContain("Model in use: pi-gateway's default model (default — chosen on pi-gateway's admin LLM page");
+    expect(body).not.toContain("pi-long-1m");
+    expect(body).not.toContain("admin setting");
     expect(body).not.toContain("chosen for this conversation in the composer");
     expect(body).not.toContain("pinned via environment variable");
     expect(body).toContain("Confluence host: set (mcp__confluence__* is READ-ONLY");

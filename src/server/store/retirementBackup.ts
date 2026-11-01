@@ -47,6 +47,8 @@ const RETIRED_APP_CONFIG_KEYS = [
   "stt_override",
   "claude_oauth_token",
   "skill_discovery_cache",
+  "agent_model_override",
+  "model_vision_policy",
   "external_agents_registry_v1",
   "retired:personal_agents:pending",
   "retired:external_avatars:pending",

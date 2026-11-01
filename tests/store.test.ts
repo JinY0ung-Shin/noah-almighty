@@ -305,6 +305,52 @@ describe("store app config (app-wide secrets)", () => {
     expect(retried.getAppSecret("skill_discovery_cache")).toBeNull();
   });
 
+  it("drops the retired admin model override and vision policy on reopen, only behind a DB backup", () => {
+    const dataDir = path.join(tempDir, "appconfig");
+    const backupDir = path.join(dataDir, "backups");
+    const first = makeStore();
+    // What an older release's 관리자 → 시스템 → 모델 panel stored (pi-gateway's
+    // admin LLM page owns the default model and image input now).
+    first.setAppSecret("agent_model_override", "qwen/coder");
+    first.setAppSecret("model_vision_policy", JSON.stringify({ "qwen/coder": false }));
+    first.setAppSecret("test_app_value", "v-abc");
+    first.close();
+
+    // A failed backup holds both rows in place.
+    const blocker = path.join(dataDir, "backups");
+    fs.writeFileSync(blocker, "not a folder");
+    const held = makeStore();
+    expect(held.retirementGate()).toMatchObject({ allowed: false, backupPath: null });
+    expect(held.getAppSecret("agent_model_override")).toBe("qwen/coder");
+    expect(held.getAppSecret("model_vision_policy")).toBe('{"qwen/coder":false}');
+    held.close();
+    fs.rmSync(blocker);
+
+    const second = makeStore();
+    expect(second.getAppSecret("agent_model_override")).toBeNull();
+    expect(second.getAppSecret("model_vision_policy")).toBeNull();
+    expect(second.getAppSecret("test_app_value")).toBe("v-abc");
+    const gate = second.retirementGate();
+    expect(gate.backupPath).toBe(path.join(backupDir, `pre-retire-${gate.stamp}.db`));
+    const raw = new Database(gate.backupPath!, { readonly: true });
+    try {
+      const keys = (
+        raw
+          .prepare("SELECT key FROM app_config WHERE key IN ('agent_model_override', 'model_vision_policy') ORDER BY key")
+          .all() as { key: string }[]
+      ).map((row) => row.key);
+      expect(keys).toEqual(["agent_model_override", "model_vision_policy"]);
+    } finally {
+      raw.close();
+    }
+    second.close();
+
+    // Fully retired: the next open finds nothing and takes no second backup.
+    const third = makeStore();
+    expect(third.retirementGate()).toMatchObject({ allowed: true, backupPath: null });
+    expect(fs.readdirSync(backupDir)).toHaveLength(1);
+  });
+
   it("reads stored tool-group selections naming the retired craft_* groups without them", () => {
     type Db = { prepare(sql: string): { run(...params: unknown[]): unknown } };
     const store = makeStore();

@@ -229,13 +229,13 @@ describe("run capability plan", () => {
     const offer = (models: PiModel[]) => {
       piServicesFor(env.store, env.config).models = createPiModelCatalog({ listModels: async () => models });
     };
+    // pi silent on input (an older pi) reads as vision on.
     offer([{ id: "text-llm", default: true }, { id: "vis-llm" }]);
-    env.store.setModelVisionPolicy({ "text-llm": false });
     let run = await plan(env, env.baseRequest);
-    expect(run.caps.runVisionEnabled).toBe(false);
-    expect(run.append).toContain("**No image input**");
+    expect(run.caps.runVisionEnabled).toBe(true);
     offer([{ id: "text-llm", default: true, imageInput: false }, { id: "vis-llm", imageInput: true }]);
-    env.store.setModelVisionPolicy({ "text-llm": true });
+    // A vision policy an older release stored is never consulted.
+    env.store.setAppSecret("model_vision_policy", JSON.stringify({ "text-llm": true }));
     run = await plan(env, env.baseRequest);
     expect(run.caps.runVisionEnabled).toBe(false);
     expect(run.append).toContain("**No image input**");
@@ -568,33 +568,22 @@ describe("pi run loop (fake gateway)", () => {
     expect(response.text).toBe("fell back");
   });
 
-  it("resolves pick > admin override > pi's default, each only while pi offers it", async () => {
+  it("resolves pick > pi's default, the pick only while pi offers it; a run on the default gets ONE attempt", async () => {
     const env = setup();
-    env.store.setModelOverride("m-haiku");
-    // A pick pi offers wins over the override.
+    // A stored admin override from an older release is never consulted (retired).
+    env.store.setAppSecret("agent_model_override", "m-haiku");
     expect((await plan(env, routine(env))).caps).toMatchObject({ effectiveModel: "m-opus", userModel: "m-opus" });
-    // No pick, or one pi does not offer (a legacy tier alias) → the override, chained onto the default.
+    // No pick, or one pi does not offer (a legacy tier alias) → pi's default model, one attempt.
     for (const model of [undefined, "opus"]) {
       const run = await plan(env, { ...routine(env), model });
-      expect(run.caps.effectiveModel).toBe("m-haiku");
+      expect(run.caps.effectiveModel).toBeUndefined();
       expect(run.caps.userModel).toBeUndefined();
-      expect(run.caps.modelChain).toEqual(["m-haiku", undefined]);
+      expect(run.caps.modelChain).toEqual([undefined]);
     }
-  });
-
-  it("ignores a stored override pi-gateway does not offer, and a run on the default gets ONE attempt (review-2 M2)", async () => {
-    const env = setup();
-    // An SDK-era deployment's concrete Claude id, kept across the upgrade.
-    env.store.setModelOverride("claude-opus-4-1-20250805");
-    const run = await plan(env, { ...routine(env), model: undefined });
-    expect(run.caps.effectiveModel).toBeUndefined();
-    expect(run.caps.modelChain).toEqual([undefined]);
-    expect(run.caps.ownerState.modelOverrideIgnored).toBe("claude-opus-4-1-20250805");
   });
 
   it("treats every stored model as the default while pi's list is unavailable", async () => {
     const env = setup({}, []);
-    env.store.setModelOverride("m-haiku");
     const run = await plan(env, routine(env));
     expect(run.caps.effectiveModel).toBeUndefined();
     expect(run.caps.modelChain).toEqual([undefined]);

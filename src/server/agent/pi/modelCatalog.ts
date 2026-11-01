@@ -1,7 +1,9 @@
 /**
  * pi-gateway's LIVE model list (`GET /v1/models`) — the ONLY source of the
- * models the composer offers, the admin override and vision policy name, and a
- * run may pick (docs/architecture/pi-runtime.md, "Models"). A model value
+ * models the composer offers and a run may pick, and of each model's image
+ * input and reasoning efforts (docs/architecture/pi-runtime.md, "Models"). pi's
+ * admin LLM page owns all of it: Noah has no model override and no vision
+ * policy of its own (both retired 2026-11-01). A model value
  * anywhere in Noah is a pi model id; null/"" is pi-gateway's DEFAULT model (the
  * one picked on pi's admin LLM page), and then Noah sends no `model` at all. A
  * stored id pi no longer offers (or a legacy tier alias like `opus`) reads as
@@ -25,8 +27,8 @@ export interface CatalogModel {
   default?: true;
   /**
    * pi's LLM setting for image input: false = text-only (pi 400s an image),
-   * true = accepted. Absent = pi did not say (an older pi) → Noah's own policy
-   * decides alone (modelVisionPolicy.ts `visionForCatalogModel`).
+   * true = accepted. Absent = pi did not say (an older pi) → read as accepted
+   * ({@link visionForCatalogModel}).
    */
   imageInput?: boolean;
   /**
@@ -153,20 +155,44 @@ export function catalogEffortSupport(
   return id ? models.find((entry) => entry.id === id)?.reasoning : undefined;
 }
 
+/**
+ * Whether the model a run resolves to accepts image input — pi's own LLM
+ * setting and nothing else (Noah's admin vision policy and `MODEL_VISION` are
+ * retired). `model` undefined/null is pi's DEFAULT model, looked up by the id
+ * its list marks `default`. ONLY an explicit `imageInput: false` makes a model
+ * text-only (pi would 400 an image): a model pi did not describe (an older pi),
+ * an id not in the list and an empty list (the `local` stub, or pi never
+ * answered) all read as vision ON — the pre-retirement default — so a wrong
+ * guess surfaces as pi's visible `unsupported_image_input` error instead of a
+ * silently image-less turn. The chat route's upload mode, the capability plan
+ * and the bootstrap all call this, so the upload mode, both metacognition
+ * surfaces and the composer agree.
+ */
+export function visionForCatalogModel(models: readonly CatalogModel[], model: string | null | undefined): boolean {
+  const id = model || catalogDefaultModelId(models);
+  return !(id && models.find((entry) => entry.id === id)?.imageInput === false);
+}
+
 /** `value` when it names a model in `models`, else undefined (unset / unknown → pi's default model). */
 export function catalogModel(models: readonly CatalogModel[], value: unknown): string | undefined {
   return typeof value === "string" && value && models.some((model) => model.id === value) ? value : undefined;
 }
 
 /**
- * `PI_MODEL_MAP` is RETIRED (the composer shows pi-gateway's live model list):
- * it is no longer read, and while it is still set every boot logs one warning
- * so the operator deletes it.
+ * Retired model env vars: `PI_MODEL_MAP` (the composer shows pi-gateway's live
+ * model list) and `MODEL_VISION` (pi's admin LLM page sets each model's image
+ * input; retired 2026-11-01). Neither is read any more; while one is still set
+ * every boot logs one warning for it so the operator deletes it.
  */
-export function warnRetiredModelMapEnv(env: NodeJS.ProcessEnv = process.env): void {
+export function warnRetiredModelEnv(env: NodeJS.ProcessEnv = process.env): void {
   if (env.PI_MODEL_MAP?.trim()) {
     logger.warn(
       "PI_MODEL_MAP is set but ignored: the composer now offers pi-gateway's live model list — delete it from the deployment environment",
+    );
+  }
+  if (env.MODEL_VISION?.trim()) {
+    logger.warn(
+      "MODEL_VISION is set but ignored: pi-gateway's admin LLM page sets each model's image input — delete it from the deployment environment",
     );
   }
 }

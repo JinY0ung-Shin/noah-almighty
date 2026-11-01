@@ -94,36 +94,7 @@ describe("noah-almighty platform", () => {
     expect(res.body.githubHost).toBe("github.enterprise.local");
   });
 
-  it("offers pi-gateway's live models in the bootstrap model selection, with per-model vision", async () => {
-    const services = createServices({
-      dataDir: tempDir,
-      agentRuntime: "pi",
-      sessionSecret: "test",
-      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
-    });
-    piServicesFor(services.store, services.config).models = createPiModelCatalog({
-      listModels: async () => [{ id: "m-a", ownedBy: "anthropic" }, { id: "m-b" }],
-    });
-    services.store.setModelVisionPolicy({ "m-b": false });
-    const app = createApp(services);
-    let res = await request(app).get("/api/bootstrap").expect(200);
-    expect(res.body.visionEnabled).toBe(true);
-    expect(res.body.modelSelection).toEqual({
-      models: [
-        { id: "m-a", server: "anthropic", vision: true },
-        { id: "m-b", server: null, vision: false },
-      ],
-      // Nothing picked, no override → pi-gateway's default model inherits MODEL_VISION.
-      defaultVision: true,
-    });
-    // The admin override pi offers decides the default's vision.
-    services.store.setModelOverride("m-b");
-    res = await request(app).get("/api/bootstrap").expect(200);
-    expect(res.body.modelSelection.defaultVision).toBe(false);
-    services.store.close();
-  });
-
-  it("judges the default model's vision by its pi id, and never offers vision for a model pi reports text-only (review #12)", async () => {
+  it("offers pi-gateway's live models in the bootstrap model selection, each model's vision from pi alone", async () => {
     const services = createServices({
       dataDir: tempDir,
       agentRuntime: "pi",
@@ -134,29 +105,31 @@ describe("noah-almighty platform", () => {
       piServicesFor(services.store, services.config).models = createPiModelCatalog({ listModels: async () => models });
     };
     const app = createApp(services);
-    // pi's default model is set 미지원 in the admin policy: 기본 모델 is text-only too.
-    offer([{ id: "text-llm", default: true }, { id: "vis-llm" }]);
-    services.store.setModelVisionPolicy({ "text-llm": false });
-    let res = await request(app).get("/api/bootstrap").expect(200);
-    expect(res.body.modelSelection.defaultVision).toBe(false);
-    // pi's own LLM setting says text-only: no policy (nor MODEL_VISION on) turns it on.
     offer([
-      { id: "plain", default: true, imageInput: false },
+      { id: "plain", ownedBy: "vllm", default: true, imageInput: false },
       { id: "eyes", imageInput: true },
       { id: "older-pi" },
     ]);
-    services.store.setModelVisionPolicy({ plain: true, eyes: false });
-    res = await request(app).get("/api/bootstrap").expect(200);
+    let res = await request(app).get("/api/bootstrap").expect(200);
+    // The retired deployment-wide MODEL_VISION flag is no longer sent.
+    expect(res.body).not.toHaveProperty("visionEnabled");
     expect(res.body.modelSelection).toEqual({
       models: [
-        { id: "plain", server: null, vision: false },
-        // The policy may still turn a vision model off…
-        { id: "eyes", server: null, vision: false },
-        // …and pi silent on input (an older pi) leaves the policy / MODEL_VISION in charge.
+        { id: "plain", server: "vllm", vision: false },
+        { id: "eyes", server: null, vision: true },
+        // pi silent on input (an older pi) reads as vision on.
         { id: "older-pi", server: null, vision: true },
       ],
+      // Nothing picked → pi-gateway's default model, judged by its id.
       defaultVision: false,
     });
+    // A stored policy/override left by an older release is never consulted.
+    services.store.setAppSecret("model_vision_policy", JSON.stringify({ eyes: false, plain: true }));
+    services.store.setAppSecret("agent_model_override", "eyes");
+    offer([{ id: "eyes", default: true, imageInput: true }, { id: "plain", imageInput: false }]);
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.models.map((m: { vision: boolean }) => m.vision)).toEqual([true, false]);
+    expect(res.body.modelSelection.defaultVision).toBe(true);
     services.store.close();
   });
 
@@ -181,11 +154,16 @@ describe("noah-almighty platform", () => {
       undefined,
     ]);
     expect(res.body.modelSelection.defaultReasoning).toEqual({ efforts: ["none", "low", "high"], defaultEffort: "high" });
-    // The admin override decides which model 기본 모델 is.
-    services.store.setModelOverride("plain");
+    // pi's own default decides which model 기본 모델 is (Noah has no override).
+    const offerDefault = (id: string) => {
+      piServicesFor(services.store, services.config).models = createPiModelCatalog({
+        listModels: async () => models.map(({ default: _drop, ...model }) => (model.id === id ? { ...model, default: true } : model)),
+      });
+    };
+    offerDefault("plain");
     res = await request(app).get("/api/bootstrap").expect(200);
     expect(res.body.modelSelection.defaultReasoning).toBeNull();
-    services.store.setModelOverride("older");
+    offerDefault("older");
     res = await request(app).get("/api/bootstrap").expect(200);
     expect("defaultReasoning" in res.body.modelSelection).toBe(false);
     services.store.close();
@@ -1288,7 +1266,10 @@ describe("noah-almighty platform", () => {
       { id: "deepseek/v3", server: "deepseek" },
       { id: "qwen/coder", server: null },
     ]);
-    expect(res.body.system.modelOverrideChoices).toEqual(["deepseek/v3", "qwen/coder"]);
+    // Read-only: pi's admin LLM page owns the default model and image input.
+    for (const retired of ["modelOverride", "modelOverrideIgnored", "modelOverrideChoices", "modelVisionPolicy", "visionDefault"]) {
+      expect(res.body.system).not.toHaveProperty(retired);
+    }
     expect(res.body.system).not.toHaveProperty("piModelMap");
     services.store.close();
   });

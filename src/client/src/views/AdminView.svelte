@@ -22,11 +22,8 @@
   let panelsSeeded = false;
 
   // system tab field state
-  let modelInput = "";
-  let modelBusy = false;
   let hexBusy = false;
   let signupBusy = false;
-  let modelError = "";
   let signupError = "";
   let hexError = "";
   // hex-ssh policy local checkbox matrix: policy[role][toolName] = boolean
@@ -42,7 +39,6 @@
   // audit action filter
   let auditAction = "";
   const signupStatusId = "admin-signup-status";
-  const modelStatusId = "admin-model-status";
   const hexStatusId = "admin-hex-policy-status";
   const toolSkillStatusId = "admin-tool-skill-status";
 
@@ -120,6 +116,8 @@
     set_avatar_visibility: "아바타 공개 범위 변경",
     set_claude_token: "구독 토큰 저장",
     clear_claude_token: "구독 토큰 해제",
+    // Noah's own model settings were retired (pi-gateway's admin page owns them);
+    // their labels stay for the retained audit rows.
     set_model_override: "아바타 모델 지정",
     clear_model_override: "아바타 모델 해제",
     // Speech-to-text was removed; its labels stay for the retained audit rows.
@@ -196,27 +194,6 @@
     return AUDIT_STATUS_LABELS[status] || status;
   }
   $: stats = $appState.adminStats;
-  $: savedModelOverride = String(sys.modelOverride || "");
-  $: modelChoices = (Array.isArray(sys.modelOverrideChoices) ? sys.modelOverrideChoices : []) as string[];
-  // A stored override pi no longer offers stays selectable as-is (disabled) so
-  // the select shows what is saved instead of silently jumping to the default.
-  $: modelSavedUnavailable = Boolean(savedModelOverride && !modelChoices.includes(savedModelOverride));
-  $: modelValueTrimmed = modelInput.trim();
-  $: modelDirty = modelValueTrimmed !== savedModelOverride;
-  $: modelCanSave = Boolean(!modelBusy && modelDirty);
-  $: modelStatus = modelBusy
-    ? "저장 중…"
-    : modelError
-      ? `저장 실패: ${modelError}`
-      : modelDirty
-        ? modelValueTrimmed
-          ? "저장하지 않은 모델 변경 사항이 있습니다."
-          : "저장하면 pi-gateway 기본 모델로 되돌립니다."
-        : savedModelOverride
-          ? sys.modelOverrideIgnored
-            ? "저장된 모델을 지금 pi-gateway가 제공하지 않아 무시하고 기본 모델을 사용 중입니다. 다른 모델을 고르거나 해제해 주세요."
-            : "저장됨"
-          : "pi-gateway 기본 모델 사용 중";
   $: signupMode = (sys.signupMode || "open") as SignupMode;
   $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
@@ -251,14 +228,6 @@
         ? "저장하지 않은 정책 변경 사항이 있습니다."
         : "저장된 정책과 같습니다.";
 
-  // Vision has a draft but no explicit dirty flag; derive one so a manual refresh
-  // can preserve unsaved vision-policy edits (see load()).
-  $: visionDirty = piModels.some((model) => {
-    const saved = (unwrapSystem($appState.adminSystem).modelVisionPolicy || {}) as Record<string, boolean>;
-    const savedVal = model.id in saved ? (saved[model.id] ? "on" : "off") : "default";
-    return (visionPolicyDraft[model.id] ?? "default") !== savedVal;
-  });
-
   // overview stat cards
   $: statCards = [
     { label: "전체 사용자", value: stats?.users, sub: stats?.suspended ? `정지 ${stats.suspended}명 포함` : "", target: "users", filter: "all" },
@@ -287,8 +256,6 @@
       // flag's declaration for why they misfire on the initial load.
       if (!panelsSeeded || !hexDirty) syncHexPolicyFromSys();
       if (!panelsSeeded || !toolSkillDirty) syncToolSkillFromSys();
-      if (!panelsSeeded || !visionDirty) syncVisionPolicyFromSys();
-      if (!panelsSeeded || !modelDirty) modelInput = String(unwrapSystem($appState.adminSystem).modelOverride || "");
       panelsSeeded = true;
     } catch (err) {
       error = (err as Error).message;
@@ -389,72 +356,30 @@
     }
   }
 
-  // ---- system: per-model vision policy ----
-  // Draft: pi model id → "default" (inherit MODEL_VISION) | "on" | "off".
-  let visionPolicyDraft: Record<string, "default" | "on" | "off"> = {};
-  let visionBusy = false;
-  $: visionDefaultLabel = sys.visionDefault === false ? "미지원" : "지원";
-  // pi-gateway's live model list (empty under the local stub or when pi is unreachable).
-  // `imageInput: false` = pi's own LLM setting has image input off: always text-only here.
-  $: piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as { id: string; server: string | null; imageInput?: boolean }[];
+  // ---- system: pi-gateway's models (READ-ONLY) ----
+  // pi-gateway's live model list (empty under the local stub or when pi is
+  // unreachable). Noah no longer sets a model or image input of its own: the
+  // default model, each model's image input and efforts are pi-gateway's admin
+  // LLM settings (opened at /admin/ through Noah's own port).
+  type PiModelRow = {
+    id: string;
+    server: string | null;
+    default?: true;
+    imageInput?: boolean;
+    reasoning?: { efforts: string[]; defaultEffort?: string } | null;
+  };
+  $: piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as PiModelRow[];
 
-  function syncVisionPolicyFromSys() {
-    const current = unwrapSystem($appState.adminSystem);
-    const saved = (current.modelVisionPolicy || {}) as Record<string, boolean>;
-    const models = (Array.isArray(current.piModels) ? current.piModels : []) as { id: string }[];
-    const draft: Record<string, "default" | "on" | "off"> = {};
-    for (const model of models) {
-      draft[model.id] = model.id in saved ? (saved[model.id] ? "on" : "off") : "default";
-    }
-    visionPolicyDraft = draft;
+  function imageInputLabel(model: PiModelRow): string {
+    if (model.imageInput === false) return "미지원";
+    return model.imageInput === true ? "지원" : "알 수 없음 (지원으로 처리)";
   }
 
-  async function saveVisionPolicy() {
-    if (visionBusy) return;
-    const policy: Record<string, boolean> = {};
-    for (const model of piModels) {
-      const pick = visionPolicyDraft[model.id];
-      if (pick === "on") policy[model.id] = true;
-      else if (pick === "off") policy[model.id] = false;
-    }
-    visionBusy = true;
-    try {
-      await api("/api/admin/model-vision-policy", { method: "PUT", body: JSON.stringify({ policy }) });
-      await loadAdminOverview();
-      syncVisionPolicyFromSys();
-      notify("모델별 이미지 입력 설정을 저장했습니다.", "ok");
-    } catch (err) {
-      notify(`저장 실패: ${(err as Error).message}`);
-    } finally {
-      visionBusy = false;
-    }
-  }
-
-  // ---- system: model ----
-  async function saveModel() {
-    if (modelBusy || !modelDirty) return;
-    const value = modelValueTrimmed;
-    const successMessage = value ? "모델을 저장했습니다." : "모델 지정을 해제했습니다. pi-gateway 기본 모델을 사용합니다.";
-    modelBusy = true;
-    modelError = "";
-    try {
-      if (value) await api("/api/admin/model", { method: "PUT", body: JSON.stringify({ model: value }) });
-      else await api("/api/admin/model", { method: "DELETE" });
-    } catch (err) {
-      modelBusy = false;
-      modelError = (err as Error).message;
-      notify(`저장 실패: ${modelError}`);
-      return;
-    }
-    try {
-      await loadAdminOverview();
-      modelInput = String(unwrapSystem($appState.adminSystem).modelOverride || "");
-      notify(successMessage, "ok");
-    } catch (err) {
-      notify(`모델 설정은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
-    } finally {
-      modelBusy = false;
-    }
+  function reasoningLabel(model: PiModelRow): string {
+    if (model.reasoning === null) return "사용 안 함";
+    if (!model.reasoning) return "알 수 없음";
+    const efforts = model.reasoning.efforts.join(", ") || "없음";
+    return model.reasoning.defaultEffort ? `${efforts} (기본 ${model.reasoning.defaultEffort})` : efforts;
   }
 
   // ---- system: hex-ssh policy ----
@@ -821,78 +746,40 @@
               </div>
             </div>
 
-            <!-- model override -->
+            <!-- pi-gateway's models: read-only (pi's admin LLM page owns them) -->
             <section class="settings-card">
               <div class="panel-section-head">
                 <div>
-                  <h3>아바타 모델</h3>
-                  <p class="muted">대화에서 모델을 고르지 않았을 때 사용할 모델을 지정합니다. 목록은 pi-gateway가 지금 제공하는 모델이며, 지정하지 않으면 pi-gateway 기본 모델을 사용합니다.</p>
-                </div>
-              </div>
-              <form class="settings-form" on:submit|preventDefault={saveModel}>
-                <label class="field">
-                  <span>모델</span>
-                  <select
-                    name="model"
-                    bind:value={modelInput}
-                    aria-describedby={modelStatusId}
-                    aria-invalid={modelError ? "true" : undefined}
-                    disabled={modelBusy}
-                    on:change={() => (modelError = "")}
-                  >
-                    <option value="">기본 모델 사용</option>
-                    {#if modelSavedUnavailable}
-                      <option value={savedModelOverride} disabled>{savedModelOverride} (현재 제공되지 않음)</option>
-                    {/if}
-                    {#each modelChoices as choice (choice)}
-                      <option value={choice}>{choice}</option>
-                    {/each}
-                  </select>
-                </label>
-                <div class="settings-save-row">
-                  <span id={modelStatusId} class="settings-save-status" class:dirty={modelDirty && !modelBusy && !modelError} class:pending={modelBusy} class:invalid={Boolean(modelError) || Boolean(!modelDirty && savedModelOverride && sys.modelOverrideIgnored)} role="status" aria-live="polite">{modelStatus}</span>
-                  <button class="primary" type="submit" disabled={!modelCanSave}>{modelBusy ? "저장 중…" : modelValueTrimmed ? "모델 저장" : "기본값 사용"}</button>
-                </div>
-              </form>
-            </section>
-
-            <!-- per-model vision (image input) policy -->
-            <section class="settings-card">
-              <div class="panel-section-head">
-                <div>
-                  <h3>모델별 이미지 입력(비전)</h3>
+                  <h3>LLM 모델 (pi-gateway)</h3>
                   <p class="muted">
-                    pi 모델별 이미지 입력 지원 여부를 지정합니다. "기본값"은 배포 환경설정(MODEL_VISION, 현재 {visionDefaultLabel})을 따릅니다.
-                    pi-gateway의 LLM 설정에서 이미지 입력을 켜지 않은 모델은 여기 설정과 관계없이 미지원입니다.
-                    미지원으로 설정된 모델을 쓰는 대화에서는 첨부한 이미지는 파일로만 전달되고, 아바타의 이미지/PDF 파일 읽기가 거부되며, 아바타에게도 그 사실이 안내됩니다.
+                    LLM 서버·키·모델·기본 모델·이미지 입력·시스템 프롬프트는 pi-gateway 관리 화면에서 바꿉니다. 이 표는 pi-gateway가 지금 제공하는 모델을 보여 주기만 합니다.
+                    대화에서 모델을 고르지 않으면 pi-gateway 기본 모델을 사용하고, 이미지 입력이 미지원인 모델을 쓰는 대화에서는 첨부한 이미지가 파일로만 전달됩니다.
+                  </p>
+                  <p class="muted">
+                    pi-gateway의 시스템 프롬프트 <span class="mono">noah</span>, Noah MCP 서버 등록, Noah가 꺼 둔 pi 도구는 배포(docker compose up) 때마다 저장소 기준으로 되돌아갑니다. 관리 화면에서 바꾼 내용은 다음 배포 전까지만 유지됩니다.
                   </p>
                 </div>
+                <a class="btn sm" href="/admin/" target="_blank" rel="noopener">pi-gateway 관리 화면 열기</a>
               </div>
-              <form class="settings-form" on:submit|preventDefault={saveVisionPolicy}>
-                {#each piModels as model (model.id)}
-                  <label class="field">
-                    <span>
-                      <span class="mono">{model.id}</span>
-                      {#if model.server}<span class="muted">{model.server}</span>{/if}
-                      {#if model.imageInput === false}<span class="muted">pi-gateway LLM 설정에서 이미지 입력이 꺼져 있어 항상 미지원</span>{/if}
-                    </span>
-                    <select
-                      bind:value={visionPolicyDraft[model.id]}
-                      disabled={visionBusy || model.imageInput === false}
-                      aria-label={`${model.id} 이미지 입력 지원`}
-                    >
-                      <option value="default">기본값 ({visionDefaultLabel})</option>
-                      <option value="on">지원</option>
-                      <option value="off">미지원</option>
-                    </select>
-                  </label>
-                {:else}
-                  <p class="muted">{sys.agentRuntime === "pi" ? "pi-gateway 모델 목록을 불러오지 못해 설정할 모델이 없습니다." : "로컬 스텁에는 설정할 모델이 없습니다."}</p>
-                {/each}
-                <div class="settings-save-row">
-                  <button class="primary" type="submit" disabled={visionBusy || !piModels.length}>{visionBusy ? "저장 중…" : "저장"}</button>
+              {#if piModels.length}
+                <div class="hex-policy-grid" role="group" aria-label="pi-gateway 모델 목록">
+                  <div class="hex-policy-head muted">모델</div>
+                  <div class="hex-policy-head">기본</div>
+                  <div class="hex-policy-head">이미지 입력</div>
+                  <div class="hex-policy-head">추론 단계</div>
+                  {#each piModels as model (model.id)}
+                    <div class="hex-policy-tool">
+                      <strong class="mono">{model.id}</strong>
+                      {#if model.server}<span class="muted mono">{model.server}</span>{/if}
+                    </div>
+                    <div class="hex-policy-check">{#if model.default}<span class="tag ok">기본</span>{:else}<span class="muted">—</span>{/if}</div>
+                    <div class="hex-policy-check"><span class:muted={model.imageInput !== true}>{imageInputLabel(model)}</span></div>
+                    <div class="hex-policy-check"><span class="muted">{reasoningLabel(model)}</span></div>
+                  {/each}
                 </div>
-              </form>
+              {:else}
+                <div class="empty-note">{sys.agentRuntime === "pi" ? "pi-gateway 모델 목록을 불러오지 못했습니다. 대화는 pi-gateway 기본 모델로 실행됩니다." : "로컬 스텁에는 모델이 없습니다."}</div>
+              {/if}
             </section>
 
             <!-- hex-ssh policy -->

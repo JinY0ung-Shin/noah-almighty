@@ -143,7 +143,7 @@ export function apiError(res: Response, status: number, message: string): void {
 export const PI_MODELS_UNAVAILABLE_MESSAGE = "pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
 /**
- * The model ids a WRITE (composer default, admin override, vision policy) may
+ * The model ids a WRITE (the composer's per-user default) may
  * store: pi-gateway's live list (`agent/pi/modelCatalog.ts`). Null — after
  * answering 503 — when pi has never answered and cannot be reached now, so the
  * caller stops instead of rejecting every id as unknown. Empty on the `local` stub.

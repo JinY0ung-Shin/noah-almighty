@@ -297,13 +297,18 @@ These are the invariants the project is built around. New work should reinforce 
   deployments go through `retirementGate()`: the `claude_oauth_token` and skill-discovery cache keys are deleted
   and reserved forever, `<dataDir>/agent-sessions` (CLI transcripts) is quarantined, and old CLI session ids are
   ignored (the next turn continues from the text history). **The models are pi-gateway's LIVE list** (`GET /v1/models`,
-  `agent/pi/modelCatalog.ts`, user decision 2026-10-31): a model value anywhere (composer pick, per-user default,
-  admin override, vision-policy key) is a pi model id, none = pi-gateway's default model (a new session sends no
+  `agent/pi/modelCatalog.ts`, user decision 2026-10-31): a model value anywhere (composer pick, per-user default)
+  is a pi model id, none = pi-gateway's default model (a new session sends no
   `model`; a continuing turn names the id pi's list marks `default`), and
   a stored value pi does not currently offer (a legacy tier alias like `opus`) reads as that default — never
   migrated. Writes validate against the list (400 unknown, 503 unreachable); the chat stream stores a pick as sent.
   The tier registry and `PI_MODEL_MAP` are RETIRED (a still-set `PI_MODEL_MAP` only logs a boot warning); an
-  unattended run's fallback is ONE retry on the default, in the same session. Mechanics → `docs/architecture/pi-runtime.md`.
+  unattended run's fallback is ONE retry on the default, in the same session. **Noah holds NO LLM settings of its own**
+  (user decision 2026-11-01): pi-gateway's admin LLM page picks the default model and each model's image input
+  (`visionForCatalogModel` reads pi's `input` alone; unknown = vision on); the admin model override, the per-model
+  vision policy and `MODEL_VISION` are RETIRED (keys `agent_model_override`/`model_vision_policy` deleted behind
+  `retirementGate()` and reserved forever; a still-set `MODEL_VISION` only warns), and the admin 시스템 tab lists pi's
+  models READ-ONLY. Mechanics → `docs/architecture/pi-runtime.md`.
 - **할 일 is ONE per-user list behind ONE store.** The 할 일 tab, the chat overlay (toggled under the
   composer) and the owner's avatar all write `todo_items` through `store/todos.ts`, validated by the pure
   `src/server/todos.ts` (error CODES, Korean/English maps per channel); wire types, limits and the ONE

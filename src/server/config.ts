@@ -86,8 +86,8 @@ function readPiGatewayAdminApiKey(): string | undefined {
  * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL and
  * service key are REQUIRED there: without them every run would fail, so the
  * boot refuses instead. The models come from pi's live list (`GET /v1/models`,
- * `agent/pi/modelCatalog.ts`); the retired `PI_MODEL_MAP` is not read
- * (`warnRetiredModelMapEnv`).
+ * `agent/pi/modelCatalog.ts`); the retired `PI_MODEL_MAP` and `MODEL_VISION`
+ * are not read (`warnRetiredModelEnv`).
  */
 function loadPiRuntimeConfig(): PiRuntimeConfig {
   const gatewayUrl = env("PI_GATEWAY_URL");
@@ -207,9 +207,6 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // the image at build time and exposed under this fixed name (see Dockerfile).
     // Override with HEX_SSH_COMMAND when the global bin isn't available.
     hexSshCommand: env("HEX_SSH_COMMAND", "hex-ssh-mcp"),
-    // MODEL_VISION=off marks the serving backend as text-only: image uploads and
-    // Confluence image blocks are cut off BEFORE they can 400 a whole turn.
-    visionEnabled: env("MODEL_VISION", "on").trim().toLowerCase() !== "off",
     // Corp-policy line in the browser-bridge install guide pointing the unzip
     // step at the upload-approved "Multimedia" folder. Hidden unless the
     // operator opts in.

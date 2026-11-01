@@ -249,8 +249,6 @@ export interface RoutineJobRow {
 
 /** app_config key: how self-service signups are gated ("open" | "closed" | "approval"). */
 export const SIGNUP_MODE_KEY = "signup_mode";
-/** app_config key: admin-selected agent model (a pi model id from pi-gateway's live list). */
-export const MODEL_OVERRIDE_KEY = "agent_model_override";
 
 /**
  * Generic constructor type used to compose the per-domain mixins back onto a
@@ -873,6 +871,14 @@ export class StoreBase {
     this.db
       .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
       .run("claude_oauth_token", "skill_discovery_cache");
+    // Noah's own LLM settings are retired (2026-11-01, user decision): pi-gateway's
+    // admin LLM page owns the default model and each model's image input. Drop
+    // the admin model override and the per-model vision policy. Nothing reads or
+    // writes either key any more, so this can only match what an older release
+    // left — keep both names reserved.
+    this.db
+      .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
+      .run("agent_model_override", "model_vision_policy");
     // Group knowledge repositories are retired (2026-10-30, user decision):
     // groups stay only as the avatar-sharing/trust/skill-sharing unit. Drop the
     // group repo connection, the per-user default and the per-conversation

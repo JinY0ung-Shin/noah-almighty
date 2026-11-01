@@ -36,13 +36,6 @@ export interface AppConfig {
   sessionSecret: string;
   agentRuntime: AgentRuntime;
   /**
-   * Whether the ACTIVE model accepts image input (vision). Env `MODEL_VISION`
-   * ("off" disables; default on). When false: chat image uploads are rejected,
-   * Confluence tools stop returning MCP image blocks, and the avatar is told via
-   * the standing prompt + describe_system (META-COGNITION).
-   */
-  visionEnabled: boolean;
-  /**
    * Show the corporate install-location line in the browser-bridge install
    * guide (env `BROWSER_BRIDGE_MULTIMEDIA_NOTICE`, `true`/`1`/`on` enables;
    * default off). Site policy restricts where users may put files, so the
@@ -1623,7 +1616,8 @@ export interface AgentRequest {
   /**
    * Whether the active model accepts image input. `false` injects the
    * no-vision standing warning (image/PDF Read blocked, uploads disabled);
-   * undefined/true adds nothing. Mirrors `AppConfig.visionEnabled`.
+   * undefined/true adds nothing. Set per run from pi's model list
+   * (`visionForCatalogModel`, `agent/pi/modelCatalog.ts`).
    */
   visionEnabled?: boolean;
   /**

@@ -75,7 +75,6 @@ function seed(model: string): void {
     activePaneId: "pane-1",
     view: "chat",
     bootstrap: {
-      visionEnabled: true,
       modelSelection: {
         defaultVision: true,
         models: [
@@ -202,7 +201,7 @@ describe("composer model picker", () => {
       chatPanes: [pane("")],
       activePaneId: "pane-1",
       view: "chat",
-      bootstrap: { visionEnabled: true, modelSelection: { defaultVision: true, models: [] } },
+      bootstrap: { modelSelection: { defaultVision: true, models: [] } },
     } as unknown as Parameters<typeof replaceState>[0]);
     const { container } = render(ChatView);
     expect(container.querySelector('select[aria-label="이 대화에 사용할 모델"]')).toBeNull();
@@ -236,7 +235,6 @@ describe("composer effort picker (review #9)", () => {
       activePaneId: "pane-1",
       view: "chat",
       bootstrap: {
-        visionEnabled: true,
         modelSelection: {
           defaultVision: true,
           defaultReasoning: null,
@@ -299,7 +297,7 @@ function seedStreaming(overrides: Partial<ChatPane> = {}): void {
     chatPanes: [target],
     activePaneId: target.id,
     view: "chat",
-    bootstrap: { visionEnabled: true },
+    bootstrap: {},
   } as unknown as Parameters<typeof replaceState>[0]);
 }
 

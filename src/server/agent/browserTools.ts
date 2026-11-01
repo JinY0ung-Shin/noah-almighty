@@ -59,8 +59,8 @@ export interface BrowserToolsContext {
   execute: (request: BrowserRequest) => Promise<BrowserResult>;
   allowed: boolean;
   /**
-   * Whether the model THIS run resolved to accepts image input (the per-model
-   * vision policy). Gates `screenshot`, and with it `click_at`'s PIXEL mode
+   * Whether the model THIS run resolved to accepts image input (pi's per-model
+   * image setting, `visionForCatalogModel`). Gates `screenshot`, and with it `click_at`'s PIXEL mode
    * (whose coordinates have no source without a screenshot) — click_at's
    * uid-relative mode is measured off the element itself and stays available.
    * Defaults to false so a caller that forgets to wire it gets a polite

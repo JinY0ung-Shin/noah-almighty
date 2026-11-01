@@ -24,7 +24,6 @@ export {
   normalizeHashtags,
   MAX_HASHTAGS,
   SIGNUP_MODE_KEY,
-  MODEL_OVERRIDE_KEY,
 } from "./internal.js";
 export { AVATAR_TASK_RESTART_ERROR } from "./avatarTasks.js";
 

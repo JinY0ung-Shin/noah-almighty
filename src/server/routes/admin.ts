@@ -13,7 +13,6 @@ import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
 import { HEX_SSH_TOOL_INFOS, parseHexSshToolPolicy } from "../hexSshPolicy.js";
 import { TOGGLABLE_BUILTIN_TOOLS, parseToolSkillPolicy } from "../toolSkillPolicy.js";
-import { parseModelVisionPolicy } from "../modelVisionPolicy.js";
 import {
   isMcpToolGroupId,
   normalizeMcpToolGroups,
@@ -21,14 +20,11 @@ import {
 } from "../../shared/mcpToolGroups.js";
 import { listPluginRootSkills } from "../agent/skillCatalog.js";
 import { loadDefaultPluginRoots } from "../plugins.js";
-import { modelOverrideState } from "../modelOverride.js";
-import { catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import {
   apiError,
   avatarDir,
   isAvatarVisibility,
-  offeredModelIdsOr503,
   safeString,
   MIN_PASSWORD_LENGTH,
   type RouterDeps,
@@ -58,9 +54,10 @@ export function createAdminRouter(deps: RouterDeps): Router {
     }
     const skillDiscovery = { fetchedAt: new Date().toISOString(), skills: listPluginRootSkills(rootPaths) };
     // pi-gateway's live model list (cached, stale-on-error); empty on the
-    // `local` stub and while pi has never answered.
+    // `local` stub and while pi has never answered. READ-ONLY here: the default
+    // model, each model's image input and efforts are set on pi-gateway's admin
+    // LLM page (Noah's model override and vision policy are retired).
     const piModels = await piServicesFor(store, config).models.list();
-    const piModelIds = catalogModelIds(piModels);
     res.json({
       system: {
         agentRuntime: config.agentRuntime,
@@ -76,16 +73,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
-        // Admin-selected model override (a pi model id), and whether the stored
-        // one is IGNORED (pi no longer offers it — a dropped model, an SDK-era
-        // Claude id, a retired tier alias — so runs use pi-gateway's default model).
-        modelOverride: store.getModelOverride(),
-        modelOverrideIgnored: modelOverrideState(store, piModelIds).ignored !== null,
-        modelOverrideChoices: piModelIds,
-        // Per-model vision policy, keyed by pi model id (+ the deployment default
-        // an unset model inherits) — the panel renders one selector per model.
-        modelVisionPolicy: store.getModelVisionPolicy(),
-        visionDefault: config.visionEnabled,
       },
     });
   });
@@ -521,60 +508,6 @@ export function createAdminRouter(deps: RouterDeps): Router {
     auditAs(req, "set_signup_mode", `signup mode = ${mode}`);
     logger.warn({ actorId: req.user!.id, mode }, "signup mode changed");
     res.json({ signupMode: mode });
-  });
-
-  // Admin-selected agent model: used when a conversation picked none
-  // (runCapabilities.ts). Only a model pi-gateway offers right now is accepted
-  // (review-2 M2; anything else would silently run on pi's own default model).
-  router.put("/api/admin/model", requireAuth(store), requireAdmin, async (req: AuthenticatedRequest, res) => {
-    const model = safeString(req.body?.model);
-    if (!model) {
-      apiError(res, 400, "모델 이름을 입력해 주세요.");
-      return;
-    }
-    const offered = await offeredModelIdsOr503(store, config, res);
-    if (!offered) return;
-    if (!offered.includes(model)) {
-      apiError(res, 400, `pi-gateway가 제공하는 모델만 지정할 수 있습니다: ${offered.join(", ") || "(없음)"}`);
-      return;
-    }
-    store.setModelOverride(model);
-    auditAs(req, "set_model_override", `model override = ${model}`);
-    logger.warn({ actorId: req.user!.id, model }, "model override set");
-    res.json({ modelOverride: model });
-  });
-
-  router.delete("/api/admin/model", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    store.clearModelOverride();
-    auditAs(req, "clear_model_override", "model override cleared");
-    logger.info({ actorId: req.user!.id }, "model override cleared");
-    res.json({ ok: true });
-  });
-
-  // Per-model vision policy: which of pi-gateway's models accept image input.
-  // Body: { policy: { [piModelId]: boolean } } — every key a model pi offers
-  // right now; a model ABSENT from the map inherits the MODEL_VISION default.
-  router.put("/api/admin/model-vision-policy", requireAuth(store), requireAdmin, async (req: AuthenticatedRequest, res) => {
-    const raw = req.body?.policy;
-    // An empty policy names no model, so it needs no model list.
-    const needsCatalog = raw && typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length > 0;
-    const offered = needsCatalog ? await offeredModelIdsOr503(store, config, res) : [];
-    if (!offered) return;
-    const policy = parseModelVisionPolicy(raw, offered);
-    if (!policy) {
-      apiError(res, 400, "모델별 비전 정책 형식이 올바르지 않습니다.");
-      return;
-    }
-    const saved = store.setModelVisionPolicy(policy);
-    auditAs(
-      req,
-      "set_model_vision_policy",
-      Object.entries(saved)
-        .map(([model, vision]) => `${model}=${vision ? "on" : "off"}`)
-        .join(", ") || "(all inherit default)",
-    );
-    logger.info({ actorId: req.user!.id, policy: saved }, "model vision policy set");
-    res.json({ modelVisionPolicy: saved });
   });
 
   // ---- Audit -----------------------------------------------------------

@@ -15,7 +15,7 @@ guide is [`../../extension/README.md`](../../extension/README.md) (Korean).
 
 | Page | Open it when |
 |---|---|
-| [contract.md](browser-bridge/contract.md) | Adding or changing ANY op — the five hand-synced layers, extension version compatibility, the composer's four badge rungs, and how `screenshot` rides the run's vision policy. |
+| [contract.md](browser-bridge/contract.md) | Adding or changing ANY op — the five hand-synced layers, extension version compatibility, the composer's four badge rungs, and how `screenshot` rides the run's resolved vision. |
 | [addressing.md](browser-bridge/addressing.md) | You need to reach a specific element: `click_at`'s two unrelated modes, how long a uid stays valid, the pinned working tab, the settle tail, and the three ways frames are walked. |
 | [actions.md](browser-bridge/actions.md) | You are changing what an op *does*: verified writes and their four end states, `type` routing by control kind, selects, navigation and the destination-based origin gate, click guards, audit rows, and the no-JS constraint. |
 | [snapshots.md](browser-bridge/snapshots.md) | You are changing what the model *sees*: atom budgeting, `maxChars`, state flags, table rows, respacing, links/images, and the nine `axtree.js` rules that each exist because something real went missing. |

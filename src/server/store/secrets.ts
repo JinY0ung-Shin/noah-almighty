@@ -15,11 +15,6 @@ import {
   type ToolSkillPolicy,
 } from "../toolSkillPolicy.js";
 import {
-  MODEL_VISION_POLICY_CONFIG_KEY,
-  normalizeModelVisionPolicy,
-  type ModelVisionPolicy,
-} from "../modelVisionPolicy.js";
-import {
   isBrowserExposableSecret,
   normalizeBrowserSecretHosts,
   type BrowserSecretPolicy,
@@ -502,30 +497,6 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
       this.db
         .prepare(`DELETE FROM user_shared_mcp_bindings WHERE server_name = ?${keep}`)
         .run(serverName, ...keepSlotIds);
-    }
-
-    /**
-     * Admin-managed per-model vision policy (`{piModelId: boolean}`; an absent
-     * model = inherit the MODEL_VISION deployment default). Missing/corrupt/
-     * unreadable → empty map, i.e. everything inherits — the safe pre-feature
-     * behavior.
-     */
-    getModelVisionPolicy(): ModelVisionPolicy {
-      const raw = this.getAppSecret(MODEL_VISION_POLICY_CONFIG_KEY);
-      if (!raw) {
-        return normalizeModelVisionPolicy(null);
-      }
-      try {
-        return normalizeModelVisionPolicy(JSON.parse(raw));
-      } catch {
-        return normalizeModelVisionPolicy(null);
-      }
-    }
-
-    setModelVisionPolicy(policy: ModelVisionPolicy): ModelVisionPolicy {
-      const normalized = normalizeModelVisionPolicy(policy);
-      this.setAppSecret(MODEL_VISION_POLICY_CONFIG_KEY, JSON.stringify(normalized));
-      return normalized;
     }
 
     /** Set the commit author identity used for knowledge-repo commits. */

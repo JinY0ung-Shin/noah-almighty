@@ -8,6 +8,5 @@ export {
   normalizeHashtags,
   MAX_HASHTAGS,
   SIGNUP_MODE_KEY,
-  MODEL_OVERRIDE_KEY,
   AVATAR_TASK_RESTART_ERROR,
 } from "./store/index.js";
