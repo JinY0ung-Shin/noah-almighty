@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { SERVER_ONLY_SECRET_ENV_NAMES, scrubServerOnlySecretEnv } from "../src/server/secretPolicy.js";
-import { agentSubprocessEnv } from "../src/server/agent/runPlan.js";
+import { piProxyBaseEnv } from "../src/server/agent/pi/mcpProxies.js";
 
 // #71: server-only secrets never reach a process the server starts, and the
 // server process itself is non-dumpable in the image.
@@ -15,11 +15,10 @@ describe("server-only secret env", () => {
     expect(env).toEqual({ PATH: "/usr/bin", ANTHROPIC_API_KEY: "model" });
   });
 
-  it("keeps them out of the agent subprocess env even from an unscrubbed base", () => {
-    const base: Record<string, string | undefined> = { SESSION_SECRET: "s", CRAFT_CONTROL_SECRET: "c", HOME: "/home/node" };
-    const env = agentSubprocessEnv(base, "/data/agent-sessions");
+  it("keeps them out of a relayed MCP child's env even from an unscrubbed base", () => {
+    const base: NodeJS.ProcessEnv = { SESSION_SECRET: "s", HOME: "/home/node" };
+    const env = piProxyBaseEnv(base);
     expect(env).not.toHaveProperty("SESSION_SECRET");
-    expect(env).not.toHaveProperty("CRAFT_CONTROL_SECRET");
     expect(env.HOME).toBe("/home/node");
   });
 
@@ -29,7 +28,7 @@ describe("server-only secret env", () => {
     const scrub = index.indexOf("scrubServerOnlySecretEnv(process.env);");
     expect(services).toBeGreaterThan(-1);
     expect(scrub).toBeGreaterThan(services);
-    // Before anything else starts processes (deck probes, craft probe, listen).
+    // Before anything else starts processes (deck probes, listen).
     expect(scrub).toBeLessThan(index.indexOf("probeDeckRendering();"));
   });
 
@@ -44,10 +43,10 @@ describe("server-only secret env", () => {
 
   it("compose keeps Docker's readable init off the base service, on for the root egress image", () => {
     const base = fs.readFileSync(path.join(__dirname, "../docker-compose.yml"), "utf8");
-    const app = base.slice(base.indexOf("  noah-almighty:"), base.indexOf("  craft-runner:"));
+    const app = base.slice(base.indexOf("  noah-almighty:"), base.indexOf("\nvolumes:"));
     expect(app).toMatch(/^\s+init: false$/m);
     const egress = fs.readFileSync(path.join(__dirname, "../docker-compose.egress.yml"), "utf8");
-    const egressApp = egress.slice(egress.indexOf("  noah-almighty:"), egress.indexOf("  egress-proxy:"));
+    const egressApp = egress.slice(egress.indexOf("  noah-almighty:"), egress.indexOf("  noah-egress-proxy:"));
     expect(egressApp).toMatch(/^\s+init: true$/m);
   });
 });

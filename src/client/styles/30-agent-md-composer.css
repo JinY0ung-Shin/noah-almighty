@@ -324,19 +324,6 @@
   font-size: var(--t-2xs);
   line-height: 1;
 }
-/* A sub-agent running in the background: its spawn returned at once, so the
-   card (not the turn) is where the user sees it is still at work. Outlined
-   like .task-badge so it reads as a qualifier of the solid 에이전트 badge. */
-.agent-bg-badge {
-  flex: none;
-  border: 1px solid var(--accent-soft-strong);
-  border-radius: var(--r-pill);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  padding: 0 var(--s-1-5);
-  font-size: var(--t-2xs);
-  font-weight: 700;
-}
 .agent-label {
   font-weight: 600;
   /* min-width:0 so the automatic content-based flex minimum doesn't keep an
@@ -695,12 +682,6 @@
 .prompt-card[aria-busy="true"] {
   cursor: progress;
 }
-.prompt-card.permission {
-  border-color: var(--warn-line);
-  background:
-    linear-gradient(var(--warn-soft), var(--warn-soft)),
-    linear-gradient(var(--bg-elevated), var(--bg-elevated)) var(--bg);
-}
 .prompt-card.question {
   border-color: var(--info-line);
   background:
@@ -733,35 +714,6 @@
 }
 .prompt-error {
   margin-top: var(--s-1);
-}
-.prompt-title {
-  font-size: var(--t-base);
-  font-weight: 600;
-  color: var(--text);
-}
-.prompt-tool {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-2);
-  font-size: var(--t-sm);
-  min-width: 0;
-}
-.prompt-tool code {
-  font-family: var(--font-mono);
-  background: var(--panel-strong);
-  border-radius: var(--r-sm);
-  padding: 1px var(--s-1-5);
-  flex: none;
-}
-.prompt-arg {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.prompt-desc {
-  font-size: var(--t-sm);
-  color: var(--text-soft);
 }
 .prompt-input {
   font-size: var(--t-xs);
@@ -1099,8 +1051,8 @@ tbody tr:hover td {
   transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
 }
 
-/* The row is `attach | textarea | send`, and attach is optional: it is
-   native-panes-only (external avatars take no images). Each combination needs
+/* The row is `attach | textarea | send`, and attach is optional (the DM dock
+   composer has none). Each combination needs
    its own column list — one column too many strands a button in the middle 1fr
    slot and squeezes the textarea into an `auto` one. */
 .composer-box.no-attach {
@@ -1379,7 +1331,7 @@ button.composer-bridge:focus-visible {
 }
 
 /* Per-conversation model tier picker (all viewers). Styled to match the
-   group-knowledge button since the global input chrome only applies inside a
+   MCP tool button since the global input chrome only applies inside a
    `.field` ancestor (see src/client/CLAUDE.md). */
 .composer-model-select {
   flex: none;
@@ -1403,10 +1355,8 @@ button.composer-bridge:focus-visible {
   border-color: var(--accent, var(--text));
 }
 
-/* Owner-only per-conversation group-knowledge toggle (button + dropdown), the
-   MCP tool picker, and the 할 일 overlay switch (ChatView adds only its icon
+/* The MCP tool picker (button + dropdown) and the 할 일 overlay switch (ChatView adds only its icon
    layout and the pressed/overdue states). */
-.composer-gk-btn,
 .composer-tools-btn,
 .composer-todo-btn {
   flex: none;
@@ -1423,12 +1373,9 @@ button.composer-bridge:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.composer-gk-btn[hidden],
 .composer-tools-btn[hidden] {
   display: none;
 }
-.composer-gk-btn[aria-expanded="true"],
-.composer-gk-btn:hover,
 .composer-tools-btn[aria-expanded="true"],
 .composer-tools-btn:hover,
 .composer-todo-btn:hover {
@@ -1453,7 +1400,6 @@ button.composer-bridge:focus-visible {
     transform: scale(1);
   }
 }
-.composer-gk-panel,
 .composer-tools-panel {
   position: absolute;
   right: 0;
@@ -1470,17 +1416,14 @@ button.composer-bridge:focus-visible {
   background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
 }
-.composer-gk-panel[hidden],
 .composer-tools-panel[hidden] {
   display: none;
 }
-.composer-gk-title,
 .composer-tools-title {
   font-size: 0.78em;
   color: var(--muted);
   padding-bottom: var(--s-1);
 }
-.composer-gk-item,
 .composer-tools-item {
   display: flex;
   align-items: center;

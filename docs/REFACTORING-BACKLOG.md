@@ -30,14 +30,14 @@ Each item lists: files · why · risk · effort · breaking.
 - **Why:** Larger version of the Tier-2 `repoToolKit` extraction, now including the `create_repo` body (host/token/name-regex, best-effort seed). Preserve the create→connect→best-effort-seed ordering.
 - **risk:** med · **effort:** M · **breaking:** no
 
-### T3.4 — Type the SDK message / hook surface
-- **Files:** `src/server/agent/sdkMessageHandlers.ts`, `events.ts`, `preToolUseHook.ts`
-- **Why:** ~15 sites thread SDK messages through `Record<string,unknown>` + `asString`/`isRecord`. Hand-authored discriminated unions matching the pinned SDK version would catch field-name typos at compile time. Also fix the stale `PermissionRequest` doc comment (`canUseTool` is unused headlessly).
-- **Why deferred:** Large, and coupled to the pinned SDK version.
+### T3.4 — Type the pi Responses event surface
+- **Files:** `src/server/agent/pi/eventAdapter.ts`, `pi/responsesClient.ts`, `events.ts`
+- **Why:** the adapter threads Responses SSE events through `Record<string, unknown>` + `isRecord` (~30 sites). Hand-authored discriminated unions for the event types pi-gateway actually emits would catch field-name typos at compile time. (Retargeted 2026-10-29: the SDK message / hook surface it used to name was removed with the SDK runner.)
+- **Why deferred:** Large, and coupled to pi-gateway's event shapes, which Noah does not own.
 - **risk:** med · **effort:** L · **breaking:** no
 
-### T3.5 — Make `allowedTools` + `mcpServers` data-driven
-- **Files:** `src/server/agent/claudeAgent.ts`
+### T3.5 — Make `mcpAllowedTools` + `inProcessMcpServers` data-driven
+- **Files:** `src/server/agent/runCapabilities.ts`
 - **Why:** Two hand-synced lists keyed on the same servers — adding a server to one but not the other is a silent bug. Reduce a descriptor array `{name, server, toolNames, active}` into both. Verify against the `agent-core`/`agent-tools` test expectations.
 - **risk:** med · **effort:** M · **breaking:** no
 
@@ -91,7 +91,6 @@ Each item lists: files · why · risk · effort · breaking.
   Partially addressed (2026-07): `tests/scheduler.test.ts` now covers the FAILURE path (timeout-cause
   substitution, partial-output persistence, non-timeout errors) by mocking `runAgentStream` so a run can
   hang until the deadline aborts it. The **tick / due-job selection loop itself is still untested.**
-- `claudeAgent.ts` ~36% is expected (the SDK subprocess path); the pure helpers are covered — lower priority.
 
 ---
 
@@ -141,28 +140,10 @@ The 5-axis UI audit + fix pass landed (see DESIGN.md §5 item 9). Deliberately N
   focus-ring visibility in `prefers-contrast: more`) — the 2026-08 pass was verified by gate + review
   agents only; DESIGN.md §5 still calls for a human browser sweep (light/dark × 채팅/탐색/설정/관리자).
 
-## Background phase (2026-08) — deferred hardening
+## Background phase (2026-08) — closed
 
-The SDK-native background-task continuation (visible turn finalized at the first `result` while the
-session keeps running; wake-ups delivered as new messages — see [`architecture/chat-sse-media.md`](architecture/chat-sse-media.md)) shipped
-with two deliberate v1 limits worth revisiting:
-
-### BG1 — New user message during a background phase still 409s
-- **Files:** `src/server/routes/chat.ts` (active-run 409), `runRegistry.ts`
-- **Why:** Concurrent turns would resume the SAME SDK session transcript from a second process while
-  the first is still appending wake-up turns — unresolved write/fork semantics. v1 keeps the lock and
-  tells the user (background-specific 409 + prompt guidance to the avatar). Options: queue the message
-  for after `bg_end`, or cancel-with-confirm from the composer.
-- **risk:** med · **effort:** M · **breaking:** no
-
-### BG2 — Server restart kills pending background work silently
-- **Files:** `runRegistry.ts` (in-memory), `routes/chat.ts`
-- **Why:** The phase lives in the run registry + SDK subprocess; a restart drops both. The transcript
-  keeps the "started in background" tool_result, so the NEXT turn's model may believe work is pending.
-  Options: persist a `background_pending` marker per conversation and, on restart, append a Korean
-  notice message ("서버 재시작으로 백그라운드 작업이 중단되었습니다") + a prompt fact so the avatar
-  knows the work died.
-- **risk:** low · **effort:** M · **breaking:** no
+BG1/BG2 (a new message during a background phase 409s; a restart silently kills background work) are moot:
+background tasks were retired and their code removed with the SDK runner (2026-10-29).
 
 ## Browser screenshot vision fit (2026-09) — deferred follow-up
 
@@ -182,8 +163,8 @@ limit shipped with it:
   had. Passing the run's resolution tier down as an OPTIONAL screenshot-op field (absent = standard, so
   every old build and every unwired caller keeps today's behavior) would restore full fidelity there.
 - **Why deferred:** the serving model's tier is not knowable from where the decision is made. The
-  composer offers model TIER aliases that each deployment maps to concrete models
-  (`ANTHROPIC_DEFAULT_<TIER>_MODEL`, see `modelVisionPolicy.ts` / `visionForModel`), so "which
+  composer offers pi-gateway's model ids (its live list, `agent/pi/modelCatalog.ts`) with an admin
+  per-model vision flag (`modelVisionPolicy.ts` / `visionForModel`) but no resolution tier, so "which
   resolution tier will actually serve this run" needs new admin config or a probe — and guessing the
   OTHER way (fitting to high-res for a standard-tier model) puts #66's ×1.6 coordinate skew straight
   back. Standard-tier fitting is exact for every Claude model, so the cost of waiting is fidelity only.
@@ -219,13 +200,15 @@ built:
   needs the 540 s budget and the 600 s Bash ceiling revisited); the what's-new entry (drafted, added only by
   the release step after the wording is approved).
 
-### PC3 — Run the deck Docker smoke in the release checklist
+### PC3 — Run the sandbox image check in the release checklist (and finish porting the old smoke)
 - **Files:** `.claude/skills/release/SKILL.md` (+ `architecture/build-run-verify.md`'s release bullet, kept in
-  sync with it).
-- **What:** when a release contains converter or Dockerfile changes, run
-  `scripts/deck-docker-smoke.sh --image <fresh build> --baseline-image <fresh build of the previous release>
-  --require-validator` before tagging. Nothing but this smoke exercises the image's Chromium, the pinned Python
-  set and the container hardening together.
+  sync with it), `docker/pi-sandbox/verify.sh`.
+- **What:** when a release contains converter or `docker/pi-sandbox` changes, run
+  `docker/pi-sandbox/verify.sh --image <fresh build>` before tagging — nothing else exercises the sandbox
+  image's Chromium, the pinned Python set and sandboxd's hardening together. The retired Noah-image smoke
+  (`scripts/deck-docker-smoke.sh`, removed 2026-10-29) had two steps `verify.sh` lacks: SIGKILL `deck.mjs`
+  mid-build (no Chromium/Python left after 10 s, the re-run not refused, `/tmp` clean) and the Open XML SDK
+  validator over every produced deck (`--require-validator` for releases). Port both.
 - **risk:** low · **effort:** S · **breaking:** no
 
 ### PC4 — Move the converter locks to `flock` if the agent Bash ever gets its own network namespace

@@ -18,14 +18,13 @@
   PNGs) → `build_pptx.py` (python-pptx) → the gates, in parallel → fidelity (the IR against the written
   objects) → `previews.py` → deliverable + preview sidecar. It is the proof of concept ported behind two
   roots; the PoC's evidence is preserved under [`../pptx-converter/`](../pptx-converter/README.md).
-- **Shell-side on purpose, never an MCP tool.** The `mcp__` auto-allow in the PreToolUse hook fires BEFORE any
-  owner check, so an MCP converter would need its own gate; an in-process tool would run a `--no-sandbox`
-  Chromium on agent-authored HTML inside the server process, which holds `SESSION_SECRET` and the git tokens
-  (they are stripped only from the SUBPROCESS env, `agentSubprocessEnv` in `agent/runPlan.ts`). A Bash call
-  runs as the same uid and gains nothing new, and it stays behind the ONE PreToolUse gate: plain colleagues
-  and restricted headless runs are read-only. Elevated viewers run it **without a prompt** — every chat turn
-  and routine passes `autoApprove: true` — so **the converter's own guards are the boundary**: lints, CSP,
-  network block, budgets and locks. The same path works unchanged in routines and the external task API.
+- **Shell-side on purpose, never an MCP tool.** An in-process tool would run a `--no-sandbox` Chromium on
+  agent-authored HTML inside the server process, which holds `SESSION_SECRET`, the DB and every user's git tokens.
+  The build is ONE foreground `bash` call in the run principal's own pi sandbox (the `docker/pi-sandbox` image,
+  network-less but for pi's egress allowlist), which holds none of that and gains nothing new. There is no
+  approval prompt (pi has no per-call permission step), so **the converter's own guards are the boundary** inside
+  the sandbox: lints, CSP, network block, budgets and locks. The same path works unchanged in routines and the
+  external task API.
 - **Existing decks stay python-pptx.** Editing a `.pptx` in place or using a user's own template/master goes
   through `reference/python-pptx.md` (+ `scripts/render_deck.sh` for LibreOffice renders). A converted deck is
   changed by editing its HTML and rebuilding — a python-pptx edit breaks the hash binding (below), which the
@@ -192,7 +191,7 @@ Skill-side behaviour that the prose pins in `tests/pptx-skill.test.ts` hold in p
   is still open: 테마 (the three best-fitting themes, the recommended one first with `(추천)`), 분량, 용도 (보고서형 /
   발표형). An outline for a large request goes into the chat text right before it, with a one-line confirm replacing
   one of the questions. Never where nobody can answer now (routines and automated tasks), nor on an
-  external-task-API turn, where the hook does NOT deny the dialog and it would park the task — so the skill keys
+  external-task-API turn, where nothing refuses the dialog and it would park the task — so the skill keys
   that exclusion on the prompt's verbatim `This turn was submitted by an **EXTERNAL SYSTEM**` marker (a test asserts
   it is still in `promptBuilder.ts`: reword both together). Skill-only, no prompt change.
 - **Review rounds (SKILL §11).** Every build that exits 0 is delivered first (`share_file` IN PLACE); then its
@@ -288,7 +287,7 @@ environment (all optional):
 - `check` renders and lints the build profile only (`--profile both` compares the wrap behavior of both) and
   never touches deliverables; it writes its IR, renders and report even when it exits 1, so the agent can inspect
   them. `build` includes the full check. `--out` takes only a bare `^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.pptx$`
-  written in `<deck>`. `--strict` blocks on drift too (examples, tests, the smoke).
+  written in `<deck>`. `--strict` blocks on drift too (examples, tests, `verify.sh`).
 - Output: a human summary on stdout (≤ ~60 lines, paths relative to cwd, at most 30 lint lines — except the build's
   `Share it IN PLACE: mcp__file_output__share_file path="…"` line, which names the ABSOLUTE .pptx path: share_file
   resolves a relative path against the run's working directory, not the shell's current one, and the Bash tool keeps
@@ -387,10 +386,10 @@ environment (all optional):
   | renderer V8 heap | 512 MB (`--js-flags=--max-old-space-size=512`) | — |
   | built `.pptx` | 30 MB, the `share_file` cap (gate `pptx-too-large`, exit 3) | — |
 
-- **Why 540 s.** The bundled agent CLI moves a foreground Bash command that outlives its 600 s ceiling to the
-  BACKGROUND, and a background task delivers its follow-up as a NEW chat message while blocking the user's input
-  until it settles. A converter that always ends first never trips that path; the SKILL still says what to do if
-  it happens (wait for the notice, never start another run of that deck — a second run exits 5 anyway).
+- **Why 540 s.** The skill runs `deck.sh` as one foreground bash call with a 600 s timeout (the skill sync rewrites
+  the Claude Code `timeout: 600000` ms value to pi's `timeout: 600` seconds — [`pi-runtime.md`](pi-runtime.md)
+  "Skills"). A converter that always ends first is never cut off by the shell; a second run of the same deck while
+  one is still going exits 5 anyway.
   Per-stage deadlines = remaining budget minus a reserve for the stages after it (extract reserves 90 s in
   `build`, 30 s in `check`, where only the overview sheet follows; build_pptx ≤ 180 s, reserve 45 s; each gate
   ≤ 120 s, reserve 15 s; previews ≤ 60 s); a miss kills the stage and exits 6 (a stage whose deadline is already
@@ -564,11 +563,16 @@ environment (all optional):
   fonts per profile, the limits, and the build-time self-test record (`not-recorded` on dev boxes). `missing` is
   English FACTS for an administrator, never commands.
 - **States** (`deckModeOf`): `converter` → `legacy` (python-pptx + LibreOffice + pdftoppm) → `unavailable`.
-  Authoring status (`deckAuthoringStatusFor`, the exact rule of the PreToolUse hook's skill check):
+  Authoring status (`deckAuthoringStatusFor`, the admin skill policy's rule):
   `skill-disabled` when `pptx` or `<plugin.json name>:pptx` (`avatar-defaults:pptx`) is disabled —
   `other:pptx` is not — else `read-only` without elevated tool access, else `allowed`.
+- **On pi (every run) the surfaces read the SANDBOX, not this host probe:** `piSandboxDeckToolchain(config)`
+  (`deckRender.ts`) reports `converter` with the sandbox image's facts (both profiles, its limits, self-test pass,
+  python-pptx) when the operator set `PI_DECK_SANDBOX=true`, else `converter: NOT INSTALLED` with the operator fix
+  named. Only `libreOffice` keeps the host value, because share_file's approximate previews still render Noah-side.
+  The host probe still runs at boot for the log line below. Details → [`pi-runtime.md`](pi-runtime.md) "Decks".
 - **The state on BOTH surfaces.** The explicit markers live on `describe_system`'s "Document deck generation
-  (PPTX)" line (owner, group-agent and non-owner branches — one helper, `deckCapabilityLine` in
+  (PPTX)" line (owner and non-owner branches — one helper, `deckCapabilityLine` in
   `agent/systemTools.ts`, so they can never disagree). The prompt's `deckSection` (`agent/promptBuilder.ts`)
   carries no marker: it picks the converter or the legacy standing guidance from the same probe
   (`deckConverterEnabled` wins over `deckRenderingEnabled`). The `share_file` description
@@ -691,7 +695,7 @@ environment (all optional):
   keeps the 1.0.0 IR) feeds `generator` = `noah-pptx-converter/<VERSION>`; bump it whenever the output changes, and
   regenerate the goldens only after a PowerPoint spot-check.
 
-## Tests and the smoke
+## Tests and the image check
 | file | covers |
 |---|---|
 | `tests/deck-converter.test.ts` | CLI contract, caps, `--only` validation, locks (incl. an aborted slot wait), the cwd-proof Python probe, the router's decoded-pixel budget and the image-header reader, static greps over KIT, the chart-token parser/field walker and the stylesheet-link scanner, the photo-slot prompt rule and its rule docs/Next: sections (always run); opt-in e2e: selftest, CSP/network negative controls, the resolver rule, `image-too-large`, renders of renamed slides, deliverable replacement, cancellation (SIGKILL, orphaning, SIGTERM/SIGINT → `cancelled` 143/130 in output and report), budget, chart tokens (incl. `light-dark()`/`color-mix()`: IR = preview = chart XML) and their negative control, `currentColor` icons (own and inherited, opaque and translucent), `theme-link`, `theme-color`, the dark colour map, photo slots (a two-slide family with a lifted footer: idx 13/14 on the slides, the layout's union with fresh ids and prompts, office-rules PH-01/SLD-02/SLD-03, the slide/layout parts against pml.xsd — plus the Open XML SDK validator when `NOAH_OPENXML_VALIDATOR_DLL` and `dotnet` exist —, the fidelity gate's `object` / `placeholder` negative controls; the prompt colour on a dark slide, on a dark photo well and, for a frame lifted into its layout, in the layout; document-order slots under mixed positioning; `placeholder-layout`; the gate's colour negative controls — an uncoloured prompt, a prompt run in a slide slot, a layout colour without a lifted frame) and the slot lints (`placeholder-size`, `placeholder-layout` and the hint children the CSS lints skip, the slot itself still linted); `text-on-picture` (always-run unit cases over the pure worst-case math — scrim opacity, weakest gradient corner, partial coverage, opaque card, photo slot, svg icon, large-text threshold, translucent text, the 0.72 standard across the six themes' brand-950, a translucent photo slot, hue-shifting and over-a-layer ramps, the per-channel box search against brute force, the certified grid bound, slab strictness against an independent point model, the forced work-bound tiers and their message, the per-element floor (a light caption after a slide-exhausting text stays exact) and `boundBy` — plus an e2e check) |
@@ -699,21 +703,25 @@ environment (all optional):
 | `tests/theme-derive.test.ts` | `theme-check.mjs --derive` / `--from-pptx`: a brand sweep over both bases at 0 FAIL / 0 WARN, the ≥ 45° brand/accent hue gap, exact vs matched brand-600 (the exact colour over hue-matched series for dark brands, the fell-back note naming its check), other-base tips only when verified, grey and dull brands' stepped series, the structure (one `:root`, classic's token order, midnight's slots), the CLI contract (exit codes, empty stdout on failure, `#`-less / RGB / `--flag=value` forms), the read-only `mini.pptx` fixture and synthetic templates (trailing bytes after the zip directory), hostile XML read in linear time (< 1 s at the part caps) with the caps' refusals, and the zip refusals |
 | `tests/deck-preview.test.ts` (+ `routes-chat`, `chat-files`, `chat-images`) | the sidecar loader's edge cases, the `share_file` branches and texts |
 | `tests/deck-toolchain.test.ts` (+ `agent-core`, `agent-tools`, `system-manual`) | the probe (injected spawn/clock), memo + async retry, env allowlist, modes, authoring status; prompt/describe_system/manual branches and size caps |
-| `tests/deck-packaging.test.ts` | the static Dockerfile / compose / fontconfig / npm + Python pins / `.env.example` / ignore-file / README-anchor / smoke contract |
+| `tests/deck-packaging.test.ts` | the static Dockerfile / compose / fontconfig / npm + Python pins / `.env.example` / ignore-file / README-anchor contract and the sandbox image check (`verify.sh` parses, sandboxd flags) |
 | `tests/deck-contract.test.ts` (+ `tests/fixtures/deck-preview/mini/`) | a converter-made one-slide malgun fixture accepted by the server loader (plus stale / altered-render / copied-deck rejections); the real `probe --json` through the server's parser; the describe_system markers and tails (owner and non-owner) against SKILL.md's quotes of them; the `--help` block above; `previews.py`'s size caps = the server's; opt-in e2e: the real probe → the INSTALLED marker, photo-heavy previews fitted into the 32 MiB budget and loaded, and a copy of `examples/business-review` built and shared through the loader |
 
 - The toolchain e2e suites run only with `NOAH_PPTX_E2E=1` AND a probe that reports the converter; on a dev box
   also set `NOAH_PPTX_PYTHON=<venv python>` and `NOAH_PPTX_DEV=1`. Everywhere else they skip. Recipe:
   [`build-run-verify.md`](build-run-verify.md#deck-converter).
-- **`scripts/deck-docker-smoke.sh`** drives a built image the way production runs it (`--network none --cap-drop
-  ALL --security-opt no-new-privileges:true -u node --init`): (a) `/tmp` hygiene + the record says `pass`,
-  (b) probe → converter true, (c) `selftest --fail-on-drift`, (d) every `examples/*` deck × both profiles with
-  `--strict`, and every other theme over `business-review`, `layouts` and `talk` (embedded, `--strict`), (e) two concurrent checks → exactly one exit 5 "already running", (f) SIGKILL `deck.mjs` mid-build →
-  no Chromium/Python after 10 s, the re-run is not refused and leaves `/tmp` clean, (g) the Open XML SDK 3.3.0
-  validator (Microsoft365, dev/CI-only source in `scripts/openxml-validator/`) over every produced deck — 0
-  errors, (h) server boot (`/api/bootstrap` 200 + the probe log line), (i) with `--baseline-image`, an upgrade
-  rehearsal on a data volume the baseline created, (j) a summary table. Run it whenever the converter or the
-  Dockerfile changed.
+- **`docker/pi-sandbox/verify.sh`** drives a built SANDBOX image (decks build there, never in the Noah image) under
+  the flags pi's sandboxd applies (read-only rootfs, `--cap-drop ALL`, no-new-privileges, `--network none`, the
+  256 MiB `/tmp`, 1 GiB, 256 pids, `--init`, uid 1000, the skill synced into `/workspace/.noah/skills/pptx` and once
+  from a read-only `/opt/plugins` mount): probe, selftest, every `examples/*` deck × both profiles with `--strict`,
+  a 60-slide worst case, concurrent builds, optionally one gVisor run (`--runsc`); per scenario it reports exit
+  code, wall time, memory/pids/`/tmp` peaks and OOM. Run it whenever the converter, its pins or
+  `docker/pi-sandbox` changed (recipe: `build-run-verify.md`).
+- **`scripts/deck-docker-smoke.sh` is retired** (2026-10-29): it drove the pre-pi Noah image, whose converter is
+  gone. Two of its steps have no counterpart in `verify.sh` yet — SIGKILL of `deck.mjs` mid-build (no orphaned
+  Chromium/Python, kernel-released lock, clean `/tmp`) and the Open XML SDK 3.3.0 validator over every produced
+  deck (`scripts/openxml-validator/`; the opt-in e2e still runs it when `NOAH_OPENXML_VALIDATOR_DLL` is set) —
+  see `REFACTORING-BACKLOG.md` PC3. Its server-boot and upgrade-rehearsal steps belong to the compose stack's
+  boot test (`build-run-verify.md`, "Combined-stack boot test").
 
 ## Known limitations
 - PowerPoint itself was only spot-checked by the user (desktop, Windows); the gates are checkers modelled on
@@ -727,11 +735,9 @@ environment (all optional):
   The HTML render and previews show the author's hint, not PowerPoint's prompt.
 - LibreOffice previews (edited decks, docx/xlsx/pdf) stay approximate; malgun previews use the stand-in font,
   and the result note says so.
-- ≤ 60 slides per build (split bigger decks); no background (`run_in_background`) conversions; no converter
+- ≤ 60 slides per build (split bigger decks); no background conversions; no converter
   support for user templates/masters (the python-pptx path covers them); in-deck Korean metadata (layout names
   표지/본문, placeholder prompts, alt text, `계열 N`) is not localized; no MicroType Express compression; no
   Hanja-only NotoSansKR subset; LibreOffice ≥ 25.8 is not targeted.
-- The admin skill list shows the old `pptx` description until the CLI version changes (the skill-discovery cache
-  key in `skillDiscovery.ts`) — cosmetic.
 - Deferred client polish and the open production questions (concurrency sizing, mirror coverage, disk) are in
   [`../REFACTORING-BACKLOG.md`](../REFACTORING-BACKLOG.md#pptx-converter-2026-09--deferred-follow-ups).

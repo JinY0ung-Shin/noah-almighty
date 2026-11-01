@@ -226,14 +226,11 @@ describe("real `deck.mjs probe --json` parsed by the server probe", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("the Dockerfile's DECK_CONVERTER=0 record -> converter:false naming the opt-out, selftest disabled", () => {
-    // The EXACT record the Dockerfile writes for a legacy image (so a drift between the image build and the
-    // probe's record reader fails here, not in the field).
-    const dockerfile = fs.readFileSync(path.join(REPO, "Dockerfile"), "utf8");
-    const printed = dockerfile.match(/printf '(\{"format":"noah-deck-selftest-record"[^']*\})\\n'/);
-    expect(printed, "the Dockerfile's disabled-record printf").not.toBeNull();
+  it("a 'disabled' self-test record -> converter:false naming the opt-out, selftest disabled", () => {
+    // The record a converter-less image build writes (the pre-pi Noah image's DECK_CONVERTER=0); no
+    // Dockerfile of this repository writes it any more, but the probe's record reader still honours it.
     const record = path.join(tmp("record"), "deck-selftest.json");
-    fs.writeFileSync(record, `${printed![1]}\n`);
+    fs.writeFileSync(record, '{"format":"noah-deck-selftest-record","version":1,"status":"disabled"}\n');
     vi.stubEnv("NOAH_PPTX_SELFTEST_RECORD", record);
     const state = probeDeckToolchain({ defaultPluginsDir: PLUGINS }, { spawnSync });
     expect(state.definitive).toBe(true);
@@ -286,7 +283,6 @@ describe("describe_system deck markers vs SKILL.md preflight (plan I12)", () => 
   };
   const PREFIX = "- Document deck generation (PPTX): ";
   const TAILS = {
-    "read-only": "read-only",
     "skill-disabled": "administrator disabled the `pptx` skill",
     "no-file-output": "preview/download need an interactive chat turn",
   } as const;
@@ -349,10 +345,8 @@ describe("describe_system deck markers vs SKILL.md preflight (plan I12)", () => 
     expect(unavailable).not.toContain(ALLOWED_TAIL);
   });
 
-  it("each tail overrides the allowed guidance, by precedence skill-disabled > read-only > no file output", async () => {
+  it("each tail overrides the allowed guidance, by precedence skill-disabled > no file output", async () => {
     for (const state of [CONVERTER, LEGACY]) {
-      const readOnly = await deckLine({ deckToolchain: state, fileOutputEnabled: true, deckAuthoring: "read-only" });
-      expect(readOnly).toContain(TAILS["read-only"]);
       const disabled = await deckLine({
         deckToolchain: state,
         fileOutputEnabled: false,
@@ -362,7 +356,7 @@ describe("describe_system deck markers vs SKILL.md preflight (plan I12)", () => 
       expect(disabled).not.toContain(TAILS["no-file-output"]);
       const noFileOutput = await deckLine({ deckToolchain: state, fileOutputEnabled: false, deckAuthoring: "allowed" });
       expect(noFileOutput).toContain(TAILS["no-file-output"]);
-      for (const line of [readOnly, disabled, noFileOutput]) {
+      for (const line of [disabled, noFileOutput]) {
         expect(line).not.toContain(ALLOWED_TAIL);
         expect(line).toContain(state.converter ? "converter: INSTALLED" : "converter: NOT INSTALLED");
       }
@@ -370,9 +364,11 @@ describe("describe_system deck markers vs SKILL.md preflight (plan I12)", () => 
   });
 
   it("a non-owner viewer gets the same deck line with its own tail", async () => {
-    const line = await deckLine({ deckToolchain: CONVERTER, fileOutputEnabled: true, deckAuthoring: "read-only" }, false);
+    const line = await deckLine({ deckToolchain: CONVERTER, fileOutputEnabled: true, deckAuthoring: "skill-disabled" }, false);
     expect(line).toContain("converter: INSTALLED");
-    expect(line).toContain(TAILS["read-only"]);
+    expect(line).toContain(TAILS["skill-disabled"]);
+    // Without a tail a non-owner builds too: every run writes in its own sandbox.
+    expect(await deckLine({ deckToolchain: CONVERTER, fileOutputEnabled: true }, false)).toContain(ALLOWED_TAIL);
   });
 
   it("SKILL.md quotes every marker and tail the deck line can carry, and keys its preflight on them", () => {

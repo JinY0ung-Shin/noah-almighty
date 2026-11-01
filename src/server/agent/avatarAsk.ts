@@ -3,7 +3,7 @@ import type { AppConfig, PluginRoot } from "../types.js";
 import type { Store } from "../store.js";
 import type { AgentEvents } from "./events.js";
 import { runAgentStream } from "./index.js";
-import { EMPTY_SDK_RESPONSE_MESSAGE } from "./claudeAgent.js";
+import { EMPTY_PI_RESPONSE_MESSAGE } from "./pi/runPiAgent.js";
 import {
   AVATAR_ASK_ANSWER_CAP,
   AVATAR_ASK_TIMEOUT_MS,
@@ -33,6 +33,13 @@ export {
  * stay locked no matter what `allowHeadlessTools` opens: the target answers
  * with persona + personal-knowledge READ tools (second-brain recall), exactly
  * what the asking user could already get by chatting directly.
+ *
+ * Sandbox: the run executes neither in the asker's sandbox nor the target's —
+ * the pi runner gives every consultation a fresh, empty sandbox of its own and
+ * removes it afterwards (`beginPiConsultationSandbox`), because the run is
+ * driven by the TARGET's authored content (persona, CLAUDE.md, recalled notes)
+ * with full built-ins and nobody watching. `viewerUserId` stays the asker: it
+ * is who the MCP gates see, not whose files the shell gets.
  *
  * Depth guard: the inner request carries `avatarConsultation: true`, which
  * keeps `ask_avatar` OUT of the inner run's tool registration — an A→B→C (or
@@ -68,35 +75,53 @@ function capAnswer(raw: string): { answer: string; truncated: boolean } {
   return { answer: trimmed.slice(0, AVATAR_ASK_ANSWER_CAP), truncated: true };
 }
 
+/**
+ * The consultation's synchronous gates (target exists, is not the asker, is
+ * visible, and its owner is trusted): the refusal outcome, or the resolved
+ * target. Run again by `askAvatar` itself; exported so a background start (pi
+ * runs, design D8) can refuse at once instead of in a later message.
+ */
+export function preflightAvatarAsk(
+  store: Store,
+  input: Pick<AvatarAskInput, "askerUserId" | "targetUsername">,
+):
+  | { ok: false; outcome: AvatarAskOutcome }
+  | { ok: true; username: string; target: NonNullable<ReturnType<Store["resolveChatAvatar"]>> } {
+  const username = input.targetUsername.trim().replace(/^@/, "");
+  const targetUser = username ? store.getUserByUsername(username) : null;
+  if (!targetUser) {
+    return { ok: false, outcome: { ok: false, reason: "not_found", username } };
+  }
+  if (targetUser.id === input.askerUserId) {
+    return { ok: false, outcome: { ok: false, reason: "self", username } };
+  }
+  // Visibility gate (public/group/private + suspended), then the trust gate.
+  // Both fail as if the avatar didn't exist where that avoids leaking existence.
+  const target = store.resolveChatAvatar(input.askerUserId, targetUser.id);
+  if (!target) {
+    return { ok: false, outcome: { ok: false, reason: "not_found", username } };
+  }
+  if (!store.isTrustedFor(input.askerUserId, target.id)) {
+    return {
+      ok: false,
+      outcome: { ok: false, reason: "not_trusted", username, displayName: target.displayName },
+    };
+  }
+  return { ok: true, username, target };
+}
+
 export async function askAvatar(
   store: Store,
   config: AppConfig,
   input: AvatarAskInput,
   deps: AvatarAskDeps = {},
 ): Promise<AvatarAskOutcome> {
-  const username = input.targetUsername.trim().replace(/^@/, "");
   const question = input.question.trim();
-  const targetUser = username ? store.getUserByUsername(username) : null;
-  if (!targetUser) {
-    return { ok: false, reason: "not_found", username };
+  const preflight = preflightAvatarAsk(store, input);
+  if (!preflight.ok) {
+    return preflight.outcome;
   }
-  if (targetUser.id === input.askerUserId) {
-    return { ok: false, reason: "self", username };
-  }
-  // Visibility gate (public/group/private + suspended), then the trust gate.
-  // Both fail as if the avatar didn't exist where that avoids leaking existence.
-  const target = store.resolveChatAvatar(input.askerUserId, targetUser.id);
-  if (!target) {
-    return { ok: false, reason: "not_found", username };
-  }
-  if (!store.isTrustedFor(input.askerUserId, target.id)) {
-    return {
-      ok: false,
-      reason: "not_trusted",
-      username,
-      displayName: target.displayName,
-    };
-  }
+  const { username, target } = preflight;
   // Early-out BEFORE the expensive prep (plugin-root sync can clone/pull).
   if (input.parentSignal?.aborted) {
     return { ok: false, reason: "failed", username, detail: "the asking run was cancelled" };
@@ -156,8 +181,8 @@ export async function askAvatar(
         // recall + request_info (so it can escalate a true unknown to ITS owner).
         mcpToolGroups: ["personal_knowledge"],
         knowledgeMemory,
-        // Headless with no live stream — transient model errors retry down the
-        // tier chain like routines do.
+        // Headless with no live stream — a transient model error retries once
+        // on pi-gateway's default model like routines do.
         modelFallback: true,
       },
       pluginRoots,
@@ -179,7 +204,7 @@ export async function askAvatar(
         detail: `the target run ended with ${response.resultError}`,
       };
     }
-    const raw = response.text === EMPTY_SDK_RESPONSE_MESSAGE ? "" : response.text;
+    const raw = response.text === EMPTY_PI_RESPONSE_MESSAGE ? "" : response.text;
     const { answer, truncated } = capAnswer(raw);
     if (!answer) {
       return { ok: false, reason: "empty", username, displayName: target.displayName };
@@ -197,7 +222,7 @@ export async function askAvatar(
         partialAnswer: answer || undefined,
       };
     }
-    // The SDK labels EVERY abort "aborted by user" (see the routine scheduler
+    // An abort surfaces as a generic cancellation (see the routine scheduler
     // note) — when the ASKING turn was cancelled, name the real cause instead.
     if (input.parentSignal?.aborted) {
       return {

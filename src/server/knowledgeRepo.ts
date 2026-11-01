@@ -449,7 +449,7 @@ description: ${desc}
 Describe what this skill does and when the avatar should use it.
 `;
   await writeFile(repoRoot, `${skillRel}/SKILL.md`, skillMd);
-  // The plugin manifest the SDK looks for inside each marketplace plugin dir.
+  // The plugin manifest Noah's plugin loader (`plugins.ts`) looks for inside each marketplace plugin dir.
   await writeFile(
     repoRoot,
     `${skillRel}/.claude-plugin/plugin.json`,
@@ -506,7 +506,6 @@ export async function ensureMarketplaceManifest(repoRoot: string, slug: string):
 export async function writeRepoTemplate(
   repoRoot: string,
   repoName: string,
-  kind: "personal" | "group" = "personal",
 ): Promise<boolean> {
   const manifestRel = ".claude-plugin/marketplace.json";
   if (await pathExists(resolveInRepo(repoRoot, manifestRel)!)) {
@@ -520,14 +519,13 @@ export async function writeRepoTemplate(
     manifestRel,
     `${JSON.stringify({ name: marketplaceName, plugins: [] }, null, 2)}\n`,
   );
-  await writeFile(repoRoot, "README.md", repoTemplateReadme(shortName, kind));
-  await writeFile(repoRoot, "CLAUDE.md", repoTemplateClaudeMd(shortName, kind));
-  // Seed the second-brain vault skeleton (raw/ inbox + wiki/ consolidated layer) for
-  // BOTH personal and group repos. Empty dirs need a .gitkeep to survive commit/clone.
-  // The brain-* default skills operate on this layout; existing repos created before
-  // this change keep marketplace.json (so they early-return above) and are upgraded by
-  // the brain-migrate skill instead. NOTE: no skills are seeded here on purpose — the
-  // brain skills are default-bundled, so marketplace.json stays {plugins: []}.
+  await writeFile(repoRoot, "README.md", repoTemplateReadme(shortName));
+  await writeFile(repoRoot, "CLAUDE.md", repoTemplateClaudeMd(shortName));
+  // Seed the second-brain vault skeleton (raw/ inbox + wiki/ consolidated layer).
+  // Empty dirs need a .gitkeep to survive commit/clone. The brain-* default skills operate on this layout; existing
+  // repos created before it keep marketplace.json (so they early-return above) and are
+  // upgraded by the brain-migrate skill instead. NOTE: no skills are seeded here on
+  // purpose — the brain skills are default-bundled, so marketplace.json stays {plugins: []}.
   await writeFile(repoRoot, "raw/.gitkeep", "");
   for (const section of ["sources", "entities", "concepts", "synthesis"]) {
     await writeFile(repoRoot, `wiki/${section}/.gitkeep`, "");
@@ -545,34 +543,7 @@ export async function writeRepoTemplate(
  * conventions, and long-term context. Kept short on purpose — the server caps
  * what it injects.
  */
-function repoTemplateClaudeMd(name: string, kind: "personal" | "group" = "personal"): string {
-  if (kind === "group") {
-    // Team-framed, Korean human-facing + English-readable structure. Kept short —
-    // the server caps the GROUP CLAUDE.md injection at GROUP_CLAUDE_MD_CAP (4000).
-    return `# ${name} — 팀 공유 브레인 (CLAUDE.md)
-
-이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소(팀 브레인)** 입니다. 이 파일은 구성원들의
-아바타에게 **매 대화마다** 상시 지침으로 주입됩니다. 시스템·안전 지침이 항상 우선하며,
-길어지면 서버가 일부를 잘라냅니다(그룹 CLAUDE.md는 개인보다 짧게).
-
-## 구조 (vault)
-- \`wiki/<section>/<slug>.md\` — 정제된 팀 노트. frontmatter: \`title\`, \`tags\`, \`aliases\`.
-  팀 브레인 검색(\`mcp__group_brain__search\`)이 우선 검색합니다.
-- 관련 노트는 본문에서 \`[[노트 제목]]\`으로 연결하세요 — 이 링크가 지식 그래프를 잇습니다.
-- \`raw/\` — 아직 정리되지 않은 원본 캡처. 나중에 reflect로 wiki에 정리.
-
-## 운영 원칙
-- 답하기 전에 먼저 팀 브레인을 검색하세요.
-- **읽기는 모든 구성원**, **쓰기·커밋은 그룹 관리자만**(\`mcp__group_repo__write_file\`/\`commit\`).
-  구성원은 관리자에게 정리를 요청하세요.
-- 정리(consolidation)는 **온디맨드**입니다. 관리자가 brain-reflect로 \`raw/\`+\`wiki/\`만 보고
-  정리합니다. **대화 기록은 절대 읽지 않습니다** — 그룹에는 공유 대화 스트림이 없고, 구성원
-  개인 대화를 읽는 것은 프라이버시 위반입니다.
-
-## 여기에 적어 둘 것
-- 팀 공통 응답 말투/형식, 자주 쓰는 용어·약어, 반복 작업의 기본 규칙, 합의된 결정과 배경.
-`;
-  }
+function repoTemplateClaudeMd(name: string): string {
   // Personal: bilingual — English instructions (the model reads this as standing input)
   // + Korean examples for the human owner. Kept under PERSONAL_CLAUDE_MD_CAP (6000).
   return `# ${name} — your second brain (CLAUDE.md)
@@ -603,22 +574,7 @@ caps the injected length — keep it tight.
 }
 
 /** The starter README seeded alongside the marketplace manifest. */
-function repoTemplateReadme(name: string, kind: "personal" | "group" = "personal"): string {
-  if (kind === "group") {
-    return `# ${name} — 팀 공유 지식 저장소
-
-이 저장소는 그룹이 함께 쓰는 **공유 지식 저장소(팀 브레인)** 입니다. 구성원의 아바타가
-대화에서 활용하며, 정리된 지식을 다음 대화부터 함께 사용합니다.
-
-## 구조 (세컨드 브레인 vault)
-
-- \`raw/\` — 원본 캡처 인박스
-- \`wiki/{sources,entities,concepts,synthesis}/\` — 정제된 팀 노트
-- \`wiki/index.md\` · \`wiki/log.md\` · \`wiki/_template.md\` — 목차 / 정리 이력 / 노트 템플릿
-
-읽기는 모든 구성원, 쓰기·커밋은 그룹 관리자만 가능합니다.
-`;
-  }
+function repoTemplateReadme(name: string): string {
   return `# ${name} — 지식 저장소 (세컨드 브레인)
 
 이 저장소는 아바타(Noah Almighty)의 **개인 지식 저장소(세컨드 브레인)** 입니다. 아바타가

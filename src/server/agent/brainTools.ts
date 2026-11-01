@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AppConfig } from "../types.js";
@@ -30,7 +30,7 @@ export interface BrainToolsContext {
 /** MCP server name; tools surface to the model as `mcp__brain__<tool>`. */
 export const BRAIN_SERVER_NAME = "brain";
 
-/** Tool names the model may call, in `allowedTools` form. */
+/** Tool names the model may call, in `mcpAllowedTools` form. */
 export const BRAIN_TOOL_NAMES = ["mcp__brain__search", "mcp__brain__get_note"] as const;
 
 const NO_REPO =
@@ -51,7 +51,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
   return [
     tool(
       "search",
-      "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `get_note` or `mcp__repo__read_file`. (owner or trusted same-group teammates; read-only)",
+      "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `mcp__brain__get_note` or `mcp__repo__read_file`. (owner or trusted same-group teammates; read-only)",
       {
         query: z.string().describe("What to look for, in natural language or keywords."),
         limit: z.number().int().optional().describe("Max notes to return (default 8, max 20)."),
@@ -81,7 +81,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
     ),
     tool(
       "get_note",
-      "Read a full note from your second brain by its `wiki/` path (as returned by `search`). A thin, wiki-scoped convenience over `read_file`: the path must live under `wiki/`. Use it to pull the complete note after `search` surfaces a relevant hit. (owner or trusted same-group teammates; read-only)",
+      "Read a full note from your second brain by its `wiki/` path (as returned by `mcp__brain__search`). A thin, wiki-scoped convenience over `mcp__repo__read_file`: the path must live under `wiki/`. Use it to pull the complete note after `mcp__brain__search` surfaces a relevant hit. (owner or trusted same-group teammates; read-only)",
       {
         path: z.string().describe("Repository-relative path under wiki/ (e.g. wiki/concepts/deploy.md)"),
       },
@@ -109,7 +109,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
 
 /** Build the in-process MCP server exposing the personal second-brain tools. */
 export function buildBrainServer(store: Store, ctx: BrainToolsContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: BRAIN_SERVER_NAME,
     version: "0.1.0",
     tools: buildBrainTools(store, ctx),

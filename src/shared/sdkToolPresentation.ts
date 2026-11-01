@@ -1,4 +1,5 @@
 import { DEFAULT_SHARE_LINK_EXPIRY_DAYS } from "./shareLinks.js";
+import { HEX_SSH_SERVER_NAME, HEX_SSH_TOOL_INFOS } from "../server/hexSshPolicy.js";
 import type { TodoStatus } from "./todos.js";
 
 export const SDK_SUBAGENT_TOOLS = ["Task", "Agent"] as const;
@@ -18,26 +19,6 @@ export const SDK_TASK_INSPECTION_TOOLS = [
   "TaskList",
 ] as const;
 
-export const SDK_PLAN_TOOLS = ["EnterPlanMode", "ExitPlanMode"] as const;
-
-/**
- * Agent-teams coordination tools (CLI's experimental agent teams, enabled via
- * CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS in `agentSubprocessEnv`): `Agent` with a
- * `name:` spawns an addressable teammate; `SendMessage` messages it. Auto-allowed
- * like the orchestration set but deliberately NOT in SDK_HIDDEN_ACTIVITY_TOOLS —
- * teammate coordination should show as activity rows, not look like dead air.
- */
-export const SDK_TEAM_TOOLS = ["SendMessage"] as const;
-
-/**
- * The "ultracode" dynamic multi-agent orchestration tool. Auto-allowed like
- * SDK_TEAM_TOOLS (its own spawn is meta-work; the agents it spawns still hit
- * the PreToolUse hook individually, modulo the background-subagent hook-bypass
- * caveat — see SUBAGENT_SPAWN_TOOLS in preToolUseHook.ts) and deliberately NOT
- * in SDK_HIDDEN_ACTIVITY_TOOLS so a workflow launch shows as an activity row.
- */
-export const SDK_WORKFLOW_TOOLS = ["Workflow"] as const;
-
 export const SDK_INTERNAL_HIDDEN_TOOLS = [
   "ToolSearch",
   "TodoWrite",
@@ -51,83 +32,11 @@ export const SDK_ORCHESTRATION_TOOLS = [
   ...SDK_TASK_UPDATE_TOOLS,
   ...SDK_TASK_END_TOOLS,
   ...SDK_TASK_INSPECTION_TOOLS,
-  ...SDK_PLAN_TOOLS,
 ] as const;
 
 export const SDK_HIDDEN_ACTIVITY_TOOLS = [
   ...SDK_INTERNAL_HIDDEN_TOOLS,
   ...SDK_ORCHESTRATION_TOOLS,
-] as const;
-
-/**
- * The permission-gated built-ins an ELEVATED viewer may use — the tools the
- * PreToolUse hook blanket-allows once `elevated && autoApprove` holds, i.e.
- * every live chat and owner routine today. Named here so runPlan can ALSO list
- * them in `allowedTools` for exactly those runs: the bundled CLI (2.1.222)
- * cancels an in-flight permission evaluation when queued input (typically a
- * background <task-notification>) entered the same turn and reports the
- * cancellation as a USER REFUSAL ("The user doesn't want to take this action
- * right now" / toolDenialKind: "cancelled") — the flaky silent auto-deny.
- * Rule-allowed tools never enter that cancellable ask path, and a hook DENY
- * still overrides an allowedTools rule, so the hook's guards (admin policy,
- * active-repo git, read-only viewers) keep working. Unknown
- * names are harmless no-ops (same contract as UNUSED_SDK_BUILTIN_TOOLS), so
- * both shell-kill spellings ride along. AskUserQuestion stays OFF this list:
- * the hook intercepts it with a deny-carrying-answer, which must stay ahead
- * of any rule.
- */
-export const SDK_ELEVATED_BUILTIN_TOOLS = [
-  "Bash",
-  "BashOutput",
-  "KillShell",
-  "KillBash",
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "NotebookEdit",
-  "WebFetch",
-  "WebSearch",
-] as const;
-
-/**
- * Full-CLI harness tools the SDK/CLI advertises by default but that Noah Almighty
- * does NOT use: they're absent from `allowedTools`, duplicate an app feature
- * (Cron* vs. `mcp__system__*_routine`, PushNotification/ReadNotifications vs.
- * `mcp__system__notify_user`, Enter/ExitWorktree vs. `mcp__git_repo__open_repo`),
- * or are interactive-CLI-only (Monitor / DesignSync / ClaudeDesign /
- * ScheduleWakeup / RemoteTrigger / ReportFindings / SendFeedback / ProposeSkills /
- * ProposeGoal).
- * `SendMessage` and `Workflow` are NOT here: they power agent teams
- * (SDK_TEAM_TOOLS) and ultracode/dynamic-workflow orchestration
- * (SDK_WORKFLOW_TOOLS) respectively, and an admin can turn either off via the
- * togglable-tool policy instead.
- * Fed to the SDK `disallowedTools` option so they're dropped from the advertised
- * `tools` array on every request — several kB of tool descriptions. Unknown
- * names are harmless no-ops, so the list can name tools a given CLI version may
- * not ship.
- */
-export const UNUSED_SDK_BUILTIN_TOOLS = [
-  "Monitor",
-  "DesignSync",
-  "CronCreate",
-  "CronDelete",
-  "CronList",
-  "EnterWorktree",
-  "ExitWorktree",
-  "ScheduleWakeup",
-  "PushNotification",
-  "RemoteTrigger",
-  "ReportFindings",
-  "SendFeedback",
-  "ClaudeDesign",
-  "ProposeSkills",
-  "ProposeGoal",
-  "ReadNotifications",
-  // Lists the OTHER live CLI sessions registered in the shared CLAUDE_CONFIG_DIR —
-  // other users' runs. Noah never messages across sessions (see
-  // CROSS_SESSION_INBOUND in runPlan.ts); in-run agent teams address their
-  // teammates by name without it.
-  "ListAgents",
 ] as const;
 
 export const SDK_TOOL_LABELS: Record<string, string> = {
@@ -150,9 +59,13 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   Glob: "파일 찾기",
   Grep: "내용 검색",
   ListMcpResources: "MCP 리소스 목록",
+  // pi-gateway built-ins (agent/pi/eventAdapter.ts PI_TOOL_PRESENTATION names).
+  LS: "폴더 보기",
   Mcp: "MCP 도구",
+  McpSearch: "도구 찾기",
   Monitor: "모니터링 시작",
   NotebookEdit: "노트북 편집",
+  PresentFile: "파일 보여주기",
   Projects: "프로젝트 지식",
   ProposeGoal: "목표 제안",
   ProposeSkills: "스킬 제안",
@@ -165,6 +78,7 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   RemoteTrigger: "원격 트리거",
   REPL: "REPL 실행",
   ReportFindings: "리뷰 결과 보고",
+  RequestAdmin: "관리자 요청",
   ScheduleWakeup: "후속 실행 예약",
   SendFeedback: "피드백 전송",
   SendMessage: "팀원 메시지 전송",
@@ -183,7 +97,7 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
   TaskStatus: "태스크 상태",
   TaskStop: "태스크 중지",
   TaskUpdate: "태스크 업데이트",
-  // The CLI's private per-run checklist, NOT the owner's 할 일 list
+  // The agent's private per-run checklist (a stored-activity label), NOT the owner's 할 일 list
   // (mcp__todo__*) — so it must never read as "할 일".
   TodoWrite: "작업 체크리스트 갱신",
   WebFetch: "웹 페이지 읽기",
@@ -194,12 +108,14 @@ export const SDK_TOOL_LABELS: Record<string, string> = {
 
 /**
  * Labels for Noah's own in-process MCP tools (user-facing, so Korean). Kept in
- * the SHARED layer so the server status line ("실행 중: <label>" from
- * tool_progress in sdkMessageHandlers) and the client activity row (humanTool)
+ * the SHARED layer so the server status line ("실행 중: <label>", pi event
+ * adapter) and the
+ * client activity row (humanTool)
  * can never disagree about the same tool — mcp__canvas__show once showed
  * "캔버스 표시" in the activity row but a raw "show" in the status line.
  */
 export const MCP_TOOL_LABELS: Record<string, string> = {
+  mcp__avatars__ask_avatar: "아바타에게 질문",
   mcp__canvas__show: "캔버스 표시",
   mcp__confluence__describe_config: "Confluence 설정 확인",
   mcp__confluence__extract_page_assets: "Confluence 자산 추출",
@@ -211,21 +127,29 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__file_output__create_share_link: "공유 링크 만들기",
   mcp__file_output__share_file: "파일 공유",
   mcp__file_output__show_file: "이미지 표시",
+  // pi runs: the sandbox copy's commit (gitRepoTools GIT_REPO_PI_COMMIT_TOOL_NAME).
+  mcp__git_repo__commit: "작업 저장소 커밋",
   mcp__knowledge__pending_requests: "대기 요청 확인",
   mcp__knowledge__request_info: "정보 요청 기록",
   mcp__knowledge__resolve_request: "요청 처리 완료",
-  mcp__server_agents__check_server: "서버 점검",
-  mcp__server_agents__delegate: "서버에 위임",
-  mcp__server_agents__list_servers: "서버 목록",
-  mcp__server_agents__reset_session: "서버 세션 초기화",
   mcp__system__notify_user: "사용자 알림",
+  mcp__skills__read: "스킬 읽기",
   mcp__system__read_manual: "시스템 사용 매뉴얼 조회",
   mcp__todo__add_todos: "할 일 추가",
   mcp__todo__delete_todo: "할 일 삭제",
   mcp__todo__list_todos: "할 일 조회",
   mcp__todo__update_todo: "할 일 수정",
   mcp__web__fetch: "웹 페이지 읽기",
+  // hex-ssh (relayed by Noah, `agent/pi/mcpProxies.ts`): the admin panel's labels.
+  ...Object.fromEntries(HEX_SSH_TOOL_INFOS.map((info) => [`mcp__${HEX_SSH_SERVER_NAME}__${info.name}`, info.label])),
 };
+
+/**
+ * pi runs: the aggregate broker ids Noah relays third-party servers under
+ * (`agent/pi/mcpProxies.ts`) — `mcp__plugins__<server>__<tool>`,
+ * `mcp__shared__<server>__<tool>`. Their label names the tool and its server.
+ */
+const RELAYED_AGGREGATE_RE = /^mcp__(plugins|shared)__(.+?)__(.+)$/;
 
 /**
  * Human-readable label for a tool name, for status lines and activity rows. Raw
@@ -237,7 +161,9 @@ export function sdkToolLabel(name: string | undefined): string | undefined {
   if (!name) return undefined;
   const mapped = SDK_TOOL_LABELS[name] ?? MCP_TOOL_LABELS[name];
   if (mapped) return mapped;
-  // Server segments may themselves contain underscores (git_repo, group_agent),
+  const relayed = RELAYED_AGGREGATE_RE.exec(name);
+  if (relayed) return `${relayed[3]!.replace(/_/g, " ")} (${relayed[2]})`;
+  // Server segments may themselves contain underscores (git_repo, group_repo),
   // so match the server non-greedily and take the tool segment.
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   return (mcp ? mcp[2] : name).replace(/_/g, " ");
@@ -283,8 +209,6 @@ function ownLabel(labels: Record<string, string>, key: unknown): string | undefi
  *   retitle, a search query), the status an update sets ("완료로 표시",
  *   "드랍으로 표시", …) or the status a listing filters on ("진행 중", …), or a
  *   count.
- * - `mcp__server_agents__delegate`: its first string argument sits inside the
- *   tasks array — show the target servers ("web-01, db-01") instead.
  */
 export function mcpToolInputSummary(name: string | undefined, input: unknown): string | undefined {
   const args = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
@@ -303,13 +227,6 @@ export function mcpToolInputSummary(name: string | undefined, input: unknown): s
       return "1개";
     case "mcp__todo__list_todos":
       return title(args.query) ?? ownLabel(TODO_LIST_FILTER_LABELS, args.status) ?? "열린 항목";
-    case "mcp__server_agents__delegate": {
-      const tasks = Array.isArray(args.tasks) ? args.tasks : [];
-      const servers = tasks
-        .map((task) => title((task as Record<string, unknown> | null)?.server))
-        .filter((server): server is string => Boolean(server));
-      return servers.length ? servers.join(", ") : `${tasks.length}개`;
-    }
   }
   if (name === "mcp__file_output__create_share_link") {
     const days =

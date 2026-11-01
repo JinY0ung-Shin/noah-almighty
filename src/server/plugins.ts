@@ -8,14 +8,8 @@ import {
   knowledgeRepoContextFor,
   type KnowledgeRepoContext,
 } from "./knowledgeRepo.js";
-import {
-  ensureGroupClone,
-  groupKnowledgeClonePath,
-  groupKnowledgeRepoContextFor,
-  groupKnowledgeRepoContextsForUser,
-  type GroupKnowledgeRepoContext,
-} from "./groupKnowledgeRepo.js";
 import logger from "./logger.js";
+import { readRegularFileAsync } from "./chatImages.js";
 import { mcpHttpBridgeServerDef, type McpHttpBridgeConfig } from "./sharedMcpServers.js";
 import type { Store } from "./store.js";
 import type {
@@ -67,29 +61,57 @@ function isPluginRefreshDue(plugin: Pick<Plugin, "lastSyncedAt">, intervalMs: nu
 
 /** The plugin name a repo subdirectory advertises (its `plugin.json` `name`). */
 async function pluginNameAt(dir: string): Promise<string | null> {
-  const manifest = await readJson<{ name?: string }>(
-    path.join(dir, ".claude-plugin", "plugin.json"),
-  );
+  const manifest = await readJson<{ name?: string }>(dir, path.join(dir, ".claude-plugin", "plugin.json"));
   return typeof manifest?.name === "string" ? manifest.name : null;
 }
 
-async function readJson<T>(file: string): Promise<T | null> {
+/** Cap on any one text file Noah reads out of a cloned repo (manifests, SKILL.md, CLAUDE.md). */
+const REPO_TEXT_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Text of `file`, which must be a REGULAR file reached from `root` through NO
+ * link — else null. Every file Noah reads out of a cloned repo goes through
+ * here: the content is user-pushed, and git checks a committed symlink out as a
+ * real link, so a plain `readFile` would follow `CLAUDE.md -> /run/secrets/…`
+ * or `.mcp.json -> ../<another user>/.mcp.json` straight out of the clone (into
+ * the frozen prompt, a relayed MCP definition, the skill index). The opened
+ * descriptor must resolve to exactly `<realpath(root)>/<rel>` (`fdPathIs`), so a
+ * link at ANY component below `root` fails, and the final one is O_NOFOLLOW.
+ * `root` itself is trusted: callers pass a clone / plugin root Noah resolved
+ * (marketplace sources are contained by `containedPluginDir`).
+ */
+async function readTextBelow(root: string, file: string, maxBytes: number = REPO_TEXT_MAX_BYTES): Promise<string | null> {
+  const rel = path.relative(path.resolve(root), path.resolve(file));
+  if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  let realRoot: string;
   try {
-    return JSON.parse(await fs.readFile(file, "utf8")) as T;
+    realRoot = await fs.realpath(root);
+  } catch {
+    return null;
+  }
+  const read = await readRegularFileAsync(path.join(realRoot, rel), maxBytes);
+  return "buffer" in read ? read.buffer.toString("utf8") : null;
+}
+
+async function readJson<T>(root: string, file: string): Promise<T | null> {
+  const raw = await readTextBelow(root, file);
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as T;
   } catch {
     return null;
   }
 }
 
 /**
- * MCP servers the APP registers itself (in claudeAgent), per-user-configured —
+ * MCP servers the APP relays itself (`agent/pi/mcpProxies.ts`), per-user-configured —
  * e.g. `hex-ssh`, which we inject with the owner's SSH key. A plugin's bundled
  * `.mcp.json` may declare a server of the SAME name but WITHOUT the per-user
  * env (the public ops plugin ships a keyless `hex-ssh`). Since MCP config is
  * keyed by server name, the two collide and only one survives — and the
  * plugin's keyless copy can shadow ours, so the avatar gets a server with no
- * key. We strip these names from each plugin `.mcp.json` before handing the
- * root to the SDK, leaving the app's keyed registration as the sole definition.
+ * key. We strip these names from each plugin `.mcp.json` before the root's
+ * servers are relayed, leaving the app's keyed registration as the sole definition.
  */
 export const APP_MANAGED_MCP_SERVERS = ["hex-ssh"] as const;
 
@@ -104,7 +126,8 @@ export const APP_MANAGED_MCP_SERVERS = ["hex-ssh"] as const;
  */
 export async function stripManagedMcpServers(rootDir: string): Promise<boolean> {
   const file = path.join(rootDir, ".mcp.json");
-  const config = await readJson<Record<string, unknown>>(file);
+  // readJson refuses a linked .mcp.json, so the write below never goes through a link.
+  const config = await readJson<Record<string, unknown>>(rootDir, file);
   if (!config || typeof config !== "object") {
     return false;
   }
@@ -123,7 +146,7 @@ export async function stripManagedMcpServers(rootDir: string): Promise<boolean> 
 
 /**
  * A raw MCP server definition read from a plugin root's `.mcp.json`. Kept
- * loose on purpose — the SDK validates the real schema; we only look at the
+ * loose on purpose — the relayed server validates the rest; we only look at the
  * fields we transform (`type`/`env`, plus string fields for
  * `${CLAUDE_PLUGIN_ROOT}` expansion) and pass everything else through.
  */
@@ -142,7 +165,7 @@ export type PluginMcpServerDef = Record<string, unknown>;
 export async function readPluginMcpServers(
   rootDir: string,
 ): Promise<Record<string, PluginMcpServerDef>> {
-  const config = await readJson<Record<string, unknown>>(path.join(rootDir, ".mcp.json"));
+  const config = await readJson<Record<string, unknown>>(rootDir, path.join(rootDir, ".mcp.json"));
   if (!config || typeof config !== "object") {
     return {};
   }
@@ -164,9 +187,8 @@ export async function readPluginMcpServers(
  * True when a plugin root belongs to the avatar OWNER's own sources — their
  * synced plugin repos (`dataDir/plugins/<userId>/…`) or their personal
  * knowledge repo clone (`dataDir/knowledge/<userId>`, incl. marketplace
- * subdirs). Group knowledge repos and the app's default plugin roots are NOT
- * owned: secrets must never flow into an MCP server a group teammate (or the
- * app repo) defined. Used by the secret-injection lift below.
+ * subdirs). The app's default plugin roots are NOT owned: secrets must never
+ * flow into an MCP server the app repo defined. Used by the secret-injection lift below.
  */
 export function isOwnedPluginRoot(
   rootPath: string,
@@ -191,7 +213,7 @@ function expandPluginRoot(value: string, rootDir: string): string {
   return value.split("${CLAUDE_PLUGIN_ROOT}").join(rootDir);
 }
 
-/** The CLI's `--mcp-config` env reference forms: `${VAR}` and `${VAR:-default}`. */
+/** The `.mcp.json` env reference forms (Claude Code plugin convention): `${VAR}` and `${VAR:-default}`. */
 const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
 
 /** Env names an http/sse def's url + string header values reference. */
@@ -223,91 +245,23 @@ function mapHttpDefStrings(def: PluginMcpServerDef, fn: (value: string) => strin
 }
 
 /**
- * Secret-handoff wiring for `liftPluginMcpServers`: the app-owned wrapper
- * script plus the directory the per-server mode-0600 secret files go in. The
- * caller (claudeAgent) WRITES the files after the lift returns which paths are
- * needed — the values never enter the server definitions themselves.
- */
-export interface McpSecretWrapper {
-  /** Absolute path of scripts/mcp-secret-wrapper.mjs. */
-  scriptPath: string;
-  /** Directory for the one-shot secret files (created by the caller). */
-  secretsDir: string;
-  /** Per-run unique id used in the secret file names. */
-  runId: string;
-}
-
-/**
  * Lift the MCP servers defined by the given plugin roots' `.mcp.json` files
- * into an SDK `mcpServers`-shaped map, so the app — not the CLI — registers
- * them. Runs with `strictMcpConfig: true` on the query, which stops the CLI
- * from ALSO auto-spawning the same servers from the plugin dirs.
- *
- * Why the app registers them itself: it lets the owner's secret vault reach
- * the OWNED servers while the agent shell (Bash) env stays clean. Per root:
+ * into one name → definition map, for the pi run's `plugins` relay
+ * (`agent/pi/mcpProxies.ts`), which decides per definition whether it may run
+ * and spawns or bridges it itself. Per root:
  *  - `${CLAUDE_PLUGIN_ROOT}` in string fields (command/args/env/url/…) is
- *    expanded to the root path, since the CLI can no longer resolve the
- *    plugin origin. Other `${VAR}` forms are left for the CLI's own
- *    `--mcp-config` expansion, same as before the lift.
- *  - OWNED roots (see `isOwnedPluginRoot`) with a stdio def (no `type` or
- *    `type: "stdio"`) are REWRITTEN to run through the secret wrapper:
- *    `node mcp-secret-wrapper.mjs --secrets <file> -- <command> [args…]`.
- *    SECURITY: the SDK serializes `mcpServers` into the CLI's `--mcp-config`
- *    ARGV (readable via /proc/<pid>/cmdline by the agent's own Bash), so
- *    secret VALUES must never be embedded in the def env — only the secret
- *    FILE PATH may appear. The wrapper reads + deletes the 0600 file and
- *    execs the real server with the secrets merged over its env.
- *  - Non-owned roots (group repos, default plugins) are lifted verbatim —
- *    they keep loading, but NEVER receive the owner's secrets.
+ *    expanded to the root path. Other `${VAR}` forms are left for the relay
+ *    (which refuses them outside the bundled roots).
  *  - FIRST definition of a name wins, matching the load order default →
- *    avatar plugins → knowledge repo → group repos, so a group repo can't
- *    shadow the owner's own server. App in-process servers are spread AFTER
- *    the lifted map at the call site, so app names always win overall.
- *
- *  - http/sse defs: on an OWNED root with the wrapper armed, a url/header
- *    `${NAME}` naming a VAULT secret makes the server run through the
- *    stdio↔HTTP bridge (`scripts/mcp-http-bridge.mjs`) instead — the resolved
- *    url/headers go in a one-shot 0600 file (`bridgeFiles`), only its PATH in
- *    argv; any other `${VAR}` still expands from env, as the CLI would. On a
- *    NON-owned root, references to `maskEnvNames` are blanked: the CLI expands
- *    `${VAR}` in url/headers from its own env, which holds the shell-exposed
- *    secrets — a group repo's server URL must not receive them.
- *
- * Returns the servers plus the secret-file paths the wrapped defs reference;
- * the caller writes the injectable env to each (0600) BEFORE starting the
- * query, and each `bridgeFiles` config to its path the same way.
- * `secretWrapper: null` (no injectable secrets) lifts without wrapping.
+ *    avatar plugins → knowledge repo.
+ * No definition carries a secret value: nothing from the vault is resolved here.
  */
 export async function liftPluginMcpServers(
   rootPaths: string[],
-  opts: {
-    avatarUserId: string;
-    config: AppConfig;
-    secretWrapper: McpSecretWrapper | null;
-    /**
-     * Env names to BLANK (`""`) on non-owned stdio servers. Shell-exposed
-     * secrets live in the CLI subprocess env, which every CLI-spawned server
-     * inherits — group/default servers must not see those values.
-     */
-    maskEnvNames?: string[];
-    /**
-     * OWNED http/sse bridging: the bridge script and the injectable vault
-     * values its `${NAME}` references resolve from. Used only while
-     * `secretWrapper` is armed (an elevated run with injectable secrets).
-     */
-    httpBridge?: { scriptPath: string; secrets: Record<string, string> } | null;
-  },
-): Promise<{
-  servers: Record<string, PluginMcpServerDef>;
-  secretFiles: string[];
-  bridgeFiles: { name: string; path: string; config: McpHttpBridgeConfig }[];
-}> {
+): Promise<{ servers: Record<string, PluginMcpServerDef> }> {
   const servers: Record<string, PluginMcpServerDef> = {};
-  const secretFiles: string[] = [];
-  const bridgeFiles: { name: string; path: string; config: McpHttpBridgeConfig }[] = [];
   for (const rootPath of rootPaths) {
     const defs = await readPluginMcpServers(rootPath);
-    const owned = isOwnedPluginRoot(rootPath, opts.avatarUserId, opts.config);
     for (const [name, rawDef] of Object.entries(defs)) {
       if (name in servers) continue;
       const def: PluginMcpServerDef = {};
@@ -331,91 +285,30 @@ export async function liftPluginMcpServers(
           def[key] = value;
         }
       }
-      const type = typeof def.type === "string" ? def.type : "stdio";
-      if (type === "http" || type === "sse") {
-        const bridge = opts.httpBridge;
-        const vaultRefs =
-          owned && opts.secretWrapper && bridge
-            ? httpDefEnvRefs(def).filter((ref) => Object.hasOwn(bridge.secrets, ref))
-            : [];
-        // Fields the bridge cannot carry (oauth, headersHelper, …) would be lost
-        // silently — such a server stays native (its vault refs unresolved, as
-        // before this feature) and the owner hears why in the server log.
-        const unbridgeable = Object.keys(def).filter((key) => !["type", "url", "headers"].includes(key));
-        if (vaultRefs.length > 0 && unbridgeable.length > 0) {
-          logger.warn(
-            { server: name, fields: unbridgeable },
-            "plugin http mcp server references vault secrets but has fields the bridge cannot carry; left to the CLI without secrets",
-          );
-        }
-        if (bridge && opts.secretWrapper && vaultRefs.length > 0 && unbridgeable.length === 0 && typeof def.url === "string") {
-          const file = path.join(
-            opts.secretWrapper.secretsDir,
-            `http-${opts.secretWrapper.runId}-${sanitizeName(name)}.json`,
-          );
-          const headers: Record<string, string> = {};
-          for (const [headerName, value] of Object.entries((def.headers ?? {}) as Record<string, unknown>)) {
-            if (typeof value === "string") headers[headerName] = value;
-          }
-          bridgeFiles.push({
-            name,
-            path: file,
-            // Templates stay UNRESOLVED: the bridge fills vault refs and env refs
-            // in ONE pass, so a vault value containing `${…}` is never expanded again.
-            config: {
-              url: def.url as string,
-              transport: type,
-              headers,
-              redact: vaultRefs.map((ref) => bridge.secrets[ref]).filter((value) => value.length > 0),
-              vault: Object.fromEntries(vaultRefs.map((ref) => [ref, bridge.secrets[ref]])),
-              expandEnv: true,
-            },
-          });
-          servers[name] = mcpHttpBridgeServerDef(bridge.scriptPath, file);
-          continue;
-        }
-        const mask = opts.maskEnvNames ?? [];
-        if (!owned && mask.length > 0) {
-          mapHttpDefStrings(def, (value) =>
-            value.replace(ENV_REF_RE, (whole, ref: string) => (mask.includes(ref) ? "" : whole)),
-          );
-        }
-      }
-      if (!owned && type === "stdio" && opts.maskEnvNames?.length) {
-        def.env = {
-          ...(def.env && typeof def.env === "object" ? (def.env as object) : {}),
-          ...Object.fromEntries(opts.maskEnvNames.map((n) => [n, ""])),
-        };
-      }
-      if (
-        owned &&
-        type === "stdio" &&
-        opts.secretWrapper &&
-        typeof def.command === "string"
-      ) {
-        const file = path.join(
-          opts.secretWrapper.secretsDir,
-          `plugin-${opts.secretWrapper.runId}-${sanitizeName(name)}.json`,
-        );
-        secretFiles.push(file);
-        const originalArgs = Array.isArray(def.args)
-          ? def.args.filter((a): a is string => typeof a === "string")
-          : [];
-        def.args = [
-          opts.secretWrapper.scriptPath,
-          "--secrets",
-          file,
-          "--",
-          def.command,
-          ...originalArgs,
-        ];
-        def.command = process.execPath;
-        def.type = "stdio";
-      }
       servers[name] = def;
     }
   }
-  return { servers, secretFiles, bridgeFiles };
+  return { servers };
+}
+
+/**
+ * A marketplace entry's relative `source` resolved INSIDE the repo: the target
+ * must lie below `repoRoot` and be reached through no link (its realpath is
+ * exactly `<realpath(repoRoot)>/<rel>`), else null. Without this a pushed
+ * `"source": "../../plugins/<victim>/<repo>"` (or a `plugins -> ../..` link)
+ * made another user's clone a plugin root of this user's runs.
+ */
+async function containedPluginDir(repoRoot: string, source: string): Promise<string | null> {
+  const abs = path.resolve(repoRoot, source);
+  const rel = path.relative(path.resolve(repoRoot), abs);
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  try {
+    const realRoot = await fs.realpath(repoRoot);
+    if ((await fs.realpath(abs)) !== path.join(realRoot, rel)) return null;
+  } catch {
+    return null;
+  }
+  return abs;
 }
 
 async function isPluginDir(dir: string): Promise<boolean> {
@@ -445,7 +338,7 @@ type MarketplaceLayout =
 
 /**
  * Walk a cloned repo's marketplace manifest layout ONCE, shared by
- * `resolvePluginRoots` (resolves SDK roots) and `inspectRepoContents` (reports
+ * `resolvePluginRoots` (resolves plugin roots) and `inspectRepoContents` (reports
  * names for the selection UI) — they previously re-implemented the same detect-
  * layout + per-entry resolve loop ("Mirrors" comment). Returns the layout kind
  * and, for a marketplace, every entry already classified (resolved dir +
@@ -457,6 +350,7 @@ async function enumerateMarketplacePlugins(repoRoot: string): Promise<Marketplac
     return { kind: "single" };
   }
   const manifest = await readJson<MarketplaceManifest>(
+    repoRoot,
     path.join(repoRoot, ".claude-plugin", "marketplace.json"),
   );
   if (manifest && Array.isArray(manifest.plugins)) {
@@ -464,7 +358,13 @@ async function enumerateMarketplacePlugins(repoRoot: string): Promise<Marketplac
     for (const entry of manifest.plugins) {
       const source = entry?.source;
       if (typeof source === "string" && source.startsWith(".")) {
-        const abs = path.resolve(repoRoot, source);
+        const abs = await containedPluginDir(repoRoot, source);
+        if (!abs) {
+          // `../` out of the repo, or a link on the way: never a plugin root (it
+          // could name another user's clone — their skills, .mcp.json credentials).
+          entries.push({ entry, dir: null, loadable: false });
+          continue;
+        }
         entries.push({ entry, dir: { abs, source }, loadable: await isPluginDir(abs) });
       } else {
         entries.push({ entry, dir: null, loadable: false });
@@ -512,13 +412,9 @@ function parseSkillFrontmatter(text: string): { name?: string; description?: str
 }
 
 /** Read one skill's `SKILL.md` frontmatter into a SkillInfo, or null if absent/invalid. */
-async function readSkill(skillDir: string, source: string): Promise<SkillInfo | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-  } catch {
-    return null;
-  }
+async function readSkill(root: string, skillDir: string, source: string): Promise<SkillInfo | null> {
+  const raw = await readTextBelow(root, path.join(skillDir, "SKILL.md"));
+  if (raw === null) return null;
   const fm = parseSkillFrontmatter(raw);
   const name = fm?.name?.trim() || path.basename(skillDir);
   const description = fm?.description?.trim() ?? "";
@@ -542,7 +438,7 @@ export async function listSkillsInRoots(
     // points directly at `./skills/<name>`. readSkill returns null when there's
     // no SKILL.md at the root, so this is a no-op for default/owner plugin roots
     // (whose skills live one level down under `skills/`, handled below).
-    const selfSkill = await readSkill(root.path, root.source);
+    const selfSkill = await readSkill(root.path, root.path, root.source);
     if (selfSkill && !byName.has(selfSkill.name)) {
       byName.set(selfSkill.name, selfSkill);
     }
@@ -558,7 +454,7 @@ export async function listSkillsInRoots(
       if (!entry.isDirectory()) {
         continue;
       }
-      const skill = await readSkill(path.join(skillsDir, entry.name), root.source);
+      const skill = await readSkill(root.path, path.join(skillsDir, entry.name), root.source);
       if (skill && !byName.has(skill.name)) {
         byName.set(skill.name, skill);
       }
@@ -568,7 +464,7 @@ export async function listSkillsInRoots(
 }
 
 /**
- * Resolve a cloned repo into one or more SDK plugin roots:
+ * Resolve a cloned repo into one or more plugin roots:
  * - a single-plugin repo (`.claude-plugin/plugin.json` at root) → [root]
  * - a marketplace repo (`.claude-plugin/marketplace.json`) → each listed
  *   plugin's directory (relative `./...` sources, the common case)
@@ -605,7 +501,7 @@ export async function resolvePluginRoots(
             }
           }
           // Strip any app-managed MCP server (e.g. a keyless `hex-ssh`) so it
-          // can't shadow the app's keyed registration. See claudeAgent.
+          // can't shadow the app's keyed registration. See agent/pi/mcpProxies.ts.
           await stripManagedMcpServers(dir.abs);
           roots.push(dir.abs);
           continue;
@@ -628,7 +524,7 @@ export async function resolvePluginRoots(
 /**
  * Inspect a cloned repo and list the plugins it contains, for the selection UI.
  * Mirrors `resolvePluginRoots`' layout detection but reports names instead of
- * resolving SDK roots.
+ * resolving plugin roots.
  */
 export async function inspectRepoContents(repoRoot: string): Promise<RepoPluginContents> {
   const layout = await enumerateMarketplacePlugins(repoRoot);
@@ -679,8 +575,7 @@ export const KNOWLEDGE_REPO_SOURCE = "지식 저장소";
 /**
  * One knowledge-repo clone job: how to materialize the working tree (`ensure`),
  * the UI source label to attribute its skills to, and the plugin subset to load.
- * Personal and group knowledge repos differ ONLY in these three fields, so both
- * flow through the single resolver below.
+ * Every knowledge-repo skill source flows through the single resolver below.
  */
 interface KnowledgeRepoJob {
   ensure: () => Promise<string>;
@@ -689,10 +584,10 @@ interface KnowledgeRepoJob {
 }
 
 /**
- * THE shared knowledge-repo resolver: clone each job's working tree and resolve
- * it into `{path, source}` skill-source entries. The 4 public functions below
- * (personal/group × roots/sources) are thin views over this — they differ only
- * in how the jobs are built and whether failures warn (Korean) or stay silent.
+ * THE knowledge-repo resolver: clone each job's working tree and resolve it into
+ * `{path, source}` skill-source entries. The two public functions below
+ * (roots/sources) are thin views over this — they differ only in whether
+ * failures warn (Korean) or stay silent.
  * Tolerant: a clone/fetch failure on one job warns (when `onWarn` given) and
  * contributes no skills, so chat never breaks.
  */
@@ -750,42 +645,10 @@ export async function knowledgeRepoSkillSources(
   return resolveKnowledgeRepoSources(knowledgeRepoJobs(ctx));
 }
 
-/** Display label attributed to skills coming from a group's shared knowledge repo. */
-export const GROUP_KNOWLEDGE_REPO_SOURCE = "그룹 지식 저장소";
-
-/** Source label for one group's repo, including the group name when known. */
-function groupRepoSource(ctx: GroupKnowledgeRepoContext): string {
-  return ctx.groupName ? `${GROUP_KNOWLEDGE_REPO_SOURCE} · ${ctx.groupName}` : GROUP_KNOWLEDGE_REPO_SOURCE;
-}
-
-/** Wrap each group knowledge-repo context as a clone job. */
-function groupKnowledgeRepoJobs(contexts: GroupKnowledgeRepoContext[]): KnowledgeRepoJob[] {
-  return contexts.map((ctx) => ({
-    ensure: () => ensureGroupClone(ctx),
-    source: groupRepoSource(ctx),
-    selected: ctx.selected,
-  }));
-}
-
-/**
- * Resolve the group knowledge repos a member shares into plugin roots, so the
- * shared skills load for EVERY chat the member has with their own avatar. Mirrors
- * `loadKnowledgeRepoRoots`; tolerant — a clone/fetch failure on one group warns
- * and contributes no roots rather than breaking chat. Accepts many contexts (a
- * user may belong to several groups, each with a repo).
- */
-export async function loadGroupKnowledgeRepoRoots(
-  contexts: GroupKnowledgeRepoContext[],
-  onWarn?: (message: string) => void,
-): Promise<PluginRoot[]> {
-  const sources = await resolveKnowledgeRepoSources(groupKnowledgeRepoJobs(contexts), onWarn);
-  return sources.map(({ path }) => ({ type: "local", path }));
-}
-
 /**
  * The full set of plugin roots an avatar's AGENT should load for a real turn:
  * the repo-bundled default plugins, the avatar's own enabled plugins, its
- * personal knowledge repo, and every group knowledge repo its owner belongs to.
+ * and its personal knowledge repo (group knowledge repos were retired 2026-10-30).
  * Returns `[]` in `local` runtime (no plugins in local dev). This is the SINGLE
  * source of truth shared by the chat endpoint AND the routine scheduler, so the
  * two cannot drift — a routine must be able to USE the same skills a chat can.
@@ -797,18 +660,10 @@ export async function loadAgentPluginRoots(
   avatarId: string,
   config: AppConfig,
   onWarn?: (message: string) => void,
-  opts?: { disabledGroupIds?: Set<string> },
 ): Promise<PluginRoot[]> {
   if (config.agentRuntime === "local") {
     return [];
   }
-  // Per-conversation group-knowledge toggle (owner-only): skip the skill roots of
-  // any group the owner turned OFF for this conversation. The scheduler and
-  // intro/hashtag paths pass no opts, so they always load every group.
-  const disabled = opts?.disabledGroupIds;
-  const groupContexts = groupKnowledgeRepoContextsForUser(store, avatarId, config).filter(
-    (ctx) => !disabled?.has(ctx.groupId),
-  );
   return [
     ...(await loadDefaultPluginRoots(config, onWarn)),
     ...(await loadAvatarPluginRoots(
@@ -825,29 +680,23 @@ export async function loadAgentPluginRoots(
       },
     )),
     ...(await loadKnowledgeRepoRoots(knowledgeRepoContextFor(store, avatarId, config), onWarn)),
-    // Shared knowledge repos of every group the avatar's owner belongs to — so
-    // group skills load for all members' chats and routines alike.
-    ...(await loadGroupKnowledgeRepoRoots(groupContexts, onWarn)),
   ];
 }
 
-/** Per-group/total caps on injected CLAUDE.md so standing memory can't bloat every turn. */
+/** Cap on the injected CLAUDE.md so standing memory can't bloat every turn. */
 const PERSONAL_CLAUDE_MD_CAP = 6_000;
-const GROUP_CLAUDE_MD_CAP = 4_000;
-const TOTAL_GROUP_CLAUDE_MD_CAP = 8_000;
 
-/** Standing CLAUDE.md memory read from the avatar's knowledge repos (push, every turn). */
+/** Standing CLAUDE.md memory read from the avatar's knowledge repo (push, every turn). */
 export interface KnowledgeRepoMemory {
   /** Root CLAUDE.md of the personal knowledge repo, or null when absent/empty. */
   personal: string | null;
-  /** Root CLAUDE.md of each enabled group repo that has one. */
-  groups: { name: string; content: string }[];
 }
 
 /** Read a repo-root CLAUDE.md (trimmed, capped). Returns null when missing/empty. */
 async function readRepoClaudeMd(repoRoot: string, cap: number): Promise<string | null> {
   try {
-    const raw = (await fs.readFile(path.join(repoRoot, "CLAUDE.md"), "utf8")).trim();
+    // No-link read: a committed `CLAUDE.md -> /run/secrets/…` must not land in the frozen prompt.
+    const raw = (await readTextBelow(repoRoot, path.join(repoRoot, "CLAUDE.md")))?.trim();
     if (!raw) {
       return null;
     }
@@ -858,114 +707,34 @@ async function readRepoClaudeMd(repoRoot: string, cap: number): Promise<string |
 }
 
 /**
- * Load the standing CLAUDE.md memory from the avatar's personal knowledge repo
- * and each enabled group repo. Reads the working-tree clones directly (which
- * `loadAgentPluginRoots` already ensured for the same turn); a missing repo, a
- * missing CLAUDE.md, or a not-yet-cloned repo simply contributes nothing.
- *
- * Group filtering mirrors `loadAgentPluginRoots`: `disabledGroupIds` (the
- * owner's per-conversation toggle) are skipped; colleague turns pass none.
- * Unlike skills (pulled on demand), this is injected into the prompt every turn,
- * so it is capped. Personal memory is always included; the group toggle controls
- * only group memory.
+ * Load the standing CLAUDE.md memory from the avatar's personal knowledge repo.
+ * Reads the working-tree clone directly (which `loadAgentPluginRoots` already
+ * ensured for the same turn); a missing repo, a missing CLAUDE.md, or a
+ * not-yet-cloned repo simply contributes nothing. Unlike skills (pulled on
+ * demand), this is injected into the prompt, so it is capped. (Group repo
+ * CLAUDE.md files were injected too until group knowledge repos were retired
+ * 2026-10-30.)
  */
 export async function loadKnowledgeRepoMemory(
   store: Store,
   avatarId: string,
   config: AppConfig,
-  opts?: { disabledGroupIds?: Set<string> },
 ): Promise<KnowledgeRepoMemory> {
   if (config.agentRuntime === "local") {
-    return { personal: null, groups: [] };
+    return { personal: null };
   }
   const personal = store.getKnowledgeRepo(avatarId).repo
     ? await readRepoClaudeMd(knowledgeClonePath(avatarId, config), PERSONAL_CLAUDE_MD_CAP)
     : null;
-  const disabled = opts?.disabledGroupIds;
-  const groups: { name: string; content: string }[] = [];
-  let totalGroupChars = 0;
-  for (const g of store.listGroupKnowledgeReposForUser(avatarId)) {
-    if (disabled?.has(g.groupId)) {
-      continue;
-    }
-    // Bound the TOTAL, not just entry: the old `>= CAP` check ran BEFORE the read,
-    // so N groups each under GROUP_CLAUDE_MD_CAP could still sum past the total
-    // (up to ~TOTAL-1 + GROUP_CAP). Truncate the tail entry to the remaining
-    // budget so the injected group memory can never exceed TOTAL_GROUP_CLAUDE_MD_CAP.
-    const remaining = TOTAL_GROUP_CLAUDE_MD_CAP - totalGroupChars;
-    if (remaining <= 0) {
-      break;
-    }
-    const content = await readRepoClaudeMd(groupKnowledgeClonePath(g.groupId, config), GROUP_CLAUDE_MD_CAP);
-    if (content) {
-      const bounded = content.length > remaining ? content.slice(0, remaining) : content;
-      groups.push({ name: g.groupName, content: bounded });
-      totalGroupChars += bounded.length;
-    }
-  }
-  return { personal, groups };
-}
-
-/** Like `loadGroupKnowledgeRepoRoots` but returns `{path, source}` for the skills/intro paths. */
-export async function groupKnowledgeRepoSkillSources(
-  contexts: GroupKnowledgeRepoContext[],
-): Promise<{ path: string; source: string }[]> {
-  return resolveKnowledgeRepoSources(groupKnowledgeRepoJobs(contexts));
-}
-
-/**
- * Plugin roots for a GROUP-AGENT run: the bundled defaults + ONLY the owning
- * group's shared repo, cloned with the ACTING member's tokens (groups own no
- * credentials). Deliberately no personal plugins, no personal knowledge repo,
- * no other groups — the shared agent's capability boundary is group resources.
- */
-export async function loadGroupAgentPluginRoots(
-  store: Store,
-  groupId: string,
-  actingUserId: string,
-  config: AppConfig,
-  onWarn?: (message: string) => void,
-): Promise<PluginRoot[]> {
-  if (config.agentRuntime === "local") {
-    return [];
-  }
-  const ctx = groupKnowledgeRepoContextFor(
-    store,
-    groupId,
-    actingUserId,
-    config,
-    store.getGroup(groupId)?.name,
-  );
-  return [
-    ...(await loadDefaultPluginRoots(config, onWarn)),
-    ...(await loadGroupKnowledgeRepoRoots(ctx ? [ctx] : [], onWarn)),
-  ];
-}
-
-/** Standing CLAUDE.md memory for a GROUP-AGENT run: the owning group's only. */
-export async function loadGroupAgentKnowledgeMemory(
-  store: Store,
-  groupId: string,
-  config: AppConfig,
-): Promise<KnowledgeRepoMemory> {
-  if (config.agentRuntime === "local") {
-    return { personal: null, groups: [] };
-  }
-  const group = store.getGroup(groupId);
-  if (!group?.knowledgeRepo) {
-    return { personal: null, groups: [] };
-  }
-  const content = await readRepoClaudeMd(
-    groupKnowledgeClonePath(groupId, config),
-    GROUP_CLAUDE_MD_CAP,
-  );
-  return { personal: null, groups: content ? [{ name: group.name, content }] : [] };
+  return { personal };
 }
 
 /**
  * Clone each enabled plugin for an avatar into
  * `${dataDir}/plugins/${userId}/${sanitize(repo)}` and return local plugin
- * roots for the SDK. A repo may be a single plugin or a marketplace of many.
+ * roots (on pi their skills are copied into the run's sandbox and their
+ * `.mcp.json` servers relayed by Noah). A repo may be a single plugin or a
+ * marketplace of many.
  * Clone/resolve failures are tolerated: the plugin is skipped with a warning,
  * never crashing the chat.
  */

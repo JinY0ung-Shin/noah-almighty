@@ -76,7 +76,6 @@ async function mockApp(page: Page): Promise<void> {
             createdAt: "2026-07-12T03:00:05.000Z",
           },
         ],
-        groupKnowledgeOff: [],
       };
     } else if (path === "/api/chat/runs") {
       body = { run: null };

@@ -1,4 +1,4 @@
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig, SharedSkillListing } from "../types.js";
@@ -21,6 +21,7 @@ import {
   readSkillOrigin,
   rescueSharedSkillRename,
   SkillIsLearnedCopyError,
+  skillsDirUnreadable,
   unlinkSkillOrigin,
 } from "../skillTransfer.js";
 import { resolveShareCopy } from "../../shared/skillOriginMatch.js";
@@ -36,7 +37,7 @@ import { text } from "./mcpTools.js";
 /** MCP server name; tools surface as `mcp__skill_exchange__<tool>`. */
 export const SKILL_EXCHANGE_SERVER_NAME = "skill_exchange";
 
-/** Tool names in `allowedTools` form (keep in lockstep with the list below). */
+/** Tool names in `mcpAllowedTools` form (keep in lockstep with the list below). */
 export const SKILL_EXCHANGE_TOOL_NAMES = [
   "mcp__skill_exchange__find_shared_skills",
   "mcp__skill_exchange__learn_skill",
@@ -87,8 +88,8 @@ function formatSharedSkill(s: SharedSkillListing): string {
 /**
  * Build the skill-exchange tool definitions. Exposed separately from the
  * server so handlers can be exercised directly in tests. Registration is
- * owner-gated in claudeAgent.ts AND every handler self-gates (the `mcp__`
- * prefix auto-allow fires before any owner check).
+ * owner-gated in runCapabilities.ts AND every handler self-gates (the tool
+ * list is a static catalog, so only the handler sees the live caller).
  */
 export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext) {
   const ownRepoCtx = () => knowledgeRepoContextFor(store, ctx.avatarUserId, ctx.config);
@@ -299,6 +300,17 @@ export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext)
           // is gone (and no rename explains it), or the row points at a linked
           // copy. The agent surface and the 스킬 배우기 tab must tell the same
           // story about a dead share, whichever one runs into it first.
+          // …except when the sharer's skills/ is merely UNREADABLE (a link, even
+          // one into their repo): nothing was deleted, so the share stays.
+          if (
+            message === "SKILL_NOT_FOUND" &&
+            skillsDirUnreadable(knowledgeClonePath(listing.ownerUserId, ctx.config))
+          ) {
+            return text(
+              `@${listing.owner.username}'s "${listing.skillName}" cannot be read right now: skills/ in their knowledge repository is not a plain folder (a link or unreadable), and Noah never reads skills through a link. The share stays; tell the user it can be learned once @${listing.owner.username} restores skills/ as a plain folder.`,
+              true,
+            );
+          }
           if (message === "SKILL_NOT_FOUND" || message === "SKILL_IS_LEARNED_COPY") {
             store.unshareSkill(listing.ownerUserId, listing.skillName);
           }
@@ -533,7 +545,7 @@ function decodeLearnError(error: unknown, listing: SharedSkillListing): string {
  * one conversation's store + context.
  */
 export function buildSkillExchangeServer(store: Store, ctx: SkillExchangeContext) {
-  return createSdkMcpServer({
+  return createMcpToolServer({
     name: SKILL_EXCHANGE_SERVER_NAME,
     version: "0.1.0",
     tools: buildSkillExchangeTools(store, ctx),

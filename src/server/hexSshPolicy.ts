@@ -7,8 +7,6 @@ export const HEX_SSH_TOOLS = [
   "ssh-edit-block",
   "ssh-search-code",
   "ssh-write-chunk",
-  "ssh-upload",
-  "ssh-download",
   "ssh-verify",
   "ssh-capabilities",
   "ssh-session-open",
@@ -19,6 +17,32 @@ export const HEX_SSH_TOOLS = [
 ] as const;
 
 export type HexSshTool = (typeof HEX_SSH_TOOLS)[number];
+
+/**
+ * hex-ssh tools Noah NEVER offers. hex-ssh runs in Noah's container, not in the
+ * run principal's sandbox, so its local-path tools would read and write NOAH's
+ * filesystem (the DB, pi's service-key file, every user's sandbox and repo copy,
+ * other runs' /proc/<pid>/environ) while the agent's real files under /workspace
+ * are invisible to it. They are left out of HEX_SSH_TOOLS (so no stored policy can
+ * grant them — `normalizeHexSshToolPolicy` drops unknown names) AND refused by
+ * the policy proxy itself (`scripts/hex-ssh-policy-proxy.mjs`), whatever its
+ * allowlist says. A future transfer tool must be Noah's own, reading the sandbox
+ * through `PinnedDir`, never a path handed to hex-ssh.
+ *
+ * The same rule covers ARGUMENTS of the offered tools: every hex-ssh 1.9.2 tool
+ * takes `privateKeyPath`, which hex-ssh reads with readFileSync in Noah's
+ * container (an existence oracle over Noah's disk, SSH auth with any key file on
+ * it, a `/dev/zero` hang). The policy proxy refuses any call carrying it (or
+ * `localPath`) and strips both from every listed input schema; Noah supplies the
+ * key only through the child's env (`SSH_PRIVATE_KEY`, passed on only as key
+ * TEXT — hex-ssh would read any other value as a path too). known_hosts and
+ * ssh_config locations are env-only (`KNOWN_HOSTS_PATH`, `SSH_CONFIG_PATH`).
+ */
+export const HEX_SSH_NEVER_OFFERED_TOOLS = ["ssh-upload", "ssh-download"] as const;
+
+/** Agent-facing: why there is no local↔remote file transfer (BOTH metacognition surfaces). */
+export const HEX_SSH_NO_TRANSFER_SENTENCE =
+  "hex-ssh has no local↔remote file transfer (ssh-upload/ssh-download are not offered): it runs on Noah's server, not in your sandbox, so it cannot see your /workspace files — write a remote file with ssh-write-chunk/ssh-edit-block and read one with ssh-read-lines. ";
 export type HexSshViewerClass = "owner" | "trusted" | "colleague";
 export type HexSshToolPolicy = Record<HexSshViewerClass, HexSshTool[]>;
 
@@ -37,8 +61,6 @@ export const HEX_SSH_TOOL_INFOS: HexSshToolInfo[] = [
   { name: "ssh-session-exec", label: "세션 명령 실행", category: "execute" },
   { name: "ssh-edit-block", label: "원격 파일 수정", category: "write" },
   { name: "ssh-write-chunk", label: "원격 파일 쓰기", category: "write" },
-  { name: "ssh-upload", label: "로컬 파일 업로드", category: "write" },
-  { name: "ssh-download", label: "원격 파일 다운로드", category: "write" },
   { name: "ssh-session-open", label: "세션 열기", category: "session" },
   { name: "ssh-session-read", label: "세션 출력 읽기", category: "session" },
   { name: "ssh-session-close", label: "세션 닫기", category: "session" },
@@ -126,29 +148,3 @@ export function viewerClassForAgentRequest(input: {
   return "colleague";
 }
 
-export function extractHexSshToolName(toolName: string): HexSshTool | null {
-  // The server is registered under HEX_SSH_SERVER_NAME ("hex-ssh"), so the SDK
-  // emits `mcp__hex-ssh__*`. The underscore form has no producer in src/ today,
-  // but it is kept as a defensive fallback at this final permission gate in case
-  // the SDK ever normalizes the dashed server name to underscores — dropping it
-  // would silently let such a tool name bypass the policy check.
-  const prefixes = [`mcp__${HEX_SSH_SERVER_NAME}__`, "mcp__hex_ssh__"];
-  const matched = prefixes.find((prefix) => toolName.startsWith(prefix));
-  if (!matched) {
-    return null;
-  }
-  const name = toolName.slice(matched.length);
-  return TOOL_SET.has(name) ? (name as HexSshTool) : null;
-}
-
-export function isHexSshToolAllowed(
-  toolName: string,
-  viewerClass: HexSshViewerClass,
-  policy: HexSshToolPolicy,
-): boolean {
-  const hexTool = extractHexSshToolName(toolName);
-  if (!hexTool) {
-    return true;
-  }
-  return new Set(allowedHexSshToolsForViewer(policy, viewerClass)).has(hexTool);
-}

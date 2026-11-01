@@ -215,7 +215,6 @@ describe("권한·연결 tab", () => {
     knowledgeRepo: null,
     knowledgeBranch: null,
     knowledgeSelected: null,
-    groupKnowledgeOffDefault: [],
     modelDefault: null,
     effortDefault: null,
     mcpToolGroupsDefault: null,

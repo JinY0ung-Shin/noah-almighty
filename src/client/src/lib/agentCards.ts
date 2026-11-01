@@ -20,10 +20,9 @@ export function toggleAgentCard(agentId: string): void {
 }
 
 /**
- * A card's display title: the teammate's addressable `@name` (agent-teams
- * spawns only) ahead of its type/description label. The name is its own field
- * because the task_started behind every spawn re-announces the card WITHOUT it;
- * snapshots stored before the split carry the name inside `label` instead.
+ * A card's display title: its type/description label, behind the teammate's
+ * `@name` on an OLDER snapshot from the retired agent teams (new runs never set
+ * a name — kept read-only so stored activity trees still render as they did).
  */
 export function agentTitle(node: Pick<LiveAgentNode, "name" | "label">): string {
   return [node.name ? `@${node.name}` : "", node.label].filter(Boolean).join(" · ");

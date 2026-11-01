@@ -1,7 +1,7 @@
 # tests — Claude notes
 
-~38 vitest files by area (`agent-*`, `client-*`, `svelte-*`, `store`, `infra`, `app`, `routes-*`,
-`chat-*`, `external-agent*`, `group-agent`) plus `helpers.ts`, `setup-dom.ts`, and Playwright
+~38 vitest files by area (`agent-*`, `pi-*`, `client-*`, `svelte-*`, `store`, `infra`, `app`, `routes-*`,
+`chat-*`, `retire-*`) plus `helpers.ts`, `setup-dom.ts`, and Playwright
 `visual/*.spec.ts`. Verification gate + one-file recipe live in the root
 **[`CLAUDE.md`](../CLAUDE.md)** §Verification gate.
 
@@ -15,9 +15,11 @@ Non-obvious infrastructure constraints:
 - **`helpers.ts` wires up NOTHING itself** — no shared "boot the app" helper, no mocking utility. Every
   export is a thin real primitive (supertest wrapper, SSE frame parser, temp-dir registrar, git/plugin/
   marketplace fixture builders, `callTool` MCP invoker, stdio JSON-RPC client). Each file builds its OWN
-  `createServices`+`createApp`, and mocks the SDK with its own `vi.mock("../src/server/agent/index.js")`
-  via `vi.hoisted` when it needs deterministic agent output.
-- **`callTool(tool, args)` calls `tool.handler(args, {})` DIRECTLY — it bypasses the SDK's zod validation.**
+  `createServices`+`createApp`, and mocks the agent runtime with its own `vi.mock("../src/server/agent/index.js")`
+  via `vi.hoisted` when it needs deterministic agent output (or runs `AGENT_RUNTIME=local`, the stub; the pi
+  runner is exercised against a scripted fake client in `pi-runner.test.ts`, the real gateway only under the
+  opt-in `PI_E2E_LIVE=1`).
+- **`callTool(tool, args)` calls `tool.handler(args, {})` DIRECTLY — it bypasses the MCP server's zod validation.**
   So a tool's `z.string().max(N)` / `.min()` schema bound is NOT exercised by `callTool`; only runtime
   checks inside the handler are. Assert schema caps against `tool.inputSchema` if you need them covered.
 - **`withTempDir(label, onSetup?)` registers `beforeEach`/`afterEach` — call it at module/describe scope,

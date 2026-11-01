@@ -437,7 +437,6 @@ function seedPane(): string {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
     canvases: [],
     stickBottom: true,
     abortController: null,

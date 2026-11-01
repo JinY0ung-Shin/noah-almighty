@@ -10,11 +10,8 @@ import {
   type HexSshToolPolicy,
 } from "../hexSshPolicy.js";
 import {
-  SKILL_DISCOVERY_CACHE_KEY,
   TOOL_SKILL_POLICY_CONFIG_KEY,
-  normalizeSkillDiscoveryCache,
   normalizeToolSkillPolicy,
-  type SkillDiscoveryCache,
   type ToolSkillPolicy,
 } from "../toolSkillPolicy.js";
 import {
@@ -339,9 +336,8 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     /**
      * Store (encrypted) an app-wide secret keyed by name. Unlike user_secrets
-     * this is global to the deployment — e.g. the Claude subscription OAuth token
-     * (`claude setup-token`) the admin pastes in, injected as CLAUDE_CODE_OAUTH_TOKEN
-     * into the agent subprocess. AES-256-GCM at rest like every other secret; only
+     * this is global to the deployment — e.g. the signup mode, the admin model
+     * override and the boot retirements' markers. AES-256-GCM at rest like every other secret; only
      * decrypted server-side (`getAppSecret`), never returned to clients.
      */
     setAppSecret(key: string, value: string): void {
@@ -509,8 +505,8 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     /**
-     * Admin-managed per-model-tier vision policy (`{tierId: boolean}`; absent
-     * tier = inherit the MODEL_VISION deployment default). Missing/corrupt/
+     * Admin-managed per-model vision policy (`{piModelId: boolean}`; an absent
+     * model = inherit the MODEL_VISION deployment default). Missing/corrupt/
      * unreadable → empty map, i.e. everything inherits — the safe pre-feature
      * behavior.
      */
@@ -530,28 +526,6 @@ export function withSecrets<TBase extends Constructor<StoreBase>>(Base: TBase) {
       const normalized = normalizeModelVisionPolicy(policy);
       this.setAppSecret(MODEL_VISION_POLICY_CONFIG_KEY, JSON.stringify(normalized));
       return normalized;
-    }
-
-    /**
-     * Cached global skill-discovery result (one preflight `supportedCommands()`
-     * per bundled CLI version). Null when absent, malformed, or unreadable —
-     * callers treat null as "discover again" (admin panel) or fall back to
-     * `skills: "all"` (agent run), never as an error.
-     */
-    getSkillDiscoveryCache(): SkillDiscoveryCache | null {
-      const raw = this.getAppSecret(SKILL_DISCOVERY_CACHE_KEY);
-      if (!raw) {
-        return null;
-      }
-      try {
-        return normalizeSkillDiscoveryCache(JSON.parse(raw));
-      } catch {
-        return null;
-      }
-    }
-
-    setSkillDiscoveryCache(cache: SkillDiscoveryCache): void {
-      this.setAppSecret(SKILL_DISCOVERY_CACHE_KEY, JSON.stringify(cache));
     }
 
     /** Set the commit author identity used for knowledge-repo commits. */

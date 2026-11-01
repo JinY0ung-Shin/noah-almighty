@@ -87,8 +87,7 @@ function parsePreviousNames(raw: string | null | undefined): string[] {
  * visibility/trust/badge query below builds on it, so reach and elevation can
  * never drift apart. A group whose `avatar_sharing` policy is off (explicit 0;
  * NULL = on for pre-policy rows — keep in lockstep with the TS `!== 0` reads)
- * grants NEITHER: it becomes knowledge-sharing-only and drops out of this
- * relation entirely. Binds NO params; consumers append their WHERE over m1/m2/g.
+ * grants NEITHER (nor skill sharing): it drops out of this relation entirely. Binds NO params; consumers append their WHERE over m1/m2/g.
  */
 const SHARING_TEAMMATES = `FROM group_members m1
                 JOIN group_members m2 ON m1.group_id = m2.group_id
@@ -340,7 +339,8 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     // Trust (elevated tool access) is derived PURELY from group co-membership:
     // members of the same group are mutually + symmetrically elevated. A trusted
     // viewer chats with someone else's avatar at the OWNER's tool-permission level
-    // (write/Bash run, not just read-only) — but it does NOT grant the owner-only
+    // (the elevated MCP tools, not just the read-only set; pi built-ins run in the
+    // viewer's own sandbox either way) — but it does NOT grant the owner-only
     // knowledge inbox.
 
     /**

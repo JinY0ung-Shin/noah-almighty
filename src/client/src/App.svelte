@@ -9,7 +9,6 @@
   import PromptModal from "./components/PromptModal.svelte";
   import WhatsNewModal from "./components/WhatsNewModal.svelte";
   import { api, setSessionExpiredHandler } from "./lib/api";
-  import { craftAppsFromMe } from "./lib/craftApps";
   import { selectConversation } from "./lib/chat";
   import { loadRailCollapsed, persistRailCollapsed } from "./lib/layout";
   import { loadInboxData, startKnowledgeWatch, stopKnowledgeWatch } from "./lib/loaders";
@@ -90,9 +89,8 @@
     replaceState({ booted: false, bootError: "", themePref });
     try {
       const bootstrap = await api<BootstrapInfo>("/api/bootstrap");
-      const me = await api<{ user: User | null; craftApps?: unknown }>("/api/me");
-      const user = me.user;
-      replaceState({ bootstrap, user, craftApps: craftAppsFromMe(me), booted: true, themePref, view: "explore" });
+      const { user } = await api<{ user: User | null }>("/api/me");
+      replaceState({ bootstrap, user, booted: true, themePref, view: "explore" });
       // enterApp() runs via the reactive init guard below once user is set.
     } catch (err) {
       replaceState({ booted: true, bootError: (err as Error).message, themePref: getThemePref() });

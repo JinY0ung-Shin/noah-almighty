@@ -16,7 +16,6 @@ const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",
   "users",
-  "external-agents",
   "mcp",
   "access",
   "system",
@@ -55,11 +54,6 @@ export function currentRoute(): string {
   if (state.view === "todos") {
     return state.todoSelectedId ? `#/todos/${encodeURIComponent(state.todoSelectedId)}` : "#/todos";
   }
-  if (state.view === "brain") {
-    return state.brainSource && state.brainSource !== "personal"
-      ? `#/brain/${encodeURIComponent(state.brainSource)}`
-      : "#/brain";
-  }
   // The token IS the page. A syncHash from anywhere (a run stream's `open`
   // frame, a conversation switch) must write it back, or the URL collapses to
   // "#/share" and a reload or Back loses the link.
@@ -86,7 +80,6 @@ export function goView(view: ViewName, arg?: string): void {
     if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
     if (view === "routines" && arg) state.routineConversationId = arg;
     if (view === "todos" && arg) state.todoSelectedId = arg;
-    if (view === "brain") state.brainSource = arg || "personal";
     if (view === "share") state.shareToken = arg || "";
   });
   syncHash();
@@ -105,7 +98,6 @@ export function applyInitialRoute(): void {
     if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
     if (view === "routines" && arg) state.routineConversationId = arg;
     if (view === "todos" && arg) state.todoSelectedId = arg;
-    if (view === "brain") state.brainSource = arg || "personal";
     if (view === "share") state.shareToken = arg || "";
   });
   // Rewrite a legacy groups alias in place so it never enters history (Back
@@ -131,7 +123,6 @@ export function installRouteListener(onChatRoute?: (conversationId: string) => v
       if (view === "admin" && isAdminTab(arg)) state.adminTab = arg;
       if (view === "routines" && arg) state.routineConversationId = arg;
       if (view === "todos" && arg) state.todoSelectedId = arg;
-      if (view === "brain") state.brainSource = arg || "personal";
       // A second share link opened while the viewer is mounted: ShareView
       // refetches on the token change itself (same pure-state pattern).
       if (view === "share") state.shareToken = arg || "";

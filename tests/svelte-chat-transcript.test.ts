@@ -72,7 +72,6 @@ function pane(messages: StoredMessage[]): ChatPane {
     liveTools: [],
     liveTasks: [],
     livePlugins: [],
-    groupKnowledgeOff: [],
   } as unknown as ChatPane;
 }
 
@@ -113,6 +112,21 @@ beforeEach(() => {
 });
 
 describe("ChatView transcript", () => {
+  it("renders an older turn's stored plan as a read-only card with no approve/reject controls", () => {
+    const message = {
+      ...assistantMessage(),
+      response: { ...assistantMessage().response!, plan: "1. 조사\n2. 구현" },
+    } as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([message])], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const card = container.querySelector(".message.assistant .plan-card");
+    expect(card?.textContent).toContain("조사");
+    expect(container.querySelector(".plan-actions")).toBeNull();
+    expect(container.querySelector(".plan-feedback")).toBeNull();
+    expect(Array.from(container.querySelectorAll("button")).some((b) => b.textContent?.trim() === "승인")).toBe(false);
+  });
+
   it("renders an anchored file card inline at its creation point, not below the text", () => {
     const first = "다이어그램을 만들었습니다.";
     const rest = "이어서 구조를 설명합니다.";
@@ -241,50 +255,63 @@ describe("ChatView transcript", () => {
       "and stays above the stream status line",
     ).toBe(true);
   });
+
+  it("says the live rows are 진행 중 only while one of them runs", async () => {
+    const live = pane([]);
+    (live as unknown as Record<string, unknown>).streaming = true;
+    live.liveAgents = [{ id: "main", parentId: "", label: "main", status: "running", isMain: true }] as never;
+    live.liveTools = [
+      { id: "t-live", agentId: "main", kind: "tool", label: "아바타에게 질문", detail: "mate", status: "done" },
+    ] as never;
+    replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const summary = () => container.querySelector("details.activity-live .activity-summary-text")?.textContent;
+    // The tool returned and the run waits (the model writes, or a pi run waits on
+    // the consulted avatar): nothing is in progress.
+    expect(summary()).toBe("도구 1개 사용함");
+
+    updateState((state) => {
+      state.chatPanes[0].liveTools.push({ id: "t-2", agentId: "main", kind: "tool", label: "명령 실행", detail: "ls", status: "running" } as never);
+    });
+    await tick();
+    expect(summary()).toBe("도구 2개 진행 중");
+  });
 });
 
 /* ------------------------------------------------------------------ */
-/* background phase: each bubble shows its own live rows               */
+/* live activity rows                                                  */
 /* ------------------------------------------------------------------ */
 
-describe("ChatView transcript · background phase", () => {
-  it("renders the finished turn's and each wake-up turn's rows under their own bubbles", () => {
-    const turn = { ...assistantMessage(), id: "bg-msg-1", response: { kind: "text", runtime: "claude", text: ANSWER } };
-    const wake = { ...assistantMessage(), id: "wake-1", content: "결과 보고", response: { kind: "text", runtime: "claude", text: "결과 보고" } };
-    const live = pane([turn, wake] as unknown as StoredMessage[]);
+describe("ChatView transcript · live activity", () => {
+  it("shows the whole live tree in the trailing bubble only, with no background note", () => {
+    const turn = { ...assistantMessage(), id: "msg-1", response: { kind: "text", runtime: "pi", text: ANSWER } };
+    const live = pane([turn] as unknown as StoredMessage[]);
     Object.assign(live, {
       streaming: true,
-      backgroundPhase: true,
-      backgroundMessageId: "bg-msg-1",
-      backgroundTasks: [{ taskId: "a-77", taskType: "local_agent", description: "조사" }],
-      segmentMessageIds: ["bg-msg-1", "wake-1"],
-      liveSegment: 2,
       liveAgents: [
         { id: "main", parentId: "", label: "", status: "running", isMain: true },
-        { id: "ag1", parentId: "main", label: "general-purpose · 조사", status: "running", isMain: false, background: true, segment: 0 },
+        { id: "ag1", parentId: "main", label: "general-purpose · 조사", status: "running", isMain: false },
       ],
       liveTools: [
-        { id: "t1", agentId: "main", kind: "tool", label: "명령 실행", detail: "ls", status: "done", segment: 0 },
-        { id: "ag1-read", agentId: "ag1", kind: "tool", label: "파일 읽기", detail: "a.md", status: "running", segment: 0 },
-        { id: "w1", agentId: "main", kind: "tool", label: "내용 검색", detail: "needle", status: "done", segment: 1 },
+        { id: "t1", agentId: "main", kind: "tool", label: "명령 실행", detail: "ls", status: "done" },
+        { id: "ag1-read", agentId: "ag1", kind: "tool", label: "파일 읽기", detail: "a.md", status: "running" },
       ],
     });
     replaceState({ avatars: [], chatPanes: [live], activePaneId: "pane-1" });
 
     const { container } = render(ChatView);
     const bubbles = [...container.querySelectorAll(".message.assistant .bubble")];
-    // [finished turn, wake-up turn, trailing live bubble]
-    expect(bubbles).toHaveLength(3);
-    const turnCard = bubbles[0].querySelector(":scope > details.activity-live")!;
-    expect(turnCard.querySelector(".activity-summary-text")?.textContent).toBe("도구 2개 · 에이전트 1개 진행 중");
-    expect(turnCard.querySelector(".agent-bg-badge")?.textContent).toBe("백그라운드");
-    expect([...turnCard.querySelectorAll(".tool-row .tool-arg")].map((n) => n.textContent)).toEqual(["ls", "a.md"]);
-    const wakeCard = bubbles[1].querySelector(":scope > details.activity-live")!;
-    expect(wakeCard.querySelector(".activity-summary-text")?.textContent).toBe("도구 1개 사용함");
-    expect([...wakeCard.querySelectorAll(".tool-row .tool-arg")].map((n) => n.textContent)).toEqual(["needle"]);
-    // Nothing is in flight: the trailing bubble shows the background note, not a copy of the tree.
-    expect(bubbles[2].querySelector("details.activity-live")).toBeNull();
-    expect(bubbles[2].querySelector(".bg-task-note")?.textContent).toContain("백그라운드 작업 1개 진행 중 · 조사");
+    // [finished turn, trailing live bubble]
+    expect(bubbles).toHaveLength(2);
+    // The finished turn has no persisted activity: no live rows borrowed onto it.
+    expect(bubbles[0].querySelector(":scope > details.activity-live")).toBeNull();
+    const liveCard = bubbles[1].querySelector("details.activity-live")!;
+    expect(liveCard.querySelector(".activity-summary-text")?.textContent).toBe("도구 2개 · 에이전트 1개 진행 중");
+    expect([...liveCard.querySelectorAll(".tool-row .tool-arg")].map((n) => n.textContent)).toEqual(["ls", "a.md"]);
+    expect(container.querySelector(".bg-task-note")).toBeNull();
+    expect(container.querySelector(".agent-bg-badge")).toBeNull();
+    expect(container.textContent).not.toContain("백그라운드");
   });
 });
 
@@ -332,6 +359,63 @@ describe("ChatView transcript · mid-turn messages", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector(".steer-badge")).toBeNull();
     expect(rows[1].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
+  });
+
+  it("says a steer delivered only after an answer finished arrived after it (pi, or a missed boundary)", () => {
+    const at = "2026-07-26T01:00:00.000Z";
+    const opener = { id: "u-open", conversationId: "conv-1", role: "user", content: "질문", createdAt: at, response: null };
+    const folded = { ...opener, id: "u-folded", content: "중간에 끼어든 말", kind: "steer" };
+    // The run's sealed segment (turn_end), then the batch delivered as the follow-up turn.
+    const segment = { ...opener, id: "a-seg", role: "assistant", content: "첫 답", response: { kind: "text", runtime: "pi", summary: "s", text: "첫 답" } };
+    const after1 = { ...opener, id: "u-after1", content: "답 뒤 한마디", kind: "steer" };
+    const consult = { ...opener, id: "u-consult", content: "@mate 아바타의 답변", kind: "consultation", consultation: { id: "ask-1", username: "mate" } };
+    const after2 = { ...opener, id: "u-after2", content: "하나 더", kind: "steer" };
+    const messages = [opener, folded, segment, after1, consult, after2] as unknown as StoredMessage[];
+    replaceState({ avatars: [], chatPanes: [pane(messages)], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    const badges = Array.from(container.querySelectorAll(".message.user .steer-badge")).map((b) => b.textContent);
+    expect(badges).toEqual(["응답 중 전달", "답변 뒤 전달", "답변 뒤 전달"]);
+  });
+
+  it("renders a consulted avatar's answer under THAT avatar's name, never as 나, with no 편집", () => {
+    const question = {
+      id: "u-ask",
+      conversationId: "conv-1",
+      role: "user",
+      content: "@mate에게 물어봐줘",
+      createdAt: "2026-07-26T01:00:00.000Z",
+      response: null,
+    } as unknown as StoredMessage;
+    const answer = {
+      ...question,
+      id: "u-answer",
+      content: "@mate 아바타의 답변이 도착했습니다.\n\n금요일에 배포해요",
+      kind: "consultation",
+      consultation: { id: "ask-0123abcd", username: "mate", displayName: "Mate" },
+    } as unknown as StoredMessage;
+    const anonymous = { ...answer, id: "u-anon", consultation: { id: "" } } as unknown as StoredMessage;
+    // A display name that only repeats the username is said once.
+    const sameName = {
+      ...answer,
+      id: "u-same",
+      consultation: { id: "ask-4567abcd", username: "carol", displayName: "carol" },
+    } as unknown as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([question, answer, anonymous, sameName])], activePaneId: "pane-1" });
+
+    const { container } = render(ChatView);
+    // Only the owner's own question is a "나" row.
+    expect(container.querySelectorAll(".message.user")).toHaveLength(1);
+    const rows = Array.from(container.querySelectorAll(".message.consultation"));
+    expect(rows).toHaveLength(3);
+    const role = rows[0].querySelector(".msg-role")!.textContent!;
+    expect(role).toContain("@mate (Mate) 아바타의 답변");
+    expect(role).not.toContain("나");
+    expect(rows[0].querySelector(".steer-badge")?.textContent).toBe("팀원 상담 결과");
+    expect(rows[0].querySelector(".bubble")?.textContent).toContain("금요일에 배포해요");
+    expect(rows[1].querySelector(".msg-role")!.textContent).toContain("팀원 아바타의 답변");
+    expect(rows[2].querySelector(".msg-role span:not(.role-dot)")!.textContent).toBe("@carol 아바타의 답변");
+    expect(rows.every((r) => !r.querySelector('button[aria-label="편집"]'))).toBe(true);
   });
 });
 
@@ -526,7 +610,7 @@ describe("ChatView transcript · 여기서부터 다시", () => {
     expect(container.querySelector(".thinking-card-body")?.textContent).toContain(THINKING);
   });
 
-  it("hides 다시 생성 on a /compact turn but keeps its row editable", () => {
+  it("hides 다시 생성 on a legacy /compact turn but keeps its row editable", () => {
     replaceState({
       avatars: [],
       chatPanes: [pane([userRow("u-c", "/compact 결정 사항은 남겨줘"), assistantMessage()])],
@@ -711,19 +795,6 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
     const { container } = render(ChatView);
     expect(container.querySelector(".msg-file-share")).toBeNull();
     expect(container.querySelector(".msg-images > .msg-file-card")?.textContent).toContain("보고.pdf");
-  });
-
-  it("offers no control in a group agent's thread", () => {
-    const groupPane = pane([deckMessage()]);
-    groupPane.avatar = {
-      ...avatar,
-      id: "group:g1:a1",
-      isOwn: false,
-      groupAgent: { groupId: "g1", groupName: "팀" },
-    } as unknown as AvatarDetail;
-    replaceState({ avatars: [], chatPanes: [groupPane], activePaneId: "pane-1" });
-    render(ChatView);
-    expect(screen.queryByRole("button", { name: /^공유 링크/ })).toBeNull();
   });
 
   it("keeps the control in split view, where the card click downloads instead", () => {

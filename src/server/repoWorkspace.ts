@@ -5,13 +5,14 @@ import type { Store } from "./store.js";
  *
  * Direction B (single working surface): the avatar no longer edits a registered
  * repo through MCP file tools. Instead it OPENS one repo as the conversation's
- * working directory (`mcp__git_repo__open_repo`); from the NEXT turn the chat
- * route (and the routine scheduler) point the SDK cwd at that repo's clone and
- * the avatar edits/tests it with native tools (Read/Edit/Bash), while remote git
- * (push/sync) stays MCP.
+ * working directory (`mcp__git_repo__open_repo`). On pi the avatar edits/tests
+ * its sandbox COPY of the repo with the built-in tools (the turn input names the
+ * copy, `piActiveRepoTurnLine`), while saving (`mcp__git_repo__commit`) and
+ * remote git (push/sync) stay MCP.
  *
- * The SDK cwd is fixed when a turn starts and the model cannot repoint it
- * mid-turn, so the selection has to live OUTSIDE the model turn. It is persisted
+ * The chat route (and the routine scheduler) read the selection at turn start
+ * to prepare the copy and the turn's working-repo line, so it has to live
+ * OUTSIDE the model turn. It is persisted
  * on the `conversations.working_repo` column (store), NOT in memory: routine runs
  * are spaced out over time and survive server restarts, so an in-memory map would
  * silently drop the selection between scheduled runs. Durability also gives a

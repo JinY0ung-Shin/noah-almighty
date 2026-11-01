@@ -1,0 +1,4 @@
+[submodule "vendor/pi-gateway"]
+	path = vendor/pi-gateway
+	url = https://github.com/JinY0ung-Shin/pi-gateway.git
+	ignore = untracked

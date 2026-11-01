@@ -17,7 +17,7 @@ export const AVATAR_ASK_ANSWER_CAP = 8_000;
 
 /**
  * Consultations one turn may start. Each spawns a full agent run for the target
- * (its own subprocess, model calls, and a 3-min budget), so an unbounded loop
+ * (its own pi run, model calls, and a 3-min budget), so an unbounded loop
  * would be a cheap cost amplifier on the shared deployment credentials.
  */
 export const AVATAR_ASK_MAX_PER_TURN = 5;

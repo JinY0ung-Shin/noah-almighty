@@ -1,5 +1,5 @@
-// Shared retrieval/ranking for the second-brain search tools (`brainTools.ts` =
-// the owner's personal vault, `groupBrainTools.ts` = a group's shared vault).
+// Retrieval/ranking for the second-brain search tools (`brainTools.ts`, the
+// owner's personal vault — the team brain was removed 2026-10-30).
 //
 // Pure read over a cloned working tree: walk `wiki/**/*.md`, parse a minimal
 // frontmatter block, and rank by keyword hits weighted title/aliases > tags >
@@ -11,11 +11,10 @@ import path from "node:path";
 import { listTree, readFile } from "../knowledgeRepo.js";
 
 /**
- * The shared wiki-path guard both `get_note` handlers (`brainTools.ts` /
- * `groupBrainTools.ts`) run before reading: strip leading slashes, normalize, and
+ * The wiki-path guard `brainTools.ts`' `get_note` handler runs before reading: strip leading slashes, normalize, and
  * confirm the result is `wiki` or lives under `wiki/` (so `wiki/../CLAUDE.md`
  * can't escape the vault). On success returns the normalized path to read with;
- * on failure the caller emits its own (repo vs group) refusal message.
+ * on failure the caller emits its own refusal message.
  */
 export type WikiPathCheck = { ok: true; norm: string } | { ok: false };
 

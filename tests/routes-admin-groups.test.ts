@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { createApp, createServices, type AppServices } from "../src/server/app.js";
 import type { McpToolGroupId } from "../src/shared/mcpToolGroups.js";
 import { gitInit, makeBareRemote, signup, withTempDir } from "./helpers.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 
 // Covers src/server/routes/admin.ts, routes/groups.ts, store/admin.ts,
 // store/groups.ts, and the group-repo branches of routes/_shared.ts. These are
@@ -413,48 +415,110 @@ describe("admin: signup mode", () => {
   });
 });
 
+/** A pi deployment whose gateway offers `models` — or cannot be reached at all (`"down"`). */
+function bootWithModels(models: string[] | "down") {
+  const booted = boot({
+    agentRuntime: "pi",
+    pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
+  });
+  piServicesFor(booted.services.store, booted.services.config).models = createPiModelCatalog({
+    listModels: async () => {
+      if (models === "down") throw new Error("connect ECONNREFUSED");
+      return models.map((id) => ({ id }));
+    },
+  });
+  return booted;
+}
+
 describe("admin: model override", () => {
-  it("sets, surfaces, and clears the model override", async () => {
-    const { app, services } = boot();
+  it("sets, surfaces, and clears the model override — only a model pi-gateway offers", async () => {
+    const { app, services } = bootWithModels(["deepseek/v3", "qwen/coder"]);
     const admin = await mkUser(app, "admin");
 
     await admin.agent.put("/api/admin/model").send({ model: "  " }).expect(400);
+    // Anything pi does not offer would silently run on pi's default model.
+    const bad = await admin.agent.put("/api/admin/model").send({ model: "opus" }).expect(400);
+    expect(bad.body.error).toBe("pi-gateway가 제공하는 모델만 지정할 수 있습니다: deepseek/v3, qwen/coder");
+    expect(services.store.getModelOverride()).toBeNull();
 
-    await admin.agent.put("/api/admin/model").send({ model: "claude-test-model" }).expect(200);
-    expect(services.store.getModelOverride()).toBe("claude-test-model");
+    await admin.agent.put("/api/admin/model").send({ model: "qwen/coder" }).expect(200);
+    expect(services.store.getModelOverride()).toBe("qwen/coder");
     let sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelOverride).toBe("claude-test-model");
-    // No env ANTHROPIC_MODEL is set in the test config, so it isn't env-locked.
-    expect(sys.body.system.modelEnvLocked).toBe(false);
+    expect(sys.body.system.modelOverride).toBe("qwen/coder");
+    expect(sys.body.system.modelOverrideIgnored).toBe(false);
+    expect(sys.body.system.modelOverrideChoices).toEqual(["deepseek/v3", "qwen/coder"]);
+    // The env hard lock (ANTHROPIC_MODEL) is gone with the SDK runner.
+    expect(sys.body.system).not.toHaveProperty("modelEnvLocked");
 
     await admin.agent.delete("/api/admin/model").expect(200);
     expect(services.store.getModelOverride()).toBeNull();
     sys = await admin.agent.get("/api/admin/system").expect(200);
     expect(sys.body.system.modelOverride).toBeNull();
   });
+
+  it("flags a stored override pi-gateway does not offer as ignored", async () => {
+    const { app, services } = bootWithModels(["deepseek/v3"]);
+    const admin = await mkUser(app, "admin");
+    // An SDK-era Claude id / a retired tier alias survives the upgrade: reported as ignored.
+    services.store.setModelOverride("opus");
+    const sys = await admin.agent.get("/api/admin/system").expect(200);
+    expect(sys.body.system.modelOverride).toBe("opus");
+    expect(sys.body.system.modelOverrideIgnored).toBe(true);
+  });
+
+  it("answers 503 to a model write while pi-gateway's list cannot be read", async () => {
+    const { app, services } = bootWithModels("down");
+    const admin = await mkUser(app, "admin");
+    const res = await admin.agent.put("/api/admin/model").send({ model: "deepseek/v3" }).expect(503);
+    expect(res.body.error).toBe("pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    expect(services.store.getModelOverride()).toBeNull();
+    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { "deepseek/v3": false } }).expect(503);
+    await admin.agent.put("/api/me/chat-defaults").send({ model: "deepseek/v3" }).expect(503);
+    // Clearing names no model, so it needs no list.
+    await admin.agent.put("/api/me/chat-defaults").send({ model: null }).expect(200);
+    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: {} }).expect(200);
+    // The system view still answers: no models, nothing to choose.
+    const sys = await admin.agent.get("/api/admin/system").expect(200);
+    expect(sys.body.system.piModels).toEqual([]);
+  });
+});
+
+describe("composer default model", () => {
+  it("stores only a model pi-gateway offers, and clears with null/\"\"", async () => {
+    const { app, services } = bootWithModels(["deepseek/v3"]);
+    const user = await mkUser(app, "picker");
+    const bad = await user.agent.put("/api/me/chat-defaults").send({ model: "opus" }).expect(400);
+    expect(bad.body.error).toBe("알 수 없는 모델입니다.");
+    await user.agent.put("/api/me/chat-defaults").send({ model: 42 }).expect(400);
+    const ok = await user.agent.put("/api/me/chat-defaults").send({ model: "deepseek/v3" }).expect(200);
+    expect(ok.body.user.modelDefault).toBe("deepseek/v3");
+    await user.agent.put("/api/me/chat-defaults").send({ model: "" }).expect(200);
+    expect(services.store.getUserById(user.id)?.modelDefault).toBeNull();
+  });
 });
 
 describe("admin: model vision policy", () => {
-  it("validates, saves, and surfaces the per-tier vision policy", async () => {
-    const { app, services } = boot();
+  it("validates, saves, and surfaces the per-model vision policy", async () => {
+    const { app, services } = bootWithModels(["deepseek/v3", "qwen/coder"]);
     const admin = await mkUser(app, "admin");
     const member = await mkUser(app, "vp-member");
 
-    await member.agent.put("/api/admin/model-vision-policy").send({ policy: { opus: false } }).expect(403);
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { gpt: true } }).expect(400);
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { opus: "yes" } }).expect(400);
+    await member.agent.put("/api/admin/model-vision-policy").send({ policy: { "qwen/coder": false } }).expect(403);
+    // Keys must be models pi offers; values strict booleans.
+    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { opus: true } }).expect(400);
+    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { "qwen/coder": "yes" } }).expect(400);
 
     await admin.agent
       .put("/api/admin/model-vision-policy")
-      .send({ policy: { sonnet: false, haiku: false } })
+      .send({ policy: { "qwen/coder": false } })
       .expect(200);
-    expect(services.store.getModelVisionPolicy()).toEqual({ sonnet: false, haiku: false });
+    expect(services.store.getModelVisionPolicy()).toEqual({ "qwen/coder": false });
 
     const sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelVisionPolicy).toEqual({ sonnet: false, haiku: false });
+    expect(sys.body.system.modelVisionPolicy).toEqual({ "qwen/coder": false });
     expect(sys.body.system.visionDefault).toBe(true);
 
-    // Explicit empty policy = every tier inherits the deployment default again.
+    // Explicit empty policy = every model inherits the deployment default again.
     await admin.agent.put("/api/admin/model-vision-policy").send({ policy: {} }).expect(200);
     expect(services.store.getModelVisionPolicy()).toEqual({});
   });
@@ -721,7 +785,7 @@ describe("admin: group tool policy", () => {
 // ---- Groups self-service: /api/me/groups --------------------------------
 
 describe("groups self-service: roster", () => {
-  it("lists the caller's groups with roster and repo fields", async () => {
+  it("lists the caller's groups with their roster, and no repo fields", async () => {
     const { app } = boot();
     const admin = await mkUser(app, "admin");
     const bob = await mkUser(app, "bob");
@@ -735,9 +799,9 @@ describe("groups self-service: roster", () => {
     expect(res.body.groups).toHaveLength(1);
     const g = res.body.groups[0];
     expect(g.id).toBe(groupId);
-    expect(g.knowledgeRepo).toBeNull();
-    expect(g.knowledgeBranch).toBeNull();
-    expect(g.knowledgeSelected).toBeNull();
+    // Group knowledge repositories are retired (2026-10-30).
+    expect(g).not.toHaveProperty("knowledgeRepo");
+    expect(g).not.toHaveProperty("knowledgeRepoConfigured");
     expect(g.members.map((m: { userId: string }) => m.userId)).toContain(bob.id);
 
     // A user in no groups gets an empty list.
@@ -880,227 +944,18 @@ describe("groups self-service: membership management", () => {
   });
 });
 
-describe("groups self-service: knowledge repo settings", () => {
-  it("connects, clears, and validates the group knowledge repo", async () => {
-    const { app, services } = boot();
+describe("group knowledge repositories are retired", () => {
+  it("serves none of the old group repo routes (each unmatched → 404)", async () => {
+    const { app } = boot();
     const admin = await mkUser(app, "admin");
     const groupId = await createGroup(admin, "team");
-
-    // Unknown group → 404.
-    await admin.agent
-      .put("/api/me/groups/ghost/knowledge-repo")
-      .send({ repo: "org/knowledge" })
-      .expect(404);
-
-    // Non-manager (plain member) → 403.
-    const member = await mkUser(app, "member");
-    await admin.agent
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username: "member", role: "member" })
-      .expect(200);
-    await member.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/knowledge" })
-      .expect(403);
-
-    // Malformed repo string → 400.
-    await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "not a repo at all" })
-      .expect(400);
-
-    // Valid owner/repo → connected (owner/repo shorthand is always internal).
-    const set = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "org/knowledge", branch: "main" })
-      .expect(200);
-    expect(set.body.group.knowledgeRepo).toBe("org/knowledge");
-    expect(set.body.group.knowledgeBranch).toBe("main");
-
-    // Clear with empty string → repo null.
-    const cleared = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "" })
-      .expect(200);
-    expect(cleared.body.group.knowledgeRepo).toBeNull();
-    expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
-  });
-
-  it("rejects a group knowledge repo outside the internal GitHub host", async () => {
-    const { app } = boot({ githubHost: "github.enterprise.local" });
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-    const res = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo`)
-      .send({ repo: "https://github.com/org/knowledge.git", branch: "main" })
-      .expect(400);
-    expect(res.body.error).toContain("사내 GitHub host(github.enterprise.local)");
-  });
-
-  // Regression (sec): the internal-host check used to pass anything whose host it
-  // could not parse, so a local path (or `scheme::` syntax) ending in `.git` slipped
-  // through — pointing a GROUP repo at another user's clone would expose it to every
-  // group member. Same root cause as the personal knowledge-repo route.
-  it("rejects a local path or remote-helper syntax as a group knowledge repo", async () => {
-    const { app, services } = boot({ githubHost: "github.enterprise.local" });
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-
-    for (const repo of [
-      "/data/knowledge/other-user-id/.git",
-      "ext::sh -c evil .git",
-    ]) {
-      const res = await admin.agent
-        .put(`/api/me/groups/${groupId}/knowledge-repo`)
-        .send({ repo, branch: "main" })
-        .expect(400);
-      expect(res.body.error).toContain("사내 GitHub host");
-    }
-    expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
-  });
-
-  it("sets and clears the group repo plugin selection", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-
-    // No repo connected yet → 404.
-    await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: ["a"] })
-      .expect(404);
-
-    services.store.setGroupKnowledgeRepo(groupId, "org/knowledge", "main");
-
-    // Non-array, non-null → 400.
-    await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: "alpha" })
-      .expect(400);
-
-    // Array of strings → set.
-    const set = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: ["alpha", "beta"] })
-      .expect(200);
-    expect(set.body.group.knowledgeSelected).toEqual(["alpha", "beta"]);
-
-    // null → load all.
-    const all = await admin.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: null })
-      .expect(200);
-    expect(all.body.group.knowledgeSelected).toBeNull();
-
-    // Non-member → 403 (permission gate precedes everything).
-    const outsider = await mkUser(app, "outsider");
-    await outsider.agent
-      .put(`/api/me/groups/${groupId}/knowledge-repo/selected`)
-      .send({ selected: null })
-      .expect(403);
-  });
-});
-
-// ---- Group knowledge-repo views (clone-backed) --------------------------
-
-describe("group knowledge repo views", () => {
-  it("enforces membership and requires a connected repo", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const outsider = await mkUser(app, "outsider");
-    const groupId = await createGroup(admin, "team");
-
-    // Non-member, non-admin → 403 on every view.
-    await outsider.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(403);
-    await outsider.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(403);
-    await outsider.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/x.md`)
-      .expect(403);
-    await outsider.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(403);
-
-    // System admin passes membership, but with no repo connected → 404.
+    await admin.agent.put(`/api/me/groups/${groupId}/knowledge-repo`).send({ repo: "acme/kb" }).expect(404);
+    await admin.agent.put(`/api/me/groups/${groupId}/knowledge-repo/selected`).send({ selected: null }).expect(404);
     await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(404);
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(404);
     await admin.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(404);
-    // note: an invalid path is rejected (400) before the repo lookup...
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=../escape.md`)
-      .expect(400);
-    // ...a valid path with no repo connected → 404.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/x.md`)
-      .expect(404);
-    // Sanity: the store still reports no repo.
-    expect(services.store.getGroupKnowledgeRepo(groupId).repo).toBeNull();
-  });
-
-  it("clones a connected repo and serves contents, graph, and notes", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-    const remote = seedRemote("group-ok", {
-      "wiki/foo.md": "# Foo\n\nLinks to [[bar]].\n",
-      // Larger than the 512 KiB display cap, to exercise the 413 branch below.
-      "wiki/big.md": `# Big\n${"a".repeat(520 * 1024)}`,
-    });
-    // Point the group at the local remote (bypasses the PUT host validation,
-    // which is exercised separately).
-    services.store.setGroupKnowledgeRepo(groupId, remote, "main");
-
-    // contents: the seed has no `.claude-plugin`, so it's a "none" layout.
-    const contents = await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/contents`)
-      .expect(200);
-    expect(contents.body.contents.kind).toBe("none");
-
-    // graph: the wiki note becomes a node.
-    const graph = await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/graph`)
-      .expect(200);
-    expect(graph.body.graph.nodes.some((n: { id: string }) => n.id === "wiki/foo.md")).toBe(true);
-
-    // note: read the seeded file back.
-    const note = await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/foo.md`)
-      .expect(200);
-    expect(note.body.note.path).toBe("wiki/foo.md");
-    expect(note.body.note.content).toContain("# Foo");
-
-    // note: a valid-shaped path that doesn't exist in the clone → 404.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/missing.md`)
-      .expect(404);
-
-    // note: a note larger than the display cap → 413.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/big.md`)
-      .expect(413);
-
-    // refresh: re-fetches the existing clone and returns contents.
-    const refreshed = await admin.agent
-      .post(`/api/me/groups/${groupId}/knowledge-repo/refresh`)
-      .expect(200);
-    expect(refreshed.body.contents.kind).toBe("none");
-  });
-
-  it("returns 502 when the configured repo cannot be cloned", async () => {
-    const { app, services } = boot();
-    const admin = await mkUser(app, "admin");
-    const groupId = await createGroup(admin, "team");
-    // A local path that does not exist → `git clone` fails fast, offline.
-    services.store.setGroupKnowledgeRepo(
-      groupId,
-      path.join(tempDir, "nonexistent-remote.git"),
-      "main",
-    );
-
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/contents`).expect(502);
-    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(502);
-    await admin.agent.post(`/api/me/groups/${groupId}/knowledge-repo/refresh`).expect(502);
-    // The note endpoint funnels a clone failure through respondNoteFsError → 502.
-    await admin.agent
-      .get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/foo.md`)
-      .expect(502);
+    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/graph`).expect(404);
+    await admin.agent.get(`/api/me/groups/${groupId}/knowledge-repo/note?path=wiki/x.md`).expect(404);
+    await admin.agent.put("/api/me/group-knowledge-default").send({ off: [] }).expect(404);
   });
 });
 

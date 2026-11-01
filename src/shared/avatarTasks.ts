@@ -9,7 +9,7 @@ export interface AvatarApiKey {
 export type AvatarTaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 /**
  * What the external API REPORTS: the stored status, or `waiting_input` when the
- * task's run has outstanding question/permission/plan/canvas prompts. Derived
+ * task's run has outstanding question/permission/canvas prompts. Derived
  * from the in-memory run registry at read time, never stored — it flips back
  * to `running` once the prompt is answered and is gone after a restart.
  */

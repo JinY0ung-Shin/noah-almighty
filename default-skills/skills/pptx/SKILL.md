@@ -98,7 +98,7 @@ and before you read AUTHORING, ONE `AskUserQuestion` call settles what the reque
   or the user said to decide ("알아서").
 - Never where nobody can answer it now: a scheduled routine or automated task, and a turn whose system prompt says
   `This turn was submitted by an **EXTERNAL SYSTEM**` (the external task API: the dialog is not blocked there and
-  would park the task until someone answers it). Group-agent and teammate chats are interactive: ask there too.
+  would park the task until someone answers it). Teammate chats are interactive: ask there too.
 - Up to 3 questions in that one call, every label and description in the user's language. The FIRST option of
   every question is the one you recommend, marked in the user's language at the end of its label (`(추천)`), not
   with the English `(Recommended)` the tool's own guidance suggests. The dialog needs an answer to every question,
@@ -308,8 +308,7 @@ Only after `build` exited 0:
 - Limits: 3 files per turn, 30 MB per file (the build already refuses a deck over 30 MB).
 - A link other people can open: only when the user explicitly asks for one (a plain 공유해 줘 about the deck is the
   `share_file` above). Call `mcp__file_output__create_share_link` after delivering the deck when describe_system's
-  `Share links` line says this run has it; otherwise point them to the `공유 링크` button next to the file card
-  (a group-agent thread cannot be link-shared at all: say so).
+  `Share links` line says this run has it; otherwise point them to the `공유 링크` button next to the file card.
   With a link, say that whoever opens it can also download the .pptx, speaker notes included.
 - Tell the user, in their language: the file is ready, with one line per slide — naming the slides that show
   their attached images or your captures (and what each capture shows), and what goes into each empty photo slot (its
@@ -387,7 +386,7 @@ The notes arrive as the next user message, `On the canvas "…" (id: …), The u
 `- <id>: <value>` line per control (empty = no note). Apply ALL of them, then ONE rebuild (when they change a lot of
 Korean text, `check --profile both` first — §5, §6) and the next round. An all-empty submission ends the review:
 say so in one line, no rebuild. A message with an older round's ids is a resend of notes already applied: do not
-apply them again. Without the canvas tool (a group-agent chat, or a conversation whose canvas tool group is
+apply them again. Without the canvas tool (a conversation whose canvas tool group is
 turned off), list the slides in your reply and invite `번호: 요청` lines in the chat. To let the user pick the
 look, check two or three fitting themes on the same slides (one copy of the deck folder per theme, `--only
 01-cover 02-…`) and show those renders, from each copy's `.build/check/<profile>/html/`, side by side on the canvas.

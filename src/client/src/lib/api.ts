@@ -1,4 +1,3 @@
-import { craftAppsFromMe } from "./craftApps";
 import { readState, replaceState } from "./state";
 
 const API_ERROR_KO: Record<string, string> = {
@@ -72,6 +71,6 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
 }
 
 export async function refreshMe(): Promise<void> {
-  const body = await api<{ user: import("./types").User | null; craftApps?: unknown }>("/api/me");
-  replaceState({ user: body.user, craftApps: craftAppsFromMe(body) });
+  const { user } = await api<{ user: import("./types").User | null }>("/api/me");
+  replaceState({ user });
 }

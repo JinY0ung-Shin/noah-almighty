@@ -1,37 +1,29 @@
-// Shared CRUD skeleton for the knowledge-repo MCP servers (`repoTools.ts` =
-// the owner's personal repo, `groupRepoTools.ts` = a group's shared repo).
+// CRUD skeleton for the personal knowledge-repo MCP server (`repoTools.ts`).
+// It was shared with the group repo server until group knowledge repositories
+// were retired (2026-10-30), which is why the runners are parameterized.
 //
-// Both servers expose the same five file-CRUD tools — list_files / read_file /
-// write_file / scaffold_skill / commit — over a guard → resolve → ensureClone →
-// op → decode pipeline. The ONLY differences are:
-//   - the guard/resolve chain (personal = owner-only; group = owner-only +
-//     resolve the named group + an admin role gate on write/scaffold/commit),
-//   - which clone/commit helpers run (knowledgeRepo vs groupKnowledgeRepo),
-//   - a handful of success-message strings + the commit audit action/detail,
-//   - tool descriptions / arg-`describe` text (personal vs group wording).
-//
-// This module factors the loop body — the owner gate, the resolve→clone→op→decode
-// try/catch, and the shared (byte-identical, English, agent-facing) error
-// messages — into small parameterized runners. Each caller still owns its own
-// `tool()` descriptions, argument schemas, success strings, and audit calls, so
-// every string that units.test.ts asserts stays at the call site unchanged.
+// The server exposes the file-CRUD tools — list_files / read_file / write_file /
+// scaffold_skill / commit — over a guard → resolve → ensureClone → op → decode
+// pipeline. This module factors the loop body — the owner gate, the
+// resolve→clone→op→decode try/catch, and the shared (English, agent-facing)
+// error messages — into small parameterized runners. The caller still owns its
+// own `tool()` descriptions, argument schemas, success strings, and audit calls.
 
 import { scrubGitError } from "../marketplace.js";
 import type { Store } from "../store.js";
-import type { UserGroupMembership } from "../types.js";
 import { decodeRepoFsError, text } from "./mcpTools.js";
 
-/** Shared owner-only refusal text (identical in both repo servers). */
+/** Shared owner-only refusal text. */
 export const OWNER_ONLY = "This tool can only be used by the avatar owner.";
 
-/** Shared commit-tool refusal when no internal Git token is registered (identical in both repo servers). */
+/** Shared commit-tool refusal when no internal Git token is registered. */
 export const NO_GIT_TOKEN = "To push, please first register an internal Git token (GIT_TOKEN) in settings.";
 
-/** Shared commit-tool message when the working tree has nothing to commit (identical in both repo servers). */
+/** Shared commit-tool message when the working tree has nothing to commit. */
 export const NO_CHANGES = "There are no changes to commit.";
 
 /**
- * The shared create_repo name validation both servers run: `name` is required and
+ * The create_repo name validation: `name` is required and
  * must match `/^[A-Za-z0-9._-]{1,100}$/`; `org` (when present) must match the same
  * pattern. Returns the trimmed values on success, or the byte-identical refusal
  * text (returned to the model verbatim) on failure. `units.test.ts` asserts the
@@ -55,7 +47,7 @@ export function validateRepoCreateNames(rawName: string, rawOrg?: string): RepoN
 
 /**
  * The shared create_repo failure message (remote-create returned `ok:false`),
- * byte-identical in both repo servers, including the no-Bash-fallback hint. Takes
+ * including the no-Bash-fallback hint. Takes
  * the normalized target host and the failed `CreateRepoResult`-shaped result.
  */
 export function createRepoFailureMessage(
@@ -67,40 +59,18 @@ export function createRepoFailureMessage(
   return `Failed to create GitHub repository (host: ${targetHost}${status}${exitCode}): ${result.message}\nCheck whether the token (GIT_TOKEN) has repo-creation permission and whether a repository with the same name already exists. Do not work around this with Bash \`gh\`/git — the shell has no git credentials.`;
 }
 
-/** The shared create_repo outer-catch message (byte-identical in both repo servers). */
+/** The shared create_repo outer-catch message. */
 export function createRepoCatchMessage(targetHost: string, error: unknown): string {
   return `Error while creating GitHub repository (host: ${targetHost}): ${scrubGitError(error)}`;
 }
 
-/**
- * Resolve a `group` argument (id or name, case-insensitive) among the groups the
- * avatar's owner belongs to. Shared by `groupRepoTools.ts`/`groupBrainTools.ts`
- * so a model-supplied group is always checked against the owner's OWN memberships
- * (never a cross-tenant read of another team's repo). Returns null when blank or
- * unmatched; the caller maps that to its own NO_SUCH_GROUP refusal.
- */
-export function resolveOwnerGroup(
-  store: Store,
-  avatarUserId: string,
-  arg: string,
-): UserGroupMembership | null {
-  const a = arg.trim().toLowerCase();
-  if (!a) return null;
-  const groups = store.listUserGroups(avatarUserId);
-  return (
-    groups.find((g) => g.id.toLowerCase() === a) ??
-    groups.find((g) => g.name.toLowerCase() === a) ??
-    null
-  );
-}
-
-/** Render a `listTree` result the same way both servers do (dirs get a trailing slash). */
+/** Render a `listTree` result (dirs get a trailing slash). */
 export function formatTree(entries: Array<{ type: string; path: string }>): string {
   return entries.map((e) => (e.type === "dir" ? `${e.path}/` : e.path)).join("\n");
 }
 
 /**
- * The shared error message both servers return when a clone fails (load failure):
+ * The error message returned when a clone fails (load failure):
  * identical text including the no-Bash-fallback hint line. `units.test.ts` and the
  * CLAUDE.md "git remote work is MCP-only" rule depend on this wording.
  */
@@ -127,7 +97,7 @@ export function commitFailureMessage(error: unknown): string {
   return `Commit/push failed: ${detail}\nCheck the write permission of the token (GIT_TOKEN) and the remote branch protection settings. Do not work around this with Bash \`git push\` — the shell has no git credentials.`;
 }
 
-/** read_file's shared error decode (identical sentinels/wording in both servers). */
+/** read_file's shared error decode. */
 export function readFileErrorMessage(error: unknown): string {
   return decodeRepoFsError(scrubGitError(error), {
     tooLarge: "The file is too large.",
@@ -152,10 +122,10 @@ export function writeFileErrorMessage(error: unknown): string {
 export function editFileErrorMessage(error: unknown): string {
   const detail = scrubGitError(error);
   if (detail === "NOT_FOUND") {
-    return "The file does not exist yet. Use write_file to create it (or check the path with list_files/read_file).";
+    return "The file does not exist yet. Use mcp__repo__write_file to create it, or check the path with mcp__repo__list_files.";
   }
   if (detail === "STRING_NOT_FOUND") {
-    return "old_string was not found in the file. Read the current file with read_file and copy the exact text to replace, including whitespace and indentation.";
+    return "old_string was not found in the file. Read the current file with mcp__repo__read_file and copy the exact text to replace, including whitespace and indentation.";
   }
   if (detail === "STRING_NOT_UNIQUE") {
     return "old_string matches more than one place in the file. Include enough surrounding context to make it unique, or pass replace_all: true to replace every occurrence.";
@@ -193,8 +163,7 @@ export function moveFileErrorMessage(error: unknown): string {
 }
 
 /**
- * The repo-relative file ops both servers import from `knowledgeRepo` (the group
- * server reuses them on its own clone). Bundled so a runner can take one object.
+ * The repo-relative file ops imported from `knowledgeRepo`. Bundled so a runner can take one object.
  */
 export interface RepoFileOps {
   listTree: (repoRoot: string) => Promise<Array<{ type: string; path: string }>>;
@@ -225,7 +194,7 @@ export type Resolved<C> =
  * Run the shared list_files body: clone the resolved repo, list its tree, and
  * either report it empty or hand the rendered tree body to `onBody`. Clone
  * failures map to the shared `cloneFailureMessage`. `onBody`/`empty` carry the
- * caller-specific success wording (personal vs group), so no string moves here.
+ * caller-specific success wording, so no string moves here.
  */
 export async function runListFiles<C>(
   resolved: Resolved<C>,
@@ -350,9 +319,8 @@ export async function runMoveFile<C>(
 }
 
 /**
- * Run the shared scaffold_skill body. The success string is byte-identical in
- * both servers, so it lives here; only the description/arg text (kept by callers)
- * differs.
+ * Run the shared scaffold_skill body. The success string lives here; the
+ * description/arg text stays with the caller.
  */
 export async function runScaffoldSkill<C>(
   resolved: Resolved<C>,
@@ -365,7 +333,7 @@ export async function runScaffoldSkill<C>(
     const repoRoot = await ensureClone(resolved.repo);
     const filePath = await scaffoldSkill(repoRoot, args.name, args.description ?? "");
     return text(
-      `Created a new skill: ${filePath} (fill in the content with write_file, then push with commit.)`,
+      `Created a new skill: ${filePath} (fill in the content with mcp__repo__write_file, then push with mcp__repo__commit.)`,
     );
   } catch (error) {
     return text(scaffoldErrorMessage(error), true);

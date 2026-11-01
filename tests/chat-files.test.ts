@@ -115,6 +115,22 @@ describe("chatFiles", () => {
       expect(publishWorkspaceFile(config(), "conv1", "tool.exe", [ws])).toEqual({ error: "UNSUPPORTED" });
     });
 
+    it("takes none of the retired Craft-only types, though their stored cards still resolve", () => {
+      const ws = workspace();
+      fs.writeFileSync(path.join(ws, "art.psd"), Buffer.concat([Buffer.from("8BPS"), Buffer.alloc(32)]));
+      fs.writeFileSync(path.join(ws, "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+      fs.writeFileSync(path.join(ws, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      for (const name of ["art.psd", "logo.svg", "shot.png"]) {
+        expect(publishWorkspaceFile(config(), "conv1", name, [ws])).toEqual({ error: "UNSUPPORTED" });
+      }
+      const dir = chatFilesDir(config(), "conv-legacy");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "old-1.psd"), "8BPS");
+      fs.writeFileSync(path.join(dir, "old-2.svg"), "<svg/>");
+      expect(resolveStoredFile(config(), "conv-legacy", "old-1")).toMatchObject({ ext: "psd", mediaType: "image/vnd.adobe.photoshop" });
+      expect(resolveStoredFile(config(), "conv-legacy", "old-2")).toMatchObject({ ext: "svg", mediaType: "image/svg+xml" });
+    });
+
     it("rejects a container format whose bytes don't match the extension", () => {
       const ws = workspace();
       fs.writeFileSync(path.join(ws, "fake.pptx"), Buffer.from("just text"));

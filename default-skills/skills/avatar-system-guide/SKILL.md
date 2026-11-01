@@ -23,7 +23,7 @@ them — perform them directly with the MCP tools provided.
 - **General git repos**: separate from the knowledge repo, these are work/code repos the owner
   registered. The avatar opens ONE as the conversation's working directory with
   `mcp__git_repo__open_repo` (takes effect from the next message), then edits/tests/commits it with
-  native tools and local git; only `sync_repo`/`push` stay on the `mcp__git_repo__*` tools. Internal
+  native tools and local git; only `mcp__git_repo__sync_repo`/`mcp__git_repo__push` stay on the `mcp__git_repo__*` tools. Internal
   and public repo clone/sync is attempted without a token. This is plain git — it does not manage
   GitHub issues or PRs.
 - **Routines**: scheduled jobs that run headless/read-only on a KST schedule. Results are appended to a
@@ -54,7 +54,7 @@ them — perform them directly with the MCP tools provided.
   `mcp__repo__scaffold_skill`, `mcp__repo__write_file`, `mcp__repo__commit`. To retain a durable fact
   rather than a whole skill, use the brain-ingest skill (a `raw/` write plus a commit).
 - Register/work a general git repo: when the owner asks to manage a repo, register it with
-  `mcp__git_repo__register_repo`, then use `mcp__git_repo__sync_repo`/`push` for remote git and
+  `mcp__git_repo__register_repo`, then use `mcp__git_repo__sync_repo`/`mcp__git_repo__push` for remote git and
   `mcp__git_repo__open_repo` to make it the working directory (editing and local git happen with native
   tools, not MCP file CRUD). Do not require a token up front for public repo clone/sync. Register/remove
   is owner-only; working an already-registered repo is also available to trusted users.

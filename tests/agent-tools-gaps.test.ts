@@ -24,16 +24,6 @@ import {
   BRAIN_SERVER_NAME,
 } from "../src/server/agent/brainTools.js";
 import {
-  buildGroupBrainTools,
-  buildGroupBrainServer,
-  GROUP_BRAIN_SERVER_NAME,
-} from "../src/server/agent/groupBrainTools.js";
-import {
-  buildGroupRepoTools,
-  buildGroupRepoServer,
-  GROUP_REPO_SERVER_NAME,
-} from "../src/server/agent/groupRepoTools.js";
-import {
   buildSshTrustTools,
   buildSshTrustServer,
   SSH_TRUST_SERVER_NAME,
@@ -50,7 +40,7 @@ vi.mock("../src/server/sshTrust.js", async (importActual) => {
   return { ...actual, addTrustedHost: vi.fn() };
 });
 import { addTrustedHost } from "../src/server/sshTrust.js";
-// The run-plan tests record the ctx buildAgentRunPlan hands the Confluence and
+// The run-plan tests record the ctx buildRunCapabilities hands the Confluence and
 // system servers. Both factories are wrapped in spies that still build the real
 // servers, so every other test here sees the real modules.
 vi.mock("../src/server/agent/confluenceTools.js", async (importActual) => {
@@ -62,7 +52,7 @@ vi.mock("../src/server/agent/systemTools.js", async (importActual) => {
   return { ...actual, buildSystemServer: vi.fn(actual.buildSystemServer) };
 });
 import { buildSystemServer } from "../src/server/agent/systemTools.js";
-import { buildAgentRunPlan, conversationScratchDir } from "../src/server/agent/runPlan.js";
+import { buildRunCapabilities, conversationScratchDir, type RunCapabilityOptions } from "../src/server/agent/runCapabilities.js";
 
 let tempDir: string;
 
@@ -487,7 +477,7 @@ describe("confluence tools — request + attachment plumbing", () => {
     /** get_attachment with save_to_workspace on, against this test's workspace. */
     function save(
       args: Record<string, unknown>,
-      over: { visionEnabled?: boolean; workspaceDir?: string; elevated?: boolean } = {},
+      over: { visionEnabled?: boolean; workspaceDir?: string; workspaceAnchor?: string; elevated?: boolean } = {},
     ) {
       return callTool(
         buildConfluenceTools({ ...ctx(), workspaceDir: workspace, ...over }),
@@ -688,6 +678,39 @@ describe("confluence tools — request + attachment plumbing", () => {
       expect(fs.readdirSync(outside)).toEqual(["same.png"]);
     });
 
+    it("on a pi run never follows a link ABOVE the workspace (the conversation folder itself), refusing before the download", async () => {
+      // The pi layout: <user root>/c/<conv>, where the sandbox owns `c/<conv>` too.
+      const userRoot = path.join(tempDir, "u-attacker");
+      const victimConv = path.join(tempDir, "u-victim", "c", "conv-v");
+      fs.mkdirSync(path.join(userRoot, "c"), { recursive: true });
+      fs.mkdirSync(path.join(victimConv, "confluence"), { recursive: true });
+      const conv = path.join(userRoot, "c", "conv-a");
+      fs.symlinkSync(victimConv, conv);
+      const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
+      const res = await save({ attachment_id: "att-1" }, { workspaceDir: conv, workspaceAnchor: userRoot });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("symlink");
+      expect(methods).toEqual([]);
+      expect(fs.readdirSync(path.join(victimConv, "confluence"))).toEqual([]);
+
+      // The same link swapped in WHILE the download is in flight: the save
+      // goes through the pinned chain and refuses; the victim stays empty.
+      fs.unlinkSync(conv);
+      fs.mkdirSync(conv);
+      stubFetch((url) => {
+        if (url.pathname.endsWith("/content/att-1")) {
+          return json({ id: "att-1", type: "attachment", title: "diagram.png", metadata: { mediaType: "image/png" }, _links: { download: "/download/attachments/7/file" } });
+        }
+        fs.renameSync(conv, `${conv}-moved`);
+        fs.symlinkSync(victimConv, conv);
+        return fakeBinary({ contentType: "image/png", bytes: PNG });
+      });
+      const raced = JSON.parse((await save({ attachment_id: "att-1" }, { workspaceDir: conv, workspaceAnchor: userRoot })).content[0].text ?? "{}");
+      expect(raced.savedPath).toBeUndefined();
+      expect(raced.saveError).toBeTruthy();
+      expect(fs.readdirSync(path.join(victimConv, "confluence"))).toEqual([]);
+    });
+
     it("without a workspace, refuses before sending any request", async () => {
       const methods = serve({ requestedId: "att-1", title: "diagram.png", mediaType: "image/png" }, PNG);
       const res = await save({ attachment_id: "att-1" }, { workspaceDir: undefined });
@@ -815,7 +838,7 @@ describe("confluence tools — request + attachment plumbing", () => {
 });
 
 // ---------------------------------------------------------------------------
-// runPlan.ts — which workspace the Confluence save targets, and the ONE
+// runCapabilities.ts — which workspace the Confluence save targets, and the ONE
 // boolean both metacognition surfaces offer it on
 // ---------------------------------------------------------------------------
 
@@ -864,10 +887,10 @@ describe("run plan — the Confluence save target", () => {
     };
   }
 
-  async function plan(s: ReturnType<typeof setup>, req: AgentRequest) {
+  async function plan(s: ReturnType<typeof setup>, req: AgentRequest, runOptions: RunCapabilityOptions = {}) {
     vi.mocked(buildConfluenceServer).mockClear();
     vi.mocked(buildSystemServer).mockClear();
-    const result = await buildAgentRunPlan(req, [], s.config, s.store, undefined, undefined, () => 0);
+    const result = await buildRunCapabilities(req, [], s.config, s.store, undefined, undefined, () => 0, runOptions);
     return {
       result,
       confluenceCtx: vi.mocked(buildConfluenceServer).mock.calls[0][0],
@@ -875,7 +898,8 @@ describe("run plan — the Confluence save target", () => {
       systemCtx: vi.mocked(buildSystemServer).mock.calls[0][1] as unknown as {
         scratchWorkspaceDir?: string;
         confluenceSaveToWorkspace?: boolean;
-        canWriteFiles?: boolean;
+        deckAuthoring?: string;
+        piRuntime?: { sandboxOwner?: string; readOnlyBuiltins?: boolean; nonInteractive?: boolean };
       },
     };
   }
@@ -886,11 +910,10 @@ describe("run plan — the Confluence save target", () => {
     expect(plain.confluenceCtx.workspaceDir).toBe(s.scratch);
     expect(plain.systemCtx.scratchWorkspaceDir).toBe(s.scratch);
     // The path rides describe_system's ctx only; the plan returns just the
-    // boolean runClaudeAgent stamps onto the prompt.
+    // boolean stampPromptRequest stamps onto the prompt.
     expect(Object.keys(plain.result)).not.toContain("scratchWorkspaceDir");
     expect(plain.result.confluenceSaveToWorkspace).toBe(true);
     expect(plain.systemCtx.confluenceSaveToWorkspace).toBe(true);
-    expect(plain.systemCtx.canWriteFiles).toBe(true);
 
     const clone = path.join(tempDir, "plan-target", "clones", "repo");
     fs.mkdirSync(clone, { recursive: true });
@@ -901,6 +924,26 @@ describe("run plan — the Confluence save target", () => {
     expect(withRepo.confluenceCtx.workspaceDir).toBe(s.scratch);
     expect(withRepo.systemCtx.scratchWorkspaceDir).toBe(s.scratch);
     expect(withRepo.result.confluenceSaveToWorkspace).toBe(true);
+  });
+
+  it("on a pi workspace saves into the host conversation folder and names the SANDBOX path", async () => {
+    const s = setup("plan-pi-target", { confluenceUrl: "https://confluence.internal", pat: true });
+    const hostRoot = path.join(tempDir, "plan-pi-target", "pi-workspaces", "u-owner");
+    const hostConversationDir = path.join(hostRoot, "c", "conv-1");
+    fs.mkdirSync(hostConversationDir, { recursive: true });
+    const piWorkspace = {
+      principal: s.owner.id,
+      conversationDir: "/workspace/c/conv-1",
+      hostRoot,
+      hostConversationDir,
+    };
+    const pi = await plan(s, request(s), { piWorkspace, piConversationDir: "/workspace/c/conv-1" });
+    // The tool writes on the host side of the sandbox mount…
+    expect(pi.confluenceCtx.workspaceDir).toBe(hostConversationDir);
+    // …and describe_system names the folder the model actually sees.
+    expect(pi.systemCtx.scratchWorkspaceDir).toBe("/workspace/c/conv-1");
+    expect(pi.result.confluenceSaveToWorkspace).toBe(true);
+    expect(pi.result.piRuntimeFacts.conversationDir).toBe("/workspace/c/conv-1");
   });
 
   it("offers the save only where it can land: registered, elevated, a workspace, and credentials", async () => {
@@ -925,20 +968,67 @@ describe("run plan — the Confluence save target", () => {
     expect((await plan(noUrl, request(noUrl))).systemCtx.confluenceSaveToWorkspace).toBe(false);
   });
 
-  it("canWriteFiles follows the elevated built-in gate, on describe_system's ctx and the plan alike", async () => {
+  it("a colleague chat is read-only (no deck), every other class may author, each in its own principal's sandbox", async () => {
+    // The run's built-ins work in the sandbox of the user it runs AS
+    // (piRunPrincipal). A colleague chat's pi session is read_only (someone
+    // else's avatar in the colleague's sandbox — user decision 2026-10-31), so
+    // it cannot build a deck; both surfaces name WHOSE sandbox it is.
     const s = setup("plan-can-write");
     const colleague = s.store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
-    const cases: { label: string; over: Partial<AgentRequest>; expected: boolean }[] = [
-      { label: "owner chat", over: {}, expected: true },
-      { label: "read-only colleague", over: { viewerUserId: colleague.id, viewerIsOwner: false }, expected: false },
-      // Profile generators: headless without the opt-in stay tool-restricted.
-      { label: "restricted headless", over: { headless: true, conversationId: undefined }, expected: false },
-      { label: "owner routine", over: { headless: true, allowHeadlessTools: true }, expected: true },
+    // nonInteractive: nobody can answer a question (pi session `interactive: false`).
+    const cases: { label: string; over: Partial<AgentRequest>; sandboxOwner: string; readOnly: boolean; nonInteractive: boolean }[] = [
+      { label: "owner chat", over: {}, sandboxOwner: "owner", readOnly: false, nonInteractive: false },
+      {
+        label: "untrusted colleague",
+        over: { viewerUserId: colleague.id, viewerIsOwner: false },
+        sandboxOwner: "viewer",
+        readOnly: true,
+        nonInteractive: false,
+      },
+      {
+        label: "trusted colleague",
+        over: { viewerUserId: colleague.id, viewerIsOwner: false, elevated: true },
+        sandboxOwner: "viewer",
+        readOnly: true,
+        nonInteractive: false,
+      },
+      {
+        label: "avatar consultation",
+        over: { viewerUserId: colleague.id, viewerIsOwner: false, avatarConsultation: true, conversationId: undefined },
+        sandboxOwner: "nobody",
+        readOnly: false,
+        nonInteractive: true,
+      },
+      // Profile generators: headless, no viewer, no conversation — the owner's sandbox.
+      {
+        label: "restricted headless",
+        over: { headless: true, conversationId: undefined, viewerUserId: undefined },
+        sandboxOwner: "owner",
+        readOnly: false,
+        nonInteractive: true,
+      },
+      {
+        label: "owner routine",
+        over: { headless: true, allowHeadlessTools: true },
+        sandboxOwner: "owner",
+        readOnly: false,
+        nonInteractive: true,
+      },
+      // The key holder answers questions through /respond.
+      { label: "task API", over: { externalTaskApi: true }, sandboxOwner: "owner", readOnly: false, nonInteractive: false },
     ];
     for (const c of cases) {
       const { result, systemCtx } = await plan(s, request(s, c.over));
-      expect(systemCtx.canWriteFiles, c.label).toBe(c.expected);
-      expect(result.canWriteFiles, c.label).toBe(c.expected);
+      const authoring = c.readOnly ? "read-only" : "allowed";
+      expect(systemCtx.deckAuthoring, c.label).toBe(authoring);
+      expect(result.deckAuthoring, c.label).toBe(authoring);
+      expect(result.piRuntimeFacts.sandboxOwner, c.label).toBe(c.sandboxOwner);
+      expect(result.piRuntimeFacts.readOnlyBuiltins, c.label).toBe(c.readOnly);
+      expect(result.piRuntimeFacts.nonInteractive, c.label).toBe(c.nonInteractive);
+      // describe_system reads the SAME facts object the prompt is stamped from.
+      expect(systemCtx.piRuntime?.sandboxOwner, c.label).toBe(c.sandboxOwner);
+      expect(systemCtx.piRuntime?.readOnlyBuiltins, c.label).toBe(c.readOnly);
+      expect(systemCtx.piRuntime?.nonInteractive, c.label).toBe(c.nonInteractive);
     }
   });
 });
@@ -1032,214 +1122,6 @@ describe("brain tools — search + get_note over a real vault", () => {
     const s = setup("brain-server", null);
     expect(buildBrainServer(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config })).toBeTruthy();
     expect(BRAIN_SERVER_NAME).toBe("brain");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// groupBrainTools — team second-brain search over a REAL local group clone
-// ---------------------------------------------------------------------------
-
-describe("group brain tools — search + get_note over a real group vault", () => {
-  function setup(dir: string, files: Record<string, string> | null) {
-    const base = path.join(tempDir, dir);
-    fs.mkdirSync(base, { recursive: true });
-    const { store, config } = createServices({ dataDir: path.join(base, "data"), agentRuntime: "local", sessionSecret: "t" });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "member");
-    if (files) {
-      const remote = seedRemote(base, files);
-      store.setGroupKnowledgeRepo(group.id, remote, "main");
-    }
-    return { store, config, owner, group };
-  }
-  const tools = (s: ReturnType<typeof setup>) =>
-    buildGroupBrainTools(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config });
-
-  const NOTE = "---\ntitle: Team Runbook\ntags: [oncall]\n---\nEscalate incidents to the platform channel.\n";
-
-  it("ranks a matching group note and reads it with get_note", async () => {
-    const s = setup("gb-hit", { "wiki/runbook.md": NOTE });
-    const hit = await callTool(tools(s), "search", { group: "Team", query: "incidents" });
-    expect(hit.isError).toBeFalsy();
-    expect(hit.content[0].text).toContain("Team Runbook");
-    expect(hit.content[0].text).toContain("'Team' team brain");
-
-    const note = await callTool(tools(s), "get_note", { group: "Team", path: "wiki/runbook.md" });
-    expect(note.isError).toBeFalsy();
-    expect(note.content[0].text).toContain("Escalate incidents");
-  });
-
-  it("reports no matches, and points a vault-less group repo at brain-migrate", async () => {
-    const withVault = setup("gb-empty", { "wiki/runbook.md": NOTE });
-    const noMatch = await callTool(tools(withVault), "search", { group: "Team", query: "unrelatedxyz" });
-    expect(noMatch.isError).toBeFalsy();
-    expect(noMatch.content[0].text).toContain("team brain matched");
-
-    const noVault = setup("gb-novault", { "README.md": "x" });
-    const res = await callTool(tools(noVault), "search", { group: "Team", query: "incidents" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("brain-migrate");
-  });
-
-  it("get_note surfaces a read failure for a missing group wiki path", async () => {
-    const s = setup("gb-missing", { "wiki/runbook.md": NOTE });
-    const res = await callTool(tools(s), "get_note", { group: "Team", path: "wiki/ghost.md" });
-    expect(res.isError).toBe(true);
-    // Same containment+existence guard as the personal server.
-    expect(res.content[0].text).toContain("Invalid path");
-  });
-
-  it("buildGroupBrainServer exposes the named MCP server", () => {
-    const s = setup("gb-server", null);
-    expect(buildGroupBrainServer(s.store, { avatarUserId: s.owner.id, viewerIsOwner: true, config: s.config })).toBeTruthy();
-    expect(GROUP_BRAIN_SERVER_NAME).toBe("group_brain");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// groupRepoTools — list_groups, scaffold_skill, commit failure, create_repo
-// ---------------------------------------------------------------------------
-
-describe("group repo tools — coverage gaps", () => {
-  function setup(dir: string, opts: { connectRepo?: boolean; role?: "admin" | "member"; withGroup?: boolean } = {}) {
-    const { connectRepo = true, role = "admin", withGroup = true } = opts;
-    const base = path.join(tempDir, dir);
-    fs.mkdirSync(base, { recursive: true });
-    const { store, config } = createServices({ dataDir: path.join(base, "data"), agentRuntime: "local", sessionSecret: "t" });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    store.setGitToken(owner.id, "tkn");
-    let group: { id: string; name: string } | null = null;
-    let remote: string | null = null;
-    if (withGroup) {
-      group = store.createGroup({ name: "Team", createdBy: null });
-      store.addGroupMember(group.id, owner.id, role);
-      if (connectRepo) {
-        remote = seedRemote(base, { "README.md": "# team" });
-        store.setGroupKnowledgeRepo(group.id, remote, "main");
-      }
-    }
-    return { store, config, owner: { id: owner.id, username: "owner", displayName: "Owner" }, ownerId: owner.id, group, remote, base };
-  }
-  const tools = (s: ReturnType<typeof setup>, opts: { createRemoteRepo?: Parameters<typeof buildGroupRepoTools>[2] } = {}) =>
-    buildGroupRepoTools(
-      s.store,
-      { avatarUserId: s.ownerId, owner: s.owner, viewerIsOwner: true, config: s.config },
-      opts.createRemoteRepo ?? {},
-    );
-
-  it("list_groups renders the owner's groups, and the no-groups case", async () => {
-    const withGroup = setup("gr-list");
-    const listed = await callTool(tools(withGroup), "list_groups", {});
-    expect(listed.isError).toBeFalsy();
-    expect(listed.content[0].text).toContain("1 group(s) I belong to");
-    expect(listed.content[0].text).toContain("Team");
-    expect(listed.content[0].text).toContain("admin");
-    expect(listed.content[0].text).toContain("connected");
-
-    const none = setup("gr-list-none", { withGroup: false });
-    const empty = await callTool(tools(none), "list_groups", {});
-    expect(empty.content[0].text).toContain("do not belong to any group");
-  });
-
-  it("scaffold_skill creates a skill in the group repo for an admin", async () => {
-    const s = setup("gr-scaffold");
-    const res = await callTool(tools(s), "scaffold_skill", { group: "Team", name: "Team Runbook", description: "escalation steps" });
-    expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain("skills/team-runbook/SKILL.md");
-  });
-
-  it("commit surfaces a rebase conflict from an external push", async () => {
-    const s = setup("gr-conflict");
-    // Establish v1 of a file.
-    await callTool(tools(s), "write_file", { group: "Team", path: "notes/x.md", content: "v1" });
-    const first = await callTool(tools(s), "commit", { group: "Team", message: "x v1" });
-    expect(first.isError).toBeFalsy();
-
-    // A pending local edit to the SAME file…
-    await callTool(tools(s), "write_file", { group: "Team", path: "notes/x.md", content: "local edit" });
-    // …while an external actor pushes a conflicting change to notes/x.md.
-    const ext = path.join(s.base, "ext");
-    execFileSync("git", ["clone", "-q", s.remote!, ext], { stdio: "pipe" });
-    const g = (...a: string[]) => execFileSync("git", ["-C", ext, ...a], { stdio: "pipe" });
-    g("config", "user.email", "e@x.local");
-    g("config", "user.name", "Ext");
-    fs.writeFileSync(path.join(ext, "notes", "x.md"), "external edit");
-    g("add", "-A");
-    g("commit", "-q", "-m", "external");
-    g("push", "-q", "origin", "main");
-
-    const res = await callTool(tools(s), "commit", { group: "Team", message: "x local" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("CONFLICT");
-    expect(res.content[0].text).toContain("notes/x.md");
-  });
-
-  it("create_repo refuses when a repo is already connected", async () => {
-    const s = setup("gr-create-exists");
-    const res = await callTool(tools(s), "create_repo", { group: "Team", name: "x" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("already has a shared knowledge repository");
-  });
-
-  it("create_repo surfaces a creator failure and leaves the group unconnected", async () => {
-    const s = setup("gr-create-fail", { connectRepo: false });
-    const create = vi.fn(async () => ({ ok: false as const, exitCode: 1, message: "name already exists" }));
-    const res = await callTool(tools(s, { createRemoteRepo: { createRemoteRepo: create } }), "create_repo", {
-      group: "Team",
-      name: "team-knowledge",
-      org: "acme",
-    });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("Failed to create GitHub repository");
-    expect(create).toHaveBeenCalled();
-    expect(s.store.listUserGroups(s.ownerId)[0].knowledgeRepoConfigured).toBe(false);
-  });
-
-  it("create_repo connects a new repo and seeds its vault", async () => {
-    const s = setup("gr-create-ok", { connectRepo: false });
-    // The creator returns a local bare remote, so the post-create clone/seed/push runs offline.
-    const remote = seedRemote(path.join(s.base, "created"), { "README.md": "seed" });
-    const create = vi.fn(async () => ({ ok: true as const, fullName: remote, defaultBranch: "main", isPrivate: true }));
-    const res = await callTool(tools(s, { createRemoteRepo: { createRemoteRepo: create } }), "create_repo", {
-      group: "Team",
-      name: "team-knowledge",
-    });
-    expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain("second-brain vault");
-    expect(s.store.listUserGroups(s.ownerId)[0].knowledgeRepoConfigured).toBe(true);
-  });
-
-  it("create_repo connects but reports a skipped seed when the clone fails", async () => {
-    const s = setup("gr-create-seedfail", { connectRepo: false });
-    // A bogus fullName: it connects (store row written) but the seed clone throws.
-    const create = vi.fn(async () => ({ ok: true as const, fullName: path.join(tempDir, "ghost.git"), defaultBranch: "main", isPrivate: true }));
-    const res = await callTool(tools(s, { createRemoteRepo: { createRemoteRepo: create } }), "create_repo", {
-      group: "Team",
-      name: "team-knowledge",
-    });
-    expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain("Created and connected");
-    expect(res.content[0].text).toContain("Skipped initializing the default template");
-  });
-
-  it("create_repo reports the outer-catch message when the creator throws", async () => {
-    const s = setup("gr-create-throw", { connectRepo: false });
-    const create = vi.fn(async () => {
-      throw new Error("network exploded");
-    });
-    const res = await callTool(tools(s, { createRemoteRepo: { createRemoteRepo: create } }), "create_repo", {
-      group: "Team",
-      name: "team-knowledge",
-    });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("Error while creating GitHub repository");
-  });
-
-  it("buildGroupRepoServer exposes the named MCP server", () => {
-    const s = setup("gr-server");
-    expect(buildGroupRepoServer(s.store, { avatarUserId: s.ownerId, owner: s.owner, viewerIsOwner: true, config: s.config })).toBeTruthy();
-    expect(GROUP_REPO_SERVER_NAME).toBe("group_repo");
   });
 });
 

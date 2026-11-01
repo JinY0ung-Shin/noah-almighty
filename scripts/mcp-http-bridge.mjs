@@ -3,33 +3,43 @@
 //
 // Usage: node --use-system-ca mcp-http-bridge.mjs --config <file.json>
 //
-// WHY THIS EXISTS: the Agent SDK passes `options.mcpServers` to the CLI as a
-// `--mcp-config <json>` command-line ARGUMENT, world-readable via
-// /proc/<pid>/cmdline — and the agent's own Bash is a child of that CLI. An HTTP
-// server's auth header registered natively would sit right there. So the app
-// registers THIS script as a stdio server instead and hands it the URL + the
-// already-resolved headers in a mode-0600 file: only the file PATH is in argv.
-// The bridge reads the file, deletes it (one-shot handoff — same contract as
-// mcp-secret-wrapper.mjs), keeps the values in memory only (never in its env),
-// and relays JSON-RPC messages unchanged between the CLI (stdio) and the remote
-// server (Streamable HTTP, or legacy SSE).
+// WHY THIS EXISTS: Noah relays a remote HTTP MCP server (an admin 공용 server,
+// a plugin `.mcp.json` http/sse entry) to a pi run as an MCP client, and the
+// server's auth header must never sit in a child's argv (world-readable via
+// /proc/<pid>/cmdline). So Noah spawns THIS script as a stdio server and hands
+// it the URL + headers in a mode-0600 file: only the file PATH is in argv. The
+// bridge reads the file, deletes it (one-shot handoff), keeps the values in
+// memory only (never in its env), and relays JSON-RPC messages unchanged
+// between Noah (stdio) and the remote server (Streamable HTTP, or legacy SSE).
 //
 // Config: { url, transport: "http"|"sse", headers: {name: value}, redact: [..],
 // expandEnv?: true }. With `expandEnv` (set only for a plugin `.mcp.json` entry),
 // a `${VAR}` / `${VAR:-default}` still left in the URL or a header — a NON-vault
-// env name — expands from this process's env, matching the CLI's own
-// `--mcp-config` expansion. Admin-registered servers never expand env: every
+// env name — expands from this process's env, matching the usual shell-style
+// expansion. Admin-registered servers never expand env: every
 // reference there was resolved from the vault before the file was written.
 //
-// Errors go to stderr (the CLI's MCP log) with every header value and secret
+// Errors go to stderr (the relay's log) with every header value and secret
 // scrubbed; a failed upstream request is answered with a JSON-RPC error so the
-// CLI never waits on a request the remote never saw.
+// client never waits on a request the remote never saw.
+//
+// Size cap (`maxMessageBytes`, default 8 MiB — Noah's MCP_RELAY_MESSAGE_MAX_BYTES,
+// `src/server/agent/pi/boundedStdioTransport.ts`; a test keeps the two equal):
+// the SDK transports buffer a whole HTTP body / SSE event before parsing it, so
+// one huge message from the remote would exhaust memory here and then in Noah.
+// Every upstream response body (a JSON reply in total, an SSE stream per event)
+// is counted while it streams and cut past the cap, and every message written to
+// stdout is checked again after serialization. An oversized REPLY is answered
+// with Noah's own JSON-RPC error for the request it belonged to (never the
+// remote's text); one that cannot be tied to a request (the standalone/legacy
+// event stream) answers every pending request that way and ends the bridge.
 import fs from "node:fs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 const PREFIX = "[mcp-http-bridge]";
+const DEFAULT_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 let redactions = [];
 
 function scrub(text) {
@@ -57,11 +67,17 @@ function errorText(error) {
     const cause = error.cause instanceof Error ? ` (${error.cause.message})` : "";
     text = `${status}${error.message}${cause}`;
   }
-  // A remote error page can be large; the CLI shows this to the model. Scrub
+  // A remote error page can be large; the relay shows this to the model. Scrub
   // BEFORE truncating, so a cut can never leave half a secret behind.
   text = scrub(text);
   return text.length > 500 ? `${text.slice(0, 500)}…` : text;
 }
+
+const isMessage = (message) => Boolean(message) && typeof message === "object" && !Array.isArray(message);
+const isRequest = (message) => isMessage(message) && "method" in message && "id" in message && message.id !== undefined;
+const isNotification = (message) => isMessage(message) && "method" in message && !("id" in message);
+const isResponse = (message) =>
+  isMessage(message) && !("method" in message) && "id" in message && ("result" in message || "error" in message);
 
 const argv = process.argv.slice(2);
 const configIndex = argv.indexOf("--config");
@@ -118,7 +134,90 @@ try {
 } catch {
   fail("config url is not a valid URL");
 }
-const transportOptions = { requestInit: { headers } };
+const maxMessageBytes =
+  Number.isSafeInteger(config.maxMessageBytes) && config.maxMessageBytes > 0 ? config.maxMessageBytes : DEFAULT_MAX_MESSAGE_BYTES;
+const maxMessageMiB = Math.round((maxMessageBytes / (1024 * 1024)) * 100) / 100;
+// Agent-facing (the relay hands it to the model as the tool's error). Noah's own
+// words only: nothing of the oversized message is ever echoed.
+const OVERSIZE_TEXT =
+  `The remote MCP server sent a single message larger than ${maxMessageMiB} MiB, which Noah does not relay. ` +
+  "Ask for less at once (a narrower query, a smaller page, range or limit); do not repeat the same call unchanged.";
+
+/** Thrown into a response body cut at the cap (the SDK sees a failed read). */
+class OversizeError extends Error {}
+
+/** Request ids carried by a POST body (one message or a batch), as sent by the SDK. */
+function requestIdsOf(body) {
+  if (typeof body !== "string") return [];
+  try {
+    const parsed = JSON.parse(body);
+    return (Array.isArray(parsed) ? parsed : [parsed]).filter(isRequest).map((message) => message.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A body guard: counts bytes as they stream and errors the stream past the cap —
+ * in TOTAL for a JSON body (one message), PER EVENT for an SSE stream (a long
+ * stream legitimately carries many messages; an event ends at a blank line).
+ */
+function sizeGuard(perEvent, onOversize) {
+  let total = 0;
+  let lineBytes = 0;
+  let lastWasCR = false;
+  let tripped = false;
+  const trip = (controller) => {
+    tripped = true;
+    onOversize();
+    controller.error(new OversizeError(OVERSIZE_TEXT));
+  };
+  return new TransformStream({
+    transform(chunk, controller) {
+      if (tripped) return;
+      if (!perEvent) {
+        total += chunk.byteLength;
+        if (total > maxMessageBytes) return trip(controller);
+        controller.enqueue(chunk);
+        return;
+      }
+      for (let index = 0; index < chunk.length; index += 1) {
+        const byte = chunk[index];
+        if (byte === 0x0a || byte === 0x0d) {
+          const crlf = byte === 0x0a && lastWasCR;
+          lastWasCR = byte === 0x0d;
+          if (crlf) continue;
+          if (lineBytes === 0) total = 0; // a blank line ends the event
+          lineBytes = 0;
+          continue;
+        }
+        lastWasCR = false;
+        lineBytes += 1;
+        total += 1;
+        if (total > maxMessageBytes) return trip(controller);
+      }
+      controller.enqueue(chunk);
+    },
+  });
+}
+
+/** `fetch` for both SDK transports: every response body streams through {@link sizeGuard}. */
+async function cappedFetch(input, init) {
+  const ids = requestIdsOf(init?.body);
+  const response = await fetch(input, init);
+  if (!response.body) return response;
+  const perEvent = (response.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream");
+  const guarded = new Response(
+    response.body.pipeThrough(sizeGuard(perEvent, () => onOversize(ids))),
+    { status: response.status, statusText: response.statusText, headers: response.headers },
+  );
+  // The SSE client follows a redirect's final URL on reconnect.
+  Object.defineProperty(guarded, "url", { value: response.url });
+  Object.defineProperty(guarded, "redirected", { value: response.redirected });
+  return guarded;
+}
+
+const transportOptions = { requestInit: { headers }, fetch: cappedFetch };
 const upstream =
   config.transport === "sse"
     ? new SSEClientTransport(upstreamUrl, transportOptions)
@@ -147,8 +246,29 @@ async function shutdown(code) {
   process.exit(code);
 }
 
-const isRequest = (message) => message && "method" in message && "id" in message && message.id !== undefined;
-const isNotification = (message) => message && "method" in message && !("id" in message);
+
+// Requests relayed upstream and not yet answered (key: the JSON of the id), so
+// a request is answered exactly once — by the remote, or by the bridge's own
+// error when it never got (or could not relay) the remote's reply.
+const pending = new Map();
+const idKey = (id) => JSON.stringify(id);
+
+function answerError(id, message) {
+  if (!pending.delete(idKey(id))) return;
+  local.send({ jsonrpc: "2.0", id, error: { code: -32000, message } }).catch(() => {});
+}
+
+function onOversize(ids) {
+  if (ids.length > 0) {
+    log(`dropped an upstream reply larger than ${maxMessageBytes} bytes`);
+    for (const id of ids) answerError(id, OVERSIZE_TEXT);
+    return;
+  }
+  // The standalone (or legacy SSE) event stream: no request to tie it to.
+  log(`dropped an upstream stream message larger than ${maxMessageBytes} bytes; closing`);
+  for (const id of [...pending.values()]) answerError(id, OVERSIZE_TEXT);
+  void shutdown(1);
+}
 
 // initialize request ids → the negotiated protocol version from its response
 // must be set on the transport (the SDK's Client does this; a raw relay must).
@@ -160,8 +280,9 @@ const initializeIds = new Set();
 let notificationGate = Promise.resolve();
 
 local.onmessage = (message) => {
-  if (isRequest(message) && message.method === "initialize") {
-    initializeIds.add(message.id);
+  if (isRequest(message)) {
+    pending.set(idKey(message.id), message.id);
+    if (message.method === "initialize") initializeIds.add(message.id);
   }
   const sent = notificationGate.then(() => upstream.send(message));
   if (isNotification(message)) {
@@ -171,13 +292,10 @@ local.onmessage = (message) => {
     const text = errorText(error);
     log(`upstream ${message?.method ?? "message"} failed: ${text}`);
     if (isRequest(message)) {
-      local
-        .send({
-          jsonrpc: "2.0",
-          id: message.id,
-          error: { code: -32000, message: scrub(`Remote MCP server request failed: ${text}`) },
-        })
-        .catch(() => {});
+      answerError(
+        message.id,
+        error instanceof OversizeError ? OVERSIZE_TEXT : scrub(`Remote MCP server request failed: ${text}`),
+      );
     }
   });
 };
@@ -190,6 +308,15 @@ upstream.onmessage = (message) => {
       upstream.setProtocolVersion(version);
     }
   }
+  // The cap again on what actually goes out: re-serializing can grow a message
+  // (`1e20` → 21 digits), and Noah cuts any stdout line past the same cap.
+  if (Buffer.byteLength(JSON.stringify(message)) > maxMessageBytes) {
+    if (isResponse(message)) answerError(message.id, OVERSIZE_TEXT);
+    else log(`dropped an upstream ${message?.method ?? "message"} larger than ${maxMessageBytes} bytes`);
+    return;
+  }
+  // Already answered (by the bridge's own error): never a second reply.
+  if (isResponse(message) && !pending.delete(idKey(message.id))) return;
   local.send(message).catch((error) => log(`stdout write failed: ${errorText(error)}`));
 };
 upstream.onerror = (error) => log(`upstream error: ${errorText(error)}`);
@@ -205,7 +332,7 @@ process.on("unhandledRejection", (error) => log(`unhandled: ${errorText(error)}`
 try {
   // SSE opens its event stream and waits for the endpoint here; Streamable
   // HTTP only arms its abort controller. stdin is read only after this, so the
-  // CLI's initialize simply waits in the pipe until the upstream is ready.
+  // client's initialize simply waits in the pipe until the upstream is ready.
   await upstream.start();
 } catch (error) {
   fail(`cannot connect to the remote MCP server: ${errorText(error)}`);

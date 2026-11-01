@@ -1,10 +1,18 @@
 # 전체 아바타의 서버 외부 통신 차단
 
 `docker-compose.egress.yml`은 기존 Compose에 추가하는 선택적 배포 구성입니다.
-모든 로컬 아바타·그룹 에이전트·예약 작업·서버 MCP·Bash/curl/Python에
-같은 정책을 적용합니다. 사용자 PC의 브라우저 도구는 변경하지 않습니다.
+Noah 컨테이너가 보내는 모든 요청(Noah의 MCP 도구, Noah가 띄우는 hex-ssh·플러그인·공용 MCP 중계,
+git, Confluence)에 같은 정책을 적용합니다. 사용자 PC의 브라우저 도구는 변경하지 않습니다.
+아바타의 Bash/curl/Python은 pi-gateway sandbox에서 돌기 때문에 이 정책이 아니라 pi의
+`SANDBOX_EGRESS_ALLOW`(pi egress proxy 허용 목록, 비어 있으면 전부 차단)를 따릅니다.
+LLM 호출도 pi-gateway가 보내므로 pi 쪽 네트워크 설정을 따릅니다.
 관리자 → 가입·접근 → 외부 통신 차단에서 공통 목록을 관리합니다.
 아바타별 정책은 제공하지 않습니다.
+
+> **pi-gateway 번들과 함께 쓸 수 없습니다 (현재).** `docker-compose.yml`이 pi-gateway를 포함하게 된 뒤로, 이 overlay의
+> 방화벽은 자기 Squid 프록시만 열어 두기 때문에 Noah가 pi gateway(`http://gateway:8080`)에 닿지 못합니다
+> (DNS도 막혀 있습니다). 그래서 지금은 이 overlay를 켜면 모든 대화가 실패합니다. 프록시 서비스 이름은 pi의
+> `egress-proxy`와 겹치지 않게 `noah-egress-proxy`로 바꿨습니다 (같은 이름이면 compose가 pi의 서비스에 조용히 합쳐 버립니다).
 
 ## 관리자 화면 사용
 
@@ -70,14 +78,12 @@ Squid와 정책 서비스 포트는 호스트에 공개하지 않습니다. 초�
   터널을 허용합니다. 사내 서비스가 8080/8443 등을 사용하면
   `squid.conf`의 `safe_ports`와 필요한 경우 `tunnel_ports`를 운영자가 수정하고 이미지를
   다시 빌드해야 합니다. CONNECT에 임의 포트를 열면 SSH 등 터널 경로가 생깁니다.
-- 모델 API, Git HTTPS, Confluence, 외부 아바타 게이트웨이 연결도 정책 대상입니다.
+- Git HTTPS, Confluence 연결도 정책 대상입니다.
   대상 도메인을 차단 목록에 넣으면 관련 기능이 실패합니다.
 - **직접 SSH/hex-ssh, 기타 TCP/UDP, 직접 내부 서비스 접속도 차단됩니다.**
   이 구성은 직접 연결 예외를 제공하지 않습니다.
 - Node의 기본 fetch에는 이미지의 undici preload를 적용합니다. 전용 연결 구현으로
   프록시를 무시하는 SDK/플러그인은 연결에 실패합니다. 주요 모델/API는 배포 후 점검하세요.
-- 다른 서버에서 실행되는 외부 아바타나 원격 작업이 **그 서버에서 새로 보내는 요청**은
-  이 정책으로 통제하지 못합니다.
 - 도메인 차단 목록은 동일 서비스의 모든 별칭, 허용 사이트를 통한 중계, 허용된
   HTTPS 터널 내부의 프로토콜을 식별하지 못합니다. TLS 내부 검사는 하지 않습니다.
   그런 범위까지 통제하려면 허용 목록과 별도 게이트웨이 정책이 필요합니다.
@@ -149,7 +155,7 @@ docker tag "${COMPOSE_PROJECT_NAME}-noah-almighty" noah-almighty:egress-base
 docker compose -f docker-compose.yml -f docker-compose.egress.yml build
 docker compose -f docker-compose.yml -f docker-compose.egress.yml config --quiet
 # 구문 오류/권한 오류가 있으면 여기서 멈추고 수정합니다.
-docker compose -f docker-compose.yml -f docker-compose.egress.yml run --rm --no-deps egress-proxy python3 /usr/local/lib/noah-egress-controller.py --check
+docker compose -f docker-compose.yml -f docker-compose.egress.yml run --rm --no-deps noah-egress-proxy python3 /usr/local/lib/noah-egress-controller.py --check
 docker compose -f docker-compose.yml -f docker-compose.egress.yml up -d
 ```
 
@@ -179,7 +185,7 @@ host network, privileged, Kubernetes Pod 배포는 이 Compose 구성의 지원 
 nerdctl build -t noah-almighty:egress-base .
 nerdctl compose -f docker-compose.yml -f docker-compose.egress.yml build
 nerdctl compose -f docker-compose.yml -f docker-compose.egress.yml config
-nerdctl compose -f docker-compose.yml -f docker-compose.egress.yml run --rm --no-deps egress-proxy python3 /usr/local/lib/noah-egress-controller.py --check
+nerdctl compose -f docker-compose.yml -f docker-compose.egress.yml run --rm --no-deps noah-egress-proxy python3 /usr/local/lib/noah-egress-controller.py --check
 nerdctl compose -f docker-compose.yml -f docker-compose.egress.yml up -d
 ```
 
@@ -211,10 +217,10 @@ revision의 롤백도 검증합니다.
 HTTPS CONNECT 터널 테스트는 터널 안에 HTTP fixture 바이트를 보내는 방식이며
 공개 사이트의 TLS 인증서/사내 CA 검증을 대신하지 않습니다.
 
-배포 후에는 실제 허용 모델 API로 대화 한 번, 허용 Git HTTPS 조회, Confluence 조회,
+배포 후에는 대화 한 번, 허용 Git HTTPS 조회, Confluence 조회,
 앱 건강 확인 및 브라우저 도구를 점검합니다. 차단 테스트는 운영 목록의 도메인으로
 수행합니다. proxy 로그에는 메서드·목적지 도메인·상태가 남고 경로/쿼리는 기록하지 않습니다.
-로그는 `compose logs egress-proxy`로 확인합니다. `TCP_DENIED/403`과 단순 연결 실패를
+로그는 `compose logs noah-egress-proxy`로 확인합니다. `TCP_DENIED/403`과 단순 연결 실패를
 구분하세요. `describe_system`과 시스템 프롬프트에는 bootstrap의 적용 보고와 범위가
 표시되지만, 실시간 방화벽 감사 또는 현재 목록 조회 기능은 아닙니다.
 

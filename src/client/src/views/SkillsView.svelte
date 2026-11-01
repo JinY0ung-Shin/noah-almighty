@@ -53,6 +53,8 @@
   let mineLoading = true;
   let mineError = "";
   let repoConfigured = true;
+  /** 저장소의 skills가 일반 폴더가 아님(링크 등) — 목록은 비지만 공유는 그대로 유지된다. */
+  let skillsDirUnreadable = false;
   let mySkills: MySkill[] = [];
   /**
    * available 요청 순번 — 늦게 도착한 응답이 최신 목록을 덮어쓰지 못하게 한다.
@@ -114,8 +116,11 @@
     mineLoading = true;
     mineError = "";
     try {
-      const data = await api<{ repoConfigured: boolean; skills: MySkill[] }>("/api/skill-share/mine");
+      const data = await api<{ repoConfigured: boolean; skillsDirUnreadable?: boolean; skills: MySkill[] }>(
+        "/api/skill-share/mine",
+      );
       repoConfigured = data.repoConfigured;
+      skillsDirUnreadable = data.skillsDirUnreadable === true;
       mySkills = data.skills;
       return true;
     } catch (err) {
@@ -571,6 +576,11 @@
       <div class="empty-note">
         지식 저장소를 연결하면 아바타의 스킬을 공유하고 전수받을 수 있어요.
         <button class="linkish small" type="button" on:click={() => goView("settings", "knowledge")}>지식 저장소 연결하기</button>
+      </div>
+    {:else if skillsDirUnreadable}
+      <div class="warn-box" role="alert">
+        지식 저장소의 skills 폴더가 일반 폴더가 아니라서(링크 등) 스킬을 읽을 수 없습니다. 이미 공유한 스킬은
+        그대로 유지되지만, skills 폴더를 일반 폴더로 되돌리기 전까지는 동료가 미리 보거나 전수받을 수 없어요.
       </div>
     {:else if !mySkills.length}
       <div class="empty-note">

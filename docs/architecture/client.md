@@ -79,8 +79,9 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 - `<svelte:window>` cannot live inside `{#if}`/blocks — must be top-level. A `use:action` taking a
   parameter must declare a 2nd arg `(node, param?)` or svelte-check errors "Expected 1 arguments, but got
   2". `role="dialog"`/`"tablist"` on a `<nav>`/`<div>` trips an a11y warning — put the role on the right
-  element. `AgentResponse.runtime` is only `"local"|"claude"` (errors/blocked surface via `summary`, NOT
-  runtime — don't compare runtime to `"error"`).
+  element. `AgentResponse.runtime` is only a runtime tag (`"local"`/`"pi"`, plus `"claude"` on rows stored before
+  the SDK runner was removed; errors/blocked surface via `summary`, NOT runtime — don't compare runtime to
+  `"error"`).
 
 ## Svelte 5 runtime gotchas (svelte-check does NOT catch these)
 - **A green svelte-check does NOT mean the behavior is correct — for interaction/layout/timing changes,
@@ -239,8 +240,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   button's content, `aria-label` and `title` once per 1.2 s window and restores them EXACTLY (an attribute
   the button lacked is removed again), so a second click cannot make the check icon permanent and a
   text-named button never keeps "복사됨" as its name; the dialog's 복사 is named `공유 링크 복사`.
-- **Link controls appear on PPTX cards only, never in a group-agent pane** (`avatar.groupAgent` or a
-  `group:` id), and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
+- **Link controls appear on PPTX cards only**, and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
   the server could find; `FileTab` disables its button with a title instead).
 - **`panelSlides` IS the shared `cardSlideAttachments`**: the card's stamped renders when there are any,
   otherwise the legacy unstamped ones — never both (the deck-review loop publishes unstamped hidden canvas
@@ -307,7 +307,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `routes/chat.ts`, which `tsconfig.client.json` must never include (it reaches express and
   better-sqlite3 through its imports) — so the interface is declared twice and nothing type-checks across
   the gap. Fields: `id`, `text`, `state` (`queued|delivered|completed|dropped`), `createdAt`, `followUp`
-  (the model got it only AFTER a result boundary, so it starts its own turn in the same run), and
+  (true when the model got it only AFTER the current answer, as its own follow-up turn in the same run — the
+  fallback; false when pi folded it into the running turn), and
   `message` — the persisted `kind:"steer"` user row, present ONLY on the `delivered` frame and `null`
   when the conversation was deleted mid-run. `PendingSteer` (`pane.steers`) has no server counterpart and
   is LIVE-only: `resetLive` clears it and a reattach rebuilds it from the replayed frames.
@@ -317,7 +318,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   and the run loop's `finally` close the channel before the terminal path emits, so the viewer is told why
   the text came back before being told the run stopped. `turn_end {message, response}` carries the same payload shape as `done` but
   is deliberately absent from `isTerminalFrame` (`lib/chat.ts`), so the reader keeps reading: the visible
-  turn was sealed only because a steer is pending and the follow-up turn continues on the SAME run.
+  turn was sealed only because a steer is pending and the follow-up turn continues on the SAME run. The
+  `open` frame carries no delivery mode: the composer's hint is always "작업 도중에 전달돼 진행 중인 일을 바꿀 수
+  있어요", and a delivered row's badge comes from its position (`steerBadgeLabel` — "응답 중 전달" for a steer folded
+  into the running turn, "답변 뒤 전달" for a follow-up one).
   `finalizeVisibleTurn` appends the bubble for both, and `endLiveTurn(pane, true)` keeps
   `streaming`/`liveRunId`/`abortController` where `clearLive` would drop them. Both frames ride the
   replayed event log, so **every handler has to be re-appliable**: messages dedupe by id, and a bounded
@@ -341,8 +345,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `/api/messages/:id/activity`, and `sanitizeActivity` (`routes/chat.ts`) rebuilds every agent/tool/task
   row from an explicit field list. A field added to `LiveAgentNode`/`LiveToolRow`/`LiveTaskRow` but not
   there works live and silently vanishes on reload — add it to `AgentActivity` (`server/types.ts`) and the
-  sanitizer together, with a round-trip assertion in `tests/routes-chat.test.ts` (`background` and
-  `name` are the worked examples).
+  sanitizer together, with a round-trip assertion in `tests/routes-chat.test.ts` (`name` is the
+  worked example).
 - **Admin presence badge: the client poll interval bounds the server window from BELOW.**
   `users.last_seen_at` is stamped by EVERY authenticated request, and `startKnowledgeWatch`
   (`lib/loaders.ts`) is what keeps it warm for an idle-but-open tab — it polls once a minute and ONLY while
@@ -360,15 +364,11 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   design.
 
 ## Behavior gotchas (don't "fix" these)
-- **Group-knowledge toggle saves a per-USER default, fire-and-forget with NO readback.** A new chat pane
-  seeds `groupKnowledgeOff` from `state.user.groupKnowledgeOffDefault` (own-avatar panes only). This is what
-  lets the toggle reach the **auto-greeting** (fires before the composer is touched). The toggle updates
-  `state.user.groupKnowledgeOffDefault` optimistically and PUTs `/api/me/group-knowledge-default` in the
-  background; it deliberately does NOT sync `state.user` from the response (rapid toggles resolve out of
-  order) and only toasts on failure. Don't "fix" this into an await-and-sync.
-- **The model/effort/MCP-group pickers write through to a per-user default** (`PUT /api/me/chat-defaults`),
-  same optimistic-update pattern as the group-knowledge toggle: update `state.user.{model,effort,
-  mcpToolGroups}Default` then PUT in the background, toast only on failure. New panes seed from these.
+- **The model/effort/MCP-group pickers write through to a per-user default, fire-and-forget with NO
+  readback** (`PUT /api/me/chat-defaults`): update `state.user.{model,effort,mcpToolGroups}Default`
+  optimistically then PUT in the background, toast only on failure — never sync `state.user` from the
+  response (rapid picks resolve out of order). New panes seed from these, which is what lets a pick reach
+  the **auto-greeting**. (The retired group-knowledge toggle worked the same way.)
 - Some settings cards (profile/visibility/secrets) save WITHOUT a full reload to avoid wiping unsaved form
   text — preserve in-place updates there.
 - **A `secret`-carrying browser op is version-gated CLIENT-side, and the value passes straight through.**
@@ -400,8 +400,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   management that used to be the admin view's 그룹 tab; legacy `#/settings/groups`·`#/admin/groups`
   hashes normalize to `#/groups` in `lib/nav.ts` `routeFromHash`.
 - **Agent cards fold only when SEVERAL agents share one tree.** `ActivityTree` decides at the root (≥2
-  sub-agents among the rows it renders — per bubble in the background phase) and nested trees inherit
-  the decision. Each sub-agent card that has rows then gets a disclosure header (`@name`, label,
+  sub-agents among the rows it renders) and nested trees inherit
+  the decision. Each sub-agent card that has rows then gets a disclosure header (`@name` on older snapshots, label,
   `도구 N개 · 태스크 M개`, chevron) and shows only its latest tool row (its latest task row when it has no
   tools). A lone agent, a card with no rows yet and the main agent's own rows never fold. Open state is
   the module store `openAgentCards` (`lib/agentCards.ts`), keyed by agent id so the card the viewer
@@ -413,10 +413,6 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `flex-basis: 6em` is what keeps a merely long label truncating on one line wherever the bubble is
   wide. The 에이전트 badge is `flex:none`+`nowrap` because `.bubble`'s inherited `overflow-wrap:anywhere`
   otherwise broke it into one syllable per line on phones.
-- **Admin external avatars are independently lazy-loaded.** `AdminExternalAgentsPanel.svelte` stays
-  mounted with an `active` prop so its API cannot blank the existing admin overview and unsaved editor
-  state is not coupled to tab switches. Its modal uses explicit `keep|set|clear` API-key intent and
-  forces an Explore cache refresh after CRUD so runtime visibility changes appear immediately.
 
 ## Client verification
 - **`npx svelte-check --tsconfig ./tsconfig.client.json`** is the real client type/template check (also
@@ -458,12 +454,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **테마 반응성:** `lib/theme.ts`의 `theme` 스토어는 `applyTheme()`만 발행하는 single-writer.
   캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasTab의 Vega/mermaid)는 이 스토어를
   구독해 재스타일한다 — `data-theme`을 init에서 한 번만 읽는 패턴으로 되돌리면 토글 시 색이 낡는다.
-- **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어
-  `decision_reason`, SDK/진단용). 클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는
-  영어 텍스트를 한국어로 바꾸지 말 것(반대도 금지) — `preToolUseHook.ts`가 레퍼런스.
-- **admin 외부 아바타 검증 메시지는 `routes/adminExternalAgents.ts`가 `EXTERNAL_AGENTS_JSON[0].`
-  접두사를 정규식으로 벗겨 렌더한다** — `externalAgents.ts`의 한국어 throw는 `.field` 형태를
-  유지해야 조사가 어색하게 잘리지 않는다.
+- **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어, 진단용).
+  클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는 영어 텍스트를 한국어로 바꾸지 말 것(반대도 금지).
+  이 이벤트를 내던 SDK PreToolUse hook은 없어졌고, pi 런타임에는 아직 내는 곳이 없다 — 다시 쓸 때도 이 분리를 지킨다.
 - **audit log의 status는 `success`/`error` 외에 `ok`도 존재**(`agent/sshIdentityTools.ts`).
   클라이언트 라벨 매핑(`AdminView.svelte`)은 세 값 모두 처리한다.
 - **아이콘 경로의 단일 출처는 `lib/icons.ts`** (`ICON_PATHS` + `iconSvg`) — `Icon.svelte`와

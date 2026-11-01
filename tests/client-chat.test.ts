@@ -21,7 +21,6 @@ import {
   openSeededChat,
   PLUGIN_STATUS_LABELS,
   regenerate,
-  respondPlanReview,
   rollbackCanvas,
   selectConversation,
   sendMessage,
@@ -41,7 +40,6 @@ import {
 } from "../src/client/src/lib/chat.js";
 import { resolveSideTab } from "../src/client/src/lib/sidePanel.js";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
-import { liveSegmentRows, messageSegmentRows } from "../src/client/src/lib/activitySegments.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { DRAWIO_MEDIA_TYPE } from "../src/client/src/lib/drawioViewer.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
@@ -152,10 +150,6 @@ function seedPane(overrides: Partial<ChatPane> = {}): string {
     liveTextBreakPending: false,
     liveThinking: "",
     thinkingActive: false,
-    livePlan: "",
-    planPending: false,
-    planReview: null,
-    planReviewSubmitting: false,
     liveStatus: "",
     liveRunId: null,
     liveAgents: [],
@@ -163,7 +157,6 @@ function seedPane(overrides: Partial<ChatPane> = {}): string {
     liveTasks: [],
     livePlugins: [],
     liveStatusStickyUntil: 0,
-    groupKnowledgeOff: [],
     mcpToolGroups: [...DEFAULT_MCP_TOOL_GROUPS],
     canvases: [],
     sideTab: null,
@@ -574,7 +567,7 @@ describe("opening + resuming conversations", () => {
     replaceState({ conversations: [{ id: "c1", avatarUserId: "av1", isRoutine: false } as any] });
     const assistantMsg = { id: "m", role: "assistant", content: "이전 답변", response: null, conversationId: "c1", createdAt: "t" };
     useFetch((url) => {
-      if (url.startsWith("/api/messages")) return jsonRes({ messages: [assistantMsg], groupKnowledgeOff: [], canvases: [] });
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [assistantMsg], canvases: [] });
       if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
       return undefined;
@@ -623,7 +616,7 @@ describe("opening + resuming conversations", () => {
     });
     const fetchFn = useFetch((url) => {
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [], canvases: [] });
       if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
       return undefined;
@@ -642,7 +635,7 @@ describe("opening + resuming conversations", () => {
       if (url === "/api/conversations?kind=routine")
         return jsonRes({ conversations: [{ id: "r2", avatarUserId: "av1", isRoutine: true }] });
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [], canvases: [] });
       if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
       return undefined;
@@ -937,13 +930,13 @@ describe("canvas flows", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* interactive prompts + plan review                                  */
+/* interactive prompts                                                 */
 /* ------------------------------------------------------------------ */
 
-describe("prompts + plan review", () => {
+describe("prompts", () => {
   it("answerPrompt posts the owner's response and dequeues the prompt", async () => {
     updateState((s) => {
-      s.promptQueue.push({ id: "rq1", runId: "rn1", paneId: "p", kind: "permission", data: {} });
+      s.promptQueue.push({ id: "rq1", runId: "rn1", paneId: "p", kind: "question", data: {} });
     });
     let posted: any;
     useFetch((url, init) => {
@@ -953,8 +946,8 @@ describe("prompts + plan review", () => {
       }
       return undefined;
     });
-    await answerPrompt("rq1", { behavior: "allow" });
-    expect(posted).toMatchObject({ runId: "rn1", requestId: "rq1", value: { behavior: "allow" } });
+    await answerPrompt("rq1", { cancelled: true });
+    expect(posted).toMatchObject({ runId: "rn1", requestId: "rq1", value: { cancelled: true } });
     expect(readState().promptQueue).toHaveLength(0);
   });
 
@@ -973,42 +966,6 @@ describe("prompts + plan review", () => {
     expect(get(toasts).some((t) => t.message.includes("이미 종료됨"))).toBe(true);
   });
 
-  it("respondPlanReview approves and clears the inline review", async () => {
-    const id = seedPane({ planReview: { requestId: "pr1", runId: "rn1" } });
-    let posted: any;
-    useFetch((url, init) => {
-      if (url === "/api/chat/respond") {
-        posted = body(init);
-        return jsonRes({ ok: true });
-      }
-      return undefined;
-    });
-    await respondPlanReview(id, "approved");
-    expect(posted).toMatchObject({ requestId: "pr1", value: { behavior: "approved" } });
-    expect(pane(id).planReview).toBeNull();
-    expect(pane(id).liveStatus).toBe("계획을 승인했습니다.");
-  });
-
-  it("respondPlanReview rejects with trimmed feedback", async () => {
-    const id = seedPane({ planReview: { requestId: "pr2", runId: "rn2" } });
-    let posted: any;
-    useFetch((url, init) => {
-      if (url === "/api/chat/respond") {
-        posted = body(init);
-        return jsonRes({ ok: true });
-      }
-      return undefined;
-    });
-    await respondPlanReview(id, "rejected", "  방향을 바꿔줘  ");
-    expect(posted.value).toMatchObject({ behavior: "rejected", feedback: "방향을 바꿔줘" });
-  });
-
-  it("respondPlanReview is a no-op without a pending review", async () => {
-    const id = seedPane({ planReview: null });
-    const fetchFn = noFetch();
-    await respondPlanReview(id, "approved");
-    expect(fetchFn).not.toHaveBeenCalled();
-  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -1037,7 +994,7 @@ describe("reattaching to a live run", () => {
     const reloaded = { id: "old", role: "assistant", content: "저장된 답변", response: null, conversationId: "c1", createdAt: "t" };
     useFetch((url) => {
       if (url.includes("/events")) return { ok: false, status: 404, body: null, json: async () => ({}) };
-      if (url.startsWith("/api/messages")) return jsonRes({ messages: [reloaded], groupKnowledgeOff: [], canvases: [] });
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [reloaded], canvases: [] });
       return undefined;
     });
     await attachRun(id, "run404");
@@ -1057,7 +1014,6 @@ describe("reattaching to a live run", () => {
             { id: "u", role: "user", content: "질문", response: null, conversationId: "c1", createdAt: "t" },
             { id: "a", role: "assistant", content: "완료된 답변", response: null, conversationId: "c1", createdAt: "t" },
           ],
-          groupKnowledgeOff: [],
           canvases: [],
         });
       }
@@ -1201,7 +1157,7 @@ describe("opening a seeded or brand-new chat", () => {
   it("startChatWith resumes the existing conversation instead of opening a duplicate", async () => {
     replaceState({ conversations: [{ id: "c-old", avatarUserId: "av9", isRoutine: false } as any] });
     useFetch((url) => {
-      // A thread that never had canvases or group-knowledge picks omits both keys.
+      // A thread that never had canvases omits the key.
       if (url.startsWith("/api/messages")) return jsonRes({ messages: [] });
       if (url === "/api/avatars/av9") return jsonRes({ avatar: { id: "av9", alias: "동료", isOwn: false } });
       if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
@@ -1211,7 +1167,6 @@ describe("opening a seeded or brand-new chat", () => {
     expect(readState().chatPanes).toHaveLength(1);
     expect(readState().chatPanes[0]).toMatchObject({
       conversationId: "c-old",
-      groupKnowledgeOff: [],
       canvases: [],
     });
   });
@@ -1257,8 +1212,7 @@ describe("opening a seeded or brand-new chat", () => {
               response: { kind: "text", runtime: "claude", text: "", usage: { inputTokens: 0, outputTokens: 0 } },
             },
           ],
-          groupKnowledgeOff: ["g1"],
-          selectedModel: "opus",
+          selectedModel: "deepseek/v3",
           selectedEffort: "high",
           selectedMcpToolGroups: ["git_repo", "web"],
           // The same artifact is persisted once per version; only the last entry
@@ -1284,8 +1238,7 @@ describe("opening a seeded or brand-new chat", () => {
     expect(s.currentAvatar?.id).toBe("av9");
     expect(added).toMatchObject({
       conversationId: "c9",
-      groupKnowledgeOff: ["g1"],
-      modelTier: "opus",
+      model: "deepseek/v3",
       effort: "high",
       mcpToolGroups: ["git_repo", "web"],
       sideTab: null,
@@ -1370,6 +1323,41 @@ describe("sendMessage: slash literals, staged images, failure modes", () => {
 
     await sendMessage(id, "/summarize");
     expect(bodies[1].message).toBe("/summarize");
+  });
+
+  it("sends the pane's pi model, and \"\" (pi's default) for a pick pi no longer offers", async () => {
+    const id = seedPane({ model: "deepseek/v3" });
+    const sentModels: unknown[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        sentModels.push(body(init).model);
+        return sseRes(doneWith("ok"));
+      }
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    const catalog = (ids: string[]) =>
+      updateState((s) => {
+        s.bootstrap = {
+          needsSetup: false,
+          githubHost: "",
+          signupMode: "open",
+          confluenceConfigured: false,
+          modelSelection: { models: ids.map((m) => ({ id: m, server: null, vision: true })) },
+        };
+      });
+
+    catalog(["deepseek/v3", "qwen/coder"]);
+    await sendMessage(id, "하나");
+    // A legacy tier id is not a pi model: it runs on the default, never on a guess.
+    updateState((s) => void (s.chatPanes.find((p) => p.id === id)!.model = "opus"));
+    await sendMessage(id, "둘");
+    // No catalog to judge by (pi unreachable at page load): the stored pick passes through.
+    catalog([]);
+    await sendMessage(id, "셋");
+    updateState((s) => void (s.chatPanes.find((p) => p.id === id)!.model = undefined));
+    await sendMessage(id, "넷");
+    expect(sentModels).toEqual(["deepseek/v3", "", "opus", ""]);
   });
 
   it("falls back to the status code when a failed send carries no readable message", async () => {
@@ -1489,6 +1477,86 @@ describe("sendMessage: slash literals, staged images, failure modes", () => {
 /* ------------------------------------------------------------------ */
 /* stream events applied to a pane                                     */
 /* ------------------------------------------------------------------ */
+
+/**
+ * A run whose stream delivers `frames`, then stays OPEN until `release()` and
+ * ends with a `done` frame — state that only lives while a run streams (the
+ * status pin) can be stepped through with fake timers.
+ */
+function useHeldRun(runId: string, frames: Array<[string, unknown]>): () => void {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const enc = new TextEncoder();
+  const chunks = frames.map(sseFrame);
+  let i = 0;
+  useFetch((url) => {
+    if (!url.includes(`/api/chat/runs/${runId}/events`)) return jsonRes({ ok: true });
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (i < chunks.length) return controller.enqueue(enc.encode(chunks[i++]));
+        await gate;
+        controller.enqueue(enc.encode(sseFrame(["done", {}])));
+        controller.close();
+      },
+    });
+    return { ok: true, status: 200, body, json: async () => ({}) };
+  });
+  return release;
+}
+
+describe("the status pin after a tool frame", () => {
+  afterEach(() => vi.useRealTimers());
+
+  async function step(ms: number): Promise<void> {
+    await vi.advanceTimersByTimeAsync(ms);
+  }
+
+  it("shows a status that landed during the pin once it lapses (pi waiting on a consulted avatar)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const id = seedPane();
+    const release = useHeldRun("held-run-1", [
+      ["open", { runId: "held-run-1" }],
+      ["tool", { toolUseId: "t-ask", name: "Bash", input: { command: "ask mate" } }],
+      // The tool's own progress echo while it runs: says less than the pin, dropped.
+      ["status", { label: "실행 중: 명령 실행" }],
+      ["tool_end", { toolUseId: "t-ask", ok: true }],
+      // The run's next phase, inside the same 1.5 s — and its last status for a while.
+      ["status", { label: "팀원 아바타의 답변을 기다리는 중…" }],
+    ]);
+    const attached = attachRun(id, "held-run-1");
+    await step(0);
+    expect(pane(id).liveStatus).toBe("명령 실행 · ask mate");
+    await step(1400);
+    expect(pane(id).liveStatus).toBe("명령 실행 · ask mate");
+    await step(200);
+    expect(pane(id).liveStatus).toBe("팀원 아바타의 답변을 기다리는 중…");
+    release();
+    await attached;
+    expect(pane(id).streaming).toBe(false);
+  });
+
+  it("drops the running tool's own echo for good, and lets a newer pin supersede a held status", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const id = seedPane();
+    const release = useHeldRun("held-run-2", [
+      ["open", { runId: "held-run-2" }],
+      ["tool", { toolUseId: "t-1", name: "Bash", input: { command: "ls" } }],
+      ["status", { label: "실행 중: 명령 실행" }],
+      ["tool_end", { toolUseId: "t-1", ok: true }],
+      ["status", { label: "응답 생성 중…" }],
+      ["tool", { toolUseId: "t-2", name: "Bash", input: { command: "sleep 6" } }],
+      ["status", { label: "실행 중: 명령 실행" }],
+    ]);
+    const attached = attachRun(id, "held-run-2");
+    await step(0);
+    expect(pane(id).liveStatus).toBe("명령 실행 · sleep 6");
+    await step(2000);
+    // Neither the older held status nor the running tool's echo replaces it.
+    expect(pane(id).liveStatus).toBe("명령 실행 · sleep 6");
+    release();
+    await attached;
+  });
+});
 
 describe("stream events applied to a pane", () => {
   it("starts a new paragraph when activity interrupts the text stream", async () => {
@@ -1649,6 +1717,7 @@ describe("stream events applied to a pane", () => {
       ["memory", { id: "mem1", path: "wiki/회의.md", action: "create" }],
       // A reattach replays the whole log; the same capture must not stack up.
       ["memory", { id: "mem1", path: "wiki/회의.md", action: "create" }],
+      // A retired group-scope frame (an older server's replay) renders as a plain capture.
       ["memory", { id: "mem2", path: "wiki/정책.md", action: "update", scope: "group", groupName: "플랫폼" }],
       // An id-less capture still gets a row (it just cannot be deduped).
       ["memory", { path: "wiki/무제.md" }],
@@ -1662,7 +1731,7 @@ describe("stream events applied to a pane", () => {
       status: "done",
       agentId: "main",
     });
-    expect(rows[1]).toMatchObject({ label: "그룹 기억 갱신됨", detail: "플랫폼 · wiki/정책.md" });
+    expect(rows[1]).toMatchObject({ label: "기억 갱신됨", detail: "wiki/정책.md" });
     expect(rows[2]).toMatchObject({ label: "기억 추가됨", detail: "wiki/무제.md" });
     expect(rows[2].id).toBeTruthy();
   });
@@ -1720,41 +1789,21 @@ describe("stream events applied to a pane", () => {
     expect(rows[1].detail).toBeUndefined();
   });
 
-  it("plan mode shows a placeholder while writing, then the submitted plan", async () => {
+  it("ignores the retired plan / plan_review frames: no live plan state, no notification", async () => {
     const id = seedPane();
-    const statuses = trackStatus(id);
-    const pending = trackState((s) => s.chatPanes.find((p) => p.id === id)?.planPending ?? false);
+    const notes = useOsNotifications();
     await driveEvents(id, [
       ["plan", { planning: true }],
       ["plan", { plan: "1. 조사\n2. 구현" }],
+      ["plan_review", { requestId: "pr-live-1", runId: "rn-live-1", plan: "제안된 계획" }],
     ]);
-    expect(pending()).toContain(true);
-    expect(pane(id)).toMatchObject({ livePlan: "1. 조사\n2. 구현", planPending: false });
-    expect(statuses()).toContain("계획을 작성하는 중…");
-    expect(statuses()).toContain("계획을 제출했습니다.");
+    const live = pane(id) as unknown as Record<string, unknown>;
+    expect(live.livePlan).toBeUndefined();
+    expect(live.planReview).toBeUndefined();
+    expect(notes).toEqual([]);
   });
 
-  it("an empty ExitPlanMode clears the writing-plan placeholder", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["plan", { planning: true }],
-      ["plan", {}],
-    ]);
-    expect(pane(id)).toMatchObject({ planPending: false, livePlan: "" });
-  });
-
-  it("plan_review surfaces inline controls and notifies the owner", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    await driveEvents(id, [["plan_review", { requestId: "pr-live-1", runId: "rn-live-1", plan: "제안된 계획" }]]);
-    expect(pane(id).planReview).toEqual({ requestId: "pr-live-1", runId: "rn-live-1" });
-    expect(pane(id)).toMatchObject({ livePlan: "제안된 계획", planPending: false, planReviewSubmitting: false });
-    expect(notes).toEqual([
-      { title: "노아 · 계획 승인 필요", body: "제안한 계획을 검토해 주세요.", tag: `plan-${id}` },
-    ]);
-  });
-
-  it("prompt_resolved locks a parked canvas form and drops the plan controls", async () => {
+  it("prompt_resolved locks a parked canvas form", async () => {
     const id = seedPane();
     await driveEvents(id, [
       [
@@ -1768,14 +1817,10 @@ describe("stream events applied to a pane", () => {
           runId: "rn-live",
         },
       ],
-      ["plan_review", { requestId: "pr-live-2", runId: "rn-live", plan: "계획" }],
       // Resolved server-side (timeout / answered elsewhere / reconnect).
       ["prompt_resolved", { requestId: "rq-live-1" }],
-      ["prompt_resolved", { requestId: "pr-live-2" }],
     ]);
     expect(pane(id).canvases[0]).toMatchObject({ id: "cv-live", pending: false, requestId: "rq-live-1" });
-    expect(pane(id).planReview).toBeNull();
-    expect(pane(id).planReviewSubmitting).toBe(false);
   });
 
   it("a re-shown canvas replaces its entry and bumps the version count", async () => {
@@ -1876,7 +1921,6 @@ describe("stream events applied to a pane", () => {
       ["canvas", {}],
       ["file", { attachment: {} }],
       ["prompt_resolved", {}],
-      ["bg_end", {}],
     ]);
     const p = pane(id);
     // A partial frame must not mint a phantom row or move the conversation.
@@ -1909,10 +1953,9 @@ describe("stream events applied to a pane", () => {
     expect(p.liveTools[0]).toMatchObject({ detail: "ls", status: "running" });
   });
 
-  it("a server-set plan and reasoning on the finished response win over the live ones", async () => {
+  it("a server-set (legacy) plan and reasoning on the finished response win over the live ones", async () => {
     const id = seedPane();
     await driveEvents(id, [
-      ["plan", { plan: "라이브 계획" }],
       ["thinking", { text: "라이브 추론" }],
       [
         "done",
@@ -1935,325 +1978,95 @@ describe("stream events applied to a pane", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* background phase (the SDK keeps working past the visible turn)      */
+/* finalized turns and agent rows                                      */
 /* ------------------------------------------------------------------ */
 
-const BG_MESSAGE = {
-  id: "bg-msg-1",
+const TURN_MESSAGE = {
+  id: "turn-msg-1",
   role: "assistant",
   content: "먼저 답합니다",
   conversationId: "conv-x",
   createdAt: "t",
   response: {
     kind: "text",
-    runtime: "claude",
+    runtime: "pi",
     text: "먼저 답합니다",
     usage: { inputTokens: 5, outputTokens: 2 },
   },
 };
 
-describe("background phase", () => {
-  it("done{background} finalizes the bubble but keeps the activity tree mounted", async () => {
-    const id = seedPane();
-    const statuses = trackStatus(id);
-    const notes = useOsNotifications();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "npm test" } }],
-      ["delta", { text: "먼저 답합니다" }],
-      ["done", { background: true, message: BG_MESSAGE, tasks: [{ taskId: "bt1", description: "후속 작업" }] }],
-    ]);
-    const p = pane(id);
-    expect(p.messages.at(-1)).toMatchObject({ id: "bg-msg-1", role: "assistant" });
-    expect(p).toMatchObject({ backgroundPhase: true, backgroundMessageId: "bg-msg-1" });
-    expect(p.backgroundTasks).toEqual([{ taskId: "bt1", description: "후속 작업" }]);
-    // Rows keep updating until bg_end; only the text moved into the bubble.
-    expect(p.liveTools).toHaveLength(1);
-    expect(p).toMatchObject({ liveText: "", liveThinking: "", planPending: false });
-    expect(p.usage).toMatchObject({ inputTokens: 5, outputTokens: 2 });
-    expect(statuses()).toContain("백그라운드 작업 진행 중…");
-    expect(notes.map((n) => n.title)).toContain("노아 · 답변 완료");
-  });
-
-  it("bg_tasks replaces the live task set rather than merging into it", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["done", { background: true, message: BG_MESSAGE }],
-      ["bg_tasks", { tasks: [{ taskId: "a" }, { taskId: "b" }] }],
-      ["bg_tasks", { tasks: [{ taskId: "c" }] }],
-    ]);
-    expect(pane(id).backgroundTasks).toEqual([{ taskId: "c" }]);
-  });
-
-  it("bg_end seals the tree onto the finalized turn and persists the snapshot", async () => {
+describe("finalized turns and agent rows", () => {
+  it("done is terminal: it seals the live tree onto the bubble and persists the snapshot", async () => {
     const id = seedPane();
     const { calls } = await driveEvents(id, [
       ["tool", { toolUseId: "t1", name: "Bash", input: { command: "npm test" } }],
       ["task", { taskId: "k9", subagentType: "worker" }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_end", {}],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
     ]);
     const p = pane(id);
-    expect(p).toMatchObject({ backgroundPhase: false, backgroundMessageId: null });
-    expect(p.backgroundTasks).toEqual([]);
     expect(p.liveTools).toEqual([]);
     expect(p.liveTasks).toEqual([]);
     // A row still "running" at the end would render a perpetual spinner.
     const sealed = (p.messages.at(-1)!.response as any).activity;
     expect(sealed.tools[0]).toMatchObject({ id: "t1", status: "done" });
     expect(sealed.tasks[0]).toMatchObject({ id: "k9", status: "done" });
-    const put = calls.find((c) => c.url.includes("/api/messages/bg-msg-1/activity"));
+    const put = calls.find((c) => c.url.includes("/api/messages/turn-msg-1/activity"));
     expect(put?.init.method).toBe("PUT");
     expect(body(put!.init).activity.tools[0].status).toBe("done");
+    expect(p.usage).toMatchObject({ inputTokens: 5, outputTokens: 2 });
   });
 
-  it("bg_end with no activity to seal just ends the phase", async () => {
-    const id = seedPane();
-    const { calls } = await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_end", {}],
-    ]);
-    expect(pane(id).backgroundPhase).toBe(false);
-    expect(calls.some((c) => c.url.includes("/activity"))).toBe(false);
-  });
-
-  it("a background wake-up turn gets its own bubble, once per message id", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    const wake = {
-      id: "bg-wake-1",
-      role: "assistant",
-      content: "백그라운드 결과입니다",
-      conversationId: "conv-x",
-      createdAt: "t",
-      response: { kind: "text", runtime: "claude", text: "백그라운드 결과입니다" },
-    };
-    await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["delta", { text: "스트리밍 꼬리" }],
-      ["bg_message", { message: wake }],
-      ["bg_message", { message: wake }],
-      // Only the avatar's own wake-up turns become bubbles.
-      ["bg_message", { message: { ...wake, id: "bg-wake-2", role: "user" } }],
-    ]);
-    const p = pane(id);
-    expect(p.messages.filter((m) => m.id === "bg-wake-1")).toHaveLength(1);
-    expect(p.messages.some((m) => m.id === "bg-wake-2")).toBe(false);
-    // The streamed tail is embodied in the pushed bubble — it must not render twice.
-    expect(p.liveText).toBe("");
-    expect(notes.filter((n) => n.title.includes("백그라운드 작업 보고"))).toEqual([
-      { title: "노아 · 백그라운드 작업 보고", body: "백그라운드 결과입니다", tag: `bg-${id}` },
-    ]);
-  });
-
-  it("stopping during the background phase seals the tree as failed and keeps the tail", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "sleep 60" } }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["delta", { text: "중단 직전 텍스트" }],
-      ["cancelled", {}],
-    ]);
-    const p = pane(id);
-    // Those tasks really died — reporting "done" would be a lie.
-    const sealed = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(sealed.tools[0]).toMatchObject({ id: "t1", status: "failed" });
-    expect(p.backgroundPhase).toBe(false);
-    expect(p.messages.at(-1)).toMatchObject({ content: "중단 직전 텍스트" });
-    expect(p.messages.at(-1)!.response).toMatchObject({ summary: "중지됨" });
-  });
-
-  it("an error during the background phase fails the tree and reports the error", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "t1", name: "Bash", input: { command: "sleep 60" } }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["error", { error: "모델이 응답하지 못했습니다." }],
-    ]);
-    const p = pane(id);
-    const sealed = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(sealed.tools[0].status).toBe("failed");
-    expect(p.messages.at(-1)).toMatchObject({ content: "모델이 응답하지 못했습니다." });
-    expect(p.messages.at(-1)!.response).toMatchObject({ summary: "오류" });
-    expect(get(toasts).some((t) => t.message.includes("모델이 응답하지 못했습니다."))).toBe(true);
-  });
-
-  // One live tree, several bubbles: the finished turn keeps its own work (its
-  // background agent's late calls included) and the wake-up turn keeps the tool
-  // it ran. Everything used to seal onto the finished turn.
-  const WAKE_ONE = { ...BG_MESSAGE, id: "wake-1", content: "결과 보고", response: { ...BG_MESSAGE.response, text: "결과 보고" } };
-  const SPLIT_FRAMES: Array<[string, unknown]> = [
-    ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
-    // The spawn came back as a launch receipt: same card, now flagged, label kept.
-    ["agent", { agentId: "ag1", parentId: "main", background: true }],
-    ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
-    ["tool_end", { toolUseId: "t1", ok: true }],
-    ["done", { background: true, message: BG_MESSAGE }],
-    ["tool", { toolUseId: "ag1-read", name: "Read", agentId: "ag1", input: { file_path: "a.md" } }],
-    ["agent_end", { agentId: "ag1", ok: true }],
-    ["tool", { toolUseId: "w1", name: "Grep", input: { pattern: "needle" } }],
-    ["tool_end", { toolUseId: "w1", ok: true }],
-    ["bg_message", { message: WAKE_ONE }],
-  ];
-
-  it("splits the live rows per bubble while the background phase runs", async () => {
-    const id = seedPane();
-    await driveEvents(id, structuredClone(SPLIT_FRAMES));
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      label: "general-purpose · 조사",
-      background: true,
-      status: "done",
-    });
-    expect(messageSegmentRows(p, "bg-msg-1")!.tools.map((t) => t.id)).toEqual(["t1", "ag1-read"]);
-    expect(messageSegmentRows(p, "bg-msg-1")!.agents.map((a) => a.id)).toEqual(["main", "ag1"]);
-    expect(messageSegmentRows(p, "wake-1")!.tools.map((t) => t.id)).toEqual(["w1"]);
-    expect(messageSegmentRows(p, "wake-1")!.agents.map((a) => a.id)).toEqual(["main"]);
-    // No wake-up turn in flight: the trailing live bubble has no tree of its own.
-    expect(liveSegmentRows(p)).toBeNull();
-  });
-
-  it("bg_end seals each bubble's own rows and never persists the segment stamps", async () => {
-    const id = seedPane();
-    const { calls } = await driveEvents(id, [...structuredClone(SPLIT_FRAMES), ["bg_end", {}]]);
-    const p = pane(id);
-    const turn = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(turn.tools.map((t: any) => t.id)).toEqual(["t1", "ag1-read"]);
-    expect(turn.agents.find((a: any) => a.id === "ag1")).toMatchObject({ background: true, status: "done" });
-    const wake = (p.messages.find((m) => m.id === "wake-1")!.response as any).activity;
-    expect(wake.tools.map((t: any) => t.id)).toEqual(["w1"]);
-    const puts = calls.filter((c) => c.url.includes("/activity"));
-    expect(puts.map((c) => c.url)).toEqual(["/api/messages/bg-msg-1/activity", "/api/messages/wake-1/activity"]);
-    expect(JSON.stringify(puts.map((c) => body(c.init)))).not.toContain("segment");
-    expect(p).toMatchObject({ backgroundPhase: false, liveTools: [], liveAgents: [] });
-  });
-
-  it("a reattach replays the same split onto the already-loaded transcript", async () => {
-    const id = seedPane();
-    await driveEvents(id, structuredClone(SPLIT_FRAMES));
-    // Reattach: resetLive, then the whole log again — both bubbles are already
-    // in the transcript, so every message frame dedupes but its segment closes.
-    await driveEvents(id, structuredClone(SPLIT_FRAMES));
-    const p = pane(id);
-    expect(p.messages.filter((m) => m.id === "wake-1")).toHaveLength(1);
-    expect(p.segmentMessageIds).toEqual(["bg-msg-1", "wake-1"]);
-    expect(messageSegmentRows(p, "wake-1")!.tools.map((t) => t.id)).toEqual(["w1"]);
-  });
-
-  it("a kill mid-wake-up seals the in-flight turn's rows onto the newest bubble", async () => {
+  it("ignores the retired background frames and a done{background} flag", async () => {
     const id = seedPane();
     await driveEvents(id, [
       ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["tool", { toolUseId: "w1", name: "Bash", input: { command: "sleep 60" } }],
-      ["bg_message", { message: structuredClone(WAKE_ONE) }],
-      // The second wake-up turn is still running when the user stops the run.
-      ["tool", { toolUseId: "w2", name: "Bash", input: { command: "sleep 90" } }],
-      ["cancelled", {}],
+      ["bg_tasks", { tasks: [{ taskId: "a" }] }],
+      ["done", { background: true, message: structuredClone(TURN_MESSAGE) }],
+      ["bg_message", { message: { ...structuredClone(TURN_MESSAGE), id: "wake-1" } }],
+      ["bg_end", {}],
     ]);
     const p = pane(id);
-    const turn = (p.messages.find((m) => m.id === "bg-msg-1")!.response as any).activity;
-    expect(turn.tools.map((t: any) => t.id)).toEqual(["t1"]);
-    const wake = (p.messages.find((m) => m.id === "wake-1")!.response as any).activity;
-    expect(wake.tools.map((t: any) => [t.id, t.status])).toEqual([
-      ["w1", "failed"],
-      ["w2", "failed"],
-    ]);
+    // The flag no longer holds the tree open: done is the turn's end.
+    expect(p.messages.map((m) => m.id)).toEqual(["turn-msg-1"]);
+    expect(p.liveTools).toEqual([]);
+    expect(p).not.toHaveProperty("backgroundPhase");
+    expect(p).not.toHaveProperty("backgroundTasks");
   });
 
-  it("keeps a resumed agent's @name and nests its background shell under its own bubble", async () => {
+  it("a replayed done frame does not duplicate the finalized bubble", async () => {
     const id = seedPane();
     await driveEvents(id, [
-      ["agent", { agentId: "ag1", parentId: "main", name: "probe", subagentType: "general-purpose", description: "조사" }],
-      ["agent_end", { agentId: "ag1", ok: true }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      // SendMessage resume: task_started re-announces the card without the name,
-      // then the background set flags it.
-      ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
-      ["agent", { agentId: "ag1", parentId: "main", background: true }],
-      ["task", { taskId: "sh1", agentId: "ag1", taskType: "local_bash", description: "긴 셸" }],
-      ["task_end", { taskId: "sh1", agentId: "ag1", ok: true }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
     ]);
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      name: "probe",
-      label: "general-purpose · 조사",
-      background: true,
-      status: "running",
-    });
-    // The shell is the resumed agent's, so it sits under the finished bubble with it.
-    expect(messageSegmentRows(p, "bg-msg-1")!.tasks).toEqual([
-      expect.objectContaining({ id: "sh1", agentId: "ag1", status: "done" }),
-    ]);
-    expect(liveSegmentRows(p)).toBeNull();
+    expect(pane(id).messages.filter((m) => m.id === "turn-msg-1")).toHaveLength(1);
   });
 
-  it("keeps a teammate's @name when task_started re-announces the card with the type the spawn omitted", async () => {
+  it("an agent frame never marks the card as a background agent", async () => {
     const id = seedPane();
     const statuses = trackStatus(id);
     await driveEvents(id, [
-      // A flagless-type spawn: the Agent input named the teammate but omitted
-      // subagent_type, and the task_started right behind it carries the type
-      // the CLI defaulted to — and no name. Before the split this re-announce
-      // overwrote "@tester · 테스트 실행" with "general-purpose · 테스트 실행".
+      ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
+      // A re-emit with no naming field keeps the card's label.
+      ["agent", { agentId: "ag1", parentId: "main", background: true }],
+    ]);
+    const node = pane(id).liveAgents.find((a) => a.id === "ag1")!;
+    expect(node).toMatchObject({ label: "general-purpose · 조사", status: "running" });
+    expect(node).not.toHaveProperty("background");
+    expect(statuses().every((s) => !s.includes("백그라운드"))).toBe(true);
+  });
+
+  it("ignores a teammate name on an agent frame (agent teams are retired)", async () => {
+    const id = seedPane();
+    const statuses = trackStatus(id);
+    await driveEvents(id, [
       ["agent", { agentId: "ag1", parentId: "main", name: "tester", description: "테스트 실행" }],
       ["agent", { agentId: "ag1", parentId: "main", subagentType: "general-purpose", description: "테스트 실행" }],
-      ["agent", { agentId: "ag2", parentId: "main", name: "reviewer", subagentType: "Explore", description: "코드 리뷰" }],
-      ["agent", { agentId: "ag2", parentId: "main", subagentType: "Explore", description: "코드 리뷰" }],
-      // Reversed arrival: the nameless re-announce lands first.
-      ["agent", { agentId: "ag3", parentId: "main", subagentType: "general-purpose", description: "문서 조사" }],
-      ["agent", { agentId: "ag3", parentId: "main", name: "researcher", description: "문서 조사" }],
     ]);
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "ag1")).toMatchObject({
-      name: "tester",
-      label: "general-purpose · 테스트 실행",
-    });
-    expect(p.liveAgents.find((a) => a.id === "ag2")).toMatchObject({
-      name: "reviewer",
-      label: "Explore · 코드 리뷰",
-    });
-    expect(p.liveAgents.find((a) => a.id === "ag3")).toMatchObject({
-      name: "researcher",
-      label: "general-purpose · 문서 조사",
-    });
-    // The status line names the teammate too, even on the nameless re-announce.
-    expect(statuses()).toContain("에이전트 작업 중: @tester · general-purpose · 테스트 실행");
-  });
-
-  it("nests a server-agent card whose parent is a delegate TOOL row under the agent that made the call", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "td", name: "mcp__server_agents__delegate", input: { tasks: [] } }],
-      ["agent", { agentId: "server-agent:r1", parentId: "td", description: "web-01 · 서버 에이전트" }],
-      ["agent", { agentId: "server-agent:r2", parentId: "td", description: "db-01 · 서버 에이전트" }],
-      // A subagent's own delegate call nests its cards under that subagent.
-      ["agent", { agentId: "sub1", parentId: "main", subagentType: "general-purpose", description: "조사" }],
-      ["tool", { toolUseId: "td2", name: "mcp__server_agents__delegate", agentId: "sub1", input: { tasks: [] } }],
-      ["agent", { agentId: "server-agent:r3", parentId: "td2", description: "web-02 · 서버 에이전트" }],
-    ]);
-    const p = pane(id);
-    expect(p.liveAgents.find((a) => a.id === "server-agent:r1")).toMatchObject({ parentId: "main", label: "web-01 · 서버 에이전트" });
-    expect(p.liveAgents.find((a) => a.id === "server-agent:r2")).toMatchObject({ parentId: "main" });
-    expect(p.liveAgents.find((a) => a.id === "server-agent:r3")).toMatchObject({ parentId: "sub1" });
-  });
-
-  it("renders a server-agent card's namespaced rows on the card, never touching a main row with the same raw id", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["tool", { toolUseId: "toolu_main", name: "Bash", input: { command: "ls" } }],
-      ["tool", { toolUseId: "td", name: "mcp__server_agents__delegate", input: { tasks: [] } }],
-      ["agent", { agentId: "server-agent:r1", parentId: "td", description: "web-01 · 서버 에이전트" }],
-      // The runner namespaces every remote-originated id as `<cardId>:<id>` — even one that copies a main id.
-      ["tool", { toolUseId: "server-agent:r1:toolu_main", name: "Read", agentId: "server-agent:r1", input: { file_path: "/etc/hosts" } }],
-      ["tool_end", { toolUseId: "server-agent:r1:toolu_main", ok: true }],
-    ]);
-    const p = pane(id);
-    const remote = p.liveTools.find((t) => t.id === "server-agent:r1:toolu_main")!;
-    expect(remote).toMatchObject({ agentId: "server-agent:r1", status: "done" });
-    const main = p.liveTools.find((t) => t.id === "toolu_main")!;
-    // The remote end closed only its own namespaced row.
-    expect(main.agentId).toBe("main");
-    expect(main.status).not.toBe("done");
+    const node = pane(id).liveAgents.find((a) => a.id === "ag1")!;
+    expect(node.name).toBeUndefined();
+    expect(node.label).toBe("general-purpose · 테스트 실행");
+    expect(statuses()).toContain("에이전트 작업 중: general-purpose · 테스트 실행");
   });
 
   it("passes a parent that names neither an agent nor a tool through unchanged", async () => {
@@ -2262,12 +2075,17 @@ describe("background phase", () => {
     expect(pane(id).liveAgents.find((a) => a.id === "orphan")).toMatchObject({ parentId: "toolu_unknown" });
   });
 
-  it("a visible turn keeps the whole live tree in the live bubble", async () => {
+  it("live rows carry no segment stamp, so the persisted snapshot has none", async () => {
     const id = seedPane();
-    await driveEvents(id, [["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }]]);
-    const p = pane(id);
-    expect(liveSegmentRows(p)!.tools.map((t) => t.id)).toEqual(["t1"]);
-    expect(messageSegmentRows(p, "anything")).toBeNull();
+    const { calls } = await driveEvents(id, [
+      ["agent", { agentId: "ag1", parentId: "main", description: "조사" }],
+      ["tool", { toolUseId: "t1", name: "Bash", agentId: "ag1", input: { command: "ls" } }],
+      ["task", { taskId: "k1", agentId: "ag1", taskType: "local_bash", description: "셸" }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
+    ]);
+    const put = calls.find((c) => c.url.includes("/activity"));
+    expect(JSON.stringify(body(put!.init))).not.toContain("segment");
+    expect(pane(id).liveAgents).toEqual([]);
   });
 });
 
@@ -2366,6 +2184,31 @@ describe("mid-turn messages (steers)", () => {
     expect(get(toasts).filter((t) => t.message.includes("되돌려 두었습니다"))).toHaveLength(1);
   });
 
+  it("a consulted avatar's answer is never the viewer's: no pending bubble, no draft restore, delivered as its row", async () => {
+    const source = { id: "ask-0123abcd", username: "mate", displayName: "Mate" };
+    const id = seedPane({ draft: "쓰던 글" });
+    const row = {
+      ...steerUserRow("um-c1", "@mate 아바타의 답변이 도착했습니다.\n\n금요일"),
+      kind: "consultation",
+      consultation: source,
+    };
+    await driveEvents(id, [
+      steerFrame("s-consult-1", "queued", "@mate 아바타의 답변이 도착했습니다.\n\n금요일", { source }),
+      steerFrame("s-consult-1", "delivered", "@mate 아바타의 답변이 도착했습니다.\n\n금요일", { source, message: row }),
+      // A run that ended before taking one: dropped, and NOT handed to the composer.
+      steerFrame("s-consult-2", "queued", "@mate 아바타의 답변이 도착했습니다.\n\n늦음", { source }),
+      steerFrame("s-consult-2", "dropped", "@mate 아바타의 답변이 도착했습니다.\n\n늦음", { source }),
+      // Delivered after the conversation was deleted: the stand-in keeps the provenance.
+      steerFrame("s-consult-3", "delivered", "@mate 아바타의 답변", { source, message: null }),
+    ]);
+    const p = pane(id);
+    expect(p.steers).toEqual([]);
+    expect(p.draft).toBe("쓰던 글");
+    expect(get(toasts).filter((t) => t.message.includes("되돌려 두었습니다"))).toHaveLength(0);
+    expect(p.messages.find((m) => m.id === "um-c1")).toMatchObject({ kind: "consultation", consultation: source });
+    expect(p.messages.find((m) => m.id === "s-consult-3")).toMatchObject({ role: "user", kind: "consultation", consultation: source });
+  });
+
   it("a completed steer just drops any pending row it still has", async () => {
     const id = seedPane();
     await driveEvents(id, [
@@ -2457,19 +2300,6 @@ describe("mid-turn messages (steers)", () => {
     expect(get(toasts).some((t) => t.message.includes("응답이 마무리되는 중이라"))).toBe(true);
   });
 
-  it("an external pane never reaches the steer route", async () => {
-    const id = seedPane({
-      streaming: true,
-      liveRunId: "run-79",
-      draft: "외부 아바타",
-      avatar: { id: "ext-1", alias: "외부", displayName: "External", runtime: "external" } as any,
-    });
-    const fetchFn = noFetch();
-    await sendSteer(id, "외부 아바타");
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(pane(id).draft).toBe("외부 아바타");
-  });
-
   it("a steer needs a live run: no run id, no request", async () => {
     const id = seedPane({ streaming: true, liveRunId: null, draft: "보낼 곳이 없음" });
     const fetchFn = noFetch();
@@ -2484,15 +2314,6 @@ describe("mid-turn messages (steers)", () => {
 
 describe("auto-reconnect", () => {
   const RECONNECTING = "연결이 끊겨 다시 연결하는 중…";
-
-  const WAKE_MESSAGE = {
-    id: "bg-wake-r",
-    role: "assistant",
-    content: "백그라운드 보고",
-    conversationId: "conv-x",
-    createdAt: "t",
-    response: { kind: "text", runtime: "claude", text: "백그라운드 보고" },
-  };
 
   /**
    * An events endpoint whose Nth attempt gets `frames(n)`. The stream simply ends
@@ -2515,33 +2336,34 @@ describe("auto-reconnect", () => {
 
   it("holds the live region open when the stream dies with the run still working", async () => {
     const id = seedPane();
+    const FOLLOW_UP = { ...structuredClone(TURN_MESSAGE), id: "follow-up-r", content: "이어서 답합니다" };
     const attempts = useRunEvents("run-drop", (n) => {
       const frames: Array<[string, unknown]> = [
         ["tool", { toolUseId: "t1", name: "Bash", input: { command: "npm test" } }],
-        ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
+        // A steer was pending: the turn so far is sealed, the run goes on.
+        ["turn_end", { message: structuredClone(TURN_MESSAGE) }],
       ];
       // The reattach replays the whole log, and this time carries it to the end.
-      if (n > 1) frames.push(["bg_message", { message: WAKE_MESSAGE }], ["bg_end", {}]);
+      if (n > 1) frames.push(["done", { message: FOLLOW_UP }]);
       return frames;
     });
 
     const running = attachRun(id, "run-drop");
-    // Nothing is torn down: the background indicator and its turn stay mounted.
+    // Nothing is torn down: the sealed turn and the live run stay mounted.
     await waitFor(() => pane(id).liveStatus === RECONNECTING);
-    expect(pane(id)).toMatchObject({ streaming: true, backgroundPhase: true });
-    expect(pane(id).messages.at(-1)).toMatchObject({ id: "bg-msg-1" });
+    expect(pane(id)).toMatchObject({ streaming: true });
+    expect(pane(id).messages.at(-1)).toMatchObject({ id: "turn-msg-1" });
 
     // A returning tab retries immediately instead of waiting the backoff out.
     document.dispatchEvent(new Event("visibilitychange"));
     await running;
 
     expect(attempts()).toBe(2);
-    // The replay rebuilt the turn without duplicating it, and the wake-up landed.
-    expect(pane(id).messages.filter((m) => m.id === "bg-msg-1")).toHaveLength(1);
-    expect(pane(id).messages.at(-1)).toMatchObject({ id: "bg-wake-r" });
+    // The replay rebuilt the turn without duplicating it, and the follow-up landed.
+    expect(pane(id).messages.filter((m) => m.id === "turn-msg-1")).toHaveLength(1);
+    expect(pane(id).messages.at(-1)).toMatchObject({ id: "follow-up-r" });
     expect(pane(id)).toMatchObject({
       streaming: false,
-      backgroundPhase: false,
       liveStatus: "",
       abortController: null,
     });
@@ -2587,7 +2409,7 @@ describe("auto-reconnect", () => {
         return { ok: false, status: 404, body: null, json: async () => ({}) };
       }
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [saved], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [saved], canvases: [] });
       return jsonRes({ ok: true });
     });
 
@@ -2623,10 +2445,12 @@ describe("auto-reconnect", () => {
     const id = seedPane();
     const notes = useOsNotifications();
     const attempts = useRunEvents("run-note", (n) => {
+      // The first read dies after a sealed turn; the replay ends the run
+      // with that SAME message, which is already on screen.
       const frames: Array<[string, unknown]> = [
-        ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
+        ["turn_end", { message: structuredClone(TURN_MESSAGE) }],
       ];
-      if (n > 1) frames.push(["bg_end", {}]);
+      if (n > 1) frames.push(["done", { message: structuredClone(TURN_MESSAGE) }]);
       return frames;
     });
 
@@ -2636,8 +2460,8 @@ describe("auto-reconnect", () => {
     await running;
 
     expect(attempts()).toBe(2);
-    // The replayed done{background} deduped, so it must stay silent.
-    expect(notes.filter((n) => n.title.includes("답변 완료"))).toHaveLength(1);
+    // The replayed message deduped, so the done must stay silent.
+    expect(notes.filter((n) => n.title.includes("답변 완료"))).toHaveLength(0);
   });
 
   it("a send whose own stream dies follows the run instead of ending the turn", async () => {
@@ -2709,13 +2533,6 @@ describe("auto-reconnect", () => {
     expect(pane(id).messages.at(-1)).toMatchObject({ role: "assistant", content: "다시 찾은 답변" });
   });
 
-  it("entering the background phase refreshes the sidebar's conversation list", async () => {
-    const id = seedPane();
-    const { calls } = await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-    ]);
-    expect(calls.some((c) => c.url === "/api/conversations")).toBe(true);
-  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -2911,20 +2728,20 @@ describe("browser-bridge relay: stored-secret input", () => {
 /* ------------------------------------------------------------------ */
 
 describe("interactive prompts raised by a run", () => {
-  it("queues permission and question prompts and notifies the owner", async () => {
+  it("queues question prompts and notifies the owner; a retired permission frame raises nothing", async () => {
     const id = seedPane();
     const notes = useOsNotifications();
     const queued = trackState((s) => s.promptQueue.map((p) => `${p.kind}:${p.id}`).join(","));
     await driveEvents(id, [
       ["permission", { requestId: "pm-1", runId: "rn-p", toolName: "Bash" }],
-      ["permission", { requestId: "pm-1", runId: "rn-p", toolName: "Bash" }],
       ["question", { requestId: "qs-1", runId: "rn-p", payload: { questions: [{ question: "어느 쪽으로 갈까요?" }] } }],
-      ["permission", { runId: "rn-p", toolName: "Bash" }],
+      ["question", { requestId: "qs-1", runId: "rn-p", payload: { questions: [{ question: "어느 쪽으로 갈까요?" }] } }],
+      ["question", { runId: "rn-p", payload: {} }],
     ]);
-    expect(queued()).toContain("permission:pm-1,question:qs-1");
-    // One notification each: the duplicate and the id-less frame raised nothing.
+    expect(queued()).toContain("question:qs-1");
+    expect(queued()).not.toContain("permission");
+    // One notification: the duplicate, the id-less frame and the permission frame raised nothing.
     expect(notes).toEqual([
-      { title: "노아 · 확인 필요", body: '"명령 실행" 실행을 승인해 주세요.', tag: "prompt-pm-1" },
       { title: "노아 · 질문", body: "어느 쪽으로 갈까요?", tag: "prompt-qs-1" },
     ]);
     // The queue is dropped with the run so nothing can be answered into a dead run.
@@ -2946,122 +2763,15 @@ describe("interactive prompts raised by a run", () => {
     const notes = useOsNotifications();
     const queued = trackState((s) => s.promptQueue.map((p) => p.id).join(","));
     await driveEvents(id, [
-      ["permission", { requestId: "pm-2", runId: "rn-r", toolName: "Bash" }],
+      ["question", { requestId: "pm-2", runId: "rn-r", payload: {} }],
       ["prompt_resolved", { requestId: "pm-2" }],
-      ["permission", { requestId: "pm-2", runId: "rn-r", toolName: "Bash" }],
+      ["question", { requestId: "pm-2", runId: "rn-r", payload: {} }],
     ]);
     expect(queued()).toContain("pm-2");
     expect(queued().at(-1)).toBe("");
     // enqueuePrompt is the only thing that notifies, so one note proves the
     // resolved id was never shown a second time.
     expect(notes).toHaveLength(1);
-  });
-
-  it("respondPlanReview re-enables the controls and rethrows when the submit fails", async () => {
-    const id = seedPane({ planReview: { requestId: "pr-fail", runId: "rn-f" } });
-    useFetch(() => jsonRes({ error: "이미 종료된 실행입니다." }, 500));
-    await expect(respondPlanReview(id, "rejected", "다시 세워줘")).rejects.toThrow("이미 종료된 실행입니다.");
-    // The review stays put so the owner can retry rather than losing the controls.
-    expect(pane(id).planReview).toEqual({ requestId: "pr-fail", runId: "rn-f" });
-    expect(pane(id).planReviewSubmitting).toBe(false);
-    expect(get(toasts).some((t) => t.message.includes("이미 종료된 실행입니다."))).toBe(true);
-  });
-
-  it("respondPlanReview sends a rejection with no feedback at all", async () => {
-    const id = seedPane({ planReview: { requestId: "pr-bare", runId: "rn-bare" } });
-    let posted: any;
-    useFetch((url, init) => {
-      if (url === "/api/chat/respond") {
-        posted = body(init);
-        return jsonRes({ ok: true });
-      }
-      return undefined;
-    });
-    await respondPlanReview(id, "rejected", "   ");
-    expect(posted.value).toEqual({ behavior: "rejected" });
-    expect(pane(id).planReview).toBeNull();
-  });
-
-  it("a plan_review replayed after it was resolved does not come back", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    // A reconnect's plan_review may carry no plan text (the "plan" frame did).
-    await driveEvents(id, [
-      ["plan_review", { requestId: "pr-gone" }],
-      ["prompt_resolved", { requestId: "pr-gone" }],
-      ["plan_review", { requestId: "pr-gone" }],
-    ]);
-    expect(pane(id).planReview).toBeNull();
-    expect(pane(id).livePlan).toBe("");
-    expect(notes).toHaveLength(1);
-  });
-});
-
-/* ------------------------------------------------------------------ */
-/* pane defaults, external avatars                                     */
-/* ------------------------------------------------------------------ */
-
-describe("composer defaults on a new pane", () => {
-  it("seeds a native pane from the owner's remembered picks", async () => {
-    replaceState({
-      user: {
-        id: "owner",
-        roles: [],
-        modelDefault: "opus",
-        effortDefault: "low",
-        mcpToolGroupsDefault: ["git_repo"],
-        groupKnowledgeOffDefault: ["g7"],
-      } as any,
-    });
-    useFetch((url) => {
-      if (url === "/api/avatars/owner") return jsonRes({ avatar: { id: "owner", alias: "내 아바타", isOwn: true } });
-      if (url === "/api/conversations") return jsonRes({ conversations: [] });
-      return undefined;
-    });
-    await startNewChat();
-    expect(readState().chatPanes[0]).toMatchObject({
-      modelTier: "opus",
-      effort: "low",
-      mcpToolGroups: ["git_repo"],
-      groupKnowledgeOff: ["g7"],
-    });
-  });
-
-  it("leaves an external pane unseeded and sends only its gateway model", async () => {
-    replaceState({
-      user: { id: "owner", roles: [], modelDefault: "opus", effortDefault: "low" } as any,
-    });
-    const bodies: any[] = [];
-    useFetch((url, init) => {
-      if (url === "/api/avatars/ext1")
-        return jsonRes({ avatar: { id: "ext1", alias: "게이트웨이", isOwn: false, runtime: "external" } });
-      if (url === "/api/chat/stream") {
-        bodies.push(body(init));
-        return sseRes(doneWith("외부 응답"));
-      }
-      if (url === "/api/conversations") return jsonRes({ conversations: [] });
-      return undefined;
-    });
-
-    await startChatWith({ id: "ext1" } as any);
-    const id = readState().chatPanes[0].id;
-    // A native tier alias must never leak into a slot holding a gateway model id.
-    expect(pane(id).modelTier).toBeUndefined();
-    expect(pane(id).effort).toBeUndefined();
-
-    updateState((s) => {
-      const p = s.chatPanes.find((x) => x.id === id)!;
-      p.pendingImages = [STAGED_IMAGE];
-    });
-    await sendMessage(id, "안녕");
-
-    // External avatars run their own stack behind the gateway: the local-only
-    // composer settings and the image upload path stay off it.
-    expect(bodies[0]).toMatchObject({ avatarId: "ext1", model: "" });
-    expect(bodies[0].effort).toBeUndefined();
-    expect(bodies[0].groupKnowledgeOff).toBeUndefined();
-    expect(bodies[0].mcpToolGroups).toBeUndefined();
-    expect(bodies[0].images).toBeUndefined();
   });
 });
 
@@ -3070,7 +2780,7 @@ describe("composer defaults on a new pane", () => {
 /* ------------------------------------------------------------------ */
 
 describe("activity failures and terminal frames", () => {
-  it("names an addressable teammate and marks failed agents, tools and tasks", async () => {
+  it("marks failed agents, tools and tasks (a stray teammate name is ignored)", async () => {
     const id = seedPane();
     const statuses = trackStatus(id);
     await driveEvents(id, [
@@ -3089,10 +2799,10 @@ describe("activity failures and terminal frames", () => {
       // A tool_end with nothing new to say keeps the detail it started with.
       ["tool", { toolUseId: "t2", name: "Grep", input: { pattern: "TODO" } }],
       ["tool_end", { toolUseId: "t2", ok: true }],
-      ["task", { taskId: "k1", workflowName: "배포" }],
+      ["task", { taskId: "k1", subagentType: "배포" }],
       ["task", { taskId: "k2", taskType: "code_review" }],
       ["task_update", { taskId: "k2" }],
-      ["task_end", { taskId: "k1", workflowName: "배포", ok: false }],
+      ["task_end", { taskId: "k1", subagentType: "배포", ok: false }],
     ]);
     const p = pane(id);
     expect(p.livePlugins).toEqual([
@@ -3100,8 +2810,8 @@ describe("activity failures and terminal frames", () => {
       { name: "pluginB", status: "started" },
     ]);
     expect(p.liveAgents.filter((a) => a.id === "mate")).toHaveLength(1);
+    expect(p.liveAgents.find((a) => a.id === "mate")?.name).toBeUndefined();
     expect(p.liveAgents.find((a) => a.id === "mate")).toMatchObject({
-      name: "reviewer",
       label: "code-review · 2차",
       status: "failed",
       parentId: "main",
@@ -3109,14 +2819,14 @@ describe("activity failures and terminal frames", () => {
     expect(p.liveAgents.find((a) => a.id === "anon")).toMatchObject({ label: "하위 작업", parentId: "mate" });
     expect(p.liveTools[0]).toMatchObject({ status: "failed", detail: "종료 코드 1" });
     expect(p.liveTools[1]).toMatchObject({ status: "done", detail: "TODO" });
-    expect(p.liveTasks.map((t) => t.label)).toEqual(["워크플로 배포", "code review"]);
+    expect(p.liveTasks.map((t) => t.label)).toEqual(["배포", "code review"]);
     expect(p.liveTasks[0].status).toBe("failed");
     expect(statuses()).toContain("태스크가 완료되지 못했습니다.");
     // A task frame with nothing to name it still says something.
     expect(statuses()).toContain("태스크 진행 중");
   });
 
-  it("a cancelled frame outside the background phase stops the turn and keeps what it shared", async () => {
+  it("a cancelled frame stops the turn and keeps what it shared", async () => {
     const id = seedPane();
     const attachment = { id: "f1", kind: "file", mediaType: "text/plain", name: "메모.txt" };
     await driveEvents(id, [
@@ -3130,7 +2840,7 @@ describe("activity failures and terminal frames", () => {
     expect(last.attachments).toEqual([{ ...attachment, anchor: 0 }]);
   });
 
-  it("an error frame outside the background phase reports the error", async () => {
+  it("an error frame reports the error", async () => {
     const id = seedPane();
     await driveEvents(id, [["error", { error: "도구 실행이 실패했습니다." }]]);
     expect(pane(id).messages.at(-1)).toMatchObject({ content: "도구 실행이 실패했습니다." });
@@ -3160,89 +2870,51 @@ describe("activity failures and terminal frames", () => {
     const notes = useOsNotifications();
     const long = "가".repeat(200);
     await driveEvents(id, [
-      ["done", { message: { ...BG_MESSAGE, id: "long-1", content: `  ${long}  ` } }],
-      ["done", { message: { ...BG_MESSAGE, id: "empty-1", content: "" } }],
+      ["done", { message: { ...TURN_MESSAGE, id: "long-1", content: `  ${long}  ` } }],
+      ["done", { message: { ...TURN_MESSAGE, id: "empty-1", content: "" } }],
     ]);
     expect(notes[0].body).toBe(`${"가".repeat(140)}…`);
     expect(notes[1].body).toBe("응답이 완료되었습니다.");
-  });
-
-  it("a background report notification is trimmed the same way", async () => {
-    const id = seedPane();
-    const notes = useOsNotifications();
-    const long = "나".repeat(200);
-    await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-long", content: long } }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-empty", content: "" } }],
-      // A bg_tasks frame with no task list clears the chips.
-      ["bg_tasks", {}],
-    ]);
-    expect(notes.map((n) => n.body).slice(-2)).toEqual([
-      `${"나".repeat(140)}…`,
-      "백그라운드 작업이 완료되었습니다.",
-    ]);
-    expect(pane(id).backgroundTasks).toEqual([]);
   });
 
   it("notifications name the avatar by alias, then display name, then a generic fallback", async () => {
     const notes = useOsNotifications();
     const named = seedPane({ avatar: { id: "av2", displayName: "노아 봇" } as any });
     const frames: Array<[string, unknown]> = [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-named", content: "보고" } }],
-      ["permission", { requestId: `nm-${Date.now()}-1`, toolName: "Bash" }],
-      ["plan_review", { requestId: `nm-${Date.now()}-2`, plan: "계획" }],
+      ["question", { requestId: `nm-${Date.now()}-1`, payload: {} }],
+      ["done", { message: structuredClone(TURN_MESSAGE) }],
     ];
     await driveEvents(named, frames);
     expect(notes.map((n) => n.title)).toEqual([
+      "노아 봇 · 질문",
       "노아 봇 · 답변 완료",
-      "노아 봇 · 백그라운드 작업 보고",
-      "노아 봇 · 확인 필요",
-      "노아 봇 · 계획 승인 필요",
     ]);
 
     const seen = notes.length;
     const anon = seedPane({ avatar: {} as any });
     await driveEvents(anon, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["bg_message", { message: { ...BG_MESSAGE, id: "wake-anon", content: "보고" } }],
-      ["permission", { requestId: `nm-${Date.now()}-3`, toolName: "Bash" }],
-      ["plan_review", { requestId: `nm-${Date.now()}-4`, plan: "계획" }],
+      ["question", { requestId: `nm-${Date.now()}-3`, payload: {} }],
+      ["done", { message: { ...structuredClone(TURN_MESSAGE), id: "anon-1" } }],
     ]);
     expect(notes.slice(seen).map((n) => n.title)).toEqual([
+      "아바타 · 질문",
       "아바타 · 답변 완료",
-      "아바타 · 백그라운드 작업 보고",
-      "아바타 · 확인 필요",
-      "아바타 · 계획 승인 필요",
     ]);
   });
 
-  it("a replayed done{background} frame does not duplicate the finalized bubble", async () => {
-    const id = seedPane();
-    await driveEvents(id, [
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-      ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-    ]);
-    expect(pane(id).messages.filter((m) => m.id === "bg-msg-1")).toHaveLength(1);
-    expect(pane(id).backgroundPhase).toBe(true);
-  });
-
-  it("a background turn with no usage, no response and no message at all still holds together", async () => {
+  it("a turn with no usage, no response and no message at all still holds together", async () => {
     const bare = seedPane();
     const { calls } = await driveEvents(bare, [
       ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
-      ["done", { background: true, message: { id: "bg-thin", role: "assistant", content: "얇은 답변", response: null } }],
-      ["bg_end", {}],
+      ["done", { message: { id: "thin-1", role: "assistant", content: "얇은 답변", response: null } }],
     ]);
     expect(pane(bare).usage).toBeNull();
     // Nothing to graft onto in memory, but the snapshot is still persisted.
     expect(pane(bare).messages.at(-1)!.response).toBeNull();
-    expect(calls.some((c) => c.url.includes("/api/messages/bg-thin/activity"))).toBe(true);
+    expect(calls.some((c) => c.url.includes("/api/messages/thin-1/activity"))).toBe(true);
 
     const none = seedPane();
-    await driveEvents(none, [["done", { background: true }]]);
-    expect(pane(none)).toMatchObject({ backgroundPhase: true, backgroundMessageId: null });
+    await driveEvents(none, [["done", {}]]);
     expect(pane(none).messages).toEqual([]);
   });
 
@@ -3255,8 +2927,7 @@ describe("activity failures and terminal frames", () => {
       [
         ["tool", { toolUseId: "t1", name: "Bash", input: { command: "ls" } }],
         ["browser", { requestId: "br-fail-1", runId: "rn-fail", op: "click", uid: "u1" }],
-        ["done", { background: true, message: structuredClone(BG_MESSAGE) }],
-        ["bg_end", {}],
+        ["done", { message: structuredClone(TURN_MESSAGE) }],
       ],
       failEverythingElse,
     );
@@ -3275,7 +2946,7 @@ describe("activity failures and terminal frames", () => {
       plain,
       [
         ["tool", { toolUseId: "t2", name: "Bash", input: { command: "ls" } }],
-        ["done", { message: { ...structuredClone(BG_MESSAGE), id: "done-fail-1" } }],
+        ["done", { message: { ...structuredClone(TURN_MESSAGE), id: "done-fail-1" } }],
       ],
       failEverythingElse,
     );
@@ -4004,7 +3675,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
   it("keeps a model/effort/tool pick made WHILE a regenerate run streamed through the run-end re-read", async () => {
     const id = seedPane({
       conversationId: "c",
-      modelTier: "opus",
+      model: "deepseek/v3",
       effort: "high",
       messages: [row("u1", "user", "질문"), row("a1", "assistant", "예전 답")],
     });
@@ -4023,10 +3694,9 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
         return jsonRes({
           messages: [row("u1", "user", "질문"), row("n1", "assistant", "새 답")],
           canvases: [],
-          selectedModel: "opus",
+          selectedModel: "deepseek/v3",
           selectedEffort: "high",
           selectedMcpToolGroups: ["system"],
-          groupKnowledgeOff: ["g-server"],
         });
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
@@ -4036,10 +3706,9 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     // Picked mid-run: "다음 메시지부터 적용됩니다".
     updateState((s) => {
       const target = s.chatPanes.find((p) => p.id === id)!;
-      target.modelTier = "haiku";
+      target.model = "qwen/coder";
       target.effort = "low";
       target.mcpToolGroups = ["system", "browser"] as any;
-      target.groupKnowledgeOff = ["g-mine"];
     });
     finish();
     await waitFor(() => !pane(id).streaming);
@@ -4048,14 +3717,14 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     // The transcript was re-read …
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "n1"]);
     // … and every selection is still the viewer's.
-    expect(pane(id)).toMatchObject({ modelTier: "haiku", effort: "low", groupKnowledgeOff: ["g-mine"] });
+    expect(pane(id)).toMatchObject({ model: "qwen/coder", effort: "low" });
     expect(pane(id).mcpToolGroups).toEqual(["system", "browser"]);
   });
 
   it("keeps a pick made before an edit the server refused, through the refusal re-read", async () => {
     const id = seedPane({
       conversationId: "c",
-      modelTier: "haiku",
+      model: "qwen/coder",
       messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")],
     });
     useFetch((url) => {
@@ -4065,7 +3734,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
         return jsonRes({
           messages: [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "다른 탭")],
           canvases: [],
-          selectedModel: "opus",
+          selectedModel: "deepseek/v3",
         });
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
@@ -4076,7 +3745,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
     await confirmNext(true);
     await sending;
     await waitFor(() => pane(id).messages.length === 3);
-    expect(pane(id).modelTier).toBe("haiku");
+    expect(pane(id).model).toBe("qwen/coder");
     expect(pane(id).rewindEdit).toEqual({ messageId: "u1", draft: "고친 질문" });
   });
 
@@ -4178,57 +3847,40 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
   });
 });
 
-describe("/compact in the chat pane", () => {
-  it("sends /compact as its own turn — the literal, like every built-in", async () => {
+describe("the retired /compact in the chat pane", () => {
+  it("sends a typed /compact as a plain literal; the server's refusal restores the draft", async () => {
     const id = seedPane({ conversationId: "c", avatar: { id: "av1", alias: "노아", displayName: "Noah", isOwn: true } as any });
     const bodies: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/stream") {
         bodies.push(body(init));
-        return sseRes([
-          ["open", { conversationId: "c", runId: "r1", userMessageId: "srv-u" }],
-          ["compact", { id: "cmp", ok: true, trigger: "manual", preTokens: 18_049, postTokens: 1_378 }],
-          doneFrame("srv-a", "대화 맥락을 요약해 정리했습니다 (약 18.0K → 1.4K 토큰). 이후 대화는 요약본을 바탕으로 이어집니다."),
-        ]);
+        return jsonRes({ error: "/compact는 더 이상 지원하지 않습니다. 대화가 길어지면 맥락은 자동으로 정리됩니다." }, 400);
       }
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    await sendMessage(id, "/compact  결정 사항은 남겨줘");
+    await sendMessage(id, "/compact 결정 사항은 남겨줘");
     expect(bodies[0].message).toBe("/compact 결정 사항은 남겨줘");
-    expect(pane(id).messages.map((m) => m.content)).toEqual([
-      "/compact 결정 사항은 남겨줘",
-      "대화 맥락을 요약해 정리했습니다 (약 18.0K → 1.4K 토큰). 이후 대화는 요약본을 바탕으로 이어집니다.",
-    ]);
-  });
-
-  it("never sends /compact as a mid-turn message: the text stays and a toast says when", async () => {
-    const id = seedPane({ streaming: true, liveRunId: "run-live", draft: "/compact 결정 사항은 남겨줘" });
-    const fetchFn = noFetch();
-    for (const text of ["/compact", "/compact 결정 사항은 남겨줘", "  /COMPACT  "]) {
-      await sendSteer(id, text);
-    }
-    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).messages).toEqual([]);
     expect(pane(id).draft).toBe("/compact 결정 사항은 남겨줘");
-    expect(pane(id).steerSending).toBeFalsy();
-    expect(get(toasts).some((t) => t.message === "/compact는 응답이 끝난 뒤에 보내 주세요.")).toBe(true);
+    expect(get(toasts).some((t) => t.message.includes("/compact는 더 이상 지원하지 않습니다"))).toBe(true);
   });
 
-  it("still sends a steer that merely starts with the letters", async () => {
+  it("sends a mid-turn /compact like any other slash-leading steer", async () => {
     const id = seedPane({ streaming: true, liveRunId: "run-live" });
     const bodies: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/runs/run-live/message") {
         bodies.push(body(init));
-        return jsonRes({ steer: { id: "s1", text: "/compactify 로 이름 바꿔줘", state: "queued", createdAt: "t", followUp: false } });
+        return jsonRes({ steer: { id: "s1", text: "/compact", state: "queued", createdAt: "t", followUp: false } });
       }
       return undefined;
     });
-    await sendSteer(id, "/compactify 로 이름 바꿔줘");
-    expect(bodies).toEqual([{ message: "/compactify 로 이름 바꿔줘" }]);
+    await sendSteer(id, "/compact");
+    expect(bodies).toEqual([{ message: "/compact" }]);
   });
 
-  it("offers no 다시 생성 for a /compact turn, but its row can still be edited", () => {
+  it("offers no 다시 생성 for a legacy /compact turn, but its row can still be edited", () => {
     const messages = [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "/compact 결정 사항은 남겨줘"), row("a2", "assistant", "대화 맥락을 요약해 정리했습니다.")];
     expect(canRegenerate(messages)).toBe(false);
     expect(isRewindAnchor(messages[2])).toBe(true);

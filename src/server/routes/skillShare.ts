@@ -24,6 +24,7 @@ import {
   reconcileOwnerSharedSkills,
   rescueSharedSkillRename,
   SkillIsLearnedCopyError,
+  skillsDirUnreadable,
   unlinkSkillOrigin,
 } from "../skillTransfer.js";
 import { withRepoLock } from "../gitMutex.js";
@@ -37,6 +38,13 @@ import type { SharedSkill, SharedSkillListing, User } from "../types.js";
 // see the owner's avatar in 탐색 (store.listLearnableSkills enforces it).
 
 /** Korean messages for the skillTransfer message-coded errors. */
+/**
+ * The sharer's `skills/` exists but is not a plain folder (a link, even one into
+ * their repo): its skills cannot be read — and must not be pruned as deleted.
+ */
+const SKILLS_DIR_UNREADABLE_KO =
+  "공유한 아바타의 저장소에서 지금은 이 스킬을 읽을 수 없습니다(skills 폴더가 일반 폴더가 아닙니다). 공유는 그대로 유지되니, 저장소가 고쳐진 뒤 다시 시도해 주세요.";
+
 const LEARN_ERROR_KO: Record<string, { status: number; message: string }> = {
   SKILL_EXISTS: {
     status: 409,
@@ -146,6 +154,10 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
         return;
       }
       const repoSkills = listRepoSkills(repoRoot);
+      // skills/ exists but is not a plain folder (a link, even one into the
+      // repo): it lists as empty, yet nothing was deleted — the reconcile below
+      // leaves every share as it is, and the tab says why the list is empty.
+      const skillsUnreadable = skillsDirUnreadable(repoRoot);
       // Provenance for LEARNED skills (전수받은 것) — drives the response's
       // origin field (reconciliation reads its own copy off the same tree).
       const originBySlug = new Map(
@@ -184,6 +196,8 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
       );
       res.json({
         repoConfigured: true,
+        // Present only when set, so the ordinary response shape is unchanged.
+        ...(skillsUnreadable ? { skillsDirUnreadable: true } : {}),
         skills: repoSkills.map((s) => ({
           slug: s.slug,
           name: s.name,
@@ -410,6 +424,12 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
         // Before serving anything: a source that is itself a linked copy is a
         // row from before re-sharing those was refused (see the catch).
         assertSkillShareable(srcRoot, listing.skillName);
+        // A linked skills/ (even into the sharer's own repo) is never read
+        // through — and not pruned as a deletion by the catch below either.
+        if (skillsDirUnreadable(srcRoot)) {
+          apiError(res, 409, SKILLS_DIR_UNREADABLE_KO);
+          return;
+        }
         const content = await readFile(srcRoot, `${SKILL_DIR}/${listing.skillName}/SKILL.md`);
         // A skill is the whole directory, not one file: list what a learn would
         // actually copy (aux docs, scripts, templates) so nobody adopts a tree
@@ -560,6 +580,13 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
+        if (
+          message === "SKILL_NOT_FOUND" &&
+          skillsDirUnreadable(knowledgeClonePath(listing.ownerUserId, config))
+        ) {
+          apiError(res, 409, SKILLS_DIR_UNREADABLE_KO); // not deleted: the share stays
+          return;
+        }
         const known = LEARN_ERROR_KO[message];
         if (known) {
           // Both stale-row shapes drain here: the source dir is gone, or it

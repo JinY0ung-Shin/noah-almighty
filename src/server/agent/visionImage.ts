@@ -15,7 +15,7 @@
  * vision* helpers.
  *
  * The target is always the STANDARD tier. Noah cannot know the serving model's
- * resolution tier (model ids are admin-configured aliases), and standard is the
+ * resolution tier (model ids are whatever pi-gateway names them), and standard is the
  * size every Claude model sees at least: a high-resolution-tier model handed a
  * standard-fitted image merely gets a smaller one, never wrong coordinates.
  */

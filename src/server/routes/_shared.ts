@@ -3,7 +3,6 @@ import path from "node:path";
 import { type Response } from "express";
 import logger from "../logger.js";
 import {
-  groupKnowledgeRepoSkillSources,
   knowledgeRepoSkillSources,
   loadDefaultPluginRoots,
   resolvePluginRoots,
@@ -11,10 +10,11 @@ import {
 } from "../plugins.js";
 import { knowledgeRepoContextFor } from "../knowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
-import { groupKnowledgeRepoContextsForUser } from "../groupKnowledgeRepo.js";
 import { Store } from "../store.js";
 import type { AppConfig, AvatarVisibility, PluginRoot } from "../types.js";
 import { runAgentStream } from "../agent/index.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
+import { catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { workspaceDirFor } from "../workspace.js";
 import type { ScheduleError } from "../routineSchedule.js";
 import type { AuthenticatedRequest } from "../auth.js";
@@ -23,7 +23,7 @@ export interface AppServices {
   config: AppConfig;
   store: Store;
   /**
-   * The model the SDK last reported, shared by everything that can start a run
+   * The model pi last reported, shared by everything that can start a run
    * (the chat router writes it, the admin system overview reads it). It lives
    * on the services rather than inside `createApp` so the server-started paths
    * — the routine scheduler, the external task API dispatcher — can reach it too.
@@ -83,7 +83,7 @@ export function viewerPlatformFromUserAgent(
   return undefined;
 }
 
-/** A small mutable holder for the model the SDK last reported (chat → admin). */
+/** A small mutable holder for the model pi last reported (chat → admin). */
 export interface ObservedModelHolder {
   get(): string | null;
   set(model: string): void;
@@ -139,6 +139,24 @@ export function apiError(res: Response, status: number, message: string): void {
   res.status(status).json({ error: message });
 }
 
+/** 503 body of a model WRITE while pi-gateway's model list cannot be read. */
+export const PI_MODELS_UNAVAILABLE_MESSAGE = "pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+
+/**
+ * The model ids a WRITE (composer default, admin override, vision policy) may
+ * store: pi-gateway's live list (`agent/pi/modelCatalog.ts`). Null — after
+ * answering 503 — when pi has never answered and cannot be reached now, so the
+ * caller stops instead of rejecting every id as unknown. Empty on the `local` stub.
+ */
+export async function offeredModelIdsOr503(store: Store, config: AppConfig, res: Response): Promise<string[] | null> {
+  const snapshot = await piServicesFor(store, config).models.snapshot();
+  if (!snapshot.available) {
+    apiError(res, 503, PI_MODELS_UNAVAILABLE_MESSAGE);
+    return null;
+  }
+  return catalogModelIds(snapshot.models);
+}
+
 /**
  * `Content-Disposition` for a DOWNLOAD (never inline) with a possibly
  * non-ASCII name: a quoted ASCII `filename` fallback plus the RFC 5987
@@ -177,8 +195,7 @@ export function describeAvatarEquipment(
 
 /**
  * Map a knowledge-repo `readFile` rejection to its user-facing (Korean) HTTP
- * response — shared by the personal + group note endpoints, whose catch blocks
- * were byte-identical. Do NOT reuse `mcpTools.decodeRepoFsError` (English agent
+ * response for the personal note endpoint. Do NOT reuse `mcpTools.decodeRepoFsError` (English agent
  * channel).
  */
 export function respondNoteFsError(res: Response, error: unknown): void {
@@ -213,9 +230,8 @@ export function avatarDir(config: AppConfig): string {
 }
 
 /**
- * Decode + validate a data-URL avatar upload (png/jpeg/webp, ≤ MAX_AVATAR_BYTES).
- * Shared by the profile photo upload and the admin external-avatar photo upload
- * so the accepted formats/limits can't drift apart.
+ * Decode + validate a data-URL avatar upload (png/jpeg/webp, ≤ MAX_AVATAR_BYTES)
+ * for the profile photo upload.
  */
 export function decodeAvatarImage(
   image: unknown,
@@ -242,9 +258,8 @@ export function decodeAvatarImage(
 
 /**
  * Write an avatar image under avatarDir as `<stem>.<ext>`, removing any stale
- * sibling extension so prior files don't linger. The stem is either a user id
- * or an external avatar id — both come from server-validated registries, never
- * raw client input.
+ * sibling extension so prior files don't linger. The stem is a user id from a
+ * server-validated row, never raw client input.
  */
 export function saveAvatarImageFile(
   config: AppConfig,
@@ -292,16 +307,13 @@ interface SkillAvatar {
  * Resolve the plugin roots + skills an avatar can use, attributing each source.
  * Shared by `/api/me/intro/generate`, `/api/me/hashtags/generate`, and
  * `/api/avatars/:id/skills` — they all walked the same default + per-plugin +
- * personal/group knowledge-repo loop. `includeGroupRepos` adds the owner's group
- * knowledge repos (the intro/hashtag generators count them; the skills panel does
- * not). Returns the attributed sources, the flattened skills, and pre-built
+ * personal knowledge-repo loop. Returns the attributed sources, the flattened skills, and pre-built
  * read-only `PluginRoot[]` for `runAgentStream`.
  */
 export async function resolveAvatarSkillSources(
   store: Store,
   avatar: SkillAvatar,
   config: AppConfig,
-  includeGroupRepos: boolean,
 ) {
   const sourced: { path: string; source: string }[] = [];
   // Repo-bundled defaults, loaded for every avatar.
@@ -325,12 +337,6 @@ export async function resolveAvatarSkillSources(
   }
   // The avatar's own knowledge repo, so its accumulated skills surface too.
   sourced.push(...(await knowledgeRepoSkillSources(knowledgeRepoContextFor(store, avatar.id, config))));
-  // Shared group knowledge repos the owner belongs to (intro/hashtags only).
-  if (includeGroupRepos) {
-    sourced.push(
-      ...(await groupKnowledgeRepoSkillSources(groupKnowledgeRepoContextsForUser(store, avatar.id, config))),
-    );
-  }
   const pluginRoots: PluginRoot[] = sourced.map((s) => ({ type: "local", path: s.path }));
   return { sourced, enabledPlugins, pluginRoots };
 }
@@ -341,7 +347,8 @@ type HeadlessAvatarResult =
   | { ok: false };
 
 /**
- * Run a headless, read-only, owner-scoped agent turn for the avatar's OWN
+ * Run a headless, owner-scoped agent turn (no owner-level MCP tools; pi
+ * built-ins in the owner's own sandbox, a reused run folder) for the avatar's OWN
  * profile generators (intro/hashtags). Sets up the per-feature workspace, a
  * 2-minute abort deadline, and returns the raw reply text (`response.text ||
  * response.summary || ""`) on success, or `{ ok: false }` on a thrown run (the

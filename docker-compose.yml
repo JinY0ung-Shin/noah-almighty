@@ -1,136 +1,188 @@
+# Noah Almighty + its pi-gateway: one `docker compose up -d --build` brings up both (README.md
+# "Deployment"). Every agent turn runs on pi-gateway (docs/architecture/pi-runtime.md); pi-gateway's
+# code and compose file are used as they are, from an operator checkout at the pinned commit.
+#
+#   pi-gateway's services (gateway, sandboxd, mcp-broker, egress-proxy, sandbox-image) come from
+#   `include:` below; docker/pi/compose.override.yml is Noah's instance configuration on top of them.
+#   Variables: THIS project's .env (and the shell) win over pi-gateway's own .env, on both sides —
+#   .env.example lists the keys that therefore mean the same thing to both.
+#
+# Networks:
+#   default   Noah's own (published port, outbound git / Confluence / web).
+#   edge      pi's gateway network; Noah joins it to call http://gateway:8080.
+#   noah-mcp  internal, broker ↔ Noah only: pi's mcp-broker calls Noah's /mcp/<server> from a pinned
+#             address, and Noah's NOAH_MCP_ALLOWED_CIDRS admits exactly that address.
+#   User sandboxes have NO network (pi's sandboxd: network_mode none); their only way out is pi's
+#   egress-proxy, which opens nothing unless pi's SANDBOX_EGRESS_ALLOW lists it. Never list Noah there:
+#   the broker, not the sandbox, calls Noah.
+#
+# NEVER run this stack on a Docker daemon that already runs another pi-gateway: pi's sandboxd adopts,
+# reaps and removes every sandbox labelled pi-gateway.instance=default on its daemon (hard-coded).
+
+include:
+  - path:
+      # PI_GATEWAY_DIR = the pi-gateway checkout (default: the vendor/pi-gateway git submodule).
+      - ${PI_GATEWAY_DIR:-./vendor/pi-gateway}/docker-compose.yml
+      - docker/pi/compose.override.yml
+
+# Build args of the Noah image. Map syntax (NAME: value) throughout — compose forbids mixing the
+# `- NAME` list form with `NAME: value` entries in one args block.
+x-noah-build-args: &noah-build-args
+  # Corporate mirror settings (empty = use upstream defaults).
+  # Set these in your shell before building when your network requires a mirror.
+  APT_MIRROR_HOST: ${APT_MIRROR_HOST:-}
+  NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+  # Corporate proxy CA to trust for HTTPS clones (path within the build
+  # context). Override in your shell: export CA_CERT_FILE=docker/tls-fullchain.crt
+  CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
+  # Docker built-in proxy args – inherited from the host shell. Unset
+  # ones resolve to "" and are simply not forwarded.
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  NO_PROXY: ${NO_PROXY:-}
+  http_proxy: ${http_proxy:-}
+  https_proxy: ${https_proxy:-}
+  no_proxy: ${no_proxy:-}
+
+# What Noah and pi-setup both need to know about each other (in-network addresses).
+x-pi-addresses: &pi-addresses
+  PI_GATEWAY_URL: http://gateway:8080
+  # The base pi's broker uses to reach Noah. With native TLS (TLS_CERT_FILE) set it to
+  # https://<the certificate's host name>:<PORT> and NOAH_MCP_HOST_ALIAS to that host name.
+  NOAH_MCP_PUBLIC_URL: ${NOAH_MCP_PUBLIC_URL:-http://noah-almighty:${PORT:-48787}}
+
 services:
   noah-almighty:
     build:
       context: .
-      # Map syntax (NAME: value) throughout — compose forbids mixing the
-      # `- NAME` list form with `NAME: value` entries in one args block.
-      args:
-        # Corporate mirror settings (empty = use upstream defaults).
-        # Set these in your shell before building when your network requires a mirror.
-        APT_MIRROR_HOST: ${APT_MIRROR_HOST:-}
-        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
-        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
-        # The pptx skill's HTML→editable-PPTX converter
-        # (docs/architecture/pptx-converter.md). DECK_CONVERTER=0 builds a
-        # legacy image without Chromium (python-pptx only) — for an apt mirror
-        # that cannot serve chromium-headless-shell. DECK_CONVERTER_STRICT_GOLDEN=1
-        # makes golden drift in the build-time converter self-test FAIL the
-        # build instead of being recorded and reported at runtime.
-        DECK_CONVERTER: ${DECK_CONVERTER:-1}
-        DECK_CONVERTER_STRICT_GOLDEN: ${DECK_CONVERTER_STRICT_GOLDEN:-0}
-        # Corporate proxy CA to trust for HTTPS clones (path within the build
-        # context). Override in your shell: export CA_CERT_FILE=docker/tls-fullchain.crt
-        CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
-        # Docker built-in proxy args – inherited from the host shell. Unset
-        # ones resolve to "" and are simply not forwarded.
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-}
-        http_proxy: ${http_proxy:-}
-        https_proxy: ${https_proxy:-}
-        no_proxy: ${no_proxy:-}
+      args: *noah-build-args
     ports:
       - "${PORT:-48787}:${PORT:-48787}"
-    # The whole .env is injected into the container, so every ANTHROPIC_* var
-    # (ANTHROPIC_API_KEY/MODEL/BASE_URL/AUTH_TOKEN, the per-tier
-    # ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL, and any added later) reaches
-    # the Claude Agent SDK without enumerating each key here. SESSION_SECRET,
-    # AGENT_RUNTIME, READONLY_TOOLS, GITHUB_HOST come from .env too. If
-    # SESSION_SECRET is missing the server throws on boot (NODE_ENV=production).
+    # The whole .env is injected into the container (SESSION_SECRET, SECURE_COOKIES,
+    # GITHUB_HOST, …). If SESSION_SECRET is missing the server throws on boot (NODE_ENV=production).
+    # The model credentials live in pi-gateway (its admin LLM page), never here.
     env_file:
       - .env
+    # environment wins over env_file: these are fixed by this stack's layout.
     environment:
-      # Force the container's data volume regardless of the .env value
-      # (environment wins over env_file).
+      <<: *pi-addresses
       APP_DATA_DIR: /app/data
-      # Craft apps (admin-only beta): the exchange volume shared with the
-      # craft-runner service below, plus the control-socket secret from .env.
-      # Either one unset = the feature is unavailable (fail closed).
-      CRAFT_EXCHANGE_DIR: /app/craft-exchange
-      CRAFT_CONTROL_SECRET: ${CRAFT_CONTROL_SECRET:-}
+      AGENT_RUNTIME: pi
+      # pi's service key, read from the compose secret below (never from .env).
+      PI_GATEWAY_API_KEY_FILE: /run/secrets/pi_gateway_api_key
+      PI_WORKSPACES_DIR: /srv/pi-workspaces
+      # Only pi's broker (its pinned noah-mcp address) may reach /mcp. Widen deliberately in .env.
+      NOAH_MCP_ALLOWED_CIDRS: ${NOAH_MCP_ALLOWED_CIDRS:-${NOAH_MCP_BROKER_IP:-172.16.248.10}/32}
+      # Sandboxes run noah-almighty/pi-sandbox (docker/pi/compose.override.yml), which builds decks.
+      PI_DECK_SANDBOX: "true"
+      # NODE_EXTRA_CA_CERTS in .env is a HOST path (pi-gateway's meaning); mounted below.
+      NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:+/etc/noah-almighty/extra-ca.pem}
+    secrets:
+      - source: pi_gateway_api_key
+        target: pi_gateway_api_key
     volumes:
       - noah-almighty-data:/app/data
-      # Unix sockets + per-conversation inbox/outbox of the craft-runner.
-      - craft-exchange:/app/craft-exchange
       # HTTPS certs (optional): on the deploy host drop PEMs into ./docker/tls
       # and set TLS_CERT_FILE/TLS_KEY_FILE to /app/tls/<file> in .env. Read-only;
       # stays empty on plain-HTTP deployments.
       - ./docker/tls:/app/tls:ro
+      # pi's per-user sandbox workspaces (uid 1000 on both sides): Noah stages attachments, captures
+      # and Confluence files into them and reads shared files and deck previews from them.
+      - type: bind
+        source: ${PI_GATEWAY_HOME:?PI_GATEWAY_HOME is required in .env (same value as pi-gateway's .env)}/workspaces
+        target: /srv/pi-workspaces
+        bind:
+          create_host_path: false
+      # Corporate CA (optional, same host file pi-gateway's gateway and broker mount). /dev/null = none.
+      - type: bind
+        source: ${NODE_EXTRA_CA_CERTS:-/dev/null}
+        target: /etc/noah-almighty/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      default: {}
+      edge: {}
+      noah-mcp:
+        aliases:
+          - ${NOAH_MCP_HOST_ALIAS:-noah-almighty}
+    depends_on:
+      pi-setup:
+        condition: service_completed_successfully
     restart: unless-stopped
     # PID 1 is the image's own EXECUTE-ONLY tini (Dockerfile ENTRYPOINT): it
-    # reaps zombie child processes (SDK subprocess, git, gh, …) and forwards
+    # reaps zombie child processes (git, gh, LibreOffice, MCP relays, …) and forwards
     # signals to the graceful-shutdown handlers. Compose `init: true` must stay
     # OFF here: Docker's docker-init would become PID 1 as the `node` uid with a
     # readable binary, exposing the container environment (SESSION_SECRET) to
-    # the agent's Bash via /proc/1/environ (#71).
+    # every same-uid process via /proc/1/environ (#71).
     init: false
 
-  # Craft apps sidecar (craft-runner/README.md): runs the pinned PhotoCraft CLI
-  # as headless MCP servers, one unprivileged uid per conversation. Opt-in:
-  # set COMPOSE_PROFILES=craft in .env (and CRAFT_CONTROL_SECRET, 32+ chars),
-  # because building it downloads the pinned app release from GitHub (or
-  # CRAFT_RELEASE_BASE). It shares ONLY the craft-exchange volume with Noah —
-  # never the noah-almighty-data volume — and has no network at all: Noah talks
-  # to it over the two unix sockets in that volume.
-  craft-runner:
-    profiles: ["craft"]
+  # One-shot: registers Noah's MCP servers with pi's broker and applies Noah's pi instance settings
+  # (docker/pi/pi-setup.sh → scripts/pi-register-mcp.mjs --configure-instance). Idempotent, so it simply
+  # re-runs on every `up`. The image is Noah's own (same scripts as the running server).
+  pi-setup:
     build:
-      # Repo root, so the image reuses docker/apt_mirror_sources.sh and the
-      # same CA_CERT_FILE as the main service.
+      context: docker/pi
+      dockerfile_inline: FROM noah
+      additional_contexts:
+        noah: service:noah-almighty
+    # pi-gateway's gateway uid: the owner of its admin_api_key secret file (0400).
+    user: "10001:10001"
+    command: ["sh", "docker/pi/pi-setup.sh"]
+    environment: *pi-addresses
+    secrets:
+      - source: pi_gateway_admin_api_key
+        target: pi_gateway_admin_api_key
+    networks:
+      - edge
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # Build-only: Noah's deck-capable sandbox image (docker/pi-sandbox), FROM pi's own sandbox image as
+  # pi's `sandbox-image` service just built it. pi's sandboxd runs it (docker/pi/compose.override.yml).
+  pi-sandbox-image:
+    image: noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}
+    build:
       context: .
-      dockerfile: craft-runner/Dockerfile
+      dockerfile: docker/pi-sandbox/Dockerfile
+      additional_contexts:
+        pi-sandbox-base: service:sandbox-image
       args:
-        APT_MIRROR_HOST: ${APT_MIRROR_HOST:-}
+        SANDBOX_BASE_IMAGE: pi-sandbox-base
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
         CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
-        CRAFT_RELEASE_BASE: ${CRAFT_RELEASE_BASE:-https://github.com/storytold}
+        # 1 = golden drift in the build-time converter self-test FAILS the build (docker/pi-sandbox/README.md).
+        DECK_CONVERTER_STRICT_GOLDEN: ${DECK_CONVERTER_STRICT_GOLDEN:-0}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
         http_proxy: ${http_proxy:-}
         https_proxy: ${https_proxy:-}
         no_proxy: ${no_proxy:-}
-    # No network interface at all (not even loopback to the host): the apps
-    # can neither reach the internet nor the internal network / Noah's API.
+    command: ["true"]
     network_mode: none
     read_only: true
-    tmpfs:
-      # Per-session HOME/TMPDIR live here; mode 0711 so session uids cannot
-      # share files through a world-writable /tmp.
-      - /tmp:size=1g,mode=0711
-    # The daemon is root but keeps only what session isolation needs: spawn
-    # children as per-session uids (SETUID/SETGID), own/mode the exchange tree
-    # (CHOWN/FOWNER/DAC_OVERRIDE) and kill children (KILL). Children run with
-    # no capabilities.
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - CHOWN
-      - FOWNER
-      - DAC_OVERRIDE
-      - KILL
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 8g
-    cpus: 4
-    pids_limit: 512
-    # Only these variables — never env_file: .env (model credentials and
-    # every other secret stay out of this container). The secret is never
-    # sent over the sockets: both sides prove it with an HMAC challenge.
-    # CRAFT_EXCHANGE_MAX_BYTES caps the whole exchange volume (default 20 GiB;
-    # each conversation's out/ is capped at 2 GiB) — it shares the host disk
-    # with Noah's data volume.
-    environment:
-      CRAFT_CONTROL_SECRET: ${CRAFT_CONTROL_SECRET:-}
-      CRAFT_MAX_PROCS: 3
-      CRAFT_EXCHANGE_MAX_BYTES: ${CRAFT_EXCHANGE_MAX_BYTES:-21474836480}
-    volumes:
-      - craft-exchange:/exchange
-    restart: unless-stopped
-    init: true
+    restart: "no"
+
+secrets:
+  # Noah's own copy of pi's service key (uid 1000, 0400): docker/pi/setup-host.sh.
+  pi_gateway_api_key:
+    file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/pi_gateway_api_key
+  # pi's admin key, read by pi-setup as uid 10001 (pi-gateway's scripts/setup-host.sh).
+  pi_gateway_admin_api_key:
+    file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/gateway/admin_api_key
 
 volumes:
   noah-almighty-data:
-  craft-exchange:

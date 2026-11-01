@@ -53,22 +53,6 @@ export function withKnowledgeRepo<TBase extends Constructor<StoreBase>>(
       return this.toUser(this.userRowById(userId)!);
     }
 
-    /**
-     * Set the owner's DEFAULT group-knowledge OFF-set (group ids turned off),
-     * which seeds every new conversation. `[]` (or null) re-enables all.
-     */
-    setGroupKnowledgeOffDefault(userId: string, off: string[]): User {
-      if (!this.userRowById(userId)) {
-        throw new Error("USER_NOT_FOUND");
-      }
-      this.db
-        .prepare(
-          "UPDATE users SET group_knowledge_off_default = ? WHERE id = ?",
-        )
-        .run(off.length ? JSON.stringify(off) : null, userId);
-      return this.toUser(this.userRowById(userId)!);
-    }
-
     /** The configured knowledge repo + branch + plugin selection for a user. */
     getKnowledgeRepo(userId: string): {
       repo: string | null;

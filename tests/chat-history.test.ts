@@ -28,10 +28,10 @@ const getTempDir = withTempDir("history", () => {
 });
 
 describe("chat history fallback", () => {
-  it("passes stored messages when no SDK session exists after a stopped first turn", async () => {
+  it("passes stored messages when no pi session exists after a stopped first turn", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "claude",
+      agentRuntime: "local",
       sessionSecret: "test",
     });
     const app = createApp(services);
@@ -45,7 +45,7 @@ describe("chat history fallback", () => {
     services.store.addMessage(conversationId, {
       role: "assistant",
       content: "(중지됨)",
-      response: { kind: "text", runtime: "claude", summary: "중지됨", text: "" },
+      response: { kind: "text", runtime: "pi", summary: "중지됨", text: "" },
     });
 
     await owner
@@ -60,10 +60,10 @@ describe("chat history fallback", () => {
     ]);
   });
 
-  it("resumes the SDK session while still carrying history as a self-heal fallback", async () => {
+  it("continues the stored pi session while still carrying history as a self-heal fallback", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "claude",
+      agentRuntime: "local",
       sessionSecret: "test",
     });
     const app = createApp(services);
@@ -83,16 +83,16 @@ describe("chat history fallback", () => {
 
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0].resumeSessionId).toBe("sess-existing");
-    // History rides along even on a resume turn: buildPrompt does NOT inject it
-    // while resuming (guarded on resumeSessionId), but claudeAgent needs it to
-    // self-heal a missing SDK transcript by re-running without `resume`.
+    // History rides along even on a continued turn: buildUserPrompt does NOT
+    // inject it while continuing (guarded on resumeSessionId), but runPiAgent
+    // needs it to self-heal a lost pi session by starting a new one.
     expect(capturedRequests[0].conversationHistory).toEqual([{ role: "user", content: "첫 요청" }]);
   });
 
   it("persists and reuses the conversation MCP tool-group selection", async () => {
     const services = createServices({
       dataDir: tempDir,
-      agentRuntime: "claude",
+      agentRuntime: "local",
       sessionSecret: "test",
     });
     const app = createApp(services);
@@ -133,7 +133,7 @@ describe("chat image attachments", () => {
   const PNG_URL = `data:image/png;base64,${PNG_B64}`;
 
   it("stores an attachment, feeds the model image blocks, and serves it owner-scoped", async () => {
-    const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+    const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
     const app = createApp(services);
     const owner = request.agent(app);
     const ownerRes = await signup(owner, "shutterbug").expect(201);
@@ -170,8 +170,8 @@ describe("chat image attachments", () => {
     await stranger.get(`/api/conversations/${conversationId}/images/shot-1`).expect(404);
   });
 
-  it("does not resume the SDK session on an image turn, preserving images with restored text history", async () => {
-    const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+  it("continues the stored session on an image turn, carrying the images and the text history", async () => {
+    const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
     const app = createApp(services);
     const owner = request.agent(app);
     const ownerRes = await signup(owner, "visual-followup").expect(201);
@@ -183,7 +183,7 @@ describe("chat image attachments", () => {
     services.store.addMessage(conversationId, {
       role: "assistant",
       content: "이전 답변",
-      response: { kind: "text", runtime: "claude", summary: "", text: "이전 답변" },
+      response: { kind: "text", runtime: "pi", summary: "", text: "이전 답변" },
     });
     services.store.setAgentSessionId(ownerId, conversationId, "sess-existing-image");
 
@@ -198,7 +198,10 @@ describe("chat image attachments", () => {
       .expect(200);
 
     expect(capturedRequests).toHaveLength(1);
-    expect(capturedRequests[0].resumeSessionId).toBeUndefined();
+    // pi continues the session on an image turn too (the removed SDK runner
+    // had to restart from text history); the history still rides along as the
+    // runner's self-heal fallback.
+    expect(capturedRequests[0].resumeSessionId).toBe("sess-existing-image");
     expect(capturedRequests[0].conversationHistory).toEqual([
       { role: "user", content: "이전 요청" },
       { role: "assistant", content: "이전 답변" },
@@ -207,7 +210,7 @@ describe("chat image attachments", () => {
   });
 
   it("rejects an unsafe supplied conversation id before image persistence", async () => {
-    const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+    const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
     const app = createApp(services);
     const owner = request.agent(app);
     const ownerRes = await signup(owner, "pathcheck").expect(201);
@@ -227,7 +230,7 @@ describe("chat image attachments", () => {
   });
 
   it("rejects an oversized image before streaming", async () => {
-    const services = createServices({ dataDir: tempDir, agentRuntime: "claude", sessionSecret: "test" });
+    const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
     const app = createApp(services);
     const owner = request.agent(app);
     const ownerRes = await signup(owner, "bigpic").expect(201);

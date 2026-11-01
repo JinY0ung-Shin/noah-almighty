@@ -163,7 +163,7 @@ describe("parked blocking canvas across conversation switches", () => {
 
     useFetch((url) => {
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [], canvases: [] });
       if (url === "/api/avatars/av1")
         return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs?conversationId=c-park"))
@@ -211,7 +211,7 @@ describe("parked blocking canvas across conversation switches", () => {
     let eventsSignal: AbortSignal | null = null;
     useFetch((url, init) => {
       if (url.startsWith("/api/messages"))
-        return jsonRes({ messages: [], groupKnowledgeOff: [], canvases: [] });
+        return jsonRes({ messages: [], canvases: [] });
       if (url === "/api/avatars/av1")
         return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
       if (url.startsWith("/api/chat/runs?conversationId=c-park"))

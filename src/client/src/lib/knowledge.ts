@@ -70,11 +70,8 @@ export async function recordKnowledgeViaAvatar(request: KnowledgeRequest, answer
           if (data?.runId) runId = data.runId;
         } else if (event === "error") {
           errText = data?.error || "오류가 발생했습니다.";
-        } else if (event === "permission" && runId && data?.requestId) {
-          // No prompt UI here; the avatar's repo/knowledge tools auto-approve
-          // server-side, so an actual prompt means an unexpected action — deny it.
-          api("/api/chat/respond", { method: "POST", body: JSON.stringify({ runId, requestId: data.requestId, value: { behavior: "deny" } }) }).catch(() => {});
         } else if (event === "question" && runId && data?.requestId) {
+          // No prompt UI here: a question would park the run, so cancel it.
           api("/api/chat/respond", { method: "POST", body: JSON.stringify({ runId, requestId: data.requestId, value: { cancelled: true } }) }).catch(() => {});
         }
       });

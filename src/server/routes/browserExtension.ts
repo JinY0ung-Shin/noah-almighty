@@ -17,7 +17,7 @@ import { apiError, requestOrigin, type RouterDeps } from "./_shared.js";
 // Install/update surface for the browser bridge. Auth-only, NOT admin-gated:
 // browser control is a general capability — any user may drive their OWN
 // browser from a chat with their OWN avatar. The run-time gate lives in
-// claudeAgent/browserTools (owner-of-avatar, interactive, never group-agent),
+// runCapabilities/browserTools (owner-of-avatar, interactive),
 // and a group's tool policy can still switch the `browser` group off entirely.
 
 /**

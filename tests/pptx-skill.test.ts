@@ -156,7 +156,6 @@ describe("pptx SKILL.md body", () => {
       "`converter: NOT INSTALLED`",
       "`toolchain available`",
       "`UNAVAILABLE`",
-      "`read-only`",
       "``administrator disabled the `pptx` skill``",
       "`preview/download need an interactive chat turn`",
     ]) {
@@ -907,7 +906,7 @@ describe("pptx pictures (SKILL §2 visual sources, AUTHORING §7 captures and sc
     const label = /const IMAGE_SOURCES_LINE_PREFIX = "- ([^"]+): ";/.exec(serverSrc("agent/systemTools.ts"))?.[1];
     expect(label).toBe("Images for documents and decks");
     expect(flat).toContain(`describe_system's \`${label}\` line says which of these this run has`);
-    const subdir = (rel: string) => [...serverSrc(rel).matchAll(/workspaceSubdirForWrite\(\s*\w+,\s*"([^"]+)"\s*\)/g)].map((m) => m[1]);
+    const subdir = (rel: string) => [...serverSrc(rel).matchAll(/workspaceSubdirForWrite\(\s*\w+,\s*"([^"]+)"(?:,\s*\w+)?\s*\)/g)].map((m) => m[1]);
     const [attachments] = subdir("chatImages.ts");
     const [captures] = subdir("chatFiles.ts");
     const confluence = /const WORKSPACE_SAVE_DIR = "([^"]+)";/.exec(serverSrc("agent/confluenceTools.ts"))?.[1];

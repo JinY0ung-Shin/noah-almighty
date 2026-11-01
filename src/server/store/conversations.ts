@@ -8,6 +8,7 @@ import type {
   CanvasVersion,
   ConversationSummary,
   MessageAttachment,
+  MessageConsultationSource,
   SdkResumePoint,
   StoredMessage,
 } from "../types.js";
@@ -78,7 +79,8 @@ export interface ConversationRewindPlan {
   /**
    * Resume point of the row IMMEDIATELY before the anchor, when that row is an
    * assistant row that recorded one — the kept history then ends exactly there
-   * in the SDK transcript. Null → the re-run rebuilds context from `keep`.
+   * (the re-run branches from that pi response). Null → the re-run rebuilds
+   * context from `keep`.
    */
   resumeAt: SdkResumePoint | null;
   /**
@@ -119,12 +121,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const rows = this.db
         .prepare(
           `SELECT c.id, c.avatar_user_id, c.title, c.updated_at, c.is_routine,
-                  COALESCE(u.display_name, ga.display_name) AS avatar_display_name,
+                  u.display_name AS avatar_display_name,
                   r.id AS routine_id, r.prompt AS routine_prompt
            FROM conversations c
            LEFT JOIN users u ON u.id = c.avatar_user_id
-           -- the concat mirrors groupAgentAvatarId() (../groupAgents.ts); keep in lockstep
-           LEFT JOIN group_agents ga ON c.avatar_user_id = 'group:' || ga.group_id || ':' || ga.id
            LEFT JOIN routine_jobs r ON r.conversation_id = c.id
            WHERE ${where.join(" AND ")}
            ORDER BY c.updated_at DESC`,
@@ -133,7 +133,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return rows.map((r) => this.toConversationSummary(r));
     }
 
-    /** Deployment-wide history count used to guard external-avatar deletion/repointing. */
+    /** Deployment-wide count of conversations bound to one avatar id. */
     countConversationsForAvatar(avatarId: string): number {
       return this.count(
         "SELECT COUNT(*) AS c FROM conversations WHERE avatar_user_id = ?",
@@ -143,7 +143,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
 
     /**
      * Every conversation id bound to an avatar id, across ALL owners. Snapshot
-     * input for pre-cascade disk sweeps (group deletion removes the rows the
+     * input for pre-cascade disk sweeps (account deletion removes the rows the
      * per-conversation chat-image/file dirs are keyed by).
      */
     listConversationIdsForAvatar(avatarId: string): string[] {
@@ -174,12 +174,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const row = this.db
         .prepare(
           `SELECT c.id, c.avatar_user_id, c.title, c.updated_at, c.is_routine,
-                  COALESCE(u.display_name, ga.display_name) AS avatar_display_name,
+                  u.display_name AS avatar_display_name,
                   r.id AS routine_id, r.prompt AS routine_prompt
            FROM conversations c
            LEFT JOIN users u ON u.id = c.avatar_user_id
-           -- the concat mirrors groupAgentAvatarId() (../groupAgents.ts); keep in lockstep
-           LEFT JOIN group_agents ga ON c.avatar_user_id = 'group:' || ga.group_id || ':' || ga.id
            LEFT JOIN routine_jobs r ON r.conversation_id = c.id
            WHERE c.owner_user_id = ? AND c.id = ?
            LIMIT 1`,
@@ -202,21 +200,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return row?.avatar_user_id ?? null;
     }
 
-    /** Exact Gateway endpoint bound to an external conversation, if established. */
-    getConversationExternalEndpoint(
-      ownerId: string,
-      conversationId: string,
-    ): string | null {
-      const row = this.db
-        .prepare(
-          "SELECT external_endpoint FROM conversations WHERE id = ? AND owner_user_id = ?",
-        )
-        .get(conversationId, ownerId) as
-        | { external_endpoint: string | null }
-        | undefined;
-      return row?.external_endpoint ?? null;
-    }
-
     /** The owner of a conversation regardless of caller (null if it doesn't exist). */
     conversationOwner(conversationId: string): string | null {
       const row = this.db
@@ -230,7 +213,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       conversationId: string,
       avatarUserId: string,
       firstUserText: string,
-      opts: { isRoutine?: boolean; externalEndpoint?: string } = {},
+      opts: { isRoutine?: boolean } = {},
     ): void {
       const timestamp = now();
       // Look up by id ALONE so a conversation id that already exists under a
@@ -239,31 +222,13 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       // Express 4, escape the async handler as an unhandled rejection). The chat
       // route also rejects a foreign supplied id up front with a 409.
       const existing = this.db
-        .prepare(
-          "SELECT owner_user_id, external_endpoint FROM conversations WHERE id = ?",
-        )
-        .get(conversationId) as
-        | { owner_user_id: string; external_endpoint: string | null }
-        | undefined;
+        .prepare("SELECT owner_user_id FROM conversations WHERE id = ?")
+        .get(conversationId) as { owner_user_id: string } | undefined;
       if (existing) {
         if (existing.owner_user_id !== ownerId) {
           throw new Error("CONVERSATION_OWNER_MISMATCH");
         }
-        if (
-          opts.externalEndpoint &&
-          existing.external_endpoint !== opts.externalEndpoint
-        ) {
-          throw new Error(
-            existing.external_endpoint
-              ? "EXTERNAL_ENDPOINT_MISMATCH"
-              : "EXTERNAL_ENDPOINT_UNBOUND",
-          );
-        }
         // Promote to routine-tagged if asked (idempotent); never clears the flag.
-        // Existing external rows must already be endpoint-bound. In particular,
-        // legacy NULL rows may contain a transcript from before this column existed;
-        // silently adopting the current endpoint could disclose that history after
-        // an env/config change.
         this.db
           .prepare(
             `UPDATE conversations SET updated_at = ?${opts.isRoutine ? ", is_routine = 1" : ""} WHERE id = ?`,
@@ -277,8 +242,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const title = autoConversationTitle(firstUserText);
       this.db
         .prepare(
-          `INSERT INTO conversations (id, owner_user_id, avatar_user_id, title, is_routine, external_endpoint, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO conversations (id, owner_user_id, avatar_user_id, title, is_routine, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           conversationId,
@@ -286,13 +251,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           avatarUserId,
           title,
           opts.isRoutine ? 1 : 0,
-          opts.externalEndpoint ?? null,
           timestamp,
           timestamp,
         );
     }
 
-    /** The SDK session to resume for this conversation's next turn (null if none). */
+    /** The session to continue on this conversation's next turn (pi: a `resp_…` id; null if none). */
     getAgentSessionId(ownerId: string, conversationId: string): string | null {
       const row = this.db
         .prepare("SELECT agent_session_id FROM conversations WHERE id = ? AND owner_user_id = ?")
@@ -301,7 +265,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Record (or clear, when sessionId is null) the SDK session id produced by this
+     * Record (or clear, when sessionId is null) the session id (pi response id) produced by this
      * conversation's latest turn. Owner-scoped so a guessed conversation id can't
      * point another owner's conversation at a different session.
      */
@@ -341,6 +305,41 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
+     * The system prompt this conversation's pi sessions are created with,
+     * frozen at its FIRST pi turn (design D2: pi fixes `instructions` per
+     * session and Noah reuses the same text for every later session of the
+     * conversation — a model switch or a lost session re-sends it verbatim).
+     * Same write-once, take-under-the-lock contract as the to-do snapshot above.
+     */
+    /** True once the conversation's pi instructions are frozen (its first pi turn has run). */
+    hasConversationPiInstructions(ownerId: string, conversationId: string): boolean {
+      const row = this.db
+        .prepare("SELECT pi_instructions IS NOT NULL AS frozen FROM conversations WHERE id = ? AND owner_user_id = ?")
+        .get(conversationId, ownerId) as { frozen: number } | undefined;
+      return Boolean(row?.frozen);
+    }
+
+    ensureConversationPiInstructions(ownerId: string, conversationId: string, take: () => string): string | null {
+      const read = () =>
+        this.db
+          .prepare("SELECT pi_instructions FROM conversations WHERE id = ? AND owner_user_id = ?")
+          .get(conversationId, ownerId) as { pi_instructions: string | null } | undefined;
+      const stored = read();
+      if (!stored) return null;
+      if (stored.pi_instructions !== null) return stored.pi_instructions;
+      return this.db.transaction((): string | null => {
+        const row = read();
+        if (!row) return null;
+        if (row.pi_instructions !== null) return row.pi_instructions;
+        const instructions = take();
+        this.db
+          .prepare("UPDATE conversations SET pi_instructions = ? WHERE id = ? AND owner_user_id = ?")
+          .run(instructions, conversationId, ownerId);
+        return instructions;
+      }).immediate();
+    }
+
+    /**
      * The registered git-repo NAME opened as this conversation's working directory
      * (via `mcp__git_repo__open_repo`), or null when none is open. Durable home of
      * the per-conversation working surface (repoWorkspace.ts) so routine runs —
@@ -373,34 +372,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Group ids whose shared knowledge is toggled OFF for this conversation
-     * (owner-only). Empty array = every group enabled (the default). Owner-scoped
-     * so a guessed conversation id can't read another owner's setting.
-     */
-    getConversationGroupKnowledgeOff(ownerId: string, conversationId: string): string[] {
-      const row = this.db
-        .prepare("SELECT group_knowledge_off FROM conversations WHERE id = ? AND owner_user_id = ?")
-        .get(conversationId, ownerId) as { group_knowledge_off: string | null } | undefined;
-      return parseNameList(row?.group_knowledge_off ?? null) ?? [];
-    }
-
-    /**
-     * Replace the conversation's group-knowledge OFF set (the group ids whose shared
-     * knowledge is disabled). Empty array clears it (every group ON). Stores the OFF
-     * set so groups default ON. No-op when the conversation isn't the owner's.
-     */
-    setConversationGroupKnowledgeOff(ownerId: string, conversationId: string, offGroupIds: string[]): void {
-      const unique = [...new Set(offGroupIds.filter(Boolean))];
-      const next = unique.length > 0 ? JSON.stringify(unique) : null;
-      this.db
-        .prepare("UPDATE conversations SET group_knowledge_off = ? WHERE id = ? AND owner_user_id = ?")
-        .run(next, conversationId, ownerId);
-    }
-
-    /**
-     * The user-chosen model TIER (alias) for this conversation, or null when none
-     * was picked (use the server default resolution). Owner-scoped so a guessed
-     * conversation id can't read another owner's setting.
+     * The user-chosen pi model id for this conversation, or null when none was
+     * picked (use the default resolution; a stored id pi no longer offers reads
+     * as unset at run time). Owner-scoped so a guessed conversation id can't
+     * read another owner's setting.
      */
     getConversationModel(ownerId: string, conversationId: string): string | null {
       const row = this.db
@@ -411,12 +386,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Set (or clear, when `tier` is null/empty) the conversation's chosen model tier.
-     * No-op when the conversation isn't the owner's. Callers validate the tier
-     * against the registry (`isModelTier`) before persisting.
+     * Set (or clear, when `model` is null/empty) the conversation's chosen model.
+     * No-op when the conversation isn't the owner's. Stored as sent: the run
+     * checks it against pi-gateway's live list (runCapabilities).
      */
-    setConversationModel(ownerId: string, conversationId: string, tier: string | null): void {
-      const next = tier && tier.trim() ? tier.trim() : null;
+    setConversationModel(ownerId: string, conversationId: string, model: string | null): void {
+      const next = model && model.trim() ? model.trim() : null;
       this.db
         .prepare("UPDATE conversations SET selected_model = ? WHERE id = ? AND owner_user_id = ?")
         .run(next, conversationId, ownerId);
@@ -424,8 +399,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
 
     /**
      * The user-chosen reasoning EFFORT level for this conversation, or null when
-     * none was picked (use the SDK default). Owner-scoped, mirroring the model
-     * tier above.
+     * none was picked (use the runtime default). Owner-scoped, mirroring the
+     * model above.
      */
     getConversationEffort(ownerId: string, conversationId: string): string | null {
       const row = this.db
@@ -510,6 +485,24 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
+     * Parse a consultation row's source column. A corrupt or missing value still
+     * yields an (anonymous) source: the row stays marked as NOT the owner's words.
+     */
+    private parseConsultationJson(json: string | null): MessageConsultationSource {
+      try {
+        const parsed = json ? (JSON.parse(json) as Partial<MessageConsultationSource>) : {};
+        return {
+          id: typeof parsed.id === "string" ? parsed.id : "",
+          ...(typeof parsed.username === "string" && parsed.username ? { username: parsed.username } : {}),
+          ...(typeof parsed.displayName === "string" && parsed.displayName ? { displayName: parsed.displayName } : {}),
+        };
+      } catch {
+        logger.warn("skipping corrupt consultation_json on a stored message");
+        return { id: "" };
+      }
+    }
+
+    /**
      * The attachment lists of a conversation's persisted messages, NEWEST
      * message first (messages without attachments skipped; entries that are
      * not attachment objects dropped). Owner-scoped: [] when `ownerId` does not
@@ -570,6 +563,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         response_json: string | null;
         attachments_json: string | null;
         kind: string | null;
+        consultation_json: string | null;
         created_at: string;
       }[];
       return rows.map((r) => ({
@@ -582,6 +576,9 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         // before the column existed (no `kind` key at all), so nothing that
         // compares stored messages has to learn about it.
         ...(r.kind === "steer" || r.kind === "queued" ? { kind: r.kind } : {}),
+        ...(r.kind === "consultation"
+          ? { kind: r.kind, consultation: this.parseConsultationJson(r.consultation_json) }
+          : {}),
         response: this.parseResponseJson(r.response_json),
         createdAt: r.created_at,
       }));
@@ -600,11 +597,15 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
          * message the model never received must not appear in history at all.
          * `"queued"` for a USER row written while ANOTHER run is active on the
          * thread (an enqueue) — it can never anchor a rewind.
+         * `"consultation"` (with `consultation`) for a row NOAH wrote: a
+         * consulted teammate avatar's answer, never the owner's words.
          */
-        kind?: "steer" | "queued";
+        kind?: "steer" | "queued" | "consultation";
+        /** Who answered — stored only with `kind: "consultation"`. */
+        consultation?: MessageConsultationSource;
         /**
-         * Where this ASSISTANT row's segment ended in the local SDK transcript —
-         * what a later rewind onto the next user row resumes at. Server-only:
+         * Where this ASSISTANT row's segment ended (its pi response id) — what a
+         * later rewind onto the next user row branches from. Server-only:
          * written to its own columns, never part of the returned message.
          */
         resumePoint?: SdkResumePoint;
@@ -613,10 +614,12 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const id = crypto.randomUUID();
       const createdAt = now();
       const attachments = input.attachments?.length ? input.attachments : undefined;
+      const consultation =
+        input.kind === "consultation" ? (input.consultation ?? { id: "" }) : undefined;
       this.db
         .prepare(
-          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, sdk_session_id, sdk_uuid, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, conversation_id, role, content, response_json, attachments_json, kind, consultation_json, sdk_session_id, sdk_uuid, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -626,6 +629,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           input.response ? JSON.stringify(input.response) : null,
           attachments ? JSON.stringify(attachments) : null,
           input.kind ?? null,
+          consultation ? JSON.stringify(consultation) : null,
           input.resumePoint?.sessionId ?? null,
           input.resumePoint?.uuid ?? null,
           createdAt,
@@ -637,6 +641,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         content: input.content,
         attachments,
         ...(input.kind ? { kind: input.kind } : {}),
+        ...(consultation ? { consultation } : {}),
         response: input.response ?? null,
         createdAt,
       };
@@ -968,7 +973,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       const tx = this.db.transaction(() => {
         this.deleteCanvasArtifactsForConversation(id);
         this.deleteShareLinksForConversation(id);
-        this.deleteServerAgentSessionsForConversation(id);
         this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
         // Personal task-API rows (avatar_tasks) have no FK onto conversations,
         // so the thread's tasks would outlive it — manual cascade.
@@ -994,7 +998,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         for (const conversationId of conversationIds) {
           this.deleteCanvasArtifactsForConversation(conversationId);
           this.deleteShareLinksForConversation(conversationId);
-          this.deleteServerAgentSessionsForConversation(conversationId);
           deleteMessages.run(conversationId);
           deleteAvatarTasks.run(conversationId);
           deleteConversation.run(conversationId, ownerId);
@@ -1011,7 +1014,10 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
      * message. A steer sits mid-turn (folded after a tool call, or heading a
      * follow-up turn of the same run), so the run it belongs to started at the
      * ordinary message before it — re-running from the steer would drop that
-     * message from the re-run's context. Owner-scoped; null when there is none.
+     * message from the re-run's context. A consulted avatar's answer
+     * (`consultation`) arrives the same way and is skipped alike — and it is
+     * not the owner's message to re-run at all. Owner-scoped; null when there
+     * is none.
      */
     findRegenerateAnchorId(ownerId: string, conversationId: string): string | null {
       if (!this.ownsConversation(ownerId, conversationId)) {
@@ -1019,7 +1025,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       }
       const row = this.db
         .prepare(
-          "SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' AND (kind IS NULL OR kind <> 'steer') ORDER BY rowid DESC LIMIT 1",
+          "SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' AND (kind IS NULL OR kind NOT IN ('steer', 'consultation')) ORDER BY rowid DESC LIMIT 1",
         )
         .get(conversationId) as { id: string } | undefined;
       return row?.id ?? null;
@@ -1052,7 +1058,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       };
     }
 
-    /** The recorded SDK resume point of one row, or null when it has none. */
+    /** The recorded resume point of one row, or null when it has none. */
     private messageResumePoint(messageId: string): SdkResumePoint | null {
       const row = this.db
         .prepare("SELECT sdk_session_id, sdk_uuid FROM messages WHERE id = ?")
@@ -1066,9 +1072,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
      * Apply a rewind plan in ONE transaction: delete exactly the planned rows
      * (by id, so a row appended after planning survives), the share links of
      * their deck cards, and the canvas state they produced; then clear the
-     * conversation's SDK session, whose
-     * transcript still holds the discarded turns (the re-run records its fork's
-     * own id on success). The on-disk attachment bytes are the caller's sweep.
+     * conversation's session, which still holds the discarded turns (the
+     * re-run records the id of the response it branched into on success). The on-disk attachment bytes are the caller's sweep.
      * False when the conversation is not the owner's.
      */
     applyConversationRewind(
@@ -1095,8 +1100,6 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           ),
         );
         this.rewindCanvasArtifacts(conversationId, plan.cutoffCreatedAt);
-        // The kept history no longer matches what any remote server-agent session saw.
-        this.deleteServerAgentSessionsForConversation(conversationId);
         this.db
           .prepare(
             "UPDATE conversations SET agent_session_id = NULL, updated_at = ? WHERE id = ? AND owner_user_id = ?",
