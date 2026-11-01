@@ -319,7 +319,7 @@ avatar owner's — a trusted colleague's chat — never gets a copy of the owner
 AND `.git`, history included, in the colleague's persistent sandbox, outliving the trust that made it). `open_repo`
 only selects the repo for the conversation, turn start (`resolveActiveWorkspaceRepo`) only ensures the clone (no
 copy, no copy lock), and the colleague reads Noah's canonical clone through `mcp__git_repo__list_files` /
-`read_file` / `grep` (`GIT_REPO_READ_TOOL_NAMES`, `gitRepoRead.ts`: every path component lstat-checked, links never
+`read_file` / `grep` (`GIT_REPO_READ_TOOL_NAMES`, `gitRepoRead.ts`: every read under the clone's `withRepoLock`, so never a half-done sync or commit — list/read show the working tree as the last sync or commit left it, grep the index; every path component lstat-checked and every folder/file opened only when its descriptor path is the checked one (`listDirVerified`, `readRegularFileAsync` + `fdPathIs`, review R7), links never
 followed, `..`/`.git` refused, 1 MB / 2 000-line / 1 000-entry caps; `grep` is `git grep --cached` in the clone,
 64 KB / 30 s). They sit on every git_repo server (static catalog), `mcpAllowedTools` admits them only when
 `sandboxOwner !== "owner"`, and each handler re-checks `elevated`, not-the-owner's-sandbox and the repo still

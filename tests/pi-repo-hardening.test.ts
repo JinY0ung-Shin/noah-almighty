@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/server/types.js";
 import type { Store } from "../src/server/store.js";
 import { listSkillsInRoots, loadKnowledgeRepoMemory, readPluginMcpServers, resolvePluginRoots } from "../src/server/plugins.js";
@@ -15,6 +15,8 @@ import { materializePiSkills } from "../src/server/agent/pi/piSkills.js";
 import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopyStatus } from "../src/server/agent/pi/piRepoCopy.js";
 import { gitInit, makeSkill, withTempDir } from "./helpers.js";
+import { grepRepo, listRepoFiles, readRepoFile } from "../src/server/gitRepoRead.js";
+import { withRepoLock } from "../src/server/gitMutex.js";
 
 const dir = withTempDir("pi-repo-hardening");
 
@@ -146,4 +148,62 @@ describe("sandbox copy read-back never takes the server down (review #4)", () =>
     expect(files).toEqual(expect.arrayContaining([":!x", ":(x)y", "handbook/intro.md"]));
     expect(fs.readlinkSync(path.join(ref.clonePath, "docs"))).toBe("handbook");
   }, 60_000);
+});
+
+describe("a colleague's read tools read Noah's clone only under its lock, never through a link (review R7)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function clone() {
+    const root = path.join(dir(), "clone");
+    gitInit(root);
+    fs.mkdirSync(path.join(root, "sub"));
+    fs.writeFileSync(path.join(root, "sub", "secret.txt"), "INSIDE");
+    execFileSync("git", ["-C", root, "add", "-A"], { stdio: "pipe" });
+    execFileSync("git", ["-C", root, "commit", "-q", "-m", "sub"], { stdio: "pipe" });
+    return root;
+  }
+
+  it("waits for a running sync/commit instead of reading its half-written working tree", async () => {
+    const root = clone();
+    let release: (() => void) | undefined;
+    const held = withRepoLock(root, () => new Promise<void>((resolve) => (release = resolve)));
+    while (!release) await new Promise((resolve) => setImmediate(resolve)); // the lock is now taken
+    // A commit is half-way through applying files.
+    fs.writeFileSync(path.join(root, "README.md"), "half-written");
+    const read = readRepoFile(root, "README.md");
+    const list = listRepoFiles(root, "");
+    const grep = grepRepo(root, "hello|done");
+    fs.writeFileSync(path.join(root, "README.md"), "done");
+    fs.writeFileSync(path.join(root, "added.txt"), "x");
+    execFileSync("git", ["-C", root, "add", "-A"], { stdio: "pipe" });
+    release!();
+    await held;
+    expect(await read).toContain("done");
+    expect(await read).not.toContain("half-written");
+    expect(await list).toContain("added.txt");
+    expect(await grep).toContain("README.md:1:done");
+  });
+
+  it("refuses a file whose folder turned into a committed link after it was checked", async () => {
+    const root = clone();
+    const outside = path.join(dir(), "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret.txt"), "OUTSIDE");
+    const target = path.join(root, "sub", "secret.txt");
+    const lstat = fs.lstatSync.bind(fs);
+    // A concurrent writer swaps `sub` for a link right after the last component was lstat-checked.
+    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: fs.StatSyncOptions) => {
+      const stat = lstat(file, options as never);
+      if (String(file) === target && !fs.existsSync(path.join(root, "sub-real"))) {
+        fs.renameSync(path.join(root, "sub"), path.join(root, "sub-real"));
+        fs.symlinkSync(outside, path.join(root, "sub"));
+      }
+      return stat;
+    }) as typeof fs.lstatSync);
+    const outcome = await Promise.resolve()
+      .then(() => readRepoFile(root, "sub/secret.txt"))
+      .catch((error: unknown) => (error as Error).message);
+    expect(String(outcome)).not.toContain("OUTSIDE");
+    expect(String(outcome)).toContain("link");
+  });
 });

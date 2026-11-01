@@ -495,7 +495,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
       ),
     tool(
       "list_files",
-      "List the files of one of the avatar owner's registered repositories (its current committed state in Noah's clone) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. `path` narrows to a folder (default: the whole repo); links are shown but never followed, `.git` is not listed. Read-only. (trusted colleague only — the owner reads its own sandbox copy instead)",
+      "List the files of one of the avatar owner's registered repositories (the working tree of Noah's clone of it, read while no sync or commit is running — as its last sync or commit left it) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. `path` narrows to a folder (default: the whole repo); links are shown but never followed, `.git` is not listed. Read-only. (trusted colleague only — the owner reads its own sandbox copy instead)",
       {
         name: z.string().describe("Registered repo name"),
         path: z.string().optional().describe("A folder inside the repo (default: the root)"),
@@ -504,7 +504,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         try {
           const clone = await readableClone(args.name);
           if ("content" in clone) return clone;
-          return text(`'${clone.name}': ${listRepoFiles(clone.clone, args.path ?? "")}`);
+          return text(`'${clone.name}': ${await listRepoFiles(clone.clone, args.path ?? "")}`);
         } catch (error) {
           return readFailure(error);
         }
@@ -512,7 +512,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "read_file",
-      "Read a text file of one of the avatar owner's registered repositories (its current committed state in Noah's clone) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns lines `offset`..`offset+limit-1` (1-based; default the first 2000) and says how to continue; files over 1 MB, binary files, links and `.git` are refused. Read-only. (trusted colleague only)",
+      "Read a text file of one of the avatar owner's registered repositories (the working tree of Noah's clone of it, read while no sync or commit is running — as its last sync or commit left it) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns lines `offset`..`offset+limit-1` (1-based; default the first 2000) and says how to continue; files over 1 MB, binary files, links and `.git` are refused. Read-only. (trusted colleague only)",
       {
         name: z.string().describe("Registered repo name"),
         path: z.string().describe("The file's path inside the repo, e.g. src/index.ts"),
@@ -523,7 +523,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         try {
           const clone = await readableClone(args.name);
           if ("content" in clone) return clone;
-          return text(readRepoFile(clone.clone, args.path, args.offset ?? 1, args.limit ?? 2000));
+          return text(await readRepoFile(clone.clone, args.path, args.offset ?? 1, args.limit ?? 2000));
         } catch (error) {
           return readFailure(error);
         }
@@ -531,7 +531,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "grep",
-      "Search one of the avatar owner's registered repositories (its committed files in Noah's clone) for an extended regular expression when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns `path:line:text` matches (binary files skipped, output capped); `path` narrows to a file or folder. Read-only. (trusted colleague only)",
+      "Search one of the avatar owner's registered repositories (the files in the git index of Noah's clone of it — its last commit or sync; a link is matched as its target text) for an extended regular expression when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns `path:line:text` matches (binary files skipped, output capped); `path` narrows to a file or folder. Read-only. (trusted colleague only)",
       {
         name: z.string().describe("Registered repo name"),
         pattern: z.string().describe("An extended (POSIX ERE) regular expression"),
