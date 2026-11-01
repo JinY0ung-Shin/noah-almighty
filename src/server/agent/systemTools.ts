@@ -21,7 +21,7 @@ import type {
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
-import { EFFORT_LEVELS } from "../effortLevels.js";
+import { EFFORT_LEVELS, type ModelEffort } from "../effortLevels.js";
 import {
   gettingStartedGaps,
   piAdminDisabledToolsNote,
@@ -77,6 +77,12 @@ export interface SystemToolsContext {
    * default level). See effortLevels.ts / runCapabilities userEffort.
    */
   selectedEffort?: string;
+  /**
+   * What THIS run sends for that pick on its model (`effortForModel`, the clamp
+   * runPiAgent applies), plus the efforts pi lists for the model. Undefined →
+   * the pick is reported as sent (a caller without the catalog, a test).
+   */
+  sentEffort?: ModelEffort & { supported?: readonly string[] };
   /**
    * MCP tool groups enabled for THIS run, chosen in the chat composer. Arrives
    * already clamped by the admin's per-group tool policy — describe_system
@@ -763,9 +769,20 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const userEffort = ctx.selectedEffort;
         // English label: this is model-facing self-state.
         const effortLabel = (id: string) => EFFORT_LEVELS.find((e) => e.id === id)?.labelEn;
-        const effortLine = userEffort
-          ? `${effortLabel(userEffort) ? `${userEffort} (${effortLabel(userEffort)})` : userEffort} (chosen for this conversation)`
-          : "not chosen for this conversation (no level is sent, so pi-gateway applies its own default)";
+        const effortName = (id: string) => (effortLabel(id) ? `${id} (${effortLabel(id)})` : id);
+        const sent = ctx.sentEffort;
+        const supported = sent?.supported?.length ? ` (it supports: ${sent.supported.join(", ")})` : "";
+        // A pick the model does not support is clamped before sending (pi would
+        // 400 it): name what is actually in effect.
+        const effortLine = !userEffort
+          ? "not chosen for this conversation (no level is sent, so pi-gateway applies its own default)"
+          : sent?.kind === "lowered" && sent.effort
+            ? `${effortName(sent.effort)} — ${userEffort} was chosen for this conversation, but the current model does not support it${supported}, so the closest lower level is sent`
+            : sent?.kind === "model_default"
+              ? `${sent.effort ? `${effortName(sent.effort)} (the model's default)` : "the model's default"} — ${userEffort} was chosen for this conversation, but the current model supports no level at or below it${supported}`
+              : sent?.kind === "not_reasoning"
+                ? `none — the current model does not use reasoning effort, so the level chosen for this conversation (${userEffort}) is not sent`
+                : `${effortName(userEffort)} (chosen for this conversation)`;
         const enabledMcpToolGroups = effectiveMcpToolGroups(ctx.enabledMcpToolGroups);
         const webProxy = webFetchProxyState();
         const enabledMcpToolGroupLabels = MCP_TOOL_GROUPS

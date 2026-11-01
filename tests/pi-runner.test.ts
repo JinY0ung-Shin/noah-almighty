@@ -520,6 +520,39 @@ describe("runPiAgent", () => {
     expect(requests[1]).toMatchObject({ previousResponseId: "resp_s1_5", model: "m-opus" });
   });
 
+  it("clamps the effort to what pi lists for the model each request runs on (review #9)", async () => {
+    const { store, config, base } = setup();
+    piServicesFor(store, config).models = createPiModelCatalog({
+      listModels: async () => [
+        { id: "m-default", default: true, reasoning: { efforts: ["none", "minimal", "low", "medium", "high"], defaultEffort: "high" } },
+        { id: "m-deep", reasoning: { efforts: ["high", "xhigh"], defaultEffort: "xhigh" } },
+        { id: "m-plain", reasoning: null },
+        { id: "m-older" },
+      ],
+    });
+    const sent = async (over: Partial<AgentRequest>, steps: Step[] = [() => textTurn("resp_c_1", "ok")]) => {
+      const { client, requests } = fakeClient(steps);
+      await runPiAgent(base(over), [], config, store, undefined, undefined, { client, retry: { attempts: 1 } });
+      return requests.map((r) => r.reasoningEffort);
+    };
+    // 기본 모델 lists up to high: max → high (never pi's 400).
+    expect(await sent({ effort: "max" })).toEqual(["high"]);
+    // Supported → as picked.
+    expect(await sent({ effort: "medium" })).toEqual(["medium"]);
+    // Nothing at or below `low` on m-deep → the model's default, named explicitly.
+    expect(await sent({ model: "m-deep", effort: "low" })).toEqual(["xhigh"]);
+    // A model that does not reason gets no effort.
+    expect(await sent({ model: "m-plain", effort: "high" })).toEqual([undefined]);
+    // Control: pi silent about efforts (an older pi) → sent as picked, as before.
+    expect(await sent({ model: "m-older", effort: "max" })).toEqual(["max"]);
+    // A fallback onto pi's default is clamped for THAT model.
+    const fallback = await sent({ headless: true, allowHeadlessTools: true, modelFallback: true, model: "m-deep", effort: "xhigh" }, [
+      () => new PiGatewayError("unavailable", { status: 503, retryable: true }),
+      () => textTurn("resp_c_2", "from the default"),
+    ]);
+    expect(fallback).toEqual(["xhigh", "high"]);
+  });
+
   it("a rewind forks at the kept row's response id and states the rewind in the turn input", async () => {
     const { store, config, base } = setup();
     const { client, requests } = fakeClient([() => textTurn("resp_s1_5", "redo")]);

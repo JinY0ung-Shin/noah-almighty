@@ -7,7 +7,7 @@ import {
 import logger from "../logger.js";
 import { createRateLimiter } from "../rateLimit.js";
 import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_shared.js";
-import { catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { catalogEffortSupport, catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { effectiveModelOverride } from "../modelOverride.js";
 import { visionForCatalogModel } from "../modelVisionPolicy.js";
@@ -151,6 +151,7 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
     // pi has never answered — the client then hides the picker).
     const models = await piServicesFor(store, config).models.list();
     const visionPolicy = store.getModelVisionPolicy();
+    const defaultReasoning = catalogEffortSupport(models, effectiveModelOverride(store, catalogModelIds(models)));
     res.json({
       needsSetup: !store.hasAnyUser(),
       githubHost: config.githubHost,
@@ -170,10 +171,14 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       modelSelection: {
         // `server` is pi's `owned_by`; `vision` pi's image setting ∘ the admin
         // per-model policy ∘ MODEL_VISION (visionForCatalogModel).
+        // `reasoning`: the efforts pi lists for the model (null = it does not
+        // reason; absent = pi did not say) — the composer greys out what
+        // effortForModel would not send as picked.
         models: models.map((model) => ({
           id: model.id,
           server: model.server,
           vision: visionForCatalogModel(models, model.id, visionPolicy, config.visionEnabled),
+          ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
         })),
         // Vision of the model a conversation gets when the user picked nothing:
         // the admin override when pi offers it, else pi-gateway's default model
@@ -184,10 +189,12 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
           visionPolicy,
           config.visionEnabled,
         ),
+        // That model's efforts, the same way (absent = unknown).
+        ...(defaultReasoning !== undefined ? { defaultReasoning } : {}),
       },
-      // Per-conversation reasoning effort picker. A change mid-conversation
-      // starts a new pi session from the text history (pi fixes effort per
-      // session).
+      // Per-conversation reasoning effort picker. A change applies from the
+      // next turn on, in the same pi session (P3); what is sent is clamped to
+      // the model's efforts (modelSelection above).
       effortSelection: {
         levels: EFFORT_LEVELS,
         default: DEFAULT_EFFORT_LEVEL,

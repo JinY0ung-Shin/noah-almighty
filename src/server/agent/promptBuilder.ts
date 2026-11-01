@@ -791,9 +791,17 @@ function piRuntimeSection(request: AgentRequest): string | null {
     "Not available on this runtime: WebSearch (fetch a known URL with `mcp__web__fetch`). " +
     piRelayedMcpSentence(pi) +
     piAsyncToolsSentence(request) +
+    PI_EFFORT_CLAMP_SENTENCE +
     "These instructions were fixed when this conversation started; settings, connections and tools may have changed since, so check `mcp__system__describe_system` before relying on any of that. Each user message starts with the current date and time."
   );
 }
+
+/**
+ * The composer's effort pick is clamped per model before it is sent (pi 400s an
+ * effort the model does not list): mirrored by describe_system's effort line.
+ */
+export const PI_EFFORT_CLAMP_SENTENCE =
+  "The reasoning effort chosen in the composer is sent only if the active model supports it; otherwise the closest supported level below it is used (or the model's default when there is none, and nothing for a model that does not reason) — `mcp__system__describe_system` names the level in effect. ";
 
 /** pi's `mcp_search` ranks English tool text by keywords (BM25): a query in another language, or without the service, finds little. */
 const MCP_SEARCH_QUERY_LINE =

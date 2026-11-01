@@ -373,17 +373,26 @@ describe("cancel / models / files", () => {
         JSON.stringify({
           object: "list",
           data: [
-            { id: "text", object: "model", input: ["text"] },
-            { id: "eyes", object: "model", input: ["text", "image"] },
+            { id: "text", object: "model", input: ["text"], reasoning: null },
+            {
+              id: "eyes",
+              object: "model",
+              input: ["text", "image"],
+              reasoning: { efforts: ["low", "high", "turbo"], default_effort: "high" },
+            },
             { id: "older", object: "model" },
+            { id: "odd", object: "model", reasoning: { efforts: "high" } },
           ],
         }),
       );
     };
+    // pi's per-model image input and efforts (unknown effort names dropped; absent
+    // or malformed = unknown, never a guess).
     await expect(client().listModels()).resolves.toEqual([
-      { id: "text", imageInput: false },
-      { id: "eyes", imageInput: true },
+      { id: "text", imageInput: false, reasoning: null },
+      { id: "eyes", imageInput: true, reasoning: { efforts: ["low", "high"], defaultEffort: "high" } },
       { id: "older" },
+      { id: "odd" },
     ]);
     handler = (_req, res) => {
       res.writeHead(200, { "content-type": "text/markdown" });

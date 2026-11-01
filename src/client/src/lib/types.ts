@@ -347,8 +347,10 @@ export interface PiModelOption {
   id: string;
   /** pi's `owned_by` (the serving backend), if reported. */
   server: string | null;
-  /** Whether this model accepts image input (admin per-model policy ∘ MODEL_VISION). */
+  /** Whether this model accepts image input (pi's image setting ∘ admin per-model policy ∘ MODEL_VISION). */
   vision: boolean;
+  /** pi's reasoning efforts for this model (null = it does not reason; absent = unknown). */
+  reasoning?: import("../../../server/effortLevels").ModelEffortSupport | null;
 }
 
 export interface BootstrapInfo {
@@ -371,6 +373,8 @@ export interface BootstrapInfo {
     models: PiModelOption[];
     /** Vision of the model used when the user picked none (admin override/pi default). */
     defaultVision?: boolean;
+    /** That model's reasoning efforts, like `PiModelOption.reasoning`. */
+    defaultReasoning?: import("../../../server/effortLevels").ModelEffortSupport | null;
   };
   /**
    * Per-conversation reasoning effort picker config: selectable levels + the

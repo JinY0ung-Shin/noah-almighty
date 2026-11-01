@@ -11,14 +11,16 @@
 // unresized passthrough, the honest notice, and the type/size gate that keeps
 // the payload inside what the server accepts.
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { get } from "svelte/store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatView from "../src/client/src/views/ChatView.svelte";
 import { sendSteer } from "../src/client/src/lib/chat.js";
-import { readState, replaceState, toasts } from "../src/client/src/lib/state.js";
+import { readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import type { ChatPane } from "../src/client/src/lib/types.js";
 import type { AvatarDetail } from "../src/server/types.js";
+import { EFFORT_LEVELS } from "../src/server/effortLevels.js";
 
 // Only the steer sender is faked; everything else ChatView imports from the chat
 // module (mount-time loaders included) stays real.
@@ -223,6 +225,65 @@ describe("composer model picker", () => {
       .filter(([url]) => String(url).includes("/api/me/chat-defaults"))
       .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
     expect(bodies).toEqual([{ model: "seeing" }, { model: null }]);
+  });
+});
+
+describe("composer effort picker (review #9)", () => {
+  function seedEffort(model: string, effort: string): void {
+    replaceState({
+      avatars: [],
+      chatPanes: [{ ...pane(model), effort }],
+      activePaneId: "pane-1",
+      view: "chat",
+      bootstrap: {
+        visionEnabled: true,
+        modelSelection: {
+          defaultVision: true,
+          defaultReasoning: null,
+          models: [
+            { id: "small", server: null, vision: true, reasoning: { efforts: ["none", "low", "medium", "high"], defaultEffort: "high" } },
+            { id: "older", server: null, vision: true },
+          ],
+        },
+        effortSelection: { levels: EFFORT_LEVELS, default: "high" },
+      },
+    } as unknown as Parameters<typeof replaceState>[0]);
+  }
+  const effortOptions = (container: HTMLElement) =>
+    [...container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 사고 강도(effort)"]')!.options].map((o) => [
+      o.value,
+      o.textContent?.trim(),
+      o.disabled,
+    ]);
+
+  it("greys out the levels the pane's model does not take and says what runs instead", () => {
+    seedEffort("small", "high");
+    const { container } = render(ChatView);
+    expect(effortOptions(container)).toEqual([
+      ["low", "낮음", false],
+      ["medium", "보통", false],
+      ["high", "높음", false],
+      ["xhigh", "매우 높음 (이 모델 미지원 → 높음)", true],
+      ["max", "최대 (이 모델 미지원 → 높음)", true],
+    ]);
+  });
+
+  it("keeps an unsupported CURRENT pick selectable, and greys nothing when pi did not say", async () => {
+    seedEffort("small", "max");
+    const { container } = render(ChatView);
+    expect(effortOptions(container).at(-1)).toEqual(["max", "최대 (이 모델 미지원 → 높음)", false]);
+    updateState((state) => {
+      state.chatPanes[0]!.model = "older";
+    });
+    await tick();
+    expect(effortOptions(container).every(([, , disabled]) => disabled === false)).toBe(true);
+    // 기본 모델 here does not reason: every level but the current one is greyed out.
+    updateState((state) => {
+      state.chatPanes[0]!.model = undefined;
+    });
+    await tick();
+    expect(effortOptions(container).filter(([, , disabled]) => !disabled).map(([value]) => value)).toEqual(["max"]);
+    expect(effortOptions(container)[0]).toEqual(["low", "낮음 (이 모델은 사고 강도를 쓰지 않음)", true]);
   });
 });
 

@@ -14,6 +14,7 @@
  * `local` stub has no pi, so its catalog is always empty.
  */
 import logger from "../../logger.js";
+import type { ModelEffortSupport } from "../../effortLevels.js";
 import type { PiResponsesClient } from "./responsesClient.js";
 
 /** One model pi-gateway offers. `server` is pi's `owned_by` (null when pi sent none). */
@@ -28,6 +29,11 @@ export interface CatalogModel {
    * decides alone (modelVisionPolicy.ts `visionForCatalogModel`).
    */
   imageInput?: boolean;
+  /**
+   * pi's reasoning efforts for the model (`effortForModel` clamps a pick to
+   * them); null = not a reasoning model; absent = pi did not say (an older pi).
+   */
+  reasoning?: ModelEffortSupport | null;
 }
 
 /** What one lookup knows: the models, and whether that list came from pi at all. */
@@ -93,6 +99,7 @@ export function createPiModelCatalog(
             server: model.ownedBy?.trim() || null,
             ...(model.default ? { default: true as const } : {}),
             ...(model.imageInput !== undefined ? { imageInput: model.imageInput } : {}),
+            ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
           });
         }
         lastFetchFailed = false;
@@ -132,6 +139,18 @@ export function catalogModelIds(models: readonly CatalogModel[]): string[] {
 /** The id of pi-gateway's default model (`default: true` in its list); undefined when pi named none. */
 export function catalogDefaultModelId(models: readonly CatalogModel[]): string | undefined {
   return models.find((model) => model.default)?.id;
+}
+
+/**
+ * pi's effort support for `model` (undefined → pi's default model, by its id):
+ * the input of `effortForModel`. Undefined when the model or the field is unknown.
+ */
+export function catalogEffortSupport(
+  models: readonly CatalogModel[],
+  model: string | null | undefined,
+): ModelEffortSupport | null | undefined {
+  const id = model || catalogDefaultModelId(models);
+  return id ? models.find((entry) => entry.id === id)?.reasoning : undefined;
 }
 
 /** `value` when it names a model in `models`, else undefined (unset / unknown → pi's default model). */

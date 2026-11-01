@@ -54,7 +54,13 @@
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
-  import { DEFAULT_EFFORT_LEVEL } from "../../../server/effortLevels";
+  import {
+    DEFAULT_EFFORT_LEVEL,
+    EFFORT_LEVELS,
+    effortForModel,
+    type EffortLevel,
+    type ModelEffortSupport,
+  } from "../../../server/effortLevels";
   import {
     DEFAULT_MCP_TOOL_GROUPS,
     MCP_TOOL_GROUPS,
@@ -524,6 +530,37 @@
     const entry = model ? sel.models.find((m) => m.id === model) : undefined;
     if (entry) return entry.vision !== false;
     return (sel.defaultVision ?? boot.visionEnabled) !== false;
+  }
+
+  // pi's reasoning efforts for the model THIS pane would use (same resolution as
+  // paneVisionEnabled): undefined = unknown (an older pi), null = no reasoning.
+  function paneEffortSupport(item: ChatPane, state: ReturnType<typeof readState>): ModelEffortSupport | null | undefined {
+    const sel = state.bootstrap?.modelSelection;
+    if (!sel) return undefined;
+    const model = knownModel(item.model, sel.models);
+    return model ? sel.models.find((m) => m.id === model)?.reasoning : sel.defaultReasoning;
+  }
+
+  // An effort option on this pane's model: a level the model does not take as
+  // picked is greyed out (the server clamps it the same way, effortForModel),
+  // and its label says what runs instead. The current value stays selectable.
+  function effortOption(item: ChatPane, level: EffortLevel, state: ReturnType<typeof readState>) {
+    const sent = effortForModel(level.id, paneEffortSupport(item, state));
+    const current = item.effort ?? state.bootstrap?.effortSelection?.default ?? DEFAULT_EFFORT_LEVEL;
+    const name = (id: string) => EFFORT_LEVELS.find((e) => e.id === id)?.label ?? id;
+    const note =
+      sent.kind === "lowered" && sent.effort
+        ? `이 모델 미지원 → ${name(sent.effort)}`
+        : sent.kind === "model_default"
+          ? `이 모델 미지원 → 모델 기본값${sent.effort ? `(${name(sent.effort)})` : ""}`
+          : sent.kind === "not_reasoning"
+            ? "이 모델은 사고 강도를 쓰지 않음"
+            : "";
+    return {
+      label: note ? `${level.label} (${note})` : level.label,
+      title: note ? `${level.description}\n${note}` : level.description,
+      disabled: Boolean(note) && level.id !== current,
+    };
   }
 
   async function addImages(item: ChatPane, files: FileList | File[] | null | undefined) {
@@ -1646,7 +1683,8 @@
                       on:change={(event) => setEffort(item, event.currentTarget.value)}
                     >
                       {#each $appState.bootstrap.effortSelection.levels as level (level.id)}
-                        <option value={level.id} title={level.description}>{level.label}</option>
+                        {@const option = effortOption(item, level, $appState)}
+                        <option value={level.id} title={option.title} disabled={option.disabled}>{option.label}</option>
                       {/each}
                     </select>
                   {/if}

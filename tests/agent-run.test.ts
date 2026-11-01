@@ -11,7 +11,10 @@ import {
   buildRunCapabilities,
   stampPromptRequest,
 } from "../src/server/agent/runCapabilities.js";
-import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { PI_EFFORT_CLAMP_SENTENCE, buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { piEphemeralRunKey, piRunPrincipal, piServicesFor } from "../src/server/agent/pi/piRuntime.js";
 import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
@@ -185,6 +188,42 @@ const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req
 // The capability plan: which Noah servers and tools a run class gets
 // ===========================================================================
 describe("run capability plan", () => {
+  it("reports the effort it SENDS on the run's model in describe_system, and the clamp rule in the prompt (review #9)", async () => {
+    const env = setup();
+    piServicesFor(env.store, env.config).models = createPiModelCatalog({
+      listModels: async () => [
+        { id: "small", default: true, reasoning: { efforts: ["none", "minimal", "low", "medium", "high"], defaultEffort: "high" } },
+        { id: "plain", reasoning: null },
+        { id: "older-pi" },
+      ],
+    });
+    const describe = async (request: AgentRequest) => {
+      const run = await plan(env, request);
+      const server = run.caps.inProcessMcpServers.system as unknown as { instance: McpServer };
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "t", version: "1" });
+      await server.instance.connect(b);
+      await client.connect(a);
+      try {
+        const result = (await client.callTool({ name: "describe_system", arguments: {} })) as { content: { text: string }[] };
+        return { run, line: result.content[0]!.text.split("\n").find((l) => l.startsWith("- Reasoning effort: ")) ?? "" };
+      } finally {
+        await client.close();
+      }
+    };
+    // 기본 모델 lists up to high: max is lowered to high.
+    let { run, line } = await describe({ ...env.baseRequest, effort: "max" });
+    expect(line).toContain("high (High) — max was chosen for this conversation, but the current model does not support it");
+    expect(line).toContain("it supports: none, minimal, low, medium, high");
+    expect(run.append).toContain(PI_EFFORT_CLAMP_SENTENCE);
+    // A model that does not reason gets no effort.
+    ({ line } = await describe({ ...env.baseRequest, model: "plain", effort: "low" }));
+    expect(line).toContain("none — the current model does not use reasoning effort");
+    // Control: pi silent about efforts (an older pi) → reported as picked.
+    ({ line } = await describe({ ...env.baseRequest, model: "older-pi", effort: "max" }));
+    expect(line).toBe("- Reasoning effort: max (Maximum) (chosen for this conversation)");
+  });
+
   it("resolves a run on pi's default model to that model's vision, and pi's text-only setting wins (review #12)", async () => {
     const env = setup();
     const offer = (models: PiModel[]) => {

@@ -7,8 +7,9 @@
  *   principal in `user` (body for POST /v1/responses, `?user=` for GET/cancel/input). pi trusts it.
  * - A turn continues a session by `previous_response_id` (`resp_<uuid>_<turn>`).
  *   `instructions` is accepted ONLY on the first turn (a session's system prompt
- *   is fixed — design D2). `reasoning.effort` is fixed at session creation too
- *   (a DIFFERENT value on a later turn is a 400).
+ *   is fixed — design D2). `model` and `reasoning.effort` may change on any
+ *   turn (pi P3); an effort the model's `/v1/models` entry does not list is a
+ *   400 `unsupported_reasoning_effort`, so the runner clamps it first.
  * - Errors are `{error: {message, type, code, …}}`. 503 `concurrency_limit_exceeded`
  *   (pi's turn limiter, after ≤120 s of queueing) carries `retry_after` + a
  *   `retry-after` header and is safe to retry: no turn ran.
@@ -21,6 +22,8 @@
  * English detail rides `upstreamMessage` for logs only.
  */
 
+import { REASONING_EFFORT_ORDER } from "../../effortLevels.js";
+
 const MAX_SSE_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024;
@@ -31,7 +34,7 @@ export const PI_MAX_FILE_BYTES = 32 * 1024 * 1024;
 /** pi's USER_ID_PATTERN (packages/shared/src/user-key.ts). */
 export const PI_USER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/;
 /** pi's REASONING_EFFORTS (agent/runtime.ts). */
-export const PI_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const PI_REASONING_EFFORTS = REASONING_EFFORT_ORDER;
 export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
 
 export const PI_DEFAULT_CONNECT_TIMEOUT_MS = 180_000;
@@ -460,6 +463,25 @@ export interface PiModel {
    * otherwise). Absent when pi sent no `input` (an older pi): unknown.
    */
   imageInput?: boolean;
+  /**
+   * pi's `reasoning`: the efforts the model accepts (pi 400s
+   * `unsupported_reasoning_effort` otherwise) and its default; `null` = not a
+   * reasoning model (pi ignores the effort). Absent (an older pi): unknown.
+   */
+  reasoning?: { efforts: PiReasoningEffort[]; defaultEffort?: PiReasoningEffort } | null;
+}
+
+const isPiEffort = (value: unknown): value is PiReasoningEffort =>
+  typeof value === "string" && (PI_REASONING_EFFORTS as readonly string[]).includes(value);
+
+/** pi's per-model `reasoning` entry; undefined = absent or malformed (unknown). */
+function parseModelReasoning(raw: unknown): PiModel["reasoning"] {
+  if (raw === null) return null;
+  if (!isRecord(raw) || !Array.isArray(raw.efforts)) return undefined;
+  return {
+    efforts: raw.efforts.filter(isPiEffort),
+    ...(isPiEffort(raw.default_effort) ? { defaultEffort: raw.default_effort } : {}),
+  };
 }
 
 export interface PiFileContent {
@@ -714,6 +736,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
           ...(typeof m.owned_by === "string" ? { ownedBy: m.owned_by } : {}),
           ...(m.default === true ? { default: true as const } : {}),
           ...(Array.isArray(m.input) ? { imageInput: m.input.includes("image") } : {}),
+          ...(parseModelReasoning(m.reasoning) !== undefined ? { reasoning: parseModelReasoning(m.reasoning) } : {}),
         }));
     },
     async fileContent(path, user, signal) {

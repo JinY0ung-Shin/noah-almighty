@@ -35,7 +35,8 @@
  *     pi did not deliver before the response ended is sent, together with the
  *     rest, as a follow-up turn on the same run (the route's `turn_end` contract).
  *  6. Every turn sends the current model and effort, so a change applies to
- *     the SAME session from that turn on (pi switches it, design P3).
+ *     the SAME session from that turn on (pi switches it, design P3). The
+ *     effort is clamped to the levels pi lists for that model (`effortForModel`).
  *  7. hex-ssh, plugin `.mcp.json` and 공용 MCP servers are relayed by Noah as an
  *     MCP client (`mcpProxies.ts`, stable ids `hex-ssh`/`plugins`/`shared`);
  *     every Noah MCP result is redacted at the endpoint with the run's set.
@@ -50,7 +51,7 @@ import type { AgentRequest, AgentResponse, AgentUsage, AppConfig, PluginRoot } f
 import type { Store } from "../../store.js";
 import type { AgentEvents } from "../events.js";
 import logger from "../../logger.js";
-import { isEffortLevel } from "../../effortLevels.js";
+import { effortForModel } from "../../effortLevels.js";
 import { unknownArgumentProblem, type McpRunRegistry, type McpServerSource } from "../../mcpHttp/endpoint.js";
 import { buildRunCapabilities, stampPromptRequest } from "../runCapabilities.js";
 import {
@@ -61,7 +62,7 @@ import {
 } from "../promptBuilder.js";
 import { resultErrorMessage } from "../runErrors.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog, piKnownTools } from "./mcpCatalog.js";
-import { catalogDefaultModelId } from "./modelCatalog.js";
+import { catalogDefaultModelId, catalogEffortSupport } from "./modelCatalog.js";
 import {
   PI_RUN_TOKEN_HEADER,
   beginPiConsultationSandbox,
@@ -79,6 +80,7 @@ import { redactSecretValues } from "../secretRedaction.js";
 import { AVATAR_ASK_TIMEOUT_MS } from "../avatarAskShared.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  PI_REASONING_EFFORTS,
   PiGatewayError,
   type PiReasoningEffort,
   type PiResponseRequest,
@@ -118,9 +120,9 @@ export function isLostPiSession(error: unknown): error is PiGatewayError {
   );
 }
 
-/** Noah's effort ids are a subset of pi's REASONING_EFFORTS (low…max). */
+/** An effort pi knows (Noah's picks low…max, or a level pi listed for a model), else nothing is sent. */
 function piEffortFor(effort: string | undefined): PiReasoningEffort | undefined {
-  return isEffortLevel(effort) ? (effort as PiReasoningEffort) : undefined;
+  return (PI_REASONING_EFFORTS as readonly string[]).includes(effort ?? "") ? (effort as PiReasoningEffort) : undefined;
 }
 
 /** A server this run did not build: lists nothing of its own (the catalog answers) and every call is refused. */
@@ -235,7 +237,11 @@ async function runPiAgentAs(
     },
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
-  const effort = piEffortFor(capabilities.userEffort);
+  // The effort sent on `model` (undefined = pi's default model): the pick
+  // clamped to the efforts pi lists for that model (`effortForModel` — pi 400s
+  // any other), so a fallback onto another model is clamped for THAT model.
+  const effortOn = (model: string | undefined): PiReasoningEffort | undefined =>
+    piEffortFor(effortForModel(capabilities.userEffort, catalogEffortSupport(services.models.peek(), model)).effort);
   // The model chain is the capability plan's (one entry unless the run opted into
   // fallback): each entry is a pi model id sent as is, or undefined = pi-gateway's
   // default model. Every turn sends its model and effort, so a change (or a
@@ -405,6 +411,7 @@ async function runPiAgentAs(
       for (;;) {
         const fresh = !previous;
         const model = piModelFor(chain[attempt], fresh);
+        const effort = effortOn(chain[attempt]);
         attemptShowedOutput = false;
         attemptActed = false;
         const piRequest: PiResponseRequest = {

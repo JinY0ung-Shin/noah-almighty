@@ -35,7 +35,7 @@ import type { PiSkillPlan } from "./pi/piSkills.js";
 import type { PiAsyncJobs } from "./pi/asyncJobs.js";
 import { planPiMcpProxies, type PiMcpProxyPlan } from "./pi/mcpProxies.js";
 import { PI_NOAH_SERVER_NAMES } from "./pi/mcpCatalog.js";
-import { catalogModel, catalogModelIds } from "./pi/modelCatalog.js";
+import { catalogEffortSupport, catalogModel, catalogModelIds } from "./pi/modelCatalog.js";
 import { piServicesFor } from "./pi/piRuntime.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
 import { piSandboxEnvOf } from "./pi/responsesClient.js";
@@ -57,7 +57,7 @@ import {
   type HexSshViewerClass,
 } from "../hexSshPolicy.js";
 import { effectiveModelOverride } from "../modelOverride.js";
-import { isEffortLevel } from "../effortLevels.js";
+import { effortForModel, isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
 import { summarizeOwnerState } from "./ownerState.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
@@ -429,6 +429,14 @@ export async function buildRunCapabilities(
     store.getModelVisionPolicy(),
     config.visionEnabled,
   );
+  // The effort this run SENDS on its model: the pick clamped to the efforts pi
+  // lists for it (`effortForModel`, the same clamp runPiAgent applies per
+  // request). describe_system names it next to the pick.
+  const runEffortSupport = catalogEffortSupport(piModels, effectiveModel);
+  const runEffort = {
+    ...effortForModel(userEffort, runEffortSupport),
+    ...(runEffortSupport ? { supported: runEffortSupport.efforts } : {}),
+  };
   const agentStart = Date.now();
 
   agentLogger.info(
@@ -777,6 +785,7 @@ export async function buildRunCapabilities(
     config,
     selectedModel: userModel,
     selectedEffort: userEffort,
+    sentEffort: runEffort,
     // The REGISTERED set (not the raw selection).
     enabledMcpToolGroups: registeredMcpToolGroups,
     // The working repo opened for this conversation (NAME only — the clone path is

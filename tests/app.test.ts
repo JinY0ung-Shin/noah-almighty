@@ -160,6 +160,37 @@ describe("noah-almighty platform", () => {
     services.store.close();
   });
 
+  it("reports each model's efforts (and the default model's) so the composer can grey out the rest (review #9)", async () => {
+    const services = createServices({
+      dataDir: tempDir,
+      agentRuntime: "pi",
+      sessionSecret: "test",
+      pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false },
+    });
+    const models: PiModel[] = [
+      { id: "small", default: true, reasoning: { efforts: ["none", "low", "high"], defaultEffort: "high" } },
+      { id: "plain", reasoning: null },
+      { id: "older" },
+    ];
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({ listModels: async () => models });
+    const app = createApp(services);
+    let res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.models.map((m: { reasoning?: unknown }) => m.reasoning)).toEqual([
+      { efforts: ["none", "low", "high"], defaultEffort: "high" },
+      null,
+      undefined,
+    ]);
+    expect(res.body.modelSelection.defaultReasoning).toEqual({ efforts: ["none", "low", "high"], defaultEffort: "high" });
+    // The admin override decides which model 기본 모델 is.
+    services.store.setModelOverride("plain");
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.defaultReasoning).toBeNull();
+    services.store.setModelOverride("older");
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect("defaultReasoning" in res.body.modelSelection).toBe(false);
+    services.store.close();
+  });
+
   it("offers no models on the local stub (the client hides the picker)", async () => {
     const services = createServices({ dataDir: tempDir, agentRuntime: "local", sessionSecret: "test" });
     const res = await request(createApp(services)).get("/api/bootstrap").expect(200);

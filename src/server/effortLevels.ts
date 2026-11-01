@@ -7,10 +7,10 @@
  *
  * The five ids ('low' | 'medium' | 'high' | 'xhigh' | 'max') are a subset of
  * pi's REASONING_EFFORTS (the names come from the retired Agent SDK's
- * `EffortLevel`); what a model does with a level it does not support is pi's
- * call — no per-model gating here.
- *
- * Effort is INDEPENDENT of the model.
+ * `EffortLevel`). The pick is per conversation, independent of the model, but
+ * what is SENT depends on it: pi's `/v1/models` lists each model's efforts and
+ * pi 400s any other, so {@link effortForModel} clamps the pick to the model
+ * (the run, describe_system and the composer all use it).
  *
  * `label`/`description` are user-facing, so they are KOREAN (matching the
  * project's language split: user strings Korean, stable `id`s never localized).
@@ -55,13 +55,13 @@ export const EFFORT_LEVELS: EffortLevel[] = [
     id: "xhigh",
     label: "매우 높음",
     labelEn: "Very high",
-    description: "high보다 더 깊은 추론 (Opus 4.7+; 그 외 모델은 high로 자동 조정)",
+    description: "high보다 더 깊은 추론 (모델이 지원하지 않으면 지원하는 가장 가까운 낮은 강도로 실행)",
   },
   {
     id: "max",
     label: "최대",
     labelEn: "Maximum",
-    description: "최대 사고 — 가장 어려운 작업용 (일부 모델만 지원, 느리고 비쌈)",
+    description: "최대 사고 — 가장 어려운 작업용 (느리고 비쌈; 모델이 지원하지 않으면 지원하는 가장 가까운 낮은 강도로 실행)",
   },
 ];
 
@@ -78,4 +78,51 @@ export const DEFAULT_EFFORT_LEVEL = "high";
 /** Type guard: a non-empty string that names a known effort level. */
 export function isEffortLevel(value: unknown): value is string {
   return typeof value === "string" && EFFORT_LEVEL_IDS.includes(value);
+}
+
+/**
+ * pi's REASONING_EFFORTS, lowest to highest — the order a pick is lowered in.
+ * `none` turns reasoning off; it is never a lowered pick's target.
+ */
+export const REASONING_EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * What pi's `/v1/models` says about one model's efforts: the ones it accepts
+ * (pi 400s any other) and the one it uses when a request names none. `null` in
+ * its place = the model does not reason (pi ignores any effort); absent = pi did
+ * not say (an older pi) → the pick is sent as is.
+ */
+export interface ModelEffortSupport {
+  efforts: readonly string[];
+  defaultEffort?: string;
+}
+
+/**
+ * The effort actually SENT for a pick on a model:
+ * - `picked`: supported (or support unknown) → sent as picked;
+ * - `lowered`: the closest supported level BELOW the pick (never `none`);
+ * - `model_default`: no supported level at or below the pick → the model's
+ *   default effort (undefined when pi named none: nothing is sent);
+ * - `not_reasoning`: the model does not reason → nothing is sent;
+ * - `unset`: nothing picked → nothing is sent (pi's default).
+ */
+export interface ModelEffort {
+  effort: string | undefined;
+  kind: "picked" | "lowered" | "model_default" | "not_reasoning" | "unset";
+}
+
+export function effortForModel(
+  picked: string | null | undefined,
+  support: ModelEffortSupport | null | undefined,
+): ModelEffort {
+  if (!picked) return { effort: undefined, kind: "unset" };
+  if (support === undefined) return { effort: picked, kind: "picked" };
+  if (support === null) return { effort: undefined, kind: "not_reasoning" };
+  if (support.efforts.includes(picked)) return { effort: picked, kind: "picked" };
+  const rank = (id: string): number => (REASONING_EFFORT_ORDER as readonly string[]).indexOf(id);
+  const lowered = support.efforts
+    .filter((id) => id !== "none" && rank(id) >= 0 && rank(id) < rank(picked))
+    .sort((a, b) => rank(b) - rank(a))[0];
+  if (lowered) return { effort: lowered, kind: "lowered" };
+  return { effort: support.defaultEffort, kind: "model_default" };
 }
