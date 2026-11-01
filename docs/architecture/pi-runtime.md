@@ -278,6 +278,14 @@ tracked + untracked-not-ignored files and `.git`, plain files, links never copie
 | `push` | pushes the clone (= what `commit` saved; sandbox-local git commits are never read) and notes uncommitted copy changes |
 | `remove_repo` / `close_repo` | remove the viewer's copy, every `<name>.prev*` and the record / keep the copy |
 
+"Clean" has two strengths. For claim and sync refusal (`copyHasChanges`) it means no TRACKED-file change — what
+decides whether someone's work is in the way. Deleting a replaced copy needs more (`existingDisposable`, review R3):
+the read-back walk prunes ignored folders and skips links, so ignored content (`.env.local`, notes in an ignored
+folder, build output), links, a `git stash` or a sandbox commit/branch would otherwise be judged clean and lost. A
+delete therefore also requires the copy's HEAD EXACTLY on its base, every ref tip in its `.git` a commit Noah's
+clone has (`git cat-file --batch-check` in the clone; refs read as data), no skipped entry against the base tree,
+and a full walk (ignore rules NOT applied) finding nothing but folders and base-tree files outside the top `.git`.
+Anything unreadable or over a cap counts as content.
 A replaced copy is NEVER deleted unless proven clean (review #13): it moves to a new `<name>.prev-<UTC stamp>`
 (`-2`… when taken), older ones are never touched or replaced, and only `remove_repo` (or account deletion) clears
 them. `git ls-files` listings are streamed (`gitListZ`, no exec buffer) and capped at the copy's file cap (review #15).

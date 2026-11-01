@@ -476,9 +476,11 @@ export interface EnsuredCopy {
  * work stays; `when-missing` (turn
  * start) never touches an existing copy; `refresh` (after a sync) always
  * writes a fresh one. A copy that is replaced is NEVER deleted unless it is
- * proven clean: with `discardIfClean` (sync_repo, which refused a dirty copy
- * just before) a copy whose git HEAD is on its base and whose files match the
- * base tree is removed; every other one is moved aside to a NEW
+ * proven to hold nothing but its base: with `discardIfClean` (sync_repo, which
+ * refused a dirty copy just before) a copy that passes
+ * {@link existingDisposable} (HEAD exactly on the base, no sandbox-only ref or
+ * stash, no changed/deleted file, and no ignored, linked or other extra entry)
+ * is removed; every other one is moved aside to a NEW
  * `<name>.prev-<UTC stamp>` (older ones are never touched), so no edit is
  * ever silently lost. Serialized with every other operation on the canonical
  * clone.
@@ -507,17 +509,146 @@ function isPrevName(entry: string, name: string): boolean {
   return entry === `${name}.prev` || (entry.startsWith(`${name}.prev-`) && /^\d{8}T\d{6}Z(-[0-9a-z]+)?$/.test(entry.slice(name.length + 6)));
 }
 
-/** The existing copy `name` is proven clean against `base`: HEAD on the base and no file differing from the base tree. */
-async function existingCleanAgainst(clone: string, parent: PinnedDir, name: string, base: string): Promise<boolean> {
+/**
+ * The existing copy `name` may be DELETED: it provably holds nothing but its
+ * base commit. "Clean" for claim and sync (`copyHasChanges`) means no TRACKED
+ * change — that decides whether work is in the way, not whether the folder is
+ * disposable — and the read-back walk prunes ignored folders, skips links and
+ * nested `.git`s, and accepts sandbox commits on the base. All of those are the
+ * agent's content too (`.env.local`, notes in an ignored folder, a link it
+ * made, a `git stash`, a local commit or branch), so a delete also needs:
+ * - the copy's git HEAD exactly ON the base (not a sandbox commit above it);
+ * - every ref tip in its `.git` a commit Noah's clone has (no stash, no
+ *   sandbox-only branch or commit);
+ * - no file, deletion or skipped entry against the base tree
+ *   (`readBackAgainstBase`);
+ * - nothing else in the copy at all, ignored or not: every entry outside the
+ *   top `.git` is a folder or a base-tree file ({@link copyHoldsOnlyTree}).
+ * Anything unreadable or over a cap counts as content: the copy is moved aside.
+ */
+async function existingDisposable(clone: string, parent: PinnedDir, name: string, base: string): Promise<boolean> {
   const copy = parent.dir([name]);
   if (!copy) return false;
   try {
-    if (!copyOnBase(copy, base).ok) return false;
-    const changes = await readBackAgainstBase(clone, copy, base).catch(() => null);
-    return changes !== null && changes.writes.length === 0 && changes.deletes.length === 0;
+    if (readCopyGitTip(copy) !== base) return false;
+    if (!(await copyRefsKnown(clone, copy))) return false;
+    const tree = await baseTree(clone, base);
+    const changes = await readBackAgainstBase(clone, copy, base, tree).catch(() => null);
+    if (!changes || changes.writes.length || changes.deletes.length || changes.skipped.length) return false;
+    return copyHoldsOnlyTree(copy, tree);
+  } catch {
+    return false;
   } finally {
     copy.close();
   }
+}
+
+/** Every ref tip in the copy's `.git` (loose refs and `packed-refs`); null when they cannot all be read as plain data. */
+function copyRefTips(copy: PinnedDir): string[] | null {
+  const tips: string[] = [];
+  const refs = copy.dir([".git", "refs"]);
+  if (refs) {
+    try {
+      const walk = (folder: PinnedDir, depth: number): boolean => {
+        if (depth > MAX_DEPTH) return false;
+        for (const entry of folder.list()) {
+          if (entry.isDirectory()) {
+            const sub = folder.dir([entry.name]);
+            if (!sub) return false;
+            try {
+              if (!walk(sub, depth + 1)) return false;
+            } finally {
+              sub.close();
+            }
+          } else if (entry.isFile()) {
+            const value = folder.readFile(entry.name, 4096)?.toString("utf8").trim();
+            if (value && /^ref:\s*refs\/\S+$/.test(value)) continue; // a symbolic ref (origin/HEAD): its target is a ref of its own
+            if (!value || !SHA_RE.test(value)) return false; // garbage: unprovable
+            tips.push(value);
+          } else {
+            return false;
+          }
+          if (tips.length > REFS_MAX) return false;
+        }
+        return true;
+      };
+      if (!walk(refs, 0)) return null;
+    } catch {
+      return null;
+    } finally {
+      refs.close();
+    }
+  }
+  const packed = readCopyGitFile(copy, ["packed-refs"], PACKED_REFS_MAX_BYTES)?.toString("utf8") ?? "";
+  for (const line of packed.split("\n")) {
+    const sha = /^\^?([0-9a-f]{40}(?:[0-9a-f]{24})?)(?:\s|$)/.exec(line.trim())?.[1];
+    if (sha) tips.push(sha);
+    if (tips.length > REFS_MAX) return null;
+  }
+  return tips;
+}
+
+const REFS_MAX = 2000;
+
+/** Every ref tip of the copy is an object Noah's clone has: no stash, no sandbox-only branch or commit. */
+async function copyRefsKnown(clone: string, copy: PinnedDir): Promise<boolean> {
+  const tips = copyRefTips(copy);
+  if (!tips) return false;
+  const unique = [...new Set(tips)];
+  if (unique.length === 0) return true;
+  const missing = await new Promise<boolean>((resolve) => {
+    const child = spawn("git", ["-C", clone, "cat-file", "--batch-check"], { env: serverGitEnv(), stdio: ["pipe", "pipe", "ignore"] });
+    child.stdin.on("error", () => {
+      /* EPIPE: the exit code decides */
+    });
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const lines = out.split("\n").filter(Boolean);
+      resolve(code !== 0 || lines.length !== unique.length || lines.some((line) => / missing$/.test(line)));
+    });
+    child.stdin.end(unique.join("\n") + "\n");
+  });
+  return !missing;
+}
+
+/**
+ * The copy holds nothing but folders and base-tree files: a full walk (ignore
+ * rules NOT applied) of everything outside the top `.git`, every folder listed
+ * through a verified descriptor path. A link, special file, nested `.git`,
+ * file outside the tree, unreadable folder or more than READBACK_MAX_ENTRIES
+ * entries → false. (Contents were compared by `readBackAgainstBase` already.)
+ */
+function copyHoldsOnlyTree(pinned: PinnedDir, tree: Map<string, { mode: string; sha: string }>): boolean {
+  const copyReal = pinned.realPath();
+  if (!copyReal) return false;
+  const real = (rel: string): string => (rel ? path.join(copyReal, ...rel.split("/")) : copyReal);
+  let entries = 0;
+  let level: string[] = [""];
+  for (let depth = 0; level.length > 0; depth += 1) {
+    if (depth > MAX_DEPTH) return false;
+    const next: string[] = [];
+    for (const dirRel of level) {
+      const names = listDirVerified(pinned.descendant(dirRel), real(dirRel));
+      if (!names) return false;
+      for (const entry of names) {
+        if (!dirRel && entry.name === ".git") continue; // the copy's own git: checked by its refs
+        entries += 1;
+        if (entries > READBACK_MAX_ENTRIES) return false;
+        const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
+        if (entry.isDirectory() && entry.name !== ".git") next.push(rel);
+        else if (!entry.isFile() || !tree.has(rel)) return false;
+      }
+    }
+    level = next;
+  }
+  return true;
 }
 
 async function ensureCopyLocked(
@@ -554,7 +685,7 @@ async function ensureCopyLocked(
     tmp.close();
     let previousPath: string | undefined;
     if (existing === "dir" || existing === "file") {
-      if (existing === "dir" && discardIfClean && state && (await existingCleanAgainst(ref.clonePath, parent, ref.name, state.base))) {
+      if (existing === "dir" && discardIfClean && state && (await existingDisposable(ref.clonePath, parent, ref.name, state.base))) {
         parent.remove(ref.name);
       } else {
         const prevName = freePrevName(parent, ref.name);
@@ -655,12 +786,13 @@ async function readBack(clone: string, pinned: PinnedDir): Promise<CopyChanges> 
  * work. Same walk, links and caps as readBack; for "has it uncommitted work?"
  * only (its writes are never applied).
  */
-async function readBackAgainstBase(clone: string, pinned: PinnedDir, base: string): Promise<CopyChanges> {
-  const tree = new Map<string, { mode: string; sha: string }>();
-  for (const line of await gitListZ(clone, ["ls-tree", "-r", "-z", "--full-tree", base])) {
-    const match = /^(\d{6}) \w+ ([0-9a-f]+)\t(.+)$/s.exec(line);
-    if (match) tree.set(match[3]!, { mode: match[1]!, sha: match[2]! });
-  }
+async function readBackAgainstBase(
+  clone: string,
+  pinned: PinnedDir,
+  base: string,
+  knownTree?: Map<string, { mode: string; sha: string }>,
+): Promise<CopyChanges> {
+  const tree = knownTree ?? (await baseTree(clone, base));
   const { seen, skipped, copy, real } = await walkCopy(clone, pinned, new Set(tree.keys()));
   const algorithm = base.length === 64 ? "sha256" : "sha1";
   const isFileMode = (mode: string) => mode === "100644" || mode === "100755";
@@ -687,6 +819,16 @@ async function readBackAgainstBase(clone: string, pinned: PinnedDir, base: strin
     else if (inCopy !== "file") skipped.push(rel);
   }
   return { writes, deletes, skipped: [...new Set(skipped)] };
+}
+
+/** The base commit's tree (`git ls-tree -r` in the canonical clone): path → mode + blob id. */
+async function baseTree(clone: string, base: string): Promise<Map<string, { mode: string; sha: string }>> {
+  const tree = new Map<string, { mode: string; sha: string }>();
+  for (const line of await gitListZ(clone, ["ls-tree", "-r", "-z", "--full-tree", base])) {
+    const match = /^(\d{6}) \w+ ([0-9a-f]+)\t(.+)$/s.exec(line);
+    if (match) tree.set(match[3]!, { mode: match[1]!, sha: match[2]! });
+  }
+  return tree;
 }
 
 /** The git blob id of a sandbox file (verified read); throws when it cannot be read. */

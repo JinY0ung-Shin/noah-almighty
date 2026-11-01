@@ -231,3 +231,53 @@ describe("uncommitted edits survive a moved clone, sync and re-open (review #13)
     expect(fs.readdirSync(repos)).toEqual([]);
   });
 });
+
+describe("a replaced copy is deleted only when it holds nothing but its base (review R3)", () => {
+  it("sync moves aside a copy whose only extra content is ignored, a link, a stash or a sandbox commit; deletes a pristine one", async () => {
+    const s = repoSetup();
+    expect((await callTool(s.tools, "register_repo", { repo: s.remote, name: "app", branch: "main" })).isError).toBeFalsy();
+    expect((await callTool(s.tools, "open_repo", { name: "app" })).isError).toBeFalsy();
+    fs.writeFileSync(path.join(s.copy, ".gitignore"), ".env.local\nbuild/\n");
+    expect((await callTool(s.tools, "commit", { name: "app", message: "ignore rules" })).content[0].text).toContain("Committed");
+    const repos = path.dirname(s.copy);
+    const prevs = () => fs.readdirSync(repos).filter((name) => name.startsWith("app.prev")).sort();
+    const sync = async () => {
+      const result = await callTool(s.tools, "sync_repo", { name: "app" });
+      expect(result.isError).toBeFalsy();
+      return /moved to (\S+?);/.exec(result.content[0].text ?? "")?.[1];
+    };
+    const kept = (previousPath: string | undefined, rel: string, content: string) => {
+      expect(previousPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z(-\d+)?$/);
+      expect(fs.readFileSync(path.join(repos, path.basename(previousPath!), rel), "utf8")).toBe(content);
+    };
+
+    // Ignored content is the agent's too: never deleted with the copy.
+    fs.writeFileSync(path.join(s.copy, ".env.local"), "API_KEY=local");
+    kept(await sync(), ".env.local", "API_KEY=local");
+    fs.mkdirSync(path.join(s.copy, "build"));
+    fs.writeFileSync(path.join(s.copy, "build", "notes.md"), "my notes");
+    kept(await sync(), "build/notes.md", "my notes");
+    // A link the agent made (the read-back skips it): moved aside, not deleted.
+    fs.symlinkSync("shared.md", path.join(s.copy, "alias.md"));
+    const linked = await sync();
+    expect(linked).toBeDefined();
+    expect(fs.lstatSync(path.join(repos, path.basename(linked!), "alias.md")).isSymbolicLink()).toBe(true);
+    // A `git stash` leaves the working tree on the base, the work in .git.
+    fs.writeFileSync(path.join(s.copy, "shared.md"), "stashed edit");
+    s.inCopy("stash", "-q");
+    expect(fs.readFileSync(path.join(s.copy, "shared.md"), "utf8")).toBe("v1");
+    expect(await sync()).toBeDefined();
+    // A sandbox commit later undone in the working tree only: still moved aside.
+    fs.writeFileSync(path.join(s.copy, "local.txt"), "local");
+    s.inCopy("add", "-A");
+    s.inCopy("commit", "-q", "-m", "sandbox-only");
+    fs.unlinkSync(path.join(s.copy, "local.txt"));
+    expect(await sync()).toBeDefined();
+    expect(prevs()).toHaveLength(5);
+
+    // A pristine copy (an empty folder is no content) is deleted, not kept.
+    fs.mkdirSync(path.join(s.copy, "empty"));
+    expect(await sync()).toBeUndefined();
+    expect(prevs()).toHaveLength(5);
+  });
+});
