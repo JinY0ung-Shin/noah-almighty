@@ -172,8 +172,13 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
    * re-copying then would take that conversation's half-done work. Null = go,
    * and the copy's run lock is then HELD by this run until it ends
    * (`copyRunLock`), exactly like a turn that started with the repo open.
+   * `remove` (remove_repo, which deletes the copy and every `.prev*`) takes the
+   * same gate, worded for a removal.
    */
-  const copyAccessRefusal = async (ref: PiRepoCopyRef): Promise<ReturnType<typeof text> | null> => {
+  const copyAccessRefusal = async (
+    ref: PiRepoCopyRef,
+    action: "edit" | "remove" = "edit",
+  ): Promise<ReturnType<typeof text> | null> => {
     const conversationId = ctx.conversationId ?? "";
     const key = piRepoCopyLockKey(ref);
     const running = activeRepoHolder(key);
@@ -184,7 +189,9 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         : { ok: true as const, undo: () => {} };
     if (!lock.ok) {
       return text(
-        `'${ref.name}': another conversation's run is working on this sandbox copy right now, so this conversation cannot change, commit or sync it. Tell the user and try again after that run ends.`,
+        action === "remove"
+          ? `'${ref.name}': another conversation's run is working on this sandbox copy right now, so this conversation cannot remove the repository (that would delete the copy under that run). Nothing was removed. Tell the user and try again after that run ends.`
+          : `'${ref.name}': another conversation's run is working on this sandbox copy right now, so this conversation cannot change, commit or sync it. Tell the user and try again after that run ends.`,
         true,
       );
     }
@@ -197,7 +204,9 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     if (claim.kind === "held") {
       lock.undo(); // a refused tool never keeps the other conversation's run out
       return text(
-        `'${ref.name}': the sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, ref.name)} holds uncommitted changes from another conversation that still has this repository open, so this conversation must not commit, sync or re-copy it. Do not edit that copy. Tell the user to commit those changes (or close_repo) in that other conversation first.`,
+        action === "remove"
+          ? `'${ref.name}': the sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, ref.name)} holds uncommitted changes from another conversation that still has this repository open, so this conversation must not remove the repository (that would delete those changes). Nothing was removed. Tell the user to commit those changes (or close_repo) in that other conversation first.`
+          : `'${ref.name}': the sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, ref.name)} holds uncommitted changes from another conversation that still has this repository open, so this conversation must not commit, sync or re-copy it. Do not edit that copy. Tell the user to commit those changes (or close_repo) in that other conversation first.`,
         true,
       );
     }
@@ -327,13 +336,21 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "remove_repo",
-      "Remove a registered general git repository from the list and delete its local working clone, together with your sandbox copy of it and every `<name>.prev-<UTC stamp>` folder moved aside next to it. Does not delete the remote repository. (owner only)",
+      "Remove a registered general git repository from the list and delete its local working clone, together with your sandbox copy of it and every `<name>.prev-<UTC stamp>` folder moved aside next to it. Refused (nothing removed) while another conversation's run is working on that copy, or while another conversation that still has the repository open left uncommitted changes in it. Does not delete the remote repository. (owner only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = ownerGuard();
         if (denied) return denied;
         try {
           const repoCtx = ownerRepoContext(args.name);
+          // The copy is shared by the principal's conversations: never delete it
+          // (or the registration and clone it comes from) under another
+          // conversation's run or its uncommitted work.
+          const ref = copyRef(repoCtx.name);
+          if (ref) {
+            const refused = await copyAccessRefusal(ref, "remove");
+            if (refused) return refused;
+          }
           const removed = store.deleteGitRepo(ctx.avatarUserId, repoCtx.name);
           await removeGitRepoClone(repoCtx);
           if (ctx.piWorkspace) {

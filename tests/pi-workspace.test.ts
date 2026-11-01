@@ -542,6 +542,58 @@ describe("working-repo copy (D1)", () => {
     expect(activeRepoHolder(key)).toBe("conv-1");
     releaseActiveRepo(key, "conv-1");
   });
+
+  it("remove_repo takes the same copy gate: refused under another conversation's run or its uncommitted work, nothing removed", async () => {
+    const s = repoSetup();
+    s.store.touchConversation(s.owner.id, "conv-2", s.owner.id, "other thread");
+    const withLocks = (conversationId: string, locks: RunRepoLocks) =>
+      buildGitRepoTools(s.store, {
+        avatarUserId: s.owner.id,
+        owner: { id: s.owner.id, username: "owner", displayName: "Owner" },
+        viewerIsOwner: true,
+        elevated: true,
+        config: s.config,
+        conversationId,
+        piWorkspace: piWorkspaceFor(s.config, s.owner.id, conversationId),
+        copyRunLock: locks,
+      });
+    const chatLocks = new RunRepoLocks("conv-1");
+    const chat = withLocks("conv-1", chatLocks);
+    await callTool(chat, "register_repo", { repo: s.remote, name: "app", branch: "main" });
+    expect((await callTool(chat, "open_repo", { name: "app" })).isError).toBeFalsy();
+    const copy = path.join(piWorkspaceFor(s.config, s.owner.id, "conv-1").hostRoot!, "repos", s.owner.id, "app");
+    const clone = path.join(s.config.dataDir, "git-repos", s.owner.id, "app");
+    fs.writeFileSync(path.join(copy, "README.md"), "chat half-done");
+    const untouched = () => {
+      expect(s.store.getGitRepo(s.owner.id, "app")).toBeTruthy();
+      expect(fs.existsSync(path.join(clone, ".git"))).toBe(true);
+      expect(fs.readFileSync(path.join(copy, "README.md"), "utf8")).toBe("chat half-done");
+    };
+
+    // conv-1's run holds the copy lock while it edits: conv-2's remove_repo must not delete anything.
+    const otherLocks = new RunRepoLocks("conv-2");
+    const other = withLocks("conv-2", otherLocks);
+    const locked = await callTool(other, "remove_repo", { name: "app" });
+    expect(locked.isError).toBe(true);
+    expect(locked.content[0].text).toContain("another conversation's run is working on this sandbox copy");
+    expect(locked.content[0].text).toContain("Nothing was removed");
+    untouched();
+
+    // The run ended, but conv-1 still has the repo open with uncommitted changes: still refused.
+    chatLocks.releaseAll();
+    const held = await callTool(other, "remove_repo", { name: "app" });
+    expect(held.isError).toBe(true);
+    expect(held.content[0].text).toContain("uncommitted changes from another conversation");
+    untouched();
+    otherLocks.releaseAll();
+
+    // The holder's own remove_repo goes through and takes everything with it.
+    const own = withLocks("conv-1", new RunRepoLocks("conv-1"));
+    expect((await callTool(own, "remove_repo", { name: "app" })).content[0].text).toContain("Removed the git repo registration");
+    expect(s.store.getGitRepo(s.owner.id, "app")).toBeFalsy();
+    expect(fs.existsSync(copy)).toBe(false);
+    expect(fs.existsSync(clone)).toBe(false);
+  });
 });
 
 describe("run capabilities on pi", () => {

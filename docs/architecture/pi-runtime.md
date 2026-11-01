@@ -276,7 +276,7 @@ tracked + untracked-not-ignored files and `.git`, plain files, links never copie
 | `commit` (pi only, `GIT_REPO_PI_COMMIT_TOOL_NAME`) | reads the copy's WORKING TREE back (lstat walk, `.git` skipped at every level, links/specials skipped and reported, ignore rules from the CANONICAL clone via `git check-ignore`, tracked files under ignored folders still compared; caps 100 000 entries / 20 000 changed files / 256 MB / 64 MB per file), writes changed files into the clone (never through a tracked link or onto a folder), deletes files gone from the copy, `git add -A` + `git commit` there, then replaces the copy's `.git` with a fresh copy of the clone's (sandbox `git status` is clean again) |
 | `sync_repo` | refused while the copy has uncommitted changes (`copyHasChanges`: measured against the copy's BASE tree even after the clone moved — `readBackAgainstBase`, `git ls-tree` + blob hashes, never git in the copy — and always for a diverged copy); else syncs the clone and refreshes the copy, deleting the replaced copy only when `existingDisposable` proves it holds nothing but its base, else moving it aside |
 | `push` | pushes the clone (= what `commit` saved; sandbox-local git commits are never read) and notes uncommitted copy changes |
-| `remove_repo` / `close_repo` | remove the viewer's copy, every `<name>.prev*` and the record / keep the copy |
+| `remove_repo` / `close_repo` | remove the viewer's copy, every `<name>.prev*` and the record (behind the same copy gate as `commit`/`sync_repo`, before anything is removed) / keep the copy |
 
 "Clean" has two strengths. For claim and sync refusal (`copyHasChanges`) it means no TRACKED-file change — what
 decides whether someone's work is in the way. Deleting a replaced copy needs more (`existingDisposable`, review R3):
@@ -315,7 +315,9 @@ to the tools as `GitRepoToolsContext.copyRunLock` via `RunCapabilityOptions.piRe
 holder check gives a newly taken one back at once) and a
 persistent HOLDER in the copy record (`claimPiRepoCopy`: another conversation may take the copy over only while it
 is clean, or once the holder no longer has the repo open; else turn start → `held`, the tools refuse). The chat route
-answers both with 409, the scheduler skips the routine (`ROUTINE_REPO_BUSY`).
+answers both with 409, the scheduler skips the routine (`ROUTINE_REPO_BUSY`). `remove_repo` passes the same gate
+(`copyAccessRefusal(ref, "remove")`) BEFORE it deletes the registration, the clone or the copy: it deletes the copy
+and every `.prev*`, so another conversation's run (or its uncommitted work) must never be under it.
 Both surfaces: the prompt's working-repo section and describe_system's working-repo line name the copy path and the
 commit → push flow (`PiRuntimeFacts.activeRepoDir`, set only when `sandboxOwner === "owner"`).
 
