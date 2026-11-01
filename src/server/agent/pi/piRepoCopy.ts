@@ -126,10 +126,54 @@ async function headOf(clone: string): Promise<string> {
   return stdout.trim();
 }
 
-/** NUL-separated `git ls-files` output (canonical clone only). */
-async function lsFiles(clone: string, args: string[]): Promise<string[]> {
-  const { stdout } = await git(clone, ["ls-files", "-z", ...args], 120_000);
-  return stdout.split("\0").filter(Boolean);
+/** Byte guard on one `git ls-files` listing (far above COPY_MAX_FILES real paths). */
+const LS_FILES_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * NUL-separated `git ls-files` output (canonical clone only), STREAMED: an
+ * `execFile` buffer (1 MiB by default) failed a repo of ~17k ordinary paths
+ * long before the copy caps, and its error carried the truncated listing into
+ * the tool result. Past COPY_MAX_FILES entries (or LS_FILES_MAX_BYTES) git is
+ * killed and the copy refused as too large.
+ */
+function lsFiles(clone: string, args: string[]): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["-C", clone, "ls-files", "-z", ...args], {
+      env: serverGitEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let entries = 0;
+    let err = "";
+    let refused: Error | null = null;
+    const stop = (error: Error) => {
+      if (refused) return;
+      refused = error;
+      child.kill("SIGKILL");
+    };
+    const timer = setTimeout(() => stop(new Error("git ls-files timed out.")), 120_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (refused) return; // keep draining: the pipe must not fill while git is killed
+      bytes += chunk.length;
+      for (let index = chunk.indexOf(0); index !== -1; index = chunk.indexOf(0, index + 1)) entries += 1;
+      if (entries > COPY_MAX_FILES || bytes > LS_FILES_MAX_BYTES) stop(new CopyTooLargeError());
+      else chunks.push(chunk);
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      if (err.length < 4096) err += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (refused) reject(refused);
+      else if (code === 0) resolve(Buffer.concat(chunks).toString("utf8").split("\0").filter(Boolean));
+      else reject(new Error(`git ls-files failed: ${err.trim().slice(0, 2000) || `exit ${code}`}`));
+    });
+  });
 }
 
 /**
@@ -245,7 +289,7 @@ function copyGitDir(source: string, target: PinnedDir, budget: { files: number; 
   walk(source, target, 0);
 }
 
-class CopyTooLargeError extends Error {
+export class CopyTooLargeError extends Error {
   constructor() {
     super(
       `The repository is too large to copy into the sandbox (limits: ${COPY_MAX_FILES} files, ${Math.round(COPY_MAX_BYTES / 1024 / 1024)} MB including .git).`,
