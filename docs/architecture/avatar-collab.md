@@ -248,6 +248,11 @@
   `copySkillDir` (lstat walk — symlinks SKIPPED never followed, 512KB/file + 4MB + 200 files + depth 8
   caps, containment via the exported `resolveInRepo`/`realpathContained`), `learnSkillIntoRepo`
   (ensureClone both → copy → rewrite identity → `ensureMarketplaceManifest` → `commitAndPush`).
+  Every READ below a repo root takes NO link (review R8): `skills/` and `skills/<slug>/` must be real
+  directories under the root's realpath (lstat), SKILL.md heads and origin markers are opened O_NOFOLLOW and
+  checked with `fdPathIs` — so a pushed `skills -> ../../<victim>/skills` (or a linked dir / SKILL.md / marker)
+  reads as absent instead of listing another user's private skill names. `listRepoSkills`, `readSkillOrigin`,
+  `hashSkillDir`, `listSkillFiles`, the copy source and the rename-rescue presence check share that rule.
   On rename the SKILL.md frontmatter `name:` AND `.claude-plugin/plugin.json` `name` are rewritten (a
   stale frontmatter name would load the skill under the OLD name and collide); a missing plugin.json is
   created (the marketplace entry is unloadable without one).

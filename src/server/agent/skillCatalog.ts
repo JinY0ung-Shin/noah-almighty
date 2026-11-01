@@ -8,10 +8,11 @@ import path from "node:path";
 import type { DiscoveredSkill } from "../toolSkillPolicy.js";
 
 /** Cap for SKILL.md reads — frontmatter sits at the top of the file. */
-const SKILL_MD_READ_BYTES = 4096;
+export const SKILL_MD_READ_BYTES = 4096;
 
-/** Read a SKILL.md's frontmatter name/description (capped, tolerant). Also
- *  used by skillTransfer.ts to snapshot share metadata. */
+/** Read a SKILL.md's frontmatter name/description (capped, tolerant).
+ *  skillTransfer.ts reads the head itself, through no link, and parses it with
+ *  {@link parseSkillMdHead}. */
 export function skillMdMeta(filePath: string): { name?: string; description?: string } {
   let head: string;
   try {
@@ -26,6 +27,11 @@ export function skillMdMeta(filePath: string): { name?: string; description?: st
   } catch {
     return {};
   }
+  return parseSkillMdHead(head);
+}
+
+/** The frontmatter name/description of a SKILL.md's first {@link SKILL_MD_READ_BYTES} bytes. */
+export function parseSkillMdHead(head: string): { name?: string; description?: string } {
   if (!head.startsWith("---")) {
     return {};
   }

@@ -711,6 +711,57 @@ describe("skillTransfer", () => {
     expect(skills[1].name).toBe("b-skill"); // dir-name fallback
   });
 
+  it("never follows a link out of the repo: a linked skills/, skill dir, SKILL.md or origin marker reads as absent (review R8)", async () => {
+    // The victim: another user's clone next door, with a private skill and a learned-copy marker.
+    const victim = path.join(tempDir, "link-victim");
+    writeSkills(victim, {
+      "secret-skill": {
+        "SKILL.md": skillMd("secret-skill", "TOP SECRET plan"),
+        ".noah-skill-origin.json": JSON.stringify({
+          ownerUserId: "u-victim",
+          ownerUsername: "victim",
+          skillName: "private-thing",
+          contentHash: null,
+          localHash: null,
+          learnedAt: "",
+        }),
+      },
+    });
+    const dest = path.join(tempDir, "link-dest");
+    fs.mkdirSync(dest, { recursive: true });
+
+    // 1. A pushed `skills -> ../link-victim/skills`.
+    const whole = path.join(tempDir, "link-whole");
+    fs.mkdirSync(whole, { recursive: true });
+    fs.symlinkSync("../link-victim/skills", path.join(whole, "skills"));
+    expect(fs.readdirSync(path.join(whole, "skills"))).toEqual(["secret-skill"]); // the link is live
+    expect(listRepoSkills(whole)).toEqual([]);
+    expect(readRepoSkill(whole, "secret-skill")).toBeNull();
+    expect(readSkillOrigin(whole, "secret-skill")).toBeNull();
+    expect(hashSkillDir(whole, "secret-skill")).toBeNull();
+    expect(listSkillFiles(whole, "secret-skill").files).toEqual([]);
+    await expect(copySkillDir(whole, "secret-skill", dest, "x")).rejects.toThrow("SKILL_NOT_FOUND");
+
+    // 2. A real skills/ holding a linked skill dir, a linked SKILL.md and a linked marker.
+    const parts = path.join(tempDir, "link-parts");
+    writeSkills(parts, { own: { "SKILL.md": skillMd("own", "mine") } });
+    fs.symlinkSync("../../link-victim/skills/secret-skill", path.join(parts, "skills", "linked-dir"));
+    fs.mkdirSync(path.join(parts, "skills", "linked-md"));
+    fs.symlinkSync("../../../link-victim/skills/secret-skill/SKILL.md", path.join(parts, "skills", "linked-md", "SKILL.md"));
+    fs.symlinkSync(
+      "../../../link-victim/skills/secret-skill/.noah-skill-origin.json",
+      path.join(parts, "skills", "own", ".noah-skill-origin.json"),
+    );
+    expect(listRepoSkills(parts)).toEqual([{ slug: "own", name: "own", description: "mine" }]);
+    expect(JSON.stringify(listRepoSkills(parts))).not.toContain("TOP SECRET");
+    expect(readSkillOrigin(parts, "own")).toBeNull();
+    expect(readSkillOrigin(parts, "linked-dir")).toBeNull();
+    await expect(copySkillDir(parts, "linked-md", dest, "y")).rejects.toThrow("SKILL_NOT_FOUND");
+    // The real skill still reads, hashes and copies.
+    expect(hashSkillDir(parts, "own")).toMatch(/^[0-9a-f]{64}$/);
+    expect((await copySkillDir(parts, "own", dest, "own")).files).toBe(1);
+  });
+
   it("lists the files a learn would copy (tree, no symlinks, SKILL.md-only)", () => {
     const root = path.join(tempDir, "manifest-repo");
     fs.mkdirSync(path.join(root, "skills", "solo"), { recursive: true });

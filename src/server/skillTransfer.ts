@@ -16,7 +16,8 @@ import {
 } from "./knowledgeRepo.js";
 import { git } from "./repoGitCore.js";
 import { resolveShareCopy } from "../shared/skillOriginMatch.js";
-import { skillMdMeta } from "./agent/skillCatalog.js";
+import { SKILL_MD_READ_BYTES, parseSkillMdHead } from "./agent/skillCatalog.js";
+import { fdPathIs } from "./pinnedFs.js";
 import type { SharedSkill, SharedSkillManifest } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -26,8 +27,9 @@ const execFileAsync = promisify(execFile);
 // module materializes a learned skill by copying `skills/<slug>/` from the
 // sharer's clone into the learner's repo, registering it in the learner's
 // marketplace manifest (like scaffoldSkill), and committing with the learner's
-// identity. All path handling goes through knowledgeRepo's resolveInRepo +
-// realpathContained so the git-safety rules stay single-sourced.
+// identity. Path handling goes through knowledgeRepo's resolveInRepo (+
+// realpathContained for writes) so the git-safety rules stay single-sourced,
+// and every READ below a repo root takes no link at all (see "no-link reads").
 //
 // The copied tree is TEACHING MATERIAL authored by a teammate: symlinks are
 // never followed (skipped + counted), sizes are capped, and everything lands
@@ -68,14 +70,119 @@ export function normalizeSkillSlug(name: string): string {
   return sanitizeName(name.trim()).toLowerCase().replace(/^-+|-+$/g, "");
 }
 
+// ---- no-link reads ---------------------------------------------------------
+//
+// A knowledge repo is user-pushed, and git checks a committed symlink out as a
+// real link. Following one would read ANOTHER user's clone next door: a pushed
+// `skills -> ../../<victim>/skills` once listed that user's private skill names
+// and descriptions in the shared-skills list (review R8), and a marker linked to
+// `/dev/zero` would never finish reading. So every path this module READS below
+// the repo root reaches it through NO link: the root's realpath, then each
+// segment lstat'd as a real directory, and files opened O_NOFOLLOW with the
+// opened descriptor checked against the expected path (`fdPathIs`), the
+// pattern of plugins.ts `readTextBelow`. The tree walks below (walkSkillDir,
+// copyTree) already skip links entry by entry.
+
+// O_NONBLOCK: a FIFO never blocks the open. O_NOFOLLOW: a link as the last name is refused.
+const NO_FOLLOW_READ_FLAGS =
+  fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0);
+
+/** Cap on a provenance marker read (Noah writes a few hundred bytes). */
+const MAX_ORIGIN_MARKER_BYTES = 64 * 1024;
+
+function isRealDir(abs: string): boolean {
+  try {
+    return fs.lstatSync(abs).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** `<repo>/skills` when it is a real directory reached through no link, else null. */
+function skillsDirNoLink(repoRoot: string): string | null {
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(repoRoot);
+  } catch {
+    return null;
+  }
+  const dir = path.join(realRoot, SKILL_DIR);
+  return isRealDir(dir) ? dir : null;
+}
+
+/** `<repo>/skills/<slug>` when it is a real directory reached through no link, else null. A slug is ONE name. */
+function skillDirNoLink(repoRoot: string, slug: string): string | null {
+  if (!slug || slug === "." || slug === ".." || /[\\/\0]/.test(slug) || !resolveInRepo(repoRoot, `${SKILL_DIR}/${slug}`)) {
+    return null;
+  }
+  const skills = skillsDirNoLink(repoRoot);
+  if (!skills) {
+    return null;
+  }
+  const dir = path.join(skills, slug);
+  return isRealDir(dir) ? dir : null;
+}
+
+/**
+ * The first `maxBytes` of a REGULAR file reached through no link (`file` must
+ * already be link-free above its last name, as the helpers above return), or
+ * null. `truncated` when the file is larger.
+ */
+function readHeadNoFollow(file: string, maxBytes: number): { text: string; truncated: boolean } | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, NO_FOLLOW_READ_FLAGS);
+  } catch {
+    return null;
+  }
+  try {
+    if (!fdPathIs(fd, file)) {
+      return null;
+    }
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      return null;
+    }
+    const buffer = Buffer.alloc(Math.min(maxBytes, stat.size));
+    let total = 0;
+    while (total < buffer.length) {
+      const read = fs.readSync(fd, buffer, total, buffer.length - total, total);
+      if (read === 0) {
+        break;
+      }
+      total += read;
+    }
+    return { text: buffer.subarray(0, total).toString("utf8"), truncated: stat.size > maxBytes };
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** listRepoSkills' membership rule for one slug: a real `skills/<slug>/` holding a regular SKILL.md, no link anywhere. */
+function hasSkillMd(repoRoot: string, slug: string): boolean {
+  const dir = skillDirNoLink(repoRoot, slug);
+  if (!dir) {
+    return false;
+  }
+  try {
+    return fs.lstatSync(path.join(dir, "SKILL.md")).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Enumerate the skills of one repo working tree by scanning
  * `skills/<dir>/SKILL.md` (the shareable set — bundled/plugin skills are
  * deliberately NOT included; everyone already has the bundles, and plugins are
- * shared by installing the same plugin). Tolerant: no skills dir → [].
+ * shared by installing the same plugin). Tolerant: no skills dir → []. A link
+ * anywhere (`skills` itself, a `<dir>`, a SKILL.md) leaves that part out — the
+ * link could name another user's clone.
  */
 export function listRepoSkills(repoRoot: string): RepoSkillEntry[] {
-  const dir = resolveInRepo(repoRoot, SKILL_DIR);
+  const dir = skillsDirNoLink(repoRoot);
   if (!dir) {
     return [];
   }
@@ -87,14 +194,14 @@ export function listRepoSkills(repoRoot: string): RepoSkillEntry[] {
   }
   const out: RepoSkillEntry[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || !isRealDir(path.join(dir, entry.name))) {
       continue;
     }
-    const mdPath = path.join(dir, entry.name, "SKILL.md");
-    if (!fs.existsSync(mdPath)) {
+    const md = readHeadNoFollow(path.join(dir, entry.name, "SKILL.md"), SKILL_MD_READ_BYTES);
+    if (!md) {
       continue;
     }
-    const meta = skillMdMeta(mdPath);
+    const meta = parseSkillMdHead(md.text);
     out.push({
       slug: entry.name,
       name: meta.name || entry.name,
@@ -214,11 +321,7 @@ function walkSkillDir(
  * caps (such a skill can't transfer anyway).
  */
 export function hashSkillDir(repoRoot: string, slug: string): string | null {
-  const lexical = resolveInRepo(repoRoot, `${SKILL_DIR}/${slug}`);
-  if (!lexical) {
-    return null;
-  }
-  const dir = realpathContained(repoRoot, lexical, true);
+  const dir = skillDirNoLink(repoRoot, slug);
   if (!dir) {
     return null;
   }
@@ -258,8 +361,7 @@ export function hashSkillDir(repoRoot: string, slug: string): string | null {
  * empty one. A missing/uncontained dir is an empty manifest, not an error.
  */
 export function listSkillFiles(repoRoot: string, slug: string): SharedSkillManifest {
-  const lexical = resolveInRepo(repoRoot, `${SKILL_DIR}/${slug}`);
-  const dir = lexical ? realpathContained(repoRoot, lexical, true) : null;
+  const dir = skillDirNoLink(repoRoot, slug);
   if (!dir) {
     return { files: [], totalBytes: 0, truncated: false };
   }
@@ -277,12 +379,13 @@ export function listSkillFiles(repoRoot: string, slug: string): SharedSkillManif
 
 /** Read a learned skill's provenance marker, or null when absent/invalid. */
 export function readSkillOrigin(repoRoot: string, slug: string): SkillOrigin | null {
-  const lexical = resolveInRepo(repoRoot, `${SKILL_DIR}/${slug}/${SKILL_ORIGIN_FILE}`);
-  if (!lexical) {
+  const dir = skillDirNoLink(repoRoot, slug);
+  const read = dir ? readHeadNoFollow(path.join(dir, SKILL_ORIGIN_FILE), MAX_ORIGIN_MARKER_BYTES) : null;
+  if (!read || read.truncated) {
     return null;
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(lexical, "utf8")) as Partial<SkillOrigin>;
+    const raw = JSON.parse(read.text) as Partial<SkillOrigin>;
     if (
       typeof raw.ownerUserId !== "string" ||
       typeof raw.ownerUsername !== "string" ||
@@ -960,8 +1063,7 @@ export async function rescueSharedSkillRename(
   // common answer — give it with one stat instead of parsing every skill's
   // frontmatter (listRepoSkills reads each SKILL.md). The SKILL.md-exists test
   // is listRepoSkills' membership rule for one slug.
-  const presentMd = resolveInRepo(repoRoot, `${SKILL_DIR}/${row.skillName}/SKILL.md`);
-  if ((presentMd && fs.existsSync(presentMd)) || !fs.existsSync(path.join(repoRoot, ".git"))) {
+  if (hasSkillMd(repoRoot, row.skillName) || !fs.existsSync(path.join(repoRoot, ".git"))) {
     return null; // the dir is present (so this was no rename), or the clone is mid-rebuild
   }
   const bySlug = new Map(listRepoSkills(repoRoot).map((entry) => [entry.slug, entry]));
@@ -1027,13 +1129,10 @@ export async function copySkillDir(
   if (!srcLex || !destLex) {
     throw new Error("INVALID_NAME");
   }
-  // Source must exist (realpath containment guards symlinked ancestors) and
-  // actually be a skill directory.
-  const src = realpathContained(srcRoot, srcLex, true);
-  if (!src || !fs.existsSync(path.join(src, "SKILL.md"))) {
-    throw new Error("SKILL_NOT_FOUND");
-  }
-  if (fs.lstatSync(src).isSymbolicLink() || !fs.statSync(src).isDirectory()) {
+  // Source must be a skill directory reached through no link, holding a
+  // regular SKILL.md (listRepoSkills' membership rule).
+  const src = hasSkillMd(srcRoot, srcSlug) ? skillDirNoLink(srcRoot, srcSlug) : null;
+  if (!src) {
     throw new Error("SKILL_NOT_FOUND");
   }
   // Destination must not exist yet; its (possibly not-yet-created) path must
