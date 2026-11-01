@@ -36,7 +36,13 @@ import { askAvatar } from "../src/server/agent/avatarAsk.js";
 import { PI_NO_ASK_USER_SENTENCE, piSandboxOwnerSentence } from "../src/server/agent/ownerState.js";
 import { isPiResponseId, runPiAgent } from "../src/server/agent/pi/runPiAgent.js";
 import { piConversationSegment, piHostPath, piUserKey, piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
-import { PiGatewayError, type PiResponseRequest, type PiResponsesClient, type PiStreamEvent } from "../src/server/agent/pi/responsesClient.js";
+import {
+  PiGatewayError,
+  buildResponsesBody,
+  type PiResponseRequest,
+  type PiResponsesClient,
+  type PiStreamEvent,
+} from "../src/server/agent/pi/responsesClient.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { gitInit, makeBareRemote, withTempDir, signup } from "./helpers.js";
 
@@ -598,6 +604,24 @@ describe("runPiAgent", () => {
     expect(response.text).toBe("Blue it is");
     expect(questions).toHaveLength(1);
     expect(requests[1]).toMatchObject({ previousResponseId: "resp_q_1", input: { kind: "answer", callId: "call_1" } });
+  });
+
+  it("re-sends the owner's sandbox_env (and the run token) with the AskUserQuestion answer", async () => {
+    const { store, config, owner, base } = setup();
+    store.setUserSecret(owner.id, "API_TOKEN", "owner-shell-secret-1");
+    store.setSecretShellExpose(owner.id, "API_TOKEN", true);
+    const { client, requests } = fakeClient([() => questionTurn("resp_q_1", "call_1"), () => textTurn("resp_q_2", "Blue it is")]);
+    const { events } = recorder({ onQuestion: async () => ({ behavior: "completed", result: { answers: { "Color?": "Blue" } } }) });
+    await runPiAgent(base(), [], config, store, events, undefined, { client });
+    expect(requests).toHaveLength(2);
+    expect(requests[0]!.sandboxEnv).toEqual({ API_TOKEN: "owner-shell-secret-1" });
+    expect(requests[1]!.input.kind).toBe("answer");
+    expect(requests[1]!.sandboxEnv).toEqual(requests[0]!.sandboxEnv);
+    expect(requests[1]!.headers).toEqual(requests[0]!.headers);
+    // Model and effort stay out of the answer: pi keeps the session's.
+    expect(requests[1]!.model).toBeUndefined();
+    expect(requests[1]!.reasoningEffort).toBeUndefined();
+    expect(buildResponsesBody(requests[1]!).sandbox_env).toEqual({ API_TOKEN: "owner-shell-secret-1" });
   });
 
   it.each([

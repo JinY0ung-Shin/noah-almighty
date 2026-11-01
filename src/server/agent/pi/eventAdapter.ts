@@ -659,6 +659,23 @@ function sumUsage(previous: AgentUsage | undefined, next: AgentUsage | undefined
 }
 
 /**
+ * The fields EVERY request of a run carries again, an AskUserQuestion answer
+ * included: who it runs as, the MCP metadata/headers (the run token), and the
+ * owner's `sandbox_env` — pi keeps that only for the request it came with, so an
+ * answer without it would run the rest of the response's `bash` without the
+ * secrets AND without their redaction. Model and effort are deliberately left
+ * out: omitted on a continuing turn, pi keeps the session's.
+ */
+function perRequestFields(request: PiResponseRequest): Pick<PiResponseRequest, "user" | "metadata" | "headers" | "sandboxEnv"> {
+  return {
+    user: request.user,
+    ...(request.metadata ? { metadata: request.metadata } : {}),
+    ...(request.headers ? { headers: request.headers } : {}),
+    ...(request.sandboxEnv ? { sandboxEnv: request.sandboxEnv } : {}),
+  };
+}
+
+/**
  * Drive one Noah run over pi: stream the turn, answer AskUserQuestion pauses
  * through `events.onQuestion`, and return the final text. A run without
  * `onQuestion` (nobody can answer) starts its session `interactive: false`, so
@@ -754,11 +771,9 @@ export async function runPiTurn(options: RunPiTurnOptions): Promise<PiRunResult>
       const output = formatPiQuestionAnswer(answer);
       if (outer?.aborted) throw new PiGatewayError("aborted");
       request = {
-        user: request.user,
+        ...perRequestFields(request),
         previousResponseId: outcome.responseId,
         input: { kind: "answer", callId: outcome.question.callId, output },
-        ...(request.metadata ? { metadata: request.metadata } : {}),
-        ...(request.headers ? { headers: request.headers } : {}),
       };
       continue;
     }
