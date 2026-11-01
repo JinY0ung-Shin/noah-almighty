@@ -244,6 +244,19 @@ describe("docker/pi scripts", () => {
     expect(script).toContain("NOAH_UID=1000");
     expect(script).not.toMatch(/echo[^\n]*\$\(cat/);
   });
+
+  it("gives Noah its own 0400 copy of pi's ADMIN key for the /admin panel proxy (file only)", () => {
+    const script = read("docker/pi/setup-host.sh");
+    expect(script).toContain('DEST="$SECRETS/noah/pi_gateway_admin_api_key"');
+    expect(script).toContain('copy_for_noah "$SECRETS/gateway/admin_api_key"');
+    expect(block(noah, "environment", 4)).toMatch(/^ {6}PI_GATEWAY_ADMIN_API_KEY_FILE: \/run\/secrets\/pi_gateway_admin_api_key_noah$/m);
+    expect(noah).toContain("- source: pi_gateway_admin_api_key_noah");
+    expect(block(compose, "secrets", 0)).toContain(
+      "file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/pi_gateway_admin_api_key",
+    );
+    // Never inline: the key would sit in the container env.
+    expect(compose).not.toMatch(/PI_GATEWAY_ADMIN_API_KEY:/);
+  });
 });
 
 describe(".env.example — bundled pi-gateway", () => {

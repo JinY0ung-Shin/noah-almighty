@@ -70,6 +70,8 @@ services:
       AGENT_RUNTIME: pi
       # pi's service key, read from the compose secret below (never from .env).
       PI_GATEWAY_API_KEY_FILE: /run/secrets/pi_gateway_api_key
+      # pi's ADMIN key (Noah's own copy): Noah serves pi's admin panel at /admin to Noah admins.
+      PI_GATEWAY_ADMIN_API_KEY_FILE: /run/secrets/pi_gateway_admin_api_key_noah
       PI_WORKSPACES_DIR: /srv/pi-workspaces
       # Only pi's broker (its pinned noah-mcp address) may reach /mcp. Widen deliberately in .env.
       NOAH_MCP_ALLOWED_CIDRS: ${NOAH_MCP_ALLOWED_CIDRS:-${NOAH_MCP_BROKER_IP:-172.16.248.10}/32}
@@ -80,6 +82,8 @@ services:
     secrets:
       - source: pi_gateway_api_key
         target: pi_gateway_api_key
+      - source: pi_gateway_admin_api_key_noah
+        target: pi_gateway_admin_api_key_noah
     volumes:
       - noah-almighty-data:/app/data
       # HTTPS certs (optional): on the deploy host drop PEMs into ./docker/tls
@@ -180,6 +184,9 @@ secrets:
   # Noah's own copy of pi's service key (uid 1000, 0400): docker/pi/setup-host.sh.
   pi_gateway_api_key:
     file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/pi_gateway_api_key
+  # Noah's own copy of pi's ADMIN key (uid 1000, 0400): docker/pi/setup-host.sh. Read by the /admin proxy.
+  pi_gateway_admin_api_key_noah:
+    file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/pi_gateway_admin_api_key
   # pi's admin key, read by pi-setup as uid 10001 (pi-gateway's scripts/setup-host.sh).
   pi_gateway_admin_api_key:
     file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/gateway/admin_api_key

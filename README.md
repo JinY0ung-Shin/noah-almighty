@@ -169,7 +169,7 @@ never copied into this repository.
    the keys both read (`LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
    `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`) must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a
    **host** path.
-2. **Prepare the host** (idempotent; re-run whenever pi's service key changes). It reads `PI_GATEWAY_HOME`
+2. **Prepare the host** (idempotent; re-run whenever pi's service or admin key changes). It reads `PI_GATEWAY_HOME`
    (and `PI_GATEWAY_SECRETS`, `PI_GATEWAY_DIR`) from that `.env`:
    ```bash
    sudo docker/pi/setup-host.sh
@@ -184,8 +184,9 @@ never copied into this repository.
      [Sizing pi-gateway](#sizing-pi-gateway)), `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
    - **Noah's half:** checks the workspaces owner, copies pi's service key to
      `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key` (uid 1000, 0400 — pi's one-copy-per-service convention;
-     compose mounts it into Noah as a secret, so the key never sits in `.env`) and checks that pi's admin key
-     is set.
+     compose mounts it into Noah as a secret, so the key never sits in `.env`), checks that pi's admin key
+     is set and copies it the same way to `$PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key` (Noah serves pi's
+     admin panel at `/admin`, below).
 3. **Build and start everything:**
    ```bash
    docker compose up -d --build
@@ -198,8 +199,10 @@ never copied into this repository.
    `mcp-broker` → `gateway` (healthy) → `pi-setup` → `noah-almighty`. `pi-setup` registers one broker entry per
    Noah MCP server, deploys Noah's system prompt (`scripts/pi-system-prompt.md`, live prompt `noah`) and turns
    off pi's `request_admin` / `present_file` built-ins; it is idempotent and re-runs on every `up`.
-4. **Configure the LLM in pi-gateway:** open pi's admin page (`http://127.0.0.1:8080/admin` on the host by
-   default; key: `$PI_GATEWAY_SECRETS/gateway/admin_api_key`) → **LLM**, add the corporate LLM server and its
+4. **Configure the LLM in pi-gateway:** open pi's admin page — on Noah's own port at `http://<host>:48787/admin/`
+   (alias `/settings/pi`) once you are signed in as a Noah admin (step 5; Noah injects pi's admin key, so there is no
+   second login), or on the host at `http://127.0.0.1:8080/admin` with the key in
+   `$PI_GATEWAY_SECRETS/gateway/admin_api_key` → **LLM**, add the corporate LLM server and its
    models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
    pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
    picks none runs pi's default model). A model whose **image** input is off there is text-only in Noah too
@@ -213,13 +216,14 @@ never copied into this repository.
 | | |
 |---|---|
 | Noah → pi | `http://gateway:8080` over pi's `edge` network, with pi's service key from the compose secret (`PI_GATEWAY_API_KEY_FILE`). |
+| pi's admin panel | Served on Noah's port at `/admin/` (alias `/settings/pi`) to Noah ADMINS only: Noah forwards to `http://gateway:8080/admin…` with pi's admin key from its own compose secret (`PI_GATEWAY_ADMIN_API_KEY_FILE`), drops Noah's cookies, refuses cross-origin writes and audits every write (`pi_admin_proxy`). What `pi-setup` applies (Noah's prompt `noah`, its MCP registrations, the disabled pi built-ins) is re-applied on every `up` — edit those in this repository, not there. |
 | pi's broker → Noah `/mcp/<server>` | `http://noah-almighty:48787` over `noah-mcp`, an internal network only the broker and Noah are on. The broker has a pinned address there (`NOAH_MCP_BROKER_IP`, default `172.16.248.10` in `NOAH_MCP_SUBNET` `172.16.248.0/24` — outside Docker's default address pools, so no auto-allocated network lands on it), and Noah's `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that address, so no other container, and no published-port client, passes `/mcp`'s source check; each call still needs a per-run token Noah mints itself. Change both variables if the subnet collides with a network your host routes to. |
 | sandboxes | No network at all (`network_mode: none`, pi's sandboxd). Their only exit is pi's egress-proxy, which opens only what pi's `SANDBOX_EGRESS_ALLOW` lists — keep Noah's address out of it: the broker, not the sandbox, calls Noah. |
 | workspaces | `$PI_GATEWAY_HOME/workspaces` is bind-mounted read-write into Noah at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`): Noah stages attachments, captures and Confluence files into each user's sandbox folder and reads shared files and deck previews from it. uid 1000 on both sides. |
 | sandbox image | `noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}` ([docker/pi-sandbox](docker/pi-sandbox/README.md)), built FROM pi's own `pi-gateway/sandbox:latest` and set as sandboxd's `SANDBOX_IMAGE`; pi's own image keeps its own tag. It carries the pptx skill's converter (Chromium headless shell, the pinned Python set, the deck fonts), so `PI_DECK_SANDBOX=true` is fixed. |
 | Noah image | No agent runs in it any more. It keeps what the server itself runs: git (server-side repository work), `gh` (create_repo), LibreOffice + poppler + the deck fonts (share_file's approximate previews), python3-cryptography/paramiko (SSH key generation, known_hosts), the hex-ssh MCP server (relayed to pi), and the MCP bridge scripts. No Chromium, Python package set, uv or ripgrep (those are in the sandbox image). |
 
-docker-compose.yml FIXES `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_KEY_FILE`, `PI_WORKSPACES_DIR`,
+docker-compose.yml FIXES `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_KEY_FILE`, `PI_GATEWAY_ADMIN_API_KEY_FILE`, `PI_WORKSPACES_DIR`,
 `PI_DECK_SANDBOX` and the default `NOAH_MCP_PUBLIC_URL` / `NOAH_MCP_ALLOWED_CIDRS` for the container; `.env`
 cannot override the fixed ones.
 
@@ -431,6 +435,7 @@ backup and quarantine).
 | `SECURE_COOKIES` | `true` to mark the session cookie `Secure` (HTTPS-only). Leave unset for plain-HTTP deployments (e.g. local docker-compose) or the cookie is never sent back and login fails. |
 | `AGENT_RUNTIME` | `pi` (default; every turn runs on pi-gateway — see `docs/architecture/pi-runtime.md`) or `local` (deterministic offline stub for tests). `claude` is retired and stops the boot. **Fixed to `pi` by docker-compose.yml.** |
 | `PI_GATEWAY_URL` / `PI_GATEWAY_API_KEY` / `PI_GATEWAY_API_KEY_FILE` | The pi-gateway origin and its service key — inline, or a file holding only the key (trimmed). Set ONE: both, or an unreadable/empty file, stops the boot. The key is server-only (it can run turns as any user): an inline key is scrubbed from the process env after boot, a file's key never enters it. **Fixed by docker-compose.yml** (`http://gateway:8080`, the compose secret `/run/secrets/pi_gateway_api_key`; a `PI_GATEWAY_API_KEY` in `.env` would stop the boot); set them yourself only for a native run. |
+| `PI_GATEWAY_ADMIN_API_KEY_FILE` | A file holding ONLY pi's admin key (trimmed). Set → Noah serves pi-gateway's admin panel at `/admin/` (alias `/settings/pi`) to Noah admins, injecting the key; unset → `/admin` answers 503. An inline `PI_GATEWAY_ADMIN_API_KEY`, or an unreadable/empty file, stops the boot. **Fixed by docker-compose.yml** (`/run/secrets/pi_gateway_admin_api_key_noah`, Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`). |
 | `PI_WORKSPACES_DIR` | Path of pi's `$PI_GATEWAY_HOME/workspaces` as Noah sees it (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. **Fixed by docker-compose.yml** (`/srv/pi-workspaces`, a bind mount of `$PI_GATEWAY_HOME/workspaces`). |
 | `NOAH_MCP_PUBLIC_URL` | The base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (registered by the `pi-setup` service through `scripts/pi-register-mcp.mjs`, logged at boot). Compose default `http://noah-almighty:<PORT>`; set it (with `NOAH_MCP_HOST_ALIAS`) only for native TLS. |
 | `NOAH_MCP_ALLOWED_CIDRS` | Comma-separated addresses/CIDRs (IPv4/IPv6) allowed to reach `/mcp/<server>`, matched on the TCP peer (never `X-Forwarded-For`); others get 403 before the token is read. An invalid entry stops the boot. Compose default: the broker's pinned address, `${NOAH_MCP_BROKER_IP}/32`. Unset (native run) = open — then bind/firewall the port to the broker's network. |

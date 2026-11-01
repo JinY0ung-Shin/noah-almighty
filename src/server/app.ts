@@ -23,6 +23,7 @@ import { createAdminRouter } from "./routes/admin.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
+import { createPiAdminProxyRouter } from "./routes/piAdminProxy.js";
 import { createMcpHttpRouter } from "./mcpHttp/endpoint.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 import { piServicesFor } from "./agent/pi/piRuntime.js";
@@ -91,6 +92,10 @@ export function createApp(services = createServices()) {
       networkAcl: parseMcpNetworkAcl(config.pi?.mcpAllowedCidrs?.join(",")),
     }),
   );
+  // pi-gateway's admin panel at /admin (Noah admins only, pi's admin key injected).
+  // BEFORE the JSON parser so bodies stream through untouched, and before the
+  // security-header middleware so pi's own CSP reaches its UI unchanged.
+  app.use(createPiAdminProxyRouter(deps));
   // Limit bumped from 3mb to accommodate chat image attachments (base64-inflated,
   // up to MAX_CHAT_IMAGES_PER_MESSAGE × ~5MB; the client downscales before send).
   app.use(express.json({ limit: "50mb" }));

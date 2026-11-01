@@ -12,6 +12,9 @@ export default defineConfig({
       "/api": "http://localhost:48787",
       "/users": "http://localhost:48787",
       "/fonts": "http://localhost:48787",
+      // pi-gateway's admin panel, served by Noah (routes/piAdminProxy.ts).
+      "/admin": "http://localhost:48787",
+      "/settings/pi": "http://localhost:48787",
     },
   },
   build: {

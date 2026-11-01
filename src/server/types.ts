@@ -285,6 +285,11 @@ export interface PiRuntimeConfig {
   /** Service key (env `PI_GATEWAY_API_KEY` or the file `PI_GATEWAY_API_KEY_FILE`; server-only, never left in process.env). */
   apiKey: string;
   /**
+   * pi's ADMIN key (file `PI_GATEWAY_ADMIN_API_KEY_FILE` only; server-only). Set →
+   * Noah serves pi's admin panel at `/admin` to Noah admins (`routes/piAdminProxy.ts`).
+   */
+  adminApiKey?: string;
+  /**
    * Host path of the gateway's `$PI_GATEWAY_HOME/workspaces` (env
    * `PI_WORKSPACES_DIR`): Noah stages files into `u-<sha256(user)[:24]>/…`.
    * Unset → Noah writes nothing into sandboxes (the model still gets the paths).

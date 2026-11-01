@@ -16,6 +16,8 @@
 #           uid 1000, 0400 — pi-gateway keeps one copy of a secret per service, owned by that service's uid,
 #           and Noah is one more service. Re-running replaces a stale copy (the gateway's file is the source).
 #   checks  $PI_GATEWAY_SECRETS/gateway/admin_api_key is set (the one-shot `pi-setup` service reads it)
+#   copies  it → $PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key, uid 1000, 0400, the same way: Noah serves
+#           pi's admin panel at /admin to Noah admins and injects this key (re-run after rotating pi's admin key)
 #   adds    PI_GATEWAY_HOME, PI_GATEWAY_SECRETS to Noah's .env (only when missing)
 # Values are never printed.
 set -euo pipefail
@@ -71,18 +73,25 @@ API_KEY="$SECRETS/gateway/api_key"
   || fail "$SECRETS/gateway/admin_api_key is empty — Noah's pi-setup service needs pi's admin API to register its MCP servers"
 
 install -d -o 0 -g 0 -m 0700 "$SECRETS/noah"
+# copy_for_noah SRC: SRC → $DEST, uid 1000, 0400 (a stale copy is replaced; values are never printed).
+copy_for_noah() {
+  local src="$1" action
+  if [ -f "$DEST" ] && cmp -s "$src" "$DEST"; then
+    chown "$NOAH_UID:$NOAH_UID" "$DEST"; chmod 0400 "$DEST"
+    echo "keep   $DEST"
+  else
+    [ -f "$DEST" ] && action=update || action=create
+    tmp="$(mktemp "$SECRETS/noah/.tmp.XXXXXX")"
+    cat "$src" > "$tmp"
+    install -o "$NOAH_UID" -g "$NOAH_UID" -m 0400 "$tmp" "$DEST"
+    rm -f "$tmp"
+    echo "$action $DEST"
+  fi
+}
 DEST="$SECRETS/noah/pi_gateway_api_key"
-if [ -f "$DEST" ] && cmp -s "$API_KEY" "$DEST"; then
-  chown "$NOAH_UID:$NOAH_UID" "$DEST"; chmod 0400 "$DEST"
-  echo "keep   $DEST"
-else
-  [ -f "$DEST" ] && action=update || action=create
-  tmp="$(mktemp "$SECRETS/noah/.tmp.XXXXXX")"
-  cat "$API_KEY" > "$tmp"
-  install -o "$NOAH_UID" -g "$NOAH_UID" -m 0400 "$tmp" "$DEST"
-  rm -f "$tmp"
-  echo "$action $DEST"
-fi
+copy_for_noah "$API_KEY"
+DEST="$SECRETS/noah/pi_gateway_admin_api_key"
+copy_for_noah "$SECRETS/gateway/admin_api_key"
 
 touch "$ENV_FILE"
 add_env() {

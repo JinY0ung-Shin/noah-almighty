@@ -515,6 +515,10 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   `PI_GATEWAY_API_KEY` there stops the boot). Same-uid caveat (#71): the file is readable by every uid-1000 child
   Noah spawns (hex-ssh, bundled stdio plugin servers, the HTTP bridge, git, LibreOffice) — the env scrub does not
   cover files; see `secrets-ssh.md` ("Same-uid posture (#71)").
+- **Admin key** — Noah's OWN 0400 uid-1000 copy of pi's ADMIN key (`$PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key`,
+  same `setup-host.sh` step), compose secret `pi_gateway_admin_api_key_noah`, read through
+  `PI_GATEWAY_ADMIN_API_KEY_FILE` for the `/admin` panel proxy (below). Same same-uid caveat as the service key, with a
+  wider blast radius: the admin key configures pi itself.
 - **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
   fixed), uid 1000 on both sides.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
@@ -554,6 +558,34 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own
   tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual
   topic say exactly that.
+
+## pi admin panel proxy (`routes/piAdminProxy.ts`)
+
+pi-gateway's own admin panel (LLM servers and models, the default model, prompts, MCP, tools, history, its test
+chat) is served on Noah's port at `/admin` — pi's OWN path, because its UI hard-codes `/admin/` and `/admin/api`
+(Vite `base`), and Noah's SPA uses `#/…` hash routes, so the server path is free. `/settings/pi` redirects there.
+The operator is the same person as Noah's admin (user decision 2026-11-01), so Noah's admin session IS pi admin:
+
+- **Gate** — every `/admin` request resolves the Noah session first; anonymous/non-admin → `/` (page) or pi's
+  error shape 401/403 (API), and nothing is forwarded.
+- **Key** — Noah's cookies, any client `Authorization` and client `X-Forwarded-*` are stripped; pi's admin key
+  (`PiRuntimeConfig.adminApiKey`, `PI_GATEWAY_ADMIN_API_KEY_FILE` ONLY — an inline `PI_GATEWAY_ADMIN_API_KEY` stops
+  the boot) is injected as `Authorization: Bearer`. Without the key `/admin` answers a Korean 503.
+- **CSRF** — pi skips its own `X-Admin-Request` check for bearer callers, and an injected bearer is ambient, so
+  Noah checks instead: a non-GET/HEAD/OPTIONS call needs `Sec-Fetch-Site: same-origin` (or, without it, an
+  `Origin` whose host is the request's Host; the scheme is not compared, for TLS-terminating proxies) AND
+  `X-Admin-Request: 1`.
+- **Local answers** — `POST /admin/api/login|logout` are answered `{ok:true}` by Noah: forwarding a typed key would
+  count failures against Noah's ONE address in pi's lockout, and there is no pi session to end.
+- **Streaming** — mounted BEFORE `express.json` and Noah's security-header middleware: bodies stream both ways
+  (pi's test chat is SSE; no timeout once headers arrived, 60 s before), pi's own CSP/X-Frame-Options reach its UI,
+  pi's `Set-Cookie` is dropped. Upstream down → 502 (Korean).
+- **Audit** — every forwarded write is an audit row `pi_admin_proxy` with `METHOD path` only (no query, no body).
+- **What does not stick** — `pi-setup` re-applies Noah's prompt `noah` (`scripts/pi-system-prompt.md`), its MCP
+  broker entries and the disabled `request_admin`/`present_file` on every `docker compose up`, so edits to those in
+  the panel last only until then; the repository stays their source of truth. Everything else (LLM settings,
+  egress, other prompts) is pi's own state. A prompt deployed there applies to pi sessions STARTED afterwards
+  (`snapshotForSession`); Noah's own append stays frozen per conversation (`conversations.pi_instructions`).
 
 ## Models (`agent/pi/modelCatalog.ts`)
 
@@ -604,7 +636,8 @@ successfully → empty, and the `local` stub's is always empty (the client then 
 `AGENT_RUNTIME` (`pi` default, `local` stub; anything else stops the boot), `PI_GATEWAY_URL` + the service key
 (required): inline `PI_GATEWAY_API_KEY` (in `SERVER_ONLY_SECRET_ENV_NAMES`) OR `PI_GATEWAY_API_KEY_FILE` (read and
 trimmed by `readPiGatewayApiKey`; both set, an unreadable or empty file, or a second line stops the boot; the key never
-enters `process.env` — the bundled compose stack sets only the file), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`,
+enters `process.env` — the bundled compose stack sets only the file), `PI_GATEWAY_ADMIN_API_KEY_FILE` (optional, the
+`/admin` panel proxy; file only — `readPiGatewayAdminApiKey`), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`,
 `NOAH_MCP_ALLOWED_CIDRS` (optional `/mcp` peer allowlist), `PI_DECK_SANDBOX`.
 
 Removed with the SDK runner: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (the old hard lock), `ANTHROPIC_DEFAULT_*_MODEL`,

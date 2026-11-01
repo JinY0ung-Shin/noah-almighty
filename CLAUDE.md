@@ -214,7 +214,8 @@ These are the invariants the project is built around. New work should reinforce 
   agent Noah's filesystem: hex-ssh's `ssh-upload`/`ssh-download` are never offered). A file Noah reads out of a
   user-pushed clone never follows a committed link (`plugins.ts` `readTextBelow`). The phase-0 hardening stays: the server process is non-dumpable, server-only
   secrets never reach a child through its ENV, and nothing secret rides argv — a secret FILE is not covered: pi's
-  service-key file (`PI_GATEWAY_API_KEY_FILE`, uid 1000, 0400) stays readable to every same-uid child. The image makes node and tini EXECUTE-ONLY
+  service-key file (`PI_GATEWAY_API_KEY_FILE`, uid 1000, 0400) and pi's ADMIN-key file (`PI_GATEWAY_ADMIN_API_KEY_FILE`,
+  same posture, file-only — it configures pi itself) stay readable to every same-uid child. The image makes node and tini EXECUTE-ONLY
   (`chmod 0711`) so their environ/memory are unreadable to other same-uid processes — PID 1 is that tini,
   started via `docker-entrypoint.sh`'s exec, so compose `init: true` must stay OFF on the base service (a
   runtime-started PID 1 stays readable); `index.ts` drops `SERVER_ONLY_SECRET_ENV_NAMES` (`secretPolicy.ts`)
@@ -386,7 +387,9 @@ These are the invariants the project is built around. New work should reinforce 
   shared key means the same on both sides — `NODE_EXTRA_CA_CERTS` is a HOST path (mounted read-only into
   Noah); ONE pi-gateway per Docker daemon (sandboxd reaps every `pi-gateway.instance=default` sandbox); the
   egress overlay (`docker-compose.egress.yml`) is NOT supported with the bundle (its firewall blocks pi's
-  gateway). A pi-gateway bump moves the submodule to a PUSHED commit and re-runs the dind boot test (`build-run-verify.md`).
+  gateway). pi's admin panel is served on Noah's port at `/admin` to Noah ADMINS (`routes/piAdminProxy.ts`, pi's
+  admin key injected, same-origin writes only, audited) — what `pi-setup` applies (prompt `noah`, MCP entries) is
+  re-applied on every `up`, so the repo stays its source. A pi-gateway bump moves the submodule to a PUSHED commit and re-runs the dind boot test (`build-run-verify.md`).
 - **Project name diverges by layer:** display "Noah Almighty", code slug `noah-almighty`, working dir
   `avatar-chat`. Grep both old/new slugs when auditing names.
 - **The user fleet is Windows/Linux only — no macOS.** Platform-dependent decisions (browser-bridge
