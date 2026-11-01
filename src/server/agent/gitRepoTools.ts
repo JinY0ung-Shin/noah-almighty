@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig } from "../types.js";
 import { decodeExecError, text } from "./mcpTools.js";
+import { PI_REPO_REPLACED_COPY_SENTENCE } from "./ownerState.js";
 import { setWorkspaceRepo } from "../repoWorkspace.js";
 import { commitIdentityFor } from "../knowledgeRepo.js";
 import type { PiWorkspace } from "./pi/piWorkspace.js";
@@ -297,7 +298,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
               const copyPath = piRepoCopySandboxPath(ctx.avatarUserId, repoCtx.name);
               return text(
                 status.kind === "moved"
-                  ? `Not synced: your sandbox copy ${copyPath} has ${count === null ? "uncommitted changes" : `${count} uncommitted file change(s)`} made on an older state of '${repoCtx.name}' (Noah's clone moved since the copy was made, so they cannot be committed as they are). Call mcp__git_repo__open_repo with name='${repoCtx.name}' for a fresh copy — this one is moved aside to ${copyPath}.prev-<UTC stamp>, never deleted — re-apply the edits there, commit them, then sync again.`
+                  ? `Not synced: your sandbox copy ${copyPath} has ${count === null ? "uncommitted changes" : `${count} uncommitted file change(s)`} made on an older state of '${repoCtx.name}' (Noah's clone moved since the copy was made, so they cannot be committed as they are). Call mcp__git_repo__open_repo with name='${repoCtx.name}' for a fresh copy — this one, with your changes, is moved aside to ${copyPath}.prev-<UTC stamp> and kept there until remove_repo — re-apply the edits there, commit them, then sync again.`
                   : `Not synced: your sandbox copy ${copyPath} has ${count} uncommitted file change(s). Save them with mcp__git_repo__commit first (or move them out of the copy), then sync again.`,
                 true,
               );
@@ -306,12 +307,12 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           await ensureGitRepoClone(repoCtx, { sync: true });
           store.markGitRepoSynced(ctx.avatarUserId, repoCtx.name);
           if (ref) {
-            // The copy was clean just now; it is deleted only if still proven clean.
-            const copy = await ensurePiRepoCopy(ref, "refresh", { discardIfClean: true });
+            // No tracked change just now; deleted only if it holds nothing but its base.
+            const copy = await ensurePiRepoCopy(ref, "refresh");
             return text(
               `Synced the git repo: ${repoCtx.name}. Your sandbox copy at ${copy.sandboxPath} now matches it.` +
                 (copy.previousPath
-                  ? ` The previous copy could not be proven clean, so it was moved to ${copy.previousPath}; check it for edits you still need.`
+                  ? ` The previous copy held content that is not in its commit (ignored or extra files, links, stashes or sandbox commits), so it was moved to ${copy.previousPath}, where it stays until remove_repo; move anything you still need out of it.`
                   : ""),
             );
           }
@@ -326,7 +327,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "remove_repo",
-      "Remove a registered general git repository from the list and delete its local working clone. Does not delete the remote repository. (owner only)",
+      "Remove a registered general git repository from the list and delete its local working clone, together with your sandbox copy of it and every `<name>.prev-<UTC stamp>` folder moved aside next to it. Does not delete the remote repository. (owner only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = ownerGuard();
@@ -346,7 +347,9 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "open_repo",
-      "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy (never checkout/switch/reset/rebase there — commit refuses a copy whose git HEAD left the commit Noah gave it), but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state is moved aside to a new `<name>.prev-<UTC stamp>` folder (never deleted) and replaced. The selection persists for this conversation (later turns are told the path) until close_repo. In a trusted colleague's conversation (not the owner's sandbox) NO copy is made: the repo is selected for reading through `mcp__git_repo__list_files`/`read_file`/`grep`. (owner / trusted user only)",
+      "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy (never checkout/switch/reset/rebase there — commit refuses a copy whose git HEAD left the commit Noah gave it), but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state (or whose git HEAD left that commit) is replaced. " +
+        PI_REPO_REPLACED_COPY_SENTENCE +
+        " The selection persists for this conversation (later turns are told the path) until close_repo. In a trusted colleague's conversation (not the owner's sandbox) NO copy is made: the repo is selected for reading through `mcp__git_repo__list_files`/`read_file`/`grep`. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = elevatedGuard();
@@ -376,8 +379,10 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           return text(
             `Opened '${repoCtx.name}'. Your working copy is at ${copy.sandboxPath} (${copy.outcome === "kept" ? "your existing copy was kept — it is current" : "a fresh copy of the current state"}).` +
               (copy.previousPath
-                ? ` Your previous copy was made from an older state and was moved to ${copy.previousPath}; re-apply any edits you still need from there.`
-                : "") +
+                ? ` Your previous copy was made from an older state (or its git HEAD left that commit) and held content of its own, so it was moved to ${copy.previousPath}, where it stays until remove_repo; re-apply any edits you still need from there.`
+                : copy.discardedPrevious
+                  ? " Your previous copy was made from an older state and held nothing but that commit, so it was deleted."
+                  : "") +
               ` Work there with absolute paths; save with mcp__git_repo__commit (name='${repoCtx.name}', message), then mcp__git_repo__push.`,
           );
         } catch (error) {
@@ -432,7 +437,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ...tools,
       tool(
         "commit",
-        "Save your work on an opened repository: read the working tree of your sandbox copy (`/workspace/repos/<owner>/<name>/`, see open_repo) back into Noah's own clone and commit it there with this message, under the configured commit identity. Every changed, added and deleted file of the copy is included (ignored files, the copy's .git and symbolic links are not); git commits you made inside the sandbox are not used — only the files. Refused when Noah's clone moved since your copy was made (another conversation committed or a sync pulled): then open_repo again for a fresh copy (your current one is moved aside to a new `<name>.prev-<UTC stamp>` folder, never deleted) and redo the edits there. Also refused when the copy's own git HEAD left the commit Noah gave it: never checkout/switch/reset/rebase in the copy — its files would then be another state's, and committing them would undo other work. Then `mcp__git_repo__push` to send it to origin. (owner / trusted user only)",
+        "Save your work on an opened repository: read the working tree of your sandbox copy (`/workspace/repos/<owner>/<name>/`, see open_repo) back into Noah's own clone and commit it there with this message, under the configured commit identity. Every changed, added and deleted file of the copy is included (ignored files, the copy's .git and symbolic links are not); git commits you made inside the sandbox are not used — only the files. Refused when Noah's clone moved since your copy was made (another conversation committed or a sync pulled): then open_repo again for a fresh copy (your current one is moved aside to a new `<name>.prev-<UTC stamp>` folder, kept until remove_repo, unless it provably holds nothing of yours) and redo the edits there. Also refused when the copy's own git HEAD left the commit Noah gave it: never checkout/switch/reset/rebase in the copy — its files would then be another state's, and committing them would undo other work. Then `mcp__git_repo__push` to send it to origin. (owner / trusted user only)",
         {
           name: z.string().describe("Registered repo name"),
           message: z.string().describe("The commit message"),
@@ -468,7 +473,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
                 );
               case "moved":
                 return text(
-                  `Not committed: '${repoCtx.name}' changed in Noah since your copy was made (copy base ${outcome.base.slice(0, 8)}, now ${outcome.head.slice(0, 8)}) — another conversation committed or a sync pulled. Nothing was applied. Call mcp__git_repo__open_repo with name='${repoCtx.name}' to get a fresh copy (your current copy is moved aside to ${copyPath}.prev-<UTC stamp>, never deleted), re-apply your edits there, and commit again.`,
+                  `Not committed: '${repoCtx.name}' changed in Noah since your copy was made (copy base ${outcome.base.slice(0, 8)}, now ${outcome.head.slice(0, 8)}) — another conversation committed or a sync pulled. Nothing was applied. Call mcp__git_repo__open_repo with name='${repoCtx.name}' to get a fresh copy (your current copy is moved aside to ${copyPath}.prev-<UTC stamp> and kept there until remove_repo, unless it provably holds nothing of yours — then it is deleted), re-apply your edits there, and commit again.`,
                   true,
                 );
               case "diverged":

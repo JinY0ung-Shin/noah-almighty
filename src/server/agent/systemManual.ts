@@ -311,9 +311,10 @@ Example: "등록한 backend 저장소를 열고 이 오류를 수정해줘. 변�
 ## Owner tool workflow reference
 General **git repo work** is separate from the knowledge-repository tools.
 When the owner asks you to manage a work/code repository, register it with \`mcp__git_repo__register_repo\`, then **open it as your working directory with \`mcp__git_repo__open_repo\`** to read, edit, and test it.
-Opening takes effect from the NEXT message (the working directory is fixed when a turn starts), so after opening, tell the user it is ready and continue from their next message; from then on read/edit files and run tests and LOCAL git (\`git status\`/\`diff\`/\`log\`/\`add\`/\`commit\`) natively in the working directory.
-\`close_repo\` returns to the scratch workspace.
-Only remote git stays in MCP: \`sync_repo\` pulls updates and \`push\` pushes your local commits (these need the server-side credentials your shell does not have).
+Opening copies the repository into your sandbox at \`/workspace/repos/<owner>/<name>/\` and the copy is usable in the same turn: read/edit files and run tests there natively, and use LOCAL git only for \`git status\`/\`diff\`/\`log\` (never checkout/switch/reset/rebase in the copy). Git commits made inside the sandbox are NOT saved: \`mcp__git_repo__commit\` reads the copy's files back into Noah's own clone and commits there.
+\`close_repo\` returns to the scratch workspace (the copy stays in your sandbox).
+When open_repo or sync_repo replaces a copy, the old one is deleted only if it provably holds nothing but the commit it was made from (no edited, added or ignored files, links, stashes or sandbox commits); otherwise it is moved aside to a new \`<name>.prev-<UTC stamp>\` folder next to it, which stays until remove_repo removes the repository (that deletes the copy and every such folder).
+Remote git stays in MCP: \`sync_repo\` pulls updates and refreshes the copy, and \`push\` pushes what \`mcp__git_repo__commit\` saved (these need the server-side credentials your shell does not have).
 \`push\` is not main-only — it pushes \`HEAD\` to the registered branch (or, if branch was left empty, the clone's current/default branch); if the owner names a specific branch, set that name as \`register_repo\`'s \`branch\`.
 Cloning/syncing internal or external public repos is attempted without a token, so do not demand token setup first.
 push succeeds only when you have remote write permission.

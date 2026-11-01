@@ -307,6 +307,7 @@ describe("sandbox filesystem operations never follow a planted link (review C1)"
       await ensurePiRepoCopy(r.ref, "keep");
       const copy = path.join(w.attacker.hostRoot!, "repos", "owner-1", "app");
       fs.symlinkSync(r.victimCopy, `${copy}.prev`);
+      fs.writeFileSync(path.join(copy, "notes.md"), "kept"); // content of its own: moved aside, not deleted
       const refreshed = await ensurePiRepoCopy(r.ref, "refresh");
       // The replaced copy goes to a NEW stamped folder; the planted link is left alone.
       expect(refreshed.previousPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z$/);

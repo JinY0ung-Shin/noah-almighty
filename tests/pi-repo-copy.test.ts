@@ -201,7 +201,7 @@ describe("uncommitted edits survive a moved clone, sync and re-open (review #13)
     // Case 2 — commit is refused (moved); open_repo moves the copy to a STAMPED folder.
     expect((await callTool(s.tools, "commit", { name: "app", message: "x" })).content[0].text).toContain(".prev-<UTC stamp>");
     const reopen = await callTool(s.tools, "open_repo", { name: "app" });
-    const prevPath = /moved to (\S+); re-apply/.exec(reopen.content[0].text ?? "")?.[1];
+    const prevPath = /moved to (\S+?), where it stays until remove_repo; re-apply/.exec(reopen.content[0].text ?? "")?.[1];
     expect(prevPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z$/);
     const repos = path.dirname(s.copy);
     const prevs = () => fs.readdirSync(repos).filter((name) => name.startsWith("app.prev")).sort();
@@ -244,7 +244,7 @@ describe("a replaced copy is deleted only when it holds nothing but its base (re
     const sync = async () => {
       const result = await callTool(s.tools, "sync_repo", { name: "app" });
       expect(result.isError).toBeFalsy();
-      return /moved to (\S+?);/.exec(result.content[0].text ?? "")?.[1];
+      return /moved to (\S+?), where it stays until remove_repo/.exec(result.content[0].text ?? "")?.[1];
     };
     const kept = (previousPath: string | undefined, rel: string, content: string) => {
       expect(previousPath).toMatch(/\/app\.prev-\d{8}T\d{6}Z(-\d+)?$/);
@@ -279,5 +279,40 @@ describe("a replaced copy is deleted only when it holds nothing but its base (re
     fs.mkdirSync(path.join(s.copy, "empty"));
     expect(await sync()).toBeUndefined();
     expect(prevs()).toHaveLength(5);
+  });
+});
+
+describe("re-opening after another conversation's commit does not pile up copies (review R4)", () => {
+  it("open_repo deletes a stale copy that holds nothing but its base, and moves aside one with ignored content", async () => {
+    const s = repoSetup();
+    expect((await callTool(s.tools, "register_repo", { repo: s.remote, name: "app", branch: "main" })).isError).toBeFalsy();
+    expect((await callTool(s.tools, "open_repo", { name: "app" })).isError).toBeFalsy();
+    fs.writeFileSync(path.join(s.copy, ".gitignore"), ".env.local\n");
+    expect((await callTool(s.tools, "commit", { name: "app", message: "ignore rules" })).content[0].text).toContain("Committed");
+    const repos = path.dirname(s.copy);
+    const prevs = () => fs.readdirSync(repos).filter((name) => name.startsWith("app.prev"));
+    // Noah's clone moves under the copy (another conversation's commit lands there).
+    const moveClone = (file: string) => {
+      fs.writeFileSync(path.join(s.clone, file), file);
+      g(s.clone, "add", "-A");
+      g(s.clone, "-c", "user.name=o", "-c", "user.email=o@x", "-c", "commit.gpgsign=false", "commit", "-q", "-m", file);
+    };
+
+    for (let round = 1; round <= 3; round += 1) {
+      moveClone(`other-${round}.txt`);
+      const reopened = await callTool(s.tools, "open_repo", { name: "app" });
+      expect(reopened.isError).toBeFalsy();
+      expect(reopened.content[0].text).toContain("held nothing but that commit, so it was deleted");
+      expect(fs.existsSync(path.join(s.copy, `other-${round}.txt`))).toBe(true);
+    }
+    expect(prevs()).toEqual([]);
+
+    // Ignored content of its own: kept aside, with the stated lifetime.
+    fs.writeFileSync(path.join(s.copy, ".env.local"), "API_KEY=local");
+    moveClone("other-4.txt");
+    const kept = await callTool(s.tools, "open_repo", { name: "app" });
+    expect(kept.content[0].text).toContain("where it stays until remove_repo");
+    expect(prevs()).toHaveLength(1);
+    expect(fs.readFileSync(path.join(repos, prevs()[0]!, ".env.local"), "utf8")).toBe("API_KEY=local");
   });
 });

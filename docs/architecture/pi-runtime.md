@@ -272,9 +272,9 @@ tracked + untracked-not-ignored files and `.git`, plain files, links never copie
 
 | Tool (pi wording in the static catalog) | Behavior |
 |---|---|
-| `open_repo` | ensures the clone + identity, makes/keeps the copy (`keep`: an existing copy made from the current HEAD whose own git HEAD is still on that base stays, edits and all; a stale or diverged one moves to a NEW `<name>.prev-<UTC stamp>`), returns the sandbox path — usable THIS turn |
+| `open_repo` | ensures the clone + identity, makes/keeps the copy (`keep`: an existing copy made from the current HEAD whose own git HEAD is still on that base stays, edits and all; a stale or diverged one is replaced — deleted when `existingDisposable` proves it holds nothing but its base, else moved to a NEW `<name>.prev-<UTC stamp>`), returns the sandbox path — usable THIS turn |
 | `commit` (pi only, `GIT_REPO_PI_COMMIT_TOOL_NAME`) | reads the copy's WORKING TREE back (lstat walk, `.git` skipped at every level, links/specials skipped and reported, ignore rules from the CANONICAL clone via `git check-ignore`, tracked files under ignored folders still compared; caps 100 000 entries / 20 000 changed files / 256 MB / 64 MB per file), writes changed files into the clone (never through a tracked link or onto a folder), deletes files gone from the copy, `git add -A` + `git commit` there, then replaces the copy's `.git` with a fresh copy of the clone's (sandbox `git status` is clean again) |
-| `sync_repo` | refused while the copy has uncommitted changes (`copyHasChanges`: measured against the copy's BASE tree even after the clone moved — `readBackAgainstBase`, `git ls-tree` + blob hashes, never git in the copy — and always for a diverged copy); else syncs the clone and refreshes the copy, deleting the replaced copy only when it is re-proven clean (`discardIfClean`), else moving it aside |
+| `sync_repo` | refused while the copy has uncommitted changes (`copyHasChanges`: measured against the copy's BASE tree even after the clone moved — `readBackAgainstBase`, `git ls-tree` + blob hashes, never git in the copy — and always for a diverged copy); else syncs the clone and refreshes the copy, deleting the replaced copy only when `existingDisposable` proves it holds nothing but its base, else moving it aside |
 | `push` | pushes the clone (= what `commit` saved; sandbox-local git commits are never read) and notes uncommitted copy changes |
 | `remove_repo` / `close_repo` | remove the viewer's copy, every `<name>.prev*` and the record / keep the copy |
 
@@ -286,9 +286,9 @@ delete therefore also requires the copy's HEAD EXACTLY on its base, every ref ti
 clone has (`git cat-file --batch-check` in the clone; refs read as data), no skipped entry against the base tree,
 and a full walk (ignore rules NOT applied) finding nothing but folders and base-tree files outside the top `.git`.
 Anything unreadable or over a cap counts as content.
-A replaced copy is NEVER deleted unless proven clean (review #13): it moves to a new `<name>.prev-<UTC stamp>`
+A replaced copy (open_repo `keep` AND sync `refresh` alike — review R4: keep mode used to move even a pristine copy aside, so every re-open after another conversation's commit left a full copy, `.git` included) is NEVER deleted unless proven disposable (review #13): it moves to a new `<name>.prev-<UTC stamp>`
 (`-2`… when taken), older ones are never touched or replaced, and only `remove_repo` (or account deletion) clears
-them. `git ls-files` listings are streamed (`gitListZ`, no exec buffer) and capped at the copy's file cap (review #15).
+them — BOTH metacognition surfaces, the open_repo description and the manual say exactly that (`PI_REPO_REPLACED_COPY_SENTENCE`), never "never deleted". `git ls-files` listings are streamed (`gitListZ`, no exec buffer) and capped at the copy's file cap (review #15).
 
 `commit` also refuses a copy whose OWN git HEAD left its base (`diverged`, review #6): Noah reads the copy's `.git`
 as DATA (`readCopyGitTip`: HEAD → loose ref → `packed-refs`) and walks LOOSE commit objects' parents

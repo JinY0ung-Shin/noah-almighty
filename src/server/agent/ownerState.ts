@@ -223,6 +223,15 @@ export const PI_NO_ASK_USER_SENTENCE =
   "`AskUserQuestion` is not available in this run: its session was started without it because nobody can answer.";
 
 /**
+ * What happens to a sandbox repo copy that open_repo or sync_repo REPLACES
+ * (`ensurePiRepoCopy`, review R4). ONE text for both metacognition surfaces
+ * (the prompt's working-repository note and describe_system's copy line) and
+ * the open_repo tool description.
+ */
+export const PI_REPO_REPLACED_COPY_SENTENCE =
+  "A copy that open_repo or sync_repo replaces is deleted only when it provably holds nothing but the commit it was made from (no edited, added or ignored files, links, stashes or sandbox commits); otherwise it is moved aside to a new `<name>.prev-<UTC stamp>` folder next to it, which stays until remove_repo removes the repository (that deletes the copy and every such folder) — move anything you still need out of it before then.";
+
+/**
  * The owner's shell-secret state (pi `sandbox_env`, design P4), ONE text for
  * both metacognition surfaces (the prompt's secrets section and describe_system's
  * shell-secret line). `exported` is what this run's bash receives

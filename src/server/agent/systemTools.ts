@@ -1,4 +1,4 @@
-import { DIRECT_MESSAGE_STATE, GROUP_REPOS_RETIRED_SENTENCE, PI_NO_ASK_USER_SENTENCE } from "./ownerState.js";
+import { DIRECT_MESSAGE_STATE, GROUP_REPOS_RETIRED_SENTENCE, PI_NO_ASK_USER_SENTENCE, PI_REPO_REPLACED_COPY_SENTENCE } from "./ownerState.js";
 import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import {
@@ -666,7 +666,7 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
       : []),
     ...(pi.activeRepoDir
       ? [
-          `- Working repository copy: ${pi.activeRepoDir}/ (a copy of '${ctx.activeRepoName ?? "?"}' in your sandbox; save with mcp__git_repo__commit, then mcp__git_repo__push — git commits made inside the sandbox are not saved, and commit refuses a copy whose git HEAD left the commit Noah gave it, so never checkout/switch/reset/rebase there)`,
+          `- Working repository copy: ${pi.activeRepoDir}/ (a copy of '${ctx.activeRepoName ?? "?"}' in your sandbox; save with mcp__git_repo__commit, then mcp__git_repo__push — git commits made inside the sandbox are not saved, and commit refuses a copy whose git HEAD left the commit Noah gave it, so never checkout/switch/reset/rebase there). ${PI_REPO_REPLACED_COPY_SENTENCE}`,
         ]
       : []),
   ];

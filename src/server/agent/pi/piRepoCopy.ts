@@ -463,34 +463,32 @@ export interface EnsuredCopy {
   sandboxPath: string;
   /** "kept" = the existing copy is current; "created" = a fresh copy was written. */
   outcome: "kept" | "created";
-  /** Sandbox path of the previous copy, when a stale one was moved aside. */
+  /** Sandbox path of the previous copy, when a replaced one was moved aside. */
   previousPath?: string;
+  /** The replaced copy held nothing but its base and was deleted instead of moved aside. */
+  discardedPrevious?: boolean;
   base: string;
 }
 
 /**
- * Make sure the viewer's sandbox has a copy of the repo. `keep` (turn start,
- * open_repo) leaves an existing copy alone when it was made from the current
- * canonical HEAD and its own git HEAD is still on that base (a diverged copy
- * is replaced, so open_repo is the way out of one) — the agent's uncommitted
- * work stays; `when-missing` (turn
- * start) never touches an existing copy; `refresh` (after a sync) always
- * writes a fresh one. A copy that is replaced is NEVER deleted unless it is
- * proven to hold nothing but its base: with `discardIfClean` (sync_repo, which
- * refused a dirty copy just before) a copy that passes
- * {@link existingDisposable} (HEAD exactly on the base, no sandbox-only ref or
- * stash, no changed/deleted file, and no ignored, linked or other extra entry)
- * is removed; every other one is moved aside to a NEW
- * `<name>.prev-<UTC stamp>` (older ones are never touched), so no edit is
- * ever silently lost. Serialized with every other operation on the canonical
- * clone.
+ * Make sure the viewer's sandbox has a copy of the repo. `keep` (open_repo)
+ * leaves an existing copy alone when it was made from the current canonical
+ * HEAD and its own git HEAD is still on that base (a diverged copy is
+ * replaced, so open_repo is the way out of one) — the agent's uncommitted work
+ * stays; `when-missing` (turn start) never touches an existing copy; `refresh`
+ * (after a sync) always writes a fresh one. A copy that is replaced (keep or
+ * refresh) is NEVER deleted unless {@link existingDisposable} proves it holds
+ * nothing but its base (HEAD exactly on the base, no sandbox-only ref or stash,
+ * no changed/deleted file, and no ignored, linked or other extra entry) —
+ * then it is removed, so re-opening after another conversation's commit does
+ * not pile up full copies (review R4); every other one is moved aside to a
+ * NEW `<name>.prev-<UTC stamp>` (older ones are never touched; only
+ * `removePiRepoCopy` — remove_repo, account deletion — clears them), so no
+ * edit is ever silently lost. Serialized with every other operation on the
+ * canonical clone.
  */
-export function ensurePiRepoCopy(
-  ref: PiRepoCopyRef,
-  mode: "keep" | "when-missing" | "refresh",
-  options: { discardIfClean?: boolean } = {},
-): Promise<EnsuredCopy> {
-  return withRepoLock(ref.clonePath, () => ensureCopyLocked(ref, mode, options.discardIfClean ?? false));
+export function ensurePiRepoCopy(ref: PiRepoCopyRef, mode: "keep" | "when-missing" | "refresh"): Promise<EnsuredCopy> {
+  return withRepoLock(ref.clonePath, () => ensureCopyLocked(ref, mode));
 }
 
 /** `<name>.prev-YYYYMMDDTHHMMSSZ` (`-2`, `-3`… when taken) — never an existing name. */
@@ -654,7 +652,6 @@ function copyHoldsOnlyTree(pinned: PinnedDir, tree: Map<string, { mode: string; 
 async function ensureCopyLocked(
   ref: PiRepoCopyRef,
   mode: "keep" | "when-missing" | "refresh",
-  discardIfClean: boolean,
 ): Promise<EnsuredCopy> {
   if (!ref.workspace.hostRoot) {
     throw new Error("The sandbox workspace mount is not configured, so the repository cannot be copied into the sandbox.");
@@ -684,9 +681,11 @@ async function ensureCopyLocked(
     }
     tmp.close();
     let previousPath: string | undefined;
+    let discardedPrevious = false;
     if (existing === "dir" || existing === "file") {
-      if (existing === "dir" && discardIfClean && state && (await existingDisposable(ref.clonePath, parent, ref.name, state.base))) {
+      if (existing === "dir" && state && (await existingDisposable(ref.clonePath, parent, ref.name, state.base))) {
         parent.remove(ref.name);
+        discardedPrevious = true;
       } else {
         const prevName = freePrevName(parent, ref.name);
         parent.rename(ref.name, prevName);
@@ -697,7 +696,13 @@ async function ensureCopyLocked(
     }
     parent.rename(tmpName, ref.name);
     writeState(stateFile, { base: head, copiedAt: new Date().toISOString(), ...(state?.holder ? { holder: state.holder } : {}) });
-    return { sandboxPath, outcome: "created", base: head, ...(previousPath ? { previousPath } : {}) };
+    return {
+      sandboxPath,
+      outcome: "created",
+      base: head,
+      ...(previousPath ? { previousPath } : {}),
+      ...(discardedPrevious ? { discardedPrevious } : {}),
+    };
   } finally {
     parent.close();
   }

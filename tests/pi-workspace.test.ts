@@ -33,6 +33,7 @@ import { setWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildRunCapabilities, stampPromptRequest } from "../src/server/agent/runCapabilities.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { deckCapabilityLine } from "../src/server/agent/systemTools.js";
+import { PI_REPO_REPLACED_COPY_SENTENCE } from "../src/server/agent/ownerState.js";
 import { piSandboxDeckToolchain } from "../src/server/deckRender.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../src/server/workspace.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog } from "../src/server/agent/pi/mcpCatalog.js";
@@ -692,6 +693,13 @@ describe("run capabilities on pi", () => {
     const ownerCaps = await buildRunCapabilities(request(owner, { activeRepoName: "app" }), [], config, store, undefined, undefined, () => 0, {});
     expect(ownerCaps.mcpAllowedTools).not.toContain("mcp__git_repo__read_file");
     expect(ownerCaps.piRuntimeFacts?.activeRepoDir).toBe(piRepoCopySandboxPath(owner.id, "app"));
+    // Both surfaces state the moved-aside folders' real lifetime (review R4): kept until remove_repo, not "never deleted".
+    const ownerTurn = buildPiTurnPreamble(stampPromptRequest(request(owner, { activeRepoName: "app" }), ownerCaps, config, undefined));
+    const ownerDescribe = (await callServerTool(ownerCaps.inProcessMcpServers.system, "describe_system", {})).content[0]!.text;
+    for (const surface of [ownerTurn, ownerDescribe]) {
+      expect(surface).toContain(PI_REPO_REPLACED_COPY_SENTENCE);
+      expect(surface).not.toContain("never deleted");
+    }
   });
 
   it("the static catalog lists the skills server and the pi git_repo wording", async () => {
