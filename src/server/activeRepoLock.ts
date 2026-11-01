@@ -56,3 +56,52 @@ export function releaseActiveRepo(clonePath: string, conversationId: string): vo
 export function activeRepoHolder(key: string): string | null {
   return heldBy.get(key) ?? null;
 }
+
+/**
+ * The copy run locks ONE run took MID-TURN (`mcp__git_repo__open_repo`,
+ * `sync_repo`, `commit` on a pi sandbox copy), held until that run ends. The
+ * turn-start lock (`resolveActiveWorkspaceRepo`) covers only a repo that was
+ * open when the turn began; without this, a conversation that opens the repo
+ * mid-turn works on the shared copy unlocked, and another conversation's run
+ * (a routine starting with the repo open) could take the copy over and commit
+ * the half-done edits. `runPiAgent` makes one per run, hands it to the git_repo
+ * tools through their context, and calls `releaseAll` when the run ends.
+ *
+ * Only a lock this run newly took is released here: one the conversation
+ * already held (the turn-start lock) stays with whoever took it. After
+ * `releaseAll` nothing more is taken, so a tool call racing the run's end
+ * cannot leave a lock behind.
+ */
+export class RunRepoLocks {
+  private readonly taken = new Set<string>();
+  private closed = false;
+
+  constructor(private readonly holderId: string) {}
+
+  /**
+   * Take `key` for this run's conversation. `ok: false` when another
+   * conversation holds it or the run already ended. On success `undo` gives
+   * back a lock THIS call newly took (a no-op otherwise) — for a tool that is
+   * refused right after taking it, so a refusal never blocks anyone.
+   */
+  acquire(key: string): { ok: true; undo: () => void } | { ok: false } {
+    if (this.closed) return { ok: false };
+    const fresh = activeRepoHolder(key) === null;
+    if (!acquireActiveRepo(key, this.holderId)) return { ok: false };
+    if (!fresh || this.taken.has(key)) return { ok: true, undo: () => {} };
+    this.taken.add(key);
+    return {
+      ok: true,
+      undo: () => {
+        if (this.taken.delete(key)) releaseActiveRepo(key, this.holderId);
+      },
+    };
+  }
+
+  /** The run ended: release every lock it took, and take no more. */
+  releaseAll(): void {
+    this.closed = true;
+    for (const key of this.taken) releaseActiveRepo(key, this.holderId);
+    this.taken.clear();
+  }
+}

@@ -294,7 +294,12 @@ refused with a redirect to re-open (last writer wins, never silently over a newe
 (`resolveActiveWorkspaceRepo` with `piWorkspace`) only creates a MISSING copy. The copy is ONE per (principal, owner,
 repo) and its edits carry no conversation, so two guards keep one conversation from committing another's half-done
 work (review #5, 2026-11-01): a RUN lock on the copy (`piRepoCopyLockKey` in the in-memory `activeRepoLock`; turn
-start → `locked`, and `open_repo`/`sync_repo`/`commit` of another conversation refuse while it is held) and a
+start → `locked`, and `open_repo`/`sync_repo`/`commit` of another conversation refuse while it is held — and those
+three TAKE it for their own conversation (review R2): a run that opens the repo MID-turn holds the lock exactly like
+one that started with it open, through the run's `RunRepoLocks` (`activeRepoLock.ts`, made by `runPiAgent`, handed
+to the tools as `GitRepoToolsContext.copyRunLock` via `RunCapabilityOptions.piRepoLocks`, released in the run's
+`finally` after the run token is revoked; only a lock the run newly took is released, and a tool refused on the
+holder check gives a newly taken one back at once) and a
 persistent HOLDER in the copy record (`claimPiRepoCopy`: another conversation may take the copy over only while it
 is clean, or once the holder no longer has the repo open; else turn start → `held`, the tools refuse). The chat route
 answers both with 409, the scheduler skips the routine (`ROUTINE_REPO_BUSY`).

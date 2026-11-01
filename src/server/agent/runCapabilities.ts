@@ -33,6 +33,7 @@ import {
 import { piSandboxPath, piToolPathToHost, type PiWorkspace } from "./pi/piWorkspace.js";
 import type { PiSkillPlan } from "./pi/piSkills.js";
 import type { PiAsyncJobs } from "./pi/asyncJobs.js";
+import type { RunRepoLocks } from "../activeRepoLock.js";
 import { planPiMcpProxies, type PiMcpProxyPlan } from "./pi/mcpProxies.js";
 import { PI_NOAH_SERVER_NAMES } from "./pi/mcpCatalog.js";
 import { catalogEffortSupport, catalogModel, catalogModelIds } from "./pi/modelCatalog.js";
@@ -252,6 +253,11 @@ export interface RunCapabilityOptions {
    * returns at once; runPiAgent delivers the answer like a steer (mid-turn or a follow-up turn).
    */
   piAsyncJobs?: PiAsyncJobs;
+  /**
+   * pi runs: the sandbox-copy run locks this run takes mid-turn (open_repo,
+   * sync_repo, commit) — `runPiAgent` releases them when the run ends.
+   */
+  piRepoLocks?: RunRepoLocks;
 }
 
 /**
@@ -926,6 +932,8 @@ export async function buildRunCapabilities(
     conversationId: request.conversationId,
     // The model works on a sandbox COPY (design D1); `commit` reads it back.
     ...(piWorkspace ? { piWorkspace } : {}),
+    // A copy opened, synced or committed mid-turn stays locked to this run.
+    ...(runOptions.piRepoLocks ? { copyRunLock: runOptions.piRepoLocks } : {}),
   });
   // mcp__skills__read: a run whose skill index lists skills that were NOT
   // copied into this sandbox (a colleague reading the owner's skills).

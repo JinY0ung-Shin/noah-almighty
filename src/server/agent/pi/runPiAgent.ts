@@ -76,6 +76,7 @@ import { materializePiSkills } from "./piSkills.js";
 import { PiTurnFailedError, runPiTurn, type PiRunResult } from "./eventAdapter.js";
 import { PI_PROXY_SERVER_NAMES, PiMcpProxyPool } from "./mcpProxies.js";
 import { PiAsyncJobs } from "./asyncJobs.js";
+import { RunRepoLocks } from "../../activeRepoLock.js";
 import { redactSecretValues } from "../secretRedaction.js";
 import { AVATAR_ASK_TIMEOUT_MS } from "../avatarAskShared.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -221,6 +222,9 @@ async function runPiAgentAs(
         Boolean(steerChannel.push(delivery.agentText, { displayText: delivery.displayText, source: delivery.source })),
       )
     : undefined;
+  // The sandbox-copy run locks the git_repo tools take mid-turn, released in
+  // the run's `finally` below (a tool can only run once the run token exists).
+  const repoLocks = new RunRepoLocks(conversationId ?? `run:${workKey}`);
   const capabilities = await buildRunCapabilities(
     request,
     pluginRoots,
@@ -233,6 +237,7 @@ async function runPiAgentAs(
       piConversationDir: workspace.conversationDir,
       piWorkspace: workspace,
       piSkills,
+      piRepoLocks: repoLocks,
       ...(asyncJobs ? { piAsyncJobs: asyncJobs } : {}),
     },
   );
@@ -555,6 +560,8 @@ async function runPiAgentAs(
     asyncJobs?.abortAll();
     tokenAbort.abort();
     await registry.revoke(token).catch(() => undefined);
+    // After the token is gone no tool call can take another lock.
+    repoLocks.releaseAll();
     const closing = proxies.close().catch((error: unknown) =>
       agentLogger.warn({ conversationId, err: String(error) }, "pi mcp proxies did not close cleanly"),
     );

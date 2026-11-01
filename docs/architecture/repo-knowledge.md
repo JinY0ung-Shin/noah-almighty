@@ -79,7 +79,8 @@
   the selection → resolves/ensures the canonical clone (no sync) → configures commit identity, and with the
   run's `piWorkspace` only creates a MISSING sandbox copy. That copy is ONE per (principal, owner, repo), shared by
   all of the principal's conversations, so the pi branch takes the run lock on the COPY (`piRepoCopyLockKey` in
-  `activeRepoLock.ts` → `locked`) and claims it (`claimPiRepoCopy` → `held` while another conversation that still has
+  `activeRepoLock.ts` → `locked`; `open_repo`/`sync_repo`/`commit` take the same lock mid-turn and the run keeps it
+  until it ends — `RunRepoLocks`) and claims it (`claimPiRepoCopy` → `held` while another conversation that still has
   the repo open left uncommitted changes); the chat route answers 409 and the scheduler skips with `ROUTINE_REPO_BUSY`. The avatar works on that COPY in its principal's sandbox,
   `/workspace/repos/<owner-seg>/<name>/` (design D1): native read/edit/bash + LOCAL git for status/diff/log there,
   while `commit` (reads the copy's working tree back into the canonical clone and commits THERE), `push` and

@@ -25,7 +25,8 @@ import {
 import { piRunWorkspace, preparePiRunWorkspace } from "../src/server/agent/pi/piRuntime.js";
 import { PRUNE_GRACE_MS, materializePiSkills, rewriteSkillMarkdown } from "../src/server/agent/pi/piSkills.js";
 import { buildSkillsTools } from "../src/server/agent/skillsTools.js";
-import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopySandboxPath } from "../src/server/agent/pi/piRepoCopy.js";
+import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopyLockKey, piRepoCopySandboxPath } from "../src/server/agent/pi/piRepoCopy.js";
+import { RunRepoLocks, acquireActiveRepo, activeRepoHolder, releaseActiveRepo } from "../src/server/activeRepoLock.js";
 import { buildGitRepoTools, GIT_REPO_PI_COMMIT_TOOL_NAME } from "../src/server/agent/gitRepoTools.js";
 import { resolveActiveWorkspaceRepo } from "../src/server/activeRepoResolve.js";
 import { setWorkspaceRepo } from "../src/server/repoWorkspace.js";
@@ -493,6 +494,52 @@ describe("working-repo copy (D1)", () => {
     const reclaimed = await resolve("conv-1");
     expect(reclaimed.kind).toBe("ok");
     if (reclaimed.kind === "ok") reclaimed.release();
+  });
+
+  it("a run's copy locks: open/commit/sync take the lock until releaseAll; a refused tool never keeps it (review R2)", async () => {
+    const s = repoSetup();
+    s.store.touchConversation(s.owner.id, "conv-2", s.owner.id, "routine thread");
+    const withLocks = (conversationId: string, locks: RunRepoLocks) =>
+      buildGitRepoTools(s.store, {
+        avatarUserId: s.owner.id,
+        owner: { id: s.owner.id, username: "owner", displayName: "Owner" },
+        viewerIsOwner: true,
+        elevated: true,
+        config: s.config,
+        conversationId,
+        piWorkspace: piWorkspaceFor(s.config, s.owner.id, conversationId),
+        copyRunLock: locks,
+      });
+    const chatLocks = new RunRepoLocks("conv-1");
+    const chat = withLocks("conv-1", chatLocks);
+    await callTool(chat, "register_repo", { repo: s.remote, name: "app", branch: "main" });
+    const key = piRepoCopyLockKey({ workspace: piWorkspaceFor(s.config, s.owner.id, "conv-1"), ownerId: s.owner.id, name: "app" });
+    for (const [tool, args] of [["sync_repo", { name: "app" }], ["open_repo", { name: "app" }], ["commit", { name: "app", message: "noop" }]] as const) {
+      expect((await callTool(chat, tool, args)).isError).toBeFalsy();
+      expect(activeRepoHolder(key)).toBe("conv-1");
+    }
+    const copy = path.join(piWorkspaceFor(s.config, s.owner.id, "conv-1").hostRoot!, "repos", s.owner.id, "app");
+    fs.writeFileSync(path.join(copy, "README.md"), "chat half-done");
+    // Another conversation's run is locked out while the chat's run lives.
+    const routineLocks = new RunRepoLocks("conv-2");
+    const routine = withLocks("conv-2", routineLocks);
+    expect((await callTool(routine, "commit", { name: "app", message: "routine" })).content[0].text).toContain("another conversation's run");
+    chatLocks.releaseAll();
+    expect(activeRepoHolder(key)).toBeNull();
+    // A run that ended takes no lock again (a tool call racing the run's end).
+    expect(chatLocks.acquire(key)).toEqual({ ok: false });
+    // Refused on the chat's uncommitted work: the routine does NOT keep the lock.
+    const refused = await callTool(routine, "commit", { name: "app", message: "routine" });
+    expect(refused.content[0].text).toContain("uncommitted changes from another conversation");
+    expect(activeRepoHolder(key)).toBeNull();
+    routineLocks.releaseAll();
+    // A lock the conversation already held (turn start) is not the run's to release.
+    acquireActiveRepo(key, "conv-1");
+    const nextRun = new RunRepoLocks("conv-1");
+    expect(nextRun.acquire(key).ok).toBe(true);
+    nextRun.releaseAll();
+    expect(activeRepoHolder(key)).toBe("conv-1");
+    releaseActiveRepo(key, "conv-1");
   });
 });
 

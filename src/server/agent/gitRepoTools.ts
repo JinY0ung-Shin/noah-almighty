@@ -19,7 +19,7 @@ import {
   setPiRepoCopyHolder,
   type PiRepoCopyRef,
 } from "./pi/piRepoCopy.js";
-import { activeRepoHolder } from "../activeRepoLock.js";
+import { activeRepoHolder, type RunRepoLocks } from "../activeRepoLock.js";
 import { RepoReadError, grepRepo, listRepoFiles, readRepoFile } from "../gitRepoRead.js";
 import {
   configureGitRepoIdentity,
@@ -62,6 +62,14 @@ export interface GitRepoToolsContext {
    * refuse with NO_PI_WORKSPACE.
    */
   piWorkspace?: PiWorkspace;
+  /**
+   * This RUN's copy locks (`RunRepoLocks`, made and released by `runPiAgent`):
+   * open_repo, sync_repo and commit TAKE the sandbox copy's run lock for this
+   * conversation and keep it until the run ends, so another conversation's run
+   * cannot take the copy over mid-turn. Unset (a direct tool build in a test, a
+   * run with no run scope) → they only check that no other run holds it.
+   */
+  copyRunLock?: Pick<RunRepoLocks, "acquire">;
 }
 
 /** MCP server name; tools surface to the model as `mcp__git_repo__<tool>`. */
@@ -160,19 +168,33 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
    * principal's conversations (activeRepoResolve.ts): refuse while another
    * conversation's RUN holds it, or while another conversation that still has
    * the repo open left uncommitted changes in it — committing, syncing or
-   * re-copying then would take that conversation's half-done work. Null = go.
+   * re-copying then would take that conversation's half-done work. Null = go,
+   * and the copy's run lock is then HELD by this run until it ends
+   * (`copyRunLock`), exactly like a turn that started with the repo open.
    */
   const copyAccessRefusal = async (ref: PiRepoCopyRef): Promise<ReturnType<typeof text> | null> => {
     const conversationId = ctx.conversationId ?? "";
-    const running = activeRepoHolder(piRepoCopyLockKey(ref));
-    if (running && running !== conversationId) {
+    const key = piRepoCopyLockKey(ref);
+    const running = activeRepoHolder(key);
+    const lock = ctx.copyRunLock
+      ? ctx.copyRunLock.acquire(key)
+      : running && running !== conversationId
+        ? { ok: false as const }
+        : { ok: true as const, undo: () => {} };
+    if (!lock.ok) {
       return text(
         `'${ref.name}': another conversation's run is working on this sandbox copy right now, so this conversation cannot change, commit or sync it. Tell the user and try again after that run ends.`,
         true,
       );
     }
-    const claim = await claimPiRepoCopy(ref, conversationId, (holder) => store.getConversationWorkingRepo(holder) === ref.name);
+    const claim = await claimPiRepoCopy(ref, conversationId, (holder) => store.getConversationWorkingRepo(holder) === ref.name).catch(
+      (error: unknown) => {
+        lock.undo();
+        throw error;
+      },
+    );
     if (claim.kind === "held") {
+      lock.undo(); // a refused tool never keeps the other conversation's run out
       return text(
         `'${ref.name}': the sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, ref.name)} holds uncommitted changes from another conversation that still has this repository open, so this conversation must not commit, sync or re-copy it. Do not edit that copy. Tell the user to commit those changes (or close_repo) in that other conversation first.`,
         true,

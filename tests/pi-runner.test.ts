@@ -45,6 +45,10 @@ import {
 } from "../src/server/agent/pi/responsesClient.js";
 import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { gitInit, makeBareRemote, withTempDir, signup } from "./helpers.js";
+import { activeRepoHolder } from "../src/server/activeRepoLock.js";
+import { resolveActiveWorkspaceRepo } from "../src/server/activeRepoResolve.js";
+import { setWorkspaceRepo } from "../src/server/repoWorkspace.js";
+import { piRepoCopyLockKey } from "../src/server/agent/pi/piRepoCopy.js";
 
 const dir = withTempDir("pi-runner");
 
@@ -1084,6 +1088,77 @@ describe("runPiAgent", () => {
 });
 
 // ---- decisions, paths, prompt --------------------------------------------------------------
+
+describe("runPiAgent: a sandbox copy opened mid-turn stays locked to that run (review R2)", () => {
+  it("open_repo takes the copy's run lock for the conversation, another conversation's run is locked out, and the run's end frees it", async () => {
+    const { store, config, owner, base } = setup();
+    store.touchConversation(owner.id, "conv-2", owner.id, "routine thread");
+    const seed = path.join(dir(), "app-seed");
+    gitInit(seed);
+    const remote = makeBareRemote(path.join(dir(), "app.git"));
+    const run = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
+    run("branch", "-M", "main");
+    run("remote", "add", "origin", remote);
+    run("push", "-q", "origin", "main");
+    store.upsertGitRepo(owner.id, "app", remote, "main");
+    // The routine thread has the repo open; the chat (conv-1) opens it MID-TURN.
+    setWorkspaceRepo(store, "conv-2", "app");
+    const lockKey = piRepoCopyLockKey({ workspace: piWorkspaceFor(config, owner.id, "conv-1"), ownerId: owner.id, name: "app" });
+    const resolveFor = (conversationId: string) =>
+      resolveActiveWorkspaceRepo({
+        store,
+        config,
+        avatar: { id: owner.id, displayName: "Owner", alias: "" },
+        conversationId,
+        elevated: true,
+        gitRepoToolsEnabled: true,
+        piWorkspace: piWorkspaceFor(config, owner.id, conversationId),
+      });
+
+    const registry = new McpRunRegistry();
+    const app = express();
+    app.use(express.json());
+    app.use(createMcpHttpRouter({ registry }));
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const seen: Record<string, unknown> = {};
+    try {
+      const { client } = fakeClient([
+        async (req) => {
+          const mcp = new Client({ name: "broker", version: "1" });
+          await mcp.connect(
+            new StreamableHTTPClientTransport(new URL(`${url}/mcp/git_repo`), {
+              requestInit: { headers: { authorization: `Bearer ${req.headers![PI_RUN_TOKEN_HEADER]!}` } },
+            }),
+          );
+          seen.open = await mcp.callTool({ name: "open_repo", arguments: { name: "app" } });
+          seen.holder = activeRepoHolder(lockKey);
+          // The copy is still clean, so only the run lock can keep the routine out.
+          const routine = await resolveFor("conv-2");
+          seen.routine = routine;
+          if (routine.kind === "ok") routine.release();
+          // The same conversation keeps getting in (a second tool call of the run).
+          seen.again = await mcp.callTool({ name: "open_repo", arguments: { name: "app" } });
+          await mcp.close();
+          return textTurn("resp_r2_1", "opened");
+        },
+      ]);
+      await runPiAgent(base({ mcpToolGroups: ["system", "git_repo"] }), [], config, store, undefined, undefined, { client, registry });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    expect(JSON.stringify(seen.open)).toContain("Opened 'app'");
+    expect(JSON.stringify(seen.again)).toContain("Opened 'app'");
+    expect(seen.holder).toBe("conv-1");
+    expect(seen.routine).toMatchObject({ kind: "error", reason: "locked" });
+    // The run ended: the lock is gone and the routine takes the clean copy over.
+    expect(activeRepoHolder(lockKey)).toBeNull();
+    const after = await resolveFor("conv-2");
+    expect(after.kind).toBe("ok");
+    if (after.kind === "ok") after.release();
+  });
+});
 
 describe("piRunPrincipal", () => {
   const base: AgentRequest = {
