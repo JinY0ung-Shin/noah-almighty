@@ -6,6 +6,7 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp, createServices, type AppServices } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { PI_ADMIN_PROXY_TIMEOUTS } from "../src/server/routes/piAdminProxy.js";
 import { signup, withTempDir } from "./helpers.js";
 
 // Covers src/server/routes/piAdminProxy.ts (pi-gateway's admin panel at /admin
@@ -58,6 +59,33 @@ beforeEach(async () => {
         res.end(body);
         return;
       }
+      if (req.url?.split("?")[0] === "/admin/api/slow") {
+        const ms = Number(new URL(req.url, "http://pi").searchParams.get("ms") ?? "0");
+        setTimeout(() => {
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ done: true }));
+        }, ms);
+        return;
+      }
+      const typed: Record<string, string> = {
+        "/admin/api/typed/js": "text/javascript; charset=utf-8",
+        "/admin/api/typed/css": "text/css",
+        "/admin/api/typed/html": "text/html",
+        "/admin/api/typed/png": "image/png",
+        "/admin/api/typed/text": "text/plain; charset=utf-8",
+        "/admin/assets/app.js": "text/javascript",
+      };
+      const type = typed[req.url?.split("?")[0] ?? ""];
+      if (type) {
+        res.writeHead(200, { "content-type": type });
+        res.end("alert(1)");
+        return;
+      }
+      if (req.url === "/admin/api/typed/none") {
+        res.writeHead(200);
+        res.end("alert(1)");
+        return;
+      }
       if (req.url === "/admin/api/stream") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write("data: one\n\n");
@@ -94,6 +122,31 @@ async function adminCookie(app: ReturnType<typeof createApp>): Promise<string[]>
   const res = await request(app).post("/api/auth/login").send({ username: "boss", password: "password123" });
   const set = res.headers["set-cookie"] as unknown as string[] | undefined;
   return (set ?? []).map((c) => c.split(";")[0]);
+}
+
+/** One request with the target sent byte for byte (HTTP client libraries normalize paths). */
+async function rawRequest(
+  app: ReturnType<typeof createApp>,
+  method: string,
+  target: string,
+  headers: Record<string, string>,
+): Promise<number> {
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port, method, path: target, headers });
+      req.on("response", (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 }
 
 async function users(app: ReturnType<typeof createApp>) {
@@ -288,6 +341,118 @@ describe("pi admin panel proxy (/admin)", () => {
     const { admin: admin2 } = await users(down.app);
     const res = await admin2.get("/admin/api/session").expect(502);
     expect(res.body.error.message).toContain("pi-gateway에 연결할 수 없습니다");
+    pi.listen(0); // afterEach closes it again
+  });
+
+  it("refuses an API request that did not come from pi's page: cross-site, or rendered in Noah's SPA (an <img> or link)", async () => {
+    const { app } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    const file = "/admin/api/chat/file?user=u-x1&path=%2Fworkspace%2Fa";
+    // A markdown image in an avatar intro: same-origin, but Noah's SPA names itself as the referrer.
+    await admin.get(file).set("Host", "noah.test").set("Sec-Fetch-Site", "same-origin").set("Referer", "https://noah.test/").expect(403);
+    // Plain HTTP (no fetch metadata): the referrer alone still gives it away.
+    await admin.get(file).set("Host", "noah.test").set("Referer", "http://noah.test/#/explore").expect(403);
+    // A link or image on another site.
+    await admin.get(file).set("Sec-Fetch-Site", "cross-site").expect(403);
+    await admin.get(file).set("Sec-Fetch-Site", "same-site").expect(403);
+    await admin.get(file).set("Host", "noah.test").set("Referer", "https://evil.test/admin/x").expect(403);
+    await admin.get("/admin/api/history/resp_1").set("Sec-Fetch-Site", "cross-site").expect(403);
+    // An encoded spelling of /admin/api is still the API.
+    const cookie = (await adminCookie(app)).join("; ");
+    expect(await rawRequest(app, "GET", "/admin/%61pi/chat/file?user=u-x1", { cookie, referer: "http://127.0.0.1/" })).toBe(403);
+    expect(seen).toHaveLength(0);
+
+    // pi's own page: no referrer (no-referrer), same-origin metadata — or none at all.
+    await admin.get(file).set("Sec-Fetch-Site", "same-origin");
+    await admin.get(file);
+    await admin.get(file).set("Host", "noah.test").set("Referer", "https://noah.test/admin/chat");
+    expect(seen).toHaveLength(3);
+    // The page itself may be opened from anywhere: it only loads pi's UI.
+    await admin.get("/admin/").set("Sec-Fetch-Site", "cross-site").expect(200);
+  });
+
+  it("decides on the path pi routes: an encoded spelling neither skips the audit nor reaches pi's login", async () => {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    await users(app);
+    const cookie = (await adminCookie(app)).join("; ");
+    await rawRequest(app, "GET", "/admin/api/chat/%66ile?user=u-alice&path=%2Fworkspace%2Fs.txt", { cookie });
+    await rawRequest(app, "GET", "/admin/api/%68istory/resp_9", { cookie });
+    await rawRequest(app, "HEAD", "/admin/api/history/resp_8", { cookie });
+    await rawRequest(app, "GET", "/admin/api//history/resp_7/", { cookie });
+    const before = seen.length;
+    const write = { cookie, "sec-fetch-site": "same-origin", "x-admin-request": "1" };
+    expect(await rawRequest(app, "POST", "/admin/api/%6cogin", write)).toBe(400);
+    expect(await rawRequest(app, "POST", "/admin/api/logout/", write)).toBe(200);
+    expect(seen.length).toBe(before);
+
+    const adminId = services.store.listUsers().find((u) => u.username === "boss")!.id;
+    const details = services.store
+      .listAudit(adminId, true)
+      .filter((row) => row.action === "pi_admin_proxy")
+      .map((row) => row.detail)
+      .sort();
+    expect(details).toEqual([
+      "GET /admin/api//history/resp_7/",
+      "GET /admin/api/chat/file (user=u-alice)",
+      "GET /admin/api/history/resp_9",
+      "HEAD /admin/api/history/resp_8",
+    ]);
+  });
+
+  it("relays only inert content types on API responses, always with nosniff; pi's page assets keep theirs", async () => {
+    const { app } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    for (const kind of ["js", "css", "html", "none"]) {
+      const res = await admin.get(`/admin/api/typed/${kind}`).expect(200);
+      expect(res.headers["content-type"]).toBe("application/octet-stream");
+      expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    }
+    expect((await admin.get("/admin/api/typed/png")).headers["content-type"]).toBe("image/png");
+    expect((await admin.get("/admin/api/typed/text")).headers["content-type"]).toBe("text/plain; charset=utf-8");
+    const session = await admin.get("/admin/api/session").expect(200);
+    expect(session.headers["content-type"]).toBe("application/json");
+    expect(session.headers["x-content-type-options"]).toBe("nosniff");
+    expect((await admin.get("/admin/assets/app.js")).headers["content-type"]).toBe("text/javascript");
+  });
+
+  describe("upstream timeouts", () => {
+    const saved = { ...PI_ADMIN_PROXY_TIMEOUTS };
+    afterEach(() => Object.assign(PI_ADMIN_PROXY_TIMEOUTS, saved));
+
+    it("gives a write far longer than a read, and records a timed-out write as unknown, not failed", async () => {
+      Object.assign(PI_ADMIN_PROXY_TIMEOUTS, { readMs: 100, writeMs: 2_000 });
+      const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+      const { admin } = await users(app);
+      const write = (ms: number) =>
+        admin.post(`/admin/api/slow?ms=${ms}`).set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").send("{}");
+
+      // A slow write (a plugin install) outlasts the read timeout and reports pi's real outcome.
+      expect((await write(300)).status).toBe(201);
+      const read = await admin.get("/admin/api/slow?ms=300").expect(504);
+      expect(read.body.error.code).toBe("upstream_timeout");
+
+      Object.assign(PI_ADMIN_PROXY_TIMEOUTS, { writeMs: 100 });
+      const timedOut = await write(300).expect(504);
+      expect(timedOut.body.error.message).toContain("반영됐을 수 있으니");
+      const adminId = services.store.listUsers().find((u) => u.username === "boss")!.id;
+      const details = services.store
+        .listAudit(adminId, true)
+        .filter((row) => row.action === "pi_admin_proxy")
+        .map((row) => row.detail);
+      expect(details).toContain("POST /admin/api/slow — 응답 시간 초과(반영 여부 미확인)");
+    });
+  });
+
+  it("keeps serving when the audit write throws (it runs outside Express, where a throw would stop Noah)", async () => {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    services.store.audit = () => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    };
+    await admin.post("/admin/api/echo").set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").send("x").expect(201);
+    await admin.get("/admin/api/history/resp_1").expect(404);
+    await new Promise<void>((resolve) => pi.close(() => resolve()));
+    await admin.get("/admin/api/history/resp_1").expect(502);
     pi.listen(0); // afterEach closes it again
   });
 

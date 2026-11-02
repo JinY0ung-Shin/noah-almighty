@@ -18,7 +18,13 @@ import type { RouterDeps } from "./_shared.js";
  *   key is injected as `Authorization: Bearer`, so pi's own login never shows.
  *   pi skips its CSRF header check for bearer callers, so Noah does it instead:
  *   a mutating call must be same-origin (`Sec-Fetch-Site`, else `Origin`) AND
- *   carry pi's `X-Admin-Request: 1`.
+ *   carry pi's `X-Admin-Request: 1`. The ambient key also makes a GET dangerous
+ *   (a user's sandbox file, another user's history, pi starting a sandbox for any
+ *   id), and pi's UI loads `chat/file` through plain `<img>`/`<a download>`, so
+ *   no custom header can gate GETs: EVERY `/admin/api` request must also come
+ *   from pi's own UI — not cross-site (`Sec-Fetch-Site`), and no `Referer`
+ *   outside `/admin` (pi's UI is `no-referrer`; Noah's SPA sends `same-origin`
+ *   referrers, so a markdown image or link rendered in Noah is refused).
  * - pi's `POST /admin/api/login|logout` are answered HERE, never forwarded: a
  *   login attempt would test a typed key against pi from Noah's ONE address
  *   (pi locks an address out after failures), and logout has no pi session to end.
@@ -35,7 +41,14 @@ import type { RouterDeps } from "./_shared.js";
  *   `chat/file`, an admin chat runs bash in that user's sandbox). Every forwarded
  *   mutating call, and every read of a user's data (`history/<id>`, `chat/file`),
  *   is audited as `pi_admin_proxy` (method + path, never the query values or body —
- *   except `chat/file`'s `user`, which names whose sandbox was read).
+ *   except `chat/file`'s `user`, which names whose sandbox was read). Every
+ *   decision about the path (audit, local login/logout, API vs page) reads the
+ *   path pi will ROUTE — percent-decoded, as pi's router does — never the raw one.
+ * - API responses carry agent-written bytes (`chat/file` serves sandbox files
+ *   under Noah's origin), so only inert content types are relayed there (JSON,
+ *   SSE, plain text, images); anything else — a `.js` labelled `text/javascript`
+ *   above all, which `script-src 'self'` would run — goes out as
+ *   `application/octet-stream`, always with `nosniff`.
  *
  * Settings pi-setup re-applies on every `docker compose up` (Noah's prompt
  * `noah`, its MCP registrations, the disabled pi tools) are overwritten there:
@@ -44,8 +57,14 @@ import type { RouterDeps } from "./_shared.js";
 
 const PREFIX = "/admin";
 const API_PREFIX = "/admin/api";
-/** Wait this long for pi's response headers; a started stream (SSE) is never timed out. */
-const UPSTREAM_HEADER_TIMEOUT_MS = 60_000;
+/**
+ * How long to wait for pi's response HEADERS; a started stream (SSE) is never
+ * timed out. A write gets far longer than a read: pi's own work bounds it (a
+ * plugin install runs several git commands of up to 120 s EACH, an LLM/MCP test
+ * waits 60 s plus setup), and cutting it short would report a failure for a
+ * change pi then applies. Mutable only so tests can shorten it.
+ */
+export const PI_ADMIN_PROXY_TIMEOUTS = { readMs: 60_000, writeMs: 15 * 60_000 };
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** Request headers never forwarded: hop-by-hop, Noah's credentials, client-claimed proxy facts. */
@@ -84,6 +103,29 @@ function isApiPath(pathname: string): boolean {
   return pathname === API_PREFIX || pathname.startsWith(`${API_PREFIX}/`);
 }
 
+/**
+ * The path pi will ROUTE: its router (find-my-way) percent-decodes before
+ * matching, so `/admin/api/chat/%66ile` IS `chat/file` there. Each segment is
+ * decoded (safeAdminTarget already proved they all decode, and refused encoded
+ * slashes). Used for display (the audit row) and as the base of `matchPath`.
+ */
+function routedPath(rawPath: string): string {
+  return rawPath
+    .split("/")
+    .map((segment) => decodeURIComponent(segment))
+    .join("/");
+}
+
+/**
+ * `routedPath` folded for MATCHING, over-inclusively on purpose (a spelling pi
+ * would not route only costs an extra audit row or a local answer): case,
+ * repeated slashes, a trailing slash and a `;…` suffix are ignored.
+ */
+function matchPath(routed: string): string {
+  const folded = routed.toLowerCase().split(";")[0].replace(/\/{2,}/g, "/");
+  return folded.length > 1 && folded.endsWith("/") ? folded.slice(0, -1) : folded;
+}
+
 function underAdmin(pathname: string): boolean {
   return pathname === PREFIX || pathname.startsWith(`${PREFIX}/`);
 }
@@ -110,9 +152,9 @@ function safeAdminTarget(originalUrl: string): boolean {
   });
 }
 
-/** pi admin reads that open ONE user's data — audited like a write. */
+/** pi admin reads that open ONE user's data — audited like a write (HEAD runs pi's GET handler). */
 function readsUserData(method: string, pathname: string): boolean {
-  if (method !== "GET") return false;
+  if (method !== "GET" && method !== "HEAD") return false;
   if (pathname === `${API_PREFIX}/chat/file`) return true;
   return /^\/admin\/api\/history\/[^/]+$/.test(pathname) && pathname !== `${API_PREFIX}/history/retention`;
 }
@@ -142,6 +184,31 @@ function sameOrigin(req: Request): boolean {
   }
 }
 
+/**
+ * An `/admin/api` request comes from pi's own UI page, not from another site or
+ * from something rendered in Noah's SPA. pi's UI sends no `Referer`
+ * (`no-referrer`, both its meta tag and its header) and same-origin fetch
+ * metadata; Noah's SPA sends a `same-origin` referrer on every subresource, and
+ * its sanitizer drops `referrerpolicy`, so an `<img>` there always names `/`.
+ * Without fetch metadata (plain HTTP to a non-localhost host) only the
+ * `Referer` rule applies.
+ */
+function fromPanel(req: Request): boolean {
+  const site = req.get("sec-fetch-site");
+  if (site && site !== "same-origin") return false;
+  const referer = req.get("referer");
+  if (referer === undefined) return true;
+  try {
+    const url = new URL(referer);
+    return url.host === req.get("host") && underAdmin(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Content types relayed as-is on an API response; anything else is `application/octet-stream`. */
+const INERT_API_CONTENT_TYPE = /^\s*(?:application\/json|text\/event-stream|text\/plain|image\/[a-z0-9.+-]+)\s*(?:;|$)/i;
+
 function forwardedRequestHeaders(req: Request, adminKey: string): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
@@ -164,7 +231,6 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
   });
 
   router.use(PREFIX, (req: AuthenticatedRequest, res) => {
-    const pathname = req.originalUrl.split("?")[0];
     // Express matches `/admin` case-insensitively and leaves `..` in originalUrl;
     // only a plain lowercase `/admin` tree path goes any further.
     if (!safeAdminTarget(req.originalUrl)) {
@@ -172,6 +238,9 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       res.status(404).type("text/plain; charset=utf-8").send("Not found");
       return;
     }
+    // What pi routes (decoded), never the raw spelling: `%66ile` must not dodge the audit.
+    const routed = routedPath(req.originalUrl.split("?")[0]);
+    const pathname = matchPath(routed);
     const api = isApiPath(pathname);
 
     const user = store.getUserBySessionToken(sessionTokenFromRequest(req));
@@ -201,7 +270,12 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
     }
 
     const mutating = !SAFE_METHODS.has(req.method);
-    if (mutating && (!sameOrigin(req) || req.get("x-admin-request") !== "1")) {
+    if ((mutating && (!sameOrigin(req) || req.get("x-admin-request") !== "1")) || (api && !fromPanel(req))) {
+      req.resume();
+      logger.warn(
+        { method: req.method, path: routed, site: req.get("sec-fetch-site") ?? null, referer: req.get("referer") !== undefined },
+        "pi admin proxy: refused a request that did not come from pi's admin page",
+      );
       piError(res, 403, "csrf", "다른 출처에서 온 요청은 받을 수 없습니다.");
       return;
     }
@@ -234,25 +308,43 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       return;
     }
     const audited = mutating || readsUserData(req.method, pathname);
-    const userParam = pathname === `${API_PREFIX}/chat/file` ? target.searchParams.get("user") : null;
-    const auditDetail = `${req.method} ${pathname}${userParam ? ` (user=${userParam.slice(0, 128)})` : ""}`;
+    const userParam = pathname === `${API_PREFIX}/chat/file` ? target.searchParams.getAll("user").join(",") : "";
+    const auditDetail = `${req.method} ${routed.slice(0, 256)}${userParam ? ` (user=${userParam.slice(0, 128)})` : ""}`;
+    // Runs inside socket listeners, outside Express: a throw here (SQLITE_BUSY
+    // under a long write lock) would be an uncaughtException that stops Noah.
+    const audit = (detail: string, status: "success" | "error") => {
+      if (!audited) return;
+      try {
+        auditAs(req, "pi_admin_proxy", detail, status);
+      } catch (error) {
+        logger.error({ err: (error as Error).message, detail }, "pi admin proxy: audit row not written");
+      }
+    };
     const client = target.protocol === "https:" ? https : http;
     const upstream = client.request(target, {
       method: req.method,
       headers: forwardedRequestHeaders(req, adminKey),
     });
-    upstream.setTimeout(UPSTREAM_HEADER_TIMEOUT_MS, () => {
+    let timedOut = false;
+    upstream.setTimeout(mutating ? PI_ADMIN_PROXY_TIMEOUTS.writeMs : PI_ADMIN_PROXY_TIMEOUTS.readMs, () => {
+      timedOut = true;
       upstream.destroy(new Error("pi-gateway admin response timed out"));
     });
 
     upstream.on("response", (piRes) => {
       upstream.setTimeout(0);
       const status = piRes.statusCode ?? 502;
-      if (audited) auditAs(req, "pi_admin_proxy", auditDetail, status < 400 ? "success" : "error");
+      audit(auditDetail, status < 400 ? "success" : "error");
       res.status(status);
       for (const [name, value] of Object.entries(piRes.headers)) {
         if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
         res.setHeader(name, value);
+      }
+      if (api) {
+        // Agent-written bytes under Noah's origin: never as script, stylesheet or page.
+        const type = piRes.headers["content-type"];
+        if (!type || !INERT_API_CONTENT_TYPE.test(type)) res.setHeader("content-type", "application/octet-stream");
+        res.setHeader("x-content-type-options", "nosniff");
       }
       res.flushHeaders();
       piRes.pipe(res);
@@ -264,15 +356,25 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       if (clientGone) {
         // The browser left before pi answered: pi may still have applied a write,
         // so the audit row says the outcome is unknown rather than a plain failure.
-        if (audited) auditAs(req, "pi_admin_proxy", `${auditDetail} — 응답 전에 연결 끊김(반영 여부 미확인)`, "error");
+        audit(`${auditDetail} — 응답 전에 연결 끊김(반영 여부 미확인)`, "error");
         return;
       }
-      logger.warn({ err: error.message, path: pathname }, "pi admin proxy: upstream failed");
+      logger.warn({ err: error.message, path: routed }, "pi admin proxy: upstream failed");
       if (res.headersSent) {
         res.destroy();
         return;
       }
-      if (audited) auditAs(req, "pi_admin_proxy", auditDetail, "error");
+      if (timedOut) {
+        // pi may still finish the work: say the outcome is unknown, not that it failed.
+        audit(`${auditDetail} — 응답 시간 초과(반영 여부 미확인)`, "error");
+        const message = mutating
+          ? "pi-gateway가 제한 시간 안에 응답하지 않았습니다. 요청이 반영됐을 수 있으니 화면을 새로고침해 결과를 확인한 뒤 다시 시도해 주세요."
+          : "pi-gateway가 제한 시간 안에 응답하지 않았습니다. 잠시 뒤 다시 시도해 주세요.";
+        if (api) piError(res, 504, "upstream_timeout", message);
+        else res.status(504).type("text/plain; charset=utf-8").send(message);
+        return;
+      }
+      audit(auditDetail, "error");
       if (api) {
         piError(res, 502, "upstream_unreachable", "pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
       } else {

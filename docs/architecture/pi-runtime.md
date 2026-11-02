@@ -583,17 +583,36 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
 - **CSRF** — pi skips its own `X-Admin-Request` check for bearer callers, and an injected bearer is ambient, so
   Noah checks instead: a non-GET/HEAD/OPTIONS call needs `Sec-Fetch-Site: same-origin` (or, without it, an
   `Origin` whose host is the request's Host; the scheme is not compared, for TLS-terminating proxies) AND
-  `X-Admin-Request: 1`.
+  `X-Admin-Request: 1`. The ambient key makes a GET dangerous too (a user's sandbox file, another user's history,
+  pi starting a sandbox for any id), and pi's UI loads `chat/file` through plain `<img>`/`<a download>`, so no
+  custom header can gate reads: EVERY `/admin/api` request must also come from pi's own page — `Sec-Fetch-Site`
+  absent or `same-origin`, and no `Referer` outside `/admin` on the request's host. pi's UI is `no-referrer`;
+  Noah's SPA sends `same-origin` referrers and its sanitizer drops `referrerpolicy`, so a markdown image or link
+  rendered in Noah (an avatar intro naming `/admin/api/chat/file?user=…`) is refused. Without fetch metadata
+  (plain HTTP to a non-localhost host) only the `Referer` rule applies.
+- **Routed path** — pi's router percent-decodes before matching, so every path decision (audit, the local
+  login/logout answers, API vs page) reads the DECODED path, folded over-inclusively (case, repeated/trailing
+  slashes, a `;…` suffix): `/admin/api/chat/%66ile` is audited as `chat/file`, `POST /admin/api/%6cogin` is answered
+  locally. HEAD runs pi's GET handler, so it is audited like GET.
 - **Local answers** — `POST /admin/api/login|logout` never reach pi: forwarding a typed key would count failures
   against Noah's ONE address in pi's lockout, and there is no pi session to end. Logout answers `{ok:true}`; login
   answers a Korean 400 (`noah_proxied`: sign in to Noah and reload) — the form only shows when something else
   failed, so a typed key is never treated as a fix.
 - **Streaming** — mounted BEFORE `express.json` and Noah's security-header middleware: bodies stream both ways
-  (pi's test chat is SSE; no timeout once headers arrived, 60 s before), pi's own CSP/X-Frame-Options reach its UI,
-  pi's `Set-Cookie` is dropped. Upstream down → 502 (Korean).
+  (pi's test chat is SSE; no timeout once headers arrived), pi's own CSP/X-Frame-Options reach its UI, pi's
+  `Set-Cookie` is dropped. Upstream down → 502 (Korean). Waiting for pi's headers is bounded at 60 s for a read but
+  15 min for a write (`PI_ADMIN_PROXY_TIMEOUTS`): a plugin install runs several git commands of up to 120 s each,
+  and a write cut short would report a failure pi then applies. A timeout answers 504 and audits the write as
+  응답 시간 초과(반영 여부 미확인).
+- **Inert API content types** — `chat/file` serves agent-written sandbox bytes under Noah's origin, so an
+  `/admin/api` response keeps its content type only when inert (JSON, SSE, `text/plain`, `image/*`); anything else
+  (`text/javascript` above all, which Noah's `script-src 'self'` would run) is relayed as
+  `application/octet-stream`, always with `nosniff`. pi's page assets (`/admin/assets/*`) keep theirs.
 - **Audit** — every forwarded write AND every read of one user's data (`GET history/<id>`, `GET chat/file`) is an
   audit row `pi_admin_proxy` with `METHOD path` only (no query, no body; `chat/file` adds `user=`). A write whose
-  browser left before pi answered is recorded as an error marked 반영 여부 미확인 (pi may have applied it).
+  browser left before pi answered is recorded as an error marked 반영 여부 미확인 (pi may have applied it). The
+  audit write runs in socket listeners outside Express, so it is caught and logged — a `SQLITE_BUSY` there must
+  never become an uncaughtException that stops Noah.
 - **What does not stick** — `pi-setup` re-applies Noah's prompt `noah` (`scripts/pi-system-prompt.md`), its MCP
   broker entries and the disabled `request_admin`/`present_file` on every `docker compose up`, so edits to those in
   the panel last only until then; the repository stays their source of truth. Everything else (LLM settings,
