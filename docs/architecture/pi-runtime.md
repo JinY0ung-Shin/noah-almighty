@@ -608,8 +608,14 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
   `/admin/api` response keeps its content type only when inert (JSON, SSE, `text/plain`, `image/*`); anything else
   (`text/javascript` above all, which Noah's `script-src 'self'` would run) is relayed as
   `application/octet-stream`, always with `nosniff`. pi's page assets (`/admin/assets/*`) keep theirs.
-- **Audit** — every forwarded write AND every read of one user's data (`GET history/<id>`, `GET chat/file`) is an
-  audit row `pi_admin_proxy` with `METHOD path` only (no query, no body; `chat/file` adds `user=`). A write whose
+- **Audit** — every forwarded write AND every API read except pi's known config/global reads (`UNAUDITED_READS`:
+  session, status — polled every 10 s —, llm, tools, mcp/servers, history/retention, marketplaces, plugins,
+  plugin-settings, chat/options, prompts, prompt-deployments) is an audit row `pi_admin_proxy` with `METHOD path`
+  only — so `history`, `history/<id>`, `chat/file`, `requests` and any read pi adds LATER are audited by default.
+  No query and no body, except the pi user the call acts as: the query's `user` (`chat/file`, `history`,
+  `chat/<id>/cancel`) or the JSON body's `user` of an admin chat / preview (`POST chat`, `chat/preview` — the
+  body is buffered for it, up to pi's own 16 MiB limit, else 413 without forwarding), so the row says whose
+  sandbox or history was touched. A write whose
   browser left before pi answered is recorded as an error marked 반영 여부 미확인 (pi may have applied it). The
   audit write runs in socket listeners outside Express, so it is caught and logged — a `SQLITE_BUSY` there must
   never become an uncaughtException that stops Noah.
@@ -633,7 +639,10 @@ are deleted behind `retirementGate()` and reserved forever; their audit labels s
 links to pi's admin page.
 `piServicesFor(store, config).models` is one catalog per app instance: a 60 s cache, one in-flight fetch for every
 caller (5 s timeout), stale-on-error (a failed refresh keeps the last good list; retried after 5 s); never fetched
-successfully → empty, and the `local` stub's is always empty (the client then hides the picker).
+successfully → empty, and the `local` stub's is always empty (the client then hides the picker). A successful
+`PUT /admin/api/llm` through the admin proxy calls `invalidate()`: the next lookup fetches again, and a fetch
+already in flight (which may have read the old settings) never replaces a list fetched since — so a model whose
+image input was just turned off stops getting image blocks at once, as the retired Noah vision policy did.
 
 - **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else pi's default. A stored
   value pi does not offer (a legacy tier alias like `opus`, a model pi dropped, an SDK-era Claude id) reads as unset —

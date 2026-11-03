@@ -1587,6 +1587,24 @@ describe("chat error handling", () => {
     expect(assistant.response?.thinking).toBe("생각");
   });
 
+  it("never offers pi's default model as the alternative when it is the one that just failed (no pick)", async () => {
+    const { services, app } = boot();
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "deepseek/v3", default: true }, { id: "glm-4" }],
+    });
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "err4").expect(201)).body.user.id as string;
+    H.retryable = true;
+    H.impl = async () => {
+      throw new Error("overloaded");
+    };
+    const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-err4", message: "가라" }).expect(200);
+    const errData = parseSse(res.text).find((f) => f.event === "error")!.data as { error: string };
+    expect(errData.error).toBe(
+      "지금 기본 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델(glm-4)로 바꿔 다시 시도해 보세요.",
+    );
+  });
+
   it("names pi's default model in the nudge, and omits the list when pi offers no other model", async () => {
     const { app } = boot();
     const owner = request.agent(app);

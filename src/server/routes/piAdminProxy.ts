@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import { Router, type Request, type Response } from "express";
 import { sessionTokenFromRequest, type AuthenticatedRequest } from "../auth.js";
+import { piServicesFor } from "../agent/pi/piRuntime.js";
 import logger from "../logger.js";
 import type { RouterDeps } from "./_shared.js";
 
@@ -39,9 +40,12 @@ import type { RouterDeps } from "./_shared.js";
  *   `/admin/../v1/…` would otherwise carry the admin key off the tree or off pi.
  * - A Noah admin is pi's admin: pi lets its admin act as ANY pi user (history,
  *   `chat/file`, an admin chat runs bash in that user's sandbox). Every forwarded
- *   mutating call, and every read of a user's data (`history/<id>`, `chat/file`),
- *   is audited as `pi_admin_proxy` (method + path, never the query values or body —
- *   except `chat/file`'s `user`, which names whose sandbox was read). Every
+ *   mutating call, and every API read EXCEPT pi's known global/config reads
+ *   (`UNAUDITED_READS` — so a read pi adds later is audited until it is listed),
+ *   is audited as `pi_admin_proxy`: method + path, never the query or body —
+ *   except the `user` the call acts as (the query's `user`, or the JSON body's
+ *   `user` of an admin chat / preview, which is buffered for it), so the row
+ *   names whose sandbox or history was touched. Every
  *   decision about the path (audit, local login/logout, API vs page) reads the
  *   path pi will ROUTE — percent-decoded, as pi's router does — never the raw one.
  * - API responses carry agent-written bytes (`chat/file` serves sandbox files
@@ -152,11 +156,50 @@ function safeAdminTarget(originalUrl: string): boolean {
   });
 }
 
-/** pi admin reads that open ONE user's data — audited like a write (HEAD runs pi's GET handler). */
-function readsUserData(method: string, pathname: string): boolean {
-  if (method !== "GET" && method !== "HEAD") return false;
-  if (pathname === `${API_PREFIX}/chat/file`) return true;
-  return /^\/admin\/api\/history\/[^/]+$/.test(pathname) && pathname !== `${API_PREFIX}/history/retention`;
+/**
+ * pi admin API reads that show only pi's own configuration or global state, so
+ * they are NOT audited (`/status` is also polled every 10 s by pi's UI). Every
+ * other API read — `history`, `history/<id>`, `chat/file`, `requests`, and any
+ * read pi adds later — is audited like a write: the default is audited.
+ */
+const UNAUDITED_READS: readonly RegExp[] = [
+  /^\/session$/,
+  /^\/status$/,
+  /^\/llm$/,
+  /^\/tools$/,
+  /^\/mcp\/servers$/,
+  /^\/history\/retention$/,
+  /^\/marketplaces(?:\/[^/]+)?$/,
+  /^\/plugins$/,
+  /^\/plugins\/[^/]+\/skills\/[^/]+$/,
+  /^\/plugin-settings$/,
+  /^\/chat\/options$/,
+  /^\/prompts(?:\/[^/]+)?$/,
+  /^\/prompt-deployments$/,
+];
+
+/** An API read audited like a write (HEAD runs pi's GET handler). `pathname` is a `matchPath`. */
+function auditedRead(method: string, pathname: string): boolean {
+  if ((method !== "GET" && method !== "HEAD") || !isApiPath(pathname)) return false;
+  const rest = pathname.slice(API_PREFIX.length);
+  return !UNAUDITED_READS.some((pattern) => pattern.test(rest));
+}
+
+/** Writes whose JSON body names the pi user they act as (`user`): buffered so the audit row can say whose sandbox. */
+const BODY_USER_WRITES = new Set([`${API_PREFIX}/chat`, `${API_PREFIX}/chat/preview`]);
+/** pi's own body limit; a larger buffered body is refused here exactly as pi would. */
+const MAX_BUFFERED_BODY_BYTES = 16 * 1024 * 1024;
+
+function jsonBodyUser(body: Buffer): string {
+  try {
+    const parsed: unknown = JSON.parse(body.toString("utf8"));
+    if (parsed && typeof parsed === "object" && typeof (parsed as { user?: unknown }).user === "string") {
+      return (parsed as { user: string }).user;
+    }
+  } catch {
+    // pi answers the malformed body itself; the row just names no user.
+  }
+  return "";
 }
 
 /** pi's admin error shape, so its UI shows the message (`{ error: { code, message } }`). */
@@ -307,9 +350,7 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       res.status(404).type("text/plain; charset=utf-8").send("Not found");
       return;
     }
-    const audited = mutating || readsUserData(req.method, pathname);
-    const userParam = pathname === `${API_PREFIX}/chat/file` ? target.searchParams.getAll("user").join(",") : "";
-    const auditDetail = `${req.method} ${routed.slice(0, 256)}${userParam ? ` (user=${userParam.slice(0, 128)})` : ""}`;
+    const audited = mutating || auditedRead(req.method, pathname);
     // Runs inside socket listeners, outside Express: a throw here (SQLITE_BUSY
     // under a long write lock) would be an uncaughtException that stops Noah.
     const audit = (detail: string, status: "success" | "error") => {
@@ -320,77 +361,117 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
         logger.error({ err: (error as Error).message, detail }, "pi admin proxy: audit row not written");
       }
     };
-    const client = target.protocol === "https:" ? https : http;
-    const upstream = client.request(target, {
-      method: req.method,
-      headers: forwardedRequestHeaders(req, adminKey),
-    });
-    let timedOut = false;
-    upstream.setTimeout(mutating ? PI_ADMIN_PROXY_TIMEOUTS.writeMs : PI_ADMIN_PROXY_TIMEOUTS.readMs, () => {
-      timedOut = true;
-      upstream.destroy(new Error("pi-gateway admin response timed out"));
-    });
 
-    upstream.on("response", (piRes) => {
-      upstream.setTimeout(0);
-      const status = piRes.statusCode ?? 502;
-      audit(auditDetail, status < 400 ? "success" : "error");
-      res.status(status);
-      for (const [name, value] of Object.entries(piRes.headers)) {
-        if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
-        res.setHeader(name, value);
-      }
-      if (api) {
-        // Agent-written bytes under Noah's origin: never as script, stylesheet or page.
-        const type = piRes.headers["content-type"];
-        if (!type || !INERT_API_CONTENT_TYPE.test(type)) res.setHeader("content-type", "application/octet-stream");
-        res.setHeader("x-content-type-options", "nosniff");
-      }
-      res.flushHeaders();
-      piRes.pipe(res);
-      piRes.on("error", () => res.destroy());
-    });
-
+    let upstream: http.ClientRequest | null = null;
     let clientGone = false;
-    upstream.on("error", (error) => {
-      if (clientGone) {
-        // The browser left before pi answered: pi may still have applied a write,
-        // so the audit row says the outcome is unknown rather than a plain failure.
-        audit(`${auditDetail} — 응답 전에 연결 끊김(반영 여부 미확인)`, "error");
-        return;
-      }
-      logger.warn({ err: error.message, path: routed }, "pi admin proxy: upstream failed");
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      if (timedOut) {
-        // pi may still finish the work: say the outcome is unknown, not that it failed.
-        audit(`${auditDetail} — 응답 시간 초과(반영 여부 미확인)`, "error");
-        const message = mutating
-          ? "pi-gateway가 제한 시간 안에 응답하지 않았습니다. 요청이 반영됐을 수 있으니 화면을 새로고침해 결과를 확인한 뒤 다시 시도해 주세요."
-          : "pi-gateway가 제한 시간 안에 응답하지 않았습니다. 잠시 뒤 다시 시도해 주세요.";
-        if (api) piError(res, 504, "upstream_timeout", message);
-        else res.status(504).type("text/plain; charset=utf-8").send(message);
-        return;
-      }
-      audit(auditDetail, "error");
-      if (api) {
-        piError(res, 502, "upstream_unreachable", "pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
-      } else {
-        res.status(502).type("text/plain; charset=utf-8").send("pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
-      }
-    });
-
     // The browser went away (a cancelled chat stream): stop pi's side too.
     res.on("close", () => {
       if (!res.writableFinished) {
         if (!res.headersSent) clientGone = true;
-        upstream.destroy();
+        upstream?.destroy();
       }
     });
 
-    req.pipe(upstream);
+    /** Sends the request on to pi: the buffered `body`, or the live request stream when null. */
+    const forward = (body: Buffer | null, bodyUser: string) => {
+      const users = [...target.searchParams.getAll("user"), ...(bodyUser ? [bodyUser] : [])].join(",");
+      const auditDetail = `${req.method} ${routed.slice(0, 256)}${users ? ` (user=${users.slice(0, 128)})` : ""}`;
+      const headers = forwardedRequestHeaders(req, adminKey);
+      if (body) headers["content-length"] = String(body.length);
+      const client = target.protocol === "https:" ? https : http;
+      const request = client.request(target, { method: req.method, headers });
+      upstream = request;
+      let timedOut = false;
+      request.setTimeout(mutating ? PI_ADMIN_PROXY_TIMEOUTS.writeMs : PI_ADMIN_PROXY_TIMEOUTS.readMs, () => {
+        timedOut = true;
+        request.destroy(new Error("pi-gateway admin response timed out"));
+      });
+
+      request.on("response", (piRes) => {
+        request.setTimeout(0);
+        const status = piRes.statusCode ?? 502;
+        audit(auditDetail, status < 400 ? "success" : "error");
+        // pi's LLM page changed the default model or a model's image input: the
+        // next turn must not run on Noah's cached list for up to a minute.
+        if (mutating && status < 400 && pathname === `${API_PREFIX}/llm`) piServicesFor(store, config).models.invalidate();
+        res.status(status);
+        for (const [name, value] of Object.entries(piRes.headers)) {
+          if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
+          res.setHeader(name, value);
+        }
+        if (api) {
+          // Agent-written bytes under Noah's origin: never as script, stylesheet or page.
+          const type = piRes.headers["content-type"];
+          if (!type || !INERT_API_CONTENT_TYPE.test(type)) res.setHeader("content-type", "application/octet-stream");
+          res.setHeader("x-content-type-options", "nosniff");
+        }
+        res.flushHeaders();
+        piRes.pipe(res);
+        piRes.on("error", () => res.destroy());
+      });
+
+      request.on("error", (error) => {
+        if (clientGone) {
+          // The browser left before pi answered: pi may still have applied a write,
+          // so the audit row says the outcome is unknown rather than a plain failure.
+          audit(`${auditDetail} — 응답 전에 연결 끊김(반영 여부 미확인)`, "error");
+          return;
+        }
+        logger.warn({ err: error.message, path: routed }, "pi admin proxy: upstream failed");
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
+        if (timedOut) {
+          // pi may still finish the work: say the outcome is unknown, not that it failed.
+          audit(`${auditDetail} — 응답 시간 초과(반영 여부 미확인)`, "error");
+          const message = mutating
+            ? "pi-gateway가 제한 시간 안에 응답하지 않았습니다. 요청이 반영됐을 수 있으니 화면을 새로고침해 결과를 확인한 뒤 다시 시도해 주세요."
+            : "pi-gateway가 제한 시간 안에 응답하지 않았습니다. 잠시 뒤 다시 시도해 주세요.";
+          if (api) piError(res, 504, "upstream_timeout", message);
+          else res.status(504).type("text/plain; charset=utf-8").send(message);
+          return;
+        }
+        audit(auditDetail, "error");
+        if (api) {
+          piError(res, 502, "upstream_unreachable", "pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
+        } else {
+          res.status(502).type("text/plain; charset=utf-8").send("pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
+        }
+      });
+
+      if (body) request.end(body);
+      else req.pipe(request);
+    };
+
+    if (!(mutating && BODY_USER_WRITES.has(pathname))) {
+      forward(null, "");
+      return;
+    }
+    // An admin chat names the pi user it runs as in its JSON body: read it whole
+    // (pi's own 16 MiB limit) so the audit row says whose sandbox ran it.
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on("data", (chunk: Buffer) => {
+      if (tooLarge) return;
+      size += chunk.length;
+      if (size > MAX_BUFFERED_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0;
+        piError(res, 413, "request_too_large", "요청 본문이 너무 큽니다.");
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (tooLarge || clientGone) return;
+      const body = Buffer.concat(chunks);
+      forward(body, jsonBodyUser(body));
+    });
+    req.on("error", () => {
+      // The browser went away mid-body: nothing was forwarded, so there is nothing to audit.
+    });
   });
 
   return router;

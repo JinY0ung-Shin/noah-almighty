@@ -3,10 +3,11 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, createServices, type AppServices } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { PI_ADMIN_PROXY_TIMEOUTS } from "../src/server/routes/piAdminProxy.js";
+import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
 import { signup, withTempDir } from "./helpers.js";
 
 // Covers src/server/routes/piAdminProxy.ts (pi-gateway's admin panel at /admin
@@ -57,6 +58,11 @@ beforeEach(async () => {
       if (req.url?.split("?")[0] === "/admin/api/echo") {
         res.writeHead(201, { "content-type": "application/octet-stream" });
         res.end(body);
+        return;
+      }
+      if (req.url === "/admin/api/llm?ok=1") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ configured: true }));
         return;
       }
       if (req.url?.split("?")[0] === "/admin/api/slow") {
@@ -325,6 +331,70 @@ describe("pi admin panel proxy (/admin)", () => {
       .map((row) => row.detail)
       .sort();
     expect(details).toEqual(["GET /admin/api/chat/file (user=u-alice)", "GET /admin/api/history/resp_123"]);
+  });
+
+  it("audits every API read except pi's config/global ones, and names the user a call acts as (query or chat body)", async () => {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    const write = (url: string) => admin.post(url).set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1");
+    const chatBody = JSON.stringify({ user: "u-alice", input: "ls ~", stream: true });
+    await write("/admin/api/chat").set("Content-Type", "application/json").send(chatBody);
+    await write("/admin/api/chat/preview").set("Content-Type", "application/json").send({ user: "u-dave" });
+    await write("/admin/api/chat/resp_1/cancel?user=u-bob").send();
+    await admin.get("/admin/api/history?user=u-carol");
+    await admin.get("/admin/api/requests");
+    await admin.get("/admin/api/something-pi-adds-later");
+    for (const read of ["status", "llm", "tools", "mcp/servers", "prompts", "prompts/noah", "plugins", "chat/options", "session"]) {
+      await admin.get(`/admin/api/${read}`);
+    }
+    // The buffered chat body reaches pi byte for byte, with a correct length.
+    const chat = seen.find((r) => r.url === "/admin/api/chat")!;
+    expect(chat.body.toString()).toBe(chatBody);
+    expect(chat.headers["content-length"]).toBe(String(Buffer.byteLength(chatBody)));
+
+    const adminId = services.store.listUsers().find((u) => u.username === "boss")!.id;
+    const details = services.store
+      .listAudit(adminId, true)
+      .filter((row) => row.action === "pi_admin_proxy")
+      .map((row) => row.detail)
+      .sort();
+    expect(details).toEqual([
+      "GET /admin/api/history (user=u-carol)",
+      "GET /admin/api/requests",
+      "GET /admin/api/something-pi-adds-later",
+      "POST /admin/api/chat (user=u-alice)",
+      "POST /admin/api/chat/preview (user=u-dave)",
+      "POST /admin/api/chat/resp_1/cancel (user=u-bob)",
+    ]);
+  });
+
+  it("refuses a buffered chat body over pi's own limit without forwarding it", async () => {
+    const { app } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    const res = await admin
+      .post("/admin/api/chat")
+      .set("Sec-Fetch-Site", "same-origin")
+      .set("X-Admin-Request", "1")
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ user: "u-a", input: "x".repeat(16 * 1024 * 1024) }))
+      .catch((error: { response?: request.Response }) => error.response!);
+    if (res) expect(res.status).toBe(413);
+    expect(seen.filter((r) => r.url === "/admin/api/chat")).toHaveLength(0);
+  });
+
+  it("drops Noah's cached model list after pi's LLM settings change, and only then", async () => {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    const invalidate = vi.spyOn(piServicesFor(services.store, services.config).models, "invalidate");
+    const write = (method: "put" | "post", url: string) =>
+      admin[method](url).set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").send("{}");
+    await write("post", "/admin/api/llm/test"); // a test changes nothing
+    await write("put", "/admin/api/llm"); // the fake pi answers 404: nothing was saved
+    expect(invalidate).not.toHaveBeenCalled();
+    await write("put", "/admin/api/echo-llm");
+    expect(invalidate).not.toHaveBeenCalled();
+    await write("put", "/admin/api/llm?ok=1");
+    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
   it("says so in Korean when no admin key is configured, or pi is unreachable", async () => {

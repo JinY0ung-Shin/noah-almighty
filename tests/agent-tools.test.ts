@@ -3534,6 +3534,12 @@ describe("system tools (avatar system management)", () => {
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
     expect(body).toContain("Model in use: pi-gateway's default model (default — chosen on pi-gateway's admin LLM page");
     expect(body).not.toContain("pi-long-1m");
+    // An unattended run sends no model, so no composer pick reaches it (review #14).
+    const headless = buildSystemTools(s.store, { ...s.baseCtx, config: piConfig(s.config), viewerIsOwner: true, headless: true, visionEnabled: false });
+    const headlessBody = (await callTool(headless, "describe_system", {})).content[0].text ?? "";
+    expect(headlessBody).toContain("unattended runs always use it, so no composer pick applies to this run");
+    expect(headlessBody).toContain("only an admin changing that default or its image setting");
+    expect(headlessBody).not.toContain("pick another model");
     expect(body).not.toContain("admin setting");
     expect(body).not.toContain("chosen for this conversation in the composer");
     expect(body).not.toContain("pinned via environment variable");

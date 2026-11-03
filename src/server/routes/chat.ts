@@ -100,7 +100,7 @@ import {
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import { MAX_MODEL_ID_CHARS, catalogModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
+import { MAX_MODEL_ID_CHARS, catalogDefaultModelId, catalogModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   attachRunClient,
@@ -2616,9 +2616,11 @@ export async function executeChatTurn(
       // lead with `detail` appended: the runtime's own text is English, so it can never
       // be the whole bubble. The technical `detail` still goes to logs/audit above.
       const failedModelLabel = turnModel ? `${turnModel} 모델` : "기본 모델";
+      // No pick = pi's default model ran: never offer the model that just failed.
+      const failedModel = turnModel ?? catalogDefaultModelId(piModels);
       const alternatives = piModels
         .map((model) => model.id)
-        .filter((id) => id !== turnModel)
+        .filter((id) => id !== failedModel)
         .join(", ");
       // OUR deadline wins the message: an abort reads as the user's doing, and
       // no user was there to press stop on an unattended task.

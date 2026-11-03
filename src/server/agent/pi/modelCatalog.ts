@@ -56,6 +56,12 @@ export interface PiModelCatalog {
   snapshot(): Promise<CatalogSnapshot>;
   /** The last good list without fetching ([] before the first successful fetch). */
   peek(): CatalogModel[];
+  /**
+   * pi's model settings changed (its admin LLM page, through Noah's proxy): the
+   * next lookup fetches again, and a fetch already in flight — which may have
+   * read the old settings — no longer counts as fresh.
+   */
+  invalidate(): void;
 }
 
 /** How long a fetched list is served before the next lookup refreshes it. */
@@ -84,19 +90,30 @@ export function createPiModelCatalog(
   let freshUntil = 0;
   let lastFetchFailed = false;
   let inFlight: Promise<void> | null = null;
+  /** Bumped by invalidate(): a fetch started under an older generation never marks the list fresh. */
+  let generation = 0;
 
   const refresh = (): Promise<void> => {
     if (!client) return Promise.resolve();
-    inFlight ??= (async () => {
+    if (inFlight) return inFlight;
+    const startedAt = generation;
+    // `finally` can run before the assignment below (a client that throws
+    // synchronously), so it checks through this slot, never the const itself.
+    const slot: { promise: Promise<void> | null; settled: boolean } = { promise: null, settled: false };
+    const fetching: Promise<void> = (async () => {
       try {
         const models = await client.listModels(AbortSignal.timeout(FETCH_TIMEOUT_MS));
+        // Started before an invalidate(): it may hold the OLD settings, so it
+        // never replaces a list fetched since (only fills an empty cache).
+        const current = startedAt === generation;
+        if (!current && good !== null) return;
         const seen = new Set<string>();
-        good = [];
+        const fetched: CatalogModel[] = [];
         for (const model of models) {
           const id = model.id.trim();
           if (!id || seen.has(id)) continue;
           seen.add(id);
-          good.push({
+          fetched.push({
             id,
             server: model.ownedBy?.trim() || null,
             ...(model.default ? { default: true as const } : {}),
@@ -104,9 +121,12 @@ export function createPiModelCatalog(
             ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
           });
         }
+        good = fetched;
+        if (!current) return;
         lastFetchFailed = false;
         freshUntil = now() + ttlMs;
       } catch (error) {
+        if (startedAt !== generation) return;
         lastFetchFailed = true;
         freshUntil = now() + FAILURE_RETRY_MS;
         logger.warn(
@@ -114,10 +134,13 @@ export function createPiModelCatalog(
           good ? "pi-gateway model list refresh failed; serving the last good list" : "pi-gateway model list unavailable",
         );
       } finally {
-        inFlight = null;
+        slot.settled = true;
+        if (slot.promise && inFlight === slot.promise) inFlight = null;
       }
     })();
-    return inFlight;
+    slot.promise = fetching;
+    if (!slot.settled) inFlight = fetching;
+    return fetching;
   };
 
   const snapshot = async (): Promise<CatalogSnapshot> => {
@@ -130,6 +153,12 @@ export function createPiModelCatalog(
     snapshot,
     list: async () => (await snapshot()).models,
     peek: () => good ?? [],
+    invalidate: () => {
+      generation += 1;
+      freshUntil = 0;
+      // The next lookup starts its own fetch instead of joining a stale one.
+      inFlight = null;
+    },
   };
 }
 

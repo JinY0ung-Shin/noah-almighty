@@ -65,6 +65,54 @@ describe("pi model catalog", () => {
     expect(c).toEqual(a);
   });
 
+  it("refetches after invalidate(), and a fetch in flight across it never counts as fresh (pi's LLM page changed)", async () => {
+    let now = 0;
+    const { client } = scriptedPi([[{ id: "m1" }], [{ id: "m1", imageInput: false }], [{ id: "m2" }]]);
+    const catalog = createPiModelCatalog(client, { now: () => now });
+    expect(await catalog.list()).toEqual([{ id: "m1", server: null }]);
+    catalog.invalidate();
+    // Well inside the TTL, the next lookup fetches again.
+    now += 1_000;
+    expect(await catalog.list()).toEqual([{ id: "m1", server: null, imageInput: false }]);
+    expect(client.listModels).toHaveBeenCalledTimes(2);
+    expect(await catalog.list()).toEqual([{ id: "m1", server: null, imageInput: false }]);
+    expect(client.listModels).toHaveBeenCalledTimes(2);
+
+    // A fetch that started before the change: its answer is served, but the next lookup fetches anew.
+    const releases: ((models: PiModel[]) => void)[] = [];
+    const slow = { listModels: vi.fn(() => new Promise<PiModel[]>((resolve) => releases.push(resolve))) };
+    const racing = createPiModelCatalog(slow, { now: () => now });
+    const stale = racing.list();
+    racing.invalidate();
+    const fresh = racing.list(); // does not join the stale fetch
+    expect(slow.listModels).toHaveBeenCalledTimes(2);
+    releases[1]([{ id: "new" }]);
+    expect(await fresh).toEqual([{ id: "new", server: null }]);
+    // The stale answer lands last: it never replaces the list fetched since.
+    releases[0]([{ id: "old" }]);
+    await stale;
+    expect(await racing.list()).toEqual([{ id: "new", server: null }]);
+    expect(slow.listModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("survives a client that throws synchronously (no stuck in-flight fetch)", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    let now = 0;
+    let fail = true;
+    const client = {
+      listModels: vi.fn((): Promise<PiModel[]> => {
+        if (fail) throw new Error("sync boom");
+        return Promise.resolve([{ id: "ok" }]);
+      }),
+    };
+    const catalog = createPiModelCatalog(client, { now: () => now });
+    expect(await catalog.list()).toEqual([]);
+    fail = false;
+    now += 10_000;
+    expect(await catalog.list()).toEqual([{ id: "ok", server: null }]);
+    warn.mockRestore();
+  });
+
   it("keeps the last good list when a refresh fails (stale-on-error), and retries later", async () => {
     let now = 0;
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
