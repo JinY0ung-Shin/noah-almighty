@@ -87,7 +87,8 @@
   from `mcp-broker` `POST http://noah-almighty:48787/mcp/repo` → **401**, from `gateway` and from the published
   port → **403**; Noah `GET http://gateway:8080/v1/models` with the mounted key → 200; the `/admin` proxy (Noah's
   copy of pi's admin key, `secrets/noah/pi_gateway_admin_api_key` 0400) → `GET /admin/api/session` as a Noah admin
-  200 `{authenticated:true}`, anonymous 401, `/admin/` serves pi's UI with pi's CSP; and pi's
+  200 `{authenticated:true}`, anonymous **403** `noah_session_required` (never 401: pi's UI would answer that with
+  its own key login form), `/admin/` serves pi's UI with pi's CSP; and pi's
   `scripts/security-check/run.mjs` (run in `sandboxd`, `--internal noah-almighty:48787` plus each Noah IP) →
   all PASS, sandboxes `noah-almighty/pi-sandbox:latest` with network `none`. Tear the dind and its volume down
   afterwards; leave `noahpi-dind` (the pi e2e instance) alone.

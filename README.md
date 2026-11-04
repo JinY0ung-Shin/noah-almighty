@@ -109,8 +109,9 @@ which check owner/group trust themselves.
 - **Per-conversation model picker**: the chat composer lists the models pi-gateway offers right now
   (its live `GET /v1/models`, configured on pi's admin LLM page) plus **기본 모델**, pi-gateway's default
   model, which runs when nothing is picked. The choice persists on the conversation and rides each turn;
-  a stored pick pi stops offering quietly runs the default. An admin may set a deployment-wide model
-  (관리자 → 시스템 → 모델) and per-model image-input support.
+  a stored pick pi stops offering quietly runs the default. Noah keeps no LLM settings of its own:
+  the default model and each model's image input are set on pi-gateway's admin LLM page (served at
+  `/admin/` to Noah admins).
 - **Per-user sandboxes, tiered data access**: each run executes in the ACTING user's own pi
   sandbox with the full tool set (shell, files) — a colleague chatting with your avatar works in
   the colleague's sandbox, never yours. What separates owners, group co-members (avatar-sharing
@@ -206,7 +207,7 @@ never copied into this repository.
    models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
    pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
    picks none runs pi's default model). A model whose **image** input is off there is text-only in Noah too
-   (attached images reach it as files; Noah's per-model vision setting can only turn vision off), and its
+   (attached images reach it as files; pi's setting is the only one — Noah has none of its own), and its
    reasoning **efforts** are the levels Noah sends: a composer pick the model does not list runs at the closest
    listed level below it, or at the model's default effort (the composer greys such levels out).
 5. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
@@ -383,11 +384,19 @@ included.
 5. **Rollback** to the SDK-era release: `git checkout` that release, re-tag the old image as `latest`, and
    `docker compose up -d --no-build noah-almighty`. pi's services keep running until
    `docker compose down` from the new checkout; nothing of Noah's data volume depends on them. The first pi boot
-   did change two things the old release reads, though: it DELETED the stored Claude subscription token
-   (`claude_oauth_token` — paste it again in the old admin UI, or restore it from
-   `APP_DATA_DIR/backups/pre-retire-<stamp>.db`) and MOVED the CLI transcripts (`agent-sessions`) to
-   `APP_DATA_DIR/retired/<stamp>/` — move them back, or older conversations continue from their text history
-   only. Turns taken on pi have no CLI transcript either way.
+   did change three things the old release reads, though:
+   - it DELETED the stored Claude subscription token (`claude_oauth_token`) — paste it again in the old admin UI;
+   - it DELETED Noah's own LLM settings, the admin model override (`agent_model_override`) and the per-model
+     vision policy (`model_vision_policy`) — set them again in the old admin UI (관리자 → 시스템 → 모델). Until
+     then, a conversation that picked no model runs the old release's default tier instead of the model the admin
+     had pinned, and a tier that was marked text-only reads as image-capable again, so an image turn on a
+     text-only model fails;
+   - it MOVED the CLI transcripts (`agent-sessions`) to `APP_DATA_DIR/retired/<stamp>/` — move them back, or
+     older conversations continue from their text history only. Turns taken on pi have no CLI transcript either
+     way.
+
+   All three deleted values are still in `APP_DATA_DIR/backups/pre-retire-<stamp>.db` (same `app_config` keys,
+   readable with the same `SESSION_SECRET`) if you would rather copy the rows back than re-enter them.
 
 The optional egress overlay ([docs/egress-policy.md](docs/egress-policy.md)) is not yet supported together
 with the bundled pi-gateway: its firewall admits only its own proxy, so Noah cannot reach pi's gateway.
@@ -441,7 +450,7 @@ backup and quarantine).
 | `PI_WORKSPACES_DIR` | Path of pi's `$PI_GATEWAY_HOME/workspaces` as Noah sees it (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. **Fixed by docker-compose.yml** (`/srv/pi-workspaces`, a bind mount of `$PI_GATEWAY_HOME/workspaces`). |
 | `NOAH_MCP_PUBLIC_URL` | The base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (registered by the `pi-setup` service through `scripts/pi-register-mcp.mjs`, logged at boot). Compose default `http://noah-almighty:<PORT>`; set it (with `NOAH_MCP_HOST_ALIAS`) only for native TLS. |
 | `NOAH_MCP_ALLOWED_CIDRS` | Comma-separated addresses/CIDRs (IPv4/IPv6) allowed to reach `/mcp/<server>`, matched on the TCP peer (never `X-Forwarded-For`); others get 403 before the token is read. An invalid entry stops the boot. Compose default: the broker's pinned address, `${NOAH_MCP_BROKER_IP}/32`. Unset (native run) = open — then bind/firewall the port to the broker's network. |
-| `PI_MODEL_MAP` | **Retired** — the composer now offers pi-gateway's live model list (2026-10-31). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. Stored picks that named a tier (`opus`, `sonnet`, …) are not migrated: they run pi-gateway's default model until a model is picked again, and an admin model setting naming a tier is reported as ignored (관리자 → 시스템). |
+| `PI_MODEL_MAP` | **Retired** — the composer now offers pi-gateway's live model list (2026-10-31). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. Stored picks that named a tier (`opus`, `sonnet`, …) are not migrated: they run pi-gateway's default model until a model is picked again. Noah's own admin model setting is retired too (2026-11-01): pi-gateway's admin LLM page picks the default model. |
 | `PI_DECK_SANDBOX` | `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). **Fixed to `true` by docker-compose.yml**, which builds and wires that image. |
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
 | `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default the `./vendor/pi-gateway` submodule), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |
