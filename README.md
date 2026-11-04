@@ -295,8 +295,17 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
 
 ### Upgrade
 
-- **Noah:** `git pull && git submodule update --init`, then `docker compose up -d --build`. The submodule
-  carries the pi-gateway pin, so a pin move arrives with the pull. `pi-setup` re-registers what changed.
+- **Noah:** `git pull && git submodule update --init`, then `sudo docker/pi/setup-host.sh`, then
+  `docker compose up -d --build`. The submodule carries the pi-gateway pin, so a pin move arrives with the pull.
+  `pi-setup` re-registers what changed. Run `setup-host.sh` on EVERY upgrade: it is idempotent (it keeps what
+  exists and only refreshes Noah's key copies), and a release can add a host secret file Compose requires — the
+  `/admin` panel's `noah/pi_gateway_admin_api_key` is one. Without that file `docker compose up` stops with
+  `bind source path does not exist` and the new Noah container is never created.
+- **After rotating a pi key** (`$PI_GATEWAY_SECRETS/gateway/api_key` or `admin_api_key`): re-run
+  `sudo docker/pi/setup-host.sh`, then `docker compose up -d --force-recreate noah-almighty`. Noah reads both
+  keys once at boot, and its secret mount still points at the old file, so a plain `up -d` keeps the old key. A
+  stale admin key makes pi refuse the `/admin` panel and, after repeated failures, lock Noah's address out for
+  15 minutes; that lock outlasts the fix, so wait it out after recreating.
 - **Deployments from before the submodule** (pi-gateway checked out at `../pi-gateway`): pi's `.env` lives
   there, and without it pi's compose loses `DOCKER_GID`, `GATEWAY_BIND_ADDR` and the rest. Either copy it once
   (`cp ../pi-gateway/.env vendor/pi-gateway/.env`) and retire the old checkout, or keep using it with
