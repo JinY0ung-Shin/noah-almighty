@@ -195,6 +195,27 @@ describe("composer model picker", () => {
     expect(container.textContent).not.toContain("고정되어 있습니다");
   });
 
+  it("names pi's falcon tier wherever no pick is shown: picker, settings summary and toast", async () => {
+    seed("");
+    const { container } = render(ChatView);
+    const summary = () => container.querySelector(".composer-settings-summary")?.textContent ?? "";
+    // pi without a falcon tier: the plain label.
+    expect(summary()).toMatch(/^기본 모델 · /);
+    // The summary follows the bootstrap (a model-list refresh), not only the pane.
+    updateState((state) => {
+      state.bootstrap!.modelSelection!.defaultModel = "falcon";
+    });
+    await waitFor(() => expect(summary()).toMatch(/^기본 모델 \(falcon\) · /));
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
+    expect(select.options[0].textContent?.trim()).toBe("기본 모델 (falcon)");
+
+    await fireEvent.change(select, { target: { value: "seeing" } });
+    await waitFor(() => expect(summary()).toMatch(/^seeing · /));
+    await fireEvent.change(select, { target: { value: "" } });
+    await waitFor(() => expect(summary()).toMatch(/^기본 모델 \(falcon\) · /));
+    expect(get(toasts).some((t) => t.message.includes("모델을 기본 모델 (falcon)(으)로 변경했습니다"))).toBe(true);
+  });
+
   it("is hidden when pi offers no models", () => {
     replaceState({
       avatars: [],

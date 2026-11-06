@@ -223,12 +223,17 @@
 
   // The pane's pi model id as the picker shows it; "" = pi-gateway's default
   // model (also for a stored id pi no longer offers).
-  function currentModel(item: ChatPane): string {
-    return knownModel(item.model, $appState.bootstrap?.modelSelection?.models ?? []);
+  function currentModel(item: ChatPane, state: ReturnType<typeof readState> = $appState): string {
+    return knownModel(item.model, state.bootstrap?.modelSelection?.models ?? []);
   }
 
-  function modelLabel(model: string): string {
-    return model || "기본 모델";
+  // "" = no pick: name the model the run actually uses (pi's `falcon` tier,
+  // bootstrap's modelSelection.defaultModel) when pi offers it — the same text
+  // as the picker's first option.
+  function modelLabel(model: string, state: ReturnType<typeof readState>): string {
+    if (model) return model;
+    const defaultModel = state.bootstrap?.modelSelection?.defaultModel;
+    return defaultModel ? `기본 모델 (${defaultModel})` : "기본 모델";
   }
 
   function hasEffortPicker(): boolean {
@@ -243,8 +248,8 @@
     return true;
   }
 
-  function currentModelLabel(item: ChatPane): string {
-    return modelLabel(currentModel(item));
+  function currentModelLabel(item: ChatPane, state: ReturnType<typeof readState>): string {
+    return modelLabel(currentModel(item, state), state);
   }
 
   function effortLabel(item: ChatPane): string {
@@ -414,9 +419,13 @@
     return `도구 ${mcpToolsCount(item, adminBlocked)}`;
   }
 
-  function composerSettingsSummary(item: ChatPane, adminBlocked: Set<McpToolGroupId>): string {
+  function composerSettingsSummary(
+    item: ChatPane,
+    adminBlocked: Set<McpToolGroupId>,
+    state: ReturnType<typeof readState>,
+  ): string {
     const parts: string[] = [];
-    if (hasModelPicker()) parts.push(currentModelLabel(item));
+    if (hasModelPicker()) parts.push(currentModelLabel(item, state));
     if (hasEffortPicker()) parts.push(`강도 ${effortLabel(item)}`);
     parts.push(mcpToolsLabel(item, adminBlocked));
     return parts.join(" · ");
@@ -1036,7 +1045,7 @@
       if (target) target.model = model || undefined;
       if (state.user) state.user.modelDefault = model || null;
     });
-    notify(`모델을 ${modelLabel(model)}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`, "info");
+    notify(`모델을 ${modelLabel(model, readState())}(으)로 변경했습니다. 다음 메시지부터 적용됩니다.`, "info");
     api("/api/me/chat-defaults", { method: "PUT", body: JSON.stringify({ model: model || null }) }).catch((err) =>
       notify(`기본 모델을 저장하지 못했습니다: ${(err as Error).message}`, "warn"),
     );
@@ -1656,7 +1665,7 @@
                 >
                   <Icon name="gear" size={16} />
                   <span class="composer-settings-label">설정</span>
-                  <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet)}</span>
+                  <span class="composer-settings-summary">{composerSettingsSummary(item, adminBlockedMcpToolGroupSet, $appState)}</span>
                 </button>
                 <span id={paneDomId("composer-controls", item.id)} class="composer-controls" class:open={composerSettingsOpenPaneId === item.id}>
                   {#if $appState.bootstrap?.modelSelection?.models.length}
