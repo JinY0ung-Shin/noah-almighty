@@ -9,8 +9,8 @@ The durable direction (relay into the user's own browser, the extension runs no 
 bridge-authored expressions for `read_storage`, the default-deny `CDP_ALLOWLIST` is the boundary, everything
 the page returns is untrusted) is summarized in [`../../CLAUDE.md`](../../CLAUDE.md) and stated in full in
 [contract.md](browser-bridge/contract.md) and [actions.md](browser-bridge/actions.md). Cautions for the shipped folder itself — `BUNDLE_FILES`,
-`BINARY_BUNDLE_FILES`, the min-compatible ceiling — are in
-[`../../extension/CLAUDE.md`](../../extension/CLAUDE.md). The user-facing install and allowlist-policy
+`BINARY_BUNDLE_FILES`, the min-compatible ceiling, icons, popup sizing — are in
+[extension.md](browser-bridge/extension.md) (summary rules in [`../../extension/CLAUDE.md`](../../extension/CLAUDE.md)). The user-facing install and allowlist-policy
 guide is [`../../extension/README.md`](../../extension/README.md) (Korean).
 
 | Page | Open it when |
@@ -24,4 +24,4 @@ guide is [`../../extension/README.md`](../../extension/README.md) (Korean).
 Two invariants that fail in the FIELD rather than in CI, repeated here because they are cheap to miss:
 a new file under `extension/` must be added to `BUNDLE_FILES` (and a BINARY file also to
 `BINARY_BUNDLE_FILES`), and `BROWSER_EXTENSION_MIN_COMPATIBLE` must never exceed the bundled manifest
-version. Details in [`../../extension/CLAUDE.md`](../../extension/CLAUDE.md).
+version. Details in [extension.md](browser-bridge/extension.md).

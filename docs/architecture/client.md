@@ -155,6 +155,12 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   the test instead of baking tofu into a baseline. Measure after first paint, or from a
   `ResizeObserver` callback.
 
+- **Legacy-mode template deps are resolved at COMPILE time — fixes beyond `$:`.** State read only inside a helper
+  the markup calls renders STALE (a composer button's `title` froze this way). Besides a `$:` map, pass the state
+  as an argument (`attachHint(item, $appState)` in `ChatView`) or name it in the markup (`{@const}`). Neither
+  svelte-check nor jsdom catches it — unrelated store writes re-evaluate the expression and mask the staleness;
+  only a real browser shows it.
+
 ## Chat transcript auto-scroll (stick-to-bottom)
 - **User intent is read from INPUT events (wheel/touch/pointer), never inferred from scroll deltas.**
   Scroll-event heuristics lost twice over: mid-stream re-pins reset the viewport between wheel notches
@@ -297,7 +303,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 
 ## Client ↔ server contracts mirrored by hand
 - **New cross-boundary code goes into `src/shared/*`** (modules both sides compile, e.g. the import-free
-  `mcpToolGroups.ts`, `todos.ts`) or a server module listed in `tsconfig.client.json`'s `include` — never a
+  `mcpToolGroups.ts`, `todos.ts`) or a server module listed in `tsconfig.client.json`'s `include` (today
+  `types.ts`, `routineSchedule.ts`, `experimentalFeatures.ts`, `releaseNotes.ts`, `effortLevels.ts`,
+  `hexSshPolicy.ts`) — never a
   hand-copy. The pairs below predate that layer and are still mirrored by hand; update them in lockstep:
   - `normalizeTags` (`lib/format.ts`) ↔ server `normalizeHashtags`
   - repo-href building ↔ server `githubHost` resolution
@@ -429,12 +437,12 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   Svelte plugin). `.svelte` files are NOT in the coverage `include` yet — adding them would sink totals
   below the vitest thresholds until component tests broaden.
 - **Isolated UI/layout/interaction behavior CAN be runtime-verified** when no `HTTP_PROXY` is set (check
-  `env | grep -i proxy`). Install Playwright on demand (`npm i -D playwright && npx playwright install
-  chromium`), build a MINIMAL Svelte fixture **inside the project dir** (a `/tmp` fixture can't resolve
+  `env | grep -i proxy`). Playwright is already installed (`@playwright/test` devDep + `playwright-core`; fetch a browser with
+  `node node_modules/@playwright/test/cli.js install chromium` if missing), build a MINIMAL Svelte fixture **inside the project dir** (a `/tmp` fixture can't resolve
   `vite`/`@sveltejs/vite-plugin-svelte` from `node_modules`) that imports the REAL action/component under
   test, serve it (`node_modules/.bin/vite --config <fixture>/vite.config.mjs`, `configFile:false`,
   `plugins:[svelte()]`), and drive it headless to measure real DOM/layout. Clean up after: `rm -rf` the
-  fixture and `npm uninstall` the playwright devDeps so `package.json`/lock stay clean. This caught the
+  fixture. This caught the
   `autosize` shrink-after-send fix PASSING svelte-check yet FAILING at runtime, and the wheel-animation
   re-engage race in the transcript auto-scroll rewrite.
 - ⚠️ **Vite full-reloads the fixture page once after a source edit** (dep re-optimize): everything you
@@ -463,3 +471,12 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **아이콘 경로의 단일 출처는 `lib/icons.ts`** (`ICON_PATHS` + `iconSvg`) — `Icon.svelte`와
   `lib/dom.ts`(imperative innerHTML)가 함께 소비한다. `Icon.svelte`에 경로를 직접 추가하지 말 것.
   `Icon`의 `name`은 bare string이라 **오타는 조용히 빈 SVG로 렌더**된다 — 이름 추가 시 육안 확인.
+- **A status indicator that only STATES a problem is a dead end — make it the way to the fix.** The composer's
+  browser-bridge badge is a `<button>` into the install guide on every rung that names something ACTIONABLE, and
+  an inert `<span>` only when the install matches the server bundle exactly. Each rung (`data-status`
+  `current`/`compatible`/`outdated`/`unreachable`, styled `--ok`/`--info`/`--warn`/`--danger`) carries its OWN
+  TEXT, not just its colour — two rungs told apart by hue alone are one rung to anyone who can't separate the
+  dots. Same for gated buttons: a disabled button whose prerequisite is unstated reads as broken, so make the
+  prerequisite the button's FIRST STEP on the same click (which is also the user gesture a file picker needs).
+  Cross-view deep links ride a ONE-SHOT flag in `lib/state.ts` (`browserGuideRequested`, set by the badge and
+  `WhatsNewModal`, consumed and cleared by `SettingsAccessTab` on activation), never a router param.

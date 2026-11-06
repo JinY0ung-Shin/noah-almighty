@@ -16,8 +16,8 @@
   build:client` (vite) / `npm run lint:client` (svelte-check) also work. `tsconfig.client.json`
   pulls in `src/server/types.ts` + `routineSchedule.ts` so the client shares server types via
   the `src/client/src/lib/types.ts` re-export barrel — import server types through it.
-- `rtk proxy npx vitest run tests/<file>.test.ts` — run ONE test file (full suite is ~16s); the
-  suites are split agent-core/agent-tools/store/infra/app/chat-history.
+- `rtk proxy npx vitest run tests/<file>.test.ts` — run ONE test file (full suite is ~16s); see
+  "Tests" below for the layout.
 - `docker compose config` — validate compose/env wiring before Docker changes. The stack INCLUDES
   pi-gateway's compose from `${PI_GATEWAY_DIR:-./vendor/pi-gateway}` (the submodule; README "Deployment"), so
   `config` needs it checked out (`git submodule update --init`), a Noah `.env`
@@ -44,10 +44,43 @@
 - **Dev box ≠ deploy target.** Coding happens on a WSL2 box; deployment is a separate internal corporate server
   (no local DB, `localhost` is not the deploy env). Any schema / UID / volume / `SESSION_SECRET` change needs an
   EXISTING-deployment migration path, not just fresh-install behavior.
-- **Tests:** vitest files in `tests/`, named by area (`agent-*`, `client-*`, `svelte-*`, `browser-*`, `store`,
-  `infra`, `app`, `chat-history`, …) with shared fixtures in `tests/helpers.ts`.
 - **Release notes never advertise macOS** — the user fleet is Windows/Linux only
   ([`browser-bridge/extension.md`](browser-bridge/extension.md)).
+
+## Tests
+- **Layout:** ~110 vitest files in `tests/`, named by area (`agent-*`, `pi-*`, `client-*`, `svelte-*`, `browser-*`,
+  `deck-*`, `share-*`, `routes-*`, `chat-*`, `retire-*`, `store`, `infra`, `app`, …) plus `helpers.ts`,
+  `setup-dom.ts` and the Playwright `visual/*.spec.ts`.
+- **The vitest project is chosen purely by FILENAME.** `svelte-*.test.ts` → `components` (jsdom + Svelte plugins
+  + `setupFiles: ["tests/setup-dom.ts"]`); every other `*.test.ts` → `unit` (node, no DOM, no Svelte transform). A
+  Svelte-mounting test without the prefix lands in `unit`, where `document`/`window` are absent and `.svelte`
+  imports don't transform — it fails loudly.
+- **`helpers.ts` wires up NOTHING itself** — thin real primitives (supertest wrapper, SSE frame parser, temp-dir
+  registrar, git/plugin/marketplace fixture builders, `callTool`, stdio JSON-RPC client). Each file builds its OWN
+  `createServices`+`createApp` and mocks the runtime itself (`vi.mock("../src/server/agent/index.js")` via
+  `vi.hoisted`, or `AGENT_RUNTIME=local`); the pi runner runs against a scripted fake in `pi-runner.test.ts`, the
+  real gateway only under `PI_E2E_LIVE=1`.
+- **`callTool(tools, name, args)` finds the tool and calls its `handler(args, {})` DIRECTLY**, bypassing the server's zod validation, so a
+  schema bound (`.max(N)`/`.min()`) is not exercised — assert it against `tool.inputSchema`.
+- **`withTempDir(label, onSetup?)` registers `beforeEach`/`afterEach`** — call it at module/describe scope, never
+  inside `it()`. Its accessor is `undefined` until the first `beforeEach`; the
+  `let tempDir; const get = withTempDir(label, () => { tempDir = get(); })` idiom captures the fresh
+  `fs.mkdtempSync` dir (cleaned per test).
+- **`setup-dom.ts` polyfills exactly three jsdom gaps** Svelte 5 needs: `Element.prototype.animate`
+  (transition directives), `Element.prototype.getAnimations` (an `animate:` directive queries a leaving keyed row)
+  and `ResizeObserver` (the transcript's autoscroll controller) — safe only because jsdom never lays out; real
+  timing/layout is covered ONLY by the Playwright visual suite.
+- **`pretest` (`npm run build:client -- --mode test`) runs only through `npm test`, not `npx vitest`.** A red
+  `npm test` with ZERO test output almost always means the CLIENT BUILD broke. No test reads `dist/client`.
+- **Visual specs never run under `npm test`** (both projects include only `*.test.ts`). They run via
+  `npm run test:visual` (`tests/run-visual.mjs`), which starts its own Vite on `127.0.0.1:5173` with
+  `strictPort` — it fails if 5173 is taken, and a bare `npx playwright test` connection-refuses.
+- **Coverage thresholds are ONE global gate under `--coverage` only** (`test:coverage`). A green list with a red
+  `test:coverage` is a threshold miss, not flakiness; the floor sits a hair under achieved coverage and only rises.
+- **Intended CONTRACT changes update their pinned tests; regressions do not.** Prompt/tool-text pins are
+  `toContain`/`not.toContain` substrings (`agent-core.test.ts`): adding a section is safe, changing an existing
+  string breaks a pin. When a fix deliberately changes a route's status/shape, update the pin and say so; never
+  loosen a test to hide a regression.
 
 ## Verifying the running app / UI
 - Verifying the local server: WHEN a corporate `HTTP_PROXY` is set it intercepts `localhost`

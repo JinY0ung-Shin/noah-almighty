@@ -216,6 +216,20 @@
   settings path, a host mismatch names the allowed sites and the current host, and a declined consent is
   reported rather than retried. The one line the tool text and both metacognition surfaces never soften:
   one-time codes (OTP/2FA) and payment details stay off-limits — no policy covers them.
+- **How the extension narrows a secret write (0.28.0).** The plaintext arrives only on `secretText` / a field's
+  `secretValue` — never `text`/`value` — so a pre-0.28.0 build reads `message.text || ""` and types NOTHING; keep
+  that property. `secretWriteRefusal` checks tab host → FRAME host (`refDocumentUrl`, an OOPIF attributed through
+  its OWN session because backendNodeIds are per-process — `tests/visual/password-facts.spec.ts`) → password
+  shape → consent, all before a single key. The popup goes LAST because it names the field kind it asks about:
+  prompting and then refusing on shape would ask about a write that could not happen and leave a session-WIDE
+  grant behind. The write goes through `writeSecretField`, NEVER `clearAndWrite` (every end state of the clearing
+  ladder QUOTES what the field landed on, and rungs B/C re-enter the value). No note, error or throw carries the
+  value. `extension/secretInput.js` is the pure half and is never wired to the value —
+  `tests/browser-secret-input.test.ts` pins that structurally.
+- **Adding a consent kind moves three places together:** `DATA_CONSENT_COPY` (`background.js`), the `kind=` branch
+  in `consent.js`, and `DATA_TYPE_LABELS` in `options.js` (which `grantedTypes` enumerates, so a kind can never be
+  promptable but unrevokable). A kind keyed by a SENTINEL (`secret` → `SECRET_SESSION_GRANT_HOST`, `"*"`) needs a
+  fourth — its row label (`grantRowLabel`), or the list shows a bare `*` that reads as a wildcard site.
 - **Two guards run before a click, and `clickNode` itself stays UNGUARDED by design**
   (`select_option`'s option click and `focusForInput`'s fallback reuse it; the guards live in the op
   branches). (1) FILE-UPLOAD refusal: `<input type=file>` looks like any `button` in the AX tree — its

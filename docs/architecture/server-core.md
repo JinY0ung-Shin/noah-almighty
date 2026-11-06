@@ -12,7 +12,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   each a `(deps) => Router` factory. Shared route helpers (`apiError`, `safeString`, `looksLikeRepo`,
   `avatarDir`, MIME/size/password consts, `AppServices`) live in `routes/_shared.ts`.
   **`createApp`/`createServices`/`expandChatSlashCommand`/`AppServices` are still imported from `app.ts`**
-  (re-exported) — don't change those import paths.
+  (re-exported) — don't change those import paths. No module-level mutable state in routes or services: thread
+  it through `deps`.
 - **PPT share links** have their own router (`routes/shareLinks.ts`, `createShareLinksRouter`, mounted right
   after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY
@@ -58,8 +59,26 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   it. `create/updateRoutineJob` accept either the legacy flat fields OR a full `RoutineSchedule` object
   (additive, backward-compatible with `{prompt, minuteOfDay}` + NULL `schedule_kind`). When you add a
   schedule field, touch `routineSchedule.ts` + `RoutineJobRow` + this decode together.
-- **`deleteUser` does cascade-delete MANUALLY** (no `ON DELETE CASCADE` despite `foreign_keys=ON`). A
-  new user-scoped table needs a matching `DELETE` added there or it orphans rows past "permanent deletion."
+- **`deleteUser` does cascade-delete MANUALLY** (no `ON DELETE CASCADE` despite `foreign_keys=ON`), in TWO halves
+  that must stay in sync. (1) DB rows: a new user-scoped table needs a matching `DELETE` — in BOTH directions where
+  the user can be owner AND subject (e.g. `knowledge_requests` by `avatar_user_id` OR `asker_user_id`) — or it
+  orphans rows past "permanent deletion". (2) On-disk namespaces: every `dataDir/<ns>/<userId>` tree (`plugins/`,
+  `workspaces/`, `pi-repo-copies/`, the knowledge clone, the ssh-trust dir, the avatar image, per-conversation
+  media) and the user's pi sandbox workspace (`<PI_WORKSPACES_DIR>/u-<key>`, pi-runtime.md "Cascades") needs a
+  best-effort sweep in the `routes/admin.ts` delete handler. Audit rows are RETAINED by design (`actor_*` dangle,
+  like `groups.created_by`).
+- **`migrate()` runs on EVERY `new Store()`, so a value-guarded backfill is NOT one-time.** An
+  `UPDATE … WHERE col IS NULL` re-fires each boot and clobbers rows the APP later creates NULL on purpose (a fresh
+  signup's `onboarded_at`; a user-typed `[예약 작업]` title vanishing from chat). A backfill whose predicate can
+  match FUTURE rows MUST be gated on the `PRAGMA user_version` ladder in `store/internal.ts`
+  (`CANVAS_BACKFILL_VERSION`, `ONBOARDED_ROUTINE_BACKFILL_VERSION`): check `user_version < N`, run, stamp N.
+  Value-guarded migrations that can only ever match OLD rows (git-token move, visibility normalize) may stay
+  ungated.
+- **Cross-mixin `this.foo()` calls type-check ONLY via the hand-maintained `export interface StoreBase`
+  declaration merge** (`store/internal.ts`): a method mixin A adds and mixin B calls needs its signature there
+  too. A mixin that overrides `close()` to clear a cache MUST call `super.close()` or the SQLite handle leaks
+  (`store/secrets.ts` is the example). Use the shared `count()` / `now()` helpers, never a hand-rolled
+  `.get() as {n}` or `new Date().toISOString()`.
 - **The retired personal-bot feature is purged at boot, outside `migrate()`, until ONE clean pass.**
   `retirePersonalAgents` (`src/server/retirePersonalAgents.ts` + the `store/retiredPersonalAgents.ts` mixin,
   called from `index.ts` right after `createServices()` — before `createApp`, `listen` and the routine

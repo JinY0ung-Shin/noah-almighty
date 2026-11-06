@@ -81,8 +81,9 @@
 - **Verifying extension behavior locally:** Playwright's Chromium loads the unpacked extension
   (`chromium.launchPersistentContext(dir, { channel: "chromium", args: ["--disable-extensions-except=<extension/>",
   "--load-extension=<extension/>"] })`), which drives real `chrome-extension://` pages and settles what a
-  match pattern actually does. Only `@playwright/test` is installed (no `playwright`/`playwright-core`,
-  and `node_modules/.bin` has no `playwright` symlink). Ad-hoc harness — not committed as a test.
+  match pattern actually does. `@playwright/test` (devDep) and `playwright-core` are installed. Ad-hoc harness — not committed as a test.
+  Always run a NEGATIVE control: Chrome loads an extension with an invalid `externally_connectable` pattern
+  (dropping the entry with only a warning), so "it loaded" is not evidence a pattern works.
 
 ## Fleet and signing invariants (fail in the FIELD, not in CI)
 - **Windows/Linux only — no macOS.** Platform-dependent decisions (paste shortcuts, file-dialog/DLP behavior,
@@ -96,3 +97,35 @@
   corrupts it.
 - **`BROWSER_EXTENSION_MIN_COMPATIBLE` never exceeds the bundled manifest version** — `tests/infra.test.ts`
   enforces the ceiling.
+- **`BUNDLE_FILES` is an explicit allowlist, not a directory walk** — a stray note here never ships, but a
+  forgotten real file does not either, and neither failure shows in CI unless a byte-equality pin is added to
+  `tests/infra.test.ts`.
+- **`background.js` imports TWO pure modules at load — `axtree.js` and `secretInput.js`.** Both are on
+  `BUNDLE_FILES` and byte-pinned in `tests/infra.test.ts`: an MV3 module worker whose import fails never
+  registers, so a bundle missing either kills every op (the extension reads as unreachable).
+- **The four `icon-*.png` are load-bearing and stay tracked in git.** `manifest.json` names them, so a missing or
+  corrupted icon makes Chrome refuse the WHOLE extension. They are on `BUNDLE_FILES` + `BINARY_BUNDLE_FILES`, and
+  every consumer reads them with a throwing `fs.readFileSync`, so an untracked icon 500s
+  `GET /api/browser-extension.zip`, breaks the release build and fails `app.test.ts`/`infra.test.ts`.
+- **Changing `manifest.json` `key` moves the id in four places:** the manifest, the `browserBridge.ts` default id,
+  `README.md`'s example id, and any admin policy-registry path naming it. The build script refuses a mismatch
+  and prints the bootstrap list.
+- **The extension fetches nothing on its own.** The 0.7.0 self-updater (updater.html/js/css) was removed in
+  0.9.0 because fetch-verify-write-reload is dropper-shaped — Windows Defender quarantined the shipped zip over
+  it. No `host_permissions`, no network call.
+- **Language split inside the folder:** `background.js`/`axtree.js` strings are model-facing input (English);
+  everything a person reads — `options.html`, `consent.html`, `action.default_title`, `README.md` — is Korean.
+  The easy misses are `manifest.json` `description` and `policy-schema.json`.
+
+## Action popup sizing
+`options.html` is BOTH the action popup and the options tab, and the popup's body width must be ONE fixed,
+viewport-independent value. Chrome sizes an action popup by resetting its frame to the 25px minimum and reading
+`scrollWidth` as the content width, and since Chrome 152 it repeats that after every post-load layout change.
+With no width the popup balloons to the 800px cap; with a width that follows the viewport (`max-width: 100vw`,
+`%`, a media query matching under ~430px) it never reports its true width at 25px, so it oscillates between
+partial widths on classic scrollbars or collapses to a ~32px sliver on overlay scrollbars (the 2026-09-04 bug; a
+`max-width: 100vw` shipped since 0.9.0 was harmless until Chrome 152). Verify popup CSS by OPENING the real
+popup: Playwright + `--load-extension`, `chrome.action.openPopup()` from the service worker, and a probe script in
+the popup logging `resize` sizes to `chrome.storage.local` (the popup never surfaces as a Playwright page) —
+against current stable Chrome for Testing, classic AND `--enable-features=OverlayScrollbar`, with the unfixed CSS
+as the control. Setting `action.default_popup` means `chrome.action.onClicked` never fires — don't add a listener.

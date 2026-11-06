@@ -344,3 +344,6 @@
   `uidByNode` — misses cached as `""` so they are not re-paid, swept by `forgetTabRefs` (by key prefix, so
   a hint cannot outlive its tab even if the uid was already evicted) and cleared with the `REF_MAP_MAX`
   eviction. `renderAxText` gets NO hints: the reading view has no uids to disambiguate.
+- **The vision-tier constants are mirrored on purpose.** `VISION_STANDARD_MAX_EDGE`/`VISION_STANDARD_MAX_TOKENS`
+  (`extension/axtree.js`) follow Claude's documented vision limits, and the server keeps an INDEPENDENT TypeScript
+  port for old installs (`agent/visionImage.ts`). When the documented limits move, both move.

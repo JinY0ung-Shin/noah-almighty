@@ -14,7 +14,7 @@ every non-local run to `runPiAgent` (`agent/pi/runPiAgent.ts`); the sandbox prin
 - `runCapabilities.ts` — **the ONE capability plan** (design N1): `buildRunCapabilities` (tool access
   `deriveAgentToolAccess`, MCP families `planMcpToolFamilies`, the in-process MCP servers, the model and its
   fallback chain over pi's live list (`pi/modelCatalog.ts`), describe_system's ctx, `mcpAllowedTools`) and `stampPromptRequest` (the request as the
-  prompt builder sees it). The setup half declares **no `let`** — it is pure derivation over
+  prompt builder sees it). The setup half declares **no run-scoped `let`** — it is pure derivation over
   store/config/plugins; every accumulator lives in the runner.
 - `promptBuilder.ts` — `buildSystemPromptAppend` + `buildUserPrompt` + compatibility `buildPrompt` +
   `compactConversationHistory`/`conversationHistoryBlock` + `GIT_MCP_ONLY_GUIDANCE`. The append is rendered ONCE
@@ -38,6 +38,15 @@ every non-local run to `runPiAgent` (`agent/pi/runPiAgent.ts`); the sandbox prin
 - `pi/mcpProxies.ts` `piProxyBaseEnv()` — the env for the children Noah itself spawns (relayed MCP servers, the
   admin 공용 MCP check), built from the scrubbed `process.env` minus git credentials and server-only secrets.
 - `agentUtils.ts` — small shared helpers.
+
+### The loop half has exactly ONE inbound channel
+`AgentEvents.steers` (a `SteerChannel`, `steerChannel.ts`) is the HOST pushing in; every other `AgentEvents` member
+is the run calling OUT (even a parked `onQuestion` originates in the loop). `runPiTurn` hands queued steers and
+async `ask_avatar` answers to the running pi response; whatever pi did not deliver, the run loop drains at the
+response boundary as ONE follow-up turn, and it closes the channel at a steer-free boundary and again in
+`finally` (chat-sse-media.md). A run given no channel cannot be steered, and `midTurnMessages` says so on both
+metacognition surfaces. The setup half (`buildRunCapabilities`) holds no RUN-scoped `let` (a closure-local
+one inside a callback, like `startAskAvatar`'s job id, is fine); run-scoped mutable state lives in the loop.
 
 ### Official product manual
 
@@ -115,6 +124,11 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   bundled `SKILL.md` body + frontmatter. Korean: UI, `apiError`, status/activity labels, conversation titles. A
   string used on BOTH channels is split into two. The avatar always REPLIES in the user's language (default
   Korean), anchored in `buildSystemPromptAppend`.
+- **The prompt append is FROZEN per conversation, so nothing volatile goes in it.** One conversation mixes chat,
+  routine and task-API turns on ONE pi session, so a count, a date or a run-kind fact in
+  `buildSystemPromptAppend` would be frozen wrong for the rest of the thread. Per-turn facts ride
+  `buildPiTurnPreamble` in the turn input; live numbers (the pending knowledge-request count, the 할 일 counts,
+  the KST date) belong in `describe_system` or tool results (`/todo` carries its date in the input).
 - **Interactive-only capabilities gate on BOTH `headless` and `externalTaskApi`** (and never consultations), the way
   `shareLinkToolActive` does in `runCapabilities.ts` — an API-submitted turn has no human at the keyboard. See
   [`avatar-task-api.md`](avatar-task-api.md) "Provenance".
@@ -285,3 +299,5 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   `allowCall` admits only this run's `mcpAllowedTools`, but pi lists a session's tools once from the static
   catalog and one conversation can carry runs of different classes (and live state changes mid-session); the
   handler's own owner/elevated/member check is the guard that always runs against the CURRENT run.
+- **A third-party or process server is never its own broker id.** It rides one of Noah's relays
+  (`pi/mcpProxies.ts`: `hex-ssh`, `plugins`, `shared`), so pi's broker only ever sees Noah's fixed id list.
