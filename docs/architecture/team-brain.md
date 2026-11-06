@@ -2,72 +2,157 @@
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
 > The ONE instance-wide shared knowledge vault (back 2026-11-06, after the per-GROUP brain was retired
-> 2026-10-30): the local-only git vault, the proposal queue and its confirm cards, the run-class gating,
-> both metacognition surfaces, the backup mirror, and the UI.
+> 2026-10-30), restructured the same day into a Karpathy-style LLM wiki (`raw/` sources → schema-validated
+> `wiki/` pages compiled by the admin's avatar): the local-only git vault and its fixed schema, the proposal
+> queue and its confirm cards, the run-class gating, both metacognition surfaces, the backup mirror, and the UI.
 
 ## Decisions (user, 2026-11-06)
 - ONE vault per Noah instance (the instance IS the team). **Local git only** — no `origin`, no user
   tokens, no GitHub permissions involved. Only Noah's own code writes it.
-- Teammates **read + propose**; an **admin decides**. An admin's own note skips the queue after one
-  consent. Admins decide others' proposals **through their own avatar**.
+- Teammates **read + submit SOURCES**; an **admin's avatar compiles** them into wiki pages at review time
+  (the curator is the admin's own interactive run — no background curator, no new run class); the admin
+  **presses** the card. An admin's own knowledge / maintenance skips the queue (one press).
 - Proposals come **only from the avatar** (no UI form). The avatar proactively offers ("팀에 공유할까요?"),
   driven by the four team-knowledge tests; **no frequency limit** (revisit after real-model use).
 - Every state change is a **human press on a chat card** (option A — the model only drafts).
-- **No delete** op (a wrong note is corrected with an update). **Badges** announce results.
+- **No delete** op (a wrong page is corrected with an update; a reversed decision is superseded).
+  **Badges** announce results.
 - **Backup** = an admin-set repository on the INTERNAL git host, pushed with THAT admin's own token.
-- Design + rejected alternatives: `~/.noah-work/team-brain-2026-11-06/design.md`.
+- **LLM-wiki restructure (same day, user):** Karpathy-style `raw/` → `wiki/` + server-generated index/log;
+  the submitter's avatar runs an **intake interview**; a **FIXED `SCHEMA.md`** in code that the server
+  validates on every change; every pre-schema note moved to `raw/legacy/`; a schema change = version bump
+  + the admin's one-time migration pass (`team-brain-curate` skill).
+- Designs + rejected alternatives: `~/.noah-work/team-brain-2026-11-06/design.md`,
+  `~/.noah-work/team-brain-wiki-2026-11-06/design.md` (+ `research/`: Karpathy gist, follow-ups).
 
-## The vault (`teamBrain.ts`)
-- `<dataDir>/team-brain`, branch `main`, created lazily (`ensureTeamBrainRepo`: `git init` + a seed
-  `wiki/index.md` commit by the Noah identity). Same note format and **current-truth** rule as the personal
-  vault; search (`rankBrainNotes`) and the graph (`buildKnowledgeGraph`) are reused with this root.
-- Never handed to a sandbox and never a `.git` the agent can touch: the agent only sees note CONTENT
-  through the brain tools. All git runs through `repoGitCore.git()` (serverGitEnv hardening; identity
-  via env config, never argv). Every write is under `withRepoLock(teamBrainRoot)` — not reentrant, so
-  exported ops take it once.
-- `validateTeamNotePath`: a `.md` under `wiki/`, not `wiki/index.md`/`wiki/log.md`/`_template.md`, plain
-  path chars only (letters of any script, digits, space, `._-/`), no hidden/empty segment, ≤ 200 chars.
-- A failed commit never leaves the note behind: the path is reset and restored from HEAD (or removed for
-  a create) under the lock — reads serve the WORKING TREE, so a leftover would publish an unapproved
-  note and ride the next approval. The commit itself is path-scoped (`commit -- <path>`).
-- `applyTeamNote` re-checks the note's committed blob against the draft's `expectedBlob` UNDER the lock:
-  `EXISTS` (create over an existing note), `MISSING` (update of a gone note), `STALE` (changed since) →
-  `TeamNoteConflictError`, never an overwrite. Identical content is a no-op (returns HEAD). The commit is
-  authored by the presser (`commitIdentityFor`) with `Proposal: <id>` and a `Co-authored-by:` proposer
-  trailer.
-- `findSecretInText`: the proposer's OWN stored secret values (≥ 6 chars) by name + a few well-known
-  token shapes. Accident prevention, not containment.
-- `countTeamNotesSync` is describe_system's bounded walk (never follows a link).
+## The vault (`teamBrain.ts`, `teamBrainSchema.ts`)
+- `<dataDir>/team-brain`, branch `main`, created lazily (`ensureTeamBrainRepo` = init-or-migrate under
+  the lock). Search (`rankBrainNotes`, now with an additive `{prefix}` option) and the graph
+  (`buildKnowledgeGraph`) are reused with this root.
+- **Layout (schema v1):** `SCHEMA.md` (`TEAM_BRAIN_SCHEMA_MD`, first line `<!-- noah-team-brain-schema: N -->`);
+  `raw/YYYY/MM/<date>-<id8>.md` (`teamRawPath`) = one approved submission, RENDERED BY THE SERVER at apply
+  (`renderTeamRaw`: server-stamped submitter/approver, verbatim source, intake answers, follow-ups) and never
+  a change target; `raw/legacy/…` = pre-schema notes; `wiki/<TEAM_PAGE_FOLDERS[type]>/<slug>.md` = pages;
+  `wiki/index.md` REGENERATED from page frontmatter on every commit (`renderTeamIndex`) and `wiki/log.md`
+  APPENDED per commit (`formatLogEntry`) — the model never writes either (`TEAM_STRUCTURAL_PATHS`).
+- **A raw source is committed only WITH its approved changeset** — reads serve the working tree, so an
+  unapproved source must never land there; a rejected/withdrawn source lives only in the DB row.
+- **Validation (`parseTeamPage`, `validateChangeset`)** — the schema is enforced, not just prompted:
+  required `title`/`type`/`summary`/`sources`/`review_after`; type ⇔ folder; title + aliases unique
+  vault-wide (`teamNameKey`, NFC/case-folded) and within the changeset; every `sources` entry an existing
+  raw (or the changeset's own new raw — which EVERY changed page must cite); decision `status`
+  accepted|superseded with `superseded_by`; ≤ `TEAM_BRAIN_MAX_CHANGES` pages / byte caps; secret scan
+  (`findSecretInText`, incl. the writer's own secrets via `ownSecrets`). Errors are agent-facing English,
+  returned verbatim so the curator fixes and retries.
+- **Migration:** `migrateTeamBrainHoldingLock` — v0 (no marker) → v1 `git mv`s every `wiki/**/*.md` except
+  the structural files/templates to `raw/legacy/<rel>`, writes SCHEMA.md, regenerates the index, logs it,
+  ONE commit by the Noah identity; a later version bump rewrites SCHEMA.md + log, and the non-conforming
+  pages surface in `team_brain_health` for the admin's migration pass. Boot runs `migrateTeamBrainOnBoot`
+  (`index.ts`, never throws, schedules a backup push); a restored pre-schema mirror is migrated right
+  after the restore. Nothing is deleted (git history + `raw/legacy/`).
+- Never handed to a sandbox and never a `.git` the agent can touch: the agent only sees CONTENT through
+  the brain tools (`readTeamVaultFile` allows exactly `SCHEMA.md`, `wiki/**.md`, `raw/**.md`). All git runs
+  through `repoGitCore.git()` (serverGitEnv hardening; identity via env config, never argv). Every write is
+  under `withRepoLock(teamBrainRoot)` — not reentrant, so exported ops take it once (`*HoldingLock`
+  internals never do).
+- **`applyTeamChangeset`** under the lock: ensure/migrate; re-check every page's blob (`EXISTS`/`MISSING`/
+  `STALE` → `TeamNoteConflictError` with the path) and re-run `validateChangeset` against the vault AS IT IS
+  NOW (`TeamChangesetInvalidError`); write raw + pages, regenerate the index, append the log; ONE
+  path-scoped commit (`Proposal: <id>` + `Co-authored-by:` proposer trailer), authored by the presser.
+  **Any failure restores every touched path from `git show HEAD:<path>`** (no index lock needed — the old
+  `reset`/`checkout` rollback failed under the same `index.lock` that failed the commit) and removes new files.
+- **Every locked op starts by reconciling to HEAD** (`reconcileLocked`: `git reset -q`, `checkout HEAD -- .`,
+  `git clean` of `wiki/`, `raw/`, `SCHEMA.md`) — a crash mid-migration or mid-apply never leaves a staged
+  rename or a readable unapproved file behind; the v0 move list comes from `git ls-tree HEAD`, never the
+  index. Page/raw PATH lists are uncapped (existence checks exact); only page CONTENT reads cap at 2000.
+- `teamBrainHealth` (read-only, bounded, lists capped at 50, exact numbers in `counts`): uncompiled raw sources (cited by no valid
+  page — incl. `raw/legacy/`), pages failing the schema, past `review_after`, dangling `[[links]]`, orphans,
+  duplicate names, missing sources, pages with `gaps`, history narrative, instruction-like text.
+- `countTeamNotesSync` / `countTeamRawSync` / `teamVaultSchemaVersionSync` are describe_system's bounded reads.
 
 ## The queue (`team_brain_proposals`, `store/teamBrain.ts`)
-- One table: `kind` = `propose` (teammate) | `direct` (admin's own) | `review` (admin's decision on a
-  `propose`, `target_id`); `op` = `create` | `update`; `status` per `src/shared/teamBrain.ts`. The
-  conversation link is read through a join (todo_items precedent) — no conversation-deleting cascade.
-- Caps: 64 KB body, 20 open (draft + pending) rows per user (checked in the insert transaction), drafts
-  expire after 7 days OR once their conversation (and so their card) is gone (lazy `expireTeamBrainDrafts`
-  before counts/reads/presses — the join stands in for a cascade on every conversation-deleting path). A
-  pending proposal whose card is gone is withdrawn from 지식 그래프 → 팀 브레인 → 내 제안.
-- `transitionTeamBrainProposal` is compare-and-set on the current status; a review press claims the card
-  AND its target in ONE transaction (`teamBrainTransaction`), so two admins pressing at once decide once.
+- One table: `kind` = `propose` (teammate source) | `direct` (admin's own changeset, with or without a new
+  source) | `review` (admin's decision on a `propose`, `target_id`); `status` per `src/shared/teamBrain.ts`
+  (adds `needs_info` = 보완 요청); `intake_json` (type + slot answers + gaps + follow-ups) and `changes_json`
+  (pages + model-flagged `conflicts`). `path` = the raw path the source will land at (review: the target's;
+  maintenance direct: ""). The conversation link is read through a join (todo_items precedent).
+- Caps: 64 KB source/page, 15 pages / 256 KB per changeset, 20 open (draft + pending + needs_info) rows per
+  user (checked in the insert transaction); drafts expire 7 days after their last update (`updated_at` — an
+  answered 보완 요청 restarts the clock) OR once their conversation (and so their card) is gone.
+- **Approve claims the CARD only; the target becomes `approved` only after the commit lands**
+  (`approveTargetAfterCommit`); while that is in flight every other press on the target and the proposer's
+  withdraw get 409. Applying ANY review card (and withdrawing the target) cancels the other draft review
+  cards for that target (`cancelTeamBrainReviewDrafts`) — an approve drafted before an ask round can never
+  commit later; a failed apply restores them and clears decision stamps. The boot sweep
+  (`sweepTeamBrainAppliesOnBoot`, last 7 days, one `git log` scan for `Proposal:` trailers) reverts an
+  applied card whose commit never landed and approves a target whose commit did.
+- `transitionTeamBrainProposal` is compare-and-set on the current status; every decision transition
+  (approved / rejected / needs_info) resets `result_seen_at` so a later result badges again; a review press
+  claims the card AND its target in ONE transaction. `answerTeamBrainQuestions` is CAS `needs_info → draft`
+  and moves the row to the answering conversation.
+- One-time row migration (user_version 3): pre-schema `propose` rows still draft/pending keep their note
+  text as the SOURCE (path → `teamRawPath`, intake type null = legacy); pre-schema `direct`/`review` drafts
+  are cancelled.
 - `isActiveAdmin` / `isActiveUser` judge a PERSON live (exists, not suspended, `admin` role).
-- Cascades: `deleteUser` → `deleteTeamBrainProposalsForUser` (approved notes stay in git);
-  `applyConversationRewind` → `withdrawTeamBrainDrafts` for the `team_brain` attachments of dropped
-  messages (a submitted/applied one stays — a rewind never undoes the world).
+- Cascades: `deleteUser` → `deleteTeamBrainProposalsForUser` (approved content stays in git);
+  `applyConversationRewind` → `withdrawTeamBrainDrafts(conversationId, ids)` — scoped to the rewound
+  conversation — for the `team_brain` attachments of dropped messages (a submitted/applied one stays — a
+  rewind never undoes the world); a draft that already went through a 보완 요청 round falls back to
+  `needs_info` on rewind AND on expiry (its unsent answer dropped), never withdrawn/expired.
 
 ## Tools (`agent/teamBrainTools.ts`, on the `brain` server)
 - No new MCP server (the 2026-10-29 usability study measured `brain`/`group_brain` confusion): `search`
-  and `get_note` take `scope` (`personal`/`team`/`all`, default `all`; a personal ERROR gives way to team
-  hits), plus `propose_team_note`, `list_team_proposals`, `get_team_proposal`, `prepare_team_review`.
+  and `get_note` take `scope` (`personal`/`team`/`all`); team `get_note` reads `SCHEMA.md`, `wiki/…` and
+  `raw/…` (a raw source comes back inside the untrusted wrapper; a wiki page leads with `blob: <id>`, which
+  every `update` change must carry as `baseBlob` — a page changed since the read is refused, never reverted); team search lists pages, then
+  UNCOMPILED sources (wrapped, labeled "uncompiled source — not yet a wiki page").
+- Member (`TEAM_BRAIN_PROPOSE_TOOL_NAMES`): `propose_team_note` = a SOURCE submission `{type, title,
+  summary, source, answers}` — `checkIntake` against `TEAM_INTAKE_REQUIRED[type]`; missing slots → an error
+  telling the avatar to ask ONCE, in ONE message, only for those ("unknown" → a gap); an admin is
+  redirected to `prepare_team_changes`. `answer_team_questions` answers a `needs_info` row (appends a
+  follow-up, new card). `list_team_proposals`.
+- Admin (`TEAM_BRAIN_ADMIN_TOOL_NAMES`): `get_team_proposal` (raw path to cite, intake/source/follow-ups in
+  ONE wrapper, ≤ 5 related pages, "read SCHEMA.md + index first"); `prepare_team_review` approve (a
+  validated changeset citing the target's raw) | reject (reason) | ask (1–5 questions → `needs_info`);
+  `prepare_team_changes` = the admin's own knowledge (`source` → intake checked, pages cite the
+  `raw/new-source.md` placeholder `TEAM_NEW_SOURCE_PLACEHOLDER`, swapped for the minted raw path before
+  validation) or maintenance (no source: migration of `raw/legacy/`, lint fixes); `team_brain_health`.
 - No tool changes the vault or a row's status: each one at most creates a `draft` row and calls
   `onCard` (→ `AgentEvents.onTeamBrainCard`, stamped with `currentTextAnchor()`), then returns at once
   ("NOTHING is shared yet") — "no tool call ever waits for approval" holds.
 - Admin tools re-check `isActiveAdmin(viewer)` per call. Every teammate-written string an admin's agent
-  sees (pending-list titles; a proposal's title, summary and content; the current note) sits inside ONE
-  `<untrusted_teammate_text>` wrapper whose closing tag the text cannot forge (`untrusted()` defuses any
-  inside). `get_team_proposal` opens only SUBMITTED proposals (pending/approved/rejected) — a draft was
-  never shared. Every team read carries `TEAM_NOTE_TRUST_NOTE`.
-- `prepare_team_review` with `revisedContent` re-bases on the note AS IT IS NOW (op/blob from the current
-  state) — that is how a stale proposal is merged; without it a stale proposal is refused.
+  sees sits inside ONE `<untrusted_teammate_text>` wrapper whose closing tag the text cannot forge
+  (`untrusted()` defuses any inside). `get_team_proposal` opens only SUBMITTED proposals. Every team read
+  carries `TEAM_NOTE_TRUST_NOTE`.
+- The curator procedure (review/compile, migration pass, lint fixes) is the bundled `team-brain-curate`
+  default skill (admin-only by its tools); `brain-ingest` may OFFER a team submission.
+
+## Metacognition
+- Prompt (`teamBrainSection`, frozen, no counts) on the owner, teammate and consultation branches, keyed on
+  `request.teamBrain`: the read line + trust note always; on a propose run also `TEAM_KNOWLEDGE_DEFINITION`,
+  `TEAM_OFFER_TO_SHARE` (offer + intake: per-type required facts from `TEAM_INTAKE_REQUIRED`) and the member
+  or `TEAM_ADMIN_FLOW` ("… its CURATOR"); otherwise "not available in this run".
+- The prompt is FROZEN per conversation, so the propose/admin wording is the first turn's: a later routine
+  or API turn on the same session, or a role change, can make it overstate. The tool errors and the live
+  `describe_system` line stay exact — that is the accepted trade (no volatile text in the frozen part).
+- `describe_system` (live): `teamBrainStatusLine` (wiki page count + schema version, migration pending when
+  below current; member: can submit sources + unseen results; ADMIN: pending count + health counts —
+  uncompiled sources, pages failing SCHEMA.md, past review_after — pointing at `team_brain_health`) and, for
+  admins, `teamBrainBackupLine`. `read_manual` "The team brain" (`systemManual.ts`) describes the same flow.
+
+## Cards and routes (`teamBrainActions.ts`, `routes/teamBrain.ts`)
+- A card is a `kind:"team_brain"` `MessageAttachment` (id = proposal id; no file behind it), emitted on the
+  `file` SSE event and persisted with the message. `TeamBrainCard.svelte` reads its live state from
+  `GET /api/team-brain/cards/:id` — visible ONLY to the row's drafter. The view carries `pages` (per changed
+  page: before = committed content, after, stale). Viewing a decided card marks the result seen.
+- Presses: `POST …/submit` (propose draft → pending; a source has no staleness), `…/withdraw` (propose
+  draft/pending/needs_info → withdrawn; direct/review draft → cancelled), `…/apply` (admin; direct →
+  `applyTeamChangeset` (log op `direct` with a source, `maintain` without); review approve → target
+  approved + commit of target raw + changeset; reject → rejected; ask → target `needs_info` with the
+  questions). Apply claims first, writes, and RELEASES the claim on a failed write (409 stale/invalid with a
+  Korean message / 500). Each press is audited (`team_brain_submit|withdraw|direct|approve|reject|ask`).
+- Reads: `GET /api/team-brain/status` (badge; needs_info counts as a result), `/proposals/mine` (marks seen),
+  `/proposals/pending` (admin, read-only), `/graph` (`{graph}`), `/note?path=` (`readTeamVaultFile`).
 
 ## Gating (`runCapabilities.ts`)
 | Booleans | Rule |
@@ -122,7 +207,7 @@
   a mistyped project repo) is refused with an explanation instead of overwritten. Auth via `gitAuthConfig`
   (env, never argv/disk). Policy, admin status and token are re-checked at PUSH time; failures land in
   `lastError` (admin panel + the admin's describe_system).
-- Restore (`POST …/backup/restore`): only into a vault with no notes (re-checked under the lock); clones to a temp dir, drops
+- Restore (`POST …/backup/restore`): only into a vault with no notes AND no raw sources (re-checked under the lock; a restored pre-schema mirror is migrated right after); clones to a temp dir, drops
   `origin`, refuses symlinks/submodules (`120000`/`160000`) and a mirror without `wiki/`, renames the old
   vault aside (never deleted). The DB is on the same volume — after a lost volume the queue and settings are
   gone too: re-enter the URL, then 복원.
@@ -130,6 +215,10 @@
   internal https URL (`tests/team-brain-backup.test.ts`).
 
 ## UI
+- Cards never render teammate markdown/HTML: source, intake and diff lines are text (`<pre>`, `<del>`/`<ins>`).
+  The review/direct card shows "원본 N건 · 페이지 N개", the source, the model-flagged conflicts OPEN, and per
+  page a line diff (`src/shared/lineDiff.ts`, bounded LCS, unchanged runs collapsed) with deletions
+  prominent ("삭제 N줄" chip). 내 제안 shows 보완 요청 + the admin's questions.
 - Team notes render through `renderMarkdown(…, { forbidInlineStyle: true })` — teammate-written HTML must
   not position itself over the app (fake UI); the card shows raw text in `<pre>`.
 - 지식 그래프: 내 브레인 / 팀 브레인 tabs; the team tab's side panel (no node selected) lists 내 제안

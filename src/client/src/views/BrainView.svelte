@@ -9,7 +9,7 @@
   import { appState, replaceState } from "../lib/state";
   import { refreshTeamBrainStatus } from "../lib/teamBrain";
   import type { KnowledgeGraph, KnowledgeGraphNode, KnowledgeNote, User } from "../lib/types";
-  import type { TeamBrainProposal } from "../../../shared/teamBrain";
+  import { TEAM_PAGE_TYPE_LABELS, type TeamBrainProposal } from "../../../shared/teamBrain";
 
   // Full-page second-brain graph of the owner's personal knowledge repo, reached
   // from the left nav. Pairs the reusable GraphCanvas with a note panel that
@@ -91,13 +91,14 @@
   }
 
   // Status → `.tag` tone (docs/DESIGN.md §4.3): text AND colour, never colour alone.
-  const STATUS_TONE: Record<string, string> = { approved: "ok", rejected: "danger", pending: "read" };
+  const STATUS_TONE: Record<string, string> = { approved: "ok", rejected: "danger", pending: "read", needs_info: "write" };
 
   const STATUS_KO: Record<string, string> = {
     draft: "제출 전",
     pending: "검토 대기",
     approved: "승인됨",
     rejected: "반려됨",
+    needs_info: "보완 요청",
     withdrawn: "철회됨",
     expired: "만료됨",
   };
@@ -365,7 +366,7 @@
       {:else}
         {#if scope === "team"}
           <section class="brain-proposals" aria-label="팀 브레인 제안">
-            <p class="brain-hint">팀 브레인 노트는 팀원이 제안하고 관리자가 승인한 내용입니다.</p>
+            <p class="brain-hint">팀 브레인은 팀원이 보낸 원본을 관리자의 아바타가 위키 페이지로 정리하고, 관리자가 승인한 내용입니다.</p>
             {#if listsError}<p class="error-note" role="alert">{listsError}</p>{/if}
             {#if isAdmin}
               <h3>검토 대기 <span class="brain-count">{pending.length}</span></h3>
@@ -376,9 +377,10 @@
                     <li class="brain-card">
                       <div class="brain-card-top">
                         <strong>{p.title}</strong>
-                        <span class="tag">{p.op === "create" ? "새 노트" : "수정"}</span>
+                        <span class="tag">{p.intake ? (p.intake.type ? TEAM_PAGE_TYPE_LABELS[p.intake.type] : "원본") : p.op === "create" ? "새 노트" : "수정"}</span>
                       </div>
                       <span class="brain-card-meta">{p.proposerName} · <code>{p.path}</code></span>
+                      {#if p.summary}<span class="brain-card-meta">{p.summary}</span>{/if}
                     </li>
                   {/each}
                 </ul>
@@ -397,7 +399,11 @@
                     </div>
                     <span class="brain-card-meta"><code>{p.path}</code></span>
                     {#if p.status === "rejected" && p.decisionReason}<p class="brain-card-reason">반려 사유: {p.decisionReason}</p>{/if}
-                    {#if p.status === "pending"}
+                    {#if p.status === "needs_info"}
+                      <p class="brain-card-reason is-ask">관리자의 보완 요청{p.decisionReason ? `: ${p.decisionReason}` : ""}</p>
+                      <p class="brain-hint">대화에서 아바타에게 답을 알려 주면 제안 카드에 반영됩니다. 다시 제출해야 검토가 이어집니다.</p>
+                    {/if}
+                    {#if p.status === "pending" || p.status === "needs_info"}
                       <button class="btn ghost sm brain-proposal-withdraw" type="button" disabled={withdrawing === p.id} on:click={() => withdraw(p.id)}>제안 철회</button>
                     {/if}
                   </li>
@@ -783,6 +789,10 @@
     color: var(--text);
     font-size: var(--t-xs);
     line-height: 1.5;
+  }
+  .brain-card-reason.is-ask {
+    background: var(--warn-soft);
+    white-space: pre-line;
   }
   .brain-proposal-withdraw {
     align-self: flex-start;

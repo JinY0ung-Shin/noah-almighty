@@ -226,6 +226,13 @@ secrets:
   # pi's admin key, read by pi-setup as uid 10001 (pi-gateway's scripts/setup-host.sh).
   pi_gateway_admin_api_key:
     file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/gateway/admin_api_key
+  # REPLACES pi's own `extra_ca` (pi's sandbox-image pip build secret, `${NODE_EXTRA_CA_CERTS:-/dev/null}`):
+  # a build input outside the project directory — /dev/null, or a host CA path — fails on Compose >= 5.6
+  # (`additional privileges requested: pass "--allow=fs.read=…"`, bake's fs entitlement). CA_CERT_FILE lives
+  # under docker/, so pi's pip install trusts the same CA as every other build. Defined here, not in
+  # docker/pi/compose.override.yml, whose relative paths resolve against the pi-gateway checkout.
+  extra_ca:
+    file: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
 
 volumes:
   noah-almighty-data:

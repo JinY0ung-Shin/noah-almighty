@@ -28,7 +28,8 @@ import type {
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE, type HexSshViewerClass } from "../hexSshPolicy.js";
-import { countTeamNotesSync } from "../teamBrain.js";
+import { countTeamNotesSync, teamBrainHealth, teamBrainInitialized, teamVaultSchemaVersionSync } from "../teamBrain.js";
+import { TEAM_BRAIN_SCHEMA_VERSION } from "../../shared/teamBrain.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
 import { EFFORT_LEVELS, type ModelEffort } from "../effortLevels.js";
 import {
@@ -63,27 +64,59 @@ import {
  * avatar owner is present or an owner-scheduled routine is running with owner
  * tool access.
  */
+/** describe_system waits at most this long for the admin's health counts. */
+const TEAM_BRAIN_HEALTH_DESCRIBE_TIMEOUT_MS = 3000;
+
 /**
  * describe_system's LIVE team-brain line (the prompt only states the capability,
- * never counts): the vault size, what THIS run may do (the same booleans the
- * brain tools key on), and the live queue numbers for the person it acts for.
+ * never counts): the vault size + schema version, what THIS run may do (the
+ * same booleans the brain tools key on), the live queue numbers for the person
+ * it acts for and, for an admin (the curator), the health counts. Never throws:
+ * a failed health read degrades to a pointer at team_brain_health.
  */
-function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): string {
+async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promise<string> {
   const tb = ctx.teamBrain;
   if (!tb?.read) {
     return "- Team brain: not readable in this run";
   }
-  const notes = countTeamNotesSync(ctx.config);
-  const head = `- Team brain (mcp__brain__search scope "team"): ${notes} note${notes === 1 ? "" : "s"}`;
+  const pages = countTeamNotesSync(ctx.config);
+  const exists = teamBrainInitialized(ctx.config);
+  const version = exists ? teamVaultSchemaVersionSync(ctx.config) : TEAM_BRAIN_SCHEMA_VERSION;
+  const schema = !exists
+    ? "not created yet"
+    : version < TEAM_BRAIN_SCHEMA_VERSION
+      ? `schema v${version}, below the current v${TEAM_BRAIN_SCHEMA_VERSION} — Noah migrates it on boot, then the admin's migration pass (team-brain-curate skill) compiles the moved notes`
+      : `schema v${version}`;
+  const head = `- Team brain (mcp__brain__search scope "team"): ${pages} wiki page${pages === 1 ? "" : "s"}, ${schema}`;
   if (!tb.propose) {
-    return `${head}; read-only in this run (proposing works only in the owner's own interactive conversation)`;
+    return `${head}; read-only in this run (submitting works only in the owner's own interactive conversation)`;
   }
   if (tb.admin) {
     const pending = store.countPendingTeamBrainProposals();
-    return `${head}; the owner is an ADMIN — their own notes are saved when they press the card's button, and ${pending} teammate proposal${pending === 1 ? "" : "s"} await${pending === 1 ? "s" : ""} their review (mcp__brain__list_team_proposals → get_team_proposal → prepare_team_review; decided only by their press on the card)`;
+    const queue = `${pending} teammate submission${pending === 1 ? "" : "s"} await${pending === 1 ? "s" : ""} their review (mcp__brain__list_team_proposals → get_team_proposal → compile → prepare_team_review)`;
+    let health = "";
+    if (exists) {
+      try {
+        // teamBrainHealth is a bounded vault scan; describe_system must stay fast, so
+        // a slow vault degrades to the pointer instead of holding the report.
+        let timer: NodeJS.Timeout | undefined;
+        const h = await Promise.race([
+          teamBrainHealth(ctx.config),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("timeout")), TEAM_BRAIN_HEALTH_DESCRIBE_TIMEOUT_MS);
+            timer.unref?.();
+          }),
+        ]).finally(() => clearTimeout(timer));
+        const n = h.counts;
+        health = `; health: ${n.uncompiledSources} uncompiled source${n.uncompiledSources === 1 ? "" : "s"}, ${n.invalidPages} page${n.invalidPages === 1 ? "" : "s"} failing SCHEMA.md (need migration/fixes), ${n.overdue} past review_after — details and next steps with mcp__brain__team_brain_health + the team-brain-curate skill`;
+      } catch {
+        health = "; health: unavailable right now (mcp__brain__team_brain_health)";
+      }
+    }
+    return `${head}; the owner is an ADMIN (the curator) — their own knowledge goes in through mcp__brain__prepare_team_changes, and ${queue}; nothing changes until they press the card${health}`;
   }
   const unseen = store.countUnseenTeamBrainResults(ctx.avatarUserId);
-  return `${head}; you can propose notes with mcp__brain__propose_team_note after the user agrees (an admin approves them)${unseen ? `; ${unseen} of the owner's proposals have a new result (mcp__brain__list_team_proposals)` : ""}`;
+  return `${head}; you can submit sources with mcp__brain__propose_team_note after the user agrees and the intake (an admin's avatar compiles them; an admin decides)${unseen ? `; ${unseen} of the owner's submissions have a new result or an admin's questions (mcp__brain__list_team_proposals)` : ""}`;
 }
 
 /** Admin-only: the push-only backup mirror's state. */
@@ -918,7 +951,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // and the prompt's matching `brainSection` gating — so the report and
           // the run's real tool roster can't drift.
           `- Second brain (personal): ${!enabledMcpToolGroups.includes("personal_knowledge") ? "OFF for this conversation (personal knowledge tool group deselected — no brain recall or capture tools are registered this turn)" : state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
-          teamBrainStatusLine(store, ctx),
+          await teamBrainStatusLine(store, ctx),
           ...(ctx.teamBrain?.admin ? [teamBrainBackupLine(store)] : []),
           `- Old group repositories / group brain: removed — ${GROUP_REPOS_RETIRED_SENTENCE}`,
           `- General git repos: ${state.gitRepoCount}`,

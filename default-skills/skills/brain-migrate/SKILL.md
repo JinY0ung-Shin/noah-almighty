@@ -13,8 +13,9 @@ skill performs that upgrade **idempotently** — running it twice changes nothin
 ## Scope
 Personal repo only: `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
 This migrates the PERSONAL vault only. The team brain is a separate instance-wide vault Noah creates and
-manages itself (nothing to set up or migrate): if the user asks to set one up for the team, say it already
-exists — search it with `mcp__brain__search` (scope "team").
+manages itself (nothing to set up or migrate here): if the user asks to set one up for the team, say it already
+exists — search it with `mcp__brain__search` (scope "team"). Compiling old team notes into the team wiki is an
+admin's job with the `team-brain-curate` skill, never this one.
 
 ## Procedure (create-if-absent only — NEVER overwrite)
 1. **List the current tree** with `mcp__repo__list_files`. Do not assume. Call every tool by its full

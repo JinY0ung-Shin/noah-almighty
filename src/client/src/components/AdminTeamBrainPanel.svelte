@@ -11,7 +11,12 @@
   export let active = false;
 
   interface PanelState {
+    /** Compiled wiki pages (structural files excluded). */
     noteCount: number;
+    /** raw/ sources in the vault (raw/legacy included); absent from an older server. */
+    rawSources?: number;
+    /** raw/ sources no valid page cites yet — the curator's backlog. */
+    uncompiledSources?: number;
     pendingReview: number;
     backup: TeamBrainBackupState;
     githubHost: string;
@@ -25,6 +30,9 @@
   let error = "";
   let message = "";
   $: if (active && !initialized) void load();
+  $: uncompiled = state?.uncompiledSources ?? 0;
+  // Restore needs an EMPTY vault: raw sources count too (after the schema migration every old note is one).
+  $: vaultEmpty = !!state && state.noteCount === 0 && (state.rawSources ?? 0) === 0;
   $: dirty = !!state && (url.trim() !== (state.backup.url ?? "") || (branch.trim() || "main") !== state.backup.branch);
 
   function seed(next: PanelState) {
@@ -90,7 +98,12 @@
     if (!(await confirmAction("백업 저장소의 내용으로 팀 브레인을 복원할까요? 비어 있는 팀 브레인에만 복원할 수 있습니다."))) return;
     await run(async () => {
       const r = await api<{ noteCount: number }>("/api/admin/team-brain/backup/restore", { method: "POST" });
-      return `복원했습니다. 노트 ${r.noteCount}개`;
+      // The restore reply carries no raw counts, and an older mirror is migrated on restore (its notes
+      // become raw sources), so read the panel state again for the real numbers.
+      const next = await api<PanelState>("/api/admin/team-brain").catch(() => null);
+      if (!next || next.rawSources === undefined) return `복원했습니다. 위키 페이지 ${r.noteCount}개`;
+      const backlog = next.uncompiledSources ? ` (미편찬 ${next.uncompiledSources}건)` : "";
+      return `복원했습니다. 위키 페이지 ${next.noteCount}개 · 원본 ${next.rawSources}건${backlog}`;
     });
   }
 
@@ -117,15 +130,26 @@
       <div class="team-brain-admin-stats">
         <button class="stat-card stat-clickable" type="button" on:click={openTeamBrain}>
           <div class="stat-value">{state.noteCount}</div>
-          <div class="stat-label">노트</div>
+          <div class="stat-label">위키 페이지</div>
           <div class="stat-link muted">지식 그래프에서 보기</div>
         </button>
+        {#if state.rawSources !== undefined}
+          <div class="stat-card">
+            <div class="stat-value">{state.rawSources}</div>
+            <div class="stat-label">원본</div>
+            <div class="stat-link muted" class:team-brain-admin-backlog={uncompiled > 0}>미편찬 {uncompiled}건</div>
+          </div>
+        {/if}
         <button class="stat-card stat-clickable" type="button" on:click={openTeamBrain}>
           <div class="stat-value">{state.pendingReview}</div>
           <div class="stat-label">검토 대기 제안</div>
           <div class="stat-link muted">목록 보기 · 결정은 아바타에게 요청</div>
         </button>
       </div>
+
+      {#if uncompiled > 0}
+        <p class="team-brain-admin-hint">아바타에게 '팀 브레인 정리(team-brain-curate)'를 요청하면 미편찬 원본을 위키로 편찬합니다.</p>
+      {/if}
 
       <h4 class="team-brain-admin-sub">백업</h4>
       <p class="muted">
@@ -158,8 +182,8 @@
       {#if state.backup.url}
         <div class="team-brain-admin-actions">
           <button class="ghost-sm" type="button" disabled={busy || dirty} on:click={pushNow}>지금 백업</button>
-          <button class="ghost-sm" type="button" disabled={busy || dirty || state.noteCount > 0} on:click={restore}
-            title={state.noteCount > 0 ? "비어 있는 팀 브레인에만 복원할 수 있습니다." : ""}>백업에서 복원</button>
+          <button class="ghost-sm" type="button" disabled={busy || dirty || !vaultEmpty} on:click={restore}
+            title={vaultEmpty ? "" : "비어 있는 팀 브레인에만 복원할 수 있습니다."}>백업에서 복원</button>
         </div>
       {/if}
     {:else if busy}
@@ -171,6 +195,8 @@
 
 <style>
   .team-brain-admin-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--s-3); margin-bottom: var(--s-4); }
+  .team-brain-admin-hint { margin: 0 0 var(--s-4); padding: var(--s-2) var(--s-2-5); border: 1px solid var(--info-line); border-radius: var(--r-sm); background: var(--info-soft); color: var(--info); font-size: var(--t-xs); }
+  .team-brain-admin-backlog { color: var(--warn); }
   .team-brain-admin-sub { margin: var(--s-2) 0 var(--s-1); font-size: var(--t-sm); }
   .team-brain-admin-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-2); }
 </style>

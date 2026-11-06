@@ -47,6 +47,19 @@ export interface BrainNoteHit {
   /** Short body excerpt around the first query hit (or the note's opening). */
   snippet: string;
   score: number;
+  /**
+   * Team brain only (teamBrain.ts `searchTeamBrain`): a compiled wiki page, or
+   * a raw source no page cites yet. Absent on personal-vault hits.
+   */
+  kind?: "page" | "uncompiled_source";
+}
+
+/** Options for `rankBrainNotes` (additive; the default keeps the personal-vault behavior). */
+export interface RankBrainNotesOptions {
+  /** Which folder to scan: `wiki/` (default — structural index/log and templates excluded) or `raw/`. */
+  prefix?: "wiki/" | "raw/";
+  /** Score only the paths this accepts (applied BEFORE the scan cap). */
+  include?: (relPath: string) => boolean;
 }
 
 export type BrainSearchResult =
@@ -149,7 +162,9 @@ export async function rankBrainNotes(
   repoRoot: string,
   query: string,
   limit: number = DEFAULT_LIMIT,
+  options: RankBrainNotesOptions = {},
 ): Promise<BrainSearchResult> {
+  const prefix = options.prefix ?? "wiki/";
   const entries = await listTree(repoRoot);
   const hasVault = entries.some(
     (e) => e.path === "wiki" || e.path.startsWith("wiki/") || e.path === "raw" || e.path.startsWith("raw/"),
@@ -161,11 +176,12 @@ export async function rankBrainNotes(
     .filter(
       (e) =>
         e.type === "file" &&
-        e.path.startsWith("wiki/") &&
+        e.path.startsWith(prefix) &&
         e.path.endsWith(".md") &&
         !e.path.endsWith("_template.md") &&
         e.path !== "wiki/index.md" &&
-        e.path !== "wiki/log.md",
+        e.path !== "wiki/log.md" &&
+        (!options.include || options.include(e.path)),
     )
     .slice(0, SCAN_CAP);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);

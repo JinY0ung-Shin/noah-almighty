@@ -286,7 +286,7 @@ function teamBrainSection(request: AgentRequest): string | null {
   const tb = request.teamBrain;
   if (!tb?.read) return null;
   const base =
-    '**Team brain**: the team\'s ONE shared knowledge vault — notes teammates proposed and an admin approved. Search it with `mcp__brain__search` (scope "team", or the default "all") before answering a question about the team\'s decisions, systems, fixes, terms, conventions or owners, and read a hit with `mcp__brain__get_note` (scope "team"). ' +
+    '**Team brain**: the team\'s ONE shared knowledge vault — a wiki an admin\'s avatar compiles from the sources teammates submit, under a fixed schema (`SCHEMA.md`) the server enforces; an admin approves every change. Search it with `mcp__brain__search` (scope "team", or the default "all") before answering a question about the team\'s decisions, systems, fixes, terms, conventions or owners, and read a hit with `mcp__brain__get_note` (scope "team"; `wiki/index.md` is the catalog). A hit labeled "uncompiled source" is a submitted text not yet compiled into a page — less settled. ' +
     TEAM_NOTE_TRUST_NOTE;
   if (!tb.propose) {
     return `${base} Proposing team notes is not available in this run (only in the owner's own interactive conversation).`;

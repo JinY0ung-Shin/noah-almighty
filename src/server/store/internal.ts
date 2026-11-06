@@ -14,6 +14,7 @@ import type {
   User,
 } from "../types.js";
 import { normalizeMcpToolGroups, type McpToolGroupId } from "../../shared/mcpToolGroups.js";
+import { teamRawPath } from "../../shared/teamBrain.js";
 
 const SESSION_DAYS = 14;
 
@@ -51,6 +52,13 @@ const CANVAS_BACKFILL_VERSION = 1;
  *  re-running them on a later boot silently corrupts live data. The gate is
  *  what makes them one-time. Next backfill: bump to 3 and gate on it. */
 const ONBOARDED_ROUTINE_BACKFILL_VERSION = 2;
+
+/** user_version for the team-brain schema-v1 row migration (LLM wiki,
+ *  2026-11-06): open legacy single-note proposals become raw SOURCES (path →
+ *  teamRawPath, an empty intake, no base blob) and legacy direct/review DRAFTS
+ *  are cancelled. Gated because the direct/review predicate matches drafts the
+ *  app creates later. Next backfill: bump to 4 and gate on it. */
+const TEAM_BRAIN_WIKI_BACKFILL_VERSION = 3;
 
 function now(): string {
   return new Date().toISOString();
@@ -861,10 +869,16 @@ export class StoreBase {
     // trail is what keeps those copies matched to the row until their next
     // update rewrites the marker. NULL (and anything unparseable) reads as [].
     this.addColumnIfMissing("shared_skills", "previous_names", "TEXT");
+    // Team brain schema v1 (LLM wiki): a submission's intake answers (JSON
+    // TeamBrainIntake) and a compiled changeset (JSON TeamBrainChangeset) on
+    // review/direct rows. NULL = none (legacy rows; decoded defensively).
+    this.addColumnIfMissing("team_brain_proposals", "intake_json", "TEXT");
+    this.addColumnIfMissing("team_brain_proposals", "changes_json", "TEXT");
     this.migrateGitTokenSecrets();
     this.migrateVisibility();
     this.migrateCanvasArtifacts();
     this.migrateOnboardedAndRoutineFlags();
+    this.migrateTeamBrainWikiRows();
     this.migrateTodoStatuses();
     // Deliberately ABOVE the retirement gate, so it runs even when the backup
     // failed: the new trust model (every active user is a teammate) is already
@@ -1233,6 +1247,40 @@ export class StoreBase {
     this.db.pragma(`user_version = ${ONBOARDED_ROUTINE_BACKFILL_VERSION}`);
   }
 
+  /** Wave-3 one-time migration (TEAM_BRAIN_WIKI_BACKFILL_VERSION). The vault
+   *  itself moves every existing note to raw/legacy/ (teamBrain.ts); here an
+   *  OPEN legacy proposal (a whole wiki note) becomes a raw source the admin's
+   *  avatar compiles — its content stays verbatim. Legacy direct/review drafts
+   *  carry a single-note write the new apply path cannot take: cancelled.
+   *  Decided rows stay untouched (history). */
+  private migrateTeamBrainWikiRows(): void {
+    const schemaVersion =
+      Number(this.db.pragma("user_version", { simple: true })) || 0;
+    if (schemaVersion >= TEAM_BRAIN_WIKI_BACKFILL_VERSION) {
+      return;
+    }
+    const legacyIntake = JSON.stringify({ type: null, answers: {}, gaps: [], followups: [] });
+    this.db.transaction(() => {
+      const rows = this.db
+        .prepare(
+          "SELECT id, created_at FROM team_brain_proposals WHERE kind = 'propose' " +
+            "AND status IN ('draft', 'pending') AND path LIKE 'wiki/%'",
+        )
+        .all() as Array<{ id: string; created_at: string }>;
+      const move = this.db.prepare(
+        "UPDATE team_brain_proposals SET path = ?, intake_json = ?, base_blob = NULL WHERE id = ?",
+      );
+      for (const r of rows) move.run(teamRawPath(r.created_at, r.id), legacyIntake, r.id);
+      this.db
+        .prepare(
+          "UPDATE team_brain_proposals SET status = 'cancelled', updated_at = ? " +
+            "WHERE kind IN ('direct', 'review') AND status = 'draft' AND changes_json IS NULL",
+        )
+        .run(now());
+    })();
+    this.db.pragma(`user_version = ${TEAM_BRAIN_WIKI_BACKFILL_VERSION}`);
+  }
+
   /** One-time backfill: treat every account existing at gate time as already
    *  onboarded (set onboarded_at = created_at) so the server-backed welcome
    *  modal doesn't re-fire for current users — only NEW signups (onboarded_at
@@ -1463,7 +1511,7 @@ export interface StoreBase {
   /** deleteUser cascade (store/teamBrain.ts). */
   deleteTeamBrainProposalsForUser(userId: string): void;
   /** The rewind cascade for team-brain draft cards (store/teamBrain.ts). */
-  withdrawTeamBrainDrafts(ids: readonly string[]): number;
+  withdrawTeamBrainDrafts(conversationId: string, ids: readonly string[]): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(
     key: string,

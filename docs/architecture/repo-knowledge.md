@@ -105,7 +105,8 @@
   starter root `CLAUDE.md`.
 - **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL.** (The
   ONE instance-wide team brain, back 2026-11-06, is a separate Noah-owned local vault with its own
-  proposal queue → [`team-brain.md`](team-brain.md); it shares the `brain` server and the vault format.)
+  proposal queue → [`team-brain.md`](team-brain.md); it shares the `brain` server, but its vault is a
+  stricter LLM wiki: server-rendered `raw/` sources, a FIXED server-validated `SCHEMA.md`, server-generated index/log.)
   `wiki/` (curated) + `raw/` (capture) are just directories inside the owner's personal knowledge repo.
   The team brain (`mcp__group_brain__*`, group vault scaffolding, group graph) was REMOVED 2026-10-30 (user
   decision), and group knowledge repos with it; `group_brain`/`group_repo` are retired pi broker ids (`RETIRED_MCP_SERVER_NAMES` in

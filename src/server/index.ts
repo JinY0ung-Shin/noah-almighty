@@ -17,6 +17,8 @@ import { retirePiColleagueRepoCopies } from "./retirePiColleagueRepoCopies.js";
 import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import { sweepPiConsultationSandboxes } from "./agent/pi/piRuntime.js";
+import { migrateTeamBrainOnBoot } from "./teamBrain.js";
+import { sweepTeamBrainAppliesOnBoot } from "./teamBrainActions.js";
 import { warnRetiredModelEnv } from "./agent/pi/modelCatalog.js";
 import {
   deckToolchainLogFields,
@@ -74,6 +76,15 @@ const sweptConsultations = sweepPiConsultationSandboxes(services.config);
 if (sweptConsultations > 0) {
   logger.info({ count: sweptConsultations }, "removed leftover avatar-consultation sandboxes");
 }
+// Bring an existing team-brain vault to the current fixed schema (v0 → v1 moves
+// every pre-schema note to raw/legacy/; nothing is deleted). Fire-and-forget:
+// it never throws, every write path re-runs it under the vault lock anyway, and
+// a migration commit schedules a backup push.
+// Then a card whose apply died mid-write (no `Proposal:` commit) goes back to draft.
+const teamBrainBootAt = new Date().toISOString();
+void migrateTeamBrainOnBoot(services.config, () => services.teamBrainBackup?.schedule()).then(() =>
+  sweepTeamBrainAppliesOnBoot(services, teamBrainBootAt),
+);
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);

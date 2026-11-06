@@ -9,9 +9,8 @@ import {
   type TeamBrainActionDeps,
   type TeamBrainActionResult,
 } from "../teamBrainActions.js";
-import { countTeamNotes, readTeamNote, teamBrainGraph, validateTeamNotePath } from "../teamBrain.js";
+import { countTeamNotes, normalizeTeamVaultPath, readTeamVaultFile, teamBrainCounts, teamBrainGraph } from "../teamBrain.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
-import { isVaultNotePath } from "../knowledgeGraph.js";
 import type { TeamBrainStatus } from "../../shared/teamBrain.js";
 
 // Team brain HTTP surface (docs/architecture/team-brain.md). Every write here is
@@ -101,15 +100,13 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
   });
 
   router.get("/api/team-brain/note", async (req, res) => {
-    const raw = typeof req.query.path === "string" ? req.query.path : "";
-    const checked = validateTeamNotePath(raw);
-    // The structural index is readable too (graph content panel parity).
-    const notePath = checked.ok ? checked.path : raw === "wiki/index.md" ? raw : null;
-    if (!notePath || !isVaultNotePath(notePath)) {
+    // SCHEMA.md, wiki pages (incl. the generated index/log) and raw sources.
+    const notePath = normalizeTeamVaultPath(typeof req.query.path === "string" ? req.query.path : "");
+    if (!notePath) {
       apiError(res, 400, "잘못된 노트 경로입니다.");
       return;
     }
-    const content = await readTeamNote(config, notePath).catch(() => null);
+    const content = await readTeamVaultFile(config, notePath).catch(() => null);
     if (content === null) {
       apiError(res, 404, "노트를 찾을 수 없습니다.");
       return;
@@ -122,8 +119,11 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
 
   router.get("/api/admin/team-brain", async (_req, res) => {
     const backup = deps.services.teamBrainBackup;
+    const counts = await teamBrainCounts(config);
     res.json({
-      noteCount: await countTeamNotes(config),
+      noteCount: counts.pages,
+      rawSources: counts.rawSources,
+      uncompiledSources: counts.uncompiledSources,
       pendingReview: store.countPendingTeamBrainProposals(),
       backup: backup ? backup.state() : readTeamBrainBackupState(store),
       githubHost: config.githubHost,
