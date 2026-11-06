@@ -103,7 +103,9 @@
   intro/hashtag gen leaves it unset. (Group repo CLAUDE.md files were injected too until group knowledge
   repos were retired, 2026-10-30.) `writeRepoTemplate` seeds a
   starter root `CLAUDE.md`.
-- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL only.**
+- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL.** (The
+  ONE instance-wide team brain, back 2026-11-06, is a separate Noah-owned local vault with its own
+  proposal queue → [`team-brain.md`](team-brain.md); it shares the `brain` server and the vault format.)
   `wiki/` (curated) + `raw/` (capture) are just directories inside the owner's personal knowledge repo.
   The team brain (`mcp__group_brain__*`, group vault scaffolding, group graph) was REMOVED 2026-10-30 (user
   decision), and group knowledge repos with it; `group_brain`/`group_repo` are retired pi broker ids (`RETIRED_MCP_SERVER_NAMES` in

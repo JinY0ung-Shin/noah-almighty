@@ -39,6 +39,12 @@ which check owner/teammate trust themselves.
   the avatar can list/read/write files, scaffold skills (`skills/<name>/SKILL.md`), and
   commit & push — via the owner-only `mcp__repo__*` tools. Settings just points at the repo
   (a GitHub link); there is no in-app file editor.
+- **Team brain (팀 브레인)**: ONE shared knowledge vault for the whole team — decisions, system
+  facts, fixes, glossary, conventions, owners. Every avatar can search it; when a conversation
+  produces team knowledge the avatar offers to share it, the user confirms on a card, and an
+  admin approves or rejects it (an admin's own notes go in on their card press). It lives on
+  the Noah server as a local git repository; an admin can mirror it to a backup repository on
+  the internal git host (관리자 → 팀 브레인).
 - **Delegation loop**: grow your avatar by turning repeated work, project rules, runbooks,
   and answers to teammate questions into skills / knowledge files / routines, then delegate
   more of that work back to the avatar over time.
