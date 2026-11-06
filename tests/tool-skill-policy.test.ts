@@ -1,4 +1,4 @@
-// Admin builtin tool/skill on-off policy: validators, the global skill list
+// Admin skill on-off policy: validators, the global skill list
 // (plugin-root scan of the bundled default-skills, served by GET
 // /api/admin/system), and the prompt meta-cognition surface.
 import { afterAll, describe, expect, it } from "vitest";
@@ -10,7 +10,6 @@ import request from "supertest";
 import { createApp, createServices } from "../src/server/app.js";
 import {
   DEFAULT_TOOL_SKILL_POLICY,
-  TOGGLABLE_BUILTIN_TOOLS,
   normalizeToolSkillPolicy,
   parseToolSkillPolicy,
 } from "../src/server/toolSkillPolicy.js";
@@ -32,29 +31,12 @@ afterAll(() => {
 });
 
 describe("tool/skill policy validators", () => {
-  it("keeps the core tools out of the togglable catalog", () => {
-    const names = TOGGLABLE_BUILTIN_TOOLS.flatMap((tool) => tool.names);
-    expect(names).toEqual(
-      expect.arrayContaining(["WebFetch", "WebSearch"]),
-    );
-    // The retired agent-teams / workflow toggles are gone with their features.
-    expect(names).not.toContain("SendMessage");
-    expect(names).not.toContain("Workflow");
-    expect(TOGGLABLE_BUILTIN_TOOLS.map((tool) => tool.id)).not.toContain("agent_teams");
-    expect(TOGGLABLE_BUILTIN_TOOLS.map((tool) => tool.id)).not.toContain("workflow");
-    for (const core of ["Bash", "Read", "Glob", "Grep", "Edit", "Write", "Skill", "AskUserQuestion"]) {
-      expect(names).not.toContain(core);
-    }
-  });
-
   it("parses a valid policy strictly, deduplicating entries", () => {
     expect(
       parseToolSkillPolicy({
-        disabledTools: ["WebFetch", "WebFetch"],
         disabledSkills: ["code-review", "code-review", "plugin:deep-research"],
       }),
     ).toEqual({
-      disabledTools: ["WebFetch"],
       disabledSkills: ["code-review", "plugin:deep-research"],
     });
   });
@@ -62,15 +44,12 @@ describe("tool/skill policy validators", () => {
   it("rejects malformed policies at the write boundary", () => {
     expect(parseToolSkillPolicy(null)).toBeNull();
     expect(parseToolSkillPolicy([])).toBeNull();
-    expect(parseToolSkillPolicy({ disabledTools: [] })).toBeNull();
-    expect(parseToolSkillPolicy({ disabledTools: "WebFetch", disabledSkills: [] })).toBeNull();
-    // Core tools outside the togglable catalog must never be disable-able via the API.
-    expect(parseToolSkillPolicy({ disabledTools: ["Bash"], disabledSkills: [] })).toBeNull();
-    expect(parseToolSkillPolicy({ disabledTools: [], disabledSkills: ["bad name"] })).toBeNull();
-    expect(parseToolSkillPolicy({ disabledTools: [], disabledSkills: ["skill(x)"] })).toBeNull();
+    expect(parseToolSkillPolicy({})).toBeNull();
+    expect(parseToolSkillPolicy({ disabledSkills: "code-review" })).toBeNull();
+    expect(parseToolSkillPolicy({ disabledSkills: ["bad name"] })).toBeNull();
+    expect(parseToolSkillPolicy({ disabledSkills: ["skill(x)"] })).toBeNull();
     expect(
       parseToolSkillPolicy({
-        disabledTools: [],
         disabledSkills: Array.from({ length: 201 }, (_, i) => `skill-${i}`),
       }),
     ).toBeNull();
@@ -81,24 +60,26 @@ describe("tool/skill policy validators", () => {
     expect(normalizeToolSkillPolicy("garbage")).toEqual(DEFAULT_TOOL_SKILL_POLICY);
     expect(
       normalizeToolSkillPolicy({
-        disabledTools: ["WebSearch", "Bash", 42],
         disabledSkills: ["ok-skill", "bad name", null],
       }),
-    ).toEqual({ disabledTools: ["WebSearch"], disabledSkills: ["ok-skill"] });
+    ).toEqual({ disabledSkills: ["ok-skill"] });
   });
 
-  it("normalizes a stored policy's retired SendMessage/Workflow toggles away on read", () => {
+  // Issue #78: the built-in tool toggles (Claude SDK WebFetch/WebSearch/
+  // NotebookEdit, advisory Task/Agent) are retired. A stored policy still naming
+  // them is dropped on read, and an admin tab opened before the upgrade can
+  // still save (the field is ignored, not refused).
+  it("drops a stored policy's retired built-in tool toggles", () => {
     expect(
       normalizeToolSkillPolicy({
-        disabledTools: ["SendMessage", "WebFetch", "Workflow"],
-        disabledSkills: [],
+        disabledTools: ["WebFetch", "WebSearch", "NotebookEdit", "Task", "Agent", "SendMessage", "Workflow"],
+        disabledSkills: ["code-review"],
       }),
-    ).toEqual({ disabledTools: ["WebFetch"], disabledSkills: [] });
-    // …and the strict admin write path rejects them like any unknown name.
-    expect(parseToolSkillPolicy({ disabledTools: ["SendMessage"], disabledSkills: [] })).toBeNull();
-    expect(parseToolSkillPolicy({ disabledTools: ["Workflow"], disabledSkills: [] })).toBeNull();
+    ).toEqual({ disabledSkills: ["code-review"] });
+    expect(
+      parseToolSkillPolicy({ disabledTools: ["WebFetch", "Task", "Agent"], disabledSkills: [] }),
+    ).toEqual({ disabledSkills: [] });
   });
-
 });
 
 describe("skill catalog helpers", () => {
@@ -249,16 +230,17 @@ describe("prompt admin-disabled note", () => {
     avatar: { id: "a1", displayName: "아바타", alias: "", persona: "" },
   } as unknown as AgentRequest;
 
-  it("adds the standing note when the admin disabled tools or skills", () => {
+  it("adds the standing note when the admin disabled skills", () => {
     const prompt = buildSystemPromptAppend({
       ...baseRequest,
-      adminDisabledTools: ["WebFetch", "WebSearch"],
       adminDisabledSkills: ["code-review"],
     });
-    expect(prompt).toContain("system administrator disabled");
-    expect(prompt).toContain("`WebFetch`");
+    expect(prompt).toContain("system administrator disabled the following skills");
     expect(prompt).toContain("`code-review`");
     expect(prompt).toContain("Do not attempt, retry, or suggest them");
+    // Issue #78: no retired built-in tool policy reaches the prompt.
+    expect(prompt).not.toContain("built-in tools:");
+    expect(prompt).not.toContain("subagent switch");
   });
 
   it("omits the note when nothing is disabled", () => {

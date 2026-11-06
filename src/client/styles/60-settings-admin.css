@@ -634,6 +634,10 @@
   border-radius: var(--r-md);
   background: var(--line);
 }
+/* SSH policy: 소유자 / 팀원 (one team — the 일반 동료 column is retired). */
+.hex-policy-grid.cols-2 {
+  grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(84px, 120px));
+}
 .hex-policy-grid > * {
   background: var(--panel);
 }

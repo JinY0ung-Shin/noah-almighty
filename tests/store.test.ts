@@ -17,6 +17,7 @@ import {
 } from "../src/server/routineSchedule.js";
 import {
   DEFAULT_HEX_SSH_TOOL_POLICY,
+  HEX_SSH_POLICY_CONFIG_KEY,
   type HexSshToolPolicy,
 } from "../src/server/hexSshPolicy.js";
 
@@ -376,22 +377,28 @@ describe("store app config (app-wide secrets)", () => {
     const policy: HexSshToolPolicy = {
       owner: ["ssh-read-lines", "remote-ssh"],
       trusted: ["ssh-read-lines"],
-      colleague: [],
     };
     expect(store.setHexSshToolPolicy(policy)).toEqual(policy);
     expect(store.getHexSshToolPolicy()).toEqual(policy);
   });
 
-  it("stores the builtin tool/skill policy as app config", () => {
+  it("drops the retired hex-ssh colleague column from a stored policy", () => {
     const store = makeStore();
-    expect(store.getToolSkillPolicy()).toEqual({ disabledTools: [], disabledSkills: [] });
-    // The lenient normalizer drops unknown tool names and malformed skill names.
+    store.setAppSecret(
+      HEX_SSH_POLICY_CONFIG_KEY,
+      JSON.stringify({ owner: ["remote-ssh"], trusted: ["ssh-read-lines"], colleague: ["ssh-read-lines"] }),
+    );
+    expect(store.getHexSshToolPolicy()).toEqual({ owner: ["remote-ssh"], trusted: ["ssh-read-lines"] });
+  });
+
+  it("stores the skill policy as app config", () => {
+    const store = makeStore();
+    expect(store.getToolSkillPolicy()).toEqual({ disabledSkills: [] });
+    // The lenient normalizer drops malformed skill names.
     const saved = store.setToolSkillPolicy({
-      disabledTools: ["WebFetch", "WebSearch", "Bash"],
       disabledSkills: ["code-review", "bad name!"],
     });
     expect(saved).toEqual({
-      disabledTools: ["WebFetch", "WebSearch"],
       disabledSkills: ["code-review"],
     });
     expect(store.getToolSkillPolicy()).toEqual(saved);

@@ -7,7 +7,6 @@ import {
   DIRECT_MESSAGE_STATE,
   GROUP_REPOS_RETIRED_SENTENCE,
   gettingStartedGaps,
-  piAdminDisabledToolsNote,
   PI_NO_ASK_USER_SENTENCE,
   PI_REPO_REPLACED_COPY_SENTENCE,
   piSandboxOwnerSentence,
@@ -821,7 +820,7 @@ function piRuntimeSection(request: AgentRequest): string | null {
     MCP_SEARCH_QUERY_LINE +
     "A refused call says why: do not retry it or look for a shell workaround. " +
     "The user cannot see files in the sandbox, so put the content in your reply or publish the file with the file-output tools when they are available. " +
-    "Not available on this runtime: WebSearch (fetch a known URL with `mcp__web__fetch`). " +
+    "There is no web-search tool on this runtime (fetch a known URL with `mcp__web__fetch`). " +
     piRelayedMcpSentence(pi) +
     piAsyncToolsSentence(request) +
     PI_EFFORT_CLAMP_SENTENCE +
@@ -1022,25 +1021,15 @@ export function buildSystemPromptAppend(
   if (disabledToolGroupsBlock) {
     lines.push(disabledToolGroupsBlock);
   }
-  // Admin tool/skill policy (META-COGNITION): deployment-wide disables set in
-  // the admin panel. A disabled skill is never copied or served, but a disabled
-  // built-in is advisory on pi, so this standing note pre-empts wasted attempts
-  // and wrong suggestions for every viewer class. Mirrored by describe_system.
-  const adminDisabledTools = (request.adminDisabledTools ?? []).filter(Boolean);
+  // Admin skill policy (META-COGNITION): deployment-wide skill disables set in
+  // the admin panel. A disabled skill is never copied or served; this standing
+  // note pre-empts wrong suggestions for every viewer class. Mirrored by
+  // describe_system.
   const adminDisabledSkills = (request.adminDisabledSkills ?? []).filter(Boolean);
-  if (adminDisabledTools.length > 0 || adminDisabledSkills.length > 0) {
-    const disabledParts = [
-      adminDisabledTools.length > 0
-        ? `built-in tools: ${adminDisabledTools.map((name) => `\`${name}\``).join(", ")}`
-        : "",
-      adminDisabledSkills.length > 0
-        ? `skills: ${adminDisabledSkills.map((name) => `\`${name}\``).join(", ")}`
-        : "",
-    ].filter(Boolean);
+  if (adminDisabledSkills.length > 0) {
     lines.push(
-      `The system administrator disabled the following for ALL avatars in this deployment — ${disabledParts.join("; ")}. ` +
-        "They are unavailable even if they appear in a tool or skill listing. Do not attempt, retry, or suggest them; if the user asks for one, explain that it is administratively disabled." +
-        piAdminDisabledToolsNote(adminDisabledTools),
+      `The system administrator disabled the following skills for ALL avatars in this deployment: ${adminDisabledSkills.map((name) => `\`${name}\``).join(", ")}. ` +
+        "They are unavailable even if they appear in a skill listing. Do not attempt, retry, or suggest them; if the user asks for one, explain that it is administratively disabled.",
     );
   }
   const knowledgeMemoryBlock = knowledgeMemorySection(request);
@@ -1102,7 +1091,7 @@ export function buildSystemPromptAppend(
         : " No HTTP_PROXY/HTTPS_PROXY is configured: intranet URLs are fetched directly, but external internet sites may be unreachable if this deployment requires a corporate proxy.";
     lines.push(
       "Web page fetch: when the user shares a URL or asks about an intranet/internet page, read it with `mcp__web__fetch` (owner/trusted-user conversations only; loopback and link-local/metadata addresses are blocked). " +
-        "Prefer it over the built-in WebFetch tool — it fetches plain http:// intranet pages as-is and honors the deployment's proxy and CA settings." +
+        "There is no web-search tool, so fetch a known URL with it; it fetches plain http:// intranet pages as-is and honors the deployment's proxy and CA settings." +
         proxyNote,
     );
   }

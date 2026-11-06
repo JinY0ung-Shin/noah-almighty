@@ -43,8 +43,18 @@ export const HEX_SSH_NEVER_OFFERED_TOOLS = ["ssh-upload", "ssh-download"] as con
 /** Agent-facing: why there is no local↔remote file transfer (BOTH metacognition surfaces). */
 export const HEX_SSH_NO_TRANSFER_SENTENCE =
   "hex-ssh has no local↔remote file transfer (ssh-upload/ssh-download are not offered): it runs on Noah's server, not in your sandbox, so it cannot see your /workspace files — write a remote file with ssh-write-chunk/ssh-edit-block and read one with ssh-read-lines. ";
-export type HexSshViewerClass = "owner" | "trusted" | "colleague";
-export type HexSshToolPolicy = Record<HexSshViewerClass, HexSshTool[]>;
+/**
+ * Who a run's hex-ssh allowlist is judged for. ONE team (2026-11-06): every
+ * approved viewer is a teammate (`trusted`), so the admin policy has just two
+ * columns (소유자 / 팀원). `none` is a run with no SSH at all — a restricted
+ * headless run (intro / hashtag generation) or a viewer without elevated
+ * access — and is never configurable. The retired `colleague` column (일반 동료)
+ * is dropped from a stored policy on read and ignored on write; never mint a
+ * third column again.
+ */
+export type HexSshViewerClass = "owner" | "trusted" | "none";
+export type HexSshPolicyRole = Exclude<HexSshViewerClass, "none">;
+export type HexSshToolPolicy = Record<HexSshPolicyRole, HexSshTool[]>;
 
 export interface HexSshToolInfo {
   name: HexSshTool;
@@ -68,7 +78,7 @@ export const HEX_SSH_TOOL_INFOS: HexSshToolInfo[] = [
 ];
 
 const TOOL_SET = new Set<string>(HEX_SSH_TOOLS);
-const ROLE_KEYS: HexSshViewerClass[] = ["owner", "trusted", "colleague"];
+const ROLE_KEYS: HexSshPolicyRole[] = ["owner", "trusted"];
 const READ_ONLY_HEX_SSH_TOOLS: HexSshTool[] = [
   "ssh-read-lines",
   "ssh-search-code",
@@ -79,7 +89,6 @@ const READ_ONLY_HEX_SSH_TOOLS: HexSshTool[] = [
 export const DEFAULT_HEX_SSH_TOOL_POLICY: HexSshToolPolicy = {
   owner: [...HEX_SSH_TOOLS],
   trusted: [...READ_ONLY_HEX_SSH_TOOLS],
-  colleague: [...READ_ONLY_HEX_SSH_TOOLS],
 };
 
 function uniqueKnownTools(value: unknown): HexSshTool[] {
@@ -104,13 +113,10 @@ export function normalizeHexSshToolPolicy(value: unknown): HexSshToolPolicy {
   return {
     owner: Array.isArray(value.owner) ? uniqueKnownTools(value.owner) : [...DEFAULT_HEX_SSH_TOOL_POLICY.owner],
     trusted: Array.isArray(value.trusted) ? uniqueKnownTools(value.trusted) : [...DEFAULT_HEX_SSH_TOOL_POLICY.trusted],
-    colleague: Array.isArray(value.colleague)
-      ? uniqueKnownTools(value.colleague)
-      : [...DEFAULT_HEX_SSH_TOOL_POLICY.colleague],
   };
 }
 
-/** Strict parser for the admin API: all roles must be arrays. */
+/** Strict parser for the admin API: both roles must be arrays (a retired `colleague` is ignored). */
 export function parseHexSshToolPolicy(value: unknown): HexSshToolPolicy | null {
   if (!isRecord(value)) {
     return null;
@@ -123,7 +129,6 @@ export function parseHexSshToolPolicy(value: unknown): HexSshToolPolicy | null {
   return {
     owner: uniqueKnownTools(value.owner),
     trusted: uniqueKnownTools(value.trusted),
-    colleague: uniqueKnownTools(value.colleague),
   };
 }
 
@@ -131,6 +136,7 @@ export function allowedHexSshToolsForViewer(
   policy: HexSshToolPolicy,
   viewerClass: HexSshViewerClass,
 ): HexSshTool[] {
+  if (viewerClass === "none") return [];
   return policy[viewerClass] ?? [];
 }
 
@@ -145,6 +151,6 @@ export function viewerClassForAgentRequest(input: {
   if (!input.headless && input.elevated) {
     return "trusted";
   }
-  return "colleague";
+  return "none";
 }
 

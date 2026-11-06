@@ -692,7 +692,7 @@ describe("web fetch tools", () => {
     ]);
     expect(followed.content[0].text).toContain("after move");
 
-    // Cross host: reported, not followed (mirrors the built-in WebFetch contract).
+    // Cross host: reported, not followed.
     const crossHost = stubFetch([
       stubResponse("", {
         status: 302,
@@ -2724,19 +2724,36 @@ describe("system tools (avatar system management)", () => {
     expect(on.content[0].text).toContain("`drawio` skill");
   });
 
-  it("describe_system reports admin-disabled builtin tools and skills", async () => {
+  it("describe_system never blames the admin SSH policy for a run class that gets no SSH", async () => {
+    const s = setup("st-ssh-none");
+    s.store.setUserSecret(s.owner.id, "SSH_PRIVATE_KEY", "-----BEGIN KEY-----");
+    const sshLine = async (sshViewerClass: "owner" | "none"): Promise<string> => {
+      const res = await callTool(
+        buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, enabledMcpToolGroups: ["ssh"], sshEnabled: false, sshViewerClass }),
+        "describe_system",
+        {},
+      );
+      const text = res.content[0]?.text ?? "";
+      return text.split("\n").find((line) => line.startsWith("- Remote SSH tools:")) ?? "";
+    };
+    expect(await sshLine("owner")).toContain("the deployment's SSH tool policy allows no SSH tools here");
+    const none = await sshLine("none");
+    expect(none).toContain("this kind of run never gets SSH tools");
+    expect(none).not.toContain("SSH tool policy");
+  });
+
+  it("describe_system reports admin-disabled skills (built-in tool toggles are retired)", async () => {
     const s = setup("st-toolskill");
     const noPolicy = await callTool(toolsFor(s), "describe_system", {});
-    expect(noPolicy.content[0].text).toContain("Admin-disabled built-in tools: (none)");
     expect(noPolicy.content[0].text).toContain("Admin-disabled skills: (none)");
+    expect(noPolicy.content[0].text).not.toContain("Admin-disabled built-in tools");
 
     const tools = buildSystemTools(s.store, {
       ...s.baseCtx,
       viewerIsOwner: true,
-      toolSkillPolicy: { disabledTools: ["WebFetch"], disabledSkills: ["code-review"] },
+      toolSkillPolicy: { disabledSkills: ["code-review"] },
     });
     const res = await callTool(tools, "describe_system", {});
-    expect(res.content[0].text).toContain("Admin-disabled built-in tools: `WebFetch`");
     expect(res.content[0].text).toContain("Admin-disabled skills: `code-review`");
   });
 

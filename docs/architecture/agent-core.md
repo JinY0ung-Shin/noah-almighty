@@ -138,25 +138,27 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   attributable, visible, undoable). Both metacognition surfaces branch on `browserEnabled` when they describe
   that write route.
 
-## Admin builtin tool/skill on-off policy (`toolSkillPolicy.ts` + `agent/skillCatalog.ts`)
-- **What it is:** the admin panel (system tab → "내장 도구·스킬 정책") stores deployment-wide off-switches for
-  BUILT-IN tools (the `TOGGLABLE_BUILTIN_TOOLS` catalog; core tools are deliberately NOT togglable and the strict
-  parser rejects them) and individual SKILLS (bare name or `<plugin>:<name>`). Storage mirrors the hex-ssh
-  policy: one JSON blob in `app_config` (`getToolSkillPolicy`/`setToolSkillPolicy` in `store/secrets.ts`,
-  lenient `normalize*` on read / strict `parse*` at `PUT /api/admin/tool-skill-policy`), read FRESH per
-  agent run. Empty policy == pre-feature behavior (safe under `SESSION_SECRET` rotation).
-- **Built-in toggles are ADVISORY on pi.** pi's built-ins (read/write/edit/bash/ls/find/grep, plus its own
-  `Agent`) are always on — pi has no per-request tool allowlist — and the catalog names tools pi does not have
-  (WebFetch/WebSearch/NotebookEdit). describe_system's "Admin-disabled built-in tools" line says so, and when the
-  subagent switch is off (`piAdminDisabledToolsNote`) tells the avatar to honor it itself and never spawn one.
+## Admin skill on-off policy (`toolSkillPolicy.ts` + `agent/skillCatalog.ts`)
+- **What it is:** the admin panel (system tab → "스킬 정책") stores deployment-wide off-switches for individual
+  SKILLS (bare name or `<plugin>:<name>`). Storage mirrors the hex-ssh policy: one JSON blob in `app_config`
+  (`getToolSkillPolicy`/`setToolSkillPolicy` in `store/secrets.ts`, lenient `normalize*` on read / strict
+  `parse*` at `PUT /api/admin/tool-skill-policy`), read FRESH per agent run. Empty policy == pre-feature
+  behavior (safe under `SESSION_SECRET` rotation). The config key `builtin_tool_skill_policy` keeps its name.
+- **Built-in tool toggles are RETIRED (issue #78, 2026-11-06).** WebFetch/WebSearch/NotebookEdit were Claude
+  Agent SDK tools pi does not have, and the Task/Agent toggle was only advisory. pi's own `Agent`/`SendMessage`
+  exist only when an installed pi plugin ships agents, and pi's admin tool page (`/admin`, Noah admin = pi admin)
+  switches them off FOR REAL (dropped from every session and subagent) — the Noah panel points there. A stored
+  `disabledTools` is dropped on read and ignored on write (an admin tab from before the upgrade still saves), so
+  neither surface carries a built-in tool policy any more. Never re-add an advisory tool switch: gate the tool
+  where it is built, or don't offer the switch.
 - **Skill toggles are ENFORCED by omission.** `materializePiSkills` (`pi/piSkills.ts`) never copies a disabled
   skill into the sandbox, never lists it in the frozen skill index, and `mcp__skills__read` refuses it.
 - **Skill listing for the admin panel** comes from the bundled default-skills plugin root
   (`listPluginRootSkills` in `skillCatalog.ts`, which reads each `skills/<dir>/SKILL.md` through `skillMdMeta`):
   `GET /api/admin/system`'s `skillDiscovery` is always `{ fetchedAt, skills: {name, description}[] }`. There is no
   CLI preflight and no cache (the old discovery cache key is retired through `retirementGate()`).
-- **Meta-cognition:** `buildSystemPromptAppend` standing note (`adminDisabledTools/-Skills` on
-  `AgentRequest`) + `describe_system` "Admin-disabled …" lines (via `SystemToolsContext.toolSkillPolicy`)
+- **Meta-cognition:** `buildSystemPromptAppend` standing note (`adminDisabledSkills` on
+  `AgentRequest`) + `describe_system` "Admin-disabled skills" line (via `SystemToolsContext.toolSkillPolicy`)
   — the frozen prompt states the policy at conversation start, describe_system the live one.
 - **Beware `*/` in JSDoc:** a glob like `skills/*/SKILL.md` inside a block comment TERMINATES it and the
   rest of the file parses as code (surfaced as bizarre TS1443/TS1160 errors far below). Write

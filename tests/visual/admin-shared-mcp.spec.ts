@@ -76,7 +76,7 @@ async function mock(page: Page, opts: { failBind?: boolean } = {}) {
     else if (path === "/api/admin/stats") body = { stats: {} };
     else if (path === "/api/admin/users") body = { users: [] };
     else if (path === "/api/audit") body = { audit: [] };
-    else if (path === "/api/admin/system") body = { system: { signupMode: "open", toolSkillPolicy: { disabledTools: [], disabledSkills: [] }, hexSshToolPolicy: { owner: [], trusted: [], colleague: [] } } };
+    else if (path === "/api/admin/system") body = { system: { signupMode: "open", toolSkillPolicy: { disabledSkills: [] }, hexSshToolPolicy: { owner: [], trusted: [] } } };
     else if (path === "/api/admin/presence") body = { presence: { users: [], windowMinutes: 60 } };
     else if (path === "/api/admin/shared-mcp-servers" && request.method() === "POST") {
       const input = request.postDataJSON();

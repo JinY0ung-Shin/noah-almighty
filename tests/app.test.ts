@@ -1149,7 +1149,6 @@ describe("noah-almighty platform", () => {
     const policy = {
       owner: ["ssh-read-lines", "remote-ssh"],
       trusted: ["ssh-read-lines"],
-      colleague: [],
     };
     const saved = await admin
       .put("/api/admin/hex-ssh-policy")
@@ -1164,43 +1163,53 @@ describe("noah-almighty platform", () => {
       .put("/api/admin/hex-ssh-policy")
       .send({ policy: { owner: [] } })
       .expect(400);
+    // One team: the retired 일반 동료 (colleague) column from an admin tab
+    // opened before the upgrade is ignored, never stored.
+    const legacy = await admin
+      .put("/api/admin/hex-ssh-policy")
+      .send({ policy: { ...policy, colleague: ["remote-ssh"] } })
+      .expect(200);
+    expect(legacy.body.policy).toEqual(policy);
     await member.put("/api/admin/hex-ssh-policy").send({ policy }).expect(403);
   });
 
-  it("lets admins manage the builtin tool/skill policy and blocks members", async () => {
+  it("lets admins manage the skill policy and blocks members", async () => {
     const app = testApp();
     const { agent: admin } = await newUser(app, "boss");
     const { agent: member } = await newUser(app, "member1");
 
     const before = await admin.get("/api/admin/system").expect(200);
-    expect(before.body.system.toolSkillPolicy).toEqual({ disabledTools: [], disabledSkills: [] });
-    expect(
-      before.body.system.togglableBuiltinTools.flatMap((t: { names: string[] }) => t.names),
-    ).toEqual(expect.arrayContaining(["WebFetch", "WebSearch"]));
+    expect(before.body.system.toolSkillPolicy).toEqual({ disabledSkills: [] });
+    // Issue #78: no built-in tool toggle catalog any more.
+    expect(before.body.system).not.toHaveProperty("togglableBuiltinTools");
     // The global skill list is read from the bundled default-skills root (no CLI preflight).
     expect(Array.isArray(before.body.system.skillDiscovery.skills)).toBe(true);
     expect(before.body.system.skillDiscovery).not.toHaveProperty("cliVersion");
 
-    const policy = { disabledTools: ["WebFetch", "WebSearch"], disabledSkills: ["code-review"] };
+    const policy = { disabledSkills: ["code-review"] };
     const saved = await admin.put("/api/admin/tool-skill-policy").send({ policy }).expect(200);
     expect(saved.body.policy).toEqual(policy);
 
     const system = await admin.get("/api/admin/system").expect(200);
     expect(system.body.system.toolSkillPolicy).toEqual(policy);
 
-    // Strict write path: core tools outside the togglable catalog, missing
-    // fields, and malformed skill names are all rejected (never silently dropped).
-    await admin
+    // An admin tab from before the upgrade may still send the retired
+    // `disabledTools`: ignored, never stored.
+    const legacy = await admin
       .put("/api/admin/tool-skill-policy")
-      .send({ policy: { disabledTools: ["Bash"], disabledSkills: [] } })
-      .expect(400);
+      .send({ policy: { disabledTools: ["WebFetch", "Agent"], disabledSkills: ["code-review"] } })
+      .expect(200);
+    expect(legacy.body.policy).toEqual(policy);
+
+    // Strict write path: a missing field and malformed skill names are
+    // rejected (never silently dropped).
     await admin
       .put("/api/admin/tool-skill-policy")
       .send({ policy: { disabledTools: [] } })
       .expect(400);
     await admin
       .put("/api/admin/tool-skill-policy")
-      .send({ policy: { disabledTools: [], disabledSkills: ["bad name"] } })
+      .send({ policy: { disabledSkills: ["bad name"] } })
       .expect(400);
     await member.put("/api/admin/tool-skill-policy").send({ policy }).expect(403);
   });

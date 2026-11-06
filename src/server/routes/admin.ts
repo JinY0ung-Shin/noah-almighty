@@ -12,7 +12,7 @@ import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
 import { deleteConversationFiles } from "../chatFiles.js";
 import { HEX_SSH_TOOL_INFOS, parseHexSshToolPolicy } from "../hexSshPolicy.js";
-import { TOGGLABLE_BUILTIN_TOOLS, parseToolSkillPolicy } from "../toolSkillPolicy.js";
+import { parseToolSkillPolicy } from "../toolSkillPolicy.js";
 import {
   isMcpToolGroupId,
   normalizeMcpToolGroups,
@@ -67,10 +67,9 @@ export function createAdminRouter(deps: RouterDeps): Router {
         confluenceConfigured: Boolean(config.confluenceUrl),
         hexSshTools: HEX_SSH_TOOL_INFOS,
         hexSshToolPolicy: store.getHexSshToolPolicy(),
-        // Admin-managed built-in tool/skill on-off policy + the catalogs the
-        // panel renders it against.
+        // Admin-managed skill on-off policy + the skill list the panel renders
+        // it against (built-in tool toggles are retired — pi's /admin owns them).
         toolSkillPolicy: store.getToolSkillPolicy(),
-        togglableBuiltinTools: TOGGLABLE_BUILTIN_TOOLS,
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
@@ -88,7 +87,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
     auditAs(
       req,
       "set_hex_ssh_policy",
-      `owner=${saved.owner.length}, trusted=${saved.trusted.length}, colleague=${saved.colleague.length}`,
+      `owner=${saved.owner.length}, trusted=${saved.trusted.length}`,
     );
     logger.warn({ actorId: req.user!.id, policy: saved }, "hex-ssh tool policy changed");
     res.json({ policy: saved });
@@ -104,9 +103,9 @@ export function createAdminRouter(deps: RouterDeps): Router {
     auditAs(
       req,
       "set_tool_skill_policy",
-      `disabledTools=${saved.disabledTools.length}, disabledSkills=${saved.disabledSkills.length}`,
+      `disabledSkills=${saved.disabledSkills.length}`,
     );
-    logger.warn({ actorId: req.user!.id, policy: saved }, "builtin tool/skill policy changed");
+    logger.warn({ actorId: req.user!.id, policy: saved }, "skill policy changed");
     res.json({ policy: saved });
   });
 
