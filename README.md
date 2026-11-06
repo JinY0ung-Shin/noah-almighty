@@ -309,6 +309,8 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   - pi's `egress-proxy` Go build: FROM `pi-go-builder` (pi's Go image plus the CA);
   - pi's gateway, sandboxd and mcp-broker `npm ci`: FROM `pi-node-builder` (pi's Node image plus the CA as
     `NODE_EXTRA_CA_CERTS`, `docker/pi/node-ca.Dockerfile`);
+  - pi's sandbox image `pip install`: pi's `extra_ca` build secret, which Noah's compose points at
+    `CA_CERT_FILE` (pi's own default, a host path, is refused by Compose >= 5.6);
   - the egress overlay's proxy.
 
   `strict-ssl=false`, `NODE_TLS_REJECT_UNAUTHORIZED=0` and `GOSUMDB=off` are never needed. With the CA in place,

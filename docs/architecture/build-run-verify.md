@@ -123,14 +123,19 @@
   --host=unix:///var/run/docker.sock --default-address-pool base=10.218.0.0/16,size=24`, with `<dir>` holding a
   `git archive` of HEAD + the working compose files, a pi-gateway export at the pin, a `home/` (workspaces 0700,
   plugins 0777) and `secrets/` made by hand (files 0444 so uid 10001 reads them without root; Noah's copy 0400),
-  `DOCKER_GID` = the dind socket's gid. Then inside it `docker compose build` (~10 min cold) and `up -d`, and
+  `DOCKER_GID` = the dind socket's gid. The dind image lacks bash/curl: `apk add bash curl` first (setup-host.sh
+  is bash). Then inside it `docker compose build` (~10 min cold) and `up -d`, and
   check: `pi-setup` logs one `PUT` per server then `ok … (unchanged)` on a re-run; `/api/bootstrap` answers;
   from `mcp-broker` `POST http://noah-almighty:48787/mcp/repo` → **401**, from `gateway` and from the published
   port → **403**; Noah `GET http://gateway:8080/v1/models` with the mounted key → 200; the `/admin` proxy (Noah's
   copy of pi's admin key, `secrets/noah/pi_gateway_admin_api_key` 0400) → `GET /admin/api/session` as a Noah admin
   200 `{authenticated:true}`, anonymous **403** `noah_session_required` (never 401: pi's UI would answer that with
-  its own key login form), `/admin/` serves pi's UI with pi's CSP; and pi's
-  `scripts/security-check/run.mjs` (run in `sandboxd`, `--internal noah-almighty:48787` plus each Noah IP) →
+  its own key login form), `/admin/` serves pi's UI with pi's CSP (a scripted MUTATING `/admin/api` call must send
+  the panel's `Origin`, `Referer: …/admin/`, `Sec-Fetch-Site: same-origin` and `X-Admin-Request: 1`, else 403
+  `csrf` — intended); and pi's
+  `scripts/security-check/run.mjs` (run in `sandboxd`, `--internal noah-almighty:48787` plus each Noah IP; its rootfs
+  is read-only, so pipe the script instead of `docker cp`: `docker compose exec -T sandboxd node --input-type=module
+  - <args> < vendor/pi-gateway/scripts/security-check/run.mjs`) →
   all PASS, sandboxes `noah-almighty/pi-sandbox:latest` with network `none`. **Existing-volume ownership (#79):**
   `docker compose stop noah-almighty`, `chown 0:0` the volume root via `docker compose run --rm --no-deps --user
   0:0 --entrypoint sh noah-almighty -c 'chown 0:0 /app/data'` → `setup-host.sh` fails with `error: volume … root
@@ -181,8 +186,13 @@
     no CA is set). `node:22-bookworm-slim` has no `ca-certificates`, and installing it would need pi's apt mirror
     args, which live in pi's `.env` and are not visible to Noah's services — hence the Node-only file. The ENV is
     inherited by pi's runtime images: gateway and broker override it from pi's compose (their own mount, or empty
-    = unset); sandboxd just trusts the same roots plus the operator CA. pi's own `sandbox-image` takes its CA from
-    `NODE_EXTRA_CA_CERTS` (a host path) as a build secret, pi's own mechanism. `GO_BASE_IMAGE` / `NODE_BASE_IMAGE`
+    = unset); sandboxd just trusts the same roots plus the operator CA. pi's own `sandbox-image` takes its CA as pi's build secret
+    `extra_ca`, which pi points at `NODE_EXTRA_CA_CERTS` (a host path, `/dev/null` when unset); Noah's
+    `docker-compose.yml` REDEFINES that secret as `CA_CERT_FILE`. **Every build input must live inside the
+    project directory:** Compose >= 5.6 builds through bake, which refuses a secret/context file outside it
+    (`additional privileges requested: pass "--allow=fs.read=…"`, even `/dev/null`; `COMPOSE_BAKE=false` does
+    not help — only `BUILDX_BAKE_ENTITLEMENTS_FS=0`, which switches the check off). Runtime bind mounts are
+    unaffected. `GO_BASE_IMAGE` / `NODE_BASE_IMAGE`
     must equal the pinned pi Dockerfile's `GO_IMAGE` / `NODE_IMAGE` defaults — the test fails when a pi bump
     moves one; update both together.
   - Tests: `tests/docker-extra-ca.test.ts` (scripts run for real against a temp store, ignore-file parsing,

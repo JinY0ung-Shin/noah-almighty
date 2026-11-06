@@ -280,4 +280,10 @@ describe("CA_CERT_FILE wiring", () => {
     expect(compose).toMatch(/pi-go-builder:\n(?:.*\n)*?\s+dockerfile: docker\/pi\/golang-ca\.Dockerfile/);
     expect(compose).toMatch(/pi-go-builder:\n(?:.*\n)*?\s+CA_CERT_FILE: \$\{CA_CERT_FILE:-docker\/extra-ca\.crt\.example\}/);
   });
+
+  it("pi's sandbox-image build secret extra_ca is CA_CERT_FILE, a file inside the project (Compose >= 5.6 bake)", () => {
+    // pi defines it as ${NODE_EXTRA_CA_CERTS:-/dev/null}: outside the project, so bake refuses the build.
+    expect(read("vendor/pi-gateway/docker-compose.yml")).toMatch(/sandbox-image:\n(?:.*\n)*?\s+secrets: \[extra_ca\]/);
+    expect(read("docker-compose.yml")).toMatch(/\n  extra_ca:\n    file: \$\{CA_CERT_FILE:-docker\/extra-ca\.crt\.example\}\n/);
+  });
 });
