@@ -223,6 +223,18 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   deleted, and a clean pass stamps `retired:agent_sessions`. Old CLI session ids and resume points in
   `conversations.agent_session_id` / `messages.sdk_*` are left as they are: the pi runner ignores any value that is
   not a `resp_…` id and starts a new session from the text history.
+- **Data directory root must be writable — checked FIRST (#79, 2026-11-06).** The `Store` constructor, right
+  after `mkdirSync(dataDir)` and BEFORE the DB opens, runs `assertDataDirWritable` (`store/dataDirWritable.ts`):
+  one `mkdtemp` + `rmdir` of `.write-probe-*` in the root. `EACCES`/`EPERM`/`EROFS` → one `logger.fatal`
+  (dataDir, code, process uid, owner uid:gid, mode) and `DataDirNotWritableError`, so the boot stops and the
+  container restarts; any other error propagates. Why: Docker copies the image's `/app/data` owner into a
+  named volume only at creation, so a volume from before the non-root `node` user (2026-06-13) keeps a
+  root-owned root — existing uid-1000 files (the DB) kept working and healthchecks passed while every NEW
+  subfolder (`backups/` → the gate held forever, `team-brain/`, `pi-repo-copies/`) failed. `setup-host.sh`
+  detects the same state on the host before `up` (stat of the compose volume's mountpoint; skips what it
+  cannot see). The repair is the operator's, documented in README "Upgrade" → "Data volume ownership"
+  (tar backup, then `chown 1000:1000` + `chmod 0755` of the root only); Noah never repairs it, and no root
+  step in an entrypoint may touch `APP_DATA_DIR`. Tests: `tests/store-data-dir-writable.test.ts`.
 - **Retirement backup and quarantine (user decision 2026-10-29): no retirement ever deletes a FILE, and
   none deletes a ROW before the whole DB is backed up.** One per-boot gate in `StoreBase`
   (`retirementGate()`, helpers in `src/server/store/retirementBackup.ts`) carries a UTC stamp

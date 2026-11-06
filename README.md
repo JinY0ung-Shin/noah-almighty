@@ -191,7 +191,8 @@ never copied into this repository.
      `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key` (uid 1000, 0400 — pi's one-copy-per-service convention;
      compose mounts it into Noah as a secret, so the key never sits in `.env`), checks that pi's admin key
      is set and copies it the same way to `$PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key` (Noah serves pi's
-     admin panel at `/admin`, below).
+     admin panel at `/admin`, below), and — on an existing deployment — that the `noah-almighty-data`
+     volume's root is uid 1000 (detection only; Upgrade → "Data volume ownership").
 3. **Build and start everything:**
    ```bash
    docker compose up -d --build
@@ -366,6 +367,36 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   account created then comes back active, i.e. a trusted teammate, after the re-upgrade. After
   re-upgrading, re-check 관리자 ▸ 사용자 and suspend anyone who should not be on the team. Restore the
   `pre-retire-<stamp>.db` backup instead if the old groups must come back.
+- **Data volume ownership (#79).** The `noah-almighty-data` volume's ROOT must belong to uid 1000. Docker
+  copies the image's `/app/data` owner into a named volume only when it creates the volume, so a volume made
+  by an image from before the non-root `node` user (2026-06-13) can keep a root-owned root: files already in
+  it (the DB) stay usable, but Noah cannot create any new folder there — repository working copies
+  (`pi-repo-copies/`), the team brain (`team-brain/`) and the retirement backup (`backups/`, so every
+  retirement step stays held) all fail with `EACCES`. Both `setup-host.sh` (`error: volume … root is uid 0`)
+  and Noah's boot (a fatal `data directory /app/data is not writable` log, then exit — the container keeps
+  restarting) refuse this state. The repair is an operator action, root only, never recursive and never
+  `chmod 777`; take a backup first:
+
+  ```bash
+  docker compose stop noah-almighty
+  # 1. Back up the whole volume (contents, owners and modes) to ./noah-data-backup on the host.
+  mkdir -p noah-data-backup
+  docker compose run --rm --no-deps --user 0:0 -v "$PWD/noah-data-backup:/backup" --entrypoint sh \
+    noah-almighty -c 'tar -C /app/data -czf "/backup/noah-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz" .'
+  # 2. Look: the root's owner/mode, and any top-level entry NOT owned by uid 1000.
+  docker compose run --rm --no-deps --user 0:0 --entrypoint sh noah-almighty \
+    -c 'stat -c "%u:%g %a %n" /app/data; find /app/data -mindepth 1 -maxdepth 1 ! -uid 1000'
+  # 3. Give the ROOT (only) to uid 1000.
+  docker compose run --rm --no-deps --user 0:0 --entrypoint sh noah-almighty \
+    -c 'chown 1000:1000 /app/data && chmod 0755 /app/data && stat -c "%u:%g %a %n" /app/data'
+  sudo docker/pi/setup-host.sh   # now reports: ok     <project>_noah-almighty-data root (uid 1000, mode 755)
+  docker compose up -d
+  ```
+
+  An entry step 2 lists is a separate finding: `chown` it the same way, by name (`chown -R` only a folder you
+  have looked at). Existing data and encrypted secrets are untouched (`SESSION_SECRET` is unchanged). On the
+  next boot the retirement gate takes its backup — one `database backed up before retiring removed features`
+  log line — and only then runs the steps it held; repository open/sync and the team brain work again.
 - Existing SDK-era deployments: see "Moving an existing deployment to pi" below.
 
 ### Deck converter golden drift

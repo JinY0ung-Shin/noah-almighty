@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { encryptSecret } from "../crypto.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import logger from "../logger.js";
+import { DataDirNotWritableError, assertDataDirWritable } from "./dataDirWritable.js";
 import { RETIRED_COLUMNS, backupDatabase, retirementDataPresent, retirementStamp } from "./retirementBackup.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type {
@@ -303,6 +304,17 @@ export class StoreBase {
   constructor(config: AppConfig) {
     this.secret = config.sessionSecret;
     fs.mkdirSync(config.dataDir, { recursive: true });
+    // BEFORE the DB opens: a root-owned volume root (#79) stops the boot here,
+    // naming the operator's repair, instead of serving with every new folder
+    // (the retirement backup included) failing with EACCES.
+    try {
+      assertDataDirWritable(config.dataDir);
+    } catch (err) {
+      if (err instanceof DataDirNotWritableError) {
+        logger.fatal(err.detail, err.message);
+      }
+      throw err;
+    }
     this.db = new Database(config.dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");

@@ -19,6 +19,8 @@
 #   copies  it → $PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key, uid 1000, 0400, the same way: Noah serves
 #           pi's admin panel at /admin to Noah admins and injects this key (re-run after rotating pi's admin key)
 #   adds    PI_GATEWAY_HOME, PI_GATEWAY_SECRETS to Noah's .env (only when missing)
+#   checks  an EXISTING noah-almighty-data volume's root is uid 1000 (#79) — detection only: it fails with
+#           the repair to run (README.md "Upgrade" → "Data volume ownership"), it never changes the volume
 # Values are never printed.
 set -euo pipefail
 
@@ -105,6 +107,51 @@ add_env() {
 }
 add_env PI_GATEWAY_HOME "$PI_GATEWAY_HOME"
 add_env PI_GATEWAY_SECRETS "$SECRETS"
+
+# Noah's data volume ROOT must belong to uid 1000 (#79). Docker copies the image's /app/data owner into a named
+# volume only when it CREATES the volume, so one made by an image older than the non-root node user keeps a
+# root-owned root: Noah could then create no new folder in it (backups/, team-brain/, pi-repo-copies/). Noah's
+# own boot refuses that state too; this catches it before `up`. Detection only — the repair (a backup first)
+# is the operator's. Anything that cannot be determined here (no docker CLI, a remote daemon, no volume yet)
+# is reported and skipped.
+check_data_volume() {
+  local project volume mountpoint owner mode
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "skip   data volume check (no docker CLI on this host)"
+    return 0
+  fi
+  # `config` prints the project name first; nothing else of its output (which holds .env values) is kept.
+  project="$(cd "$REPO" && docker compose config 2>/dev/null | sed -n '1s/^name: *//p')" || true
+  if [ -z "$project" ]; then
+    echo "skip   data volume check (docker compose config did not resolve the project name)"
+    return 0
+  fi
+  volume="$(docker volume ls -q --filter "label=com.docker.compose.project=$project" \
+    --filter label=com.docker.compose.volume=noah-almighty-data 2>/dev/null | head -n 1)" || true
+  if [ -z "$volume" ]; then
+    echo "ok     no noah-almighty-data volume yet (project $project): compose creates it uid $NOAH_UID"
+    return 0
+  fi
+  mountpoint="$(docker volume inspect -f '{{ .Mountpoint }}' "$volume" 2>/dev/null)" || true
+  if [ -z "$mountpoint" ] || [ ! -d "$mountpoint" ]; then
+    echo "skip   data volume check ($volume is not on this host's filesystem; Noah's boot still checks it)"
+    return 0
+  fi
+  owner="$(stat -c %u "$mountpoint")"
+  mode="$(stat -c %a "$mountpoint")"
+  if [ "$owner" = "$NOAH_UID" ] && [ $(( 8#$mode & 8#200 )) -ne 0 ]; then
+    echo "ok     $volume root (uid $NOAH_UID, mode $mode)"
+    return 0
+  fi
+  echo "error: volume $volume root is uid $owner mode $mode — Noah (uid $NOAH_UID) cannot create folders in it" >&2
+  echo "       (backups/, team-brain/, pi-repo-copies/). Back the volume up, then repair its root ONLY:" >&2
+  echo "       README.md \"Upgrade\" → \"Data volume ownership\". Then re-run this script." >&2
+  exit 1
+}
+
+echo
+echo "== noah data volume"
+check_data_volume
 
 echo
 echo "next: docker compose up -d --build   (README.md \"Deployment\")"
