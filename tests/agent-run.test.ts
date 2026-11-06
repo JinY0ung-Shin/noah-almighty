@@ -593,6 +593,58 @@ describe("pi run loop (fake gateway)", () => {
     }
   });
 
+  // User decision 2026-11-06: with no pick Noah runs pi's `falcon` tier while pi
+  // offers it; pi itself is untouched (no tier → pi's own default, as before).
+  it("runs Noah's default `falcon` tier when nothing is picked, and falls back from it onto pi's default", async () => {
+    const env = setup({}, [...PI_MODELS, "falcon"]);
+    const chat = await plan(env, env.baseRequest);
+    expect(chat.caps.userModel).toBeUndefined();
+    expect(chat.caps.effectiveModel).toBe("falcon");
+    expect(chat.caps.modelChain).toEqual(["falcon"]);
+    // An unattended run keeps its ONE fallback onto pi's own default.
+    expect((await plan(env, { ...routine(env), model: undefined })).caps.modelChain).toEqual(["falcon", undefined]);
+    // A pick still wins.
+    expect((await plan(env, routine(env))).caps.effectiveModel).toBe("m-opus");
+    // A fresh session names the tier (pi would otherwise use ITS default).
+    const { client, requests } = fakeClient([() => textTurn("resp_falcon_1", "hi")]);
+    await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents(), undefined, { client });
+    expect(requests.map((r) => r.model)).toEqual(["falcon"]);
+  });
+
+  // Review: the fallback entry is pi's OWN default — its effort is clamped for
+  // THAT model, never for falcon (pi would 400 an effort its default lacks).
+  it("clamps the fallback attempt's effort for pi's default, not for falcon", async () => {
+    const env = setup();
+    piServicesFor(env.store, env.config).models = createPiModelCatalog({
+      listModels: async () => [
+        { id: "falcon", reasoning: { efforts: ["low", "high", "xhigh"], defaultEffort: "high" } },
+        { id: "small", default: true, reasoning: { efforts: ["low", "high"], defaultEffort: "high" } },
+      ],
+    });
+    const { client, requests } = fakeClient([
+      () => new PiGatewayError("unavailable", { status: 503, retryable: true }),
+      () => textTurn("resp_fb_effort", "fell back"),
+    ]);
+    await runPiAgent({ ...routine(env), model: undefined, effort: "xhigh" }, [], env.config, env.store, makeEvents(), undefined, {
+      client,
+      retry: { attempts: 1 },
+    });
+    expect(requests.map((r) => [r.model, r.reasoningEffort])).toEqual([
+      ["falcon", "xhigh"],
+      [undefined, "high"],
+    ]);
+  });
+
+  it("never falls back onto the same model: falcon that IS pi's default gets one attempt", async () => {
+    const env = setup();
+    piServicesFor(env.store, env.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "falcon", default: true }, { id: "m-opus" }],
+    });
+    const caps = (await plan(env, { ...routine(env), model: undefined })).caps;
+    expect(caps.effectiveModel).toBe("falcon");
+    expect(caps.modelChain).toEqual(["falcon"]);
+  });
+
   it("treats every stored model as the default while pi's list is unavailable", async () => {
     const env = setup({}, []);
     const run = await plan(env, routine(env));

@@ -1361,8 +1361,9 @@ export interface AgentRequest {
   /**
    * User-chosen pi model id for this conversation, from the chat composer (an
    * id from pi-gateway's live model list, `agent/pi/modelCatalog.ts`). Resolved
-   * in `runCapabilities.ts`: this pick if pi still offers it, then the admin
-   * override if pi offers it, else pi-gateway's default model (no model is sent).
+   * in `runCapabilities.ts`: this pick if pi still offers it, else Noah's
+   * default — pi's `falcon` tier while pi offers it, else pi-gateway's own
+   * default model (then no model is sent).
    * Unset → that same resolution without a pick.
    */
   model?: string;

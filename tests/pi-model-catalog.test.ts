@@ -5,6 +5,8 @@ import {
   catalogDefaultModelId,
   catalogEffortSupport,
   createPiModelCatalog,
+  defaultRunModelId,
+  noahDefaultModel,
   visionForCatalogModel,
   warnRetiredModelEnv,
 } from "../src/server/agent/pi/modelCatalog.js";
@@ -227,6 +229,27 @@ describe("per-model capabilities from pi's list (review #9, #12)", () => {
     expect(catalogEffortSupport(models, undefined)).toEqual(reasoning);
     expect(catalogEffortSupport(models, "plain")).toBeNull();
     expect(catalogEffortSupport(models, "older")).toBeUndefined();
+  });
+});
+
+describe("Noah's default model: pi's falcon tier (2026-11-06)", () => {
+  const reasoning = { efforts: ["low", "high"], defaultEffort: "high" };
+  const withTier = [
+    { id: "falcon", server: "vllm", imageInput: false, reasoning },
+    { id: "deep", server: "vllm", default: true as const, imageInput: true, reasoning: null },
+  ];
+  it("prefers the falcon tier while pi offers it, else pi's own default", () => {
+    expect(noahDefaultModel(withTier)).toBe("falcon");
+    expect(defaultRunModelId(withTier)).toBe("falcon");
+    const noTier = withTier.slice(1);
+    expect(noahDefaultModel(noTier)).toBeUndefined();
+    expect(defaultRunModelId(noTier)).toBe("deep");
+    expect(defaultRunModelId([])).toBeUndefined();
+  });
+  it("judges a no-pick run's vision and efforts by falcon, not by pi's default", () => {
+    expect(visionForCatalogModel(withTier, undefined)).toBe(false);
+    expect(catalogEffortSupport(withTier, undefined)).toEqual(reasoning);
+    expect(visionForCatalogModel(withTier.slice(1), undefined)).toBe(true);
   });
 });
 

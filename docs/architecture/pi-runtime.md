@@ -648,16 +648,24 @@ successfully → empty, and the `local` stub's is always empty (the client then 
 already in flight (which may have read the old settings) never replaces a list fetched since — so a model whose
 image input was just turned off stops getting image blocks at once, as the retired Noah vision policy did.
 
-- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else pi's default. A stored
-  value pi does not offer (a legacy tier alias like `opus`, a model pi dropped, an SDK-era Claude id) reads as unset —
-  no migration rewrites old values. describe_system names the id and its source (`… (chosen for this conversation in
-  the composer)` / `pi-gateway's default model (default — chosen on pi-gateway's admin LLM page; …)`).
+- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else **Noah's default = pi's
+  `falcon` tier** (`NOAH_DEFAULT_MODEL`, `noahDefaultModel`; user decision 2026-11-06) while pi lists it, else pi's own
+  default. pi is untouched: its tiers (`eagle`/`falcon`/`swift`, pi ≥ 344ef09) are admin-set names listed first in
+  `/v1/models` with their target model's input/reasoning, and a session opened on a tier follows it when the admin
+  repoints it; Noah only SENDS `falcon` (a new session names it explicitly — omitting `model` would be pi's default).
+  Every "no pick" lookup (vision, efforts, the bootstrap's `defaultModel`/`defaultVision`/`defaultReasoning`, the
+  failure bubble) goes through `defaultRunModelId` — EXCEPT the fallback chain's `undefined` entry, which is pi's OWN
+  default: `runPiAgent`'s `effortOn` clamps it by `catalogDefaultModelId`, never by falcon. It covers chat, routines, consultations and generators alike. A
+  stored value pi does not offer (a legacy alias like `opus`, a model pi dropped, an SDK-era Claude id) reads as unset
+  — no migration rewrites old values. describe_system names the id and its source (`… (chosen for this conversation
+  in the composer)` / `falcon (default — Noah's default is pi-gateway's \`falcon\` tier …)` / `pi-gateway's default
+  model (default — chosen on pi-gateway's admin LLM page; …)`).
 - **Vision** (review #12): pi's `/v1/models` entry carries `input` (`["text"]` / `["text","image"]`, parsed to
   `imageInput`; absent on an older pi = unknown). `visionForCatalogModel` (`modelCatalog.ts`) is pi's setting ALONE:
   only `imageInput: false` makes a model text-only (pi would 400 `unsupported_image_input`); a model pi did not
   describe, an id not in the list and an empty list (the `local` stub, pi never answered) read as vision ON — the
-  pre-retirement default, so a wrong guess shows as pi's visible 400 rather than a silently image-less turn. pi's
-  default model is resolved by its catalog id (`catalogDefaultModelId`). Image turns on a text-only model go file
+  pre-retirement default, so a wrong guess shows as pi's visible 400 rather than a silently image-less turn. The
+  default model is resolved by its catalog id (`defaultRunModelId`: `falcon`, else `catalogDefaultModelId`). Image turns on a text-only model go file
   mode (`chat-sse-media.md`). No 400 retry: Noah ships with its pi (U9).
 - **Effort** (review #9): pi's entry carries `reasoning` — `{efforts, default_effort}` for a reasoning model (pi 400s
   `unsupported_reasoning_effort` for any other effort; its default list stops at `high`), `null` for one that does not
@@ -669,8 +677,10 @@ image input was just turned off stops getting image blocks at once, as the retir
   prompt states the rule (`PI_EFFORT_CLAMP_SENTENCE`), and the composer greys out levels the pane's model would not
   take as picked (bootstrap `models[].reasoning` / `defaultReasoning`; the current pick stays selectable). No 400
   retry, as for vision.
-- **Fallback** (`request.modelFallback`, unattended runs): `[resolved, default]`, so ONE retry on pi's default model
-  in the same session; a run already on the default gets one attempt.
+- **Fallback** (`request.modelFallback`, unattended runs): `[resolved, default]`, so ONE retry on pi's OWN default model
+  in the same session (also from `falcon`); a run already on pi's default gets one attempt — judged by id only, so a
+  `falcon` that points at the same real model as a non-tier pi default still retries it once (`/v1/models` does not
+  expose a tier's target).
 - **Writes** validate against the list: an unknown non-empty id → 400, pi never reachable → 503 (`offeredModelIdsOr503`,
   `routes/_shared.ts`). The chat stream's `model` is NOT validated: it is stored as sent ("" clears), so a pick
   survives pi being briefly unreachable, and the run applies it only while pi offers it.

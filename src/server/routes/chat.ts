@@ -100,7 +100,7 @@ import {
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import { MAX_MODEL_ID_CHARS, catalogDefaultModelId, catalogModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
+import { MAX_MODEL_ID_CHARS, catalogModel, defaultRunModelId, noahDefaultModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   attachRunClient,
@@ -906,9 +906,10 @@ export async function executeChatTurn(
   }
 
   // This turn's model, mirroring runCapabilities' resolution (this turn's pick >
-  // stored pick > pi-gateway's default model, the pick only while pi offers it
+  // stored pick > the default model (pi's `falcon` tier, else pi's own default),
+  // the pick only while pi offers it
   // — its live list, read AFTER the rewind plan above). Its vision (pi's image
-  // setting, pi's default model looked up by its id — visionForCatalogModel)
+  // setting, the default model looked up by its id — visionForCatalogModel)
   // gates the upload below AND the regenerate image re-feed; the run itself
   // recomputes the same value. It also names the model a transient failure
   // bubble blames.
@@ -2622,9 +2623,9 @@ export async function executeChatTurn(
       // this is how a stuck model gets unblocked. Every other failure gets a Korean
       // lead with `detail` appended: the runtime's own text is English, so it can never
       // be the whole bubble. The technical `detail` still goes to logs/audit above.
-      const failedModelLabel = turnModel ? `${turnModel} 모델` : "기본 모델";
-      // No pick = pi's default model ran: never offer the model that just failed.
-      const failedModel = turnModel ?? catalogDefaultModelId(piModels);
+      const failedModelLabel = turnModel ? `${turnModel} 모델` : noahDefaultModel(piModels) ? `기본 모델(${noahDefaultModel(piModels)})` : "기본 모델";
+      // No pick = the default model ran: never offer the model that just failed.
+      const failedModel = turnModel ?? defaultRunModelId(piModels);
       const alternatives = piModels
         .map((model) => model.id)
         .filter((id) => id !== failedModel)
