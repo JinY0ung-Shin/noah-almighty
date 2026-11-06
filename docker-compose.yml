@@ -201,6 +201,21 @@ services:
     read_only: true
     restart: "no"
 
+  # Build-only: pi's Node base image plus CA_CERT_FILE for Node (docker/pi/node-ca.Dockerfile). pi's
+  # gateway, sandboxd and mcp-broker build FROM it (docker/pi/compose.override.yml sets pi's NODE_IMAGE
+  # build arg), so `npm ci` against an HTTPS mirror behind a corporate CA verifies (#77).
+  pi-node-builder:
+    image: noah-almighty/pi-node-builder:local
+    build:
+      context: .
+      dockerfile: docker/pi/node-ca.Dockerfile
+      args:
+        CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
+    command: ["true"]
+    network_mode: none
+    read_only: true
+    restart: "no"
+
 secrets:
   # Noah's own copy of pi's service key (uid 1000, 0400): docker/pi/setup-host.sh.
   pi_gateway_api_key:

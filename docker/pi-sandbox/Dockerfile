@@ -88,8 +88,11 @@ RUN if [ -n "$PIP_INDEX_URL" ]; then \
 # /usr/local/lib/node link is Node's built-in global folder (<prefix>/lib/node), which still resolves when
 # a caller drops NODE_PATH from the environment. No deck.sh change is needed. Playwright never downloads a
 # browser. --prefix overrides the base image's NPM_CONFIG_PREFIX (/workspace/.home/.npm-global).
+# Node never reads the system trust store: NODE_EXTRA_CA_CERTS hands npm the system bundle, which holds
+# CA_CERT_FILE after the step above, so an HTTPS npm mirror behind a corporate CA verifies (#77).
 ARG PLAYWRIGHT_CORE_VERSION=1.61.1
-RUN NPM_CONFIG_CACHE=/tmp/npm-cache npm install -g --prefix /usr/local --no-fund --no-audit \
+RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt NPM_CONFIG_CACHE=/tmp/npm-cache \
+    npm install -g --prefix /usr/local --no-fund --no-audit \
       "playwright-core@${PLAYWRIGHT_CORE_VERSION}" \
   && rm -rf /tmp/npm-cache /root/.npm \
   && mkdir -p /usr/local/lib/node \

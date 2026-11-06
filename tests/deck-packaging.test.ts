@@ -51,7 +51,8 @@ describe("Dockerfile — the Noah image carries no deck converter", () => {
   // LibreOffice + poppler for share_file's approximate previews and the fonts they use.
   const baseApt = indexOf(/^RUN .*apt-get install -y --no-install-recommends build-essential /);
   const npmCopy = dockerfile.indexOf("COPY package.json package-lock.json* ./");
-  const npmInstall = indexOf(/^RUN .*npm install;/);
+  // The app install (not the hex-ssh `npm install -g` layer before package.json is copied).
+  const npmInstall = indexOf(/^RUN (?!.*npm install -g).*\bnpm install\b/);
   const copyFontconf = dockerfile.indexOf("COPY docker/fontconfig/60-noah-deck-fonts.conf /etc/fonts/conf.d/");
   const copyPptx = dockerfile.indexOf("COPY default-skills/skills/pptx ./default-skills/skills/pptx");
   // The app COPY leaves out the pptx tree: the font layer already put it in place.

@@ -151,20 +151,38 @@
   https origin) or hand-add it; the one-click updater cannot bridge that gap because it rides the
   very page↔extension channel that broke. The container runs as `node` (uid 1000): a root-owned
   mode-600 key in `./docker/tls` reads as EACCES at boot — make the PEMs readable by uid 1000.
-- **`CA_CERT_FILE` goes through ONE script: `docker/install-extra-ca.sh <pem> <prefix>`** (Noah `Dockerfile`,
-  `docker/pi-sandbox/Dockerfile`, `docker/egress/proxy.Dockerfile`, `docker/pi/golang-ca.Dockerfile`; Debian and
-  Alpine). It splits a PEM bundle into one `<prefix>-NN.crt` per certificate — `update-ca-certificates` hashes
-  only one certificate per file and just WARNS (`does not contain exactly one certificate or CRL: skipping`),
-  exit 0 — then fails the build unless every certificate's first base64 line is in
-  `/etc/ssl/certs/ca-certificates.crt`. The placeholder `docker/extra-ca.crt.example` is a no-op. A new image
-  that needs the CA copies the script and calls it the same way. Tests: `tests/docker-extra-ca.test.ts`.
-- **pi's Go build trusts `CA_CERT_FILE` through pi's own `GO_IMAGE` build arg** (issue #76): the build-only
-  `pi-go-builder` service (`docker/pi/golang-ca.Dockerfile`, FROM pi's Go image plus the CA) is handed to pi's
-  `egress-proxy` build by `docker/pi/compose.override.yml` (`args.GO_IMAGE: pi-go-builder` +
-  `additional_contexts: service:pi-go-builder`), so pi's Dockerfile and compose file stay untouched and
-  `go mod download && go mod verify` runs with TLS and the checksum database ON (never `GOSUMDB=off`).
-  `GO_BASE_IMAGE` must equal the pinned pi Dockerfile's `GO_IMAGE` default — the test fails when a pi bump
-  moves it; update both together.
+- **`CA_CERT_FILE` (#76, #77) is ONE file directly under `docker/` (`.crt`/`.pem`, never `docker/tls/`) and
+  reaches every build that fetches over HTTPS, with verification ON** — never `GOSUMDB=off`, `strict-ssl=false`
+  or `NODE_TLS_REJECT_UNAUTHORIZED=0` (the Noah image's npm steps used the last two until #77).
+  - **System store: `docker/install-extra-ca.sh <pem> <prefix>`** (Noah `Dockerfile`, `docker/pi-sandbox/Dockerfile`,
+    `docker/egress/proxy.Dockerfile`, `docker/pi/golang-ca.Dockerfile`; Debian and Alpine). It splits a PEM bundle
+    into one `<prefix>-NN.crt` per certificate — `update-ca-certificates` hashes only one certificate per file and
+    just WARNS (`does not contain exactly one certificate or CRL: skipping`), exit 0 — finds the updater on PATH
+    or in `/usr/sbin`, `/usr/local/sbin`, `/sbin` (pi's sandbox base sets a build PATH without sbin), then fails
+    the build unless every certificate's first base64 line is in `/etc/ssl/certs/ca-certificates.crt`. The
+    placeholder `docker/extra-ca.crt.example` is a no-op.
+  - **Node never reads the system store.** Every `npm install` in the Noah image and the deck sandbox runs with
+    `NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt` (the bundle that now holds the CA). A new Node network
+    step does the same.
+  - **Build contexts must admit the inputs.** The root `.dockerignore` does; `docker/pi-sandbox/Dockerfile.dockerignore`
+    is an allowlist and lists `docker/install-extra-ca.sh`, `docker/*.crt`, `docker/*.pem`. A new per-Dockerfile
+    ignore file must too — the test parses both and pins that no other one exists.
+  - **pi's builds take the CA through pi's own base-image build args**, set by `docker/pi/compose.override.yml`
+    with `additional_contexts: service:<builder>`, so pi's Dockerfile and compose file stay untouched:
+    `egress-proxy` gets `GO_IMAGE: pi-go-builder` (`docker/pi/golang-ca.Dockerfile`: pi's Go image + the system
+    store), and gateway / sandboxd / mcp-broker get `NODE_IMAGE: pi-node-builder` (`docker/pi/node-ca.Dockerfile`:
+    pi's Node image + `NODE_EXTRA_CA_CERTS=/etc/noah-node-ca.pem`, written by `docker/pi/node-ca-bundle.cjs` as
+    Node's own roots plus every CA certificate, each parsed as X.509 or the build fails; roots keep it valid when
+    no CA is set). `node:22-bookworm-slim` has no `ca-certificates`, and installing it would need pi's apt mirror
+    args, which live in pi's `.env` and are not visible to Noah's services — hence the Node-only file. The ENV is
+    inherited by pi's runtime images: gateway and broker override it from pi's compose (their own mount, or empty
+    = unset); sandboxd just trusts the same roots plus the operator CA. pi's own `sandbox-image` takes its CA from
+    `NODE_EXTRA_CA_CERTS` (a host path) as a build secret, pi's own mechanism. `GO_BASE_IMAGE` / `NODE_BASE_IMAGE`
+    must equal the pinned pi Dockerfile's `GO_IMAGE` / `NODE_IMAGE` defaults — the test fails when a pi bump
+    moves one; update both together.
+  - Tests: `tests/docker-extra-ca.test.ts` (scripts run for real against a temp store, ignore-file parsing,
+    wiring pins). Real builds behind a test-CA HTTPS mirror: opt-in `NOAH_DOCKER_CA_E2E=1
+    rtk proxy npx vitest run tests/docker-ca-e2e.test.ts` (needs docker, openssl, internet; several minutes).
 - **Dockerfile CA trust is PER-STAGE.** The `CA_CERT_FILE`→`update-ca-certificates` block
   lives in the `base` stage and covers ONLY that stage — an HTTPS fetch (curl/npm/cargo) in a
   *different* earlier stage hits the corporate intercepting proxy with no trusted CA and dies

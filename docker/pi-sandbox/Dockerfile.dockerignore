@@ -1,11 +1,15 @@
 # Build context of docker/pi-sandbox/Dockerfile (BuildKit reads <Dockerfile>.dockerignore instead of the
 # root .dockerignore). Only what that Dockerfile copies or bind-mounts: the pptx skill tree (fonts,
-# requirements, the self-test), this directory, and the CA placeholder / an operator's CA file.
+# requirements, the self-test), this directory, the CA installer, and the CA placeholder / an operator's
+# CA file. CA_CERT_FILE must therefore be a .crt or .pem file DIRECTLY under docker/ (docker/tls/, which
+# holds private keys, stays out); tests/docker-extra-ca.test.ts checks this file admits it (#77).
 *
 !default-skills/skills/pptx/
 !docker/pi-sandbox/
+!docker/install-extra-ca.sh
 !docker/extra-ca.crt.example
-!docker/tls-fullchain.crt
+!docker/*.crt
+!docker/*.pem
 **/__pycache__/
 **/*.pyc
 **/.build/

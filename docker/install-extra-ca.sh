@@ -13,18 +13,38 @@
 # TLS and checksum verification stay ON everywhere: this script is the fix for "x509: certificate
 # signed by unknown authority", never GOSUMDB=off or pip --trusted-host.
 #
-# Test seams (tests/docker-extra-ca.test.ts): EXTRA_CA_DIR, EXTRA_CA_BUNDLE, EXTRA_CA_UPDATE.
+# update-ca-certificates is found on PATH or in the sbin directories: a derived image's build PATH may
+# leave /usr/sbin out (pi's sandbox image sets a user PATH), and the tool is still there (#77).
+#
+# Test seams (tests/docker-extra-ca.test.ts): EXTRA_CA_DIR, EXTRA_CA_BUNDLE, EXTRA_CA_UPDATE,
+# EXTRA_CA_SBIN_DIRS.
 set -eu
 
 src=${1:?usage: install-extra-ca.sh <pem-file> <name-prefix>}
 prefix=${2:?usage: install-extra-ca.sh <pem-file> <name-prefix>}
 dir=${EXTRA_CA_DIR:-/usr/local/share/ca-certificates}
 bundle=${EXTRA_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}
-update=${EXTRA_CA_UPDATE:-update-ca-certificates}
+update=${EXTRA_CA_UPDATE:-}
 
 if ! grep -q -- "-----BEGIN CERTIFICATE-----" "$src"; then
   echo "No extra CA certificate configured; skipping trust-store update."
   exit 0
+fi
+
+if [ -z "$update" ]; then
+  update=$(command -v update-ca-certificates 2>/dev/null || true)
+fi
+if [ -z "$update" ]; then
+  for sbin in ${EXTRA_CA_SBIN_DIRS:-/usr/sbin /usr/local/sbin /sbin}; do
+    if [ -x "$sbin/update-ca-certificates" ]; then
+      update="$sbin/update-ca-certificates"
+      break
+    fi
+  done
+fi
+if [ -z "$update" ]; then
+  echo "install-extra-ca: update-ca-certificates not found (install the ca-certificates package first)" >&2
+  exit 1
 fi
 
 mkdir -p "$dir"

@@ -12,7 +12,10 @@ npm-debug.log*
 test-results/
 playwright-report/
 coverage/
-docker/tls-fullchain.crt
+# Operator CA files (CA_CERT_FILE lives directly under docker/ as .crt/.pem); the
+# placeholder docker/extra-ca.crt.example stays tracked.
+docker/*.crt
+docker/*.pem
 docker/tls/*
 !docker/tls/.gitkeep
 .claude.local.md

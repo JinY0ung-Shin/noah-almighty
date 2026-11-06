@@ -59,9 +59,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   && command -v pdftoppm fc-cache \
   && python3 -c "import cryptography, paramiko"
 
-# Trust an optional corporate proxy CA so git/curl/node can clone over HTTPS
-# through an intercepting proxy. Folding it into the system bundle covers git
-# (libcurl), curl, and node, so no per-tool env is needed.
+# Trust an optional corporate proxy CA so git/curl can clone over HTTPS through
+# an intercepting proxy. Folding it into the system bundle covers git (libcurl)
+# and curl. Node never reads the system store, so the npm steps below pass the
+# same bundle through NODE_EXTRA_CA_CERTS (TLS verification stays ON, #77).
 #
 # CA_CERT_FILE is the path (relative to the build context) of the cert to trust.
 # Override it at build time to point at your own CA:
@@ -91,11 +92,10 @@ WORKDIR /app
 ARG HEX_SSH_MCP_VERSION=1.9.2
 RUN --mount=type=cache,target=/root/.npm \
   if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
-      printf 'registry=%s\nstrict-ssl=false\n' "$NPM_CONFIG_REGISTRY" > /root/.npmrc; \
-      NODE_TLS_REJECT_UNAUTHORIZED=0 npm install -g "@levnikolaevich/hex-ssh-mcp@${HEX_SSH_MCP_VERSION}"; \
-    else \
-      npm install -g "@levnikolaevich/hex-ssh-mcp@${HEX_SSH_MCP_VERSION}"; \
+      printf 'registry=%s\n' "$NPM_CONFIG_REGISTRY" > /root/.npmrc; \
     fi \
+  && NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+     npm install -g "@levnikolaevich/hex-ssh-mcp@${HEX_SSH_MCP_VERSION}" \
   && rm -f /root/.npmrc \
   && PKG_DIR="$(npm root -g)/@levnikolaevich/hex-ssh-mcp" \
   && BIN_REL="$(node -e "const b=require('$PKG_DIR/package.json').bin; process.stdout.write(typeof b==='string'?b:Object.values(b)[0])")" \
@@ -111,20 +111,19 @@ RUN --mount=type=cache,target=/root/.npm \
 # Always use npm install (not npm ci) so the build doesn't fail when the lock
 # file drifts out of sync with package.json, and so a corporate mirror can
 # resolve slightly different dependency versions than the lock file expects.
-# When a custom NPM_CONFIG_REGISTRY is provided we also set strict-ssl=false
-# for HTTP mirrors with self-signed certs and NODE_TLS_REJECT_UNAUTHORIZED=0
-# for node-gyp header downloads. The npm cache (tarballs + prebuilt native
+# TLS stays verified: NODE_EXTRA_CA_CERTS (the system bundle, which holds
+# CA_CERT_FILE) covers npm, prebuilt-binary and node-gyp header downloads
+# behind a corporate CA — never strict-ssl=false or
+# NODE_TLS_REJECT_UNAUTHORIZED=0. The npm cache (tarballs + prebuilt native
 # binaries) and node-gyp's header cache are BuildKit cache mounts, so a
 # dependency change re-fetches only what changed and none of it bloats the layer.
 COPY package.json package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm \
     --mount=type=cache,target=/root/.cache/node-gyp \
   if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
-      printf 'registry=%s\nstrict-ssl=false\n' "$NPM_CONFIG_REGISTRY" > .npmrc; \
-      NODE_TLS_REJECT_UNAUTHORIZED=0 npm install; \
-    else \
-      npm install; \
+      printf 'registry=%s\n' "$NPM_CONFIG_REGISTRY" > .npmrc; \
     fi \
+  && NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install \
   && rm -f .npmrc
 
 # The pptx skill's vendored OFL fonts, registered with fontconfig for LibreOffice's

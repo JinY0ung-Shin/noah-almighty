@@ -290,13 +290,22 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   release download.
 - **pi-gateway's images:** `APT_MIRROR_URL`, `APT_SECURITY_MIRROR_URL`, `GOPROXY` in pi-gateway's `.env`;
   `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL` and `GOPROXY` are shared with Noah's (Noah's `.env` wins). pi's
-  `egress-proxy` is built FROM Noah's `pi-go-builder` image (pi's Go builder plus `CA_CERT_FILE`), so an HTTPS
-  `GOPROXY` behind a corporate CA verifies without `GOSUMDB=off`.
-- **Corporate CA (`CA_CERT_FILE`):** one certificate or a PEM bundle of several, as a path inside the build
-  context. Every image above that installs it (Noah, deck sandbox, `pi-go-builder`, the egress overlay's proxy)
-  splits a bundle one certificate per file (`docker/install-extra-ca.sh`), and a certificate that does not reach
-  the trust store fails the build. With the CA in place, leave `PIP_TRUSTED_HOST` unset: it only switches pip's
-  TLS check off for a host.
+  `egress-proxy` is built FROM Noah's `pi-go-builder` image and its Node services FROM `pi-node-builder`, so an
+  HTTPS `GOPROXY` or npm mirror behind a corporate CA verifies (next bullet).
+- **Corporate CA (`CA_CERT_FILE`):** one certificate or a PEM bundle of several, as a `.crt` or `.pem` file
+  directly under `docker/` (not `docker/tls/`). Every build that fetches over HTTPS trusts it with TLS
+  verification on:
+  - the Noah image and the deck sandbox: the system store (`docker/install-extra-ca.sh` splits a bundle one
+    certificate per file and fails the build when one does not reach the store), and npm through
+    `NODE_EXTRA_CA_CERTS`, since Node never reads the system store;
+  - pi's `egress-proxy` Go build: FROM `pi-go-builder` (pi's Go image plus the CA);
+  - pi's gateway, sandboxd and mcp-broker `npm ci`: FROM `pi-node-builder` (pi's Node image plus the CA as
+    `NODE_EXTRA_CA_CERTS`, `docker/pi/node-ca.Dockerfile`);
+  - the egress overlay's proxy.
+
+  `strict-ssl=false`, `NODE_TLS_REJECT_UNAUTHORIZED=0` and `GOSUMDB=off` are never needed. With the CA in place,
+  leave `PIP_TRUSTED_HOST` unset: it only switches pip's TLS check off for a host. An HTTPS npm mirror now needs
+  `CA_CERT_FILE` even for the Noah image, which used to skip verification for any mirror.
 
 ### Upgrade
 

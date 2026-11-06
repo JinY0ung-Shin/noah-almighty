@@ -2,6 +2,16 @@
 # code and compose file stay untouched; this is instance configuration, merged onto pi's file the way a
 # docker-compose.override.yml would be. Relative paths here would resolve against the pi-gateway checkout,
 # so there are none. Variables come from Noah's .env / the shell first, then pi-gateway's own .env.
+
+# pi's Node services (gateway, sandboxd, mcp-broker) build FROM ${NODE_IMAGE}; hand them Noah's
+# CA-trusting Node base (the `pi-node-builder` service in docker-compose.yml, docker/pi/node-ca.Dockerfile)
+# so `npm ci` verifies an HTTPS npm mirror behind CA_CERT_FILE (#77). Merged onto pi's own build args.
+x-pi-node-builder: &pi-node-builder
+  args:
+    NODE_IMAGE: pi-node-builder
+  additional_contexts:
+    pi-node-builder: service:pi-node-builder
+
 services:
   # Every user sandbox runs Noah's deck-capable image (docker/pi-sandbox, built FROM pi's own sandbox
   # image by the `pi-sandbox-image` service). pi's `pi-gateway/sandbox:latest` stays pi's own build.
@@ -11,6 +21,7 @@ services:
     depends_on:
       pi-sandbox-image:
         condition: service_completed_successfully
+    build: *pi-node-builder
 
   # pi unloads a session after SESSION_IDLE_SECONDS without a turn and rebuilds it on the next one,
   # re-listing every Noah MCP server through the broker — the step that saturates gateway and broker
@@ -20,6 +31,7 @@ services:
   gateway:
     environment:
       SESSION_IDLE_SECONDS: ${NOAH_PI_SESSION_IDLE_SECONDS:-1800}
+    build: *pi-node-builder
 
   # The broker calls Noah's /mcp/<server> over a network only it and Noah are on, from a PINNED address:
   # Noah's NOAH_MCP_ALLOWED_CIDRS defaults to exactly that address (/32), so neither the network's
@@ -29,6 +41,7 @@ services:
     networks:
       noah-mcp:
         ipv4_address: ${NOAH_MCP_BROKER_IP:-172.16.248.10}
+    build: *pi-node-builder
 
   # pi builds egress-proxy FROM ${GO_IMAGE}; hand it Noah's CA-trusting Go builder (the `pi-go-builder`
   # service in docker-compose.yml, docker/pi/golang-ca.Dockerfile) so `go mod download` trusts

@@ -90,7 +90,7 @@ describe("docker-compose.yml — pi-gateway is included from its submodule, neve
 
   it("defines no service or network whose name pi's compose already uses", () => {
     const own = [...services.matchAll(/^ {2}([a-z][\w-]*):$/gm)].map((m) => m[1]);
-    expect(own.sort()).toEqual(["noah-almighty", "pi-go-builder", "pi-sandbox-image", "pi-setup"]);
+    expect(own.sort()).toEqual(["noah-almighty", "pi-go-builder", "pi-node-builder", "pi-sandbox-image", "pi-setup"]);
     for (const name of own) expect(PI_SERVICES).not.toContain(name);
     // The optional egress overlay is merged by `-f` AFTER the include: a same-named service there
     // would silently rewrite pi's (verified with `docker compose config`).
