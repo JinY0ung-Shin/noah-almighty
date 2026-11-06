@@ -277,9 +277,6 @@ export function rewindTurnState(rewind: AgentRewindInfo): string {
   );
 }
 
-/** Product-wide UI capability; never reads private DM content or presence into agent context. */
-export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in teammates via the 메시지 dock at the bottom-right corner of the screen (a collapsible chat window available on every view). It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";
-
 /**
  * 공용 MCP 서버 lines (`planSharedMcpRun` states) — ONE wording for both
  * metacognition surfaces: the prompt's standing section and describe_system.

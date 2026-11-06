@@ -4,7 +4,6 @@ import { normalizeGithubHost } from "../marketplace.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
 import { kstDateTimeString } from "../routineSchedule.js";
 import {
-  DIRECT_MESSAGE_STATE,
   GROUP_REPOS_RETIRED_SENTENCE,
   gettingStartedGaps,
   PI_NO_ASK_USER_SENTENCE,
@@ -1012,7 +1011,6 @@ export function buildSystemPromptAppend(
   if (piSkillsBlock) {
     lines.push(piSkillsBlock);
   }
-  lines.push(DIRECT_MESSAGE_STATE);
   lines.push(
     "Official Noah usage manual — feature index (not a claim that every feature is enabled):\n" +
       systemManualIndex(true) +

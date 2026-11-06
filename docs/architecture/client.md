@@ -147,10 +147,9 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   … in `onMount` during the app's initial mount). That layout runs while the `@font-face` Korean
   subsets are still UNLOADED, and in headless Chromium the text it shaped can stay on the system
   fallback for good even after every face reports `loaded` — `document.fonts.check()`/`ready` say
-  fine, the pixels are tofu. The DM dock's inset measurement did exactly this and turned the rail's
-  탐색/비우기/진영 into boxes in three visual baselines (bisected 2026-09-11 with CDP
-  `CSS.getPlatformFontsForNode`; fix = defer the measurement behind a double `requestAnimationFrame`,
-  `DirectMessageDock.svelte`). The visual specs' `waitForKoreanFont` now ends with
+  fine, the pixels are tofu. The (since removed) DM dock's inset measurement did exactly this and turned
+  the rail's 탐색/비우기/진영 into boxes in three visual baselines (bisected 2026-09-11 with CDP
+  `CSS.getPlatformFontsForNode`; fix = defer the measurement behind a double `requestAnimationFrame`). The visual specs' `waitForKoreanFont` now ends with
   `assertNoFallbackHangul`, which asks the renderer which platform font each Hangul node used and fails
   the test instead of baking tofu into a baseline. Measure after first paint, or from a
   `ResizeObserver` callback.

@@ -258,7 +258,7 @@
   pinned clears the dismissal. The toggle reads as pressed only while the card is actually shown. Escape
   anywhere, the composer included, dismisses a transient card unless an IME composition is active,
   another handler already called `preventDefault` (slash menu, rewind editor) or kept the key from
-  reaching `window` (the DM dock stops propagation at its root), or focus is in a dialog.
+  reaching `window`, or focus is in a dialog.
 - **What the card does** (user decisions 2026-10-10, widened 2026-10-21). A checkbox completes with a
   되돌리기 toast; a title opens the item in the tab. Each row's ACTIONS start it (진행 중으로, ▶) or put an
   in-progress one back (시작 전으로, ⏸), and drop it (드랍, ⊘ — never trash: drop is not delete) with
@@ -357,7 +357,7 @@
   `.todo-overlay-body` is positioned with `overflow-x: hidden`, `scrollbar-gutter: stable` and 8px bottom
   padding, so leaving/gliding rows never overflow it (a classic scrollbar would flash and re-ellipsize
   every title). The composer's `할 일 N` pops via `{#key $todoActivity.pop}` with `todo-count-pop`
-  (`30-agent-md-composer.css`; the DM badge's `dm-badge-pop` stays separate). The 1.2 s wash and the
+  (`30-agent-md-composer.css`). The 1.2 s wash and the
   360 ms overshooting pop sit outside DESIGN §2.5 on purpose (the user's choice). Reduced motion: exits
   instant, glide off, arrivals fade + wash, no pops. Real-browser geometry is pinned by the motion cases in
   `tests/visual/todo-overlay.spec.ts` — pinned at 1680×1000 and the bottom-anchored popover at

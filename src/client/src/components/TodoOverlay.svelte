@@ -223,7 +223,7 @@
     narrow?.addEventListener?.("change", decide);
     // Escape anywhere (the composer included) dismisses a transient card; bubble
     // phase, so a handler that owns Escape first (slash menu, rewind editor, a
-    // dialog, the DM dock) wins by preventing/stopping it.
+    // dialog) wins by preventing/stopping it.
     window.addEventListener("keydown", onWindowKeydown);
     if (!dismissed && explicit) afterPaint(focusCard);
     const stopListening = onBeforeAvatarChange(beforeAvatarChange);

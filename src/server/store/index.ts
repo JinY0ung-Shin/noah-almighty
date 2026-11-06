@@ -1,4 +1,3 @@
-import { withDirectMessages } from "./directMessages.js";
 import type { AppConfig } from "../types.js";
 import { StoreBase } from "./internal.js";
 import { withUsers } from "./users.js";
@@ -38,7 +37,7 @@ export { AVATAR_TASK_RESTART_ERROR } from "./avatarTasks.js";
  * disjoint, so nothing shadows anything); it only feeds TS `this`-typing, which
  * the `declare`d cross-domain method signatures on StoreBase already cover.
  */
-const ComposedStore = withTeamBrain(withTodos(withRetiredGroupAgents(withRetiredExternalAvatars(withRetiredPersonalAgents(withShareLinks(withDirectMessages(withAvatarTasks(
+const ComposedStore = withTeamBrain(withTodos(withRetiredGroupAgents(withRetiredExternalAvatars(withRetiredPersonalAgents(withShareLinks(withAvatarTasks(
   withAdmin(
     withConversations(
       withAvatars(
@@ -46,7 +45,7 @@ const ComposedStore = withTeamBrain(withTodos(withRetiredGroupAgents(withRetired
       ),
     ),
   ),
-))))))));
+)))))));
 
 export class Store extends ComposedStore {
   constructor(config: AppConfig) {

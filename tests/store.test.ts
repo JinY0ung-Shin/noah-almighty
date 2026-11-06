@@ -230,6 +230,47 @@ describe("store app config (app-wide secrets)", () => {
     expect(second.getAppSecret("test_app_value")).toBe("v-abc");
   });
 
+  it("drops the retired direct_messages table on reopen, after backing it up", () => {
+    type Db = {
+      exec(sql: string): void;
+      prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): unknown };
+    };
+    const dbOf = (store: unknown) => (store as unknown as { db: Db }).db;
+    const first = makeStore();
+    const alice = first.createUser({ username: "dm-alice", displayName: "Alice", password: "password123" });
+    const bob = first.createUser({ username: "dm-bob", displayName: "Bob", password: "password123" });
+    // What an older release (human-to-human DM, retired 2026-11-06) left behind.
+    dbOf(first).exec(`
+      CREATE TABLE direct_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL REFERENCES users(id),
+        recipient_id TEXT NOT NULL REFERENCES users(id),
+        text TEXT NOT NULL, nonce TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT,
+        UNIQUE(sender_id, nonce)
+      );
+      CREATE INDEX dm_pair ON direct_messages(sender_id, recipient_id, id);
+    `);
+    dbOf(first)
+      .prepare("INSERT INTO direct_messages (sender_id, recipient_id, text, nonce, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(alice.id, bob.id, "안녕", "nonce-0123456789abcdef", new Date().toISOString());
+    first.close();
+    const second = makeStore();
+    const leftovers = dbOf(second)
+      .prepare("SELECT name FROM sqlite_master WHERE name = 'direct_messages' OR name LIKE 'dm\\_%' ESCAPE '\\'")
+      .all();
+    expect(leftovers).toEqual([]);
+    const backupPath = second.retirementGate().backupPath;
+    expect(backupPath).toBeTruthy();
+    const backup = new Database(backupPath as string, { readonly: true });
+    try {
+      expect(backup.prepare("SELECT text FROM direct_messages").all()).toEqual([{ text: "안녕" }]);
+    } finally {
+      backup.close();
+    }
+    // A user who had DMs can still be deleted (no dangling FK, no missing table).
+    expect(second.deleteUser(alice.id)).toBe(true);
+  });
+
   it("drops the retired Craft apps switch on reopen", () => {
     const first = makeStore();
     first.setAppSecret("craft_apps_enabled", "on");

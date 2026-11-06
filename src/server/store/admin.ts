@@ -271,7 +271,6 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         return false;
       }
       const tx = this.db.transaction(() => {
-        this.db.prepare("DELETE FROM direct_messages WHERE sender_id = ? OR recipient_id = ?").run(id, id);
         this.db.prepare("DELETE FROM avatar_tasks WHERE owner_user_id = ?").run(id);
         this.db.prepare("DELETE FROM avatar_api_keys WHERE owner_user_id = ?").run(id);
         // PPT share links this user CREATED, whatever thread they point into
