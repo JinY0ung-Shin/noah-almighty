@@ -4,6 +4,7 @@
   import Icon from "../components/Icon.svelte";
   import { api } from "../lib/api";
   import { renderMarkdown } from "../lib/format";
+  import { linkifyWikilinks, nodeLinks, sectionColor, sectionLabel, stripFrontmatter, stripTitleHeading, topNotes } from "../lib/knowledgeGraph";
   import { goView } from "../lib/nav";
   import { appState, replaceState } from "../lib/state";
   import { refreshTeamBrainStatus } from "../lib/teamBrain";
@@ -89,6 +90,9 @@
     }
   }
 
+  // Status → `.tag` tone (docs/DESIGN.md §4.3): text AND colour, never colour alone.
+  const STATUS_TONE: Record<string, string> = { approved: "ok", rejected: "danger", pending: "read" };
+
   const STATUS_KO: Record<string, string> = {
     draft: "제출 전",
     pending: "검토 대기",
@@ -110,6 +114,16 @@
   // graph load (refresh) or note selection.
   let graphToken = 0;
   let noteToken = 0;
+  // Notes opened from inside the panel (a [[link]], a backlink) stack here so
+  // 뒤로 returns to the note you came from; a pick on the canvas starts afresh.
+  let noteHistory: KnowledgeGraphNode[] = [];
+  let noteEl: HTMLElement | undefined;
+
+  $: stats = graph
+    ? { notes: graph.nodes.filter((n) => !n.dangling).length, links: graph.edges.length, dangling: graph.nodes.filter((n) => n.dangling).length }
+    : null;
+  $: hubs = graph ? topNotes(graph, 10) : [];
+  $: links = graph && selected ? nodeLinks(graph, selected.id) : { outgoing: [], incoming: [] };
 
   onMount(() => {
     mounted = true;
@@ -143,13 +157,41 @@
     // Bump the token so any in-flight note fetch is discarded on resolve.
     noteToken++;
     selected = null;
+    noteHistory = [];
     noteHtml = "";
     noteError = "";
     noteLoading = false;
   }
 
-  async function onSelect(node: KnowledgeGraphNode | null): Promise<void> {
+  /** Open a note from inside the panel, remembering where we came from. */
+  function openFromPanel(node: KnowledgeGraphNode): void {
+    if (selected && selected.id !== node.id) noteHistory = [...noteHistory, selected];
+    void onSelect(node, true);
+  }
+
+  function goBack(): void {
+    const prev = noteHistory[noteHistory.length - 1];
+    if (!prev) return;
+    noteHistory = noteHistory.slice(0, -1);
+    void onSelect(prev, true);
+  }
+
+  function openById(id: string): void {
+    const node = graph?.nodes.find((n) => n.id === id);
+    if (node) openFromPanel(node);
+  }
+
+  // Wikilinks in the rendered note are `<button data-wikilink=id>` (linkifyWikilinks).
+  function onNoteClick(event: MouseEvent): void {
+    const target = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-wikilink]");
+    const id = target?.dataset.wikilink;
+    if (id) openById(id);
+  }
+
+  async function onSelect(node: KnowledgeGraphNode | null, fromPanel = false): Promise<void> {
+    if (!fromPanel) noteHistory = [];
     selected = node;
+    if (noteEl) noteEl.scrollTop = 0;
     noteHtml = "";
     noteError = "";
     if (!node || node.dangling) {
@@ -162,7 +204,8 @@
       const res = await api<{ note: KnowledgeNote }>(`${ENDPOINTS[scope].note}?path=${encodeURIComponent(node.id)}`);
       if (token !== noteToken) return;
       // Team notes are teammate-written: no inline style (overlay / fake-UI guard).
-      noteHtml = renderMarkdown(res.note.content, { forbidInlineStyle: scope === "team" });
+      const body = stripTitleHeading(stripFrontmatter(res.note.content), node.label);
+      noteHtml = renderMarkdown(graph ? linkifyWikilinks(body, graph) : body, { forbidInlineStyle: scope === "team" });
     } catch (err) {
       if (token !== noteToken) return;
       noteError = (err as Error).message;
@@ -172,7 +215,7 @@
   }
 
   function retrySelectedNote(): void {
-    if (selected) void onSelect(selected);
+    if (selected) void onSelect(selected, true);
   }
 </script>
 
@@ -180,7 +223,7 @@
   <header class="brain-head">
     <div class="brain-title">
       <h1>지식 그래프</h1>
-      <p class="muted small">노트 사이의 <code>[[링크]]</code> 연결을 한눈에 보고, 노드를 클릭하면 내용을 바로 읽을 수 있어요.</p>
+      <p class="muted small">노트 사이의 <code>[[링크]]</code> 연결을 보여줍니다. 노드를 누르거나 검색하면 내용과 연결된 노트를 바로 읽을 수 있어요.</p>
     </div>
     <div class="brain-head-actions">
       <div class="seg-control" role="tablist" aria-label="브레인 선택">
@@ -190,7 +233,7 @@
         </button>
       </div>
       {#if showGraph}
-        <button class="ghost-sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => { void loadGraph(); if (scope === "team") void loadLists(); }}>
+        <button class="btn secondary sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => { void loadGraph(); if (scope === "team") void loadLists(); }}>
           <Icon name="refresh" size={15} /><span>새로고침</span>
         </button>
       {/if}
@@ -215,98 +258,175 @@
       aria-busy={loading ? "true" : "false"}
     >
       {#if loading}
-        <div class="brain-state muted" role="status">그래프를 불러오는 중…</div>
+        <div class="brain-state brain-graph-state muted" role="status">그래프를 불러오는 중…</div>
       {:else if error}
-        <div class="brain-state error-note" role="alert">
-          불러오기 실패: {error}
-          <button class="linkish small" type="button" disabled={loading} on:click={() => loadGraph()}>다시 시도</button>
+        <div class="brain-state brain-graph-state error-note" role="alert">
+          <span>불러오기 실패: {error}
+            <button class="linkish small" type="button" disabled={loading} on:click={() => loadGraph()}>다시 시도</button></span>
         </div>
       {:else if graph?.noVault}
-        <div class="brain-state muted">
-          이 저장소는 아직 세컨드브레인 구조(<code>wiki/</code>·<code>raw/</code>)가 없습니다. 아바타에게
-          <strong>brain-migrate</strong>를 한 번 실행해 달라고 하면 구조를 만들어 줍니다.
+        <div class="brain-state brain-graph-state muted">
+          <span>이 저장소는 아직 세컨드브레인 구조(<code>wiki/</code>·<code>raw/</code>)가 없습니다. 아바타에게
+          <strong>brain-migrate</strong>를 한 번 실행해 달라고 하면 구조를 만들어 줍니다.</span>
         </div>
       {:else if !graph?.nodes.length}
-        <div class="brain-state muted">
-          {scope === "team"
+        <div class="brain-state brain-graph-state muted">
+          <span>{scope === "team"
             ? "팀 브레인에 아직 노트가 없습니다. 대화 중 아바타가 팀에 공유할지 물으면, 동의한 내용이 관리자 승인을 거쳐 여기에 쌓입니다."
-            : "아직 표시할 노트가 없습니다. 대화로 지식을 쌓으면 여기에 나타납니다."}
+            : "아직 표시할 노트가 없습니다. 대화로 지식을 쌓으면 여기에 나타납니다."}</span>
         </div>
       {:else}
         <GraphCanvas {graph} selectedId={selected?.id ?? null} on:select={(e) => onSelect(e.detail)} />
-        <div class="brain-stats muted">{graph.nodes.length}개 노트 · {graph.edges.length}개 연결</div>
+      {/if}
+      {#if stats && !loading && !error && graph?.nodes.length}
+        <div class="brain-stats" aria-label="그래프 요약">
+          <span><strong>{stats.notes}</strong> 노트</span>
+          <span><strong>{stats.links}</strong> 연결</span>
+          {#if stats.dangling}<span><strong>{stats.dangling}</strong> 미연결 링크</span>{/if}
+        </div>
       {/if}
     </div>
 
-    <aside class="brain-note" aria-label="노트 내용">
-      {#if !selected && scope === "team"}
-        <div class="brain-proposals">
-          <p class="muted small">노드를 클릭하면 노트 내용이 여기에 표시됩니다. 팀 브레인 노트는 팀원이 제안하고 관리자가 승인한 내용입니다.</p>
-          {#if listsError}<p class="error-note" role="alert">{listsError}</p>{/if}
-          {#if isAdmin}
-            <h3>검토 대기 {pending.length}건</h3>
-            {#if pending.length}
-              <p class="muted small">결정은 내 아바타에게 “팀 브레인 제안 검토해줘”라고 요청한 뒤, 아바타가 띄운 카드의 버튼으로 합니다.</p>
-              <ul class="brain-proposal-list">
-                {#each pending as p (p.id)}
-                  <li><strong>{p.title}</strong><span class="muted small">{p.proposerName} · {p.op === "create" ? "새 노트" : "수정"} · <code>{p.path}</code></span></li>
-                {/each}
-              </ul>
-            {:else}
-              <p class="muted small">검토할 제안이 없습니다.</p>
-            {/if}
-          {/if}
-          <h3>내 제안</h3>
-          {#if mine.length}
-            <ul class="brain-proposal-list">
-              {#each mine as p (p.id)}
-                <li>
-                  <strong>{p.title}</strong>
-                  <span class="muted small"><span class={`brain-proposal-status status-${p.status}`}>{STATUS_KO[p.status] ?? p.status}</span> · <code>{p.path}</code></span>
-                  {#if p.status === "rejected" && p.decisionReason}<span class="small">반려 사유: {p.decisionReason}</span>{/if}
-                  {#if p.status === "pending"}
-                    <button class="ghost-sm brain-proposal-withdraw" type="button" disabled={withdrawing === p.id} on:click={() => withdraw(p.id)}>제안 철회</button>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
+    <aside class="brain-note" aria-label="노트 내용" bind:this={noteEl}>
+      {#if selected}
+        <div class="brain-note-nav">
+          {#if noteHistory.length}
+            <button class="btn ghost sm" type="button" on:click={goBack} title={`${noteHistory[noteHistory.length - 1].label}(으)로 돌아가기`}>
+              <Icon name="chevron-left" size={15} /><span>뒤로</span>
+            </button>
           {:else}
-            <p class="muted small">아직 제안한 내용이 없습니다. 대화 중 아바타에게 “이거 팀에 공유해줘”라고 하면 제안 카드를 만들어 줍니다.</p>
+            <span class="brain-section-label">
+              <span class="brain-dot" class:dangling={selected.dangling} style={`--dot:${sectionColor(selected.section)}`}></span>{sectionLabel(selected.section)}
+            </span>
           {/if}
-        </div>
-      {:else if !selected}
-        <div class="brain-note-empty muted">
-          <Icon name="book" size={22} />
-          <p>노드를 클릭하면 노트 내용이 여기에 표시됩니다.</p>
-        </div>
-      {:else}
-        <div class="brain-note-head">
-          <div class="brain-note-title">
-            <strong>{selected.label}</strong>
-            {#if !selected.dangling}<code class="muted">{selected.id}</code>{/if}
-          </div>
-          <button class="icon-button" type="button" aria-label="닫기" title="닫기" on:click={clearNote}>
+          <button class="btn ghost icon sm" type="button" aria-label="닫기" title="닫기" on:click={clearNote}>
             <Icon name="close" size={16} />
           </button>
         </div>
-        {#if selected.tags.length}
-          <div class="brain-note-tags">
-            {#each selected.tags as tag}<span class="tag tag-chip">#{tag}</span>{/each}
-          </div>
-        {/if}
+        <header class="brain-note-head">
+          {#if noteHistory.length}
+            <span class="brain-section-label">
+              <span class="brain-dot" class:dangling={selected.dangling} style={`--dot:${sectionColor(selected.section)}`}></span>{sectionLabel(selected.section)}
+            </span>
+          {/if}
+          <h2>{selected.label}</h2>
+          {#if !selected.dangling}<code class="brain-note-path">{selected.id}</code>{/if}
+          {#if selected.tags.length}
+            <div class="brain-note-tags">
+              {#each selected.tags as tag}<span class="tag">#{tag}</span>{/each}
+            </div>
+          {/if}
+        </header>
 
         {#if selected.dangling}
-          <div class="brain-state muted">미연결 링크 — 이 제목의 노트가 아직 없습니다.</div>
+          <div class="brain-callout muted">아직 이 제목의 노트가 없습니다. 아래 노트들이 이 제목을 <code>[[링크]]</code>로 가리키고 있어요.</div>
         {:else if noteLoading}
-          <div class="brain-state muted">노트를 불러오는 중…</div>
+          <div class="brain-state muted" role="status">노트를 불러오는 중…</div>
         {:else if noteError}
           <div class="brain-state error-note" role="alert">
             불러오기 실패: {noteError}
             <button class="linkish small" type="button" disabled={noteLoading} on:click={retrySelectedNote}>다시 시도</button>
           </div>
         {:else}
+          <!-- Wikilinks render as buttons; clicks are delegated here (keyboard Enter/Space fire click too). -->
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
           <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          <article class="brain-note-body md">{@html noteHtml}</article>
+          <article class="brain-note-body md" on:click={onNoteClick}>{@html noteHtml}</article>
+        {/if}
+
+        {#if links.outgoing.length || links.incoming.length}
+          <section class="brain-links" aria-label="연결된 노트">
+            {#if links.incoming.length}
+              <h3>이 노트를 가리키는 노트 <span class="brain-count">{links.incoming.length}</span></h3>
+              <ul class="brain-list">
+                {#each links.incoming as n (n.id)}
+                  <li><button type="button" class="brain-row" on:click={() => openFromPanel(n)}>
+                    <span class="brain-dot" class:dangling={n.dangling} style={`--dot:${sectionColor(n.section)}`}></span>
+                    <span class="brain-row-label">{n.label}</span>
+                    <span class="brain-row-meta">{sectionLabel(n.section)}</span>
+                  </button></li>
+                {/each}
+              </ul>
+            {/if}
+            {#if links.outgoing.length}
+              <h3>이 노트가 링크한 노트 <span class="brain-count">{links.outgoing.length}</span></h3>
+              <ul class="brain-list">
+                {#each links.outgoing as n (n.id)}
+                  <li><button type="button" class="brain-row" on:click={() => openFromPanel(n)}>
+                    <span class="brain-dot" class:dangling={n.dangling} style={`--dot:${sectionColor(n.section)}`}></span>
+                    <span class="brain-row-label">{n.label}</span>
+                    <span class="brain-row-meta">{sectionLabel(n.section)}</span>
+                  </button></li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        {/if}
+      {:else}
+        {#if scope === "team"}
+          <section class="brain-proposals" aria-label="팀 브레인 제안">
+            <p class="brain-hint">팀 브레인 노트는 팀원이 제안하고 관리자가 승인한 내용입니다.</p>
+            {#if listsError}<p class="error-note" role="alert">{listsError}</p>{/if}
+            {#if isAdmin}
+              <h3>검토 대기 <span class="brain-count">{pending.length}</span></h3>
+              {#if pending.length}
+                <p class="brain-hint">결정은 내 아바타에게 “팀 브레인 제안 검토해줘”라고 요청한 뒤, 아바타가 띄운 카드의 버튼으로 합니다.</p>
+                <ul class="brain-list">
+                  {#each pending as p (p.id)}
+                    <li class="brain-card">
+                      <div class="brain-card-top">
+                        <strong>{p.title}</strong>
+                        <span class="tag">{p.op === "create" ? "새 노트" : "수정"}</span>
+                      </div>
+                      <span class="brain-card-meta">{p.proposerName} · <code>{p.path}</code></span>
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="brain-hint">검토할 제안이 없습니다.</p>
+              {/if}
+            {/if}
+            <h3>내 제안 {#if mine.length}<span class="brain-count">{mine.length}</span>{/if}</h3>
+            {#if mine.length}
+              <ul class="brain-list">
+                {#each mine as p (p.id)}
+                  <li class="brain-card">
+                    <div class="brain-card-top">
+                      <strong>{p.title}</strong>
+                      <span class={`tag brain-proposal-status status-${p.status} ${STATUS_TONE[p.status] ?? ""}`}>{STATUS_KO[p.status] ?? p.status}</span>
+                    </div>
+                    <span class="brain-card-meta"><code>{p.path}</code></span>
+                    {#if p.status === "rejected" && p.decisionReason}<p class="brain-card-reason">반려 사유: {p.decisionReason}</p>{/if}
+                    {#if p.status === "pending"}
+                      <button class="btn ghost sm brain-proposal-withdraw" type="button" disabled={withdrawing === p.id} on:click={() => withdraw(p.id)}>제안 철회</button>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="brain-hint">아직 제안한 내용이 없습니다. 대화 중 아바타에게 “이거 팀에 공유해줘”라고 하면 제안 카드를 만들어 줍니다.</p>
+            {/if}
+          </section>
+        {/if}
+        {#if hubs.length}
+          <section class="brain-hubs" aria-label="주요 노트">
+            <h3>연결이 많은 노트</h3>
+            <p class="brain-hint">노드를 누르거나 검색하면 노트 내용이 여기에 표시됩니다.</p>
+            <ul class="brain-list">
+              {#each hubs as { node, degree } (node.id)}
+                <li><button type="button" class="brain-row" on:click={() => onSelect(node)}>
+                  <span class="brain-dot" style={`--dot:${sectionColor(node.section)}`}></span>
+                  <span class="brain-row-label">{node.label}</span>
+                  <span class="brain-row-meta">연결 {degree}</span>
+                </button></li>
+              {/each}
+            </ul>
+          </section>
+        {:else if scope !== "team"}
+          <div class="brain-note-empty muted">
+            <Icon name="book" size={22} />
+            <p>노드를 누르면 노트 내용이 여기에 표시됩니다.</p>
+          </div>
         {/if}
       {/if}
     </aside>
@@ -320,7 +440,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--s-4);
     padding: var(--s-5);
     overflow: hidden;
   }
@@ -329,6 +449,11 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: var(--s-3);
+    flex-wrap: wrap;
+  }
+  .brain-title {
+    min-width: 0;
+    flex: 1 1 320px;
   }
   .brain-title h1 {
     margin: 0;
@@ -337,7 +462,19 @@
   }
   .brain-title p {
     margin: var(--s-1) 0 0;
+    line-height: 1.5;
   }
+  .brain-head-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .brain-tab-badge {
+    margin-left: var(--s-1);
+  }
+
   .brain-empty {
     width: min(560px, 100%);
     margin: auto;
@@ -368,6 +505,7 @@
     margin: var(--s-2) 0 0;
     line-height: 1.6;
   }
+
   .brain-body {
     flex: 1;
     min-height: 0;
@@ -375,15 +513,34 @@
     gap: var(--s-4);
   }
   .brain-graph {
-    flex: 1 1 60%;
+    flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
   }
+  .brain-graph-state {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    border: 1px dashed var(--line);
+    border-radius: var(--r-lg);
+  }
+  .brain-graph-state > span {
+    max-width: 520px;
+  }
   .brain-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1) var(--s-4);
+    padding: 0 var(--s-1);
     font-size: var(--t-xs);
+    color: var(--muted);
+  }
+  .brain-stats strong {
+    color: var(--text-soft);
+    font-variant-numeric: tabular-nums;
   }
   .brain-state {
     padding: var(--s-6) var(--s-2);
@@ -393,20 +550,22 @@
   .brain-state .linkish.small {
     margin-left: var(--s-2);
   }
+
+  /* The reading pane: an opaque surface (DESIGN §1 — reading content is never glass). */
   .brain-note {
-    flex: 1 1 40%;
+    flex: 0 0 clamp(320px, 34%, 480px);
     min-width: 0;
     min-height: 0;
-    max-width: 460px;
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
-    padding: var(--s-4);
+    gap: var(--s-4);
+    padding: var(--s-4) var(--s-5) var(--s-5);
     border: 1px solid var(--line-soft);
     border-radius: var(--r-lg);
-    background: var(--material-regular, var(--panel));
-    box-shadow: var(--shadow-sm), 0 1px 0 var(--material-edge, transparent) inset;
+    background: var(--panel);
+    box-shadow: var(--shadow-sm);
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .brain-note-empty {
     margin: auto;
@@ -416,104 +575,243 @@
     gap: var(--s-2);
     text-align: center;
   }
-  .brain-note-head {
+  .brain-note-nav {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: var(--s-2);
+    min-height: 28px;
+    margin-bottom: calc(-1 * var(--s-2));
   }
-  .brain-note-title {
+  .brain-note-nav .btn.ghost.sm {
+    margin-left: calc(-1 * var(--s-2));
+  }
+  .brain-section-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1-5);
+    font-size: var(--t-xs);
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .brain-note-head {
     display: flex;
     flex-direction: column;
-    gap: var(--s-1);
+    gap: var(--s-1-5);
+    padding-bottom: var(--s-4);
+    border-bottom: 1px solid var(--line-soft);
     min-width: 0;
   }
-  .brain-note-title strong {
-    font-size: var(--t-lg);
+  .brain-note-head h2 {
+    margin: 0;
+    font-size: var(--t-xl);
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
   }
-  .brain-note-title code {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .brain-note-path {
     font-size: var(--t-xs);
+    color: var(--muted);
+    overflow-wrap: anywhere;
   }
   .brain-note-tags {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-1);
-  }
-  /* Composes the global `.tag` base; note tags run one step larger than a
-     generic tag, which is the only delta left. */
-  .tag-chip {
-    font-size: var(--t-xs);
+    margin-top: var(--s-1);
   }
   .brain-note-body {
     min-width: 0;
+    font-size: var(--t-md);
+    line-height: 1.7;
     word-break: break-word;
   }
-  .brain-head-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-    justify-content: flex-end;
+  /* Wikilinks (linkifyWikilinks): inline text links, not chrome buttons. */
+  .brain-note-body :global(.wikilink) {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-color: var(--accent-soft-strong);
+    text-underline-offset: 3px;
+    cursor: pointer;
   }
-  .brain-tab-badge {
-    margin-left: var(--s-1);
+  .brain-note-body :global(.wikilink:hover) {
+    text-decoration-color: currentColor;
   }
-  .brain-proposals {
+  .brain-note-body :global(.wikilink.dangling) {
+    color: var(--muted);
+    text-decoration-style: dashed;
+  }
+  .brain-note-body :global(.wikilink.missing) {
+    color: var(--text-soft);
+  }
+  .brain-callout {
+    padding: var(--s-3);
+    border-radius: var(--r-md);
+    background: var(--bg);
+    line-height: 1.6;
+  }
+
+  .brain-links,
+  .brain-proposals,
+  .brain-hubs {
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
   }
-  .brain-proposals h3 {
+  .brain-links {
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--line-soft);
+  }
+  .brain-links h3,
+  .brain-proposals h3,
+  .brain-hubs h3 {
+    display: flex;
+    align-items: center;
+    gap: var(--s-1-5);
     margin: var(--s-2) 0 0;
     font-size: var(--t-sm);
+    font-weight: 700;
   }
-  .brain-proposals p {
+  .brain-links h3:first-child,
+  .brain-hubs h3:first-child {
+    margin-top: 0;
+  }
+  .brain-count {
+    font-weight: 600;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .brain-hint {
     margin: 0;
+    font-size: var(--t-xs);
+    line-height: 1.5;
+    color: var(--muted);
   }
-  .brain-proposal-list {
+  .brain-proposals + .brain-hubs {
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--line-soft);
+  }
+  .brain-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: var(--s-1);
   }
-  .brain-proposal-list li {
+  .brain-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-height: 36px;
+    padding: var(--s-1-5) var(--s-2-5);
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text);
+    font-size: var(--t-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  .brain-row:hover {
+    background: var(--bg);
+  }
+  .brain-row-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .brain-row-meta {
+    flex: none;
+    font-size: var(--t-2xs);
+    color: var(--muted);
+  }
+  .brain-dot {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--dot);
+  }
+  .brain-dot.dangling {
+    background: transparent;
+    border: 1.5px dashed var(--muted);
+  }
+  .brain-card {
     display: flex;
     flex-direction: column;
-    gap: var(--s-0-5);
-    padding: var(--s-2);
+    gap: var(--s-1);
+    padding: var(--s-3);
     border: 1px solid var(--line-soft);
-    border-radius: var(--r-sm);
+    border-radius: var(--r-md);
+    background: var(--bg);
     overflow-wrap: anywhere;
+  }
+  .brain-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .brain-card-top strong {
+    font-size: var(--t-sm);
+    line-height: 1.4;
+  }
+  .brain-card-top .tag {
+    flex: none;
+  }
+  .brain-card-meta {
+    font-size: var(--t-xs);
+    color: var(--muted);
+  }
+  .brain-card-meta code {
+    font-size: var(--t-2xs);
+  }
+  .brain-card-reason {
+    margin: var(--s-1) 0 0;
+    padding: var(--s-2) var(--s-2-5);
+    border-radius: var(--r-sm);
+    background: var(--danger-soft);
+    color: var(--text);
+    font-size: var(--t-xs);
+    line-height: 1.5;
   }
   .brain-proposal-withdraw {
     align-self: flex-start;
-  }
-  .brain-proposal-status.status-approved {
-    color: var(--ok);
-  }
-  .brain-proposal-status.status-rejected {
-    color: var(--warn);
-  }
-  .brain-proposal-status.status-pending {
-    color: var(--info);
+    margin-top: var(--s-1);
   }
 
-  @media (max-width: 860px) {
+  @media (max-width: 960px) {
     .brain-body {
       flex-direction: column;
       overflow-y: auto;
     }
     .brain-graph {
+      flex: none;
+      height: min(62dvh, 520px);
       min-height: 320px;
     }
     .brain-note {
-      max-width: none;
       flex: none;
+      overflow: visible;
+    }
+  }
+  @media (max-width: 560px) {
+    .brain-view {
+      padding: var(--s-4);
+      gap: var(--s-3);
+    }
+    .brain-head-actions {
+      width: 100%;
+      justify-content: space-between;
     }
   }
 </style>
