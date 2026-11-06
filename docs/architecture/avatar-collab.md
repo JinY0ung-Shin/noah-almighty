@@ -5,13 +5,13 @@
 
 ## Avatar consultation (`mcp__avatars__ask_avatar`, #ask-avatar)
 
-- **What it is:** an OWNER-DRIVEN turn (owner chat or owner routine) may ask a **same-group teammate's
+- **What it is:** an OWNER-DRIVEN turn (owner chat or owner routine) may ask a **teammate's
   avatar** one question and get its answer back as tool text. Core in `agent/avatarAsk.ts`
   (`askAvatar`), tool + outcome decoding beside `search_avatars` in `avatarDirectoryTools.ts` (same
   `avatars` server + tool group).
 - **Gates (in order):** `store.getUserByUsername` → self-refusal → `resolveChatAvatar` (visibility:
-  unknown, `private`, group-invisible, and suspended all return the SAME `not_found` so the tool can't
-  probe existence) → `isTrustedFor` (= `shareAnyGroup`, the single trust choke point). So a consult
+  unknown, `private`, and suspended all return the SAME `not_found` so the tool can't
+  probe existence) → `isTrustedFor` (both active teammates — the single trust choke point). So a consult
   grants exactly what the asking USER could already get by chatting with that avatar directly — no new
   trust surface.
 - **The inner run is the trusted-colleague viewer class**, constructed only in `avatarAsk.ts`:
@@ -61,7 +61,9 @@
   consultation framing in `promptBuilder.ts`, NOT the routine one (which would claim owner-level
   permissions this run doesn't have).
 - **Registration:** `avatarAskActive` (= `avatars` group enabled && `ownerToolAccess` &&
-  `!avatarConsultation`) drives the `mcpAllowedTools` entry AND the ctx executor injection byte-identically;
+  `!avatarConsultation` && `ownerState.reachableTeammateCount > 0` — active, 팀 공개 teammates,
+  since a private avatar can't be consulted — hand-synced with promptBuilder
+  `avatarAskEnabled` and describe_system's consultation line) drives the `mcpAllowedTools` entry AND the ctx executor injection byte-identically;
   the tool joins the server's tool list only when the executor is present, and the handler still
   self-gates on `viewerIsOwner`. Timeout on a busy model returns the PARTIAL streamed text in the error.
   In an interactive chat the call does not wait: it returns `Consultation ask-<id> … started in the background`
@@ -83,14 +85,14 @@
 - **What a browser SEES is the OWNER's text and the WHOLE directory, not the frontmatter and one file.**
   Two independent fixes to the same illusion: (1) `shared_skills.custom_description` is the owner's
   human-facing 소개 문구, and the EFFECTIVE description (`custom_description ?? description`) is resolved
-  in `toSharedSkill` — the one mapper every read passes through — so the feed, preview header, group
-  management list and `find_shared_skills` cannot drift apart; the raw columns ride along as
+  in `toSharedSkill` — the one mapper every read passes through — so the feed, preview header, admin
+  moderation list and `find_shared_skills` cannot drift apart; the raw columns ride along as
   `customDescription` (owner UIs distinguish "custom" from "falling back") and `snapshotDescription`.
   That second field exists because the mine RECONCILIATION must keep comparing and writing the SNAPSHOT
   column only (`shareSkill` leaves `custom_description` out of its upsert): comparing the effective text
   would re-snapshot — and re-sort — the row on every tab load once an intro exists. So a custom intro
   survives frontmatter drift and re-shares; UNSHARE deletes it with the row (a later re-share starts
-  clean, unlike learn counts and group blocks, which are keyed by skill NAME on purpose). Write path:
+  clean, unlike learn counts and admin blocks, which are keyed by skill NAME on purpose). Write path:
   `PUT /api/skill-share/share/:skillName/description` (owner-only by construction — the row is addressed
   by the authenticated id; empty body = clear) and `share_skill`'s optional `description` param, whose
   contract is OMITTED = leave standing, non-empty = replace, explicit `""` = clear. Both REJECT past
@@ -121,7 +123,7 @@
   tracking/badges stop, and re-learning the same share later is a fresh copy.
 - **A RENAMED skill directory is followed, not unshared.** Renaming `skills/<a>/` → `skills/<b>/` used
   to look exactly like "deleted a, added b", so the share row (with its 소개 문구, its 전수 history and
-  every group block) was pruned and the owner had to re-share under the new name. Now
+  every block) was pruned and the owner had to re-share under the new name. Now
   `renameSharedSkill` (store/avatars.ts) moves the row IN PLACE in one transaction: same id, same
   `created_at`, same `custom_description`, new slug + fresh snapshot/hash, the old name appended to
   `previous_names` (JSON array, cap 5, most-recent-last, deduped, and never containing the CURRENT
@@ -130,10 +132,10 @@
   event already sitting under the target name: the collision guard below proved no live share holds
   it, so those are orphans of a dead share whose name this one takes over, and leaving them would
   inflate the renamed skill's 전수 count forever (the dead share's own count is forfeited once another
-  skill claims its name). `shared_skill_group_blocks` is COPIED by `INSERT OR IGNORE` (merging with a
-  block already standing at the new name — never lost, never duplicated) and the OLD name's blocks are
+  skill claims its name). `shared_skill_blocks` is COPIED by `INSERT OR IGNORE` (merging with a
+  block already standing at the new name — never lost, never duplicated) and the OLD name's block is
   LEFT IN PLACE: blocks are name-keyed anti-evasion that already survive unshare→re-share, so letting
-  two `git mv`s clear one would hand every owner a way around a group admin's decision. Only an
+  two `git mv`s clear one would hand every owner a way around the admin's decision. Only an
   explicit unblock removes a block. A target slug that is ALREADY shared refuses the rename (returns
   null, no side effects) and the caller falls back to unsharing — merging two shares would silently
   pick one row's intro and history over the other's.
@@ -223,35 +225,45 @@
   `learned N×` marker, and describe_system's owner total (`OwnerState.sharedSkillLearnTotal`,
   describe_system-only like gitRepoCount). Learner ids are stored ONLY for the deleteUser cascade
   (both axes purge — product data, not an audit trail); the UI never shows who learned.
-- **A GROUP ADMIN can take a member's share out of THEIR group's channel — moderation, not global
-  unshare.** An admin owns what circulates in their group, but nothing outside it: they must not be able
-  to revoke someone's sharing everywhere, and the owner's own listing is not theirs to edit. So a block is
-  a row in `shared_skill_group_blocks` keyed by **(group_id, owner_user_id, skill_name)** — the skill
-  NAME, not the share-row id, the same anti-evasion key as `skill_learn_events`: unshare→re-share mints a
-  new row that lands ALREADY blocked. The visibility rule is **"at least one mutual sharing group with no
-  block"**: `LEARNABLE_SKILLS_FROM`'s teammate test became an `EXISTS` over the shared groups with a
-  correlated `NOT EXISTS` block check, so a block subtracts exactly ONE group for exactly ONE
-  (owner, skill) — that is the admin's authority radius, and it's why the fragment now diverges from
-  `VISIBILITY_WHERE`'s `IN (…)` (the suspended/`group`/SHARING_TEAMMATES half still moves in lockstep;
-  avatar visibility itself is never touched). Enforcement is at the STORE QUERY level and so fails closed:
-  the learnable listing AND the single-row lookups (`getLearnableSkill`/`getLearnableSkillByName`) are all
-  built on that one fragment, so preview/learn by id can't route around a block, and
-  `mcp__skill_exchange__find_shared_skills` + the metacognition `learnableSkillCount` follow for free —
-  no route logic changed. What a block does NOT do: learned copies stay in learners' repos (the same
-  "what crossed the boundary belongs to the receiver" line as `ask_avatar`), the owner's `mine` view and
-  their share row are untouched (they are never told which group blocked them), and other groups keep
-  carrying the skill. Managed by `canManageGroup` (system admin OR that group's admin) at
-  `GET/POST/DELETE /api/me/groups/:id/shared-skills[/blocks…]` in routes/groups.ts, audited as
-  `group_skill_block`/`group_skill_unblock`. Cascades: `deleteGroup` drops its blocks (a surviving row
-  would also match a recycled group id); `deleteUser` purges blocks where the deleted user is the OWNER
-  (their shares vanish anyway) while `blocked_by` DANGLES like `groups.created_by` — a block outlives the
-  admin who set it, since dropping it would silently un-moderate a live channel.
+- **Admin blocks: the SYSTEM admin can take any user's share out of the team's discovery — moderation,
+  not unshare** (single team, 2026-11-06; replaced the per-group channel blocks a group admin set). The
+  owner's own listing is not the admin's to edit, so a block is a row in `shared_skill_blocks` keyed by
+  **(owner_user_id, skill_name)** — the skill NAME, not the share-row id, the same anti-evasion key as
+  `skill_learn_events`: unshare→re-share mints a new row that lands ALREADY blocked, and blocking needs no
+  live share row at all (it pre-empts a future share). `LEARNABLE_SKILLS_FROM` carries a correlated
+  `NOT EXISTS` over the block table, so a block removes exactly ONE (owner, skill) from EVERY teammate's
+  learnable reads — the only sanctioned divergence from `VISIBILITY_WHERE` (the suspended/`group`/team
+  half still moves in lockstep; avatar visibility itself is never touched). Enforcement is at the STORE
+  QUERY level and so fails closed: the learnable listing AND the single-row lookups
+  (`getLearnableSkill`/`getLearnableSkillByName`) are all built on that one fragment, so preview/learn by
+  id can't route around a block, and `mcp__skill_exchange__find_shared_skills` + the metacognition
+  `learnableSkillCount` follow for free. What a block does NOT do: learned copies stay in learners' repos
+  (the same "what crossed the boundary belongs to the receiver" line as `ask_avatar`), and the owner's
+  `mine` view and share row are untouched (they are never told). A block is never deleted except by an
+  explicit unblock, and a rename COPIES it (above).
+  Routes (`requireAdmin`, `routes/admin.ts`): `GET /api/admin/shared-skills` → `{ skills:
+  SharedSkillModeration[] }` (`listSharedSkillsForModeration`: every ACTIVE user's share with its 전수 count
+  and `blocked` — not viewer-scoped, blocked rows stay listed so they can be unblocked, and a `private`
+  owner's shares are listed too so a block can pre-empt them going 팀 공개 again) plus `otherBlocks:
+  SharedSkillBlockEntry[]` (`{ ownerUserId, ownerUsername, ownerDisplayName, ownerSuspended, skillName,
+  blockedAt | null }`, `listOtherSharedSkillBlocks()`) — the blocks NOT already shown under an active
+  owner's share row (unshared, renamed away, pre-emptive, or a suspended owner's; inner-joined to `users`,
+  so an orphan is skipped), listed in the panel's 공유 목록에 없는 차단 section with 차단 해제;
+  `POST /api/admin/shared-skills/blocks` body `{ ownerUserId, skillName }` (idempotent — an existing block
+  keeps its original blocker/time; 400 on a missing id or a skill name that is not a valid slug, 404 when
+  the owner is not an existing user); `DELETE /api/admin/shared-skills/blocks/:ownerUserId/:skillName`
+  (404 when not blocked). Audited `skill_block`/`skill_unblock`. Store: `blockSharedSkill`,
+  `unblockSharedSkill`, `isSharedSkillBlocked`. Cascade: `deleteUser` purges blocks where the deleted
+  user is the OWNER (their shares vanish anyway) while `blocked_by` DANGLES like other actor columns — a
+  block outlives the admin who set it, since dropping it would silently un-moderate the team's channel.
+  The conversion copied every `shared_skill_group_blocks` row in (union across groups = fail closed) —
+  [`server-core.md`](server-core.md).
 - **Reach = avatar discovery, exactly.** `LEARNABLE_SKILLS_FROM` (store/avatars.ts) mirrors
-  `VISIBILITY_WHERE` minus the self-exception: not suspended + `visibility='group'` + SHARING_TEAMMATES
-  co-membership. A `private` avatar's shares vanish; an `avatar_sharing`-off group grants nothing; your
-  own shares are never "learnable" (managed via `listSharedSkillsByOwner`). Keep the two SQL fragments in
-  lockstep — the ONLY sanctioned divergence is the per-skill group-channel block above, which narrows the
-  teammate relation for one (owner, skill) without touching avatar visibility.
+  `VISIBILITY_WHERE` minus the self-exception: not suspended + `visibility='group'` (팀 공개) + the viewer an
+  active teammate (`VIEWER_IS_TEAMMATE`). A `private` avatar's shares vanish; your own shares are never
+  "learnable" (managed via `listSharedSkillsByOwner`). Keep the two SQL fragments in lockstep — the ONLY
+  sanctioned divergence is the per-skill admin block above, which removes one (owner, skill) without
+  touching avatar visibility. → [`team-trust.md`](team-trust.md).
 - **Transfer plumbing lives in `skillTransfer.ts`** (server root, NOT knowledgeRepo.ts, which it imports): `listRepoSkills` (scan `skills/<dir>/SKILL.md`),
   `copySkillDir` (lstat walk — symlinks SKIPPED never followed, 512KB/file + 4MB + 200 files + depth 8
   caps, containment via the exported `resolveInRepo`/`realpathContained`), `learnSkillIntoRepo`
@@ -270,7 +282,7 @@
   `skillExchangeTools.decodeLearnError`.
 - **Registration:** `skillExchangeActive` (= `avatars` group enabled && `ownerToolAccess`) drives
   `mcpAllowedTools` + `inProcessMcpServers` byte-identically; every handler ALSO self-gates on `viewerIsOwner`
-  (find included — the listing is the OWNER's group view, and a trusted teammate driving this avatar has
+  (find included — the listing is the OWNER's team view, and a trusted teammate driving this avatar has
   their own avatar for their view). Owner routines keep the tools.
 - **Metacognition:** `OwnerState.learnableSkillCount`/`sharedSkillCount` (lazy getters) feed BOTH the
   standing prompt section (promptBuilder, inside the avatars-group block, re-deriving the registration
@@ -308,7 +320,7 @@
   self-state DATA shared by `buildPrompt` (English prompt paragraphs) and
   `systemTools.describe_system` (tool text). This module is the structural sync point for the
   metacognition principle. It returns ungated facts; gating + formatting stay at each call site (e.g.
-  `buildPrompt` blanks secrets/groups to `[]` unless `ownerToolAccess`). When you add a self-state fact to
+  `buildPrompt` blanks secrets to `[]` and leaves `teammateCount` unset unless `ownerToolAccess`). When you add a self-state fact to
   one consumer, add it to `OwnerState` and the other.
 - **Owner identity:** the `AgentOwner` type (`{id, username, displayName, alias?}`) lives in `../types.ts`
   and the descriptor is built ONCE in `buildRunCapabilities` and passed to all tool servers. Don't re-declare

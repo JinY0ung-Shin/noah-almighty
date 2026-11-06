@@ -16,7 +16,7 @@ Each item lists: files · why · risk · effort · breaking.
 ## Tier 3 — larger / riskier (behavior-preserving but needs care)
 
 ### T3.1 — Split the `Store` god-class — ✅ DONE (2026-06)
-- **Done:** `src/server/store.ts` is now a barrel re-exporting an UNCHANGED public surface. The single `Store` facade is preserved via mixin composition (`store/index.ts` `Store extends ComposedStore`); shared base + schema/migrations live in `store/internal.ts` (`StoreBase`); per-domain method groups + `*Row` interfaces moved into `store/{users,avatars,conversations,groups,routines,knowledgeRepo,secrets,admin}.ts`. All ~110 call sites + `createServices` keep `new Store(config)` + `store.foo()`. Verified by full lint/test/build.
+- **Done:** `src/server/store.ts` is now a barrel re-exporting an UNCHANGED public surface. The single `Store` facade is preserved via mixin composition (`store/index.ts` `Store extends ComposedStore`); shared base + schema/migrations live in `store/internal.ts` (`StoreBase`); per-domain method groups + `*Row` interfaces moved into `store/{users,avatars,conversations,groups,routines,knowledgeRepo,secrets,admin}.ts` (the `groups` mixin was removed with groups on 2026-11-06). All ~110 call sites + `createServices` keep `new Store(config)` + `store.foo()`. Verified by full lint/test/build.
 
 ### T3.2 — Centralize the avatar-visibility SQL predicate
 - **Done** (with the `public`-removal + avatar-sharing work): the co-membership join now lives in ONE
@@ -24,6 +24,9 @@ Each item lists: files · why · risk · effort · breaking.
   `groups.avatar_sharing` gate), shared by `VISIBILITY_WHERE` (list + search), `groupTeammateIds`,
   `shareAnyGroup`, and `sharedGroupNames`. Parity is pinned by the store scope-parity + avatar-sharing
   matrix tests.
+- **Superseded 2026-11-06 (single team, groups retired):** the fragment is now `VIEWER_IS_TEAMMATE` (the
+  viewer is an active user), embedded by `VISIBILITY_WHERE` and `LEARNABLE_SKILLS_FROM`, with the TS twin
+  `isActiveTeammatePair` behind `isTrustedFor`/`isVisibleTo` — see `docs/architecture/team-trust.md`.
 
 ### T3.3 — Dedupe the knowledge-repo MCP tool family (3-way, incl. `create_repo`)
 - **Files:** `src/server/agent/repoTools.ts`, `groupRepoTools.ts`

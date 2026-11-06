@@ -18,8 +18,8 @@ own:
 | Run class | Principal (sandbox) | Owner data |
 |---|---|---|
 | owner chat, owner routine, task-API turn | the owner | own |
-| trusted (group) colleague chat | the colleague (U4) | owner repo/brain/skills only through Noah MCP tools |
-| untrusted colleague chat | the colleague | the read-only MCP set only (`mcpAllowedTools`) |
+| trusted (teammate) colleague chat | the colleague (U4) | owner repo/brain/skills only through Noah MCP tools |
+| untrusted colleague chat (fail-closed floor: with one team, every colleague who can reach an avatar is trusted) | the colleague | the read-only MCP set only (`mcpAllowedTools`) |
 | avatar consultation (the consulted avatar's run) | NOBODY: a fresh, empty `consult-<random>` sandbox, deleted after the run | read-only MCP toward the consulted owner |
 | intro/hashtag generators, any run without a conversation | the owner | own |
 
@@ -250,7 +250,7 @@ next conversation) and describe_system (`piRunLines`, live) both state (`PiRunti
 - **Owner runs** (chat, routine, task API, generators — principal = the avatar's owner) copy every root into
   `.noah/skills/`. A **non-owner run** (a colleague in their OWN sandbox, a consultation in its fresh one) gets only the
   bundled default-skills as files, in a SEPARATE folder `.noah/skills-shared/<root>/` (so it can never touch the
-  sandbox owner's own copies); the owner's personal/plugin/group skills are listed `via: "mcp"` and read through `mcp__skills__read`
+  sandbox owner's own copies); the owner's personal/plugin skills are listed `via: "mcp"` and read through `mcp__skills__read`
   (`skills` server — registered only on such runs, when such skills exist; files never land in the
   other user's sandbox; links and paths out of the skill are refused).
 - **Admin skill policy** by omission: a disabled skill (bare name or `<plugin>:<name>`) is not copied, listed or readable.
@@ -265,7 +265,7 @@ next conversation) and describe_system (`piRunLines`, live) both state (`PiRunti
   merge the manifest — and an owner run removes a root it did not write only once no run used it (manifest `usedAt`
   or the entry's mtime, the newer) for `PRUNE_GRACE_MS` (6 h, past the task API's 5 h budget), or at once when the
   admin policy left that root with no skill. It collects stale `.noah/skills-shared/` leftovers by the same rule. So a
-  left group's skill copy can stay in the user's own sandbox up to 6 h. `__pycache__`,
+  skill copy of a root the user no longer has can stay in the user's own sandbox up to 6 h. `__pycache__`,
   `.build`, `.git`, `node_modules` and links are skipped; caps 5 000 files / 128 MB per root, 32 MB per file.
 
 ## Working repositories (design D1, `agent/pi/piRepoCopy.ts`)

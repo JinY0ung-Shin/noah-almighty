@@ -4,7 +4,7 @@ A platform where each user signs up, builds an **avatar** (profile + GitHub plug
 personal knowledge repo), browses coworkers' avatars, and chats with any avatar they can reach.
 Every chat turn runs on a bundled pi-gateway, each in the acting user's own network-less sandbox;
 the owner's data (knowledge repo, secrets, SSH, to-dos) is reached only through Noah's MCP tools,
-which check owner/group trust themselves.
+which check owner/teammate trust themselves.
 
 ## What it does
 
@@ -17,17 +17,22 @@ which check owner/group trust themselves.
   blocked as well.
 - **Built-in usage manual**: local avatars receive a compact feature index on every turn and
   read detailed guides through `mcp__system__read_manual` (the always-on system tool group). Guides cover
-  setup, chat, knowledge, skills/plugins, groups, scheduling, external Task API integration,
+  setup, chat, knowledge, skills/plugins, the team, scheduling, external Task API integration,
   repositories, browser/web, credentials/SSH, artifacts and administration. Current account
   capabilities are checked separately through `describe_system`.
-- **Accounts**: self-service signup with username + password (no invite codes). The
-  first user to sign up becomes the **admin**. SQLite-backed users + roles (`admin`/`member`).
+- **Accounts and the team**: one Noah deployment is **one team**. Signup is username + password (no
+  invite codes); the first user to sign up becomes the **admin**. Every later signup waits until an
+  admin approves it (**승인제**), or signups are shut entirely (**가입 차단**) — there is no open signup,
+  because approval IS joining the team. Every approved (not suspended) user is a teammate: all
+  teammates are equal and **trust each other symmetrically** — they reach each other's 팀 공개 avatars
+  with elevated tool access (`isTrustedFor`, the single choke point). SQLite-backed users + roles
+  (`admin`/`member`). There are no groups (retired 2026-11-06); team knowledge travels as shared skills.
 - **Avatar profile**: display name, uploaded profile picture (with a generated
   initials/gradient fallback), one-line bio, an optional persona / system prompt, and
   **capability hashtags** (역량 해시태그) the avatar can **auto-generate** from its own
-  skills/persona (just like the self-introduction). Avatars are visible only to the owner's
-  group teammates (default) or to no one (**비공개**), set from **내 아바타** — there is no
-  public-to-everyone state, so a user in no group chats only with their own avatar.
+  skills/persona (just like the self-introduction). Avatars are visible to every teammate
+  (**팀 공개**, default) or to no one (**비공개**), set from **내 아바타** — nothing is visible
+  beyond the team.
 - **Personal knowledge repo**: each user connects one dedicated GitHub repo where their
   avatar accumulates work knowledge and skills. It is **auto-loaded into the avatar** (its
   skills become available in chat), and the avatar **manages it itself**: in an owner chat
@@ -71,14 +76,6 @@ which check owner/group trust themselves.
   items that come up in a conversation, and completes or edits them; routines and the external task API
   can add items too (an API-submitted task cannot delete one). Mechanics:
   [`docs/architecture/todos.md`](docs/architecture/todos.md).
-- **Groups**: the system admin creates named teams (`/api/admin/groups*`) and assigns group
-  admins. Group co-membership in an avatar-sharing group is the SOLE source of trust/elevation —
-  co-members **auto-trust each other symmetrically**: they see each other's `group`-visibility
-  avatars and get elevated tool access (write-capable tools with a per-tool prompt) when chatting
-  with a co-member's avatar. There is no per-user "trusted users" list anymore — `isTrustedFor` IS
-  group co-membership (`shareAnyGroup`), the single choke point. Groups have no shared knowledge
-  repo (retired 2026-10-30); team knowledge travels as shared skills. Group self-serve (member
-  management, avatar sharing, shared-skill channel) is at `/api/me/groups*`.
 - **Knowledge-backfill loop**: when the avatar notices a knowledge gap it can file a
   `request_info` gap. The owner sees pending gaps in the **내 아바타** nav badge and receives
   an in-app toast; clicking through lets them answer and feed the answer back to the avatar,
@@ -102,8 +99,7 @@ which check owner/group trust themselves.
   `SSH_PRIVATE_KEY` keypair immediately. External github.com `GITHUB_TOKEN` setup and
   knowledge repo / branch setup can happen later through settings.
 - **Discovery**: published avatars appear in the Explore directory, searchable by name or
-  **capability hashtag**; anyone can start a chat. Group co-members also see each other's
-  unpublished avatars. An avatar can look up other avatars' capabilities mid-chat
+  **capability hashtag**; any teammate can start a chat with a 팀 공개 avatar. An avatar can look up other avatars' capabilities mid-chat
   (the shared read-only `mcp__avatars__search_avatars` tool) and point you to a
   better-suited teammate when a request is outside its own expertise.
 - **Per-conversation model picker**: the chat composer lists the models pi-gateway offers right now
@@ -114,13 +110,15 @@ which check owner/group trust themselves.
   `/admin/` to Noah admins).
 - **Per-user sandboxes, tiered data access**: each run executes in the ACTING user's own pi
   sandbox with the full tool set (shell, files) — a colleague chatting with your avatar works in
-  the colleague's sandbox, never yours. What separates owners, group co-members (avatar-sharing
-  groups) and plain colleagues is what Noah's MCP tools let each of them reach: owner-only tools
+  the colleague's sandbox, never yours. What separates the owner from a teammate is what Noah's
+  MCP tools let each of them reach: owner-only tools
   (repo commit/push, SSH, secrets, routines, to-dos) check the owner in their handlers.
   - Streaming, markdown rendering, conversations, and per-message actions (copy,
     regenerate, edit-and-resend) are supported for all viewer classes.
-- **Admin**: list users, grant/revoke the `admin` role, delete accounts and manage groups
-  (create/delete teams, assign group admins, manage members). The LLM endpoints are configured
+- **Admin**: list users, approve pending signups (joining the team), suspend, grant/revoke the
+  `admin` role and delete accounts; set the signup mode (관리자 ▸ 가입·접근 ▸ 회원가입 정책: 승인제 / 가입 차단); set the ONE MCP tool
+  policy that applies to every user, admins included (관리자 ▸ 도구·스킬 ▸ **MCP 도구 정책**); and
+  block a user's shared skill for the whole team (관리자 ▸ 도구·스킬 ▸ **공유 스킬 관리**). The LLM endpoints are configured
   in pi-gateway's own admin page (README "Deployment").
 
 ## Quick start
@@ -327,6 +325,31 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
 - **A new sandbox image only applies to new sandboxes.** Running ones keep the old image until idle
   (`SANDBOX_IDLE_SECONDS`, 15 min); to switch at once (workspaces stay):
   `docker rm -f $(docker ps -aq --filter label=pi-gateway.sandbox=1)`.
+- **Single team (groups retired, 2026-11-06).** The first boot of this release converts an existing
+  deployment once, in one transaction:
+  - every ACTIVE non-admin user who was not in an avatar-sharing group is **suspended** (their sessions
+    end) — one audit row each (`single_team_suspend`, shown in 관리자 ▸ 감사 로그) and one boot warning
+    `single-team conversion: suspended every active non-admin user outside an avatar-sharing group` with
+    the count and usernames. An admin **re-approves** the ones that belong in 관리자 ▸ 사용자.
+    A deployment with NO avatar-sharing group suspends **every** non-admin. While suspended, a user's
+    routines stop running and their personal API keys (외부 작업 API) stop working — external integrations
+    built on those keys fail until the account is re-approved, and nothing tells the integration why, so
+    re-approve integration owners first.
+  - the groups' MCP tool policies merge into ONE global policy (the INTERSECTION of the policies of every
+    group that has at least one member; none → no restriction), logged at boot and audited as
+    `set_tool_policy` by `system`. Unlike the per-group policy, which never touched users outside a policy
+    group, the global policy applies to **everyone, admins included** — review it in 관리자 ▸ 도구·스킬 ▸ MCP 도구 정책.
+  - group-admin shared-skill blocks become team-wide blocks (관리자 ▸ 도구·스킬 ▸ 공유 스킬 관리).
+  - a stored `open` signup mode now reads as 승인제 (approval).
+
+  The conversion runs even when the retirement backup fails (it deletes nothing, and waiting would leave
+  non-members trusted until a backup succeeds); only the group tables' drop waits behind the retirement
+  backup (next sections). Rolling back to an older release brings the group tables back EMPTY — no one
+  shares a group, so no one reaches or trusts another's avatar until this release runs again, and the
+  re-upgrade will NOT suspend anyone a second time. So during a rollback **never set signup to open**: an
+  account created then comes back active, i.e. a trusted teammate, after the re-upgrade. After
+  re-upgrading, re-check 관리자 ▸ 사용자 and suspend anyone who should not be on the team. Restore the
+  `pre-retire-<stamp>.db` backup instead if the old groups must come back.
 - Existing SDK-era deployments: see "Moving an existing deployment to pi" below.
 
 ### Deck converter golden drift
@@ -419,7 +442,7 @@ with the bundled pi-gateway: its firewall admits only its own proxy, so Noah can
 
 ### Retirement backups and quarantine
 
-Removed features (personal bots, external avatars, group shared agents, server agents, Craft apps, STT)
+Removed features (personal bots, external avatars, group shared agents, groups, server agents, Craft apps, STT)
 are cleaned out of an existing deployment at boot. Before any of that deletes data, Noah:
 
 - **backs up the whole SQLite DB** to `APP_DATA_DIR/backups/pre-retire-<UTC stamp>.db` (file 0600,
@@ -498,9 +521,10 @@ backup and quarantine).
 Agent turns never run in Noah's container: each one runs in the acting user's pi-gateway sandbox
 (no network, read-only root filesystem, its own workspace), and the sandbox reaches Noah only
 through pi's MCP broker with a per-run token Noah mints — `/mcp` additionally admits only the
-broker's address. Every Noah MCP handler self-gates owner/elevated access, and the group trust
-check (`isTrustedFor`) stays the single choke point for peer trust. Installed plugins' HTTP MCP
-servers are relayed by Noah; stdio MCP servers from knowledge, group or plugin repositories are
+broker's address. Every Noah MCP handler self-gates owner/elevated access, and the team trust
+check (`isTrustedFor`: both users approved and not suspended) stays the single choke point for peer
+trust. Installed plugins' HTTP MCP
+servers are relayed by Noah; stdio MCP servers from knowledge or plugin repositories are
 not started. Keep pi-gateway's `SANDBOX_EGRESS_ALLOW` minimal, and never list Noah in it.
 
 ## Verification
@@ -515,8 +539,8 @@ npm run build
 Svelte/Vite client — a client compile error aborts the run before any Vitest test executes.
 
 Smoke test: sign up (first user = admin) → open **내 아바타**, set a name/picture/bio,
-click **아바타가 자동 생성** under 역량 해시태그, add a plugin → create a group in the admin
-panel and add a second account to it → from that account, open **탐색**, search by a
+click **아바타가 자동 생성** under 역량 해시태그, add a plugin → sign up a second account and approve
+it in the admin panel → from that account, open **탐색**, search by a
 hashtag, pick the teammate's avatar, and chat. Confirm the response streams and renders
 markdown.
 
@@ -526,7 +550,7 @@ markdown.
 
 ### 사용자 간 DM
 
-화면 오른쪽 아래 **메시지** 바를 누르면 작은 대화창이 위로 올라옵니다. 접속 중인 사용자 또는 이전 대화 상대를 선택해 1:1 메시지를 보냅니다. 모든 로그인 사용자가 그룹·아바타 공개 범위와 관계없이 사용할 수 있습니다. Enter로 전송하고 Shift+Enter로 줄을 바꿉니다.
+화면 오른쪽 아래 **메시지** 바를 누르면 작은 대화창이 위로 올라옵니다. 접속 중인 사용자 또는 이전 대화 상대를 선택해 1:1 메시지를 보냅니다. 모든 로그인 사용자(팀원)가 아바타 공개 범위와 관계없이 사용할 수 있습니다. Enter로 전송하고 Shift+Enter로 줄을 바꿉니다.
 
 - 대화창은 어느 화면에서든 보이고 모달이 아니어서 뒤 화면을 그대로 사용할 수 있습니다. 접으면 바만 남고, 펼친 상태와 마지막 대화 상대는 브라우저에 기억됩니다.
 - 대화창 바깥을 누르면 접힙니다. 누른 곳은 그대로 동작하며, 보던 대화와 입력 중인 글은 유지되므로 다시 펼치면 이어서 씁니다.

@@ -235,7 +235,7 @@
   `captures/` ([`browser-bridge/contract.md`](browser-bridge/contract.md)), and Confluence saves in
   `confluence/`. Both metacognition surfaces name the folders ([`agent-core.md`](agent-core.md)).
 - **Conversation delete removes the SERVER-WRITTEN workspace copies, and only those (2026-09-30).** Every
-  conversation-delete path (single and bulk delete in `routes/chat.ts`, the admin user and group cascades in
+  conversation-delete path (single and bulk delete in `routes/chat.ts`, the admin user cascade in
   `routes/admin.ts`) calls `deleteConversationWorkspaceCopies` (`workspace.ts`) next to the chat-image/file
   sweeps. It removes `attachments/`, `captures/` and `confluence/` (`SERVER_WORKSPACE_COPY_DIRS`) from the
   deleted conversation's sandbox folder under EVERY `u-*` user root (`deletePiConversationCopies`) and from its

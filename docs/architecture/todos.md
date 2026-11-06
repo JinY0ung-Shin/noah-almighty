@@ -107,8 +107,8 @@
   !consultationRun` — an interactive own-avatar chat, an owner routine (headless with tools opted in) and
   an external-task-API turn; never a teammate's chat, a consultation or a generic headless
   run (intro/hashtag generation). It rides the always-on `system` family rather than a tool group, so a
-  saved tool-group selection (`selected_*` / `*_default` store explicit lists) or a group's
-  `allowed_mcp_tool_groups` policy can never silently drop it. `todoDeleteActive = todoToolsActive &&
+  saved tool-group selection (`selected_*` / `*_default` store explicit lists) or the admin's
+  global MCP tool policy (`mcp_tool_policy`) can never silently drop it. `todoDeleteActive = todoToolsActive &&
   !externalTaskApi`: an API-submitted turn is machine-authored, so withholding delete is a SPEED BUMP
   against an injected, irreversible removal of items — not a full boundary: `update_todo` stays
   available (it can still rewrite titles and memos), and per CLAUDE.md a leaked key IS the owner's
