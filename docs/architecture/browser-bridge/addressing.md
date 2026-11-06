@@ -3,6 +3,8 @@
 > Detail page of [Architecture & Operational Notes](../../ARCHITECTURE-NOTES.md).
 > `click_at`'s two modes, uid lifetime, the pinned working tab, the settle tail, and how frames are walked.
 
+- **Elements are addressed by `backendNodeId`; screenshot-pixel `click_at` is the deliberate escape hatch** for
+  targets the AX tree does not expose (canvas widgets, AX-invisible controls).
 - **`click_at` has TWO modes and they share nothing but a name.** UID mode (`uid` +
   `xFraction`/`yFraction`, 0–1, default 0.5 centre) resolves the ref, takes `DOM.getContentQuads` on the
   ref's OWN session, and clicks a fraction of the element's bounding box clamped 1px inside — no

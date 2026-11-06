@@ -296,8 +296,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   side panel serves the ACTIVE pane, and a tab opened unasked in another pane would surface later.
 
 ## Client ↔ server contracts mirrored by hand
-- No shared module across the TS/Svelte ↔ server boundary, so the client re-implements several server
-  validators. Update these in lockstep:
+- **New cross-boundary code goes into `src/shared/*`** (modules both sides compile, e.g. the import-free
+  `mcpToolGroups.ts`, `todos.ts`) or a server module listed in `tsconfig.client.json`'s `include` — never a
+  hand-copy. The pairs below predate that layer and are still mirrored by hand; update them in lockstep:
   - `normalizeTags` (`lib/format.ts`) ↔ server `normalizeHashtags`
   - repo-href building ↔ server `githubHost` resolution
   - the schedule builder (`RoutineModal.svelte` + `formatRoutineSchedule` in `lib/format.ts`) ↔ server

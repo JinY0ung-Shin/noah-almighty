@@ -99,9 +99,11 @@
   `compact` frame (server-minted id, deduped on replay) → the client's persisted `compact` activity row + chip.
   The usage badge's window is pi's `usage.context_window` (`AgentUsage.contextWindow`).
 - **Tool gate: built-ins are pi's, MCP tools are gated per call at `/mcp`.** pi's built-ins
-  (read/write/edit/bash/ls/find/grep) are always on and run in the RUN PRINCIPAL's own sandbox (viewer for a
-  colleague chat, the asker for a consultation, the owner otherwise — `piRunPrincipal`); pi has no per-request
-  built-in allowlist, so read-only run classes get them too, in their own sandbox, never the owner's files. Noah's
+  (read/write/edit/bash/ls/find/grep) run in the RUN PRINCIPAL's own sandbox (viewer for a colleague chat, the
+  owner otherwise — `piRunPrincipal`; a consultation gets a fresh, empty `consult-<random>` sandbox of its own). pi
+  has no per-request built-in allowlist — its only per-request switches are `interactive` and `read_only` — so a
+  colleague chat's session is `read_only` (read/ls/find/grep) and every other class has the full set, never over
+  the owner's files. Details → [`pi-runtime.md`](pi-runtime.md) "Run classes". Noah's
   tools reach the model only through `mcp_call`, and the `/mcp` endpoint admits exactly this run's
   `mcpAllowedTools` (`allowCall`) — then every handler self-gates again. Nothing prompts for approval: there is no
   permission dialog, no confirmer, no protected-path ask. Details → [`pi-runtime.md`](pi-runtime.md) "One run"
@@ -169,6 +171,13 @@
   the turn opener (or another steer) and reads "응답 중 전달"; a fallback one follows a sealed answer segment and
   reads "답변 뒤 전달". **Both frames must be replay-idempotent** — they ride the ordered run-event
   log, so a reattach re-applies them (see [`client.md`](./client.md) for the wire contract).
+
+### Deletion cascades (rules)
+- **A new message-deleting path cascades like `applyConversationRewind`:** the dropped rows' attachments (minus the
+  ones a kept row carries), their staged workspace copies, per-card share links, and canvases from the anchor time.
+- **A new conversation-deleting path** calls `deleteShareLinksForConversation` next to the canvas cascade
+  ([`server-core.md`](server-core.md)) AND `deleteConversationWorkspaceCopies` (the server-written
+  `attachments/`/`captures/`/`confluence/` copies in the sandbox folder die with what they mirror).
 
 ## Image attachments
 - The user message can carry images. The composer stages images (`ChatPane.pendingImages`, downscaled to

@@ -83,3 +83,16 @@
   "--load-extension=<extension/>"] })`), which drives real `chrome-extension://` pages and settles what a
   match pattern actually does. Only `@playwright/test` is installed (no `playwright`/`playwright-core`,
   and `node_modules/.bin` has no `playwright` symlink). Ad-hoc harness — not committed as a test.
+
+## Fleet and signing invariants (fail in the FIELD, not in CI)
+- **Windows/Linux only — no macOS.** Platform-dependent decisions (paste shortcuts, file-dialog/DLP behavior,
+  extension guidance) target Windows/Linux; mac handling stays defensive-only (e.g. `viewerPlatform`'s Meta
+  branch), and no user-facing text or release note advertises macOS.
+- **ONE RSA key on the release machine** (`BROWSER_EXTENSION_KEY_FILE`) derives the extension id and the policy
+  update channel. Losing it orphans every install; changing it changes the id, which every place naming the id
+  must follow.
+- **A new file under `extension/` joins `BUNDLE_FILES`** (`browserExtensionBundle.ts`) or the shipped zip silently
+  bricks; a BINARY file also joins `BINARY_BUNDLE_FILES`, or the one-click updater pushes it through utf8 and
+  corrupts it.
+- **`BROWSER_EXTENSION_MIN_COMPATIBLE` never exceeds the bundled manifest version** — `tests/infra.test.ts`
+  enforces the ceiling.

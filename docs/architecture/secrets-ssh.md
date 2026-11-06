@@ -211,6 +211,17 @@
   `/run/secrets/pi_gateway_admin_api_key_noah` (Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`). It is
   pi's full admin, so the same-uid caveat above weighs more for it than for the service key.
 
+### Rules when adding a secret path
+- **A new server-only secret joins `SERVER_ONLY_SECRET_ENV_NAMES` (`secretPolicy.ts`)**, which `index.ts` drops from
+  `process.env` right after the config loads; **a new child-process env starts from that scrubbed `process.env`**
+  (as `piProxyBaseEnv` does), never from a saved copy of the original.
+- **Relaying IS the gate for a third-party MCP server** — it cannot self-gate like Noah's handlers, so Noah decides
+  per run whether to relay it at all. A slot value lands only in the bridge's config file and never reaches the
+  sandbox or argv. When a slotted server sits a run out (`needs_binding` (+ its `hostChanged` flag),
+  `missing_secrets`, `secrets_unavailable`), BOTH metacognition surfaces say why.
+- **Browser secret input on both surfaces** lists the enabled names + allowed sites AND branches on whether the
+  browser bridge is connected.
+
 ## On-prem GitHub CA
 - **One var `GITHUB_CA_CERT`** (PEM path, `applyCustomGithubCa` in `tlsCa.ts`, called from `index.ts`).
   Covers Node `fetch` via runtime `tls.setDefaultCACertificates` (appends to system roots), `git`

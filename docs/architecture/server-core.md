@@ -8,7 +8,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
 
 ## HTTP layout (after the Tier-1/2 refactor)
 - **`app.ts` is thin glue.** `createApp` builds middleware + mounts per-domain routers from
-  `routes/`. Handlers live in `routes/{auth,profile,directMessages,plugins,knowledgeRepo,groups,routines,chat,admin}.ts`,
+  `routes/`. Handlers live in `routes/*.ts` (e.g. `auth`, `profile`, `chat`, `admin`, `browserExtension`, `avatarTasks`, `piAdminProxy`, `sharedMcp`, `skillShare`, `todos`),
   each a `(deps) => Router` factory. Shared route helpers (`apiError`, `safeString`, `looksLikeRepo`,
   `avatarDir`, MIME/size/password consts, `AppServices`) live in `routes/_shared.ts`.
   **`createApp`/`createServices`/`expandChatSlashCommand`/`AppServices` are still imported from `app.ts`**
@@ -135,7 +135,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   drops `groups.knowledge_repo`/`knowledge_branch`/`knowledge_selected`, `users.group_knowledge_off_default`
   and `conversations.group_knowledge_off` (`dropColumnIfPresent`); every name is reserved forever.
   `retireGroupKnowledgeRepos.ts` (boot, after the Craft step) quarantines Noah's clones
-  `<dataDir>/group-knowledge` whole into `retired/<stamp>/group-knowledge` and stamps
+  `<dataDir>/group-knowledge` (a path reserved forever) whole into `retired/<stamp>/group-knowledge` and stamps
   `retired:group_knowledge_repos`; a refused move (EXDEV included) is retried next boot. The remote
   repositories are never touched. Removed with it: `groupKnowledgeRepo.ts`, `groupRepoTools.ts`
   (`mcp__group_repo__*`), the `/api/me/groups/:id/knowledge-repo*` routes, `PUT /api/me/group-knowledge-default`,

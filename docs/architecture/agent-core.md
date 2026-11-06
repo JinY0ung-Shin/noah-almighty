@@ -103,6 +103,27 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
 [`browser-bridge/contract.md`](browser-bridge/contract.md) and
 [`browser-bridge/actions.md`](browser-bridge/actions.md).
 
+## Cross-cutting rules for agent-facing work
+
+- **Metacognition has TWO surfaces that must agree.** The prompt append (`buildSystemPromptAppend`, frozen once
+  per conversation) and the live `describe_system` / system manual. A new capability reports its current state on
+  BOTH; a self-state fact goes into `OwnerState` (`summarizeOwnerState`, `agent/ownerState.ts`) so both consumers
+  get the same unformatted fact (detail in [`avatar-collab.md`](avatar-collab.md)). Never offer a route the run
+  does not actually have.
+- **Language split: agent-facing English, user-facing Korean.** Classify a new string by *"does the model read it
+  as INPUT?"*. English: prompts, tool descriptions, tool-call refusals and errors, server slash-command expansions,
+  bundled `SKILL.md` body + frontmatter. Korean: UI, `apiError`, status/activity labels, conversation titles. A
+  string used on BOTH channels is split into two. The avatar always REPLIES in the user's language (default
+  Korean), anchored in `buildSystemPromptAppend`.
+- **Interactive-only capabilities gate on BOTH `headless` and `externalTaskApi`** (and never consultations), the way
+  `shareLinkToolActive` does in `runCapabilities.ts` — an API-submitted turn has no human at the keyboard. See
+  [`avatar-task-api.md`](avatar-task-api.md) "Provenance".
+- **A server-held third-party credential stays READ-ONLY, STRUCTURALLY.** The Confluence client's `requestJson`
+  (and `requestBinary`) has no `method`/`body` option, so a future tool cannot quietly reach a mutating endpoint
+  with the owner's PAT. Page creation/editing is routed to the browser tools (the user's own session —
+  attributable, visible, undoable). Both metacognition surfaces branch on `browserEnabled` when they describe
+  that write route.
+
 ## Admin builtin tool/skill on-off policy (`toolSkillPolicy.ts` + `agent/skillCatalog.ts`)
 - **What it is:** the admin panel (system tab → "내장 도구·스킬 정책") stores deployment-wide off-switches for
   BUILT-IN tools (the `TOGGLABLE_BUILTIN_TOOLS` catalog; core tools are deliberately NOT togglable and the strict
@@ -145,8 +166,10 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   (`allowCall`): miss it and the call is refused; miss the server build and the call has nothing to run.
   (Making this data-driven is deferred, T3.5.) A conditionally built tool on an EXISTING server (`create_repo`,
   `create_share_link`) gets its own `mcpAllowedTools` entry keyed on the SAME boolean as its build.
-- **A new SERVER also reaches pi's broker:** its name joins `PI_NOAH_SERVER_NAMES` + the static catalog build
-  (`pi/mcpCatalog.ts`) AND `NOAH_MCP_SERVER_NAMES` in `scripts/pi-register-mcp.mjs` (a test keeps them equal), and
+- **A new SERVER also reaches pi's broker:** its name joins `PI_NOAH_SERVER_NAMES` (`pi/mcpCatalog.ts`; a relay
+  id: `PI_PROXY_SERVER_NAMES` in `pi/mcpProxies.ts`) + the static catalog build (`pi/mcpCatalog.ts`) AND `NOAH_MCP_SERVER_NAMES` in
+  `scripts/pi-register-mcp.mjs`, which mirrors `PI_MCP_SERVER_NAMES` (= both lists; `tests/pi-runner.test.ts`
+  keeps them equal), and
   the bundled `pi-setup` service re-runs the script on the next `docker compose up` (a native setup runs it by
   hand). tools/list is answered from that static catalog (pi lists a session's tools
   once), so a tool's registration never hides it from the model — the per-call gate and the handler do the

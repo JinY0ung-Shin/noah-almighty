@@ -66,6 +66,9 @@ shared SQLite file.
 - `/:id` resolution is its own `use()` layer: a miss is a plain 404 with **no existence probe**,
   and the resolved row rides `res.locals.avatarTask`.
 
+- **A key IS the owner.** It runs a FULL owner run (same tools, the owner's sandbox, repo commits), and its
+  holder answers the run's `question`/`canvas` prompts via `/respond` — a leaked key is the owner's session.
+
 ## Status machine
 Stored (`AvatarTaskStatus`): `queued` → `running` → `succeeded` | `failed` | `cancelled`.
 - **`waiting_input` is PRESENTATION ONLY** and never lands in the DB — the wire type is
@@ -184,6 +187,10 @@ secrets as `$NAME` in bash — pi `sandbox_env`, design P4). What the flag chang
   headless run never reaches — the two surfaces must agree.
 - Everything else is deliberately untouched: `deriveAgentToolAccess` / `planMcpToolFamilies` never
   read the flag, and `request.avatar` is the owner's own row (this is not a new avatar kind).
+
+- **Rule: a new interactive-only capability is gated on BOTH `headless` and `externalTaskApi`** — `headless` alone
+  lets an API-submitted turn through. `shareLinkToolActive` is the model; cross-referenced from
+  [`agent-core.md`](agent-core.md) "Cross-cutting rules".
 
 ## Metacognition (both surfaces, from one fact)
 `OwnerState.avatarApiKeyCount` (`agent/ownerState.ts`, eager like its neighbours — the list is capped

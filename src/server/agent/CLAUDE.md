@@ -49,7 +49,8 @@ Durable principles for this layer:
   describe_system reports. Miss one and the model either sees a tool it can't call or calls one that isn't built.
 - **A new SERVER also reaches pi's broker** (`docs/architecture/pi-runtime.md`): add its name to
   `PI_NOAH_SERVER_NAMES` + the static catalog build (`pi/mcpCatalog.ts`) AND to `NOAH_MCP_SERVER_NAMES` in
-  `scripts/pi-register-mcp.mjs` (a test keeps the two equal); broker ids are GLOBAL per pi instance, so the
+  `scripts/pi-register-mcp.mjs` (it mirrors `PI_MCP_SERVER_NAMES` = Noah's servers + relay ids; a test keeps the
+  two equal); broker ids are GLOBAL per pi instance, so the
   script must run again — the bundled `pi-setup` service does on every `docker compose up`. A
   third-party/process server is never its own id — it rides Noah's relays (`pi/mcpProxies.ts`: `hex-ssh`,
   `plugins`, `shared`). Servers are built with `createMcpToolServer` (`mcpServer.ts`), and a child Noah spawns for a relay starts from `piProxyBaseEnv` (`pi/mcpProxies.ts`).

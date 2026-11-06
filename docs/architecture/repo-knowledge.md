@@ -112,7 +112,8 @@
   `brainSection` and the `describe_system` brain line) check the per-conversation `personal_knowledge`
   tool-group toggle FIRST — mirroring `buildRunCapabilities`' `brainActive` — so a deselected group reads as
   OFF, never as active; both also say groups have no repository or team brain
-  (`GROUP_REPOS_RETIRED_SENTENCE`). **Capture/consolidate** is the
+  (`GROUP_REPOS_RETIRED_SENTENCE` — needed because older frozen `pi_instructions` still name the
+  `mcp__group_repo__*` tools). **Capture/consolidate** is the
   `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` + `commit` —
   there is NO separate "brain write" tool, so a
   capture is a repo write plus a commit (uncommitted = not persisted). It composes with the backfill

@@ -83,6 +83,10 @@ names that principal again. Cost: each consultation cold-starts a container (~30
 model call. Skills there are the bundled ones as files plus the target's via `mcp__skills__read` (a non-owner run);
 `viewerUserId` stays the asker, so the MCP gates, `request_info` attribution and trust checks are what they were.
 
+- **pi's ONLY per-request switches are `interactive` and `read_only`.** There is no per-request built-in
+  allowlist, so a run class's BUILT-IN tool access differs only through those two flags and which sandbox
+  principal it runs in.
+
 ## One run (`agent/pi/runPiAgent.ts`)
 
 1. **Capabilities** — `buildRunCapabilities(…, { piConversationDir, … })` (`agent/runCapabilities.ts`),

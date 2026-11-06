@@ -6,8 +6,18 @@
 - **Audit policy: actions PLUS deliberate reads.** `screenshot`/`read_text` get rows (they are the
   exfiltration surface); `snapshot`/`wait_for` never do — they fire between every step and would bury
   the rows that matter. URLs are scrubbed of userinfo and query string.
-- **No JS execution, and that shapes op design.** `CDP_ALLOWLIST` is default-deny with no
-  `Runtime.*`/`Network.*`/`Storage.*`; elements are AX-tree `backendNodeId`s. So `select_option` clicks a
+- **Drive it the way a PERSON would, then re-read.** An op that cannot be executed directly (no JS, no
+  `Storage.*`) is driven through the input a person would use — click, keyboard, scroll — and the result is
+  RE-READ (`getPartialAXTree`, a fresh snapshot) to confirm what it landed on, never assumed from the
+  action's success.
+- **Confluence writes go through these tools, never the server PAT.** The Confluence MCP tools are read-only by
+  construction ([`../agent-core.md`](../agent-core.md) "Cross-cutting rules"); creating or editing a page runs
+  here, in the user's own logged-in session, so the edit is attributable, visible and undoable.
+- **No page JS execution (beyond `read_storage`'s fixed bridge-authored expressions, one per storage type), and
+  that shapes op design.** `CDP_ALLOWLIST` is default-deny: no `Storage.*`; of `Runtime.*` ONLY the `Runtime.evaluate` behind
+  `read_storage` (not `Runtime.enable`); of `Network.*` ONLY the consent-gated, current-origin
+  `Network.getCookies` behind `read_cookies` ([contract.md](contract.md)). That allowlist — NOT the permission
+  manifest — is the security boundary. Elements are AX-tree `backendNodeId`s. So `select_option` clicks a
   rendered option, or drives a collapsed native `<select>` from the KEYBOARD (next bullet). Every later
   entry has had to pass the SAME test — read-only, executes no page JS, opens no exfiltration class
   `getFullAXTree` does not already open (it hands back the page's whole text): `Page.getFrameTree` and

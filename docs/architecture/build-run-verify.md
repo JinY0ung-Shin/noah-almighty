@@ -41,6 +41,14 @@
   policy reads `releases/latest/download/…`, so a release without them breaks the update check for
   the whole fleet. See [`browser-bridge/extension.md`](browser-bridge/extension.md).
 
+- **Dev box ≠ deploy target.** Coding happens on a WSL2 box; deployment is a separate internal corporate server
+  (no local DB, `localhost` is not the deploy env). Any schema / UID / volume / `SESSION_SECRET` change needs an
+  EXISTING-deployment migration path, not just fresh-install behavior.
+- **Tests:** vitest files in `tests/`, named by area (`agent-*`, `client-*`, `svelte-*`, `browser-*`, `store`,
+  `infra`, `app`, `chat-history`, …) with shared fixtures in `tests/helpers.ts`.
+- **Release notes never advertise macOS** — the user fleet is Windows/Linux only
+  ([`browser-bridge/extension.md`](browser-bridge/extension.md)).
+
 ## Verifying the running app / UI
 - Verifying the local server: WHEN a corporate `HTTP_PROXY` is set it intercepts `localhost`
   (returns "Access Denied") — hit the dev server with `curl --noproxy '*' localhost:<port>/...`.
