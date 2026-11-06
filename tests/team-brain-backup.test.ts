@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
-import { applyTeamNote, countTeamNotes, readTeamNote, teamBrainRoot } from "../src/server/teamBrain.js";
+import { countTeamNotes, readTeamNote, readTeamVaultFile, teamBrainRoot, teamVaultSchemaVersionSync } from "../src/server/teamBrain.js";
+import { seedTeamVault, teamPage } from "./team-brain-fixtures.js";
 import { signup, withTempDir } from "./helpers.js";
 
 // The mirror is pushed over https to the INTERNAL host; here git's own
@@ -46,17 +47,9 @@ async function boot(dataDir = dir()) {
   return { ...services, app, admin, mate, adminUser, mateUser };
 }
 
-const NOTE = "---\ntitle: 배포\n---\n\n배포는 compose up.\n";
-const seedNote = (config: { dataDir: string }) =>
-  applyTeamNote(config, {
-    path: "wiki/concepts/deploy.md",
-    op: "create",
-    content: NOTE,
-    expectedBlob: null,
-    title: "배포",
-    proposalId: "seed",
-    author: { name: "A", email: "a@x" },
-  });
+const PAGE_PATH = "wiki/howto/deploy.md";
+const NOTE = teamPage({ title: "배포", body: "배포는 compose up." });
+const seedNote = (config: { dataDir: string }) => seedTeamVault(config, [{ path: PAGE_PATH, content: NOTE }]);
 
 describe("team brain backup", () => {
   it("is admin-only and refuses a non-internal host, a local path and a bad branch", async () => {
@@ -80,7 +73,7 @@ describe("team brain backup", () => {
     expect(pushed.body.backup.lastOkAt).toBeTruthy();
     expect(pushed.body.backup.lastError).toBeNull();
     const mirrorLog = execFileSync("git", ["-C", path.join(mirrorRoot, "brain.git"), "log", "--format=%s", "backup"]).toString();
-    expect(mirrorLog).toContain("team-brain: 배포");
+    expect(mirrorLog).toContain("team-brain: seed");
     // The vault keeps no remote: the mirror is push-only, by URL.
     expect(execFileSync("git", ["-C", teamBrainRoot(s.config), "remote"]).toString().trim()).toBe("");
     // The token never lands on disk in the vault's config.
@@ -97,9 +90,32 @@ describe("team brain backup", () => {
     await fresh.admin.put("/api/admin/team-brain/backup").send({ url: MIRROR_URL, branch: "backup" }).expect(200);
     const restored = await fresh.admin.post("/api/admin/team-brain/backup/restore").expect(200);
     expect(restored.body.noteCount).toBe(1);
-    expect(await readTeamNote(fresh.config, "wiki/concepts/deploy.md")).toBe(NOTE);
+    expect(await readTeamNote(fresh.config, PAGE_PATH)).toBe(NOTE);
     expect(execFileSync("git", ["-C", teamBrainRoot(fresh.config), "remote"]).toString().trim()).toBe("");
     expect(await countTeamNotes(fresh.config)).toBe(1);
+  });
+
+  it("migrates a pre-schema mirror right after restoring it, and treats raw sources as content", async () => {
+    // A mirror pushed by an older build: notes straight under wiki/, no SCHEMA.md.
+    const scratch = fs.mkdtempSync(path.join(mirrorRoot, "v0-"));
+    execFileSync("git", ["-C", scratch, "init", "--quiet", "--initial-branch=v0"]);
+    fs.mkdirSync(path.join(scratch, "wiki", "concepts"), { recursive: true });
+    fs.writeFileSync(path.join(scratch, "wiki", "index.md"), "# Team brain\n");
+    fs.writeFileSync(path.join(scratch, "wiki", "concepts", "deploy.md"), "old note\n");
+    execFileSync("git", ["-C", scratch, "add", "-A"]);
+    execFileSync("git", ["-C", scratch, "-c", "user.name=x", "-c", "user.email=x@x", "commit", "--quiet", "-m", "team-brain: old"]);
+    execFileSync("git", ["-C", scratch, "push", "--quiet", path.join(mirrorRoot, "brain.git"), "v0:refs/heads/v0"]);
+    const s = await boot();
+    await s.admin.put("/api/admin/team-brain/backup").send({ url: MIRROR_URL, branch: "v0" }).expect(200);
+    const restored = await s.admin.post("/api/admin/team-brain/backup/restore").expect(200);
+    expect(restored.body.noteCount).toBe(0);
+    expect(teamVaultSchemaVersionSync(s.config)).toBe(1);
+    expect(await readTeamVaultFile(s.config, "raw/legacy/concepts/deploy.md")).toBe("old note\n");
+    // The admin panel shows how much is waiting to be compiled.
+    expect((await s.admin.get("/api/admin/team-brain").expect(200)).body).toMatchObject({ noteCount: 0, rawSources: 1, uncompiledSources: 1 });
+    // Only raw sources, no pages — still not an empty vault: a second restore is refused.
+    const refused = await s.admin.post("/api/admin/team-brain/backup/restore").expect(409);
+    expect(refused.body.error).toContain("이미 노트가 있어");
   });
 
   it("never force-pushes: a branch with history the vault does not know is refused, not overwritten", async () => {
@@ -147,6 +163,7 @@ describe("team brain backup", () => {
 
   it("schedules a debounced push after an approved card is applied", async () => {
     const s = await boot();
+    await seedNote(s.config);
     let scheduled = 0;
     const original = s.teamBrainBackup!.schedule.bind(s.teamBrainBackup);
     s.teamBrainBackup!.schedule = () => {
@@ -157,12 +174,13 @@ describe("team brain backup", () => {
       kind: "direct",
       proposerUserId: s.adminUser.id,
       conversationId: null,
-      path: "wiki/a.md",
+      path: "",
       op: "create",
       title: "a",
       summary: "",
-      content: "a",
+      content: "",
       baseBlob: null,
+      changeset: { changes: [{ path: "wiki/howto/other.md", op: "create", content: teamPage({ title: "Other" }), baseBlob: null }], conflicts: [] },
     });
     if (!r.ok) throw new Error("draft");
     await s.admin.post(`/api/team-brain/cards/${r.proposal.id}/apply`).expect(200);

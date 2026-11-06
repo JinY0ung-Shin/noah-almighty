@@ -3,19 +3,24 @@
 // lands here, re-checking everything live: the presser is the row's own
 // drafter, still active, an admin where the action needs one, the row is in
 // the status the button expects (compare-and-set — two admins pressing at once
-// decide a proposal once), and the note is exactly what the draft saw (stale →
-// refused, never overwritten). User-facing messages are Korean.
+// decide a proposal once), and every page is exactly what the draft saw and
+// the changeset still passes the schema (applyTeamChangeset re-checks both
+// under the vault lock — refused, never overwritten). User-facing messages are
+// Korean; the server's English validation errors never reach the UI.
 
 import { commitIdentityFor } from "./knowledgeRepo.js";
 import {
+  TeamChangesetInvalidError,
   TeamNoteConflictError,
-  applyTeamNote,
-  teamNoteState,
+  applyTeamChangeset,
+  teamBrainProposalCommits,
+  teamPageStates,
 } from "./teamBrain.js";
+import { isTeamRawPath, parseTeamPage, renderTeamRaw, teamPageTypeForPath } from "./teamBrainSchema.js";
 import logger from "./logger.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
-import type { TeamBrainCardView, TeamBrainProposal } from "../shared/teamBrain.js";
+import type { TeamBrainCardView, TeamBrainProposal, TeamPageChangeView } from "../shared/teamBrain.js";
 
 export interface TeamBrainActor {
   id: string;
@@ -30,18 +35,38 @@ export type TeamBrainActionResult =
 export interface TeamBrainActionDeps {
   store: Store;
   config: AppConfig;
-  /** A note was committed — the backup mirror schedules a push. */
+  /** A changeset was committed — the backup mirror schedules a push. */
   onCommitted?: () => void;
   audit?: (action: string, detail: string, status?: "success" | "error") => void;
 }
 
 const NOT_FOUND = { ok: false as const, status: 404, message: "카드를 찾을 수 없습니다." };
+const ALREADY = { ok: false as const, status: 409, message: "이미 처리된 카드입니다." };
+const STALE_MESSAGE = "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.";
 
-/** Does the note still match what the decision was drafted against? */
-async function isStale(config: AppConfig, row: TeamBrainProposal): Promise<boolean> {
-  if (row.kind === "review" && row.decision === "reject") return false;
-  const state = await teamNoteState(config, row.path);
-  return state.blob !== row.baseBlob;
+/** Each page write of a changeset with its committed state now; stale = changed since the draft. */
+async function pageViews(config: AppConfig, row: TeamBrainProposal, checkStale: boolean): Promise<TeamPageChangeView[]> {
+  const changes = row.changeset?.changes ?? [];
+  if (changes.length === 0) return [];
+  const states = await teamPageStates(
+    config,
+    changes.map((c) => c.path),
+  );
+  return changes.map((c) => {
+    const state = states.get(c.path) ?? { content: null, blob: null };
+    const parsed = parseTeamPage(c.path, c.content);
+    const stale = checkStale && (c.op === "create" ? state.blob !== null : state.blob !== c.baseBlob);
+    return {
+      path: c.path,
+      op: c.op,
+      title: parsed.ok ? parsed.meta.title : parsed.title,
+      type: parsed.ok ? parsed.meta.type : teamPageTypeForPath(c.path),
+      // Once applied, the committed page IS `after` — show no "before" rather than a misleading empty diff.
+      before: row.status === "draft" ? state.content : null,
+      after: c.content,
+      stale,
+    };
+  });
 }
 
 /**
@@ -59,22 +84,22 @@ export async function teamBrainCardView(
   const proposal = store.getTeamBrainProposal(id);
   if (!proposal || proposal.proposerUserId !== viewerId) return null;
   const target = proposal.targetId ? store.getTeamBrainProposal(proposal.targetId) : null;
-  const state = await teamNoteState(config, proposal.path);
-  const stale = proposal.status === "draft" ? await isStale(config, proposal) : false;
   const draft = proposal.status === "draft";
+  const pages = await pageViews(config, proposal, draft);
+  const stale = pages.some((p) => p.stale);
   const admin = store.isActiveAdmin(viewerId);
   // Seeing a decided proposal on its card counts as seeing the result (the badge clears).
-  if (proposal.kind === "propose" && (proposal.status === "approved" || proposal.status === "rejected")) {
+  if (proposal.kind === "propose" && ["approved", "rejected", "needs_info"].includes(proposal.status)) {
     store.markTeamBrainResultsSeen(viewerId, [proposal.id]);
   }
   return {
     proposal,
     target,
     stale,
-    currentContent: state.content,
+    pages,
     actions: {
-      submit: proposal.kind === "propose" && draft && !stale,
-      withdraw: proposal.kind === "propose" && (draft || proposal.status === "pending"),
+      submit: proposal.kind === "propose" && draft,
+      withdraw: proposal.kind === "propose" && (draft || proposal.status === "pending" || proposal.status === "needs_info"),
       apply:
         proposal.kind !== "propose" &&
         draft &&
@@ -91,30 +116,23 @@ async function viewOrGone(deps: TeamBrainActionDeps, viewerId: string, id: strin
   return view ? { ok: true, view } : NOT_FOUND;
 }
 
-/** 관리자에게 제출: a teammate's draft goes to the review queue. */
+/** 관리자에게 제출: a teammate's draft source goes to the review queue (a source has no staleness). */
 export async function submitTeamBrainProposal(
   deps: TeamBrainActionDeps,
   actor: TeamBrainActor,
   id: string,
 ): Promise<TeamBrainActionResult> {
-  const { store, config } = deps;
+  const { store } = deps;
   store.expireTeamBrainDrafts();
   const row = store.getTeamBrainProposal(id);
   if (!row || row.proposerUserId !== actor.id || !store.isActiveUser(actor.id)) return NOT_FOUND;
-  if (row.kind !== "propose" || row.status !== "draft") {
-    return { ok: false, status: 409, message: "이미 처리된 카드입니다." };
-  }
-  if (await isStale(config, row)) {
-    return { ok: false, status: 409, message: "그 사이 팀 브레인의 노트가 바뀌었습니다. 아바타에게 다시 제안을 요청하세요." };
-  }
-  if (!store.transitionTeamBrainProposal(id, ["draft"], "pending")) {
-    return { ok: false, status: 409, message: "이미 처리된 카드입니다." };
-  }
-  deps.audit?.("team_brain_submit", `${row.id} ${row.op} ${row.path}`);
+  if (row.kind !== "propose" || row.status !== "draft") return ALREADY;
+  if (!store.transitionTeamBrainProposal(id, ["draft"], "pending")) return ALREADY;
+  deps.audit?.("team_brain_submit", `${row.id} ${row.path}`);
   return viewOrGone(deps, actor.id, id);
 }
 
-/** 철회 / 취소: the drafter takes back a draft or a still-pending proposal, or cancels an admin card. */
+/** 철회 / 취소: the drafter takes back a draft, pending or needs_info proposal, or cancels an admin card. */
 export async function withdrawTeamBrainProposal(
   deps: TeamBrainActionDeps,
   actor: TeamBrainActor,
@@ -123,27 +141,103 @@ export async function withdrawTeamBrainProposal(
   const { store } = deps;
   const row = store.getTeamBrainProposal(id);
   if (!row || row.proposerUserId !== actor.id) return NOT_FOUND;
-  const moved =
-    row.kind === "propose"
-      ? store.transitionTeamBrainProposal(id, ["draft", "pending"], "withdrawn")
-      : store.transitionTeamBrainProposal(id, ["draft"], "cancelled");
-  if (!moved) return { ok: false, status: 409, message: "이미 처리된 카드입니다." };
+  let inFlight = false;
+  const moved = store.teamBrainTransaction(() => {
+    if (row.kind !== "propose") return store.transitionTeamBrainProposal(id, ["draft"], "cancelled");
+    // An admin's approve is committing right now: the source is being published — too late to take back.
+    if (store.teamBrainApplyInFlight(id)) {
+      inFlight = true;
+      return false;
+    }
+    if (!store.transitionTeamBrainProposal(id, ["draft", "pending", "needs_info"], "withdrawn")) return false;
+    store.cancelTeamBrainReviewDrafts(id); // the drafted decisions on it are void
+    return true;
+  });
+  if (inFlight) return { ok: false, status: 409, message: "관리자가 지금 이 제안을 팀 브레인에 반영하고 있습니다." };
+  if (!moved) return ALREADY;
   deps.audit?.("team_brain_withdraw", `${row.id} ${row.kind} ${row.path}`);
   return viewOrGone(deps, actor.id, id);
 }
 
-function conflictMessage(error: unknown): string | null {
-  if (!(error instanceof TeamNoteConflictError)) return null;
-  if (error.reason === "EXISTS") return "그 사이 같은 경로에 노트가 생겼습니다. 아바타에게 기존 노트와 합쳐 달라고 요청하세요.";
-  if (error.reason === "MISSING") return "수정할 노트가 더 이상 없습니다.";
-  return "그 사이 팀 브레인의 노트가 바뀌었습니다. 아바타에게 현재 노트에 맞춰 다시 정리해 달라고 요청하세요.";
+/**
+ * The commit landed: the target is approved. The CAS cannot lose to another
+ * press (an approve in flight blocks them and the withdraw); if it ever does,
+ * the vault is the truth — compensate by forcing approved and log it.
+ */
+function approveTargetAfterCommit(store: Store, targetId: string, decidedBy: string): void {
+  const fields = { decidedBy, decisionReason: null, decided: true, resetSeen: true };
+  if (store.transitionTeamBrainProposal(targetId, ["pending"], "approved", fields)) return;
+  logger.error({ proposalId: targetId }, "team brain: approved target left pending; forcing approved (its source is committed)");
+  store.transitionTeamBrainProposal(targetId, ["draft", "needs_info", "rejected", "withdrawn", "expired"], "approved", fields);
+}
+
+/** How far back the boot sweep looks (an applied card older than this is history). */
+const BOOT_SWEEP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Boot sweep: an approve card (direct, or review approve) claimed BEFORE this
+ * process started, in the last 7 days, whose commit (`Proposal: <id>` trailer)
+ * never landed — the process died mid-apply — goes back to draft (and an old
+ * build's already-approved target back to pending); one whose commit DID land
+ * but whose target is still pending gets the target approved. Claims made
+ * after `startedAt` are this process's own (maybe in flight) — never touched.
+ * Never throws.
+ */
+export async function sweepTeamBrainAppliesOnBoot(
+  deps: Pick<TeamBrainActionDeps, "store" | "config">,
+  startedAt: string,
+): Promise<number> {
+  const { store, config } = deps;
+  try {
+    const since = new Date(Date.parse(startedAt) - BOOT_SWEEP_WINDOW_MS).toISOString();
+    const rows = store
+      .listTeamBrainProposals({ statuses: ["applied"], limit: 200 })
+      .filter(
+        (r) =>
+          (r.kind === "direct" || (r.kind === "review" && r.decision === "approve")) &&
+          r.decidedAt !== null &&
+          r.decidedAt >= since &&
+          r.decidedAt < startedAt,
+      );
+    if (rows.length === 0) return 0;
+    const landed = await teamBrainProposalCommits(config, new Date(Date.parse(since) - 24 * 60 * 60 * 1000).toISOString());
+    let fixed = 0;
+    for (const r of rows) {
+      const target = r.kind === "review" && r.targetId ? store.getTeamBrainProposal(r.targetId) : null;
+      if (landed.has(target?.id ?? r.id)) {
+        if (target?.status === "pending") {
+          approveTargetAfterCommit(store, target.id, r.decidedBy ?? r.proposerUserId);
+          fixed += 1;
+        }
+        continue;
+      }
+      store.teamBrainTransaction(() => {
+        store.transitionTeamBrainProposal(r.id, ["applied"], "draft", { clearDecision: true });
+        if (target) store.transitionTeamBrainProposal(target.id, ["approved"], "pending", { clearDecision: true, decisionReason: null });
+      });
+      logger.warn({ proposalId: r.id }, "team brain: an applied card's commit never landed; the card is a draft again");
+      fixed += 1;
+    }
+    return fixed;
+  } catch (error) {
+    logger.error({ err: error }, "team brain boot sweep failed");
+    return 0;
+  }
+}
+
+function applyErrorMessage(error: unknown): string | null {
+  if (error instanceof TeamNoteConflictError) return STALE_MESSAGE;
+  if (error instanceof TeamChangesetInvalidError) {
+    return `변경 내용이 팀 브레인 규칙에 맞지 않습니다 (문제 ${error.errors.length}건). 아바타에게 다시 정리해 달라고 요청하세요.`;
+  }
+  return null;
 }
 
 /**
- * 팀 브레인에 반영 (direct) / 승인 반영 · 반려 확정 (review): admin only. The
- * card (and, for a review, its target) is CLAIMED first by compare-and-set in
- * one transaction; a failed write releases the claim so the card can be
- * pressed again.
+ * 팀 브레인에 반영 (direct) / 승인 반영 · 반려 확정 · 보완 요청 보내기 (review):
+ * admin only. The card (and, for a review, its target) is CLAIMED first by
+ * compare-and-set in one transaction; a failed write releases the claim so the
+ * card can be pressed again.
  */
 export async function applyTeamBrainCard(
   deps: TeamBrainActionDeps,
@@ -157,66 +251,117 @@ export async function applyTeamBrainCard(
   if (!store.isActiveAdmin(actor.id)) {
     return { ok: false, status: 403, message: "관리자만 팀 브레인에 반영할 수 있습니다." };
   }
-  if (row.kind === "propose" || row.status !== "draft") {
-    return { ok: false, status: 409, message: "이미 처리된 카드입니다." };
-  }
+  if (row.kind === "propose" || row.status !== "draft") return ALREADY;
   const target = row.kind === "review" && row.targetId ? store.getTeamBrainProposal(row.targetId) : null;
   if (row.kind === "review" && (!target || target.kind !== "propose" || target.status !== "pending")) {
     return { ok: false, status: 409, message: "이 제안은 이미 처리되었거나 철회되었습니다." };
   }
-  const approve = row.kind === "direct" || row.decision === "approve";
-  const targetTo = approve ? "approved" : "rejected";
+  const decision = row.kind === "direct" ? "approve" : row.decision;
+  if (!decision) return { ok: false, status: 409, message: "이 카드의 결정이 올바르지 않습니다." };
+  const commits = decision === "approve";
+  if (commits && (!row.changeset || row.changeset.changes.length === 0)) {
+    return { ok: false, status: 409, message: "반영할 변경 내용이 없습니다. 아바타에게 다시 정리해 달라고 요청하세요." };
+  }
+  if (commits && target && !isTeamRawPath(target.path)) {
+    return { ok: false, status: 409, message: "이 제안의 원본 경로가 올바르지 않습니다." };
+  }
+  const targetTo = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_info";
 
-  // Claim: the card (and its target) move together, or not at all.
+  // Claim. Every press voids the OTHER drafted decisions on the same target
+  // (one decision per round — a changeset compiled before a 보완 요청 answer
+  // never commits after it). reject / ask move the card AND the target
+  // together. An approve claims the CARD only: the target turns approved after
+  // the commit lands, so the proposer never sees an approval that may still
+  // fail; an approve in flight blocks every other press and the withdraw.
   let claimed = false;
+  let voided: string[] = [];
   try {
     claimed = store.teamBrainTransaction(() => {
-    if (!store.transitionTeamBrainProposal(id, ["draft"], "applied", { decidedBy: actor.id, decided: true })) return false;
-    if (target) {
-      const moved = store.transitionTeamBrainProposal(target.id, ["pending"], targetTo, {
-        decidedBy: actor.id,
-        decisionReason: approve ? null : row.decisionReason,
-        decided: true,
-      });
-      if (!moved) throw new Error("TARGET_RACE"); // rolls the card's claim back too
-    }
-    return true;
+      if (target && (store.getTeamBrainProposal(target.id)?.status !== "pending" || store.teamBrainApplyInFlight(target.id))) {
+        return false;
+      }
+      if (!store.transitionTeamBrainProposal(id, ["draft"], "applied", { decidedBy: actor.id, decided: true })) return false;
+      if (target) {
+        voided = store.cancelTeamBrainReviewDrafts(target.id, id);
+        if (!commits) {
+          const moved = store.transitionTeamBrainProposal(target.id, ["pending"], targetTo, {
+            decidedBy: actor.id,
+            // reject: the reason; ask: the questions (shown to the proposer while needs_info).
+            decisionReason: row.decisionReason,
+            decided: true,
+            resetSeen: true,
+          });
+          if (!moved) throw new Error("TARGET_RACE"); // rolls the whole claim back
+        }
+      }
+      return true;
     });
   } catch (error) {
     if (!(error instanceof Error && error.message === "TARGET_RACE")) throw error;
   }
-  if (!claimed) return { ok: false, status: 409, message: "이미 처리된 카드입니다." };
+  if (!claimed) return ALREADY;
 
+  // A failed write decided nothing: the card is a draft again (no decision
+  // stamps) and the drafts it voided come back.
   const release = () =>
     store.teamBrainTransaction(() => {
-      store.transitionTeamBrainProposal(id, ["applied"], "draft");
-      if (target) store.transitionTeamBrainProposal(target.id, [targetTo], "pending");
+      store.transitionTeamBrainProposal(id, ["applied"], "draft", { clearDecision: true });
+      store.restoreTeamBrainReviewDrafts(voided);
     });
 
-  if (approve) {
+  if (commits) {
     const proposer = target ? store.getUserById(target.proposerUserId) : null;
+    const approver = { name: actor.displayName || actor.username, username: actor.username };
+    const approvedAt = new Date().toISOString();
+    // The source being committed: the target's (review), or the admin's own (direct with a source).
+    const source = target ?? (row.intake ? row : null);
+    const submitter = target
+      ? proposer
+        ? { name: proposer.displayName || proposer.username, username: proposer.username }
+        : { name: target.proposerName, username: "" }
+      : approver;
     try {
-      await applyTeamNote(config, {
-        path: row.path,
-        op: row.op,
-        content: row.content,
-        expectedBlob: row.baseBlob,
+      await applyTeamChangeset(config, {
+        raw: source
+          ? { path: source.path, content: renderTeamRaw({ proposal: source, approver, approvedAt, submitter }) }
+          : null,
+        changes: row.changeset!.changes,
         title: row.title,
         proposalId: target?.id ?? row.id,
+        logOp: target ? "ingest" : row.intake ? "direct" : "maintain",
+        logBy: target ? submitter.username || submitter.name : undefined,
+        logApprovedBy: actor.username,
         author: commitIdentityFor(store, actor),
         coAuthor: proposer && proposer.id !== actor.id ? commitIdentityFor(store, proposer) : null,
       });
     } catch (error) {
       release();
-      const conflict = conflictMessage(error);
-      if (conflict) return { ok: false, status: 409, message: conflict };
+      const message = applyErrorMessage(error);
+      if (message) {
+        if (error instanceof TeamChangesetInvalidError) {
+          logger.warn({ proposalId: id, errors: error.errors.slice(0, 10) }, "team brain changeset refused at apply");
+        }
+        return { ok: false, status: 409, message };
+      }
       logger.error({ err: error, proposalId: id }, "team brain apply failed");
       deps.audit?.("team_brain_apply", `${row.id} ${row.path}`, "error");
       return { ok: false, status: 500, message: "팀 브레인에 저장하지 못했습니다." };
     }
     deps.onCommitted?.();
+    if (target) approveTargetAfterCommit(store, target.id, actor.id);
   }
-  const action = row.kind === "direct" ? "team_brain_direct" : approve ? "team_brain_approve" : "team_brain_reject";
-  deps.audit?.(action, `${target?.id ?? row.id} ${row.op} ${row.path}${target ? ` (proposer ${target.proposerUserId})` : ""}`);
+  const action =
+    row.kind === "direct"
+      ? "team_brain_direct"
+      : decision === "approve"
+        ? "team_brain_approve"
+        : decision === "reject"
+          ? "team_brain_reject"
+          : "team_brain_ask";
+  const pages = row.changeset?.changes.length ?? 0;
+  deps.audit?.(
+    action,
+    `${target?.id ?? row.id} ${target?.path ?? row.path}${commits ? ` (${pages} pages)` : ""}${target ? ` (proposer ${target.proposerUserId})` : ""}`,
+  );
   return viewOrGone(deps, actor.id, id);
 }

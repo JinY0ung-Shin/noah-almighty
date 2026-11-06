@@ -1519,6 +1519,10 @@ body.col-resizing .canvas-html-frame {
   gap: var(--s-0-5);
 }
 .team-brain-kind {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1-5);
   color: var(--text-soft);
   font-size: var(--t-xs);
 }
@@ -1562,6 +1566,9 @@ body.col-resizing .canvas-html-frame {
   background: var(--info-soft);
   color: var(--info);
   font-size: var(--t-xs);
+  /* Questions (needs_info) may span lines; every status is plain text. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 .team-brain-status.tone-ok {
   border-color: var(--ok-line);
@@ -1586,6 +1593,204 @@ body.col-resizing .canvas-html-frame {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-2);
+}
+.team-brain-count {
+  color: var(--text-soft);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+.team-brain-section-label {
+  color: var(--text-soft);
+  font-size: var(--t-xs);
+  font-weight: 600;
+}
+.team-brain-hint {
+  margin: var(--s-1-5) 0 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+/* 보충 정보: slot label → answer; an unknown answer is a muted "모름" chip. */
+.team-brain-intake {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-top: var(--s-1-5);
+}
+.team-brain-intake-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin: 0;
+}
+.team-brain-intake-row {
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+  gap: var(--s-2);
+  font-size: var(--t-xs);
+}
+.team-brain-intake-row dt {
+  color: var(--muted);
+}
+.team-brain-intake-row dd {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-brain-unknown {
+  border-style: dashed;
+}
+.team-brain-gaps {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--t-xs);
+}
+.team-brain-followups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: var(--s-1-5) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.team-brain-followup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+.team-brain-qa {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--s-2);
+  margin: 0;
+  font-size: var(--t-xs);
+}
+.team-brain-qa-label {
+  color: var(--muted);
+}
+.team-brain-qa-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Boxed callouts: the review's 보완 요청 questions and the compiler's conflicts. */
+.team-brain-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-2-5);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  font-size: var(--t-xs);
+}
+.team-brain-box .team-brain-section-label {
+  color: var(--warn);
+}
+.team-brain-box-text {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-brain-box ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin: 0;
+  padding-left: var(--s-4);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+/* One row per page write: op / type / deletion count chips, title, path. */
+.team-brain-pages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-brain-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
+  padding: var(--s-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+.team-brain-page.is-stale {
+  border-color: var(--warn-line);
+}
+.team-brain-page-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1-5);
+  min-width: 0;
+}
+.team-brain-page-title {
+  min-width: 0;
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+}
+.team-brain-page-stale {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--t-xs);
+}
+.team-brain-diff-stat {
+  font-variant-numeric: tabular-nums;
+}
+/* Line diff. Deletions are the loud part (a reviewer must SEE what a changeset
+   removes): danger tint + strike + a heavy left rule + a − sign, never colour alone. */
+.team-brain-diff {
+  max-height: 320px;
+  margin: var(--s-1-5) 0 0;
+  padding: var(--s-1) 0;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+}
+.team-brain-diff-line {
+  display: block;
+  padding: 0 var(--s-2) 0 var(--s-1-5);
+  border-left: 3px solid transparent;
+  color: var(--text-soft);
+  text-decoration: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-brain-diff-line.is-del {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.team-brain-diff-line.is-add {
+  border-left-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.team-brain-diff-sign {
+  display: inline-block;
+  width: 1.5ch;
+  font-weight: 700;
+  text-decoration: none;
+  user-select: none;
+}
+.team-brain-diff-skip {
+  padding: 0 var(--s-2);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--t-2xs);
 }
 
 /* A file tab of the side panel (FileTab, msg-file-card click): the canvas card

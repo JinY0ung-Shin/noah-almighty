@@ -1102,6 +1102,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         // A team-brain card nobody pressed dies with its message; a submitted or
         // applied one stays (a rewind cuts history, never the world).
         this.withdrawTeamBrainDrafts(
+          conversationId,
           plan.drop.flatMap((message) =>
             (message.attachments ?? []).filter((att) => att.kind === "team_brain").map((att) => att.id),
           ),

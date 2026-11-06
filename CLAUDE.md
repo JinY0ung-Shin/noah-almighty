@@ -141,9 +141,12 @@ These are the invariants the project is built around. New work should reinforce 
   per conversation, never refreshed. → `todos.md`.
 - **Knowledge repo = one per user, agent-managed. Second brain = a CONVENTION (`wiki/`+`raw/`) over that
   SAME repo, NOT a new store**; uncommitted = not persisted. → `repo-knowledge.md`.
-- **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; teammates READ and PROPOSE, an
-  admin decides.** Every state change is a human press on a chat card (the model only drafts); admin power
-  is judged on the VIEWER, never the avatar owner; no delete; the backup is a push-only, never-forced
+- **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; teammates READ and SUBMIT
+  SOURCES, an admin's avatar COMPILES them, an admin decides.** It is a Karpathy-style LLM wiki: immutable
+  server-rendered `raw/` sources → `wiki/` pages under a FIXED `SCHEMA.md` the SERVER validates (rules are
+  enforced, not just prompted); index/log are server-generated; a schema change = version bump + migration
+  pass, never a hand edit. Every state change is a human press on a chat card (the model only drafts); admin
+  power is judged on the VIEWER, never the avatar owner; no delete; the backup is a push-only, never-forced
   mirror to the internal git host with the saving admin's token. New team-brain names are `team_brain*`, never `group*`.
   → `team-brain.md`.
 

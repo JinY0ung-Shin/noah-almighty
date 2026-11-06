@@ -23,7 +23,10 @@ import { isInternalGitSource, tokenForGitUrl } from "./gitCredentials.js";
 import {
   TEAM_BRAIN_BRANCH,
   countTeamNotes,
+  countTeamRaw,
   ensureTeamBrainRepo,
+  migrateTeamBrainHoldingLock,
+  reconcileTeamBrainHoldingLock,
   teamBrainInitialized,
   teamBrainRoot,
 } from "./teamBrain.js";
@@ -50,6 +53,11 @@ interface BackupStatus {
 
 export type BackupConfigureResult = { ok: true } | { ok: false; message: string };
 export type BackupRunResult = { ok: true } | { ok: false; message: string };
+
+/** Wiki pages OR raw sources (incl. raw/legacy) — a vault with either is not "empty" for restore. */
+async function vaultHoldsKnowledge(config: AppConfig): Promise<boolean> {
+  return (await countTeamNotes(config)) > 0 || (await countTeamRaw(config)) > 0;
+}
 
 /** A branch name git would take as a plain ref (no options, no ref syntax tricks). */
 function safeBranch(raw: string): string | null {
@@ -233,7 +241,7 @@ export class TeamBrainBackup {
   async restore(): Promise<BackupRunResult> {
     const s = this.settings();
     if (!s) return { ok: false, message: "백업 저장소가 설정되지 않았습니다." };
-    if ((await countTeamNotes(this.config)) > 0) {
+    if (await vaultHoldsKnowledge(this.config)) {
       return { ok: false, message: "팀 브레인에 이미 노트가 있어 복원할 수 없습니다. 복원은 비어 있는 팀 브레인에만 할 수 있습니다." };
     }
     const resolved = this.resolveAuth(s);
@@ -243,8 +251,10 @@ export class TeamBrainBackup {
     const tmp = `${root}.restore-${Date.now()}`;
     try {
       return await withRepoLock(root, async () => {
+        // Leftovers of a crashed write never count (or ride along into the aside copy as live).
+        await reconcileTeamBrainHoldingLock(root);
         // Re-checked under the lock: an approval may have landed since the first check.
-        if ((await countTeamNotes(this.config)) > 0) throw new Error("RESTORE_NOT_EMPTY");
+        if (await vaultHoldsKnowledge(this.config)) throw new Error("RESTORE_NOT_EMPTY");
         await fs.mkdir(path.dirname(root), { recursive: true });
         await git(
           path.dirname(root),
@@ -264,6 +274,10 @@ export class TeamBrainBackup {
           await fs.rename(root, `${root}.pre-restore-${Date.now()}`);
         }
         await fs.rename(tmp, root);
+        // A mirror from before the current schema is brought up to it right away (one Noah commit).
+        await migrateTeamBrainHoldingLock(root).catch((error) => {
+          logger.warn({ err: error }, "team brain restore: schema migration failed; retried on the next write/boot");
+        });
         return { ok: true as const };
       });
     } catch (error) {
