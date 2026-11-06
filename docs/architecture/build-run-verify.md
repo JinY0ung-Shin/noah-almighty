@@ -131,7 +131,12 @@
   200 `{authenticated:true}`, anonymous **403** `noah_session_required` (never 401: pi's UI would answer that with
   its own key login form), `/admin/` serves pi's UI with pi's CSP; and pi's
   `scripts/security-check/run.mjs` (run in `sandboxd`, `--internal noah-almighty:48787` plus each Noah IP) →
-  all PASS, sandboxes `noah-almighty/pi-sandbox:latest` with network `none`. Tear the dind and its volume down
+  all PASS, sandboxes `noah-almighty/pi-sandbox:latest` with network `none`. **Existing-volume ownership (#79):**
+  `docker compose stop noah-almighty`, `chown 0:0` the volume root via `docker compose run --rm --no-deps --user
+  0:0 --entrypoint sh noah-almighty -c 'chown 0:0 /app/data'` → `setup-host.sh` fails with `error: volume … root
+  is uid 0`, `up -d` leaves Noah restarting with one fatal `data directory /app/data is not writable` log; the
+  README "Data volume ownership" repair → `setup-host.sh` `ok`, Noah healthy, `backups/` created when retired
+  data is present. Tear the dind and its volume down
   afterwards; leave `noahpi-dind` (the pi e2e instance) alone.
 - `docker build` and `docker run` DO work here (plain `docker build -t <unique tag> .` of the Noah image). The
   user's dev stack on the host is this checkout's own `docker compose up -d --build`; never run it while a
