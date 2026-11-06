@@ -41,7 +41,8 @@ which check owner/teammate trust themselves.
   (a GitHub link); there is no in-app file editor.
 - **Team brain (팀 브레인)**: ONE shared knowledge vault for the whole team — decisions, system
   facts, fixes, glossary, conventions, owners. Every avatar can search it; when a conversation
-  produces team knowledge the avatar offers to share it, the user confirms on a card, and an
+  produces team knowledge the avatar offers to share it, the user checks the source's
+  출처 정보 (출처 유형·출처·작성자·작성일 — required, editable on the card) and confirms, and an
   admin approves or rejects it (an admin's own notes go in on their card press). It lives on
   the Noah server as a local git repository; an admin can mirror it to a backup repository on
   the internal git host (관리자 → 팀 브레인).
@@ -596,18 +597,3 @@ markdown.
 ### 외부 아바타 작업 API
 
 외부 시스템에서 개인 API 키로 자신의 아바타에게 자유로운 지시를 보내고, 작업 상태·결과를 조회하거나 추가 질문에 응답할 수 있습니다. **내 아바타 → 권한·연결 → 외부 작업 API**에서 키를 발급하세요. 호출 예제와 실행 정책은 [외부 아바타 작업 API 문서](docs/avatar-task-api.md)를 참고하세요.
-
-### 사용자 간 DM
-
-화면 오른쪽 아래 **메시지** 바를 누르면 작은 대화창이 위로 올라옵니다. 접속 중인 사용자 또는 이전 대화 상대를 선택해 1:1 메시지를 보냅니다. 모든 로그인 사용자(팀원)가 아바타 공개 범위와 관계없이 사용할 수 있습니다. Enter로 전송하고 Shift+Enter로 줄을 바꿉니다.
-
-- 대화창은 어느 화면에서든 보이고 모달이 아니어서 뒤 화면을 그대로 사용할 수 있습니다. 접으면 바만 남고, 펼친 상태와 마지막 대화 상대는 브라우저에 기억됩니다.
-- 대화창 바깥을 누르면 접힙니다. 누른 곳은 그대로 동작하며, 보던 대화와 입력 중인 글은 유지되므로 다시 펼치면 이어서 씁니다.
-- 화면이 좁은 모바일에서는 전체 너비 하단 시트로 열리며, 손잡이를 아래로 끌어 접습니다.
-- 접속 중은 최근 1시간 내 활동 및 유효한 로그인 세션 기준입니다. 화면이 보이는 동안 5초마다 갱신하며, 접속 중 인원 수는 바에 표시됩니다.
-- 읽지 않은 메시지는 바의 빨간 배지에 표시되고 새 메시지가 오면 한 번 커졌다 돌아옵니다. 대화를 펼쳐 확인하면 읽음 처리됩니다. 오프라인 상대에게도 기존 대화를 이어서 보낼 수 있습니다.
-- 내가 보낸 메시지에는 상대가 열어 본 가장 최근 메시지 아래에 **읽음**, 그보다 나중에 보낸 메시지 아래에 **안 읽음**이 표시됩니다. 상대가 대화창을 펼쳐 확인한 시점에 읽음으로 기록되므로 표시가 5초 갱신 주기만큼 늦을 수 있습니다.
-- 텍스트는 메시지당 최대 4,000자, 사용자당 분당 60개입니다. 이전 메시지는 50개씩 불러옵니다.
-- 대화는 서버에 저장되고 재시작 후에도 유지됩니다. DM API에서는 대화 당사자만 내용을 조회할 수 있으며 아바타 대화·지식 저장소에는 포함되지 않습니다. 종단 간 암호화는 제공하지 않습니다.
-- 계정 영구 삭제 시 해당 사용자가 보내거나 받은 DM도 삭제됩니다. 첨부파일·메시지 수정/삭제·차단·브라우저 푸시 알림은 제공하지 않습니다.
-- 아바타의 사용 안내: 시스템 매뉴얼 `direct-messages` 항목. 아바타가 DM을 읽거나 대신 보내는 도구는 없습니다.

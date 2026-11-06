@@ -243,7 +243,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     purge. When `retirementDataPresent` (read-only, schema-defensive, safe pre-migrate) finds anything a
     retirement would delete — a retired table (`server_agents`, `server_agent_sessions`, `group_agents`,
     `group_agents_legacy`, `external_avatar_images`, `personal_agents`, `bot_tasks`,
-    `avatar_trusted_users`, `groups`, `group_members`, `shared_skill_group_blocks`), a retired `app_config` key (`server_agents_enabled`,
+    `avatar_trusted_users`, `groups`, `group_members`, `shared_skill_group_blocks`, `direct_messages`), a retired `app_config` key (`server_agents_enabled`,
     `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`, the
     three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
     `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, or a bot-bound routine — the
@@ -285,6 +285,13 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     <dataDir>/backups/pre-retire-<stamp>.db` (a read-only tree inside may need `chmod -R u+w` first).
     Operator text: README "Retirement backups and quarantine". Tests: `tests/retire-backup.test.ts` plus
     the quarantine expectations in every `tests/retire-*.test.ts`.
+  - **Human-to-human DM retired (2026-11-06, user decision "쓸데없는 기능").** The 메시지 dock, `/api/dm*`,
+    `store/directMessages.ts`, `shared/directMessages.ts`, the `DIRECT_MESSAGE_STATE` self-state line and
+    manual topic `direct-messages` are gone; behind the gate `migrate()` runs `DROP TABLE IF EXISTS
+    direct_messages` (its `dm_pair`/`dm_unread`/`dm_rate` indexes go with it), and the table is in
+    `RETIRED_TABLES`, so every stored message survives only in that boot's backup. `PRESENCE_WINDOW_MS` stays
+    (the admin presence badge owns it now). The table, index, route (`/api/dm`) and localStorage
+    (`dmDockOpen`, `dmDockPeer`) names are reserved forever.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

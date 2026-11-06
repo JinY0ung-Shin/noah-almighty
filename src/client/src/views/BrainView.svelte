@@ -5,19 +5,21 @@
   import { api } from "../lib/api";
   import { renderMarkdown } from "../lib/format";
   import { linkifyWikilinks, nodeLinks, sectionColor, sectionLabel, stripFrontmatter, stripTitleHeading, topNotes } from "../lib/knowledgeGraph";
+  import { openSeededChat } from "../lib/chat";
   import { goView } from "../lib/nav";
-  import { appState, replaceState } from "../lib/state";
+  import { appState } from "../lib/state";
   import { refreshTeamBrainStatus } from "../lib/teamBrain";
   import type { KnowledgeGraph, KnowledgeGraphNode, KnowledgeNote, User } from "../lib/types";
   import { TEAM_PAGE_TYPE_LABELS, type TeamBrainProposal } from "../../../shared/teamBrain";
 
-  // Full-page second-brain graph of the owner's personal knowledge repo, reached
-  // from the left nav. Pairs the reusable GraphCanvas with a note panel that
+  // Full-page second-brain graph, one rail item per brain: 내 브레인 (the owner's
+  // personal knowledge repo, `scope="personal"`) and 팀 브레인 (TeamBrainView →
+  // `scope="team"`). Pairs the reusable GraphCanvas with a note panel that
   // fetches + renders the clicked note's markdown — the richer surface over the
-  // compact GraphViewModal in settings. The 팀 브레인 tab shows the ONE team
-  // vault the same way (read-only), and — with no note selected — my proposals'
-  // status and, for an admin, the pending queue (decisions go through the
-  // admin's avatar + a card, never here).
+  // compact GraphViewModal in settings. The team scope shows the ONE team vault
+  // read-only and — with no note selected — my proposals' status and, for an
+  // admin, the pending queue; its 검토 시작 hands one proposal to the admin's own
+  // avatar (decisions still go through the avatar + a card, never here).
   type Scope = "personal" | "team";
   const ENDPOINTS: Record<Scope, { graph: string; note: string }> = {
     personal: { graph: "/api/me/knowledge-repo/graph", note: "/api/me/knowledge-repo/note" },
@@ -25,7 +27,7 @@
   };
   type ProposalRow = Omit<TeamBrainProposal, "content">;
 
-  let scope: Scope = "personal";
+  export let scope: Scope = "personal";
   $: user = $appState.user as User;
   $: isAdmin = Boolean(user?.roles?.includes("admin"));
   // The personal graph/note endpoints 404 without a connected repo.
@@ -35,27 +37,16 @@
   let mine: ProposalRow[] = [];
   let pending: ProposalRow[] = [];
   let listsError = "";
-  let mounted = false;
 
-  // The badge / admin panel deep link: open on the team tab (one-shot flag).
-  $: if (mounted && $appState.brainOpenTeamTab) {
-    replaceState({ brainOpenTeamTab: false });
-    switchScope("team");
-  }
-
-  function switchScope(next: Scope): void {
-    if (scope === next && graph) return;
-    scope = next;
-    if (next === "personal" && !hasRepo) {
-      graphToken++;
-      graph = null;
-      error = "";
-      loading = false;
-      clearNote();
-      return;
-    }
-    void loadGraph();
-    if (next === "team") void loadLists();
+  // 검토 시작: a new chat with the admin's OWN avatar, its composer seeded with a
+  // review request (not sent — the admin presses 보내기). Only the server-minted
+  // id goes into the text: the title is teammate-written and would otherwise
+  // reach the admin's avatar as the admin's own instruction.
+  function startReview(p: ProposalRow): void {
+    void openSeededChat(
+      `팀 브레인 제안 ${p.id} 를 검토해줘. team-brain-curate 절차대로 내용을 확인하고 위키 페이지로 정리한 뒤, 승인·보완 요청·반려 중 무엇을 추천하는지 이유와 함께 알려줘.`,
+      "입력창에 검토 요청을 준비했습니다. 보내기를 누르면 아바타가 검토를 시작해요.",
+    );
   }
 
   async function loadLists(): Promise<void> {
@@ -127,8 +118,11 @@
   $: links = graph && selected ? nodeLinks(graph, selected.id) : { outgoing: [], incoming: [] };
 
   onMount(() => {
-    mounted = true;
-    if ($appState.brainOpenTeamTab) return; // the reactive deep link above opens the team tab
+    if (scope === "team") {
+      void loadGraph();
+      void loadLists();
+      return;
+    }
     if (!hasRepo) {
       loading = false;
       return;
@@ -223,16 +217,16 @@
 <div class="brain-view">
   <header class="brain-head">
     <div class="brain-title">
-      <h1>지식 그래프</h1>
-      <p class="muted small">노트 사이의 <code>[[링크]]</code> 연결을 보여줍니다. 노드를 누르거나 검색하면 내용과 연결된 노트를 바로 읽을 수 있어요.</p>
+      <h1>{scope === "team" ? "팀 브레인" : "내 브레인"}</h1>
+      <p class="muted small">
+        {#if scope === "team"}
+          팀원 모두가 읽는 공용 위키입니다. 노트 사이의 <code>[[링크]]</code> 연결을 보여주고, 노드를 누르면 내용을 읽을 수 있어요.
+        {:else}
+          내 지식 저장소의 노트 사이 <code>[[링크]]</code> 연결을 보여줍니다. 노드를 누르거나 검색하면 내용과 연결된 노트를 바로 읽을 수 있어요.
+        {/if}
+      </p>
     </div>
     <div class="brain-head-actions">
-      <div class="seg-control" role="tablist" aria-label="브레인 선택">
-        <button type="button" role="tab" class:active={scope === "personal"} aria-selected={scope === "personal"} on:click={() => switchScope("personal")}>내 브레인</button>
-        <button type="button" role="tab" class:active={scope === "team"} aria-selected={scope === "team"} on:click={() => switchScope("team")}>
-          팀 브레인{#if $appState.teamBrainStatus.unseenResults + $appState.teamBrainStatus.pendingReview > 0}<span class="nav-badge brain-tab-badge">{$appState.teamBrainStatus.unseenResults + $appState.teamBrainStatus.pendingReview}</span>{/if}
-        </button>
-      </div>
       {#if showGraph}
         <button class="btn secondary sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => { void loadGraph(); if (scope === "team") void loadLists(); }}>
           <Icon name="refresh" size={15} /><span>새로고침</span>
@@ -371,7 +365,7 @@
             {#if isAdmin}
               <h3>검토 대기 <span class="brain-count">{pending.length}</span></h3>
               {#if pending.length}
-                <p class="brain-hint">결정은 내 아바타에게 “팀 브레인 제안 검토해줘”라고 요청한 뒤, 아바타가 띄운 카드의 버튼으로 합니다.</p>
+                <p class="brain-hint">검토 시작을 누르면 내 아바타와의 새 대화에 검토 요청이 준비됩니다. 아바타가 정리한 뒤 띄우는 카드의 버튼으로 승인·보완 요청·반려를 결정합니다.</p>
                 <ul class="brain-list">
                   {#each pending as p (p.id)}
                     <li class="brain-card">
@@ -381,6 +375,7 @@
                       </div>
                       <span class="brain-card-meta">{p.proposerName} · <code>{p.path}</code></span>
                       {#if p.summary}<span class="brain-card-meta">{p.summary}</span>{/if}
+                      <button class="btn secondary sm brain-review-start" type="button" on:click={() => startReview(p)}>검토 시작</button>
                     </li>
                   {/each}
                 </ul>
@@ -477,10 +472,6 @@
     flex-wrap: wrap;
     justify-content: flex-end;
   }
-  .brain-tab-badge {
-    margin-left: var(--s-1);
-  }
-
   .brain-empty {
     width: min(560px, 100%);
     margin: auto;
@@ -794,7 +785,8 @@
     background: var(--warn-soft);
     white-space: pre-line;
   }
-  .brain-proposal-withdraw {
+  .brain-proposal-withdraw,
+  .brain-review-start {
     align-self: flex-start;
     margin-top: var(--s-1);
   }

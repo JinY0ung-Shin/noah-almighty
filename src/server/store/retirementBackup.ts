@@ -34,6 +34,8 @@ const RETIRED_TABLES = [
   "personal_agents",
   "bot_tasks",
   "avatar_trusted_users",
+  // Human-to-human DM (retired 2026-11-06).
+  "direct_messages",
   // Groups (retired 2026-11-06, single team): dropped by migrate() once the
   // single-team conversion has stamped its marker.
   "groups",

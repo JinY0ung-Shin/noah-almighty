@@ -11,7 +11,7 @@ function viewDenied(view: ViewName, state: ClientState): boolean {
   return ADMIN_ONLY_VIEWS.includes(view) && !state.user?.roles?.includes("admin");
 }
 
-const VIEW_ROUTES: ViewName[] = ["explore", "chat", "todos", "brain", "inbox", "routines", "skills", "settings", "admin", "share"];
+const VIEW_ROUTES: ViewName[] = ["explore", "chat", "todos", "brain", "teamBrain", "inbox", "routines", "skills", "settings", "admin", "share"];
 const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",

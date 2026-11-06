@@ -337,19 +337,6 @@ export class StoreBase {
 
   protected migrate(): void {
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS direct_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sender_id TEXT NOT NULL REFERENCES users(id),
-        recipient_id TEXT NOT NULL REFERENCES users(id),
-        text TEXT NOT NULL,
-        nonce TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        read_at TEXT,
-        UNIQUE(sender_id, nonce)
-      );
-      CREATE INDEX IF NOT EXISTS dm_pair ON direct_messages(sender_id, recipient_id, id);
-      CREATE INDEX IF NOT EXISTS dm_unread ON direct_messages(recipient_id, sender_id) WHERE read_at IS NULL;
-      CREATE INDEX IF NOT EXISTS dm_rate ON direct_messages(sender_id, created_at);
       CREATE TABLE IF NOT EXISTS avatar_api_keys (
         id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, name TEXT NOT NULL,
         prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT
@@ -895,6 +882,12 @@ export class StoreBase {
     // Trust is derived purely from team membership (isTrustedFor); the old
     // per-(avatar, viewer) trust table is dropped (its grants don't survive).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
+    // Human-to-human DM (the 메시지 dock, /api/dm) is removed (2026-11-06, user
+    // decision): drop its table — every stored message goes with it, kept only
+    // in this boot's pre-retirement backup. Nothing creates it any more, so this
+    // can only match what an older release left — keep the table and index
+    // names reserved. Indexes go with the table.
+    this.db.exec("DROP TABLE IF EXISTS direct_messages");
     // The speech-to-text feature is removed; drop its admin endpoint override.
     // Nothing writes this key any more, so the delete can only match a row left
     // by an older release — keep the key name reserved.

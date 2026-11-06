@@ -16,11 +16,25 @@ import {
   teamBrainProposalCommits,
   teamPageStates,
 } from "./teamBrain.js";
-import { isTeamRawPath, parseTeamPage, renderTeamRaw, teamPageTypeForPath } from "./teamBrainSchema.js";
+import {
+  findSecretInText,
+  isTeamRawPath,
+  parseTeamPage,
+  renderTeamRaw,
+  teamPageTypeForPath,
+  withTeamProvenance,
+} from "./teamBrainSchema.js";
 import logger from "./logger.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
-import type { TeamBrainCardView, TeamBrainProposal, TeamPageChangeView } from "../shared/teamBrain.js";
+import {
+  teamProvenanceIssues,
+  teamProvenanceProblemLabel,
+  type TeamBrainCardView,
+  type TeamBrainProposal,
+  type TeamPageChangeView,
+  type TeamProvenanceInput,
+} from "../shared/teamBrain.js";
 
 export interface TeamBrainActor {
   id: string;
@@ -42,6 +56,13 @@ export interface TeamBrainActionDeps {
 
 const NOT_FOUND = { ok: false as const, status: 404, message: "카드를 찾을 수 없습니다." };
 const ALREADY = { ok: false as const, status: 409, message: "이미 처리된 카드입니다." };
+/** The row's OWN source (propose, or an admin's direct card with one) — what its provenance describes. */
+function hasOwnSource(row: TeamBrainProposal): boolean {
+  return (row.kind === "propose" || row.kind === "direct") && Boolean(row.intake?.type);
+}
+
+const PROVENANCE_INCOMPLETE = "출처 정보(출처 유형·출처·작성자·작성일)를 카드에서 먼저 채워 주세요.";
+
 const STALE_MESSAGE = "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.";
 
 /** Each page write of a changeset with its committed state now; stale = changed since the draft. */
@@ -108,6 +129,9 @@ export async function teamBrainCardView(
         (proposal.kind === "direct" || target?.status === "pending"),
       cancel: proposal.kind !== "propose" && draft,
     },
+    provenance: hasOwnSource(proposal)
+      ? { editable: draft, issues: teamProvenanceIssues(proposal.intake).map((i) => i.slot) }
+      : null,
   };
 }
 
@@ -127,8 +151,47 @@ export async function submitTeamBrainProposal(
   const row = store.getTeamBrainProposal(id);
   if (!row || row.proposerUserId !== actor.id || !store.isActiveUser(actor.id)) return NOT_FOUND;
   if (row.kind !== "propose" || row.status !== "draft") return ALREADY;
+  // A source goes to the queue only with its provenance (rows drafted before it was asked fill it on the card).
+  if (teamProvenanceIssues(row.intake).length > 0) return { ok: false, status: 409, message: PROVENANCE_INCOMPLETE };
   if (!store.transitionTeamBrainProposal(id, ["draft"], "pending")) return ALREADY;
   deps.audit?.("team_brain_submit", `${row.id} ${row.path}`);
+  return viewOrGone(deps, actor.id, id);
+}
+
+/**
+ * 출처 정보 수정: the drafter corrects their own draft source's provenance on
+ * the card (a propose draft, or an admin's direct card with a source). Every
+ * field is re-validated with the intake rules and scanned for secrets.
+ */
+export async function editTeamBrainProvenance(
+  deps: TeamBrainActionDeps,
+  actor: TeamBrainActor,
+  id: string,
+  body: unknown,
+): Promise<TeamBrainActionResult> {
+  const { store } = deps;
+  store.expireTeamBrainDrafts();
+  const row = store.getTeamBrainProposal(id);
+  if (!row || row.proposerUserId !== actor.id || !store.isActiveUser(actor.id)) return NOT_FOUND;
+  if (!hasOwnSource(row) || !row.intake) return { ok: false, status: 409, message: "이 카드에는 고칠 출처 정보가 없습니다." };
+  if (row.status !== "draft") return ALREADY;
+  const b = (body && typeof body === "object" ? body : {}) as Partial<Record<keyof TeamProvenanceInput, unknown>>;
+  const field = (v: unknown) => (typeof v === "string" ? v : "");
+  const input = {
+    source_kind: field(b.sourceKind),
+    source: field(b.source),
+    author: field(b.author),
+    authored_at: field(b.authoredAt),
+  };
+  const merged = withTeamProvenance(row.intake, input);
+  if (!merged.ok) {
+    return { ok: false, status: 400, message: merged.issues.map((i) => teamProvenanceProblemLabel(i.slot, i.problem)).join(" ") };
+  }
+  if (findSecretInText(Object.values(input).join("\n"), store.getUserSecrets(actor.id))) {
+    return { ok: false, status: 400, message: "출처 정보에 비밀 값(토큰·비밀번호 등)이 들어 있습니다. 지우고 다시 저장하세요." };
+  }
+  if (!store.updateTeamBrainDraftIntake(id, actor.id, merged.intake)) return ALREADY;
+  deps.audit?.("team_brain_edit_provenance", `${row.id} ${row.path}`);
   return viewOrGone(deps, actor.id, id);
 }
 
@@ -252,6 +315,10 @@ export async function applyTeamBrainCard(
     return { ok: false, status: 403, message: "관리자만 팀 브레인에 반영할 수 있습니다." };
   }
   if (row.kind === "propose" || row.status !== "draft") return ALREADY;
+  // The admin's own source is committed as a raw file: its provenance must be complete too.
+  if (hasOwnSource(row) && teamProvenanceIssues(row.intake).length > 0) {
+    return { ok: false, status: 409, message: PROVENANCE_INCOMPLETE };
+  }
   const target = row.kind === "review" && row.targetId ? store.getTeamBrainProposal(row.targetId) : null;
   if (row.kind === "review" && (!target || target.kind !== "propose" || target.status !== "pending")) {
     return { ok: false, status: 409, message: "이 제안은 이미 처리되었거나 철회되었습니다." };

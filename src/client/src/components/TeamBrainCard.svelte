@@ -8,12 +8,25 @@
   import { onDestroy, onMount } from "svelte";
   import { api } from "../lib/api";
   import Icon from "./Icon.svelte";
-  import type { TeamBrainCardView, TeamBrainIntake, TeamPageChangeView } from "../../../shared/teamBrain";
+  import type {
+    TeamBrainCardView,
+    TeamBrainIntake,
+    TeamPageChangeView,
+    TeamProvenanceInput,
+    TeamProvenanceSlot,
+  } from "../../../shared/teamBrain";
   import {
     TEAM_INTAKE_SLOTS,
     TEAM_INTAKE_SLOT_LABELS,
     TEAM_PAGE_TYPE_LABELS,
+    TEAM_PROVENANCE_SLOTS,
+    TEAM_SOURCE_KINDS,
+    TEAM_SOURCE_KIND_LABELS,
+    TEAM_SOURCE_KIND_PLACEHOLDERS,
     isTeamIntakeUnknown,
+    teamProvenanceProblem,
+    teamProvenanceProblemLabel,
+    teamSourceKindOf,
   } from "../../../shared/teamBrain";
   import { collapseUnchanged, diffLines, type DiffHunkItem } from "../../../shared/lineDiff";
   import { refreshTeamBrainStatus } from "../lib/teamBrain";
@@ -51,6 +64,72 @@
       busy = false;
     }
   }
+
+  // 출처 정보 (provenance) editor: the drafter fills or corrects 출처 유형·출처·작성자·작성일
+  // on their own draft before 제출 / 반영. It opens by itself while something is
+  // missing — the gated button's prerequisite is the first step — and the
+  // server re-validates every save.
+  let editing = false;
+  let autoOpened = false;
+  let saving = false;
+  let formError = "";
+  let form: TeamProvenanceInput = { sourceKind: "", source: "", author: "", authoredAt: "" };
+
+  function openEditor(intake: TeamBrainIntake | null): void {
+    const a = intake?.answers ?? {};
+    form = {
+      sourceKind: teamSourceKindOf(a.source_kind ?? "") ?? "",
+      source: a.source ?? "",
+      author: a.author ?? "",
+      authoredAt: a.authored_at ?? "",
+    };
+    formError = "";
+    editing = true;
+  }
+
+  function formProblems(f: TeamProvenanceInput): string[] {
+    const values: Record<TeamProvenanceSlot, string> = {
+      source_kind: f.sourceKind,
+      source: f.source,
+      author: f.author,
+      authored_at: f.authoredAt,
+    };
+    const kind = teamSourceKindOf(f.sourceKind);
+    return TEAM_PROVENANCE_SLOTS.flatMap((slot) => {
+      const problem = teamProvenanceProblem(slot, values[slot], kind);
+      return problem ? [teamProvenanceProblemLabel(slot, problem)] : [];
+    });
+  }
+
+  async function saveProvenance(): Promise<void> {
+    if (saving) return;
+    const problems = formProblems(form);
+    if (problems.length) {
+      formError = problems.join(" ");
+      return;
+    }
+    saving = true;
+    formError = "";
+    try {
+      view = await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/provenance`, {
+        method: "PUT",
+        body: JSON.stringify(form),
+      });
+      editing = false;
+    } catch (err) {
+      formError = (err as Error).message;
+    } finally {
+      saving = false;
+    }
+  }
+
+  $: if (view?.provenance?.editable && view.provenance.issues.length > 0 && !autoOpened) {
+    autoOpened = true;
+    openEditor(view.proposal.intake);
+  }
+  $: if (view && !view.provenance?.editable) editing = false;
+  $: provenanceBlocked = Boolean(view?.provenance && view.provenance.issues.length > 0);
+  $: formKind = teamSourceKindOf(form.sourceKind);
 
   // An open proposal is decided (or answered) elsewhere — an admin's conversation,
   // the proposer's avatar: re-read on return.
@@ -160,9 +239,11 @@
     unknown: boolean;
   }
 
+  /** The non-provenance answers (provenance has its own block). */
   function intakeRows(intake: TeamBrainIntake): IntakeRow[] {
     const rows: IntakeRow[] = [];
     for (const slot of TEAM_INTAKE_SLOTS) {
+      if ((TEAM_PROVENANCE_SLOTS as readonly string[]).includes(slot)) continue;
       const answer = intake.answers[slot];
       if (typeof answer !== "string" || !answer.trim()) continue;
       rows.push({ label: TEAM_INTAKE_SLOT_LABELS[slot], answer, unknown: isTeamIntakeUnknown(answer) });
@@ -171,7 +252,31 @@
   }
 
   function gapLabels(intake: TeamBrainIntake): string {
-    return intake.gaps.map((slot) => TEAM_INTAKE_SLOT_LABELS[slot] ?? slot).join(", ");
+    return intake.gaps
+      .filter((slot) => !(TEAM_PROVENANCE_SLOTS as readonly string[]).includes(slot))
+      .map((slot) => TEAM_INTAKE_SLOT_LABELS[slot] ?? slot)
+      .join(", ");
+  }
+
+  interface ProvenanceRow {
+    slot: TeamProvenanceSlot;
+    label: string;
+    answer: string;
+    state: "ok" | "unknown" | "missing";
+  }
+
+  /** 출처 유형·출처·작성자·작성일, always all four (a missing one says so). */
+  function provenanceRows(intake: TeamBrainIntake): ProvenanceRow[] {
+    return TEAM_PROVENANCE_SLOTS.map((slot) => {
+      const raw = (intake.answers[slot] ?? "").trim();
+      const kind = slot === "source_kind" ? teamSourceKindOf(raw) : null;
+      return {
+        slot,
+        label: TEAM_INTAKE_SLOT_LABELS[slot],
+        answer: kind ? TEAM_SOURCE_KIND_LABELS[kind] : raw,
+        state: !raw ? "missing" : isTeamIntakeUnknown(raw) ? "unknown" : "ok",
+      };
+    });
   }
 
   interface PageDiff {
@@ -206,9 +311,80 @@
   $: conflicts = proposal?.changeset?.conflicts ?? [];
 </script>
 
+{#snippet provenanceList(intake: TeamBrainIntake)}
+  <dl class="team-brain-intake-list">
+    {#each provenanceRows(intake) as row (row.slot)}
+      <div class="team-brain-intake-row">
+        <dt>{row.label}</dt>
+        <dd>
+          {#if row.state === "missing"}<span class="tag danger team-brain-missing">미기재</span>
+          {:else if row.state === "unknown"}<span class="tag team-brain-unknown">모름</span>
+          {:else}{row.answer}{/if}
+        </dd>
+      </div>
+    {/each}
+  </dl>
+{/snippet}
+
+{#snippet provenanceBlock(intake: TeamBrainIntake, editable: boolean)}
+  <div class="team-brain-provenance">
+    <div class="team-brain-provenance-head">
+      <span class="team-brain-section-label">출처 정보</span>
+      {#if editable && !editing}
+        <button class="ghost-sm" type="button" on:click={() => openEditor(intake)}>수정</button>
+      {/if}
+    </div>
+    {#if editable && editing}
+      <form class="team-brain-provenance-form" on:submit|preventDefault={saveProvenance} aria-label="출처 정보 입력">
+        <label class="field">
+          <span>출처 유형</span>
+          <select bind:value={form.sourceKind} disabled={saving} required>
+            <option value="" disabled>선택하세요</option>
+            {#each TEAM_SOURCE_KINDS as kind (kind)}
+              <option value={kind}>{TEAM_SOURCE_KIND_LABELS[kind]}</option>
+            {/each}
+          </select>
+        </label>
+        <label class="field">
+          <span>출처</span>
+          <input
+            type={formKind === "link" ? "url" : "text"}
+            bind:value={form.source}
+            disabled={saving}
+            placeholder={formKind ? TEAM_SOURCE_KIND_PLACEHOLDERS[formKind] : "출처 유형을 먼저 고르세요"}
+            autocomplete="off"
+          />
+        </label>
+        <label class="field">
+          <span>작성자</span>
+          <input bind:value={form.author} disabled={saving} placeholder="원본을 쓰거나 말한 사람 (직접 확인했다면 본인)" autocomplete="off" />
+          <small class="field-hint">모르면 '모름'이라고 적으세요.</small>
+        </label>
+        <label class="field">
+          <span>작성일</span>
+          <input bind:value={form.authoredAt} disabled={saving} placeholder="YYYY-MM-DD" inputmode="numeric" autocomplete="off" />
+          <small class="field-hint">연·월만 알면 YYYY-MM, 연도만 알면 YYYY, 모르면 '모름'.</small>
+        </label>
+        {#if formError}
+          <p class="team-brain-status tone-warn" role="alert">{formError}</p>
+        {/if}
+        <div class="team-brain-actions">
+          <button class="primary" type="submit" disabled={saving}>{saving ? "저장 중…" : "출처 정보 저장"}</button>
+          {#if !provenanceBlocked}
+            <button class="ghost-sm" type="button" disabled={saving} on:click={() => (editing = false)}>취소</button>
+          {/if}
+        </div>
+      </form>
+    {:else}
+      {@render provenanceList(intake)}
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet intakeBlock(intake: TeamBrainIntake)}
   {@const rows = intakeRows(intake)}
-  {#if rows.length || intake.gaps.length}
+  {@const gaps = gapLabels(intake)}
+  {#if rows.length || gaps}
     <div class="team-brain-intake">
       <span class="team-brain-section-label">보충 정보</span>
       {#if rows.length}
@@ -221,8 +397,8 @@
           {/each}
         </dl>
       {/if}
-      {#if intake.gaps.length}
-        <p class="team-brain-gaps">아직 모르는 정보: {gapLabels(intake)}</p>
+      {#if gaps}
+        <p class="team-brain-gaps">아직 모르는 정보: {gaps}</p>
       {/if}
     </div>
   {/if}
@@ -296,6 +472,7 @@
           <summary>원문 보기</summary>
           <pre class="team-brain-pre">{proposal.content}</pre>
         </details>
+        {#if proposal.intake.type}{@render provenanceBlock(proposal.intake, Boolean(view.provenance?.editable))}{/if}
         {@render intakeBlock(proposal.intake)}
       {:else}
         <details class="team-brain-details">
@@ -306,10 +483,17 @@
     {/if}
 
     {#if source}
+      <!-- A direct card's own source: its provenance stays OUT of the fold, editable while a draft. -->
+      {#if proposal.kind === "direct" && source.intake?.type}
+        {@render provenanceBlock(source.intake, Boolean(view.provenance?.editable))}
+      {/if}
       <details class="team-brain-details">
         <summary>원본 보기</summary>
         <pre class="team-brain-pre">{source.content}</pre>
-        {#if source.intake}{@render intakeBlock(source.intake)}{/if}
+        {#if source.intake}
+          {#if proposal.kind !== "direct" && source.intake.type}{@render provenanceList(source.intake)}{/if}
+          {@render intakeBlock(source.intake)}
+        {/if}
       </details>
     {/if}
 
@@ -378,16 +562,19 @@
     {#if status}
       <p class={`team-brain-status tone-${status.tone}`} role="status">{status.text}</p>
     {/if}
+    {#if provenanceBlocked && (view.actions.submit || view.actions.apply)}
+      <p class="team-brain-status tone-warn">출처 정보(출처 유형·출처·작성자·작성일)를 채워야 {view.actions.submit ? "제출" : "반영"}할 수 있습니다.</p>
+    {/if}
     {#if actionError}
       <p class="team-brain-status tone-warn" role="alert">{actionError}</p>
     {/if}
     {#if view.actions.submit || view.actions.withdraw || view.actions.apply || view.actions.cancel}
       <div class="team-brain-actions">
         {#if view.actions.submit}
-          <button class="primary" type="button" disabled={busy} on:click={() => act("submit")}>관리자에게 제출</button>
+          <button class="primary" type="button" disabled={busy || provenanceBlocked} on:click={() => act("submit")}>관리자에게 제출</button>
         {/if}
         {#if view.actions.apply}
-          <button class="primary" type="button" disabled={busy} on:click={() => act("apply")}>{applyLabel(view)}</button>
+          <button class="primary" type="button" disabled={busy || provenanceBlocked} on:click={() => act("apply")}>{applyLabel(view)}</button>
         {/if}
         {#if view.actions.withdraw}
           <button class="ghost-sm" type="button" disabled={busy} on:click={() => act("withdraw")}>

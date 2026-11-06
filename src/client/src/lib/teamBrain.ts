@@ -31,10 +31,7 @@ export async function refreshTeamBrainStatus({ announce = false } = {}): Promise
   }
   replaceState({ teamBrainStatus: status });
   if (announce) {
-    const open = () => {
-      replaceState({ brainOpenTeamTab: true });
-      goView("brain");
-    };
+    const open = () => goView("teamBrain");
     if (status.unseenResults > lastAnnounced.unseenResults) {
       notify(`팀 브레인 제안 결과가 ${status.unseenResults}건 나왔어요.`, "info", { actionLabel: "확인", action: open });
     } else if (status.pendingReview > lastAnnounced.pendingReview) {
@@ -49,5 +46,5 @@ export async function refreshTeamBrainStatus({ announce = false } = {}): Promise
 
 export function resetTeamBrainClientState(): void {
   lastAnnounced = { unseenResults: 0, pendingReview: 0 };
-  replaceState({ teamBrainStatus: { unseenResults: 0, pendingReview: 0 }, brainOpenTeamTab: false });
+  replaceState({ teamBrainStatus: { unseenResults: 0, pendingReview: 0 } });
 }

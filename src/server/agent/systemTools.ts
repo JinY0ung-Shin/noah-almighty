@@ -1,5 +1,4 @@
 import {
-  DIRECT_MESSAGE_STATE,
   GROUP_REPOS_RETIRED_SENTENCE,
   PI_NO_ASK_USER_SENTENCE,
   PI_REPO_REPLACED_COPY_SENTENCE,
@@ -793,7 +792,6 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const user = store.getUserById(ctx.avatarUserId);
         const publicGuide = [
           "Noah Almighty avatar-chat system summary:",
-          DIRECT_MESSAGE_STATE,
           "- System tools are always available on local avatar runs; individual handlers still enforce owner and group scope. Other tool groups follow the current selection and policy.",
           "- Official usage manual: call mcp__system__read_manual (omit topic for the index) for setup steps, examples and limitations. Use topic external-tasks for the external Task API. The manual documents features; the current state below determines this run's actual capabilities.",
           "- The avatar converses by loading its profile/persona, base skills, owner plugins, and personal knowledge repository together.",

@@ -5,7 +5,6 @@
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
   import { goView } from "../lib/nav";
-  import { replaceState } from "../lib/state";
   import type { TeamBrainBackupState } from "../../../shared/teamBrain";
 
   export let active = false;
@@ -108,8 +107,7 @@
   }
 
   function openTeamBrain() {
-    replaceState({ brainOpenTeamTab: true });
-    goView("brain");
+    goView("teamBrain");
   }
 
   function when(iso: string | null): string {
@@ -131,7 +129,7 @@
         <button class="stat-card stat-clickable" type="button" on:click={openTeamBrain}>
           <div class="stat-value">{state.noteCount}</div>
           <div class="stat-label">위키 페이지</div>
-          <div class="stat-link muted">지식 그래프에서 보기</div>
+          <div class="stat-link muted">팀 브레인에서 보기</div>
         </button>
         {#if state.rawSources !== undefined}
           <div class="stat-card">

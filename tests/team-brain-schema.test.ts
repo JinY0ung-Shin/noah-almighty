@@ -13,6 +13,7 @@ import {
   renderTeamRaw,
   schemaVersionOf,
   validateChangeset,
+  withTeamProvenance,
   type ChangesetCheckContext,
   type TeamPageParse,
 } from "../src/server/teamBrainSchema.js";
@@ -226,19 +227,80 @@ describe("validateChangeset", () => {
 });
 
 describe("checkIntake", () => {
+  const PROV = { source_kind: "document", source: "배포 가이드 v3", author: "인프라팀", authored_at: "2026-10" };
+
   it("lists exactly the missing required slots for the type", () => {
     expect(checkIntake("decision", { source: "회의", scope: "전사" })).toEqual({
       ok: false,
-      missing: ["validity", "decided_by", "decided_when", "rationale"],
+      missing: ["source_kind", "author", "authored_at", "validity", "decided_by", "decided_when", "rationale"],
+      invalid: [],
     });
-    expect(checkIntake("howto", { source: "x", scope: "y", validity: "z", verified: "  " })).toEqual({ ok: false, missing: ["verified"] });
+    expect(checkIntake("howto", { ...PROV, scope: "y", validity: "z", verified: "  " })).toEqual({
+      ok: false,
+      missing: ["verified"],
+      invalid: [],
+    });
   });
 
   it("trims, drops unknown keys and non-strings, and records unknown answers as gaps", () => {
-    const r = checkIntake("system", { source: " 문서 ", scope: "운영", validity: "모름", owner: "unknown", bogus: "x", verified: 3 });
+    const r = checkIntake("system", { ...PROV, source: " 문서 ", scope: "운영", validity: "모름", owner: "unknown", bogus: "x", verified: 3 });
     expect(r).toEqual({
       ok: true,
-      intake: { type: "system", answers: { source: "문서", scope: "운영", validity: "모름", owner: "unknown" }, gaps: ["validity", "owner"], followups: [] },
+      intake: {
+        type: "system",
+        answers: { ...PROV, source: "문서", scope: "운영", validity: "모름", owner: "unknown" },
+        gaps: ["validity", "owner"],
+        followups: [],
+      },
+    });
+  });
+
+  it("refuses an unknown or unlisted origin, a non-URL link and bad or future dates; keeps unknown author/date as gaps", () => {
+    const base = { ...PROV, scope: "운영", validity: "변경 전까지" };
+    const invalid = (answers: Record<string, string>) => {
+      const r = checkIntake("concept", answers);
+      return r.ok ? [] : r.invalid;
+    };
+    expect(invalid({ ...base, source_kind: "모름" })).toEqual([{ slot: "source_kind", problem: "unknown_not_allowed" }]);
+    expect(invalid({ ...base, source: "unknown" })).toEqual([{ slot: "source", problem: "unknown_not_allowed" }]);
+    expect(invalid({ ...base, source_kind: "소문" })).toEqual([{ slot: "source_kind", problem: "bad_kind" }]);
+    expect(invalid({ ...base, source_kind: "link", source: "wiki page" })).toEqual([{ slot: "source", problem: "bad_url" }]);
+    expect(invalid({ ...base, source_kind: "link", source: "https://wiki.internal/deploy" })).toEqual([]);
+    expect(invalid({ ...base, authored_at: "2026-02-30" })).toEqual([{ slot: "authored_at", problem: "bad_date" }]);
+    expect(invalid({ ...base, authored_at: "지난주" })).toEqual([{ slot: "authored_at", problem: "bad_date" }]);
+    expect(invalid({ ...base, authored_at: "2999-01-01" })).toEqual([{ slot: "authored_at", problem: "future_date" }]);
+    expect(invalid({ ...base, source: "x".repeat(501) })).toEqual([{ slot: "source", problem: "too_long" }]);
+    for (const date of ["2026", "2026-10", "2026-10-31"]) expect(invalid({ ...base, authored_at: date })).toEqual([]);
+    const r = checkIntake("concept", { ...base, source_kind: "웹 링크", source: "https://x.internal", author: "모름", authored_at: "unknown" });
+    expect(r.ok && r.intake.answers.source_kind).toBe("link");
+    expect(r.ok && r.intake.gaps).toEqual(["author", "authored_at"]);
+  });
+
+  it("merges a card's provenance edit into the intake and re-validates it", () => {
+    const checked = checkIntake("concept", { ...PROV, scope: "운영", validity: "모름" });
+    if (!checked.ok) throw new Error("fixture");
+    const edited = withTeamProvenance(checked.intake, {
+      source_kind: "회의",
+      source: "11/4 주간 회의",
+      author: "모름",
+      authored_at: "2026-11-04",
+    });
+    expect(edited).toEqual({
+      ok: true,
+      intake: {
+        type: "concept",
+        answers: { source_kind: "meeting", source: "11/4 주간 회의", author: "모름", authored_at: "2026-11-04", scope: "운영", validity: "모름" },
+        gaps: ["author", "validity"],
+        followups: [],
+      },
+    });
+    expect(withTeamProvenance(checked.intake, { source_kind: "link", source: "", author: "", authored_at: "어제" })).toEqual({
+      ok: false,
+      issues: [
+        { slot: "source", problem: "missing" },
+        { slot: "author", problem: "missing" },
+        { slot: "authored_at", problem: "bad_date" },
+      ],
     });
   });
 });
@@ -258,7 +320,15 @@ const PROPOSAL: TeamBrainProposal = {
   baseBlob: null,
   intake: {
     type: "howto",
-    answers: { source: "직접 확인", scope: "운영", validity: "모름", verified: "예, v1.2" },
+    answers: {
+      source_kind: "verified",
+      source: "직접 확인",
+      author: "Mate",
+      authored_at: "2026-11-05",
+      scope: "운영",
+      validity: "모름",
+      verified: "예, v1.2",
+    },
     gaps: ["validity"],
     followups: [{ questions: "어느 서버?", answer: "prod-1", askedAt: "2026-11-06T01:00:00.000Z", answeredAt: "2026-11-06T02:00:00.000Z" }],
   },
@@ -282,9 +352,14 @@ describe("server-rendered files", () => {
       submitter: { name: "Mate", username: "mate" },
     });
     expect(raw).toContain("---\ntitle: 배포 절차\ntype: raw\nid: abcd1234-0000-0000-0000-000000000000\npage_type: howto\n");
-    expect(raw).toContain("submitted_by: Mate (mate)\nsubmitted_at: 2026-11-06T00:00:00.000Z\napproved_by: Admin (admin)\napproved_at: 2026-11-07T00:00:00.000Z\n---");
+    expect(raw).toContain(
+      "submitted_by: Mate (mate)\nsubmitted_at: 2026-11-06T00:00:00.000Z\napproved_by: Admin (admin)\napproved_at: 2026-11-07T00:00:00.000Z\n" +
+        "source_kind: verified\nsource: 직접 확인\nauthor: Mate\nauthored_at: 2026-11-05\n---",
+    );
     expect(raw).toContain("## Source\n\n배포는 compose up.\n");
-    expect(raw).toContain("## Intake\n\n- source: 직접 확인\n- scope: 운영\n- verified: 예, v1.2\n- gaps: validity\n");
+    // Provenance lives in the frontmatter only.
+    expect(raw).toContain("## Intake\n\n- scope: 운영\n- verified: 예, v1.2\n- gaps: validity\n");
+    expect(parseTeamFrontmatter(raw)?.fields.get("authored_at")).toBe("2026-11-05");
     expect(raw).toContain("## Follow-up 1 (2026-11-06T01:00:00.000Z)\n### Questions\n어느 서버?\n### Answer (2026-11-06T02:00:00.000Z)\nprod-1");
     expect(parseTeamFrontmatter(raw)?.fields.get("title")).toBe("배포 절차");
   });

@@ -193,7 +193,8 @@ function tools(s: ReturnType<typeof setup>, team: TeamBrainToolsContext) {
   });
 }
 
-const HOWTO_ANSWERS = { source: "직접 해 봄", scope: "운영 서버", validity: "변경 전까지", verified: "v1.10에서 확인" };
+const PROVENANCE = { source_kind: "verified", source: "직접 해 봄", author: "김팀원", authored_at: "2026-11-05" };
+const HOWTO_ANSWERS = { ...PROVENANCE, scope: "운영 서버", validity: "변경 전까지", verified: "v1.10에서 확인" };
 const submit = (over: Record<string, unknown> = {}) => ({
   type: "howto",
   title: "배포 절차",
@@ -238,11 +239,42 @@ describe("team brain tools — submitting a source", () => {
     const r = await callTool(t, "propose_team_note", submit({ type: "decision", answers: { source: "회의", scope: "전사", validity: "  " } }));
     expect(r.isError).toBe(true);
     const msg = textOf(r);
-    for (const slot of ["validity", "decided_by", "decided_when", "rationale"]) expect(msg).toContain(`- ${slot}:`);
+    for (const slot of ["source_kind", "author", "authored_at", "validity", "decided_by", "decided_when", "rationale"]) {
+      expect(msg).toContain(`- ${slot}:`);
+    }
     expect(msg).not.toContain("- scope:");
+    expect(msg).not.toContain("- source:");
     expect(msg).toContain("ONCE, in ONE message, only for these");
-    expect(msg).toContain('"unknown" is accepted');
+    expect(msg).toContain('"unknown" is accepted and recorded as a gap, except for source_kind and source');
     expect(s.store.listTeamBrainProposals({})).toHaveLength(0);
+  });
+
+  it("refuses an unknown origin, a link that is not a URL and an impossible date — and keeps unknown author/date as gaps", async () => {
+    const s = setup("provenance");
+    const t = tools(s, teamCtx(s, s.mate.id));
+    const bad = await callTool(
+      t,
+      "propose_team_note",
+      submit({ answers: { ...HOWTO_ANSWERS, source_kind: "link", source: "사내 위키 어딘가", authored_at: "2026-13-01" } }),
+    );
+    expect(bad.isError).toBe(true);
+    expect(textOf(bad)).toContain("These answers are not accepted:");
+    expect(textOf(bad)).toContain("- source: source_kind is link, so source must be the http(s) URL itself");
+    expect(textOf(bad)).toContain("- authored_at: authored_at must be a real date");
+    const unknownOrigin = await callTool(t, "propose_team_note", submit({ answers: { ...HOWTO_ANSWERS, source: "모름" } }));
+    expect(textOf(unknownOrigin)).toContain('- source: source cannot be "unknown"');
+    expect(s.store.listTeamBrainProposals({})).toHaveLength(0);
+
+    const ok = await callTool(
+      t,
+      "propose_team_note",
+      submit({ answers: { ...HOWTO_ANSWERS, source_kind: "회의", source: "11/4 주간 회의", author: "모름", authored_at: "unknown" } }),
+    );
+    expect(ok.isError, textOf(ok)).toBeFalsy();
+    const [row] = s.store.listTeamBrainProposals({});
+    // A Korean label is stored as the kind id; unknown author/date are gaps, not refusals.
+    expect(row.intake?.answers.source_kind).toBe("meeting");
+    expect(row.intake?.gaps).toEqual(["author", "authored_at"]);
   });
 
   it("redirects an admin to prepare_team_changes (no queue for their own knowledge)", async () => {
@@ -447,6 +479,7 @@ describe("team brain tools — admin review", () => {
       changes: [{ path: "wiki/howto/rollback.md", op: "create", content: page({ title: "롤백", sources: "raw/new-source.md" }) }],
     };
     const missing = await callTool(t, "prepare_team_changes", { ...own, source: { ...own.source, answers: { source: "직접" } } });
+    expect(textOf(missing)).toContain("- source_kind:");
     expect(textOf(missing)).toContain("Ask the admin ONCE");
     const ok = await callTool(t, "prepare_team_changes", own);
     expect(ok.isError, textOf(ok)).toBeFalsy();

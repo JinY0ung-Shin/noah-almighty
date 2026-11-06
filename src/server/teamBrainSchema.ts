@@ -20,11 +20,16 @@ import {
   TEAM_INTAKE_REQUIRED,
   TEAM_INTAKE_SLOTS,
   TEAM_PAGE_FOLDERS,
+  TEAM_PROVENANCE_MAX_CHARS,
+  TEAM_PROVENANCE_SLOTS,
+  TEAM_SOURCE_KINDS,
   TEAM_PAGE_REVIEW_MONTHS,
   TEAM_PAGE_TYPES,
   isTeamBrainOp,
   isTeamIntakeUnknown,
   isTeamPageType,
+  teamProvenanceIssues,
+  teamSourceKindOf,
   type TeamBrainIntake,
   type TeamBrainOp,
   type TeamBrainProposal,
@@ -32,6 +37,8 @@ import {
   type TeamIntakeFollowup,
   type TeamIntakeSlot,
   type TeamPageType,
+  type TeamProvenanceProblem,
+  type TeamProvenanceSlot,
 } from "../shared/teamBrain.js";
 
 export const TEAM_BRAIN_SCHEMA_MARKER = `<!-- noah-team-brain-schema: ${TEAM_BRAIN_SCHEMA_VERSION} -->`;
@@ -551,12 +558,48 @@ export function validateChangeset(
 
 // ── Intake ───────────────────────────────────────────────────────────────────
 
-export type IntakeCheck = { ok: true; intake: TeamBrainIntake } | { ok: false; missing: TeamIntakeSlot[] };
+export type TeamProvenanceIssue = { slot: TeamProvenanceSlot; problem: TeamProvenanceProblem };
+
+export type IntakeCheck =
+  | { ok: true; intake: TeamBrainIntake }
+  | { ok: false; missing: TeamIntakeSlot[]; invalid: TeamProvenanceIssue[] };
+
+/** Agent-facing (English) reason for a refused provenance answer. */
+export function provenanceProblemText(slot: TeamProvenanceSlot, problem: TeamProvenanceProblem): string {
+  switch (problem) {
+    case "missing":
+      return `${slot} is required`;
+    case "unknown_not_allowed":
+      return `${slot} cannot be "unknown" — a source without a known origin is not submitted; ask where it comes from`;
+    case "bad_kind":
+      return `source_kind must be one of ${TEAM_SOURCE_KINDS.join(", ")}`;
+    case "bad_url":
+      return "source_kind is link, so source must be the http(s) URL itself (or pick another kind)";
+    case "bad_date":
+      return "authored_at must be a real date as YYYY-MM-DD, YYYY-MM or YYYY (or unknown)";
+    case "future_date":
+      return "authored_at is in the future";
+    case "too_long":
+      return `${slot} is too long (max ${TEAM_PROVENANCE_MAX_CHARS} characters)`;
+  }
+}
+
+/** A source kind answer stored as its id (the model or a label may say "회의" / "Meeting"). */
+function normalizeSourceKind(kept: Partial<Record<TeamIntakeSlot, string>>): void {
+  const kind = kept.source_kind ? teamSourceKindOf(kept.source_kind) : null;
+  if (kind) kept.source_kind = kind;
+}
+
+function gapsOf(answers: Partial<Record<TeamIntakeSlot, string>>): TeamIntakeSlot[] {
+  return TEAM_INTAKE_SLOTS.filter((slot) => answers[slot] !== undefined && isTeamIntakeUnknown(answers[slot]!));
+}
 
 /**
  * Normalize a submission's slot answers: trims, drops unknown keys and
  * non-strings; a blank answer is missing; an "unknown" answer is kept and
- * listed in `gaps`. Missing = a required slot for `type` with no answer.
+ * listed in `gaps`. Missing = a required slot for `type` with no answer;
+ * invalid = a provenance answer the rules refuse (`teamProvenanceProblem`:
+ * source kind/source never unknown, a link is a URL, a real past date).
  */
 export function checkIntake(
   type: TeamPageType,
@@ -569,10 +612,33 @@ export function checkIntake(
     const v = (source as Record<string, unknown>)[slot];
     if (typeof v === "string" && v.trim()) kept[slot] = v.trim();
   }
+  normalizeSourceKind(kept);
   const missing = TEAM_INTAKE_REQUIRED[type].filter((slot) => kept[slot] === undefined);
-  if (missing.length > 0) return { ok: false, missing };
-  const gaps = TEAM_INTAKE_SLOTS.filter((slot) => kept[slot] !== undefined && isTeamIntakeUnknown(kept[slot]!));
-  return { ok: true, intake: { type, answers: kept, gaps, followups: [...followups] } };
+  const intake: TeamBrainIntake = { type, answers: kept, gaps: gapsOf(kept), followups: [...followups] };
+  const invalid = teamProvenanceIssues(intake).filter((i) => i.problem !== "missing");
+  if (missing.length > 0 || invalid.length > 0) return { ok: false, missing, invalid };
+  return { ok: true, intake };
+}
+
+/**
+ * The drafter's provenance edit on the card, merged into the row's intake
+ * (the other answers and the follow-ups are kept; gaps are recomputed). Every
+ * provenance field must pass the same rules as the intake check.
+ */
+export function withTeamProvenance(
+  intake: TeamBrainIntake,
+  input: Record<TeamProvenanceSlot, string>,
+): { ok: true; intake: TeamBrainIntake } | { ok: false; issues: TeamProvenanceIssue[] } {
+  const answers: Partial<Record<TeamIntakeSlot, string>> = { ...intake.answers };
+  for (const slot of TEAM_PROVENANCE_SLOTS) {
+    const v = input[slot].trim();
+    if (v) answers[slot] = v;
+    else delete answers[slot];
+  }
+  normalizeSourceKind(answers);
+  const next: TeamBrainIntake = { ...intake, answers, gaps: gapsOf(answers) };
+  const issues = teamProvenanceIssues(next);
+  return issues.length > 0 ? { ok: false, issues } : { ok: true, intake: next };
 }
 
 // ── Server-rendered files ────────────────────────────────────────────────────
@@ -611,6 +677,8 @@ export function renderTeamRaw(input: {
     `submitted_at: ${proposal.createdAt}`,
     `approved_by: ${who(approver)}`,
     `approved_at: ${approvedAt}`,
+    // The ORIGINAL's provenance (the drafter's answers; absent on rows from before it was asked).
+    ...TEAM_PROVENANCE_SLOTS.filter((slot) => intake?.answers[slot]).map((slot) => `${slot}: ${oneLine(intake!.answers[slot]!)}`),
     "---",
     `# ${title}`,
     "",
@@ -618,7 +686,10 @@ export function renderTeamRaw(input: {
   if (proposal.summary.trim()) lines.push(`> ${oneLine(proposal.summary)}`, "");
   lines.push("## Source", "", proposal.content.replace(/\r\n?/g, "\n").replace(/\s+$/, ""), "");
   if (intake) {
-    const answered = TEAM_INTAKE_SLOTS.filter((s) => intake.answers[s] !== undefined && !intake.gaps.includes(s));
+    // Provenance already sits in the frontmatter above.
+    const answered = TEAM_INTAKE_SLOTS.filter(
+      (s) => intake.answers[s] !== undefined && !intake.gaps.includes(s) && !(TEAM_PROVENANCE_SLOTS as readonly string[]).includes(s),
+    );
     if (answered.length > 0 || intake.gaps.length > 0) {
       lines.push("## Intake", "");
       for (const slot of answered) lines.push(`- ${slot}: ${indentContinuation(intake.answers[slot]!)}`);

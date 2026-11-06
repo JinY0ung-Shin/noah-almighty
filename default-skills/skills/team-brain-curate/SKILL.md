@@ -49,7 +49,10 @@ knowledge with `mcp__brain__propose_team_note` (a source submission), never with
    read it with `get_note` and pass its `blob` as `baseBlob`),
    `create` only what has no home yet, link related pages inline with `[[Exact Title]]`, set
    `review_after` per SCHEMA.md's defaults, and carry the intake facts (owner, validity → `valid_from`,
-   gaps) into frontmatter.
+   gaps) into frontmatter. Weigh the source's **provenance** (`source_kind`, `source`, `author`,
+   `authored_at` — the ORIGINAL's origin, author and date, not the submission's): a source older than what
+   a page already says is a conflict to list, never a silent overwrite. When `get_team_proposal` reports
+   the provenance incomplete (a submission from before it was required), recommend **ask** for it.
 5. Tell the admin your recommendation and why: **approve** (and what pages change), **ask**, or **reject**.
    - **ask** when a fact the pages need is missing and the proposer can supply it. Send at most 5 short
      questions in the proposer's language. They answer through their own avatar and resubmit.
@@ -62,8 +65,8 @@ knowledge with `mcp__brain__propose_team_note` (a source submission), never with
 7. Tell the admin to press the card. Mention each conflict you listed.
 
 ## 2. The admin's own knowledge
-Run the same intake you would for a teammate: ask ONCE, in one message, only for the facts the page type
-still needs. Then call `mcp__brain__prepare_team_changes` with
+Run the same intake you would for a teammate, provenance included (`source_kind`, `source`, `author`,
+`authored_at`): ask ONCE, in one message, only for the facts the page type still needs. Then call `mcp__brain__prepare_team_changes` with
 `source` = {type, text: the admin's words verbatim, answers} and the compiled pages. Each page cites
 `raw/new-source.md` in `sources`, and the server swaps in the real raw path.
 

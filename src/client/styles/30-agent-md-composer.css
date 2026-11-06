@@ -1051,26 +1051,12 @@ tbody tr:hover td {
   transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
 }
 
-/* The row is `attach | textarea | send`, and attach is optional (the DM dock
-   composer has none). Each combination needs
-   its own column list — one column too many strands a button in the middle 1fr
-   slot and squeezes the textarea into an `auto` one. */
-.composer-box.no-attach {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
 /* A mid-turn send button joins the row for as long as a turn streams (disabled
    until something is typed, never unmounted — the column list must not change
    under the user's fingers), so every combination above needs its list one
-   `auto` longer; an unlisted column would wrap the button onto its own row.
-   External avatars take no mid-turn messages, so the `.no-attach` pairs are
-   unreachable today; they are here so the row can't silently break if that ever
-   changes. */
+   `auto` longer; an unlisted column would wrap the button onto its own row. */
 .composer-box.with-steer {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-}
-.composer-box.with-steer.no-attach {
-  grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
 /* Image-attach button (left of the textarea). A label wrapping a hidden file
@@ -1139,12 +1125,7 @@ tbody tr:hover td {
   height: 12px;
 }
 
-/* Widened to `.composer-box textarea`: the DM dock reuses the SAME
-   `.composer-box` + `.send-button` pair outside `.composer`, and this reset —
-   the borderless, transparent field the box draws its ring around — is part of
-   that pair, not of the chat column. */
-.composer textarea,
-.composer-box textarea {
+.composer textarea {
   width: 100%;
   border: 0;
   outline: none;
@@ -1208,21 +1189,6 @@ textarea::placeholder {
   flex-wrap: wrap;
   min-width: 0;
   max-width: 100%;
-}
-/* The DM dock's pill floats over the bottom-right corner of every view, and
-   this row's right-aligned meta lands in exactly that spot — the browser-bridge
-   status chip there is a BUTTON into the install guide, so it has to stay
-   reachable. `--dm-dock-inset` is published by DirectMessageDock.svelte and is
-   absent (→ 0px) whenever the dock is hidden.
-   Scoped to the column that is LAST in the layout, because a side panel
-   (canvas / file preview) already sits under the pill and shifting the badges
-   then would buy nothing. Two selectors, because the single-pane branch puts
-   `.chat-col` directly in `.chat-layout` while the split branch nests panes in
-   `.chat-workbench` — the panel is a sibling of the WORKBENCH, not of the pane
-   (verified against ChatView.svelte's two `.chat-layout` branches). */
-.chat-layout > .chat-col:last-child .composer-hint,
-.chat-layout > .chat-workbench:last-child > .chat-col:last-child .composer-hint {
-  padding-right: var(--dm-dock-inset, 0px);
 }
 .composer-hint kbd {
   font-family: inherit;
@@ -1384,8 +1350,7 @@ button.composer-bridge:focus-visible {
 }
 /* The 할 일 count's pop when the avatar changes the list — the composer switch's
    `할 일 N` and the chat card's `(외 N개)` (ChatView / TodoOverlay apply it at
-   360 ms under no-preference only). Same shape as the DM badge's own
-   `dm-badge-pop`, which stays separate: its visual spec asserts that name. The
+   360 ms under no-preference only). The
    overshoot and the 360 ms (past DESIGN §2.5's 120–240 ms, which also forbids
    bounce on programmatic motion) are the USER's choice for this cue (2026-10-10,
    "숫자 튐") — not a motion-audit fix target. */
@@ -1590,15 +1555,6 @@ button.composer-bridge:focus-visible {
   color: var(--accent-strong);
   border-color: var(--accent-soft-strong);
   background: var(--accent-soft);
-}
-/* The one chip meant to be NOTICED rather than read: an unread count. Filled
-   state colour (docs/DESIGN.md §2.1) instead of the family's soft tint, because
-   it has to carry across a busy screen from the corner of the eye. */
-.tag.unread {
-  color: var(--on-danger);
-  background: var(--danger);
-  border-color: var(--danger);
-  font-weight: 700;
 }
 .tag.read {
   color: var(--info);

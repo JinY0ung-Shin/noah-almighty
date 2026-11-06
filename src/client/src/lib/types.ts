@@ -130,7 +130,10 @@ export interface PendingSteer {
 export type ViewName =
   | "explore"
   | "chat"
+  /** 내 브레인: the owner's personal knowledge-repo graph (`#/brain`). */
   | "brain"
+  /** 팀 브레인: the ONE team vault, my submissions and (admins) the review queue (`#/teamBrain`). */
+  | "teamBrain"
   | "inbox"
   | "routines"
   | "skills"

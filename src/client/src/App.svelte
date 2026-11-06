@@ -4,7 +4,6 @@
   import Shell from "./components/Shell.svelte";
   import Toasts from "./components/Toasts.svelte";
   import ConfirmationDialog from "./components/ConfirmationDialog.svelte";
-  import DirectMessageDock from "./components/DirectMessageDock.svelte";
   import OnboardingModal from "./components/OnboardingModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import WhatsNewModal from "./components/WhatsNewModal.svelte";
@@ -34,6 +33,7 @@
     chat: () => import("./views/ChatView.svelte"),
     todos: () => import("./views/TodosView.svelte"),
     brain: () => import("./views/BrainView.svelte"),
+    teamBrain: () => import("./views/TeamBrainView.svelte"),
     inbox: () => import("./views/InboxView.svelte"),
     routines: () => import("./views/RoutinesView.svelte"),
     skills: () => import("./views/SkillsView.svelte"),
@@ -46,7 +46,8 @@
     explore: "탐색",
     chat: "대화",
     todos: "할 일",
-    brain: "지식 그래프",
+    brain: "내 브레인",
+    teamBrain: "팀 브레인",
     inbox: "알림",
     routines: "예약 작업",
     skills: "스킬 배우기",
@@ -264,17 +265,6 @@
     </main>
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{activeViewLabel} 화면</div>
   </section>
-{/if}
-
-<!-- The messenger dock is NOT part of the layout: it floats in the viewport's
-     bottom-right corner, so it mounts once for the logged-in state and shows on
-     EVERY view rather than living in the rail footer. Non-modal, so it is
-     placed BEFORE the modal stack whose DOM order is load-bearing
-     (DESIGN.md §4.4) and must not be reordered. -->
-{#if $appState.user}
-  {#key $appState.user.id}
-    <DirectMessageDock userId={$appState.user.id} hidden={mobileRailOpen} />
-  {/key}
 {/if}
 
 {#if showOnboarding && $appState.user}
