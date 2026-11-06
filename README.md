@@ -109,11 +109,11 @@ which check owner/teammate trust themselves.
   (the shared read-only `mcp__avatars__search_avatars` tool) and point you to a
   better-suited teammate when a request is outside its own expertise.
 - **Per-conversation model picker**: the chat composer lists the models pi-gateway offers right now
-  (its live `GET /v1/models`, configured on pi's admin LLM page) plus **기본 모델**, pi-gateway's default
-  model, which runs when nothing is picked. The choice persists on the conversation and rides each turn;
-  a stored pick pi stops offering quietly runs the default. Noah keeps no LLM settings of its own:
-  the default model and each model's image input are set on pi-gateway's admin LLM page (served at
-  `/admin/` to Noah admins).
+  (its live `GET /v1/models`, configured on pi's admin LLM page) plus **기본 모델**, which runs when
+  nothing is picked: pi-gateway's **`falcon` tier** when pi offers one, otherwise pi-gateway's own default
+  model. The choice persists on the conversation and rides each turn; a stored pick pi stops offering
+  quietly runs the default. Which real model `falcon` (and every other tier), the pi default and each
+  model's image input mean is set on pi-gateway's admin LLM page (served at `/admin/` to Noah admins).
 - **Per-user sandboxes, tiered data access**: each run executes in the ACTING user's own pi
   sandbox with the full tool set (shell, files) — a colleague chatting with your avatar works in
   the colleague's sandbox, never yours. What separates the owner from a teammate is what Noah's
@@ -208,9 +208,10 @@ never copied into this repository.
    (alias `/settings/pi`) once you are signed in as a Noah admin (step 5; Noah injects pi's admin key, so there is no
    second login), or on the host at `http://127.0.0.1:8080/admin` with the key in
    `$PI_GATEWAY_SECRETS/gateway/admin_api_key` → **LLM**, add the corporate LLM server and its
-   models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
+   models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3) — and point the **`falcon` tier** at the
+   model Noah should use by default. Until then every chat turn fails with
    pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
-   picks none runs pi's default model). A model whose **image** input is off there is text-only in Noah too
+   picks none runs the `falcon` tier, or pi's default model when no `falcon` tier is set). A model whose **image** input is off there is text-only in Noah too
    (attached images reach it as files; pi's setting is the only one — Noah has none of its own), and its
    reasoning **efforts** are the levels Noah sends: a composer pick the model does not list runs at the closest
    listed level below it, or at the model's default effort (the composer greys such levels out).

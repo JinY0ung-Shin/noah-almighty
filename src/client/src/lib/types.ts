@@ -365,7 +365,9 @@ export interface BootstrapInfo {
    */
   modelSelection?: {
     models: PiModelOption[];
-    /** Vision of the model used when the user picked none (pi-gateway's default model). */
+    /** The model used when the user picked none — Noah's default (pi's `falcon` tier); absent → pi-gateway's own default. */
+    defaultModel?: string;
+    /** Vision of the model used when the user picked none. */
     defaultVision?: boolean;
     /** That model's reasoning efforts, like `PiModelOption.reasoning`. */
     defaultReasoning?: import("../../../server/effortLevels").ModelEffortSupport | null;

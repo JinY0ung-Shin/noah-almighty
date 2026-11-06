@@ -756,7 +756,7 @@
                   <h3>LLM 모델 (pi-gateway)</h3>
                   <p class="muted">
                     LLM 서버·키·모델·기본 모델·이미지 입력·시스템 프롬프트는 pi-gateway 관리 화면에서 바꿉니다. 이 표는 pi-gateway가 지금 제공하는 모델을 보여 주기만 합니다.
-                    대화에서 모델을 고르지 않으면 pi-gateway 기본 모델을 사용하고, 이미지 입력이 미지원인 모델을 쓰는 대화에서는 첨부한 이미지가 파일로만 전달됩니다.
+                    대화에서 모델을 고르지 않으면 Noah는 pi-gateway의 <span class="mono">falcon</span> 티어를 사용합니다. falcon 티어가 없으면 아래 표에서 '기본'으로 표시된 pi-gateway 기본 모델을 사용합니다. 이미지 입력이 미지원인 모델을 쓰는 대화에서는 첨부한 이미지가 파일로만 전달됩니다.
                   </p>
                   <p class="muted">
                     pi-gateway의 시스템 프롬프트 <span class="mono">noah</span>, Noah MCP 서버 등록, Noah가 꺼 둔 pi 도구는 배포(docker compose up) 때마다 저장소 기준으로 되돌아갑니다. 관리 화면에서 바꾼 내용은 다음 배포 전까지만 유지됩니다.

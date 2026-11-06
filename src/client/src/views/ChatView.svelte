@@ -519,7 +519,7 @@
   }
 
   // Vision support for the model THIS pane would use: the pane's pick when pi
-  // still offers it, else pi-gateway's default model's. Mirrors the server's
+  // still offers it, else the default model's (pi's `falcon` tier, else pi's own). Mirrors the server's
   // resolution (which also enforces it on upload); unknown reads as vision on,
   // like the server (visionForCatalogModel).
   function paneVisionEnabled(item: ChatPane, state: ReturnType<typeof readState> = readState()): boolean {
@@ -1667,7 +1667,7 @@
                       value={currentModel(item)}
                       on:change={(event) => setModel(item, event.currentTarget.value)}
                     >
-                      <option value="" title="pi-gateway가 정한 기본 모델을 사용합니다">기본 모델</option>
+                      <option value="" title={$appState.bootstrap.modelSelection.defaultModel ? `pi-gateway의 ${$appState.bootstrap.modelSelection.defaultModel} 티어를 사용합니다` : "pi-gateway가 정한 기본 모델을 사용합니다"}>{$appState.bootstrap.modelSelection.defaultModel ? `기본 모델 (${$appState.bootstrap.modelSelection.defaultModel})` : "기본 모델"}</option>
                       {#each $appState.bootstrap.modelSelection.models as model (model.id)}
                         <option value={model.id} title={model.server ? `${model.id}\n(${model.server})` : model.id}>
                           {model.id}

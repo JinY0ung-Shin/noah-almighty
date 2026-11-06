@@ -7,7 +7,7 @@ import {
 import logger from "../logger.js";
 import { createRateLimiter } from "../rateLimit.js";
 import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_shared.js";
-import { catalogEffortSupport, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
+import { catalogEffortSupport, noahDefaultModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 
@@ -162,8 +162,8 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // has a Confluence host configured (the PAT is useless otherwise).
       confluenceConfigured: Boolean(config.confluenceUrl),
       // Per-conversation model picker: the models pi-gateway offers right now.
-      // A pick is a pi model id; none (or one pi stopped offering) runs
-      // pi-gateway's default model. Image input is pi's own per-model setting
+      // A pick is a pi model id; none (or one pi stopped offering) runs the
+      // default model (pi's `falcon` tier, else pi-gateway's own default). Image input is pi's own per-model setting
       // (visionForCatalogModel); the retired deployment-wide MODEL_VISION flag
       // (`visionEnabled`) is no longer sent.
       modelSelection: {
@@ -177,9 +177,11 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
           vision: visionForCatalogModel(models, model.id),
           ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
         })),
-        // Vision of the model a conversation gets when the user picked nothing:
-        // pi-gateway's default model by its id (mirrors runCapabilities and the
-        // chat route).
+        // The model a conversation gets when the user picked nothing: Noah's
+        // default (pi's `falcon` tier) while pi offers it; absent → pi-gateway's
+        // own default. The picker names it on its "기본 모델" option.
+        ...(noahDefaultModel(models) ? { defaultModel: noahDefaultModel(models) } : {}),
+        // Vision of that model (mirrors runCapabilities and the chat route).
         defaultVision: visionForCatalogModel(models, undefined),
         // That model's efforts, the same way (absent = unknown).
         ...(defaultReasoning !== undefined ? { defaultReasoning } : {}),

@@ -67,7 +67,9 @@ These are the invariants the project is built around. New work should reinforce 
   `interactive: false`. The prompt is FROZEN per conversation; every gap pi has is stated on both
   surfaces. → `pi-runtime.md`.
 - **Noah holds NO LLM settings of its own.** Models are pi-gateway's LIVE list (`/v1/models`); a model
-  value anywhere is a pi model id, and pi's admin LLM page owns the default model and image input. Noah's
+  value anywhere is a pi model id, and pi's admin LLM page owns every model's meaning and image input. The
+  ONE fixed choice: with no pick Noah sends pi's `falcon` TIER (pi's own default only when pi has none) —
+  a name pi resolves, never a model id hard-coded in Noah; pi's behavior is never changed for it. Noah's
   `admin` role IS pi admin (pi's panel is proxied at `/admin`). → `pi-runtime.md`.
 - **The agent's code never runs in Noah's container; Noah's own process stays hardened (#71).** Noah
   spawns only its OWN code (never from an agent-editable root, never a relayed tool taking a local path),

@@ -2,12 +2,13 @@
  * pi-gateway's LIVE model list (`GET /v1/models`) — the ONLY source of the
  * models the composer offers and a run may pick, and of each model's image
  * input and reasoning efforts (docs/architecture/pi-runtime.md, "Models"). pi's
- * admin LLM page owns all of it: Noah has no model override and no vision
- * policy of its own (both retired 2026-11-01). A model value
- * anywhere in Noah is a pi model id; null/"" is pi-gateway's DEFAULT model (the
- * one picked on pi's admin LLM page), and then Noah sends no `model` at all. A
- * stored id pi no longer offers (or a legacy tier alias like `opus`) reads as
- * that default — no migration rewrites old values.
+ * admin LLM page owns all of it: Noah has no vision policy of its own (retired
+ * 2026-11-01). A model value anywhere in Noah is a pi model id; null/"" is the
+ * DEFAULT model: pi's `falcon` tier when pi offers it (NOAH_DEFAULT_MODEL, user
+ * decision 2026-11-06 — the tier's target model is still picked on pi's admin
+ * LLM page), otherwise pi-gateway's own default (then Noah sends no `model`). A
+ * stored id pi no longer offers (or a legacy alias like `opus`) reads as that
+ * default — no migration rewrites old values.
  *
  * One catalog per app instance (`piServicesFor(store, config).models`): a 60 s
  * cache, one in-flight fetch shared by every caller, and stale-on-error — a
@@ -173,22 +174,41 @@ export function catalogDefaultModelId(models: readonly CatalogModel[]): string |
 }
 
 /**
- * pi's effort support for `model` (undefined → pi's default model, by its id):
+ * Noah's default model: pi-gateway's `falcon` tier (one of pi's fixed tier
+ * names eagle/falcon/swift; an admin points it at a real model on pi's admin
+ * LLM page). Used when a conversation picked no model — chat, routines,
+ * consultations and generators alike. pi itself is untouched: without a
+ * `falcon` tier the run falls back to pi-gateway's own default model.
+ */
+export const NOAH_DEFAULT_MODEL = "falcon";
+
+/** {@link NOAH_DEFAULT_MODEL} when pi offers it right now, else undefined (→ pi's own default). */
+export function noahDefaultModel(models: readonly CatalogModel[]): string | undefined {
+  return models.some((model) => model.id === NOAH_DEFAULT_MODEL) ? NOAH_DEFAULT_MODEL : undefined;
+}
+
+/** The model id a run with no pick actually runs: Noah's default, else pi's default; undefined when unknown. */
+export function defaultRunModelId(models: readonly CatalogModel[]): string | undefined {
+  return noahDefaultModel(models) ?? catalogDefaultModelId(models);
+}
+
+/**
+ * pi's effort support for `model` (undefined → the default model, {@link defaultRunModelId}):
  * the input of `effortForModel`. Undefined when the model or the field is unknown.
  */
 export function catalogEffortSupport(
   models: readonly CatalogModel[],
   model: string | null | undefined,
 ): ModelEffortSupport | null | undefined {
-  const id = model || catalogDefaultModelId(models);
+  const id = model || defaultRunModelId(models);
   return id ? models.find((entry) => entry.id === id)?.reasoning : undefined;
 }
 
 /**
  * Whether the model a run resolves to accepts image input — pi's own LLM
  * setting and nothing else (Noah's admin vision policy and `MODEL_VISION` are
- * retired). `model` undefined/null is pi's DEFAULT model, looked up by the id
- * its list marks `default`. ONLY an explicit `imageInput: false` makes a model
+ * retired). `model` undefined/null is the DEFAULT model ({@link defaultRunModelId}:
+ * the `falcon` tier, else the id pi's list marks `default`). ONLY an explicit `imageInput: false` makes a model
  * text-only (pi would 400 an image): a model pi did not describe (an older pi),
  * an id not in the list and an empty list (the `local` stub, or pi never
  * answered) all read as vision ON — the pre-retirement default — so a wrong
@@ -198,11 +218,11 @@ export function catalogEffortSupport(
  * surfaces and the composer agree.
  */
 export function visionForCatalogModel(models: readonly CatalogModel[], model: string | null | undefined): boolean {
-  const id = model || catalogDefaultModelId(models);
+  const id = model || defaultRunModelId(models);
   return !(id && models.find((entry) => entry.id === id)?.imageInput === false);
 }
 
-/** `value` when it names a model in `models`, else undefined (unset / unknown → pi's default model). */
+/** `value` when it names a model in `models`, else undefined (unset / unknown → the default model). */
 export function catalogModel(models: readonly CatalogModel[], value: unknown): string | undefined {
   return typeof value === "string" && value && models.some((model) => model.id === value) ? value : undefined;
 }

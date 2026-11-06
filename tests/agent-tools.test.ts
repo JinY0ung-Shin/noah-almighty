@@ -3408,6 +3408,17 @@ describe("system tools (avatar system management)", () => {
       "Model in use: pi-gateway's default model (default — chosen on pi-gateway's admin LLM page; the user can pick another model for this conversation in the composer)",
     );
 
+    // pi offers the falcon tier → it is Noah's default and named as such.
+    const falcon = buildSystemTools(s.store, {
+      ...s.baseCtx,
+      config: piConfig(s.config),
+      viewerIsOwner: true,
+      defaultModel: "falcon",
+    });
+    expect((await callTool(falcon, "describe_system", {})).content[0].text).toContain(
+      "Model in use: falcon (default — Noah's default is pi-gateway's `falcon` tier, whose model is chosen on pi-gateway's admin LLM page; the user can pick another model for this conversation in the composer)",
+    );
+
     // The `local` stub has no pi; an effort id with no known label is echoed
     // verbatim rather than dropped.
     const local = buildSystemTools(s.store, {

@@ -33,7 +33,8 @@ import type { TodoSnapshot } from "../../shared/todos.js";
  *
  * NOTE on model: there is no owner-independent model fact here any more — the
  * admin model override is retired (pi-gateway's admin LLM page picks the
- * default model), so a run's model is the composer pick or pi's default, both
+ * default model), so a run's model is the composer pick or the default (pi's
+ * `falcon` tier, else pi's own default), both
  * known to describe_system from its own context.
  */
 export interface OwnerState {

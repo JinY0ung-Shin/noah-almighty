@@ -130,6 +130,12 @@ describe("noah-almighty platform", () => {
     res = await request(app).get("/api/bootstrap").expect(200);
     expect(res.body.modelSelection.models.map((m: { vision: boolean }) => m.vision)).toEqual([true, false]);
     expect(res.body.modelSelection.defaultVision).toBe(true);
+    expect(res.body.modelSelection).not.toHaveProperty("defaultModel");
+    // pi offers the falcon tier → it is Noah's default, and its vision counts.
+    offer([{ id: "falcon", imageInput: false }, { id: "eyes", default: true, imageInput: true }]);
+    res = await request(app).get("/api/bootstrap").expect(200);
+    expect(res.body.modelSelection.defaultModel).toBe("falcon");
+    expect(res.body.modelSelection.defaultVision).toBe(false);
     services.store.close();
   });
 

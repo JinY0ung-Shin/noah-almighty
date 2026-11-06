@@ -36,7 +36,13 @@ import type { PiAsyncJobs } from "./pi/asyncJobs.js";
 import type { RunRepoLocks } from "../activeRepoLock.js";
 import { planPiMcpProxies, type PiMcpProxyPlan } from "./pi/mcpProxies.js";
 import { PI_NOAH_SERVER_NAMES } from "./pi/mcpCatalog.js";
-import { catalogEffortSupport, catalogModel, visionForCatalogModel } from "./pi/modelCatalog.js";
+import {
+  catalogDefaultModelId,
+  catalogEffortSupport,
+  catalogModel,
+  noahDefaultModel,
+  visionForCatalogModel,
+} from "./pi/modelCatalog.js";
 import { piServicesFor } from "./pi/piRuntime.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
 import { piSandboxEnvOf } from "./pi/responsesClient.js";
@@ -400,26 +406,29 @@ export async function buildRunCapabilities(
   const browserToolsEnabled = familyPlan.browser;
   const systemToolsEnabled = familyPlan.system;
   const registeredMcpToolGroups = familyPlan.registered;
-  // Effective model: the user's per-conversation pick, otherwise pi-gateway's
-  // DEFAULT model (undefined — no `model` is sent; pi's admin LLM page picks it,
-  // Noah has no admin override). The pick must be a model pi-gateway CURRENTLY
-  // offers (its live list, `pi/modelCatalog.ts`): a stale pick or a legacy tier
-  // alias reads as unset, so a garbage value can never become a model id.
+  // Effective model: the user's per-conversation pick, otherwise Noah's DEFAULT —
+  // pi's `falcon` tier while pi offers it (NOAH_DEFAULT_MODEL), else pi-gateway's
+  // own default (undefined — no `model` is sent; pi's admin LLM page picks it).
+  // The pick must be a model pi-gateway CURRENTLY offers (its live list,
+  // `pi/modelCatalog.ts`): a stale pick or a legacy alias reads as unset, so a
+  // garbage value can never become a model id.
   const piModels = await piServicesFor(store, config).models.list();
   const userModel = catalogModel(piModels, request.model);
   // User-chosen reasoning effort for this conversation. Unknown/unset → no
   // effort is sent, so pi applies its own default.
   const userEffort = isEffortLevel(request.effort) ? request.effort : undefined;
-  const effectiveModel: string | undefined = userModel;
+  const effectiveModel: string | undefined = userModel ?? noahDefaultModel(piModels);
   // Model fallback chain (unattended runs — `request.modelFallback`): on a
   // transient model/server error, retry ONCE on pi-gateway's default model in the
-  // same pi session. A run already on the default gets one attempt (retrying
+  // same pi session. A run already on pi's default gets one attempt (retrying
   // the model that just failed is no fallback). Otherwise the chain is just the
   // single resolved model (chat behavior).
   const modelChain: (string | undefined)[] =
-    request.modelFallback && effectiveModel !== undefined ? [effectiveModel, undefined] : [effectiveModel];
-  // Effective vision for the model THIS run resolved to (pi's default model by
-  // its catalog id): text-only only when pi reports the model without image
+    request.modelFallback && effectiveModel !== undefined && effectiveModel !== catalogDefaultModelId(piModels)
+      ? [effectiveModel, undefined]
+      : [effectiveModel];
+  // Effective vision for the model THIS run resolved to (falcon, or pi's default
+  // model by its catalog id): text-only only when pi reports the model without image
   // input — visionForCatalogModel, the same call as the chat route's upload
   // mode and the bootstrap. Drives the no-vision prompt section, the Confluence
   // image-block gate, and describe_system.
@@ -812,6 +821,7 @@ export async function buildRunCapabilities(
     viewerIsOwner: ownerToolAccess,
     config,
     selectedModel: userModel,
+    defaultModel: noahDefaultModel(piModels),
     selectedEffort: userEffort,
     sentEffort: runEffort,
     // The REGISTERED set (not the raw selection).

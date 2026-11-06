@@ -242,14 +242,19 @@ async function runPiAgentAs(
     },
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
-  // The effort sent on `model` (undefined = pi's default model): the pick
-  // clamped to the efforts pi lists for that model (`effortForModel` — pi 400s
-  // any other), so a fallback onto another model is clamped for THAT model.
-  const effortOn = (model: string | undefined): PiReasoningEffort | undefined =>
-    piEffortFor(effortForModel(capabilities.userEffort, catalogEffortSupport(services.models.peek(), model)).effort);
+  // The effort sent on `model` (undefined = pi's OWN default model — the
+  // fallback entry, never Noah's `falcon` default, which the plan names by id):
+  // the pick clamped to the efforts pi lists for that model (`effortForModel` —
+  // pi 400s any other), so a fallback onto another model is clamped for THAT
+  // model. pi's default unknown by id → its efforts are unknown (sent as picked).
+  const effortOn = (model: string | undefined): PiReasoningEffort | undefined => {
+    const models = services.models.peek();
+    const id = model ?? catalogDefaultModelId(models);
+    return piEffortFor(effortForModel(capabilities.userEffort, id ? catalogEffortSupport(models, id) : undefined).effort);
+  };
   // The model chain is the capability plan's (one entry unless the run opted into
-  // fallback): each entry is a pi model id sent as is, or undefined = pi-gateway's
-  // default model. Every turn sends its model and effort, so a change (or a
+  // fallback): each entry is a pi model id sent as is (Noah's no-pick default
+  // `falcon` included), or undefined = pi-gateway's OWN default model. Every turn sends its model and effort, so a change (or a
   // fallback) applies to the SAME session from that turn on (pi switches it, P3).
   const chain = capabilities.modelChain;
   let attempt = 0;
