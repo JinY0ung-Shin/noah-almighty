@@ -162,7 +162,12 @@ Check plugin enabled state, sync errors, selected content, permissions, and whet
     body: `## The team
 One Noah server is one team: every approved user is a teammate, all equal and mutually trusted (elevated tools on each other's avatars). There are no groups any more (they were removed). Joining the team IS signup approval: with sign-up mode 승인제 a new account waits until a system administrator approves it, and with 가입 차단 nobody can sign up. A suspended account is no one's teammate.
 A system administrator moderates the team-wide shared-skill list (blocking a share hides it from every teammate) and sets the one MCP tool policy that applies to everyone.
-There is no shared team knowledge repository and no team brain: both were removed, so mcp__group_repo__*/mcp__group_brain__* no longer exist. Share team knowledge as skills (mcp__skill_exchange__*) or keep it in each member's personal repository.
+The old per-group knowledge repositories and per-group brain were removed with groups, so mcp__group_repo__*/mcp__group_brain__* no longer exist.
+
+## The team brain
+The team has ONE team brain: a shared vault of facts every teammate may read — team decisions, system facts, fixes for recurring problems, glossary terms, conventions and owners. Search it with mcp__brain__search (scope "team") and read a hit with mcp__brain__get_note (scope "team").
+Nobody writes it directly. In the owner's own interactive chat, after the user agrees to share something, mcp__brain__propose_team_note shows a confirmation card: a teammate presses 관리자에게 제출 and an admin approves or rejects it (the result shows on the card and as a badge on 지식 그래프); an admin's own note is saved when they press 팀 브레인에 반영. Admins review pending proposals through their avatar (mcp__brain__list_team_proposals, get_team_proposal, prepare_team_review) and decide with the card's button. There is no delete: a wrong note is corrected with an update. An admin can mirror the team brain to a backup repository on the internal git host (관리자 → 팀 브레인).
+How-to knowledge (procedures, workflows) still travels as shared skills (mcp__skill_exchange__*).
 
 ## Find and consult a teammate
 Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a teammate's avatar one question (only an active teammate whose avatar is not private answers).

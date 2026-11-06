@@ -3605,12 +3605,12 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("never-in-shell");
   });
 
-  it("describe_system says there is no shared team repository or team brain", async () => {
+  it("describe_system redirects the old group repo/brain to the ONE team brain", async () => {
     const s = setup("st-team-brain");
     s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     const text = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
     expect(text).toContain(
-      "- Shared team knowledge repository and team brain: none — There is NO shared team knowledge repository and no team brain",
+      "- Old group repositories / group brain: removed — The old per-GROUP knowledge repositories and per-group brain were removed with groups",
     );
     expect(text).toContain("`mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist");
     expect(text).toContain("Team size: 1 teammate besides the owner.");

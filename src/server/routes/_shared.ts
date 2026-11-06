@@ -29,6 +29,8 @@ export interface AppServices {
    * — the routine scheduler, the external task API dispatcher — can reach it too.
    */
   observedModel: ObservedModelHolder;
+  /** The team-brain push-only backup mirror (teamBrainBackup.ts); one per process. */
+  teamBrainBackup?: import("../teamBrainBackup.js").TeamBrainBackup;
 }
 
 /**

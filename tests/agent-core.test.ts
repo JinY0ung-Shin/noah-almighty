@@ -942,14 +942,14 @@ describe("loadDefaultPluginRoots", () => {
         "utf8",
       );
     const migrate = skill("brain-migrate");
-    // Personal only: the team brain is gone, so the skill never targets a group repo.
+    // Personal vault only: the team brain is Noah-managed (nothing to migrate), never a group repo.
     expect(migrate).toContain("Personal repo only");
-    expect(migrate).toContain("there is no team brain");
+    expect(migrate).toContain("The team brain is a separate instance-wide vault Noah creates and");
     expect(migrate).not.toContain("mcp__group_repo__");
 
     const reflect = skill("brain-reflect");
     expect(reflect).toContain("Reads raw/ + wiki/ and may optionally review the owner's own recent conversations");
-    expect(reflect).toContain("The second brain is personal only (there is no shared team repository)");
+    expect(reflect).toContain("This consolidates the PERSONAL brain only; the team brain is admin-approved and never touched here.");
     expect(reflect).not.toContain("mcp__group_repo__");
     expect(reflect).not.toContain(
       "It reads ONLY raw/ and wiki/ — never conversations",
@@ -1909,8 +1909,10 @@ describe("buildPrompt", () => {
     expect(p).toContain(
       "Team size when this conversation started: 3 teammates besides the owner (`mcp__system__describe_system` has the live count).",
     );
-    // Retired 2026-10-30 / 2026-11-06: the prompt says so and redirects stale mentions.
-    expect(p).toContain("There is NO shared team knowledge repository and no team brain");
+    // Group repos/brain retired 2026-10-30 / 2026-11-06: the prompt says so and redirects
+    // stale mentions to the ONE team brain (back 2026-11-06).
+    expect(p).toContain("The old per-GROUP knowledge repositories and per-group brain were removed with groups");
+    expect(p).toContain("use the ONE team brain instead");
     expect(p).toContain("say they were removed");
     expect(p).not.toContain("mcp__group_repo__list_groups");
     expect(p).not.toContain("avatar sharing off");
@@ -2656,9 +2658,9 @@ describe("buildPrompt", () => {
     expect(p).toContain("mcp__system__describe_system");
     expect(p).toContain("Remote git work goes through MCP tools ONLY");
     // Second-brain self-state: the routine has the personal brain trigger, and the
-    // team line says there is no shared repository or team brain.
+    // team line redirects the old group tools to the ONE team brain.
     expect(p).toContain("mcp__brain__search");
-    expect(p).toContain("There is NO shared team knowledge repository and no team brain");
+    expect(p).toContain("The old per-GROUP knowledge repositories and per-group brain were removed with groups");
     // A routine CAN now open a working repo (scheduler threads conversationId +
     // resolves the opened repo as cwd); it takes effect from the next run.
     expect(p).toContain("mcp__git_repo__open_repo");

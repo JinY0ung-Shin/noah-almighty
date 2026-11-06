@@ -148,6 +148,7 @@ export type AdminTab =
   | "access"
   | "system"
   | "tools"
+  | "team_brain"
   | "audit";
 export type ChatLayout = "vertical" | "horizontal" | "grid";
 

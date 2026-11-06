@@ -83,6 +83,8 @@ export const PI_DISCOVERY_SENTENCES: Record<string, string> = {
   "system/describe_system": "Answers 'what can I do right now': which tools, tool groups, connections and settings this run has.",
   "system/read_manual": "How-to guides: how to set up, configure or use a Noah feature (browser extension, routines, task API, plugins, …).",
   "brain/search": "Use it to recall what was decided or discussed before.",
+  "brain/propose_team_note": "Share a fact, decision or fix with the whole team in the team brain.",
+  "brain/list_team_proposals": "Check team-brain proposals: their status, or the ones awaiting review.",
   "browser/click": "Click a button, link, checkbox, menu item or tab.",
   "canvas/show": "Draw a diagram or mockup for the user to review.",
   "repo/write_file": "Save a note or file, e.g. a second-brain wiki/ note.",

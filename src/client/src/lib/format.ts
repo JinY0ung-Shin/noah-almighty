@@ -27,13 +27,18 @@ export function avatarGradient(user: { id?: string; username?: string; displayNa
   return `linear-gradient(135deg, hsl(${h} 58% 52%), hsl(${(h + 48) % 360} 64% 42%))`;
 }
 
-export function renderMarkdown(text: string | null | undefined): string {
+export function renderMarkdown(text: string | null | undefined, options: { forbidInlineStyle?: boolean } = {}): string {
   const source = text || "";
   // A <style> (HTML or inline-SVG) in {@html} output styles the WHOLE app, so a
   // message's `body { … }` would restyle every screen: markdown never keeps one.
   // Inline style="" stays. Canvas pages and drawings get their own document or
   // shadow root instead (CanvasTab).
-  const html = DOMPurify.sanitize(marked.parse(source) as string, { FORBID_TAGS: ["style"] });
+  // `forbidInlineStyle`: content another person wrote (team-brain notes) must not
+  // position itself over the app (`position:fixed; inset:0` fake UI).
+  const html = DOMPurify.sanitize(marked.parse(source) as string, {
+    FORBID_TAGS: ["style"],
+    ...(options.forbidInlineStyle ? { FORBID_ATTR: ["style"] } : {}),
+  });
   if (source.trim() && !html.trim()) {
     const escaped = source.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] || c);
     return DOMPurify.sanitize(`<pre>${escaped}</pre>`);

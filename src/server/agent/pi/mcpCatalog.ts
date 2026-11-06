@@ -127,7 +127,21 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     skill_exchange: buildSkillExchangeServer(store, base),
     ssh_identity: buildSshIdentityServer(store, base),
     git_repo: buildGitRepoServer(store, { ...base, elevated: false }),
-    brain: buildBrainServer(store, base),
+    // Widest form: the team-brain propose + admin tools too (handlers self-gate per call).
+    brain: buildBrainServer(store, {
+      ...base,
+      team: {
+        read: true,
+        propose: true,
+        admin: true,
+        viewerUserId: "",
+        conversationId: null,
+        onCard: () => {
+          throw new Error("catalog server: never called");
+        },
+        config,
+      },
+    }),
     canvas: buildCanvasServer({ emitCanvas: refuse }),
     browser: buildBrowserServer({
       execute: refuse,

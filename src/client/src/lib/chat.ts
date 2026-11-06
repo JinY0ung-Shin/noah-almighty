@@ -1838,7 +1838,15 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
               pane.sideExpand = true;
           }
         });
-        setStatus(paneId, data.attachment.kind === "file" ? "파일을 공유했습니다." : "이미지를 표시했습니다.", true);
+        setStatus(
+          paneId,
+          data.attachment.kind === "file"
+            ? "파일을 공유했습니다."
+            : data.attachment.kind === "team_brain"
+              ? "팀 브레인 카드를 표시했습니다."
+              : "이미지를 표시했습니다.",
+          true,
+        );
       }
       return;
     case "prompt_resolved":

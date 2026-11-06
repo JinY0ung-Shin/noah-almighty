@@ -20,6 +20,13 @@ import {
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
+  TEAM_ADMIN_FLOW,
+  TEAM_KNOWLEDGE_DEFINITION,
+  TEAM_MEMBER_FLOW,
+  TEAM_NOTE_TRUST_NOTE,
+  TEAM_OFFER_TO_SHARE,
+} from "./teamBrainTools.js";
+import {
   effectiveMcpToolGroups,
   MCP_TOOL_GROUPS,
   type McpToolGroupId,
@@ -265,6 +272,27 @@ function brainSection(
       ? " For a consolidation task you may review the owner's OWN recent conversations with `mcp__system__list_recent_conversations`/`mcp__system__read_conversation` (owner-scoped) to find durable facts to capture; never read anyone else's conversations."
       : "";
   return `${base}${capture}${migrate}${conv}`;
+}
+
+/**
+ * Team brain section (docs/architecture/team-brain.md): the ONE instance-wide
+ * vault every run with a known approved principal may READ, the four
+ * team-knowledge tests, and — only on a propose-capable run (the owner's own
+ * interactive chat) — the standing OFFER-TO-SHARE guidance plus the member or
+ * ADMIN flow. Keyed on `request.teamBrain`, stamped from the SAME booleans that
+ * register the tools, so the prompt never names a tool the run lacks. Nothing
+ * volatile (note/proposal counts live in describe_system).
+ */
+function teamBrainSection(request: AgentRequest): string | null {
+  const tb = request.teamBrain;
+  if (!tb?.read) return null;
+  const base =
+    '**Team brain**: the team\'s ONE shared knowledge vault — notes teammates proposed and an admin approved. Search it with `mcp__brain__search` (scope "team", or the default "all") before answering a question about the team\'s decisions, systems, fixes, terms, conventions or owners, and read a hit with `mcp__brain__get_note` (scope "team"). ' +
+    TEAM_NOTE_TRUST_NOTE;
+  if (!tb.propose) {
+    return `${base} Proposing team notes is not available in this run (only in the owner's own interactive conversation).`;
+  }
+  return [base, TEAM_KNOWLEDGE_DEFINITION, TEAM_OFFER_TO_SHARE, tb.admin ? TEAM_ADMIN_FLOW : TEAM_MEMBER_FLOW].join(" ");
 }
 
 /**
@@ -1228,6 +1256,10 @@ export function buildSystemPromptAppend(
     if (consultationBrainBlock) {
       lines.push(consultationBrainBlock);
     }
+    const consultationTeamBrain = teamBrainSection(request);
+    if (consultationTeamBrain) {
+      lines.push(consultationTeamBrain);
+    }
   } else if (request.headless && !piOwnerRun(request)) {
     // A restricted one-shot task (profile intro/hashtag generation). An owner
     // routine takes the owner branch (piOwnerRun) and a consultation the one
@@ -1296,6 +1328,10 @@ export function buildSystemPromptAppend(
     // Team meta-cognition: Noah serves ONE team; every approved user is a
     // mutually trusted teammate, so teammates' avatars are reachable at
     // elevated level (unless private).
+    const ownerTeamBrain = teamBrainSection(request);
+    if (ownerTeamBrain) {
+      lines.push(ownerTeamBrain);
+    }
     const teamBlock = teamSection(request);
     if (teamBlock) {
       lines.push(teamBlock);
@@ -1383,6 +1419,10 @@ export function buildSystemPromptAppend(
       lines.push(
         "This person is a teammate of the owner: Noah serves a single team and every approved user is a teammate, so they are an **automatically trusted (elevated)** user and get the owner-level Noah tools this run lists (your built-in file and shell tools work in THEIR own sandbox). Use remote SSH tools only within the scope the admin has permitted.",
       );
+      const teammateTeamBrain = teamBrainSection(request);
+      if (teammateTeamBrain) {
+        lines.push(teammateTeamBrain);
+      }
       // Trusted teammate: the SAME working-surface flow the owner gets, scoped to
       // elevated permissions (open/sync/push, but NOT register/remove). Shares the
       // single helper with gitRepoSection() so the two branches can't drift — this

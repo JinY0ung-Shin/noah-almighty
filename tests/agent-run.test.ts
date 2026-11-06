@@ -277,9 +277,14 @@ describe("run capability plan", () => {
     expect(run.servers).toEqual(
       expect.arrayContaining(["knowledge", "repo", "system", "todo", "confluence", "avatars", "git_repo"]),
     );
-    for (const absent of ["canvas", "brain", "group_repo", "ssh_trust", "browser", "file_output"]) {
+    for (const absent of ["canvas", "group_repo", "ssh_trust", "browser", "file_output"]) {
       expect(run.servers).not.toContain(absent);
     }
+    // The brain server rides every owner run for TEAM-brain recall (no personal repo
+    // here, so only search/get_note); without a card sink no team-brain write tool exists.
+    expect(run.servers).toContain("brain");
+    expect(run.allowed).toContain("mcp__brain__search");
+    expect(run.allowed).not.toContain("mcp__brain__propose_team_note");
     // Every built server is one pi's broker knows; nothing is relayed for this run.
     expect(run.caps.piMcpProxies.upstreams).toEqual([]);
     expect(run.caps.piRuntimeFacts.sandboxOwner).toBe("owner");
@@ -306,8 +311,9 @@ describe("run capability plan", () => {
     expect(run.caps.effectiveModel).toBe("m-sonnet");
     expect(run.caps.userEffort).toBe("high");
     // Only the `system` group enabled → only the system family is registered:
-    // the system server plus, on this owner run, the to-do server riding it.
-    expect(run.servers).toEqual(["system", "todo"]);
+    // the system server plus, on this owner run, the to-do server riding it — and
+    // the brain server for TEAM-brain recall, which no tool group gates.
+    expect(run.servers).toEqual(["system", "todo", "brain"]);
 
     // …and the gateway receives the picked pi model id as is, and the effort.
     const { client, requests } = fakeClient([() => textTurn("resp_t_1", "ok")]);
@@ -372,7 +378,7 @@ describe("run capability plan", () => {
     expect(run.allowed).not.toContain("mcp__file_output__create_share_link");
   });
 
-  it("registers no group repo or team brain server (both retired 2026-10-30) and states the single team", async () => {
+  it("registers no group repo or group brain server (both retired 2026-10-30) and states the single team", async () => {
     const env = setup();
     env.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     const run = await plan(env, env.baseRequest);
@@ -382,7 +388,9 @@ describe("run capability plan", () => {
     // The team section states the single team, its size and that there is no shared repository.
     expect(run.append).toContain("Noah serves a single team: every approved user is a teammate.");
     expect(run.append).toContain("Team size when this conversation started: 1 teammate besides the owner");
-    expect(run.append).toContain("There is NO shared team knowledge repository and no team brain");
+    expect(run.append).toContain("The old per-GROUP knowledge repositories and per-group brain were removed with groups");
+    // …and the ONE team brain is stated as readable (no card sink in this plan → no proposing).
+    expect(run.append).toContain("**Team brain**: the team's ONE shared knowledge vault");
     expect(run.append).not.toContain("avatar sharing off");
   });
 

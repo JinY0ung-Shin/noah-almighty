@@ -1,6 +1,7 @@
 import { api, refreshMe } from "./api";
 import { goView } from "./nav";
 import { notify, readState, replaceState, updateState } from "./state";
+import { refreshTeamBrainStatus, resetTeamBrainClientState } from "./teamBrain";
 import { emptyTodoState, refreshTodos, resetTodoClientState } from "./todos";
 import type {
   AdminPresence,
@@ -175,6 +176,7 @@ function onKnowledgeVisible(): void {
     void refreshKnowledgeStatus({ announce: true });
     void refreshNotificationStatus({ announce: true });
     void refreshAdminPresence();
+    void refreshTeamBrainStatus({ announce: true });
     // The to-do list rides the same tick: routines and external-task runs edit it
     // with no chat stream open, so this is how their changes reach the overlay.
     void refreshTodos();
@@ -201,12 +203,14 @@ export function startKnowledgeWatch(): void {
   // The 할 일 list (rail badge + chat overlay) is seeded the same way.
   void refreshAdminPresence();
   void refreshTodos();
+  void refreshTeamBrainStatus();
 }
 /** Stop the poll AND forget the account's state — the logout / session-expiry / teardown path. */
 export function stopKnowledgeWatch(): void {
   clearKnowledgeWatch();
   // Don't leave another account's presence list (or to-do list) in state.
   resetTodoClientState();
+  resetTeamBrainClientState();
   replaceState({
     adminPresence: null,
     todos: emptyTodoState(),

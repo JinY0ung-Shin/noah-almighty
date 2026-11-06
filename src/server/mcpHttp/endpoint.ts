@@ -263,7 +263,7 @@ const RETIRED_SERVER_MESSAGES: Record<string, string> = {
   group_repo:
     "MCP server 'group_repo' was removed: group knowledge repositories no longer exist. Tell the user group repositories were removed; use the personal repository (mcp__repo__*) or skill sharing (mcp__skill_exchange__*) instead.",
   group_brain:
-    "MCP server 'group_brain' was removed: there is no team brain any more. Search the personal second brain (mcp__brain__search) instead.",
+    "MCP server 'group_brain' was removed with groups. The team now has ONE team brain: search it with mcp__brain__search (scope \"team\").",
 };
 
 function refusedToolResult(tool: string, message?: string): CallToolResult {

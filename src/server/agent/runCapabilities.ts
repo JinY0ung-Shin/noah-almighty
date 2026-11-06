@@ -331,6 +331,7 @@ export async function buildRunCapabilities(
     await import("./canvasTools.js");
   const { buildBrainServer, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } =
     await import("./brainTools.js");
+  const { TEAM_BRAIN_PROPOSE_TOOL_NAMES, TEAM_BRAIN_ADMIN_TOOL_NAMES } = await import("./teamBrainTools.js");
   const {
     buildTodoServer,
     TODO_SERVER_NAME,
@@ -554,10 +555,41 @@ export async function buildRunCapabilities(
   // no browser can never resolve a value.
   const browserSecretPolicies =
     browserActive && !consultationRun ? ownerState.browserSecrets : [];
+  // Team brain (docs/architecture/team-brain.md): ONE instance-wide local vault.
+  // READ on every run with a known approved principal (owner, trusted teammate,
+  // consultation, owner routine/API). PROPOSE only on an interactive owner run with
+  // a card sink (the share-link gate's shape). The ADMIN tools key on the VIEWER:
+  // a propose-capable run is the owner's own, so the viewer IS the owner here —
+  // a teammate chatting with an admin's avatar never gets them. Handlers re-check
+  // the admin role live. No tool group: a new group would be silently OFF for
+  // every user with a saved composer selection.
+  const teamBrainReadActive = elevatedToolAccess || consultationRun;
+  const teamBrainProposeActive =
+    Boolean(events?.onTeamBrainCard) &&
+    ownerToolAccess &&
+    !consultationRun &&
+    !request.headless &&
+    !request.externalTaskApi;
+  const teamBrainAdminActive = teamBrainProposeActive && store.isActiveAdmin(request.avatar.id);
+  const brainServerActive = brainActive || teamBrainReadActive;
   const brainServer = buildBrainServer(store, {
     avatarUserId: request.avatar.id,
     viewerIsOwner: ownerToolAccess,
     elevated: elevatedToolAccess,
+    personalActive: brainActive,
+    team: teamBrainReadActive
+      ? {
+          read: true,
+          propose: teamBrainProposeActive,
+          admin: teamBrainAdminActive,
+          viewerUserId: request.avatar.id,
+          conversationId: request.conversationId ?? null,
+          onCard: teamBrainProposeActive
+            ? (e) => events?.onTeamBrainCard?.({ ...e, anchor: currentTextAnchor() })
+            : undefined,
+          config,
+        }
+      : undefined,
     config,
   });
   const fileOutputActive = Boolean(request.cwd && events?.onFile);
@@ -793,6 +825,10 @@ export async function buildRunCapabilities(
     // create_share_link registration (shareLinkToolActive above): describe_system
     // states it as available, or names why not and points at the 공유 링크 button.
     shareLinksEnabled: shareLinkToolActive,
+    // The SAME booleans the brain server and mcpAllowedTools key on.
+    teamBrain: teamBrainReadActive
+      ? { read: true, propose: teamBrainProposeActive, admin: teamBrainAdminActive }
+      : undefined,
     // The to-do tools' registration (todoToolsActive / todoDeleteActive above).
     todoToolsEnabled: todoToolsActive,
     todoDeleteEnabled: todoDeleteActive,
@@ -1167,7 +1203,7 @@ export async function buildRunCapabilities(
       : {}),
     ...(gitRepoToolsEnabled ? { [GIT_REPO_SERVER_NAME]: gitRepoServer } : {}),
     ...(skillsServer ? { [SKILLS_SERVER_NAME]: skillsServer } : {}),
-    ...(brainActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
+    ...(brainServerActive ? { [BRAIN_SERVER_NAME]: brainServer } : {}),
     ...(canvasServer ? { [CANVAS_SERVER_NAME]: canvasServer } : {}),
     ...(browserServer ? { [BROWSER_SERVER_NAME]: browserServer } : {}),
     ...(fileOutputServer
@@ -1201,7 +1237,9 @@ export async function buildRunCapabilities(
       // Read tools over the owner's clone: runs NOT in the owner's sandbox (review #11).
       ...(gitRepoToolsEnabled && sandboxOwner !== "owner" ? GIT_REPO_READ_TOOL_NAMES : []),
       ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
-      ...(brainActive ? BRAIN_TOOL_NAMES : []),
+      ...(brainServerActive ? BRAIN_TOOL_NAMES : []),
+      ...(teamBrainProposeActive ? TEAM_BRAIN_PROPOSE_TOOL_NAMES : []),
+      ...(teamBrainAdminActive ? TEAM_BRAIN_ADMIN_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),
       ...(fileOutputActive ? FILE_OUTPUT_TOOL_NAMES : []),
@@ -1245,6 +1283,9 @@ export async function buildRunCapabilities(
     canvasActive,
     fileOutputActive,
     shareLinkToolActive,
+    teamBrainState: teamBrainReadActive
+      ? { read: true, propose: teamBrainProposeActive, admin: teamBrainAdminActive }
+      : undefined,
     skillExchangeActive,
     todoToolsActive,
     todoDeleteActive,
@@ -1313,6 +1354,7 @@ export function stampPromptRequest(
     canvasActive,
     fileOutputActive,
     shareLinkToolActive,
+    teamBrainState,
     skillExchangeActive,
     todoToolsActive,
     todoDeleteActive,
@@ -1397,6 +1439,8 @@ export function stampPromptRequest(
     // tool the run lacks; any other run with file output hears the 공유 링크
     // button redirect instead. Same boolean describe_system reports.
     shareLinksEnabled: shareLinkToolActive,
+    // Team brain: the run's real capability (brain server + its tools key on it).
+    teamBrain: teamBrainState,
     // 할 일 capability: rides ONLY runs that registered the to-do tools
     // (todoToolsActive — the skillExchangeActive precedent), with the
     // list FROZEN at this conversation's first such turn. No live counts: they

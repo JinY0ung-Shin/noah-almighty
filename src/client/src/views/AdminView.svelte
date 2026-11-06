@@ -4,6 +4,7 @@
   import AdminUserRow from "../components/AdminUserRow.svelte";
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
+  import AdminTeamBrainPanel from "../components/AdminTeamBrainPanel.svelte";
   import AdminToolPolicyPanel from "../components/AdminToolPolicyPanel.svelte";
   import AdminSharedSkillsPanel from "../components/AdminSharedSkillsPanel.svelte";
   import { api } from "../lib/api";
@@ -54,6 +55,7 @@
     { id: "access", label: "가입·접근", icon: "key" },
     { id: "system", label: "시스템", icon: "server" },
     { id: "tools", label: "도구·스킬", icon: "sparkles" },
+    { id: "team_brain", label: "팀 브레인", icon: "book" },
     { id: "audit", label: "감사 로그", icon: "list" },
   ];
 
@@ -597,6 +599,7 @@
     <div class="admin-panel" role="tabpanel" id="admin-panel" aria-labelledby={`admin-tab-${$appState.adminTab}`}>
       <AdminEgressPanel active={$appState.adminTab === "access"} />
       <AdminSharedMcpPanel active={$appState.adminTab === "mcp"} />
+      <AdminTeamBrainPanel active={$appState.adminTab === "team_brain"} />
       <!-- 도구·스킬: always mounted so a draft survives tab switches; each panel
            renders only while active, and the wrapper takes the list layout only
            then (an empty grid elsewhere would add a stray gap). -->
