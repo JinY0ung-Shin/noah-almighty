@@ -122,7 +122,9 @@
   loop: `request_info` ESCALATES a true unknown to the owner, `brain-ingest` RETAINS the answer.
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
   hygiene default-skill — skill-only, no server lint code; the `[[link]]` resolution the graph view uses
-  lives in `knowledgeGraph.ts`; the structural `wiki/index.md`, `wiki/log.md` and `_template.md` are
+  lives in `knowledgeGraph.ts` — the brain view's clickable `[[links]]` re-resolve client-side in
+  `src/client/src/lib/knowledgeGraph.ts` (`resolveWikilink`: title/stem/path, no aliases — keep the
+  two in step); the structural `wiki/index.md`, `wiki/log.md` and `_template.md` are
   excluded from BOTH `rankBrainNotes` and `buildKnowledgeGraph`, so an empty vault renders the
   empty state and the TOC never becomes a hub) strips "previously X, changed to Y on <date>" narrative
   out of `wiki/` notes and never edits `raw/` (the original-capture archive) or `wiki/log.md`

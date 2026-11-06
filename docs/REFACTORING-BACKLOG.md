@@ -112,7 +112,8 @@ The 5-axis UI audit + fix pass landed (see DESIGN.md §5 item 9). Deliberately N
 ### U2 — Remaining bespoke chips onto `.tag`
 - **What:** `.weekday-chip`(36px square — genuinely different interaction), `.nav-badge`(fixed 18px h),
   `.q-chip`, `.agent-badge`, `.task-badge`, `.setup-badge`, `.routine-chip`, `.inbox-chip`,
-  `.canvas-answered-badge`, `.group-add-chip`, `.slash-option-tag`, GraphCanvas legend/node chips.
+  `.canvas-answered-badge`, `.group-add-chip`, `.slash-option-tag`, GraphCanvas legend (section-filter
+  toggle buttons since 2026-11-06; the node-chip strip is gone).
 - **Why deferred:** several are structurally different (fixed geometry, interactive), not just styled
   differently — each needs a per-case call, some may stay documented exceptions.
 - **risk:** low · **effort:** M · **breaking:** no
