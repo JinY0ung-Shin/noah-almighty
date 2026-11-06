@@ -30,6 +30,16 @@ services:
       noah-mcp:
         ipv4_address: ${NOAH_MCP_BROKER_IP:-172.16.248.10}
 
+  # pi builds egress-proxy FROM ${GO_IMAGE}; hand it Noah's CA-trusting Go builder (the `pi-go-builder`
+  # service in docker-compose.yml, docker/pi/golang-ca.Dockerfile) so `go mod download` trusts
+  # CA_CERT_FILE behind an HTTPS GOPROXY. Merged onto pi's own build args (its mirror args stay).
+  egress-proxy:
+    build:
+      args:
+        GO_IMAGE: pi-go-builder
+      additional_contexts:
+        pi-go-builder: service:pi-go-builder
+
 networks:
   # broker ↔ Noah only. Internal: no route out, and no sandbox is ever attached (sandboxes have no network).
   # The default subnet sits in 172.16.0.0/16, OUTSIDE Docker's default auto-allocation pools

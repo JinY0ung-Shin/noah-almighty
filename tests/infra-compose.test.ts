@@ -50,7 +50,7 @@ const PI_COMPOSE_VARIABLES = [
  * Keys Noah's .env may set that pi's compose ALSO reads. Compose lets the including project's
  * environment win inside an included file, so each must mean the same thing on both sides.
  */
-const SHARED_KEYS = ["LOG_LEVEL", "NODE_EXTRA_CA_CERTS", "NPM_CONFIG_REGISTRY", "PIP_INDEX_URL", "PI_GATEWAY_HOME", "PI_GATEWAY_SECRETS"];
+const SHARED_KEYS = ["GOPROXY", "LOG_LEVEL", "NODE_EXTRA_CA_CERTS", "NPM_CONFIG_REGISTRY", "PIP_INDEX_URL", "PI_GATEWAY_HOME", "PI_GATEWAY_SECRETS"];
 
 /**
  * The block under `key` that starts at exactly `indent` spaces, up to the next line at that indent
@@ -90,7 +90,7 @@ describe("docker-compose.yml — pi-gateway is included from its submodule, neve
 
   it("defines no service or network whose name pi's compose already uses", () => {
     const own = [...services.matchAll(/^ {2}([a-z][\w-]*):$/gm)].map((m) => m[1]);
-    expect(own.sort()).toEqual(["noah-almighty", "pi-sandbox-image", "pi-setup"]);
+    expect(own.sort()).toEqual(["noah-almighty", "pi-go-builder", "pi-sandbox-image", "pi-setup"]);
     for (const name of own) expect(PI_SERVICES).not.toContain(name);
     // The optional egress overlay is merged by `-f` AFTER the include: a same-named service there
     // would silently rewrite pi's (verified with `docker compose config`).

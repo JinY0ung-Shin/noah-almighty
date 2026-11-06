@@ -34,16 +34,13 @@ ARG PIP_TRUSTED_HOST=
 ARG NPM_CONFIG_REGISTRY=
 
 # Trust an optional corporate proxy CA (same contract as the main Dockerfile's CA_CERT_FILE): folded
-# into the system bundle so git/curl (and pip/npm at build time) work through an intercepting proxy.
+# into the system bundle so git/curl (and pip/npm at build time) work through an intercepting proxy;
+# a PEM bundle is split one certificate per file (docker/install-extra-ca.sh).
 ARG CA_CERT_FILE=docker/extra-ca.crt.example
 COPY ${CA_CERT_FILE} /tmp/extra-ca.crt
-RUN if grep -q "BEGIN CERTIFICATE" /tmp/extra-ca.crt; then \
-      cp /tmp/extra-ca.crt /usr/local/share/ca-certificates/extra-proxy-ca.crt; \
-      update-ca-certificates; \
-    else \
-      echo "No extra CA certificate configured; skipping trust-store update."; \
-    fi \
-  && rm -f /tmp/extra-ca.crt
+COPY docker/install-extra-ca.sh /tmp/install-extra-ca.sh
+RUN sh /tmp/install-extra-ca.sh /tmp/extra-ca.crt extra-proxy-ca \
+  && rm -f /tmp/extra-ca.crt /tmp/install-extra-ca.sh
 
 # Chromium headless shell (driven at /usr/lib/chromium/chromium-headless-shell, bypassing Debian's
 # /usr/bin wrapper), fontconfig (fc-cache), fonts-nanum (Hangul fallback), poppler-utils (pdftotext /

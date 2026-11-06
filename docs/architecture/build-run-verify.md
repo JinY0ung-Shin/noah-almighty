@@ -151,6 +151,20 @@
   https origin) or hand-add it; the one-click updater cannot bridge that gap because it rides the
   very page↔extension channel that broke. The container runs as `node` (uid 1000): a root-owned
   mode-600 key in `./docker/tls` reads as EACCES at boot — make the PEMs readable by uid 1000.
+- **`CA_CERT_FILE` goes through ONE script: `docker/install-extra-ca.sh <pem> <prefix>`** (Noah `Dockerfile`,
+  `docker/pi-sandbox/Dockerfile`, `docker/egress/proxy.Dockerfile`, `docker/pi/golang-ca.Dockerfile`; Debian and
+  Alpine). It splits a PEM bundle into one `<prefix>-NN.crt` per certificate — `update-ca-certificates` hashes
+  only one certificate per file and just WARNS (`does not contain exactly one certificate or CRL: skipping`),
+  exit 0 — then fails the build unless every certificate's first base64 line is in
+  `/etc/ssl/certs/ca-certificates.crt`. The placeholder `docker/extra-ca.crt.example` is a no-op. A new image
+  that needs the CA copies the script and calls it the same way. Tests: `tests/docker-extra-ca.test.ts`.
+- **pi's Go build trusts `CA_CERT_FILE` through pi's own `GO_IMAGE` build arg** (issue #76): the build-only
+  `pi-go-builder` service (`docker/pi/golang-ca.Dockerfile`, FROM pi's Go image plus the CA) is handed to pi's
+  `egress-proxy` build by `docker/pi/compose.override.yml` (`args.GO_IMAGE: pi-go-builder` +
+  `additional_contexts: service:pi-go-builder`), so pi's Dockerfile and compose file stay untouched and
+  `go mod download && go mod verify` runs with TLS and the checksum database ON (never `GOSUMDB=off`).
+  `GO_BASE_IMAGE` must equal the pinned pi Dockerfile's `GO_IMAGE` default — the test fails when a pi bump
+  moves it; update both together.
 - **Dockerfile CA trust is PER-STAGE.** The `CA_CERT_FILE`→`update-ca-certificates` block
   lives in the `base` stage and covers ONLY that stage — an HTTPS fetch (curl/npm/cargo) in a
   *different* earlier stage hits the corporate intercepting proxy with no trusted CA and dies

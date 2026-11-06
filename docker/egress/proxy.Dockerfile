@@ -7,9 +7,9 @@ RUN sh /tmp/apt_mirror_sources.sh \
     && rm -rf /var/lib/apt/lists/* /tmp/apt_mirror_sources.sh
 ARG CA_CERT_FILE=docker/extra-ca.crt.example
 COPY ${CA_CERT_FILE} /tmp/extra-ca.crt
-RUN if grep -q "BEGIN CERTIFICATE" /tmp/extra-ca.crt; then \
-      cp /tmp/extra-ca.crt /usr/local/share/ca-certificates/noah-extra-ca.crt && update-ca-certificates; \
-    fi && rm -f /tmp/extra-ca.crt
+COPY docker/install-extra-ca.sh /tmp/install-extra-ca.sh
+RUN sh /tmp/install-extra-ca.sh /tmp/extra-ca.crt noah-extra-ca \
+  && rm -f /tmp/extra-ca.crt /tmp/install-extra-ca.sh
 COPY docker/egress/squid.conf /etc/squid/squid.conf
 COPY docker/egress/policy /etc/noah-egress
 COPY docker/egress/controller.py /usr/local/lib/noah-egress-controller.py

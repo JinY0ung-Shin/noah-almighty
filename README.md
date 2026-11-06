@@ -167,7 +167,7 @@ never copied into this repository.
 1. **Write Noah's `.env`:** `cp .env.example .env`, then set at least `SESSION_SECRET`, `PI_GATEWAY_HOME`
    (pi's data root, e.g. `/srv/pi-gateway`; `PI_GATEWAY_SECRETS` only when it is not `$PI_GATEWAY_HOME/secrets`).
    Values in Noah's `.env` win over pi-gateway's `.env` inside pi's compose file too, so
-   the keys both read (`LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
+   the keys both read (`GOPROXY`, `LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
    `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`) must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a
    **host** path.
 2. **Prepare the host** (idempotent; re-run whenever pi's service or admin key changes). It reads `PI_GATEWAY_HOME`
@@ -291,7 +291,14 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   then also serve Debian trixie's `chromium-headless-shell` and `chromium-common`. uv is a pinned GitHub
   release download.
 - **pi-gateway's images:** `APT_MIRROR_URL`, `APT_SECURITY_MIRROR_URL`, `GOPROXY` in pi-gateway's `.env`;
-  `NPM_CONFIG_REGISTRY` and `PIP_INDEX_URL` are shared with Noah's (Noah's `.env` wins).
+  `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL` and `GOPROXY` are shared with Noah's (Noah's `.env` wins). pi's
+  `egress-proxy` is built FROM Noah's `pi-go-builder` image (pi's Go builder plus `CA_CERT_FILE`), so an HTTPS
+  `GOPROXY` behind a corporate CA verifies without `GOSUMDB=off`.
+- **Corporate CA (`CA_CERT_FILE`):** one certificate or a PEM bundle of several, as a path inside the build
+  context. Every image above that installs it (Noah, deck sandbox, `pi-go-builder`, the egress overlay's proxy)
+  splits a bundle one certificate per file (`docker/install-extra-ca.sh`), and a certificate that does not reach
+  the trust store fails the build. With the CA in place, leave `PIP_TRUSTED_HOST` unset: it only switches pip's
+  TLS check off for a host.
 
 ### Upgrade
 

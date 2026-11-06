@@ -69,15 +69,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # or in compose via the `args:` block. It must resolve to a file inside the
 # build context (Docker COPY can't read paths outside it). The default is a
 # placeholder so builds that do not need a custom CA still work.
+# A PEM bundle of several certificates is split one per file (docker/install-extra-ca.sh), and a
+# certificate that does not reach the system bundle fails the build.
 ARG CA_CERT_FILE=docker/extra-ca.crt.example
 COPY ${CA_CERT_FILE} /tmp/extra-ca.crt
-RUN if grep -q "BEGIN CERTIFICATE" /tmp/extra-ca.crt; then \
-      cp /tmp/extra-ca.crt /usr/local/share/ca-certificates/extra-proxy-ca.crt; \
-      update-ca-certificates; \
-    else \
-      echo "No extra CA certificate configured; skipping trust-store update."; \
-    fi \
-  && rm -f /tmp/extra-ca.crt
+COPY docker/install-extra-ca.sh /tmp/install-extra-ca.sh
+RUN sh /tmp/install-extra-ca.sh /tmp/extra-ca.crt extra-proxy-ca \
+  && rm -f /tmp/extra-ca.crt /tmp/install-extra-ca.sh
 
 WORKDIR /app
 

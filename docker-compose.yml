@@ -180,6 +180,27 @@ services:
     read_only: true
     restart: "no"
 
+  # Build-only: pi's Go builder image plus CA_CERT_FILE (docker/pi/golang-ca.Dockerfile). pi's
+  # `egress-proxy` builds FROM it (docker/pi/compose.override.yml sets pi's GO_IMAGE build arg), so an
+  # HTTPS GOPROXY behind a corporate CA verifies — TLS and the Go checksum database stay on.
+  pi-go-builder:
+    image: noah-almighty/pi-go-builder:local
+    build:
+      context: .
+      dockerfile: docker/pi/golang-ca.Dockerfile
+      args:
+        CA_CERT_FILE: ${CA_CERT_FILE:-docker/extra-ca.crt.example}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        http_proxy: ${http_proxy:-}
+        https_proxy: ${https_proxy:-}
+        no_proxy: ${no_proxy:-}
+    command: ["true"]
+    network_mode: none
+    read_only: true
+    restart: "no"
+
 secrets:
   # Noah's own copy of pi's service key (uid 1000, 0400): docker/pi/setup-host.sh.
   pi_gateway_api_key:

@@ -36,7 +36,7 @@ In the bundled stack compose runs that build itself (Operator below). Build args
 `SANDBOX_BASE_IMAGE` (default `pi-gateway/sandbox:latest`; compose passes the named context
 `pi-sandbox-base` = pi's `sandbox-image` service), `PIP_INDEX_URL` /
 `PIP_TRUSTED_HOST` / `NPM_CONFIG_REGISTRY` (mirrors; apt follows the mirror the BASE image was built with),
-`CA_CERT_FILE` (build-context path of an extra CA, as in the main image), `UV_VERSION`,
+`CA_CERT_FILE` (build-context path of an extra CA or PEM bundle, as in the main image; `docker/install-extra-ca.sh`), `UV_VERSION`,
 `PLAYWRIGHT_CORE_VERSION`, `DECK_CONVERTER_STRICT_GOLDEN=1` (golden drift fails the build),
 `DECK_MAX_CONCURRENT` (default 1). The build runs the converter's self-test from a read-only bind mount
 of the skill tree (nothing of it lands in the image) and fails on any integrity failure; on this box it

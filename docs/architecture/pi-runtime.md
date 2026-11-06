@@ -527,7 +527,7 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed), uid 1000 on both sides.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
-  Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `LOG_LEVEL`,
+  Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,
   `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`.
 - **Not supported with the bundle:** the egress overlay (`docker-compose.egress.yml`, `docs/egress-policy.md` —
   its firewall admits only its own proxy, so Noah cannot reach pi's gateway), and a second pi-gateway on the same
