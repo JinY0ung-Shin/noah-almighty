@@ -556,6 +556,13 @@ export interface AgentEvents {
   steers?: SteerChannel;
   /** A second-brain note was saved (repo write under wiki/) — display notice. */
   onMemory?: (event: MemoryEvent) => void;
+  /**
+   * A team-brain card was drafted (propose / direct / review). NON-blocking: the
+   * chat route attaches it to the live assistant message; only a human press on
+   * the card changes anything. Supplied by the interactive chat route only, so
+   * an absent sink keeps every team-brain write tool unregistered.
+   */
+  onTeamBrainCard?: (event: import("./teamBrainTools.js").TeamBrainCardEvent) => void;
   /** pi-gateway summarized the session (context compaction) — durable activity-row notice. */
   onCompact?: (event: CompactEvent) => void;
 

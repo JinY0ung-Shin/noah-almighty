@@ -20,6 +20,7 @@ const ADMIN_TABS: AdminTab[] = [
   "access",
   "system",
   "tools",
+  "team_brain",
   "audit",
 ];
 

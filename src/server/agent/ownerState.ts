@@ -345,11 +345,11 @@ export function teammateCountPhrase(teammateCount: number): string {
 }
 
 /**
- * There is no shared knowledge repository and no team brain (group
- * repositories and the team brain retired 2026-10-30, groups themselves
- * 2026-11-06). Said on BOTH metacognition surfaces, because a frozen prompt of
- * an older conversation, a skill or a note may still name
- * `mcp__group_repo__*` / `mcp__group_brain__*`.
+ * The per-GROUP repositories and brain are gone (retired 2026-10-30, groups
+ * themselves 2026-11-06); the ONE instance-wide team brain came back
+ * 2026-11-06 (docs/architecture/team-brain.md). Said on BOTH metacognition
+ * surfaces, because a frozen prompt of an older conversation, a skill or a
+ * note may still name `mcp__group_repo__*` / `mcp__group_brain__*`.
  */
 export const GROUP_REPOS_RETIRED_SENTENCE =
-  "There is NO shared team knowledge repository and no team brain: group repositories, the team brain and groups themselves were removed, so the `mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist. If an earlier message, a skill or a note names them, say they were removed and use the owner's personal repository (`mcp__repo__*`) or skill sharing (`mcp__skill_exchange__*`) instead — never look for a workaround.";
+  "The old per-GROUP knowledge repositories and per-group brain were removed with groups, so the `mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist. If an earlier message, a skill or a note names them, say they were removed and use the ONE team brain instead (`mcp__brain__search` with scope \"team\"; new team knowledge is proposed from the owner's own chat and approved by an admin), the owner's personal repository (`mcp__repo__*`) or skill sharing (`mcp__skill_exchange__*`) — never look for a workaround.";

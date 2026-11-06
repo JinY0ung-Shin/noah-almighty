@@ -7,6 +7,7 @@
   import ShareLinkDialog from "../components/ShareLinkDialog.svelte";
   import SidePanel from "../components/SidePanel.svelte";
   import TodoOverlay from "../components/TodoOverlay.svelte";
+  import TeamBrainCard from "../components/TeamBrainCard.svelte";
   import { activePane, appState, newId, notify, readState, updateState } from "../lib/state";
   import {
     PLUGIN_STATUS_LABELS,
@@ -1220,6 +1221,8 @@
         {:else}
           {@render fileCard(item, att, source)}
         {/if}
+      {:else if att.kind === "team_brain"}
+        <TeamBrainCard proposalId={att.id} />
       {:else}
         <figure class="msg-image-item">
           <a class="msg-image-link" href={`/api/conversations/${encodeURIComponent(item.conversationId)}/images/${encodeURIComponent(att.id)}`} target="_blank" rel="noopener noreferrer">

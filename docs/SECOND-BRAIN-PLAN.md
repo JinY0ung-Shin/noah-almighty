@@ -6,6 +6,10 @@
 > **2026-11-06: groups themselves are retired** (one Noah instance = one team; every approved user is a
 > teammate). "Trusted same-group teammates" below now reads "trusted teammates" — see
 > [`architecture/team-trust.md`](architecture/team-trust.md).
+>
+> **2026-11-06: a team brain is back — in a different shape.** ONE instance-wide, Noah-owned LOCAL git
+> vault (not a group repo): teammates read and propose, an admin decides on confirm cards. See
+> [`architecture/team-brain.md`](architecture/team-brain.md); the group-repo design below stays retired.
 
 Evolve the per-user (and per-group) git knowledge repo from a passive skill store into
 an active, self-maintaining **second brain** (Karpathy LLM-Wiki + mem0 consolidation +

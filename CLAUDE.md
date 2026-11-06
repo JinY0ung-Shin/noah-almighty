@@ -34,7 +34,8 @@ These are the invariants the project is built around. New work should reinforce 
   beyond the team. Visibility and trust stay separate axes: a private avatar's owner is still a trusted
   teammate. Reach, trust and skill sharing ride ONE team relation, so they never drift apart.
 - **Groups are RETIRED (2026-11-06)**, after group shared agents (2026-10-29) and group knowledge repos /
-  team brain (2026-10-30); team knowledge travels as shared skills, and the admin MCP tool policy is ONE
+  per-group brain (2026-10-30); team HOW-TO travels as shared skills, team FACTS live in the ONE team brain
+  (below), and the admin MCP tool policy is ONE
   global policy that binds admins too. Every group table, column, route (`/api/{me,admin}/groups*`),
   prefix (`group:`, `group-`), dir and MCP name is **reserved forever** — never mint them again (true of
   EVERY retired id, setting key, column, dir or broker name). → `server-core.md`, `team-trust.md`.
@@ -138,6 +139,11 @@ These are the invariants the project is built around. New work should reinforce 
   per conversation, never refreshed. → `todos.md`.
 - **Knowledge repo = one per user, agent-managed. Second brain = a CONVENTION (`wiki/`+`raw/`) over that
   SAME repo, NOT a new store**; uncommitted = not persisted. → `repo-knowledge.md`.
+- **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; teammates READ and PROPOSE, an
+  admin decides.** Every state change is a human press on a chat card (the model only drafts); admin power
+  is judged on the VIEWER, never the avatar owner; no delete; the backup is a push-only, never-forced
+  mirror to the internal git host with the saving admin's token. New team-brain names are `team_brain*`, never `group*`.
+  → `team-brain.md`.
 
 ### Code shape
 - **Per-user settings follow ONE pattern** (column → migration → `toUser` → `updateProfile` → `User` type

@@ -1476,6 +1476,118 @@ body.col-resizing .canvas-html-frame {
   font-size: var(--t-xs);
 }
 
+/* Team-brain confirmation card (kind:"team_brain" attachments, TeamBrainCard).
+   The avatar only drafts it; the buttons here are where a person decides. Status
+   tones reuse the semantic tokens so dark mode follows them. */
+.team-brain-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  width: min(100%, 480px);
+  min-width: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--material-thin);
+}
+.team-brain-card.is-gone,
+.team-brain-card[aria-busy] {
+  flex-direction: row;
+  align-items: center;
+}
+.team-brain-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.team-brain-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft, rgba(255, 255, 255, 0.08));
+  color: var(--accent);
+}
+.team-brain-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--s-0-5);
+}
+.team-brain-kind {
+  color: var(--text-soft);
+  font-size: var(--t-xs);
+}
+.team-brain-name {
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+}
+.team-brain-path {
+  color: var(--muted);
+  font-size: var(--t-xs);
+  overflow-wrap: anywhere;
+}
+.team-brain-summary {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+.team-brain-details summary {
+  cursor: pointer;
+  font-size: var(--t-xs);
+  color: var(--text-soft);
+}
+.team-brain-pre {
+  max-height: 240px;
+  margin: var(--s-1-5) 0 0;
+  padding: var(--s-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-brain-status {
+  margin: 0;
+  padding: var(--s-1-5) var(--s-2);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-sm);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: var(--t-xs);
+}
+.team-brain-status.tone-ok {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.team-brain-status.tone-warn {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.team-brain-status.tone-muted {
+  border-color: var(--line-soft);
+  background: transparent;
+  color: var(--muted);
+}
+.team-brain-muted {
+  color: var(--muted);
+  font-size: var(--t-sm);
+}
+.team-brain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
 /* A file tab of the side panel (FileTab, msg-file-card click): the canvas card
    frame; these style only its title block and the slide list. */
 .file-tab-title {

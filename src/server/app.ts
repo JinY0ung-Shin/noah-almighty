@@ -15,6 +15,8 @@ import { createKnowledgeRepoRouter } from "./routes/knowledgeRepo.js";
 import { createAvatarTasksRouter } from "./routes/avatarTasks.js";
 import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
+import { createTeamBrainRouter } from "./routes/teamBrain.js";
+import { TeamBrainBackup } from "./teamBrainBackup.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSharedMcpRouter } from "./routes/sharedMcp.js";
 import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
@@ -44,7 +46,7 @@ export function createServices(configOverrides: Partial<AppConfig> = {}): AppSer
       observedModelValue = model;
     },
   };
-  return { config, store, observedModel };
+  return { config, store, observedModel, teamBrainBackup: new TeamBrainBackup(store, config) };
 }
 
 export function createApp(services = createServices()) {
@@ -171,6 +173,7 @@ export function createApp(services = createServices()) {
   app.use(createKnowledgeRepoRouter(deps));
   app.use(createRoutinesRouter(deps));
   app.use(createTodosRouter(deps));
+  app.use(createTeamBrainRouter(deps));
   app.use(createAvatarTasksRouter(deps));
   app.use(createSkillShareRouter(deps));
   app.use(createSharedMcpRouter(deps));

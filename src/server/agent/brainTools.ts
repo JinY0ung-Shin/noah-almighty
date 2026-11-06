@@ -6,6 +6,7 @@ import { ensureClone, knowledgeRepoContextFor, readFile as readRepoFile } from "
 import { OWNER_ONLY, cloneFailureMessage, readFileErrorMessage } from "./repoToolKit.js";
 import { text } from "./mcpTools.js";
 import { formatBrainHits, normalizeWikiPath, rankBrainNotes } from "./brainSearch.js";
+import { buildTeamBrainTools, readTeamNoteTool, teamSearchBlock, type TeamBrainToolsContext } from "./teamBrainTools.js";
 
 /**
  * Per-conversation context for the PERSONAL second-brain search tools. Read-only
@@ -24,6 +25,15 @@ export interface BrainToolsContext {
    * Defaults to `viewerIsOwner` when omitted.
    */
   elevated?: boolean;
+  /**
+   * The PERSONAL vault is live in this run (`personalBrainActive` in
+   * runCapabilities: tool group on + repo connected + read access). The server
+   * is also built for a team-only run, where personal scope must refuse.
+   * Defaults to true (the pre-team-brain behavior) when omitted.
+   */
+  personalActive?: boolean;
+  /** The team brain half (teamBrainTools.ts); omitted = no team brain in this run. */
+  team?: TeamBrainToolsContext;
   config: AppConfig;
 }
 
@@ -46,17 +56,12 @@ const NO_VAULT =
  */
 export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
   const canRead = ctx.elevated ?? ctx.viewerIsOwner;
+  const personalActive = ctx.personalActive ?? true;
+  const team = ctx.team;
+  const teamRead = Boolean(team?.read);
   const repoCtx = () => knowledgeRepoContextFor(store, ctx.avatarUserId, ctx.config);
 
-  return [
-    tool(
-      "search",
-      "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `mcp__brain__get_note` or `mcp__repo__read_file`. (owner or trusted teammates; read-only)",
-      {
-        query: z.string().describe("What to look for, in natural language or keywords."),
-        limit: z.number().int().optional().describe("Max notes to return (default 8, max 20)."),
-      },
-      async (args) => {
+  const searchPersonal = async (args: { query: string; limit?: number }) => {
         if (!canRead) return text(OWNER_ONLY, true);
         const c = repoCtx();
         if (!c) return text(NO_REPO, true);
@@ -77,15 +82,59 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
         } catch (error) {
           return text(cloneFailureMessage(error), true);
         }
+  };
+
+  const scopeShape = z
+    .enum(["personal", "team", "all"])
+    .optional()
+    .describe('"personal" = your own second brain, "team" = the shared team brain, "all" (default) = both that are available in this run.');
+
+  return [
+    tool(
+      "search",
+      "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `mcp__brain__get_note` or `mcp__repo__read_file`. (owner or trusted teammates; read-only) With `scope` it also searches the TEAM brain — the team's shared, admin-approved knowledge (decisions, system facts, fixes, glossary, conventions, owners); search it (scope \"team\") before answering a team question and before proposing a team note.",
+      {
+        query: z.string().describe("What to look for, in natural language or keywords."),
+        limit: z.number().int().optional().describe("Max notes to return (default 8, max 20)."),
+        scope: scopeShape,
+      },
+      async (args) => {
+        const scope = args.scope ?? "all";
+        if (scope === "team") {
+          if (!teamRead || !team) return text("The team brain is not readable in this run.", true);
+          const block = await teamSearchBlock(team.config, args.query, args.limit);
+          return text(block.count > 0 ? block.body : `No notes in the team brain matched "${args.query}".`);
+        }
+        if (scope === "personal" && !personalActive) {
+          return text("Your personal second brain is not available in this conversation (the personal knowledge tools are off or no repository is connected).", true);
+        }
+        const teamBlock = teamRead && team ? await teamSearchBlock(team.config, args.query, args.limit) : { count: 0, body: "" };
+        if (!personalActive) {
+          return text(teamBlock.count > 0 ? teamBlock.body : `No notes in the team brain matched "${args.query}".`);
+        }
+        const personal = await searchPersonal(args);
+        if (scope === "personal" || teamBlock.count === 0) return personal;
+        // Both halves: keep a personal hit list or its no-match line; a personal ERROR
+        // (no repo / no vault) gives way to the team hits rather than hiding them.
+        const personalText = personal.isError ? "" : personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");
+        return text(personalText ? `${personalText}\n\n${teamBlock.body}` : teamBlock.body);
       },
     ),
     tool(
       "get_note",
-      "Read a full note from your second brain by its `wiki/` path (as returned by `mcp__brain__search`). A thin, wiki-scoped convenience over `mcp__repo__read_file`: the path must live under `wiki/`. Use it to pull the complete note after `mcp__brain__search` surfaces a relevant hit. (owner or trusted teammates; read-only)",
+      "Read a full note from your second brain by its `wiki/` path (as returned by `mcp__brain__search`). A thin, wiki-scoped convenience over `mcp__repo__read_file`: the path must live under `wiki/`. Use it to pull the complete note after `mcp__brain__search` surfaces a relevant hit. (owner or trusted teammates; read-only) Pass scope \"team\" to read a TEAM-brain note.",
       {
         path: z.string().describe("Repository-relative path under wiki/ (e.g. wiki/concepts/deploy.md)"),
+        scope: z.enum(["personal", "team"]).optional().describe('"personal" (default) or "team" — use the scope the search hit came from.'),
       },
       async (args) => {
+        if (args.scope === "team") {
+          if (!team) return text("The team brain is not readable in this run.", true);
+          return readTeamNoteTool(team, args.path);
+        }
+        if (!personalActive) {
+          return text('Your personal second brain is not available in this conversation. For a team note pass scope "team".', true);
+        }
         if (!canRead) return text(OWNER_ONLY, true);
         const c = repoCtx();
         if (!c) return text(NO_REPO, true);
@@ -104,6 +153,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
         }
       },
     ),
+    ...(team ? buildTeamBrainTools(store, team) : []),
   ];
 }
 

@@ -1644,6 +1644,19 @@ export async function executeChatTurn(
             persistedThinkingOffset = streamedThinking.length;
             persistedAttachmentsOffset = shownAttachments.length;
           },
+          // A team-brain card (the avatar drafted a proposal / note / review). It
+          // rides the message's attachments like a file card; NOTHING happens until
+          // the user presses it (routes/teamBrain.ts re-checks everything then).
+          onTeamBrainCard: (event) => {
+            const attachment: MessageAttachment = {
+              id: event.proposalId,
+              kind: "team_brain",
+              mediaType: "application/vnd.noah.team-brain+json",
+              ...(event.anchor !== undefined ? { anchor: event.anchor } : {}),
+            };
+            shownAttachments.push(attachment);
+            emitRunEvent(runId, "file", { runId, attachment });
+          },
           onMemory: (event) => {
             // Stable id: an SSE reattach replays the whole event log, and
             // the client dedupes 기억 rows by this id.

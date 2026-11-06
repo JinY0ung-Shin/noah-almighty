@@ -622,6 +622,36 @@ export class StoreBase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
+      -- Team brain (팀 브레인) proposals and card drafts (docs/architecture/team-brain.md).
+      -- APPROVED content lives in the local git vault <dataDir>/team-brain; this table
+      -- is the queue + the provenance (who, from which conversation, what). kind =
+      -- propose|direct|review, op = create|update (no delete). conversation_id is
+      -- read through a join that drops it once the conversation is gone (todo_items
+      -- precedent), so no conversation-deleting path needs a cascade. A brand-new
+      -- table: CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
+      CREATE TABLE IF NOT EXISTS team_brain_proposals (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        proposer_user_id TEXT NOT NULL,
+        conversation_id TEXT,
+        path TEXT NOT NULL,
+        op TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        base_blob TEXT,
+        target_id TEXT,
+        decision TEXT,
+        decision_reason TEXT,
+        decided_by TEXT,
+        decided_at TEXT,
+        result_seen_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_team_brain_proposals_status ON team_brain_proposals(status, kind);
+      CREATE INDEX IF NOT EXISTS idx_team_brain_proposals_proposer ON team_brain_proposals(proposer_user_id, status);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
       CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
@@ -1418,6 +1448,10 @@ export interface StoreBase {
   /** The links of specific deck cards — the rewind/regenerate cascade (store/shareLinks.ts). */
   deleteShareLinksForFiles(conversationId: string, fileIds: readonly string[]): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
+  /** deleteUser cascade (store/teamBrain.ts). */
+  deleteTeamBrainProposalsForUser(userId: string): void;
+  /** The rewind cascade for team-brain draft cards (store/teamBrain.ts). */
+  withdrawTeamBrainDrafts(ids: readonly string[]): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(
     key: string,

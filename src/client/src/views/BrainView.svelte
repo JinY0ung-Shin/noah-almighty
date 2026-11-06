@@ -5,20 +5,98 @@
   import { api } from "../lib/api";
   import { renderMarkdown } from "../lib/format";
   import { goView } from "../lib/nav";
-  import { appState } from "../lib/state";
+  import { appState, replaceState } from "../lib/state";
+  import { refreshTeamBrainStatus } from "../lib/teamBrain";
   import type { KnowledgeGraph, KnowledgeGraphNode, KnowledgeNote, User } from "../lib/types";
+  import type { TeamBrainProposal } from "../../../shared/teamBrain";
 
   // Full-page second-brain graph of the owner's personal knowledge repo, reached
   // from the left nav. Pairs the reusable GraphCanvas with a note panel that
   // fetches + renders the clicked note's markdown — the richer surface over the
-  // compact GraphViewModal in settings. (Group repos have no graph: the team
-  // brain was removed 2026-10-30.)
-  const GRAPH_ENDPOINT = "/api/me/knowledge-repo/graph";
-  const NOTE_ENDPOINT = "/api/me/knowledge-repo/note";
+  // compact GraphViewModal in settings. The 팀 브레인 tab shows the ONE team
+  // vault the same way (read-only), and — with no note selected — my proposals'
+  // status and, for an admin, the pending queue (decisions go through the
+  // admin's avatar + a card, never here).
+  type Scope = "personal" | "team";
+  const ENDPOINTS: Record<Scope, { graph: string; note: string }> = {
+    personal: { graph: "/api/me/knowledge-repo/graph", note: "/api/me/knowledge-repo/note" },
+    team: { graph: "/api/team-brain/graph", note: "/api/team-brain/note" },
+  };
+  type ProposalRow = Omit<TeamBrainProposal, "content">;
 
+  let scope: Scope = "personal";
   $: user = $appState.user as User;
-  // The graph/note endpoints 404 without a connected repo.
+  $: isAdmin = Boolean(user?.roles?.includes("admin"));
+  // The personal graph/note endpoints 404 without a connected repo.
   $: hasRepo = Boolean(user?.knowledgeRepo);
+  $: showGraph = scope === "team" || hasRepo;
+
+  let mine: ProposalRow[] = [];
+  let pending: ProposalRow[] = [];
+  let listsError = "";
+  let mounted = false;
+
+  // The badge / admin panel deep link: open on the team tab (one-shot flag).
+  $: if (mounted && $appState.brainOpenTeamTab) {
+    replaceState({ brainOpenTeamTab: false });
+    switchScope("team");
+  }
+
+  function switchScope(next: Scope): void {
+    if (scope === next && graph) return;
+    scope = next;
+    if (next === "personal" && !hasRepo) {
+      graphToken++;
+      graph = null;
+      error = "";
+      loading = false;
+      clearNote();
+      return;
+    }
+    void loadGraph();
+    if (next === "team") void loadLists();
+  }
+
+  async function loadLists(): Promise<void> {
+    listsError = "";
+    try {
+      const [m, p] = await Promise.all([
+        api<{ proposals: ProposalRow[] }>("/api/team-brain/proposals/mine"),
+        isAdmin ? api<{ proposals: ProposalRow[] }>("/api/team-brain/proposals/pending") : Promise.resolve({ proposals: [] }),
+      ]);
+      mine = m.proposals;
+      pending = p.proposals;
+      // Opening my list marked the results seen server-side.
+      void refreshTeamBrainStatus();
+    } catch (err) {
+      listsError = (err as Error).message;
+    }
+  }
+
+  // A pending proposal can be taken back here too — its card may be gone with its conversation.
+  let withdrawing = "";
+  async function withdraw(id: string): Promise<void> {
+    if (withdrawing) return;
+    withdrawing = id;
+    listsError = "";
+    try {
+      await api(`/api/team-brain/cards/${encodeURIComponent(id)}/withdraw`, { method: "POST" });
+      await loadLists();
+    } catch (err) {
+      listsError = (err as Error).message;
+    } finally {
+      withdrawing = "";
+    }
+  }
+
+  const STATUS_KO: Record<string, string> = {
+    draft: "제출 전",
+    pending: "검토 대기",
+    approved: "승인됨",
+    rejected: "반려됨",
+    withdrawn: "철회됨",
+    expired: "만료됨",
+  };
 
   let loading = true;
   let error = "";
@@ -34,6 +112,8 @@
   let noteToken = 0;
 
   onMount(() => {
+    mounted = true;
+    if ($appState.brainOpenTeamTab) return; // the reactive deep link above opens the team tab
     if (!hasRepo) {
       loading = false;
       return;
@@ -48,7 +128,7 @@
     clearNote();
     const token = ++graphToken;
     try {
-      const res = await api<{ graph: KnowledgeGraph }>(GRAPH_ENDPOINT);
+      const res = await api<{ graph: KnowledgeGraph }>(ENDPOINTS[scope].graph);
       if (token !== graphToken) return;
       graph = res.graph;
     } catch (err) {
@@ -79,9 +159,10 @@
     noteLoading = true;
     const token = ++noteToken;
     try {
-      const res = await api<{ note: KnowledgeNote }>(`${NOTE_ENDPOINT}?path=${encodeURIComponent(node.id)}`);
+      const res = await api<{ note: KnowledgeNote }>(`${ENDPOINTS[scope].note}?path=${encodeURIComponent(node.id)}`);
       if (token !== noteToken) return;
-      noteHtml = renderMarkdown(res.note.content);
+      // Team notes are teammate-written: no inline style (overlay / fake-UI guard).
+      noteHtml = renderMarkdown(res.note.content, { forbidInlineStyle: scope === "team" });
     } catch (err) {
       if (token !== noteToken) return;
       noteError = (err as Error).message;
@@ -101,14 +182,22 @@
       <h1>지식 그래프</h1>
       <p class="muted small">노트 사이의 <code>[[링크]]</code> 연결을 한눈에 보고, 노드를 클릭하면 내용을 바로 읽을 수 있어요.</p>
     </div>
-    {#if hasRepo}
-      <button class="ghost-sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => loadGraph()}>
-        <Icon name="refresh" size={15} /><span>새로고침</span>
-      </button>
-    {/if}
+    <div class="brain-head-actions">
+      <div class="seg-control" role="tablist" aria-label="브레인 선택">
+        <button type="button" role="tab" class:active={scope === "personal"} aria-selected={scope === "personal"} on:click={() => switchScope("personal")}>내 브레인</button>
+        <button type="button" role="tab" class:active={scope === "team"} aria-selected={scope === "team"} on:click={() => switchScope("team")}>
+          팀 브레인{#if $appState.teamBrainStatus.unseenResults + $appState.teamBrainStatus.pendingReview > 0}<span class="nav-badge brain-tab-badge">{$appState.teamBrainStatus.unseenResults + $appState.teamBrainStatus.pendingReview}</span>{/if}
+        </button>
+      </div>
+      {#if showGraph}
+        <button class="ghost-sm" type="button" title="다시 불러오기" disabled={loading} on:click={() => { void loadGraph(); if (scope === "team") void loadLists(); }}>
+          <Icon name="refresh" size={15} /><span>새로고침</span>
+        </button>
+      {/if}
+    </div>
   </header>
 
-  {#if !hasRepo}
+  {#if !showGraph}
     <section class="brain-empty">
       <span class="brain-empty-icon"><Icon name="book" size={24} /></span>
       <div>
@@ -138,7 +227,11 @@
           <strong>brain-migrate</strong>를 한 번 실행해 달라고 하면 구조를 만들어 줍니다.
         </div>
       {:else if !graph?.nodes.length}
-        <div class="brain-state muted">아직 표시할 노트가 없습니다. 대화로 지식을 쌓으면 여기에 나타납니다.</div>
+        <div class="brain-state muted">
+          {scope === "team"
+            ? "팀 브레인에 아직 노트가 없습니다. 대화 중 아바타가 팀에 공유할지 물으면, 동의한 내용이 관리자 승인을 거쳐 여기에 쌓입니다."
+            : "아직 표시할 노트가 없습니다. 대화로 지식을 쌓으면 여기에 나타납니다."}
+        </div>
       {:else}
         <GraphCanvas {graph} selectedId={selected?.id ?? null} on:select={(e) => onSelect(e.detail)} />
         <div class="brain-stats muted">{graph.nodes.length}개 노트 · {graph.edges.length}개 연결</div>
@@ -146,7 +239,42 @@
     </div>
 
     <aside class="brain-note" aria-label="노트 내용">
-      {#if !selected}
+      {#if !selected && scope === "team"}
+        <div class="brain-proposals">
+          <p class="muted small">노드를 클릭하면 노트 내용이 여기에 표시됩니다. 팀 브레인 노트는 팀원이 제안하고 관리자가 승인한 내용입니다.</p>
+          {#if listsError}<p class="error-note" role="alert">{listsError}</p>{/if}
+          {#if isAdmin}
+            <h3>검토 대기 {pending.length}건</h3>
+            {#if pending.length}
+              <p class="muted small">결정은 내 아바타에게 “팀 브레인 제안 검토해줘”라고 요청한 뒤, 아바타가 띄운 카드의 버튼으로 합니다.</p>
+              <ul class="brain-proposal-list">
+                {#each pending as p (p.id)}
+                  <li><strong>{p.title}</strong><span class="muted small">{p.proposerName} · {p.op === "create" ? "새 노트" : "수정"} · <code>{p.path}</code></span></li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="muted small">검토할 제안이 없습니다.</p>
+            {/if}
+          {/if}
+          <h3>내 제안</h3>
+          {#if mine.length}
+            <ul class="brain-proposal-list">
+              {#each mine as p (p.id)}
+                <li>
+                  <strong>{p.title}</strong>
+                  <span class="muted small"><span class={`brain-proposal-status status-${p.status}`}>{STATUS_KO[p.status] ?? p.status}</span> · <code>{p.path}</code></span>
+                  {#if p.status === "rejected" && p.decisionReason}<span class="small">반려 사유: {p.decisionReason}</span>{/if}
+                  {#if p.status === "pending"}
+                    <button class="ghost-sm brain-proposal-withdraw" type="button" disabled={withdrawing === p.id} on:click={() => withdraw(p.id)}>제안 철회</button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="muted small">아직 제안한 내용이 없습니다. 대화 중 아바타에게 “이거 팀에 공유해줘”라고 하면 제안 카드를 만들어 줍니다.</p>
+          {/if}
+        </div>
+      {:else if !selected}
         <div class="brain-note-empty muted">
           <Icon name="book" size={22} />
           <p>노드를 클릭하면 노트 내용이 여기에 표시됩니다.</p>
@@ -322,6 +450,57 @@
   .brain-note-body {
     min-width: 0;
     word-break: break-word;
+  }
+  .brain-head-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .brain-tab-badge {
+    margin-left: var(--s-1);
+  }
+  .brain-proposals {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .brain-proposals h3 {
+    margin: var(--s-2) 0 0;
+    font-size: var(--t-sm);
+  }
+  .brain-proposals p {
+    margin: 0;
+  }
+  .brain-proposal-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .brain-proposal-list li {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-0-5);
+    padding: var(--s-2);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    overflow-wrap: anywhere;
+  }
+  .brain-proposal-withdraw {
+    align-self: flex-start;
+  }
+  .brain-proposal-status.status-approved {
+    color: var(--ok);
+  }
+  .brain-proposal-status.status-rejected {
+    color: var(--warn);
+  }
+  .brain-proposal-status.status-pending {
+    color: var(--info);
   }
 
   @media (max-width: 860px) {

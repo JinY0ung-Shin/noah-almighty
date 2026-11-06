@@ -15,8 +15,9 @@ not actually say. Never invent facts.
 
 ## Scope
 - **Personal repo:** `mcp__repo__write_file` then `mcp__repo__commit`.
-- **Personal only:** there is no shared team repository (group repositories, the team brain and groups
-  themselves were removed), so a team fact is captured in the owner's own repo like any other.
+- **Personal only:** this skill writes the owner's OWN repo. The team brain is a separate, admin-approved
+  vault this skill never writes: a fact that passes the four team-knowledge tests can ALSO be offered to
+  the team (ask the user; on their yes use `mcp__brain__propose_team_note` — only in the owner's own chat).
 - **No repo connected (personal):** if a write returns `NO_REPO` and `mcp__repo__create_repo` is
   available, offer to create the knowledge repo first; otherwise ask the owner to connect one.
 

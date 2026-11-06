@@ -9,6 +9,7 @@
   import { loadConversations, stopKnowledgeWatch } from "../lib/loaders";
   import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
   import { goView } from "../lib/nav";
+  import { teamBrainBadgeCount, teamBrainBadgeTitle } from "../lib/teamBrain";
   import { trapTab } from "../lib/modalBehavior";
   import { appState, notify, replaceState, updateState } from "../lib/state";
   import { setThemePref } from "../lib/theme";
@@ -66,6 +67,8 @@
   // every open item; the tooltip spells the split out.
   $: todoCounts = $appState.todos.counts;
   $: todoBadgeCount = todoCounts.overdue + todoCounts.dueToday;
+  // 지식 그래프 badge: my decided-but-unseen team-brain proposals + (admins) pending reviews.
+  $: teamBrainBadge = teamBrainBadgeCount($appState.teamBrainStatus);
   $: todoBadgeTitle = [todoCounts.overdue ? `마감 지남 ${todoCounts.overdue}개` : "", todoCounts.dueToday ? `오늘 마감 ${todoCounts.dueToday}개` : ""]
     .filter(Boolean)
     .join(" · ");
@@ -652,6 +655,9 @@
           {/if}
           {#if item.view === "todos" && todoBadgeCount > 0}
             <span class="nav-badge" title={todoBadgeTitle}>{todoBadgeCount}</span>
+          {/if}
+          {#if item.view === "brain" && teamBrainBadge > 0}
+            <span class="nav-badge" title={teamBrainBadgeTitle($appState.teamBrainStatus)}>{teamBrainBadge}</span>
           {/if}
         </button>
       {/each}

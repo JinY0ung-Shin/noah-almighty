@@ -664,7 +664,11 @@ export type ImageMediaType =
 export interface MessageAttachment {
   /** Stable id; also the on-disk filename stem and the serving-URL segment. */
   id: string;
-  kind: "image" | "file";
+  /**
+   * `team_brain` = a team-brain confirmation card (id = the proposal id; no file
+   * behind it — the card reads its live state from /api/team-brain/cards/:id).
+   */
+  kind: "image" | "file" | "team_brain";
   /** MIME type: one of {@link ImageMediaType} for images; document MIME for files. */
   mediaType: string;
   /** Original filename, for the alt text / download name (optional). */
@@ -1475,6 +1479,13 @@ export interface AgentRequest {
    * team size. Same gating as `teammateCount`.
    */
   reachableTeammateCount?: number;
+  /**
+   * Team brain capability of THIS run (runCapabilities' teamBrain* booleans),
+   * stamped for the prompt's team-brain section: read = search/get_note scope
+   * team; propose = propose_team_note + list (interactive owner run); admin =
+   * the review tools (the VIEWER is an admin). Undefined = no team brain here.
+   */
+  teamBrain?: { read: boolean; propose: boolean; admin: boolean };
   /**
    * Whether the avatar owner marked their account as a shared (communal)
    * account (`User.sharedAccount`). Filled by the server from the owner's row

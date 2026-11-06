@@ -10,7 +10,7 @@ asked to "tidy up / consolidate my notes".
 
 ## Scope
 - **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
-  The second brain is personal only (there is no shared team repository).
+  This consolidates the PERSONAL brain only; the team brain is admin-approved and never touched here.
 
 ## Optional conversation pull
 You MAY also review the owner's OWN recent conversations to mine durable facts worth consolidating

@@ -28,6 +28,8 @@ import type {
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
+import { countTeamNotesSync } from "../teamBrain.js";
+import { readTeamBrainBackupState } from "../teamBrainBackup.js";
 import { EFFORT_LEVELS, type ModelEffort } from "../effortLevels.js";
 import {
   gettingStartedGaps,
@@ -62,6 +64,37 @@ import {
  * avatar owner is present or an owner-scheduled routine is running with owner
  * tool access.
  */
+/**
+ * describe_system's LIVE team-brain line (the prompt only states the capability,
+ * never counts): the vault size, what THIS run may do (the same booleans the
+ * brain tools key on), and the live queue numbers for the person it acts for.
+ */
+function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): string {
+  const tb = ctx.teamBrain;
+  if (!tb?.read) {
+    return "- Team brain: not readable in this run";
+  }
+  const notes = countTeamNotesSync(ctx.config);
+  const head = `- Team brain (mcp__brain__search scope "team"): ${notes} note${notes === 1 ? "" : "s"}`;
+  if (!tb.propose) {
+    return `${head}; read-only in this run (proposing works only in the owner's own interactive conversation)`;
+  }
+  if (tb.admin) {
+    const pending = store.countPendingTeamBrainProposals();
+    return `${head}; the owner is an ADMIN — their own notes are saved when they press the card's button, and ${pending} teammate proposal${pending === 1 ? "" : "s"} await${pending === 1 ? "s" : ""} their review (mcp__brain__list_team_proposals → get_team_proposal → prepare_team_review; decided only by their press on the card)`;
+  }
+  const unseen = store.countUnseenTeamBrainResults(ctx.avatarUserId);
+  return `${head}; you can propose notes with mcp__brain__propose_team_note after the user agrees (an admin approves them)${unseen ? `; ${unseen} of the owner's proposals have a new result (mcp__brain__list_team_proposals)` : ""}`;
+}
+
+/** Admin-only: the push-only backup mirror's state. */
+function teamBrainBackupLine(store: Store): string {
+  const b = readTeamBrainBackupState(store);
+  if (!b.url) return "- Team brain backup: not configured (an admin sets a backup repository on the internal git host under 관리자 → 팀 브레인)";
+  if (b.lastError) return `- Team brain backup: FAILING — ${b.lastError} (target ${b.url} @ ${b.branch}, pushed with ${b.adminName ?? "?"}'s git token)`;
+  return `- Team brain backup: ${b.lastOkAt ? `last pushed ${b.lastOkAt}` : "configured, not pushed yet"} (target ${b.url} @ ${b.branch}, pushed with ${b.adminName ?? "?"}'s git token)`;
+}
+
 export interface SystemToolsContext {
   /** The avatar (== owner) whose settings these tools manage. */
   avatarUserId: string;
@@ -121,6 +154,8 @@ export interface SystemToolsContext {
    * redirect.
    */
   shareLinksEnabled?: boolean;
+  /** This run's team-brain capability (runCapabilities' teamBrain* booleans); undefined = none. */
+  teamBrain?: { read: boolean; propose: boolean; admin: boolean };
   /**
    * Whether THIS run registered the owner's to-do tools (`mcp__todo__*`,
    * runCapabilities' `todoToolsActive`) and, of those, `delete_todo`
@@ -872,7 +907,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // and the prompt's matching `brainSection` gating — so the report and
           // the run's real tool roster can't drift.
           `- Second brain (personal): ${!enabledMcpToolGroups.includes("personal_knowledge") ? "OFF for this conversation (personal knowledge tool group deselected — no brain recall or capture tools are registered this turn)" : state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
-          `- Shared team knowledge repository and team brain: none — ${GROUP_REPOS_RETIRED_SENTENCE}`,
+          teamBrainStatusLine(store, ctx),
+          ...(ctx.teamBrain?.admin ? [teamBrainBackupLine(store)] : []),
+          `- Old group repositories / group brain: removed — ${GROUP_REPOS_RETIRED_SENTENCE}`,
           `- General git repos: ${state.gitRepoCount}`,
           `- Working repository: ${ctx.activeRepoName ? (ctx.piRuntime?.activeRepoDir ? `${ctx.activeRepoName} (opened via open_repo; you work on its sandbox copy ${ctx.piRuntime.activeRepoDir}/, save with mcp__git_repo__commit, push via mcp__git_repo__push; never checkout/switch/reset/rebase in the copy)` : `${ctx.activeRepoName} (opened via open_repo; save with mcp__git_repo__commit, push via mcp__git_repo__push)`) : "(none open)"}`,
           `- Local image output: ${ctx.fileOutputEnabled ? "enabled — use `mcp__file_output__show_file` for PNG/JPEG/WebP/GIF files in the working directories" : "unavailable in this run"}`,
