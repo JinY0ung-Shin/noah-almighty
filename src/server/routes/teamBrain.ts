@@ -3,6 +3,7 @@ import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js
 import { apiError, type RouterDeps } from "./_shared.js";
 import {
   applyTeamBrainCard,
+  editTeamBrainProvenance,
   submitTeamBrainProposal,
   teamBrainCardView,
   withdrawTeamBrainProposal,
@@ -79,6 +80,11 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
 
   router.post("/api/team-brain/cards/:id/submit", async (req: AuthenticatedRequest, res) => {
     respond(res, await submitTeamBrainProposal(actionDeps(req), actor(req), String(req.params.id)));
+  });
+
+  // The drafter's 출처 정보 edit on their own draft card (body: TeamProvenanceInput).
+  router.put("/api/team-brain/cards/:id/provenance", async (req: AuthenticatedRequest, res) => {
+    respond(res, await editTeamBrainProvenance(actionDeps(req), actor(req), String(req.params.id), req.body));
   });
 
   router.post("/api/team-brain/cards/:id/withdraw", async (req: AuthenticatedRequest, res) => {

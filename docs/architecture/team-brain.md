@@ -12,7 +12,7 @@
 - Teammates **read + submit SOURCES**; an **admin's avatar compiles** them into wiki pages at review time
   (the curator is the admin's own interactive run — no background curator, no new run class); the admin
   **presses** the card. An admin's own knowledge / maintenance skips the queue (one press).
-- Proposals come **only from the avatar** (no UI form). The avatar proactively offers ("팀에 공유할까요?"),
+- Proposals come **only from the avatar** (no UI form to START one). The avatar proactively offers ("팀에 공유할까요?"),
   driven by the four team-knowledge tests; **no frequency limit** (revisit after real-model use).
 - Every state change is a **human press on a chat card** (option A — the model only drafts).
 - **No delete** op (a wrong page is corrected with an update; a reversed decision is superseded).
@@ -22,6 +22,15 @@
   the submitter's avatar runs an **intake interview**; a **FIXED `SCHEMA.md`** in code that the server
   validates on every change; every pre-schema note moved to `raw/legacy/`; a schema change = version bump
   + the admin's one-time migration pass (`team-brain-curate` skill).
+- **Provenance is required (same day, user: option C after "출처·작성자·작성일 하나도 작성하게 안되어있다").**
+  Every type's intake starts with `TEAM_PROVENANCE_SLOTS` = `source_kind` (one of `TEAM_SOURCE_KINDS`:
+  document | link | meeting | message | verified | other) + `source` (the reference itself) + `author` (the
+  ORIGINAL's author) + `authored_at` (the original's date) — the server's own `submitted_by/at` stamps say
+  who put it into Noah, these say where it came from. The drafter can fill/correct the four ON THE CARD
+  while it is a draft (the one in-card edit; still no form to start a proposal). C = A (the slots, asked by
+  the avatar) + B (the card edit) + a STRUCTURED origin (kind + reference) — a link is checked as a URL, a
+  date as a date, and both are machine-readable in raw frontmatter. SCHEMA.md (wiki page rules) is
+  unchanged, so no schema-version bump: raw files are server-rendered, never validated as pages.
 - Designs + rejected alternatives: `~/.noah-work/team-brain-2026-11-06/design.md`,
   `~/.noah-work/team-brain-wiki-2026-11-06/design.md` (+ `research/`: Karpathy gist, follow-ups).
 
@@ -31,7 +40,9 @@
   (`buildKnowledgeGraph`) are reused with this root.
 - **Layout (schema v1):** `SCHEMA.md` (`TEAM_BRAIN_SCHEMA_MD`, first line `<!-- noah-team-brain-schema: N -->`);
   `raw/YYYY/MM/<date>-<id8>.md` (`teamRawPath`) = one approved submission, RENDERED BY THE SERVER at apply
-  (`renderTeamRaw`: server-stamped submitter/approver, verbatim source, intake answers, follow-ups) and never
+  (`renderTeamRaw`: server-stamped submitter/approver, then the provenance answers as frontmatter keys
+  `source_kind`/`source`/`author`/`authored_at` (omitted on rows from before they were asked), verbatim
+  source, the other intake answers, follow-ups) and never
   a change target; `raw/legacy/…` = pre-schema notes; `wiki/<TEAM_PAGE_FOLDERS[type]>/<slug>.md` = pages;
   `wiki/index.md` REGENERATED from page frontmatter on every commit (`renderTeamIndex`) and `wiki/log.md`
   APPENDED per commit (`formatLogEntry`) — the model never writes either (`TEAM_STRUCTURAL_PATHS`).
@@ -107,9 +118,13 @@
   every `update` change must carry as `baseBlob` — a page changed since the read is refused, never reverted); team search lists pages, then
   UNCOMPILED sources (wrapped, labeled "uncompiled source — not yet a wiki page").
 - Member (`TEAM_BRAIN_PROPOSE_TOOL_NAMES`): `propose_team_note` = a SOURCE submission `{type, title,
-  summary, source, answers}` — `checkIntake` against `TEAM_INTAKE_REQUIRED[type]`; missing slots → an error
-  telling the avatar to ask ONCE, in ONE message, only for those ("unknown" → a gap); an admin is
-  redirected to `prepare_team_changes`. `answer_team_questions` answers a `needs_info` row (appends a
+  summary, source, answers}` — `checkIntake` against `TEAM_INTAKE_REQUIRED[type]`; missing slots or
+  refused provenance (`teamProvenanceProblem`, shared: `source_kind`/`source` never "unknown"
+  (`TEAM_INTAKE_NO_UNKNOWN`), kind by id or Korean label → stored as the id, `link` ⇒ http(s) URL,
+  `authored_at` = a real `YYYY[-MM[-DD]]` not in the future (1 day slack), ≤ 500 chars each) → ONE error
+  listing both, telling the avatar to ask ONCE, in ONE message, only for those (any other "unknown" → a
+  gap); an admin is redirected to `prepare_team_changes`. `get_team_proposal` flags a submission whose
+  provenance is incomplete (older rows) so the curator can recommend ask. `answer_team_questions` answers a `needs_info` row (appends a
   follow-up, new card). `list_team_proposals`.
 - Admin (`TEAM_BRAIN_ADMIN_TOOL_NAMES`): `get_team_proposal` (raw path to cite, intake/source/follow-ups in
   ONE wrapper, ≤ 5 related pages, "read SCHEMA.md + index first"); `prepare_team_review` approve (a
@@ -145,6 +160,14 @@
   `file` SSE event and persisted with the message. `TeamBrainCard.svelte` reads its live state from
   `GET /api/team-brain/cards/:id` — visible ONLY to the row's drafter. The view carries `pages` (per changed
   page: before = committed content, after, stale). Viewing a decided card marks the result seen.
+- **Provenance edit** (`PUT …/provenance` `{sourceKind, source, author, authoredAt}` →
+  `editTeamBrainProvenance`): only the drafter, only while the row is a `draft` propose or direct-with-source
+  (CAS `updateTeamBrainDraftIntake`, bumps `updated_at` = restarts the 7-day clock); `withTeamProvenance`
+  merges + re-validates (400 with the Korean `teamProvenanceProblemLabel` texts), secret scan, audit
+  `team_brain_edit_provenance`. The view's `provenance` = `{editable, issues}` (null on review/maintenance/
+  legacy cards); **submit and a direct apply are refused (409) while `issues` is non-empty** — a draft
+  from before provenance was asked fills it on the card first. A review approve of an OLD pending row
+  without provenance is allowed (the admin decides; the raw then simply lacks those keys).
 - Presses: `POST …/submit` (propose draft → pending; a source has no staleness), `…/withdraw` (propose
   draft/pending/needs_info → withdrawn; direct/review draft → cancelled), `…/apply` (admin; direct →
   `applyTeamChangeset` (log op `direct` with a source, `maintain` without); review approve → target
@@ -216,6 +239,12 @@
 
 ## UI
 - Cards never render teammate markdown/HTML: source, intake and diff lines are text (`<pre>`, `<del>`/`<ins>`).
+  출처 정보 is its own block (all four rows; a missing one = 미기재 chip, unknown = 모름) above 보충 정보,
+  which no longer repeats them. On an editable draft it carries 수정 → an inline form (kind `<select>`,
+  source `type=url` for 웹 링크, author, date) validated client-side with the SAME shared rules before the
+  PUT; while `issues` is non-empty the form opens by itself, has no 취소, and 제출/반영 stay disabled with a
+  line saying why (the gated button's prerequisite is the first step). A direct card shows it outside the
+  원본 보기 fold; a review card shows the target's read-only inside it.
   The review/direct card shows "원본 N건 · 페이지 N개", the source, the model-flagged conflicts OPEN, and per
   page a line diff (`src/shared/lineDiff.ts`, bounded LCS, unchanged runs collapsed) with deletions
   prominent ("삭제 N줄" chip). 내 제안 shows 보완 요청 + the admin's questions.

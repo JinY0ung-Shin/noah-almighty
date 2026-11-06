@@ -41,7 +41,8 @@ which check owner/teammate trust themselves.
   (a GitHub link); there is no in-app file editor.
 - **Team brain (팀 브레인)**: ONE shared knowledge vault for the whole team — decisions, system
   facts, fixes, glossary, conventions, owners. Every avatar can search it; when a conversation
-  produces team knowledge the avatar offers to share it, the user confirms on a card, and an
+  produces team knowledge the avatar offers to share it, the user checks the source's
+  출처 정보 (출처 유형·출처·작성자·작성일 — required, editable on the card) and confirms, and an
   admin approves or rejects it (an admin's own notes go in on their card press). It lives on
   the Noah server as a local git repository; an admin can mirror it to a backup repository on
   the internal git host (관리자 → 팀 브레인).

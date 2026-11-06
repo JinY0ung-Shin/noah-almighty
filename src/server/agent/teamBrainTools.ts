@@ -16,17 +16,20 @@ import {
   teamChangesetContext,
   teamNoteBlob,
 } from "../teamBrain.js";
-import { checkIntake, parseTeamPage, validateChangeset } from "../teamBrainSchema.js";
+import { checkIntake, parseTeamPage, provenanceProblemText, validateChangeset, type TeamProvenanceIssue } from "../teamBrainSchema.js";
 import type { BrainNoteHit } from "./brainSearch.js";
 import {
   TEAM_BRAIN_MAX_CHANGES,
   TEAM_BRAIN_MAX_CONTENT_BYTES,
   TEAM_BRAIN_MAX_OPEN_PROPOSALS,
+  TEAM_INTAKE_NO_UNKNOWN,
   TEAM_INTAKE_REQUIRED,
   TEAM_INTAKE_SLOTS,
   TEAM_INTAKE_SLOT_QUESTIONS,
   TEAM_PAGE_FOLDERS,
   TEAM_PAGE_TYPES,
+  TEAM_SOURCE_KINDS,
+  teamProvenanceIssues,
   teamRawPath,
   type TeamBrainChangeset,
   type TeamBrainIntake,
@@ -106,7 +109,7 @@ const REQUIRED_FACTS = TEAM_PAGE_TYPES.map((t) => `${t}: ${TEAM_INTAKE_REQUIRED[
 /** Standing guidance to OFFER sharing + run the intake interview (propose-capable runs only). */
 export const TEAM_OFFER_TO_SHARE =
   "OFFER TO SHARE: when this turn produced team knowledge (all four tests) — a problem solved, a decision made, a fact the user had to explain — end your reply with ONE short question asking whether to share it with the team brain, in the user's language. Never share without the user's yes in this conversation. " +
-  `INTAKE, after the yes: search the team brain (scope "team") to see what it already says; pick the page type (${TEAM_PAGE_TYPES.join(", ")}); check which of that type's required facts the conversation already answers (${REQUIRED_FACTS}); then ask ONCE, in ONE message, only for the missing ones (at most about 4 questions; "모름"/unknown is a fine answer and is recorded as a gap) — never re-ask what the conversation already says. The user's own words (and any material they pasted) are the SOURCE and are kept verbatim. The team brain states the CURRENT truth only. There is no delete.`;
+  `INTAKE, after the yes: search the team brain (scope "team") to see what it already says; pick the page type (${TEAM_PAGE_TYPES.join(", ")}); check which of that type's required facts the conversation already answers (${REQUIRED_FACTS}); then ask ONCE, in ONE message, only for the missing ones (at most about 4 questions; "모름"/unknown is a fine answer and is recorded as a gap — except for source_kind and source: a source whose origin nobody knows is not submitted) — never re-ask what the conversation already says. PROVENANCE is asked every time: source_kind (${TEAM_SOURCE_KINDS.join(", ")}), source (the document, URL, meeting, conversation or where it was verified), author (who originally wrote or said it — the user themselves when it is their own verification) and authored_at (when, YYYY-MM-DD; YYYY-MM or YYYY is fine). The card lets the user correct these four before submitting. The user's own words (and any material they pasted) are the SOURCE and are kept verbatim. The team brain states the CURRENT truth only. There is no delete.`;
 
 export const TEAM_MEMBER_FLOW =
   "Then call `mcp__brain__propose_team_note` with the type, a short title and summary, the user's words verbatim as `source` and the facts as `answers`: it shows the user a card and NOTHING is shared until they press 관리자에게 제출. Never write team-brain wiki pages yourself — an admin's avatar compiles the submitted source into the team wiki and the admin approves it, asks for more information, or rejects it; the user sees the result on the card and as a badge. A 보완 요청 (status needs_info; `mcp__brain__list_team_proposals` shows the admin's questions): relay the questions to the user, pass their answer to `mcp__brain__answer_team_questions`, and tell them to press 관리자에게 제출 on the new card. Never say anything was shared or saved before an admin approved it.";
@@ -163,12 +166,18 @@ function proposalLine(p: TeamBrainProposal, withProposer: boolean): string {
 }
 
 /** The slot list an incomplete intake must still collect (agent-facing). */
-function missingSlotsText(type: TeamPageType, missing: readonly TeamIntakeSlot[], who: "user" | "admin"): string {
+function missingSlotsText(
+  type: TeamPageType,
+  missing: readonly TeamIntakeSlot[],
+  invalid: readonly TeamProvenanceIssue[],
+  who: "user" | "admin",
+): string {
   const lines = missing.map((s) => `- ${s}: ${TEAM_INTAKE_SLOT_QUESTIONS[s]}`);
+  const wrong = invalid.map((i) => `- ${i.slot}: ${provenanceProblemText(i.slot, i.problem)}`);
   return [
-    `A ${type} source needs these facts that \`answers\` does not give yet:`,
-    ...lines,
-    `Ask the ${who} ONCE, in ONE message, only for these (in their language; skip any the conversation already answers and pass that answer instead); "unknown" is accepted and recorded as a gap. Then call again with every answer in \`answers\` (keys: ${TEAM_INTAKE_SLOTS.join(", ")}).`,
+    ...(lines.length > 0 ? [`A ${type} source needs these facts that \`answers\` does not give yet:`, ...lines] : []),
+    ...(wrong.length > 0 ? ["These answers are not accepted:", ...wrong] : []),
+    `Ask the ${who} ONCE, in ONE message, only for these (in their language; skip any the conversation already answers and pass that answer instead); "unknown" is accepted and recorded as a gap, except for ${TEAM_INTAKE_NO_UNKNOWN.join(" and ")}. Then call again with every answer in \`answers\` (keys: ${TEAM_INTAKE_SLOTS.join(", ")}).`,
   ].join("\n");
 }
 
@@ -297,7 +306,9 @@ const conflictsShape = z
 const answersShape = z
   .record(z.string(), z.string())
   .optional()
-  .describe(`Intake facts by slot (${TEAM_INTAKE_SLOTS.join(", ")}); "unknown" when the user does not know.`);
+  .describe(
+    `Intake facts by slot (${TEAM_INTAKE_SLOTS.join(", ")}); "unknown" when the user does not know (never for ${TEAM_INTAKE_NO_UNKNOWN.join(" or ")}). source_kind is one of ${TEAM_SOURCE_KINDS.join(", ")}; with link, source is the http(s) URL; authored_at is YYYY-MM-DD (or YYYY-MM / YYYY).`,
+  );
 
 /** Format team search hits: compiled pages first, then uncompiled sources (teammate-written, wrapped). */
 function formatTeamHits(hits: BrainNoteHit[]): string {
@@ -380,6 +391,12 @@ function intakeBlock(p: TeamBrainProposal): string {
       lines.push("Intake:", ...answered.map((s) => `- ${s}: ${intake.answers[s]}`));
     }
     if (intake.gaps.length > 0) lines.push(`Gaps (the proposer does not know): ${intake.gaps.join(", ")}`);
+    const issues = teamProvenanceIssues(intake);
+    if (issues.length > 0) {
+      lines.push(
+        `Provenance incomplete (submitted before it was required): ${issues.map((i) => i.slot).join(", ")} — consider asking the proposer (ask) before approving.`,
+      );
+    }
   }
   lines.push("", "Source:", p.content);
   for (const [i, f] of (intake?.followups ?? []).entries()) {
@@ -394,7 +411,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
     tools.push(
       tool(
         "propose_team_note",
-        `Submit a SOURCE to the TEAM brain (shared with every teammate): the user's own words plus the intake facts. Call this ONLY after the user said yes to sharing it in this conversation and you ran the intake (asked ONCE, in one message, only for the facts the conversation does not already answer). It shows the user a confirmation card and returns at once; NOTHING is shared until THEY press the card's button, and then an admin's avatar compiles the source into wiki pages and the admin approves it, asks for more information, or rejects it. Never write wiki pages yourself. Required facts per type — ${REQUIRED_FACTS}. Before calling, search the team brain (scope "team") so the summary can say what the source adds or changes. The source must pass all four team-knowledge tests (useful to others, durable, settled, safe to share). Admins compile their own knowledge with prepare_team_changes instead.`,
+        `Submit a SOURCE to the TEAM brain (shared with every teammate): the user's own words plus the intake facts. Call this ONLY after the user said yes to sharing it in this conversation and you ran the intake (asked ONCE, in one message, only for the facts the conversation does not already answer). It shows the user a confirmation card and returns at once; NOTHING is shared until THEY press the card's button, and then an admin's avatar compiles the source into wiki pages and the admin approves it, asks for more information, or rejects it. Never write wiki pages yourself. Required facts per type — ${REQUIRED_FACTS}. The provenance facts (source_kind, source, author, authored_at) describe the ORIGINAL (who wrote or said it, and when), not the submission; the user can correct them on the card before submitting. Before calling, search the team brain (scope "team") so the summary can say what the source adds or changes. The source must pass all four team-knowledge tests (useful to others, durable, settled, safe to share). Admins compile their own knowledge with prepare_team_changes instead.`,
         {
           type: z.enum(TEAM_PAGE_TYPES).describe("The page type this source is mainly about."),
           title: z.string().describe("Short title (shown on the card)."),
@@ -419,7 +436,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
           const type = args.type as TeamPageType;
           const answers = answersRecord(args.answers);
           const intake = checkIntake(type, answers);
-          if (!intake.ok) return text(missingSlotsText(type, intake.missing, "user"), true);
+          if (!intake.ok) return text(missingSlotsText(type, intake.missing, intake.invalid, "user"), true);
           const secret = findSecretInText(
             [title, summary, source, ...Object.values(intake.intake.answers)].join("\n"),
             store.getUserSecrets(ctx.viewerUserId),
@@ -447,7 +464,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
           ctx.onCard({ proposalId: created.proposal.id, kind: created.proposal.kind });
           const gaps = intake.intake.gaps.length > 0 ? ` Recorded as unknown (gaps): ${intake.intake.gaps.join(", ")}.` : "";
           return text(
-            `Card shown (draft ${created.proposal.id}). NOTHING is shared yet: the user must press "관리자에게 제출" on the card. Pressing it sends the source to an admin, whose avatar compiles it into the team wiki; the admin approves it, asks for more information (보완 요청) or rejects it, and the user sees the result on the card and as a badge.${gaps} Do not say it was shared or saved — tell the user, in their language, to check the card.`,
+            `Card shown (draft ${created.proposal.id}). NOTHING is shared yet: the user can correct the source's provenance (출처 유형·출처·작성자·작성일) on the card and must press "관리자에게 제출". Pressing it sends the source to an admin, whose avatar compiles it into the team wiki; the admin approves it, asks for more information (보완 요청) or rejects it, and the user sees the result on the card and as a badge.${gaps} Do not say it was shared or saved — tell the user, in their language, to check the card.`,
           );
         },
       ),
@@ -694,7 +711,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
             if (contentTooLarge(sourceText)) return text(`The source is too large (max ${TEAM_BRAIN_MAX_CONTENT_BYTES / 1024} KB).`, true);
             const type = args.source.type as TeamPageType;
             const checked = checkIntake(type, answersRecord(args.source.answers));
-            if (!checked.ok) return text(missingSlotsText(type, checked.missing, "admin"), true);
+            if (!checked.ok) return text(missingSlotsText(type, checked.missing, checked.invalid, "admin"), true);
             const secret = findSecretInText(
               [sourceText, ...Object.values(checked.intake.answers)].join("\n"),
               store.getUserSecrets(ctx.viewerUserId),

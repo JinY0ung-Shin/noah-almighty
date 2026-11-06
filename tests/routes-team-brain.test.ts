@@ -20,7 +20,13 @@ afterEach(() => {
 
 const SOURCE = "배포는 compose up 으로 한다.\n";
 const PAGE_PATH = "wiki/howto/deploy.md";
-const INTAKE = { type: "howto" as const, answers: { source: "직접 확인", scope: "운영", validity: "모름", verified: "예" }, gaps: ["validity" as const], followups: [] };
+const PROVENANCE = { source_kind: "verified", source: "직접 확인", author: "mate", authored_at: "2026-11-05" };
+const INTAKE = {
+  type: "howto" as const,
+  answers: { ...PROVENANCE, scope: "운영", validity: "모름", verified: "예" },
+  gaps: ["validity" as const],
+  followups: [],
+};
 
 /** A review/direct changeset creating the deploy page, citing `raw`. */
 function changesetFor(raw: string, body = "compose up"): TeamBrainChangeset {
@@ -81,6 +87,7 @@ describe("team brain cards", () => {
     await s.admin.post(`/api/team-brain/cards/${p.id}/submit`).expect(404);
     const view = (await s.mate.get(`/api/team-brain/cards/${p.id}`).expect(200)).body as TeamBrainCardView;
     expect(view.actions).toEqual({ submit: true, withdraw: true, apply: false, cancel: false });
+    expect(view.provenance).toEqual({ editable: true, issues: [] });
     // A teammate can never APPLY their own proposal.
     await s.mate.post(`/api/team-brain/cards/${p.id}/apply`).expect(403);
     const submitted = (await s.mate.post(`/api/team-brain/cards/${p.id}/submit`).expect(200)).body as TeamBrainCardView;
@@ -115,6 +122,7 @@ describe("team brain cards", () => {
     expect(raw).toContain(`id: ${p.id}`);
     expect(raw).toContain("submitted_by: mate (mate)");
     expect(raw).toContain("approved_by: admin (admin)");
+    expect(raw).toContain("source_kind: verified\nsource: 직접 확인\nauthor: mate\nauthored_at: 2026-11-05\n---");
     expect(raw).toContain(`## Source\n\n${SOURCE}`);
     expect(raw).toContain("- gaps: validity");
     const root = teamBrainRoot(s.config);
@@ -127,6 +135,56 @@ describe("team brain cards", () => {
     await s.mate.get(`/api/team-brain/cards/${p.id}`).expect(200);
     expect((await s.mate.get("/api/team-brain/status").expect(200)).body.unseenResults).toBe(0);
     expect(s.store.listAudit(s.adminUser.id, true, 50).map((a) => a.action)).toContain("team_brain_approve");
+  });
+
+  it("출처 정보: the drafter fills missing provenance on the card before submit; every save is re-validated", async () => {
+    const s = await boot();
+    // A draft from before provenance was asked: no kind / source / author / date.
+    const p = draft(s.store, s.mateUser.id, {
+      intake: { type: "howto", answers: { scope: "운영", validity: "모름", verified: "예" }, gaps: ["validity"], followups: [] },
+    });
+    const view = (await s.mate.get(`/api/team-brain/cards/${p.id}`).expect(200)).body as TeamBrainCardView;
+    expect(view.provenance).toEqual({ editable: true, issues: ["source_kind", "source", "author", "authored_at"] });
+    const blocked = await s.mate.post(`/api/team-brain/cards/${p.id}/submit`).expect(409);
+    expect(blocked.body.error).toContain("출처 정보");
+    expect(s.store.getTeamBrainProposal(p.id)?.status).toBe("draft");
+
+    const body = { sourceKind: "link", source: "사내 위키", author: "인프라팀", authoredAt: "2026-02-30" };
+    await s.other.put(`/api/team-brain/cards/${p.id}/provenance`).send(body).expect(404);
+    await s.admin.put(`/api/team-brain/cards/${p.id}/provenance`).send(body).expect(404);
+    const invalid = await s.mate.put(`/api/team-brain/cards/${p.id}/provenance`).send(body).expect(400);
+    expect(invalid.body.error).toContain("http:// 또는 https://");
+    expect(invalid.body.error).toContain("작성일은 YYYY-MM-DD");
+    const unknownSource = await s.mate.put(`/api/team-brain/cards/${p.id}/provenance`).send({ ...body, source: "모름" }).expect(400);
+    expect(unknownSource.body.error).toContain("출처는 '모름'으로 둘 수 없습니다.");
+    const secret = await s.mate
+      .put(`/api/team-brain/cards/${p.id}/provenance`)
+      .send({ ...body, source: `https://wiki.internal/?t=ghp_${"a".repeat(36)}`, authoredAt: "2026-10" })
+      .expect(400);
+    expect(secret.body.error).toContain("비밀 값");
+
+    const saved = (
+      await s.mate
+        .put(`/api/team-brain/cards/${p.id}/provenance`)
+        .send({ ...body, source: "https://wiki.internal/deploy", author: "모름", authoredAt: "2026-10" })
+        .expect(200)
+    ).body as TeamBrainCardView;
+    expect(saved.provenance).toEqual({ editable: true, issues: [] });
+    expect(saved.proposal.intake).toMatchObject({
+      answers: { source_kind: "link", source: "https://wiki.internal/deploy", author: "모름", authored_at: "2026-10", scope: "운영" },
+      gaps: ["author", "validity"],
+    });
+    expect(s.store.listAudit(s.mateUser.id, false, 20).map((a) => a.action)).toContain("team_brain_edit_provenance");
+
+    await s.mate.post(`/api/team-brain/cards/${p.id}/submit`).expect(200);
+    // Once submitted it is the admin's to judge: no more edits.
+    const after = (await s.mate.get(`/api/team-brain/cards/${p.id}`).expect(200)).body as TeamBrainCardView;
+    expect(after.provenance).toEqual({ editable: false, issues: [] });
+    await s.mate.put(`/api/team-brain/cards/${p.id}/provenance`).send(body).expect(409);
+    // A review card has no source of its own to edit.
+    const review = reviewOf(s.store, s.adminUser.id, s.store.getTeamBrainProposal(p.id)!, "reject", { decisionReason: "x" });
+    expect(((await s.admin.get(`/api/team-brain/cards/${review.id}`).expect(200)).body as TeamBrainCardView).provenance).toBeNull();
+    await s.admin.put(`/api/team-brain/cards/${review.id}/provenance`).send(body).expect(409);
   });
 
   it("rejects with the reason the proposer sees, and never writes the vault", async () => {
@@ -193,7 +251,22 @@ describe("team brain cards", () => {
     // A caller-minted id lets the changeset cite the row's own raw path up front.
     const id = crypto.randomUUID();
     const rawPath = teamRawPath(new Date().toISOString(), id);
-    const fixed = draft(s.store, s.adminUser.id, { id, kind: "direct", path: rawPath, changeset: changesetFor(rawPath) });
+    const fixed = draft(s.store, s.adminUser.id, {
+      id,
+      kind: "direct",
+      path: rawPath,
+      changeset: changesetFor(rawPath),
+      intake: { ...INTAKE, answers: { ...INTAKE.answers, author: "" } },
+    });
+    // The admin's own source is committed as a raw file, so its provenance gates the apply too.
+    const gated = (await s.admin.get(`/api/team-brain/cards/${fixed.id}`).expect(200)).body as TeamBrainCardView;
+    expect(gated.provenance).toEqual({ editable: true, issues: ["author"] });
+    expect((await s.admin.post(`/api/team-brain/cards/${fixed.id}/apply`).expect(409)).body.error).toContain("출처 정보");
+    expect(await readTeamVaultFile(s.config, fixed.path)).toBeNull();
+    await s.admin
+      .put(`/api/team-brain/cards/${fixed.id}/provenance`)
+      .send({ sourceKind: "verified", source: "직접 확인", author: "admin", authoredAt: "2026-11-05" })
+      .expect(200);
     await s.admin.post(`/api/team-brain/cards/${fixed.id}/apply`).expect(200);
     const raw = (await readTeamVaultFile(s.config, fixed.path))!;
     expect(raw).toContain("submitted_by: admin (admin)");

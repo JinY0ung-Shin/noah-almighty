@@ -38,7 +38,15 @@ function proposal(over: Partial<TeamBrainProposal> = {}): TeamBrainProposal {
 function intake(over: Partial<TeamBrainIntake> = {}): TeamBrainIntake {
   return {
     type: "howto",
-    answers: { source: "직접 해 봄", scope: "운영 환경", validity: "unknown", verified: "2026-11-05 직접 접속" },
+    answers: {
+      source_kind: "verified",
+      source: "직접 해 봄",
+      author: "김팀원",
+      authored_at: "2026-11-05",
+      scope: "운영 환경",
+      validity: "unknown",
+      verified: "2026-11-05 직접 접속",
+    },
     gaps: ["validity"],
     followups: [],
     ...over,
@@ -52,12 +60,16 @@ function cardView(over: Partial<TeamBrainCardView> = {}): TeamBrainCardView {
     stale: false,
     pages: [],
     actions: { submit: false, withdraw: false, apply: false, cancel: false },
+    provenance: null,
     ...over,
   };
 }
 
 let views: Record<string, TeamBrainCardView> = {};
 let posted: string[] = [];
+/** PUT /provenance bodies, and what the fake server answers to them. */
+let provenancePuts: unknown[] = [];
+let provenanceReply: ((body: unknown) => Response) | null = null;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -66,10 +78,19 @@ function json(body: unknown, status = 200): Response {
 beforeEach(() => {
   views = {};
   posted = [];
+  provenancePuts = [];
+  provenanceReply = null;
   replaceState({ user: null });
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
-    const m = /^\/api\/team-brain\/cards\/([^/]+)(?:\/(submit|withdraw|apply))?$/.exec(url);
+    const prov = /^\/api\/team-brain\/cards\/([^/]+)\/provenance$/.exec(url);
+    if (prov) {
+      expect(init?.method).toBe("PUT");
+      const body = JSON.parse(String(init?.body));
+      provenancePuts.push(body);
+      return provenanceReply ? provenanceReply(body) : json({ error: "없음" }, 404);
+    }
+    const m =/^\/api\/team-brain\/cards\/([^/]+)(?:\/(submit|withdraw|apply))?$/.exec(url);
     if (!m) return json({ error: "not found" }, 404);
     const id = decodeURIComponent(m[1]);
     const view = views[id];
@@ -327,5 +348,109 @@ describe("TeamBrainCard — review / direct", () => {
     expect(screen.getByText("원본 1건 · 페이지 1개 (새 페이지 1)")).toBeTruthy();
     expect(screen.getByText("원본 보기")).toBeTruthy();
     expect(screen.getByText("보충 정보")).toBeTruthy();
+  });
+});
+
+describe("TeamBrainCard — 출처 정보 (provenance)", () => {
+  const bare = () => intake({ answers: { scope: "운영 환경", validity: "unknown", verified: "예" }, gaps: ["validity"] });
+  const missingAll = { editable: true, issues: ["source_kind", "source", "author", "authored_at"] } as TeamBrainCardView["provenance"];
+
+  it("shows the four provenance rows read-only, a missing one as 미기재", async () => {
+    await mount(
+      cardView({
+        proposal: proposal({ intake: intake({ answers: { ...intake().answers, author: "" } }), status: "pending" }),
+        provenance: { editable: false, issues: ["author"] },
+      }),
+    );
+    expect(screen.getByText("출처 정보")).toBeTruthy();
+    expect(screen.getByText("직접 확인")).toBeTruthy(); // the kind's label, not its id
+    expect(screen.queryByText("verified")).toBeNull();
+    expect(screen.getByText("2026-11-05")).toBeTruthy();
+    expect(screen.getByText("미기재").classList.contains("tag")).toBe(true);
+    expect(screen.queryByRole("button", { name: "수정" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "출처 정보 입력" })).toBeNull();
+  });
+
+  it("opens the editor by itself while provenance is missing, and keeps 제출 disabled until it is saved", async () => {
+    await mount(
+      cardView({
+        proposal: proposal({ intake: bare() }),
+        actions: { submit: true, withdraw: true, apply: false, cancel: false },
+        provenance: missingAll,
+      }),
+    );
+    const form = screen.getByRole("form", { name: "출처 정보 입력" });
+    expect(within(form).getByRole("combobox")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "관리자에게 제출" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/출처 정보\(출처 유형·출처·작성자·작성일\)를 채워야 제출할 수 있습니다/)).toBeTruthy();
+    // No way out of the editor while something is missing.
+    expect(within(form).queryByRole("button", { name: "취소" })).toBeNull();
+  });
+
+  it("validates on the card before sending (a link must be a URL; a real date), then PUTs and re-renders", async () => {
+    await mount(
+      cardView({
+        proposal: proposal({ intake: bare() }),
+        actions: { submit: true, withdraw: true, apply: false, cancel: false },
+        provenance: missingAll,
+      }),
+    );
+    const form = screen.getByRole("form", { name: "출처 정보 입력" });
+    await fireEvent.change(within(form).getByRole("combobox"), { target: { value: "link" } });
+    const source = within(form).getByRole("textbox", { name: "출처" }) as HTMLInputElement;
+    const author = within(form).getByRole("textbox", { name: /작성자/ }) as HTMLInputElement;
+    const date = within(form).getByRole("textbox", { name: /작성일/ }) as HTMLInputElement;
+    await fireEvent.input(source, { target: { value: "사내 위키" } });
+    await fireEvent.input(author, { target: { value: "인프라팀" } });
+    await fireEvent.input(date, { target: { value: "2026-02-30" } });
+    await fireEvent.submit(form);
+    const alert = within(form).getByRole("alert");
+    expect(alert.textContent).toContain("http:// 또는 https://");
+    expect(alert.textContent).toContain("작성일은 YYYY-MM-DD");
+    expect(provenancePuts).toEqual([]);
+
+    const filled = intake({
+      answers: { ...bare().answers, source_kind: "link", source: "https://wiki.internal/deploy", author: "인프라팀", authored_at: "2026-10" },
+    });
+    provenanceReply = () =>
+      json(
+        cardView({
+          proposal: proposal({ intake: filled }),
+          actions: { submit: true, withdraw: true, apply: false, cancel: false },
+          provenance: { editable: true, issues: [] },
+        }),
+      );
+    await fireEvent.input(source, { target: { value: "https://wiki.internal/deploy" } });
+    await fireEvent.input(date, { target: { value: "2026-10" } });
+    await fireEvent.submit(form);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "출처 정보 입력" })).toBeNull());
+    expect(provenancePuts).toEqual([{ sourceKind: "link", source: "https://wiki.internal/deploy", author: "인프라팀", authoredAt: "2026-10" }]);
+    expect(screen.getByText("웹 링크")).toBeTruthy();
+    expect(screen.getByText("https://wiki.internal/deploy")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "관리자에게 제출" }) as HTMLButtonElement).disabled).toBe(false);
+    // Still a draft: the drafter can reopen the editor (prefilled) and leave it again.
+    await fireEvent.click(screen.getByRole("button", { name: "수정" }));
+    const again = screen.getByRole("form", { name: "출처 정보 입력" });
+    expect((within(again).getByRole("textbox", { name: /작성자/ }) as HTMLInputElement).value).toBe("인프라팀");
+    await fireEvent.click(within(again).getByRole("button", { name: "취소" }));
+    expect(screen.queryByRole("form", { name: "출처 정보 입력" })).toBeNull();
+  });
+
+  it("shows the server's refusal inside the editor", async () => {
+    await mount(
+      cardView({
+        proposal: proposal({ intake: bare() }),
+        actions: { submit: true, withdraw: true, apply: false, cancel: false },
+        provenance: missingAll,
+      }),
+    );
+    provenanceReply = () => json({ error: "출처 정보에 비밀 값(토큰·비밀번호 등)이 들어 있습니다." }, 400);
+    const form = screen.getByRole("form", { name: "출처 정보 입력" });
+    await fireEvent.change(within(form).getByRole("combobox"), { target: { value: "document" } });
+    await fireEvent.input(within(form).getByRole("textbox", { name: "출처" }), { target: { value: "배포 가이드" } });
+    await fireEvent.input(within(form).getByRole("textbox", { name: /작성자/ }), { target: { value: "모름" } });
+    await fireEvent.input(within(form).getByRole("textbox", { name: /작성일/ }), { target: { value: "모름" } });
+    await fireEvent.submit(form);
+    await waitFor(() => expect(within(form).getByRole("alert").textContent).toContain("비밀 값"));
   });
 });

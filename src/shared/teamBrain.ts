@@ -99,7 +99,10 @@ export type TeamDecisionStatus = (typeof TEAM_DECISION_STATUSES)[number];
 
 /** Facts the submitter's avatar must collect before a source can be submitted. */
 export const TEAM_INTAKE_SLOTS = [
+  "source_kind",
   "source",
+  "author",
+  "authored_at",
   "scope",
   "validity",
   "decided_by",
@@ -110,19 +113,64 @@ export const TEAM_INTAKE_SLOTS = [
 ] as const;
 export type TeamIntakeSlot = (typeof TEAM_INTAKE_SLOTS)[number];
 
-/** Required slots per page type (common three + type-specific). */
+/**
+ * Provenance (user decision 2026-11-06, "출처·작성자·작성일"): WHERE a source comes
+ * from (a kind + the reference itself), WHO originally wrote or said it and
+ * WHEN — the original's, not the submitter's (the server stamps the submitter
+ * and the submission time itself). Required on every type, rendered into the
+ * raw file's frontmatter, and editable by the drafter on the card before they
+ * press 제출 / 반영.
+ */
+export const TEAM_PROVENANCE_SLOTS = ["source_kind", "source", "author", "authored_at"] as const satisfies readonly TeamIntakeSlot[];
+export type TeamProvenanceSlot = (typeof TEAM_PROVENANCE_SLOTS)[number];
+
+/** Slots that can never be answered "unknown": a source without an origin is not submitted. */
+export const TEAM_INTAKE_NO_UNKNOWN: readonly TeamIntakeSlot[] = ["source_kind", "source"];
+
+/** Where a source comes from. `link` requires `source` to be an http(s) URL. */
+export const TEAM_SOURCE_KINDS = ["document", "link", "meeting", "message", "verified", "other"] as const;
+export type TeamSourceKind = (typeof TEAM_SOURCE_KINDS)[number];
+
+/** User-facing (Korean) source-kind labels. */
+export const TEAM_SOURCE_KIND_LABELS: Record<TeamSourceKind, string> = {
+  document: "문서",
+  link: "웹 링크",
+  meeting: "회의",
+  message: "대화·메일·메신저",
+  verified: "직접 확인",
+  other: "기타",
+};
+
+/** What `source` should hold for each kind (Korean, the card's input placeholder). */
+export const TEAM_SOURCE_KIND_PLACEHOLDERS: Record<TeamSourceKind, string> = {
+  document: "문서 제목 또는 위치 (예: 배포 가이드 v3, 사내 위키 경로)",
+  link: "https:// 로 시작하는 주소",
+  meeting: "회의 이름 (예: 11/4 주간 회의)",
+  message: "누구와의 어떤 대화인지 (예: 김OO 메일, #infra 채널)",
+  verified: "어디서 어떻게 확인했는지 (예: 운영 서버에서 직접 실행)",
+  other: "출처를 구체적으로",
+};
+
+/** Max length of one provenance answer (characters). */
+export const TEAM_PROVENANCE_MAX_CHARS = 500;
+
+/** Required slots per page type (provenance + scope/validity + type-specific). */
+const COMMON_INTAKE: readonly TeamIntakeSlot[] = [...TEAM_PROVENANCE_SLOTS, "scope", "validity"];
 export const TEAM_INTAKE_REQUIRED: Record<TeamPageType, readonly TeamIntakeSlot[]> = {
-  decision: ["source", "scope", "validity", "decided_by", "decided_when", "rationale"],
-  system: ["source", "scope", "validity", "owner"],
-  howto: ["source", "scope", "validity", "verified"],
-  concept: ["source", "scope", "validity"],
-  term: ["source", "scope", "validity"],
-  contact: ["source", "scope", "validity"],
+  decision: [...COMMON_INTAKE, "decided_by", "decided_when", "rationale"],
+  system: [...COMMON_INTAKE, "owner"],
+  howto: [...COMMON_INTAKE, "verified"],
+  concept: COMMON_INTAKE,
+  term: COMMON_INTAKE,
+  contact: COMMON_INTAKE,
 };
 
 /** User-facing (Korean) slot labels (card + 내 제안). */
 export const TEAM_INTAKE_SLOT_LABELS: Record<TeamIntakeSlot, string> = {
+  source_kind: "출처 유형",
   source: "출처",
+  author: "작성자",
+  authored_at: "작성일",
   scope: "적용 범위",
   validity: "유효 기간",
   decided_by: "결정한 사람",
@@ -134,7 +182,10 @@ export const TEAM_INTAKE_SLOT_LABELS: Record<TeamIntakeSlot, string> = {
 
 /** Agent-facing (English) slot descriptions — what to ask the user. */
 export const TEAM_INTAKE_SLOT_QUESTIONS: Record<TeamIntakeSlot, string> = {
-  source: "where this comes from (a meeting, a document/link, a person, or the user's own verification)",
+  source_kind: `what kind of origin this is — exactly one of ${TEAM_SOURCE_KINDS.join(", ")} (verified = the user checked it themselves); never unknown`,
+  source: "the origin itself: the document's title or location, the URL (kind link: must be the http(s) URL), the meeting, the conversation, or where the user verified it; never unknown",
+  author: "who originally wrote or said it (a person, a team, or the user themselves) — the original's author, not whoever submits it",
+  authored_at: "when the original was written, said or verified, as YYYY-MM-DD (YYYY-MM or YYYY when only that is known)",
   scope: "what it applies to (which system, service, environment, project or team)",
   validity: "since when it holds and until when (a date, an event, or 'until changed')",
   decided_by: "who made the decision (a person or a meeting)",
@@ -150,6 +201,103 @@ export const TEAM_INTAKE_UNKNOWN = "unknown";
 export function isTeamIntakeUnknown(value: string): boolean {
   const v = value.trim().toLowerCase();
   return v === TEAM_INTAKE_UNKNOWN || v === "모름" || v === "알 수 없음" || v === "n/a";
+}
+
+/** A source kind from its id or its Korean label (case/space-insensitive); null otherwise. */
+export function teamSourceKindOf(value: string): TeamSourceKind | null {
+  const v = value.trim().toLowerCase();
+  for (const kind of TEAM_SOURCE_KINDS) {
+    if (v === kind || v === TEAM_SOURCE_KIND_LABELS[kind].toLowerCase()) return kind;
+  }
+  return null;
+}
+
+/** Why a provenance answer is refused (the server maps it to English, the card to Korean). */
+export type TeamProvenanceProblem = "missing" | "unknown_not_allowed" | "bad_kind" | "bad_url" | "bad_date" | "future_date" | "too_long";
+
+function validCalendarDate(text: string): { ok: boolean; start: Date | null } {
+  const m = text.match(/^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/);
+  if (!m) return { ok: false, start: null };
+  const year = Number(m[1]);
+  const month = m[2] ? Number(m[2]) : 1;
+  const day = m[3] ? Number(m[3]) : 1;
+  if (year < 1900 || month < 1 || month > 12) return { ok: false, start: null };
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return { ok: false, start: null };
+  return { ok: true, start: d };
+}
+
+/**
+ * Checks ONE provenance answer (already trimmed; "" = missing). `kind` is the
+ * row's source kind (for the URL rule on `source`). `now` bounds the date (a
+ * day of slack for time zones). Returns null when acceptable.
+ */
+export function teamProvenanceProblem(
+  slot: TeamProvenanceSlot,
+  value: string,
+  kind: TeamSourceKind | null,
+  now: Date = new Date(),
+): TeamProvenanceProblem | null {
+  const v = value.trim();
+  if (!v) return "missing";
+  if (v.length > TEAM_PROVENANCE_MAX_CHARS) return "too_long";
+  const unknown = isTeamIntakeUnknown(v);
+  if (unknown) return TEAM_INTAKE_NO_UNKNOWN.includes(slot) ? "unknown_not_allowed" : null;
+  if (slot === "source_kind") return teamSourceKindOf(v) ? null : "bad_kind";
+  if (slot === "source" && kind === "link") return /^https?:\/\/[^\s/]+\S*$/i.test(v) ? null : "bad_url";
+  if (slot === "authored_at") {
+    const date = validCalendarDate(v);
+    if (!date.ok || !date.start) return "bad_date";
+    if (date.start.getTime() > now.getTime() + 24 * 60 * 60 * 1000) return "future_date";
+  }
+  return null;
+}
+
+/** Korean particle pair by the last syllable's final consonant ("출처" → 를, "작성일" → 을). */
+function josa(word: string, withFinal: string, withoutFinal: string): string {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  const hasFinal = code >= 0 && code <= 11171 && code % 28 !== 0;
+  return `${word}${hasFinal ? withFinal : withoutFinal}`;
+}
+
+/** Korean reason for one refused provenance field (card + API errors). */
+export function teamProvenanceProblemLabel(slot: TeamProvenanceSlot, problem: TeamProvenanceProblem): string {
+  const label = TEAM_INTAKE_SLOT_LABELS[slot];
+  switch (problem) {
+    case "missing":
+      return slot === "source_kind" ? `${josa(label, "을", "를")} 고르세요.` : `${josa(label, "을", "를")} 입력하세요.`;
+    case "unknown_not_allowed":
+      return `${josa(label, "은", "는")} '모름'으로 둘 수 없습니다.`;
+    case "bad_kind":
+      return `출처 유형은 ${Object.values(TEAM_SOURCE_KIND_LABELS).join(", ")} 중 하나여야 합니다.`;
+    case "bad_url":
+      return "웹 링크는 http:// 또는 https:// 로 시작하는 주소여야 합니다.";
+    case "bad_date":
+      return "작성일은 YYYY-MM-DD 형식(연·월만 알면 YYYY-MM, 연도만 알면 YYYY)이거나 '모름'이어야 합니다.";
+    case "future_date":
+      return "작성일이 미래 날짜입니다.";
+    case "too_long":
+      return `${josa(label, "이", "가")} 너무 깁니다 (최대 ${TEAM_PROVENANCE_MAX_CHARS}자).`;
+  }
+}
+
+/**
+ * The provenance slots a submission still lacks or answers wrongly (empty =
+ * complete). A legacy row (no type) has no intake to check.
+ */
+export function teamProvenanceIssues(
+  intake: TeamBrainIntake | null,
+  now: Date = new Date(),
+): Array<{ slot: TeamProvenanceSlot; problem: TeamProvenanceProblem }> {
+  if (!intake?.type) return [];
+  const answers = intake.answers;
+  const kind = teamSourceKindOf(answers.source_kind ?? "");
+  const out: Array<{ slot: TeamProvenanceSlot; problem: TeamProvenanceProblem }> = [];
+  for (const slot of TEAM_PROVENANCE_SLOTS) {
+    const problem = teamProvenanceProblem(slot, answers[slot] ?? "", kind, now);
+    if (problem) out.push({ slot, problem });
+  }
+  return out;
 }
 
 /** One round of 보완 요청: the admin's questions and the proposer's answer. */
@@ -281,6 +429,21 @@ export interface TeamBrainCardView {
   pages: TeamPageChangeView[];
   /** Which buttons this viewer may press now. */
   actions: { submit: boolean; withdraw: boolean; apply: boolean; cancel: boolean };
+  /**
+   * The card's own source provenance (출처 유형·출처·작성자·작성일): `editable` while the
+   * drafter may still change it on the card (a propose / direct-with-source
+   * draft); `issues` = what is missing or invalid — submit and apply are
+   * refused until it is empty. Null on cards without an own source.
+   */
+  provenance: { editable: boolean; issues: TeamProvenanceSlot[] } | null;
+}
+
+/** PUT /api/team-brain/cards/:id/provenance — the drafter's edit on the card. */
+export interface TeamProvenanceInput {
+  sourceKind: string;
+  source: string;
+  author: string;
+  authoredAt: string;
 }
 
 /** Badge numbers (GET /api/team-brain/status). */

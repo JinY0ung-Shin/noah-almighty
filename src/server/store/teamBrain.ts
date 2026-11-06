@@ -411,6 +411,22 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
       );
     }
 
+    /**
+     * The drafter's provenance edit on their own card (compare-and-set on a
+     * still-draft propose / direct row). Bumps `updated_at`, so an edited draft
+     * restarts its expiry clock like an answered 보완 요청.
+     */
+    updateTeamBrainDraftIntake(id: string, proposerUserId: string, intake: TeamBrainIntake): boolean {
+      return (
+        this.db
+          .prepare(
+            `UPDATE team_brain_proposals SET intake_json = ?, updated_at = ?
+             WHERE id = ? AND proposer_user_id = ? AND kind IN ('propose', 'direct') AND status = 'draft'`,
+          )
+          .run(JSON.stringify(intake), now(), id, proposerUserId).changes > 0
+      );
+    }
+
     /** Run `fn` in ONE db transaction (a review press moves two rows together). */
     teamBrainTransaction<T>(fn: () => T): T {
       return this.db.transaction(fn)();

@@ -1640,6 +1640,34 @@ body.col-resizing .canvas-html-frame {
 .team-brain-unknown {
   border-style: dashed;
 }
+/* 출처 정보: the source's provenance, editable on the drafter's own draft card. */
+.team-brain-provenance {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-top: var(--s-1-5);
+}
+.team-brain-provenance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.team-brain-provenance-form {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-2-5);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+.team-brain-provenance-form .field span {
+  font-size: var(--t-xs);
+}
+.team-brain-provenance-form .field input,
+.team-brain-provenance-form .field select {
+  padding: var(--s-1-5) var(--s-2-5);
+  font-size: var(--t-sm);
+}
 .team-brain-gaps {
   margin: 0;
   color: var(--warn);
