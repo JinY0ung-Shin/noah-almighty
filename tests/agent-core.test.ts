@@ -949,7 +949,7 @@ describe("loadDefaultPluginRoots", () => {
 
     const reflect = skill("brain-reflect");
     expect(reflect).toContain("Reads raw/ + wiki/ and may optionally review the owner's own recent conversations");
-    expect(reflect).toContain("The second brain is personal only (groups have no shared repository)");
+    expect(reflect).toContain("The second brain is personal only (there is no shared team repository)");
     expect(reflect).not.toContain("mcp__group_repo__");
     expect(reflect).not.toContain(
       "It reads ONLY raw/ and wiki/ — never conversations",
@@ -1574,28 +1574,23 @@ describe("buildPrompt", () => {
     expect(p).toContain('"신진영"');
   });
 
-  const teamMembership = {
-    id: "g1",
-    name: "Team",
-    role: "member" as const,
-    allowedMcpToolGroups: null,
-    avatarSharing: true,
-  };
-
-  it("gives owner-driven turns with a group the ask_avatar standing guidance", () => {
+  it("gives owner-driven turns with a teammate the ask_avatar standing guidance", () => {
     const p = buildPrompt(
       req({
         viewerIsOwner: true,
         viewerName: "신진영",
-        groupMemberships: [teamMembership],
+        teammateCount: 2,
+        reachableTeammateCount: 2,
       }),
       0,
     );
     expect(p).toContain("Consulting teammate avatars");
     expect(p).toContain("mcp__avatars__ask_avatar");
+    expect(p).toContain("only active teammates' avatars that are not private will answer");
+    expect(p).not.toContain("shares a group");
   });
 
-  it("keeps ask_avatar guidance OUT of teammate, restricted-headless, and group-less turns", () => {
+  it("keeps ask_avatar guidance OUT of teammate, restricted-headless, and teammate-less turns", () => {
     const teammate = buildPrompt(
       req({ viewerIsOwner: false, elevated: true, viewerName: "동료" }),
       0,
@@ -1603,16 +1598,20 @@ describe("buildPrompt", () => {
     expect(teammate).not.toContain("mcp__avatars__ask_avatar");
     // Restricted headless (intro/hashtag generation) has no ask executor either.
     const restricted = buildPrompt(
-      req({ viewerIsOwner: true, headless: true, groupMemberships: [teamMembership] }),
+      req({ viewerIsOwner: true, headless: true, teammateCount: 2, reachableTeammateCount: 2 }),
       0,
     );
     expect(restricted).not.toContain("mcp__avatars__ask_avatar");
-    // No groups → no reachable target → no guidance (mirrors avatarAskActive).
-    const groupless = buildPrompt(
-      req({ viewerIsOwner: true, groupMemberships: [] }),
-      0,
-    );
-    expect(groupless).not.toContain("mcp__avatars__ask_avatar");
+    // No teammate → no reachable target → no guidance (mirrors avatarAskActive).
+    const alone = buildPrompt(req({ viewerIsOwner: true, teammateCount: 0, reachableTeammateCount: 0 }), 0);
+    expect(alone).not.toContain("mcp__avatars__ask_avatar");
+    // Teammates exist but every avatar is private → nobody reachable → no guidance.
+    const allPrivate = buildPrompt(req({ viewerIsOwner: true, teammateCount: 3, reachableTeammateCount: 0 }), 0);
+    expect(allPrivate).not.toContain("mcp__avatars__ask_avatar");
+    expect(allPrivate).toContain("Team size when this conversation started: 3 teammates besides the owner");
+    // Unknown team size (a direct unit call) fails closed too.
+    const unknown = buildPrompt(req({ viewerIsOwner: true }), 0);
+    expect(unknown).not.toContain("mcp__avatars__ask_avatar");
   });
 
   it("keeps ask_avatar guidance for owner routines (they can consult too)", () => {
@@ -1621,7 +1620,8 @@ describe("buildPrompt", () => {
         viewerIsOwner: true,
         headless: true,
         allowHeadlessTools: true,
-        groupMemberships: [teamMembership],
+        teammateCount: 1,
+        reachableTeammateCount: 1,
       }),
       0,
     );
@@ -1692,7 +1692,6 @@ describe("buildPrompt", () => {
         viewerIsOwner: false,
         elevated: true,
         viewerName: "질문자",
-        trustedViaGroups: ["Team"],
         // Even on a shared (communal) account the consultation must not invite
         // capture-on-behalf: writes are withheld for machine-initiated runs.
         sharedAccount: true,
@@ -1701,7 +1700,8 @@ describe("buildPrompt", () => {
     );
     expect(p).toContain("automated avatar-to-avatar consultation");
     expect(p).toContain('"질문자"');
-    expect(p).toContain("'Team'");
+    expect(p).toContain("a trusted teammate of your owner");
+    expect(p).not.toContain("group");
     expect(p).toContain("mcp__knowledge__request_info");
     // The tool line states what the run really has: Noah recall tools for the
     // owner's knowledge, built-ins in the ASKER's sandbox — never a read-only
@@ -1893,27 +1893,34 @@ describe("buildPrompt", () => {
     expect(p).not.toContain("states the CURRENT truth only");
   });
 
-  it("tells a group member that groups have no repository or team brain", () => {
+  it("tells the owner about the single team and that there is no shared repository or team brain", () => {
     const p = buildPrompt(
       req({
         viewerIsOwner: true,
         knowledgeRepoConfigured: true,
-        groupMemberships: [
-          {
-            id: "g1",
-            name: "플랫폼팀",
-            role: "member",
-            avatarSharing: true,
-          },
-        ],
+        teammateCount: 3,
       }),
       0,
     );
-    // Retired 2026-10-30: the prompt says so and redirects stale mentions.
-    expect(p).toContain("플랫폼팀(member)");
-    expect(p).toContain("Groups have NO shared knowledge repository and there is no team brain");
-    expect(p).toContain("say group repositories were removed");
+    expect(p).toContain(
+      "Noah serves a single team: every approved user is a teammate. Teammates see your avatar unless it is private and are mutually trusted (elevated tools on each other's avatars).",
+    );
+    // FROZEN prompt: the size is as of the conversation's start; describe_system is live.
+    expect(p).toContain(
+      "Team size when this conversation started: 3 teammates besides the owner (`mcp__system__describe_system` has the live count).",
+    );
+    // Retired 2026-10-30 / 2026-11-06: the prompt says so and redirects stale mentions.
+    expect(p).toContain("There is NO shared team knowledge repository and no team brain");
+    expect(p).toContain("say they were removed");
     expect(p).not.toContain("mcp__group_repo__list_groups");
+    expect(p).not.toContain("avatar sharing off");
+    expect(p).not.toContain("The owner belongs to the following groups");
+    // Singular wording for a one-person team.
+    const one = buildPrompt(req({ viewerIsOwner: true, teammateCount: 1 }), 0);
+    expect(one).toContain("Team size when this conversation started: 1 teammate besides the owner");
+    // No team line when the size is unknown (not an owner-tool run).
+    const colleague = buildPrompt(req({ viewerIsOwner: false, elevated: true }), 0);
+    expect(colleague).not.toContain("Team size when this conversation started");
   });
 
   it("injects the personal CLAUDE.md standing memory with an injection guard", () => {
@@ -2175,7 +2182,7 @@ describe("buildPrompt", () => {
     );
     expect(p).toContain("**colleague**");
     expect(p).not.toContain("read-only");
-    expect(p).toContain("a user the owner trusts");
+    expect(p).toContain("This person is a teammate of the owner");
     expect(p).toContain("Changing avatar system settings");
   });
 
@@ -2632,14 +2639,7 @@ describe("buildPrompt", () => {
       allowHeadlessTools: true,
       knowledgeRepoConfigured: true,
       secretNames: ["GIT_TOKEN", "SSH_PRIVATE_KEY"],
-      groupMemberships: [
-        {
-          id: "g1",
-          name: "플랫폼팀",
-          role: "admin" as const,
-          avatarSharing: true,
-        },
-      ],
+      teammateCount: 4,
     };
     const p = buildPrompt(req(over), 0);
     // One conversation mixes live chat and routine runs, so the frozen append
@@ -2651,14 +2651,14 @@ describe("buildPrompt", () => {
     );
     expect(turn(over)).toContain("do not ask questions");
     expect(p).toContain("mcp__repo__commit");
-    expect(p).toContain("플랫폼팀(admin)");
+    expect(p).toContain("Team size when this conversation started: 4 teammates besides the owner");
     expect(p).toContain("`GIT_TOKEN`");
     expect(p).toContain("mcp__system__describe_system");
     expect(p).toContain("Remote git work goes through MCP tools ONLY");
     // Second-brain self-state: the routine has the personal brain trigger, and the
-    // groups line says groups have no repository or team brain.
+    // team line says there is no shared repository or team brain.
     expect(p).toContain("mcp__brain__search");
-    expect(p).toContain("Groups have NO shared knowledge repository and there is no team brain");
+    expect(p).toContain("There is NO shared team knowledge repository and no team brain");
     // A routine CAN now open a working repo (scheduler threads conversationId +
     // resolves the opened repo as cwd); it takes effect from the next run.
     expect(p).toContain("mcp__git_repo__open_repo");
@@ -2745,25 +2745,19 @@ describe("buildPrompt", () => {
     );
   });
 
-  it("explains group-sourced trust when the elevated viewer shares a group with the owner", () => {
+  it("explains team-sourced trust for an elevated viewer, without any group wording", () => {
     const p = buildPrompt(
-      req({
-        viewerIsOwner: false,
-        elevated: true,
-        viewerName: "김철수",
-        trustedViaGroups: ["플랫폼팀"],
-      }),
-      0,
-    );
-    expect(p).toContain("'플랫폼팀'");
-    expect(p).toContain("automatically trusted");
-    // Without a shared group the original direct-trust wording is kept.
-    const direct = buildPrompt(
       req({ viewerIsOwner: false, elevated: true, viewerName: "김철수" }),
       0,
     );
-    expect(direct).toContain("a user the owner trusts");
-    expect(direct).not.toContain("automatically trusted");
+    expect(p).toContain(
+      "This person is a teammate of the owner: Noah serves a single team and every approved user is a teammate, so they are an **automatically trusted (elevated)** user",
+    );
+    expect(p).not.toContain("same group");
+    expect(p).not.toContain("group(s)");
+    // A plain (non-elevated) colleague is never told they are trusted.
+    const plain = buildPrompt(req({ viewerIsOwner: false, viewerName: "김철수" }), 0);
+    expect(plain).not.toContain("automatically trusted");
   });
 
   // ---- shared (communal) account ----
@@ -2844,7 +2838,7 @@ describe("buildPrompt", () => {
       0,
     );
     expect(on).toContain("shared (communal) account");
-    expect(on).toContain("trusted same-group teammates chatting with this avatar");
+    expect(on).toContain("trusted teammates chatting with this avatar");
   });
 
   // ---- visual canvas (#50) ----

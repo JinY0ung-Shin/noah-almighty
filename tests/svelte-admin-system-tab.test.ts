@@ -50,7 +50,7 @@ const system = {
   togglableBuiltinTools: [],
   toolSkillPolicy: { disabledTools: [], disabledSkills: [] },
   skillDiscovery: { fetchedAt: "2026-10-29T00:00:00.000Z", skills: [{ name: "pptx", description: "덱 만들기" }] },
-  signupMode: "open",
+  signupMode: "approval",
 };
 
 let calls: { url: string; method: string; body: string | null }[] = [];
@@ -69,7 +69,6 @@ function stubAdminFetch(systemOverrides: Record<string, unknown> = {}): void {
       if (url.includes("/api/admin/system")) return json({ system: systemPayload });
       if (url.includes("/api/admin/users")) return json({ users: [] });
       if (url.includes("/api/audit")) return json({ audit: [] });
-      if (url.includes("/api/admin/groups")) return json({ groups: [] });
       return json({});
     }),
   );
@@ -93,7 +92,7 @@ describe("admin 시스템 tab seeding", () => {
 
     // hex policy checkboxes reflect the SAVED policy (not an unseeded matrix).
     expect((screen.getByLabelText("소유자 원격 파일 읽기") as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText("같은 그룹원 원격 명령 실행") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("팀원 원격 명령 실행") as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText("일반 동료 원격 파일 읽기") as HTMLInputElement).checked).toBe(false);
   });
 

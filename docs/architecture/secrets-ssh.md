@@ -68,7 +68,7 @@
   bare token after a `Bearer`/`Basic`/`Token` scheme word, and each slot's trimmed value as sent). Every ENABLED admin
   server reserves its name for the run, mounted or not: a same-named plugin server is dropped (status-line
   warning), so `mcp__<name>__*` never points at something the metacognition says is unavailable; app servers win
-  over both. Shared servers ignore the composer's tool-group picker and group tool policy, like plugin servers.
+  over both. Shared servers ignore the composer's tool-group picker and the admin MCP tool policy, like plugin servers.
 - **Per-secret AGENT-SHELL exposure (셸 노출, opt-in):** `user_secrets.shell_expose` (0 default) —
   toggled per key via `PATCH /api/me/secrets/:name {shellExpose}` (셸 노출 checkbox in the 시크릿 card; hidden for
   reserved names via the client-imported `secretPolicy.isShellExposableSecret`). On an OWNER run in the owner's own

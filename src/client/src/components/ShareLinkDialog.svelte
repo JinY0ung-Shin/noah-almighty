@@ -2,7 +2,6 @@
   import { createEventDispatcher, onMount, tick } from "svelte";
   import Modal from "./Modal.svelte";
   import { copyText } from "../lib/dom";
-  import { appState } from "../lib/state";
   import {
     absoluteShareUrl,
     activeShareLink,
@@ -10,7 +9,7 @@
     latestExpiredShareLink,
     listShareLinks,
     revokeShareLink,
-    shareAudienceNote,
+    SHARE_AUDIENCE_NOTE,
     shareDateLabel,
     shareDateTimeLabel,
   } from "../lib/shareLinks";
@@ -57,7 +56,7 @@
   let cancelButton: HTMLButtonElement | undefined;
 
   $: fileName = attachment.name || "파일";
-  $: audience = shareAudienceNote($appState.bootstrap?.signupMode);
+  const audience = SHARE_AUDIENCE_NOTE;
   $: linkUrl = link?.url ? absoluteShareUrl(link.url) : "";
 
   onMount(() => {

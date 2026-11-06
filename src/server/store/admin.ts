@@ -12,13 +12,27 @@ import {
   type Constructor,
   type StoreBase,
   type UserRow,
+  MCP_TOOL_POLICY_KEY,
   PRESENCE_WINDOW_MS,
   SIGNUP_MODE_KEY,
   now,
+  parseNameList,
 } from "./internal.js";
+import logger from "../logger.js";
+import {
+  effectiveMcpToolGroups,
+  normalizeMcpToolGroups,
+  type McpToolGroupId,
+} from "../../shared/mcpToolGroups.js";
 
 export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class Admin extends Base {
+    /**
+     * The unreadable `mcp_tool_policy` ciphertext already warned about, so a
+     * rotated SESSION_SECRET logs once per stored value, not once per run.
+     */
+    private warnedUnreadableMcpPolicy: string | null = null;
+
     // ---- Admin ------------------------------------------------------------
 
     private toAdminSummary(row: UserRow): AdminUserSummary {
@@ -69,7 +83,6 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         openRequests: this.count("SELECT COUNT(*) AS c FROM knowledge_requests WHERE status = 'open'"),
         activeRoutines: this.count("SELECT COUNT(*) AS c FROM routine_jobs WHERE enabled = 1"),
         activeSessions: this.count("SELECT COUNT(*) AS c FROM sessions WHERE expires_at > ?", current),
-        groups: this.count("SELECT COUNT(*) AS c FROM groups"),
       };
     }
 
@@ -180,15 +193,77 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.toAdminSummary(this.userRowById(userId)!);
     }
 
-    // ---- App-wide settings (signup gating, model override) ----------
+    // ---- App-wide settings (signup gating, admin tool policy) --------
 
+    /**
+     * Signup gating. Fails CLOSED to `approval`: only an explicitly stored
+     * `closed` reads as closed, and everything else — absent, unreadable, or the
+     * retired `open` an older release stored — reads as `approval`. Approving a
+     * pending (suspended) signup IS joining the team, so no mode may skip it.
+     */
     getSignupMode(): SignupMode {
-      const raw = this.getAppSecret(SIGNUP_MODE_KEY);
-      return raw === "closed" || raw === "approval" ? raw : "open";
+      return this.getAppSecret(SIGNUP_MODE_KEY) === "closed" ? "closed" : "approval";
     }
 
     setSignupMode(mode: SignupMode): void {
-      this.setAppSecret(SIGNUP_MODE_KEY, mode);
+      this.setAppSecret(SIGNUP_MODE_KEY, mode === "closed" ? "closed" : "approval");
+    }
+
+    /**
+     * The ONE deployment-wide admin MCP tool policy as stored: the allowlist of
+     * MCP tool groups (normalized — unknown/retired ids dropped, so a policy of
+     * only retired ids degrades to `[]`, blocking rather than failing open), or
+     * `null` = no restriction (absent, blank or malformed JSON — as the old
+     * per-group column read). A value that can no longer be DECRYPTED (rotated
+     * SESSION_SECRET) fails CLOSED to `[]`: a restriction must not silently
+     * lift itself.
+     */
+    getMcpToolPolicy(): McpToolGroupId[] | null {
+      const state = this.getAppSecretState(MCP_TOOL_POLICY_KEY);
+      if (state.status === "missing") {
+        return null;
+      }
+      if (state.status === "unreadable") {
+        const ciphertext =
+          (
+            this.db.prepare("SELECT value_enc FROM app_config WHERE key = ?").get(MCP_TOOL_POLICY_KEY) as
+              | { value_enc: string }
+              | undefined
+          )?.value_enc ?? "";
+        if (ciphertext !== this.warnedUnreadableMcpPolicy) {
+          this.warnedUnreadableMcpPolicy = ciphertext;
+          logger.warn(
+            "admin MCP tool policy is unreadable (SESSION_SECRET changed?); blocking every optional MCP tool group until an admin saves it again",
+          );
+        }
+        return [];
+      }
+      const parsed = parseNameList(state.value);
+      return parsed ? normalizeMcpToolGroups(parsed) : null;
+    }
+
+    /** Set (normalized) or clear (`null`) the global admin MCP tool policy. */
+    setMcpToolPolicy(allowed: McpToolGroupId[] | null): McpToolGroupId[] | null {
+      if (allowed === null) {
+        this.deleteAppSecret(MCP_TOOL_POLICY_KEY);
+        return null;
+      }
+      const normalized = normalizeMcpToolGroups(allowed);
+      this.setAppSecret(MCP_TOOL_POLICY_KEY, JSON.stringify(normalized));
+      return normalized;
+    }
+
+    /**
+     * EFFECTIVE admin tool policy for a user — since the single-team
+     * conversion (2026-11-06) the ONE global policy, the same for everyone.
+     * `null` = unrestricted; otherwise the allowlist with `system` always
+     * included. Consumed by runCapabilities (run clamp), toUser (composer
+     * state), and the chat/scheduler git-repo gating; the name and signature
+     * are kept so those callers never changed.
+     */
+    allowedMcpToolGroupsForUser(_userId: string): McpToolGroupId[] | null {
+      const allowed = this.getMcpToolPolicy();
+      return allowed === null ? null : effectiveMcpToolGroups(allowed);
     }
 
     deleteUser(id: string): boolean {
@@ -234,8 +309,6 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         this.db
           .prepare("DELETE FROM knowledge_requests WHERE avatar_user_id = ? OR asker_user_id = ?")
           .run(id, id);
-        // Group memberships (the group itself survives; created_by may dangle).
-        this.db.prepare("DELETE FROM group_members WHERE user_id = ?").run(id);
         // Registered work repos + notifications in either direction — otherwise
         // these orphan rows outlive the "permanently deleted" account.
         this.db.prepare("DELETE FROM git_repositories WHERE user_id = ?").run(id);
@@ -248,14 +321,12 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         this.db
           .prepare("DELETE FROM skill_learn_events WHERE owner_user_id = ? OR learner_user_id = ?")
           .run(id, id);
-        // Group-channel blocks ON this user's shares: their listings are gone,
-        // so the blocks have nothing left to hide. Only the OWNER axis purges —
-        // `blocked_by` is an actor column and DANGLES like groups.created_by and
+        // Admin blocks ON this user's shares: their listings are gone, so the
+        // blocks have nothing left to hide. Only the OWNER axis purges —
+        // `blocked_by` is an actor column and DANGLES like
         // audit.actor_user_id (a block by a since-deleted admin still stands;
-        // dropping it would silently un-moderate another group's channel).
-        this.db
-          .prepare("DELETE FROM shared_skill_group_blocks WHERE owner_user_id = ?")
-          .run(id);
+        // dropping it would silently un-moderate the team's channel).
+        this.db.prepare("DELETE FROM shared_skill_blocks WHERE owner_user_id = ?").run(id);
         this.db
           .prepare("DELETE FROM avatar_notifications WHERE owner_user_id = ? OR avatar_user_id = ?")
           .run(id, id);
@@ -266,7 +337,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
           .run(id);
         this.db.prepare("DELETE FROM canvas_artifacts WHERE owner_user_id = ?").run(id);
         // Audit rows are RETAINED by design: the trail must outlive the account
-        // (actor_user_id/actor_name dangle, like groups.created_by).
+        // (actor_user_id/actor_name dangle, like shared_skill_blocks.blocked_by).
         this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
       });
       tx();

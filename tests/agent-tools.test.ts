@@ -995,7 +995,7 @@ describe("repo tools (knowledge-repo management)", () => {
     await callTool(ownerTools(s), "write_file", { path: "notes/shared.md", content: "# 공유 지식" });
     await callTool(ownerTools(s), "commit", { message: "seed" });
 
-    // A trusted same-group teammate: not the owner, but elevated.
+    // A trusted teammate: not the owner, but elevated.
     const teammate = buildRepoTools(s.store, {
       avatarUserId: s.ownerId,
       owner: s.owner,
@@ -2757,41 +2757,65 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("group tool policy");
   });
 
-  it("reports the effective model, groups, profile visibility and pending requests", async () => {
+  it("reports the effective model, team size, profile visibility and pending requests", async () => {
     const s = setup("st-describe-full");
     // The composer pick is the effective model.
     await offerModels(s, ["sonnet"]);
-    const group = s.store.createGroup({ name: "플랫폼팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "admin");
+    s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     s.store.addKnowledgeRequest(s.owner.id, { question: "다음 출시일은?", askerName: "동료" });
 
     const res = await callTool(buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, selectedModel: "sonnet" }), "describe_system", {});
     expect(res.isError).toBeFalsy();
     const body = res.content[0].text;
     expect(body).toContain("sonnet (chosen for this conversation in the composer)");
-    expect(body).toContain("플랫폼팀(admin)");
-    // New avatars default to group visibility.
-    expect(body).toContain("group (discoverable by group teammates only)");
+    expect(body).toContain("Team size: 1 teammate besides the owner.");
+    // New avatars default to group (팀 공개) visibility.
+    expect(body).toContain("group / 팀 공개 (discoverable by every teammate)");
     expect(body).toContain("Remote SSH tools: disabled");
     expect(body).toContain("Pending information requests: 1");
   });
 
-  it("describe_system marks avatar-sharing-off groups and flips the consultation line", async () => {
-    const s = setup("st-avatar-sharing");
-    const group = s.store.createGroup({ name: "지식전용팀" });
-    s.store.addGroupMember(group.id, s.owner.id, "member");
-    const before = await callTool(toolsFor(s), "describe_system", {});
-    expect(before.content[0].text).toContain("지식전용팀(member)");
-    expect(before.content[0].text).toContain("Avatar consultation (mcp__avatars__ask_avatar): available");
+  it("describe_system states the single team with its LIVE size and flips the consultation line on it", async () => {
+    const s = setup("st-team");
+    // Alone: no teammate → no consultation target (mirrors avatarAskActive).
+    const alone = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(alone).toContain(
+      "- Team: Noah serves a single team: every approved user is a teammate. Teammates see your avatar unless it is private and are mutually trusted (elevated tools on each other's avatars). Team size: 0 teammates besides the owner.",
+    );
+    expect(alone).toContain(
+      "Avatar consultation (mcp__avatars__ask_avatar): enabled, but no teammate avatar is reachable (there are no other approved teammates, or every teammate's avatar is private)",
+    );
 
-    s.store.setGroupAvatarSharing(group.id, false);
-    const after = await callTool(toolsFor(s), "describe_system", {});
-    const body = after.content[0].text;
-    // Per-group marker + the standing explanation of what "off" means.
-    expect(body).toContain("지식전용팀(member, avatar sharing off)");
-    expect(body).toContain('Groups marked "avatar sharing off" grant neither avatar visibility, mutual trust nor skill sharing');
-    // Every group sharing-off ⇒ no teammate avatar is reachable for consultation.
-    expect(body).toContain("none of the owner's groups share avatars");
+    // A pending (suspended) signup is no one's teammate yet.
+    const pending = s.store.createUser({ username: "pending", displayName: "Pending", password: "password123" });
+    s.store.setSuspended(pending.id, true);
+    const stillAlone = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(stillAlone).toContain("Team size: 0 teammates besides the owner.");
+
+    // Approving it joins the team, and describe_system reads that live.
+    s.store.setSuspended(pending.id, false);
+    const body = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(body).toContain("Team size: 1 teammate besides the owner.");
+    expect(body).toContain("Avatar consultation (mcp__avatars__ask_avatar): available — you can ask a teammate's avatar one question");
+    // A private teammate still counts toward the team size, but is not reachable.
+    s.store.updateProfile(pending.id, { visibility: "private" });
+    const privateMate = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
+    expect(privateMate).toContain("Team size: 1 teammate besides the owner.");
+    expect(privateMate).toContain("enabled, but no teammate avatar is reachable");
+    s.store.updateProfile(pending.id, { visibility: "group" });
+    // No group wording or per-group markers leak in.
+    expect(body).not.toContain("avatar sharing off");
+    expect(body).not.toContain("- Groups:");
+    expect(body).not.toContain("same-group");
+    // The tool group still governs it.
+    const off = (
+      await callTool(
+        buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, enabledMcpToolGroups: ["system"] }),
+        "describe_system",
+        {},
+      )
+    ).content[0].text ?? "";
+    expect(off).toContain("Avatar consultation (mcp__avatars__ask_avatar): OFF for this conversation");
   });
 
   it("refuses routine and plugin mutations for non-owner viewers", async () => {
@@ -3351,7 +3375,7 @@ describe("system tools (avatar system management)", () => {
     const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
     expect(body).toContain("Name: Owner");
     expect(body).toContain("intro (none), capability hashtags (none)");
-    expect(body).toContain("group (discoverable by group teammates only)");
+    expect(body).toContain("group / 팀 공개 (discoverable by every teammate)");
     expect(body).not.toContain("undefined");
   });
 
@@ -3581,18 +3605,16 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("never-in-shell");
   });
 
-  it("describe_system says groups have no repository or team brain, and lists the groups", async () => {
+  it("describe_system says there is no shared team repository or team brain", async () => {
     const s = setup("st-team-brain");
-    const sharing = s.store.createGroup({ name: "플랫폼팀" });
-    const quiet = s.store.createGroup({ name: "조용한팀" });
-    s.store.addGroupMember(sharing.id, s.owner.id, "member");
-    s.store.addGroupMember(quiet.id, s.owner.id, "admin");
-    s.store.setGroupAvatarSharing(quiet.id, false);
+    s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     const text = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
-    expect(text).toContain("- Group knowledge repositories and team brain: none — Groups have NO shared knowledge repository");
+    expect(text).toContain(
+      "- Shared team knowledge repository and team brain: none — There is NO shared team knowledge repository and no team brain",
+    );
     expect(text).toContain("`mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist");
-    expect(text).toContain("플랫폼팀(member)");
-    expect(text).toContain("조용한팀(admin, avatar sharing off)");
+    expect(text).toContain("Team size: 1 teammate besides the owner.");
+    expect(text).not.toContain("avatar sharing off");
   });
 });
 
@@ -3607,11 +3629,8 @@ describe("avatar directory tools (cross-avatar search)", () => {
     const me = store.createUser({ username: "me", displayName: "나", password: "password123" });
     const k8s = store.createUser({ username: "kuber", displayName: "쿠버박사", password: "password123" });
     store.updateProfile(k8s.id, { hashtags: ["쿠버네티스", "데브옵스"], bio: "클러스터 운영" });
-    // Cross-avatar discovery reaches group teammates only — share a group.
-    const group = store.createGroup({ name: "DirTeam", createdBy: null });
-    store.addGroupMember(group.id, me.id, "member");
-    store.addGroupMember(group.id, k8s.id, "member");
-    return { store, meId: me.id };
+    // Cross-avatar discovery reaches every active teammate's 팀 공개 avatar.
+    return { store, meId: me.id, k8sId: k8s.id };
   }
 
   it("exposes the documented server + tool names", () => {
@@ -3637,6 +3656,16 @@ describe("avatar directory tools (cross-avatar search)", () => {
     const tools = buildAvatarDirectoryTools(store, { avatarUserId: meId, viewerUserId: meId });
     const res = await callTool(tools, "search_avatars", { query: "존재하지않는역량xyz" });
     expect(res.content[0].text).toContain("Could not find any visible avatar matching");
+  });
+
+  it("never finds a private teammate avatar or a suspended teammate", async () => {
+    const { store, meId, k8sId } = setup();
+    const tools = buildAvatarDirectoryTools(store, { avatarUserId: meId, viewerUserId: meId });
+    store.updateProfile(k8sId, { visibility: "private" });
+    expect((await callTool(tools, "search_avatars", { query: "쿠버네티스" })).content[0].text).not.toContain("@kuber");
+    store.updateProfile(k8sId, { visibility: "group" });
+    store.setSuspended(k8sId, true);
+    expect((await callTool(tools, "search_avatars", { query: "쿠버네티스" })).content[0].text).not.toContain("@kuber");
   });
 });
 
@@ -3772,7 +3801,8 @@ describe("avatar consultation tool (mcp__avatars__ask_avatar)", () => {
       displayName: "동료박사",
     });
     expect(notTrusted.isError).toBe(true);
-    expect(notTrusted.content[0].text).toContain("shares a group with your owner");
+    expect(notTrusted.content[0].text).toContain("You can only consult the avatars of active teammates");
+    expect(notTrusted.content[0].text).not.toContain("group");
 
     const timedOut = await decode({
       ok: false,
@@ -3796,11 +3826,9 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
     });
     const asker = store.createUser({ username: "asker", displayName: "질문자", password: "password123" });
     const peer = store.createUser({ username: "peer", displayName: "동료박사", password: "password123" });
-    // In no shared group → invisible to the asker (there is no wider state).
-    store.createUser({ username: "outsider", displayName: "외부인", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, asker.id, "member");
-    store.addGroupMember(group.id, peer.id, "member");
+    // Suspended (e.g. a pending signup) → not a teammate, so invisible to the asker.
+    const outsider = store.createUser({ username: "outsider", displayName: "외부인", password: "password123" });
+    store.setSuspended(outsider.id, true);
     return { store, config, askerId: asker.id, peerId: peer.id };
   }
   const respond = (text: string): AgentResponse => ({
@@ -3823,8 +3851,9 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
 
   it("hides an INVISIBLE avatar behind the same not_found (no existence probe)", async () => {
     const { store, config, askerId } = setup("ask-invisible");
-    // Default visibility is `group`; sharing no group with the asker → invisible.
-    store.createUser({ username: "hidden", displayName: "숨김", password: "password123" });
+    // An active teammate whose avatar is `private` → invisible to the asker.
+    const hidden = store.createUser({ username: "hidden", displayName: "숨김", password: "password123" });
+    store.updateProfile(hidden.id, { visibility: "private" });
     const outcome = await askAvatar(store, config, {
       askerUserId: askerId,
       askerName: "질문자",
@@ -3836,9 +3865,9 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
 
   it("refuses a non-teammate avatar as not_found (visibility gate fires first)", async () => {
     const { store, config, askerId } = setup("ask-untrusted");
-    // With `public` retired, reach and trust are the same group relation for
-    // native avatars: a non-teammate never gets past the visibility gate, so
-    // the answer is not_found, not not_trusted. (The not_trusted branch stays
+    // Reach and trust ride the same team relation for native avatars: a
+    // non-teammate (suspended) never gets past the visibility gate, so the
+    // answer is not_found, not not_trusted. (The not_trusted branch stays
     // in avatarAsk as a fail-closed defense should the axes ever diverge.)
     const outcome = await askAvatar(store, config, {
       askerUserId: askerId,
@@ -3860,7 +3889,7 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
     expect(outcome).toMatchObject({ ok: false, reason: "self" });
   });
 
-  it("runs a same-group target as the trusted-colleague viewer class with the depth guard set", async () => {
+  it("runs a teammate target as the trusted-colleague viewer class with the depth guard set", async () => {
     const { store, config, askerId, peerId } = setup("ask-ok");
     let seen: AgentRequest | undefined;
     const outcome = await askAvatar(
@@ -3892,7 +3921,7 @@ describe("askAvatar (avatar-to-avatar consultation core)", () => {
     expect(seen!.allowHeadlessTools).toBe(true);
     expect(seen!.avatarConsultation).toBe(true);
     expect(seen!.mcpToolGroups).toEqual(["personal_knowledge"]);
-    expect(seen!.trustedViaGroups).toEqual(["Team"]);
+    expect(seen).not.toHaveProperty("trustedViaGroups");
   });
 
   it("caps an oversized answer and flags the truncation", async () => {

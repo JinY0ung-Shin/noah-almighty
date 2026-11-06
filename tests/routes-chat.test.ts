@@ -496,13 +496,10 @@ describe("slash-command expansion at the route boundary", () => {
     const ownerId = (await signup(owner, "owner-learn").expect(201)).body.user.id as string;
 
     const teammate = request.agent(app);
-    const teammateId = (await signup(teammate, "teammate-learn").expect(201)).body.user.id as string;
-    // Group co-membership is the only reach to someone else's avatar now (it
-    // also elevates the viewer — irrelevant here: the ownerOnly slash guard
-    // keys on IDENTITY, not elevation).
-    const group = store.createGroup({ name: "learn-group" });
-    store.addGroupMember(group.id, ownerId);
-    store.addGroupMember(group.id, teammateId);
+    await signup(teammate, "teammate-learn").expect(201);
+    // Every approved user is a teammate who can reach the owner's avatar (and
+    // is elevated — irrelevant here: the ownerOnly slash guard keys on
+    // IDENTITY, not elevation).
 
     const res = await teammate.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "c", message: "/learn" }).expect(403);
     expect(res.body.error).toContain("내 아바타");
@@ -1429,15 +1426,12 @@ describe("conversation delete sweeps the server-written workspace copies", () =>
       expect(fs.existsSync(path.join(workspace, sub, "seeded.png")), sub).toBe(true);
     }
   }
-  /** Two users in one avatar-sharing group, so each can reach the other's avatar. */
+  /** Two approved users — teammates, so each can reach the other's avatar. */
   async function teammates(app: ReturnType<typeof createApp>, store: Store, prefix: string) {
     const owner = request.agent(app);
     const ownerId = (await signup(owner, `${prefix}-owner`).expect(201)).body.user.id as string;
     const mate = request.agent(app);
     const mateId = (await signup(mate, `${prefix}-mate`).expect(201)).body.user.id as string;
-    const group = store.createGroup({ name: `${prefix}-group` });
-    store.addGroupMember(group.id, ownerId);
-    store.addGroupMember(group.id, mateId);
     return { owner, ownerId, mate, mateId };
   }
   const sendImage = (agent: ReturnType<typeof request.agent>, avatarId: string, conversationId: string) =>
@@ -3285,10 +3279,8 @@ describe("retired group shared-agent ids", () => {
   it("reach nothing: no avatar detail, no skills, no chat turn", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
-    const ownerId = (await signup(owner, "gaowner").expect(201)).body.user.id as string;
-    const group = store.createGroup({ name: "플랫폼" });
-    store.addGroupMember(group.id, ownerId);
-    const avatarId = `group:${group.id}:agent-1`;
+    await signup(owner, "gaowner").expect(201);
+    const avatarId = "group:legacy-team:agent-1";
 
     await owner.get(`/api/avatars/${avatarId}`).expect(404);
     await owner.get(`/api/avatars/${avatarId}/skills`).expect(404);
@@ -3325,13 +3317,11 @@ describe("knowledge-repo load failures degrade to a status frame", () => {
 });
 
 describe("admin MCP tool policy clamps the run", () => {
-  it("runs with the intersection of the composer choice and the group policy, storing the raw choice", async () => {
+  it("runs with the intersection of the composer choice and the global admin policy, storing the raw choice", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "policyuser").expect(201)).body.user.id as string;
-    const group = store.createGroup({ name: "policy" });
-    store.addGroupMember(group.id, ownerId);
-    store.setGroupAllowedMcpToolGroups(group.id, ["confluence"]);
+    store.setMcpToolPolicy(["confluence"]);
 
     await owner
       .post("/api/chat/stream")
@@ -3480,9 +3470,6 @@ describe("create_share_link host callback (onShareLink)", () => {
     const ownerId = (await signup(owner, "shareowner").expect(201)).body.user.id as string;
     const colleague = request.agent(app);
     const colleagueId = (await signup(colleague, "sharecolleague").expect(201)).body.user.id as string;
-    const group = store.createGroup({ name: "팀" });
-    store.addGroupMember(group.id, ownerId);
-    store.addGroupMember(group.id, colleagueId);
 
     const supplied = new Map<string, boolean>();
     H.impl = async (agentRequest, _pr, cfg, _store, events) => {

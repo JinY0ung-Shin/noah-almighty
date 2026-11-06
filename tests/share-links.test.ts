@@ -380,6 +380,8 @@ describe("share links — owner create / reuse / list / revoke", () => {
     const dataDir = path.join(tempDir, "rotating");
     const before = boot(dataDir, "secret-one");
     const owner = await newUser(before.app, "owner");
+    // Approved before the rotation (approval needs the bootstrap admin's session).
+    await newUser(before.app, "viewer");
     const deck = seedDeck(before, owner.id, "conv-deck");
     const link = (await create(owner.agent, "conv-deck", deck.card.id).expect(201)).body.link as ShareLinkSummary;
     const token = tokenOf(link.url);
@@ -388,7 +390,8 @@ describe("share links — owner create / reuse / list / revoke", () => {
     const after = boot(dataDir, "secret-two");
     const ownerAgain = request.agent(after.app);
     await ownerAgain.post("/api/auth/login").send({ username: "owner", password: "password123" }).expect(200);
-    const viewer = await newUser(after.app, "viewer");
+    const viewer = { agent: request.agent(after.app) };
+    await viewer.agent.post("/api/auth/login").send({ username: "viewer", password: "password123" }).expect(200);
     const list = (await ownerAgain.get("/api/me/share-links").expect(200)).body as ShareLinkSummary[];
     expect(list).toEqual([expect.objectContaining({ id: link.id, expired: false, url: null })]);
     const reused = await create(ownerAgain, "conv-deck", deck.card.id).expect(200);
@@ -819,10 +822,8 @@ describe("share links — which threads can share", () => {
     const t = boot();
     const member = await newUser(t.app, "member");
     const viewer = await newUser(t.app, "viewer");
-    const group = t.store.createGroup({ name: "플랫폼" });
-    t.store.addGroupMember(group.id, member.id);
     // A retired group shared-agent id (purged at boot; the namespace stays dark).
-    const deck = seedDeck(t, member.id, "conv-ga", { avatarId: `group:${group.id}:agent-1` });
+    const deck = seedDeck(t, member.id, "conv-ga", { avatarId: "group:legacy-group:agent-1" });
     const res = await create(member.agent, "conv-ga", deck.card.id).expect(404);
     expect(res.body.error).toBe("파일을 찾을 수 없습니다.");
 
@@ -850,9 +851,6 @@ describe("share links — which threads can share", () => {
     const avatarOwner = await newUser(t.app, "avatarowner");
     const colleague = await newUser(t.app, "colleague");
     const viewer = await newUser(t.app, "viewer");
-    const group = t.store.createGroup({ name: "팀" });
-    t.store.addGroupMember(group.id, avatarOwner.id);
-    t.store.addGroupMember(group.id, colleague.id);
     // The colleague's OWN thread with the avatar owner's avatar.
     const deck = seedDeck(t, colleague.id, "conv-colleague", { avatarId: avatarOwner.id });
     // Only the conversation owner creates — never the avatar's owner.
@@ -861,11 +859,11 @@ describe("share links — which threads can share", () => {
     const token = tokenOf(link.url);
     await open(viewer.agent, token).expect(200);
 
-    // The colleague leaves the group: the avatar is out of reach, so is the link.
-    t.store.removeGroupMember(group.id, colleague.id);
+    // The colleague is suspended (leaves the team): the avatar is out of reach,
+    // so is the link. Reinstating them restores it.
+    t.store.setSuspended(colleague.id, true);
     await open(viewer.agent, token).expect(404);
-    await create(colleague.agent, "conv-colleague", deck.card.id).expect(404);
-    t.store.addGroupMember(group.id, colleague.id);
+    t.store.setSuspended(colleague.id, false);
     await open(viewer.agent, token).expect(200);
     // The avatar goes private → unreachable again; suspended → likewise.
     t.store.updateProfile(avatarOwner.id, { visibility: "private" });
@@ -915,9 +913,6 @@ describe("share links — cascades", () => {
     const doomed = await newUser(t.app, "doomed");
     const colleague = await newUser(t.app, "colleague");
     const bystander = await newUser(t.app, "bystander");
-    const group = t.store.createGroup({ name: "팀" });
-    t.store.addGroupMember(group.id, doomed.id);
-    t.store.addGroupMember(group.id, colleague.id);
     // (a) links the doomed user created in their own thread…
     const own = seedDeck(t, doomed.id, "conv-own");
     await create(doomed.agent, "conv-own", own.card.id).expect(201);

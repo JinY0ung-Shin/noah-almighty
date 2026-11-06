@@ -640,6 +640,8 @@ describe("run capabilities on pi", () => {
     const { store, config, owner, mate } = setup();
     store.setToolSkillPolicy({ disabledTools: ["Task", "Agent"], disabledSkills: [] });
     store.setUserSecret(owner.id, "API_TOKEN", "tok-123456789");
+    // Start with no active teammate (the only other user is suspended).
+    store.setSuspended(mate.id, true);
     const interactive = (): AgentEvents => ({ steers: new SteerChannel() });
     const build = async () => {
       const caps = await buildRunCapabilities(request(owner), [], config, store, interactive(), undefined, () => 0, {
@@ -650,7 +652,7 @@ describe("run capabilities on pi", () => {
       return { caps, describe, prompt: buildSystemPromptAppend(stamped), turn: buildPiTurnPreamble(stamped) };
     };
 
-    // No avatar-sharing group → no ask_avatar → no background-ask claim (L4).
+    // No teammate → no ask_avatar → no background-ask claim (L4).
     const lonely = await build();
     expect(lonely.caps.mcpAllowedTools).not.toContain("mcp__avatars__ask_avatar");
     expect(lonely.caps.piRuntimeFacts?.asyncAskAvatar).toBe(false);
@@ -673,12 +675,21 @@ describe("run capabilities on pi", () => {
     expect(lonely.prompt).not.toContain("custom secrets are provided as environment variables");
     expect(lonely.describe).toContain("no plugin/knowledge-repo .mcp.json server receives them");
 
+    // An active teammate whose avatar is PRIVATE is still not reachable: the
+    // three hand-synced gate sites (registration, prompt, describe_system) agree.
+    store.setSuspended(mate.id, false);
+    store.updateProfile(mate.id, { visibility: "private" });
+    const privateMate = await build();
+    expect(privateMate.caps.mcpAllowedTools).not.toContain("mcp__avatars__ask_avatar");
+    expect(privateMate.prompt).not.toContain("Consulting teammate avatars");
+    expect(privateMate.prompt).toContain("Team size when this conversation started: 1 teammate besides the owner");
+    expect(privateMate.describe).toContain("enabled, but no teammate avatar is reachable");
+
     // With a reachable teammate the tool exists, and so does its background mode.
-    const group = store.createGroup({ name: "team", createdBy: owner.id });
-    store.addGroupMember(group.id, owner.id, "admin");
-    store.addGroupMember(group.id, mate.id, "member");
-    store.setGroupAvatarSharing(group.id, true);
+    store.updateProfile(mate.id, { visibility: "group" });
     const teamed = await build();
+    expect(teamed.prompt).toContain("Consulting teammate avatars");
+    expect(teamed.describe).toContain("Avatar consultation (mcp__avatars__ask_avatar): available");
     expect(teamed.caps.mcpAllowedTools).toContain("mcp__avatars__ask_avatar");
     expect(teamed.caps.piRuntimeFacts?.asyncAskAvatar).toBe(true);
     expect(teamed.turn).toContain("returns at once with a consultation id");

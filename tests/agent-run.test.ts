@@ -372,26 +372,26 @@ describe("run capability plan", () => {
     expect(run.allowed).not.toContain("mcp__file_output__create_share_link");
   });
 
-  it("registers no group repo or team brain server for a group admin (both retired 2026-10-30)", async () => {
+  it("registers no group repo or team brain server (both retired 2026-10-30) and states the single team", async () => {
     const env = setup();
-    const group = env.store.createGroup({ name: "팀" });
-    env.store.addGroupMember(group.id, env.owner.id, "admin");
+    env.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     const run = await plan(env, env.baseRequest);
     expect(run.servers).not.toContain("group_repo");
     expect(run.servers).not.toContain("group_brain");
     expect(run.allowed.some((name) => name.startsWith("mcp__group_"))).toBe(false);
-    // The groups section still states the group and that it has no repository.
-    expect(run.append).toContain("팀(admin)");
-    expect(run.append).toContain("Groups have NO shared knowledge repository");
+    // The team section states the single team, its size and that there is no shared repository.
+    expect(run.append).toContain("Noah serves a single team: every approved user is a teammate.");
+    expect(run.append).toContain("Team size when this conversation started: 1 teammate besides the owner");
+    expect(run.append).toContain("There is NO shared team knowledge repository and no team brain");
+    expect(run.append).not.toContain("avatar sharing off");
   });
 
   it("allows ask_avatar ONLY on owner-driven runs and never inside a consultation", async () => {
     const env = setup();
-    const group = env.store.createGroup({ name: "팀" });
-    env.store.addGroupMember(group.id, env.owner.id, "member");
+    env.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     const ASK = "mcp__avatars__ask_avatar";
 
-    // Owner chat with a group → the consultation tool is allow-listed.
+    // Owner chat with a teammate → the consultation tool is allow-listed.
     expect((await plan(env, env.baseRequest)).allowed).toContain(ASK);
     // A consultation run must never re-register it (the depth guard)...
     expect((await plan(env, { ...env.baseRequest, avatarConsultation: true })).allowed).not.toContain(ASK);
@@ -407,8 +407,11 @@ describe("run capability plan", () => {
     expect(routine.caps.piRuntimeFacts.asyncAskAvatar).toBe(false);
   });
 
-  it("keeps ask_avatar out when the owner belongs to no group (no reachable target)", async () => {
+  it("keeps ask_avatar out when the owner has no active teammate (no reachable target)", async () => {
     const env = setup();
+    // A suspended (pending) user is no one's teammate.
+    const pending = env.store.createUser({ username: "pending", displayName: "Pending", password: "password123" });
+    env.store.setSuspended(pending.id, true);
     const run = await plan(env, env.baseRequest);
     expect(run.allowed).not.toContain("mcp__avatars__ask_avatar");
     // The discovery tool itself stays available.

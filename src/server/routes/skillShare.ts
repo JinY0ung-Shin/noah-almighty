@@ -346,7 +346,7 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
     },
   );
 
-  // The group's shared-skill feed: teammates' shares I could learn PLUS my own
+  // The team's shared-skill feed: teammates' shares I could learn PLUS my own
   // shares (like 탐색 shows my own avatar) — seeing my skill alongside its
   // 전수 count is how I know how far it spread. Metadata only, never touches a
   // clone, so the tab list stays fast. The client tells mine apart by

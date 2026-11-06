@@ -350,12 +350,12 @@ describe("ShareLinkDialog", () => {
     expect(await within(card).findByRole("button", { name: "공유 링크 만들기" })).toBeTruthy();
   });
 
-  it("tells the owner that open sign-up lets anyone who can reach Noah in", async () => {
+  it("tells the owner that any logged-in Noah user with the link can open it", async () => {
     stubFetch();
-    openDialog({ signupMode: "open" });
+    openDialog({ signupMode: "approval" });
     expect(
       await within(dialog()).findByText(
-        "링크를 받은 사람은 누구나 Noah에 가입·로그인해 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
+        "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
       ),
     ).toBeTruthy();
   });

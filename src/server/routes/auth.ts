@@ -61,9 +61,12 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       }
       throw error;
     }
-    // Approval mode: the account is created but parked (suspended) with no session
-    // until an admin activates it. The client shows a "pending approval" notice.
-    if (!isFirstUser && signupMode === "approval") {
+    // Approval (the only other mode — `open` is retired): the account is created
+    // but parked (suspended) with no session until an admin activates it.
+    // Approval IS joining the team (and with it, trust — isTrustedFor), so no
+    // self-service signup past the first may skip it. The client shows a
+    // "pending approval" notice.
+    if (!isFirstUser) {
       store.setSuspended(user.id, true);
       store.audit({
         actorUserId: user.id,
@@ -153,7 +156,7 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       needsSetup: !store.hasAnyUser(),
       githubHost: config.githubHost,
       // Lets the auth screen hide/adjust the signup affordance and show the right
-      // copy (open vs. approval vs. closed) before anyone tries to register.
+      // copy (approval vs. closed) before anyone tries to register.
       signupMode: store.getSignupMode(),
       // Lets onboarding show the Confluence PAT field only when the deployment
       // has a Confluence host configured (the PAT is useless otherwise).

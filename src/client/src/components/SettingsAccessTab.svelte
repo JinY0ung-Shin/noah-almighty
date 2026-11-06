@@ -1037,11 +1037,11 @@
       </div>
     </div>
     <ul class="hint-list">
-      <li>직접 등록한 플러그인·지식 저장소의 <code>.mcp.json</code> MCP 서버에 환경변수로(HTTP 서버는 헤더의 <code>{"${이름}"}</code>으로) 주입되고, 공용 MCP 서버에는 아래에서 직접 연결한 시크릿만 들어가요 — 본인·같은 그룹원과의 대화에서만.</li>
+      <li>직접 등록한 플러그인·지식 저장소의 <code>.mcp.json</code> MCP 서버에 환경변수로(HTTP 서버는 헤더의 <code>{"${이름}"}</code>으로) 주입되고, 공용 MCP 서버에는 아래에서 직접 연결한 시크릿만 들어가요 — 본인·팀원과의 대화에서만.</li>
       <li><strong>셸 노출</strong>을 켜면 내 대화·루틴·API 작업의 셸(Bash)에서 같은 이름의 환경변수로도 쓸 수 있어요. 동료와의 대화나 아바타 간 질문의 셸에는 들어가지 않아요. 필요한 키만 켜세요.</li>
       <li><strong>브라우저 입력</strong>을 켜면 아바타가 브라우저 확장을 통해 이 시크릿을 지정한 사이트의 로그인 필드에 이름으로 입력할 수 있어요. 값은 아바타에게 보이지 않고, 지정한 사이트 밖에서는 거부되며, 브라우저 세션마다 처음 한 번 브라우저에서 확인해요(그 한 번이 허용해 둔 모든 사이트에 적용돼요).</li>
       <li>도구 출력에 값이 나타나면 자동으로 가려져요.</li>
-      <li>GIT_TOKEN·GITHUB_TOKEN·SSH 계열은 전용 경로로만 쓰이고, 그룹 저장소 MCP 서버·일반 사용자 대화에는 어떤 시크릿도 주입되지 않아요.</li>
+      <li>GIT_TOKEN·GITHUB_TOKEN·SSH 계열은 전용 경로로만 쓰이고, 일반 동료 대화에는 어떤 시크릿도 주입되지 않아요.</li>
     </ul>
 
     {#if sharedMcpSlotted.length}
@@ -1108,7 +1108,7 @@
           <div class="secret-preset-actions">
             <span id={presetStatusId} class="settings-save-status" class:dirty={Boolean(presetFilled[preset.name] && !presetBusy[preset.name] && !presetErrors[preset.name])} class:pending={Boolean(presetBusy[preset.name])} class:invalid={Boolean(presetErrors[preset.name])} role="status" aria-live="polite">{presetStatusText[preset.name]}</span>
             {#if isSet && isShellExposableSecret(preset.name)}
-              <label class="shell-expose-toggle" title="켜면 이 값이 아바타 셸(Bash) 환경변수로도 주입됩니다 (본인·신뢰하는 그룹원 대화에서만, 도구 출력에서는 자동 가려짐)">
+              <label class="shell-expose-toggle" title="켜면 이 값이 아바타 셸(Bash) 환경변수로도 주입됩니다 (본인 대화·루틴·API 작업에서만, 팀원 대화에는 전달되지 않음, 도구 출력에서는 자동 가려짐)">
                 <input
                   type="checkbox"
                   checked={shellExposed.has(preset.name)}
@@ -1211,7 +1211,7 @@
             <code>{name}</code>
             <span class="muted token-set">● 설정됨</span>
             {#if isShellExposableSecret(name)}
-              <label class="shell-expose-toggle" title="켜면 이 값이 아바타 셸(Bash) 환경변수로도 주입됩니다 (본인·신뢰하는 그룹원 대화에서만, 도구 출력에서는 자동 가려짐)">
+              <label class="shell-expose-toggle" title="켜면 이 값이 아바타 셸(Bash) 환경변수로도 주입됩니다 (본인 대화·루틴·API 작업에서만, 팀원 대화에는 전달되지 않음, 도구 출력에서는 자동 가려짐)">
                 <input
                   type="checkbox"
                   checked={shellExposed.has(name)}

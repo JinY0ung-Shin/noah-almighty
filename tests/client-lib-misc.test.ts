@@ -64,7 +64,6 @@ import {
   writeExtensionFiles,
 } from "../src/client/src/lib/browserBridgeInstall.js";
 import {
-  loadAdminGroups,
   loadAdminOverview,
   loadAvatars,
   loadConversations,
@@ -561,11 +560,12 @@ describe("nav routing", () => {
     // malformed percent-encoding decodes to null rather than throwing
     history.replaceState(null, "", "#/chat/%E0%A4%A");
     expect(routeFromHash()).toEqual({ view: "chat", arg: null });
-    // legacy 그룹-tab hashes redirect to the merged 그룹 view
-    history.replaceState(null, "", "#/settings/groups");
-    expect(routeFromHash()).toEqual({ view: "groups", arg: null });
+    // The retired 그룹 view (groups → single team) is no route any more; its
+    // old tab hashes parse as a plain (unknown) tab arg.
+    history.replaceState(null, "", "#/groups");
+    expect(routeFromHash()).toEqual({ view: null, arg: null });
     history.replaceState(null, "", "#/admin/groups");
-    expect(routeFromHash()).toEqual({ view: "groups", arg: null });
+    expect(routeFromHash()).toEqual({ view: "admin", arg: "groups" });
   });
 
   it("currentRoute renders the per-view hash from store state", () => {
@@ -575,6 +575,8 @@ describe("nav routing", () => {
     expect(currentRoute()).toBe("#/admin/audit");
     replaceState({ view: "admin", adminTab: "mcp" });
     expect(currentRoute()).toBe("#/admin/mcp");
+    replaceState({ view: "admin", adminTab: "tools" });
+    expect(currentRoute()).toBe("#/admin/tools");
     replaceState({ view: "brain" });
     expect(currentRoute()).toBe("#/brain");
     replaceState({
@@ -612,8 +614,8 @@ describe("nav routing", () => {
     goView("settings", "knowledge");
     expect(readState()).toMatchObject({ view: "settings", settingsTab: "knowledge" });
 
-    goView("groups");
-    expect(readState().view).toBe("groups");
+    goView("admin", "tools");
+    expect(readState()).toMatchObject({ view: "admin", adminTab: "tools" });
   });
 
   it("applyInitialRoute hydrates the store from the current hash", () => {
@@ -623,13 +625,19 @@ describe("nav routing", () => {
     expect(readState()).toMatchObject({ view: "routines", routineConversationId: "conv9" });
   });
 
-  it("applyInitialRoute rewrites a legacy groups alias in place", () => {
-    replaceState({ user: { id: "u", roles: [] } as any });
+  it("applyInitialRoute lands a retired 그룹 bookmark on a real screen", () => {
+    replaceState({ user: { id: "u", roles: ["admin"] } as any, view: "explore", settingsTab: "profile", adminTab: "overview" });
+    history.replaceState(null, "", "#/groups");
+    applyInitialRoute();
+    expect(readState().view).toBe("explore");
+    // The old tab aliases open their view on the tab it already had.
     history.replaceState(null, "", "#/settings/groups");
     applyInitialRoute();
-    expect(readState().view).toBe("groups");
-    expect(location.hash).toBe("#/groups");
-    // non-alias hashes are left untouched (chat deep-links stay intact)
+    expect(readState()).toMatchObject({ view: "settings", settingsTab: "profile" });
+    history.replaceState(null, "", "#/admin/groups");
+    applyInitialRoute();
+    expect(readState()).toMatchObject({ view: "admin", adminTab: "overview" });
+    // chat deep-links stay intact
     history.replaceState(null, "", "#/chat/conv7");
     applyInitialRoute();
     expect(location.hash).toBe("#/chat/conv7");
@@ -877,7 +885,7 @@ describe("loaders", () => {
     expect(removeListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
   });
 
-  it("loadRoutinesData / loadAdminOverview / loadAdminGroups populate their slices", async () => {
+  it("loadRoutinesData / loadAdminOverview populate their slices", async () => {
     useFetch((url) => {
       if (url === "/api/me/routines") return jsonRes({ routines: [{ id: "rt" }] });
       if (url === "/api/conversations?kind=routine") return jsonRes({ conversations: [{ id: "rc" }] });
@@ -887,7 +895,6 @@ describe("loaders", () => {
       // Real server shape ({ audit }, see routes/admin.ts) — the loader once
       // read a nonexistent `events` key and the admin audit tab rendered empty.
       if (url === "/api/audit") return jsonRes({ audit: [{ id: "ev" }] });
-      if (url === "/api/admin/groups") return jsonRes({ groups: [{ id: "g" }] });
       return undefined;
     });
     await loadRoutinesData();
@@ -900,11 +907,7 @@ describe("loaders", () => {
       adminSystem: { uptime: 1 },
       adminUsers: [{ id: "au" }],
       audit: [{ id: "ev" }],
-    });
-
-    await loadAdminGroups();
-    expect(readState().adminGroups).toEqual([{ id: "g" }]);
-  });
+    });  });
 });
 
 /* ------------------------------------------------------------------ */

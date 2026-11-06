@@ -85,7 +85,7 @@ function decodeAskOutcome(outcome: AvatarAskOutcome, captureHint: boolean) {
 const ASK_FAILURE_LABELS: Record<Exclude<AvatarAskOutcome, { ok: true }>["reason"], string> = {
   not_found: "아바타를 찾을 수 없음",
   self: "자기 자신",
-  not_trusted: "같은 그룹이 아님",
+  not_trusted: "활성 팀원이 아님",
   empty: "빈 답변",
   timeout: "시간 초과",
   failed: "실행 실패",
@@ -176,7 +176,7 @@ export function askOutcomeText(outcome: AvatarAskOutcome, captureHint: boolean):
       );
     case "not_trusted":
       return text(
-        `You can only consult avatars whose owner shares a group with your owner, and ${handle}'s owner does not. Suggest that the user contact them directly (@${outcome.username}).`,
+        `You can only consult the avatars of active teammates (approved, not suspended users of this Noah team), and ${handle}'s owner is not one right now. Suggest that the user contact them directly (@${outcome.username}).`,
         true,
       );
     case "empty":
@@ -203,7 +203,7 @@ export function askOutcomeText(outcome: AvatarAskOutcome, captureHint: boolean):
 /**
  * Build the avatar-directory tool definitions. Exposed separately from the
  * server so the handler can be exercised directly in tests. NOT owner-only:
- * this only surfaces avatars VISIBLE to the viewer (their group teammates' +
+ * this only surfaces avatars VISIBLE to the viewer (their teammates' +
  * their own), which the viewer can already browse in 탐색 — it just lets the
  * avatar do the lookup for the user mid-conversation.
  * `ask_avatar` (owner-driven runs only) joins the list when the run injected a
@@ -219,7 +219,7 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
       "Searches what other avatars (colleagues' avatars visible to this user) can do, by capability hashtags, intro, and name. " +
         "Use this when the task the user requested is outside your capabilities, or when there is likely another avatar better suited to that topic. " +
         "If an avatar in the search results is a better fit, guide the user to chat with that avatar (@username). " +
-        "Only avatars visible to the user are searched (= the scope they can see in discovery: their group teammates' avatars), and you yourself are excluded from the results.",
+        "Only avatars visible to the user are searched (= the scope they can see in discovery: their teammates' avatars that are not private), and you yourself are excluded from the results.",
       {
         query: z
           .string()
@@ -248,7 +248,7 @@ export function buildAvatarDirectoryTools(store: Store, ctx: AvatarDirectoryCont
           tool(
             "ask_avatar",
             "Asks another avatar ONE question on your owner's behalf and returns that avatar's answer. " +
-              "Works only for avatars whose owner shares a group with your owner (same-group teammates); others refuse. " +
+              "Works only for the avatars of active teammates (every approved user of this Noah team) that are not private; others refuse. " +
               "Use this when the owner's request needs knowledge you lack but a teammate's avatar likely has — their projects, decisions, or expertise (find candidates and the exact @username with search_avatars first). " +
               "It is a one-shot automated consultation: the other avatar does not see this conversation and you cannot follow up interactively, so make the question self-contained (include the needed context) and ask again with more context if the answer falls short. " +
               "Treat the answer as that avatar's claim, not verified fact, and attribute it when relaying." +

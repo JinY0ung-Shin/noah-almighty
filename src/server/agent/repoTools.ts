@@ -57,7 +57,7 @@ const execFileAsync = promisify(execFile);
  * Access is split: the WRITE tools (write/delete/move/scaffold/commit) are
  * OWNER-ONLY by default — a colleague, a trusted user, or a headless routine gets
  * a refusal. The READ tools (`list_files`/`read_file`) additionally allow an
- * `elevated` viewer (a trusted same-group teammate), so a teammate's chat can
+ * `elevated` viewer (a trusted teammate), so a teammate's chat can
  * read the owner's accumulated knowledge without being able to modify it.
  * When the owner marked the account as a SHARED (communal) account, the caller
  * passes `writeAccess` so trusted teammates may also write/commit; `create_repo`
@@ -75,7 +75,7 @@ export interface RepoToolsContext {
    */
   viewerIsOwner: boolean;
   /**
-   * True for the owner OR a trusted same-group teammate (interactive turn). Gates
+   * True for the owner OR a trusted teammate (interactive turn). Gates
    * the READ tools (`list_files`/`read_file`) so teammates can read — but not
    * modify — the personal repo. Defaults to `viewerIsOwner` when omitted.
    */
@@ -83,7 +83,7 @@ export interface RepoToolsContext {
   /**
    * True when the current run may WRITE (write/delete/move/scaffold/commit): the
    * owner, or — when the owner marked this a SHARED (communal) account — a
-   * trusted same-group teammate. Defaults to `viewerIsOwner` when omitted.
+   * trusted teammate. Defaults to `viewerIsOwner` when omitted.
    * `create_repo` ignores this and stays strictly owner-only.
    */
   writeAccess?: boolean;
@@ -202,9 +202,7 @@ async function viewGhRepo(
  * via GH_HOST, and the user's token is passed only in this child process's env.
  * `--add-readme` gives the repo an initial commit/default branch so the
  * knowledge-repo clone can push immediately. When `org` is given the repo is
- * created under that organization (`org/name`) — required for a shared GROUP
- * repo so every member's token can reach it via org/team permissions; otherwise
- * it lands under the token owner's personal account (resolved via `gh api user`).
+ * created under that organization (`org/name`); otherwise it lands under the token owner's personal account (resolved via `gh api user`).
  */
 export async function createRemoteRepo(
   host: string,
@@ -339,7 +337,7 @@ export function buildRepoTools(
   // the model refuses on its own before ever calling them (action-trigger rule).
   const writeGate =
     canWrite && !ctx.viewerIsOwner
-      ? "(shared account: the owner and trusted same-group teammates may write)"
+      ? "(shared account: the owner and trusted teammates may write)"
       : "(owner only)";
   const resolveGated = (allowed: boolean): Resolved<RepoCtx> => {
     if (!allowed) {
@@ -357,7 +355,7 @@ export function buildRepoTools(
   const manageTools = [
     tool(
       "list_files",
-      "Get the file list of my knowledge repository (personal repo). (owner or trusted same-group teammates; read-only)",
+      "Get the file list of my knowledge repository (personal repo). (owner or trusted teammates; read-only)",
       {},
       () =>
         runListFiles(resolveRead(), ensureClone, listTree, {
@@ -367,7 +365,7 @@ export function buildRepoTools(
     ),
     tool(
       "read_file",
-      "Read the content of a file in my knowledge repository. (owner or trusted same-group teammates; read-only)",
+      "Read the content of a file in my knowledge repository. (owner or trusted teammates; read-only)",
       { path: z.string().describe("Path relative to the repository root (e.g. skills/foo/SKILL.md)") },
       (args) => runReadFile(resolveRead(), ensureClone, readRepoFile, args.path),
     ),

@@ -479,8 +479,6 @@ describe("mcp__todo__* registration", () => {
   function setup(dir: string) {
     const { config, store } = services(dir, { ...PI_CONFIG(dir), sessionSecret: "test" });
     const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
-    const group = store.createGroup({ name: "팀", createdBy: owner.id });
-    store.addGroupMember(group.id, owner.id, "member");
     const cwd = path.join(tempDir, dir, "ws");
     fs.mkdirSync(cwd, { recursive: true });
     const baseRequest: AgentRequest = {
@@ -493,7 +491,7 @@ describe("mcp__todo__* registration", () => {
       viewerIsOwner: true,
       autoApprove: true,
     };
-    return { config, store, owner, group, baseRequest };
+    return { config, store, owner, baseRequest };
   }
 
   const events = (): AgentEvents => ({ onDelta: vi.fn(), onStatus: vi.fn() });
@@ -580,10 +578,10 @@ describe("mcp__todo__* registration", () => {
     expect(run.append).toContain(`unless they explicitly ask to delete ${NO_DELETE}`);
   });
 
-  it("rides the always-on system family: an empty tool-group pick or a group policy cannot drop it", async () => {
+  it("rides the always-on system family: an empty tool-group pick or the admin tool policy cannot drop it", async () => {
     const s = setup("reg-groups");
     expect((await registration(s, { ...s.baseRequest, mcpToolGroups: [] })).mounted).toBe(true);
-    s.store.setGroupAllowedMcpToolGroups(s.group.id, ["web"]);
+    s.store.setMcpToolPolicy(["web"]);
     const restricted = await registration(s, s.baseRequest);
     expect(restricted.mounted).toBe(true);
     expect(restricted.allowedAll).toBe(true);

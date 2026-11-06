@@ -47,7 +47,7 @@ retirePersonalAgents(services);
 retireExternalAvatars(services);
 // Delete what the removed group shared agents left (every member's thread with
 // them, their files and CLI transcripts, the agent table — decision D4) before
-// anything can serve it. Groups stay. A no-op once
+// anything can serve it. A no-op once
 // done; a failed purge throws and stops the boot.
 retireGroupAgents(services);
 // The removed Craft apps left only a retry queue on disk; quarantine it (best effort).

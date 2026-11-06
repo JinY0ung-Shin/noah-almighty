@@ -14,7 +14,7 @@
 
   // 스킬 배우기: 동료 아바타가 공유한 스킬을 둘러보고 내 아바타의 지식 저장소로
   // 전수(복사+커밋)하는 탭 + 내 저장소 스킬의 공유 토글. 서버 계약은
-  // routes/skillShare.ts — 공유 범위는 탐색과 동일(같은 그룹, 아바타 공개 시).
+  // routes/skillShare.ts — 공유 범위는 탐색과 동일(팀원, 아바타가 팀 공개일 때).
 
   /** 서버 상한과 맞춘 값 (skillTransfer.ts의 MAX_SKILL_INTRO_CHARS) — 넘으면 400. */
   const INTRO_MAX = 500;
@@ -422,7 +422,7 @@
           method: "POST",
           body: JSON.stringify({ skill: skill.slug }),
         });
-        notify(`"${skill.name}" 스킬을 공유했습니다. 같은 그룹 동료에게 보여요.`, "ok");
+        notify(`"${skill.name}" 스킬을 공유했습니다. 팀원에게 보여요.`, "ok");
       } else {
         await api(`/api/skill-share/share/${encodeURIComponent(skill.slug)}`, { method: "DELETE" });
         notify(`"${skill.name}" 스킬 공유를 해제했습니다.`, "ok");
@@ -487,7 +487,7 @@
       </div>
     {:else if !learnable.length}
       <div class="empty-note">
-        아직 공유된 스킬이 없습니다. 같은 그룹 동료가 스킬을 공유하면 여기에 보여요.
+        아직 공유된 스킬이 없습니다. 팀원이 스킬을 공유하면 여기에 보여요.
         대화 중에 아바타에게 "공유된 스킬 찾아줘"라고 요청할 수도 있습니다.
       </div>
     {:else if !filtered.length}
@@ -657,7 +657,7 @@
           <div class="skill-mine-row"><span class="sk-mine-desc">"{mineQuery.trim()}"에 맞는 스킬이 없습니다.</span></div>
         {/each}
       </div>
-      <p class="sk-share-hint">공유한 스킬은 같은 그룹 동료(아바타 공유가 켜진 그룹)에게만 보입니다.</p>
+      <p class="sk-share-hint">공유한 스킬은 아바타가 팀 공개일 때 팀원에게 보입니다.</p>
     {/if}
   </section>
   </div>

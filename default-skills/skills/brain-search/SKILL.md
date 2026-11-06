@@ -1,6 +1,6 @@
 ---
 name: brain-search
-description: Recall from the second brain — search the curated wiki/ notes in your knowledge repo BEFORE answering anything that could draw on accumulated knowledge (owner preferences, prior decisions, people/projects, recurring topics). Read-only; works on the personal brain (mcp__brain__*). Available to the owner and trusted same-group teammates.
+description: Recall from the second brain — search the curated wiki/ notes in your knowledge repo BEFORE answering anything that could draw on accumulated knowledge (owner preferences, prior decisions, people/projects, recurring topics). Read-only; works on the personal brain (mcp__brain__*). Available to the owner and trusted teammates.
 ---
 
 # brain-search — recall from the second brain
@@ -17,7 +17,7 @@ recurring topic. Prefer recalling what is already written down over re-asking th
 ## Tools (read-only)
 - **Personal brain:** `mcp__brain__search` (ranked hits with path + snippet) then `mcp__brain__get_note`
   to read a full note (wiki-scoped; `mcp__repo__read_file` reads other repo paths).
-- There is no team brain and no group repository (both were removed): the second brain is personal
+- There is no team brain and no shared team repository (both were removed): the second brain is personal
   only. A mention of `mcp__group_brain__*` or `mcp__group_repo__*` predates that removal.
 
 ## How to search well

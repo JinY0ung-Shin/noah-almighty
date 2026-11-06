@@ -1,6 +1,6 @@
 ---
 name: brain-migrate
-description: One-time idempotent upgrade of an already-connected personal knowledge repo to the second-brain vault layout. Use when the owner asks to "set up / upgrade my second brain", or when a connected repo predates the vault layout (no wiki/ folder, an old CLAUDE.md stub). Creates the missing wiki/ skeleton and seeds the brain philosophy WITHOUT ever overwriting existing files. Uses only mcp__repo__*; the second brain is personal, so never a group repo.
+description: One-time idempotent upgrade of an already-connected personal knowledge repo to the second-brain vault layout. Use when the owner asks to "set up / upgrade my second brain", or when a connected repo predates the vault layout (no wiki/ folder, an old CLAUDE.md stub). Creates the missing wiki/ skeleton and seeds the brain philosophy WITHOUT ever overwriting existing files. Uses only mcp__repo__*; the second brain is personal, so never a shared team repo.
 ---
 
 # brain-migrate — upgrade an existing repo to the vault layout
@@ -12,8 +12,8 @@ skill performs that upgrade **idempotently** — running it twice changes nothin
 
 ## Scope
 Personal repo only: `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
-The second brain is personal — there is no team brain and groups have no shared repository, so if
-the user asks to set one up for a group, say so plainly.
+The second brain is personal — there is no team brain and no shared team repository, so if
+the user asks to set one up for the team, say so plainly.
 
 ## Procedure (create-if-absent only — NEVER overwrite)
 1. **List the current tree** with `mcp__repo__list_files`. Do not assume. Call every tool by its full

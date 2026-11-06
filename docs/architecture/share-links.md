@@ -9,8 +9,8 @@
 - **A HUMAN-initiated export of ONE deck card**, the equivalent of downloading the .pptx and forwarding
   it. It authorises reading ONE card's bytes — the download plus the slide renders stamped with the
   card's id — and nothing else. It is **not a trust source**: it never touches `isTrustedFor`, avatar
-  visibility or tool access, and it is **deliberately not group-bounded**: any signed-in, non-suspended
-  Noah user holding the link can view the renders and download the file (speaker notes included).
+  visibility or tool access, and it is **deliberately not visibility-bounded**: any signed-in, non-suspended
+  Noah user (i.e. any approved teammate — signup always needs approval since 2026-11-06) holding the link can view the renders and download the file (speaker notes included).
 - **PPTX download cards only** (`isPptxCard`: a visible `kind:"file"` with the PPTX media type) whose
   bytes still resolve as a `.pptx` on disk (`resolveShareableDeck`).
 - **The creator is the CONVERSATION owner** (`conversationOwner(cid) === user.id`) — of an own-avatar
@@ -75,7 +75,7 @@
 2. The creator is not suspended.
 3. `shareableThread(store, creator, cid)`: the conversation is still owned by the creator; its avatar is the
    creator's own; `group:` threads never; any other namespaced id fails closed; a colleague thread only while
-   `resolveChatAvatar(creator, avatarId)` still succeeds (the avatar owner went private, left the shared group or
+   `resolveChatAvatar(creator, avatarId)` still succeeds (the avatar owner went private or
    was suspended → the link dies).
 4. The card's bytes still resolve as a `.pptx` (`resolveShareableDeck`).
 5. For a slide: the index is strict (`/^[1-9]\d?$/`), inside `slide_ids_json`, and the render resolves.
@@ -183,8 +183,9 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
   link keeps serving the earlier file until it expires or is revoked. The success text OPENS with a SECURITY
   banner (a bearer link: give it ONLY to the user, never to a file, the repo or another site), states the
   expiry in KST, created vs reused, the deck and slide count (or download-only), the URL on its own line, how
-  to revoke, and — read live from `signupMode` — that anyone who can reach Noah can sign up and open it when
-  sign-up is open. Every ok result, created or reused, also carries the conversation's OTHER unexpired links
+  to revoke, and who can open it (any signed-in teammate). (The open-signup audience caveat, read live from
+  `signupMode` through `FileOutputToolsContext.signupOpen`, was removed with the `open` signup mode on
+  2026-11-06.) Every ok result, created or reused, also carries the conversation's OTHER unexpired links
   (`ShareLinkResult.otherActiveLinks` via `otherActiveShareLinks`: file name + expiry, newest first, never a
   URL — each is a bearer credential): a link never follows a rebuild, so an earlier build's link still shows
   the old version. The result text renders them as ONE line between the created/reused line and the URL (at
@@ -196,8 +197,7 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
   data-driven owner sections are not budgeted), else — on any run with file output — a redirect to the card's
   공유 링크 button. describe_system has an owner line
   (available + audience/expiry/revoke facts, the one-link rule scoped to a delivered CARD — a rebuild
-  re-delivered with share_file is a new card and an earlier link keeps serving the earlier file — and the
-  sign-up caveat, or not available + why + the button redirect) and a non-owner line (the
+  re-delivered with share_file is a new card and an earlier link keeps serving the earlier file; or not available + why + the button redirect) and a non-owner line (the
   person owns this conversation, so the button works for them). The `files-canvas` manual topic carries the
   exception to "artifacts are scoped to their conversation", with the same card-scoped rule.
 - The activity row shows the expiry (`7일`), never the opaque id: `mcpToolInputSummary`
@@ -215,7 +215,8 @@ Every JSON answer (401/404 included) is `Cache-Control: no-store`. Errors are Ko
 - **`ShareLinkDialog`** is a portaled Modal and therefore NEVER calls `confirmAction` or `notify` (a
   portaled modal inerts everything else under `<body>`, including App's ConfirmationDialog and Toasts):
   revoke confirms inline, errors render in the card. States: loading → none (1일 / 7일(기본) / 30일, the
-  이전 링크 만료 note, the audience note — its sign-up-open variant from bootstrap `signupMode`) → active
+  이전 링크 만료 note, the audience note — the constant `SHARE_AUDIENCE_NOTE` in `lib/shareLinks.ts`, one wording now that signup
+  always needs approval) → active
   (readonly absolute URL, 복사, expiry + view count, the `created:false` and `url: null` notes, 공유 해제).
 - **Settings**: 내 아바타 → 권한·연결 → 공유 링크 (`SettingsShareLinks`, loaded on `active`): 복사 for live
   links, 해제 through `confirmAction` (`tone: "danger"`), 삭제 without confirmation for an expired row.

@@ -3,6 +3,9 @@
 > **2026-10-30: the GROUP half of this plan is removed (user decision).** The team brain
 > (`mcp__group_brain__*`, group vault scaffolding, the group knowledge-graph view) no longer exists; the
 > second brain is personal only. Decision 1 and Phase 4 below are historical.
+> **2026-11-06: groups themselves are retired** (one Noah instance = one team; every approved user is a
+> teammate). "Trusted same-group teammates" below now reads "trusted teammates" — see
+> [`architecture/team-trust.md`](architecture/team-trust.md).
 
 Evolve the per-user (and per-group) git knowledge repo from a passive skill store into
 an active, self-maintaining **second brain** (Karpathy LLM-Wiki + mem0 consolidation +

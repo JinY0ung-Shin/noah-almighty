@@ -1,5 +1,5 @@
-// Group knowledge repositories are retired (user decision 2026-10-30): groups
-// stay only as the avatar-sharing / trust / skill-sharing unit. An existing
+// Group knowledge repositories are retired (user decision 2026-10-30; groups
+// themselves followed on 2026-11-06, single team). An existing
 // deployment's DB columns (`groups.knowledge_*`, the group-knowledge OFF-sets)
 // are dropped by migrate() behind the pre-retirement backup, and Noah's clones
 // (`<dataDir>/group-knowledge`) are quarantined, never deleted.
@@ -31,15 +31,27 @@ function columns(dbPath: string, table: string): string[] {
   }
 }
 
-/** A deployment the last release left: a group with a connected repo, OFF-sets, and a clone on disk. */
+/**
+ * A deployment an older release left: a group (the legacy tables, re-created
+ * raw — this build never creates them) with a connected repo, OFF-sets, and a
+ * clone on disk. The single-team marker is removed, as such a deployment never
+ * had it; the owner is a member of the (avatar-sharing) group, so the
+ * single-team conversion keeps them active.
+ */
 function seedLegacy(config: AppConfig) {
   const store = new Store(config);
   const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-  const group = store.createGroup({ name: "Team" });
-  store.addGroupMember(group.id, owner.id, "admin");
   store.touchConversation(owner.id, "own-chat", owner.id, "안녕");
   store.close();
+  const group = { id: "legacy-team" };
   const raw = new Database(config.dbPath);
+  raw.exec(`
+    CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT DEFAULT '', created_by TEXT, created_at TEXT);
+    CREATE TABLE group_members (group_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', created_at TEXT, PRIMARY KEY (group_id, user_id));
+  `);
+  raw.prepare("INSERT INTO groups (id, name) VALUES (?, 'Team')").run(group.id);
+  raw.prepare("INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'admin')").run(group.id, owner.id);
+  raw.prepare("DELETE FROM app_config WHERE key = 'single_team:migrated'").run();
   raw.exec("ALTER TABLE groups ADD COLUMN knowledge_repo TEXT");
   raw.exec("ALTER TABLE groups ADD COLUMN knowledge_branch TEXT");
   raw.exec("ALTER TABLE groups ADD COLUMN knowledge_selected TEXT");
@@ -56,7 +68,7 @@ function seedLegacy(config: AppConfig) {
 }
 
 describe("group knowledge repository retirement", () => {
-  it("backs the DB up, drops the retired columns, and keeps groups and memberships", () => {
+  it("backs the DB up, drops the retired columns (and, since 2026-11-06, the group tables), and keeps the owner's data", () => {
     const config = configFor("legacy");
     const seed = seedLegacy(config);
 
@@ -81,9 +93,11 @@ describe("group knowledge repository retirement", () => {
       ] as const) {
         expect(columns(config.dbPath, table), `${table}.${column}`).not.toContain(column);
       }
-      // Groups stay: the group, its admin and the owner's own conversation.
-      expect(store.getGroup(seed.group.id)?.name).toBe("Team");
-      expect(store.groupRoleFor(seed.owner.id, seed.group.id)).toBe("admin");
+      // Groups are retired too: the tables are gone (the backup has them), and
+      // the owner — a member — stays active with their own conversation.
+      expect(columns(config.dbPath, "groups")).toEqual([]);
+      expect(columns(config.dbPath, "group_members")).toEqual([]);
+      expect(store.adminUserDetail(seed.owner.id)?.suspended).toBe(false);
       expect(store.listConversations(seed.owner.id).map((c) => c.id)).toEqual(["own-chat"]);
     } finally {
       store.close();
@@ -133,7 +147,7 @@ describe("group knowledge repository retirement", () => {
     try {
       expect(store.retirementGate().backupPath).toBeNull();
       expect(fs.existsSync(path.join(config.dataDir, "backups"))).toBe(false);
-      expect(columns(config.dbPath, "groups")).not.toContain("knowledge_repo");
+      expect(columns(config.dbPath, "groups")).toEqual([]);
       expect(columns(config.dbPath, "users")).not.toContain("group_knowledge_off_default");
       expect(columns(config.dbPath, "conversations")).not.toContain("group_knowledge_off");
       retireGroupKnowledgeRepos({ config, store });
@@ -148,12 +162,12 @@ describe("group knowledge repository retirement", () => {
     const config = configFor("all-null");
     new Store(config).close();
     const raw = new Database(config.dbPath);
-    raw.exec("ALTER TABLE groups ADD COLUMN knowledge_repo TEXT");
+    raw.exec("ALTER TABLE users ADD COLUMN group_knowledge_off_default TEXT");
     raw.close();
     const store = new Store(config);
     try {
       expect(store.retirementGate().backupPath).toBeNull();
-      expect(columns(config.dbPath, "groups")).not.toContain("knowledge_repo");
+      expect(columns(config.dbPath, "users")).not.toContain("group_knowledge_off_default");
     } finally {
       store.close();
     }

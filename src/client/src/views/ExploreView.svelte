@@ -49,16 +49,14 @@
   $: profileReady = isProfileReady($appState.user);
   $: knowledgeReady = isKnowledgeReady($appState.user);
   $: accessReady = isAccessReady($appState.user);
-  // 아바타는 같은 그룹원에게만 보이므로, 그룹이 없는 사용자에게는 자기 아바타만
-  // 남습니다. 빈 목록처럼 보이는 이유를 카드 아래에서 설명해 줍니다.
+  // 아바타는 팀원(승인된 사용자)에게만, 그리고 팀 공개일 때만 보이므로 팀원이
+  // 아직 없거나 모두 비공개면 자기 아바타만 남습니다. 빈 목록처럼 보이는 이유를
+  // 카드 아래에서 설명해 줍니다.
   $: hasPeerAvatars = $appState.avatars.some((av) => av.id !== $appState.user?.id);
-  const GROUP_HINT = "그룹에 소속되면 동료의 아바타가 여기에 보여요. 그룹 참여는 관리자에게 문의하세요.";
+  const TEAM_HINT = "팀원이 아바타를 팀 공개로 두면 여기에 보여요. 새 팀원은 관리자가 가입을 승인하면 합류합니다.";
 
   function rank(av: AvatarSummary) {
-    if (av.id === $appState.user?.id) return 0;
-    // Group shared agents sort with same-group teammates (both are group-scoped).
-    if (av.sharesGroup) return 1;
-    return 2;
+    return av.id === $appState.user?.id ? 0 : 1;
   }
 
   function matches(av: AvatarSummary, parts: string[]) {
@@ -195,7 +193,7 @@
     : error
       ? `아바타 목록을 불러오지 못했습니다: ${error}`
       : !$appState.avatars.length
-        ? "같은 그룹의 아바타가 아직 없습니다."
+        ? "팀원의 아바타가 아직 없습니다."
         : !avatars.length
           ? `${displayQuery} 검색 결과가 없습니다.`
           : displayQuery
@@ -223,7 +221,7 @@
 <header class="view-header">
   <div>
     <h1>탐색</h1>
-    <p>같은 그룹의 아바타와 대화를 시작하세요</p>
+    <p>팀원의 아바타와 대화를 시작하세요</p>
   </div>
 </header>
 
@@ -279,8 +277,8 @@
     </div>
   {:else if !$appState.avatars.length}
     <div class="empty-note">
-      같은 그룹의 아바타가 아직 없습니다.
-      {GROUP_HINT}
+      팀원의 아바타가 아직 없습니다.
+      {TEAM_HINT}
       <button class="linkish small" type="button" on:click={() => goView("settings", "profile")}>내 아바타 공개 범위 설정</button>
     </div>
   {:else if !avatars.length}
@@ -312,8 +310,6 @@
                 <strong>{av.displayName}</strong>
                 {#if av.id === $appState.user?.id}
                   <span class="tag accent">나</span>
-                {:else if av.sharesGroup}
-                  <span class="tag write">같은 그룹</span>
                 {/if}
                 {#if av.visibility === "private"}
                   <span class="tag">비공개</span>
@@ -343,7 +339,7 @@
         </div>
       {/each}
       {#if !hasPeerAvatars && !displayQuery}
-        <div class="empty-note">{GROUP_HINT}</div>
+        <div class="empty-note">{TEAM_HINT}</div>
       {/if}
     </div>
   {/if}

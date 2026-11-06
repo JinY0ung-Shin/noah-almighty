@@ -6,7 +6,7 @@ import path from "node:path";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/server/types.js";
-import { shareGroup, signup, withTempDir } from "./helpers.js";
+import { signup, withTempDir } from "./helpers.js";
 
 // PPT share links END TO END, across the seams no single lane owns:
 //  1. the owner's interactive turn through the REAL chat route, runAgentStream
@@ -214,8 +214,8 @@ describe("share links end to end (chat route → runPiAgent → /mcp → tool �
     expect(lines[0]).toMatch(
       /^SECURITY: this URL is a bearer link — anyone signed in to Noah who has it can view the slides and download the \.pptx \(speaker notes included\) until \d{4}-\d{2}-\d{2} \d{2}:\d{2} KST\. Give it ONLY to the user/,
     );
-    // A fresh deployment signs anyone up — the result says so.
-    expect(linkText).toContain("Sign-up is OPEN on this server");
+    // Open sign-up is retired (approval is the team gate): no such caveat.
+    expect(linkText).not.toContain("Sign-up is OPEN");
     expect(linkText).toContain('Created a new share link for "3분기 보고.pptx" — it shows 1 slide render(s) plus the .pptx download');
     const urlLine = lines.find((line) => line.startsWith("URL: "));
     expect(urlLine).toMatch(/^URL: http:\/\/127\.0\.0\.1:\d+\/#\/share\/[A-Za-z0-9_-]{43}$/);
@@ -291,8 +291,7 @@ describe("share links end to end (chat route → runPiAgent → /mcp → tool �
     const ownerId = (await signup(owner, "gateowner").expect(201)).body.user.id as string;
     const colleague = request.agent(app);
     await signup(colleague, "gatecolleague").expect(201);
-    // Co-members: the colleague reaches (and is trusted by) the owner's avatar.
-    await shareGroup(owner, ["gateowner", "gatecolleague"]);
+    // Teammates (both approved): the colleague reaches (and is trusted by) the owner's avatar.
 
     const turns: Array<[string, ReturnType<typeof request.agent>, string]> = [
       ["own", owner, ownerId],

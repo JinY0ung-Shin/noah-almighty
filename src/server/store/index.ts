@@ -8,7 +8,6 @@ import { withRoutines } from "./routines.js";
 import { withAvatars } from "./avatars.js";
 import { withConversations } from "./conversations.js";
 import { withAdmin } from "./admin.js";
-import { withGroups } from "./groups.js";
 import { withAvatarTasks } from "./avatarTasks.js";
 import { withShareLinks } from "./shareLinks.js";
 import { withRetiredPersonalAgents } from "./retiredPersonalAgents.js";
@@ -39,12 +38,10 @@ export { AVATAR_TASK_RESTART_ERROR } from "./avatarTasks.js";
  * the `declare`d cross-domain method signatures on StoreBase already cover.
  */
 const ComposedStore = withTodos(withRetiredGroupAgents(withRetiredExternalAvatars(withRetiredPersonalAgents(withShareLinks(withDirectMessages(withAvatarTasks(
-  withGroups(
-    withAdmin(
-      withConversations(
-        withAvatars(
-          withRoutines(withKnowledgeRepo(withSecrets(withUsers(StoreBase)))),
-        ),
+  withAdmin(
+    withConversations(
+      withAvatars(
+        withRoutines(withKnowledgeRepo(withSecrets(withUsers(StoreBase)))),
       ),
     ),
   ),

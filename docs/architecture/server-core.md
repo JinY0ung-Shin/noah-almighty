@@ -28,32 +28,31 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   **discovery** (`/api/avatars*`) + **conversations** + the **chat SSE** endpoint live in
   `routes/chat.ts`; `/api/audit` lives in `routes/admin.ts`.
 - **Router mount order reproduces the original relative route order**
-  (auth→profile→plugins→knowledgeRepo→groups→routines→chat→admin). The error middleware + SPA
-  catch-all must stay LAST. Don't reorder mounts.
+  (auth→profile→plugins→knowledgeRepo→routines→chat→admin; the `groups` router was removed 2026-11-06).
+  The error middleware + SPA catch-all must stay LAST. Don't reorder mounts.
 - The only shared mutable state across routers is the effective model: threaded as an
   `ObservedModelHolder {get,set}` through `deps` (chat router writes via the `onModel` callback;
   `/api/admin/system` reads it). Don't reintroduce a module-level `let`.
 
 ## Store (`store.ts` barrel → `store/*.ts`)
 - **`store.ts` is a thin barrel; the `Store` facade is COMPOSED from per-domain mixins** (split 2026-06,
-  T3.1). `store/index.ts` builds `const ComposedStore = withGroups(withAdmin(…withUsers(StoreBase)))`
+  T3.1). `store/index.ts` builds `const ComposedStore = withTodos(…withAdmin(…withUsers(StoreBase)))`
   and `export class Store extends ComposedStore`; the shared base + schema/migrations + cross-cutting
   helpers (`db`, `secret`, `count`, `addColumnIfMissing`) live in `store/internal.ts` (`StoreBase`),
   and each domain is a `(Base) => class extends Base {…}` mixin in
-  `store/{users,avatars,conversations,groups,routines,knowledgeRepo,secrets,admin}.ts`. The PUBLIC
-  surface is UNCHANGED — every caller still does `new Store(config)` + `store.foo()`, and `./store`
-  re-exports `normalizeHashtags`/`MAX_HASHTAGS`/the `*_KEY` consts. Compose order is irrelevant
+  `store/{users,avatars,conversations,routines,knowledgeRepo,secrets,admin,…}.ts` (the `groups` mixin was
+  removed 2026-11-06). The PUBLIC surface is UNCHANGED — every caller still does `new Store(config)` +
+  `store.foo()`, and `./store` re-exports `normalizeHashtags`/`MAX_HASHTAGS`/the `*_KEY` consts. Compose order is irrelevant
   (method names disjoint), one shared `this.db`/`this.secret`. New methods go in the matching domain
   mixin (or `StoreBase` if cross-cutting).
 - **`count(sql, …)` is the only count path** (in the base). Don't hand-roll `(… .get() as {c:number}).c`.
-- **Row mappers each have a named `*Row` interface** (`UserRow`/`GroupRow`/`PluginRow`/`GroupMemberRow`/
-  `RoutineJobRow`). New mappers follow that — don't use reflective `Parameters<Store["toX"]>[0]`.
-- **The co-membership SQL lives in ONE fragment** (T3.2 done): `SHARING_TEAMMATES` in
-  `store/avatars.ts` (group_members self-join + `groups.avatar_sharing` gate: NULL/1 = on, only an
-  explicit 0 is off — keep the TS `!== 0` reads in lockstep). ALL four consumers build on it —
-  `VISIBILITY_WHERE` (list + search share it), `groupTeammateIds`, `shareAnyGroup` (= `isTrustedFor`),
-  `sharedGroupNames` — so reach and elevation can never drift apart, and the `search_avatars` MCP
-  scope automatically matches the browse scope.
+- **Row mappers each have a named `*Row` interface** (`UserRow`/`PluginRow`/`RoutineJobRow`/…). New mappers follow that — don't use reflective `Parameters<Store["toX"]>[0]`.
+- **The team relation lives in ONE fragment + ONE TS twin** (T3.2, rebuilt for the single team
+  2026-11-06): `VIEWER_IS_TEAMMATE` in `store/avatars.ts` (the viewer is an existing, not-suspended user)
+  is embedded by `VISIBILITY_WHERE` (list + search share it) and `LEARNABLE_SKILLS_FROM`;
+  `isActiveTeammatePair` backs `isTrustedFor` and `isVisibleTo` — so reach, elevation and skill sharing can
+  never drift apart, and the `search_avatars` MCP scope automatically matches the browse scope. (It
+  replaced the group `SHARING_TEAMMATES` self-join and its four consumers.) → [`team-trust.md`](team-trust.md).
 - **Schedule decode lives in ONE place:** `scheduleFromRow` (via `parseDaysOfWeek`, which try/catches
   the `JSON.parse` so a corrupt `days_of_week` row can't abort a scheduler tick). `toRoutineJob` reuses
   it. `create/updateRoutineJob` accept either the legacy flat fields OR a full `RoutineSchedule` object
@@ -66,7 +65,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `workspaces/`, `pi-repo-copies/`, the knowledge clone, the ssh-trust dir, the avatar image, per-conversation
   media) and the user's pi sandbox workspace (`<PI_WORKSPACES_DIR>/u-<key>`, pi-runtime.md "Cascades") needs a
   best-effort sweep in the `routes/admin.ts` delete handler. Audit rows are RETAINED by design (`actor_*` dangle,
-  like `groups.created_by`).
+  like `shared_skill_blocks.blocked_by`).
 - **`migrate()` runs on EVERY `new Store()`, so a value-guarded backfill is NOT one-time.** An
   `UPDATE … WHERE col IS NULL` re-fires each boot and clobbers rows the APP later creates NULL on purpose (a fresh
   signup's `onboarded_at`; a user-typed `[예약 작업]` title vanishing from chat). A backfill whose predicate can
@@ -142,14 +141,13 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   a pass with ZERO failures stamps `retired:group_agents` (read by EXISTENCE). A marked boot returns at once
   unless a pending row exists or a retired table re-appears (an older release booted after the stamp), which
   re-runs the full purge — so the `group:` avatar-id prefix, the `group-` workspace prefix, the two table
-  names, the index name and both marker keys stay reserved FOREVER. Groups, members and
-  audit rows are untouched; AdminView keeps the `group_agent_create/delete/update/image` labels for retained
+  names, the index name and both marker keys stay reserved FOREVER. Audit rows are untouched; AdminView keeps the `group_agent_create/delete/update/image` labels for retained
   audit rows. The row-keyed helpers (pending document, session-artifact sweep, name-prefix sweep) are shared
   with the personal-bot retirement in `src/server/retiredSessionFiles.ts`. `migrateGroupAgentsMulti` and the
-  boot `migrateGroupAgentDiskArtifacts` rename are gone; deleting a group now removes only its rows. Tests:
+  boot `migrateGroupAgentDiskArtifacts` rename are gone. Tests:
   `tests/retire-group-agents.test.ts`.
-- **Group knowledge repositories are RETIRED (2026-10-30, user decision).** Groups stay only as the
-  avatar-sharing / trust / skill-sharing (+ admin tool policy) unit. Behind `retirementGate()` (DB backup
+- **Group knowledge repositories are RETIRED (2026-10-30, user decision).** (Groups themselves followed on
+  2026-11-06, next entry.) Behind `retirementGate()` (DB backup
   first — `retirementDataPresent` counts a `RETIRED_COLUMNS` entry only while it holds a value), `migrate()`
   drops `groups.knowledge_repo`/`knowledge_branch`/`knowledge_selected`, `users.group_knowledge_off_default`
   and `conversations.group_knowledge_off` (`dropColumnIfPresent`); every name is reserved forever.
@@ -163,6 +161,60 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `normalizeMcpToolGroups`), the composer's 그룹 지식 toggle and the 그룹 카드 repo section. AdminView keeps
   the `group_repo_*` audit labels for retained rows. A `group-<name>` skill root an older build copied into a
   sandbox is pruned like any unused root (`piSkills.ts`). Tests: `tests/retire-group-knowledge-repos.test.ts`.
+- **Groups are RETIRED (2026-11-06, user decision): ONE Noah instance = ONE team.** Every approved
+  (not suspended) user is a teammate; trust, visibility and skill sharing ride ONE team relation
+  ([`team-trust.md`](team-trust.md)). `migrateSingleTeam()` (`store/internal.ts`, called from `migrate()`
+  after `migrateTodoStatuses()` and ABOVE the retirement gate) does the conversion. It runs DELIBERATELY even
+  while the gate is HELD (a failed backup): it deletes nothing, and waiting would leave every non-member a
+  trusted teammate until a backup succeeds.
+  - **Once**, while the marker `single_team:migrated` (`SINGLE_TEAM_MARKER_KEY`, an `app_config` row read by
+    EXISTENCE, so a `SESSION_SECRET` rotation can't un-mark it) is absent. A DB with no `groups` table (a
+    fresh install) is just stamped (in a transaction that also runs the blocks copy below, should an older
+    release have left a `shared_skill_group_blocks` table). Otherwise ONE transaction: M = members of a group whose `avatar_sharing`
+    is NULL or != 0; every user with `suspended = 0`, NOT holding the `admin` role and NOT in M is
+    SUSPENDED (fail closed — they were outside every team, and approval is now the only way in; with NO
+    avatar-sharing group that is every non-admin), their `sessions` rows deleted, and one audit row each
+    (`single_team_suspend`, actor NULL / `system`, Korean detail naming `@username`). Suspension also stops
+    their routines and their personal API keys (an external integration fails until re-approval). The global
+    tool policy `mcp_tool_policy` is seeded with the INTERSECTION of the non-null `allowed_mcp_tool_groups` of
+    every group with at least one `group_members` row (fail closed; an empty group's policy restricted no one,
+    so it does not count; none → key absent); when written, an audit row `set_tool_policy` (actor NULL /
+    `system`, detail `단일 팀 전환: 그룹별 MCP 도구 정책을 하나로 합쳐 전체 정책으로 설정했습니다 = …` or
+    `(모두 차단)`). Every `shared_skill_group_blocks` row is copied into `shared_skill_blocks` in the same
+    transaction (union across groups = fail closed) and the copy cursor is stamped (below). The marker is
+    stamped. After commit, ONE `logger.warn` with `{count, usernames, mcpToolPolicy}`. An admin re-approves
+    the suspended users who belong. The schema reads are defensive (missing `group_members` / `avatar_sharing` /
+    `allowed_mcp_tool_groups` tolerated).
+  - **Later boots** while `shared_skill_group_blocks` still exists (the gate held the drop, or an older
+    release re-created it): only rows whose `created_at` is later than the copy cursor are copied
+    (`INSERT OR IGNORE`, before the gated drop); NULL-`created_at` rows are skipped. The cursor is the
+    `app_config` key `single_team:blocks_copied`, read through its plain `updated_at` (fallback: the marker's
+    `updated_at`) and moved by every copy. Why: an UNBLOCK — including of a block an older release created
+    after the conversion — must never be undone by a re-copy from the old table.
+  - **Behind `retirementGate()`** (end of `migrate()`), only once the marker exists: `DROP INDEX IF EXISTS`
+    `idx_shared_skill_group_blocks_skill`, `idx_group_members_user`, `idx_group_members_group`, then
+    `DROP TABLE IF EXISTS` `shared_skill_group_blocks`, `group_members`, `groups`. All three tables are in
+    `RETIRED_TABLES`, so the pre-retirement DB backup is taken first. The CREATE TABLEs and the
+    `addColumnIfMissing("groups", …)` calls are gone; the `RETIRED_COLUMNS` `groups.knowledge_*` entries are
+    harmless once the table is gone (`dropColumnIfPresent`/`retirementDataPresent` are table-defensive).
+  - **Rollback**: an older release booted after the drop re-creates the group tables EMPTY (every user then
+    sits outside any group — trust and visibility collapse until this release is back); on the next boot of
+    this release the marker is present, so nothing is suspended again — blocks the older build created are
+    copied and the tables dropped again. Consequence: an account created during the rollback comes back
+    ACTIVE, i.e. a trusted teammate. The operator must never set signup to `open` on the older release and
+    must re-check the user list after re-upgrading (README "Upgrade").
+  - **Removed with it**: the `store/groups.ts` mixin, `routes/groups.ts` (`/api/me/groups*`), every
+    `/api/admin/groups*` route, `GET /api/me/users/search` + `searchUsers`, `shareAnyGroup`/
+    `groupTeammateIds`/`sharedGroupNames`/`SHARING_TEAMMATES`, the types `Group`/`GroupMember`/`GroupRole`/
+    `UserGroupMembership`/`AdminGroupSummary`, `User.groups`, the Explore membership flag on `AvatarSummary`,
+    `AdminStats.groups`, `OwnerState.groups`, the group-admin role, the per-group avatar-sharing switch
+    (nothing replaces it), the signup mode `open`, and the client's 그룹 view. Group-admin powers (members,
+    shared-skill blocks) went to the SYSTEM admin: approval is membership, blocks live at
+    `/api/admin/shared-skills*` ([`avatar-collab.md`](avatar-collab.md)), the tool policy at
+    `/api/admin/tool-policy`. AdminView keeps the `group_*` audit labels for retained rows.
+  - **Reserved FOREVER**: the three table names and three index names, the `groups.avatar_sharing` /
+    `groups.allowed_mcp_tool_groups` columns, the `/api/me/groups*` and `/api/admin/groups*` paths, the marker
+    key `single_team:migrated`, the cursor key `single_team:blocks_copied`, and (already) the `group:` / `group-` prefixes. Tests: `tests/retire-groups.test.ts`.
 - **The retired Claude Agent SDK runtime (removed 2026-10-29, decision U8) leaves CLI state behind.** Through
   `retirementGate()` (DB backup first): the `claude_oauth_token` app_config key (the old `claude setup-token`
   subscription token) and the skill-discovery cache key (`skill_discovery_cache`) are deleted and both names are
@@ -179,7 +231,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     purge. When `retirementDataPresent` (read-only, schema-defensive, safe pre-migrate) finds anything a
     retirement would delete — a retired table (`server_agents`, `server_agent_sessions`, `group_agents`,
     `group_agents_legacy`, `external_avatar_images`, `personal_agents`, `bot_tasks`,
-    `avatar_trusted_users`), a retired `app_config` key (`server_agents_enabled`,
+    `avatar_trusted_users`, `groups`, `group_members`, `shared_skill_group_blocks`), a retired `app_config` key (`server_agents_enabled`,
     `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`, the
     three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
     `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, or a bot-bound routine — the

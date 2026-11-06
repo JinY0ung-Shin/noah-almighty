@@ -15,8 +15,8 @@ not actually say. Never invent facts.
 
 ## Scope
 - **Personal repo:** `mcp__repo__write_file` then `mcp__repo__commit`.
-- **Personal only:** groups have no shared repository (group repositories and the team brain were
-  removed), so a team fact is captured in the owner's own repo like any other.
+- **Personal only:** there is no shared team repository (group repositories, the team brain and groups
+  themselves were removed), so a team fact is captured in the owner's own repo like any other.
 - **No repo connected (personal):** if a write returns `NO_REPO` and `mcp__repo__create_repo` is
   available, offer to create the knowledge repo first; otherwise ask the owner to connect one.
 

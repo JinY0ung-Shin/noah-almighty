@@ -27,7 +27,7 @@ import {
   openShareLink,
   revokeShareLink,
   sanitizeSharePayload,
-  shareAudienceNote,
+  SHARE_AUDIENCE_NOTE,
   shareDateLabel,
   shareDateTimeLabel,
   shareOwnerLine,
@@ -265,13 +265,10 @@ describe("display rules", () => {
     expect(shareOwnerLine(payload({ ownerName: "", ownerUsername: "", expiresAt: "" }))).toBe("알 수 없는 사용자님이 공유");
   });
 
-  it("tells the audience the truth about sign-up and speaker notes", () => {
-    expect(shareAudienceNote("closed")).toBe(
+  it("tells the audience the truth about who can open it and speaker notes", () => {
+    // Open sign-up is retired (single team): only an approved Noah user can.
+    expect(SHARE_AUDIENCE_NOTE).toBe(
       "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
-    );
-    expect(shareAudienceNote(undefined)).toBe(shareAudienceNote("approval"));
-    expect(shareAudienceNote("open")).toBe(
-      "링크를 받은 사람은 누구나 Noah에 가입·로그인해 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
     );
   });
 

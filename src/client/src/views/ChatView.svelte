@@ -256,8 +256,8 @@
     return effectiveMcpToolGroups(selected);
   }
 
-  // Admin per-group tool policy from /api/me (`user.allowedMcpToolGroups`, the
-  // effective intersection): blocked groups render disabled in the picker; the
+  // Admin MCP tool policy from /api/me (`user.allowedMcpToolGroups`, the one
+  // deployment-wide allowlist): blocked groups render disabled in the picker; the
   // server clamps every run regardless. A top-level `$:` derivation, NOT a
   // helper-body read — legacy-mode template helper bodies compile inside
   // $.untrack and would go stale. Helpers below take it as a PARAMETER so the
@@ -1742,7 +1742,7 @@
               />
               <span>
                 <strong>{group.labelKo}</strong>
-                <small>{isRequiredMcpToolGroup(group.id) ? "항상 사용 · 매뉴얼과 시스템 상태를 확인합니다. 설정 변경은 기존 권한을 따릅니다." : adminBlocked ? "관리자의 그룹 도구 정책으로 제한된 도구 묶음입니다" : group.descriptionKo}</small>
+                <small>{isRequiredMcpToolGroup(group.id) ? "항상 사용 · 매뉴얼과 시스템 상태를 확인합니다. 설정 변경은 기존 권한을 따릅니다." : adminBlocked ? "관리자의 도구 정책으로 제한된 도구 묶음입니다" : group.descriptionKo}</small>
               </span>
             </label>
           {/each}

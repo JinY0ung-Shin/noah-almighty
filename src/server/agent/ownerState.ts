@@ -3,7 +3,6 @@ import type {
   AppConfig,
   PiSandboxOwner,
   SharedMcpRunState,
-  UserGroupMembership,
 } from "../types.js";
 import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
@@ -21,9 +20,9 @@ import type { TodoSnapshot } from "../../shared/todos.js";
  * ownerToolAccess; describe_system → its tool-result text). Returning raw data
  * only — never formatted strings — keeps both existing outputs byte-identical.
  *
- * NOTE on gating: this returns the ungated facts (e.g. full `secretNames`/
- * `groups`). buildPrompt blanks `secretNames`/`groupMemberships` to `[]` unless
- * `ownerToolAccess`; describe_system always reads them live (it only runs for the
+ * NOTE on gating: this returns the ungated facts (e.g. full `secretNames`,
+ * `teammateCount`). buildPrompt blanks `secretNames` to `[]` and leaves
+ * `teammateCount` unset unless `ownerToolAccess`; describe_system always reads them live (it only runs for the
  * owner). That gating stays at the call sites, not here.
  *
  * NOTE on Confluence: the two sites compute `confluencePatConfigured` from
@@ -58,8 +57,19 @@ export interface OwnerState {
    * them as fact.
    */
   browserSecrets: BrowserSecretPolicy[];
-  /** Groups the owner belongs to, with role + avatar-sharing flag per group. */
-  groups: UserGroupMembership[];
+  /**
+   * Active teammates of the owner: approved (not suspended) users other than
+   * the owner. Noah serves ONE team, so this is the whole reach of the avatar
+   * (who may see it unless it is private, and who is mutually trusted) and the
+   * ask_avatar gate (0 → nobody to consult).
+   */
+  teammateCount: number;
+  /**
+   * Teammates whose avatar the owner's avatar can REACH (active, not private —
+   * `store.countReachableTeammates`). Gates ask_avatar on all three
+   * hand-synced sites; `teammateCount` stays the team size.
+   */
+  reachableTeammateCount: number;
   /** Number of general (work/code) git repos the owner has registered. */
   gitRepoCount: number;
   /** Pending knowledge (request_info) gaps in the owner's inbox. */
@@ -73,7 +83,7 @@ export interface OwnerState {
   /** Experimental (beta) feature keys the owner enabled for this avatar (#50). */
   experimentalFeatures: string[];
   /**
-   * Shared (communal) account flag: trusted same-group teammates may also WRITE
+   * Shared (communal) account flag: trusted teammates may also WRITE
    * to the owner's personal knowledge repo (see repoTools.ts `writeAccess`).
    */
   sharedAccount: boolean;
@@ -109,7 +119,8 @@ export function summarizeOwnerState(
     secretNames: store.listUserSecretNames(avatarUserId),
     shellExposedSecretNames: store.listShellExposedSecretNames(avatarUserId),
     browserSecrets: store.listBrowserSecretPolicies(avatarUserId),
-    groups: store.listUserGroups(avatarUserId),
+    teammateCount: store.countTeammates(avatarUserId),
+    reachableTeammateCount: store.countReachableTeammates(avatarUserId),
     // Lazy: only describe_system reads these; the prompt (buildSystemPromptAppend) path
     // never accesses them, so defer the store queries until a consumer reads them.
     get gitRepoCount() {
@@ -151,7 +162,7 @@ export type GettingStartedGapId = "repo" | "gitToken";
  * Deliberately only TWO ids. Both keep whole capability families dark — with no
  * repository the avatar has no memory, no skills, and nowhere to capture; with
  * no token it can neither create a repository nor commit/push one. Counts that
- * could merely be HIGHER (secrets, plugins, shared/learnable skills, groups) are
+ * could merely be HIGHER (secrets, plugins, shared/learnable skills, teammates) are
  * not gaps: an avatar that recites everything its owner has not done yet nags.
  *
  * Takes the two flags rather than a whole OwnerState so the prompt builder can
@@ -278,7 +289,7 @@ export function rewindTurnState(rewind: AgentRewindInfo): string {
 }
 
 /** Product-wide UI capability; never reads private DM content or presence into agent context. */
-export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in users across groups via the 메시지 dock at the bottom-right corner of the screen (a collapsible chat window available on every view). It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";
+export const DIRECT_MESSAGE_STATE = "Human-to-human DM is available to signed-in teammates via the 메시지 dock at the bottom-right corner of the screen (a collapsible chat window available on every view). It has recent-active contacts, persisted conversations and unread badges. No avatar tool can read or send these DMs; guide the user to the UI. Read manual topic direct-messages for details.";
 
 /**
  * 공용 MCP 서버 lines (`planSharedMcpRun` states) — ONE wording for both
@@ -318,10 +329,27 @@ export function sharedMcpServerLines(
 }
 
 /**
- * Groups have no shared knowledge repository and there is no team brain
- * (both retired 2026-10-30). Said on BOTH metacognition surfaces, because a
- * frozen prompt of an older conversation, a skill or a note may still name
+ * Noah serves ONE team (groups retired 2026-11-06): every approved user is a
+ * teammate, all equal and mutually trusted. ONE wording for both
+ * metacognition surfaces (the prompt's owner team line and describe_system),
+ * each adding the team size its own way: describe_system the LIVE count, the
+ * FROZEN prompt the count as of the conversation's start. Never mentions
+ * groups — they no longer exist.
+ */
+export const TEAM_SENTENCE =
+  "Noah serves a single team: every approved user is a teammate. Teammates see your avatar unless it is private and are mutually trusted (elevated tools on each other's avatars).";
+
+/** "N teammate(s) besides the owner" — the size half of the team line. */
+export function teammateCountPhrase(teammateCount: number): string {
+  return `${teammateCount} teammate${teammateCount === 1 ? "" : "s"} besides the owner`;
+}
+
+/**
+ * There is no shared knowledge repository and no team brain (group
+ * repositories and the team brain retired 2026-10-30, groups themselves
+ * 2026-11-06). Said on BOTH metacognition surfaces, because a frozen prompt of
+ * an older conversation, a skill or a note may still name
  * `mcp__group_repo__*` / `mcp__group_brain__*`.
  */
 export const GROUP_REPOS_RETIRED_SENTENCE =
-  "Groups have NO shared knowledge repository and there is no team brain: both were removed, so the `mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist. If an earlier message, a skill or a note names them, say group repositories were removed and use the owner's personal repository (`mcp__repo__*`) or skill sharing (`mcp__skill_exchange__*`) instead — never look for a workaround.";
+  "There is NO shared team knowledge repository and no team brain: group repositories, the team brain and groups themselves were removed, so the `mcp__group_repo__*` and `mcp__group_brain__*` tools no longer exist. If an earlier message, a skill or a note names them, say they were removed and use the owner's personal repository (`mcp__repo__*`) or skill sharing (`mcp__skill_exchange__*`) instead — never look for a workaround.";

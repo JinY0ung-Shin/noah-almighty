@@ -23,12 +23,12 @@ export {
 
 /**
  * Avatar-to-avatar consultation (#ask-avatar): run ONE headless agent turn
- * against a same-group teammate's avatar and return its answer text.
+ * against a teammate's avatar and return its answer text.
  *
  * Trust model — deliberately identical to a teammate chatting with that avatar
  * in the UI: the asker must be able to REACH the avatar (`resolveChatAvatar`,
- * the visibility gate) AND share a group with its owner (`isTrustedFor`, the
- * single trust choke point). The inner run is the existing trusted-colleague
+ * the visibility gate) AND be trusted by its owner (`isTrustedFor`, the
+ * single trust choke point: both are active members of the one team). The inner run is the existing trusted-colleague
  * viewer class (`viewerIsOwner: false, elevated: true`), so owner-only tools
  * stay locked no matter what `allowHeadlessTools` opens: the target answers
  * with persona + personal-knowledge READ tools (second-brain recall), exactly
@@ -95,7 +95,7 @@ export function preflightAvatarAsk(
   if (targetUser.id === input.askerUserId) {
     return { ok: false, outcome: { ok: false, reason: "self", username } };
   }
-  // Visibility gate (public/group/private + suspended), then the trust gate.
+  // Visibility gate (group/private + suspended), then the trust gate.
   // Both fail as if the avatar didn't exist where that avoids leaking existence.
   const target = store.resolveChatAvatar(input.askerUserId, targetUser.id);
   if (!target) {
@@ -172,7 +172,6 @@ export async function askAvatar(
         // brain / repo read) register; owner gates key off viewerIsOwner=false.
         viewerIsOwner: false,
         elevated: true,
-        trustedViaGroups: store.sharedGroupNames(input.askerUserId, target.id),
         headless: true,
         allowHeadlessTools: true,
         // Depth guard + consultation prompt framing (see promptBuilder).

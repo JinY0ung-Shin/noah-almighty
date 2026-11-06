@@ -149,15 +149,15 @@ send.
 - One shared constant, `DIRECT_MESSAGE_STATE` (`agent/ownerState.ts`), is pushed into
   `buildSystemPromptAppend` (`agent/promptBuilder.ts`) AND into `describe_system`'s **public guide**
   (`agent/systemTools.ts`) — the public half, so it reaches non-owner viewers too. It states where the
-  dock is, that DM crosses groups, and that no avatar tool can read or send DMs.
+  dock is, that every signed-in teammate can use it, and that no avatar tool can read or send DMs.
 - Detail lives in manual topic `direct-messages` (`agent/systemManual.ts`), which the constant points
   at. Update both when the UI moves; the constant is the only DM text in the prompt budget.
 
 ## Design notes and gotchas
-- **DM reach deliberately crosses group boundaries.** Every signed-in user can message every
-  recently-active user, independent of `avatar_sharing`, avatar visibility and group membership — the
-  opposite of avatar discovery (`SHARING_TEAMMATES`). It is human contact, not an avatar ACL; don't
-  route it through `isTrustedFor`.
+- **DM reach is independent of avatar visibility.** Every signed-in user can message every
+  recently-active user, whatever either avatar's 팀 공개/비공개 setting — unlike avatar discovery
+  (`VISIBILITY_WHERE`). It is human contact, not an avatar ACL; don't route it through `isTrustedFor`.
+  (Before the single team, 2026-11-06, this also meant DM crossed group boundaries.)
 - There is **no block, mute, typing indicator, edit/delete or push notification**, and no end-to-end
   encryption: plaintext rows in the server SQLite file, readable by anyone with DB access. Only the two
   participants can read a thread over HTTP — admins have no DM-reading endpoint, by design.

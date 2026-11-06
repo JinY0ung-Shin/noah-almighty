@@ -6,7 +6,7 @@
    not here.
    ============================================================ */
 
-/* Generic icon button — also used outside the rail (SettingsGroupCard, BrainView),
+/* Generic icon button — also used outside the rail (BrainView),
    so the base rides SEMANTIC tokens; the rail restores its own palette below. */
 .icon-button {
   display: inline-grid;

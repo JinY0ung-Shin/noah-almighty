@@ -68,7 +68,7 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
         );
       }
       // Shared (communal) account: opens the owner's knowledge-repo WRITE tools
-      // to trusted same-group teammates. Self-service is safe — the flag only
+      // to trusted teammates. Self-service is safe — the flag only
       // widens access to the caller's OWN repo, never grants the caller anything.
       if (typeof req.body?.sharedAccount === "boolean")
         patch.sharedAccount = req.body.sharedAccount;
@@ -162,18 +162,6 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
       }
       const user = store.setChatDefaults(req.user!.id, patch);
       res.json({ user });
-    },
-  );
-
-  // Typeahead for the group member-add picker: match by username OR display name.
-  // Excludes self. Used by the group management UIs (managing group membership is
-  // how trust/elevation is granted — see Store.isTrustedFor).
-  router.get(
-    "/api/me/users/search",
-    requireAuth(store),
-    (req: AuthenticatedRequest, res) => {
-      const q = safeString(req.query?.q);
-      res.json({ users: q ? store.searchUsers(q, req.user!.id) : [] });
     },
   );
 

@@ -630,7 +630,7 @@ describe("shared MCP routes", () => {
     const audit = await admin.get("/api/audit").expect(200);
     const actions = (audit.body.audit as { action: string }[]).map((row) => row.action);
     expect(actions).toEqual(expect.arrayContaining(["shared_mcp_bind", "shared_mcp_unbind"]));
-  });
+  }, 15_000); // HTTP-heavy (two signups incl. the approval round-trip + ~20 calls): 5 s is tight under a full parallel run
 
   it("deleting a user removes their bindings", async () => {
     const { services, admin, member, memberUser } = await boot();

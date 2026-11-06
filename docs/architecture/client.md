@@ -192,8 +192,8 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 - Avatar pool = all visible avatars, duplicates allowed (multiple parallel conversations with the same
   avatar incl. your own); the only gate is the 4-pane max. User message bubbles render text directly in
   `.bubble` (which has `white-space: pre-wrap`), NOT wrapped in `<p>` (that adds stray top/bottom margins).
-  `GET /api/avatars` (`listPublishedAvatars`) includes the viewer's OWN avatar plus public + group-teammate
-  avatars.
+  `GET /api/avatars` (`listPublishedAvatars`) includes the viewer's OWN avatar plus every teammate's 팀 공개
+  (`group`) avatar — every visible non-own avatar is a teammate's, so Explore carries no membership badge.
 
 ## 할 일 tab and chat card
 Mechanics → [`todos.md`](todos.md). Load-bearing for any change here: ONE store slice feeds the rail
@@ -404,10 +404,16 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   components UNCONDITIONALLY (always mounted) and pass `active={settingsTab === "…"}`; each child gates only
   its own template (`{#if active && user}`) and initializes form state ONCE at script-init from
   `readState().user`. `SettingsView.svelte` is the worked example (1,013→130 lines; tabs in
-  `components/Settings{Profile,Access,Knowledge}Tab.svelte`). The former inline groups tab moved to its
-  own left-rail view (`views/GroupsView.svelte`, 2026-08): my-groups cards + the system-admin group
-  management that used to be the admin view's 그룹 tab; legacy `#/settings/groups`·`#/admin/groups`
-  hashes normalize to `#/groups` in `lib/nav.ts` `routeFromHash`.
+  `components/Settings{Profile,Access,Knowledge}Tab.svelte`).
+- **관리자 ▸ 도구·스킬 (`#/admin/tools`, between 시스템 and 감사 로그) holds the two team-wide admin panels**
+  (single team, 2026-11-06 — [`team-trust.md`](team-trust.md)). `AdminToolPolicyPanel.svelte` (MCP 도구 정책)
+  edits the ONE global allowlist through `GET/PUT /api/admin/tool-policy`; `system` is shown checked and
+  non-toggleable, and a save calls `refreshMe` so the admin's own composer picks up the clamp at once.
+  `AdminSharedSkillsPanel.svelte` (공유 스킬 관리) lists `GET /api/admin/shared-skills` with a search box and
+  a 차단 N개 count, and blocks/unblocks through `confirmAction`; a 공유 목록에 없는 차단 section lists
+  the response's `otherBlocks` (blocks with no active share row) so they can be lifted too. The signup-mode control (가입·접근 ▸ 회원가입 정책) offers only
+  승인제 / 가입 차단 (a stored `open` or no value shows as 승인제), and the visibility control (`SettingsProfileTab`, admin `AdminUserRow`) reads
+  팀 공개 / 비공개. Old `#/groups` bookmarks land on 탐색 and `#/admin/groups` opens 관리자 on its current tab (`lib/nav.ts`).
 - **Agent cards fold only when SEVERAL agents share one tree.** `ActivityTree` decides at the root (≥2
   sub-agents among the rows it renders) and nested trees inherit
   the decision. Each sub-agent card that has rows then gets a disclosure header (`@name` on older snapshots, label,

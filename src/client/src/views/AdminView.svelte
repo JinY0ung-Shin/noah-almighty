@@ -4,9 +4,10 @@
   import AdminUserRow from "../components/AdminUserRow.svelte";
   import AdminEgressPanel from "../components/AdminEgressPanel.svelte";
   import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel.svelte";
+  import AdminToolPolicyPanel from "../components/AdminToolPolicyPanel.svelte";
+  import AdminSharedSkillsPanel from "../components/AdminSharedSkillsPanel.svelte";
   import { api } from "../lib/api";
   import { loadAdminOverview } from "../lib/loaders";
-  import { goView } from "../lib/nav";
   import { appState, notify, replaceState, updateState } from "../lib/state";
   import { timeLabel } from "../lib/format";
   import type { AdminTab, AdminUserSummary, SignupMode } from "../lib/types";
@@ -42,8 +43,9 @@
   const hexStatusId = "admin-hex-policy-status";
   const toolSkillStatusId = "admin-tool-skill-status";
 
-  // 그룹 관리 moved to the shared 그룹 view (GroupsView) — #/admin/groups
-  // redirects there (lib/nav.ts).
+  // Groups were retired (single team, 2026-11-06): their admin powers live in
+  // 사용자 (approval = joining the team) and 도구·스킬 (tool policy + shared-skill
+  // blocks).
   type AdminTabDef = { id: AdminTab; label: string; icon: string };
   const tabs: AdminTabDef[] = [
     { id: "overview", label: "개요", icon: "activity" },
@@ -51,6 +53,7 @@
     { id: "mcp", label: "공용 MCP", icon: "link" },
     { id: "access", label: "가입·접근", icon: "key" },
     { id: "system", label: "시스템", icon: "server" },
+    { id: "tools", label: "도구·스킬", icon: "sparkles" },
     { id: "audit", label: "감사 로그", icon: "list" },
   ];
 
@@ -58,21 +61,24 @@
     { id: "all", label: "전체", match: () => true },
     { id: "admins", label: "관리자", match: (u) => u.roles?.includes("admin") },
     { id: "suspended", label: "정지", match: (u) => u.suspended },
-    { id: "group", label: "그룹 공개", match: (u) => u.visibility === "group" },
+    { id: "group", label: "팀 공개", match: (u) => u.visibility === "group" },
     { id: "sessions", label: "활성 세션", match: (u) => (u.activeSessions || 0) > 0 },
   ];
 
   const roleDefs = [
     { key: "owner", label: "소유자" },
-    { key: "trusted", label: "같은 그룹원" },
+    { key: "trusted", label: "팀원" },
     { key: "colleague", label: "일반 동료" },
   ];
   const categoryLabels: Record<string, string> = { read: "조회", execute: "실행", write: "수정·전송", session: "세션" };
 
   const signupModes = [
-    { id: "open" as SignupMode, label: "개방", desc: "누구나 즉시 가입하고 바로 사용할 수 있습니다." },
-    { id: "approval" as SignupMode, label: "승인 후 사용", desc: "가입은 가능하지만 관리자가 활성화해야 로그인됩니다. 대기 중인 계정은 사용자 탭에 ‘정지’ 상태로 표시됩니다." },
-    { id: "closed" as SignupMode, label: "차단", desc: "신규 가입을 받지 않습니다." },
+    {
+      id: "approval" as SignupMode,
+      label: "승인제",
+      desc: "가입 신청은 받지만 관리자가 승인(활성화)해야 로그인됩니다. 승인이 곧 팀 합류이며, 승인된 사용자는 모두 서로 신뢰하는 팀원이 됩니다. 대기 중인 계정은 사용자 탭에 ‘정지’ 상태로 표시됩니다.",
+    },
+    { id: "closed" as SignupMode, label: "가입 차단", desc: "신규 가입을 받지 않습니다." },
   ];
 
   onMount(load);
@@ -132,7 +138,14 @@
     set_tool_skill_policy: "도구·스킬 정책 변경",
     set_egress_policy: "외부 통신 차단 정책 적용",
     egress_policy_failed: "외부 통신 차단 정책 적용 실패",
+    set_tool_policy: "MCP 도구 정책 변경",
+    skill_block: "공유 스킬 차단",
+    skill_unblock: "공유 스킬 차단 해제",
+    single_team_suspend: "단일 팀 전환으로 정지",
+    // Groups were retired (single team); their labels stay for the retained
+    // audit rows.
     group_create: "그룹 생성",
+    group_update: "그룹 정보 수정",
     group_delete: "그룹 삭제",
     group_member_add: "그룹원 추가",
     group_member_remove: "그룹원 제거",
@@ -140,6 +153,8 @@
     group_repo_set: "그룹 지식 저장소 설정",
     group_tool_policy: "그룹 도구 정책 변경",
     group_avatar_sharing: "그룹원 아바타 상호 공개 변경",
+    group_skill_block: "그룹 공유 스킬 차단",
+    group_skill_unblock: "그룹 공유 스킬 차단 해제",
     group_agent_create: "그룹 에이전트 생성",
     group_agent_delete: "그룹 에이전트 삭제",
     group_agent_update: "그룹 에이전트 프로필 변경",
@@ -194,8 +209,9 @@
     return AUDIT_STATUS_LABELS[status] || status;
   }
   $: stats = $appState.adminStats;
-  $: signupMode = (sys.signupMode || "open") as SignupMode;
-  $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "개방";
+  // The retired `open` mode reads as 승인제 (the server fails closed the same way).
+  $: signupMode = (sys.signupMode === "closed" ? "closed" : "approval") as SignupMode;
+  $: signupModeLabel = signupModes.find((m) => m.id === signupMode)?.label || "승인제";
   $: signupStatus = signupBusy ? "회원가입 정책을 저장 중입니다." : signupError ? `저장 실패: ${signupError}` : `현재 정책: ${signupModeLabel}`;
   $: hexTools = Array.isArray(sys.hexSshTools) ? sys.hexSshTools : [];
   $: hexSavedKey = hexPolicyKeyFromSaved(sys.hexSshToolPolicy || {}, hexTools);
@@ -232,13 +248,12 @@
   $: statCards = [
     { label: "전체 사용자", value: stats?.users, sub: stats?.suspended ? `정지 ${stats.suspended}명 포함` : "", target: "users", filter: "all" },
     { label: "관리자", value: stats?.admins, sub: "", target: "users", filter: "admins" },
-    { label: "그룹 공개 아바타", value: stats?.groupAvatars, sub: "", target: "users", filter: "group" },
+    { label: "팀 공개 아바타", value: stats?.groupAvatars, sub: "", target: "users", filter: "group" },
     { label: "대화", value: stats?.conversations, sub: "", target: "", filter: "all" },
     { label: "메시지", value: stats?.messages, sub: "", target: "", filter: "all" },
     { label: "활성 예약 작업", value: stats?.activeRoutines, sub: "", target: "", filter: "all" },
     { label: "미응답 질문", value: stats?.openRequests, sub: "", target: "", filter: "all" },
     { label: "활성 세션", value: stats?.activeSessions, sub: "", target: "users", filter: "sessions" },
-    { label: "그룹", value: stats?.groups, sub: "", target: "groups", filter: "all" },
   ] as { label: string; value: number | undefined; sub: string; target: string; filter: typeof $appState.adminUserFilter }[];
 
   async function load() {
@@ -290,11 +305,6 @@
 
   function goOverviewTarget(target: string, filter: typeof $appState.adminUserFilter) {
     if (!target) return;
-    if (target === "groups") {
-      // Group management lives on the shared 그룹 view now.
-      goView("groups");
-      return;
-    }
     updateState((state) => {
       state.adminTab = target as AdminTab;
       if (target === "users") state.adminUserFilter = filter;
@@ -587,6 +597,13 @@
     <div class="admin-panel" role="tabpanel" id="admin-panel" aria-labelledby={`admin-tab-${$appState.adminTab}`}>
       <AdminEgressPanel active={$appState.adminTab === "access"} />
       <AdminSharedMcpPanel active={$appState.adminTab === "mcp"} />
+      <!-- 도구·스킬: always mounted so a draft survives tab switches; each panel
+           renders only while active, and the wrapper takes the list layout only
+           then (an empty grid elsewhere would add a stray gap). -->
+      <div class:admin-list={$appState.adminTab === "tools"}>
+        <AdminToolPolicyPanel active={$appState.adminTab === "tools"} />
+        <AdminSharedSkillsPanel active={$appState.adminTab === "tools"} />
+      </div>
       {#if $appState.adminTab === "overview"}
         <div class="admin-list">
           <section class="settings-card">
@@ -602,13 +619,13 @@
                   <button
                     class="stat-card stat-clickable"
                     type="button"
-                    aria-label={`${c.label} ${c.target === "groups" ? "그룹 관리" : "사용자 관리"}로 이동`}
+                    aria-label={`${c.label} 사용자 관리로 이동`}
                     on:click={() => goOverviewTarget(c.target, c.filter)}
                   >
                     <div class="stat-value">{c.value ?? 0}</div>
                     <div class="stat-label">{c.label}</div>
                     {#if c.sub}<div class="stat-sub muted">{c.sub}</div>{/if}
-                    <div class="stat-link muted">{c.target === "groups" ? "그룹 관리" : "사용자 관리"}</div>
+                    <div class="stat-link muted">사용자 관리</div>
                   </button>
                 {:else}
                   <div class="stat-card">
@@ -678,7 +695,7 @@
             <div class="panel-section-head">
               <div>
                 <h3>회원가입 정책</h3>
-                <p class="muted">새 사용자가 스스로 가입하는 방식을 정합니다. 첫 관리자 계정은 정책과 무관하게 항상 허용됩니다.</p>
+                <p class="muted">새 사용자가 팀에 합류하는 방식을 정합니다. 이 서버의 승인된 사용자는 모두 한 팀이며 서로 신뢰하므로, 누구나 바로 가입하는 방식은 없습니다. 첫 관리자 계정은 정책과 무관하게 항상 허용됩니다.</p>
               </div>
             </div>
             <div class="radio-cards" role="radiogroup" aria-label="회원가입 정책" aria-describedby={signupStatusId}>

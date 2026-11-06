@@ -12,7 +12,6 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createProfileRouter } from "./routes/profile.js";
 import { createPluginsRouter } from "./routes/plugins.js";
 import { createKnowledgeRepoRouter } from "./routes/knowledgeRepo.js";
-import { createGroupsRouter } from "./routes/groups.js";
 import { createAvatarTasksRouter } from "./routes/avatarTasks.js";
 import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
@@ -53,7 +52,7 @@ export function createApp(services = createServices()) {
 
   // Audit the authenticated actor of `req`. Collapses the repeated
   // `store.audit({ actorUserId: req.user!.id, actorName: req.user!.username, ... })`
-  // shape used across the group/admin/me routes into one call site.
+  // shape used across the admin/me routes into one call site.
   const auditAs = (
     req: AuthenticatedRequest,
     action: string,
@@ -170,7 +169,6 @@ export function createApp(services = createServices()) {
   app.use(createDirectMessagesRouter(deps));
   app.use(createPluginsRouter(deps));
   app.use(createKnowledgeRepoRouter(deps));
-  app.use(createGroupsRouter(deps));
   app.use(createRoutinesRouter(deps));
   app.use(createTodosRouter(deps));
   app.use(createAvatarTasksRouter(deps));

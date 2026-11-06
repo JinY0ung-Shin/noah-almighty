@@ -51,7 +51,6 @@ const user = {
   shellExposedSecretNames: [],
   browserSecrets: [],
   sshPublicKey: null,
-  groups: [],
   experimentalFeatures: [],
   sharedAccount: false,
   onboardedAt: null,

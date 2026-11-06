@@ -57,7 +57,7 @@ The `system` MCP group is always registered for local avatars, including old con
 or admin policies that omit it. `effectiveMcpToolGroups(selection, policy)` applies this invariant
 at both the chat preflight and run-plan boundary; the effective store policy and UI reflect it too.
 The composer and admin policy editor display system as checked and non-toggleable. Management
-handlers still enforce owner/group scope, so tool registration does not grant new privileges.
+handlers still enforce owner/elevated scope, so tool registration does not grant new privileges.
 The manual tool is intentionally public: it reads only static allowlisted topics, never user state
 or files. An unknown topic returns the valid index with an error instead of resolving a path.
 `describe_system` points to the same manual; live state and permissions still come from its existing
@@ -192,8 +192,8 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   but registers only when `shareLinkToolActive` (`runCapabilities.ts`) holds: `fileOutputActive && events.onShareLink &&
   ownerToolAccess && !consultationRun && !request.headless &&
   !request.externalTaskApi`, computed right after `fileOutputActive`, before `buildSystemServer`. That one
-  boolean drives the tool build (`shareLinkEnabled`/`createShareLink`/`signupOpen` on
-  `FileOutputToolsContext`), its own `mcpAllowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately
+  boolean drives the tool build (`shareLinkEnabled`/`createShareLink` on
+  `FileOutputToolsContext`; `signupOpen` was removed with the `open` signup mode), its own `mcpAllowedTools` entry (`FILE_OUTPUT_SHARE_LINK_TOOL_NAME`, deliberately
   NOT in `FILE_OUTPUT_TOOL_NAMES`), `SystemToolsContext.shareLinksEnabled` and `AgentRequest.shareLinksEnabled`
   (stamped by `stampPromptRequest`). The chat route supplies `onShareLink` only on interactive own-avatar owner
   turns and re-checks per call (once the visible turn is finalized it refuses unless the owner steered the
@@ -209,7 +209,7 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   Mechanics → [`share-links.md`](share-links.md).
 - **Guard convention differs per file BY DESIGN:** system/sshIdentity/knowledge-write gate on
   `ctx.viewerIsOwner` (= `ownerToolAccess` = owner chat OR owner routine); `repoTools` (personal knowledge
-  repo) splits READ (`list_files`/`read_file`, gated on `ctx.elevated` = owner OR trusted same-group
+  repo) splits READ (`list_files`/`read_file`, gated on `ctx.elevated` = owner OR trusted
   teammate) vs WRITE/commit/create (owner-only); `gitRepoTools` splits owner vs elevated; `confluenceTools`
   and `webFetchTools` gate on `ctx.elevated`; `sshTrustTools` and `search_avatars` are intentionally
   UNGATED (fingerprints aren't secrets; directory search is all-viewer read-only) while its sibling

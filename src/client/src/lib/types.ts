@@ -1,5 +1,4 @@
 export type {
-  AdminGroupSummary,
   SharedMcpServerUserView,
   SharedMcpServerView,
   SharedMcpTransport,
@@ -16,8 +15,6 @@ export type {
   AvatarVisibility,
   CanvasArtifact,
   ConversationSummary,
-  GroupMember,
-  GroupSharedSkill,
   ImageMediaType,
   KnowledgeGraph,
   KnowledgeGraphNode,
@@ -28,7 +25,9 @@ export type {
   RepoPluginContents,
   RoutineJob,
   SharedSkill,
+  SharedSkillBlockEntry,
   SharedSkillListing,
+  SharedSkillModeration,
   SharedSkillManifest,
   SignupMode,
   SkillInfo,
@@ -134,7 +133,6 @@ export type ViewName =
   | "brain"
   | "inbox"
   | "routines"
-  | "groups"
   | "skills"
   | "settings"
   | "admin"
@@ -149,6 +147,7 @@ export type AdminTab =
   | "mcp"
   | "access"
   | "system"
+  | "tools"
   | "audit";
 export type ChatLayout = "vertical" | "horizontal" | "grid";
 
@@ -356,7 +355,7 @@ export interface PiModelOption {
 export interface BootstrapInfo {
   needsSetup: boolean;
   githubHost: string;
-  signupMode: "open" | "closed" | "approval";
+  signupMode: import("../../../server/types.js").SignupMode;
   confluenceConfigured: boolean;
   /**
    * Per-conversation model picker config: pi-gateway's live model list. Empty

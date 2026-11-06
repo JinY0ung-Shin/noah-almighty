@@ -963,7 +963,7 @@ function renameTargetCorroborated(
  * byte-identical content sits elsewhere, a row whose directory is gone with
  * nothing to explain it unshares, and a rename the safety checks reject leaves
  * the row on the directory it still names. Unsharing costs only the row — the
- * skill, its learn history and a group's blocks all stay.
+ * skill, its learn history and an admin's blocks all stay.
  */
 export async function reconcileOwnerSharedSkills(
   store: SharedSkillReconcileStore,

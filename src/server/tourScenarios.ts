@@ -97,7 +97,7 @@ const SKILL_TOUR = [
   "",
   "Step 2 — scaffold it for real: create `skills/<slug>/SKILL.md` with `mcp__repo__scaffold_skill`, fill in the actual instructions, and `mcp__repo__commit` (uncommitted means it was never persisted). The SKILL.md body is input for a model — YOU are its future reader — so write it in English, concrete and imperative, with the trigger stated up front (when this skill should fire) and the steps written so they can be followed without this conversation for context. Keep the user informed in their own language as you go, and show them the gist of what you wrote rather than pasting the whole file.",
   "",
-  "Step 3 — set the expectation precisely, because the timing surprises people: the skill loads from the NEXT conversation, not this one, so nothing looks different until they start a new chat. It also shows up under 「내 아바타의 스킬 공유」 in the 스킬 배우기 view, and from there they can share it with teammates in their groups — a colleague's avatar can then learn the same way of working with one click.",
+  "Step 3 — set the expectation precisely, because the timing surprises people: the skill loads from the NEXT conversation, not this one, so nothing looks different until they start a new chat. It also shows up under 「내 아바타의 스킬 공유」 in the 스킬 배우기 view, and from there they can share it with their teammates — a colleague's avatar can then learn the same way of working with one click.",
   "",
   "Wrapping up: point out that they just changed how you work, permanently and in a way they can read, edit, and revoke. Recap in one sentence and suggest the next tour: `/tour browser`. If what they described happens on a schedule rather than on demand, mention `/routine` as the better fit for that.",
 ].join("\n");

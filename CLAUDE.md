@@ -25,23 +25,25 @@ These are the invariants the project is built around. New work should reinforce 
   expansions, bundled `SKILL.md`); else Korean (UI, `apiError`, status labels, titles). A string used on
   both channels is split. The avatar replies in the user's language (default Korean).
 
-### Groups, trust, sharing
-- **Trust/elevation is GROUP-ONLY.** `isTrustedFor` IS `shareAnyGroup` — the single choke point every
-  trust check flows through. Add new trust sources THERE, never at call sites.
-- **Avatar visibility is `group` | `private`** (`public` is retired): an avatar never reaches beyond its
-  owner's groups. A group's `avatar_sharing` policy gates visibility, trust AND skill sharing together
-  (`SHARING_TEAMMATES`). Visibility and trust stay separate axes.
-- **A group is ONLY the sharing/trust/skill-sharing (+ admin tool policy) unit.** Group shared agents
-  (2026-10-29) and group knowledge repos / team brain (2026-10-30) are RETIRED; team knowledge travels as
-  shared skills. Their ids, prefixes (`group:`, `group-`), tables, columns, dirs and MCP names are
-  **reserved forever** — never mint them again (true of EVERY retired id, setting key, column, dir or broker
-  name). → `server-core.md`, `groups-trust.md`.
+### Team, trust, sharing
+- **ONE Noah instance = ONE team; trust = an approved (not suspended) user.** Every approved user is a
+  teammate, all equal and mutually trusted (no guest tier). `isTrustedFor` stays the single choke point
+  every trust check flows through — add new trust sources (or restrictions) THERE, never at call sites.
+  **Signup approval IS the trust gate**, so an `open` signup mode must never return (`approval` | `closed`).
+- **Avatar visibility is `group` (팀 공개) | `private` (비공개)** — `public` is retired; nothing reaches
+  beyond the team. Visibility and trust stay separate axes: a private avatar's owner is still a trusted
+  teammate. Reach, trust and skill sharing ride ONE team relation, so they never drift apart.
+- **Groups are RETIRED (2026-11-06)**, after group shared agents (2026-10-29) and group knowledge repos /
+  team brain (2026-10-30); team knowledge travels as shared skills, and the admin MCP tool policy is ONE
+  global policy that binds admins too. Every group table, column, route (`/api/{me,admin}/groups*`),
+  prefix (`group:`, `group-`), dir and MCP name is **reserved forever** — never mint them again (true of
+  EVERY retired id, setting key, column, dir or broker name). → `server-core.md`, `team-trust.md`.
 - **Skill sharing rides the avatar-discovery boundary — never wider**, for CONTENT as well as rows:
   learning COPIES the skill into the learner's repo; a learned copy is not re-shareable while linked to
-  its origin; group-admin channel blocks fail closed on every learnable read and are never deleted (only
-  unblocked); a renamed skill is followed only on git's own rename evidence — a deletion is always a hard
-  revoke and anything unresolved unshares. `mcp__skill_exchange__*` is owner-only end to end.
-  → `avatar-collab.md`.
+  its origin; system-admin blocks fail closed on every learnable read, are never deleted (only
+  unblocked) and are copied on rename; a renamed skill is followed only on git's own rename evidence — a
+  deletion is always a hard revoke and anything unresolved unshares. `mcp__skill_exchange__*` is
+  owner-only end to end. → `avatar-collab.md`.
 
 ### Data safety
 - **A retirement never destroys data without a way back.** Every destructive retirement step runs behind
