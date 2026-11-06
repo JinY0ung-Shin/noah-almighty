@@ -30,10 +30,9 @@
   let hexError = "";
   // hex-ssh policy local checkbox matrix: policy[role][toolName] = boolean
   let hexPolicy: Record<string, Record<string, boolean>> = {};
-  // builtin tool/skill policy local state: checked = DISABLED deployment-wide
+  // skill policy local state: checked = DISABLED deployment-wide
   let toolSkillBusy = false;
   let toolSkillError = "";
-  let disabledToolChecks: Record<string, boolean> = {};
   let disabledSkillChecks: Record<string, boolean> = {};
   let customDisabledSkills: string[] = [];
   let customSkillInput = "";
@@ -70,7 +69,6 @@
   const roleDefs = [
     { key: "owner", label: "소유자" },
     { key: "trusted", label: "팀원" },
-    { key: "colleague", label: "일반 동료" },
   ];
   const categoryLabels: Record<string, string> = { read: "조회", execute: "실행", write: "수정·전송", session: "세션" };
 
@@ -229,13 +227,11 @@
         : hexTools.length
           ? "저장된 정책과 같습니다."
           : "설정할 SSH 도구가 없습니다.";
-  $: togglableTools = Array.isArray(sys.togglableBuiltinTools) ? sys.togglableBuiltinTools : [];
   $: discoveredSkills = sys.skillDiscovery && Array.isArray(sys.skillDiscovery.skills) ? sys.skillDiscovery.skills : [];
   $: savedToolSkillPolicy = sys.toolSkillPolicy || {};
-  $: toolSkillSavedKey = toolSkillPolicyKey(savedToolSkillPolicy.disabledTools || [], savedToolSkillPolicy.disabledSkills || []);
-  $: localDisabledTools = disabledToolNamesFrom(togglableTools, disabledToolChecks);
+  $: toolSkillSavedKey = toolSkillPolicyKey(savedToolSkillPolicy.disabledSkills || []);
   $: localDisabledSkills = disabledSkillNamesFrom(disabledSkillChecks, customDisabledSkills);
-  $: toolSkillCurrentKey = toolSkillPolicyKey(localDisabledTools, localDisabledSkills);
+  $: toolSkillCurrentKey = toolSkillPolicyKey(localDisabledSkills);
   $: toolSkillDirty = toolSkillCurrentKey !== toolSkillSavedKey;
   $: toolSkillCanSave = Boolean(!toolSkillBusy && toolSkillDirty);
   $: toolSkillStatus = toolSkillBusy
@@ -459,19 +455,13 @@
     }
   }
 
-  // ---- system: builtin tool/skill policy ----
+  // ---- system: skill policy ----
   // Hand-mirrors SKILL_NAME_RE in src/server/toolSkillPolicy.ts (no shared
   // module across the client-server boundary) — update in lockstep.
   const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-  function toolSkillPolicyKey(tools: string[], skills: string[]): string {
-    return `${[...tools].sort().join(",")}|${[...skills].sort().join(",")}`;
-  }
-
-  function disabledToolNamesFrom(catalog: any[], checks: Record<string, boolean>): string[] {
-    return catalog
-      .filter((entry) => checks[entry.id])
-      .flatMap((entry) => (Array.isArray(entry.names) ? entry.names.map(String) : []));
+  function toolSkillPolicyKey(skills: string[]): string {
+    return [...skills].sort().join(",");
   }
 
   function disabledSkillNamesFrom(checks: Record<string, boolean>, custom: string[]): string[] {
@@ -484,15 +474,9 @@
 
   function syncToolSkillFromSys() {
     const cur = unwrapSystem($appState.adminSystem);
-    const catalog = Array.isArray(cur.togglableBuiltinTools) ? cur.togglableBuiltinTools : [];
     const saved = cur.toolSkillPolicy || {};
-    const savedTools: string[] = Array.isArray(saved.disabledTools) ? saved.disabledTools.map(String) : [];
     const savedSkills: string[] = Array.isArray(saved.disabledSkills) ? saved.disabledSkills.map(String) : [];
     const discovered = cur.skillDiscovery && Array.isArray(cur.skillDiscovery.skills) ? cur.skillDiscovery.skills : [];
-    const toolChecks: Record<string, boolean> = {};
-    for (const entry of catalog) {
-      toolChecks[entry.id] = Array.isArray(entry.names) && entry.names.some((name: string) => savedTools.includes(name));
-    }
     const skillChecks: Record<string, boolean> = {};
     const discoveredNames = new Set<string>();
     for (const skill of discovered) {
@@ -501,7 +485,6 @@
       discoveredNames.add(name);
       skillChecks[name] = savedSkills.includes(name);
     }
-    disabledToolChecks = toolChecks;
     disabledSkillChecks = skillChecks;
     // Saved names the discovery list doesn't cover (typed by an admin, or from
     // an older skill list) stay visible/removable so the dirty-compare stays honest.
@@ -535,7 +518,7 @@
     try {
       await api("/api/admin/tool-skill-policy", {
         method: "PUT",
-        body: JSON.stringify({ policy: { disabledTools: localDisabledTools, disabledSkills: localDisabledSkills } }),
+        body: JSON.stringify({ policy: { disabledSkills: localDisabledSkills } }),
       });
     } catch (err) {
       toolSkillBusy = false;
@@ -546,7 +529,7 @@
     try {
       await loadAdminOverview();
       syncToolSkillFromSys();
-      notify("내장 도구·스킬 정책을 저장했습니다.", "ok");
+      notify("스킬 정책을 저장했습니다.", "ok");
     } catch (err) {
       notify(`정책은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
@@ -808,11 +791,11 @@
                 <div class="panel-section-head">
                   <div>
                     <h3>SSH 도구 정책</h3>
-                    <p class="muted">역할별로 hex-ssh MCP 도구 노출과 실행을 제한합니다.</p>
+                    <p class="muted">hex-ssh MCP 도구를 아바타 소유자 본인과, 그 아바타와 대화하는 팀원에게 각각 허용할지 정합니다.</p>
                   </div>
                 </div>
                 <form class="hex-policy-form" on:submit|preventDefault={saveHexPolicy}>
-                  <div class="hex-policy-grid" role="group" aria-label="SSH 도구 역할별 정책" aria-describedby={hexStatusId}>
+                  <div class="hex-policy-grid cols-2" role="group" aria-label="SSH 도구 역할별 정책" aria-describedby={hexStatusId}>
                     <div class="hex-policy-head muted">도구</div>
                     {#each roleDefs as role}
                       <div class="hex-policy-head">{role.label}</div>
@@ -841,34 +824,23 @@
                 <div class="panel-section-head">
                   <div>
                     <h3>SSH 도구 정책</h3>
-                    <p class="muted">역할별로 hex-ssh MCP 도구 노출과 실행을 제한합니다.</p>
+                    <p class="muted">hex-ssh MCP 도구를 아바타 소유자 본인과, 그 아바타와 대화하는 팀원에게 각각 허용할지 정합니다.</p>
                   </div>
                 </div>
                 <div class="empty-note">현재 설정할 SSH 도구가 없습니다. hex-ssh 도구 목록이 서버에서 제공되면 역할별 정책 표가 여기에 표시됩니다.</div>
               </section>
             {/if}
 
-            <!-- builtin tool/skill policy -->
+            <!-- skill policy (built-in tool toggles retired, #78) -->
             <section class="settings-card">
               <div class="panel-section-head">
                 <div>
-                  <h3>내장 도구·스킬 정책</h3>
-                  <p class="muted">체크한 항목은 모든 아바타에서 비활성화됩니다. 스킬은 목록에서 숨겨지거나 실행이 차단됩니다.</p>
+                  <h3>스킬 정책</h3>
+                  <p class="muted">체크한 스킬은 모든 아바타에서 비활성화됩니다. 아바타의 스킬 목록에서 빠지고 읽기도 차단됩니다.</p>
+                  <p class="muted">하위 에이전트(Agent) 같은 내장 도구는 여기서 끄지 않습니다. <a href="/admin/" target="_blank" rel="noopener">pi-gateway 관리 화면</a>의 도구 설정에서 끄면 모든 세션에서 실제로 빠집니다. (Agent 도구는 pi에 에이전트가 들어 있는 플러그인을 설치했을 때만 생깁니다.)</p>
                 </div>
               </div>
               <form class="settings-form" on:submit|preventDefault={saveToolSkillPolicy}>
-                <div class="field">
-                  <span>내장 도구 비활성화</span>
-                  <small class="muted">pi 런타임에는 내장 도구를 막는 도구 게이트가 없어, 비활성화한 도구는 강제로 차단되지 않고 아바타에게 사용하지 말라는 안내로 전달됩니다.</small>
-                  <div class="policy-option-picker" role="group" aria-label="내장 도구 비활성화" aria-describedby={toolSkillStatusId}>
-                    {#each togglableTools as entry (entry.id)}
-                      <label class="policy-option">
-                        <input type="checkbox" bind:checked={disabledToolChecks[entry.id]} aria-describedby={toolSkillStatusId} disabled={toolSkillBusy} on:change={() => (toolSkillError = "")} />
-                        <span><strong>{entry.labelKo}</strong><small class="muted">{entry.descriptionKo}</small></span>
-                      </label>
-                    {/each}
-                  </div>
-                </div>
                 <div class="field">
                   <span>스킬 비활성화</span>
                   {#if sys.skillDiscovery}

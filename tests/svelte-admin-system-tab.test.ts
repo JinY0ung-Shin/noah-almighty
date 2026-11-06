@@ -45,10 +45,8 @@ const system = {
   hexSshToolPolicy: {
     owner: ["ssh-read-lines", "remote-ssh"],
     trusted: ["ssh-read-lines"],
-    colleague: [],
   },
-  togglableBuiltinTools: [],
-  toolSkillPolicy: { disabledTools: [], disabledSkills: [] },
+  toolSkillPolicy: { disabledSkills: [] },
   skillDiscovery: { fetchedAt: "2026-10-29T00:00:00.000Z", skills: [{ name: "pptx", description: "덱 만들기" }] },
   signupMode: "approval",
 };
@@ -93,7 +91,11 @@ describe("admin 시스템 tab seeding", () => {
     // hex policy checkboxes reflect the SAVED policy (not an unseeded matrix).
     expect((screen.getByLabelText("소유자 원격 파일 읽기") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("팀원 원격 명령 실행") as HTMLInputElement).checked).toBe(false);
-    expect((screen.getByLabelText("일반 동료 원격 파일 읽기") as HTMLInputElement).checked).toBe(false);
+    // One team: just 소유자 / 팀원 — the 일반 동료 column is retired.
+    expect(screen.queryByLabelText("일반 동료 원격 파일 읽기")).toBeNull();
+    // Issue #78: no built-in tool toggles; the panel points at pi's admin tool page.
+    expect(screen.queryByRole("group", { name: "내장 도구 비활성화" })).toBeNull();
+    expect(screen.getByRole("link", { name: "pi-gateway 관리 화면" }).getAttribute("href")).toBe("/admin/");
   });
 
   it("lists pi-gateway's models read-only and links to pi-gateway's admin page", async () => {
@@ -147,14 +149,14 @@ describe("admin 시스템 tab seeding", () => {
   it("keeps unsaved policy edits across a manual 새로고침", async () => {
     await openSystemTab();
 
-    const colleagueRead = screen.getByLabelText("일반 동료 원격 파일 읽기") as HTMLInputElement;
-    await fireEvent.click(colleagueRead);
-    expect(colleagueRead.checked).toBe(true);
+    const teammateExec = screen.getByLabelText("팀원 원격 명령 실행") as HTMLInputElement;
+    await fireEvent.click(teammateExec);
+    expect(teammateExec.checked).toBe(true);
 
     await fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "새로고침" })).toBeTruthy());
 
-    expect((screen.getByLabelText("일반 동료 원격 파일 읽기") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("팀원 원격 명령 실행") as HTMLInputElement).checked).toBe(true);
     // The untouched rows still show server state.
     expect((screen.getByLabelText("소유자 원격 파일 읽기") as HTMLInputElement).checked).toBe(true);
   });

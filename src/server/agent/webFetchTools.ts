@@ -384,7 +384,7 @@ export function buildWebFetchTools(ctx: WebFetchToolsContext) {
       "fetch",
       "Fetches a web page or resource (intranet or internet) by URL from the app server and returns its readable text. " +
         "Use it whenever the user shares a URL or asks about the content of an intranet/internet page. " +
-        "Prefer this over the built-in WebFetch tool: plain http:// intranet URLs are fetched as-is (no forced HTTPS upgrade), " +
+        "Plain http:// intranet URLs are fetched as-is (no forced HTTPS upgrade), " +
         "corporate HTTP_PROXY/HTTPS_PROXY/NO_PROXY settings apply, and the deployment's trusted CA bundle is used. " +
         "HTML is converted to text with links kept as `label (url)`; JSON is pretty-printed. " +
         `Output is windowed to ${WEB_FETCH_MAX_RESULT_CHARS} chars — pass \`offset\` to continue reading a long page. ` +
@@ -436,8 +436,8 @@ export function buildWebFetchTools(ctx: WebFetchToolsContext) {
             const nextGuard = guardWebFetchUrl(next.toString());
             if (!nextGuard.ok) return text(`Redirect blocked: ${nextGuard.message}`, true);
             if (next.hostname !== current.hostname) {
-              // Mirror the built-in WebFetch contract: report a cross-host hop so
-              // the model re-fetches deliberately (and the guard re-runs on it).
+              // Report a cross-host hop instead of following it, so the
+              // model re-fetches deliberately (and the guard re-runs on it).
               return text(
                 `REDIRECT DETECTED: ${current} redirects to a different host: ${next}\n` +
                   "Call mcp__web__fetch again with that URL if following the redirect is expected.",

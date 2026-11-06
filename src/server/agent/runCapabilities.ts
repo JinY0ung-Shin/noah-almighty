@@ -363,11 +363,9 @@ export async function buildRunCapabilities(
     hexSshPolicy,
     hexSshViewerClass,
   );
-  // Admin-managed built-in tool/skill on-off policy — read fresh per run like
-  // the hex-ssh policy, so a panel change applies from the next turn without a
-  // restart. A disabled skill is never copied, listed or served (the runner's
-  // skill sync, pi/piSkills.ts); a disabled built-in is ADVISORY on pi — both
-  // surfaces ask the model not to use it (piAdminDisabledToolsNote).
+  // Admin-managed skill on-off policy — read fresh per run like the hex-ssh
+  // policy, so a panel change applies from the next turn without a restart. A
+  // disabled skill is never copied, listed or served (pi/piSkills.ts).
   const toolSkillPolicy = store.getToolSkillPolicy();
   // Admin tool policy (enforcement + META-COGNITION): the ONE global allowlist
   // of MCP tool groups (null = unrestricted). Clamped HERE — the single
@@ -863,6 +861,7 @@ export async function buildRunCapabilities(
     confluenceSaveToWorkspace,
     // SSH self-state from the SAME boolean the registration below uses.
     sshEnabled: sshActive,
+    sshViewerClass: hexSshViewerClass,
     sharedMcpServers: sharedMcpStates,
     // What this runtime really has (sandbox folder, steer timing, shell
     // secrets, model switches) — mirrored by the prompt's pi section
@@ -1454,10 +1453,9 @@ export function stampPromptRequest(
     experimentalFeatures: ownerToolAccess
       ? ownerState.experimentalFeatures
       : [],
-    // Admin tool/skill policy self-state (META-COGNITION): all viewer classes —
-    // a disabled built-in is advisory on pi, so the standing note stops the
-    // avatar from attempting/suggesting it. Mirrored by describe_system.
-    adminDisabledTools: toolSkillPolicy.disabledTools,
+    // Admin skill policy self-state (META-COGNITION): all viewer classes, so
+    // the standing note stops the avatar from suggesting a disabled skill.
+    // Mirrored by describe_system.
     adminDisabledSkills: toolSkillPolicy.disabledSkills,
     // External task API self-state, owner runs only: the live
     // key count, plus the CONFIGURED per-run budget — config, not store, so an

@@ -1583,14 +1583,11 @@ export interface AgentRequest {
    */
   experimentalFeatures?: string[];
   /**
-   * Admin tool/skill policy self-state (META-COGNITION): built-in tools /
-   * skills the system administrator disabled deployment-wide. Set by
-   * `stampPromptRequest` for every viewer class. On pi a disabled skill is
-   * omitted from the sandbox skill copy and a built-in toggle is advisory (pi
-   * has no per-request allowlist), so the standing prompt note keeps the avatar
-   * from attempting or suggesting either.
+   * Admin skill policy self-state (META-COGNITION): skills the system
+   * administrator disabled deployment-wide. Set by `stampPromptRequest` for
+   * every viewer class. A disabled skill is omitted from the sandbox skill
+   * copy, so the standing prompt note keeps the avatar from suggesting it.
    */
-  adminDisabledTools?: string[];
   adminDisabledSkills?: string[];
   avatarApiKeyCount?: number;
   /**

@@ -183,18 +183,6 @@ export function gettingStartedGaps(
 }
 
 /**
- * What the admin built-in-tool disables mean on pi (review L6). pi has none of
- * WebFetch/WebSearch/NotebookEdit, and its own subagent tool (`Agent`) cannot
- * be switched off per request (design P1), so the subagent toggle is the
- * model's to honor.
- * Mirrored by describe_system's admin-disabled line.
- */
-export function piAdminDisabledToolsNote(disabledTools: readonly string[]): string {
-  if (!disabledTools.some((name) => name === "Agent" || name === "Task")) return "";
-  return " On this runtime that subagent switch is NOT enforced by a tool gate (pi's own `Agent` tool stays callable), so honor it yourself: never spawn a subagent with `Agent`; do the work in this run.";
-}
-
-/**
  * Whose sandbox a run's built-in tools work in (`PiRuntimeFacts.sandboxOwner`),
  * ONE text for both metacognition surfaces (the prompt's runtime section and
  * describe_system's runtime line). Empty for the owner's own runs: "this

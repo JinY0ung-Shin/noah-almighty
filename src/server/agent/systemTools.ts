@@ -27,13 +27,12 @@ import type {
   SharedMcpRunState,
 } from "../types.js";
 import { text } from "./mcpTools.js";
-import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
+import { HEX_SSH_NO_TRANSFER_SENTENCE, type HexSshViewerClass } from "../hexSshPolicy.js";
 import { countTeamNotesSync } from "../teamBrain.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
 import { EFFORT_LEVELS, type ModelEffort } from "../effortLevels.js";
 import {
   gettingStartedGaps,
-  piAdminDisabledToolsNote,
   piSandboxOwnerSentence,
   shellSecretsSentence,
   rewindTurnState,
@@ -261,6 +260,12 @@ export interface SystemToolsContext {
    * → the legacy key-presence wording.
    */
   sshEnabled?: boolean;
+  /**
+   * runCapabilities' `hexSshViewerClass`: `none` (a restricted headless run or a
+   * non-elevated viewer) gets no hex-ssh tool whatever the admin policy says,
+   * so the SSH line must not blame the policy for it.
+   */
+  sshViewerClass?: HexSshViewerClass;
   /**
    * The run's 공용 MCP states (`planSharedMcpRun`) — the SAME array stamped on
    * `AgentRequest.sharedMcpServers`. Undefined (consultation runs, older
@@ -617,7 +622,7 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
       ? "Built-in tools: read/ls/find/grep only (read-only session: no write, edit or bash)"
       : "Built-in tools: read/write/edit/ls/find/grep/bash") +
     "; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
-    "No WebSearch (use mcp__web__fetch for a known URL). " +
+    "No web-search tool (use mcp__web__fetch for a known URL). " +
     (pi?.nonInteractive ? `${PI_NO_ASK_USER_SENTENCE} ` : "") +
     "hex-ssh, plugin `.mcp.json` and admin 공용 MCP servers are relayed by Noah as `mcp__hex-ssh__<tool>`, `mcp__plugins__<server>__<tool>` and `mcp__shared__<server>__<tool>` (the `mcp__<server>__<tool>` form resolves too); the session's tool list is read when the pi session starts, so a server connected since appears only in a later session and a removed one is refused. " +
     "The system prompt is fixed when the conversation starts, so this tool is the source of CURRENT state"
@@ -897,7 +902,6 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // Mirrors buildSystemPromptAppend's web-fetch proxy self-state (the
           // shared webFetchProxyState helper; values already redacted).
           `- Web fetch (mcp__web__fetch): ${enabledMcpToolGroups.includes("web") ? "enabled for this conversation" : "OFF for this conversation (web tool group deselected)"}; ${webProxy.httpsProxy || webProxy.httpProxy ? `external URLs go through the corporate proxy (${webProxy.httpsProxy ?? webProxy.httpProxy}${webProxy.noProxy ? `; NO_PROXY: ${webProxy.noProxy}` : ""})` : "no HTTP_PROXY/HTTPS_PROXY configured — intranet URLs direct; external sites may be unreachable if this deployment requires a proxy"}`,
-          `- Admin-disabled built-in tools: ${ctx.toolSkillPolicy?.disabledTools.length ? ctx.toolSkillPolicy.disabledTools.map((name) => `\`${name}\``).join(", ") + " (disabled deployment-wide by the system administrator; WebFetch/WebSearch/NotebookEdit do not exist on this runtime anyway" + (piAdminDisabledToolsNote(ctx.toolSkillPolicy.disabledTools) ? ", and the subagent switch is NOT enforced by a tool gate here — pi's own `Agent` tool stays callable, so honor it yourself and never spawn a subagent" : "") + ")" : "(none)"}`,
           `- Admin-disabled skills: ${ctx.toolSkillPolicy?.disabledSkills.length ? ctx.toolSkillPolicy.disabledSkills.map((name) => `\`${name}\``).join(", ") + " (deployment-wide; they are never copied into your sandbox or served, so none of them is available)" : "(none)"}`,
           `- Knowledge repository: ${knowledgeRepo.repo || "(none)"}${knowledgeRepo.branch ? ` @ ${knowledgeRepo.branch}` : ""}`,
           `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
@@ -946,7 +950,9 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                       ? "no SSH_PRIVATE_KEY secret"
                       : !enabledMcpToolGroups.includes("ssh")
                         ? "the SSH tool group is OFF for this conversation"
-                        : "the deployment's SSH tool policy allows no SSH tools here"
+                        : ctx.sshViewerClass === "none"
+                          ? "this kind of run never gets SSH tools (only the owner's own runs and teammates' chats do)"
+                          : "the deployment's SSH tool policy allows no SSH tools here"
                   }`
           }`,
           ...sharedMcpLines(ctx),

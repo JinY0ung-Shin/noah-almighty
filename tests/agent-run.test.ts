@@ -290,18 +290,18 @@ describe("run capability plan", () => {
     expect(run.caps.piRuntimeFacts.sandboxOwner).toBe("owner");
   });
 
-  it("a stored policy still naming the retired SendMessage/Workflow toggles changes nothing", async () => {
+  it("a stored policy still naming retired built-in tool toggles changes nothing", async () => {
     const env = setup();
-    // A pre-retirement row: the read path normalizes the retired names away.
+    // A pre-#78 row: the read path drops every built-in tool toggle.
     env.store.setAppSecret(
       TOOL_SKILL_POLICY_CONFIG_KEY,
-      JSON.stringify({ disabledTools: ["SendMessage", "Workflow", "WebFetch"], disabledSkills: [] }),
+      JSON.stringify({ disabledTools: ["SendMessage", "Workflow", "WebFetch", "Task", "Agent"], disabledSkills: ["code-review"] }),
     );
-    expect(env.store.getToolSkillPolicy().disabledTools).toEqual(["WebFetch"]);
+    expect(env.store.getToolSkillPolicy()).toEqual({ disabledSkills: ["code-review"] });
     const run = await plan(env, env.baseRequest);
-    // Both surfaces read the normalized list (advisory on pi).
-    expect(run.caps.toolSkillPolicy.disabledTools).toEqual(["WebFetch"]);
-    expect(run.stamped.adminDisabledTools).toEqual(["WebFetch"]);
+    expect(run.caps.toolSkillPolicy).toEqual({ disabledSkills: ["code-review"] });
+    expect(run.stamped).not.toHaveProperty("adminDisabledTools");
+    expect(run.stamped.adminDisabledSkills).toEqual(["code-review"]);
   });
 
   it("plumbs the model, effort, and MCP tool-group selection into the run", async () => {

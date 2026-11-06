@@ -25,6 +25,11 @@
   (`allowTool` filters `tools/list` AND refuses `tools/call`), and the `/mcp` endpoint's `allowCall`. Model-facing
   names stay `mcp__hex-ssh__<tool>`. The upstream package is installed into the image at build time, not via
   runtime `npx`.
+- **Viewer classes (`hexSshPolicy.ts`):** the admin policy has TWO columns, `owner` (소유자) and `trusted`
+  (팀원 — every approved viewer, one team). A restricted headless run (intro / hashtag generation) or a viewer
+  without elevated access is `none` and gets no hex-ssh tool, whatever is stored. The 일반 동료 `colleague`
+  column is RETIRED (2026-11-06): dropped from a stored policy on read, ignored on write; the config key
+  `hex_ssh_tool_policy` keeps its name.
 - **App-managed MCP servers shadow same-named plugin ones.** A plugin's bundled `.mcp.json` declaring `hex-ssh`
   (keyless) must never stand in for the app's keyed one. `stripManagedMcpServers` (plugins.ts,
   `APP_MANAGED_MCP_SERVERS`) removes those names from each plugin `.mcp.json` in `resolvePluginRoots`. For the

@@ -464,7 +464,7 @@ describe("admin: hex-ssh tool policy", () => {
     // A role that isn't an array → strict parser returns null → 400.
     await admin.agent
       .put("/api/admin/hex-ssh-policy")
-      .send({ policy: { owner: "not-an-array", trusted: [], colleague: [] } })
+      .send({ policy: { owner: "not-an-array", trusted: [] } })
       .expect(400);
     await admin.agent.put("/api/admin/hex-ssh-policy").send({ policy: 42 }).expect(400);
   });

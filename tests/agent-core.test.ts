@@ -1,4 +1,4 @@
-import { DEFAULT_HEX_SSH_TOOL_POLICY, HEX_SSH_TOOLS, normalizeHexSshToolPolicy } from "../src/server/hexSshPolicy.js";
+import { DEFAULT_HEX_SSH_TOOL_POLICY, HEX_SSH_TOOLS, allowedHexSshToolsForViewer, normalizeHexSshToolPolicy } from "../src/server/hexSshPolicy.js";
 import {
   execFileSync,
   spawn,
@@ -791,7 +791,7 @@ describe("deriveAgentToolAccess", () => {
     });
     expect(a.ownerToolAccess).toBe(false);
     expect(a.elevatedToolAccess).toBe(false);
-    expect(a.hexSshViewerClass).toBe("colleague");
+    expect(a.hexSshViewerClass).toBe("none");
   });
 
   it("owner, headless WITH allowHeadlessTools → full owner tools (scheduled routine)", () => {
@@ -818,12 +818,18 @@ describe("deriveAgentToolAccess", () => {
     expect(a.hexSshViewerClass).toBe("trusted");
   });
 
+  it("no SSH class is ever configurable: `none` gets no hex-ssh tool whatever a stored policy says", () => {
+    const stored = normalizeHexSshToolPolicy({ owner: [...HEX_SSH_TOOLS], trusted: [...HEX_SSH_TOOLS], colleague: [...HEX_SSH_TOOLS] });
+    expect(stored).not.toHaveProperty("colleague");
+    expect(allowedHexSshToolsForViewer(stored, "none")).toEqual([]);
+  });
+
   it("plain colleague → neither owner nor elevated tools", () => {
     const a = deriveAgentToolAccess({ ...base, viewerIsOwner: false });
     expect(a.ownerToolAccess).toBe(false);
     expect(a.elevatedToolAccess).toBe(false);
     expect(a.elevated).toBe(false);
-    expect(a.hexSshViewerClass).toBe("colleague");
+    expect(a.hexSshViewerClass).toBe("none");
   });
 
   it("avatar consultation (headless trusted non-owner + opt-in) → elevated recall, NEVER owner tools", () => {
@@ -3274,7 +3280,7 @@ process.stdin.on("data", (chunk) => {
     expect(HEX_SSH_TOOLS).not.toContain("ssh-upload");
     expect(DEFAULT_HEX_SSH_TOOL_POLICY.owner).not.toContain("ssh-download");
     // A stored policy from before the removal loses them on read.
-    expect(normalizeHexSshToolPolicy({ owner: ["ssh-upload", "remote-ssh", "ssh-download"], trusted: [], colleague: [] }).owner).toEqual([
+    expect(normalizeHexSshToolPolicy({ owner: ["ssh-upload", "remote-ssh", "ssh-download"], trusted: [] }).owner).toEqual([
       "remote-ssh",
     ]);
     const upstreamPath = path.join(tempDir, "fake-hex-upstream-transfer.mjs");

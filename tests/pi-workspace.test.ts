@@ -35,6 +35,7 @@ import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agen
 import { deckCapabilityLine } from "../src/server/agent/systemTools.js";
 import { PI_REPO_REPLACED_COPY_SENTENCE } from "../src/server/agent/ownerState.js";
 import { piSandboxDeckToolchain } from "../src/server/deckRender.js";
+import { TOOL_SKILL_POLICY_CONFIG_KEY } from "../src/server/toolSkillPolicy.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../src/server/workspace.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog } from "../src/server/agent/pi/mcpCatalog.js";
 import { callTool, gitInit, makeBareRemote, makeSkill, withTempDir } from "./helpers.js";
@@ -636,9 +637,10 @@ describe("run capabilities on pi", () => {
 
   // Review L4/L5/L6 + hardening 5a: what pi does NOT have must not be
   // advertised, on BOTH metacognition surfaces.
-  it("states pi's real ask_avatar mode, checklist, subagent switch and plugin-secret rule on BOTH surfaces", async () => {
+  it("states pi's real ask_avatar mode, checklist and plugin-secret rule on BOTH surfaces (no retired subagent switch)", async () => {
     const { store, config, owner, mate } = setup();
-    store.setToolSkillPolicy({ disabledTools: ["Task", "Agent"], disabledSkills: [] });
+    // A pre-#78 stored policy with the retired subagent toggle: it is dropped.
+    store.setAppSecret(TOOL_SKILL_POLICY_CONFIG_KEY, JSON.stringify({ disabledTools: ["Task", "Agent"], disabledSkills: [] }));
     store.setUserSecret(owner.id, "API_TOKEN", "tok-123456789");
     // Start with no active teammate (the only other user is suspended).
     store.setSuspended(mate.id, true);
@@ -665,9 +667,11 @@ describe("run capabilities on pi", () => {
     expect(lonely.describe).toContain("this runtime has no TodoWrite/TaskCreate");
     expect(lonely.describe).not.toContain("your private per-run TodoWrite/TaskCreate checklist");
 
-    // The admin subagent switch is not a tool gate on pi (L6).
-    expect(lonely.prompt).toContain("that subagent switch is NOT enforced by a tool gate");
-    expect(lonely.describe).toContain("the subagent switch is NOT enforced by a tool gate here");
+    // Issue #78: the advisory subagent switch is retired (pi's /admin tool page
+    // gates `Agent` for real), so neither surface carries it any more.
+    expect(lonely.prompt).not.toContain("subagent switch");
+    expect(lonely.describe).not.toContain("subagent switch");
+    expect(lonely.describe).not.toContain("Admin-disabled built-in tools");
     expect(lonely.describe).not.toContain("removed deployment-wide");
 
     // No plugin .mcp.json def receives a vault secret on pi (5a).
