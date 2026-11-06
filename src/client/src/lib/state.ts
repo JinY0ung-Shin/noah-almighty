@@ -1,6 +1,5 @@
 import { get, writable } from "svelte/store";
 import type {
-  AdminGroupSummary,
   AdminPresence,
   AdminStats,
   AdminTab,
@@ -63,7 +62,6 @@ export interface ClientState {
   routineTypeFilter: "all" | "recurring" | "once";
   routineFilter: "all" | "enabled" | "paused" | "completed" | "error";
   adminUsers: AdminUserSummary[];
-  adminGroups: AdminGroupSummary[];
   adminUserFilter: "all" | "admins" | "suspended" | "group" | "sessions";
   adminUserSearch: string;
   adminGroupSearch: string;
@@ -137,7 +135,6 @@ export const appState = writable<ClientState>({
   routineTypeFilter: "all",
   routineFilter: "all",
   adminUsers: [],
-  adminGroups: [],
   adminUserFilter: "all",
   adminUserSearch: "",
   adminGroupSearch: "",
@@ -271,7 +268,6 @@ export function setDocumentTitle(): void {
     brain: "지식 그래프",
     inbox: "알림",
   routines: "예약 작업",
-    groups: "그룹",
     skills: "스킬 배우기",
     settings: "내 아바타",
     admin: "관리자",

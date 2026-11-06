@@ -7,8 +7,6 @@
   import { loadSettingsData } from "../lib/loaders";
   import { appState, updateState } from "../lib/state";
 
-  // 그룹 moved to its own left-rail view (GroupsView) — #/settings/groups
-  // redirects there (lib/nav.ts).
   const tabs = [
     { id: "profile", label: "프로필", icon: "user" },
     { id: "access", label: "권한·연결", icon: "shield" },

@@ -19,7 +19,7 @@ import {
 } from "../src/server/skillTransfer.js";
 import { buildRepoTools } from "../src/server/agent/repoTools.js";
 import { buildSkillExchangeTools } from "../src/server/agent/skillExchangeTools.js";
-import { callTool, makeBareRemote, shareGroup, signup, withTempDir } from "./helpers.js";
+import { callTool, makeBareRemote, signup, withTempDir } from "./helpers.js";
 import type { SharedSkillListing } from "../src/server/types.js";
 
 // Coverage target: the skill-share (#skill-share) surface —
@@ -242,10 +242,9 @@ describe("shared_skills store", () => {
 
   it("a custom introduction overrides the snapshot for viewers, and outlives a re-share", async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
@@ -305,13 +304,13 @@ describe("shared_skills store", () => {
     expect(store.listSharedSkillsByOwner(sharer.userId)[0].customDescription).toBeNull();
   });
 
-  it("learnable visibility mirrors avatar discovery (group teammates only)", async () => {
+  it("learnable visibility mirrors avatar discovery (every active teammate)", async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin"); // first signup = system admin
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const outsider = await newUser(app, "outsider");
-    const groupId = await shareGroup(admin.agent, ["sharer", "mate"]);
+    const suspendedViewer = await newUser(app, "outsider");
+    store.setSuspended(suspendedViewer.userId, true);
 
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
@@ -319,43 +318,41 @@ describe("shared_skills store", () => {
       description: "Weekly report deck generator",
     });
 
-    // Teammate sees it; the sharer's own view and outsiders don't.
+    // A teammate sees it; the sharer's own view and a suspended account don't.
     expect(store.listLearnableSkills(mate.userId)).toHaveLength(1);
     expect(store.countLearnableSkills(mate.userId)).toBe(1);
     expect(store.listLearnableSkills(sharer.userId)).toHaveLength(0);
-    expect(store.listLearnableSkills(outsider.userId)).toHaveLength(0);
-    expect(store.countLearnableSkills(outsider.userId)).toBe(0);
+    expect(store.listLearnableSkills(suspendedViewer.userId)).toHaveLength(0);
+    expect(store.countLearnableSkills(suspendedViewer.userId)).toBe(0);
+    // An id that is no user at all is nobody's teammate either.
+    expect(store.listLearnableSkills("no-such-user")).toHaveLength(0);
 
     // Lookup by @username + slug, and by id — visibility-checked both ways.
     const byName = store.getLearnableSkillByName(mate.userId, "sharer", "pptx-report");
     expect(byName?.owner.username).toBe("sharer");
-    expect(store.getLearnableSkillByName(outsider.userId, "sharer", "pptx-report")).toBeNull();
+    expect(store.getLearnableSkillByName(suspendedViewer.userId, "sharer", "pptx-report")).toBeNull();
     expect(store.getLearnableSkill(mate.userId, byName!.id)?.id).toBe(byName!.id);
-    expect(store.getLearnableSkill(outsider.userId, byName!.id)).toBeNull();
+    expect(store.getLearnableSkill(suspendedViewer.userId, byName!.id)).toBeNull();
 
     // A private avatar's shares disappear from teammates (visibility axis).
     store.updateProfile(sharer.userId, { visibility: "private" });
     expect(store.listLearnableSkills(mate.userId)).toHaveLength(0);
+    expect(store.getLearnableSkill(mate.userId, byName!.id)).toBeNull();
     store.updateProfile(sharer.userId, { visibility: "group" });
 
-    // A suspended owner's shares disappear.
+    // A suspended owner's shares disappear; reinstating restores them.
     store.setSuspended(sharer.userId, true);
     expect(store.listLearnableSkills(mate.userId)).toHaveLength(0);
+    expect(store.getLearnableSkillByName(mate.userId, "sharer", "pptx-report")).toBeNull();
     store.setSuspended(sharer.userId, false);
-
-    // An avatar-sharing-off group grants neither visibility nor learnability.
-    store.setGroupAvatarSharing(groupId, false);
-    expect(store.listLearnableSkills(mate.userId)).toHaveLength(0);
-    store.setGroupAvatarSharing(groupId, true);
     expect(store.listLearnableSkills(mate.userId)).toHaveLength(1);
   });
 
   it("filters by query across skill fields and owner names", async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
@@ -375,10 +372,9 @@ describe("shared_skills store", () => {
 
   it("counts learns per (owner, skill) and keeps them across unshare→re-share", async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "pptx-report",
@@ -409,41 +405,37 @@ describe("shared_skills store", () => {
     expect(store.countSkillLearnsForOwner(sharer.userId)).toBe(0);
   });
 
-  it("a group-channel block hides the share from that group's members only", async () => {
+  it("an admin block hides the share from every teammate, on every learnable read", async () => {
     const { app, store } = bootstrap();
     const admin = await newUser(app, "admin");
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const groupId = await shareGroup(admin.agent, ["sharer", "mate"], "Alpha");
+    const other = await newUser(app, "other");
     const share = store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
       description: "",
     });
 
-    store.blockSharedSkillInGroup(groupId, sharer.userId, "pptx-report", admin.userId);
+    store.blockSharedSkill(sharer.userId, "pptx-report", admin.userId);
+    expect(store.isSharedSkillBlocked(sharer.userId, "pptx-report")).toBe(true);
 
     // Every learnable read is built on the same fragment, so the listing AND
-    // the by-id / by-name lookups that back preview+learn all fail closed.
-    expect(store.listLearnableSkills(mate.userId)).toHaveLength(0);
-    expect(store.countLearnableSkills(mate.userId)).toBe(0);
-    expect(store.getLearnableSkill(mate.userId, share.id)).toBeNull();
-    expect(store.getLearnableSkillByName(mate.userId, "sharer", "pptx-report")).toBeNull();
+    // the by-id / by-name lookups that back preview+learn all fail closed —
+    // for EVERY teammate (there is no other channel to carry it).
+    for (const viewer of [mate, other, admin]) {
+      expect(store.listLearnableSkills(viewer.userId)).toHaveLength(0);
+      expect(store.countLearnableSkills(viewer.userId)).toBe(0);
+      expect(store.getLearnableSkill(viewer.userId, share.id)).toBeNull();
+      expect(store.getLearnableSkillByName(viewer.userId, "sharer", "pptx-report")).toBeNull();
+    }
     // The owner's own view is untouched — a block is not an unshare.
     expect(store.listSharedSkillsByOwner(sharer.userId)).toHaveLength(1);
-    // And so is avatar visibility: the block scopes to the skill channel.
+    // And so is avatar visibility/trust: the block scopes to the skill.
     expect(store.isTrustedFor(mate.userId, sharer.userId)).toBe(true);
     expect(
       store.listPublishedAvatars(mate.userId).some((a) => a.id === sharer.userId),
     ).toBe(true);
-
-    // A SECOND mutual sharing group with no block keeps it visible: the rule is
-    // "at least one unblocked mutual group", not "no block anywhere".
-    const otherGroupId = await shareGroup(admin.agent, ["sharer", "mate"], "Beta");
-    expect(store.listLearnableSkills(mate.userId)).toHaveLength(1);
-    expect(store.getLearnableSkill(mate.userId, share.id)?.id).toBe(share.id);
-    store.blockSharedSkillInGroup(otherGroupId, sharer.userId, "pptx-report", admin.userId);
-    expect(store.listLearnableSkills(mate.userId)).toHaveLength(0);
 
     // Blocking one skill never touches the owner's OTHER shares.
     store.shareSkill(sharer.userId, {
@@ -455,10 +447,11 @@ describe("shared_skills store", () => {
       "code-review",
     ]);
 
-    // Unblocking both restores it.
-    expect(store.unblockSharedSkillInGroup(groupId, sharer.userId, "pptx-report")).toBe(true);
-    expect(store.unblockSharedSkillInGroup(groupId, sharer.userId, "pptx-report")).toBe(false);
-    store.unblockSharedSkillInGroup(otherGroupId, sharer.userId, "pptx-report");
+    // Blocking is idempotent; unblocking restores it (once).
+    store.blockSharedSkill(sharer.userId, "pptx-report", admin.userId);
+    expect(store.unblockSharedSkill(sharer.userId, "pptx-report")).toBe(true);
+    expect(store.unblockSharedSkill(sharer.userId, "pptx-report")).toBe(false);
+    expect(store.isSharedSkillBlocked(sharer.userId, "pptx-report")).toBe(false);
     expect(store.listLearnableSkills(mate.userId)).toHaveLength(2);
   });
 
@@ -467,13 +460,12 @@ describe("shared_skills store", () => {
     const admin = await newUser(app, "admin");
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const groupId = await shareGroup(admin.agent, ["sharer", "mate"]);
     const first = store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
       description: "",
     });
-    store.blockSharedSkillInGroup(groupId, sharer.userId, "pptx-report", admin.userId);
+    store.blockSharedSkill(sharer.userId, "pptx-report", admin.userId);
 
     store.unshareSkill(sharer.userId, "pptx-report");
     const second = store.shareSkill(sharer.userId, {
@@ -486,69 +478,73 @@ describe("shared_skills store", () => {
     expect(store.getLearnableSkill(mate.userId, second.id)).toBeNull();
   });
 
-  it("lists a group's shares with blocked flags, and cascades blocks on delete", async () => {
+  it("lists every active user's shares with blocked flags for moderation", async () => {
     const { app, store } = bootstrap();
     const admin = await newUser(app, "admin");
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const outsider = await newUser(app, "outsider");
-    const groupId = await shareGroup(admin.agent, ["sharer", "mate"]);
+    const away = await newUser(app, "away");
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
       description: "",
     });
-    store.shareSkill(outsider.userId, {
-      skillName: "not-in-group",
-      displayName: "not-in-group",
+    store.shareSkill(mate.userId, {
+      skillName: "code-review",
+      displayName: "code-review",
       description: "",
     });
+    store.shareSkill(away.userId, {
+      skillName: "away-skill",
+      displayName: "away-skill",
+      description: "",
+    });
+    store.setSuspended(away.userId, true);
+    // A private owner's shares are still moderated (blocking pre-empts a switch back).
+    store.updateProfile(mate.userId, { visibility: "private" });
     store.recordSkillLearn(sharer.userId, "pptx-report", mate.userId);
-    store.blockSharedSkillInGroup(groupId, sharer.userId, "pptx-report", admin.userId);
+    store.blockSharedSkill(sharer.userId, "pptx-report", admin.userId);
 
-    // Members' shares only — a non-member's share is outside this admin's reach.
-    const listed = store.listGroupSharedSkills(groupId);
-    expect(listed.map((s) => s.skillName)).toEqual(["pptx-report"]);
-    expect(listed[0].blocked).toBe(true);
-    expect(listed[0].learnCount).toBe(1);
-    expect(listed[0].owner.username).toBe("sharer");
+    const listed = store.listSharedSkillsForModeration();
+    // Active owners only (sorted by owner display name), suspended ones left out.
+    expect(listed.map((s) => s.skillName)).toEqual(["code-review", "pptx-report"]);
+    const deck = listed.find((s) => s.skillName === "pptx-report")!;
+    expect(deck.blocked).toBe(true);
+    expect(deck.learnCount).toBe(1);
+    expect(deck.owner.username).toBe("sharer");
+    expect(listed.find((s) => s.skillName === "code-review")!.blocked).toBe(false);
     // Blocked rows stay listed — that's how an admin lifts the block.
-    store.unblockSharedSkillInGroup(groupId, sharer.userId, "pptx-report");
-    expect(store.listGroupSharedSkills(groupId)[0].blocked).toBe(false);
-
-    // Deleting the group takes its blocks with it (they only ever meant
-    // "not through THIS group"), so a rebuilt group starts clean.
-    store.blockSharedSkillInGroup(groupId, sharer.userId, "pptx-report", admin.userId);
-    expect(store.listLearnableSkills(mate.userId)).toHaveLength(0);
-    store.deleteGroup(groupId);
-    const rebuilt = await shareGroup(admin.agent, ["sharer", "mate"], "Rebuilt");
-    expect(store.listGroupSharedSkills(rebuilt)[0].blocked).toBe(false);
-    expect(store.listLearnableSkills(mate.userId)).toHaveLength(1);
+    store.unblockSharedSkill(sharer.userId, "pptx-report");
+    expect(store.listSharedSkillsForModeration().find((s) => s.skillName === "pptx-report")!.blocked).toBe(false);
   });
 
-  it("deleteUser purges blocks on the deleted OWNER's shares", async () => {
+  it("deleteUser purges blocks on the deleted OWNER's shares only (blocked_by dangles)", async () => {
     const { app, store } = bootstrap();
     const admin = await newUser(app, "admin");
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const groupId = await shareGroup(admin.agent, ["sharer", "mate"]);
+    const blocker = await newUser(app, "blocker");
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
       description: "",
     });
-    store.blockSharedSkillInGroup(groupId, sharer.userId, "pptx-report", admin.userId);
+    store.blockSharedSkill(sharer.userId, "pptx-report", admin.userId);
     store.deleteUser(sharer.userId);
-    expect(store.listGroupSharedSkills(groupId)).toHaveLength(0);
+    expect(store.isSharedSkillBlocked(sharer.userId, "pptx-report")).toBe(false);
 
     // A same-named share from a DIFFERENT owner is unaffected by the purge.
-    store.addGroupMember(groupId, mate.userId);
     store.shareSkill(mate.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
       description: "",
     });
-    expect(store.listGroupSharedSkills(groupId)[0].blocked).toBe(false);
+    expect(store.listSharedSkillsForModeration()[0].blocked).toBe(false);
+
+    // Deleting the BLOCKER keeps their block standing: it is an actor column.
+    store.blockSharedSkill(mate.userId, "pptx-report", blocker.userId);
+    store.deleteUser(blocker.userId);
+    expect(store.isSharedSkillBlocked(mate.userId, "pptx-report")).toBe(true);
   });
 
   it("renameSharedSkill moves the row, its history, and its blocks in one step", () => {
@@ -562,7 +558,7 @@ describe("shared_skills store", () => {
     store.setSharedSkillDescription("u1", "pptx-report", "우리 팀 보고서 덱 스킬");
     store.recordSkillLearn("u1", "pptx-report", "mate-1");
     store.recordSkillLearn("u1", "pptx-report", "mate-2");
-    store.blockSharedSkillInGroup("g-1", "u1", "pptx-report", "admin-1");
+    store.blockSharedSkill("u1", "pptx-report", "admin-1");
     // An event orphaned by a DEAD share that once held the target name.
     store.recordSkillLearn("u1", "deck-maker", "mate-3");
 
@@ -585,11 +581,11 @@ describe("shared_skills store", () => {
     // The 전수 count follows the rename, and the dead share's orphan under the
     // taken name is dropped rather than left to inflate this skill's count.
     expect(store.skillLearnCounts("u1")).toEqual({ "deck-maker": 2 });
-    // A group admin's block follows AND stays on the name the rename freed:
+    // An admin's block follows AND stays on the name the rename freed:
     // blocks are name-keyed anti-evasion (they already survive unshare→
     // re-share), so two renames must not clear one.
-    expect(store.unblockSharedSkillInGroup("g-1", "u1", "deck-maker")).toBe(true);
-    expect(store.unblockSharedSkillInGroup("g-1", "u1", "pptx-report")).toBe(true);
+    expect(store.unblockSharedSkill("u1", "deck-maker")).toBe(true);
+    expect(store.unblockSharedSkill("u1", "pptx-report")).toBe(true);
   });
 
   it("renameSharedSkill refuses a taken target and leaves everything untouched", () => {
@@ -597,7 +593,7 @@ describe("shared_skills store", () => {
     store.shareSkill("u1", { skillName: "a", displayName: "a", description: "A" });
     const taken = store.shareSkill("u1", { skillName: "b", displayName: "b", description: "B" });
     store.recordSkillLearn("u1", "a", "mate-1");
-    store.blockSharedSkillInGroup("g-1", "u1", "a");
+    store.blockSharedSkill("u1", "a");
 
     expect(
       store.renameSharedSkill("u1", "a", "b", {
@@ -613,7 +609,7 @@ describe("shared_skills store", () => {
     expect(rows.map((s) => s.snapshotDescription)).toEqual(["A", "B"]);
     expect(rows.find((s) => s.skillName === "b")!.id).toBe(taken.id);
     expect(store.skillLearnCounts("u1")).toEqual({ a: 1 });
-    expect(store.unblockSharedSkillInGroup("g-1", "u1", "a")).toBe(true);
+    expect(store.unblockSharedSkill("u1", "a")).toBe(true);
     // A row that doesn't exist is refused the same way.
     expect(
       store.renameSharedSkill("u1", "ghost", "c", {
@@ -658,10 +654,9 @@ describe("shared_skills store", () => {
 
   it("deleteUser cascades the owner's share rows", async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "pptx-report",
@@ -1258,7 +1253,7 @@ describe("shared-skill reconciliation", () => {
     const before = share(store, root, "u1", "pptx-report");
     store.setSharedSkillDescription("u1", "pptx-report", "덱 만들어 드려요");
     store.recordSkillLearn("u1", "pptx-report", "mate-1");
-    store.blockSharedSkillInGroup("g-1", "u1", "pptx-report");
+    store.blockSharedSkill("u1", "pptx-report");
 
     moveTreeSkill(root, "pptx-report", "deck-maker");
     commitTree(root, "rename the deck skill");
@@ -1277,7 +1272,7 @@ describe("shared-skill reconciliation", () => {
     expect(row.contentHash).toBe(before.contentHash);
     expect(store.skillLearnCounts("u1")).toEqual({ "deck-maker": 1 });
 
-    // A group admin's block follows the rename AND stays on the freed old name:
+    // An admin's block follows the rename AND stays on the freed old name:
     // re-minting a share there is still blocked, so two `git mv`s are not a way
     // around the block.
     store.shareSkill("u1", {
@@ -1285,8 +1280,8 @@ describe("shared-skill reconciliation", () => {
       displayName: "pptx-report",
       description: "",
     });
-    expect(store.unblockSharedSkillInGroup("g-1", "u1", "deck-maker")).toBe(true);
-    expect(store.unblockSharedSkillInGroup("g-1", "u1", "pptx-report")).toBe(true);
+    expect(store.unblockSharedSkill("u1", "deck-maker")).toBe(true);
+    expect(store.unblockSharedSkill("u1", "pptx-report")).toBe(true);
   });
 
   it("follows a rename of a non-ASCII skill directory", async () => {
@@ -1636,13 +1631,12 @@ describe("skill-share routes", () => {
   // The heaviest test in the suite: two seeded remotes + repeated clone/learn
   // round-trips. Under full-suite parallel load the real git work can exceed
   // vitest's 5s default, so give the END-TO-END flow explicit headroom.
-  it("shares, browses, previews, and learns across a group", { timeout: 30_000 }, async () => {
+  it("shares, browses, previews, and learns across the team", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const outsider = await newUser(app, "outsider");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
+    const other = await newUser(app, "other");
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -1672,26 +1666,31 @@ describe("skill-share routes", () => {
     await sharer.agent.post("/api/skill-share/share").send({ skill: "../etc" }).expect(400);
     await sharer.agent.post("/api/skill-share/share").send({ skill: "pptx-report" }).expect(200);
 
-    // Teammate browses it; outsider sees nothing. The SHARER sees their own
+    // Every teammate browses it. The SHARER sees their own
     // share in the same feed (like 탐색 shows one's own avatar) with the count.
     const avail = await mate.agent.get("/api/skill-share/available").expect(200);
     expect(avail.body.skills).toHaveLength(1);
     const listing = avail.body.skills[0];
     expect(listing.owner.username).toBe("sharer");
     expect(listing.contentHash).toMatch(/^[0-9a-f]{64}$/);
-    const outsiderAvail = await outsider.agent.get("/api/skill-share/available").expect(200);
-    expect(outsiderAvail.body.skills).toHaveLength(0);
+    const otherAvail = await other.agent.get("/api/skill-share/available").expect(200);
+    expect(otherAvail.body.skills).toHaveLength(1);
     const sharerAvail = await sharer.agent.get("/api/skill-share/available").expect(200);
     expect(sharerAvail.body.skills).toHaveLength(1);
     expect(sharerAvail.body.skills[0].ownerUserId).toBe(sharer.userId);
     expect(sharerAvail.body.skills[0].learnCount).toBe(0);
 
-    // Preview returns the live SKILL.md; outsiders get 404 even with the id.
+    // Preview returns the live SKILL.md.
     const previewRes = await mate.agent
       .get(`/api/skill-share/available/${listing.id}`)
       .expect(200);
     expect(previewRes.body.content).toContain("Make the deck.");
-    await outsider.agent.get(`/api/skill-share/available/${listing.id}`).expect(404);
+    // A private sharer is out of every teammate's reach, even with the id.
+    store.updateProfile(sharer.userId, { visibility: "private" });
+    expect((await other.agent.get("/api/skill-share/available").expect(200)).body.skills).toHaveLength(0);
+    await other.agent.get(`/api/skill-share/available/${listing.id}`).expect(404);
+    await other.agent.post("/api/skill-share/learn").send({ id: listing.id }).expect(404);
+    store.updateProfile(sharer.userId, { visibility: "group" });
     // The SHARER previews their own card: the row is in their feed but excluded
     // from the learnable query, so the route must resolve own shares separately.
     const ownPreview = await sharer.agent
@@ -1700,8 +1699,7 @@ describe("skill-share routes", () => {
     expect(ownPreview.body.content).toContain("Make the deck.");
     expect(ownPreview.body.skill.ownerUserId).toBe(sharer.userId);
 
-    // Learn: outsider 404; mate without conflicts 200; second learn 409; rename ok.
-    await outsider.agent.post("/api/skill-share/learn").send({ id: listing.id }).expect(404);
+    // Learn: mate without conflicts 200; second learn 409; rename ok.
     const learned = await mate.agent
       .post("/api/skill-share/learn")
       .send({ id: listing.id })
@@ -1737,10 +1735,9 @@ describe("skill-share routes", () => {
 
   it("previews the whole file manifest, on a teammate's card and my own", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     await sharer.agent.post("/api/skill-share/share").send({ skill: "pptx-report" }).expect(200);
     const listing = (await mate.agent.get("/api/skill-share/available").expect(200)).body.skills[0];
@@ -1767,10 +1764,9 @@ describe("skill-share routes", () => {
 
   it("owner-written 소개 문구 rides every viewer surface and survives reconciliation", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     await sharer.agent.post("/api/skill-share/share").send({ skill: "pptx-report" }).expect(200);
     const listing = (await mate.agent.get("/api/skill-share/available").expect(200)).body.skills[0];
@@ -1840,10 +1836,9 @@ describe("skill-share routes", () => {
 
   it("flags updates via origin markers and overwrites in place", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -1910,10 +1905,9 @@ describe("skill-share routes", () => {
 
   it("unlink (구독 해지) drops the origin marker; the copy stays, tracking stops", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2020,10 +2014,9 @@ describe("skill-share routes", () => {
 
   it("preview and learn prune a legacy row whose SOURCE is a linked copy", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(
       sharer.userId,
       seedSkillRemote("sharer-repo", {
@@ -2061,10 +2054,9 @@ describe("skill-share routes", () => {
 
   it("learn without a connected learner repo is a 400 with guidance", async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     const row = store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
@@ -2147,10 +2139,9 @@ describe("skill-share routes", () => {
 
   it("preview serves a renamed skill on a stale card, without reordering the owner's shares", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     await sharer.agent.post("/api/skill-share/share").send({ skill: "pptx-report" }).expect(200);
     const listing = (await mate.agent.get("/api/skill-share/available").expect(200)).body.skills[0];
@@ -2175,10 +2166,9 @@ describe("skill-share routes", () => {
 
   it("learn rescues a renamed source instead of pruning the share", { timeout: 30_000 }, async () => {
     const { app, store } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2205,10 +2195,9 @@ describe("skill-share routes", () => {
 
   it("an update is still authorized by a marker naming the share's previous name", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2270,57 +2259,56 @@ describe("skill-share routes", () => {
   });
 });
 
-// ---- routes/groups.ts: group-channel skill blocks -----------------------------
+// ---- routes/admin.ts: admin shared-skill blocks ------------------------------
 
-describe("group-channel skill blocks (routes)", () => {
-  /** A group with a sharer, a plain member, and a promoted GROUP admin. */
+describe("admin shared-skill blocks (routes)", () => {
+  /** A system admin, a sharer and a plain teammate. */
   async function channel() {
     const { app, store, config } = bootstrap();
     const sysAdmin = await newUser(app, "sysadmin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    const boss = await newUser(app, "boss");
-    const groupId = await shareGroup(sysAdmin.agent, ["sharer", "mate", "boss"]);
-    store.setGroupMemberRole(groupId, boss.userId, "admin");
     const share = store.shareSkill(sharer.userId, {
       skillName: "pptx-report",
       displayName: "Deck maker",
       description: "Weekly report deck generator",
     });
-    return { app, store, config, sysAdmin, sharer, mate, boss, groupId, share };
+    return { app, store, config, sysAdmin, sharer, mate, share };
   }
-  const blocksPath = (groupId: string) =>
-    `/api/me/groups/${groupId}/shared-skills/blocks`;
+  const blocksPath = "/api/admin/shared-skills/blocks";
 
-  it("gates the management listing on canManage (member 403, group + system admin ok)", async () => {
-    const { sysAdmin, mate, boss, groupId } = await channel();
+  it("gates the moderation listing on the system admin (teammate 403)", async () => {
+    const { sysAdmin, mate, sharer } = await channel();
 
-    await mate.agent.get(`/api/me/groups/${groupId}/shared-skills`).expect(403);
-    const asGroupAdmin = await boss.agent
-      .get(`/api/me/groups/${groupId}/shared-skills`)
-      .expect(200);
-    expect(asGroupAdmin.body.skills).toHaveLength(1);
-    expect(asGroupAdmin.body.skills[0]).toMatchObject({
+    await mate.agent.get("/api/admin/shared-skills").expect(403);
+    await sharer.agent.get("/api/admin/shared-skills").expect(403);
+    const listed = await sysAdmin.agent.get("/api/admin/shared-skills").expect(200);
+    expect(listed.body.skills).toHaveLength(1);
+    expect(listed.body.skills[0]).toMatchObject({
       skillName: "pptx-report",
       blocked: false,
       owner: { username: "sharer" },
     });
-    // The system admin manages every group without being a member.
-    await sysAdmin.agent.get(`/api/me/groups/${groupId}/shared-skills`).expect(200);
-    await boss.agent.get("/api/me/groups/no-such-group/shared-skills").expect(404);
   });
 
-  it("blocks + unblocks through the group channel, with audit rows", async () => {
-    const { sysAdmin, sharer, mate, boss, groupId, share } = await channel();
+  it("the retired group-channel routes are gone", async () => {
+    const { sysAdmin, sharer } = await channel();
+    await sysAdmin.agent.get("/api/me/groups/any/shared-skills").expect(404);
+    await sysAdmin.agent
+      .post("/api/me/groups/any/shared-skills/blocks")
+      .send({ ownerUserId: sharer.userId, skillName: "pptx-report" })
+      .expect(404);
+  });
+
+  it("blocks + unblocks team-wide, with audit rows", async () => {
+    const { sysAdmin, sharer, mate, share } = await channel();
     const body = { ownerUserId: sharer.userId, skillName: "pptx-report" };
 
-    // A plain member cannot moderate the channel.
-    await mate.agent.post(blocksPath(groupId)).send(body).expect(403);
-    await mate.agent
-      .delete(`${blocksPath(groupId)}/${sharer.userId}/pptx-report`)
-      .expect(403);
+    // A plain teammate cannot moderate.
+    await mate.agent.post(blocksPath).send(body).expect(403);
+    await mate.agent.delete(`${blocksPath}/${sharer.userId}/pptx-report`).expect(403);
 
-    await boss.agent.post(blocksPath(groupId)).send(body).expect(200);
+    await sysAdmin.agent.post(blocksPath).send(body).expect(200);
 
     // The teammate's whole learner surface fails closed on the store queries:
     // the feed drops it, and both single-row lookups 404 (preview would be 410
@@ -2333,49 +2321,56 @@ describe("group-channel skill blocks (routes)", () => {
     const mine = await sharer.agent.get("/api/skill-share/available").expect(200);
     expect(mine.body.skills.map((s: { id: string }) => s.id)).toEqual([share.id]);
 
-    const blockedList = await boss.agent
-      .get(`/api/me/groups/${groupId}/shared-skills`)
-      .expect(200);
+    const blockedList = await sysAdmin.agent.get("/api/admin/shared-skills").expect(200);
     expect(blockedList.body.skills[0].blocked).toBe(true);
 
     // Re-blocking is idempotent, not an error.
-    await boss.agent.post(blocksPath(groupId)).send(body).expect(200);
+    await sysAdmin.agent.post(blocksPath).send(body).expect(200);
 
-    // The system admin lifts it; the second delete 404s (no no-op audit row).
-    await sysAdmin.agent
-      .delete(`${blocksPath(groupId)}/${sharer.userId}/pptx-report`)
-      .expect(200);
-    await sysAdmin.agent
-      .delete(`${blocksPath(groupId)}/${sharer.userId}/pptx-report`)
+    // Unblock; the second delete 404s (no no-op audit row).
+    await sysAdmin.agent.delete(`${blocksPath}/${sharer.userId}/pptx-report`).expect(200);
+    const again = await sysAdmin.agent
+      .delete(`${blocksPath}/${sharer.userId}/pptx-report`)
       .expect(404);
+    expect(again.body.error).toBe("차단된 공유 스킬이 아닙니다.");
     const restored = await mate.agent.get("/api/skill-share/available").expect(200);
     expect(restored.body.skills.map((s: { id: string }) => s.id)).toEqual([share.id]);
     await mate.agent.get(`/api/skill-share/available/${share.id}`).expect(410);
 
     const audit = await sysAdmin.agent.get("/api/audit").expect(200);
     const rows = audit.body.audit as { action: string; detail: string }[];
-    const blocked = rows.find((e) => e.action === "group_skill_block");
-    const unblocked = rows.find((e) => e.action === "group_skill_unblock");
-    expect(blocked?.detail).toContain('@sharer의 "pptx-report" 공유를 그룹 채널에서 차단');
-    expect(unblocked?.detail).toContain('@sharer의 "pptx-report" 공유 차단을 그룹 채널에서 해제');
+    const blocked = rows.filter((e) => e.action === "skill_block");
+    const unblocked = rows.filter((e) => e.action === "skill_unblock");
+    expect(blocked).toHaveLength(2);
+    expect(unblocked).toHaveLength(1);
+    expect(blocked[0].detail).toContain('@sharer의 "pptx-report" 공유를 팀 전체에서 차단');
+    expect(unblocked[0].detail).toContain('@sharer의 "pptx-report" 공유 차단을 해제');
   });
 
-  it("refuses a non-member owner and a malformed skill name", async () => {
-    const { app, boss, sharer, groupId } = await channel();
-    const outsider = await newUser(app, "outsider");
+  it("allows a block before any share exists, and refuses an unknown owner or a malformed name", async () => {
+    const { store, sysAdmin, sharer, mate } = await channel();
 
-    await boss.agent
-      .post(blocksPath(groupId))
-      .send({ ownerUserId: outsider.userId, skillName: "pptx-report" })
+    // Name-keyed: blocking a skill that is not shared yet pre-empts the share.
+    await sysAdmin.agent
+      .post(blocksPath)
+      .send({ ownerUserId: sharer.userId, skillName: "future-skill" })
+      .expect(200);
+    store.shareSkill(sharer.userId, { skillName: "future-skill", displayName: "future", description: "" });
+    expect(store.getLearnableSkillByName(mate.userId, "sharer", "future-skill")).toBeNull();
+
+    const unknown = await sysAdmin.agent
+      .post(blocksPath)
+      .send({ ownerUserId: "no-such-user", skillName: "pptx-report" })
       .expect(404);
-    await boss.agent
-      .post(blocksPath(groupId))
+    expect(unknown.body.error).toBe("사용자를 찾을 수 없습니다.");
+    await sysAdmin.agent
+      .delete(`${blocksPath}/no-such-user/pptx-report`)
+      .expect(404);
+    await sysAdmin.agent
+      .post(blocksPath)
       .send({ ownerUserId: sharer.userId, skillName: "Not A Slug" })
       .expect(400);
-    await boss.agent
-      .post(blocksPath(groupId))
-      .send({ skillName: "pptx-report" })
-      .expect(400);
+    await sysAdmin.agent.post(blocksPath).send({ skillName: "pptx-report" }).expect(400);
   });
 });
 
@@ -2418,10 +2413,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("find lists teammate shares with the learn address; empty state guides", async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     const tools = toolsFor(store, config, mate.userId, "mate");
 
     const empty = await callTool(tools, "find_shared_skills", {});
@@ -2442,10 +2436,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("learn_skill copies into the owner's repo and redirects on failures", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     const tools = toolsFor(store, config, mate.userId, "mate");
 
@@ -2502,10 +2495,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("learn_skill keeps the share when the sharer's skills/ is a link, and copies nothing through it", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("linked-sharer"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2534,10 +2526,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("learn_skill update:true resolves the learner's copy and refuses ambiguity", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2624,10 +2615,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("learn_skill update:true finds a copy learned under the share's previous name", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2666,10 +2656,9 @@ describe("mcp skill_exchange tools", () => {
   // would let the renamed share overwrite the OTHER share's copy.
   it("refuses an update when the rename trail matches two copies", { timeout: 60_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2724,10 +2713,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("learn_skill rescues a renamed source and prunes a dead one", { timeout: 60_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2767,10 +2755,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("unlink_skill stops tracking mid-conversation", { timeout: 30_000 }, async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     store.setKnowledgeRepo(
       mate.userId,
@@ -2825,10 +2812,9 @@ describe("mcp skill_exchange tools", () => {
 
   it("share_skill's description sets the card introduction; omitting it preserves one", async () => {
     const { app, store, config } = bootstrap();
-    const admin = await newUser(app, "admin");
+    await newUser(app, "admin"); // first signup = system admin
     const sharer = await newUser(app, "sharer");
     const mate = await newUser(app, "mate");
-    await shareGroup(admin.agent, ["sharer", "mate"]);
     store.setKnowledgeRepo(sharer.userId, seedSkillRemote("sharer-repo"), "main");
     const tools = toolsFor(store, config, sharer.userId, "sharer");
     const share = (args: Record<string, unknown>) => callTool(tools, "share_skill", args);

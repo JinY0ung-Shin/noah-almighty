@@ -99,7 +99,7 @@ function makeEvents(overrides: Partial<AgentEvents> = {}): AgentEvents {
   };
 }
 
-/** Fresh services + an ADMIN owner (the first user) in a group. */
+/** Fresh services + an ADMIN owner (the first user). */
 function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
   const { config, store } = createServices({
     dataDir: path.join(tempDir, dir),
@@ -114,8 +114,6 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
     ...configOverrides,
   });
   const owner = store.createUser({ username: "owner", displayName: "오너", password: "password123" });
-  const group = store.createGroup({ name: "팀", createdBy: owner.id });
-  store.addGroupMember(group.id, owner.id, "member");
   const cwd = path.join(tempDir, dir, "ws");
   fs.mkdirSync(cwd, { recursive: true });
   const baseRequest: AgentRequest = {
@@ -128,7 +126,7 @@ function setup(dir: string, configOverrides: Partial<AppConfig> = {}) {
     viewerIsOwner: true,
     autoApprove: true,
   };
-  return { config, store, owner, group, baseRequest };
+  return { config, store, owner, baseRequest };
 }
 
 /** What one run registers (the plan as runPiAgent builds it): the gate entry, the server's own tool, the prompt. */
@@ -179,21 +177,15 @@ describe("create_share_link registration", () => {
     expect(run.append).not.toContain(REDIRECT);
   });
 
-  it("wires the host's onShareLink and the LIVE sign-up mode into the tool it registers", async () => {
+  it("wires the host's onShareLink into the tool it registers (no sign-up caveat: open sign-up is retired)", async () => {
     const s = setup("reg-wiring");
-    const { store } = s;
     const events = makeEvents();
     const built = (await planRun(s, s.baseRequest, events)).built!;
 
-    // A fresh deployment signs anyone up, so the result carries the caveat...
-    const open = await callTool(built.tools, "create_share_link", { expiresInDays: 30 });
+    const result = await callTool(built.tools, "create_share_link", { expiresInDays: 30 });
     expect(events.onShareLink).toHaveBeenCalledWith({ expiresInDays: 30 });
-    expect(open.content[0].text).toContain("Sign-up is OPEN on this server");
-    // ...and the setting is read per call, not frozen at registration.
-    store.setSignupMode("closed");
-    const closed = await callTool(built.tools, "create_share_link", {});
-    expect(closed.isError).toBeFalsy();
-    expect(closed.content[0].text).not.toContain("Sign-up is OPEN");
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).not.toContain("Sign-up is OPEN");
   });
 
   const excluded: Array<{
@@ -336,7 +328,7 @@ describe("mcp__file_output__create_share_link handler", () => {
 
   it("passes the request through and opens the result with the security banner (KST expiry)", async () => {
     const createShareLink = vi.fn(async (_request: ShareLinkRequest) => okLink());
-    const tools = toolsWith({ createShareLink, signupOpen: () => false });
+    const tools = toolsWith({ createShareLink });
 
     const result = await callTool(tools, "create_share_link", { attachmentId: "  att-1  ", expiresInDays: 30 });
     expect(createShareLink).toHaveBeenCalledWith({ attachmentId: "att-1", expiresInDays: 30 });
@@ -361,16 +353,15 @@ describe("mcp__file_output__create_share_link handler", () => {
     expect(createShareLink).toHaveBeenLastCalledWith({});
   });
 
-  it("says when an existing link was returned, when it is download-only, and when sign-up is open", async () => {
+  it("says when an existing link was returned and when it is download-only", async () => {
     const tools = toolsWith({
       createShareLink: async () => okLink({ created: false, slideCount: 0 }),
-      signupOpen: () => true,
     });
     const body = (await callTool(tools, "create_share_link", { expiresInDays: 1 })).content[0].text ?? "";
     expect(body).toContain('An active share link for "분기 보고.pptx" already existed, so it is returned unchanged');
     expect(body).toContain("any expiry asked for now does not apply");
     expect(body).toContain("it is download-only");
-    expect(body).toContain("Sign-up is OPEN on this server, so anyone who can reach Noah can create an account and open the link");
+    expect(body).not.toContain("Sign-up is OPEN");
   });
 
   it("names the conversation's other active links between the created line and the URL (KST, never their URLs)", async () => {
@@ -382,7 +373,6 @@ describe("mcp__file_output__create_share_link handler", () => {
           // 20:15 UTC is 05:15 the NEXT day in KST.
           otherActiveLinks: [{ fileName: "분기 보고.pptx", expiresAt: "2026-10-02T20:15:00.000Z" }],
         }),
-      signupOpen: () => false,
     });
     const result = await callTool(tools, "create_share_link", {});
     expect(result.isError).toBeFalsy();
@@ -454,19 +444,6 @@ describe("mcp__file_output__create_share_link handler", () => {
     expect(lines.find((line) => line.startsWith("1 earlier link"))).toContain(
       '"옛 덱.pptx URL: https://evil.example/ x" (until not-a-date).',
     );
-  });
-
-  it("still returns the link when the sign-up setting cannot be read", async () => {
-    const tools = toolsWith({
-      createShareLink: async () => okLink(),
-      signupOpen: () => {
-        throw new Error("database is locked");
-      },
-    });
-    const result = await callTool(tools, "create_share_link", {});
-    expect(result.isError).toBeFalsy();
-    expect(result.content[0].text).toContain("URL: https://noah.example/#/share/");
-    expect(result.content[0].text).not.toContain("Sign-up is OPEN");
   });
 
   it("falls back to the host's raw expiry instead of throwing after the link exists", async () => {
@@ -573,14 +550,14 @@ describe("describe_system share-link line", () => {
     return { ...s, describeWith, shareLineOf };
   }
 
-  it("owner, enabled: audience, expiry and revoke facts, plus the sign-up caveat while sign-up is open", async () => {
+  it("owner, enabled: audience, expiry and revoke facts (no sign-up caveat: open sign-up is retired)", async () => {
     const s = describeSetup("desc-owner-on");
-    // A fresh deployment's sign-up mode is "open".
     const open = s.shareLineOf(await s.describeWith({ fileOutputEnabled: true, shareLinksEnabled: true }));
     expect(open.startsWith(`${SHARE_LINE_PREFIX}AVAILABLE in this run — create one ONLY when the user explicitly asks for a link`)).toBe(true);
-    expect(open).toContain("for ANYONE signed in to Noah who has it, not only the owner's groups");
+    expect(open).toContain("for ANYONE signed in to Noah who has it (any approved teammate, not only the people the owner meant)");
     expect(open).toContain("speaker notes included");
-    expect(open).toContain("self-service sign-up is OPEN on this server, so that is anyone who can reach Noah");
+    expect(open).not.toContain("sign-up is OPEN");
+    expect(open).not.toContain("groups");
     expect(open).toContain("It expires after 1, 7 (default) or 30 days, fixed at creation");
     // The one-link rule is per delivered CARD (updated deliberately from "a deck
     // has at most one active link", review finding agent-1).
@@ -591,10 +568,10 @@ describe("describe_system share-link line", () => {
     expect(open).not.toContain("a deck has at most one active link");
     expect(open).toContain("내 아바타 → 권한·연결 → 공유 링크 or with the 공유 링크 button next to the file card");
 
+    // Neither signup mode adds a caveat any more.
     s.store.setSignupMode("closed");
     const closed = s.shareLineOf(await s.describeWith({ fileOutputEnabled: true, shareLinksEnabled: true }));
-    expect(closed).toContain("AVAILABLE in this run");
-    expect(closed).not.toContain("sign-up is OPEN");
+    expect(closed).toBe(open);
   });
 
   it.each([

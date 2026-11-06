@@ -368,9 +368,8 @@ export async function buildRunCapabilities(
   // skill sync, pi/piSkills.ts); a disabled built-in is ADVISORY on pi — both
   // surfaces ask the model not to use it (piAdminDisabledToolsNote).
   const toolSkillPolicy = store.getToolSkillPolicy();
-  // Admin per-group tool policy (enforcement + META-COGNITION): the driving
-  // user's allowed MCP tool groups is the INTERSECTION across their
-  // policy-bearing groups (null = unrestricted). Clamped HERE — the single
+  // Admin tool policy (enforcement + META-COGNITION): the ONE global allowlist
+  // of MCP tool groups (null = unrestricted). Clamped HERE — the single
   // choke point every runAgentStream caller (chat, routines, headless
   // generators) passes through — so a blocked group's MCP servers are never
   // even registered, whatever selection the caller passed. System is the
@@ -491,7 +490,7 @@ export async function buildRunCapabilities(
     personalKnowledgeToolsEnabled &&
     ownerToolAccess &&
     !knowledgeRepoConfigured;
-  // Shared (communal) account: the owner opted into letting trusted same-group
+  // Shared (communal) account: the owner opted into letting trusted
   // teammates WRITE to the personal knowledge repo through this avatar. Widens
   // ONLY the repo file-CRUD/commit gate below (still headless-gated via
   // elevatedToolAccess); create_repo, repo connection settings, and every other
@@ -506,7 +505,7 @@ export async function buildRunCapabilities(
       avatarUserId: request.avatar.id,
       owner,
       viewerIsOwner: ownerToolAccess,
-      // Trusted same-group teammates may READ (list_files/read_file) the owner's
+      // Trusted teammates may READ (list_files/read_file) the owner's
       // personal repo; write/commit stay owner-only UNLESS the owner marked this
       // a shared account (see repoTools.ts `writeAccess`).
       elevated: elevatedToolAccess,
@@ -591,7 +590,7 @@ export async function buildRunCapabilities(
   // external-task-API turn. Never a teammate's chat or a consultation
   // (another avatar's question). It rides the always-on
   // system family rather than a tool group of its own, so a saved tool-group
-  // selection or a group's MCP policy can never silently drop it. delete_todo
+  // selection or the admin's MCP policy can never silently drop it. delete_todo
   // is withheld from API turns: their message is machine-authored, so this is a
   // speed bump against an injected, irreversible removal of items — not a full
   // boundary (update_todo stays, and a leaked key IS the owner's session per
@@ -740,7 +739,7 @@ export async function buildRunCapabilities(
   // Unattended pi runs (routines, the task API) keep the waiting call.
   //
   // Avatar consultation (#ask-avatar): OWNER-DRIVEN runs (owner chats + owner
-  // routines) may ask a same-group teammate's avatar one question.
+  // routines) may ask a teammate's avatar one question.
   // `avatarConsultation` is the depth guard — a consultation run never
   // re-registers the tool, so ask chains cannot nest. avatarAskActive is the
   // SINGLE boolean used byte-identically in mcpAllowedTools + the ctx injection
@@ -750,10 +749,10 @@ export async function buildRunCapabilities(
     avatarDirectoryToolsEnabled &&
     ownerToolAccess &&
     !consultationRun &&
-    // No avatar-sharing group → no reachable target (trust = shared membership
-    // in a group with avatar sharing ON; sharing-off groups grant neither
-    // visibility nor trust), so keep the tool out of the prompt entirely.
-    ownerState.groups.some((g) => g.avatarSharing);
+    // No REACHABLE teammate (none, or every other avatar private) → no target,
+    // so keep the tool out of the prompt entirely. Hand-synced with
+    // promptBuilder's avatarAskEnabled and describe_system's line.
+    ownerState.reachableTeammateCount > 0;
   // Only a run that HAS ask_avatar can describe its background mode (review L4).
   const piAsyncAsk = avatarAskActive && Boolean(events?.steers) && Boolean(runOptions.piAsyncJobs);
   // pi self-state, ONE value for both metacognition surfaces (describe_system
@@ -898,7 +897,7 @@ export async function buildRunCapabilities(
   // learn one into the owner's knowledge repo, (un)share own repo skills.
   // Rides the `avatars` tool group (it is cross-avatar discovery) and is
   // OWNER-ONLY end to end: learning writes the owner's repo, and the listing
-  // is the OWNER's group view — a trusted teammate driving this avatar must
+  // is the OWNER's team view — a trusted teammate driving this avatar must
   // not browse it (their own avatar serves their view). skillExchangeActive is
   // the SINGLE boolean used byte-identically in mcpAllowedTools + inProcessMcpServers.
   const skillExchangeActive = avatarDirectoryToolsEnabled && ownerToolAccess;
@@ -930,7 +929,6 @@ export async function buildRunCapabilities(
   const piSkillSources = runOptions.piSkills?.mcpSources;
   const skillsReadActive = Boolean(piSkillSources && piSkillSources.size > 0);
   const skillsServer = skillsReadActive ? buildSkillsServer({ sources: piSkillSources }) : null;
-  const ownerGroups = ownerState.groups;
   // To-do server (todoToolsActive above). The handlers re-check viewerIsOwner
   // — registration is not the boundary under the static catalog — and stamp
   // each new item with WHO added it and the conversation it came from.
@@ -1096,10 +1094,6 @@ export async function buildRunCapabilities(
           ? {
               shareLinkEnabled: true,
               createShareLink: events!.onShareLink,
-              // Read live per call (an app_config value, cached per
-              // ciphertext): whether "anyone signed in" really means anyone
-              // who can reach Noah, for the result's audience caveat.
-              signupOpen: () => store.getSignupMode() === "open",
             }
           : {}),
       })
@@ -1233,7 +1227,6 @@ export async function buildRunCapabilities(
     hexSshAllowedTools,
     webFetchProxyState,
     ownerState,
-    ownerGroups,
     ownerSecrets,
     injectableSecretEnv,
     browserSecretPolicies,
@@ -1309,7 +1302,6 @@ export function stampPromptRequest(
     ownerToolAccess,
     webFetchProxyState,
     ownerState,
-    ownerGroups,
     ownerSecrets,
     runVisionEnabled,
     knowledgeRepoConfigured,
@@ -1343,7 +1335,7 @@ export function stampPromptRequest(
     deckAuthoring,
   });
 
-  // Owner self-state (secret names, group memberships) flows to every
+  // Owner self-state (secret names, team size) flows to every
   // OWNER-DRIVEN turn: interactive owner chats AND owner-scheduled routines
   // (ownerToolAccess) — the same gate that registers the owner-level tools, so
   // prompt awareness and tool availability never diverge. Restricted headless
@@ -1377,7 +1369,9 @@ export function stampPromptRequest(
     // NO_PROXY snapshot so the avatar knows whether external sites are
     // reachable through the corporate proxy. Mirrored by describe_system.
     webFetchProxy: webFetchProxyState(),
-    groupMemberships: ownerToolAccess ? ownerGroups : [],
+    ...(ownerToolAccess
+      ? { teammateCount: ownerState.teammateCount, reachableTeammateCount: ownerState.reachableTeammateCount }
+      : {}),
     // Skill-exchange self-state (#skill-share): counts ride ONLY runs that
     // registered the tools (skillExchangeActive), so the standing note and
     // tool availability can't diverge.

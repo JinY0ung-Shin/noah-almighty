@@ -179,10 +179,8 @@ function seedLegacyDeployment(config: AppConfig) {
   const store = new Store(config);
   const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
   const colleague = store.createUser({ username: "colleague", displayName: "Colleague", password: "password123" });
-  const group = store.createGroup({ name: "Team" });
-  store.addGroupMember(group.id, owner.id, "member");
   // A retired group-agent id: a different namespace this retirement must not touch.
-  const groupAvatar = `group:${group.id}:agent-1`;
+  const groupAvatar = "group:legacy-team:agent-1";
   const botA = `personal:${owner.id}:agent-a`;
   const botB = `personal:${owner.id}:agent-b`;
   const botGone = `personal:${owner.id}:agent-gone`;

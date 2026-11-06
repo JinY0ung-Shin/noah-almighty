@@ -18,7 +18,7 @@ import { apiError, requestOrigin, type RouterDeps } from "./_shared.js";
 // browser control is a general capability — any user may drive their OWN
 // browser from a chat with their OWN avatar. The run-time gate lives in
 // runCapabilities/browserTools (owner-of-avatar, interactive),
-// and a group's tool policy can still switch the `browser` group off entirely.
+// and the admin's MCP tool policy can still switch the `browser` tool group off entirely.
 
 /**
  * The Noah address THIS request came in on, as an extension match pattern.

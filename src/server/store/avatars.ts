@@ -2,9 +2,10 @@ import crypto from "node:crypto";
 import type {
   AvatarDetail,
   AvatarSummary,
-  GroupSharedSkill,
   SharedSkill,
+  SharedSkillBlockEntry,
   SharedSkillListing,
+  SharedSkillModeration,
 } from "../types.js";
 import {
   type Constructor,
@@ -45,7 +46,7 @@ interface SharedSkillRow {
   owner_display_name?: string;
   owner_alias?: string | null;
   owner_avatar_ext?: string | null;
-  /** 1 when this row is blocked in the group the management query asked about. */
+  /** 1 when an admin block (shared_skill_blocks) covers this row's (owner, name). */
   blocked?: number;
 }
 
@@ -82,17 +83,15 @@ function parsePreviousNames(raw: string | null | undefined): string[] {
 }
 
 /**
- * Shared FROM/JOIN fragment for "users m1 and m2 share an avatar-sharing
- * group" — the SINGLE source of the co-membership SQL (T3.2). Every
- * visibility/trust/badge query below builds on it, so reach and elevation can
- * never drift apart. A group whose `avatar_sharing` policy is off (explicit 0;
- * NULL = on for pre-policy rows — keep in lockstep with the TS `!== 0` reads)
- * grants NEITHER (nor skill sharing): it drops out of this relation entirely. Binds NO params; consumers append their WHERE over m1/m2/g.
+ * THE team relation (single team, 2026-11-06): "the user bound to this ONE
+ * positional param is an ACTIVE teammate" — an existing, not-suspended users
+ * row. Every approved user is a teammate, so this plus the target row's own
+ * `suspended = 0` is the whole relation. VISIBILITY_WHERE and
+ * LEARNABLE_SKILLS_FROM embed it, and `isActiveTeammatePair` (behind
+ * `isTrustedFor`/`isVisibleTo`) is its TS twin, so reach, trust and skill
+ * sharing can never drift apart. Binds ONE param: the viewer id.
  */
-const SHARING_TEAMMATES = `FROM group_members m1
-                JOIN group_members m2 ON m1.group_id = m2.group_id
-                JOIN groups g ON g.id = m1.group_id
-                 AND (g.avatar_sharing IS NULL OR g.avatar_sharing != 0)`;
+const VIEWER_IS_TEAMMATE = `EXISTS (SELECT 1 FROM users tm WHERE tm.id = ? AND tm.suspended = 0)`;
 
 export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class Avatars extends Base {
@@ -101,18 +100,15 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     /**
      * Shared visibility WHERE predicate for the discovery queries
      * (listPublishedAvatars + searchAvatars): suspended owners are hidden; the
-     * viewer's own avatar always shows, and `group` avatars show to group
-     * teammates only (`private` to no one else — there is no wider state).
-     * Binds TWO positional params, both the viewer id, in order: the `id = ?`
-     * self-exception, then the teammate subquery's `m1.user_id = ?`. Callers
-     * must pass `(viewerId, viewerId, ...)`.
+     * viewer's own avatar always shows, and `group` (팀 공개) avatars show to
+     * every active teammate (`private` to no one else — there is no wider
+     * state). Binds TWO positional params, both the viewer id, in order: the
+     * `id = ?` self-exception, then VIEWER_IS_TEAMMATE. Callers must pass
+     * `(viewerId, viewerId, ...)`.
      */
     private static readonly VISIBILITY_WHERE = `suspended = 0
              AND (id = ?
-              OR (visibility = 'group' AND id IN (
-                SELECT m2.user_id ${SHARING_TEAMMATES}
-                WHERE m1.user_id = ?
-              )))`;
+              OR (visibility = 'group' AND ${VIEWER_IS_TEAMMATE}))`;
 
     /**
      * Correlated per-avatar aggregates (plugin_count + updated_at) embedded in the
@@ -132,23 +128,12 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return row.m;
     }
 
-    /** User ids that share at least one group with `viewerId` (excludes self). */
-    private groupTeammateIds(viewerId: string): Set<string> {
-      const rows = this.db
-        .prepare(
-          `SELECT DISTINCT m2.user_id AS id ${SHARING_TEAMMATES}
-           WHERE m1.user_id = ? AND m2.user_id != ?`,
-        )
-        .all(viewerId, viewerId) as { id: string }[];
-      return new Set(rows.map((r) => r.id));
-    }
-
     listPublishedAvatars(viewerId: string): AvatarSummary[] {
-      // Visibility model: `group` avatars are visible to group teammates only;
-      // `private` only to the owner. The viewer's own avatar always shows
-      // regardless of visibility; nothing reaches beyond the viewer's groups.
-      // (Group co-membership is also what makes teammates mutually elevated —
-      // see isTrustedFor, built on the same SHARING_TEAMMATES fragment.)
+      // Visibility model: `group` (팀 공개) avatars are visible to every active
+      // teammate; `private` only to the owner. The viewer's own avatar always
+      // shows regardless of visibility. (Team membership is also what makes
+      // teammates mutually elevated — see isTrustedFor, the TS twin of the same
+      // VIEWER_IS_TEAMMATE relation.)
       const rows = this.db
         .prepare(
           `SELECT *,
@@ -158,11 +143,7 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
            ORDER BY display_name COLLATE NOCASE ASC`,
         )
         .all(viewerId, viewerId) as AvatarSummaryRow[];
-      const teammates = this.groupTeammateIds(viewerId);
-      return rows.map((row) => ({
-        ...this.toAvatarSummary(row),
-        sharesGroup: teammates.has(row.id),
-      }));
+      return rows.map((row) => this.toAvatarSummary(row));
     }
 
     private toAvatarSummary(row: AvatarSummaryRow): AvatarSummary {
@@ -193,7 +174,7 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     /**
-     * Find avatars visible to the viewer (own + group teammates') whose capabilities match a
+     * Find avatars visible to the viewer (own + teammates') whose capabilities match a
      * free-text query, ranked. Matches across hashtags, bio, intro, name, alias,
      * and username; a hashtag hit outranks a body hit. An empty query lists all
      * (capped). Backs the cross-avatar `mcp__avatars__search_avatars` tool, so an
@@ -210,7 +191,7 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
         50,
       );
       // Visibility mirrors listPublishedAvatars: the viewer's own avatar plus
-      // `group` avatars of group teammates (`private` ones stay owner-only).
+      // teammates' `group` avatars (`private` ones stay owner-only).
       // Suspended users are never discoverable. Keeping this in sync with
       // listPublishedAvatars is what the avatar-directory MCP tool relies on
       // to surface the same teammates the viewer can browse.
@@ -222,7 +203,6 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
            WHERE ${Avatars.VISIBILITY_WHERE}`,
         )
         .all(viewerId, viewerId) as AvatarSummaryRow[];
-      const teammates = this.groupTeammateIds(viewerId);
       const tokens = query
         .toLowerCase()
         .split(/[\s,，、]+/)
@@ -260,12 +240,7 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
           b.score - a.score ||
           a.row.display_name.localeCompare(b.row.display_name),
       );
-      return matches
-        .slice(0, limit)
-        .map((s) => ({
-          ...this.toAvatarSummary(s.row),
-          sharesGroup: teammates.has(s.row.id),
-        }));
+      return matches.slice(0, limit).map((s) => this.toAvatarSummary(s.row));
     }
 
     getAvatar(viewerId: string, id: string): AvatarDetail | null {
@@ -302,7 +277,7 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     /**
      * Resolve a chat target avatar: reachable if it's the viewer's own, or visible
-     * to the viewer per its visibility — `group` (group teammates) or `private`
+     * to the viewer per its visibility — `group` (teammates) or `private`
      * (owner only). See `isVisibleTo`.
      */
     resolveChatAvatar(
@@ -336,118 +311,77 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     // ---- Trust & visibility ----------------------------------------------
-    // Trust (elevated tool access) is derived PURELY from group co-membership:
-    // members of the same group are mutually + symmetrically elevated. A trusted
-    // viewer chats with someone else's avatar at the OWNER's tool-permission level
-    // (the elevated MCP tools, not just the read-only set; pi built-ins run in the
-    // viewer's own sandbox either way) — but it does NOT grant the owner-only
-    // knowledge inbox.
+    // ONE Noah instance is ONE team (2026-11-06): every approved (not suspended)
+    // user is a teammate, and teammates are mutually + symmetrically elevated. A
+    // trusted viewer chats with someone else's avatar at the OWNER's
+    // tool-permission level (the elevated MCP tools, not just the read-only set;
+    // pi built-ins run in the viewer's own sandbox either way) — but it does NOT
+    // grant the owner-only knowledge inbox. Signup approval IS the trust gate.
 
     /**
      * True when `viewerId` may use tools at the owner's level on `avatarId`'s
-     * avatar. The ONLY source is sharing at least one group (see `shareAnyGroup`).
-     * This is THE single point every trust/elevated check flows through, so all
-     * elevation derives from group membership — manage trust by managing groups.
+     * avatar: both are distinct, existing, active (not suspended) users — i.e.
+     * teammates. This is THE single choke point every trust/elevated check flows
+     * through; add any new trust source (or restriction) HERE, never at call
+     * sites.
      */
     isTrustedFor(viewerId: string, avatarId: string): boolean {
-      if (!viewerId || !avatarId || viewerId === avatarId) {
-        return false;
-      }
-      return this.shareAnyGroup(viewerId, avatarId);
+      return this.isActiveTeammatePair(viewerId, avatarId);
     }
 
     /**
      * Whether an avatar row is discoverable/reachable by `viewerId` (NOT counting
-     * the self-exception, which callers handle). `group` → group teammates only;
-     * `private` → no one. TS mirror of the SQL VISIBILITY_WHERE — both are built
-     * on the same teammate relation, so keep them in lockstep. Suspended owners
-     * are filtered by the callers before this is consulted.
+     * the self-exception, which callers handle). `group` (팀 공개) → every
+     * active teammate; `private` → no one. TS mirror of the SQL VISIBILITY_WHERE
+     * — both are built on the same team relation, so keep them in lockstep.
      */
     private isVisibleTo(row: UserRow, viewerId: string): boolean {
       if (this.rowVisibility(row) === "group") {
-        return this.shareAnyGroup(viewerId, row.id);
+        return this.isActiveTeammatePair(viewerId, row.id);
       }
       return false; // private
     }
 
     /**
-     * True when two distinct users share at least one group. Group co-membership
-     * is the sole source of trust (members of the same group are mutually
-     * elevated) via `isTrustedFor`, and the same relation gates `group`
-     * visibility. Indexed on group_members(user_id).
+     * TS twin of VIEWER_IS_TEAMMATE: two distinct ids, both existing users,
+     * neither suspended. The only relation behind trust and visibility.
      */
-    private shareAnyGroup(userA: string, userB: string): boolean {
+    private isActiveTeammatePair(userA: string, userB: string): boolean {
       if (!userA || !userB || userA === userB) {
         return false;
       }
-      const row = this.db
-        .prepare(
-          `SELECT 1 ${SHARING_TEAMMATES}
-           WHERE m1.user_id = ? AND m2.user_id = ? LIMIT 1`,
-        )
-        .get(userA, userB);
-      return Boolean(row);
+      return (
+        this.count(
+          "SELECT COUNT(*) AS c FROM users WHERE id IN (?, ?) AND suspended = 0",
+          userA,
+          userB,
+        ) === 2
+      );
     }
 
     /**
-     * Names of the groups two distinct users share. Explains WHY a viewer is
-     * auto-trusted (group co-membership) for the prompt — the trust DECISION
-     * itself still goes through `isTrustedFor`/`shareAnyGroup`.
+     * How many active teammates `userId` has (active users other than them) —
+     * the team size the avatar is told about (`OwnerState.teammateCount`) and
+     * the ask_avatar gate (no teammate → nobody to consult).
      */
-    sharedGroupNames(userA: string, userB: string): string[] {
-      if (!userA || !userB || userA === userB) {
-        return [];
-      }
-      const rows = this.db
-        .prepare(
-          `SELECT DISTINCT g.name AS name ${SHARING_TEAMMATES}
-           WHERE m1.user_id = ? AND m2.user_id = ?
-           ORDER BY g.name COLLATE NOCASE ASC`,
-        )
-        .all(userA, userB) as { name: string }[];
-      return rows.map((r) => r.name);
+    countTeammates(userId: string): number {
+      return this.count(
+        "SELECT COUNT(*) AS c FROM users WHERE suspended = 0 AND id != ?",
+        userId,
+      );
     }
 
     /**
-     * Search users by username OR display name (case-insensitive substring) to
-     * populate the group member-add picker. `searcherId` is excluded. Prefix
-     * matches sort first, then by display name. Returns [] for a blank query.
-     * Capped at `limit`.
+     * How many teammates' avatars `userId` can actually REACH: active users
+     * other than them whose avatar is `group` (팀 공개) — the same predicate as
+     * VISIBILITY_WHERE. The ask_avatar gate (`OwnerState.reachableTeammateCount`):
+     * a team whose every other avatar is private has nobody to consult.
      */
-    searchUsers(
-      query: string,
-      searcherId: string,
-      limit = 8,
-    ): { id: string; username: string; displayName: string }[] {
-      const q = query.trim();
-      if (!q) {
-        return [];
-      }
-      // Escape LIKE wildcards so a literal %, _ or \ in the query stays literal.
-      const esc = q.replace(/[\\%_]/g, (c) => `\\${c}`);
-      const like = `%${esc}%`;
-      const prefix = `${esc}%`;
-      const rows = this.db
-        .prepare(
-          `SELECT u.id AS id, u.username AS username, u.display_name AS display_name
-           FROM users u
-           WHERE u.id != ?
-             AND (u.username LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
-           ORDER BY
-             CASE WHEN u.username LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,
-             u.display_name COLLATE NOCASE ASC
-           LIMIT ?`,
-        )
-        .all(searcherId, like, like, prefix, prefix, limit) as {
-        id: string;
-        username: string;
-        display_name: string;
-      }[];
-      return rows.map((r) => ({
-        id: r.id,
-        username: r.username,
-        displayName: r.display_name,
-      }));
+    countReachableTeammates(userId: string): number {
+      return this.count(
+        "SELECT COUNT(*) AS c FROM users WHERE suspended = 0 AND id != ? AND visibility = 'group'",
+        userId,
+      );
     }
 
     // ---- Shared skills (#skill-share) --------------------------------------
@@ -455,8 +389,8 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     // rows here are metadata snapshots for discovery — content is copied from
     // the owner's clone at learn time (skillTransfer.ts). Reach deliberately
     // mirrors avatar discovery: a viewer sees a share iff they could see the
-    // owner's avatar in 탐색 (not suspended, visibility='group', and sharing a
-    // group per SHARING_TEAMMATES) — never wider than the avatar itself.
+    // owner's avatar in 탐색 (not suspended, visibility='group', and the viewer
+    // an active teammate) — never wider than the avatar itself.
 
     /**
      * JOIN/WHERE for shares VISIBLE to a viewer. Keep the predicate in lockstep
@@ -464,39 +398,31 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
      * shares are managed via listSharedSkillsByOwner, not browsed as learnable.
      * Binds TWO positional params, both the viewer id.
      *
-     * The teammate test is an EXISTS over the shared groups rather than
-     * VISIBILITY_WHERE's `IN (…)` because a GROUP-CHANNEL BLOCK
-     * (shared_skill_group_blocks) removes ONE group from the relation for ONE
-     * (owner, skill_name): the share survives as long as SOME mutual sharing
-     * group is unblocked, and avatar visibility itself never changes. That
+     * An ADMIN BLOCK (shared_skill_blocks) removes ONE (owner, skill_name) from
+     * every teammate's reads; avatar visibility itself never changes. That
      * per-skill subtraction is the ONLY intended divergence — the
-     * suspended/`group`/SHARING_TEAMMATES half stays in lockstep. Enforcing it
-     * HERE is what makes it fail closed: every learnable read (listing, by-id,
-     * by-name, count) is built on this fragment, so a direct id fetch from
-     * preview/learn can't route around a block.
+     * suspended/`group`/team half stays in lockstep. Enforcing it HERE is what
+     * makes it fail closed: every learnable read (listing, by-id, by-name,
+     * count) is built on this fragment, so a direct id fetch from preview/learn
+     * can't route around a block.
      */
     private static readonly LEARNABLE_SKILLS_FROM = `FROM shared_skills s
            JOIN users u ON u.id = s.owner_user_id
            WHERE u.suspended = 0
              AND s.owner_user_id != ?
              AND u.visibility = 'group'
-             AND EXISTS (
-               SELECT 1 ${SHARING_TEAMMATES}
-               WHERE m1.user_id = ?
-                 AND m2.user_id = s.owner_user_id
-                 AND NOT EXISTS (
-                   SELECT 1 FROM shared_skill_group_blocks b
-                   WHERE b.group_id = m1.group_id
-                     AND b.owner_user_id = s.owner_user_id
-                     AND b.skill_name = s.skill_name
-                 )
+             AND ${VIEWER_IS_TEAMMATE}
+             AND NOT EXISTS (
+               SELECT 1 FROM shared_skill_blocks b
+               WHERE b.owner_user_id = s.owner_user_id
+                 AND b.skill_name = s.skill_name
              )`;
 
     /**
      * The EFFECTIVE description resolution lives HERE, in the one mapper every
      * shared_skills read passes through: the owner's custom introduction when
      * set, else the frontmatter snapshot. Consumers (feed, preview header, MCP
-     * find, group management) read `description` and cannot drift apart; the
+     * find, admin moderation) read `description` and cannot drift apart; the
      * two raw columns stay available for the owner's own UIs and for the mine
      * reconciliation, which must compare the SNAPSHOT only.
      */
@@ -601,12 +527,12 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
      * Everything else keyed by the skill NAME moves with it in the SAME
      * transaction, or the rename would silently drop moderation and history:
      *
-     * - `shared_skill_group_blocks` is COPIED to the new name (INSERT OR IGNORE
+     * - `shared_skill_blocks` is COPIED to the new name (INSERT OR IGNORE
      *   merges with a block already standing there — never lost, never
-     *   duplicated) and the old name's blocks are LEFT IN PLACE. Blocks are
+     *   duplicated) and the old name's block is LEFT IN PLACE. Blocks are
      *   name-keyed anti-evasion, which is why they already survive
      *   unshare→re-share; letting two `git mv`s clear one would hand every
-     *   owner a way around a group admin's decision. Only an explicit unblock
+     *   owner a way around the admin's decision. Only an explicit unblock
      *   removes a block, so re-minting a share under the freed old name stays
      *   blocked.
      * - `skill_learn_events` is re-keyed onto the new name, and any event
@@ -690,10 +616,10 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
           .run(toSkillName, ownerUserId, fromSkillName);
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO shared_skill_group_blocks
-               (group_id, owner_user_id, skill_name, blocked_by, created_at)
-             SELECT group_id, owner_user_id, ?, blocked_by, created_at
-               FROM shared_skill_group_blocks
+            `INSERT OR IGNORE INTO shared_skill_blocks
+               (owner_user_id, skill_name, blocked_by, created_at)
+             SELECT owner_user_id, ?, blocked_by, created_at
+               FROM shared_skill_blocks
               WHERE owner_user_id = ? AND skill_name = ?`,
           )
           .run(toSkillName, ownerUserId, fromSkillName);
@@ -914,37 +840,36 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
       );
     }
 
-    // ---- Group-channel blocks (group-admin moderation) ---------------------
-    // A group admin may take a member's shared skill out of THEIR group's
-    // discovery channel. The block is keyed by (group, owner, skill NAME) —
-    // like skill_learn_events, NOT the share-row id, so an unshare→re-share
-    // can't evade it — and it subtracts exactly one group from
-    // LEARNABLE_SKILLS_FROM's teammate relation: another mutual sharing group
-    // still carries the skill, avatar visibility is untouched, and copies
+    // ---- Admin blocks (system-admin moderation) ---------------------------
+    // The system admin may take any user's shared skill out of the team's
+    // discovery. The block is keyed by (owner, skill NAME) — like
+    // skill_learn_events, NOT the share-row id, so an unshare→re-share can't
+    // evade it — and it removes the skill from EVERY teammate's learnable
+    // reads (LEARNABLE_SKILLS_FROM); avatar visibility is untouched, and copies
     // already learned stay in their learners' repos.
 
     /**
-     * Every share by a MEMBER of this group, with its owner, 전수 count, and
-     * whether it is blocked in THIS group — the group-admin management view.
-     * Unlike the learnable listing this is not viewer-scoped: an admin manages
-     * their channel, so blocked rows stay listed (that's how they're unblocked).
+     * Every ACTIVE user's share, with its owner, 전수 count, and whether it is
+     * blocked — the admin moderation view. Not viewer-scoped: the admin manages
+     * the whole team's channel, so blocked rows stay listed (that's how they're
+     * unblocked), and a `private` owner's shares are listed too (blocking one
+     * pre-empts the owner switching back to 팀 공개).
      */
-    listGroupSharedSkills(groupId: string): GroupSharedSkill[] {
+    listSharedSkillsForModeration(): SharedSkillModeration[] {
       const rows = this.db
         .prepare(
           `SELECT s.*, u.username AS owner_username, u.display_name AS owner_display_name,
                   u.alias AS owner_alias, u.avatar_ext AS owner_avatar_ext,
                   ${LEARN_COUNT_COLUMN},
-                  EXISTS (SELECT 1 FROM shared_skill_group_blocks b
-                          WHERE b.group_id = ?
-                            AND b.owner_user_id = s.owner_user_id
+                  EXISTS (SELECT 1 FROM shared_skill_blocks b
+                          WHERE b.owner_user_id = s.owner_user_id
                             AND b.skill_name = s.skill_name) AS blocked
            FROM shared_skills s
            JOIN users u ON u.id = s.owner_user_id
-           JOIN group_members m ON m.user_id = s.owner_user_id AND m.group_id = ?
+           WHERE u.suspended = 0
            ORDER BY u.display_name COLLATE NOCASE ASC, s.skill_name COLLATE NOCASE ASC`,
         )
-        .all(groupId, groupId) as SharedSkillRow[];
+        .all() as SharedSkillRow[];
       return rows.map((row) => ({
         ...this.toSharedSkillListing(row),
         blocked: row.blocked === 1,
@@ -952,38 +877,79 @@ export function withAvatars<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     /**
-     * Block one owner's skill in one group's channel (idempotent — an already
+     * Block one owner's skill for the whole team (idempotent — an already
      * blocked row keeps its original blocker/timestamp). Deliberately does NOT
      * require a live share row: the key is the skill NAME, so blocking survives
      * (and pre-empts) an unshare→re-share cycle.
      */
-    blockSharedSkillInGroup(
-      groupId: string,
-      ownerUserId: string,
-      skillName: string,
-      blockedBy: string | null = null,
-    ): void {
+    blockSharedSkill(ownerUserId: string, skillName: string, blockedBy: string | null = null): void {
       this.db
         .prepare(
-          `INSERT INTO shared_skill_group_blocks (group_id, owner_user_id, skill_name, blocked_by, created_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT (group_id, owner_user_id, skill_name) DO NOTHING`,
+          `INSERT INTO shared_skill_blocks (owner_user_id, skill_name, blocked_by, created_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (owner_user_id, skill_name) DO NOTHING`,
         )
-        .run(groupId, ownerUserId, skillName, blockedBy, now());
+        .run(ownerUserId, skillName, blockedBy, now());
     }
 
-    /** Lift a group-channel block. False when it wasn't blocked. */
-    unblockSharedSkillInGroup(
-      groupId: string,
-      ownerUserId: string,
-      skillName: string,
-    ): boolean {
+    /** Lift an admin block. False when it wasn't blocked. */
+    unblockSharedSkill(ownerUserId: string, skillName: string): boolean {
       return (
         this.db
-          .prepare(
-            "DELETE FROM shared_skill_group_blocks WHERE group_id = ? AND owner_user_id = ? AND skill_name = ?",
-          )
-          .run(groupId, ownerUserId, skillName).changes > 0
+          .prepare("DELETE FROM shared_skill_blocks WHERE owner_user_id = ? AND skill_name = ?")
+          .run(ownerUserId, skillName).changes > 0
+      );
+    }
+
+    /**
+     * The blocks NOT represented in `listSharedSkillsForModeration` (that
+     * listing covers active owners' live shares): a suspended owner, a skill
+     * that is not (or no longer) shared. A block whose owner no longer exists
+     * is skipped (deleteUser cascades them; a leftover row is unreachable by
+     * the unblock route anyway).
+     */
+    listOtherSharedSkillBlocks(): SharedSkillBlockEntry[] {
+      const rows = this.db
+        .prepare(
+          `SELECT b.owner_user_id, b.skill_name, b.created_at,
+                  u.username, u.display_name, u.suspended
+           FROM shared_skill_blocks b
+           JOIN users u ON u.id = b.owner_user_id
+           WHERE NOT (
+             u.suspended = 0
+             AND EXISTS (SELECT 1 FROM shared_skills s
+                         WHERE s.owner_user_id = b.owner_user_id AND s.skill_name = b.skill_name)
+           )
+           ORDER BY u.display_name COLLATE NOCASE ASC, b.skill_name COLLATE NOCASE ASC`,
+        )
+        .all() as {
+        owner_user_id: string;
+        skill_name: string;
+        created_at: string | null;
+        username: string;
+        display_name: string;
+        suspended: number;
+      }[];
+      return rows.map((row) => ({
+        ownerUserId: row.owner_user_id,
+        ownerUsername: row.username,
+        ownerDisplayName: row.display_name,
+        ownerSuspended: row.suspended === 1,
+        skillName: row.skill_name,
+        blockedAt: row.created_at ?? null,
+      }));
+    }
+
+    /**
+     * Whether (owner, skill_name) is blocked. A test/diagnostic helper: no
+     * production read uses it — every learnable read enforces blocks through
+     * LEARNABLE_SKILLS_FROM, which is what makes them fail closed.
+     */
+    isSharedSkillBlocked(ownerUserId: string, skillName: string): boolean {
+      return Boolean(
+        this.db
+          .prepare("SELECT 1 FROM shared_skill_blocks WHERE owner_user_id = ? AND skill_name = ?")
+          .get(ownerUserId, skillName),
       );
     }
   };

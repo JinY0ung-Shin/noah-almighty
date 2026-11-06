@@ -3,7 +3,6 @@ import { goView } from "./nav";
 import { notify, readState, replaceState, updateState } from "./state";
 import { emptyTodoState, refreshTodos, resetTodoClientState } from "./todos";
 import type {
-  AdminGroupSummary,
   AdminPresence,
   AdminStats,
   AdminUserSummary,
@@ -240,14 +239,3 @@ export async function loadAdminOverview(): Promise<void> {
   replaceState({ adminStats: stats.stats, adminSystem: system, adminUsers: users.users, audit: audit.audit });
 }
 
-export async function loadAdminGroups(): Promise<void> {
-  const { groups } = await api<{ groups: AdminGroupSummary[] }>("/api/admin/groups");
-  replaceState({ adminGroups: groups });
-}
-
-// The full user roster alone — the 그룹 view's AdminGroupRow member picker
-// browses $appState.adminUsers, without pulling the rest of loadAdminOverview.
-export async function loadAdminUsers(): Promise<void> {
-  const { users } = await api<{ users: AdminUserSummary[] }>("/api/admin/users");
-  replaceState({ adminUsers: users });
-}

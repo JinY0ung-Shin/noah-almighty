@@ -3,7 +3,7 @@
 Server-layer rules. Read with the root [`CLAUDE.md`](../../CLAUDE.md) and [`agent/CLAUDE.md`](agent/CLAUDE.md);
 mechanics live in [`docs/architecture/`](../../docs/architecture/) — mainly
 [`server-core.md`](../../docs/architecture/server-core.md) (routes, store, settings, migrations),
-[`groups-trust.md`](../../docs/architecture/groups-trust.md), [`repo-knowledge.md`](../../docs/architecture/repo-knowledge.md),
+[`team-trust.md`](../../docs/architecture/team-trust.md), [`repo-knowledge.md`](../../docs/architecture/repo-knowledge.md),
 [`secrets-ssh.md`](../../docs/architecture/secrets-ssh.md), [`routines.md`](../../docs/architecture/routines.md).
 
 - **`app.ts` is thin glue.** Per-domain `(deps) => Router` factories in `routes/*`, shared helpers in

@@ -32,7 +32,7 @@ import { text } from "./mcpTools.js";
 // learn one into its own knowledge repo, and (un)share its own repo skills.
 // Reach is the store's learnable-skill visibility (mirrors avatar discovery);
 // everything here is OWNER-ONLY — learning writes the owner's repo and the
-// share listing is scoped to the owner's own group view.
+// share listing is scoped to the owner's own team view.
 
 /** MCP server name; tools surface as `mcp__skill_exchange__<tool>`. */
 export const SKILL_EXCHANGE_SERVER_NAME = "skill_exchange";
@@ -96,7 +96,7 @@ export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext)
   return [
     tool(
       "find_shared_skills",
-      "Searches the skills other avatars (same-group teammates' avatars) have shared, by name and description. " +
+      "Searches the skills other avatars (teammates' avatars) have shared, by name and description. " +
         "**Use this when the user asks what can be learned from other avatars, mentions a capability a teammate's avatar has, or asks you to learn/adopt a skill from someone.** " +
         "Results include the sharing owner's @username and the exact skill name — the address learn_skill needs. " +
         "Only shares from owners whose avatar is visible to your owner are returned. (owner only)",
@@ -320,7 +320,7 @@ export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext)
     ),
     tool(
       "share_skill",
-      "Shares one of THIS avatar's knowledge-repo skills (a `skills/<name>/` directory) so same-group teammates can browse and learn it. " +
+      "Shares one of THIS avatar's knowledge-repo skills (a `skills/<name>/` directory) so teammates can browse and learn it. " +
         "**Use this when the user asks to share/publish a skill with the team or another user.** " +
         "Re-sharing an already-shared skill re-reads its SKILL.md metadata; it never clears an introduction the owner already wrote. " +
         "A skill LEARNED from another avatar and still linked to that share is refused — unlink it first to claim it as this avatar's own, then share. (owner only)",
@@ -407,7 +407,7 @@ export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext)
               ? ` The card now introduces it as: "${intro}".`
               : " Its custom introduction was removed; the card falls back to the SKILL.md description.";
         return text(
-          `Now sharing "${skill.slug}" — same-group teammates can browse it in their 스킬 배우기 tab or learn it through their own avatars.${introNote} Unshare any time with unshare_skill.`,
+          `Now sharing "${skill.slug}" — teammates can browse it in their 스킬 배우기 tab or learn it through their own avatars.${introNote} Unshare any time with unshare_skill.`,
         );
       },
     ),

@@ -152,7 +152,7 @@ export function shareDownloadName(name: string | undefined): string {
  * - the owner's own-avatar threads (external-task-API threads included): yes;
  * - a colleague's own thread with someone else's avatar: only while that
  *   avatar is still reachable for them (`resolveChatAvatar`: not suspended,
- *   still visible through a shared group) — a link must not outlive the reach
+ *   still visible to them as a teammate) — a link must not outlive the reach
  *   the thread was built on;
  * - anything else: no.
  */

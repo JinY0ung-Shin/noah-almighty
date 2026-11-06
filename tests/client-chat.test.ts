@@ -1341,7 +1341,7 @@ describe("sendMessage: slash literals, staged images, failure modes", () => {
         s.bootstrap = {
           needsSetup: false,
           githubHost: "",
-          signupMode: "open",
+          signupMode: "approval",
           confluenceConfigured: false,
           modelSelection: { models: ids.map((m) => ({ id: m, server: null, vision: true })) },
         };

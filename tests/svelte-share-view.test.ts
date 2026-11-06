@@ -48,7 +48,6 @@ function userOf(over: Partial<User> = {}): User {
     lastSeenRelease: null,
     allowedMcpToolGroups: null,
     mcpToolGroupsDefault: null,
-    groups: [],
     ...over,
   } as unknown as User;
 }

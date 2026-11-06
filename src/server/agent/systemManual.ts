@@ -13,7 +13,7 @@ export const SYSTEM_MANUAL_TOPICS = [
     title: "Human-to-human direct messages",
     summary: "Bottom-right 메시지 dock, recent-active contacts, unread badge and private conversation history.",
     body: `## Use
-Press the 메시지 bar docked at the bottom-right corner of the screen: it expands upward into a small chat window. Choose a recently active user or an existing conversation, type a message and press 보내기 or Enter. Shift+Enter inserts a newline. The dock is available on every screen and is not a modal, so the page behind it stays usable; collapsing it leaves only the bar, and the browser remembers whether it was expanded and which conversation was last open. Clicking anywhere outside the dock collapses it to the bar; the conversation and the unsent draft are kept, so reopening continues where it left off. On phone-width screens it becomes a full-width bottom sheet that collapses when its grabber is dragged down. Messages are plain text, up to 4000 characters. DM is available to all signed-in users across groups, independent of avatar visibility; no setup or admin role is required.
+Press the 메시지 bar docked at the bottom-right corner of the screen: it expands upward into a small chat window. Choose a recently active user or an existing conversation, type a message and press 보내기 or Enter. Shift+Enter inserts a newline. The dock is available on every screen and is not a modal, so the page behind it stays usable; collapsing it leaves only the bar, and the browser remembers whether it was expanded and which conversation was last open. Clicking anywhere outside the dock collapses it to the bar; the conversation and the unsent draft are kept, so reopening continues where it left off. On phone-width screens it becomes a full-width bottom sheet that collapses when its grabber is dragged down. Messages are plain text, up to 4000 characters. DM is available to all signed-in teammates, independent of avatar visibility; no setup or admin role is required.
 
 ## Presence and delivery
 접속 중 means activity within the last hour plus an unexpired login session, not an exact live socket connection. Visible app tabs refresh every 5 seconds. Hidden tabs pause refresh and catch up when visible. Previously contacted users remain listed offline and can still receive messages. The bar shows how many other users are 접속 중 and a badge counting unread incoming messages; expanding the dock on their conversation in a visible tab acknowledges the displayed messages. That acknowledgement is what the SENDER's read receipt reflects, and it reaches their dock on the same 5 second refresh, so a receipt can lag a few seconds behind the actual reading. Previous messages loads older history in pages of 50. Network failures keep the draft; retrying the same message uses the same delivery identifier to prevent duplicates. Sending is limited to 60 messages per minute per user.
@@ -54,15 +54,14 @@ Noah Almighty gives each user a main avatar with a profile/persona, skills, plug
 
 ## Where to go
 - 내 아바타: configure your avatar through 프로필, 권한·연결 and 지식·플러그인 tabs. Code/tool messages may call 내 아바타 "Settings/설정".
-- 탐색: find reachable teammate and group avatars and start conversations.
+- 탐색: find reachable teammate avatars and start conversations.
 - 대화: revisit conversation history and continue work.
 - 할 일: your work to-do list; in a chat, the 할 일 button under the message box shows it as a card. Read todos.
 - 예약 작업: create, edit, pause and run scheduled work and read its results.
-- 그룹: membership and shared repositories.
 - 스킬 배우기: browse and learn shared teammate skills.
 - 지식 그래프: explore the second brain's notes and relationships.
 - 알림: review notifications and pending information requests.
-- 관리자: system administrators manage users, groups and deployment features.
+- 관리자: system administrators manage users (including approving signups), the shared-skill block list, the MCP tool policy and deployment features.
 The visible controls depend on the account, deployment and conversation type. Use the current state/tool results before claiming a particular feature is enabled.
 
 ## First setup
@@ -71,11 +70,11 @@ The visible controls depend on the account, deployment and conversation type. Us
 3. Configure the internal Git token through Noah's credential controls. Do not ask for its value in chat.
 4. Ask your MAIN avatar to create and connect a personal knowledge repository. With a token configured and create_repo available, it can do this directly after you give a repository name.
 5. Try: "우리 팀 배포 절차를 기억해줘", then ask a question about that procedure in another conversation. Read knowledge for capture and recall details.
-6. Join a group through its administrator to share skills and reach teammate avatars. Avatar-sharing policy and profile visibility determine peer access.
+6. Once an administrator approves your signup you are on the team: every approved user is a teammate, so you can reach teammates' avatars and share skills right away. Your profile visibility (팀 공개 or 비공개) decides whether teammates can find your avatar.
 
 ## Administration and troubleshooting
-System administrators manage accounts, groups, available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
-For a missing feature, first inspect this run's state and visible controls, then distinguish account role, group membership, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.
+System administrators manage accounts (approving signups is how someone joins the team), available models/features and tool/skill policies from 관리자. Subscription/API credentials are administrator-managed and must not be collected in chat.
+For a missing feature, first inspect this run's state and visible controls, then distinguish account role, account approval, disabled tool group, missing integration and deployment limitation. Name the relevant setting and who can change it. Do not invent an administrator API endpoint or claim that changing a database setting instantly changes an already-running session.
 
 Reading this manual does not grant permissions. For an action, use only the tools this run actually has.`,
   },
@@ -88,7 +87,7 @@ Open your own avatar or a reachable avatar from 탐색 and send a task. Continue
 
 ## Model and tool controls
 The composer can select a model (one of the models pi-gateway currently offers, or 기본 모델 = pi-gateway's default model), reasoning effort and MCP tool groups for local avatars. With no pick, pi-gateway's default model runs (an administrator chooses it on pi-gateway's admin LLM page; Noah has no model setting of its own); a remembered pick pi-gateway no longer offers also runs the default. Image support follows pi-gateway's per-model image setting alone. A reasoning effort the model does not support is sent as the closest supported level below it (or the model's default), and the composer greys such levels out. Ask describe_system for this run's model and capabilities rather than guessing.
-The system tool group is always on for local avatars, including when all optional groups are off or an administrator restricts them. Its manual and state tools remain available; management tools still enforce owner/group permissions. Other tool groups follow composer selection and administrator policy. Turning on a group does not grant owner privileges. Changes affecting an existing run may require the next turn or a new conversation; plugin load changes normally require a new conversation.
+The system tool group is always on for local avatars, including when all optional groups are off or an administrator restricts them. Its manual and state tools remain available; management tools still enforce owner permissions. Other tool groups follow composer selection and administrator policy. Turning on a group does not grant owner privileges. Changes affecting an existing run may require the next turn or a new conversation; plugin load changes normally require a new conversation.
 
 ## Questions and approvals
 Respond to question or canvas cards in Noah to let a waiting run continue. A submitted task is not proof that the work completed. Check the final response and artifacts. Use the conversation's stop control to cancel running work; inspect any partial changes before retrying.
@@ -101,12 +100,12 @@ Example: "이 파일을 분석하고 결과를 CSV 파일로 줘. 불명확한 �
   {
     id: "profile-permissions",
     title: "Profile, visibility and permissions",
-    summary: "Persona, private/group visibility, owner versus teammate access, shared accounts.",
+    summary: "Persona, 팀 공개/비공개 visibility, owner versus teammate access, shared accounts.",
     body: `## Profile
 Use 내 아바타 to edit the display name, alias, image, bio, persona and capability hashtags. Persona describes how the avatar should work; it cannot override Noah's permission enforcement. Generated introductions/hashtags are suggestions until saved.
 
 ## Who can reach an avatar
-Personal avatar visibility is group or private, not public-to-everyone. Peer discovery and trust require membership in a common group with avatar sharing enabled. A private personal avatar opts out of peer visibility. A knowledge-only group can still share repository knowledge without enabling peer-avatar discovery/trust.
+Noah serves a single team: every approved user is a teammate, and teammates are mutually trusted. Personal avatar visibility is 팀 공개 (stored as "group": every teammate can find and chat with it) or 비공개 (private: the owner only). A private personal avatar opts out of peer visibility (and its shares are not learnable), but its owner stays a trusted teammate. A suspended or not-yet-approved account is no one's teammate.
 
 ## Permission boundaries
 - Your main avatar can use owner tools on your behalf, subject to enabled tool groups and deployment policy.
@@ -116,7 +115,7 @@ Personal avatar visibility is group or private, not public-to-everyone. Peer dis
 ## Shared accounts
 The shared/communal account toggle is in the profile settings. It lets trusted teammates write and commit the account's PERSONAL knowledge repository as well as read it. Repository creation/connection remains owner-only. Turn it on only when this account's knowledge is intentionally maintained by the team.
 
-Example: "팀원이 내 아바타를 못 찾는데 무엇을 확인해야 해?" Check profile visibility, common group membership and that group's avatar-sharing switch. A system administrator does not automatically bypass every membership boundary.`,
+Example: "팀원이 내 아바타를 못 찾는데 무엇을 확인해야 해?" Check that the profile visibility is 팀 공개 and that both accounts are approved (not suspended or pending). A system administrator does not automatically bypass every visibility boundary.`,
   },
   {
     id: "knowledge",
@@ -135,7 +134,7 @@ Connect one personal knowledge repository through 내 아바타's knowledge cont
 When a teammate asks something the avatar cannot answer, it can create an information request. The owner opens 알림, provides an answer to the information request and has the avatar capture it and resolve the request. Do not invent missing owner knowledge.
 
 ## Scope and troubleshooting
-Writes are normally owner-only; shared-account teammates are the deliberate exception. Groups have no shared repository or brain (both were removed); team knowledge travels as shared skills.
+Writes are normally owner-only; shared-account teammates are the deliberate exception. There is no shared team repository or team brain (both were removed); team knowledge travels as shared skills.
 For "I remembered this but cannot find it", check which avatar was used, which repository/namespace received it, whether the commit succeeded and whether it is a wiki/ note. For a failed push, preserve the tool's error and use the dedicated repository tools; the shell has no Git credentials.`,
   },
   {
@@ -150,22 +149,23 @@ Use the plugin controls in 내 아바타, or ask your own avatar to add a reposi
 To create your own skill, connect the personal knowledge repository first, then ask the avatar to scaffold skills/<name>/SKILL.md, write the procedure and commit it. Example: "우리 배포 체크리스트를 반복해서 쓸 수 있는 스킬로 만들어줘."
 
 ## Learn and share
-Search mcp__skill_exchange__find_shared_skills for skills shared by reachable teammates. With the user's go-ahead, learn_skill copies the skill into their own repository and commits it; the learned skill loads from the next conversation. Availability follows peer avatar visibility and group sharing rules; group administrators may block individual shares through their group.
+Search mcp__skill_exchange__find_shared_skills for skills shared by reachable teammates. With the user's go-ahead, learn_skill copies the skill into their own repository and commits it; the learned skill loads from the next conversation. Availability follows peer avatar visibility (a private owner's shares are not learnable); a system administrator may block individual shares for the whole team.
 A learned copy is a local copy with origin/subscription metadata, not a live remote execution. It cannot be re-shared while linked to its origin. Manage updates/subscription through the skill-sharing controls; do not silently remove origin metadata to bypass sharing rules.
 
 ## Troubleshooting
 Check plugin enabled state, sync errors, selected content, permissions, and whether this is a fresh conversation. A registered plugin and a successfully loaded plugin are different states.`,
   },
   {
-    id: "groups-avatars",
-    title: "Groups and avatar collaboration",
-    summary: "Groups, teammate discovery, skill sharing and one-shot consultation.",
-    body: `## Team setup
-System administrators create groups and assign group administrators. Manage group membership in the group settings. The avatar-sharing switch controls peer discovery, trust and skill sharing.
-Groups have no shared knowledge repository and there is no team brain: both were removed, so mcp__group_repo__*/mcp__group_brain__* no longer exist. Share team knowledge as skills (mcp__skill_exchange__*) or keep it in each member's personal repository.
+    id: "team",
+    title: "Team and avatar collaboration",
+    summary: "The single team, teammate discovery, skill sharing and one-shot consultation.",
+    body: `## The team
+One Noah server is one team: every approved user is a teammate, all equal and mutually trusted (elevated tools on each other's avatars). There are no groups any more (they were removed). Joining the team IS signup approval: with sign-up mode 승인제 a new account waits until a system administrator approves it, and with 가입 차단 nobody can sign up. A suspended account is no one's teammate.
+A system administrator moderates the team-wide shared-skill list (blocking a share hides it from every teammate) and sets the one MCP tool policy that applies to everyone.
+There is no shared team knowledge repository and no team brain: both were removed, so mcp__group_repo__*/mcp__group_brain__* no longer exist. Share team knowledge as skills (mcp__skill_exchange__*) or keep it in each member's personal repository.
 
 ## Find and consult a teammate
-Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a same-group teammate's avatar one question.
+Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bio or capability hashtags. For missing teammate knowledge in an owner run, mcp__avatars__ask_avatar can ask a teammate's avatar one question (only an active teammate whose avatar is not private answers).
 Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited (it answers from that avatar's knowledge, in a fresh, empty sandbox of its own that is deleted afterwards — it never sees your files or the teammate's), not a general background delegation channel.
 
 Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question.`,
@@ -348,7 +348,7 @@ Confluence requires deployment URL configuration and the owner's configured PAT.
 Use 내 아바타 → 권한·연결 to manage credentials rather than pasting values into chat. System state exposes configured NAMES and capabilities, not secret values. Internal GIT_TOKEN and external GITHUB_TOKEN are used server-side by dedicated Git tools. Custom secrets can be supplied to the owner's plugin MCP servers.
 
 ## Shared MCP servers (공용 MCP 서버)
-A system admin can register external HTTP MCP servers for every avatar (관리자 → 공용 MCP). Their tools appear as mcp__shared__<server>__<tool> (the mcp__<server>__<tool> form resolves too). A server that needs per-user authentication declares credential slots (which header, in what format) — the admin never chooses or sees anyone's secret. Each user connects one of their OWN secrets to each slot (내 아바타 → 권한·연결 → 시크릿 → 공용 MCP 서버에 연결할 시크릿, which also shows the host the value is sent to); the server fills it in server-side, so the value never reaches the avatar, the shell or the chat. Until every slot is connected the server is left out of that user's runs (connecting applies from the next message). A connection is tied to the server's host: if the admin moves the server to another host, every connection resets and must be made again. Connected secrets are only used in the owner's own conversations and trusted group teammates' chats; plain colleague chats and avatar consultations never get a slotted shared server. No plugin or knowledge-repository .mcp.json entry receives a secret (one outside the plugins bundled with Noah that names a \${NAME} placeholder is left out of the run), so a shared MCP server slot is the way there. describe_system lists each shared server and whether this run has it.
+A system admin can register external HTTP MCP servers for every avatar (관리자 → 공용 MCP). Their tools appear as mcp__shared__<server>__<tool> (the mcp__<server>__<tool> form resolves too). A server that needs per-user authentication declares credential slots (which header, in what format) — the admin never chooses or sees anyone's secret. Each user connects one of their OWN secrets to each slot (내 아바타 → 권한·연결 → 시크릿 → 공용 MCP 서버에 연결할 시크릿, which also shows the host the value is sent to); the server fills it in server-side, so the value never reaches the avatar, the shell or the chat. Until every slot is connected the server is left out of that user's runs (connecting applies from the next message). A connection is tied to the server's host: if the admin moves the server to another host, every connection resets and must be made again. Connected secrets are only used in the owner's own conversations and trusted teammates' chats; plain colleague chats and avatar consultations never get a slotted shared server. No plugin or knowledge-repository .mcp.json entry receives a secret (one outside the plugins bundled with Noah that names a \${NAME} placeholder is left out of the run), so a shared MCP server slot is the way there. describe_system lists each shared server and whether this run has it.
 
 ## Explicit exposure options
 Shell exposure is a per-secret opt-in: an enabled custom secret is an environment variable ($NAME) in bash on the owner's OWN runs (owner chat, owner routines, the task API) — never in a colleague's chat or an avatar consultation — and its value is redacted from every tool result. Browser input is a separate opt-in with exact allowed hosts and an optional password-field-only rule. The avatar passes secretName to browser type/fill_form; the server resolves the value. Reserved Git/SSH credentials are not general-purpose browser/shell secrets. Never print or save credentials merely to verify configuration.
@@ -368,7 +368,7 @@ No tools: check key presence, SSH group selection, current role and deployment p
     summary: "Download cards, previews, charts/diagrams, slide decks and notification delivery.",
     body: `## Files and previews
 Ask for a downloadable artifact explicitly, for example "분석 결과를 XLSX로 만들어줘". The avatar creates the file and publishes it with the available file-output tools. show_file displays supported previews and share_file provides a download card. Use the returned Noah URL/card; a local filesystem path or file:// link is not browser-accessible.
-Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card. The conversation's owner makes one with the 공유 링크 button next to the card, or by asking their own avatar for a link in a chat with it. Anyone signed in to Noah who has the link (where self-service sign-up is open, that includes anyone who can reach Noah) can view the slide renders and download the .pptx, speaker notes included, until it expires — 1, 7 or 30 days, 7 by default, fixed at creation. Each delivered deck card has at most one active link, and a link keeps opening the file it was made for: a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked. It is a human-initiated export, like downloading the file and forwarding it — not a way to share the conversation, and not avatar access or trust. The owner revokes links in 내 아바타 → 권한·연결 → 공유 링크. Whether the avatar can create one in this run is a runtime fact reported by describe_system.
+Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card. The conversation's owner makes one with the 공유 링크 button next to the card, or by asking their own avatar for a link in a chat with it. Anyone signed in to Noah who has the link (any approved teammate) can view the slide renders and download the .pptx, speaker notes included, until it expires — 1, 7 or 30 days, 7 by default, fixed at creation. Each delivered deck card has at most one active link, and a link keeps opening the file it was made for: a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked. It is a human-initiated export, like downloading the file and forwarding it — not a way to share the conversation, and not avatar access or trust. The owner revokes links in 내 아바타 → 권한·연결 → 공유 링크. Whether the avatar can create one in this run is a runtime fact reported by describe_system.
 Do not assume a local temporary file will become visible without publication. If file output is unavailable in this run, explain that before promising a downloadable result.
 
 ## Canvas

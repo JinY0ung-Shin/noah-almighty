@@ -810,8 +810,8 @@ export async function executeChatTurn(
     store.getConversationMcpToolGroups(ownerUserId, conversationId) ?? [
       ...DEFAULT_MCP_TOOL_GROUPS,
     ];
-  // Admin per-group tool policy: the RUN uses the intersection of the
-  // composer selection and what the system admin allows for this user
+  // Admin tool policy: the RUN uses the intersection of the composer
+  // selection and what the system admin allows (one global policy;
   // (null = unrestricted). The per-conversation row keeps the user's RAW
   // choice — lifting the policy later restores it untouched. runCapabilities
   // re-clamps identically, always retaining system; this local copy exists because git-repo gating
@@ -1518,12 +1518,6 @@ export async function executeChatTurn(
           // Elevated MCP tool access for the owner OR a trusted user. The MCP gate
           // (mcpAllowedTools + handler self-gates) denies everyone else.
           elevated: elevatedViewer,
-          // WHY a non-owner viewer is elevated, when group co-membership is the
-          // source: the shared group names surface in the prompt (META-COGNITION).
-          trustedViaGroups:
-            ownerUserId === avatar.id
-              ? []
-              : store.sharedGroupNames(ownerUserId, avatar.id),
           autoApprove: true,
           // Unattended work (the task API) retries once on pi-gateway's default model on a
           // transient model failure, exactly like a routine — there is no live

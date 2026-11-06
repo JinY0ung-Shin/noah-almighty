@@ -28,7 +28,7 @@
   const submitStatusId = "auth-submit-status";
 
   $: isSetup = Boolean(bootstrap?.needsSetup);
-  $: signupAllowed = isSetup || bootstrap?.signupMode === "open" || bootstrap?.signupMode === "approval";
+  $: signupAllowed = isSetup || bootstrap?.signupMode === "approval";
   $: if (isSetup) mode = "signup";
   $: isLogin = mode === "login";
   $: usernameTrimmed = username.trim();
@@ -72,7 +72,7 @@
         body: JSON.stringify(payload),
       });
       if (result.pending) {
-        notify("가입 요청이 접수되었습니다. 관리자가 승인하면 로그인할 수 있으며, 그룹 권한은 승인 후 관리자에게 신청해 주세요.", "info");
+        notify("가입 요청이 접수되었습니다. 관리자가 승인하면 팀에 합류해 로그인할 수 있습니다.", "info");
         setMode("login", true);
         pending = true;
         return;
@@ -81,11 +81,7 @@
         const signedUp = mode === "signup" && !isSetup;
         replaceState({ user: result.user, view: "explore" });
         if (signedUp) {
-          notify(
-            "회원가입이 완료되었습니다. 그룹 아바타 이용 등 그룹 권한이 필요하면 관리자에게 그룹 추가를 신청해 주세요.",
-            "info",
-            { durationMs: 9000 },
-          );
+          notify("회원가입이 완료되었습니다. 팀에 합류했습니다.", "info", { durationMs: 9000 });
         }
       }
     } catch (err) {
@@ -116,7 +112,7 @@
     {#if pending}
       <p class="muted auth-note" role="status">가입 요청이 승인 대기 상태입니다.</p>
     {:else if mode === "signup" && !isSetup && bootstrap?.signupMode === "approval"}
-      <p class="muted auth-note">관리자 승인 후 로그인할 수 있습니다.</p>
+      <p class="muted auth-note">관리자가 승인하면 팀에 합류해 로그인할 수 있습니다.</p>
     {/if}
 
     <form class="form-stack" on:submit|preventDefault={submit} aria-busy={busy ? "true" : "false"} aria-describedby={submitStatusId}>

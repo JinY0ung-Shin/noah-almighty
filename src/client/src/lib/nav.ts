@@ -11,7 +11,7 @@ function viewDenied(view: ViewName, state: ClientState): boolean {
   return ADMIN_ONLY_VIEWS.includes(view) && !state.user?.roles?.includes("admin");
 }
 
-const VIEW_ROUTES: ViewName[] = ["explore", "chat", "todos", "brain", "inbox", "routines", "groups", "skills", "settings", "admin", "share"];
+const VIEW_ROUTES: ViewName[] = ["explore", "chat", "todos", "brain", "inbox", "routines", "skills", "settings", "admin", "share"];
 const SETTINGS_TABS: SettingsTab[] = ["profile", "access", "knowledge"];
 const ADMIN_TABS: AdminTab[] = [
   "overview",
@@ -19,6 +19,7 @@ const ADMIN_TABS: AdminTab[] = [
   "mcp",
   "access",
   "system",
+  "tools",
   "audit",
 ];
 
@@ -26,11 +27,6 @@ let applyingRoute = false;
 
 export function routeFromHash(): { view: ViewName | null; arg: string | null } {
   const [view, arg] = location.hash.replace(/^#\/?/, "").split("/");
-  // Legacy: the 그룹 tab moved out of 내 아바타/관리자 into its own left-rail
-  // view — old bookmarks land on the merged #/groups view.
-  if ((view === "settings" || view === "admin") && arg === "groups") {
-    return { view: "groups", arg: null };
-  }
   let decoded: string | null = null;
   try {
     decoded = arg ? decodeURIComponent(arg) : null;
@@ -100,12 +96,6 @@ export function applyInitialRoute(): void {
     if (view === "todos" && arg) state.todoSelectedId = arg;
     if (view === "share") state.shareToken = arg || "";
   });
-  // Rewrite a legacy groups alias in place so it never enters history (Back
-  // would otherwise bounce through #/settings/groups → same view).
-  const [rawView, rawArg] = location.hash.replace(/^#\/?/, "").split("/");
-  if ((rawView === "settings" || rawView === "admin") && rawArg === "groups") {
-    history.replaceState(null, "", "#/groups");
-  }
 }
 
 export function installRouteListener(onChatRoute?: (conversationId: string) => void): () => void {

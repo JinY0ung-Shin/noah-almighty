@@ -50,12 +50,6 @@ export interface FileOutputToolsContext {
    * an English redirect instead of pretending a link exists.
    */
   createShareLink?: (request: ShareLinkRequest) => Promise<ShareLinkResult>;
-  /**
-   * Live read of the deployment's sign-up mode: true when self-service sign-up
-   * is OPEN, so "anyone signed in to Noah" really means anyone who can reach
-   * the server — the tool result then says so.
-   */
-  signupOpen?: () => boolean;
 }
 
 type SharedFile = Extract<FileOutputResult, { behavior: "shown" }>;
@@ -211,21 +205,13 @@ function otherActiveLinksLine(links: readonly OtherActiveLink[], created: boolea
  * with the security banner (the live-credential precedent): the URL is a bearer
  * credential the model must hand to the user and nobody else.
  */
-function shareLinkResultText(
-  result: Extract<ShareLinkResult, { ok: true }>,
-  signupOpen: boolean,
-): string {
+function shareLinkResultText(result: Extract<ShareLinkResult, { ok: true }>): string {
   const until = kstUntil(result.expiresAt);
   const lines = [
     `SECURITY: this URL is a bearer link — anyone signed in to Noah who has it can view the slides and download the .pptx (speaker notes included) until ${until}. ` +
       "Give it ONLY to the user in your reply, on its own line. " +
       "NEVER write it to a file or the knowledge repo, commit it, or send it to any other site, tool or person unless the user explicitly asked for exactly that.",
   ];
-  if (signupOpen) {
-    lines.push(
-      "Sign-up is OPEN on this server, so anyone who can reach Noah can create an account and open the link — tell the user that too.",
-    );
-  }
   const contents =
     result.slideCount > 0
       ? `it shows ${result.slideCount} slide render(s) plus the .pptx download`
@@ -369,13 +355,7 @@ export function buildFileOutputTools(ctx: FileOutputToolsContext) {
               if (!result.ok) {
                 return text(result.error, true);
               }
-              let signupOpen = false;
-              try {
-                signupOpen = ctx.signupOpen?.() === true;
-              } catch {
-                // An unreadable setting only drops the caveat, never the link.
-              }
-              return text(shareLinkResultText(result, signupOpen));
+              return text(shareLinkResultText(result));
             },
           ),
         ]

@@ -10,9 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ActivityTree from "../src/client/src/components/ActivityTree.svelte";
 import PromptModal from "../src/client/src/components/PromptModal.svelte";
 import RoutineModal from "../src/client/src/components/RoutineModal.svelte";
-import SettingsGroupCard from "../src/client/src/components/SettingsGroupCard.svelte";
 import SidePanel from "../src/client/src/components/SidePanel.svelte";
-import type { SettingsGroup } from "../src/client/src/components/SettingsGroupCard.svelte";
 import Toasts from "../src/client/src/components/Toasts.svelte";
 import Toggle from "../src/client/src/components/Toggle.svelte";
 import WhatsNewModal from "../src/client/src/components/WhatsNewModal.svelte";
@@ -21,7 +19,6 @@ import { openAgentCards } from "../src/client/src/lib/agentCards.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { readState, replaceState, toasts } from "../src/client/src/lib/state.js";
 import type {
-  GroupSharedSkill,
   LiveAgentNode,
   LiveTaskRow,
   LiveToolRow,
@@ -660,137 +657,6 @@ describe("WhatsNewModal", () => {
     expect(state.browserGuideRequested).toBe(true);
 
     replaceState({ view: "explore", settingsTab: "profile", browserGuideRequested: false });
-  });
-});
-
-/* ------------------------------------------------------------------ */
-/* SettingsGroupCard — the group admin's shared-skill channel section  */
-/* ------------------------------------------------------------------ */
-
-const GROUP_SKILL: GroupSharedSkill = {
-  id: "share-1",
-  ownerUserId: "mate-1",
-  skillName: "pptx-report",
-  displayName: "Deck maker",
-  description: "Weekly report deck generator",
-  customDescription: null,
-  snapshotDescription: "Weekly report deck generator",
-  learnCount: 2,
-  contentHash: null,
-  previousNames: [],
-  createdAt: "2026-08-01T00:00:00.000Z",
-  updatedAt: "2026-08-01T00:00:00.000Z",
-  owner: { id: "mate-1", username: "mate", displayName: "Mate", alias: "", hasImage: false },
-  blocked: false,
-};
-
-function groupProps(role: "admin" | "member"): SettingsGroup {
-  return {
-    id: "g1",
-    name: "플랫폼팀",
-    role,
-    allowedMcpToolGroups: null,
-    avatarSharing: true,
-    members: [
-      {
-        userId: "mate-1",
-        username: "mate",
-        displayName: "Mate",
-        hasImage: false,
-        role: "member",
-        visibility: "group",
-        joinedAt: null,
-      },
-    ],
-  };
-}
-
-describe("SettingsGroupCard 공유 스킬", () => {
-  /** Serve the channel listing; a POST/DELETE flips `blocked` for the reload. */
-  function mockChannel(): { calls: { url: string; method: string; body?: string }[] } {
-    const calls: { url: string; method: string; body?: string }[] = [];
-    let listing: GroupSharedSkill[] = [{ ...GROUP_SKILL }];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      const method = (init?.method ?? "GET").toUpperCase();
-      calls.push({ url, method, body: init?.body as string | undefined });
-      if (url.includes("/shared-skills/blocks")) {
-        listing = listing.map((s) => ({ ...s, blocked: method === "POST" }));
-        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
-      }
-      if (url.endsWith("/shared-skills")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ skills: listing }),
-        } as Response;
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    });
-    return { calls };
-  }
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    replaceState({ user: { id: "me-1" } as never });
-  });
-
-  it("shows a member's shares and blocks one through the group channel", async () => {
-    const { calls } = mockChannel();
-    const { container } = render(SettingsGroupCard, {
-      props: { group: groupProps("admin"), reload: async () => {} },
-    });
-
-    await screen.findByText("Deck maker");
-    expect(container.textContent).toContain("@mate");
-    expect(container.textContent).toContain("전수 2회");
-    expect(screen.queryByText("차단됨")).toBeNull();
-
-    await fireEvent.click(screen.getByRole("button", { name: "Deck maker 차단" }));
-    // Blocking is destructive-shaped, so it goes through the app confirm.
-    await waitFor(() => expect(get(confirmation)).not.toBeNull());
-    expect(get(confirmation)?.message).toContain("플랫폼팀");
-    resolveConfirmation(true);
-
-    await waitFor(() => expect(screen.getByText("차단됨")).toBeTruthy());
-    const post = calls.find((c) => c.method === "POST");
-    expect(post?.url).toBe("/api/me/groups/g1/shared-skills/blocks");
-    expect(JSON.parse(post!.body!)).toEqual({
-      ownerUserId: "mate-1",
-      skillName: "pptx-report",
-    });
-    // The row now offers the inverse action, keyed by the same pair.
-    expect(screen.getByRole("button", { name: "Deck maker 차단 해제" })).toBeTruthy();
-  });
-
-  it("unblocks through the id/name path and hides the section from plain members", async () => {
-    const { calls } = mockChannel();
-    const { unmount } = render(SettingsGroupCard, {
-      props: { group: groupProps("admin"), reload: async () => {} },
-    });
-    await screen.findByText("Deck maker");
-    await fireEvent.click(screen.getByRole("button", { name: "Deck maker 차단" }));
-    await waitFor(() => expect(get(confirmation)).not.toBeNull());
-    resolveConfirmation(true);
-    await waitFor(() => expect(screen.getByText("차단됨")).toBeTruthy());
-
-    await fireEvent.click(screen.getByRole("button", { name: "Deck maker 차단 해제" }));
-    await waitFor(() => expect(get(confirmation)).not.toBeNull());
-    resolveConfirmation(true);
-    await waitFor(() => expect(screen.queryByText("차단됨")).toBeNull());
-    expect(calls.find((c) => c.method === "DELETE")?.url).toBe(
-      "/api/me/groups/g1/shared-skills/blocks/mate-1/pptx-report",
-    );
-
-    unmount();
-    // A plain member sees no moderation section and never fetches the channel.
-    const before = calls.length;
-    render(SettingsGroupCard, {
-      props: { group: groupProps("member"), reload: async () => {} },
-    });
-    await waitFor(() => expect(screen.getByText("플랫폼팀")).toBeTruthy());
-    expect(screen.queryByText("공유 스킬")).toBeNull();
-    expect(calls.length).toBe(before);
   });
 });
 

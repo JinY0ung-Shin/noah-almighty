@@ -5,36 +5,63 @@ import path from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach } from "vitest";
 
-/** Sign up a user (caller chains `.expect(...)` / reads `res.body.user`). */
-export function signup(
-  agent: ReturnType<typeof request.agent>,
-  username: string,
-  password = "password123",
-) {
-  return agent.post("/api/auth/signup").send({ username, displayName: username, password });
+type Agent = ReturnType<typeof request.agent>;
+type SignupResponse = Awaited<ReturnType<Agent["post"]>>;
+
+/**
+ * The first account an app signed up through `signup` (the bootstrap admin),
+ * keyed by the supertest agent's app. Signup mode is `approval` by default
+ * since the single-team conversion (2026-11-06): every later account starts
+ * pending, and approving it IS joining the team. `signup(...).expect(201)`
+ * then plays the admin's part through the real admin API.
+ */
+const bootstrapAdmins = new WeakMap<object, Agent>();
+
+/** The express app behind a supertest agent (each agent wraps it in its own http.Server). */
+function appOf(agent: Agent): object {
+  const server = (agent as unknown as { app: { listeners?: (event: string) => unknown[] } }).app;
+  return (server.listeners?.("request")[0] as object | undefined) ?? server;
 }
 
 /**
- * Put users in one group so they become co-members. Group co-membership is the
- * ONLY thing that grants reach to someone else's `group`-visibility avatar, and
- * the SAME relation makes them mutually trusted/elevated — there is no way to be
- * reachable-but-read-only anymore. `admin` must be an agent with the system
- * admin role (the first signup on a fresh app). Returns the new group's id.
+ * Sign up a user. `await signup(...)` returns the raw signup response;
+ * `signup(...).expect(status)` asserts the status like supertest, EXCEPT that
+ * `.expect(201)` on a pending (202) signup approves the account as the app's
+ * bootstrap admin (`POST /api/admin/users/:id/suspend`) and logs it in, then
+ * resolves with that login response (`body.user`, session cookie on `agent`) —
+ * so a multi-user test reads as before: everyone approved is a teammate.
  */
-export async function shareGroup(
-  admin: ReturnType<typeof request.agent>,
-  usernames: string[],
-  name = "Shared",
-): Promise<string> {
-  const created = await admin.post("/api/admin/groups").send({ name }).expect(200);
-  const groupId = created.body.group.id as string;
-  for (const username of usernames) {
-    await admin
-      .post(`/api/admin/groups/${groupId}/members`)
-      .send({ username })
-      .expect(200);
-  }
-  return groupId;
+export function signup(agent: Agent, username: string, password = "password123") {
+  const send = () => agent.post("/api/auth/signup").send({ username, displayName: username, password });
+  return {
+    then<T1 = SignupResponse, T2 = never>(
+      onFulfilled?: ((res: SignupResponse) => T1 | PromiseLike<T1>) | null,
+      onRejected?: ((reason: unknown) => T2 | PromiseLike<T2>) | null,
+    ): Promise<T1 | T2> {
+      return send().then(onFulfilled, onRejected);
+    },
+    async expect(status: number): Promise<SignupResponse> {
+      const res = await send();
+      if (res.status === 201 && (res.body?.user?.roles as string[] | undefined)?.includes("admin")) {
+        bootstrapAdmins.set(appOf(agent), agent);
+      }
+      if (status === 201 && res.status === 202 && res.body?.pending === true) {
+        const admin = bootstrapAdmins.get(appOf(agent));
+        if (!admin) {
+          throw new Error(`signup(${username}) is pending approval and no bootstrap admin signed up through signup() on this app`);
+        }
+        const users = await admin.get("/api/admin/users").expect(200);
+        const pending = (users.body.users as { id: string; username: string }[]).find((u) => u.username === username);
+        if (!pending) throw new Error(`pending user ${username} not listed`);
+        await admin.post(`/api/admin/users/${pending.id}/suspend`).send({ suspended: false }).expect(200);
+        return agent.post("/api/auth/login").send({ username, password }).expect(200);
+      }
+      if (res.status !== status) {
+        throw new Error(`expected ${status} from signup(${username}), got ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+      return res;
+    },
+  };
 }
 
 /** Parse SSE text into a list of {event, data} frames. */

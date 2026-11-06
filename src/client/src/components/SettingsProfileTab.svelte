@@ -12,8 +12,8 @@
   export let active = false;
 
   const VISIBILITY_OPTIONS: { value: AvatarVisibility; label: string; desc: string }[] = [
-    { value: "group", label: "그룹 공개", desc: "같은 그룹원만 탐색에서 찾아 대화할 수 있어요." },
-    { value: "private", label: "비공개", desc: "나만 볼 수 있어요." },
+    { value: "group", label: "팀 공개", desc: "모든 팀원(가입이 승인된 사용자)이 탐색에서 찾아 대화할 수 있어요. 팀원끼리는 서로 신뢰하므로 대화에서 확장 권한 도구도 쓸 수 있어요." },
+    { value: "private", label: "비공개", desc: "나만 볼 수 있어요. 팀원 사이의 신뢰 관계는 그대로예요." },
   ];
 
   $: user = $appState.user;
@@ -275,7 +275,7 @@
       sharedAccount = next.sharedAccount;
       notify(
         next.sharedAccount
-          ? "공용 계정으로 설정했습니다. 같은 그룹 팀원이 이 아바타와 대화하며 지식 저장소를 수정·커밋할 수 있어요."
+          ? "공용 계정으로 설정했습니다. 팀원이 이 아바타와 대화하며 지식 저장소를 수정·커밋할 수 있어요."
           : "공용 계정 설정을 해제했습니다. 지식 저장소 수정은 다시 소유자 전용이 됩니다.",
         "ok",
       );
@@ -437,7 +437,7 @@
       <label class="field">
         <span>내 이름</span>
         <input bind:value={displayName} required aria-describedby={profileStatusId} disabled={profileSaving} on:input={() => (profileError = "")} />
-        <span class="field-hint">동료의 탐색·그룹 화면에 이 이름으로 보여요.</span>
+        <span class="field-hint">팀원의 탐색 화면에 이 이름으로 보여요.</span>
       </label>
       <label class="field">
         <span>아바타 이름</span>
@@ -507,7 +507,7 @@
       />
       <span class="shared-account-meta">
         <strong>공용 계정</strong>
-        <span class="muted">이 계정을 팀 공용 계정으로 표시합니다. 같은 그룹의 팀원이 이 아바타와 대화하면서 지식 저장소를 직접 수정하고 커밋할 수 있게 돼요. 저장소 생성·연결 같은 설정 변경은 계속 소유자만 할 수 있습니다.</span>
+        <span class="muted">이 계정을 팀 공용 계정으로 표시합니다. 팀원이 이 아바타와 대화하면서 지식 저장소를 직접 수정하고 커밋할 수 있게 돼요. 저장소 생성·연결 같은 설정 변경은 계속 소유자만 할 수 있습니다.</span>
       </span>
     </label>
   </section>
@@ -533,5 +533,5 @@
     line-height: 1.35;
   }
   /* .shared-account-item / .shared-account-meta moved to
-     styles/60-settings-admin.css (global) — shared with SettingsGroupCard. */
+     styles/60-settings-admin.css (global). */
 </style>

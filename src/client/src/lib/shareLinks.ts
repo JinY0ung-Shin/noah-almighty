@@ -183,12 +183,13 @@ export function shareOwnerLine(payload: Pick<ShareViewPayload, "ownerName" | "ow
   return until ? `${who}님이 공유 · ${until}까지` : `${who}님이 공유`;
 }
 
-/** Who can open a link — the same sentence in the dialog and the settings list. */
-export function shareAudienceNote(signupMode: string | null | undefined): string {
-  return signupMode === "open"
-    ? "링크를 받은 사람은 누구나 Noah에 가입·로그인해 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다."
-    : "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.";
-}
+/**
+ * Who can open a link — the same sentence in the dialog and the settings list.
+ * Only an approved (logged-in) user can: open sign-up was retired with groups,
+ * so there is no "anyone can sign up" case any more.
+ */
+export const SHARE_AUDIENCE_NOTE =
+  "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.";
 
 function validDate(iso: string | null | undefined): Date | null {
   if (!iso) return null;

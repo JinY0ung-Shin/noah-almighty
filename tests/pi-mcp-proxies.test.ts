@@ -916,11 +916,8 @@ describe("runPiAgent relays + redaction", () => {
 describe("asynchronous tools on pi", () => {
   it("ask_avatar returns at once and the answer arrives as a follow-up turn on the same run", async () => {
     const { store, config, owner, base } = setup();
-    const mate = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const group = store.createGroup({ name: "team", createdBy: owner.id });
-    store.addGroupMember(group.id, owner.id, "admin");
-    store.addGroupMember(group.id, mate.id, "member");
-    store.setGroupAvatarSharing(group.id, true);
+    // An active teammate (every approved user is one): ask_avatar is offered.
+    store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     consult.calls.length = 0;
     consult.delayMs = 150;
     const registry = new McpRunRegistry();
@@ -977,11 +974,8 @@ describe("asynchronous tools on pi", () => {
 
   it("Stop while the run waits on a consultation ends the run as CANCELLED, not done", async () => {
     const { store, config, owner, base } = setup();
-    const mate = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const group = store.createGroup({ name: "team", createdBy: owner.id });
-    store.addGroupMember(group.id, owner.id, "admin");
-    store.addGroupMember(group.id, mate.id, "member");
-    store.setGroupAvatarSharing(group.id, true);
+    // An active teammate (every approved user is one): ask_avatar is offered.
+    store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     consult.calls.length = 0;
     consult.delayMs = 5_000;
     const registry = new McpRunRegistry();

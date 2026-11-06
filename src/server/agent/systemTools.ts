@@ -1,4 +1,11 @@
-import { DIRECT_MESSAGE_STATE, GROUP_REPOS_RETIRED_SENTENCE, PI_NO_ASK_USER_SENTENCE, PI_REPO_REPLACED_COPY_SENTENCE } from "./ownerState.js";
+import {
+  DIRECT_MESSAGE_STATE,
+  GROUP_REPOS_RETIRED_SENTENCE,
+  PI_NO_ASK_USER_SENTENCE,
+  PI_REPO_REPLACED_COPY_SENTENCE,
+  TEAM_SENTENCE,
+  teammateCountPhrase,
+} from "./ownerState.js";
 import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import {
@@ -85,7 +92,7 @@ export interface SystemToolsContext {
   sentEffort?: ModelEffort & { supported?: readonly string[] };
   /**
    * MCP tool groups enabled for THIS run, chosen in the chat composer. Arrives
-   * already clamped by the admin's per-group tool policy — describe_system
+   * already clamped by the admin's global tool policy — describe_system
    * reports WHAT is enabled and deliberately never which groups a policy
    * blocked (the avatar only knows the tools it has).
    */
@@ -509,20 +516,15 @@ const SHARE_LINK_EXPIRY_PHRASE = SHARE_LINK_EXPIRY_DAYS.map((days) =>
  * the prompt's shareLinkSection, keyed on the same `shareLinksEnabled`. When
  * available it carries the audience/expiry/revoke facts the prompt leaves to
  * the tool description — the one-link rule scoped to a CARD, as the store keys
- * it, since every re-delivered rebuild is a new card — plus the sign-up caveat
- * read live. When not, it names
+ * it, since every re-delivered rebuild is a new card. When not, it names
  * WHY — by precedence external task > unattended > no file output — and
  * gives the same 공유 링크-button redirect the prompt does.
  */
-function ownerShareLinkLine(store: Store, ctx: SystemToolsContext): string {
+function ownerShareLinkLine(ctx: SystemToolsContext): string {
   if (ctx.shareLinksEnabled) {
-    const signupOpen = store.getSignupMode() === "open";
     return (
       `${SHARE_LINK_LINE_PREFIX}AVAILABLE in this run — create one ONLY when the user explicitly asks for a link (a plain '공유해 줘' about a file means share_file). ` +
-      "A link opens ONE PPTX download card of this conversation — its slide renders plus the .pptx download, speaker notes included — for ANYONE signed in to Noah who has it, not only the owner's groups" +
-      (signupOpen
-        ? "; self-service sign-up is OPEN on this server, so that is anyone who can reach Noah"
-        : "") +
+      "A link opens ONE PPTX download card of this conversation — its slide renders plus the .pptx download, speaker notes included — for ANYONE signed in to Noah who has it (any approved teammate, not only the people the owner meant)" +
       `. It expires after ${SHARE_LINK_EXPIRY_PHRASE} days, fixed at creation. ` +
       "Each delivered deck card has at most one active link (asking again for that card returns it); a rebuilt deck re-delivered with share_file is a NEW card, and an earlier link keeps serving the earlier file until it expires or is revoked — say so when you link the new card. " +
       `The owner revokes links any time in ${SHARE_LINK_SETTINGS_PATH} or with the 공유 링크 button next to the file card`
@@ -688,7 +690,7 @@ function rewindLines(ctx: SystemToolsContext): string[] {
  * Build system-management tool definitions bound to a single conversation.
  * Management handlers enforce owner/scope checks themselves. read_manual is
  * deliberately public/static; describe_system also provides a public overview
- * while restricting private state to its authorized owner/group scope.
+ * while restricting private state to its authorized owner scope.
  */
 export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
   return [
@@ -707,7 +709,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
     ),
     tool(
       "describe_system",
-      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; groups and roles; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
+      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; team size; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
       {},
       async () => {
         const user = store.getUserById(ctx.avatarUserId);
@@ -740,7 +742,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
             }`,
           );
         }
-        // Repo/token/secret/group/git-repo/open-request/model facts come from the
+        // Repo/token/secret/team/git-repo/open-request/model facts come from the
         // shared owner self-state reader (the same source buildPrompt derives from),
         // so describe_system and buildPrompt can't drift in WHAT they read. The
         // describe_system-only facts below (plugins/routines/visibility/intro/
@@ -751,7 +753,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const routines = store.listRoutineJobs(ctx.avatarUserId);
         const knowledgeRepo = state.knowledgeRepo;
         const secretNames = state.secretNames;
-        const groups = state.groups;
+        const teammateCount = state.teammateCount;
         const openRequests = state.openRequestCount;
         // ONE read of the lazy getter (each access re-runs the KST date and four
         // COUNT queries), and only when the line will state it.
@@ -816,7 +818,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const visibilityLabel =
           user?.visibility === "private"
             ? "private (owner only)"
-            : "group (discoverable by group teammates only)";
+            : "group / 팀 공개 (discoverable by every teammate)";
         const lines = [
           ...publicGuide,
           "",
@@ -863,14 +865,14 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Admin-disabled built-in tools: ${ctx.toolSkillPolicy?.disabledTools.length ? ctx.toolSkillPolicy.disabledTools.map((name) => `\`${name}\``).join(", ") + " (disabled deployment-wide by the system administrator; WebFetch/WebSearch/NotebookEdit do not exist on this runtime anyway" + (piAdminDisabledToolsNote(ctx.toolSkillPolicy.disabledTools) ? ", and the subagent switch is NOT enforced by a tool gate here — pi's own `Agent` tool stays callable, so honor it yourself and never spawn a subagent" : "") + ")" : "(none)"}`,
           `- Admin-disabled skills: ${ctx.toolSkillPolicy?.disabledSkills.length ? ctx.toolSkillPolicy.disabledSkills.map((name) => `\`${name}\``).join(", ") + " (deployment-wide; they are never copied into your sandbox or served, so none of them is available)" : "(none)"}`,
           `- Knowledge repository: ${knowledgeRepo.repo || "(none)"}${knowledgeRepo.branch ? ` @ ${knowledgeRepo.branch}` : ""}`,
-          `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted same-group teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
+          `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
           // The brain line checks the per-conversation TOOL GROUP first: this
           // mirrors runCapabilities' `brainActive` (needs `personalKnowledgeToolsEnabled`),
           // which withholds the server entirely when the group is deselected,
           // and the prompt's matching `brainSection` gating — so the report and
           // the run's real tool roster can't drift.
           `- Second brain (personal): ${!enabledMcpToolGroups.includes("personal_knowledge") ? "OFF for this conversation (personal knowledge tool group deselected — no brain recall or capture tools are registered this turn)" : state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
-          `- Group knowledge repositories and team brain: none — ${GROUP_REPOS_RETIRED_SENTENCE}`,
+          `- Shared team knowledge repository and team brain: none — ${GROUP_REPOS_RETIRED_SENTENCE}`,
           `- General git repos: ${state.gitRepoCount}`,
           `- Working repository: ${ctx.activeRepoName ? (ctx.piRuntime?.activeRepoDir ? `${ctx.activeRepoName} (opened via open_repo; you work on its sandbox copy ${ctx.piRuntime.activeRepoDir}/, save with mcp__git_repo__commit, push via mcp__git_repo__push; never checkout/switch/reset/rebase in the copy)` : `${ctx.activeRepoName} (opened via open_repo; save with mcp__git_repo__commit, push via mcp__git_repo__push)`) : "(none open)"}`,
           `- Local image output: ${ctx.fileOutputEnabled ? "enabled — use `mcp__file_output__show_file` for PNG/JPEG/WebP/GIF files in the working directories" : "unavailable in this run"}`,
@@ -881,7 +883,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           imageSourcesLine(ctx),
           `- Diagram files (.drawio): ${ctx.fileOutputEnabled ? "supported — author/edit uncompressed mxfile XML per the `drawio` skill and deliver with `mcp__file_output__share_file`; the file card's side panel renders the diagram interactively in the chat UI (client-side, no server toolchain)" : "viewer is built into the chat UI, but sharing files is unavailable in this run (needs an interactive chat turn)"}`,
           // Mirrors buildSystemPromptAppend's shareLinkSection (same boolean).
-          ownerShareLinkLine(store, ctx),
+          ownerShareLinkLine(ctx),
           `- Internal Git token (GIT_TOKEN): ${state.gitTokenSet ? "set" : "not set"}`,
           `- Getting started: ${gettingStartedLine}`,
           `- Secret names: ${secretNames.length ? secretNames.map((name) => `\`${name}\``).join(", ") + " (no plugin/knowledge-repo .mcp.json server receives them — a def outside the bundled plugins that names a ${NAME} placeholder is left out, see the relayed-servers line; a secret reaches an external server only via a bound shared MCP slot; git/SSH credentials go only to their dedicated tools)" : "(none)"}`,
@@ -911,8 +913,8 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                   }`
           }`,
           ...sharedMcpLines(ctx),
-          `- Groups: ${groups.length ? groups.map((g) => `${g.name}(${g.role === "admin" ? "admin" : "member"}${g.avatarSharing ? "" : ", avatar sharing off"})`).join(", ") : "(none)"} — members of the same group automatically trust each other mutually (this is the ONLY source of elevated access; manage trust by managing group membership).${groups.some((g) => !g.avatarSharing) ? ' Groups marked "avatar sharing off" grant neither avatar visibility, mutual trust nor skill sharing through their co-membership.' : ""}`,
-          `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (groups.some((g) => g.avatarSharing) ? "available — you can ask a same-group teammate's avatar one question on the owner's behalf; it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : groups.length > 0 ? "enabled, but none of the owner's groups share avatars (avatar sharing off), so no teammate avatar is reachable" : "enabled, but the owner belongs to no groups, so no teammate avatar is reachable (consultation requires shared group membership)") : "OFF for this conversation (avatars tool group deselected)"}`,
+          `- Team: ${TEAM_SENTENCE} Team size: ${teammateCountPhrase(teammateCount)}. Trust comes only from team membership (an admin approving a signup); the owner's avatar visibility (팀 공개/비공개) decides who can find it.`,
+          `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (state.reachableTeammateCount > 0 ? "available — you can ask a teammate's avatar one question on the owner's behalf (only active teammates whose avatar is not private answer); it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : "enabled, but no teammate avatar is reachable (there are no other approved teammates, or every teammate's avatar is private)") : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Skill exchange (mcp__skill_exchange__*): ${enabledMcpToolGroups.includes("avatars") ? `${state.learnableSkillCount} skill(s) shared by teammates are learnable (find_shared_skills → learn_skill copies one into the knowledge repository${state.knowledgeRepoConfigured ? "" : " — connect a knowledge repository first"}); this avatar shares ${state.sharedSkillCount} of its own, learned by teammates ${state.sharedSkillLearnTotal} time(s) so far (share_skill/unshare_skill, also manageable in the '스킬 배우기' tab). A learned skill loads from the NEXT conversation` : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Experimental features: ${state.experimentalFeatures.length ? state.experimentalFeatures.join(", ") + " (beta — behavior may change)" : "(none enabled)"}`,
           `- Plugins: ${plugins.length} (${plugins.filter((p) => p.enabled).length} enabled)`,

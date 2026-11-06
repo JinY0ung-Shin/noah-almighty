@@ -179,9 +179,7 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     const { store, config, owner } = setup();
     // owner = the CONSULTED avatar (C), asker = the asking avatar's owner (A).
     const asker = store.createUser({ username: "asker", displayName: "Asker", password: "password123" });
-    const group = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(group.id, owner.id, "member");
-    store.addGroupMember(group.id, asker.id, "member");
+    // Both are active users, so they are teammates (single team).
     // C's knowledge: a real vault the recall tools clone and search.
     const seed = path.join(dir(), "kb-seed");
     gitInit(seed);
@@ -1255,7 +1253,8 @@ describe("pi prompt variant", () => {
     // deliberate omission on an unattended first turn.
     gitTokenSet: true,
     knowledgeRepoConfigured: true,
-    groupMemberships: [{ id: "g", name: "Team", role: "member", avatarSharing: true }],
+    teammateCount: 1,
+    reachableTeammateCount: 1,
     todoState: { deleteEnabled: true },
   } as AgentRequest;
   const facts = (asyncAskAvatar: boolean) => ({

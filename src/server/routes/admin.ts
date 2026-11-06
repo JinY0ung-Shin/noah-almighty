@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
@@ -21,6 +21,7 @@ import {
 import { listPluginRootSkills } from "../agent/skillCatalog.js";
 import { loadDefaultPluginRoots } from "../plugins.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
+import { normalizeSkillSlug } from "../skillTransfer.js";
 import {
   apiError,
   avatarDir,
@@ -320,7 +321,7 @@ export function createAdminRouter(deps: RouterDeps): Router {
   );
 
   // Admin override of an avatar's visibility (content moderation): force it to
-  // group / private regardless of the owner's own setting (the legacy `public`
+  // group (팀 공개) / private regardless of the owner's own setting (the legacy `public`
   // state is retired — isAvatarVisibility rejects it).
   router.put(
     "/api/admin/users/:id/visibility",
@@ -343,165 +344,118 @@ export function createAdminRouter(deps: RouterDeps): Router {
     },
   );
 
-  // ---- Admin: groups ----------------------------------------------------
-  // Only system admins create/delete groups and assign group admins. Group
-  // admins then self-serve their group's members via /api/me/groups/*.
-
-  router.get("/api/admin/groups", requireAuth(store), requireAdmin, (_req, res) => {
-    res.json({ groups: store.listGroups() });
+  // ---- Admin: MCP tool policy ------------------------------------------
+  // SYSTEM-ADMIN-ONLY, deployment-wide (single team, 2026-11-06 — replaced the
+  // per-group policies): which MCP tool groups every user may use in chats
+  // they drive. The composer disables the rest and every run is clamped
+  // server-side (runCapabilities via allowedMcpToolGroupsForUser). Body
+  // `{ allowedMcpToolGroups: string[] | null }` — null clears the policy, []
+  // blocks every optional MCP tool group (`system` always stays). Unknown ids
+  // are rejected (not silently dropped) so an admin typo can't change the
+  // policy's meaning.
+  router.get("/api/admin/tool-policy", requireAuth(store), requireAdmin, (_req, res) => {
+    res.json({ allowedMcpToolGroups: store.getMcpToolPolicy() });
   });
 
-  router.post("/api/admin/groups", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const name = safeString(req.body?.name);
-    if (!name) {
-      apiError(res, 400, "그룹 이름이 필요합니다.");
+  router.put("/api/admin/tool-policy", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
+    const raw = req.body?.allowedMcpToolGroups;
+    let allowed: McpToolGroupId[] | null;
+    if (raw === null) {
+      allowed = null;
+    } else if (Array.isArray(raw) && raw.every((v) => isMcpToolGroupId(v))) {
+      allowed = normalizeMcpToolGroups(raw);
+    } else {
+      apiError(res, 400, "allowedMcpToolGroups는 MCP 도구 묶음 id 배열이거나 null이어야 합니다.");
       return;
     }
-    const group = store.createGroup({
-      name,
-      description: safeString(req.body?.description),
-      createdBy: req.user!.id,
+    const saved = store.setMcpToolPolicy(allowed);
+    const summary = saved === null ? "(제한 없음)" : saved.length ? saved.join(",") : "(모두 차단)";
+    auditAs(req, "set_tool_policy", `MCP 도구 정책 = ${summary}`);
+    logger.warn({ actorId: req.user!.id, allowed: saved }, "admin MCP tool policy changed");
+    res.json({ allowedMcpToolGroups: saved });
+  });
+
+  // ---- Admin: shared-skill moderation -----------------------------------
+  // The system admin may take any user's shared skill out of the team's
+  // discovery. The block is keyed by (owner, skill NAME) — not the share-row
+  // id, so an unshare→re-share can't evade it — avatar visibility is
+  // untouched, and copies already learned stay in their learners' repos.
+  // Enforcement is in the store's learnable queries (store/avatars.ts
+  // LEARNABLE_SKILLS_FROM), so the feed, the preview/learn single-row lookups,
+  // the MCP find tool, and the metacognition count all follow from one predicate.
+
+  // Every active user's share with its 전수 count + blocked flag, plus the
+  // blocks no active listing carries (`otherBlocks`: a suspended owner, an
+  // unshared skill) so every block stays visible — and liftable.
+  router.get("/api/admin/shared-skills", requireAuth(store), requireAdmin, (_req, res) => {
+    res.json({
+      skills: store.listSharedSkillsForModeration(),
+      otherBlocks: store.listOtherSharedSkillBlocks(),
     });
-    auditAs(req, "group_create", `created group ${group.id} (${name})`);
-    res.json({ group });
   });
 
-  router.get("/api/admin/groups/:id", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const group = store.getGroup(req.params.id);
-    if (!group) {
-      apiError(res, 404, "그룹을 찾을 수 없습니다.");
-      return;
+  /**
+   * (ownerUserId, skillName) decode shared by the two block endpoints. The
+   * owner must be an existing user. Responds and returns null on any failure.
+   */
+  const blockTarget = (
+    res: Response,
+    ownerUserIdRaw: unknown,
+    skillNameRaw: unknown,
+  ): { ownerUserId: string; skillName: string; ownerLabel: string } | null => {
+    const ownerUserId = safeString(ownerUserIdRaw);
+    const skillName = safeString(skillNameRaw);
+    if (!ownerUserId || !skillName || normalizeSkillSlug(skillName) !== skillName) {
+      apiError(res, 400, "ownerUserId와 스킬 이름이 필요합니다.");
+      return null;
     }
-    res.json({ group, members: store.listGroupMembers(req.params.id) });
-  });
-
-  router.patch("/api/admin/groups/:id", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const patch: { name?: string; description?: string } = {};
-    if (typeof req.body?.name === "string") patch.name = req.body.name;
-    if (typeof req.body?.description === "string") patch.description = req.body.description;
-    const group = store.updateGroup(req.params.id, patch);
-    if (!group) {
-      apiError(res, 404, "그룹을 찾을 수 없습니다.");
-      return;
+    const owner = store.getUserById(ownerUserId);
+    if (!owner) {
+      apiError(res, 404, "사용자를 찾을 수 없습니다.");
+      return null;
     }
-    // A rename is a visible-identity change for every member (group_create /
-    // group_delete already audit; keep the trail symmetric).
-    auditAs(req, "group_update", `group=${req.params.id} (${group.name})`);
-    res.json({ group });
-  });
+    return { ownerUserId, skillName, ownerLabel: `@${owner.username}` };
+  };
 
-  // SYSTEM-ADMIN-ONLY per-group tool policy: which MCP tool groups this group's
-  // members may use in chats they drive. The composer disables the rest and
-  // every run is clamped server-side (runCapabilities intersects policies across
-  // the user's groups). Body `{ allowed: string[] | null }` — null clears the
-  // policy, [] blocks every optional MCP tool group. Unknown ids are rejected
-  // (not silently dropped) so an admin typo can't change the policy's meaning.
-  // Deliberately NOT mirrored under /api/me/groups/* — group admins read it on
-  // their group card but cannot set it.
-  router.put(
-    "/api/admin/groups/:id/tool-policy",
-    requireAuth(store),
-    requireAdmin,
-    (req: AuthenticatedRequest, res) => {
-      const raw = req.body?.allowed;
-      let allowed: McpToolGroupId[] | null;
-      if (raw === null) {
-        allowed = null;
-      } else if (Array.isArray(raw) && raw.every((v) => isMcpToolGroupId(v))) {
-        allowed = normalizeMcpToolGroups(raw);
-      } else {
-        apiError(res, 400, "allowed는 MCP 도구 묶음 id 배열이거나 null이어야 합니다.");
-        return;
-      }
-      const group = store.setGroupAllowedMcpToolGroups(req.params.id, allowed);
-      if (!group) {
-        apiError(res, 404, "그룹을 찾을 수 없습니다.");
-        return;
-      }
-      const summary =
-        allowed === null ? "(no restriction)" : allowed.length ? allowed.join(",") : "(all blocked)";
-      auditAs(req, "group_tool_policy", `group=${req.params.id} allowed=${summary}`);
-      logger.warn(
-        { actorId: req.user!.id, groupId: req.params.id, allowed },
-        "group tool policy changed",
-      );
-      res.json({ group });
-    },
-  );
-
-  router.delete("/api/admin/groups/:id", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
-    const removed = store.deleteGroup(req.params.id);
-    if (!removed) {
-      apiError(res, 404, "그룹을 찾을 수 없습니다.");
-      return;
-    }
-    auditAs(req, "group_delete", `deleted group ${req.params.id}`);
-    logger.warn({ actorId: req.user!.id, groupId: req.params.id }, "group deleted");
-    res.json({ ok: true });
-  });
-
+  // Block: idempotent, and deliberately allowed even with no live share row —
+  // the key is the skill NAME, so a re-share lands already blocked.
   router.post(
-    "/api/admin/groups/:id/members",
+    "/api/admin/shared-skills/blocks",
     requireAuth(store),
     requireAdmin,
     (req: AuthenticatedRequest, res) => {
-      if (!store.getGroup(req.params.id)) {
-        apiError(res, 404, "그룹을 찾을 수 없습니다.");
-        return;
-      }
-      const username = safeString(req.body?.username);
-      if (!username) {
-        apiError(res, 400, "username이 필요합니다.");
-        return;
-      }
-      const role = req.body?.role === "admin" ? "admin" : "member";
-      const member = store.addGroupMemberByUsername(req.params.id, username, role);
-      if (!member) {
-        apiError(res, 404, "해당 사용자를 찾을 수 없습니다.");
-        return;
-      }
-      auditAs(req, "group_member_add", `group=${req.params.id} +${member.userId} (${role})`);
-      res.json({ member });
+      const target = blockTarget(res, req.body?.ownerUserId, req.body?.skillName);
+      if (!target) return;
+      store.blockSharedSkill(target.ownerUserId, target.skillName, req.user!.id);
+      auditAs(req, "skill_block", `${target.ownerLabel}의 "${target.skillName}" 공유를 팀 전체에서 차단`);
+      res.json({ ok: true });
     },
   );
 
-  router.patch(
-    "/api/admin/groups/:id/members/:userId",
-    requireAuth(store),
-    requireAdmin,
-    (req: AuthenticatedRequest, res) => {
-      const role = req.body?.role === "admin" ? "admin" : "member";
-      const member = store.setGroupMemberRole(req.params.id, req.params.userId, role);
-      if (!member) {
-        apiError(res, 404, "그룹원을 찾을 수 없습니다.");
-        return;
-      }
-      auditAs(req, "group_member_role", `group=${req.params.id} ${req.params.userId} -> ${role}`);
-      res.json({ member });
-    },
-  );
-
+  // Unblock. 404 when it wasn't blocked — no misleading audit row for a no-op.
   router.delete(
-    "/api/admin/groups/:id/members/:userId",
+    "/api/admin/shared-skills/blocks/:ownerUserId/:skillName",
     requireAuth(store),
     requireAdmin,
     (req: AuthenticatedRequest, res) => {
-      const removed = store.removeGroupMember(req.params.id, req.params.userId);
-      // 404 on a no-op instead of a misleading audit row + 200 {ok:false}.
-      if (!removed) {
-        apiError(res, 404, "그룹원을 찾을 수 없습니다.");
+      const target = blockTarget(res, req.params.ownerUserId, req.params.skillName);
+      if (!target) return;
+      if (!store.unblockSharedSkill(target.ownerUserId, target.skillName)) {
+        apiError(res, 404, "차단된 공유 스킬이 아닙니다.");
         return;
       }
-      auditAs(req, "group_member_remove", `group=${req.params.id} -${req.params.userId}`);
-      res.json({ ok: removed });
+      auditAs(req, "skill_unblock", `${target.ownerLabel}의 "${target.skillName}" 공유 차단을 해제`);
+      res.json({ ok: true });
     },
   );
 
-  // Self-service signup gating: open | closed | approval.
+  // Self-service signup gating: approval | closed. The retired `open` mode is
+  // rejected: approving a pending signup IS joining the team (and with it
+  // trust), so self-service must never skip it.
   router.put("/api/admin/signup-mode", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
     const mode = safeString(req.body?.mode);
-    if (mode !== "open" && mode !== "closed" && mode !== "approval") {
-      apiError(res, 400, "mode는 'open' · 'closed' · 'approval' 중 하나여야 합니다.");
+    if (mode !== "closed" && mode !== "approval") {
+      apiError(res, 400, "mode는 'approval' · 'closed' 중 하나여야 합니다.");
       return;
     }
     store.setSignupMode(mode);

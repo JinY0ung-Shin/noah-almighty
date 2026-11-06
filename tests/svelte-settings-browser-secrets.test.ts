@@ -41,7 +41,6 @@ const BASE_USER = {
   shellExposedSecretNames: [],
   browserSecrets: [] as BrowserSecretPolicy[],
   sshPublicKey: null,
-  groups: [],
   experimentalFeatures: [],
   sharedAccount: false,
   onboardedAt: null,

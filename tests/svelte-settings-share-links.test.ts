@@ -223,7 +223,6 @@ describe("권한·연결 tab", () => {
     shellExposedSecretNames: [],
     browserSecrets: [],
     sshPublicKey: null,
-    groups: [],
     experimentalFeatures: [],
     sharedAccount: false,
     onboardedAt: null,

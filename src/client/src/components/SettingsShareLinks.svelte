@@ -2,12 +2,12 @@
   import { MAX_ACTIVE_SHARE_LINKS } from "../../../shared/shareLinks";
   import { confirmAction } from "../lib/confirm";
   import { copyText } from "../lib/dom";
-  import { appState, notify } from "../lib/state";
+  import { notify } from "../lib/state";
   import {
     absoluteShareUrl,
     listShareLinks,
     revokeShareLink,
-    shareAudienceNote,
+    SHARE_AUDIENCE_NOTE,
     shareDateLabel,
     shareDateTimeLabel,
   } from "../lib/shareLinks";
@@ -26,7 +26,7 @@
   // account after a re-login) always refetches.
   $: if (!active) loaded = false;
   $: activeCount = links.filter((link) => !link.expired).length;
-  $: audience = shareAudienceNote($appState.bootstrap?.signupMode);
+  const audience = SHARE_AUDIENCE_NOTE;
 
   async function load(): Promise<void> {
     busy = true;

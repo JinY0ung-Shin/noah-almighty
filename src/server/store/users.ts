@@ -60,9 +60,9 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
           const parsed = parseNameList(row.mcp_tool_groups_default);
           return parsed ? normalizeMcpToolGroups(parsed) : null;
         })(),
-        // Effective system-admin tool policy (intersection across the user's
-        // policy-bearing groups; null = unrestricted). Display state for the
-        // composer — the server clamps every run regardless.
+        // Effective system-admin tool policy (the ONE global policy; null =
+        // unrestricted). Display state for the composer — the server clamps
+        // every run regardless.
         allowedMcpToolGroups: this.allowedMcpToolGroupsForUser(row.id),
         // Only the names — the encrypted values never leave the server.
         secretNames,
@@ -71,7 +71,6 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         // stays server-side like every other secret.
         browserSecrets: this.listBrowserSecretPolicies(row.id),
         sshPublicKey: row.ssh_public_key ?? null,
-        groups: this.listUserGroups(row.id),
         experimentalFeatures: normalizeExperimentalFeatures(
           parseNameList(row.experimental_features),
         ),
@@ -83,7 +82,7 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     /**
      * True when the user marked their account as a shared (communal) account —
-     * trusted same-group teammates may then also WRITE to this user's personal
+     * trusted teammates may then also WRITE to this user's personal
      * knowledge repo through the avatar (see repoTools.ts `writeAccess`).
      * Cheap row read for the per-turn agent path (ownerState.ts).
      */

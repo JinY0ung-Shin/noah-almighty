@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServices } from "../src/server/app.js";
 import { normalizeExperimentalFeatures } from "../src/server/experimentalFeatures.js";
+import logger from "../src/server/logger.js";
 import { normalizeHashtags } from "../src/server/store.js";
 import { CURRENT_RELEASE_ID } from "../src/server/releaseNotes.js";
 import { executeRoutineJob, startRoutineScheduler } from "../src/server/scheduler.js";
@@ -1185,7 +1186,7 @@ describe("routine jobs", () => {
 });
 
 
-describe("group trust & visibility", () => {
+describe("team trust & visibility (single team)", () => {
   function makeStore(dir: string) {
     const { store } = createServices({
       dataDir: path.join(tempDir, dir),
@@ -1198,18 +1199,34 @@ describe("group trust & visibility", () => {
     return { store, ownerId: owner.id, friendId: friend.id, strangerId: stranger.id };
   }
 
-  it("derives trust from group co-membership, symmetrically", () => {
+  it("two active users are mutually trusted; self, empty and unknown ids never are", () => {
     const { store, ownerId, friendId } = makeStore("gt1");
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(false);
-    const group = store.createGroup({ name: "Platform" });
-    store.addGroupMember(group.id, ownerId, "member");
-    store.addGroupMember(group.id, friendId, "member");
-    // Co-membership trusts both directions (unlike the old directional grant).
     expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
     expect(store.isTrustedFor(ownerId, friendId)).toBe(true);
-    // Leaving the group revokes it.
-    store.removeGroupMember(group.id, friendId);
+    expect(store.isTrustedFor(ownerId, ownerId)).toBe(false);
+    expect(store.isTrustedFor("", ownerId)).toBe(false);
+    expect(store.isTrustedFor(ownerId, "")).toBe(false);
+    expect(store.isTrustedFor("no-such-user", ownerId)).toBe(false);
+    expect(store.isTrustedFor(ownerId, "no-such-user")).toBe(false);
+  });
+
+  it("a suspended user is neither trusted nor visible, in either direction, until reinstated", () => {
+    const { store, ownerId, friendId } = makeStore("gt-suspend");
+    store.setSuspended(friendId, true);
     expect(store.isTrustedFor(friendId, ownerId)).toBe(false);
+    expect(store.isTrustedFor(ownerId, friendId)).toBe(false);
+    // The suspended user's avatar is hidden from everyone…
+    expect(store.getAvatar(ownerId, friendId)).toBeNull();
+    expect(store.resolveChatAvatar(ownerId, friendId)).toBeNull();
+    expect(store.listPublishedAvatars(ownerId).map((a) => a.id)).not.toContain(friendId);
+    expect(store.searchAvatars(ownerId, "").map((a) => a.id)).not.toContain(friendId);
+    // …and a suspended VIEWER reaches no one (fail closed even without a session).
+    expect(store.getAvatar(friendId, ownerId)).toBeNull();
+    expect(store.resolveChatAvatar(friendId, ownerId)).toBeNull();
+    expect(store.listPublishedAvatars(friendId).map((a) => a.id)).toEqual([]);
+    store.setSuspended(friendId, false);
+    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
+    expect(store.getAvatar(ownerId, friendId)?.elevated).toBe(true);
   });
 
   it("new avatars default to group visibility; updateProfile round-trips the 2 states", () => {
@@ -1222,55 +1239,42 @@ describe("group trust & visibility", () => {
     expect(store.getUserById(ownerId)?.visibility).toBe("group");
   });
 
-  it("searchUsers matches name or @id (case-insensitive), excludes self", () => {
-    const { store, ownerId } = makeStore("gt-search");
-    // Substring match on display name AND username, case-insensitive.
-    expect(store.searchUsers("frie", ownerId).map((u) => u.username)).toEqual(["friend"]);
-    expect(store.searchUsers("STRANGER", ownerId).map((u) => u.username)).toEqual(["stranger"]);
-    expect(store.searchUsers("r", ownerId).map((u) => u.username).sort()).toEqual(["friend", "stranger"]);
-    // The searcher is never a candidate for their own results.
-    expect(store.searchUsers("owner", ownerId)).toEqual([]);
-    // Blank query short-circuits.
-    expect(store.searchUsers("   ", ownerId)).toEqual([]);
-    // A literal % isn't treated as a wildcard (escaped).
-    expect(store.searchUsers("%", ownerId)).toEqual([]);
-  });
-
-  it("a group co-member resolves/sees a group-visible avatar; a stranger cannot", () => {
+  it("every teammate resolves/sees a team-visible avatar, elevated", () => {
     const { store, ownerId, friendId, strangerId } = makeStore("gt3");
-    // Owner keeps the default `group` visibility.
-    expect(store.resolveChatAvatar(strangerId, ownerId)).toBeNull();
-    expect(store.getAvatar(strangerId, ownerId)).toBeNull();
-    const group = store.createGroup({ name: "Platform" });
-    store.addGroupMember(group.id, ownerId, "member");
-    store.addGroupMember(group.id, friendId, "member");
-    expect(store.resolveChatAvatar(friendId, ownerId)?.id).toBe(ownerId);
-    const detail = store.getAvatar(friendId, ownerId);
-    expect(detail?.elevated).toBe(true);
-    expect(detail?.isOwn).toBe(false);
+    for (const viewer of [friendId, strangerId]) {
+      expect(store.resolveChatAvatar(viewer, ownerId)?.id).toBe(ownerId);
+      const detail = store.getAvatar(viewer, ownerId);
+      expect(detail?.elevated).toBe(true);
+      expect(detail?.isOwn).toBe(false);
+      expect(detail).not.toHaveProperty("sharesGroup");
+    }
   });
 
-  it("a private avatar is reachable only by its owner, even by a group co-member", () => {
+  it("a private avatar is reachable only by its owner, though its owner stays trusted", () => {
     const { store, ownerId, friendId } = makeStore("gt4");
     store.updateProfile(ownerId, { visibility: "private" });
-    const group = store.createGroup({ name: "Platform" });
-    store.addGroupMember(group.id, ownerId, "member");
-    store.addGroupMember(group.id, friendId, "member");
-    // Group co-membership still grants elevation, but `private` blocks reach.
+    // Visibility and trust are separate axes: `private` blocks reach only.
+    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
     expect(store.resolveChatAvatar(friendId, ownerId)).toBeNull();
     expect(store.getAvatar(friendId, ownerId)).toBeNull();
+    expect(store.listPublishedAvatars(friendId).map((a) => a.id)).not.toContain(ownerId);
     // The owner always reaches their own avatar.
     expect(store.resolveChatAvatar(ownerId, ownerId)?.id).toBe(ownerId);
   });
 
-  it("deleting a user clears their group memberships (and thus trust)", () => {
-    const { store, ownerId, friendId } = makeStore("gt5");
-    const group = store.createGroup({ name: "Platform" });
-    store.addGroupMember(group.id, ownerId, "member");
-    store.addGroupMember(group.id, friendId, "member");
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
+  it("countTeammates counts active users other than the given one; countReachableTeammates only the non-private ones", () => {
+    const { store, ownerId, friendId, strangerId } = makeStore("gt5");
+    expect(store.countTeammates(ownerId)).toBe(2);
+    expect(store.countReachableTeammates(ownerId)).toBe(2);
+    store.updateProfile(strangerId, { visibility: "private" });
+    expect(store.countTeammates(ownerId)).toBe(2);
+    expect(store.countReachableTeammates(ownerId)).toBe(1);
+    store.updateProfile(strangerId, { visibility: "group" });
+    store.setSuspended(friendId, true);
+    expect(store.countTeammates(ownerId)).toBe(1);
     expect(store.deleteUser(friendId)).toBe(true);
-    expect(store.listGroupMembers(group.id).map((m) => m.userId)).toEqual([ownerId]);
+    expect(store.countTeammates(ownerId)).toBe(1);
+    expect(store.isTrustedFor(friendId, ownerId)).toBe(false);
   });
 
   // ---- experimental features (#50) ----
@@ -1515,88 +1519,87 @@ describe("group trust & visibility", () => {
 });
 
 
-describe("group avatar-sharing policy", () => {
-  function makeStore(dir: string) {
-    const { store } = createServices({
+describe("admin MCP tool policy (one global policy)", () => {
+  function makeStore(dir: string, sessionSecret = "t") {
+    return createServices({
       dataDir: path.join(tempDir, dir),
       agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const friend = store.createUser({ username: "friend", displayName: "Friend", password: "password123" });
-    return { store, ownerId: owner.id, friendId: friend.id };
+      sessionSecret,
+    }).store;
   }
 
-  it("sharing OFF removes BOTH visibility and trust for that group; ON restores both", () => {
-    const { store, ownerId, friendId } = makeStore("as1");
-    const group = store.createGroup({ name: "Platform" });
-    store.addGroupMember(group.id, ownerId, "member");
-    store.addGroupMember(group.id, friendId, "member");
-    expect(store.getGroup(group.id)?.avatarSharing).toBe(true); // default on
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
-    expect(store.resolveChatAvatar(friendId, ownerId)?.id).toBe(ownerId);
-    expect(store.listPublishedAvatars(friendId).some((a) => a.id === ownerId)).toBe(true);
+  it("absent = no restriction; set/clear round-trips; it applies to every user", () => {
+    const store = makeStore("tp1");
+    const alice = store.createUser({ username: "alice", displayName: "A", password: "password123" });
+    const bob = store.createUser({ username: "bob", displayName: "B", password: "password123" });
+    expect(store.getMcpToolPolicy()).toBeNull();
+    expect(store.allowedMcpToolGroupsForUser(alice.id)).toBeNull();
+    expect(store.getUserById(alice.id)?.allowedMcpToolGroups).toBeNull();
 
-    expect(store.setGroupAvatarSharing(group.id, false)?.avatarSharing).toBe(false);
-    // The two axes ride the same SHARING_TEAMMATES fragment: both drop together.
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(false);
-    expect(store.resolveChatAvatar(friendId, ownerId)).toBeNull();
-    expect(store.getAvatar(friendId, ownerId)).toBeNull();
-    expect(store.listPublishedAvatars(friendId).some((a) => a.id === ownerId)).toBe(false);
-    expect(store.searchAvatars(friendId, "").some((a) => a.id === ownerId)).toBe(false);
-    // Own avatar still lists (self-exception is not group-derived).
-    expect(store.listPublishedAvatars(friendId).some((a) => a.id === friendId)).toBe(true);
+    expect(store.setMcpToolPolicy(["personal_knowledge"])).toEqual(["personal_knowledge"]);
+    expect(store.getMcpToolPolicy()).toEqual(["personal_knowledge"]);
+    // `system` always survives the clamp, for everyone alike.
+    expect(store.allowedMcpToolGroupsForUser(alice.id)).toEqual(["personal_knowledge", "system"]);
+    expect(store.allowedMcpToolGroupsForUser(bob.id)).toEqual(["personal_knowledge", "system"]);
+    expect(store.getUserById(bob.id)?.allowedMcpToolGroups).toEqual(["personal_knowledge", "system"]);
 
-    store.setGroupAvatarSharing(group.id, true);
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
-    expect(store.resolveChatAvatar(friendId, ownerId)?.id).toBe(ownerId);
+    // [] blocks every optional group (not "no restriction").
+    expect(store.setMcpToolPolicy([])).toEqual([]);
+    expect(store.allowedMcpToolGroupsForUser(alice.id)).toEqual(["system"]);
+
+    expect(store.setMcpToolPolicy(null)).toBeNull();
+    expect(store.getMcpToolPolicy()).toBeNull();
+    expect(store.allowedMcpToolGroupsForUser(alice.id)).toBeNull();
   });
 
-  it("any avatar-sharing group suffices; sharedGroupNames names only sharing groups", () => {
-    const { store, ownerId, friendId } = makeStore("as2");
-    const g1 = store.createGroup({ name: "Alpha" });
-    const g2 = store.createGroup({ name: "Beta" });
-    for (const g of [g1, g2]) {
-      store.addGroupMember(g.id, ownerId, "member");
-      store.addGroupMember(g.id, friendId, "member");
-    }
-    store.setGroupAvatarSharing(g1.id, false);
-    // g2 still shares → reach + trust survive; the why-elevated list is exact.
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
-    expect(store.resolveChatAvatar(friendId, ownerId)?.id).toBe(ownerId);
-    expect(store.sharedGroupNames(friendId, ownerId)).toEqual(["Beta"]);
-    store.setGroupAvatarSharing(g2.id, false);
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(false);
-    expect(store.sharedGroupNames(friendId, ownerId)).toEqual([]);
+  it("drops unknown/retired ids on read (a retired-only policy blocks, never fails open); malformed JSON reads as no restriction", () => {
+    const store = makeStore("tp2");
+    store.setAppSecret("mcp_tool_policy", JSON.stringify(["group_knowledge", "web", "bogus"]));
+    expect(store.getMcpToolPolicy()).toEqual(["web"]);
+    store.setAppSecret("mcp_tool_policy", JSON.stringify(["group_knowledge"]));
+    expect(store.getMcpToolPolicy()).toEqual([]);
+    store.setAppSecret("mcp_tool_policy", "{not json");
+    expect(store.getMcpToolPolicy()).toBeNull();
   });
 
-  it("a sharing-off group still applies its admin tool policy", () => {
-    const { store, ownerId, friendId } = makeStore("as3");
-    const group = store.createGroup({ name: "Workshop" });
-    store.addGroupMember(group.id, ownerId, "admin");
-    store.addGroupMember(group.id, friendId, "member");
-    store.setGroupAllowedMcpToolGroups(group.id, ["personal_knowledge"]);
-    store.setGroupAvatarSharing(group.id, false);
-    // The tool clamp is policy-independent.
-    expect(store.listUserGroups(friendId)[0]).toMatchObject({ avatarSharing: false });
-    expect(store.allowedMcpToolGroupsForUser(friendId)).toEqual(["personal_knowledge", "system"]);
-    expect(store.listGroupMembers(group.id)).toHaveLength(2);
+  it("a policy that can no longer be decrypted fails CLOSED (rotated SESSION_SECRET), warning once per stored value", () => {
+    makeStore("tp3", "first-secret").setMcpToolPolicy(["web"]);
+    const rotated = makeStore("tp3", "second-secret");
+    const warn = vi.spyOn(logger, "warn");
+    const unreadableWarnings = () =>
+      warn.mock.calls.filter((call) => String(call[0]).includes("MCP tool policy is unreadable")).length;
+    expect(rotated.getMcpToolPolicy()).toEqual([]);
+    expect(rotated.getMcpToolPolicy()).toEqual([]);
+    expect(rotated.getMcpToolPolicy()).toEqual([]);
+    expect(unreadableWarnings()).toBe(1);
+    // A different unreadable value (e.g. written under yet another secret) warns again.
+    makeStore("tp3", "third-secret").setMcpToolPolicy(["ssh"]);
+    expect(rotated.getMcpToolPolicy()).toEqual([]);
+    expect(unreadableWarnings()).toBe(2);
+    warn.mockRestore();
+    const u = rotated.createUser({ username: "u", displayName: "U", password: "password123" });
+    expect(rotated.allowedMcpToolGroupsForUser(u.id)).toEqual(["system"]);
   });
+});
 
-  it("NULL (pre-policy rows) reads as ON; only an explicit 0 turns it off", () => {
-    const { store, ownerId, friendId } = makeStore("as4");
-    const group = store.createGroup({ name: "Legacy" });
-    store.addGroupMember(group.id, ownerId, "member");
-    store.addGroupMember(group.id, friendId, "member");
-    // Simulate a pre-policy row (the addColumnIfMissing migration leaves NULL).
-    const db = (store as unknown as { db: { prepare: (sql: string) => { run: (...v: unknown[]) => unknown } } }).db;
-    db.prepare("UPDATE groups SET avatar_sharing = NULL WHERE id = ?").run(group.id);
-    expect(store.getGroup(group.id)?.avatarSharing).toBe(true);
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(true);
-    expect(store.resolveChatAvatar(friendId, ownerId)?.id).toBe(ownerId);
-    store.setGroupAvatarSharing(group.id, false);
-    expect(store.getGroup(group.id)?.avatarSharing).toBe(false);
-    expect(store.isTrustedFor(friendId, ownerId)).toBe(false);
+
+describe("signup mode (approval | closed)", () => {
+  function makeStore(dir: string) {
+    return createServices({ dataDir: path.join(tempDir, dir), agentRuntime: "local", sessionSecret: "t" }).store;
+  }
+
+  it("defaults to approval, round-trips closed, and reads a stored legacy `open` as approval (fail closed)", () => {
+    const store = makeStore("sm1");
+    expect(store.getSignupMode()).toBe("approval");
+    store.setSignupMode("closed");
+    expect(store.getSignupMode()).toBe("closed");
+    store.setSignupMode("approval");
+    expect(store.getSignupMode()).toBe("approval");
+    // What an older release stored before `open` was retired.
+    store.setAppSecret("signup_mode", "open");
+    expect(store.getSignupMode()).toBe("approval");
+    store.setAppSecret("signup_mode", "garbage");
+    expect(store.getSignupMode()).toBe("approval");
   });
 });
 
@@ -1641,14 +1644,10 @@ describe("searchAvatars (cross-avatar discovery)", () => {
     const reviewer = store.createUser({ username: "reviewer", displayName: "리뷰어", password: "password123" });
     const analyst = store.createUser({ username: "analyst", displayName: "분석가", password: "password123" });
     const me = store.createUser({ username: "me", displayName: "나", password: "password123" });
-    // Both keep the default `group` visibility; a shared group is what makes them
-    // discoverable by `me` cross-avatar (there is no wider "public" state).
+    // Both keep the default `group` (팀 공개) visibility, so every teammate —
+    // `me` included — discovers them cross-avatar.
     store.updateProfile(reviewer.id, { hashtags: ["코드리뷰", "파이썬"] });
     store.updateProfile(analyst.id, { hashtags: ["데이터분석"], bio: "코드리뷰도 가끔 합니다" });
-    const group = store.createGroup({ name: "Search", createdBy: null });
-    store.addGroupMember(group.id, me.id, "member");
-    store.addGroupMember(group.id, reviewer.id, "member");
-    store.addGroupMember(group.id, analyst.id, "member");
 
     const hits = store.searchAvatars(me.id, "코드리뷰", { excludeId: me.id });
     expect(hits.map((a) => a.username)).toEqual(["reviewer", "analyst"]);
@@ -1671,462 +1670,8 @@ describe("searchAvatars (cross-avatar discovery)", () => {
     const store = makeStore();
     const a = store.createUser({ username: "a", displayName: "A", password: "password123" });
     const b = store.createUser({ username: "b", displayName: "B", password: "password123" });
-    // b keeps the default `group` visibility, so a shared group is what makes b
-    // discoverable by a.
-    const group = store.createGroup({ name: "Empty Query", createdBy: null });
-    store.addGroupMember(group.id, a.id, "member");
-    store.addGroupMember(group.id, b.id, "member");
+    // b keeps the default `group` (팀 공개) visibility, so teammate a discovers b.
     expect(store.searchAvatars(a.id, "", { excludeId: a.id }).map((x) => x.username)).toEqual(["b"]);
-  });
-});
-
-
-describe("store groups", () => {
-  function makeStore(dir: string) {
-    const { store } = createServices({
-      dataDir: path.join(tempDir, dir),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    const admin = store.createUser({ username: "admin", displayName: "Admin", password: "password123" });
-    const alice = store.createUser({ username: "alice", displayName: "Alice", password: "password123" });
-    const bob = store.createUser({ username: "bob", displayName: "Bob", password: "password123" });
-    const carol = store.createUser({ username: "carol", displayName: "Carol", password: "password123" });
-    return { store, adminId: admin.id, aliceId: alice.id, bobId: bob.id, carolId: carol.id };
-  }
-
-  it("creates, lists, updates, and deletes groups", () => {
-    const { store } = makeStore("g-crud");
-    const g = store.createGroup({ name: "Team A", description: "desc", createdBy: null });
-    expect(g.name).toBe("Team A");
-    expect(store.getGroup(g.id)?.description).toBe("desc");
-    expect(store.listGroups().map((x) => x.name)).toContain("Team A");
-    expect(store.listGroups()[0].memberCount).toBe(0);
-    store.updateGroup(g.id, { name: "Team B" });
-    expect(store.getGroup(g.id)?.name).toBe("Team B");
-    expect(store.deleteGroup(g.id)).toBe(true);
-    expect(store.getGroup(g.id)).toBeNull();
-  });
-
-  it("manages members + roles", () => {
-    const { store, aliceId, bobId } = makeStore("g-mem");
-    const g = store.createGroup({ name: "T", createdBy: null });
-    expect(store.addGroupMember(g.id, aliceId, "admin")?.role).toBe("admin");
-    expect(store.addGroupMemberByUsername(g.id, "bob")?.role).toBe("member");
-    expect(store.groupRoleFor(aliceId, g.id)).toBe("admin");
-    expect(store.isGroupAdmin(aliceId, g.id)).toBe(true);
-    expect(store.isGroupAdmin(bobId, g.id)).toBe(false);
-    expect(store.listGroupMembers(g.id).map((m) => m.userId).sort()).toEqual([aliceId, bobId].sort());
-    expect(store.setGroupMemberRole(g.id, bobId, "admin")?.role).toBe("admin");
-    expect(store.listGroups()[0].adminCount).toBe(2);
-    expect(store.removeGroupMember(g.id, bobId)).toBe(true);
-    expect(store.groupRoleFor(bobId, g.id)).toBeNull();
-    expect(store.addGroupMemberByUsername(g.id, "nobody")).toBeNull();
-  });
-
-  it("group co-membership grants mutual, symmetric trust + group-visible-avatar access", () => {
-    const { store, aliceId, bobId, carolId } = makeStore("g-trust");
-    const g = store.createGroup({ name: "T", createdBy: null });
-    store.addGroupMember(g.id, aliceId, "member");
-    store.addGroupMember(g.id, bobId, "member");
-    // Group trust is symmetric.
-    expect(store.isTrustedFor(aliceId, bobId)).toBe(true);
-    expect(store.isTrustedFor(bobId, aliceId)).toBe(true);
-    expect(store.isTrustedFor(carolId, aliceId)).toBe(false);
-    // alice keeps the default `group` visibility — bob (co-member) reaches her
-    // avatar at elevated level; carol (not a teammate) cannot.
-    expect(store.getAvatar(bobId, aliceId)?.elevated).toBe(true);
-    expect(store.getAvatar(carolId, aliceId)).toBeNull();
-    expect(store.resolveChatAvatar(bobId, aliceId)?.id).toBe(aliceId);
-  });
-
-  it("removing the shared group drops the auto-trust", () => {
-    const { store, aliceId, bobId } = makeStore("g-trust-drop");
-    const g = store.createGroup({ name: "T", createdBy: null });
-    store.addGroupMember(g.id, aliceId);
-    store.addGroupMember(g.id, bobId);
-    expect(store.isTrustedFor(aliceId, bobId)).toBe(true);
-    store.deleteGroup(g.id);
-    expect(store.isTrustedFor(aliceId, bobId)).toBe(false);
-  });
-
-  it("deleting a user removes their group memberships (and the trust they conferred)", () => {
-    const { store, aliceId, bobId } = makeStore("g-cascade");
-    const g = store.createGroup({ name: "T", createdBy: null });
-    store.addGroupMember(g.id, aliceId);
-    store.addGroupMember(g.id, bobId);
-    expect(store.deleteUser(bobId)).toBe(true);
-    expect(store.listGroupMembers(g.id).map((m) => m.userId)).toEqual([aliceId]);
-    expect(store.isTrustedFor(aliceId, bobId)).toBe(false);
-  });
-
-  it("toUser exposes group memberships with role", () => {
-    const { store, aliceId } = makeStore("g-user");
-    const g = store.createGroup({ name: "Team", createdBy: null });
-    store.addGroupMember(g.id, aliceId, "admin");
-    const u = store.getUserById(aliceId);
-    expect(u?.groups.map((x) => x.name)).toEqual(["Team"]);
-    expect(u?.groups[0].role).toBe("admin");
-  });
-
-  it("listPublishedAvatars surfaces group-visible teammates with sharesGroup, and nobody else", () => {
-    const { store, aliceId, bobId, carolId } = makeStore("g-explore");
-    // bob and carol both keep the default `group` visibility; only bob shares a
-    // group with alice.
-    const g = store.createGroup({ name: "T", createdBy: null });
-    store.addGroupMember(g.id, aliceId);
-    store.addGroupMember(g.id, bobId);
-    const forAlice = store.listPublishedAvatars(aliceId);
-    const bobCard = forAlice.find((a) => a.id === bobId);
-    // bob is group-visible AND a teammate → visible + flagged.
-    expect(bobCard?.sharesGroup).toBe(true);
-    // carol shares no group with alice, so she is not listed AT ALL — group
-    // co-membership is the only thing that grants reach now, and a `sharesGroup:
-    // false` card (the old "public but not a teammate" state) can no longer exist.
-    expect(forAlice.some((a) => a.id === carolId)).toBe(false);
-    expect(forAlice.every((a) => a.id === aliceId || a.sharesGroup)).toBe(true);
-  });
-});
-
-describe("store canvas artifacts (#50)", () => {
-  function makeStore() {
-    const { store } = createServices({
-      dataDir: path.join(tempDir, "canvas-" + Math.random().toString(36).slice(2)),
-      agentRuntime: "local",
-      sessionSecret: "cvs",
-    });
-    const owner = store.createUser({ username: "cvsowner", displayName: "Owner", password: "password123" });
-    const avatar = store.createUser({ username: "cvsavatar", displayName: "Avatar", password: "password123" });
-    store.touchConversation(owner.id, "conv-cvs", avatar.id, "hi");
-    return { store, ownerId: owner.id };
-  }
-
-  it("creates v1, lists current state, and is owner-scoped", () => {
-    const { store, ownerId } = makeStore();
-    const art = store.upsertCanvasArtifact(ownerId, "conv-cvs", {
-      artifactId: "a1",
-      title: "Chart",
-      content: "# hi",
-      contentType: "markdown",
-      controls: [{ type: "select", id: "p", options: [{ label: "High" }] }],
-      interaction: "blocking",
-    });
-    expect(art?.currentVersion).toBe(1);
-    expect(art?.versionCount).toBe(1);
-    expect(art?.controls?.[0].type).toBe("select");
-    const list = store.listCanvasArtifacts(ownerId, "conv-cvs");
-    expect(list).toHaveLength(1);
-    expect(list[0].title).toBe("Chart");
-    // Another owner sees nothing.
-    const other = store.createUser({ username: "cvsother", displayName: "Other", password: "password123" });
-    expect(store.listCanvasArtifacts(other.id, "conv-cvs")).toHaveLength(0);
-    expect(store.getCanvasArtifact(other.id, "a1")).toBeNull();
-  });
-
-  it("appends a version on content change but dedups an unchanged re-show", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v1", contentType: "markdown" });
-    // Identical re-show with a submission → no new version, values attach.
-    const same = store.upsertCanvasArtifact(ownerId, "conv-cvs", {
-      artifactId: "a1",
-      title: "T",
-      content: "v1",
-      contentType: "markdown",
-      submittedValues: { p: "x" },
-    });
-    expect(same?.currentVersion).toBe(1);
-    expect(same?.submittedValues).toEqual({ p: "x" });
-    // Changed content → version 2.
-    const next = store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v2", contentType: "markdown" });
-    expect(next?.currentVersion).toBe(2);
-    expect(next?.versionCount).toBe(2);
-    expect(next?.content).toBe("v2");
-  });
-
-  it("rolls back non-destructively to an earlier version", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v1", contentType: "markdown" });
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v2", contentType: "markdown" });
-    const rolled = store.rollbackCanvasArtifact(ownerId, "a1", 1);
-    expect(rolled?.content).toBe("v1");
-    expect(rolled?.currentVersion).toBe(3); // appended, not destructive
-    expect(store.listCanvasVersions(ownerId, "a1").map((v) => v.version)).toEqual([3, 2, 1]);
-  });
-
-  it("hard-deletes an artifact and its versions, owner-scoped", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v1", contentType: "markdown" });
-    const other = store.createUser({ username: "cvsdel", displayName: "Other", password: "password123" });
-    expect(store.deleteCanvasArtifact(other.id, "a1")).toBe(false);
-    expect(store.deleteCanvasArtifact(ownerId, "a1")).toBe(true);
-    expect(store.getCanvasArtifact(ownerId, "a1")).toBeNull();
-    expect(store.listCanvasVersions(ownerId, "a1")).toHaveLength(0);
-  });
-
-  it("refuses to upsert an existing artifact id across owner or conversation boundaries", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", {
-      artifactId: "a1",
-      title: "Owner",
-      content: "owner-v1",
-      contentType: "markdown",
-    });
-
-    const other = store.createUser({ username: "cvshijack", displayName: "Other", password: "password123" });
-    store.touchConversation(other.id, "conv-other-cvs", other.id, "hi");
-    expect(
-      store.upsertCanvasArtifact(other.id, "conv-other-cvs", {
-        artifactId: "a1",
-        title: "Other",
-        content: "other-v1",
-        contentType: "markdown",
-      }),
-    ).toBeNull();
-
-    store.touchConversation(ownerId, "conv-cvs-2", ownerId, "second");
-    expect(
-      store.upsertCanvasArtifact(ownerId, "conv-cvs-2", {
-        artifactId: "a1",
-        title: "Same owner, other conversation",
-        content: "other-conv",
-        contentType: "markdown",
-      }),
-    ).toBeNull();
-
-    expect(store.getCanvasArtifact(ownerId, "a1")?.content).toBe("owner-v1");
-    expect(store.listCanvasArtifacts(ownerId, "conv-cvs-2")).toHaveLength(0);
-  });
-
-  it("cascades canvas artifacts when deleting a conversation", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v1", contentType: "markdown" });
-    expect(store.deleteConversation(ownerId, "conv-cvs")).toBe(true);
-
-    store.touchConversation(ownerId, "conv-cvs-new", ownerId, "new");
-    const re = store.upsertCanvasArtifact(ownerId, "conv-cvs-new", {
-      artifactId: "a1",
-      title: "T2",
-      content: "fresh",
-      contentType: "markdown",
-    });
-    expect(re?.currentVersion).toBe(1);
-    expect(re?.content).toBe("fresh");
-  });
-
-  it("cascades canvas artifacts when bulk-deleting chat conversations", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "bulk-a1", title: "T", content: "v1", contentType: "markdown" });
-    expect(store.deleteChatConversations(ownerId)).toContain("conv-cvs");
-
-    store.touchConversation(ownerId, "conv-cvs-bulk-new", ownerId, "new");
-    const re = store.upsertCanvasArtifact(ownerId, "conv-cvs-bulk-new", {
-      artifactId: "bulk-a1",
-      title: "T2",
-      content: "fresh",
-      contentType: "markdown",
-    });
-    expect(re?.currentVersion).toBe(1);
-  });
-
-  it("cascades canvas artifacts on deleteUser", () => {
-    const { store, ownerId } = makeStore();
-    store.upsertCanvasArtifact(ownerId, "conv-cvs", { artifactId: "a1", title: "T", content: "v1", contentType: "markdown" });
-    expect(store.deleteUser(ownerId)).toBe(true);
-    // Re-create same id under a fresh owner to confirm the old rows are gone (no PK clash).
-    const fresh = store.createUser({ username: "cvsfresh", displayName: "Fresh", password: "password123" });
-    store.touchConversation(fresh.id, "conv-fresh", fresh.id, "hi");
-    const re = store.upsertCanvasArtifact(fresh.id, "conv-fresh", { artifactId: "a1", title: "T2", content: "n", contentType: "markdown" });
-    expect(re?.currentVersion).toBe(1);
-  });
-
-  it("cascades canvas artifacts when deleting the avatar targeted by a conversation", () => {
-    const { store, ownerId } = makeStore();
-    const avatar = store.createUser({ username: "cvsdeletedavatar", displayName: "Avatar", password: "password123" });
-    store.touchConversation(ownerId, "conv-target-avatar", avatar.id, "hi");
-    store.upsertCanvasArtifact(ownerId, "conv-target-avatar", {
-      artifactId: "target-a1",
-      title: "Target",
-      content: "v1",
-      contentType: "markdown",
-    });
-
-    expect(store.deleteUser(avatar.id)).toBe(true);
-    store.touchConversation(ownerId, "conv-target-new", ownerId, "new");
-    const re = store.upsertCanvasArtifact(ownerId, "conv-target-new", {
-      artifactId: "target-a1",
-      title: "T2",
-      content: "fresh",
-      contentType: "markdown",
-    });
-    expect(re?.currentVersion).toBe(1);
-  });
-});
-
-describe("store canvas backfill migration (#50)", () => {
-  // Reach the underlying SQLite handle to read/poke PRAGMA user_version (the
-  // backfill guard), simulating a pre-feature DB that predates the migration.
-  type WithDb = { db: { pragma(stmt: string, opts?: { simple?: boolean }): unknown } };
-  const dbOf = (store: unknown): WithDb["db"] => (store as unknown as WithDb).db;
-
-  it("backfills legacy response_json canvases into the tables on (re)open, idempotently", () => {
-    const dataDir = path.join(tempDir, "canvas-backfill");
-    const first = createServices({ dataDir, agentRuntime: "local", sessionSecret: "bf" }).store;
-    const owner = first.createUser({ username: "bfowner", displayName: "Owner", password: "password123" });
-    const avatar = first.createUser({ username: "bfavatar", displayName: "Avatar", password: "password123" });
-    first.touchConversation(owner.id, "conv-bf", avatar.id, "hi");
-    // A legacy assistant message that carried canvases on its response JSON.
-    first.addMessage("conv-bf", {
-      role: "assistant",
-      content: "done",
-      response: {
-        kind: "text",
-        runtime: "claude",
-        summary: "",
-        text: "done",
-        canvases: [
-          { id: "legacy-1", title: "Legacy", content: "# old", contentType: "markdown" },
-        ],
-      },
-    });
-    // No table row yet (legacy data only lives in response_json).
-    expect(first.listCanvasArtifacts(owner.id, "conv-bf")).toHaveLength(0);
-    // The first open already climbed the backfill ladder (user_version=2). Reset
-    // it to 0 to mimic a real pre-feature DB: legacy canvases present, migration
-    // not yet run.
-    dbOf(first).pragma("user_version = 0");
-
-    // Reopen the same DB → migrate() runs migrateCanvasArtifacts() and backfills.
-    const second = createServices({ dataDir, agentRuntime: "local", sessionSecret: "bf" }).store;
-    const list = second.listCanvasArtifacts(owner.id, "conv-bf");
-    expect(list).toHaveLength(1);
-    expect(list[0].id).toBe("legacy-1");
-    expect(list[0].content).toBe("# old");
-    // The guard advanced user_version to the top of the backfill ladder so later
-    // boots skip the scan (canvas backfill=1, then onboarded/routine wave=2).
-    expect(dbOf(second).pragma("user_version", { simple: true })).toBe(2);
-
-    // Re-running migrate (a third open) must not duplicate.
-    const third = createServices({ dataDir, agentRuntime: "local", sessionSecret: "bf" }).store;
-    expect(third.listCanvasArtifacts(owner.id, "conv-bf")).toHaveLength(1);
-  });
-
-  it("skips the scan on later boots — legacy data added after migration is not rescanned", () => {
-    const dataDir = path.join(tempDir, "canvas-backfill-guard");
-    const first = createServices({ dataDir, agentRuntime: "local", sessionSecret: "bf" }).store;
-    const owner = first.createUser({ username: "bfgowner", displayName: "Owner", password: "password123" });
-    const avatar = first.createUser({ username: "bfgavatar", displayName: "Avatar", password: "password123" });
-    first.touchConversation(owner.id, "conv-bfg", avatar.id, "hi");
-    // First open already ran the backfill (nothing to do) and climbed the ladder
-    // to the top (canvas=1, then onboarded/routine wave=2).
-    expect(dbOf(first).pragma("user_version", { simple: true })).toBe(2);
-    // Inject a legacy-shaped canvas AFTER the marker is set.
-    first.addMessage("conv-bfg", {
-      role: "assistant",
-      content: "done",
-      response: {
-        kind: "text",
-        runtime: "claude",
-        summary: "",
-        text: "done",
-        canvases: [{ id: "post-marker", title: "Late", content: "# late", contentType: "markdown" }],
-      },
-    });
-
-    // Reopen: the guard short-circuits, so the post-marker legacy canvas is NOT backfilled.
-    const second = createServices({ dataDir, agentRuntime: "local", sessionSecret: "bf" }).store;
-    expect(second.listCanvasArtifacts(owner.id, "conv-bfg")).toHaveLength(0);
-  });
-});
-
-
-// ---- Just-applied dedup/efficiency store refactors (regression locks) ----
-
-describe("store avatar directory aggregates (N+1 reshape)", () => {
-  function makeStore(dir: string) {
-    const { store } = createServices({
-      dataDir: path.join(tempDir, dir),
-      agentRuntime: "local",
-      sessionSecret: "t",
-    });
-    return store;
-  }
-
-  it("directory pluginCount counts only ENABLED avatar_plugins, and getAvatar agrees", () => {
-    const store = makeStore("dir-plugins");
-    // The owner is its own viewer here, so the discovery queries' self-exception
-    // lists it regardless of visibility — no group scaffold needed.
-    const owner = store.createUser({ username: "dirowner", displayName: "Dir Owner", password: "password123" });
-
-    // Two enabled + one disabled plugin → directory count must be 2.
-    const p1 = store.addPlugin(owner.id, { repo: "owner/one" });
-    store.addPlugin(owner.id, { repo: "owner/two" });
-    const p3 = store.addPlugin(owner.id, { repo: "owner/three" });
-    store.setPluginEnabled(owner.id, p3.id, false);
-    void p1;
-
-    // listPublishedAvatars path: pluginCount comes from the correlated subquery column.
-    const listCard = store.listPublishedAvatars(owner.id).find((a) => a.id === owner.id);
-    expect(listCard?.pluginCount).toBe(2);
-
-    // searchAvatars path: same subquery column.
-    const searchCard = store.searchAvatars(owner.id, "").find((a) => a.id === owner.id);
-    expect(searchCard?.pluginCount).toBe(2);
-
-    // getAvatar single-row path: toAvatarSummary FALLS BACK to the per-row query
-    // (no subquery columns on the plain UserRow). It must compute the SAME count.
-    const detail = store.getAvatar(owner.id, owner.id);
-    expect(detail?.pluginCount).toBe(2);
-    expect(detail?.pluginCount).toBe(listCard?.pluginCount);
-
-    // Re-enabling the disabled plugin bumps every path to 3 in lockstep.
-    store.setPluginEnabled(owner.id, p3.id, true);
-    expect(store.listPublishedAvatars(owner.id).find((a) => a.id === owner.id)?.pluginCount).toBe(3);
-    expect(store.searchAvatars(owner.id, "").find((a) => a.id === owner.id)?.pluginCount).toBe(3);
-    expect(store.getAvatar(owner.id, owner.id)?.pluginCount).toBe(3);
-  });
-
-  it("directory updatedAt reflects MAX(updated_at) over the owner's own-avatar conversations; getAvatar agrees", () => {
-    const store = makeStore("dir-updated");
-    // Own-viewer again: the self-exception is what makes the card listable.
-    const owner = store.createUser({ username: "updowner", displayName: "Upd Owner", password: "password123" });
-
-    // No own-avatar conversations yet → MAX over an empty set is NULL.
-    expect(store.listPublishedAvatars(owner.id).find((a) => a.id === owner.id)?.updatedAt).toBeNull();
-    expect(store.getAvatar(owner.id, owner.id)?.updatedAt).toBeNull();
-
-    // The subquery only counts conversations where avatar_user_id == owner_user_id
-    // (the owner chatting with their OWN avatar). Create two such conversations.
-    store.touchConversation(owner.id, "own-conv-1", owner.id, "first");
-    store.touchConversation(owner.id, "own-conv-2", owner.id, "second");
-    // A conversation targeting a DIFFERENT avatar must NOT count toward this owner.
-    const otherAvatar = store.createUser({ username: "otheravatar", displayName: "Other", password: "password123" });
-    store.touchConversation(owner.id, "cross-conv", otherAvatar.id, "ignored");
-
-    const ownConvs = store
-      .listConversations(owner.id)
-      .filter((c) => c.avatarUserId === owner.id);
-    const maxOwn = ownConvs.map((c) => c.updatedAt).sort().at(-1)!;
-
-    // The directory + search + single-row paths all surface that MAX, in agreement.
-    const listed = store.listPublishedAvatars(owner.id).find((a) => a.id === owner.id);
-    const searched = store.searchAvatars(owner.id, "").find((a) => a.id === owner.id);
-    const detail = store.getAvatar(owner.id, owner.id);
-    expect(listed?.updatedAt).toBe(maxOwn);
-    expect(searched?.updatedAt).toBe(maxOwn);
-    // Single-row path uses the avatarUpdatedAt fallback — must match the subquery paths.
-    expect(detail?.updatedAt).toBe(maxOwn);
-    expect(detail?.updatedAt).toBe(listed?.updatedAt);
-
-    // Re-touching one own-avatar conversation advances MAX in lockstep across paths.
-    store.touchConversation(owner.id, "own-conv-1", owner.id, "first");
-    const bumped = store
-      .listConversations(owner.id)
-      .filter((c) => c.avatarUserId === owner.id)
-      .map((c) => c.updatedAt)
-      .sort()
-      .at(-1)!;
-    expect(store.listPublishedAvatars(owner.id).find((a) => a.id === owner.id)?.updatedAt).toBe(bumped);
-    expect(store.getAvatar(owner.id, owner.id)?.updatedAt).toBe(bumped);
   });
 });
 
@@ -2144,38 +1689,27 @@ describe("store avatar visibility scope parity (shared VISIBILITY_WHERE)", () =>
     return { store, subjectId: subject.id, teammateId: teammate.id, strangerId: stranger.id };
   }
 
-  it("a group-visible avatar reaches a co-member but not a stranger, consistently across list + search", () => {
+  it("list + search agree: a team-visible avatar reaches every active teammate, never a suspended or private-blocked one", () => {
     const { store, subjectId, teammateId, strangerId } = makeStore("vis-parity");
     // subject keeps the default `group` visibility, with a hashtag so search can match.
     store.updateProfile(subjectId, { hashtags: ["쿠버네티스"] });
+    const seen = (viewer: string) => ({
+      list: store.listPublishedAvatars(viewer).some((a) => a.id === subjectId),
+      search: store.searchAvatars(viewer, "쿠버네티스").some((a) => a.id === subjectId),
+    });
 
-    // Before any shared group: invisible to BOTH viewers via list AND search.
-    expect(store.listPublishedAvatars(teammateId).some((a) => a.id === subjectId)).toBe(false);
-    expect(store.searchAvatars(teammateId, "쿠버네티스").some((a) => a.id === subjectId)).toBe(false);
-    expect(store.listPublishedAvatars(strangerId).some((a) => a.id === subjectId)).toBe(false);
-    expect(store.searchAvatars(strangerId, "쿠버네티스").some((a) => a.id === subjectId)).toBe(false);
+    // Every active user is a teammate: both surfaces agree, for both viewers.
+    expect(seen(teammateId)).toEqual({ list: true, search: true });
+    expect(seen(strangerId)).toEqual({ list: true, search: true });
+    expect(store.listPublishedAvatars(teammateId).find((a) => a.id === subjectId)).not.toHaveProperty("sharesGroup");
 
-    // Put subject + teammate in one group; stranger stays out.
-    const group = store.createGroup({ name: "Platform" });
-    store.addGroupMember(group.id, subjectId, "member");
-    store.addGroupMember(group.id, teammateId, "member");
+    // A suspended viewer reaches nothing on either surface.
+    store.setSuspended(strangerId, true);
+    expect(seen(strangerId)).toEqual({ list: false, search: false });
 
-    // Teammate now sees the subject in BOTH the list and the matching search,
-    // and the two surfaces agree on membership.
-    const inList = store.listPublishedAvatars(teammateId).some((a) => a.id === subjectId);
-    const inSearch = store.searchAvatars(teammateId, "쿠버네티스").some((a) => a.id === subjectId);
-    expect(inList).toBe(true);
-    expect(inSearch).toBe(true);
-    expect(inSearch).toBe(inList);
-    // The list surface also flags the group co-membership.
-    expect(store.listPublishedAvatars(teammateId).find((a) => a.id === subjectId)?.sharesGroup).toBe(true);
-
-    // The stranger still sees the subject in NEITHER surface — also in agreement.
-    const strangerList = store.listPublishedAvatars(strangerId).some((a) => a.id === subjectId);
-    const strangerSearch = store.searchAvatars(strangerId, "쿠버네티스").some((a) => a.id === subjectId);
-    expect(strangerList).toBe(false);
-    expect(strangerSearch).toBe(false);
-    expect(strangerSearch).toBe(strangerList);
+    // `private` hides it on both surfaces from an active teammate too.
+    store.updateProfile(subjectId, { visibility: "private" });
+    expect(seen(teammateId)).toEqual({ list: false, search: false });
   });
 });
 
@@ -2210,12 +1744,9 @@ describe("store visibility migration (retired `public` state)", () => {
     const secret = first.createUser({ username: "secretvis", displayName: "Secret", password: "password123" });
     const stranger = first.createUser({ username: "strangervis", displayName: "Stranger", password: "password123" });
     const teammate = first.createUser({ username: "teammatevis", displayName: "Teammate", password: "password123" });
-    // A group that spans the migrated avatars + teammate, so we can prove the
-    // migrated rows are reachable through the normal group path afterwards.
-    const group = first.createGroup({ name: "Migrated", createdBy: null });
-    for (const id of [teammate.id, legacy.id, blank.id, empty.id, secret.id]) {
-      first.addGroupMember(group.id, id, "member");
-    }
+    // The "stranger" is suspended: no longer a teammate of anyone, so it proves
+    // the migrated rows never reach beyond the team.
+    first.setSuspended(stranger.id, true);
     // The fresh schema declares `visibility TEXT NOT NULL DEFAULT 'group'`, so a
     // NULL is only reachable on an EXISTING deployment, where the column was added
     // by addColumnIfMissing's nullable ALTER TABLE. Reproduce that exact shape:
@@ -2245,22 +1776,22 @@ describe("store visibility migration (retired `public` state)", () => {
     expect(second.getUserById(empty.id)?.visibility).toBe("group");
     expect(second.getUserById(secret.id)?.visibility).toBe("private");
 
-    // Folding into 'group' is not a privacy regression: a stranger who shares no
-    // group still cannot reach any migrated avatar.
+    // Folding into 'group' is not a privacy regression: a viewer outside the
+    // team (suspended) still cannot reach any migrated avatar.
     for (const id of [legacy.id, blank.id, empty.id, secret.id]) {
       expect(second.getAvatar(stranger.id, id)).toBeNull();
       expect(second.resolveChatAvatar(stranger.id, id)).toBeNull();
       expect(second.listPublishedAvatars(stranger.id).some((a) => a.id === id)).toBe(false);
     }
     // …and the migrated rows now match the SQL `visibility = 'group'` predicate,
-    // so a co-member reaches them (a literal 'public'/NULL row would NOT have).
+    // so a teammate reaches them (a literal 'public'/NULL row would NOT have).
     expect(second.getAvatar(teammate.id, legacy.id)?.id).toBe(legacy.id);
     expect(second.getAvatar(teammate.id, blank.id)?.id).toBe(blank.id);
     expect(second.getAvatar(teammate.id, empty.id)?.id).toBe(empty.id);
     expect(second.listPublishedAvatars(teammate.id).map((a) => a.id).sort()).toEqual(
       [teammate.id, legacy.id, blank.id, empty.id].sort(),
     );
-    // 'private' stays owner-only even for a co-member.
+    // 'private' stays owner-only even for a teammate.
     expect(second.getAvatar(teammate.id, secret.id)).toBeNull();
     second.close();
 

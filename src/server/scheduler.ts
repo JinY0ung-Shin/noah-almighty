@@ -142,7 +142,7 @@ async function runRoutineJobNow(
       ...(piWorkspace ? { piWorkspace } : {}),
       elevated: true,
       // Routines have no composer, so every tool group is on — capped by the
-      // admin per-group tool policy for the owner (runCapabilities clamps the run
+      // admin's global tool policy (runCapabilities clamps the run
       // itself the same way; this gate mirrors the chat route's repo gating).
       gitRepoToolsEnabled: (
         store.allowedMcpToolGroupsForUser(avatar.id) ?? DEFAULT_MCP_TOOL_GROUPS
@@ -170,7 +170,7 @@ async function runRoutineJobNow(
     }
 
     // Mirror the chat endpoint's plugin loading via the shared helper (default +
-    // avatar plugins + personal & group knowledge-repo skill roots) so routines
+    // avatar plugins + personal knowledge-repo skill roots) so routines
     // can USE the same skills an owner chat would; tolerate clone/resolve fails
     // but leave a trace — there is no client to stream the warnings to.
     const pluginWarnings: string[] = [];

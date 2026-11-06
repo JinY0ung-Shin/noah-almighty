@@ -14,6 +14,8 @@ import {
   rewindTurnState,
   shellSecretsSentence,
   sharedMcpServerLines,
+  TEAM_SENTENCE,
+  teammateCountPhrase,
 } from "./ownerState.js";
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
@@ -61,7 +63,7 @@ function anyMcpToolGroupEnabled(
 
 function disabledMcpToolGroupsSection(request: AgentRequest): string | null {
   const enabled = enabledMcpToolGroups(request);
-  // Groups removed by the ADMIN's per-group tool policy are DELIBERATELY not
+  // Groups removed by the ADMIN's global tool policy are DELIBERATELY not
   // surfaced (owner decision): the avatar only knows the tools it HAS — it is
   // never told that a policy exists or which groups it blocks. They are
   // excluded here so the user-deselected note below can't (mis)attribute an
@@ -266,30 +268,20 @@ function brainSection(
 }
 
 /**
- * Group meta-cognition section (owner prompt): which groups the owner is in,
- * their role and avatar-sharing policy, and what co-membership grants. Groups
- * carry no knowledge repository (retired 2026-10-30), and the section says so
- * for frozen prompts, notes and skills that still name the old tools. Returns
- * null when the owner is in no groups.
+ * Team meta-cognition section (owner prompt): Noah serves ONE team (groups
+ * retired 2026-11-06) — every approved user is a teammate, all mutually
+ * trusted. The prompt is FROZEN per conversation, so the size is stated as of
+ * the conversation's start and describe_system carries the live count. Also
+ * says there is no shared repository/team brain, for frozen prompts, notes and
+ * skills that still name the old tools. Null when the count is unknown (a
+ * non-owner turn, or a direct unit call).
  */
-function groupsSection(request: AgentRequest): string | null {
-  const groups = request.groupMemberships ?? [];
-  if (groups.length === 0) {
+function teamSection(request: AgentRequest): string | null {
+  if (request.teammateCount === undefined) {
     return null;
   }
-  const describe = (g: (typeof groups)[number]) =>
-    `${g.name}(${g.role === "admin" ? "admin" : "member"}${g.avatarSharing ? "" : ", avatar sharing off"})`;
-  const anySharing = groups.some((g) => g.avatarSharing);
-  // Groups with avatar sharing OFF get an appended qualifier, and the all-off
-  // case swaps in an accurate replacement instead.
-  const trustSentence = anySharing
-    ? "Members of the same group **automatically trust each other (elevated)** — group co-membership is the ONLY source of elevated (owner-level tool) access. So when you talk to a same-group colleague's avatar you gain owner-level tool permissions, and group-visible avatars can find and talk to each other." +
-      (groups.some((g) => !g.avatarSharing)
-        ? ' Exception: groups marked "avatar sharing off" grant NO avatar visibility, NO mutual trust/elevation and no skill sharing; only avatar-sharing groups do.'
-        : "")
-    : "Every group of this owner has avatar sharing OFF: co-membership grants NO avatar visibility, NO mutual trust/elevation and no skill sharing, so no teammate can reach this avatar and no teammate avatar is reachable.";
   return [
-    `The owner belongs to the following groups: ${groups.map(describe).join(", ")}. ` + trustSentence,
+    `${TEAM_SENTENCE} Team size when this conversation started: ${teammateCountPhrase(request.teammateCount)} (\`mcp__system__describe_system\` has the live count).`,
     GROUP_REPOS_RETIRED_SENTENCE,
   ].join(" ");
 }
@@ -1111,16 +1103,14 @@ export function buildSystemPromptAppend(
     );
     // Standing consultation guidance (#ask-avatar), OWNER-DRIVEN turns only —
     // the same derivation as runCapabilities' `avatarAskActive` registration gate
-    // (incl. the ≥1-group requirement: no group → no reachable target),
+    // (incl. the ≥1-reachable-teammate requirement: none, or all private →
+    // no target),
     // re-derived here like the owner/teammate/routine branches are.
     const avatarAskEnabled =
       Boolean(request.viewerIsOwner) &&
       !(Boolean(request.headless) && !request.allowHeadlessTools) &&
       !request.avatarConsultation &&
-      // Only avatar-sharing groups make teammates reachable (a sharing-off
-      // group grants neither visibility nor trust) — same derivation as
-      // runCapabilities' avatarAskActive registration gate.
-      (request.groupMemberships ?? []).some((g) => g.avatarSharing);
+      (request.reachableTeammateCount ?? 0) > 0;
     if (avatarAskEnabled) {
       const captureNote =
         mcpToolGroupEnabled(request, "personal_knowledge") &&
@@ -1128,7 +1118,7 @@ export function buildSystemPromptAppend(
           ? " Capture a durable learning from an answer with the **brain-ingest** skill (note the source avatar, then commit)."
           : "";
       lines.push(
-        "Consulting teammate avatars: when the owner needs knowledge you lack but a same-group teammate's avatar likely has (their projects, decisions, expertise), ask that avatar directly with `mcp__avatars__ask_avatar` — one self-contained question per call; only avatars whose owner shares a group with your owner will answer. " +
+        "Consulting teammate avatars: when the owner needs knowledge you lack but a teammate's avatar likely has (their projects, decisions, expertise), ask that avatar directly with `mcp__avatars__ask_avatar` — one self-contained question per call; only active teammates' avatars that are not private will answer. " +
           "Find candidates and their exact @username with `mcp__avatars__search_avatars` first. Present answers as the other avatar's claims and attribute them." +
           captureNote,
       );
@@ -1151,7 +1141,7 @@ export function buildSystemPromptAppend(
         `Skill exchange (스킬 배우기): teammates' avatars currently share ${learnable} skill(s) this avatar could learn; this avatar shares ${sharedByMe} of its own. ` +
           "When the user asks to learn/adopt a capability from another avatar — or asks for something a teammate's shared skill covers better — search with `mcp__skill_exchange__find_shared_skills`, then (with the user's go-ahead) copy it into the knowledge repository with `mcp__skill_exchange__learn_skill`." +
           readNote +
-          " Share this avatar's own repo skills with `mcp__skill_exchange__share_skill` (stop with `unshare_skill`) when the user asks; sharing reaches same-group teammates only, and the user can also manage it in the '스킬 배우기' tab." +
+          " Share this avatar's own repo skills with `mcp__skill_exchange__share_skill` (stop with `unshare_skill`) when the user asks; sharing reaches teammates only (and only while this avatar is not private), and the user can also manage it in the '스킬 배우기' tab." +
           " When the user asks to stop following a learned skill's updates (구독 해지), use `mcp__skill_exchange__unlink_skill` — it keeps the skill and only stops the tracking.",
       );
     }
@@ -1205,17 +1195,12 @@ export function buildSystemPromptAppend(
   if (request.headless && request.avatarConsultation) {
     // Avatar-to-avatar consultation (#ask-avatar): a one-shot headless turn
     // another avatar started on its owner's behalf. Framed as a TEAMMATE
-    // exchange — the asker passed the same-group trust gate (avatarAsk.ts) and
+    // exchange — the asker passed the team trust gate (avatarAsk.ts) and
     // this run holds teammate-level tools — never as a routine, which would
     // wrongly claim owner-level permissions.
     const consultAskerName = request.viewerName?.trim();
-    const consultViaGroups = (request.trustedViaGroups ?? []).filter(Boolean);
     lines.push(
-      `This is an **automated avatar-to-avatar consultation**: the avatar of ${consultAskerName ? `"${consultAskerName}"` : "a teammate"}${
-        consultViaGroups.length > 0
-          ? ` — a member of your owner's group(s) ${consultViaGroups.map((g) => `'${g}'`).join(", ")} —`
-          : " — a trusted same-group teammate of your owner —"
-      } is asking you ONE question on its owner's behalf. ` +
+      `This is an **automated avatar-to-avatar consultation**: the avatar of ${consultAskerName ? `"${consultAskerName}"` : "a teammate"} — a trusted teammate of your owner — is asking you ONE question on its owner's behalf. ` +
         "Answer as this avatar, from your persona and accumulated knowledge. No human is watching this exchange and follow-up questions are impossible, so give one self-contained, concise answer. " +
         "If you do not have the information, say so plainly instead of guessing" +
         (mcpToolGroupEnabled(request, "personal_knowledge")
@@ -1289,7 +1274,7 @@ export function buildSystemPromptAppend(
       // the avatar that teammates can write here, not discover it by surprise.
       if (request.sharedAccount) {
         lines.push(
-          "This account is marked as a **shared (communal) account**: trusted same-group teammates chatting with this avatar can also update the personal knowledge repository (write/edit/delete/move/scaffold/commit). Creating/connecting the repository itself stays owner-only; the setting is under Settings → Profile.",
+          "This account is marked as a **shared (communal) account**: trusted teammates chatting with this avatar can also update the personal knowledge repository (write/edit/delete/move/scaffold/commit). Creating/connecting the repository itself stays owner-only; the setting is under Settings → Profile.",
         );
       }
       const ownerBrainBlock = brainSection(request, "owner");
@@ -1308,12 +1293,12 @@ export function buildSystemPromptAppend(
     ) {
       lines.push(GIT_MCP_ONLY_GUIDANCE);
     }
-    // Group meta-cognition: which groups the owner is in, their role, and what
-    // co-membership grants. Group members auto-trust each other, so teammates'
-    // avatars are reachable at elevated level.
-    const groupBlock = groupsSection(request);
-    if (groupBlock) {
-      lines.push(groupBlock);
+    // Team meta-cognition: Noah serves ONE team; every approved user is a
+    // mutually trusted teammate, so teammates' avatars are reachable at
+    // elevated level (unless private).
+    const teamBlock = teamSection(request);
+    if (teamBlock) {
+      lines.push(teamBlock);
     }
     const secretsBlock = secretsSection(
       secretNames,
@@ -1393,14 +1378,10 @@ export function buildSystemPromptAppend(
           " for the owner's side. Your built-in file and shell tools work only in this colleague's own sandbox — their files, never the owner's.",
       );
     } else {
-      // Tell the avatar WHY this viewer is elevated when the trust comes from
-      // group co-membership (META-COGNITION) — group context changes how the
-      // avatar should respond (shared group skills/repo).
-      const viaGroups = (request.trustedViaGroups ?? []).filter(Boolean);
+      // Tell the avatar WHY this viewer is elevated (META-COGNITION): Noah
+      // serves ONE team and every approved user is a mutually trusted teammate.
       lines.push(
-        viaGroups.length > 0
-          ? `This person belongs to the same group(s) as the owner (${viaGroups.map((g) => `'${g}'`).join(", ")}), so they are an **automatically trusted (elevated)** user and get the owner-level Noah tools this run lists (your built-in file and shell tools work in THEIR own sandbox). They may share skills from the group's shared knowledge repository. Use remote SSH tools only within the scope the admin has permitted.`
-          : "This person is a user the owner trusts and gets the owner-level Noah tools this run lists (your built-in file and shell tools work in THEIR own sandbox). Use remote SSH tools only within the scope the admin has permitted.",
+        "This person is a teammate of the owner: Noah serves a single team and every approved user is a teammate, so they are an **automatically trusted (elevated)** user and get the owner-level Noah tools this run lists (your built-in file and shell tools work in THEIR own sandbox). Use remote SSH tools only within the scope the admin has permitted.",
       );
       // Trusted teammate: the SAME working-surface flow the owner gets, scoped to
       // elevated permissions (open/sync/push, but NOT register/remove). Shares the

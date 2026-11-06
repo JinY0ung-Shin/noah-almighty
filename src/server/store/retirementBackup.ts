@@ -34,6 +34,11 @@ const RETIRED_TABLES = [
   "personal_agents",
   "bot_tasks",
   "avatar_trusted_users",
+  // Groups (retired 2026-11-06, single team): dropped by migrate() once the
+  // single-team conversion has stamped its marker.
+  "groups",
+  "group_members",
+  "shared_skill_group_blocks",
 ] as const;
 
 /**

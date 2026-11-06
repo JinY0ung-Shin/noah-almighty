@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import Database from "better-sqlite3";
+import { encryptSecret } from "../crypto.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import logger from "../logger.js";
 import { RETIRED_COLUMNS, backupDatabase, retirementDataPresent, retirementStamp } from "./retirementBackup.js";
@@ -8,11 +10,9 @@ import type {
   AppConfig,
   AvatarVisibility,
   CanvasArtifact,
-  GroupRole,
   User,
-  UserGroupMembership,
 } from "../types.js";
-import type { McpToolGroupId } from "../../shared/mcpToolGroups.js";
+import { normalizeMcpToolGroups, type McpToolGroupId } from "../../shared/mcpToolGroups.js";
 
 const SESSION_DAYS = 14;
 
@@ -205,28 +205,6 @@ export interface GitRepositoryRow {
   created_at: string;
 }
 
-export interface GroupRow {
-  id: string;
-  name: string;
-  description: string | null;
-  /** Admin tool policy: JSON array of MCP tool-group ids; NULL = no restriction. */
-  allowed_mcp_tool_groups: string | null;
-  /** Group policy: member avatars visible/trusted to each other. NULL/1 = on, 0 = off. */
-  avatar_sharing: number | null;
-  created_by: string | null;
-  created_at: string;
-}
-
-export interface GroupMemberRow {
-  id: string;
-  username: string;
-  display_name: string;
-  avatar_ext: string | null;
-  visibility: string | null;
-  role: string;
-  created_at: string | null;
-}
-
 export interface RoutineJobRow {
   id: string;
   avatar_user_id: string;
@@ -247,8 +225,46 @@ export interface RoutineJobRow {
   created_at: string;
 }
 
-/** app_config key: how self-service signups are gated ("open" | "closed" | "approval"). */
+/**
+ * app_config key: how self-service signups are gated ("approval" | "closed").
+ * A stored "open" (retired 2026-11-06 with groups) reads as "approval": approving
+ * a pending signup IS joining the team, so self-service can never skip it.
+ */
 export const SIGNUP_MODE_KEY = "signup_mode";
+
+/**
+ * app_config key: the ONE deployment-wide admin MCP tool policy (JSON array of
+ * `McpToolGroupId`; absent = no restriction). Replaced the per-group
+ * `groups.allowed_mcp_tool_groups` column on 2026-11-06 (single team).
+ */
+export const MCP_TOOL_POLICY_KEY = "mcp_tool_policy";
+
+/**
+ * app_config marker: the one-time single-team conversion (groups retired
+ * 2026-11-06) has run. Read by EXISTENCE only, so a SESSION_SECRET rotation can
+ * never un-mark it. Reserved forever.
+ */
+export const SINGLE_TEAM_MARKER_KEY = "single_team:migrated";
+
+/**
+ * app_config cursor row of the retired-group BLOCKS copy: its `updated_at` is
+ * when `shared_skill_group_blocks` was last copied into `shared_skill_blocks`.
+ * A later boot copies only rows CREATED after it (an older release booted after
+ * the conversion), so an admin's unblock is never undone by a stale group row
+ * still sitting in the not-yet-dropped table. Reserved forever.
+ */
+const SINGLE_TEAM_BLOCKS_CURSOR_KEY = "single_team:blocks_copied";
+
+/**
+ * The retired group tables (2026-11-06, single team) and their indexes, in drop
+ * order. Every name is reserved FOREVER: nothing may create them again.
+ */
+const RETIRED_GROUP_INDEXES = [
+  "idx_shared_skill_group_blocks_skill",
+  "idx_group_members_user",
+  "idx_group_members_group",
+] as const;
+const RETIRED_GROUP_TABLES = ["shared_skill_group_blocks", "group_members", "groups"] as const;
 
 /**
  * Generic constructor type used to compose the per-domain mixins back onto a
@@ -445,20 +461,11 @@ export class StoreBase {
         created_at TEXT,
         PRIMARY KEY (user_id, name)
       );
-      CREATE TABLE IF NOT EXISTS groups (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT DEFAULT '',
-        created_by TEXT,
-        created_at TEXT
-      );
-      CREATE TABLE IF NOT EXISTS group_members (
-        group_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'member',
-        created_at TEXT,
-        PRIMARY KEY (group_id, user_id)
-      );
+      -- RESERVED FOREVER: groups were retired on 2026-11-06 (single team). The
+      -- tables groups, group_members and shared_skill_group_blocks, their
+      -- indexes and the groups.avatar_sharing / groups.allowed_mcp_tool_groups
+      -- columns are never created again; migrateSingleTeam() converts what an
+      -- existing deployment holds and the gated section of migrate() drops them.
       CREATE TABLE IF NOT EXISTS routine_jobs (
         id TEXT PRIMARY KEY,
         avatar_user_id TEXT NOT NULL,
@@ -542,24 +549,22 @@ export class StoreBase {
       );
       CREATE INDEX IF NOT EXISTS idx_skill_learn_events_skill ON skill_learn_events(owner_user_id, skill_name);
       CREATE INDEX IF NOT EXISTS idx_skill_learn_events_learner ON skill_learn_events(learner_user_id);
-      -- GROUP-CHANNEL BLOCK on a shared skill (group-admin moderation): this
-      -- group's discovery channel no longer carries (owner, skill_name). Keyed
-      -- by the skill NAME — not the shared_skills row id — for the same
-      -- anti-evasion reason as skill_learn_events: an unshare→re-share mints a
-      -- new row but must stay blocked. Scoped to ONE group, which is exactly
-      -- the blocking admin's authority: the share stays visible through any
-      -- OTHER sharing group the viewer and owner share (see
-      -- LEARNABLE_SKILLS_FROM in store/avatars.ts). A brand-new table:
-      -- CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
-      CREATE TABLE IF NOT EXISTS shared_skill_group_blocks (
-        group_id TEXT NOT NULL,
+      -- ADMIN BLOCK on a shared skill (system-admin moderation): (owner,
+      -- skill_name) is learnable by NO teammate. Keyed by the skill NAME — not
+      -- the shared_skills row id — for the same anti-evasion reason as
+      -- skill_learn_events: an unshare→re-share mints a new row but must stay
+      -- blocked. Only an explicit unblock deletes a row; a rename COPIES it
+      -- (renameSharedSkill). Enforced in LEARNABLE_SKILLS_FROM
+      -- (store/avatars.ts). Replaced the per-group shared_skill_group_blocks
+      -- (2026-11-06), whose rows migrateSingleTeam() copies in. A brand-new
+      -- table: CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
+      CREATE TABLE IF NOT EXISTS shared_skill_blocks (
         owner_user_id TEXT NOT NULL,
         skill_name TEXT NOT NULL,
         blocked_by TEXT,
         created_at TEXT,
-        PRIMARY KEY (group_id, owner_user_id, skill_name)
+        PRIMARY KEY (owner_user_id, skill_name)
       );
-      CREATE INDEX IF NOT EXISTS idx_shared_skill_group_blocks_skill ON shared_skill_group_blocks(owner_user_id, skill_name);
       -- PPT SHARE LINKS: a login-required, expiring, revocable link to ONE
       -- generated .pptx download card (see src/shared/shareLinks.ts). A LIVE
       -- reference, never a byte snapshot: every recipient call re-validates the
@@ -627,8 +632,6 @@ export class StoreBase {
       CREATE INDEX IF NOT EXISTS idx_routine_jobs_due ON routine_jobs(enabled, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_user_secrets_user ON user_secrets(user_id);
       CREATE INDEX IF NOT EXISTS idx_git_repositories_user ON git_repositories(user_id);
-      CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
-      CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
       CREATE INDEX IF NOT EXISTS idx_canvas_artifacts_conversation ON canvas_artifacts(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_canvas_artifacts_owner ON canvas_artifacts(owner_user_id);
     `);
@@ -693,7 +696,7 @@ export class StoreBase {
     // array of registry keys (experimentalFeatures.ts); NULL/[] = none. Mirrors
     // the hashtags JSON-array pattern; unknown keys are dropped on read/write.
     this.addColumnIfMissing("users", "experimental_features", "TEXT");
-    // Shared (communal) account flag: when 1, trusted same-group teammates
+    // Shared (communal) account flag: when 1, trusted teammates
     // chatting with this avatar may also WRITE to the owner's personal knowledge
     // repo (write/delete/move/scaffold/commit). Repo creation/connection settings
     // stay owner-only. Widens ONLY the repo-write tool gate (repoTools.ts).
@@ -798,19 +801,6 @@ export class StoreBase {
     // existing conversation renders its prompt on its first pi turn and
     // rebuilds context from the stored text history.
     this.addColumnIfMissing("conversations", "pi_instructions", "TEXT");
-    // Per-group ADMIN tool policy: which MCP tool groups this group's members
-    // may use in chats they drive. NULL = no restriction; a JSON array
-    // (including []) is an allowlist validated against src/shared/mcpToolGroups.ts.
-    // System-admin-only (PUT /api/admin/groups/:id/tool-policy); a user in
-    // several policy-bearing groups gets the INTERSECTION of the allowlists.
-    this.addColumnIfMissing("groups", "allowed_mcp_tool_groups", "TEXT");
-    // Per-group AVATAR-SHARING policy (group-admin managed): whether this
-    // group's co-membership makes members' avatars mutually visible AND
-    // mutually trusted (the two ride the same TEAMMATES SQL fragment). NULL
-    // (pre-policy rows) and 1 = on; only an explicit 0 turns it off — keep the
-    // SQL `!= 0` / TS `!== 0` reads in lockstep. Group repo/brain tools and the
-    // admin tool policy are NOT affected by this knob.
-    this.addColumnIfMissing("groups", "avatar_sharing", "INTEGER");
     // Shared-skill content fingerprint (#skill-share): sha256 of the sharer's
     // skills/<slug>/ dir, refreshed whenever the server touches their clone.
     // NULL = not yet computed. Added here for DBs that created shared_skills
@@ -834,14 +824,20 @@ export class StoreBase {
     this.migrateCanvasArtifacts();
     this.migrateOnboardedAndRoutineFlags();
     this.migrateTodoStatuses();
+    // Deliberately ABOVE the retirement gate, so it runs even when the backup
+    // failed: the new trust model (every active user is a teammate) is already
+    // live in this build, so skipping the conversion would trust every former
+    // non-member until a backup succeeds. It deletes nothing; only the group
+    // table drops below wait for the gate.
+    this.migrateSingleTeam();
     // Everything below DELETES what a retired feature left. It runs only once
     // the pre-retirement DB backup exists (or nothing here needed one); a failed
     // backup leaves it all in place until a later boot's backup succeeds.
     if (!this.retirementGate().allowed) {
       return;
     }
-    // Trust is now derived purely from group co-membership; the old per-(avatar,
-    // viewer) trust table is dropped (its grants don't survive the migration).
+    // Trust is derived purely from team membership (isTrustedFor); the old
+    // per-(avatar, viewer) trust table is dropped (its grants don't survive).
     this.db.exec("DROP TABLE IF EXISTS avatar_trusted_users");
     // The speech-to-text feature is removed; drop its admin endpoint override.
     // Nothing writes this key any more, so the delete can only match a row left
@@ -880,7 +876,7 @@ export class StoreBase {
       .prepare("DELETE FROM app_config WHERE key IN (?, ?)")
       .run("agent_model_override", "model_vision_policy");
     // Group knowledge repositories are retired (2026-10-30, user decision):
-    // groups stay only as the avatar-sharing/trust/skill-sharing unit. Drop the
+    // (groups themselves followed on 2026-11-06, below). Drop the
     // group repo connection, the per-user default and the per-conversation
     // group-knowledge OFF-sets. Nothing creates or writes these columns any
     // more, so this can only match what an older release left — keep every name
@@ -890,6 +886,188 @@ export class StoreBase {
     // a live session's model and effort, so a change keeps the session).
     for (const [table, column] of RETIRED_COLUMNS) {
       this.dropColumnIfPresent(table, column);
+    }
+    // Groups are retired (2026-11-06, single team). Drop their tables only
+    // AFTER the one-time conversion stamped its marker (it reads them) and
+    // after this boot's blocks copy (migrateSingleTeam, above the gate). An
+    // older release booted after the drop re-creates them empty; the next boot
+    // copies whatever blocks it left and drops them again.
+    if (this.singleTeamConfigRowExists(SINGLE_TEAM_MARKER_KEY)) {
+      for (const index of RETIRED_GROUP_INDEXES) {
+        this.db.exec(`DROP INDEX IF EXISTS ${index}`);
+      }
+      for (const table of RETIRED_GROUP_TABLES) {
+        this.db.exec(`DROP TABLE IF EXISTS ${table}`);
+      }
+    }
+  }
+
+  /** Whether an `app_config` row exists (markers are read by EXISTENCE). */
+  private singleTeamConfigRowExists(key: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM app_config WHERE key = ?").get(key));
+  }
+
+  private tableExists(table: string): boolean {
+    return Boolean(
+      this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table),
+    );
+  }
+
+  private columnExists(table: string, column: string): boolean {
+    return (this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
+      (c) => c.name === column,
+    );
+  }
+
+  /**
+   * Raw app_config write for migrate(): the secrets mixin's `setAppSecret` is
+   * not usable yet (its fields initialize only after this constructor returns).
+   * Same encryption, same row shape.
+   */
+  private writeAppConfigRaw(key: string, value: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO app_config (key, value_enc, updated_at) VALUES (?, ?, ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value_enc = excluded.value_enc, updated_at = excluded.updated_at",
+      )
+      .run(key, encryptSecret(value, this.secret), now());
+  }
+
+  /** `updated_at` of an app_config row (plain column, never encrypted), or null. */
+  private appConfigUpdatedAt(key: string): string | null {
+    const row = this.db.prepare("SELECT updated_at FROM app_config WHERE key = ?").get(key) as
+      | { updated_at: string | null }
+      | undefined;
+    return row?.updated_at ?? null;
+  }
+
+  /**
+   * Copy retired group-channel blocks into the ONE admin block list (union
+   * across groups = fail closed; INSERT OR IGNORE keeps an existing block and
+   * its blocker). `since` = only rows created strictly after it; null = all.
+   * Advances the cursor row in the same transaction as the caller.
+   */
+  private copyRetiredGroupBlocks(since: string | null): number {
+    const copied = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO shared_skill_blocks (owner_user_id, skill_name, blocked_by, created_at)
+         SELECT owner_user_id, skill_name, blocked_by, created_at FROM shared_skill_group_blocks
+         WHERE ? IS NULL OR (created_at IS NOT NULL AND created_at > ?)
+         ORDER BY created_at`,
+      )
+      .run(since, since).changes;
+    this.writeAppConfigRaw(SINGLE_TEAM_BLOCKS_CURSOR_KEY, now());
+    return copied;
+  }
+
+  /**
+   * Single-team conversion (groups retired 2026-11-06, user decision). NOT
+   * destructive (nothing is deleted here — the drops sit behind the retirement
+   * gate), so it runs on every boot above the gate:
+   *
+   * 1. ONCE (marker absent): a fresh DB that never had groups is just stamped.
+   *    Otherwise, in ONE transaction, every active non-admin user who is not a
+   *    member of an avatar-sharing group is SUSPENDED (fail closed: they were
+   *    outside every team before, and approval is now the only way in), with an
+   *    audit row each and their sessions dropped; the tool policies of groups
+   *    that HAVE members are INTERSECTED (fail closed) into the global
+   *    `mcp_tool_policy` (audited as `set_tool_policy`); EVERY group block is
+   *    copied into `shared_skill_blocks`; the marker is stamped. One warn line
+   *    names whom it suspended and the merged policy.
+   * 2. A later boot that still finds `shared_skill_group_blocks` (a held
+   *    retirement gate, or an older release that re-created it) copies only the
+   *    rows created after the previous copy (the cursor row), so a block an
+   *    admin lifted in between is never resurrected from a stale group row.
+   */
+  private migrateSingleTeam(): void {
+    const blocksTable = this.tableExists("shared_skill_group_blocks");
+    if (!this.singleTeamConfigRowExists(SINGLE_TEAM_MARKER_KEY)) {
+      if (!this.tableExists("groups")) {
+        this.db.transaction(() => {
+          if (blocksTable) this.copyRetiredGroupBlocks(null);
+          this.writeAppConfigRaw(SINGLE_TEAM_MARKER_KEY, now());
+        })();
+        return;
+      }
+      const result = this.db.transaction((): { suspended: string[]; policy: McpToolGroupId[] | null } => {
+        const hasMembers = this.tableExists("group_members");
+        const sharingFilter = this.columnExists("groups", "avatar_sharing")
+          ? "(g.avatar_sharing IS NULL OR g.avatar_sharing != 0)"
+          : "1";
+        const teamMembers = hasMembers
+          ? `SELECT m.user_id FROM group_members m JOIN groups g ON g.id = m.group_id WHERE ${sharingFilter}`
+          : "SELECT NULL WHERE 0";
+        const targets = this.db
+          .prepare(
+            `SELECT id, username FROM users
+             WHERE COALESCE(suspended, 0) = 0
+               AND id NOT IN (
+                 SELECT ur.user_id FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                 WHERE r.name = 'admin'
+               )
+               AND id NOT IN (${teamMembers})
+             ORDER BY username`,
+          )
+          .all() as { id: string; username: string }[];
+        const suspend = this.db.prepare("UPDATE users SET suspended = 1 WHERE id = ?");
+        const dropSessions = this.db.prepare("DELETE FROM sessions WHERE user_id = ?");
+        const audit = this.db.prepare(
+          `INSERT INTO audit (id, actor_user_id, actor_name, action, status, detail, created_at)
+           VALUES (?, NULL, 'system', ?, 'success', ?, ?)`,
+        );
+        for (const user of targets) {
+          suspend.run(user.id);
+          dropSessions.run(user.id);
+          audit.run(
+            crypto.randomUUID(),
+            "single_team_suspend",
+            `단일 팀 전환: 공유 그룹에 속하지 않았던 @${user.username} 계정을 정지했습니다. 팀원이 맞다면 관리자가 다시 승인하세요.`,
+            now(),
+          );
+        }
+        // Only groups that HAVE members ever restricted anyone: an empty
+        // group's policy (even `[]`) must not narrow the whole team.
+        let policy: McpToolGroupId[] | null = null;
+        if (hasMembers && this.columnExists("groups", "allowed_mcp_tool_groups")) {
+          const policies = (
+            this.db
+              .prepare(
+                `SELECT allowed_mcp_tool_groups AS p FROM groups g
+                 WHERE allowed_mcp_tool_groups IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM group_members m WHERE m.group_id = g.id)`,
+              )
+              .all() as { p: string }[]
+          )
+            .map((row) => parseNameList(row.p))
+            .filter((parsed): parsed is string[] => parsed !== null)
+            .map((parsed) => normalizeMcpToolGroups(parsed));
+          if (policies.length > 0) {
+            policy = policies.reduce((acc, next) => acc.filter((id) => next.includes(id)));
+            this.writeAppConfigRaw(MCP_TOOL_POLICY_KEY, JSON.stringify(policy));
+            audit.run(
+              crypto.randomUUID(),
+              "set_tool_policy",
+              `단일 팀 전환: 그룹별 MCP 도구 정책을 하나로 합쳐 전체 정책으로 설정했습니다 = ${policy.length ? policy.join(",") : "(모두 차단)"}`,
+              now(),
+            );
+          }
+        }
+        if (blocksTable) this.copyRetiredGroupBlocks(null);
+        this.writeAppConfigRaw(SINGLE_TEAM_MARKER_KEY, now());
+        return { suspended: targets.map((user) => user.username), policy };
+      })();
+      logger.warn(
+        { count: result.suspended.length, usernames: result.suspended, mcpToolPolicy: result.policy },
+        "single-team conversion: suspended every active non-admin user outside an avatar-sharing group (an admin re-approves the ones that belong); merged the member-bearing groups' tool policies into one",
+      );
+      return;
+    }
+    if (blocksTable) {
+      // Rows created after the previous copy only (cursor; the marker's own
+      // stamp time if this DB never stored a cursor).
+      const since =
+        this.appConfigUpdatedAt(SINGLE_TEAM_BLOCKS_CURSOR_KEY) ?? this.appConfigUpdatedAt(SINGLE_TEAM_MARKER_KEY);
+      this.db.transaction(() => this.copyRetiredGroupBlocks(since))();
     }
   }
 
@@ -1070,7 +1248,7 @@ export class StoreBase {
 
   /** Normalize visibility to the 2-state enum. Idempotent: backfills rows that
    *  predate the column AND folds the retired `public` state into `group` (the
-   *  closest surviving reach — group teammates). The legacy `published` flag is
+   *  closest surviving reach — 팀 공개, every teammate). The legacy `published` flag is
    *  no longer consulted; 'private' rows are never touched. */
   private migrateVisibility(): void {
     this.db
@@ -1163,16 +1341,6 @@ export class StoreBase {
       .get(username) as UserRow | undefined;
   }
 
-  protected groupRowById(id: string): GroupRow | undefined {
-    return this.db.prepare("SELECT * FROM groups WHERE id = ?").get(id) as
-      | GroupRow
-      | undefined;
-  }
-
-  protected normalizeRole(role: string | null | undefined): GroupRole {
-    return role === "admin" ? "admin" : "member";
-  }
-
   /**
    * Whether this boot may run a destructive retirement step, and the stamp its
    * quarantine folder and backup share. The first ask that finds retired data
@@ -1219,7 +1387,7 @@ export class StoreBase {
 
 /**
  * Cross-domain method contract. These methods are implemented by sibling mixins
- * (users/secrets/groups/conversations/knowledgeRepo) but are CALLED from
+ * (users/secrets/admin/conversations/knowledgeRepo) but are CALLED from
  * base-level and other mixins through `this`. Declaration-merging them onto the
  * StoreBase TYPE (no runtime emit, no implementation requirement, no method-
  * override clash) lets those calls type-check on the composed prototype, where
@@ -1236,7 +1404,6 @@ export interface StoreBase {
     name: string,
     policy: { enabled: boolean; hosts: string[]; passwordOnly: boolean },
   ): boolean;
-  listUserGroups(userId: string): UserGroupMembership[];
   allowedMcpToolGroupsForUser(userId: string): McpToolGroupId[] | null;
   touchConversation(
     ownerId: string,

@@ -31,14 +31,12 @@ function infer(message: string): Required<ConfirmOptions> {
     ? "계정을 삭제할까요?"
     : /대화.*삭제/.test(message)
       ? "대화를 삭제할까요?"
-      : /그룹.*삭제/.test(message)
-        ? "그룹을 삭제할까요?"
-        : disconnect
+      : disconnect
           ? "연결을 해제할까요?"
           : suspend
             ? "계정을 정지할까요?"
             : remove
-              ? "그룹원을 제거할까요?"
+              ? "제거할까요?"
               : destructive
                 ? "계속 진행할까요?"
                 : "이대로 진행할까요?";
