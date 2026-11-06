@@ -54,8 +54,6 @@ export interface ClientState {
   knowledgeRequests: KnowledgeRequest[];
   /** Team-brain badge numbers (lib/teamBrain.ts); polled with the knowledge watch. */
   teamBrainStatus: import("../../../shared/teamBrain").TeamBrainStatus;
-  /** One-shot: open the knowledge graph on the 팀 브레인 tab (the badge's deep link). */
-  brainOpenTeamTab: boolean;
   notifications: AvatarNotification[];
   inboxFilter: "all" | "unread" | "requests" | "notifications";
   routines: RoutineJob[];
@@ -130,7 +128,6 @@ export const appState = writable<ClientState>({
   plugins: [],
   knowledgeRequests: [],
   teamBrainStatus: { unseenResults: 0, pendingReview: 0 },
-  brainOpenTeamTab: false,
   notifications: [],
   inboxFilter: "all",
   routines: [],
@@ -271,7 +268,8 @@ export function setDocumentTitle(): void {
   const titles: Record<ViewName, string> = {
     explore: "탐색",
     chat: activePane()?.avatar.alias || activePane()?.avatar.displayName || "대화",
-    brain: "지식 그래프",
+    brain: "내 브레인",
+    teamBrain: "팀 브레인",
     inbox: "알림",
   routines: "예약 작업",
     skills: "스킬 배우기",

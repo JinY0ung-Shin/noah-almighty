@@ -250,8 +250,15 @@
   prominent ("삭제 N줄" chip). 내 제안 shows 보완 요청 + the admin's questions.
 - Team notes render through `renderMarkdown(…, { forbidInlineStyle: true })` — teammate-written HTML must
   not position itself over the app (fake UI); the card shows raw text in `<pre>`.
-- 지식 그래프: 내 브레인 / 팀 브레인 tabs; the team tab's side panel (no node selected) lists 내 제안
-  (status + rejection reason) and, for admins, 검토 대기 (read-only). The rail badge =
-  `unseenResults + pendingReview`, polled with the knowledge watch (`lib/teamBrain.ts`); a toast on growth
-  deep-links via the one-shot `brainOpenTeamTab` flag.
+- **Two rail items (user, 2026-11-06): 내 브레인 (`brain`, `#/brain`) and 팀 브레인 (`teamBrain`,
+  `#/teamBrain`)** — the old single 지식 그래프 item with in-view tabs is gone. Both render `BrainView`
+  (`scope` prop); 팀 브레인 goes through the thin `TeamBrainView.svelte` wrapper so switching between them
+  REMOUNTS (the router's `<svelte:component>` keeps an instance whose constructor did not change). The team
+  view's side panel (no node selected) lists 내 제안 (status + rejection reason) and, for admins, 검토 대기
+  with a **검토 시작** button per row: `openSeededChat` → a new chat with the admin's OWN avatar, the composer
+  pre-filled (not sent) with a review request naming ONLY the proposal id — never the teammate-written
+  title, which would otherwise reach the admin's avatar as the admin's own instruction. The 팀 브레인 rail
+  badge = `unseenResults + pendingReview`, polled with the knowledge watch (`lib/teamBrain.ts`); a toast on
+  growth and the admin panel's 위키 페이지 card open it with `goView("teamBrain")` (the one-shot
+  `brainOpenTeamTab` flag is gone).
 - 관리자 → 팀 브레인 (`AdminTeamBrainPanel.svelte`): counts + backup address/branch/status, 지금 백업, 백업에서 복원.

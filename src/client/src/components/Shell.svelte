@@ -52,7 +52,8 @@
     { view: "explore", label: "탐색", icon: "compass" },
     { view: "chat", label: "대화", icon: "chat" },
     { view: "todos", label: "할 일", icon: "check-square" },
-    { view: "brain", label: "지식 그래프", icon: "network" },
+    { view: "brain", label: "내 브레인", icon: "network" },
+    { view: "teamBrain", label: "팀 브레인", icon: "users" },
     { view: "inbox", label: "알림", icon: "bell" },
     { view: "routines", label: "예약 작업", icon: "clock" },
     { view: "skills", label: "스킬 배우기", icon: "sparkles" },
@@ -67,7 +68,7 @@
   // every open item; the tooltip spells the split out.
   $: todoCounts = $appState.todos.counts;
   $: todoBadgeCount = todoCounts.overdue + todoCounts.dueToday;
-  // 지식 그래프 badge: my decided-but-unseen team-brain proposals + (admins) pending reviews.
+  // 팀 브레인 badge: my decided-but-unseen team-brain proposals + (admins) pending reviews.
   $: teamBrainBadge = teamBrainBadgeCount($appState.teamBrainStatus);
   $: todoBadgeTitle = [todoCounts.overdue ? `마감 지남 ${todoCounts.overdue}개` : "", todoCounts.dueToday ? `오늘 마감 ${todoCounts.dueToday}개` : ""]
     .filter(Boolean)
@@ -656,7 +657,7 @@
           {#if item.view === "todos" && todoBadgeCount > 0}
             <span class="nav-badge" title={todoBadgeTitle}>{todoBadgeCount}</span>
           {/if}
-          {#if item.view === "brain" && teamBrainBadge > 0}
+          {#if item.view === "teamBrain" && teamBrainBadge > 0}
             <span class="nav-badge" title={teamBrainBadgeTitle($appState.teamBrainStatus)}>{teamBrainBadge}</span>
           {/if}
         </button>

@@ -579,6 +579,8 @@ describe("nav routing", () => {
     expect(currentRoute()).toBe("#/admin/tools");
     replaceState({ view: "brain" });
     expect(currentRoute()).toBe("#/brain");
+    replaceState({ view: "teamBrain" });
+    expect(currentRoute()).toBe("#/teamBrain");
     replaceState({
       view: "chat",
       chatPanes: [{ id: "p", conversationId: "conv7" } as any],
