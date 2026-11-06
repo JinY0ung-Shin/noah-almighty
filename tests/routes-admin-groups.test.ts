@@ -106,7 +106,7 @@ describe("admin routes — authorization gate", () => {
     await member.agent.get("/api/admin/users").expect(403);
     await member.agent.get("/api/admin/groups").expect(403);
     await member.agent.delete(`/api/admin/users/${admin.id}`).expect(403);
-    await member.agent.put("/api/admin/model").send({ model: "x" }).expect(403);
+    await member.agent.put("/api/admin/signup-mode").send({ mode: "open" }).expect(403);
   });
 });
 
@@ -430,54 +430,32 @@ function bootWithModels(models: string[] | "down") {
   return booted;
 }
 
-describe("admin: model override", () => {
-  it("sets, surfaces, and clears the model override — only a model pi-gateway offers", async () => {
+describe("admin: retired LLM settings (pi-gateway's admin page owns them)", () => {
+  it("no longer serves the model override or the vision policy routes", async () => {
     const { app, services } = bootWithModels(["deepseek/v3", "qwen/coder"]);
     const admin = await mkUser(app, "admin");
-
-    await admin.agent.put("/api/admin/model").send({ model: "  " }).expect(400);
-    // Anything pi does not offer would silently run on pi's default model.
-    const bad = await admin.agent.put("/api/admin/model").send({ model: "opus" }).expect(400);
-    expect(bad.body.error).toBe("pi-gateway가 제공하는 모델만 지정할 수 있습니다: deepseek/v3, qwen/coder");
-    expect(services.store.getModelOverride()).toBeNull();
-
-    await admin.agent.put("/api/admin/model").send({ model: "qwen/coder" }).expect(200);
-    expect(services.store.getModelOverride()).toBe("qwen/coder");
-    let sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelOverride).toBe("qwen/coder");
-    expect(sys.body.system.modelOverrideIgnored).toBe(false);
-    expect(sys.body.system.modelOverrideChoices).toEqual(["deepseek/v3", "qwen/coder"]);
-    // The env hard lock (ANTHROPIC_MODEL) is gone with the SDK runner.
-    expect(sys.body.system).not.toHaveProperty("modelEnvLocked");
-
-    await admin.agent.delete("/api/admin/model").expect(200);
-    expect(services.store.getModelOverride()).toBeNull();
-    sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelOverride).toBeNull();
-  });
-
-  it("flags a stored override pi-gateway does not offer as ignored", async () => {
-    const { app, services } = bootWithModels(["deepseek/v3"]);
-    const admin = await mkUser(app, "admin");
-    // An SDK-era Claude id / a retired tier alias survives the upgrade: reported as ignored.
-    services.store.setModelOverride("opus");
+    await admin.agent.put("/api/admin/model").send({ model: "qwen/coder" }).expect(404);
+    await admin.agent.delete("/api/admin/model").expect(404);
+    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { "qwen/coder": false } }).expect(404);
+    expect(services.store.getAppSecret("agent_model_override")).toBeNull();
+    expect(services.store.getAppSecret("model_vision_policy")).toBeNull();
+    // The system view lists pi's models read-only, with nothing to set.
     const sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelOverride).toBe("opus");
-    expect(sys.body.system.modelOverrideIgnored).toBe(true);
+    expect(sys.body.system.piModels).toEqual([
+      { id: "deepseek/v3", server: null },
+      { id: "qwen/coder", server: null },
+    ]);
+    expect(sys.body.system).not.toHaveProperty("modelOverride");
+    expect(sys.body.system).not.toHaveProperty("modelVisionPolicy");
   });
 
-  it("answers 503 to a model write while pi-gateway's list cannot be read", async () => {
-    const { app, services } = bootWithModels("down");
+  it("still answers the system view while pi-gateway's list cannot be read; a model write answers 503", async () => {
+    const { app } = bootWithModels("down");
     const admin = await mkUser(app, "admin");
-    const res = await admin.agent.put("/api/admin/model").send({ model: "deepseek/v3" }).expect(503);
+    const res = await admin.agent.put("/api/me/chat-defaults").send({ model: "deepseek/v3" }).expect(503);
     expect(res.body.error).toBe("pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
-    expect(services.store.getModelOverride()).toBeNull();
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { "deepseek/v3": false } }).expect(503);
-    await admin.agent.put("/api/me/chat-defaults").send({ model: "deepseek/v3" }).expect(503);
     // Clearing names no model, so it needs no list.
     await admin.agent.put("/api/me/chat-defaults").send({ model: null }).expect(200);
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: {} }).expect(200);
-    // The system view still answers: no models, nothing to choose.
     const sys = await admin.agent.get("/api/admin/system").expect(200);
     expect(sys.body.system.piModels).toEqual([]);
   });
@@ -494,33 +472,6 @@ describe("composer default model", () => {
     expect(ok.body.user.modelDefault).toBe("deepseek/v3");
     await user.agent.put("/api/me/chat-defaults").send({ model: "" }).expect(200);
     expect(services.store.getUserById(user.id)?.modelDefault).toBeNull();
-  });
-});
-
-describe("admin: model vision policy", () => {
-  it("validates, saves, and surfaces the per-model vision policy", async () => {
-    const { app, services } = bootWithModels(["deepseek/v3", "qwen/coder"]);
-    const admin = await mkUser(app, "admin");
-    const member = await mkUser(app, "vp-member");
-
-    await member.agent.put("/api/admin/model-vision-policy").send({ policy: { "qwen/coder": false } }).expect(403);
-    // Keys must be models pi offers; values strict booleans.
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { opus: true } }).expect(400);
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: { "qwen/coder": "yes" } }).expect(400);
-
-    await admin.agent
-      .put("/api/admin/model-vision-policy")
-      .send({ policy: { "qwen/coder": false } })
-      .expect(200);
-    expect(services.store.getModelVisionPolicy()).toEqual({ "qwen/coder": false });
-
-    const sys = await admin.agent.get("/api/admin/system").expect(200);
-    expect(sys.body.system.modelVisionPolicy).toEqual({ "qwen/coder": false });
-    expect(sys.body.system.visionDefault).toBe(true);
-
-    // Explicit empty policy = every model inherits the deployment default again.
-    await admin.agent.put("/api/admin/model-vision-policy").send({ policy: {} }).expect(200);
-    expect(services.store.getModelVisionPolicy()).toEqual({});
   });
 });
 

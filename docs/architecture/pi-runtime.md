@@ -515,6 +515,10 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   `PI_GATEWAY_API_KEY` there stops the boot). Same-uid caveat (#71): the file is readable by every uid-1000 child
   Noah spawns (hex-ssh, bundled stdio plugin servers, the HTTP bridge, git, LibreOffice) — the env scrub does not
   cover files; see `secrets-ssh.md` ("Same-uid posture (#71)").
+- **Admin key** — Noah's OWN 0400 uid-1000 copy of pi's ADMIN key (`$PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key`,
+  same `setup-host.sh` step), compose secret `pi_gateway_admin_api_key_noah`, read through
+  `PI_GATEWAY_ADMIN_API_KEY_FILE` for the `/admin` panel proxy (below). Same same-uid caveat as the service key, with a
+  wider blast radius: the admin key configures pi itself.
 - **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
   fixed), uid 1000 on both sides.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
@@ -555,29 +559,102 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual
   topic say exactly that.
 
+## pi admin panel proxy (`routes/piAdminProxy.ts`)
+
+pi-gateway's own admin panel (LLM servers and models, the default model, prompts, MCP, tools, history, its test
+chat) is served on Noah's port at `/admin` — pi's OWN path, because its UI hard-codes `/admin/` and `/admin/api`
+(Vite `base`), and Noah's SPA uses `#/…` hash routes, so the server path is free. `/settings/pi` redirects there.
+The operator is the same person as Noah's admin (user decision 2026-11-01), so Noah's admin session IS pi admin —
+and pi's admin may act as ANY pi user: read every user's pi history (`history/<id>`), read files from any user's
+sandbox (`chat/file?user=`), and run the test chat — full bash — in any user's sandbox. **Granting someone Noah's
+`admin` role grants that too.**
+
+- **Gate** — every `/admin` request resolves the Noah session first; anonymous/non-admin → `/` (page) or pi's
+  error shape 403 (API; never 401 — pi's UI answers a 401 with its own key login form, which cannot fix a missing
+  Noah session and would invite pasting pi's key), and nothing is forwarded.
+- **Target** — only an origin-form target under lowercase `/admin` with no `.`/`..` segment (plain or
+  percent-encoded), no encoded slash or backslash and no raw backslash goes on, and the resolved URL is re-checked (pi's origin, path
+  still under `/admin`); else 404. Express matches the mount case-insensitively and keeps `..` and an
+  absolute-form target (`GET http://evil/admin/…`) in `originalUrl` — resolving that against pi's URL would send
+  the admin key off pi's `/admin` tree or to another host.
+- **Key** — Noah's cookies, any client `Authorization` and client `X-Forwarded-*` are stripped; pi's admin key
+  (`PiRuntimeConfig.adminApiKey`, `PI_GATEWAY_ADMIN_API_KEY_FILE` ONLY — an inline `PI_GATEWAY_ADMIN_API_KEY` stops
+  the boot) is injected as `Authorization: Bearer`. Without the key `/admin` answers a Korean 503.
+- **CSRF** — pi skips its own `X-Admin-Request` check for bearer callers, and an injected bearer is ambient, so
+  Noah checks instead: a non-GET/HEAD/OPTIONS call needs `Sec-Fetch-Site: same-origin` (or, without it, an
+  `Origin` whose host is the request's Host; the scheme is not compared, for TLS-terminating proxies) AND
+  `X-Admin-Request: 1`. The ambient key makes a GET dangerous too (a user's sandbox file, another user's history,
+  pi starting a sandbox for any id), and pi's UI loads `chat/file` through plain `<img>`/`<a download>`, so no
+  custom header can gate reads: EVERY `/admin/api` request must also come from pi's own page — `Sec-Fetch-Site`
+  absent or `same-origin`, and no `Referer` outside `/admin` on the request's host. pi's UI is `no-referrer`;
+  Noah's SPA sends `same-origin` referrers and its sanitizer drops `referrerpolicy`, so a markdown image or link
+  rendered in Noah (an avatar intro naming `/admin/api/chat/file?user=…`) is refused. Without fetch metadata
+  (plain HTTP to a non-localhost host) only the `Referer` rule applies.
+- **Routed path** — pi's router percent-decodes before matching, so every path decision (audit, the local
+  login/logout answers, API vs page) reads the DECODED path, folded over-inclusively (case, repeated/trailing
+  slashes, a `;…` suffix): `/admin/api/chat/%66ile` is audited as `chat/file`, `POST /admin/api/%6cogin` is answered
+  locally. HEAD runs pi's GET handler, so it is audited like GET.
+- **Local answers** — `POST /admin/api/login|logout` never reach pi: forwarding a typed key would count failures
+  against Noah's ONE address in pi's lockout, and there is no pi session to end. Logout answers `{ok:true}`; login
+  answers a Korean 400 (`noah_proxied`: sign in to Noah and reload) — the form only shows when something else
+  failed, so a typed key is never treated as a fix.
+- **Streaming** — mounted BEFORE `express.json` and Noah's security-header middleware: bodies stream both ways
+  (pi's test chat is SSE; no timeout once headers arrived), pi's own CSP/X-Frame-Options reach its UI, pi's
+  `Set-Cookie` is dropped. Upstream down → 502 (Korean). Waiting for pi's headers is bounded at 60 s for a read but
+  15 min for a write (`PI_ADMIN_PROXY_TIMEOUTS`): a plugin install runs several git commands of up to 120 s each,
+  and a write cut short would report a failure pi then applies. A timeout answers 504 and audits the write as
+  응답 시간 초과(반영 여부 미확인).
+- **Inert API content types** — `chat/file` serves agent-written sandbox bytes under Noah's origin, so an
+  `/admin/api` response keeps its content type only when inert (JSON, SSE, `text/plain`, `image/*`); anything else
+  (`text/javascript` above all, which Noah's `script-src 'self'` would run) is relayed as
+  `application/octet-stream`, always with `nosniff`. pi's page assets (`/admin/assets/*`) keep theirs.
+- **Audit** — every forwarded write AND every API read except pi's known config/global reads (`UNAUDITED_READS`:
+  session, status — polled every 10 s —, llm, tools, mcp/servers, history/retention, marketplaces, plugins,
+  plugin-settings, chat/options, prompts, prompt-deployments) is an audit row `pi_admin_proxy` with `METHOD path`
+  only — so `history`, `history/<id>`, `chat/file`, `requests` and any read pi adds LATER are audited by default.
+  No query and no body, except the pi user the call acts as: the query's `user` (`chat/file`, `history`,
+  `chat/<id>/cancel`) or the JSON body's `user` of an admin chat / preview (`POST chat`, `chat/preview` — the
+  body is buffered for it, up to pi's own 16 MiB limit, else 413 without forwarding), so the row says whose
+  sandbox or history was touched. A write whose
+  browser left before pi answered is recorded as an error marked 반영 여부 미확인 (pi may have applied it). The
+  audit write runs in socket listeners outside Express, so it is caught and logged — a `SQLITE_BUSY` there must
+  never become an uncaughtException that stops Noah.
+- **What does not stick** — `pi-setup` re-applies Noah's prompt `noah` (`scripts/pi-system-prompt.md`), its MCP
+  broker entries and the disabled `request_admin`/`present_file` on every `docker compose up`, so edits to those in
+  the panel last only until then; the repository stays their source of truth. Everything else (LLM settings,
+  egress, other prompts) is pi's own state. A prompt deployed there applies to pi sessions STARTED afterwards
+  (`snapshotForSession`); Noah's own append stays frozen per conversation (`conversations.pi_instructions`).
+
 ## Models (`agent/pi/modelCatalog.ts`)
 
 pi-gateway's LIVE model list (`GET /v1/models` → `PiResponsesClient.listModels()`, `{id, ownedBy, default?, imageInput?, reasoning?}`) is the ONLY model
-source (user decision 2026-10-31): the composer picker, the per-user default, the admin override
-(`PUT /api/admin/model`) and the vision policy (`PUT /api/admin/model-vision-policy`, keyed by model id) all name pi
-model ids; none = pi-gateway's DEFAULT model (picked on pi's admin LLM page): a new session sends no `model`, a
-continuing turn sends the id pi marks `default: true` (omitting it there would keep the session's model).
+source (user decision 2026-10-31): the composer picker and the per-user default name pi model ids; none =
+pi-gateway's DEFAULT model (picked on pi's admin LLM page): a new session sends no `model`, a continuing turn sends
+the id pi marks `default: true` (omitting it there would keep the session's model). **Noah has no LLM settings of its
+own** (user decision 2026-11-01): the admin model override (`PUT/DELETE /api/admin/model`), the per-model vision
+policy (`PUT /api/admin/model-vision-policy`) and `MODEL_VISION` are RETIRED — pi's admin LLM page owns the default
+model, each model's image input and efforts. Their `app_config` keys (`agent_model_override`, `model_vision_policy`)
+are deleted behind `retirementGate()` and reserved forever; their audit labels stay for old rows; a still-set
+`MODEL_VISION` only logs a boot warning (`warnRetiredModelEnv`). The admin 시스템 tab lists pi's models read-only and
+links to pi's admin page.
 `piServicesFor(store, config).models` is one catalog per app instance: a 60 s cache, one in-flight fetch for every
 caller (5 s timeout), stale-on-error (a failed refresh keeps the last good list; retried after 5 s); never fetched
-successfully → empty, and the `local` stub's is always empty (the client then hides the picker).
+successfully → empty, and the `local` stub's is always empty (the client then hides the picker). A successful
+`PUT /admin/api/llm` through the admin proxy calls `invalidate()`: the next lookup fetches again, and a fetch
+already in flight (which may have read the old settings) never replaces a list fetched since — so a model whose
+image input was just turned off stops getting image blocks at once, as the retired Noah vision policy did.
 
-- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else the admin override if pi
-  offers it, else the default. A stored value pi does not offer (a legacy tier alias like `opus`, a model pi dropped,
-  an SDK-era Claude id) reads as unset — no migration rewrites old values; a stored override pi does not offer is
-  warned once per value (`modelOverride.ts`, review-2 M2) and `GET /api/admin/system` reports `modelOverrideIgnored`.
-  describe_system names the id and its source (`… (chosen for this conversation in the composer)` / `(admin setting)`
-  / `pi-gateway's default model (default)`, plus the ignored-override note).
+- **Run resolution** (`runCapabilities.ts`): the conversation's pick if pi offers it, else pi's default. A stored
+  value pi does not offer (a legacy tier alias like `opus`, a model pi dropped, an SDK-era Claude id) reads as unset —
+  no migration rewrites old values. describe_system names the id and its source (`… (chosen for this conversation in
+  the composer)` / `pi-gateway's default model (default — chosen on pi-gateway's admin LLM page; …)`).
 - **Vision** (review #12): pi's `/v1/models` entry carries `input` (`["text"]` / `["text","image"]`, parsed to
-  `imageInput`; absent on an older pi = unknown). `visionForCatalogModel` makes a model pi reports without `image`
-  text-only regardless of the admin policy and `MODEL_VISION` (pi would 400 `unsupported_image_input`), and resolves
-  pi's default model by its catalog id (`catalogDefaultModelId`) so the policy for it applies. The admin panel shows
-  such a model as always 미지원. Image turns on a text-only model go file mode (`chat-sse-media.md`). No 400 retry:
-  Noah ships with its pi (U9), and a pi without the field keeps the old behaviour.
+  `imageInput`; absent on an older pi = unknown). `visionForCatalogModel` (`modelCatalog.ts`) is pi's setting ALONE:
+  only `imageInput: false` makes a model text-only (pi would 400 `unsupported_image_input`); a model pi did not
+  describe, an id not in the list and an empty list (the `local` stub, pi never answered) read as vision ON — the
+  pre-retirement default, so a wrong guess shows as pi's visible 400 rather than a silently image-less turn. pi's
+  default model is resolved by its catalog id (`catalogDefaultModelId`). Image turns on a text-only model go file
+  mode (`chat-sse-media.md`). No 400 retry: Noah ships with its pi (U9).
 - **Effort** (review #9): pi's entry carries `reasoning` — `{efforts, default_effort}` for a reasoning model (pi 400s
   `unsupported_reasoning_effort` for any other effort; its default list stops at `high`), `null` for one that does not
   reason (pi ignores the effort), absent on an older pi. `effortForModel` (`effortLevels.ts`, shared with the client)
@@ -594,17 +671,18 @@ successfully → empty, and the `local` stub's is always empty (the client then 
   `routes/_shared.ts`). The chat stream's `model` is NOT validated: it is stored as sent ("" clears), so a pick
   survives pi being briefly unreachable, and the run applies it only while pi offers it.
 - `GET /api/bootstrap` → `modelSelection: { models: [{id, server, vision, reasoning?}], defaultVision, defaultReasoning? }` (`server` = pi's
-  `owned_by`); `GET /api/admin/system` → `piModels`, `modelOverride`, `modelOverrideIgnored`, `modelOverrideChoices`
-  (= the ids), `modelVisionPolicy`, `observedModel`.
+  `owned_by`; the retired deployment-wide `visionEnabled` is no longer sent); `GET /api/admin/system` → `piModels`
+  (read-only: `{id, server, default?, imageInput?, reasoning?}`), `observedModel`.
 - **`PI_MODEL_MAP` is RETIRED** with the composer tier registry (`modelTiers.ts`, deleted): no longer read; while it
-  is still set every boot logs one warning (`warnRetiredModelMapEnv`).
+  is still set every boot logs one warning (`warnRetiredModelEnv`, which also warns for `MODEL_VISION`).
 
 ## Env (config.ts → `AppConfig.pi`)
 
 `AGENT_RUNTIME` (`pi` default, `local` stub; anything else stops the boot), `PI_GATEWAY_URL` + the service key
 (required): inline `PI_GATEWAY_API_KEY` (in `SERVER_ONLY_SECRET_ENV_NAMES`) OR `PI_GATEWAY_API_KEY_FILE` (read and
 trimmed by `readPiGatewayApiKey`; both set, an unreadable or empty file, or a second line stops the boot; the key never
-enters `process.env` — the bundled compose stack sets only the file), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`,
+enters `process.env` — the bundled compose stack sets only the file), `PI_GATEWAY_ADMIN_API_KEY_FILE` (optional, the
+`/admin` panel proxy; file only — `readPiGatewayAdminApiKey`), `PI_WORKSPACES_DIR`, `NOAH_MCP_PUBLIC_URL`,
 `NOAH_MCP_ALLOWED_CIDRS` (optional `/mcp` peer allowlist), `PI_DECK_SANDBOX`.
 
 Removed with the SDK runner: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (the old hard lock), `ANTHROPIC_DEFAULT_*_MODEL`,

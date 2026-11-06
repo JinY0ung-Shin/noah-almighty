@@ -161,8 +161,12 @@
     service-key file (`PI_GATEWAY_API_KEY_FILE` → `/run/secrets/pi_gateway_api_key`, uid 1000, 0400 — see "Model
     credentials live in pi-gateway only" below) is readable by EVERY uid-1000 process in Noah's container: hex-ssh, the bundled
     stdio plugin servers, `mcp-http-bridge.mjs`, git, LibreOffice. That key runs turns AS ANY user, so a child
-    that read it is the whole deployment. Marginal today (the same children already reach the rw workspaces bind
-    mount and the data volume — this is not uid isolation), and closed only by #71's uid separation.
+    that read it is the whole deployment. pi's ADMIN-key file (`PI_GATEWAY_ADMIN_API_KEY_FILE` →
+    `/run/secrets/pi_gateway_admin_api_key_noah`, same uid-1000 0400 posture, file-only) is readable the same way,
+    and its blast radius is LARGER: it configures pi itself (LLM servers and their keys, prompts, MCP, plugins),
+    reads every user's pi history and sandbox files, and runs bash in any user's sandbox through pi's admin chat.
+    Marginal today (the same children already reach the rw workspaces bind mount and the data volume — this is
+    not uid isolation), and closed only by #71's uid separation.
 - **Two git tokens, vault-backed, host-routed.** Each user can store TWO git tokens as named
   `user_secrets`: `GIT_TOKEN` (`INTERNAL_GIT_TOKEN_SECRET_NAME`) for the internal `GITHUB_HOST`, and
   `GITHUB_TOKEN` (`EXTERNAL_GIT_TOKEN_SECRET_NAME`) for github.com. `tokenForGitUrl` in
@@ -194,13 +198,18 @@
 - **Model credentials live in pi-gateway only** (design D7). Noah holds no LLM key: `ANTHROPIC_API_KEY` and the
   admin-pasted `claude setup-token` subscription token are gone (`PUT/DELETE /api/admin/claude-token` → 404). The
   stored `claude_oauth_token` app_config key is deleted on existing deployments through `retirementGate()` (DB
-  backup first) and the name stays reserved forever. Noah's only gateway secret is pi's service key (a
-  server-only secret): inline `PI_GATEWAY_API_KEY`, or the file `PI_GATEWAY_API_KEY_FILE` names
+  backup first) and the name stays reserved forever. Noah holds TWO gateway secrets. The first is pi's service
+  key (a server-only secret): inline `PI_GATEWAY_API_KEY`, or the file `PI_GATEWAY_API_KEY_FILE` names
   (`readPiGatewayApiKey`, `config.ts` — both set, unreadable or empty stops the boot; a file's key never enters
   `process.env`). The bundled compose stack uses ONLY the file: Noah's own uid-1000 0400 copy
   (`docker/pi/setup-host.sh`) mounted as the compose secret `/run/secrets/pi_gateway_api_key`. Same-uid caveat
   (#71): unlike the scrubbed env, that file stays readable to every uid-1000 process in Noah's container, the
   relayed MCP children (owner plugins, 공용 MCP stdio side, hex-ssh) included — until uid separation lands.
+  The second, optional, is pi's ADMIN key, which only the `/admin` proxy (`routes/piAdminProxy.ts`) injects: FILE
+  only (`PI_GATEWAY_ADMIN_API_KEY_FILE`, `readPiGatewayAdminApiKey`; an inline `PI_GATEWAY_ADMIN_API_KEY` stops
+  the boot, so the key never sits in `process.env`), the compose secret
+  `/run/secrets/pi_gateway_admin_api_key_noah` (Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`). It is
+  pi's full admin, so the same-uid caveat above weighs more for it than for the service key.
 
 ## On-prem GitHub CA
 - **One var `GITHUB_CA_CERT`** (PEM path, `applyCustomGithubCa` in `tlsCa.ts`, called from `index.ts`).

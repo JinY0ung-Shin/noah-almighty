@@ -4,9 +4,10 @@
 //    recompute (empty local state vs fresh server payload → "dirty") before
 //    load()'s continuation reads them — the f168116 guards skipped that first
 //    seed, leaving hexPolicy = {} so the tab crashed blank on
-//    hexPolicy[role.key][tool.name] and the saved model override rendered as
-//    an empty select whose save button would DELETE the override.
+//    hexPolicy[role.key][tool.name].
 // 2. A manual 새로고침 must still preserve unsaved edits (f168116's intent).
+// 3. pi-gateway's models are READ-ONLY here (the model override and vision
+//    policy are retired; pi-gateway's admin page owns them).
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,16 +26,18 @@ function json(body: unknown, status = 200): Response {
 const system = {
   agentRuntime: "pi",
   piModels: [
-    { id: "deepseek/v3", server: "vllm-a" },
-    { id: "qwen/coder", server: null },
+    {
+      id: "deepseek/v3",
+      server: "vllm-a",
+      default: true,
+      imageInput: true,
+      reasoning: { efforts: ["low", "high"], defaultEffort: "high" },
+    },
+    { id: "qwen/coder", server: null, imageInput: false, reasoning: null },
+    { id: "older-pi", server: null },
   ],
-  modelOverride: "deepseek/v3",
-  modelOverrideIgnored: false,
-  modelOverrideChoices: ["deepseek/v3", "qwen/coder"],
   observedModel: null,
   confluenceConfigured: false,
-  visionDefault: true,
-  modelVisionPolicy: {},
   hexSshTools: [
     { name: "ssh-read-lines", label: "원격 파일 읽기", category: "read" },
     { name: "remote-ssh", label: "원격 명령 실행", category: "execute" },
@@ -79,30 +82,42 @@ async function openSystemTab(): Promise<void> {
   await screen.findByText("시스템 정보");
 }
 
-function modelSelect(): HTMLSelectElement {
-  const el = document.querySelector<HTMLSelectElement>('select[name="model"]');
-  expect(el).toBeTruthy();
-  return el!;
-}
-
 describe("admin 시스템 tab seeding", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     stubAdminFetch();
   });
 
-  it("seeds the panels on first load: tab renders, saved policy + model shown", async () => {
+  it("seeds the panels on first load: tab renders, saved policy shown", async () => {
     await openSystemTab();
 
     // hex policy checkboxes reflect the SAVED policy (not an unseeded matrix).
     expect((screen.getByLabelText("소유자 원격 파일 읽기") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("같은 그룹원 원격 명령 실행") as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText("일반 동료 원격 파일 읽기") as HTMLInputElement).checked).toBe(false);
+  });
 
-    // The saved model override seeds the select — an empty value here offers a
-    // "기본값 사용" save that would silently delete the stored override.
-    expect(modelSelect().value).toBe("deepseek/v3");
-    expect([...modelSelect().options].map((o) => o.value)).toEqual(["", "deepseek/v3", "qwen/coder"]);
+  it("lists pi-gateway's models read-only and links to pi-gateway's admin page", async () => {
+    await openSystemTab();
+    const table = screen.getByRole("group", { name: "pi-gateway 모델 목록" });
+    const cells = [...table.children].map((cell) => (cell.textContent || "").trim());
+    expect(cells).toEqual([
+      "모델", "기본", "이미지 입력", "추론 단계",
+      "deepseek/v3 vllm-a", "기본", "지원", "low, high (기본 high)",
+      "qwen/coder", "—", "미지원", "사용 안 함",
+      "older-pi", "—", "알 수 없음 (지원으로 처리)", "알 수 없음",
+    ]);
+    const link = screen.getByRole("link", { name: "pi-gateway 관리 화면 열기" }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/admin/");
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener");
+    // Nothing to set here any more: no model select, no vision selectors, no save call.
+    expect(document.querySelector('select[name="model"]')).toBeNull();
+    expect(screen.queryByLabelText("qwen/coder 이미지 입력 지원")).toBeNull();
+    const text = document.body.textContent || "";
+    expect(text).toContain("배포(docker compose up) 때마다 저장소 기준으로 되돌아갑니다");
+    expect(text).not.toContain("MODEL_VISION");
+    expect(calls.some((c) => c.url.includes("/api/admin/model"))).toBe(false);
   });
 
   it("shows the pi runtime and pi's live model list, and nothing of the retired SDK setup", async () => {
@@ -111,33 +126,23 @@ describe("admin 시스템 tab seeding", () => {
     expect(screen.getByText("pi-gateway")).toBeTruthy();
     expect(screen.getByText("pi 모델")).toBeTruthy();
     expect(screen.getByTitle("제공: vllm-a").textContent).toBe("deepseek/v3");
-    // The per-model vision rows are keyed by pi model id.
-    expect(screen.getByLabelText("qwen/coder 이미지 입력 지원")).toBeTruthy();
     expect(screen.getByText("기본 스킬 플러그인에서 찾은 스킬 1개입니다.")).toBeTruthy();
     const text = document.body.textContent || "";
     for (const retired of ["구독 로그인", "setup-token", "인증 방식", "읽기 전용 도구", "ANTHROPIC", "SDK", "CLI v"]) {
       expect(text).not.toContain(retired);
     }
-    // The retired env-pinned model row (the vision card's prose also says "설정된 모델").
+    // The retired env-pinned model row.
     expect(screen.queryByText("설정된 모델")).toBeNull();
     expect(calls.some((c) => c.url.includes("/api/admin/claude-token"))).toBe(false);
   });
 
   it("says when there are no models (the local stub)", async () => {
-    stubAdminFetch({ agentRuntime: "local", piModels: [], modelOverride: null, modelOverrideChoices: [] });
+    stubAdminFetch({ agentRuntime: "local", piModels: [] });
     await openSystemTab();
     expect(screen.getByText("로컬 스텁")).toBeTruthy();
     expect(screen.getByText("없음 (로컬 스텁)")).toBeTruthy();
-  });
-
-  it("shows a stored override pi no longer offers as ignored, without pretending it is selectable", async () => {
-    stubAdminFetch({ modelOverride: "opus", modelOverrideIgnored: true });
-    await openSystemTab();
-    expect(modelSelect().value).toBe("opus");
-    const stale = [...modelSelect().options].find((o) => o.value === "opus")!;
-    expect(stale.disabled).toBe(true);
-    expect(stale.textContent).toContain("현재 제공되지 않음");
-    expect(document.getElementById("admin-model-status")?.textContent).toContain("무시하고 기본 모델을 사용 중");
+    expect(screen.getByText("로컬 스텁에는 모델이 없습니다.")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "pi-gateway 모델 목록" })).toBeNull();
   });
 
   it("keeps unsaved policy edits across a manual 새로고침", async () => {

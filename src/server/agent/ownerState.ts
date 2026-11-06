@@ -9,9 +9,6 @@ import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
-import { modelOverrideState } from "../modelOverride.js";
-import { catalogModelIds } from "./pi/modelCatalog.js";
-import { piServicesFor } from "./pi/piRuntime.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -35,11 +32,10 @@ import { piServicesFor } from "./pi/piRuntime.js";
  * `secretNames` only and leaves the Confluence derivation to each caller, so
  * neither output changes.
  *
- * NOTE on model: this exposes the raw resolution input (`modelOverride` admin
- * setting, checked against pi-gateway's last fetched model list) — composer pick
- * > admin override > pi-gateway's default model — not a formatted label, since
- * describe_system renders its own label and buildPrompt does not surface the
- * model at all.
+ * NOTE on model: there is no owner-independent model fact here any more — the
+ * admin model override is retired (pi-gateway's admin LLM page picks the
+ * default model), so a run's model is the composer pick or pi's default, both
+ * known to describe_system from its own context.
  */
 export interface OwnerState {
   /** Active personal keys for the external task API (POST /api/v1/avatar/tasks). */
@@ -74,10 +70,6 @@ export interface OwnerState {
   sharedSkillCount: number;
   /** Total times teammates learned this owner's skills (전수된 횟수, all skills). */
   sharedSkillLearnTotal: number;
-  /** Admin-selected model override runs use when the conversation picked none (null: none, or ignored). */
-  modelOverride: string | null;
-  /** A stored override pi-gateway does not currently offer — ignored, runs use pi-gateway's default model. */
-  modelOverrideIgnored: string | null;
   /** Experimental (beta) feature keys the owner enabled for this avatar (#50). */
   experimentalFeatures: string[];
   /**
@@ -137,10 +129,6 @@ export function summarizeOwnerState(
     get sharedSkillLearnTotal() {
       return store.countSkillLearnsForOwner(avatarUserId);
     },
-    ...(() => {
-      const override = modelOverrideState(store, catalogModelIds(piServicesFor(store, config).models.peek()));
-      return { modelOverride: override.effective, modelOverrideIgnored: override.ignored };
-    })(),
     experimentalFeatures: store.getExperimentalFeatures(avatarUserId),
     sharedAccount: store.isSharedAccount(avatarUserId),
     // Lazy like the counts above: only describe_system reads it (the prompt stays static).

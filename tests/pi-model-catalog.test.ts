@@ -5,13 +5,15 @@ import {
   catalogDefaultModelId,
   catalogEffortSupport,
   createPiModelCatalog,
-  warnRetiredModelMapEnv,
+  visionForCatalogModel,
+  warnRetiredModelEnv,
 } from "../src/server/agent/pi/modelCatalog.js";
 import { effortForModel } from "../src/server/effortLevels.js";
 import type { PiModel } from "../src/server/agent/pi/responsesClient.js";
 
 // pi-gateway's live model list (agent/pi/modelCatalog.ts): the only model
-// source the composer, the admin override/vision policy and every run read.
+// source the composer and every run read (Noah's own model override and vision
+// policy are retired — pi's admin LLM page owns both).
 
 /** A scripted `GET /v1/models`: each call takes the next answer (a list, or an Error to throw). */
 function scriptedPi(answers: (PiModel[] | Error)[]) {
@@ -63,6 +65,54 @@ describe("pi model catalog", () => {
     expect(c).toEqual(a);
   });
 
+  it("refetches after invalidate(), and a fetch in flight across it never counts as fresh (pi's LLM page changed)", async () => {
+    let now = 0;
+    const { client } = scriptedPi([[{ id: "m1" }], [{ id: "m1", imageInput: false }], [{ id: "m2" }]]);
+    const catalog = createPiModelCatalog(client, { now: () => now });
+    expect(await catalog.list()).toEqual([{ id: "m1", server: null }]);
+    catalog.invalidate();
+    // Well inside the TTL, the next lookup fetches again.
+    now += 1_000;
+    expect(await catalog.list()).toEqual([{ id: "m1", server: null, imageInput: false }]);
+    expect(client.listModels).toHaveBeenCalledTimes(2);
+    expect(await catalog.list()).toEqual([{ id: "m1", server: null, imageInput: false }]);
+    expect(client.listModels).toHaveBeenCalledTimes(2);
+
+    // A fetch that started before the change: its answer is served, but the next lookup fetches anew.
+    const releases: ((models: PiModel[]) => void)[] = [];
+    const slow = { listModels: vi.fn(() => new Promise<PiModel[]>((resolve) => releases.push(resolve))) };
+    const racing = createPiModelCatalog(slow, { now: () => now });
+    const stale = racing.list();
+    racing.invalidate();
+    const fresh = racing.list(); // does not join the stale fetch
+    expect(slow.listModels).toHaveBeenCalledTimes(2);
+    releases[1]([{ id: "new" }]);
+    expect(await fresh).toEqual([{ id: "new", server: null }]);
+    // The stale answer lands last: it never replaces the list fetched since.
+    releases[0]([{ id: "old" }]);
+    await stale;
+    expect(await racing.list()).toEqual([{ id: "new", server: null }]);
+    expect(slow.listModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("survives a client that throws synchronously (no stuck in-flight fetch)", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    let now = 0;
+    let fail = true;
+    const client = {
+      listModels: vi.fn((): Promise<PiModel[]> => {
+        if (fail) throw new Error("sync boom");
+        return Promise.resolve([{ id: "ok" }]);
+      }),
+    };
+    const catalog = createPiModelCatalog(client, { now: () => now });
+    expect(await catalog.list()).toEqual([]);
+    fail = false;
+    now += 10_000;
+    expect(await catalog.list()).toEqual([{ id: "ok", server: null }]);
+    warn.mockRestore();
+  });
+
   it("keeps the last good list when a refresh fails (stale-on-error), and retries later", async () => {
     let now = 0;
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
@@ -104,19 +154,55 @@ describe("pi model catalog", () => {
   });
 });
 
-describe("PI_MODEL_MAP retirement", () => {
+describe("retired model env vars", () => {
   it("warns once per boot while PI_MODEL_MAP is still set, and never reads it", () => {
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
     try {
-      warnRetiredModelMapEnv({});
-      warnRetiredModelMapEnv({ PI_MODEL_MAP: "  " });
+      warnRetiredModelEnv({});
+      warnRetiredModelEnv({ PI_MODEL_MAP: "  " });
       expect(warn).not.toHaveBeenCalled();
-      warnRetiredModelMapEnv({ PI_MODEL_MAP: '{"opus":"m1"}' });
+      warnRetiredModelEnv({ PI_MODEL_MAP: '{"opus":"m1"}' });
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0]![0])).toContain("PI_MODEL_MAP is set but ignored");
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("warns once per boot while MODEL_VISION is still set (pi's admin LLM page owns image input)", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    try {
+      warnRetiredModelEnv({ MODEL_VISION: " " });
+      expect(warn).not.toHaveBeenCalled();
+      warnRetiredModelEnv({ MODEL_VISION: "off" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain("MODEL_VISION is set but ignored");
+      warn.mockClear();
+      warnRetiredModelEnv({ MODEL_VISION: "on", PI_MODEL_MAP: "{}" });
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("visionForCatalogModel — pi's image setting alone", () => {
+  const models = [
+    { id: "eyes", server: null, default: true as const, imageInput: true },
+    { id: "text-llm", server: null, imageInput: false },
+    { id: "older", server: null },
+  ];
+  it("follows pi's per-model image input; undefined is pi's default model by its id", () => {
+    expect(visionForCatalogModel(models, "eyes")).toBe(true);
+    expect(visionForCatalogModel(models, "text-llm")).toBe(false);
+    expect(visionForCatalogModel(models, undefined)).toBe(true);
+    expect(visionForCatalogModel([{ ...models[0]!, imageInput: false }], null)).toBe(false);
+  });
+  it("reads vision ON wherever pi said nothing: an undescribed model, an unknown id, an empty list", () => {
+    expect(visionForCatalogModel(models, "older")).toBe(true);
+    expect(visionForCatalogModel(models, "gone")).toBe(true);
+    expect(visionForCatalogModel([], undefined)).toBe(true);
+    expect(visionForCatalogModel([{ id: "x", server: null, imageInput: false }], undefined)).toBe(true);
   });
 });
 

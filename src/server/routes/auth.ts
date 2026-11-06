@@ -7,10 +7,8 @@ import {
 import logger from "../logger.js";
 import { createRateLimiter } from "../rateLimit.js";
 import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_shared.js";
-import { catalogEffortSupport, catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { catalogEffortSupport, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
-import { effectiveModelOverride } from "../modelOverride.js";
-import { visionForCatalogModel } from "../modelVisionPolicy.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
 
 // ---- Auth ------------------------------------------------------------
@@ -150,8 +148,7 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
     // pi-gateway's live model list (cached; empty on the `local` stub and while
     // pi has never answered — the client then hides the picker).
     const models = await piServicesFor(store, config).models.list();
-    const visionPolicy = store.getModelVisionPolicy();
-    const defaultReasoning = catalogEffortSupport(models, effectiveModelOverride(store, catalogModelIds(models)));
+    const defaultReasoning = catalogEffortSupport(models, undefined);
     res.json({
       needsSetup: !store.hasAnyUser(),
       githubHost: config.githubHost,
@@ -161,34 +158,26 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // Lets onboarding show the Confluence PAT field only when the deployment
       // has a Confluence host configured (the PAT is useless otherwise).
       confluenceConfigured: Boolean(config.confluenceUrl),
-      // Deployment default for image input (MODEL_VISION). Per-MODEL support
-      // rides on modelSelection.models[].vision below; this global remains the
-      // fallback when no model resolves.
-      visionEnabled: config.visionEnabled,
       // Per-conversation model picker: the models pi-gateway offers right now.
-      // A pick is a pi model id; none (or one pi stopped offering) runs the
-      // admin override, else pi-gateway's default model.
+      // A pick is a pi model id; none (or one pi stopped offering) runs
+      // pi-gateway's default model. Image input is pi's own per-model setting
+      // (visionForCatalogModel); the retired deployment-wide MODEL_VISION flag
+      // (`visionEnabled`) is no longer sent.
       modelSelection: {
-        // `server` is pi's `owned_by`; `vision` pi's image setting ∘ the admin
-        // per-model policy ∘ MODEL_VISION (visionForCatalogModel).
-        // `reasoning`: the efforts pi lists for the model (null = it does not
-        // reason; absent = pi did not say) — the composer greys out what
-        // effortForModel would not send as picked.
+        // `server` is pi's `owned_by`; `vision` pi's image setting
+        // (visionForCatalogModel). `reasoning`: the efforts pi lists for the
+        // model (null = it does not reason; absent = pi did not say) — the
+        // composer greys out what effortForModel would not send as picked.
         models: models.map((model) => ({
           id: model.id,
           server: model.server,
-          vision: visionForCatalogModel(models, model.id, visionPolicy, config.visionEnabled),
+          vision: visionForCatalogModel(models, model.id),
           ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
         })),
         // Vision of the model a conversation gets when the user picked nothing:
-        // the admin override when pi offers it, else pi-gateway's default model
-        // by its id (mirrors runCapabilities and the chat route).
-        defaultVision: visionForCatalogModel(
-          models,
-          effectiveModelOverride(store, catalogModelIds(models)),
-          visionPolicy,
-          config.visionEnabled,
-        ),
+        // pi-gateway's default model by its id (mirrors runCapabilities and the
+        // chat route).
+        defaultVision: visionForCatalogModel(models, undefined),
         // That model's efforts, the same way (absent = unknown).
         ...(defaultReasoning !== undefined ? { defaultReasoning } : {}),
       },

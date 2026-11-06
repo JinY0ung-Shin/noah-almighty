@@ -163,9 +163,9 @@ limit shipped with it:
   had. Passing the run's resolution tier down as an OPTIONAL screenshot-op field (absent = standard, so
   every old build and every unwired caller keeps today's behavior) would restore full fidelity there.
 - **Why deferred:** the serving model's tier is not knowable from where the decision is made. The
-  composer offers pi-gateway's model ids (its live list, `agent/pi/modelCatalog.ts`) with an admin
-  per-model vision flag (`modelVisionPolicy.ts` / `visionForModel`) but no resolution tier, so "which
-  resolution tier will actually serve this run" needs new admin config or a probe — and guessing the
+  composer offers pi-gateway's model ids (its live list, `agent/pi/modelCatalog.ts`) with pi's
+  per-model image flag (`visionForCatalogModel`) but no resolution tier, so "which resolution tier
+  will actually serve this run" needs a new pi-gateway model field or a probe — and guessing the
   OTHER way (fitting to high-res for a standard-tier model) puts #66's ×1.6 coordinate skew straight
   back. Standard-tier fitting is exact for every Claude model, so the cost of waiting is fidelity only.
 - **risk:** med · **effort:** M · **breaking:** no

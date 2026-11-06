@@ -109,8 +109,9 @@ which check owner/group trust themselves.
 - **Per-conversation model picker**: the chat composer lists the models pi-gateway offers right now
   (its live `GET /v1/models`, configured on pi's admin LLM page) plus **기본 모델**, pi-gateway's default
   model, which runs when nothing is picked. The choice persists on the conversation and rides each turn;
-  a stored pick pi stops offering quietly runs the default. An admin may set a deployment-wide model
-  (관리자 → 시스템 → 모델) and per-model image-input support.
+  a stored pick pi stops offering quietly runs the default. Noah keeps no LLM settings of its own:
+  the default model and each model's image input are set on pi-gateway's admin LLM page (served at
+  `/admin/` to Noah admins).
 - **Per-user sandboxes, tiered data access**: each run executes in the ACTING user's own pi
   sandbox with the full tool set (shell, files) — a colleague chatting with your avatar works in
   the colleague's sandbox, never yours. What separates owners, group co-members (avatar-sharing
@@ -169,7 +170,7 @@ never copied into this repository.
    the keys both read (`LOG_LEVEL`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`,
    `PI_GATEWAY_HOME`, `PI_GATEWAY_SECRETS`) must mean the same thing for both; `NODE_EXTRA_CA_CERTS` is a
    **host** path.
-2. **Prepare the host** (idempotent; re-run whenever pi's service key changes). It reads `PI_GATEWAY_HOME`
+2. **Prepare the host** (idempotent; re-run whenever pi's service or admin key changes). It reads `PI_GATEWAY_HOME`
    (and `PI_GATEWAY_SECRETS`, `PI_GATEWAY_DIR`) from that `.env`:
    ```bash
    sudo docker/pi/setup-host.sh
@@ -184,8 +185,9 @@ never copied into this repository.
      [Sizing pi-gateway](#sizing-pi-gateway)), `SANDBOX_EGRESS_ALLOW`, `APT_MIRROR_URL`…
    - **Noah's half:** checks the workspaces owner, copies pi's service key to
      `$PI_GATEWAY_SECRETS/noah/pi_gateway_api_key` (uid 1000, 0400 — pi's one-copy-per-service convention;
-     compose mounts it into Noah as a secret, so the key never sits in `.env`) and checks that pi's admin key
-     is set.
+     compose mounts it into Noah as a secret, so the key never sits in `.env`), checks that pi's admin key
+     is set and copies it the same way to `$PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key` (Noah serves pi's
+     admin panel at `/admin`, below).
 3. **Build and start everything:**
    ```bash
    docker compose up -d --build
@@ -198,12 +200,14 @@ never copied into this repository.
    `mcp-broker` → `gateway` (healthy) → `pi-setup` → `noah-almighty`. `pi-setup` registers one broker entry per
    Noah MCP server, deploys Noah's system prompt (`scripts/pi-system-prompt.md`, live prompt `noah`) and turns
    off pi's `request_admin` / `present_file` built-ins; it is idempotent and re-runs on every `up`.
-4. **Configure the LLM in pi-gateway:** open pi's admin page (`http://127.0.0.1:8080/admin` on the host by
-   default; key: `$PI_GATEWAY_SECRETS/gateway/admin_api_key`) → **LLM**, add the corporate LLM server and its
+4. **Configure the LLM in pi-gateway:** open pi's admin page — on Noah's own port at `http://<host>:48787/admin/`
+   (alias `/settings/pi`) once you are signed in as a Noah admin (step 5; Noah injects pi's admin key, so there is no
+   second login), or on the host at `http://127.0.0.1:8080/admin` with the key in
+   `$PI_GATEWAY_SECRETS/gateway/admin_api_key` → **LLM**, add the corporate LLM server and its
    models and pick a default (pi-gateway's `docs/OPERATIONS.md` §3.3). Until then every chat turn fails with
    pi's `llm_not_configured`. The chat composer offers exactly the models configured there (a conversation that
    picks none runs pi's default model). A model whose **image** input is off there is text-only in Noah too
-   (attached images reach it as files; Noah's per-model vision setting can only turn vision off), and its
+   (attached images reach it as files; pi's setting is the only one — Noah has none of its own), and its
    reasoning **efforts** are the levels Noah sends: a composer pick the model does not list runs at the closest
    listed level below it, or at the model's default effort (the composer greys such levels out).
 5. Open `http://<host>:48787`, click **회원가입**, and create the first account (it becomes admin).
@@ -213,13 +217,14 @@ never copied into this repository.
 | | |
 |---|---|
 | Noah → pi | `http://gateway:8080` over pi's `edge` network, with pi's service key from the compose secret (`PI_GATEWAY_API_KEY_FILE`). |
+| pi's admin panel | Served on Noah's port at `/admin/` (alias `/settings/pi`) to Noah ADMINS only: Noah forwards to `http://gateway:8080/admin…` with pi's admin key from its own compose secret (`PI_GATEWAY_ADMIN_API_KEY_FILE`), drops Noah's cookies, refuses cross-origin writes and audits every write (`pi_admin_proxy`). What `pi-setup` applies (Noah's prompt `noah`, its MCP registrations, the disabled pi built-ins) is re-applied on every `up` — edit those in this repository, not there. |
 | pi's broker → Noah `/mcp/<server>` | `http://noah-almighty:48787` over `noah-mcp`, an internal network only the broker and Noah are on. The broker has a pinned address there (`NOAH_MCP_BROKER_IP`, default `172.16.248.10` in `NOAH_MCP_SUBNET` `172.16.248.0/24` — outside Docker's default address pools, so no auto-allocated network lands on it), and Noah's `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that address, so no other container, and no published-port client, passes `/mcp`'s source check; each call still needs a per-run token Noah mints itself. Change both variables if the subnet collides with a network your host routes to. |
 | sandboxes | No network at all (`network_mode: none`, pi's sandboxd). Their only exit is pi's egress-proxy, which opens only what pi's `SANDBOX_EGRESS_ALLOW` lists — keep Noah's address out of it: the broker, not the sandbox, calls Noah. |
 | workspaces | `$PI_GATEWAY_HOME/workspaces` is bind-mounted read-write into Noah at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`): Noah stages attachments, captures and Confluence files into each user's sandbox folder and reads shared files and deck previews from it. uid 1000 on both sides. |
 | sandbox image | `noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}` ([docker/pi-sandbox](docker/pi-sandbox/README.md)), built FROM pi's own `pi-gateway/sandbox:latest` and set as sandboxd's `SANDBOX_IMAGE`; pi's own image keeps its own tag. It carries the pptx skill's converter (Chromium headless shell, the pinned Python set, the deck fonts), so `PI_DECK_SANDBOX=true` is fixed. |
 | Noah image | No agent runs in it any more. It keeps what the server itself runs: git (server-side repository work), `gh` (create_repo), LibreOffice + poppler + the deck fonts (share_file's approximate previews), python3-cryptography/paramiko (SSH key generation, known_hosts), the hex-ssh MCP server (relayed to pi), and the MCP bridge scripts. No Chromium, Python package set, uv or ripgrep (those are in the sandbox image). |
 
-docker-compose.yml FIXES `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_KEY_FILE`, `PI_WORKSPACES_DIR`,
+docker-compose.yml FIXES `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_KEY_FILE`, `PI_GATEWAY_ADMIN_API_KEY_FILE`, `PI_WORKSPACES_DIR`,
 `PI_DECK_SANDBOX` and the default `NOAH_MCP_PUBLIC_URL` / `NOAH_MCP_ALLOWED_CIDRS` for the container; `.env`
 cannot override the fixed ones.
 
@@ -290,8 +295,17 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
 
 ### Upgrade
 
-- **Noah:** `git pull && git submodule update --init`, then `docker compose up -d --build`. The submodule
-  carries the pi-gateway pin, so a pin move arrives with the pull. `pi-setup` re-registers what changed.
+- **Noah:** `git pull && git submodule update --init`, then `sudo docker/pi/setup-host.sh`, then
+  `docker compose up -d --build`. The submodule carries the pi-gateway pin, so a pin move arrives with the pull.
+  `pi-setup` re-registers what changed. Run `setup-host.sh` on EVERY upgrade: it is idempotent (it keeps what
+  exists and only refreshes Noah's key copies), and a release can add a host secret file Compose requires — the
+  `/admin` panel's `noah/pi_gateway_admin_api_key` is one. Without that file `docker compose up` stops with
+  `bind source path does not exist` and the new Noah container is never created.
+- **After rotating a pi key** (`$PI_GATEWAY_SECRETS/gateway/api_key` or `admin_api_key`): re-run
+  `sudo docker/pi/setup-host.sh`, then `docker compose up -d --force-recreate noah-almighty`. Noah reads both
+  keys once at boot, and its secret mount still points at the old file, so a plain `up -d` keeps the old key. A
+  stale admin key makes pi refuse the `/admin` panel and, after repeated failures, lock Noah's address out for
+  15 minutes; that lock outlasts the fix, so wait it out after recreating.
 - **Deployments from before the submodule** (pi-gateway checked out at `../pi-gateway`): pi's `.env` lives
   there, and without it pi's compose loses `DOCKER_GID`, `GATEWAY_BIND_ADDR` and the rest. Either copy it once
   (`cp ../pi-gateway/.env vendor/pi-gateway/.env`) and retire the old checkout, or keep using it with
@@ -370,18 +384,28 @@ included.
    `NODE_EXTRA_CA_CERTS` to the CA's **host** path or remove it (the old in-image path
    `/usr/local/share/ca-certificates/extra-proxy-ca.crt` does not exist on the host and stops `up`); remove
    `AGENT_RUNTIME`, `DECK_CONVERTER`, `UV_DEFAULT_INDEX`/`UV_INDEX` and the Claude-SDK-only keys (`ANTHROPIC_*`,
-   `MAX_TURNS`, `AUTO_COMPACT_WINDOW`, `READONLY_TOOLS`) — Noah ignores them. Move the model endpoint and its
-   credentials to pi-gateway's LLM page; the admin UI's Claude subscription token is gone.
-4. `sudo docker/pi/setup-host.sh` (First boot step 2), `docker compose up -d --build`, then configure the LLM
+   `MAX_TURNS`, `AUTO_COMPACT_WINDOW`, `READONLY_TOOLS`, `MODEL_VISION`) — Noah ignores them. Move the model endpoint and its
+   credentials to pi-gateway's LLM page; the admin UI's Claude subscription token, model override and per-model
+   vision policy are gone (pi's LLM page sets the default model and each model's image input).
+4. `sudo docker/pi/setup-host.sh` (First boot step 2 — REQUIRED before `up`: it also writes Noah's copy of pi's admin
+   key, a compose secret; without the file `docker compose up` fails), `docker compose up -d --build`, then configure the LLM
    in pi (First boot step 4).
 5. **Rollback** to the SDK-era release: `git checkout` that release, re-tag the old image as `latest`, and
    `docker compose up -d --no-build noah-almighty`. pi's services keep running until
    `docker compose down` from the new checkout; nothing of Noah's data volume depends on them. The first pi boot
-   did change two things the old release reads, though: it DELETED the stored Claude subscription token
-   (`claude_oauth_token` — paste it again in the old admin UI, or restore it from
-   `APP_DATA_DIR/backups/pre-retire-<stamp>.db`) and MOVED the CLI transcripts (`agent-sessions`) to
-   `APP_DATA_DIR/retired/<stamp>/` — move them back, or older conversations continue from their text history
-   only. Turns taken on pi have no CLI transcript either way.
+   did change three things the old release reads, though:
+   - it DELETED the stored Claude subscription token (`claude_oauth_token`) — paste it again in the old admin UI;
+   - it DELETED Noah's own LLM settings, the admin model override (`agent_model_override`) and the per-model
+     vision policy (`model_vision_policy`) — set them again in the old admin UI (관리자 → 시스템 → 모델). Until
+     then, a conversation that picked no model runs the old release's default tier instead of the model the admin
+     had pinned, and a tier that was marked text-only reads as image-capable again, so an image turn on a
+     text-only model fails;
+   - it MOVED the CLI transcripts (`agent-sessions`) to `APP_DATA_DIR/retired/<stamp>/` — move them back, or
+     older conversations continue from their text history only. Turns taken on pi have no CLI transcript either
+     way.
+
+   All three deleted values are still in `APP_DATA_DIR/backups/pre-retire-<stamp>.db` (same `app_config` keys,
+   readable with the same `SESSION_SECRET`) if you would rather copy the rows back than re-enter them.
 
 The optional egress overlay ([docs/egress-policy.md](docs/egress-policy.md)) is not yet supported together
 with the bundled pi-gateway: its firewall admits only its own proxy, so Noah cannot reach pi's gateway.
@@ -431,10 +455,11 @@ backup and quarantine).
 | `SECURE_COOKIES` | `true` to mark the session cookie `Secure` (HTTPS-only). Leave unset for plain-HTTP deployments (e.g. local docker-compose) or the cookie is never sent back and login fails. |
 | `AGENT_RUNTIME` | `pi` (default; every turn runs on pi-gateway — see `docs/architecture/pi-runtime.md`) or `local` (deterministic offline stub for tests). `claude` is retired and stops the boot. **Fixed to `pi` by docker-compose.yml.** |
 | `PI_GATEWAY_URL` / `PI_GATEWAY_API_KEY` / `PI_GATEWAY_API_KEY_FILE` | The pi-gateway origin and its service key — inline, or a file holding only the key (trimmed). Set ONE: both, or an unreadable/empty file, stops the boot. The key is server-only (it can run turns as any user): an inline key is scrubbed from the process env after boot, a file's key never enters it. **Fixed by docker-compose.yml** (`http://gateway:8080`, the compose secret `/run/secrets/pi_gateway_api_key`; a `PI_GATEWAY_API_KEY` in `.env` would stop the boot); set them yourself only for a native run. |
+| `PI_GATEWAY_ADMIN_API_KEY_FILE` | A file holding ONLY pi's admin key (trimmed). Set → Noah serves pi-gateway's admin panel at `/admin/` (alias `/settings/pi`) to Noah admins, injecting the key; unset → `/admin` answers 503. An inline `PI_GATEWAY_ADMIN_API_KEY`, or an unreadable/empty file, stops the boot. **Fixed by docker-compose.yml** (`/run/secrets/pi_gateway_admin_api_key_noah`, Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`). |
 | `PI_WORKSPACES_DIR` | Path of pi's `$PI_GATEWAY_HOME/workspaces` as Noah sees it (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. **Fixed by docker-compose.yml** (`/srv/pi-workspaces`, a bind mount of `$PI_GATEWAY_HOME/workspaces`). |
 | `NOAH_MCP_PUBLIC_URL` | The base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (registered by the `pi-setup` service through `scripts/pi-register-mcp.mjs`, logged at boot). Compose default `http://noah-almighty:<PORT>`; set it (with `NOAH_MCP_HOST_ALIAS`) only for native TLS. |
 | `NOAH_MCP_ALLOWED_CIDRS` | Comma-separated addresses/CIDRs (IPv4/IPv6) allowed to reach `/mcp/<server>`, matched on the TCP peer (never `X-Forwarded-For`); others get 403 before the token is read. An invalid entry stops the boot. Compose default: the broker's pinned address, `${NOAH_MCP_BROKER_IP}/32`. Unset (native run) = open — then bind/firewall the port to the broker's network. |
-| `PI_MODEL_MAP` | **Retired** — the composer now offers pi-gateway's live model list (2026-10-31). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. Stored picks that named a tier (`opus`, `sonnet`, …) are not migrated: they run pi-gateway's default model until a model is picked again, and an admin model setting naming a tier is reported as ignored (관리자 → 시스템). |
+| `PI_MODEL_MAP` | **Retired** — the composer now offers pi-gateway's live model list (2026-10-31). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. Stored picks that named a tier (`opus`, `sonnet`, …) are not migrated: they run pi-gateway's default model until a model is picked again. Noah's own admin model setting is retired too (2026-11-01): pi-gateway's admin LLM page picks the default model. |
 | `PI_DECK_SANDBOX` | `true` when the pi sandbox image carries the deck toolchain (`docker/pi-sandbox`). **Fixed to `true` by docker-compose.yml**, which builds and wires that image. |
 | `EXTERNAL_AGENTS_JSON` | **Retired** — external avatars were removed (2026-10-29). If still set, the server ignores it and logs one warning at boot; delete it from `.env`. The first boot of that release also permanently deletes every external-avatar conversation (messages, canvases, share links, attachments), the admin-managed external-avatar registry and their profile images. |
 | `PI_GATEWAY_DIR` / `PI_GATEWAY_HOME` / `PI_GATEWAY_SECRETS` | Compose only. The pi-gateway checkout (default the `./vendor/pi-gateway` submodule), pi's data root (**required**) and secrets dir (default `$PI_GATEWAY_HOME/secrets`) — the same values as pi-gateway's `.env`. |

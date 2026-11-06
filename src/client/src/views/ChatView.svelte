@@ -518,18 +518,16 @@
   }
 
   // Vision support for the model THIS pane would use: the pane's pick when pi
-  // still offers it, else the default model's (admin override / pi default).
-  // Mirrors the server's resolution (which also enforces it on upload); a server
-  // without a picker falls back to the global flag.
+  // still offers it, else pi-gateway's default model's. Mirrors the server's
+  // resolution (which also enforces it on upload); unknown reads as vision on,
+  // like the server (visionForCatalogModel).
   function paneVisionEnabled(item: ChatPane, state: ReturnType<typeof readState> = readState()): boolean {
-    const boot = state.bootstrap;
-    if (!boot) return true;
-    const sel = boot.modelSelection;
-    if (!sel) return boot.visionEnabled !== false;
+    const sel = state.bootstrap?.modelSelection;
+    if (!sel) return true;
     const model = knownModel(item.model, sel.models);
     const entry = model ? sel.models.find((m) => m.id === model) : undefined;
     if (entry) return entry.vision !== false;
-    return (sel.defaultVision ?? boot.visionEnabled) !== false;
+    return sel.defaultVision !== false;
   }
 
   // pi's reasoning efforts for the model THIS pane would use (same resolution as

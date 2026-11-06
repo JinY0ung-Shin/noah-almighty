@@ -17,7 +17,7 @@ import { retirePiColleagueRepoCopies } from "./retirePiColleagueRepoCopies.js";
 import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import { sweepPiConsultationSandboxes } from "./agent/pi/piRuntime.js";
-import { warnRetiredModelMapEnv } from "./agent/pi/modelCatalog.js";
+import { warnRetiredModelEnv } from "./agent/pi/modelCatalog.js";
 import {
   deckToolchainLogFields,
   probeDeckRendering,
@@ -64,9 +64,10 @@ retirePiColleagueRepoCopies(services);
 // quarantine the whole folder once, after the retirements above took their own
 // transcripts out of it (best effort; a marker ends it).
 retireAgentSessions(services);
-// PI_MODEL_MAP is retired (the composer shows pi-gateway's live model list):
-// while it is still set, every boot logs one warning that it is ignored.
-warnRetiredModelMapEnv();
+// PI_MODEL_MAP and MODEL_VISION are retired (pi-gateway's model list and admin
+// LLM page own models and image input): while one is still set, every boot logs
+// one warning that it is ignored.
+warnRetiredModelEnv();
 // Avatar consultations run in a sandbox of their own, removed when the run ends;
 // remove the ones a crash or restart left behind (best effort).
 const sweptConsultations = sweepPiConsultationSandboxes(services.config);

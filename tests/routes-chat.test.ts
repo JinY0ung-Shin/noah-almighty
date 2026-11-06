@@ -131,9 +131,10 @@ function boot() {
 }
 
 /** pi-gateway offers exactly `ids` (`GET /v1/models`) to every route and run of `services`. */
-function offerModels(services: ReturnType<typeof createServices>, ids: string[]): void {
+/** pi offers `ids`; those in `textOnly` are reported without image input (pi's own LLM setting). */
+function offerModels(services: ReturnType<typeof createServices>, ids: string[], textOnly: string[] = []): void {
   piServicesFor(services.store, services.config).models = createPiModelCatalog({
-    listModels: async () => ids.map((id) => ({ id })),
+    listModels: async () => ids.map((id) => (textOnly.includes(id) ? { id, imageInput: false } : { id })),
   });
 }
 
@@ -600,13 +601,15 @@ describe("chat-stream request validation", () => {
     expect(H.requests).toHaveLength(0);
   });
 
-  it("stages image uploads as workspace FILES when the deployment model has no vision", async () => {
+  it("stages image uploads as workspace FILES when pi's default model has no vision", async () => {
     const services = createServices({
       dataDir: tempDir,
       agentRuntime: "pi",
       pi: PI_CONFIG,
       sessionSecret: "test",
-      visionEnabled: false,
+    });
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "text-llm", default: true, imageInput: false }],
     });
     const app = createApp(services);
     const owner = request.agent(app);
@@ -643,15 +646,14 @@ describe("chat-stream request validation", () => {
     expect(stored?.attachments?.[0].kind).toBe("image");
   });
 
-  it("picks image content blocks vs staged files by the per-model vision policy of this turn's model", async () => {
+  it("picks image content blocks vs staged files by pi's image setting for this turn's model", async () => {
     const services = createServices({
       dataDir: tempDir,
       agentRuntime: "pi",
       pi: PI_CONFIG,
       sessionSecret: "test",
     });
-    offerModels(services, ["sonnet", "opus"]);
-    services.store.setModelVisionPolicy({ sonnet: false });
+    offerModels(services, ["sonnet", "opus"], ["sonnet"]);
     const app = createApp(services);
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "tiervision").expect(201)).body.user.id as string;
@@ -671,7 +673,7 @@ describe("chat-stream request validation", () => {
     expect(staged.startsWith(path.join(workspaceDirFor(services.config, ownerId, "conv-tv"), "attachments") + path.sep)).toBe(true);
     expect(fs.readFileSync(staged)).toEqual(PNG_BYTES);
 
-    // A vision model (no explicit entry → inherits the on default) still feeds the
+    // A vision model (pi said nothing about its input → read as on) still feeds the
     // model image content blocks — AND stages the same upload as a workspace
     // file, so an image the avatar sees is also one it can place into a deck.
     await owner
@@ -690,7 +692,7 @@ describe("chat-stream request validation", () => {
     expect(Buffer.from(vision.images![0].data, "base64")).toEqual(PNG_BYTES);
   });
 
-  it("sends a 기본 모델 image turn as FILES when pi's default model is text-only, by policy or by pi's own setting (review #12)", async () => {
+  it("sends a 기본 모델 image turn as FILES when pi's default model is text-only by pi's own setting (review #12)", async () => {
     const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
     const app = createApp(services);
     const owner = request.agent(app);
@@ -704,24 +706,16 @@ describe("chat-stream request validation", () => {
       expect(H.requests).toHaveLength(1);
       return H.requests[0]!;
     };
-    // The admin set pi's default model 미지원; MODEL_VISION stays on.
-    piServicesFor(services.store, services.config).models = createPiModelCatalog({
-      listModels: async () => [{ id: "text-llm", default: true }, { id: "vis-llm" }],
-    });
-    services.store.setModelVisionPolicy({ "text-llm": false });
-    let r = await turn("conv-dv1");
-    expect(r.images).toBeUndefined();
-    expect(r.imageFiles).toHaveLength(1);
-    // pi reports the default model without image input: the 지원 policy cannot turn it on.
+    // pi reports the default model without image input.
     piServicesFor(services.store, services.config).models = createPiModelCatalog({
       listModels: async () => [{ id: "text-llm", default: true, imageInput: false }, { id: "vis-llm", imageInput: true }],
     });
-    services.store.setModelVisionPolicy({ "text-llm": true });
-    r = await turn("conv-dv2");
+    // A vision policy an older release stored is never consulted.
+    services.store.setAppSecret("model_vision_policy", JSON.stringify({ "text-llm": true }));
+    const r = await turn("conv-dv2");
     expect(r.images).toBeUndefined();
     expect(r.imageFiles).toHaveLength(1);
     // Control: the vision model still gets image blocks.
-    services.store.setModelVisionPolicy({});
     H.requests.length = 0;
     await owner
       .post("/api/chat/stream")
@@ -732,8 +726,7 @@ describe("chat-stream request validation", () => {
 
   it("stages the anchor's images as files on a vision re-feed too (regenerate and edit-rewind)", async () => {
     const services = createServices({ dataDir: tempDir, agentRuntime: "pi", pi: PI_CONFIG, sessionSecret: "test" });
-    offerModels(services, ["sonnet", "opus"]);
-    services.store.setModelVisionPolicy({ sonnet: false });
+    offerModels(services, ["sonnet", "opus"], ["sonnet"]);
     const app = createApp(services);
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "refeed").expect(201)).body.user.id as string;
@@ -1592,6 +1585,24 @@ describe("chat error handling", () => {
     const assistant = store.listMessages(ownerId, "conv-err2").find((m) => m.role === "assistant")!;
     expect(assistant.content.startsWith("부분 결과")).toBe(true);
     expect(assistant.response?.thinking).toBe("생각");
+  });
+
+  it("never offers pi's default model as the alternative when it is the one that just failed (no pick)", async () => {
+    const { services, app } = boot();
+    piServicesFor(services.store, services.config).models = createPiModelCatalog({
+      listModels: async () => [{ id: "deepseek/v3", default: true }, { id: "glm-4" }],
+    });
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "err4").expect(201)).body.user.id as string;
+    H.retryable = true;
+    H.impl = async () => {
+      throw new Error("overloaded");
+    };
+    const res = await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-err4", message: "가라" }).expect(200);
+    const errData = parseSse(res.text).find((f) => f.event === "error")!.data as { error: string };
+    expect(errData.error).toBe(
+      "지금 기본 모델이 일시적으로 응답하지 못했어요 (서버 과부하 또는 일시적 오류). 입력창의 모델 선택에서 다른 모델(glm-4)로 바꿔 다시 시도해 보세요.",
+    );
   });
 
   it("names pi's default model in the nudge, and omits the list when pi offers no other model", async () => {

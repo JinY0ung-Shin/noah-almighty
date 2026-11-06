@@ -68,7 +68,6 @@ import {
   type DecodedChatImage,
   type DecodeError,
 } from "../chatImages.js";
-import { visionForCatalogModel } from "../modelVisionPolicy.js";
 import { isPreviewableExtension, renderDocumentPreviews } from "../deckRender.js";
 import { loadConverterPreviews } from "../deckPreview.js";
 import {
@@ -101,8 +100,7 @@ import {
   withDownloadExtension,
 } from "../chatFiles.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
-import { effectiveModelOverride } from "../modelOverride.js";
-import { MAX_MODEL_ID_CHARS, catalogModel, catalogModelIds } from "../agent/pi/modelCatalog.js";
+import { MAX_MODEL_ID_CHARS, catalogDefaultModelId, catalogModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
   attachRunClient,
@@ -908,24 +906,18 @@ export async function executeChatTurn(
   }
 
   // This turn's model, mirroring runCapabilities' resolution (this turn's pick >
-  // stored pick > admin override > pi-gateway's default model, each only while
-  // pi offers it — its live list, read AFTER the rewind plan above). Its vision
-  // (pi's image setting ∘ admin per-model policy ∘ MODEL_VISION, pi's default
-  // model looked up by its id — visionForCatalogModel) gates the upload below
-  // AND the regenerate image re-feed; the run itself recomputes the same value.
-  // It also names the model a transient failure bubble blames.
+  // stored pick > pi-gateway's default model, the pick only while pi offers it
+  // — its live list, read AFTER the rewind plan above). Its vision (pi's image
+  // setting, pi's default model looked up by its id — visionForCatalogModel)
+  // gates the upload below AND the regenerate image re-feed; the run itself
+  // recomputes the same value. It also names the model a transient failure
+  // bubble blames.
   const piModels = await piServicesFor(store, config).models.list();
-  const turnModel =
-    catalogModel(
-      piModels,
-      requestedModel === null ? store.getConversationModel(ownerUserId, conversationId) : requestedModel,
-    ) ?? effectiveModelOverride(store, catalogModelIds(piModels)) ?? undefined;
-  const turnVisionEnabled = visionForCatalogModel(
+  const turnModel = catalogModel(
     piModels,
-    turnModel,
-    store.getModelVisionPolicy(),
-    config.visionEnabled,
+    requestedModel === null ? store.getConversationModel(ownerUserId, conversationId) : requestedModel,
   );
+  const turnVisionEnabled = visionForCatalogModel(piModels, turnModel);
   // Text-only model for this turn ("file mode"): images are NOT rejected. As on
   // every local image turn they are staged as FILES in the conversation scratch
   // workspace (below), and here the model receives ONLY their paths
@@ -2624,9 +2616,11 @@ export async function executeChatTurn(
       // lead with `detail` appended: the runtime's own text is English, so it can never
       // be the whole bubble. The technical `detail` still goes to logs/audit above.
       const failedModelLabel = turnModel ? `${turnModel} 모델` : "기본 모델";
+      // No pick = pi's default model ran: never offer the model that just failed.
+      const failedModel = turnModel ?? catalogDefaultModelId(piModels);
       const alternatives = piModels
         .map((model) => model.id)
-        .filter((id) => id !== turnModel)
+        .filter((id) => id !== failedModel)
         .join(", ");
       // OUR deadline wins the message: an abort reads as the user's doing, and
       // no user was there to press stop on an unattended task.
@@ -3126,7 +3120,7 @@ export function createChatRouter({
       // Per-conversation pi model id chosen in the composer (all viewers, not just
       // the owner). A sent id is stored as is — NOT checked against pi's list here,
       // so a pick survives pi being briefly unreachable; the run applies it only
-      // while pi offers it (else the admin override / pi's default model). ""
+      // while pi offers it (else pi's default model). ""
       // clears back to the default; nothing sent → null = keep whatever is stored.
       // The client owns this and sends it on each turn, so it works from a brand-new
       // chat with no row yet. The composer ALSO writes the choice to a per-user

@@ -57,11 +57,37 @@ function readPiGatewayApiKey(): string {
 }
 
 /**
+ * pi's ADMIN key, for the `/admin` panel proxy (`routes/piAdminProxy.ts`): read
+ * ONLY from the file `PI_GATEWAY_ADMIN_API_KEY_FILE` names (the bundled stack
+ * mounts Noah's own uid-1000 0400 copy). Unset → the proxy is off. An inline
+ * `PI_GATEWAY_ADMIN_API_KEY` stops the boot: it would sit in process.env, where
+ * every child Noah spawns could inherit it. Like the service key, a set but
+ * unreadable/empty file stops the boot, and no message carries the key.
+ */
+function readPiGatewayAdminApiKey(): string | undefined {
+  if (env("PI_GATEWAY_ADMIN_API_KEY")) {
+    throw new Error("PI_GATEWAY_ADMIN_API_KEY is not read: put pi's admin key in a file and set PI_GATEWAY_ADMIN_API_KEY_FILE.");
+  }
+  const file = env("PI_GATEWAY_ADMIN_API_KEY_FILE");
+  if (!file) return undefined;
+  let key: string;
+  try {
+    key = fs.readFileSync(file, "utf8").trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "read error";
+    throw new Error(`PI_GATEWAY_ADMIN_API_KEY_FILE (${file}) cannot be read (${code}).`);
+  }
+  if (!key) throw new Error(`PI_GATEWAY_ADMIN_API_KEY_FILE (${file}) is empty.`);
+  if (/\s/.test(key)) throw new Error(`PI_GATEWAY_ADMIN_API_KEY_FILE (${file}) must hold the key alone on one line.`);
+  return key;
+}
+
+/**
  * pi-gateway settings, read only when `AGENT_RUNTIME=pi`. The gateway URL and
  * service key are REQUIRED there: without them every run would fail, so the
  * boot refuses instead. The models come from pi's live list (`GET /v1/models`,
- * `agent/pi/modelCatalog.ts`); the retired `PI_MODEL_MAP` is not read
- * (`warnRetiredModelMapEnv`).
+ * `agent/pi/modelCatalog.ts`); the retired `PI_MODEL_MAP` and `MODEL_VISION`
+ * are not read (`warnRetiredModelEnv`).
  */
 function loadPiRuntimeConfig(): PiRuntimeConfig {
   const gatewayUrl = env("PI_GATEWAY_URL");
@@ -81,9 +107,11 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
   const workspacesDir = env("PI_WORKSPACES_DIR");
   // Validated here so a typo fails the boot instead of opening or closing /mcp.
   const mcpAcl = parseMcpNetworkAcl(env("NOAH_MCP_ALLOWED_CIDRS"));
+  const adminApiKey = readPiGatewayAdminApiKey();
   return {
     gatewayUrl,
     apiKey,
+    ...(adminApiKey ? { adminApiKey } : {}),
     ...(workspacesDir ? { workspacesDir: path.resolve(workspacesDir) } : {}),
     ...(env("NOAH_MCP_PUBLIC_URL") ? { mcpPublicUrl: env("NOAH_MCP_PUBLIC_URL") } : {}),
     ...(mcpAcl ? { mcpAllowedCidrs: mcpAcl.cidrs } : {}),
@@ -179,9 +207,6 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // the image at build time and exposed under this fixed name (see Dockerfile).
     // Override with HEX_SSH_COMMAND when the global bin isn't available.
     hexSshCommand: env("HEX_SSH_COMMAND", "hex-ssh-mcp"),
-    // MODEL_VISION=off marks the serving backend as text-only: image uploads and
-    // Confluence image blocks are cut off BEFORE they can 400 a whole turn.
-    visionEnabled: env("MODEL_VISION", "on").trim().toLowerCase() !== "off",
     // Corp-policy line in the browser-bridge install guide pointing the unzip
     // step at the upload-approved "Multimedia" folder. Hidden unless the
     // operator opts in.
