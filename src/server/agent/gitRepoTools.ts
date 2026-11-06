@@ -16,6 +16,7 @@ import {
   piRepoCopyStatus,
   copyChangeCount,
   copyHasChanges,
+  piRepoCopyMatchesCommit,
   removePiRepoCopy,
   setPiRepoCopyHolder,
   type PiRepoCopyRef,
@@ -26,12 +27,15 @@ import {
   configureGitRepoIdentity,
   defaultGitRepoName,
   ensureGitRepoClone,
+  fastForwardGitRepo,
+  fetchRegisteredCloneHead,
   gitRepoClonePath,
   gitRepoContextFor,
   gitRepoContextFromRecord,
   normalizeGitRepoName,
-  pushGitRepo,
+  pushGitRepoDetailed,
   removeGitRepoClone,
+  type GitRepoContext,
 } from "../gitRepos.js";
 
 export interface GitRepoToolsContext {
@@ -215,6 +219,34 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
   /** The refusal for a copy whose own git HEAD left its base (checkout/switch/reset/rebase in the sandbox). */
   const divergedRefusal = (lead: string, name: string, status: { base: string; tip: string | null }): string =>
     `${lead}: the git HEAD of your sandbox copy ${piRepoCopySandboxPath(ctx.avatarUserId, name)} is no longer on the commit Noah gave it (base ${status.base.slice(0, 8)}, copy HEAD ${status.tip ? status.tip.slice(0, 8) : "unreadable"}) — a checkout, switch, reset or rebase in the sandbox replaced its files with another state, and applying them would silently undo other work. Nothing was applied. If you only switched branches, switch the copy back to the branch it was on (your uncommitted edits ride along) and try again; otherwise call mcp__git_repo__open_repo with name='${name}' for a fresh copy (this one is moved aside, not deleted) and redo the edits there. Never checkout/switch/reset/rebase in the copy.`;
+  /**
+   * sync_repo refusal for a copy whose git HEAD moved AHEAD of its base with
+   * commits made in the sandbox (#81): those are never imported, so their
+   * files count as uncommitted — say so, and name every way out.
+   */
+  const sandboxCommitsRefusal = (
+    name: string,
+    copyPath: string,
+    count: number | null,
+    status: { base: string; tip: string },
+    from: string | null,
+    incoming: string | null,
+  ): string =>
+    `Not synced: your sandbox copy ${copyPath} differs from Noah's clone of '${name}' in ${count === null ? "some" : count} file(s). Its git HEAD ${status.tip.slice(0, 8)} is AHEAD of the commit Noah gave it (${status.base.slice(0, 8)}) with commits made inside the sandbox (a merge or commit there), and Noah never imports sandbox git commits — only the copy's files — so those files count as uncommitted even though \`git status\` is clean. Ways out: ` +
+    `(1) keep the file changes as ONE new commit in Noah's clone (new SHA; the sandbox commits' authors and messages are not kept): mcp__git_repo__commit with name='${name}', then sync again; ` +
+    `(2) bring the commits over WITH their SHAs, authors and messages: they must come from another registered repo's clone — register their origin with mcp__git_repo__register_repo (owner) if it is not, sync it, then call mcp__git_repo__sync_repo with name='${name}' and from='<that repo>'` +
+    (from && incoming ? fromMismatch(from, incoming) : "") +
+    `; a copy whose files equal that repo's HEAD is accepted as is; ` +
+    `(3) discard them (and every other edit in the copy): move the copy folder out of the way (e.g. \`mv ${copyPath} ${copyPath}.discard\`), call mcp__git_repo__open_repo with name='${name}' for a fresh copy, then sync again — never reset/checkout in the copy.`;
+  const fromMismatch = (from: string, incoming: string): string =>
+    ` (from='${from}' was given, but the copy's files do not equal Noah's clone of '${from}' at ${incoming.slice(0, 8)}: if that clone is behind, sync it first with mcp__git_repo__sync_repo name='${from}'; otherwise the copy holds other changes too)`;
+  const notFastForward = (
+    name: string,
+    from: string,
+    incoming: string,
+    ff: { head: string; behind: number },
+  ): string =>
+    `Not synced: '${name}' cannot be fast-forwarded to '${from}' HEAD ${incoming.slice(0, 8)} — Noah's clone of '${name}' (HEAD ${ff.head.slice(0, 8)}) has ${ff.behind} commit(s) that '${from}' does not contain, so keeping SHAs would need a merge or rebase, which this never does. Nothing was fast-forwarded. Bring those commits into '${from}' first (or reconcile the two histories outside Noah), then sync again.`;
   const NO_PI_WORKSPACE =
     "This run cannot reach your sandbox workspace from Noah (the workspace mount is not configured), so the repository cannot be copied in or committed from it.";
   /**
@@ -289,46 +321,104 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "sync_repo",
-      "Fetch a registered git repository into Noah's clone, rebasing its commits onto the upstream, then refresh your sandbox copy to the result. Refused while your sandbox copy has changes that are not committed yet (commit them first with `mcp__git_repo__commit`), so nothing you wrote is overwritten. A public repo attempts this without a token. If Noah's commits genuinely conflict with the remote the rebase is rolled back and this errors. (owner / trusted user only)",
-      { name: z.string().describe("Registered repo name") },
+      "Fetch a registered git repository into Noah's clone, rebasing its commits onto the upstream, then refresh your sandbox copy to the result. Refused while your sandbox copy has changes that are not committed yet (commit them first with `mcp__git_repo__commit`), so nothing you wrote is overwritten. Git commits made INSIDE the sandbox copy are never imported (only its files are read), so a copy whose git HEAD moved ahead with a merge/commit there counts as changed even when `git status` is clean. " +
+        "FROM ANOTHER REPO: with `from` (another registered repo's name, e.g. an external origin registered next to an internal one), Noah then FAST-FORWARDS this repo's clone to the HEAD of `from`'s clone — Noah clone to Noah clone, so the commits keep their SHA, author and message (the ff-only bridge; never a merge commit or rebase; refused when this repo has commits `from` lacks) — then `mcp__git_repo__push` sends them to origin. Sync `from` first to bring its latest upstream. With `from`, a sandbox copy whose files already equal `from`'s HEAD (you merged those very commits in the sandbox) is accepted as is. A public repo attempts this without a token. If Noah's commits genuinely conflict with the remote the rebase is rolled back and this errors. (owner / trusted user only)",
+      {
+        name: z.string().describe("Registered repo name"),
+        from: z
+          .string()
+          .optional()
+          .describe("Optional: another registered repo whose clone HEAD this repo is fast-forwarded to after the sync, keeping commit SHAs (ff-only)."),
+      },
       async (args) => {
         const denied = elevatedGuard();
         if (denied) return denied;
         try {
           const repoCtx = ownerRepoContext(args.name);
+          const source: GitRepoContext | null = args.from?.trim() ? ownerRepoContext(args.from) : null;
+          if (source && source.name === repoCtx.name) {
+            return text(`Not synced: 'from' must name a DIFFERENT registered repo than '${repoCtx.name}'.`, true);
+          }
+          // The commit `from` brings, fetched into this clone (objects only) before anything changes.
+          let incoming: string | null = null;
+          if (source) {
+            await ensureGitRepoClone(source);
+            incoming = await fetchRegisteredCloneHead(repoCtx, source);
+            const early = await fastForwardGitRepo(repoCtx, incoming, { dryRun: true });
+            if (early.kind === "not_fast_forward") return text(notFastForward(repoCtx.name, source.name, incoming, early), true);
+          }
           const ref = copyRef(repoCtx.name);
           if (ref) {
             const refused = await copyAccessRefusal(ref);
             if (refused) return refused;
             const status = await piRepoCopyStatus(ref);
-            if (status.kind === "diverged") return text(divergedRefusal("Not synced", repoCtx.name, status), true);
-            if (copyHasChanges(status)) {
+            // A copy whose files are exactly what `from` brings loses nothing — even one
+            // that reads as diverged because the sandbox fetch landed as a pack.
+            const matchesIncoming = incoming !== null && copyHasChanges(status) && (await piRepoCopyMatchesCommit(ref, incoming));
+            if (status.kind === "diverged" && !matchesIncoming) {
+              return text(
+                divergedRefusal("Not synced", repoCtx.name, status) +
+                  ` If you instead fetched/merged commits into the copy (Noah reads sandbox commits only as loose objects and cannot follow a large fetch, which git stores as a pack), those commits are never imported anyway: to bring them over WITH their SHAs, register their origin as its own repo and call mcp__git_repo__sync_repo with name='${repoCtx.name}' and from='<that repo>' — a copy whose files equal that repo's HEAD is accepted as is.` +
+                  (source && incoming ? fromMismatch(source.name, incoming) : ""),
+                true,
+              );
+            }
+            if (status.kind !== "diverged" && copyHasChanges(status) && !matchesIncoming) {
               const count = copyChangeCount(status);
               const copyPath = piRepoCopySandboxPath(ctx.avatarUserId, repoCtx.name);
+              const sandboxCommits = status.kind !== "no_copy" && status.tip !== status.base;
               return text(
                 status.kind === "moved"
                   ? `Not synced: your sandbox copy ${copyPath} has ${count === null ? "uncommitted changes" : `${count} uncommitted file change(s)`} made on an older state of '${repoCtx.name}' (Noah's clone moved since the copy was made, so they cannot be committed as they are). Call mcp__git_repo__open_repo with name='${repoCtx.name}' for a fresh copy — this one, with your changes, is moved aside to ${copyPath}.prev-<UTC stamp> and kept there until remove_repo — re-apply the edits there, commit them, then sync again.`
-                  : `Not synced: your sandbox copy ${copyPath} has ${count} uncommitted file change(s). Save them with mcp__git_repo__commit first (or move them out of the copy), then sync again.`,
+                  : status.kind === "ok" && sandboxCommits
+                    ? sandboxCommitsRefusal(repoCtx.name, copyPath, count, status, source?.name ?? null, incoming)
+                    : `Not synced: your sandbox copy ${copyPath} has ${count} uncommitted file change(s). Save them with mcp__git_repo__commit first (or move them out of the copy), then sync again.`,
                 true,
               );
             }
           }
-          await ensureGitRepoClone(repoCtx, { sync: true });
+          // With `from`, never rebase: that would give local (bridged) commits new SHAs.
+          try {
+            await ensureGitRepoClone(repoCtx, { sync: true, fastForwardOnly: source !== null });
+          } catch (error) {
+            const message = errorMessage(error);
+            return text(message.startsWith("Not synced:") ? message : `Sync failed: ${message}\nDo not work around this with Bash git — the shell has no git credentials.`, true);
+          }
+          let forwarded = "";
+          if (source && incoming) {
+            const ff = await fastForwardGitRepo(repoCtx, incoming);
+            if (ff.kind === "not_fast_forward") {
+              // The upstream update itself went through; only the fast-forward is refused.
+              store.markGitRepoSynced(ctx.avatarUserId, repoCtx.name);
+              const copy = ref ? await ensurePiRepoCopy(ref, "refresh") : null;
+              return text(
+                `Synced '${repoCtx.name}' with its upstream (fast-forward only), but ${notFastForward(repoCtx.name, source.name, incoming, ff).replace(/^Not synced: /, "").replace("Nothing was fast-forwarded.", `Nothing was fast-forwarded from '${source.name}'.`)}` +
+                  (copy ? ` Your sandbox copy at ${copy.sandboxPath} was refreshed to '${repoCtx.name}' HEAD${copy.previousPath ? `; the previous one was moved to ${copy.previousPath}, where it stays until remove_repo` : ""}.` : ""),
+                true,
+              );
+            }
+            forwarded =
+              ff.kind === "forwarded"
+                ? ` Fast-forwarded Noah's clone of '${repoCtx.name}' from ${ff.from.slice(0, 8)} to ${ff.to.slice(0, 8)} ('${source.name}' HEAD): ${ff.commits} commit(s), SHAs, authors and messages kept. They are NOT on origin yet — call mcp__git_repo__push with name='${repoCtx.name}' now. If that push is rejected because origin moved, sync again WITH from='${source.name}' (fast-forward only); a sync without 'from' rebases them and gives them new SHAs.`
+                : ` '${source.name}' HEAD ${incoming.slice(0, 8)} is already contained in '${repoCtx.name}' (HEAD ${ff.head.slice(0, 8)}); nothing to fast-forward.`;
+          }
           store.markGitRepoSynced(ctx.avatarUserId, repoCtx.name);
           if (ref) {
             // No tracked change just now; deleted only if it holds nothing but its base.
             const copy = await ensurePiRepoCopy(ref, "refresh");
             return text(
-              `Synced the git repo: ${repoCtx.name}. Your sandbox copy at ${copy.sandboxPath} now matches it.` +
+              `Synced the git repo: ${repoCtx.name}.${forwarded} Your sandbox copy at ${copy.sandboxPath} now matches it.` +
                 (copy.previousPath
                   ? ` The previous copy held content that is not in its commit (ignored or extra files, links, stashes or sandbox commits), so it was moved to ${copy.previousPath}, where it stays until remove_repo; move anything you still need out of it.`
                   : ""),
             );
           }
-          return text(`Synced the git repo: ${repoCtx.name}`);
+          return text(`Synced the git repo: ${repoCtx.name}.${forwarded}`);
         } catch (error) {
           return text(
-            `Sync failed: ${errorMessage(error)}\nIf the rebase conflicted, the clone was rolled back to its previous state — reconcile the conflicting changes (re-apply them on top of the latest remote, or discard local work) and sync again. Do not work around this with Bash git — the shell has no git credentials.`,
+            args.from?.trim()
+              ? `Sync failed: ${errorMessage(error)}\nCheck that both repos are registered and reachable (list_repos), then sync again. Do not work around this with Bash git — the shell has no git credentials.`
+              : `Sync failed: ${errorMessage(error)}\nIf the rebase conflicted, the clone was rolled back to its previous state — reconcile the conflicting changes (re-apply them on top of the latest remote, or discard local work) and sync again. Do not work around this with Bash git — the shell has no git credentials.`,
             true,
           );
         }
@@ -431,19 +521,22 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         if (denied) return denied;
         try {
           const repoCtx = ownerRepoContext(args.name);
-          const branch = await pushGitRepo(repoCtx);
+          const pushed = await pushGitRepoDetailed(repoCtx);
+          const branch = pushed.branch;
           const ref = copyRef(repoCtx.name);
           const status = ref ? await piRepoCopyStatus(ref).catch(() => null) : null;
           const pending = status ? copyChangeCount(status) : 0;
           return text(
-            `Pushed the changes: ${repoCtx.name} -> ${branch}` +
+            (pushed.upToDate
+              ? `Nothing to push: origin's ${branch} already has Noah's clone HEAD ${pushed.head.slice(0, 8)} of '${repoCtx.name}', so the remote did not change. Git commits made inside the sandbox copy are never pushed — save the copy's files with mcp__git_repo__commit, or bring commits with their SHAs via mcp__git_repo__sync_repo with from='<another registered repo>', then push again`
+              : `Pushed the changes: ${repoCtx.name} -> ${branch} (HEAD ${pushed.head.slice(0, 8)})`) +
               (pending !== 0
                 ? `. Note: your sandbox copy still has ${pending === null ? "uncommitted changes" : `${pending} uncommitted file change(s)`} that were NOT pushed — commit them with mcp__git_repo__commit and push again if they belong in it.`
                 : ""),
           );
         } catch (error) {
           return text(
-            `push failed: ${errorMessage(error)}\nCheck remote write permission, token, and whether the branch is protected (even a public repo needs write permission to push). Do not work around this with Bash \`git push\` — the shell has no git credentials.`,
+            `push failed: ${errorMessage(error)}\nCheck remote write permission, token, and whether the branch is protected (even a public repo needs write permission to push). If it was rejected because origin moved and the commits were brought in with sync_repo 'from', sync again WITH the same 'from' (fast-forward only) — a sync without it rebases them and changes their SHAs. Do not work around this with Bash \`git push\` — the shell has no git credentials.`,
             true,
           );
         }

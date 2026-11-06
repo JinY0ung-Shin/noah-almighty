@@ -226,9 +226,9 @@ function existingOnBase(parent: PinnedDir, name: string, base: string): boolean 
 }
 
 /** The copy's git HEAD is still on its base (the base itself, or sandbox commits on top of it). */
-function copyOnBase(copy: PinnedDir, base: string): { ok: true } | { ok: false; tip: string | null } {
+function copyOnBase(copy: PinnedDir, base: string): { ok: true; tip: string } | { ok: false; tip: string | null } {
   const tip = readCopyGitTip(copy);
-  return tip && (tip === base || copyDescendsFromBase(copy, tip, base)) ? { ok: true } : { ok: false, tip };
+  return tip && (tip === base || copyDescendsFromBase(copy, tip, base)) ? { ok: true, tip } : { ok: false, tip };
 }
 
 /** Byte guard on one `git ls-files` listing (far above COPY_MAX_FILES real paths). */
@@ -764,7 +764,14 @@ async function ensureCopyLocked(
     let previousPath: string | undefined;
     let discardedPrevious = false;
     if (existing === "dir" || existing === "file") {
-      if (existing === "dir" && state && (await existingDisposable(ref.clonePath, parent, ref.name, state.base))) {
+      // Disposable against its own base, or — after a fast-forward to the very
+      // commits the sandbox made (sync_repo `from`, #81) — against the new HEAD.
+      if (
+        existing === "dir" &&
+        state &&
+        ((await existingDisposable(ref.clonePath, parent, ref.name, state.base)) ||
+          (head !== state.base && (await existingDisposable(ref.clonePath, parent, ref.name, head))))
+      ) {
         parent.remove(ref.name);
         discardedPrevious = true;
       } else {
@@ -992,10 +999,15 @@ export type CopyStatus =
    * its BASE tree (readBackAgainstBase); null when that could not be measured
    * — treated as uncommitted work.
    */
-  | { kind: "moved"; base: string; head: string; changes: CopyChanges | null }
+  | { kind: "moved"; base: string; head: string; tip: string; changes: CopyChanges | null }
   /** The copy's git HEAD left its base (checkout/switch/reset/rebase there): its files are another state's. */
   | { kind: "diverged"; base: string; tip: string | null }
-  | { kind: "ok"; base: string; changes: CopyChanges };
+  /**
+   * The copy's git HEAD is on its base: `tip` is that HEAD — the base itself,
+   * or commits made INSIDE the sandbox on top of it (never imported: only the
+   * copy's files are read back, so their changes count in `changes`, #81).
+   */
+  | { kind: "ok"; base: string; tip: string; changes: CopyChanges };
 
 /** Where the copy stands against the canonical clone (no writes anywhere). */
 export function piRepoCopyStatus(ref: PiRepoCopyRef): Promise<CopyStatus> {
@@ -1009,9 +1021,9 @@ export function piRepoCopyStatus(ref: PiRepoCopyRef): Promise<CopyStatus> {
       const head = await headOf(ref.clonePath);
       if (head !== state.base) {
         const changes = await readBackAgainstBase(ref.clonePath, copy, state.base).catch(() => null);
-        return { kind: "moved", base: state.base, head, changes };
+        return { kind: "moved", base: state.base, head, tip: onBase.tip, changes };
       }
-      return { kind: "ok", base: state.base, changes: await readBack(ref.clonePath, copy) };
+      return { kind: "ok", base: state.base, tip: onBase.tip, changes: await readBack(ref.clonePath, copy) };
     } finally {
       copy.close();
     }
@@ -1033,6 +1045,41 @@ export function copyChangeCount(status: CopyStatus): number | null {
     case "ok":
       return status.changes ? status.changes.writes.length + status.changes.deletes.length : null;
   }
+}
+
+/**
+ * The copy's files are exactly `commit`'s tree (no tracked-file change against
+ * it; `readBackAgainstBase` in the canonical clone, never git in the copy) and
+ * its git HEAD is on its base — either provably through loose sandbox commits
+ * (`copyOnBase`), or because that HEAD IS `commit` and the canonical clone
+ * shows `commit` descends from the base (a fetch of 100+ objects lands as a
+ * PACK, which `copyDescendsFromBase` cannot walk, so such a merge reads as
+ * diverged there). `commit` must already be in the canonical clone (sync_repo
+ * `from` fetches it first). Such a copy loses nothing when the clone
+ * fast-forwards to `commit` — the bridge case of #81, where the sandbox merged
+ * the very commits being brought over.
+ */
+export function piRepoCopyMatchesCommit(ref: PiRepoCopyRef, commit: string): Promise<boolean> {
+  return withRepoLock(ref.clonePath, async () => {
+    const state = readState(statePath(ref.config, ref.workspace.principal, ref.ownerId, ref.name));
+    const copy = state ? pinnedCopy(ref.workspace, ref.ownerId, ref.name) : null;
+    if (!copy || !state) return false;
+    try {
+      const onBase = copyOnBase(copy, state.base);
+      if (!onBase.ok) {
+        if (onBase.tip !== commit) return false;
+        const descends = await git(ref.clonePath, ["merge-base", "--is-ancestor", state.base, commit]).then(
+          () => true,
+          () => false,
+        );
+        if (!descends) return false;
+      }
+      const changes = await readBackAgainstBase(ref.clonePath, copy, commit).catch(() => null);
+      return Boolean(changes && changes.writes.length === 0 && changes.deletes.length === 0);
+    } finally {
+      copy.close();
+    }
+  });
 }
 
 /** The copy holds uncommitted work (anything but a proven-clean copy). The ONE test sync, claim and push use. */

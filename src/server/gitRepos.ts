@@ -124,6 +124,35 @@ async function pullRebase(ctx: GitRepoContext, repoRoot: string, url: string): P
 }
 
 /**
+ * Update from the upstream WITHOUT rewriting any local commit (#81): fetch,
+ * then fast-forward to the upstream when the clone is behind, keep the clone
+ * when it is ahead (its local commits — e.g. commits fast-forwarded in from
+ * another registered repo — keep their SHAs), and refuse when the two
+ * diverged, where `pullRebase` would re-create the local commits with new SHAs.
+ * No upstream ref yet (a branch origin does not have) = nothing to update.
+ */
+async function pullFastForwardOnly(ctx: GitRepoContext, repoRoot: string, url: string): Promise<void> {
+  const auth = gitAuthConfig(url, ctx.token ?? undefined);
+  await git(repoRoot, ["fetch", "--prune", "--tags", "origin"], undefined, auth);
+  if (ctx.branch) await checkoutBranch(repoRoot, ctx.branch);
+  const upstream = ctx.branch ? `origin/${ctx.branch}` : "@{upstream}";
+  const known = await git(repoRoot, ["rev-parse", "--verify", "--quiet", `${upstream}^{commit}`]).then(
+    () => true,
+    () => false,
+  );
+  if (!known) return;
+  if (await isAncestor(repoRoot, upstream, "HEAD")) return; // up to date, or ahead with local commits
+  if (await isAncestor(repoRoot, "HEAD", upstream)) {
+    await git(repoRoot, ["merge", "--ff-only", "--quiet", upstream]);
+    return;
+  }
+  const ahead = Number.parseInt((await git(repoRoot, ["rev-list", "--count", `${upstream}..HEAD`])).stdout.trim(), 10) || 0;
+  throw new Error(
+    `Not synced: origin moved past Noah's clone of '${ctx.name}', which holds ${ahead} commit(s) origin does not have. A normal sync would rebase them onto origin and give them NEW SHAs, so this fast-forward-only sync changed nothing. If their SHAs do not matter, run mcp__git_repo__sync_repo without 'from' (rebase), then push; to keep the SHAs, the history has to be reconciled outside Noah (or bring origin's new commits into the source repo first and sync with 'from' again).`,
+  );
+}
+
+/**
  * True when the clone has commits not present on ANY upstream — i.e. local work
  * that a `rm -rf` would silently destroy. Uses the configured-branch upstream
  * when set, else the tracking upstream of HEAD; returns false when there's no
@@ -150,7 +179,7 @@ async function hasUnpushedCommits(repoRoot: string, branch: string | null): Prom
  */
 export async function ensureGitRepoClone(
   ctx: GitRepoContext,
-  options: { sync?: boolean } = {},
+  options: { sync?: boolean; fastForwardOnly?: boolean } = {},
 ): Promise<string> {
   const repoRoot = gitRepoClonePath(ctx.userId, ctx.name, ctx.config);
   return withRepoLock(repoRoot, () => ensureGitRepoCloneLocked(ctx, repoRoot, options));
@@ -164,7 +193,7 @@ export async function ensureGitRepoClone(
 async function ensureGitRepoCloneLocked(
   ctx: GitRepoContext,
   repoRoot: string,
-  options: { sync?: boolean } = {},
+  options: { sync?: boolean; fastForwardOnly?: boolean } = {},
 ): Promise<string> {
   assertSafeGitValue(ctx.repo, "repo");
   assertSafeGitValue(ctx.branch, "branch");
@@ -211,7 +240,8 @@ async function ensureGitRepoCloneLocked(
   }
 
   if (options.sync) {
-    await pullRebase(ctx, repoRoot, url);
+    if (options.fastForwardOnly) await pullFastForwardOnly(ctx, repoRoot, url);
+    else await pullRebase(ctx, repoRoot, url);
   }
   return repoRoot;
 }
@@ -238,6 +268,19 @@ async function configureGitRepoIdentityInClone(
 }
 
 export async function pushGitRepo(ctx: GitRepoContext): Promise<string> {
+  return (await pushGitRepoDetailed(ctx)).branch;
+}
+
+export interface GitRepoPushResult {
+  branch: string;
+  /** The clone's HEAD that was pushed. */
+  head: string;
+  /** origin's branch already had that HEAD: nothing was sent (#81 — never report it as "Pushed"). */
+  upToDate: boolean;
+}
+
+/** {@link pushGitRepo}, also telling whether origin already had the clone's HEAD (`git push --porcelain` flag `=`). */
+export async function pushGitRepoDetailed(ctx: GitRepoContext): Promise<GitRepoPushResult> {
   const repoRoot = gitRepoClonePath(ctx.userId, ctx.name, ctx.config);
   // Serialize the ensure+push against concurrent ops on the same clone (git-02).
   return withRepoLock(repoRoot, async () => {
@@ -245,7 +288,73 @@ export async function pushGitRepo(ctx: GitRepoContext): Promise<string> {
     const url = marketplaceCloneUrl(ctx.repo, ctx.config.githubHost);
     const auth = gitAuthConfig(url, ctx.token ?? undefined);
     const branch = safePushBranch(ctx.branch || (await currentBranch(repoRoot)) || "HEAD");
-    await git(repoRoot, ["push", "origin", `HEAD:${branch}`], undefined, auth);
-    return branch;
+    const head = (await git(repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
+    const { stdout } = await git(repoRoot, ["push", "--porcelain", "origin", `HEAD:${branch}`], undefined, auth);
+    // Porcelain ref lines are `<flag>\t<from>:<to>\t<summary>`; `=` = up to date (locale-independent).
+    const refLines = stdout.split("\n").filter((line) => /^[ +\-*=!]\t/.test(line));
+    const upToDate = refLines.length > 0 && refLines.every((line) => line.startsWith("=\t"));
+    return { branch, head, upToDate };
+  });
+}
+
+/**
+ * Fetch the branch tip of ANOTHER registered repo's canonical clone (`source`,
+ * same owner) into `target`'s clone — objects only, no ref or working-tree
+ * change — and return that commit. Both are Noah's own clones (never a
+ * sandbox `.git`), so commits travel with their SHA, author and message
+ * intact: the external→internal bridge of #81 (`sync_repo` `from`). The BRANCH
+ * ref is fetched, not HEAD: a branch moves only when a rebase/commit there
+ * finishes, while HEAD is detached mid-rebase (the source lock is NOT taken —
+ * nesting it under the target's could deadlock `a from b` against `b from a`).
+ * The source clone must exist (`ensureGitRepoClone(source)` first); it is used
+ * as it stands, not synced here.
+ */
+export async function fetchRegisteredCloneHead(target: GitRepoContext, source: GitRepoContext): Promise<string> {
+  const targetRoot = gitRepoClonePath(target.userId, target.name, target.config);
+  const sourceRoot = gitRepoClonePath(source.userId, source.name, source.config);
+  if (path.resolve(targetRoot) === path.resolve(sourceRoot)) throw new Error("A repository cannot be fast-forwarded from itself.");
+  const branch = source.branch || (await currentBranch(sourceRoot));
+  assertSafeGitValue(branch, "branch");
+  const sourceRef = branch ? `refs/heads/${branch}` : "HEAD";
+  return withRepoLock(targetRoot, async () => {
+    await ensureGitRepoCloneLocked(target, targetRoot);
+    await git(targetRoot, ["fetch", "--no-tags", "--quiet", "--", sourceRoot, sourceRef], 180_000);
+    return (await git(targetRoot, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"])).stdout.trim();
+  });
+}
+
+export type GitRepoFastForward =
+  | { kind: "forwarded"; from: string; to: string; commits: number }
+  | { kind: "contains"; head: string }
+  | { kind: "not_fast_forward"; head: string; behind: number };
+
+/** Whether `ancestor` is an ancestor of (or equal to) `descendant` in the clone. */
+async function isAncestor(repoRoot: string, ancestor: string, descendant: string): Promise<boolean> {
+  return git(repoRoot, ["merge-base", "--is-ancestor", ancestor, descendant]).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * Where `commit` (already in the clone, see {@link fetchRegisteredCloneHead})
+ * stands against the clone's HEAD, and — unless `dryRun` — fast-forward the
+ * clone to it (`git merge --ff-only`, never a merge commit or a rebase, so its
+ * SHA is kept). `not_fast_forward`: the clone has commits `commit` lacks
+ * (`behind` of them) — nothing is changed.
+ */
+export async function fastForwardGitRepo(ctx: GitRepoContext, commit: string, options: { dryRun?: boolean } = {}): Promise<GitRepoFastForward> {
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(commit)) throw new Error("Not a commit id.");
+  const repoRoot = gitRepoClonePath(ctx.userId, ctx.name, ctx.config);
+  return withRepoLock(repoRoot, async () => {
+    const head = (await git(repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
+    if (await isAncestor(repoRoot, commit, head)) return { kind: "contains", head };
+    if (!(await isAncestor(repoRoot, head, commit))) {
+      const behind = Number.parseInt((await git(repoRoot, ["rev-list", "--count", `${commit}..${head}`])).stdout.trim(), 10) || 0;
+      return { kind: "not_fast_forward", head, behind };
+    }
+    const commits = Number.parseInt((await git(repoRoot, ["rev-list", "--count", `${head}..${commit}`])).stdout.trim(), 10) || 0;
+    if (!options.dryRun) await git(repoRoot, ["merge", "--ff-only", "--quiet", commit]);
+    return { kind: "forwarded", from: head, to: commit, commits };
   });
 }

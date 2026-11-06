@@ -417,3 +417,143 @@ describe("re-opening after another conversation's commit does not pile up copies
     expect(fs.readFileSync(path.join(repos, prevs()[0]!, ".env.local"), "utf8")).toBe("API_KEY=local");
   });
 });
+
+describe("sandbox commits ahead of the base and the clone-to-clone bridge (#81)", () => {
+  /** `app` (internal) and `ext` (an external origin two commits ahead of it), both registered and synced. */
+  async function bridgeSetup() {
+    const s = repoSetup();
+    const ext = path.join(dir(), "ext.git");
+    execFileSync("git", ["clone", "-q", "--bare", s.remote, ext], { stdio: "pipe" });
+    const extSeed = path.join(dir(), "ext-seed");
+    execFileSync("git", ["clone", "-q", "-b", "main", ext, extSeed], { stdio: "pipe" });
+    for (const file of ["ext-1.txt", "ext-2.txt"]) {
+      fs.writeFileSync(path.join(extSeed, file), file);
+      g(extSeed, "add", "-A");
+      execFileSync("git", ["-C", extSeed, "-c", "user.name=Ext Author", "-c", "user.email=ext@x", "-c", "commit.gpgsign=false", "commit", "-q", "-m", `external ${file}`], { stdio: "pipe" });
+    }
+    g(extSeed, "push", "-q", "origin", "main");
+    const extHead = g(extSeed, "rev-parse", "HEAD");
+    expect((await callTool(s.tools, "register_repo", { repo: s.remote, name: "app", branch: "main" })).isError).toBeFalsy();
+    expect((await callTool(s.tools, "register_repo", { repo: ext, name: "ext", branch: "main" })).isError).toBeFalsy();
+    expect((await callTool(s.tools, "open_repo", { name: "app" })).isError).toBeFalsy();
+    return { ...s, ext, extSeed, extHead };
+  }
+
+  it("a copy fast-forwarded IN the sandbox is named as sandbox commits, not 'uncommitted'; push says nothing moved", async () => {
+    const s = await bridgeSetup();
+    const base = g(s.clone, "rev-parse", "HEAD");
+    // What the issue did: merge the external commits into the copy (working tree clean afterwards).
+    s.inCopy("fetch", "-q", "--no-tags", s.ext, "main");
+    s.inCopy("merge", "-q", "--ff-only", "FETCH_HEAD");
+    expect(s.inCopy("status", "--porcelain")).toBe("");
+
+    const sync = await callTool(s.tools, "sync_repo", { name: "app" });
+    expect(sync.isError).toBe(true);
+    const refusal = sync.content[0].text ?? "";
+    expect(refusal).toContain("differs from Noah's clone of 'app' in 2 file(s)");
+    expect(refusal).toContain(`AHEAD of the commit Noah gave it (${base.slice(0, 8)})`);
+    expect(refusal).toContain("never imports sandbox git commits");
+    expect(refusal).toContain("from='<that repo>'");
+    expect(refusal).toContain(`mv ${"/workspace/repos/"}`);
+    expect(refusal).toContain("never reset/checkout in the copy");
+    expect(refusal).not.toContain("uncommitted file change(s)");
+
+    const push = await callTool(s.tools, "push", { name: "app" });
+    expect(push.isError).toBeFalsy();
+    expect(push.content[0].text).toContain("Nothing to push: origin's main already has");
+    expect(g(s.remote, "rev-parse", "main")).toBe(base);
+  });
+
+  it("sync_repo from= fast-forwards Noah's clone with SHAs kept, accepts the matching copy, and push sends them", async () => {
+    const s = await bridgeSetup();
+    s.inCopy("fetch", "-q", "--no-tags", s.ext, "main");
+    s.inCopy("merge", "-q", "--ff-only", "FETCH_HEAD");
+
+    const sync = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(sync.isError).toBeFalsy();
+    expect(sync.content[0].text).toContain("Fast-forwarded Noah's clone of 'app'");
+    expect(sync.content[0].text).toContain("2 commit(s), SHAs, authors and messages kept");
+    expect(sync.content[0].text).not.toContain("moved to"); // the copy held exactly the new HEAD: deleted, not moved aside
+    expect(g(s.clone, "rev-parse", "HEAD")).toBe(s.extHead);
+    expect(fs.readdirSync(path.dirname(s.copy)).filter((name) => name.startsWith("app.prev"))).toEqual([]);
+    expect(fs.readFileSync(path.join(s.copy, "ext-2.txt"), "utf8")).toBe("ext-2.txt");
+
+    const push = await callTool(s.tools, "push", { name: "app" });
+    expect(push.content[0].text).toContain("Pushed the changes: app -> main");
+    expect(g(s.remote, "rev-parse", "main")).toBe(s.extHead);
+    expect(g(s.remote, "log", "-1", "--format=%an|%s", "main")).toBe("Ext Author|external ext-2.txt");
+
+    // Again: already contained.
+    const again = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(again.content[0].text).toContain("is already contained in 'app'");
+  });
+
+  it("a sandbox merge large enough to land as a PACK (reads as diverged) is still accepted by from=", async () => {
+    const s = await bridgeSetup();
+    // 60 more external commits (~180 objects, past fetch.unpackLimit=100): the sandbox fetch stores a pack.
+    for (let index = 0; index < 60; index += 1) {
+      fs.writeFileSync(path.join(s.extSeed, `bulk-${index}.txt`), `bulk ${index}`);
+      g(s.extSeed, "add", "-A");
+      execFileSync("git", ["-C", s.extSeed, "-c", "user.name=Ext Author", "-c", "user.email=ext@x", "-c", "commit.gpgsign=false", "commit", "-q", "-m", `bulk ${index}`], { stdio: "pipe" });
+    }
+    g(s.extSeed, "push", "-q", "origin", "main");
+    const extHead = g(s.extSeed, "rev-parse", "HEAD");
+    s.inCopy("fetch", "-q", "--no-tags", s.ext, "main");
+    s.inCopy("merge", "-q", "--ff-only", "FETCH_HEAD");
+    expect(fs.readdirSync(path.join(s.copy, ".git", "objects", "pack")).some((name) => name.endsWith(".pack"))).toBe(true);
+
+    const plain = await callTool(s.tools, "sync_repo", { name: "app" });
+    expect(plain.isError).toBe(true);
+    expect(plain.content[0].text).toContain("cannot follow a large fetch");
+    expect(plain.content[0].text).toContain("from='<that repo>'");
+
+    // The source is used as Noah's clone of it stands: a stale one brings only what it has.
+    const stale = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(stale.isError).toBe(true);
+    expect(g(s.clone, "rev-parse", "HEAD")).not.toBe(extHead);
+    expect((await callTool(s.tools, "sync_repo", { name: "ext" })).isError).toBeFalsy();
+    const bridged = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(bridged.isError).toBeFalsy();
+    expect(bridged.content[0].text).toContain("62 commit(s), SHAs, authors and messages kept");
+    expect(g(s.clone, "rev-parse", "HEAD")).toBe(extHead);
+  });
+
+  it("with from=, an origin that moved meanwhile is never rebased over the bridged commits", async () => {
+    const s = await bridgeSetup();
+    expect((await callTool(s.tools, "sync_repo", { name: "app", from: "ext" })).isError).toBeFalsy();
+    // Before the push, someone pushes to the internal origin.
+    g(s.seed, "checkout", "-q", "main");
+    g(s.seed, "pull", "-q", "--rebase", "origin", "main");
+    fs.writeFileSync(path.join(s.seed, "internal.txt"), "internal");
+    g(s.seed, "add", "-A");
+    g(s.seed, "commit", "-q", "-m", "internal moved");
+    g(s.seed, "push", "-q", "origin", "main");
+
+    const again = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(again.isError).toBe(true);
+    expect(again.content[0].text).toContain("Not synced: origin moved past Noah's clone of 'app'");
+    expect(again.content[0].text).toContain("give them NEW SHAs");
+    expect(g(s.clone, "rev-parse", "HEAD")).toBe(s.extHead); // the bridged commits kept their SHAs
+  });
+
+  it("refuses a non-fast-forward, a copy with other edits, and from = itself — nothing changes", async () => {
+    const s = await bridgeSetup();
+    expect((await callTool(s.tools, "sync_repo", { name: "app", from: "app" })).content[0].text).toContain("DIFFERENT registered repo");
+
+    // A copy with edits of its own (not ext's tree) stays refused even with from=.
+    fs.writeFileSync(path.join(s.copy, "mine.txt"), "mine");
+    const dirty = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(dirty.isError).toBe(true);
+    expect(dirty.content[0].text).toContain("1 uncommitted file change(s)");
+    expect(fs.readFileSync(path.join(s.copy, "mine.txt"), "utf8")).toBe("mine");
+
+    // Commit it into app: now app has a commit ext lacks — not a fast-forward.
+    expect((await callTool(s.tools, "commit", { name: "app", message: "internal only" })).isError).toBeFalsy();
+    const head = g(s.clone, "rev-parse", "HEAD");
+    const refused = await callTool(s.tools, "sync_repo", { name: "app", from: "ext" });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain("cannot be fast-forwarded to 'ext' HEAD");
+    expect(refused.content[0].text).toContain("has 1 commit(s) that 'ext' does not contain");
+    expect(g(s.clone, "rev-parse", "HEAD")).toBe(head);
+  });
+});

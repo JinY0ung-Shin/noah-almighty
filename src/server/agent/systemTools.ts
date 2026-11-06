@@ -713,7 +713,7 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
       : []),
     ...(pi.activeRepoDir
       ? [
-          `- Working repository copy: ${pi.activeRepoDir}/ (a copy of '${ctx.activeRepoName ?? "?"}' in your sandbox; save with mcp__git_repo__commit, then mcp__git_repo__push — git commits made inside the sandbox are not saved, and commit refuses a copy whose git HEAD left the commit Noah gave it, so never checkout/switch/reset/rebase there). ${PI_REPO_REPLACED_COPY_SENTENCE}`,
+          `- Working repository copy: ${pi.activeRepoDir}/ (a copy of '${ctx.activeRepoName ?? "?"}' in your sandbox; save with mcp__git_repo__commit, then mcp__git_repo__push — git commits made inside the sandbox are not saved or imported (a copy whose git HEAD moved ahead with a merge/commit there counts as changed), and commit refuses a copy whose git HEAD left the commit Noah gave it, so never checkout/switch/reset/rebase there; to bring commits over WITH their SHAs from another registered repo, mcp__git_repo__sync_repo with from='<that repo>' fast-forwards Noah's clone, then push). ${PI_REPO_REPLACED_COPY_SENTENCE}`,
         ]
       : []),
   ];
