@@ -3,7 +3,7 @@
   import type { StylesheetJson } from "cytoscape";
   import Icon from "./Icon.svelte";
   import { prefersReducedMotion } from "../lib/motion";
-  import { cssToken, currentTheme, theme } from "../lib/theme";
+  import { cssColor, cssToken, currentTheme, theme } from "../lib/theme";
   import type { ResolvedTheme } from "../lib/theme";
   import { SECTION_COLORS, SECTION_ORDER, nodeDegrees, sectionColor, sectionLabel } from "../lib/knowledgeGraph";
   import type { KnowledgeGraph, KnowledgeGraphNode } from "../lib/types";
@@ -97,12 +97,13 @@
   function buildStyle(dark: boolean, scale = 1): StylesheetJson {
     // Every chrome color is read live from the design tokens so the canvas sits on
     // the same surface as the panel around it; the fallbacks only matter before
-    // the stylesheet loads.
-    const surface = cssToken("--panel", dark ? "#1c1c1e" : "#ffffff");
-    const text = cssToken("--text", dark ? "#f5f5f7" : "#1d1d1f");
-    const muted = cssToken("--muted", dark ? "#98989d" : "#6e6e73");
-    const edge = cssToken("--line", dark ? "#3a3a3c" : "#d2d2d7");
-    const accent = cssToken("--accent", "#0071e3");
+    // the stylesheet loads. Colors go through `cssColor`: the minified build's
+    // `#rrggbbaa` is invalid to cytoscape, which then paints black label boxes.
+    const surface = cssColor("--panel", dark ? "#1c1c1e" : "#ffffff");
+    const text = cssColor("--text", dark ? "#f5f5f7" : "#1d1d1f");
+    const muted = cssColor("--muted", dark ? "#98989d" : "#6e6e73");
+    const edge = cssColor("--line", dark ? "#3a3a3c" : "#d2d2d7");
+    const accent = cssColor("--accent", "#0071e3");
     const font = cssToken("--font-sans", "system-ui, sans-serif");
     return [
       {

@@ -49,6 +49,50 @@ export function cssToken(name: string, fallback = ""): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 }
 
+/**
+ * A color token as a string ANY color parser accepts: `rgba(r, g, b, a)`, or the
+ * value unchanged when it is already a plain color. The production CSS minifier
+ * rewrites `rgba(255, 255, 255, 0.88)` to `#ffffffe0`, which cytoscape rejects
+ * (it falls back to its default — a black label box); dev builds are unminified,
+ * so only a deployed build shows it. Use this, not `cssToken`, for colors handed
+ * to a renderer with its own parser.
+ */
+export function cssColor(name: string, fallback: string): string {
+  return normalizeColor(cssToken(name, fallback)) ?? fallback;
+}
+
+let colorProbe: CanvasRenderingContext2D | null | undefined;
+
+/** `value` as `#rgb`/`#rrggbb`/`rgb()`/`rgba()`, or `null` if it is not a color. Exported for tests. */
+export function normalizeColor(value: string): string | null {
+  const v = value.trim();
+  const hex = /^#([0-9a-f]{4}|[0-9a-f]{8})$/i.exec(v)?.[1];
+  if (hex) {
+    const full = hex.length === 4 ? [...hex].map((c) => c + c).join("") : hex;
+    const [r, g, b, a] = [0, 2, 4, 6].map((i) => parseInt(full.slice(i, i + 2), 16));
+    return `rgba(${r}, ${g}, ${b}, ${Math.round((a / 255) * 1000) / 1000})`;
+  }
+  if (/^(#[0-9a-f]{3}|#[0-9a-f]{6}|(rgba?|hsla?)\([^)]*\))$/i.test(v)) return v;
+  // Anything else (a color name, color-mix(), oklch()…): let the browser's canvas
+  // serialize it — `fillStyle` reads back as `#rrggbb` or `rgba(…)`. Two sentinels
+  // tell "not a color" (assignment ignored) apart from a color equal to one of them.
+  if (colorProbe === undefined) {
+    try {
+      colorProbe = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+    } catch {
+      colorProbe = null;
+    }
+  }
+  if (!colorProbe || !v) return null;
+  const read = (sentinel: string): string => {
+    colorProbe!.fillStyle = sentinel;
+    colorProbe!.fillStyle = v;
+    return String(colorProbe!.fillStyle);
+  };
+  const a = read("#000000");
+  return a === read("#ffffff") ? a : null;
+}
+
 export function applyTheme(pref = getThemePref()): ThemePref {
   const resolved = resolve(pref);
   document.documentElement.dataset.theme = resolved;
