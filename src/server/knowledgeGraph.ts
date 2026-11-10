@@ -12,7 +12,7 @@ import type { KnowledgeGraph, KnowledgeGraphNode } from "./types.js";
 
 // Hard cap on notes scanned — protects the endpoint from a pathological vault.
 // `listTree` orders by path (not recency), so a very large vault truncates by
-// path order; acceptable at expected scale (same trade-off as brainSearch SCAN_CAP).
+// path order; acceptable at expected scale (the same path-order trade-off as brainSearch `BRAIN_SCAN_CAP`, which reports what it skips).
 const SCAN_CAP = 1000;
 
 // `[[target]]`, `[[target|alias]]`, `[[target#heading]]`, `[[target^block]]`.

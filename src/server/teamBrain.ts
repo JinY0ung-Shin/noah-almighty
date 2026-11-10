@@ -693,6 +693,8 @@ function uncompiledOf(vault: TeamVaultListing): string[] {
  * wiki page hits first (`kind: "page"`), then hits from raw sources NO page
  * cites yet (`kind: "uncompiled_source"`, at most half the limit) — so a
  * submitted-and-approved but not-yet-compiled fact is still findable.
+ * `unscanned` (only when > 0) = pages + uncompiled sources beyond the scan cap
+ * that were not scored; the tool tells the model the search was partial.
  */
 export async function searchTeamBrain(config: Config, query: string, limit?: number): Promise<BrainSearchResult> {
   if (!teamBrainInitialized(config)) return { kind: "ok", hits: [] };
@@ -700,6 +702,7 @@ export async function searchTeamBrain(config: Config, query: string, limit?: num
   const pages = await rankBrainNotes(root, query, limit);
   const wikiHits: BrainNoteHit[] = pages.kind === "ok" ? pages.hits.map((h) => ({ ...h, kind: "page" as const })) : [];
   let extra: BrainNoteHit[] = [];
+  let unscanned = pages.kind === "ok" ? (pages.unscanned ?? 0) : 0;
   if (fsSync.existsSync(path.join(root, "raw"))) {
     // The cited set FIRST, then rank only uncited sources — a lower-ranked
     // uncompiled source is never crowded out by compiled ones.
@@ -707,10 +710,13 @@ export async function searchTeamBrain(config: Config, query: string, limit?: num
     if (uncompiled.size > 0) {
       const cap = Math.max(1, Math.ceil(Math.min(Math.max(1, limit ?? 8), 20) / 2));
       const raw = await rankBrainNotes(root, query, cap, { prefix: "raw/", include: (p) => uncompiled.has(p) });
-      if (raw.kind === "ok") extra = raw.hits.map((h) => ({ ...h, kind: "uncompiled_source" as const }));
+      if (raw.kind === "ok") {
+        extra = raw.hits.map((h) => ({ ...h, kind: "uncompiled_source" as const }));
+        unscanned += raw.unscanned ?? 0;
+      }
     }
   }
-  return { kind: "ok", hits: [...wikiHits, ...extra] };
+  return { kind: "ok", hits: [...wikiHits, ...extra], ...(unscanned > 0 ? { unscanned } : {}) };
 }
 
 /** Admin panel numbers: wiki pages, raw sources, and raw sources no page cites yet. */

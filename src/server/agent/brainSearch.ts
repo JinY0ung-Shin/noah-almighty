@@ -1,5 +1,5 @@
-// Retrieval/ranking for the second-brain search tools (`brainTools.ts`, the
-// owner's personal vault — the team brain was removed 2026-10-30).
+// Retrieval/ranking for the brain search tools (`brainTools.ts`): the owner's
+// personal vault, and the team vault through `teamBrain.ts` `searchTeamBrain`.
 //
 // Pure read over a cloned working tree: walk `wiki/**/*.md`, parse a minimal
 // frontmatter block, and rank by keyword hits weighted title/aliases > tags >
@@ -26,12 +26,14 @@ export function normalizeWikiPath(rawPath: string): WikiPathCheck {
   return { ok: true, norm };
 }
 
-// Hard cap on `wiki/` notes scanned per search. NOTE: `listTree` orders entries
-// alphabetically by path (dir-before-file), NOT by recency, so this keeps the
-// first 200 notes by path order — in a vault with >200 notes a late-sorting
-// match (e.g. `wiki/zzz.md`) is silently not scored. Acceptable at expected
-// scale; raise the cap or add mtime-desc ordering here if vaults grow larger.
-const SCAN_CAP = 200;
+// Notes scored per search. `listTree` orders entries by path (dir-before-file),
+// NOT by recency, so a vault beyond the cap loses its LATE-sorting notes — in
+// the team wiki that is whole type folders (`wiki/howto/`, `wiki/systems/`).
+// It was 200 and silent until 2026-11-10; now it equals the team vault's own
+// page-read cap (teamBrain.ts `PAGE_CAP`) and a search that hits it SAYS so:
+// `unscanned` counts the notes that were not scored and the tools pass it on to
+// the model (`unscannedNote`) — a miss must never read as "the brain lacks it".
+export const BRAIN_SCAN_CAP = 2000;
 /** Default / max number of ranked hits returned. */
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 20;
@@ -64,7 +66,23 @@ export interface RankBrainNotesOptions {
 
 export type BrainSearchResult =
   | { kind: "no_vault" }
-  | { kind: "ok"; hits: BrainNoteHit[] };
+  /** `unscanned` (only when > 0): notes beyond `BRAIN_SCAN_CAP` that this search did not score. */
+  | { kind: "ok"; hits: BrainNoteHit[]; unscanned?: number };
+
+/**
+ * The agent-facing line a search result carries when the vault is larger than
+ * one search covers ("" when everything was searched). English — the model
+ * reads it; it names the catalog to fall back on.
+ */
+export function unscannedNote(unscanned: number | undefined, vault: "personal" | "team"): string {
+  if (!unscanned || unscanned <= 0) return "";
+  const where = vault === "team" ? "the team brain" : "your second brain";
+  const fallback =
+    vault === "team"
+      ? 'read its catalog `wiki/index.md` with get_note (scope "team") and open the page by path'
+      : "read `wiki/index.md` with get_note, or list `wiki/` with `mcp__repo__list_files`, and open the note by path";
+  return `NOT A FULL SEARCH: ${where} holds more notes than one search covers — ${unscanned} note(s) (the last ones in path order) were NOT searched. A miss here does not mean ${where} lacks it: ${fallback}, and tell the user the search was partial.`;
+}
 
 interface NoteFrontmatter {
   title: string;
@@ -172,18 +190,18 @@ export async function rankBrainNotes(
   if (!hasVault) {
     return { kind: "no_vault" };
   }
-  const noteFiles = entries
-    .filter(
-      (e) =>
-        e.type === "file" &&
-        e.path.startsWith(prefix) &&
-        e.path.endsWith(".md") &&
-        !e.path.endsWith("_template.md") &&
-        e.path !== "wiki/index.md" &&
-        e.path !== "wiki/log.md" &&
-        (!options.include || options.include(e.path)),
-    )
-    .slice(0, SCAN_CAP);
+  const eligible = entries.filter(
+    (e) =>
+      e.type === "file" &&
+      e.path.startsWith(prefix) &&
+      e.path.endsWith(".md") &&
+      !e.path.endsWith("_template.md") &&
+      e.path !== "wiki/index.md" &&
+      e.path !== "wiki/log.md" &&
+      (!options.include || options.include(e.path)),
+  );
+  const noteFiles = eligible.slice(0, BRAIN_SCAN_CAP);
+  const unscanned = eligible.length - noteFiles.length;
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   const hits: BrainNoteHit[] = [];
   for (const f of noteFiles) {
@@ -212,7 +230,7 @@ export async function rankBrainNotes(
   // Stable: higher score first, ties broken by path so results are deterministic.
   hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
   const capped = Math.min(Math.max(1, limit), MAX_LIMIT);
-  return { kind: "ok", hits: hits.slice(0, capped) };
+  return { kind: "ok", hits: hits.slice(0, capped), ...(unscanned > 0 ? { unscanned } : {}) };
 }
 
 /** Render ranked hits as the agent-facing list body both brain servers return. */

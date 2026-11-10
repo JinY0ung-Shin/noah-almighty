@@ -28,7 +28,7 @@ import {
 } from "../teamBrainPolicy.js";
 import { TEAM_KNOWLEDGE_DEFINITION } from "./brainPolicy.js";
 import { checkIntake, parseTeamPage, provenanceProblemText, validateChangeset, type TeamProvenanceIssue } from "../teamBrainSchema.js";
-import type { BrainNoteHit } from "./brainSearch.js";
+import { unscannedNote, type BrainNoteHit } from "./brainSearch.js";
 import {
   TEAM_BRAIN_MAX_CHANGES,
   TEAM_BRAIN_MAX_CONTENT_BYTES,
@@ -400,15 +400,32 @@ function formatTeamHits(hits: BrainNoteHit[]): string {
   return parts.join("\n\n");
 }
 
-/** Format team search hits (used by brainTools' search when scope covers the team). */
-export async function teamSearchBlock(config: AppConfig, query: string, limit?: number): Promise<{ count: number; body: string }> {
+/**
+ * Format team search hits (used by brainTools' search when scope covers the
+ * team). `partial` is the "not a full search" line ("" when every page was
+ * searched): `body` already ends with it, and a caller printing its own
+ * no-match line appends it (`teamNoMatchText`) — a miss in a vault larger than
+ * one search covers must never read as "the team brain has nothing".
+ */
+export async function teamSearchBlock(
+  config: AppConfig,
+  query: string,
+  limit?: number,
+): Promise<{ count: number; body: string; partial: string }> {
   const result = await searchTeamBrain(config, query, limit);
   const hits = result.kind === "ok" ? result.hits : [];
-  if (hits.length === 0) return { count: 0, body: "" };
+  const partial = unscannedNote(result.kind === "ok" ? result.unscanned : 0, "team");
+  if (hits.length === 0) return { count: 0, body: "", partial };
   return {
     count: hits.length,
-    body: `Top ${hits.length} result(s) from the TEAM brain for "${query}" (${TEAM_NOTE_TRUST_NOTE}):\n${formatTeamHits(hits)}\n\nRead a full team page or source with get_note (scope "team").`,
+    body: `Top ${hits.length} result(s) from the TEAM brain for "${query}" (${TEAM_NOTE_TRUST_NOTE}):\n${formatTeamHits(hits)}\n\nRead a full team page or source with get_note (scope "team").${partial ? `\n\n${partial}` : ""}`,
+    partial,
   };
+}
+
+/** The team half's no-match line, carrying the partial-search note when there is one. */
+export function teamNoMatchText(query: string, partial: string): string {
+  return `Nothing in the team brain matched "${query}".${partial ? ` ${partial}` : ""}`;
 }
 
 /** get_note for scope "team". */

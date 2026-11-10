@@ -5,8 +5,8 @@ import type { AppConfig } from "../types.js";
 import { ensureClone, knowledgeRepoContextFor, readFile as readRepoFile } from "../knowledgeRepo.js";
 import { OWNER_ONLY, cloneFailureMessage, readFileErrorMessage } from "./repoToolKit.js";
 import { text } from "./mcpTools.js";
-import { formatBrainHits, normalizeWikiPath, rankBrainNotes } from "./brainSearch.js";
-import { buildTeamBrainTools, readTeamNoteTool, teamSearchBlock, type TeamBrainToolsContext } from "./teamBrainTools.js";
+import { formatBrainHits, normalizeWikiPath, rankBrainNotes, unscannedNote } from "./brainSearch.js";
+import { buildTeamBrainTools, readTeamNoteTool, teamNoMatchText, teamSearchBlock, type TeamBrainToolsContext } from "./teamBrainTools.js";
 import { BRAIN_CONFLICT_RULE, PERSONAL_TEAM_PAGE_KEY } from "./brainPolicy.js";
 import { parseTeamFrontmatter } from "../teamBrainSchema.js";
 import { readTeamVaultFile } from "../teamBrain.js";
@@ -147,9 +147,11 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
           const repoRoot = await ensureClone(c);
           const result = await rankBrainNotes(repoRoot, args.query, args.limit);
           if (result.kind === "no_vault") return text(NO_VAULT, true);
+          // A vault larger than one search covers: say so on a hit AND on a miss.
+          const partial = unscannedNote(result.unscanned, "personal");
           if (result.hits.length === 0) {
             return text(
-              `No notes in your second brain matched "${args.query}". It may not be captured yet — if it is durable, capture it with the brain-ingest skill.`,
+              `No notes in your second brain matched "${args.query}". ${partial || "It may not be captured yet — if it is durable, capture it with the brain-ingest skill."}`,
             );
           }
           // Read-time marks: link notes and promoted notes point at the canonical team page.
@@ -168,7 +170,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
           return text(
             `Top ${result.hits.length} note(s) from your second brain for "${args.query}":\n${formatBrainHits(
               result.hits,
-            )}${markBlock}\n\nRead a full note with get_note or mcp__repo__read_file.`,
+            )}${markBlock}\n\nRead a full note with get_note or mcp__repo__read_file.${partial ? `\n\n${partial}` : ""}`,
           );
         } catch (error) {
           return text(cloneFailureMessage(error), true);
@@ -194,17 +196,23 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
         if (scope === "team") {
           if (!teamRead || !team) return text("The team brain is not readable in this run.", true);
           const block = await teamSearchBlock(team.config, args.query, args.limit);
-          return text(block.count > 0 ? block.body : `Nothing in the team brain matched "${args.query}".`);
+          return text(block.count > 0 ? block.body : teamNoMatchText(args.query, block.partial));
         }
         if (scope === "personal" && !personalActive) {
           return text("Your personal second brain is not available in this conversation (the personal knowledge tools are off or no repository is connected).", true);
         }
-        const teamBlock = teamRead && team ? await teamSearchBlock(team.config, args.query, args.limit) : { count: 0, body: "" };
+        const teamBlock = teamRead && team ? await teamSearchBlock(team.config, args.query, args.limit) : { count: 0, body: "", partial: "" };
         if (!personalActive) {
-          return text(teamBlock.count > 0 ? teamBlock.body : `Nothing in the team brain matched "${args.query}".`);
+          return text(teamBlock.count > 0 ? teamBlock.body : teamNoMatchText(args.query, teamBlock.partial));
         }
         const personal = await searchPersonal(args);
-        if (scope === "personal" || teamBlock.count === 0) return personal;
+        if (scope === "personal") return personal;
+        if (teamBlock.count === 0) {
+          // No team hit — but a PARTIAL team search is not "the team brain has nothing".
+          if (!teamBlock.partial) return personal;
+          const own = personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");
+          return text(`${own}\n\n${teamNoMatchText(args.query, teamBlock.partial)}`, Boolean(personal.isError));
+        }
         // Both halves: keep a personal hit list or its no-match line; a personal ERROR
         // (no repo / no vault) gives way to the team hits rather than hiding them.
         const personalText = personal.isError ? "" : personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");

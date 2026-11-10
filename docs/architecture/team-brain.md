@@ -178,6 +178,11 @@
   `raw/…` (a raw source comes back inside the untrusted wrapper; a wiki page leads with `blob: <id>`, which
   every `update` change must carry as `baseBlob` — a page changed since the read is refused, never reverted); team search lists pages, then
   UNCOMPILED sources (wrapped, labeled "uncompiled source — not yet a wiki page").
+- **A search never misses silently.** `rankBrainNotes` scores the first `BRAIN_SCAN_CAP` (2000, = the vault's
+  `PAGE_CAP`) notes in PATH order — it was 200 until 2026-11-10, which dropped whole late type folders
+  (`wiki/howto/`, `wiki/systems/`) of a wiki past 200 pages with no sign. Beyond the cap the result carries
+  `unscanned`, and every team search text (hits AND the no-match line, `teamNoMatchText`) ends with
+  `unscannedNote`: "NOT A FULL SEARCH … N note(s) were NOT searched", pointing at `wiki/index.md`.
 - Member (`TEAM_BRAIN_PROPOSE_TOOL_NAMES`): `propose_team_note` = a SOURCE submission `{type, title,
   summary, source, answers}` — `checkIntake` against `TEAM_INTAKE_REQUIRED[type]`; missing slots or
   refused provenance (`teamProvenanceProblem`, shared: `source_kind`/`source` never "unknown"

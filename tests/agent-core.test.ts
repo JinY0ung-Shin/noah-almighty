@@ -30,8 +30,10 @@ import {
   tokenForGitUrl,
 } from "../src/server/gitCredentials.js";
 import {
+  BRAIN_SCAN_CAP,
   parseNoteFrontmatter,
   rankBrainNotes,
+  unscannedNote,
 } from "../src/server/agent/brainSearch.js";
 import {
   APP_MANAGED_MCP_SERVERS,
@@ -1521,6 +1523,29 @@ describe("second brain search (rankBrainNotes / parseNoteFrontmatter)", () => {
     fs.mkdirSync(bare, { recursive: true });
     fs.writeFileSync(path.join(bare, "CLAUDE.md"), "old stub");
     expect((await rankBrainNotes(bare, "deploy")).kind).toBe("no_vault");
+  });
+
+  it("scores notes past the old 200-note cap and reports the ones beyond the scan cap (never a silent miss)", async () => {
+    const dir = path.join(tempDir, "brain-big-vault");
+    fs.mkdirSync(path.join(dir, "wiki/concepts"), { recursive: true });
+    const total = BRAIN_SCAN_CAP + 3;
+    for (let i = 0; i < total; i += 1) {
+      const word = i === 250 ? "needlemid" : i === total - 1 ? "needletail" : "filler";
+      fs.writeFileSync(path.join(dir, `wiki/concepts/n${String(i).padStart(5, "0")}.md`), `---\ntitle: Note ${i}\n---\n${word}\n`);
+    }
+    // Position 250 was beyond the old cap: it is scored now, and the result says 3 notes were not.
+    const mid = await rankBrainNotes(dir, "needlemid");
+    expect(mid).toMatchObject({ kind: "ok", unscanned: 3 });
+    expect(mid.kind === "ok" && mid.hits.map((h) => h.path)).toEqual(["wiki/concepts/n00250.md"]);
+    // A note beyond the cap is still missed — but the miss carries the count.
+    expect(await rankBrainNotes(dir, "needletail")).toEqual({ kind: "ok", hits: [], unscanned: 3 });
+    // The agent-facing line: only when something was skipped; names the vault and the catalog.
+    expect(unscannedNote(0, "team")).toBe("");
+    expect(unscannedNote(undefined, "personal")).toBe("");
+    expect(unscannedNote(3, "team")).toContain("NOT A FULL SEARCH: the team brain");
+    expect(unscannedNote(3, "team")).toContain("3 note(s)");
+    expect(unscannedNote(3, "team")).toContain('`wiki/index.md` with get_note (scope "team")');
+    expect(unscannedNote(3, "personal")).toContain("NOT A FULL SEARCH: your second brain");
   });
 });
 

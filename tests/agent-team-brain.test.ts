@@ -20,6 +20,7 @@ import { applyTeamChangeset, applyTeamPolicy, ensureTeamBrainRepo, teamBrainRoot
 import { TEAM_BRAIN_SCHEMA_VERSION, teamRawPath } from "../src/shared/teamBrain.js";
 import { execFileSync } from "node:child_process";
 import { commitIntoVault } from "./team-brain-fixtures.js";
+import { BRAIN_SCAN_CAP } from "../src/server/agent/brainSearch.js";
 
 let tempDir: string;
 const getTempDir = withTempDir("agent-team-brain", () => {
@@ -357,6 +358,37 @@ describe("team brain tools — reading", () => {
     expect(legacy).toContain("raw/legacy/concepts/old.md (uncompiled source — not yet a wiki page)");
     expect(legacy.indexOf("raw/legacy/concepts/old.md")).toBeGreaterThan(legacy.indexOf("<untrusted_teammate_text>"));
     expect((await callTool(t, "search", { query: "deploy", scope: "personal" })).isError).toBe(true);
+  });
+
+  it("searches a late type folder of a big wiki, and says so when the vault outgrows one search", async () => {
+    const s = setup("search-big");
+    await ensureTeamBrainRepo(s.config);
+    // 250 pages sort BEFORE wiki/systems/: with the old 200-note cap the systems page was never scored.
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 250; i += 1) files[`wiki/concepts/c${String(i).padStart(5, "0")}.md`] = `---\ntitle: Concept ${i}\n---\nfiller\n`;
+    files["wiki/systems/gateway.md"] = "---\ntitle: Gateway\n---\nThe gatewayneedle service.\n";
+    commitIntoVault(s.config, files);
+    const t = tools(s, teamCtx(s, s.mate.id));
+    const found = textOf(await callTool(t, "search", { query: "gatewayneedle", scope: "team" }));
+    expect(found).toContain("wiki/systems/gateway.md");
+    expect(found).not.toContain("NOT A FULL SEARCH");
+
+    // Past the scan cap: the last pages by path are not searched, and hit AND miss both say so.
+    const more: Record<string, string> = {};
+    for (let i = 250; i < BRAIN_SCAN_CAP + 2; i += 1) more[`wiki/concepts/c${String(i).padStart(5, "0")}.md`] = `---\ntitle: Concept ${i}\n---\nfiller\n`;
+    const root = teamBrainRoot(s.config);
+    for (const [rel, content] of Object.entries(more)) fs.writeFileSync(path.join(root, rel), content);
+    execFileSync("git", ["-C", root, "add", "--", "wiki/concepts"]);
+    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=t@x", "commit", "-q", "-m", "test: many pages"]);
+    for (const scope of ["team", "all"]) {
+      const miss = textOf(await callTool(t, "search", { query: "gatewayneedle", scope }));
+      expect(miss).toContain('Nothing in the team brain matched "gatewayneedle".');
+      expect(miss).toContain("NOT A FULL SEARCH: the team brain");
+      expect(miss).toContain("3 note(s)");
+    }
+    const hit = textOf(await callTool(t, "search", { query: "filler", scope: "team", limit: 1 }));
+    expect(hit).toContain("from the TEAM brain");
+    expect(hit).toContain("NOT A FULL SEARCH: the team brain");
   });
 
   it("reads SCHEMA.md, wiki pages and raw sources (wrapped), and nothing else", async () => {

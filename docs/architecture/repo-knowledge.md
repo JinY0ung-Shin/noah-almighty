@@ -134,6 +134,8 @@
   `brainPolicyManualText`; tool results quote the same constants. The brain-* + team-brain-curate skills and
   the repo-template `CLAUDE.md` REFER to "the Brain policy in your instructions" instead of restating it —
   `tests/brain-policy.test.ts` pins both halves. Personal search stays `wiki/`-only (user, 2026-11-10).
+  It scores the first `BRAIN_SCAN_CAP` (2000) notes in path order and SAYS when a vault is larger
+  (`unscannedNote`, on a hit and on a miss) — the same rule as the team search, [`team-brain.md`](team-brain.md) "Tools".
   Read-time marks of promoted / link notes (`team_page:` frontmatter) → [`team-brain.md`](team-brain.md)
   "Personal-note links".
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
