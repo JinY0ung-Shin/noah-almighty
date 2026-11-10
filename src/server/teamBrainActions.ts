@@ -13,8 +13,10 @@ import {
   TeamChangesetInvalidError,
   TeamNoteConflictError,
   applyTeamChangeset,
+  applyTeamPolicy,
   teamBrainProposalCommits,
   teamPageStates,
+  teamPolicyState,
 } from "./teamBrain.js";
 import {
   findSecretInText,
@@ -28,6 +30,7 @@ import logger from "./logger.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
 import {
+  TEAM_POLICY_PATH,
   teamProvenanceIssues,
   teamProvenanceProblemLabel,
   type TeamBrainCardView,
@@ -65,8 +68,25 @@ const PROVENANCE_INCOMPLETE = "출처 정보(출처 유형·출처·작성자·�
 
 const STALE_MESSAGE = "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.";
 
+/** A policy card's one "page": POLICY.md now → the drafted text; stale = it changed since the draft. */
+async function policyView(config: AppConfig, row: TeamBrainProposal, checkStale: boolean): Promise<TeamPageChangeView[]> {
+  const state = await teamPolicyState(config);
+  return [
+    {
+      path: TEAM_POLICY_PATH,
+      op: row.baseBlob === null ? "create" : "update",
+      title: "팀 정책",
+      type: null,
+      before: row.status === "draft" ? state.content : null,
+      after: row.content,
+      stale: checkStale && state.blob !== row.baseBlob,
+    },
+  ];
+}
+
 /** Each page write of a changeset with its committed state now; stale = changed since the draft. */
 async function pageViews(config: AppConfig, row: TeamBrainProposal, checkStale: boolean): Promise<TeamPageChangeView[]> {
+  if (row.kind === "policy") return policyView(config, row, checkStale);
   const changes = row.changeset?.changes ?? [];
   if (changes.length === 0) return [];
   const states = await teamPageStates(
@@ -104,7 +124,9 @@ export async function teamBrainCardView(
   store.expireTeamBrainDrafts();
   const proposal = store.getTeamBrainProposal(id);
   if (!proposal || proposal.proposerUserId !== viewerId) return null;
-  const target = proposal.targetId ? store.getTeamBrainProposal(proposal.targetId) : null;
+  const targetRow = proposal.targetId ? store.getTeamBrainProposal(proposal.targetId) : null;
+  // A review card's target is a TEAMMATE's submission: their personal-note paths stay theirs.
+  const target = targetRow ? { ...targetRow, personalNotes: [] } : null;
   const draft = proposal.status === "draft";
   const pages = await pageViews(config, proposal, draft);
   const stale = pages.some((p) => p.stale);
@@ -126,7 +148,7 @@ export async function teamBrainCardView(
         draft &&
         admin &&
         !stale &&
-        (proposal.kind === "direct" || target?.status === "pending"),
+        (proposal.kind === "direct" || proposal.kind === "policy" || target?.status === "pending"),
       cancel: proposal.kind !== "propose" && draft,
     },
     provenance: hasOwnSource(proposal)
@@ -257,7 +279,7 @@ export async function sweepTeamBrainAppliesOnBoot(
       .listTeamBrainProposals({ statuses: ["applied"], limit: 200 })
       .filter(
         (r) =>
-          (r.kind === "direct" || (r.kind === "review" && r.decision === "approve")) &&
+          (r.kind === "direct" || r.kind === "policy" || (r.kind === "review" && r.decision === "approve")) &&
           r.decidedAt !== null &&
           r.decidedAt >= since &&
           r.decidedAt < startedAt,
@@ -297,6 +319,45 @@ function applyErrorMessage(error: unknown): string | null {
 }
 
 /**
+ * 팀 정책 반영 (policy): claim the card, commit POLICY.md (refused when it
+ * changed since the draft or no longer passes the policy rules), release the
+ * claim on a failed write. The new knobs apply from the next store read
+ * (readTeamPolicySync re-reads on the file's mtime).
+ */
+async function applyPolicyCard(
+  deps: TeamBrainActionDeps,
+  actor: TeamBrainActor,
+  row: TeamBrainProposal,
+): Promise<TeamBrainActionResult> {
+  const { store, config } = deps;
+  if (!store.transitionTeamBrainProposal(row.id, ["draft"], "applied", { decidedBy: actor.id, decided: true })) return ALREADY;
+  try {
+    await applyTeamPolicy(config, {
+      content: row.content,
+      baseBlob: row.baseBlob,
+      title: row.title,
+      proposalId: row.id,
+      author: commitIdentityFor(store, actor),
+      logApprovedBy: actor.username,
+    });
+  } catch (error) {
+    store.transitionTeamBrainProposal(row.id, ["applied"], "draft", { clearDecision: true });
+    if (error instanceof TeamNoteConflictError) {
+      return { ok: false, status: 409, message: "그 사이 팀 정책이 바뀌었습니다. 아바타에게 현재 정책에 맞춰 다시 정리해 달라고 요청하세요." };
+    }
+    if (error instanceof TeamChangesetInvalidError) {
+      return { ok: false, status: 409, message: "팀 정책 형식이 올바르지 않습니다. 아바타에게 다시 정리해 달라고 요청하세요." };
+    }
+    logger.error({ err: error, proposalId: row.id }, "team policy apply failed");
+    deps.audit?.("team_brain_policy", row.id, "error");
+    return { ok: false, status: 500, message: "팀 정책을 저장하지 못했습니다." };
+  }
+  deps.onCommitted?.();
+  deps.audit?.("team_brain_policy", `${row.id} ${TEAM_POLICY_PATH}`);
+  return viewOrGone(deps, actor.id, row.id);
+}
+
+/**
  * 팀 브레인에 반영 (direct) / 승인 반영 · 반려 확정 · 보완 요청 보내기 (review):
  * admin only. The card (and, for a review, its target) is CLAIMED first by
  * compare-and-set in one transaction; a failed write releases the claim so the
@@ -315,6 +376,7 @@ export async function applyTeamBrainCard(
     return { ok: false, status: 403, message: "관리자만 팀 브레인에 반영할 수 있습니다." };
   }
   if (row.kind === "propose" || row.status !== "draft") return ALREADY;
+  if (row.kind === "policy") return applyPolicyCard(deps, actor, row);
   // The admin's own source is committed as a raw file: its provenance must be complete too.
   if (hasOwnSource(row) && teamProvenanceIssues(row.intake).length > 0) {
     return { ok: false, status: 409, message: PROVENANCE_INCOMPLETE };

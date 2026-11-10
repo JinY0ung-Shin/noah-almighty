@@ -7,6 +7,11 @@ import { OWNER_ONLY, cloneFailureMessage, readFileErrorMessage } from "./repoToo
 import { text } from "./mcpTools.js";
 import { formatBrainHits, normalizeWikiPath, rankBrainNotes } from "./brainSearch.js";
 import { buildTeamBrainTools, readTeamNoteTool, teamSearchBlock, type TeamBrainToolsContext } from "./teamBrainTools.js";
+import { BRAIN_CONFLICT_RULE, PERSONAL_TEAM_PAGE_KEY } from "./brainPolicy.js";
+import { parseTeamFrontmatter } from "../teamBrainSchema.js";
+import { readTeamVaultFile } from "../teamBrain.js";
+import type { TeamBrainPersonalLink } from "../store/teamBrain.js";
+import crypto from "node:crypto";
 
 /**
  * Per-conversation context for the PERSONAL second-brain search tools. Read-only
@@ -48,6 +53,59 @@ const NO_REPO =
 const NO_VAULT =
   "Your knowledge repository has no `wiki/` vault yet (it predates the second-brain layout). Run the `brain-migrate` skill ONCE to create the vault skeleton (it never overwrites existing files), then capture notes with the `brain-ingest` skill and retry. Do not use Bash — use the repo tools.";
 
+/** A note's git blob id (`blob <bytes>\0<content>`, SHA-1) — what `personalNotes` records at submit time. */
+export function personalNoteBlobId(content: string): string {
+  const body = Buffer.from(content, "utf8");
+  return crypto.createHash("sha1").update(Buffer.concat([Buffer.from(`blob ${body.length}\0`, "utf8"), body])).digest("hex");
+}
+
+/** The `team_page:` a personal link note points at (null when the note is not a link note). */
+function linkNoteTarget(content: string): string | null {
+  const block = parseTeamFrontmatter(content);
+  const v = block?.fields.get(PERSONAL_TEAM_PAGE_KEY);
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** "wiki/decisions/x.md (Title)" — the team page's title when it still exists. */
+async function teamPageLabel(config: AppConfig, pagePath: string): Promise<string> {
+  const content = await readTeamVaultFile(config, pagePath).catch(() => null);
+  if (content === null) return `${pagePath} (not in the team brain any more)`;
+  const title = parseTeamFrontmatter(content)?.fields.get("title");
+  return typeof title === "string" && title ? `${pagePath} ("${title}")` : pagePath;
+}
+
+/**
+ * The read-time mark for one personal note (null = nothing to say): a link note
+ * names its team page; a promoted note (an approved submission recorded it)
+ * names the canonical team page(s), the approval date and whether the note
+ * changed since it was submitted. `forOwner` adds the PROMOTED NOTES hint.
+ */
+async function personalNoteMark(
+  config: AppConfig,
+  notePath: string,
+  content: string,
+  links: TeamBrainPersonalLink[],
+  forOwner: boolean,
+): Promise<string | null> {
+  const target = linkNoteTarget(content);
+  if (target) {
+    return `${notePath} is a LINK note: its fact lives in the team brain — the canonical version is ${await teamPageLabel(config, target)} (read it with get_note, scope "team").`;
+  }
+  const hits = links.filter((l) => l.notes.some((n) => n.path === notePath));
+  if (hits.length === 0) return null;
+  const lines: string[] = [];
+  for (const l of hits) {
+    const note = l.notes.find((n) => n.path === notePath)!;
+    const changed = personalNoteBlobId(content) !== note.blob;
+    const pages = l.teamPages.length > 0 ? (await Promise.all(l.teamPages.slice(0, 5).map((p) => teamPageLabel(config, p)))).join(", ") : "(the approving changeset is not on record)";
+    lines.push(
+      `PROMOTED: ${notePath} was submitted to the team brain and approved${l.approvedAt ? ` on ${l.approvedAt.slice(0, 10)}` : ""} (submission ${l.proposalId}). The canonical version is now the team page ${pages}. This note ${changed ? "HAS CHANGED since it was submitted — the changed part is not in the team brain" : "has not changed since it was submitted"}.`,
+    );
+  }
+  if (forOwner) lines.push("Nothing in this note changes automatically: follow PROMOTED NOTES in the Brain policy (ask the user, with all five points, before rewriting it).");
+  return lines.join("\n");
+}
+
 /**
  * Build the personal second-brain tool definitions. Read-only and gated on
  * `elevated` (owner OR trusted teammate); there is no write tool here
@@ -60,6 +118,26 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
   const team = ctx.team;
   const teamRead = Boolean(team?.read);
   const repoCtx = () => knowledgeRepoContextFor(store, ctx.avatarUserId, ctx.config);
+  // The OWNER's approved submissions that recorded personal notes (read-time marks).
+  const personalLinks = () => (teamRead ? store.listTeamBrainPersonalLinks(ctx.avatarUserId) : []);
+  /** Resolve a `personalNotes` entry against the owner's clone (owner runs only). */
+  const personalNote: TeamBrainToolsContext["personalNote"] =
+    personalActive && ctx.viewerIsOwner
+      ? async (rawPath) => {
+          const c = repoCtx();
+          if (!c) return { ok: false, reason: "no knowledge repository is connected" };
+          const w = normalizeWikiPath(rawPath);
+          if (!w.ok || !w.norm.endsWith(".md")) return { ok: false, reason: "not a `wiki/…md` note path of the personal brain" };
+          try {
+            const content = await readRepoFile(await ensureClone(c), w.norm);
+            if (linkNoteTarget(content)) return { ok: false, reason: "already a link note to the team brain" };
+            return { ok: true, link: { path: w.norm, blob: personalNoteBlobId(content) } };
+          } catch {
+            return { ok: false, reason: "no such note in the personal brain (search it with scope \"personal\" for the exact path)" };
+          }
+        }
+      : undefined;
+  const teamCtx: TeamBrainToolsContext | undefined = team ? { ...team, personalNote } : undefined;
 
   const searchPersonal = async (args: { query: string; limit?: number }) => {
         if (!canRead) return text(OWNER_ONLY, true);
@@ -74,10 +152,23 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
               `No notes in your second brain matched "${args.query}". It may not be captured yet — if it is durable, capture it with the brain-ingest skill.`,
             );
           }
+          // Read-time marks: link notes and promoted notes point at the canonical team page.
+          const marks: string[] = [];
+          if (teamRead) {
+            const links = personalLinks();
+            for (const hit of result.hits) {
+              const content = await readRepoFile(repoRoot, hit.path).catch(() => null);
+              const mark = content === null ? null : await personalNoteMark(ctx.config, hit.path, content, links, false);
+              if (mark) marks.push(mark);
+            }
+          }
+          const markBlock = marks.length
+            ? `\n\nTeam-brain links of these notes (the team page is the canonical version${ctx.viewerIsOwner ? "; PROMOTED NOTES in the Brain policy says what to ask the user" : ""}):\n${marks.join("\n")}`
+            : "";
           return text(
             `Top ${result.hits.length} note(s) from your second brain for "${args.query}":\n${formatBrainHits(
               result.hits,
-            )}\n\nRead a full note with get_note or mcp__repo__read_file.`,
+            )}${markBlock}\n\nRead a full note with get_note or mcp__repo__read_file.`,
           );
         } catch (error) {
           return text(cloneFailureMessage(error), true);
@@ -92,7 +183,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
   return [
     tool(
       "search",
-      "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `mcp__brain__get_note` or `mcp__repo__read_file`. (owner or trusted teammates; read-only) With `scope` it also searches the TEAM brain — the team's shared wiki, compiled by an admin's avatar from teammates' submitted sources (decisions, system facts, fixes, glossary, conventions, owners); team results list wiki pages first, then submitted sources not yet compiled into a page (labeled as such). Search it (scope \"team\") before answering a team question and before submitting to the team brain.",
+      "Search your SECOND BRAIN — the curated notes under `wiki/` in your knowledge repository, where past conversations, decisions, people, and concepts have been distilled. **Call this BEFORE answering any question that could draw on accumulated knowledge** (the owner's preferences, prior decisions, people/projects, recurring topics) instead of answering from the live conversation alone. Returns the most relevant notes ranked by title/aliases, tags, then body, each with the note path and a snippet; read a full hit with `mcp__brain__get_note` or `mcp__repo__read_file`. (owner or trusted teammates; read-only) With `scope` it also searches the TEAM brain — the team's shared wiki, compiled by an admin's avatar from teammates' submitted sources (decisions, system facts, fixes, glossary, conventions, owners); team results list wiki pages first, then submitted sources not yet compiled into a page (labeled as such). Search it (scope \"team\") before answering a team question and before submitting to the team brain. A personal note promoted to the team brain (or turned into a link) is marked as such: the team page is then the canonical version. When a personal note and a team page disagree, never pick one silently — show both and ask the user (WHEN THEY DISAGREE in the Brain policy).",
       {
         query: z.string().describe("What to look for, in natural language or keywords."),
         limit: z.number().int().optional().describe("Max notes to return (default 8, max 20)."),
@@ -117,7 +208,11 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
         // Both halves: keep a personal hit list or its no-match line; a personal ERROR
         // (no repo / no vault) gives way to the team hits rather than hiding them.
         const personalText = personal.isError ? "" : personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");
-        return text(personalText ? `${personalText}\n\n${teamBlock.body}` : teamBlock.body);
+        // Both brains answered: the conflict rule rides the result where it applies.
+        const both = personalText && !personalText.startsWith("No notes in your second brain")
+          ? `\n\n(Results from BOTH brains. ${BRAIN_CONFLICT_RULE})`
+          : "";
+        return text(personalText ? `${personalText}\n\n${teamBlock.body}${both}` : teamBlock.body);
       },
     ),
     tool(
@@ -129,8 +224,8 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
       },
       async (args) => {
         if (args.scope === "team") {
-          if (!team) return text("The team brain is not readable in this run.", true);
-          return readTeamNoteTool(team, args.path);
+          if (!teamCtx) return text("The team brain is not readable in this run.", true);
+          return readTeamNoteTool(teamCtx, args.path);
         }
         if (!personalActive) {
           return text('Your personal second brain is not available in this conversation. For the team brain pass scope "team".', true);
@@ -147,13 +242,15 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
         }
         try {
           const repoRoot = await ensureClone(c);
-          return text(await readRepoFile(repoRoot, w.norm));
+          const content = await readRepoFile(repoRoot, w.norm);
+          const mark = teamRead ? await personalNoteMark(ctx.config, w.norm, content, personalLinks(), ctx.viewerIsOwner) : null;
+          return text(mark ? `${mark}\n\n${content}` : content);
         } catch (error) {
           return text(readFileErrorMessage(error), true);
         }
       },
     ),
-    ...(team ? buildTeamBrainTools(store, team) : []),
+    ...(teamCtx ? buildTeamBrainTools(store, teamCtx) : []),
   ];
 }
 

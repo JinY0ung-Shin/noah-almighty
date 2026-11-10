@@ -78,6 +78,7 @@ describe("BrainView team proposals", () => {
       baseBlob: null,
       intake: { type: "howto", answers: {}, gaps: [], followups: [] },
       changeset: null,
+      personalNotes: [],
       targetId: null,
       decision: null,
       decisionReason: null,

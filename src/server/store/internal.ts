@@ -861,6 +861,10 @@ export class StoreBase {
     // review/direct rows. NULL = none (legacy rows; decoded defensively).
     this.addColumnIfMissing("team_brain_proposals", "intake_json", "TEXT");
     this.addColumnIfMissing("team_brain_proposals", "changes_json", "TEXT");
+    // The owner's personal second-brain notes a submission came from (JSON
+    // TeamPersonalNoteLink[]): the server RECORDS the link, nothing writes the
+    // personal repo (user decision 2026-11-10). NULL on every older row.
+    this.addColumnIfMissing("team_brain_proposals", "personal_notes_json", "TEXT");
     this.migrateGitTokenSecrets();
     this.migrateVisibility();
     this.migrateCanvasArtifacts();

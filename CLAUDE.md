@@ -141,6 +141,11 @@ These are the invariants the project is built around. New work should reinforce 
   per conversation, never refreshed. → `todos.md`.
 - **Knowledge repo = one per user, agent-managed. Second brain = a CONVENTION (`wiki/`+`raw/`) over that
   SAME repo, NOT a new store**; uncommitted = not persisted. → `repo-knowledge.md`.
+- **One fact, one home — and ONE home for the rules about it.** Team knowledge's canonical home is the team
+  brain, personal context the personal brain; every personal-vs-team rule lives ONLY in
+  `agent/brainPolicy.ts` (skills and templates refer to it, never restate it). An approved submission
+  RECORDS its personal notes; nothing writes the personal repo for it — the avatar asks first. When the two
+  disagree, show both. → `repo-knowledge.md`, `team-brain.md`.
 - **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; teammates READ and SUBMIT
   SOURCES, an admin's avatar COMPILES them, an admin decides.** It is a Karpathy-style LLM wiki: immutable
   server-rendered `raw/` sources → `wiki/` pages under a FIXED `SCHEMA.md` the SERVER validates (rules are
@@ -148,6 +153,8 @@ These are the invariants the project is built around. New work should reinforce 
   pass, never a hand edit. Every state change is a human press on a chat card (the model only drafts); admin
   power is judged on the VIEWER, never the avatar owner; no delete; the backup is a push-only, never-forced
   mirror to the internal git host with the saving admin's token. New team-brain names are `team_brain*`, never `group*`.
+  The admins' `POLICY.md` (knobs the server enforces + guidelines) changes only through a card and can never
+  override the fixed core or SCHEMA.md; a new adjustable rule becomes a POLICY.md knob, not a constant.
   → `team-brain.md`.
 
 ### Code shape

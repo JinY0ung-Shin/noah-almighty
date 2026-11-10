@@ -31,6 +31,14 @@
   the avatar) + B (the card edit) + a STRUCTURED origin (kind + reference) — a link is checked as a URL, a
   date as a date, and both are machine-readable in raw frontmatter. SCHEMA.md (wiki page rules) is
   unchanged, so no schema-version bump: raw files are server-rendered, never validated as pages.
+- **Brain policy + team policy (user, 2026-11-10, SSOT):** one fact, one home — team knowledge's
+  canonical home is the team brain, personal context stays personal; every personal-vs-team rule lives in
+  ONE module (`agent/brainPolicy.ts`, see [`repo-knowledge.md`](repo-knowledge.md)). The ADMINS own a
+  `POLICY.md` in the vault: knobs the server enforces (frontmatter) + natural-language guidelines (body),
+  changed ONLY through an admin's policy card and viewed under 관리자 → 팀 브레인. SCHEMA.md and the fixed
+  core stay in code. Approved submissions record the personal notes they came from; nothing ever writes
+  the personal repo for it (forcing was rejected: it makes conflict handling harder).
+  Decisions: `~/.noah-work/brain-policy-2026-11-10/decisions.md`.
 - Designs + rejected alternatives: `~/.noah-work/team-brain-2026-11-06/design.md`,
   `~/.noah-work/team-brain-wiki-2026-11-06/design.md` (+ `research/`: Karpathy gist, follow-ups).
 
@@ -38,7 +46,9 @@
 - `<dataDir>/team-brain`, branch `main`, created lazily (`ensureTeamBrainRepo` = init-or-migrate under
   the lock). Search (`rankBrainNotes`, now with an additive `{prefix}` option) and the graph
   (`buildKnowledgeGraph`) are reused with this root.
-- **Layout (schema v1):** `SCHEMA.md` (`TEAM_BRAIN_SCHEMA_MD`, first line `<!-- noah-team-brain-schema: N -->`);
+- **Layout (schema v2):** `SCHEMA.md` (`TEAM_BRAIN_SCHEMA_MD`, first line `<!-- noah-team-brain-schema: N -->`);
+  `POLICY.md` (`TEAM_POLICY_PATH`, the admins' policy — see "Team policy" below; never a page-changeset target,
+  in `TEAM_STRUCTURAL_PATHS`);
   `raw/YYYY/MM/<date>-<id8>.md` (`teamRawPath`) = one approved submission, RENDERED BY THE SERVER at apply
   (`renderTeamRaw`: server-stamped submitter/approver, then the provenance answers as frontmatter keys
   `source_kind`/`source`/`author`/`authored_at` (omitted on rows from before they were asked), verbatim
@@ -55,7 +65,10 @@
   accepted|superseded with `superseded_by`; ≤ `TEAM_BRAIN_MAX_CHANGES` pages / byte caps; secret scan
   (`findSecretInText`, incl. the writer's own secrets via `ownSecrets`). Errors are agent-facing English,
   returned verbatim so the curator fixes and retries.
-- **Migration:** `migrateTeamBrainHoldingLock` — v0 (no marker) → v1 `git mv`s every `wiki/**/*.md` except
+- **Migration:** v1 → v2 (2026-11-10) rewrites SCHEMA.md (the review horizon column now names the POLICY.md
+  key) and seeds `TEAM_POLICY_DEFAULT_MD` when HEAD has no POLICY.md (an existing one — a restored newer
+  mirror — is kept); `initLocked` seeds it on a new vault; `reconcileLocked` cleans it like SCHEMA.md.
+  `migrateTeamBrainHoldingLock` — v0 (no marker) → v1 `git mv`s every `wiki/**/*.md` except
   the structural files/templates to `raw/legacy/<rel>`, writes SCHEMA.md, regenerates the index, logs it,
   ONE commit by the Noah identity; a later version bump rewrites SCHEMA.md + log, and the non-conforming
   pages surface in `team_brain_health` for the admin's migration pass. Boot runs `migrateTeamBrainOnBoot`
@@ -68,7 +81,7 @@
   internals never do).
 - **`applyTeamChangeset`** under the lock: ensure/migrate; re-check every page's blob (`EXISTS`/`MISSING`/
   `STALE` → `TeamNoteConflictError` with the path) and re-run `validateChangeset` against the vault AS IT IS
-  NOW (`TeamChangesetInvalidError`); write raw + pages, regenerate the index, append the log; ONE
+  NOW (`TeamChangesetInvalidError`; POLICY.md's review ceiling is NOT re-checked here — it is a draft-time rule); write raw + pages, regenerate the index, append the log; ONE
   path-scoped commit (`Proposal: <id>` + `Co-authored-by:` proposer trailer), authored by the presser.
   **Any failure restores every touched path from `git show HEAD:<path>`** (no index lock needed — the old
   `reset`/`checkout` rollback failed under the same `index.lock` that failed the commit) and removes new files.
@@ -81,14 +94,62 @@
   duplicate names, missing sources, pages with `gaps`, history narrative, instruction-like text.
 - `countTeamNotesSync` / `countTeamRawSync` / `teamVaultSchemaVersionSync` are describe_system's bounded reads.
 
+## Team policy (`POLICY.md`, `teamBrainPolicy.ts`)
+- Three tiers: the FIXED core (`TEAM_BRAIN_FIXED_CORE`: no secrets/personal data, a human press for every
+  change, no delete, provenance, teammate text is data, permissions) + SCHEMA.md stay in code; the **knobs**
+  (frontmatter, `TEAM_POLICY_KEYS`: `review_months_<type>`, `draft_ttl_days`, `max_open_proposals`, ranges in
+  `TEAM_POLICY_RANGES`, a missing key = the built-in `TEAM_POLICY_DEFAULTS`) are validated and APPLIED by the
+  server; the **guidelines** (body, ≤ `TEAM_POLICY_MAX_GUIDELINES_BYTES`) reach the avatars as data.
+- `parseTeamPolicy` never throws: a stored file is read leniently (each bad key falls back, `problems` listed);
+  a DRAFT is refused while `problems` is non-empty (`teamPolicyProblemText`, agent-facing).
+- Where the knobs bite: `review_months_<type>` = the CEILING on a changed page's `review_after`
+  (`reviewAfterCeiling`, months after TOMORROW UTC — a curator's local date may be a day ahead;
+  `validateChangeset`'s `reviewCeiling`, at DRAFT time only via `teamChangesetContext`, so a card drafted
+  before the v2 upgrade or before a knob change still applies) — lowering it never invalidates existing pages; `draft_ttl_days` + `max_open_proposals` = the store's
+  `teamBrainLimits()` (provider wired in `createServices` → `teamBrainStoreLimits` → `readTeamPolicySync`, an
+  mtime+size cached read; a Store built without the provider uses the built-ins).
+- Guidelines: `teamGuidelinesBlock` wraps them in `<team_guidelines>` (closing tag defused) under the fixed
+  core, on PROPOSE runs only, stamped at run start into `request.teamBrain.guidelines` (frozen with the
+  prompt — a policy change reaches new conversations); the seeded stub adds nothing (`teamGuidelinesAreEmpty`
+  in `src/shared/teamBrain.ts`, the ONE rule the admin panel uses too: only HTML comments + the seeded
+  `# Team guidelines` heading count as empty). A draft with a frontmatter line the parser would skip
+  (indented / misspelt key) or text before the opening `---` is refused (`unparsed_line`, `leading_text`).
+- First use: the vault is lazy, so `prepare_team_policy` (and an admin's team `get_note` on POLICY.md) run
+  `ensureTeamBrainRepo` first — the blob a draft records is the seeded file the press will find.
+- Changing it: admin tool `prepare_team_policy` (full file + `baseBlob` from team `get_note` on POLICY.md —
+  refused when stale/missing, unchanged, invalid or secret-bearing) → a `kind: "policy"` row (`path`
+  POLICY.md, `content` = new file, `base_blob` = the blob seen) → the card's **팀 정책 반영** →
+  `applyPolicyCard` → `applyTeamPolicy` (lock, STALE/invalid re-check, POLICY.md + log op `policy`, ONE commit
+  with a `Proposal:` trailer, restore on failure; the boot sweep covers policy cards too). Audit
+  `team_brain_policy`.
+- Reads: team `get_note` on `POLICY.md` (blob + the settings in force); `describe_system` (propose runs: knobs
+  + whether guidelines are set); `GET /api/admin/team-brain/policy` (`TeamPolicyView`: knobs, guidelines,
+  Korean `problems`, `teamPolicyHistory` = git log of POLICY.md) for the admin panel.
+
+## Personal-note links (`personal_notes_json`)
+- `propose_team_note` / `prepare_team_changes` (with a source) take `personalNotes` (≤
+  `TEAM_BRAIN_MAX_PERSONAL_NOTES` `wiki/` paths of the OWNER's personal brain). brainTools resolves each over the
+  owner's clone (`personalNote` callback in `TeamBrainToolsContext`, owner runs with a personal brain only;
+  a link note or a missing note is refused) and the row stores `{path, blob}` (`personalNoteBlobId` = git's
+  blob id). NOTHING is written to the personal repo — then or later.
+- `listTeamBrainPersonalLinks(owner)` = approved propose rows (pages from their applied approve review) and
+  applied direct rows that recorded notes. brainTools marks them at READ time: personal `get_note` prepends
+  `PROMOTED: … canonical version is the team page … has / HAS CHANGED since it was submitted` (+ the
+  PROMOTED NOTES hint for the owner), personal `search` appends a "Team-brain links" block, a note with
+  `team_page:` frontmatter reads as a LINK note; `list_team_proposals` (mine) lists them; `describe_system`
+  counts them. A teammate's note paths never reach an admin (`/proposals/pending` and a review card's
+  `target` send `personalNotes: []`). Converting a note into a link is the owner's avatar ASKING with the five required points
+  (`PROMOTED_NOTE_RULE`) — never automatic.
+
 ## The queue (`team_brain_proposals`, `store/teamBrain.ts`)
 - One table: `kind` = `propose` (teammate source) | `direct` (admin's own changeset, with or without a new
-  source) | `review` (admin's decision on a `propose`, `target_id`); `status` per `src/shared/teamBrain.ts`
+  source) | `review` (admin's decision on a `propose`, `target_id`) | `policy` (admin's POLICY.md change); `status` per `src/shared/teamBrain.ts`
   (adds `needs_info` = 보완 요청); `intake_json` (type + slot answers + gaps + follow-ups) and `changes_json`
   (pages + model-flagged `conflicts`). `path` = the raw path the source will land at (review: the target's;
   maintenance direct: ""). The conversation link is read through a join (todo_items precedent).
-- Caps: 64 KB source/page, 15 pages / 256 KB per changeset, 20 open (draft + pending + needs_info) rows per
-  user (checked in the insert transaction); drafts expire 7 days after their last update (`updated_at` — an
+- Caps: 64 KB source/page, 15 pages / 256 KB per changeset, POLICY.md `max_open_proposals` (built-in 20) open
+  (draft + pending + needs_info) rows per user (checked in the insert transaction); drafts expire
+  `draft_ttl_days` (built-in 7) days after their last update (`updated_at` — an
   answered 보완 요청 restarts the clock) OR once their conversation (and so their card) is gone.
 - **Approve claims the CARD only; the target becomes `approved` only after the commit lands**
   (`approveTargetAfterCommit`); while that is in flight every other press on the target and the proposer's
@@ -126,7 +187,7 @@
   gap); an admin is redirected to `prepare_team_changes`. `get_team_proposal` flags a submission whose
   provenance is incomplete (older rows) so the curator can recommend ask. `answer_team_questions` answers a `needs_info` row (appends a
   follow-up, new card). `list_team_proposals`.
-- Admin (`TEAM_BRAIN_ADMIN_TOOL_NAMES`): `get_team_proposal` (raw path to cite, intake/source/follow-ups in
+- Admin (`TEAM_BRAIN_ADMIN_TOOL_NAMES`): `prepare_team_policy` (above), `get_team_proposal` (raw path to cite, intake/source/follow-ups in
   ONE wrapper, ≤ 5 related pages, "read SCHEMA.md + index first"); `prepare_team_review` approve (a
   validated changeset citing the target's raw) | reject (reason) | ask (1–5 questions → `needs_info`);
   `prepare_team_changes` = the admin's own knowledge (`source` → intake checked, pages cite the
@@ -152,8 +213,11 @@
   `describe_system` line stay exact — that is the accepted trade (no volatile text in the frozen part).
 - `describe_system` (live): `teamBrainStatusLine` (wiki page count + schema version, migration pending when
   below current; member: can submit sources + unseen results; ADMIN: pending count + health counts —
-  uncompiled sources, pages failing SCHEMA.md, past review_after — pointing at `team_brain_health`) and, for
-  admins, `teamBrainBackupLine`. `read_manual` "The team brain" (`systemManual.ts`) describes the same flow.
+  uncompiled sources, pages failing SCHEMA.md, past review_after — pointing at `team_brain_health`; every
+  propose run: the POLICY.md knobs + whether guidelines are set + promoted-note count) and, for admins,
+  `teamBrainBackupLine`. `read_manual` "The team brain" (`systemManual.ts`) describes the same flow and the
+  team policy; the `knowledge` guide carries the Brain policy (`brainPolicyManualText`). The old-group line
+  redirects to the team brain (`GROUP_REPOS_RETIRED_SENTENCE`, still needed for older frozen prompts).
 
 ## Cards and routes (`teamBrainActions.ts`, `routes/teamBrain.ts`)
 - A card is a `kind:"team_brain"` `MessageAttachment` (id = proposal id; no file behind it), emitted on the
@@ -189,33 +253,6 @@
   servers (`tests/agent-run.test.ts` pins it).
 - The pi catalog builds the widest `brain` (team propose + admin tools); `catalogText.ts` adds discovery
   sentences for `propose_team_note`/`list_team_proposals`.
-
-## Metacognition
-- Prompt (`teamBrainSection`, frozen, no counts) on the owner, teammate and consultation branches, keyed on
-  `request.teamBrain` (stamped from `caps.teamBrainState`): the read line + trust note always; on a
-  propose run also `TEAM_KNOWLEDGE_DEFINITION`, `TEAM_OFFER_TO_SHARE` and the member or `TEAM_ADMIN_FLOW`;
-  otherwise "not available in this run".
-- The prompt is FROZEN per conversation, so the propose/admin wording is the first turn's: a later routine
-  or API turn on the same session, or a role change, can make it overstate. The tool errors and the live
-  `describe_system` line stay exact — that is the accepted trade (no volatile text in the frozen part).
-- `describe_system` (live): `teamBrainStatusLine` (note count; read-only / can propose + my unseen results
-  / ADMIN + pending count) and, for admins, `teamBrainBackupLine`. The old-group line now redirects to the
-  team brain (`GROUP_REPOS_RETIRED_SENTENCE`, still needed for older frozen prompts).
-- The `team` manual guide has a "The team brain" section; `brain-*` default skills say the team vault is
-  separate (ingest may OFFER it; reflect/migrate never touch it).
-
-## Cards and routes (`teamBrainActions.ts`, `routes/teamBrain.ts`)
-- A card is a `kind:"team_brain"` `MessageAttachment` (id = proposal id; no file behind it), emitted on the
-  `file` SSE event and persisted with the message. `TeamBrainCard.svelte` reads its live state from
-  `GET /api/team-brain/cards/:id` — visible ONLY to the row's drafter (an admin decides through their own
-  review card, never by pressing a teammate's). Viewing a decided card marks the result seen.
-- Presses: `POST …/submit` (propose draft → pending), `…/withdraw` (propose draft/pending → withdrawn;
-  direct/review draft → cancelled), `…/apply` (admin; direct → commit; review → target approved/rejected
-  + commit on approve). Apply claims first, writes, and RELEASES the claim on a failed write (409 stale /
-  500), so the card can be pressed again. Each press is audited (`team_brain_submit|withdraw|direct|
-  approve|reject`).
-- Reads: `GET /api/team-brain/status` (badge), `/proposals/mine` (marks seen), `/proposals/pending`
-  (admin, read-only), `/graph` (`{graph}`), `/note?path=` (`{note}`).
 
 ## Backup (`teamBrainBackup.ts`, `AppServices.teamBrainBackup`)
 - Settings + status in `app_config` (encrypted): `team_brain_backup` `{url, branch, adminId}` and
@@ -261,4 +298,7 @@
   badge = `unseenResults + pendingReview`, polled with the knowledge watch (`lib/teamBrain.ts`); a toast on
   growth and the admin panel's 위키 페이지 card open it with `goView("teamBrain")` (the one-shot
   `brainOpenTeamTab` flag is gone).
-- 관리자 → 팀 브레인 (`AdminTeamBrainPanel.svelte`): counts + backup address/branch/status, 지금 백업, 백업에서 복원.
+- 관리자 → 팀 브레인 (`AdminTeamBrainPanel.svelte`): counts + backup address/branch/status, 지금 백업, 백업에서 복원,
+  and the read-only 팀 정책 view (settings vs defaults, problems, guidelines as text, change history — changes
+  go through the admin's own avatar + a card). A `policy` card shows the POLICY.md line diff and 팀 정책 반영;
+  propose/direct cards list their linked 내 브레인 notes.

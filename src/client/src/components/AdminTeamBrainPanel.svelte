@@ -5,7 +5,14 @@
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
   import { goView } from "../lib/nav";
-  import type { TeamBrainBackupState } from "../../../shared/teamBrain";
+  import {
+    TEAM_PAGE_TYPES,
+    TEAM_PAGE_TYPE_LABELS,
+    TEAM_POLICY_DEFAULTS,
+    teamGuidelinesAreEmpty,
+    type TeamBrainBackupState,
+    type TeamPolicyView,
+  } from "../../../shared/teamBrain";
 
   export let active = false;
 
@@ -28,7 +35,12 @@
   let branch = "main";
   let error = "";
   let message = "";
+  // 팀 정책 (POLICY.md), read-only here: it changes only through the admin's avatar + a card.
+  let policy: TeamPolicyView | null = null;
+  let policyLoading = false;
+  let policyError = "";
   $: if (active && !initialized) void load();
+  $: guidelinesEmpty = policy ? teamGuidelinesAreEmpty(policy.guidelines) : true;
   $: uncompiled = state?.uncompiledSources ?? 0;
   // Restore needs an EMPTY vault: raw sources count too (after the schema migration every old note is one).
   $: vaultEmpty = !!state && state.noteCount === 0 && (state.rawSources ?? 0) === 0;
@@ -40,8 +52,26 @@
     branch = next.backup.branch || "main";
   }
 
+  async function loadPolicy() {
+    if (policyLoading) return;
+    policyLoading = true;
+    policyError = "";
+    try {
+      const r = await api<{ policy?: TeamPolicyView }>("/api/admin/team-brain/policy");
+      if (!r?.policy) throw new Error("팀 정책을 불러오지 못했습니다.");
+      policy = r.policy;
+    } catch (err) {
+      policyError = (err as Error).message;
+    } finally {
+      policyLoading = false;
+    }
+  }
+
+  /** A guidelines body that is only an HTML comment and/or headings (the template stub) counts as none. */
+
   async function load() {
     initialized = true;
+    void loadPolicy();
     if (busy) return;
     busy = true;
     error = "";
@@ -188,6 +218,82 @@
       <p class="muted" role="status">불러오는 중…</p>
     {/if}
     {#if error}<p class="warn-box" role="alert">{error}</p>{/if}
+
+    <h4 class="team-brain-admin-sub">팀 정책</h4>
+    <p class="muted">팀 정책은 관리자 본인의 아바타에게 요청하면 카드로 바뀝니다 (카드의 팀 정책 반영을 눌러야 저장됩니다).</p>
+    {#if policy}
+      {#if !policy.exists}
+        <p class="muted team-brain-policy-note">아직 팀 정책 파일(POLICY.md)이 없어 기본값을 씁니다.</p>
+      {/if}
+      {#if policy.problems.length}
+        <div class="warn-box team-brain-policy-problems" role="note">
+          <span>정책 파일에 문제가 있어 해당 항목은 기본값을 씁니다.</span>
+          <ul>
+            {#each policy.problems as problem, i (i)}<li>{problem}</li>{/each}
+          </ul>
+        </div>
+      {/if}
+      <table class="team-brain-policy-table" aria-label="팀 정책 설정">
+        <tbody>
+          {#each TEAM_PAGE_TYPES as type (type)}
+            <tr>
+              <th scope="row">{TEAM_PAGE_TYPE_LABELS[type]} · 다시 확인 주기</th>
+              <td>
+                {policy.knobs.reviewMonths[type]}개월
+                {#if policy.knobs.reviewMonths[type] !== TEAM_POLICY_DEFAULTS.reviewMonths[type]}
+                  <span class="tag accent">기본 {TEAM_POLICY_DEFAULTS.reviewMonths[type]}개월</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+          <tr>
+            <th scope="row">초안 만료</th>
+            <td>
+              {policy.knobs.draftTtlDays}일
+              {#if policy.knobs.draftTtlDays !== TEAM_POLICY_DEFAULTS.draftTtlDays}
+                <span class="tag accent">기본 {TEAM_POLICY_DEFAULTS.draftTtlDays}일</span>
+              {/if}
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">1인당 열린 카드</th>
+            <td>
+              {policy.knobs.maxOpenProposals}개
+              {#if policy.knobs.maxOpenProposals !== TEAM_POLICY_DEFAULTS.maxOpenProposals}
+                <span class="tag accent">기본 {TEAM_POLICY_DEFAULTS.maxOpenProposals}개</span>
+              {/if}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <span class="team-brain-admin-label">가이드라인</span>
+      {#if guidelinesEmpty}
+        <p class="muted">작성된 가이드라인이 없습니다.</p>
+      {:else}
+        <!-- Admin/avatar-written text: shown as TEXT, never rendered as markdown/HTML. -->
+        <pre class="team-brain-policy-guidelines">{policy.guidelines}</pre>
+      {/if}
+
+      <span class="team-brain-admin-label">변경 이력</span>
+      {#if policy.history.length}
+        <ul class="team-brain-policy-history" aria-label="팀 정책 변경 이력">
+          {#each policy.history as entry, i (i)}
+            <li><span class="muted">{when(entry.at)} · {entry.by}</span> · {entry.title}</li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="muted">변경 이력이 없습니다.</p>
+      {/if}
+    {:else if policyLoading}
+      <p class="muted" role="status">팀 정책을 불러오는 중…</p>
+    {/if}
+    {#if policyError}
+      <div class="team-brain-admin-actions">
+        <p class="warn-box" role="alert">{policyError}</p>
+        <button class="ghost-sm" type="button" disabled={policyLoading} on:click={loadPolicy}>다시 불러오기</button>
+      </div>
+    {/if}
   </section>
 {/if}
 
@@ -197,4 +303,16 @@
   .team-brain-admin-backlog { color: var(--warn); }
   .team-brain-admin-sub { margin: var(--s-2) 0 var(--s-1); font-size: var(--t-sm); }
   .team-brain-admin-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-2); }
+  .team-brain-admin-label { display: block; margin: var(--s-3) 0 var(--s-1); color: var(--text-soft); font-size: var(--t-xs); font-weight: 600; }
+  .team-brain-policy-note { margin: 0 0 var(--s-2); font-size: var(--t-xs); }
+  .team-brain-policy-problems { margin: 0 0 var(--s-2); }
+  .team-brain-policy-problems ul { margin: var(--s-1) 0 0; padding-left: var(--s-4); }
+  .team-brain-policy-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+  .team-brain-policy-table th,
+  .team-brain-policy-table td { padding: var(--s-1-5) var(--s-2); border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: middle; }
+  .team-brain-policy-table th { width: 50%; color: var(--text-soft); font-weight: 500; }
+  .team-brain-policy-table td { font-variant-numeric: tabular-nums; }
+  .team-brain-policy-table .tag { margin-left: var(--s-1-5); }
+  .team-brain-policy-guidelines { margin: 0; max-height: 320px; overflow: auto; padding: var(--s-2) var(--s-2-5); border-radius: var(--r-sm); background: var(--bg-subtle); font-family: var(--font-mono); font-size: var(--t-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .team-brain-policy-history { margin: 0; padding-left: var(--s-4); font-size: var(--t-xs); display: flex; flex-direction: column; gap: var(--s-1); overflow-wrap: anywhere; }
 </style>

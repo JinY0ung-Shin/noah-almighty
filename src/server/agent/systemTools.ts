@@ -27,7 +27,8 @@ import type {
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE, type HexSshViewerClass } from "../hexSshPolicy.js";
-import { countTeamNotesSync, teamBrainHealth, teamBrainInitialized, teamVaultSchemaVersionSync } from "../teamBrain.js";
+import { countTeamNotesSync, readTeamPolicySync, teamBrainHealth, teamBrainInitialized, teamVaultSchemaVersionSync } from "../teamBrain.js";
+import { teamGuidelinesAreEmpty, teamPolicyKnobsText } from "../teamBrainPolicy.js";
 import { TEAM_BRAIN_SCHEMA_VERSION } from "../../shared/teamBrain.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
 import { EFFORT_LEVELS, type ModelEffort } from "../effortLevels.js";
@@ -90,6 +91,15 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
   if (!tb.propose) {
     return `${head}; read-only in this run (submitting works only in the owner's own interactive conversation)`;
   }
+  // The admins' POLICY.md, LIVE (the prompt carries the guidelines as of the conversation's start).
+  const policy = readTeamPolicySync(ctx.config);
+  const policyLine = `; team policy (POLICY.md, get_note scope "team"): ${teamPolicyKnobsText(policy.knobs)}; ${
+    teamGuidelinesAreEmpty(policy.guidelines) ? "no team guidelines written yet" : "the admins' guidelines are set (read POLICY.md for the current text)"
+  }`;
+  const promoted = store.listTeamBrainPersonalLinks(ctx.avatarUserId).length;
+  const promotedLine = promoted
+    ? `; ${promoted} of the owner's approved submissions link personal notes — the team page is now canonical for them (PROMOTED NOTES in the Brain policy; list_team_proposals names them)`
+    : "";
   if (tb.admin) {
     const pending = store.countPendingTeamBrainProposals();
     const queue = `${pending} teammate submission${pending === 1 ? "" : "s"} await${pending === 1 ? "s" : ""} their review (mcp__brain__list_team_proposals → get_team_proposal → compile → prepare_team_review)`;
@@ -112,10 +122,10 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
         health = "; health: unavailable right now (mcp__brain__team_brain_health)";
       }
     }
-    return `${head}; the owner is an ADMIN (the curator) — their own knowledge goes in through mcp__brain__prepare_team_changes, and ${queue}; nothing changes until they press the card${health}`;
+    return `${head}; the owner is an ADMIN (the curator) — their own knowledge goes in through mcp__brain__prepare_team_changes, policy changes through mcp__brain__prepare_team_policy, and ${queue}; nothing changes until they press the card${health}${policyLine}${promotedLine}`;
   }
   const unseen = store.countUnseenTeamBrainResults(ctx.avatarUserId);
-  return `${head}; you can submit sources with mcp__brain__propose_team_note after the user agrees and the intake (an admin's avatar compiles them; an admin decides)${unseen ? `; ${unseen} of the owner's submissions have a new result or an admin's questions (mcp__brain__list_team_proposals)` : ""}`;
+  return `${head}; you can submit sources with mcp__brain__propose_team_note after the user agrees and the intake (an admin's avatar compiles them; an admin decides)${unseen ? `; ${unseen} of the owner's submissions have a new result or an admin's questions (mcp__brain__list_team_proposals)` : ""}${policyLine}${promotedLine}`;
 }
 
 /** Admin-only: the push-only backup mirror's state. */

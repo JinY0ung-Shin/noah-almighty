@@ -19,11 +19,12 @@ import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
   TEAM_ADMIN_FLOW,
-  TEAM_KNOWLEDGE_DEFINITION,
   TEAM_MEMBER_FLOW,
   TEAM_NOTE_TRUST_NOTE,
   TEAM_OFFER_TO_SHARE,
+  teamGuidelinesBlock,
 } from "./teamBrainTools.js";
+import { TEAM_KNOWLEDGE_DEFINITION, brainPolicySection } from "./brainPolicy.js";
 import {
   effectiveMcpToolGroups,
   MCP_TOOL_GROUPS,
@@ -290,7 +291,25 @@ function teamBrainSection(request: AgentRequest): string | null {
   if (!tb.propose) {
     return `${base} Proposing team notes is not available in this run (only in the owner's own interactive conversation).`;
   }
-  return [base, TEAM_KNOWLEDGE_DEFINITION, TEAM_OFFER_TO_SHARE, tb.admin ? TEAM_ADMIN_FLOW : TEAM_MEMBER_FLOW].join(" ");
+  const guidelines = teamGuidelinesBlock(tb.guidelines);
+  return [base, TEAM_KNOWLEDGE_DEFINITION, TEAM_OFFER_TO_SHARE, tb.admin ? TEAM_ADMIN_FLOW : TEAM_MEMBER_FLOW, ...(guidelines ? [guidelines] : [])].join(" ");
+}
+
+/**
+ * The **Brain policy** section (brainPolicy.ts — the ONE home of the
+ * personal-vs-team rules) for what THIS run can do with each brain: the
+ * personal brain counts when its tool group is on and a repo is connected
+ * (`personalWrite` = this branch may capture), the team brain per
+ * `request.teamBrain`.
+ */
+function brainPolicyBlock(request: AgentRequest, personalWrite: boolean): string | null {
+  const personal = mcpToolGroupEnabled(request, "personal_knowledge") && request.knowledgeRepoConfigured !== false;
+  return brainPolicySection({
+    personalRead: personal,
+    personalWrite: personal && personalWrite,
+    teamRead: Boolean(request.teamBrain?.read),
+    teamPropose: Boolean(request.teamBrain?.propose),
+  });
 }
 
 /**
@@ -1248,6 +1267,10 @@ export function buildSystemPromptAppend(
     if (consultationTeamBrain) {
       lines.push(consultationTeamBrain);
     }
+    const consultationPolicy = brainPolicyBlock(request, false);
+    if (consultationPolicy) {
+      lines.push(consultationPolicy);
+    }
   } else if (request.headless && !piOwnerRun(request)) {
     // A restricted one-shot task (profile intro/hashtag generation). An owner
     // routine takes the owner branch (piOwnerRun) and a consultation the one
@@ -1319,6 +1342,10 @@ export function buildSystemPromptAppend(
     const ownerTeamBrain = teamBrainSection(request);
     if (ownerTeamBrain) {
       lines.push(ownerTeamBrain);
+    }
+    const ownerPolicy = brainPolicyBlock(request, true);
+    if (ownerPolicy) {
+      lines.push(ownerPolicy);
     }
     const teamBlock = teamSection(request);
     if (teamBlock) {
@@ -1434,6 +1461,11 @@ export function buildSystemPromptAppend(
         if (teammateBrainBlock) {
           lines.push(teammateBrainBlock);
         }
+      }
+      // A shared (communal) account lets this teammate capture too.
+      const teammatePolicy = brainPolicyBlock(request, Boolean(request.sharedAccount));
+      if (teammatePolicy) {
+        lines.push(teammatePolicy);
       }
       if (
         anyMcpToolGroupEnabled(request, [

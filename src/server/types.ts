@@ -1484,9 +1484,11 @@ export interface AgentRequest {
    * Team brain capability of THIS run (runCapabilities' teamBrain* booleans),
    * stamped for the prompt's team-brain section: read = search/get_note scope
    * team; propose = propose_team_note + list (interactive owner run); admin =
-   * the review tools (the VIEWER is an admin). Undefined = no team brain here.
+   * the review tools (the VIEWER is an admin). `guidelines` = the admins'
+   * POLICY.md guidelines at run start (propose runs only; frozen with the
+   * prompt). Undefined = no team brain here.
    */
-  teamBrain?: { read: boolean; propose: boolean; admin: boolean };
+  teamBrain?: { read: boolean; propose: boolean; admin: boolean; guidelines?: string | null };
   /**
    * Whether the avatar owner marked their account as a shared (communal)
    * account (`User.sharedAccount`). Filled by the server from the owner's row

@@ -16,6 +16,7 @@ import { createRoutinesRouter } from "./routes/routines.js";
 import { createTodosRouter } from "./routes/todos.js";
 import { createTeamBrainRouter } from "./routes/teamBrain.js";
 import { TeamBrainBackup } from "./teamBrainBackup.js";
+import { teamBrainStoreLimits } from "./teamBrain.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSharedMcpRouter } from "./routes/sharedMcp.js";
 import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
@@ -34,6 +35,8 @@ export { expandChatSlashCommand };
 export function createServices(configOverrides: Partial<AppConfig> = {}): AppServices {
   const config = loadConfig(configOverrides);
   const store = new Store(config);
+  // POLICY.md's draft expiry + open cap (the admins' knobs) apply to every store op.
+  store.setTeamBrainLimitsProvider(() => teamBrainStoreLimits(config));
   // The model pi last reported (`response.created`, AgentEvents.onModel). Null
   // until the first run reports one; the admin "system info" view surfaces it
   // alongside pi-gateway's model list so an operator can confirm what actually ran. Held in a

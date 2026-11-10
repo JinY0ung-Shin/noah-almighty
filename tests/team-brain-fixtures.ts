@@ -5,6 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { applyTeamChangeset, teamBrainRoot } from "../src/server/teamBrain.js";
 import type { TeamBrainOp, TeamPageType } from "../src/shared/teamBrain.js";
+import { addMonthsIso } from "../src/server/teamBrainPolicy.js";
+
+/** A review_after inside every type's default POLICY.md horizon (the shortest is 3 months). */
+export const NEAR_REVIEW_AFTER = addMonthsIso(new Date().toISOString().slice(0, 10), 1);
 
 export const SEED_RAW = "raw/2026/11/2026-11-06-seed0001.md";
 export const SEED_RAW_CONTENT = "---\ntitle: Seed source\ntype: raw\n---\n# Seed source\n\n## Source\n\n배포는 compose up 으로 한다.\n";
@@ -34,7 +38,7 @@ export function teamPage(o: PageOptions): string {
     `summary: ${o.summary ?? `${o.title} summary`}`,
     ...(o.aliases ? [`aliases: [${o.aliases.join(", ")}]`] : []),
     `sources: [${(o.sources ?? [SEED_RAW]).join(", ")}]`,
-    `review_after: ${o.reviewAfter ?? "2099-01-01"}`,
+    `review_after: ${o.reviewAfter ?? NEAR_REVIEW_AFTER}`,
     ...extra,
     "---",
     "",

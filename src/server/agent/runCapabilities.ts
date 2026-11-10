@@ -64,6 +64,7 @@ import {
 } from "../hexSshPolicy.js";
 import { effortForModel, isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
+import { readTeamPolicySync } from "../teamBrain.js";
 import { summarizeOwnerState } from "./ownerState.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
@@ -1292,8 +1293,14 @@ export async function buildRunCapabilities(
     canvasActive,
     fileOutputActive,
     shareLinkToolActive,
+    // The admins' POLICY.md guidelines ride the propose-capable prompt (frozen with it).
     teamBrainState: teamBrainReadActive
-      ? { read: true, propose: teamBrainProposeActive, admin: teamBrainAdminActive }
+      ? {
+          read: true,
+          propose: teamBrainProposeActive,
+          admin: teamBrainAdminActive,
+          ...(teamBrainProposeActive ? { guidelines: readTeamPolicySync(config).guidelines } : {}),
+        }
       : undefined,
     skillExchangeActive,
     todoToolsActive,

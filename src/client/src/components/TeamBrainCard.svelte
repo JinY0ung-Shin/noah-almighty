@@ -11,6 +11,7 @@
   import type {
     TeamBrainCardView,
     TeamBrainIntake,
+    TeamBrainProposalKind,
     TeamPageChangeView,
     TeamProvenanceInput,
     TeamProvenanceSlot,
@@ -146,7 +147,12 @@
   });
   onDestroy(() => document.removeEventListener("visibilitychange", onVisible));
 
-  const KIND_LABEL = { propose: "팀 브레인 제안", direct: "팀 브레인 변경", review: "팀 브레인 검토" } as const;
+  const KIND_LABEL = {
+    propose: "팀 브레인 제안",
+    direct: "팀 브레인 변경",
+    review: "팀 브레인 검토",
+    policy: "팀 정책 변경",
+  } as const satisfies Record<TeamBrainProposalKind, string>;
   const DECISION_LABEL = { approve: "승인", reject: "반려", ask: "보완 요청" } as const;
 
   type Tone = "info" | "ok" | "warn" | "muted";
@@ -187,9 +193,12 @@
         return { text: "이 제안은 이미 처리되었거나 철회되었습니다.", tone: "muted" };
       }
       if (v.stale) {
-        return { text: "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" };
+        return p.kind === "policy"
+          ? { text: "그 사이 팀 정책이 바뀌었습니다. 아바타에게 현재 정책에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" }
+          : { text: "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" };
       }
       if (!v.actions.apply) return { text: "관리자만 반영할 수 있습니다.", tone: "warn" };
+      if (p.kind === "policy") return { text: "버튼을 눌러야 팀 정책이 저장됩니다.", tone: "info" };
       if (p.kind === "review" && p.decision === "ask") return { text: "버튼을 눌러야 보완 요청이 제안자에게 전달됩니다.", tone: "info" };
       return { text: p.kind === "review" ? "버튼을 눌러야 결정이 반영됩니다." : "버튼을 눌러야 팀 브레인에 저장됩니다.", tone: "info" };
     }
@@ -199,6 +208,7 @@
         if (p.decision === "ask") return { text: "보완 요청을 보냈습니다.", tone: "ok" };
         return { text: "반려했습니다.", tone: "ok" };
       }
+      if (p.kind === "policy") return { text: "팀 정책을 저장했습니다.", tone: "ok" };
       return { text: "팀 브레인에 저장했습니다.", tone: "ok" };
     }
     if (p.status === "expired") return { text: "누르지 않아 만료되었습니다.", tone: "muted" };
@@ -214,6 +224,7 @@
       if (v.proposal.decision === "ask") return "보완 요청 보내기";
       return "반려 확정";
     }
+    if (v.proposal.kind === "policy") return "팀 정책 반영";
     return "팀 브레인에 반영";
   }
 
@@ -296,6 +307,11 @@
   $: proposal = view?.proposal ?? null;
   $: isReview = proposal?.kind === "review";
   $: isChangesetCard = Boolean(proposal && (proposal.kind === "direct" || (proposal.kind === "review" && proposal.decision === "approve")));
+  // A policy card is ONE file write (POLICY.md): its diff is the whole card, so it is shown unfolded.
+  $: isPolicy = proposal?.kind === "policy";
+  $: showPages = isChangesetCard || isPolicy;
+  // Personal second-brain notes the submission came from (an older server sends none).
+  $: personalNotes = proposal && (proposal.kind === "propose" || proposal.kind === "direct") ? (proposal.personalNotes ?? []) : [];
   // The source being compiled: a review's target, or a direct card's own source (a maintenance changeset has none).
   $: source = !view || !proposal
     ? null
@@ -444,7 +460,7 @@
         <strong class="team-brain-name">{proposal.title}</strong>
         {#if isChangesetCard}
           <span class="team-brain-count">{changesetLine(pages, Boolean(source))}</span>
-        {:else if proposal.path}
+        {:else if proposal.path && !isPolicy}
           <code class="team-brain-path">{proposal.path}</code>
         {/if}
       </div>
@@ -497,6 +513,18 @@
       </details>
     {/if}
 
+    {#if proposal && personalNotes.length}
+      <div class="team-brain-linked-notes">
+        <p class="team-brain-linked-line">
+          연결된 내 브레인 노트:
+          {#each personalNotes as note, i (note.path)}{i > 0 ? ", " : ""}<code class="team-brain-path">{note.path}</code>{/each}
+        </p>
+        <p class="team-brain-hint">
+          {proposal.kind === "direct" ? "반영되면" : "승인되면"} 팀 위키가 정본이 됩니다 — 내 노트는 바뀌지 않으며, 링크로 바꿀지는 아바타가 물어봅니다.
+        </p>
+      </div>
+    {/if}
+
     {#if isChangesetCard && conflicts.length}
       <div class="team-brain-box team-brain-conflicts" role="note">
         <span class="team-brain-section-label">확인이 필요한 충돌</span>
@@ -508,13 +536,13 @@
       </div>
     {/if}
 
-    {#if isChangesetCard && pages.length}
-      <ul class="team-brain-pages" aria-label="바뀌는 페이지">
+    {#if showPages && pages.length}
+      <ul class="team-brain-pages" aria-label={isPolicy ? "바뀌는 정책 파일" : "바뀌는 페이지"}>
         {#each pages as page, i (page.path)}
           {@const diff = diffs[i]}
           <li class="team-brain-page" class:is-stale={page.stale}>
             <div class="team-brain-page-top">
-              <span class={`tag ${page.op === "create" ? "ok" : "write"}`}>{page.op === "create" ? "새 페이지" : "수정"}</span>
+              <span class={`tag ${page.op === "create" ? "ok" : "write"}`}>{page.op === "create" ? (isPolicy ? "새 파일" : "새 페이지") : "수정"}</span>
               {#if page.type}<span class="tag">{TEAM_PAGE_TYPE_LABELS[page.type]}</span>{/if}
               {#if diff && diff.removed > 0}<span class="tag danger">삭제 {diff.removed}줄</span>{/if}
               <strong class="team-brain-page-title">{page.title || page.path}</strong>
@@ -522,10 +550,11 @@
             <code class="team-brain-path">{page.path}</code>
             {#if page.stale}
               <p class="team-brain-page-stale">
-                {page.op === "create" ? "그 사이 같은 경로에 페이지가 생겼습니다." : "그 사이 이 페이지가 바뀌었습니다."}
+                {#if isPolicy}{page.op === "create" ? "그 사이 팀 정책 파일이 생겼습니다." : "그 사이 팀 정책이 바뀌었습니다."}
+                {:else}{page.op === "create" ? "그 사이 같은 경로에 페이지가 생겼습니다." : "그 사이 이 페이지가 바뀌었습니다."}{/if}
               </p>
             {/if}
-            <details class="team-brain-details">
+            <details class="team-brain-details" open={isPolicy}>
               <summary>
                 변경 보기{#if diff}{" "}<span class="team-brain-diff-stat">(+{diff.added} −{diff.removed})</span>{/if}
               </summary>

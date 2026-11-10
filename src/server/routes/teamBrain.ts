@@ -10,9 +10,19 @@ import {
   type TeamBrainActionDeps,
   type TeamBrainActionResult,
 } from "../teamBrainActions.js";
-import { countTeamNotes, normalizeTeamVaultPath, readTeamVaultFile, teamBrainCounts, teamBrainGraph } from "../teamBrain.js";
+import {
+  countTeamNotes,
+  normalizeTeamVaultPath,
+  readTeamPolicy,
+  readTeamVaultFile,
+  teamBrainCounts,
+  teamBrainGraph,
+  teamBrainInitialized,
+  teamPolicyHistory,
+} from "../teamBrain.js";
+import { teamPolicyProblemLabel } from "../teamBrainPolicy.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
-import type { TeamBrainStatus } from "../../shared/teamBrain.js";
+import type { TeamBrainStatus, TeamPolicyView } from "../../shared/teamBrain.js";
 
 // Team brain HTTP surface (docs/architecture/team-brain.md). Every write here is
 // a HUMAN press on a chat card the avatar drafted; the actions module re-checks
@@ -66,7 +76,8 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
       return;
     }
     const proposals = store.listTeamBrainProposals({ kind: "propose", statuses: ["pending"], limit: 100 });
-    res.json({ proposals: proposals.map(({ content: _content, ...rest }) => rest) });
+    // A teammate's personal-note paths are theirs: never sent to an admin.
+    res.json({ proposals: proposals.map(({ content: _content, personalNotes: _notes, ...rest }) => ({ ...rest, personalNotes: [] })) });
   });
 
   router.get("/api/team-brain/cards/:id", async (req: AuthenticatedRequest, res) => {
@@ -134,6 +145,24 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
       backup: backup ? backup.state() : readTeamBrainBackupState(store),
       githubHost: config.githubHost,
     });
+  });
+
+  // The team policy (POLICY.md), READ-only: changes go through an admin's card.
+  router.get("/api/admin/team-brain/policy", async (_req, res) => {
+    try {
+      const exists = teamBrainInitialized(config) && (await readTeamVaultFile(config, "POLICY.md")) !== null;
+      const policy = await readTeamPolicy(config);
+      const view: TeamPolicyView = {
+        knobs: policy.knobs,
+        guidelines: policy.guidelines,
+        exists,
+        problems: policy.problems.map(teamPolicyProblemLabel),
+        history: await teamPolicyHistory(config),
+      };
+      res.json({ policy: view });
+    } catch {
+      apiError(res, 500, "팀 정책을 읽지 못했습니다.");
+    }
   });
 
   // Saving binds the mirror to THIS admin's git token from now on.

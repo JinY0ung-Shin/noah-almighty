@@ -109,7 +109,7 @@ describe("team brain backup", () => {
     await s.admin.put("/api/admin/team-brain/backup").send({ url: MIRROR_URL, branch: "v0" }).expect(200);
     const restored = await s.admin.post("/api/admin/team-brain/backup/restore").expect(200);
     expect(restored.body.noteCount).toBe(0);
-    expect(teamVaultSchemaVersionSync(s.config)).toBe(1);
+    expect(teamVaultSchemaVersionSync(s.config)).toBe(2);
     expect(await readTeamVaultFile(s.config, "raw/legacy/concepts/deploy.md")).toBe("old note\n");
     // The admin panel shows how much is waiting to be compiled.
     expect((await s.admin.get("/api/admin/team-brain").expect(200)).body).toMatchObject({ noteCount: 0, rawSources: 1, uncompiledSources: 1 });

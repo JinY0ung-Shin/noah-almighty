@@ -109,11 +109,11 @@ describe("team brain vault (local git)", () => {
     expect(root).toBe(path.join(config.dataDir, "team-brain"));
     expect(teamBrainInitialized(config)).toBe(true);
     expect(gitOut(root, ["remote"]).trim()).toBe("");
-    expect(gitOut(root, ["log", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: initialize (schema v1)");
-    expect(gitOut(root, ["ls-files"]).trim().split("\n")).toEqual(["SCHEMA.md", "wiki/index.md", "wiki/log.md"]);
+    expect(gitOut(root, ["log", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: initialize (schema v2)");
+    expect(gitOut(root, ["ls-files"]).trim().split("\n")).toEqual(["POLICY.md", "SCHEMA.md", "wiki/index.md", "wiki/log.md"]);
     expect(await readTeamVaultFile(config, "SCHEMA.md")).toBe(TEAM_BRAIN_SCHEMA_MD);
-    expect(await readTeamVaultFile(config, "wiki/log.md")).toContain("migrate | initialize schema v1");
-    expect(teamVaultSchemaVersionSync(config)).toBe(1);
+    expect(await readTeamVaultFile(config, "wiki/log.md")).toContain("migrate | initialize schema v2");
+    expect(teamVaultSchemaVersionSync(config)).toBe(2);
     // Structural files are not notes.
     expect(await countTeamNotes(config)).toBe(0);
     expect(countTeamNotesSync(config)).toBe(0);
@@ -461,7 +461,7 @@ describe("team brain review fixes", () => {
     await migrateTeamBrainOnBoot(config);
     expect(gitOut(root, ["status", "--porcelain"]).trim()).toBe("");
     expect(gitOut(root, ["ls-tree", "-r", "--name-only", "HEAD"]).trim().split("\n").sort()).toEqual(
-      ["SCHEMA.md", "raw/legacy/concepts/deploy.md", "wiki/index.md", "wiki/log.md"].sort(),
+      ["POLICY.md", "SCHEMA.md", "raw/legacy/concepts/deploy.md", "wiki/index.md", "wiki/log.md"].sort(),
     );
     expect(await readTeamVaultFile(config, "wiki/log.md")).toContain("1 pre-schema notes moved");
     expect((await teamBrainHealth(config)).uncompiledSources).toEqual(["raw/legacy/concepts/deploy.md"]);

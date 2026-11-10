@@ -15,6 +15,8 @@ brain-reflect pass.
   `mcp__repo__commit`. `mcp__repo__write_file` overwrites the entire file, so never use it to trim a passage.
 - **`raw/` is read-only for this skill.** It is the original-capture archive: read it to judge
   what is current, never edit or delete anything in it. Lint edits land in `wiki/` only.
+- **Which brain:** follow the Brain policy in your instructions (ONE FACT ONE HOME, PROMOTED NOTES); this
+  skill checks the personal vault against it (checks 7–8) and never writes the team brain.
 
 ## Checks
 1. **Dangling links** — links whose target note does not exist.
@@ -35,6 +37,12 @@ brain-reflect pass.
    - Two conflicting statements with no way to tell which is current → do NOT guess; report the
      conflict (and ask the owner when in an interactive chat).
    - The frontmatter `date` field is note metadata, not history — leave it.
+7. **Broken team links** — a LINK note (frontmatter `team_page:`) whose team page no longer exists: read
+   the `team_page` path with `mcp__brain__get_note` (scope `"team"`); report each miss (never delete the
+   note — ask the owner what it should say).
+8. **Promoted notes not yet linked** — notes `mcp__brain__get_note` marks as PROMOTED (also listed by
+   `mcp__brain__list_team_proposals`): report them; converting one to a link follows PROMOTED NOTES (the
+   owner's yes, asked with all five points) and is never a hygiene fix.
 
 ## Output
 Report findings grouped by check. If asked to fix, apply minimal edits (`mcp__repo__edit_file`), keep the

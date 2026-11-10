@@ -24,6 +24,9 @@ recurring topic. Prefer recalling what is already written down over re-asking th
   page: less settled, so say so if you rely on it.
 - A mention of `mcp__group_brain__*` or `mcp__group_repo__*` predates the removal of groups: those per-group
   tools are gone; use the team brain above.
+- **Both brains:** follow the Brain policy in your instructions. A personal hit marked PROMOTED or LINK
+  points at its canonical team page — read and cite the team page. When a personal note and a team page
+  disagree, never pick one: show both (내 브레인 / 팀 브레인) and ask the user (WHEN THEY DISAGREE).
 
 ## How to search well
 1. Start with the most specific keywords or a natural-language phrase; titles/aliases rank highest,

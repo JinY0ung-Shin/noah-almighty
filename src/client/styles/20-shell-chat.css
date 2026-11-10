@@ -1609,6 +1609,20 @@ body.col-resizing .canvas-html-frame {
   color: var(--muted);
   font-size: var(--t-xs);
 }
+/* The submitter's own 내 브레인 notes the source came from: a calm, read-only line. */
+.team-brain-linked-notes {
+  display: flex;
+  flex-direction: column;
+}
+.team-brain-linked-line {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--t-xs);
+  overflow-wrap: anywhere;
+}
+.team-brain-linked-notes .team-brain-hint {
+  margin-top: var(--s-0-5);
+}
 /* 보충 정보: slot label → answer; an unknown answer is a muted "모름" chip. */
 .team-brain-intake {
   display: flex;

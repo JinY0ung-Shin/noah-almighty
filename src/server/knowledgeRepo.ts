@@ -567,6 +567,8 @@ caps the injected length — keep it tight.
 - If the \`wiki/\` vault is missing (an older repo), run **brain-migrate** once — it never
   overwrites existing files.
 - An edit is not persisted until you commit.
+- What goes here vs the team brain follows the Brain policy in your instructions (one fact, one
+  home): a fact approved into the team brain is linked from here, never kept as a second full copy.
 
 ## 여기에 적어 둘 것 (소유자 메모)
 - 자주 쓰는 용어·약어, 합의된 결정과 배경, 반복 작업의 기본 규칙, 선호하는 응답 말투/형식.
@@ -586,6 +588,9 @@ function repoTemplateReadme(name: string): string {
 - \`wiki/{sources,entities,concepts,synthesis}/\` — 정제된 노트 (brain-reflect)
 - \`wiki/index.md\` · \`wiki/log.md\` · \`wiki/_template.md\` — 목차 / 정리 이력 / 노트 템플릿
 - \`.claude-plugin/marketplace.json\` — 추가 스킬(플러그인) 목록
+
+팀 전체가 알아야 할 결정·시스템 정보는 팀 브레인이 정본입니다. 팀 브레인에 승인된 내용은
+아바타가 동의를 구한 뒤 여기서 팀 브레인 링크로 바꿉니다.
 
 기본 brain-* 스킬은 아바타에 기본 내장되어 있습니다. 새 스킬은 "○○ 스킬 만들어줘"라고
 요청하면 \`scaffold_skill\`로 생성됩니다.

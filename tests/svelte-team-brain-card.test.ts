@@ -23,6 +23,7 @@ function proposal(over: Partial<TeamBrainProposal> = {}): TeamBrainProposal {
     baseBlob: null,
     intake: null,
     changeset: null,
+    personalNotes: [],
     targetId: null,
     decision: null,
     decisionReason: null,
@@ -452,5 +453,128 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
     await fireEvent.input(within(form).getByRole("textbox", { name: /작성일/ }), { target: { value: "모름" } });
     await fireEvent.submit(form);
     await waitFor(() => expect(within(form).getByRole("alert").textContent).toContain("비밀 값"));
+  });
+});
+
+describe("TeamBrainCard — linked personal notes", () => {
+  const HINT = /팀 위키가 정본이 됩니다 — 내 노트는 바뀌지 않으며, 링크로 바꿀지는 아바타가 물어봅니다\./;
+
+  it("shows the submitter's linked 내 브레인 notes read-only on a propose card", async () => {
+    const { container } = await mount(
+      cardView({
+        proposal: proposal({
+          intake: intake(),
+          personalNotes: [
+            { path: "wiki/howto/ssh.md", blob: "a".repeat(40) },
+            { path: "raw/2026/11/jump.md", blob: "b".repeat(40) },
+          ],
+        }),
+        actions: { submit: true, withdraw: true, apply: false, cancel: false },
+      }),
+    );
+    const line = container.querySelector(".team-brain-linked-line");
+    expect(line?.textContent?.replace(/\s+/g, " ").trim()).toBe("연결된 내 브레인 노트: wiki/howto/ssh.md, raw/2026/11/jump.md");
+    expect(screen.getByText(HINT).textContent).toMatch(/^\s*승인되면/);
+    expect(container.querySelector(".team-brain-linked-notes button, .team-brain-linked-notes a")).toBeNull();
+  });
+
+  it("words the hint for a direct card's own source, and shows nothing without links", async () => {
+    await mount(
+      cardView({
+        proposal: proposal({
+          id: "d3",
+          kind: "direct",
+          intake: intake(),
+          changeset: { changes: [], conflicts: [] },
+          personalNotes: [{ path: "wiki/howto/ssh.md", blob: "c".repeat(40) }],
+        }),
+        pages: [page({ op: "create", before: null })],
+        actions: { submit: false, withdraw: false, apply: true, cancel: true },
+      }),
+    );
+    expect(screen.getByText(HINT).textContent).toMatch(/^\s*반영되면/);
+
+    await mount(cardView({ proposal: proposal({ id: "p9", title: "링크 없는 제안", intake: intake() }) }));
+    expect(screen.getAllByText(/연결된 내 브레인 노트/)).toHaveLength(1);
+  });
+});
+
+describe("TeamBrainCard — team policy", () => {
+  const BEFORE = "---\ndraft_ttl_days: 7\n---\n# 팀 정책\n결정 페이지는 회의록을 원본으로 한다.\n";
+  const AFTER = "---\ndraft_ttl_days: 14\n---\n# 팀 정책\n결정 페이지는 회의록을 원본으로 한다.\n";
+
+  function policyView(over: Partial<TeamBrainCardView> = {}): TeamBrainCardView {
+    return cardView({
+      proposal: proposal({
+        id: "pol1",
+        kind: "policy",
+        path: "POLICY.md",
+        op: "update",
+        title: "초안 만료를 14일로",
+        summary: "검토가 밀려 초안이 자주 만료된다",
+        content: AFTER,
+        baseBlob: "d".repeat(40),
+      }),
+      pages: [{ path: "POLICY.md", op: "update", title: "팀 정책", type: null, before: BEFORE, after: AFTER, stale: false }],
+      actions: { submit: false, withdraw: false, apply: true, cancel: true },
+      ...over,
+    });
+  }
+
+  it("renders the POLICY.md diff unfolded with 팀 정책 반영, and applies it", async () => {
+    const { container } = await mount(policyView());
+
+    expect(screen.getByRole("region", { name: "팀 정책 변경" })).toBeTruthy();
+    expect(screen.getByText("팀 정책 변경")).toBeTruthy();
+    expect(screen.getByText("검토가 밀려 초안이 자주 만료된다")).toBeTruthy();
+    const rows = within(screen.getByRole("list", { name: "바뀌는 정책 파일" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]).getByText("수정")).toBeTruthy();
+    expect(within(rows[0]).getByText("삭제 1줄")).toBeTruthy();
+    expect(within(rows[0]).getByText("POLICY.md")).toBeTruthy();
+    expect(rows[0].querySelector("details")?.open).toBe(true);
+    expect(container.querySelector("del.team-brain-diff-line.is-del")?.textContent).toContain("draft_ttl_days: 7");
+    expect(container.querySelector("ins.team-brain-diff-line.is-add")?.textContent).toContain("draft_ttl_days: 14");
+    // Text only: the policy body's heading is not rendered as markdown.
+    expect(container.querySelector("h1")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("버튼을 눌러야 팀 정책이 저장됩니다.");
+    expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
+
+    views.pol1 = policyView({
+      proposal: { ...policyView().proposal, status: "applied" },
+      pages: [{ path: "POLICY.md", op: "update", title: "팀 정책", type: null, before: null, after: AFTER, stale: false }],
+      actions: { submit: false, withdraw: false, apply: false, cancel: false },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "팀 정책 반영" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("팀 정책을 저장했습니다."));
+    expect(posted).toEqual(["apply:pol1"]);
+    expect(screen.queryByRole("button", { name: "팀 정책 반영" })).toBeNull();
+    expect(screen.queryByText("현재 페이지를 찾을 수 없어 새 내용만 보여 줍니다.")).toBeNull();
+  });
+
+  it("cancels a policy draft through withdraw", async () => {
+    await mount(policyView());
+    views.pol1 = policyView({
+      proposal: { ...policyView().proposal, status: "cancelled" },
+      actions: { submit: false, withdraw: false, apply: false, cancel: false },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "취소" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("취소했습니다."));
+    expect(posted).toEqual(["withdraw:pol1"]);
+  });
+
+  it("shows a new POLICY.md in full and warns when it went stale", async () => {
+    await mount(
+      policyView({
+        stale: true,
+        actions: { submit: false, withdraw: false, apply: false, cancel: true },
+        pages: [{ path: "POLICY.md", op: "create", title: "팀 정책", type: null, before: null, after: AFTER, stale: true }],
+      }),
+    );
+    expect(screen.getByText("새 파일")).toBeTruthy();
+    expect(screen.getByText(/draft_ttl_days: 14/, { selector: "pre" })).toBeTruthy();
+    expect(screen.getByText("그 사이 팀 정책 파일이 생겼습니다.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("그 사이 팀 정책이 바뀌었습니다");
+    expect(screen.queryByRole("button", { name: "팀 정책 반영" })).toBeNull();
   });
 });

@@ -12,10 +12,11 @@
 // every write is serialized under ONE withRepoLock key (not reentrant — the
 // exported ops take it once, the *Locked internals never do).
 //
-// Layout (schema v1): SCHEMA.md · raw/YYYY/MM/<date>-<id8>.md (immutable
-// sources, committed only at approval) · raw/legacy/ (pre-schema notes) ·
-// wiki/<type folder>/<slug>.md pages · wiki/index.md + wiki/log.md (server-
-// generated on every commit).
+// Layout (schema v2): SCHEMA.md · POLICY.md (the admins' knobs + guidelines,
+// teamBrainPolicy.ts; changed only by a policy card) · raw/YYYY/MM/<date>-<id8>.md
+// (immutable sources, committed only at approval) · raw/legacy/ (pre-schema
+// notes) · wiki/<type folder>/<slug>.md pages · wiki/index.md + wiki/log.md
+// (server-generated on every commit).
 //
 // Design + mechanics: docs/architecture/team-brain.md.
 
@@ -45,7 +46,14 @@ import {
   type TeamPageParse,
   type TeamVaultIndexEntry,
 } from "./teamBrainSchema.js";
-import { TEAM_BRAIN_MAX_CONTENT_BYTES, TEAM_BRAIN_SCHEMA_VERSION, type TeamPageChange } from "../shared/teamBrain.js";
+import { TEAM_POLICY_DEFAULT_MD, parseTeamPolicy, reviewAfterCeiling, type TeamPolicyParse } from "./teamBrainPolicy.js";
+import {
+  TEAM_BRAIN_MAX_CONTENT_BYTES,
+  TEAM_BRAIN_SCHEMA_VERSION,
+  TEAM_POLICY_PATH,
+  type TeamPageChange,
+  type TeamPageType,
+} from "../shared/teamBrain.js";
 import type { AppConfig, KnowledgeGraph } from "./types.js";
 
 // The path / secret checks moved to the pure schema module; this stays their import path.
@@ -61,6 +69,7 @@ const NOAH_IDENTITY = { name: "Noah Almighty", email: "team-brain@noah-almighty.
 const INDEX_PATH = "wiki/index.md";
 const LOG_PATH = "wiki/log.md";
 const SCHEMA_PATH = "SCHEMA.md";
+const POLICY_PATH = TEAM_POLICY_PATH;
 /**
  * Bound on the pages listVault READS (content) — a pathological vault never
  * stalls a call. Paths are never capped (one ls-tree), so existence checks
@@ -187,13 +196,26 @@ export async function teamChangesetContext(
   ownSecrets?: Record<string, string>,
 ): Promise<ChangesetCheckContext> {
   const vault = await listTeamVault(config);
+  const policy = await readTeamPolicy(config);
   return {
     pages: vault.pages,
     knownPagePaths: vault.pagePaths,
     rawPaths: vault.rawPaths,
     newRawPath,
     ...(ownSecrets ? { ownSecrets } : {}),
+    reviewCeiling: ceilingFor(policy),
   };
+}
+
+/**
+ * POLICY.md's review_after ceiling per type — a DRAFT-time rule (prepare_* tools),
+ * never re-checked at the press: a card drafted before an upgrade or a knob
+ * change still applies. Counted from tomorrow (UTC) so a curator's local date
+ * one day ahead of the server is not refused.
+ */
+function ceilingFor(policy: TeamPolicyParse): (type: TeamPageType) => string {
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return (type) => reviewAfterCeiling(policy.knobs, type, tomorrow);
 }
 
 function indexFor(pages: Map<string, TeamPageParse>): string {
@@ -260,7 +282,7 @@ async function reconcileLocked(root: string): Promise<void> {
   if (!(await headHasCommit(root))) return;
   await git(root, ["reset", "-q"]);
   await git(root, ["checkout", "-q", "HEAD", "--", "."]);
-  await git(root, ["clean", "-fdq", "--", "wiki", "raw", SCHEMA_PATH]);
+  await git(root, ["clean", "-fdq", "--", "wiki", "raw", SCHEMA_PATH, POLICY_PATH]);
 }
 
 async function initLocked(root: string): Promise<void> {
@@ -270,13 +292,14 @@ async function initLocked(root: string): Promise<void> {
   await fs.mkdir(path.join(root, "wiki"), { recursive: true });
   if (!hasGit) await git(root, ["init", "--quiet", `--initial-branch=${TEAM_BRAIN_BRANCH}`]);
   await writeFile(root, SCHEMA_PATH, TEAM_BRAIN_SCHEMA_MD);
+  await writeFile(root, POLICY_PATH, TEAM_POLICY_DEFAULT_MD);
   await writeFile(root, INDEX_PATH, renderTeamIndex([], []));
   await writeFile(
     root,
     LOG_PATH,
     `${TEAM_LOG_HEADER}\n${formatLogEntry({ date: today(), op: "migrate", title: `initialize schema v${TEAM_BRAIN_SCHEMA_VERSION}`, changes: [] })}`,
   );
-  await git(root, ["add", "--", SCHEMA_PATH, INDEX_PATH, LOG_PATH]);
+  await git(root, ["add", "--", SCHEMA_PATH, POLICY_PATH, INDEX_PATH, LOG_PATH]);
   await git(
     root,
     ["commit", "--quiet", "-m", `team-brain: initialize (schema v${TEAM_BRAIN_SCHEMA_VERSION})`],
@@ -318,6 +341,13 @@ async function migrateTeamBrainLocked(root: string): Promise<boolean> {
     }
     touched.push(SCHEMA_PATH, INDEX_PATH, LOG_PATH);
     await writeFile(root, SCHEMA_PATH, TEAM_BRAIN_SCHEMA_MD);
+    // v2 brought POLICY.md: a vault without one gets the built-in policy (an
+    // existing file — a restored newer mirror — is never overwritten).
+    const seedPolicy = (await showHead(root, POLICY_PATH)) === null;
+    if (seedPolicy) {
+      touched.push(POLICY_PATH);
+      await writeFile(root, POLICY_PATH, TEAM_POLICY_DEFAULT_MD);
+    }
     const moved = new Set(moves.map((m) => m.from));
     const remaining = new Map([...before.pages].filter(([p]) => !moved.has(p)));
     // Pages that stay (v1+ bumps) are re-parsed under the NEW rules.
@@ -342,12 +372,15 @@ async function migrateTeamBrainLocked(root: string): Promise<boolean> {
           date: today(),
           op: "migrate",
           title: `schema v${TEAM_BRAIN_SCHEMA_VERSION}`,
-          changes: moves.map((m) => ({ op: "move", path: `${m.from} → ${m.to}` })),
+          changes: [
+            ...moves.map((m) => ({ op: "move", path: `${m.from} → ${m.to}` })),
+            ...(seedPolicy ? [{ op: "create", path: POLICY_PATH }] : []),
+          ],
           note,
         }),
       ),
     );
-    await git(root, ["add", "--", SCHEMA_PATH, INDEX_PATH, LOG_PATH]);
+    await git(root, ["add", "--", SCHEMA_PATH, INDEX_PATH, LOG_PATH, ...(seedPolicy ? [POLICY_PATH] : [])]);
     await git(
       root,
       ["commit", "--quiet", "-m", `team-brain: migrate to schema v${TEAM_BRAIN_SCHEMA_VERSION}`, "--", ...new Set(touched)],
@@ -438,13 +471,13 @@ export async function teamNoteBlob(root: string, notePath: string): Promise<stri
 }
 
 /**
- * A readable vault path, normalized: `SCHEMA.md`, `wiki/**.md` or `raw/**.md`
- * (no `..`, no hidden or empty segment, plain characters). Null otherwise.
+ * A readable vault path, normalized: `SCHEMA.md`, `POLICY.md`, `wiki/**.md` or
+ * `raw/**.md` (no `..`, no hidden or empty segment, plain characters). Null otherwise.
  */
 export function normalizeTeamVaultPath(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim() || raw.length > 400) return null;
   const norm = path.posix.normalize(raw.trim().replace(/^[/]+/, ""));
-  if (norm === SCHEMA_PATH) return norm;
+  if (norm === SCHEMA_PATH || norm === POLICY_PATH) return norm;
   if (!norm.endsWith(".md") || !(norm.startsWith("wiki/") || norm.startsWith("raw/"))) return null;
   if (!/^[\p{L}\p{N} ._\-/]+$/u.test(norm) || norm.split("/").some((seg) => seg === "" || seg === ".." || seg.startsWith("."))) {
     return null;
@@ -452,7 +485,7 @@ export function normalizeTeamVaultPath(raw: unknown): string | null {
   return norm;
 }
 
-/** Read SCHEMA.md, a wiki page (incl. index/log) or a raw source; null when absent or not allowed. */
+/** Read SCHEMA.md, POLICY.md, a wiki page (incl. index/log) or a raw source; null when absent or not allowed. */
 export async function readTeamVaultFile(config: Config, rawPath: string): Promise<string | null> {
   const p = normalizeTeamVaultPath(rawPath);
   if (!p || !teamBrainInitialized(config)) return null;
@@ -468,6 +501,148 @@ export async function readTeamVaultFile(config: Config, rawPath: string): Promis
 /** A wiki note's content, or null (alias of readTeamVaultFile kept for wiki callers). */
 export async function readTeamNote(config: Config, notePath: string): Promise<string | null> {
   return readTeamVaultFile(config, notePath);
+}
+
+// ── Team policy (POLICY.md) ──────────────────────────────────────────────────
+
+/** POLICY.md from the working tree (= HEAD outside an in-flight write), or null when absent. */
+async function readPolicyFile(root: string): Promise<string | null> {
+  try {
+    return await readFile(root, POLICY_PATH);
+  } catch {
+    return null;
+  }
+}
+
+/** The effective team policy (built-in defaults when the vault or the file is absent). */
+export async function readTeamPolicy(config: Config): Promise<TeamPolicyParse> {
+  if (!teamBrainInitialized(config)) return parseTeamPolicy(null);
+  return parseTeamPolicy(await readPolicyFile(teamBrainRoot(config)));
+}
+
+/** Sync-read cache keyed by vault root: re-parsed only when POLICY.md's mtime/size change. */
+const policyCache = new Map<string, { key: string; parse: TeamPolicyParse }>();
+
+/**
+ * Sync twin of readTeamPolicy for hot paths (the store's draft expiry / open
+ * cap, run assembly). A bounded read of ONE regular file (never follows a link),
+ * cached on mtime + size; anything unreadable reads as the built-in policy.
+ */
+export function readTeamPolicySync(config: Config): TeamPolicyParse {
+  const root = teamBrainRoot(config);
+  const file = path.join(root, POLICY_PATH);
+  let stat: fsSync.Stats;
+  try {
+    stat = fsSync.lstatSync(file);
+  } catch {
+    policyCache.delete(root);
+    return parseTeamPolicy(null);
+  }
+  if (!stat.isFile() || stat.size > TEAM_BRAIN_MAX_CONTENT_BYTES) return parseTeamPolicy(null);
+  // ino + ctime too: a same-size rewrite within one mtime tick (or a restore of the old bytes) still re-reads.
+  const key = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  const hit = policyCache.get(root);
+  if (hit && hit.key === key) return hit.parse;
+  let parse: TeamPolicyParse;
+  try {
+    parse = parseTeamPolicy(fsSync.readFileSync(file, "utf8"));
+  } catch {
+    return parseTeamPolicy(null);
+  }
+  policyCache.set(root, { key, parse });
+  return parse;
+}
+
+/** The store's limits from POLICY.md (draft expiry in ms, open cap) — wired in createServices. */
+export function teamBrainStoreLimits(config: Config): { draftTtlMs: number; maxOpenProposals: number } {
+  const { knobs } = readTeamPolicySync(config);
+  return { draftTtlMs: knobs.draftTtlDays * 24 * 60 * 60 * 1000, maxOpenProposals: knobs.maxOpenProposals };
+}
+
+/** POLICY.md's content + committed blob (both null when absent). */
+export async function teamPolicyState(config: Config): Promise<TeamNoteState> {
+  if (!teamBrainInitialized(config)) return { content: null, blob: null };
+  const root = teamBrainRoot(config);
+  const [content, blob] = await Promise.all([readPolicyFile(root), teamNoteBlob(root, POLICY_PATH)]);
+  return { content, blob };
+}
+
+/** Recent POLICY.md commits, newest first (the admin panel's 변경 이력). */
+export async function teamPolicyHistory(config: Config, limit = 20): Promise<Array<{ at: string; by: string; title: string }>> {
+  const root = teamBrainRoot(config);
+  if (!teamBrainInitialized(config) || !(await headHasCommit(root))) return [];
+  const n = Math.min(Math.max(1, limit), 100);
+  const { stdout } = await git(root, ["log", `-n${n}`, "--format=%aI%x1f%an%x1f%s", "HEAD", "--", POLICY_PATH]);
+  return stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [at = "", by = "", title = ""] = line.split("\x1f");
+      return { at, by, title: title.replace(/^team-brain:\s*/, "") };
+    });
+}
+
+export interface ApplyTeamPolicyInput {
+  /** The new POLICY.md (validated again here). */
+  content: string;
+  /** POLICY.md's blob the draft saw (null = it did not exist) — anything else is STALE. */
+  baseBlob: string | null;
+  title: string;
+  proposalId: string;
+  /** The admin who pressed the button. */
+  author: { name: string; email: string };
+  logApprovedBy?: string;
+}
+
+/**
+ * Commit a new POLICY.md (+ a log entry) under the vault lock, refusing a file
+ * that changed since the draft (STALE, never overwritten) or that does not pass
+ * the policy rules as they are now. Any failure restores both paths. Returns the
+ * commit id.
+ */
+export async function applyTeamPolicy(config: Config, input: ApplyTeamPolicyInput): Promise<string> {
+  const root = teamBrainRoot(config);
+  return withRepoLock(root, async () => {
+    await initLocked(root);
+    await reconcileLocked(root);
+    await migrateTeamBrainLocked(root);
+    const current = await teamNoteBlob(root, POLICY_PATH);
+    if (current !== input.baseBlob) throw new TeamNoteConflictError("STALE", POLICY_PATH);
+    const problems = parseTeamPolicy(input.content).problems;
+    if (problems.length > 0) throw new TeamChangesetInvalidError(problems.map((p) => `${POLICY_PATH}: ${p.kind}`));
+    const touched = [POLICY_PATH, LOG_PATH];
+    const inHead = (p: string) => (p === POLICY_PATH ? current !== null : true);
+    try {
+      await writeFile(root, POLICY_PATH, input.content.endsWith("\n") ? input.content : `${input.content}\n`);
+      await writeFile(
+        root,
+        LOG_PATH,
+        await appendLog(
+          root,
+          formatLogEntry({
+            date: today(),
+            op: "policy",
+            title: input.title,
+            approvedBy: input.logApprovedBy,
+            changes: [{ op: current === null ? "create" : "update", path: POLICY_PATH }],
+          }),
+        ),
+      );
+      await git(root, ["add", "--", ...touched]);
+      const subject = `team-brain: ${input.title.replace(/[\r\n]+/g, " ").trim().slice(0, 120) || "update the team policy"}`;
+      await git(
+        root,
+        ["commit", "--quiet", "-m", `${subject}\n\nProposal: ${input.proposalId}`, "--", ...touched],
+        undefined,
+        identityConfig(input.author),
+      );
+      const { stdout } = await git(root, ["rev-parse", "HEAD"]);
+      return stdout.trim();
+    } catch (error) {
+      await restorePathsLocked(root, touched, inHead);
+      throw error;
+    }
+  });
 }
 
 export interface TeamNoteState {

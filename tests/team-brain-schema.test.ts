@@ -32,7 +32,7 @@ import {
   TEAM_PAGE_TYPES,
   type TeamBrainProposal,
 } from "../src/shared/teamBrain.js";
-import { SEED_RAW, gitOut, teamPage } from "./team-brain-fixtures.js";
+import { NEAR_REVIEW_AFTER, SEED_RAW, gitOut, teamPage } from "./team-brain-fixtures.js";
 import { withTempDir } from "./helpers.js";
 
 const dir = withTempDir("team-brain-schema");
@@ -94,7 +94,7 @@ describe("page validation", () => {
       type: "howto",
       aliases: ["deploy"],
       sources: [SEED_RAW],
-      reviewAfter: "2099-01-01",
+      reviewAfter: NEAR_REVIEW_AFTER,
       owner: "플랫폼팀",
       status: null,
       gaps: ["rollback"],
@@ -333,6 +333,7 @@ const PROPOSAL: TeamBrainProposal = {
     followups: [{ questions: "어느 서버?", answer: "prod-1", askedAt: "2026-11-06T01:00:00.000Z", answeredAt: "2026-11-06T02:00:00.000Z" }],
   },
   changeset: null,
+  personalNotes: [],
   targetId: null,
   decision: null,
   decisionReason: null,
@@ -434,7 +435,7 @@ describe("vault migration v0 → v1", () => {
     const root = v0Vault(config.dataDir);
     const before = fs.readFileSync(path.join(root, "wiki", "concepts", "deploy.md"), "utf8");
     await migrateTeamBrainOnBoot(config);
-    expect(gitOut(root, ["log", "-1", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: migrate to schema v1");
+    expect(gitOut(root, ["log", "-1", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: migrate to schema v2");
     expect(gitOut(root, ["status", "--porcelain"]).trim()).toBe("");
     expect(fs.readFileSync(path.join(root, "raw", "legacy", "concepts", "deploy.md"), "utf8")).toBe(before);
     expect(fs.existsSync(path.join(root, "raw", "legacy", "용어.md"))).toBe(true);
@@ -443,7 +444,7 @@ describe("vault migration v0 → v1", () => {
     expect(await readTeamVaultFile(config, "SCHEMA.md")).toBe(TEAM_BRAIN_SCHEMA_MD);
     expect(await readTeamVaultFile(config, "wiki/index.md")).toContain("_No pages yet._");
     const log = (await readTeamVaultFile(config, "wiki/log.md"))!;
-    expect(log).toContain("migrate | schema v1");
+    expect(log).toContain("migrate | schema v2");
     expect(log).toContain("2 pre-schema notes moved to raw/legacy/");
     // Git tracked the moves as renames (history follows the note).
     expect(gitOut(root, ["log", "--follow", "--format=%s", "--", "raw/legacy/concepts/deploy.md"])).toContain("team-brain: initialize");
@@ -452,7 +453,7 @@ describe("vault migration v0 → v1", () => {
     expect(vault.pages.size).toBe(0);
     expect([...vault.rawPaths].sort()).toEqual(["raw/legacy/concepts/deploy.md", "raw/legacy/용어.md"]);
     const health = await teamBrainHealth(config);
-    expect(health).toMatchObject({ schemaVersion: 1, pages: 0, rawSources: 2 });
+    expect(health).toMatchObject({ schemaVersion: TEAM_BRAIN_SCHEMA_VERSION, pages: 0, rawSources: 2 });
     expect(health.uncompiledSources).toEqual(["raw/legacy/concepts/deploy.md", "raw/legacy/용어.md"]);
     // An uncompiled source is still findable, flagged as such.
     const hits = await searchTeamBrain(config, "compose");

@@ -121,6 +121,21 @@
   there is NO separate "brain write" tool, so a
   capture is a repo write plus a commit (uncommitted = not persisted). It composes with the backfill
   loop: `request_info` ESCALATES a true unknown to the owner, `brain-ingest` RETAINS the answer.
+- **The Brain policy (user, 2026-11-10, SSOT) — ONE module, `agent/brainPolicy.ts`.** Every rule about
+  what goes into the personal brain vs the team brain lives there and nowhere else: `PERSONAL_KNOWLEDGE_DEFINITION`
+  (capture WITHOUT asking first, then say what was saved), `TEAM_KNOWLEDGE_DEFINITION` (the four tests — moved
+  here, re-exported from `teamBrainTools.ts`), `BRAIN_ROUTING_RULE` (decide the home first; a submission may
+  also live in the personal brain until approved and is linked via `personalNotes`), `BRAIN_ONE_HOME_RULE`
+  (once approved the team page is canonical), `BRAIN_CONFLICT_RULE` (no precedence: show BOTH, labeled
+  내 브레인 / 팀 브레인, and ask), `PROMOTED_NOTE_RULE` (turning an approved note into a link is ASKED in plain
+  words with five required points and done only on a yes — never forced, never by the server).
+  `brainPolicySection` renders the **Brain policy** prompt section per run (write rules only where the run can
+  write; conflict/one-home only with both brains); read_manual's `knowledge` guide uses
+  `brainPolicyManualText`; tool results quote the same constants. The brain-* + team-brain-curate skills and
+  the repo-template `CLAUDE.md` REFER to "the Brain policy in your instructions" instead of restating it —
+  `tests/brain-policy.test.ts` pins both halves. Personal search stays `wiki/`-only (user, 2026-11-10).
+  Read-time marks of promoted / link notes (`team_page:` frontmatter) → [`team-brain.md`](team-brain.md)
+  "Personal-note links".
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
   hygiene default-skill — skill-only, no server lint code; the `[[link]]` resolution the graph view uses
   lives in `knowledgeGraph.ts` — the brain view's clickable `[[links]]` re-resolve client-side in

@@ -16,7 +16,7 @@ import {
   TEAM_BRAIN_PROPOSE_TOOL_NAMES,
   type TeamBrainToolsContext,
 } from "../src/server/agent/teamBrainTools.js";
-import { applyTeamChangeset, ensureTeamBrainRepo, teamBrainRoot, teamNoteBlob } from "../src/server/teamBrain.js";
+import { applyTeamChangeset, applyTeamPolicy, ensureTeamBrainRepo, teamBrainRoot, teamNoteBlob } from "../src/server/teamBrain.js";
 import { TEAM_BRAIN_SCHEMA_VERSION, teamRawPath } from "../src/shared/teamBrain.js";
 import { execFileSync } from "node:child_process";
 import { commitIntoVault } from "./team-brain-fixtures.js";
@@ -123,6 +123,28 @@ describe("team brain registration matrix", () => {
     const admin = (await planRun(s, s.requestFor(s.admin), makeEvents())).append;
     for (const t of [TEAM_HEAD, OFFER, DEFINITION, ADMIN_FLOW]) expect(admin).toContain(t);
     expect(admin).not.toContain(MEMBER_FLOW);
+  });
+
+  it("puts the admins' POLICY.md guidelines and the Brain policy on a propose run, not on a read-only one", async () => {
+    const s = setup("prompt-guidelines");
+    await ensureTeamBrainRepo(s.config);
+    const root = teamBrainRoot(s.config);
+    await applyTeamPolicy(s.config, {
+      content: "---\ndraft_ttl_days: 7\n---\n# 팀 규칙\n\n고객사 이름은 약어로 쓴다.\n",
+      baseBlob: await teamNoteBlob(root, "POLICY.md"),
+      title: "가이드라인",
+      proposalId: "p-guidelines",
+      author: { name: "Admin", email: "admin@x" },
+    });
+    const member = (await planRun(s, s.requestFor(s.mate), makeEvents())).append;
+    expect(member).toContain("TEAM GUIDELINES — written by the team's admins in POLICY.md");
+    expect(member).toContain("고객사 이름은 약어로 쓴다.");
+    // No personal repo here: the personal-vs-team rules have nothing to relate (they ride runs with both brains).
+    expect(member).not.toContain("**Brain policy**");
+    const reader = (
+      await planRun(s, { ...s.requestFor(s.admin), viewerUserId: s.mate.id, viewerName: "팀원", viewerIsOwner: false, elevated: true }, makeEvents())
+    ).append;
+    expect(reader).not.toContain("TEAM GUIDELINES");
   });
 
   it.each(readOnly)("tells $name it can READ but not propose (no offer-to-share)", async (c) => {

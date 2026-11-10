@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   TEAM_BRAIN_DRAFT_TTL_MS,
   TEAM_BRAIN_MAX_OPEN_PROPOSALS,
+  TEAM_BRAIN_MAX_PERSONAL_NOTES,
   isTeamBrainOp,
   isTeamBrainProposalKind,
   isTeamBrainDecision,
@@ -15,6 +16,7 @@ import {
   type TeamBrainProposal,
   type TeamBrainProposalKind,
   type TeamBrainProposalStatus,
+  type TeamPersonalNoteLink,
 } from "../../shared/teamBrain.js";
 import type Database from "better-sqlite3";
 import { type Constructor, type StoreBase, now } from "./internal.js";
@@ -40,6 +42,7 @@ interface ProposalRow {
   base_blob: string | null;
   intake_json: string | null;
   changes_json: string | null;
+  personal_notes_json: string | null;
   target_id: string | null;
   decision: string | null;
   decision_reason: string | null;
@@ -54,7 +57,7 @@ interface ProposalRow {
 const PROPOSAL_SELECT = `SELECT p.id, p.kind, p.status, p.proposer_user_id,
     COALESCE(NULLIF(pu.display_name, ''), pu.username) AS proposer_name,
     CASE WHEN c.id IS NULL THEN NULL ELSE p.conversation_id END AS conversation_id,
-    p.path, p.op, p.title, p.summary, p.content, p.base_blob, p.intake_json, p.changes_json, p.target_id, p.decision,
+    p.path, p.op, p.title, p.summary, p.content, p.base_blob, p.intake_json, p.changes_json, p.personal_notes_json, p.target_id, p.decision,
     p.decision_reason, p.decided_by,
     COALESCE(NULLIF(du.display_name, ''), du.username) AS decided_by_name,
     p.decided_at, p.created_at, p.updated_at
@@ -113,6 +116,16 @@ function decodeChangeset(raw: string | null): TeamBrainChangeset | null {
   return { changes, conflicts };
 }
 
+function decodePersonalNotes(raw: string | null): TeamPersonalNoteLink[] {
+  const v = parseJson(raw);
+  if (!Array.isArray(v)) return [];
+  return (v as unknown[])
+    .filter((n): n is Record<string, unknown> => Boolean(n) && typeof n === "object")
+    .filter((n) => typeof n.path === "string" && typeof n.blob === "string")
+    .map((n) => ({ path: n.path as string, blob: n.blob as string }))
+    .slice(0, TEAM_BRAIN_MAX_PERSONAL_NOTES);
+}
+
 function toProposal(row: ProposalRow): TeamBrainProposal {
   return {
     id: row.id,
@@ -130,6 +143,7 @@ function toProposal(row: ProposalRow): TeamBrainProposal {
     baseBlob: row.base_blob,
     intake: decodeIntake(row.intake_json),
     changeset: decodeChangeset(row.changes_json),
+    personalNotes: decodePersonalNotes(row.personal_notes_json),
     targetId: row.target_id,
     decision: isTeamBrainDecision(row.decision) ? row.decision : null,
     decisionReason: row.decision_reason,
@@ -159,9 +173,33 @@ export interface NewTeamBrainProposal {
   baseBlob: string | null;
   intake?: TeamBrainIntake | null;
   changeset?: TeamBrainChangeset | null;
+  /** The owner's personal notes the source came from (propose / direct-with-source). */
+  personalNotes?: TeamPersonalNoteLink[] | null;
   targetId?: string | null;
   decision?: TeamBrainDecision | null;
   decisionReason?: string | null;
+}
+
+/** The team-policy limits the store applies (POLICY.md knobs; built-ins until a provider is set). */
+export interface TeamBrainStoreLimits {
+  draftTtlMs: number;
+  maxOpenProposals: number;
+}
+
+const DEFAULT_LIMITS: TeamBrainStoreLimits = {
+  draftTtlMs: TEAM_BRAIN_DRAFT_TTL_MS,
+  maxOpenProposals: TEAM_BRAIN_MAX_OPEN_PROPOSALS,
+};
+
+/** An approved submission's link from the owner's personal notes to the team pages (brainTools' read-time marks). */
+export interface TeamBrainPersonalLink {
+  proposalId: string;
+  title: string;
+  /** When the source was approved (the decision stamp). */
+  approvedAt: string | null;
+  notes: TeamPersonalNoteLink[];
+  /** The team wiki pages the approving changeset created or updated (the canonical versions). */
+  teamPages: string[];
 }
 
 export type TeamBrainCreateResult =
@@ -214,6 +252,24 @@ const RESULT_STATUSES_SQL = "('approved', 'rejected', 'needs_info')";
 
 export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class TeamBrain extends Base {
+    /** Where POLICY.md's limits come from (app.ts wires the vault reader; tests may set one). */
+    teamBrainLimitsProvider: (() => TeamBrainStoreLimits) | null = null;
+
+    /** Read POLICY.md's knobs through `fn` from now on (null = the built-in limits). */
+    setTeamBrainLimitsProvider(fn: (() => TeamBrainStoreLimits) | null): void {
+      this.teamBrainLimitsProvider = fn;
+    }
+
+    /** The limits in force right now (a failing provider falls back to the built-ins). */
+    teamBrainLimits(): TeamBrainStoreLimits {
+      if (!this.teamBrainLimitsProvider) return DEFAULT_LIMITS;
+      try {
+        return this.teamBrainLimitsProvider();
+      } catch {
+        return DEFAULT_LIMITS;
+      }
+    }
+
     /**
      * Drafts nobody pressed within the TTL (since their last update — an
      * answered 보완 요청 goes back to draft with a fresh updated_at) — or whose
@@ -222,7 +278,7 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
      * conversation-deleting path.
      */
     expireTeamBrainDrafts(): number {
-      const cutoff = new Date(Date.now() - TEAM_BRAIN_DRAFT_TTL_MS).toISOString();
+      const cutoff = new Date(Date.now() - this.teamBrainLimits().draftTtlMs).toISOString();
       const due = `updated_at < ? OR (conversation_id IS NOT NULL
              AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = team_brain_proposals.conversation_id))`;
       return this.db.transaction(() => {
@@ -252,16 +308,16 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
             )
             .get(input.proposerUserId) as { c: number }
         ).c;
-        if (open >= TEAM_BRAIN_MAX_OPEN_PROPOSALS) {
+        if (open >= this.teamBrainLimits().maxOpenProposals) {
           return { ok: false, error: "LIMIT" };
         }
         const rowPath = typeof input.path === "function" ? input.path(id, stamp) : input.path;
         this.db
           .prepare(
             `INSERT INTO team_brain_proposals (id, kind, status, proposer_user_id, conversation_id, path, op, title,
-               summary, content, base_blob, intake_json, changes_json, target_id, decision, decision_reason,
-               created_at, updated_at)
-             VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               summary, content, base_blob, intake_json, changes_json, personal_notes_json, target_id, decision,
+               decision_reason, created_at, updated_at)
+             VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             id,
@@ -276,6 +332,9 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
             input.baseBlob,
             input.intake ? JSON.stringify(input.intake) : null,
             input.changeset ? JSON.stringify(input.changeset) : null,
+            input.personalNotes && input.personalNotes.length > 0
+              ? JSON.stringify(input.personalNotes.slice(0, TEAM_BRAIN_MAX_PERSONAL_NOTES))
+              : null,
             input.targetId ?? null,
             input.decision ?? null,
             input.decisionReason ?? null,
@@ -510,6 +569,49 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
         | { suspended: number }
         | undefined;
       return Boolean(row && row.suspended === 0);
+    }
+
+    /**
+     * The owner's approved submissions that recorded personal notes, newest
+     * first: each with the team pages its approving changeset wrote (a propose
+     * row: the applied approve review on it; an admin's direct card: its own).
+     */
+    listTeamBrainPersonalLinks(userId: string, limit = 200): TeamBrainPersonalLink[] {
+      const rows = this.db
+        .prepare(
+          `SELECT id, kind, title, decided_at, personal_notes_json, changes_json FROM team_brain_proposals
+           WHERE proposer_user_id = ? AND personal_notes_json IS NOT NULL
+             AND ((kind = 'propose' AND status = 'approved') OR (kind = 'direct' AND status = 'applied'))
+           ORDER BY decided_at DESC, id LIMIT ?`,
+        )
+        .all(userId, Math.min(Math.max(1, limit), 500)) as Array<{
+        id: string;
+        kind: string;
+        title: string;
+        decided_at: string | null;
+        personal_notes_json: string | null;
+        changes_json: string | null;
+      }>;
+      const review = this.db.prepare(
+        `SELECT changes_json FROM team_brain_proposals
+         WHERE kind = 'review' AND target_id = ? AND status = 'applied' AND decision = 'approve'
+         ORDER BY decided_at DESC LIMIT 1`,
+      );
+      return rows
+        .map((r) => {
+          const changes =
+            r.kind === "propose"
+              ? ((review.get(r.id) as { changes_json: string | null } | undefined)?.changes_json ?? null)
+              : r.changes_json;
+          return {
+            proposalId: r.id,
+            title: r.title,
+            approvedAt: r.decided_at,
+            notes: decodePersonalNotes(r.personal_notes_json),
+            teamPages: (decodeChangeset(changes)?.changes ?? []).map((c) => c.path),
+          };
+        })
+        .filter((l) => l.notes.length > 0);
     }
 
     /** deleteUser cascade: the user's own rows (approved content stays in git). */

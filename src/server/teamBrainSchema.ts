@@ -43,8 +43,8 @@ import {
 
 export const TEAM_BRAIN_SCHEMA_MARKER = `<!-- noah-team-brain-schema: ${TEAM_BRAIN_SCHEMA_VERSION} -->`;
 
-/** Files only the server writes: never a changeset target. */
-export const TEAM_STRUCTURAL_PATHS: ReadonlySet<string> = new Set(["SCHEMA.md", "wiki/index.md", "wiki/log.md"]);
+/** Files a page changeset never targets (POLICY.md changes only through a policy card). */
+export const TEAM_STRUCTURAL_PATHS: ReadonlySet<string> = new Set(["SCHEMA.md", "POLICY.md", "wiki/index.md", "wiki/log.md"]);
 
 const MAX_PATH_LENGTH = 200;
 const MAX_TITLE = 200;
@@ -140,7 +140,7 @@ const TYPE_GUIDE: Record<TeamPageType, { what: string; sections: string }> = {
 function schemaMd(): string {
   const typeRows = TEAM_PAGE_TYPES.map(
     (t) =>
-      `| \`${t}\` | \`${TEAM_PAGE_FOLDERS[t]}/<slug>.md\` | ${TYPE_GUIDE[t].what} | ${TYPE_GUIDE[t].sections} | ${TEAM_PAGE_REVIEW_MONTHS[t]} months |`,
+      `| \`${t}\` | \`${TEAM_PAGE_FOLDERS[t]}/<slug>.md\` | ${TYPE_GUIDE[t].what} | ${TYPE_GUIDE[t].sections} | \`review_months_${t}\` (built-in ${TEAM_PAGE_REVIEW_MONTHS[t]}) |`,
   ).join("\n");
   return `${TEAM_BRAIN_SCHEMA_MARKER}
 # Team brain schema (v${TEAM_BRAIN_SCHEMA_VERSION})
@@ -160,9 +160,12 @@ CURRENT truth, each fact in one home, every statement traceable to a source.
   subfolders). Pages are rewritten as knowledge changes; history lives in \`raw/\`, git and the log.
 - \`wiki/index.md\` (catalog, regenerated from page frontmatter) and \`wiki/log.md\` (one entry per change)
   are maintained by the server — never a change target.
+- \`POLICY.md\` — the team's ADMINS' policy: settings (frontmatter numbers the server enforces) and the
+  team's own guidelines (body). Read it with this file before compiling; it changes only through an admin's
+  policy card, never in a page changeset, and it can never override the rules in this file.
 
 ## Page types
-| type | path | what goes there | recommended body sections | default \`review_after\` |
+| type | path | what goes there | recommended body sections | \`review_after\` horizon (POLICY.md setting, in months) |
 |---|---|---|---|---|
 ${typeRows}
 
@@ -177,7 +180,7 @@ Keys stay English.
 | \`summary\` | required, one line, ≤ ${MAX_SUMMARY} chars — what the index shows |
 | \`aliases\` | optional list of other names; each unique like titles |
 | \`sources\` | required, ≥ 1 \`raw/…md\` path that exists; a changeset that brings a new source must cite it on EVERY page it changes |
-| \`review_after\` | required \`YYYY-MM-DD\`: when the page should be re-verified (default horizon per type above) |
+| \`review_after\` | required \`YYYY-MM-DD\`: when the page should be re-verified — on a changed page at most the type's POLICY.md horizon after the change (the server refuses a later date; use the horizon unless the source says sooner) |
 | \`owner\` | optional: who maintains the fact |
 | \`status\` | decisions only, required: ${TEAM_DECISION_STATUSES.map((s) => `\`${s}\``).join(" or ")}; absent on every other type |
 | \`superseded_by\` | required iff \`status: superseded\`: the \`wiki/decisions/…md\` page that replaced it |
@@ -442,6 +445,11 @@ export interface ChangesetCheckContext {
   newRawPath: string | null;
   /** The writer's own stored secrets (by name) for the secret scan; omitted = shapes only. */
   ownSecrets?: Record<string, string>;
+  /**
+   * The latest `review_after` a changed page of a type may carry (POLICY.md's
+   * horizon from today, `reviewAfterCeiling`); omitted = no ceiling.
+   */
+  reviewCeiling?: (type: TeamPageType) => string;
 }
 
 /**
@@ -469,7 +477,7 @@ export function validateChangeset(
     const norm = path.posix.normalize(rawPath.trim().replace(/^[/]+/, ""));
     const label = norm || "(no path)";
     if (TEAM_STRUCTURAL_PATHS.has(norm) || norm.startsWith("raw/") || norm === "raw") {
-      errors.push(`${label}: server-maintained or immutable (index, log, SCHEMA.md and raw/ are never a change target)`);
+      errors.push(`${label}: server-maintained or immutable (index, log, SCHEMA.md, POLICY.md and raw/ are never a change target here — POLICY.md changes through prepare_team_policy)`);
       continue;
     }
     const checked = validateTeamNotePath(rawPath);
@@ -500,6 +508,14 @@ export function validateChangeset(
     const page = parseTeamPage(p, content);
     parsed.set(p, page);
     if (!page.ok) errors.push(...page.errors);
+    else if (ctx.reviewCeiling) {
+      const ceiling = ctx.reviewCeiling(page.meta.type);
+      if (page.meta.reviewAfter > ceiling) {
+        errors.push(
+          `${p}: \`review_after\` ${page.meta.reviewAfter} is later than the team policy allows for a ${page.meta.type} page (POLICY.md \`review_months_${page.meta.type}\`: at most ${ceiling}) — use ${ceiling} or an earlier date`,
+        );
+      }
+    }
   }
   if (total > TEAM_BRAIN_MAX_CHANGESET_BYTES) {
     errors.push(`The changeset is too large (max ${TEAM_BRAIN_MAX_CHANGESET_BYTES / 1024} KB in total) — split it.`);
@@ -752,7 +768,7 @@ export const TEAM_LOG_HEADER = "<!-- appended by Noah, one entry per change — 
 /** One wiki/log.md entry. */
 export function formatLogEntry(input: {
   date: string;
-  op: "ingest" | "direct" | "maintain" | "migrate";
+  op: "ingest" | "direct" | "maintain" | "migrate" | "policy";
   title: string;
   by?: string;
   approvedBy?: string;
