@@ -388,6 +388,45 @@ describe("confluence tools", () => {
     });
   });
 
+  it("never sends the PAT to a download link on another origin", async () => {
+    const calls: { url: URL; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      calls.push({ url, init: init ?? {} });
+      return new Response(
+        JSON.stringify({
+          id: "att-1",
+          type: "attachment",
+          title: "diagram.png",
+          metadata: { mediaType: "image/png" },
+          extensions: { fileSize: 3 },
+          version: { number: 1 },
+          // An ABSOLUTE link: resolveConfluenceLink keeps it as it is.
+          _links: { download: "https://files.elsewhere.example/download/attachments/123/diagram.png" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const result = await callTool(
+      buildConfluenceTools({
+        config: makeConfig("https://confluence.internal/confluence"),
+        ownerSecrets: { CONFLUENCE_PAT: "pat" },
+        elevated: true,
+      }),
+      "get_attachment",
+      { attachment_id: "att-1" },
+    );
+
+    expect(result.isError).toBe(true);
+    const message = result.content[0].text ?? "";
+    expect(message).toContain("points at another origin (https://files.elsewhere.example)");
+    expect(message).toContain("than the configured Confluence (https://confluence.internal)");
+    expect(message).toContain("Do not retry");
+    // Only the metadata read happened: nothing was requested from the other host.
+    expect(calls.map((call) => call.url.host)).toEqual(["confluence.internal"]);
+  });
+
   it("extracts page image and draw.io asset references", async () => {
     vi.stubGlobal("fetch", async (input: string | URL | Request) => {
       const url = new URL(String(input));

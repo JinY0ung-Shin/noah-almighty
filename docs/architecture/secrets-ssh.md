@@ -63,7 +63,13 @@
   message is re-checked after serialization before it reaches stdout. An oversized reply answers ITS request with
   Noah's own English JSON-RPC error (never the remote's text) and the bridge relays on; an oversized message on a
   stream that names no request (the standalone GET stream, legacy SSE) answers every pending request that way and
-  ends the bridge. Bound vault values join the run's redaction set (`piRedactions`), and so does every credential-looking
+  ends the bridge. **It stays inside the registered origin** (2026-11-10): the bound headers ride every request,
+  often as a custom header (`X-Api-Key`) that `fetch` does NOT drop on a cross-origin redirect (only
+  Authorization/Cookie), so the bridge follows redirects by hand (`sameOriginFetch`, `redirect: "manual"`, at most
+  5 hops, fetch's own 303/POST→GET rule) and a request or redirect whose origin is not the configured URL's is
+  refused with Noah's own JSON-RPC error naming both origins — before the fix a 307 from the registered server
+  delivered the user's secret to another origin (reproduced against the real bridge), so the origin binding held
+  at registration only. Bound vault values join the run's redaction set (`piRedactions`), and so does every credential-looking
   bridged header value (`<server>:<header>` — a narrow name match, never an unresolved `${…}` template — plus the
   bare token after a `Bearer`/`Basic`/`Token` scheme word, and each slot's trimmed value as sent). Every ENABLED admin
   server reserves its name for the run, mounted or not: a same-named plugin server is dropped (status-line

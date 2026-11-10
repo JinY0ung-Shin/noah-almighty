@@ -134,7 +134,10 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   [`avatar-task-api.md`](avatar-task-api.md) "Provenance".
 - **A server-held third-party credential stays READ-ONLY, STRUCTURALLY.** The Confluence client's `requestJson`
   (and `requestBinary`) has no `method`/`body` option, so a future tool cannot quietly reach a mutating endpoint
-  with the owner's PAT. Page creation/editing is routed to the browser tools (the user's own session —
+  with the owner's PAT. **And it goes to the configured Confluence only:** `requestBinary` refuses a download
+  link whose origin is not `CONFLUENCE_URL`'s (`offConfluenceOrigin`, 2026-11-10) — the link is server-returned
+  text and `resolveConfluenceLink` keeps an absolute one as it is; a cross-origin REDIRECT stays allowed because
+  fetch drops `Authorization` there (the PAT is never in a custom header). Page creation/editing is routed to the browser tools (the user's own session —
   attributable, visible, undoable). Both metacognition surfaces branch on `browserEnabled` when they describe
   that write route.
 

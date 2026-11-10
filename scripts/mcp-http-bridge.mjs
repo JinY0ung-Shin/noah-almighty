@@ -23,6 +23,14 @@
 // scrubbed; a failed upstream request is answered with a JSON-RPC error so the
 // client never waits on a request the remote never saw.
 //
+// Origin binding: every request goes to the ORIGIN of the configured URL and
+// nowhere else. The headers sent here are the user's bound secrets, often in a
+// custom header (`X-Api-Key`), and `fetch` drops only Authorization/Cookie when
+// a redirect crosses origins — so redirects are followed BY HAND, inside that
+// origin only (at most 5), and one that leaves it is refused with Noah's own
+// error. Without this the "secret is bound to the server's origin" rule would
+// hold at registration only.
+//
 // Size cap (`maxMessageBytes`, default 8 MiB — Noah's MCP_RELAY_MESSAGE_MAX_BYTES,
 // `src/server/agent/pi/boundedStdioTransport.ts`; a test keeps the two equal):
 // the SDK transports buffer a whole HTTP body / SSE event before parsing it, so
@@ -201,19 +209,66 @@ function sizeGuard(perEvent, onOversize) {
   });
 }
 
-/** `fetch` for both SDK transports: every response body streams through {@link sizeGuard}. */
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/** Agent-facing (relayed as the request's JSON-RPC error): where the request would have gone, never a header. */
+function offOriginText(origin, redirected) {
+  return (
+    `${redirected ? "the server redirected to" : "the request targets"} another origin (${origin}), which Noah does not follow: ` +
+    `this server's credentials are sent only to ${upstreamUrl.origin}. ` +
+    "Do not retry; tell the user an admin has to register the server's final address."
+  );
+}
+
+/**
+ * `fetch` that stays inside the configured origin: redirects are followed by
+ * hand (the bound headers ride every hop, so a hop to another origin would hand
+ * them over) and a request or redirect that leaves the origin throws.
+ */
+async function sameOriginFetch(input, init) {
+  let target = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+  let options = { ...init, redirect: "manual" };
+  for (let hop = 0; ; hop += 1) {
+    if (target.origin !== upstreamUrl.origin) throw new Error(offOriginText(target.origin, hop > 0));
+    const response = await fetch(target, options);
+    const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
+    if (!location) return { response, redirected: hop > 0 };
+    await response.body?.cancel().catch(() => {});
+    if (hop >= MAX_REDIRECTS) throw new Error(`the server redirected more than ${MAX_REDIRECTS} times`);
+    try {
+      target = new URL(location, target);
+    } catch {
+      throw new Error("the server sent a redirect without a usable address");
+    }
+    // fetch's own rule: 303 (and a 301/302 answer to a POST) continues as a body-less GET.
+    const method = String(options.method ?? "GET").toUpperCase();
+    const toGet =
+      response.status === 303 ? method !== "GET" && method !== "HEAD" : response.status !== 307 && response.status !== 308 && method === "POST";
+    if (toGet) {
+      const nextHeaders = new Headers(options.headers);
+      for (const name of ["content-type", "content-length", "content-encoding", "content-language", "content-location"]) {
+        nextHeaders.delete(name);
+      }
+      const { body: _body, ...rest } = options;
+      options = { ...rest, method: "GET", headers: nextHeaders };
+    }
+  }
+}
+
+/** `fetch` for both SDK transports: same-origin only, and every response body streams through {@link sizeGuard}. */
 async function cappedFetch(input, init) {
   const ids = requestIdsOf(init?.body);
-  const response = await fetch(input, init);
+  const { response, redirected } = await sameOriginFetch(input, init);
   if (!response.body) return response;
   const perEvent = (response.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream");
   const guarded = new Response(
     response.body.pipeThrough(sizeGuard(perEvent, () => onOversize(ids))),
     { status: response.status, statusText: response.statusText, headers: response.headers },
   );
-  // The SSE client follows a redirect's final URL on reconnect.
+  // The SSE client follows a redirect's final URL on reconnect (same origin, see sameOriginFetch).
   Object.defineProperty(guarded, "url", { value: response.url });
-  Object.defineProperty(guarded, "redirected", { value: response.redirected });
+  Object.defineProperty(guarded, "redirected", { value: redirected });
   return guarded;
 }
 

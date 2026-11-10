@@ -362,6 +362,16 @@ async function requestJson(
   }
 }
 
+/** The origin of `url` when it is not the configured Confluence's (or `url` is unusable); null when it is. */
+function offConfluenceOrigin(url: string, baseUrl: string): string | null {
+  try {
+    const origin = new URL(url).origin;
+    return origin === new URL(baseUrl).origin ? null : origin;
+  } catch {
+    return "an unusable address";
+  }
+}
+
 async function requestBinary(
   ctx: ConfluenceToolsContext,
   url: string,
@@ -372,6 +382,17 @@ async function requestBinary(
 > {
   const creds = credentials(ctx);
   if (!creds.ok) return creds;
+  // The PAT goes to the configured Confluence and nowhere else. A download
+  // link is text the server returned (`resolveConfluenceLink` keeps an absolute
+  // one as it is), so one naming another host must never carry the token. A
+  // REDIRECT to another origin is fine: fetch drops Authorization there.
+  const off = offConfluenceOrigin(url, creds.baseUrl);
+  if (off) {
+    return {
+      ok: false,
+      message: `The attachment's download link points at another origin (${off}) than the configured Confluence (${new URL(creds.baseUrl).origin}), so it was not fetched: the Confluence access token is sent only to the configured Confluence. Do not retry; tell the user the file has to be downloaded in their browser.`,
+    };
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);

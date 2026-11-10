@@ -233,6 +233,10 @@ describe("planSharedMcpRun", () => {
 describe("mcp-http-bridge.mjs", () => {
   let httpServer: http.Server;
   let baseUrl = "";
+  /** ANOTHER origin (a second port): records what a cross-origin redirect would hand over. */
+  let otherServer: http.Server;
+  let otherUrl = "";
+  const seenByOther: Array<{ apiKey: string | null; auth: string | null }> = [];
   const seenAuth: string[] = [];
   const seenProbe: string[] = [];
   let tempDir = "";
@@ -301,6 +305,16 @@ describe("mcp-http-bridge.mjs", () => {
       }
       await transport.handlePostMessage(req, res, req.body);
     });
+    otherServer = http.createServer((req, res) => {
+      seenByOther.push({ apiKey: (req.headers["x-api-key"] as string | undefined) ?? null, auth: req.headers.authorization ?? null });
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((resolve) => otherServer.listen(0, "127.0.0.1", resolve));
+    otherUrl = `http://127.0.0.1:${(otherServer.address() as AddressInfo).port}`;
+    // Redirects: one that stays on this origin, one that leaves it, one that never ends.
+    app.all("/moved", (_req, res) => void res.redirect(307, "/mcp"));
+    app.all("/moved-away", (_req, res) => void res.redirect(307, `${otherUrl}/mcp`));
+    app.all("/moved-forever", (_req, res) => void res.redirect(307, "/moved-forever"));
     httpServer = http.createServer(app);
     await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
     baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
@@ -310,6 +324,10 @@ describe("mcp-http-bridge.mjs", () => {
     await new Promise<void>((resolve) => {
       httpServer.closeAllConnections();
       httpServer.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      otherServer.closeAllConnections();
+      otherServer.close(() => resolve());
     });
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -370,6 +388,71 @@ describe("mcp-http-bridge.mjs", () => {
       expect(String(error?.message)).toContain("401");
       expect(String(error?.message)).not.toContain("wrong-secret-999");
       expect(stderr()).not.toContain("wrong-secret-999");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("follows a redirect that stays on the server's own origin, headers included", async () => {
+    seenAuth.length = 0;
+    const { client, transport } = bridgeClient({
+      url: `${baseUrl}/moved`,
+      transport: "http",
+      headers: { Authorization: "Bearer good-token-123" },
+      redact: ["good-token-123"],
+    });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: "echo", arguments: { text: "hi" } });
+      expect(result.content).toEqual([{ type: "text", text: "echo:hi" }]);
+      expect(seenAuth.length).toBeGreaterThan(0);
+      expect(seenAuth.every((auth) => auth === "Bearer good-token-123")).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("refuses a redirect to ANOTHER origin: the bound secret never leaves the registered one", async () => {
+    seenByOther.length = 0;
+    const { client, transport, stderr } = bridgeClient({
+      url: `${baseUrl}/moved-away`,
+      transport: "http",
+      // A custom header is the case fetch does NOT protect: it strips only Authorization/Cookie across origins.
+      headers: { "X-Api-Key": "key-secret-456", Authorization: "Bearer good-token-123" },
+      redact: ["key-secret-456", "good-token-123"],
+    });
+    try {
+      const error = await client.connect(transport).then(
+        () => null,
+        (err: unknown) => err as Error,
+      );
+      expect(error).not.toBeNull();
+      const message = String(error?.message);
+      expect(message).toContain("Remote MCP server request failed");
+      expect(message).toContain(`redirected to another origin (${otherUrl})`);
+      expect(message).toContain(`sent only to ${baseUrl}`);
+      expect(message).not.toContain("key-secret-456");
+      expect(stderr()).not.toContain("key-secret-456");
+      // The other origin was never contacted at all.
+      expect(seenByOther).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("gives up on a redirect loop instead of following it forever", async () => {
+    const { client, transport } = bridgeClient({
+      url: `${baseUrl}/moved-forever`,
+      transport: "http",
+      headers: { Authorization: "Bearer good-token-123" },
+      redact: ["good-token-123"],
+    });
+    try {
+      const error = await client.connect(transport).then(
+        () => null,
+        (err: unknown) => err as Error,
+      );
+      expect(String(error?.message)).toContain("redirected more than 5 times");
     } finally {
       await client.close();
     }
