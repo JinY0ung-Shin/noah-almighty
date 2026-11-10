@@ -10,11 +10,13 @@ import { callTool, gitInit, makeBareRemote, withTempDir } from "./helpers.js";
 import { createServices } from "../src/server/app.js";
 import { buildBrainTools } from "../src/server/agent/brainTools.js";
 import type { TeamBrainToolsContext } from "../src/server/agent/teamBrainTools.js";
-import { teamGuidelinesBlock } from "../src/server/agent/teamBrainTools.js";
+import { TEAM_ADMIN_FLOW, TEAM_OFFER_TO_SHARE, teamGuidelinesBlock } from "../src/server/agent/teamBrainTools.js";
 import {
   BRAIN_CONFLICT_RULE,
   BRAIN_ONE_HOME_RULE,
   BRAIN_POLICY_REFERENCE,
+  BRAIN_LINK_CHECK_NAME,
+  BRAIN_LINK_CHECK_RULE,
   BRAIN_ROUTING_RULE,
   PERSONAL_KNOWLEDGE_DEFINITION,
   PROMOTED_NOTE_RULE,
@@ -42,7 +44,7 @@ import {
 } from "../src/server/teamBrain.js";
 import { applyTeamBrainCard } from "../src/server/teamBrainActions.js";
 import { TEAM_POLICY_DEFAULTS, type TeamPolicyKnobs } from "../src/shared/teamBrain.js";
-import { ADMIN_IDENTITY, NEAR_REVIEW_AFTER, SEED_RAW, commitIntoVault, gitOut, teamPage } from "./team-brain-fixtures.js";
+import { ADMIN_IDENTITY, NEAR_REVIEW_AFTER, SEED_RAW, commitIntoVault, gitOut, seedTeamVault, teamPage } from "./team-brain-fixtures.js";
 
 let tempDir: string;
 const getTempDir = withTempDir("brain-policy", () => {
@@ -320,7 +322,7 @@ describe("prepare_team_policy → 팀 정책 반영", () => {
 });
 
 describe("personal notes linked to a team submission", () => {
-  function withPersonalRepo(s: ReturnType<typeof setup>, dir: string, files: Record<string, string>) {
+  function withPersonalRepo(s: ReturnType<typeof setup>, dir: string, files: Record<string, string>, owner: { id: string } = s.mate) {
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
     const seed = path.join(tempDir, dir, "seed");
     gitInit(seed);
@@ -334,7 +336,7 @@ describe("personal notes linked to a team submission", () => {
     g("branch", "-M", "main");
     g("remote", "add", "origin", remote);
     g("push", "-q", "origin", "main");
-    s.store.setKnowledgeRepo(s.mate.id, remote, "main");
+    s.store.setKnowledgeRepo(owner.id, remote, "main");
     return {
       update(rel: string, content: string) {
         fs.writeFileSync(path.join(seed, rel), content);
@@ -428,6 +430,43 @@ describe("personal notes linked to a team submission", () => {
     expect(changed.content[0].text).toContain("HAS CHANGED since it was submitted");
   });
 
+  it("a maintenance card links the admin's own notes too, and the mark says the note was not the source (#82)", async () => {
+    const s = setup("maint");
+    withPersonalRepo(s, "maint", { "wiki/howto/deploy.md": NOTE }, s.admin);
+    await seedTeamVault(s.config, [{ path: "wiki/howto/seed.md", content: teamPage({ title: "Seed" }) }]);
+    const ctx = teamCtx(s, s.admin);
+    const tools = buildBrainTools(s.store, { avatarUserId: s.admin.id, viewerIsOwner: true, elevated: true, personalActive: true, team: ctx, config: s.config });
+
+    // No `source` = maintenance (compiling an existing raw file): the link used to be refused here.
+    const res = await callTool(tools, "prepare_team_changes", {
+      title: "배포 절차 정리",
+      summary: "s",
+      changes: [{ path: "wiki/howto/deploy.md", op: "create", content: teamPage({ title: "배포 절차" }) }],
+      personalNotes: ["wiki/howto/deploy.md"],
+    });
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toContain("Linked personal note(s): wiki/howto/deploy.md");
+    const id = (ctx.onCard as ReturnType<typeof vi.fn>).mock.calls[0][0].proposalId as string;
+    expect(s.store.getTeamBrainProposal(id)!.path).toBe("");
+
+    // Drafted only: no mark until the admin presses the card.
+    expect((await callTool(tools, "get_note", { path: "wiki/howto/deploy.md" })).content[0].text).not.toContain("PROMOTED");
+    const applied = await applyTeamBrainCard({ store: s.store, config: s.config }, actor(s.admin), id);
+    expect(applied.ok).toBe(true);
+
+    const links = s.store.listTeamBrainPersonalLinks(s.admin.id);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ fromSource: false, teamPages: ["wiki/howto/deploy.md"] });
+
+    const after = await callTool(tools, "get_note", { path: "wiki/howto/deploy.md" });
+    expect(after.content[0].text).toContain("PROMOTED: wiki/howto/deploy.md was recorded as stating the same fact as the team page");
+    expect(after.content[0].text).toContain("was NOT that page's source");
+    expect(after.content[0].text).toContain("has not changed since the link was recorded");
+    expect(after.content[0].text).not.toContain("was submitted to the team brain");
+    // The note itself is untouched.
+    expect(after.content[0].text).toContain("배포는 setup-host.sh 후 compose up.");
+  });
+
   it("marks a link note and refuses personalNotes without a personal brain", async () => {
     const s = setup("linknote");
     withPersonalRepo(s, "linknote", { "wiki/howto/deploy.md": "---\ntitle: 배포 절차\nteam_page: wiki/howto/deploy.md\n---\n팀 브레인: wiki/howto/deploy.md\n" });
@@ -456,16 +495,30 @@ describe("the Brain policy is ONE source", () => {
   it("states each rule only where the run can use it", () => {
     expect(brainPolicySection({ personalRead: false, personalWrite: false, teamRead: false, teamPropose: false })).toBeNull();
     const owner = brainPolicySection({ personalRead: true, personalWrite: true, teamRead: true, teamPropose: true })!;
-    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE, PROMOTED_NOTE_RULE]) {
+    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE, PROMOTED_NOTE_RULE]) {
       expect(owner).toContain(rule);
     }
     // A read-only teammate: the conflict rule, never the write-side rules.
     const reader = brainPolicySection({ personalRead: true, personalWrite: false, teamRead: true, teamPropose: false })!;
     expect(reader).toContain(BRAIN_CONFLICT_RULE);
-    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, PROMOTED_NOTE_RULE]) expect(reader).not.toContain(rule);
+    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, PROMOTED_NOTE_RULE]) expect(reader).not.toContain(rule);
     // A routine (personal write, no team submissions): no routing to the team.
     const routine = brainPolicySection({ personalRead: true, personalWrite: true, teamRead: true, teamPropose: false })!;
     expect(routine).not.toContain(BRAIN_ROUTING_RULE);
+    expect(routine).not.toContain(BRAIN_LINK_CHECK_RULE);
+  });
+
+  it("every team card has an execution point for one-fact-one-home: look in the personal brain first (#82)", () => {
+    // The rule itself names both tools, the personal search and the argument that records the link.
+    for (const part of [BRAIN_LINK_CHECK_NAME, "mcp__brain__propose_team_note", "mcp__brain__prepare_team_changes", 'scope "personal"', "`personalNotes`", "AND maintenance"]) {
+      expect(BRAIN_LINK_CHECK_RULE).toContain(part);
+    }
+    // The team flows point at it by NAME (never a second copy), only for a run that has a personal brain.
+    for (const flow of [TEAM_OFFER_TO_SHARE, TEAM_ADMIN_FLOW]) {
+      expect(flow).toContain(`${BRAIN_LINK_CHECK_NAME} check of the Brain policy`);
+      expect(flow).toContain("a personal brain in this run");
+      expect(flow).not.toContain(BRAIN_LINK_CHECK_RULE);
+    }
   });
 
   it("the promoted-note question names all five required points", () => {

@@ -127,15 +127,24 @@
   Korean `problems`, `teamPolicyHistory` = git log of POLICY.md) for the admin panel.
 
 ## Personal-note links (`personal_notes_json`)
-- `propose_team_note` / `prepare_team_changes` (with a source) take `personalNotes` (≤
+- `propose_team_note` / `prepare_team_changes` (with OR without a source — a maintenance card links too,
+  #82, 2026-11-10) take `personalNotes` (≤
   `TEAM_BRAIN_MAX_PERSONAL_NOTES` `wiki/` paths of the OWNER's personal brain). brainTools resolves each over the
   owner's clone (`personalNote` callback in `TeamBrainToolsContext`, owner runs with a personal brain only;
   a link note or a missing note is refused) and the row stores `{path, blob}` (`personalNoteBlobId` = git's
   blob id). NOTHING is written to the personal repo — then or later.
+- **The link exists only when the avatar passes it — soft by decision.** The server never searches the
+  personal brain for candidates. The execution point is `BRAIN_LINK_CHECK_RULE` ("BEFORE A TEAM CARD",
+  `brainPolicy.ts`): before every team card the avatar searches the personal brain for the topic and passes
+  the notes that state the same fact. `TEAM_OFFER_TO_SHARE` (intake) and `TEAM_ADMIN_FLOW` point at it by
+  name (`BRAIN_LINK_CHECK_NAME`), the `personalNotes` parameter description repeats the trigger, and the
+  curate skill refers to it. A server-side candidate detector is the next step only if this still misses.
 - `listTeamBrainPersonalLinks(owner)` = approved propose rows (pages from their applied approve review) and
   applied direct rows that recorded notes. brainTools marks them at READ time: personal `get_note` prepends
   `PROMOTED: … canonical version is the team page … has / HAS CHANGED since it was submitted` (+ the
-  PROMOTED NOTES hint for the owner), personal `search` appends a "Team-brain links" block, a note with
+  PROMOTED NOTES hint for the owner; a link from a MAINTENANCE card — `fromSource: false`, the direct row
+  has no raw `path` — reads "recorded as stating the same fact … was NOT that page's source", because the
+  page was compiled from other sources and the note may say more), personal `search` appends a "Team-brain links" block, a note with
   `team_page:` frontmatter reads as a LINK note; `list_team_proposals` (mine) lists them; `describe_system`
   counts them. A teammate's note paths never reach an admin (`/proposals/pending` and a review card's
   `target` send `personalNotes: []`). Converting a note into a link is the owner's avatar ASKING with the five required points

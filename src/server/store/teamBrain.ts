@@ -200,6 +200,13 @@ export interface TeamBrainPersonalLink {
   notes: TeamPersonalNoteLink[];
   /** The team wiki pages the approving changeset created or updated (the canonical versions). */
   teamPages: string[];
+  /**
+   * The notes are where the card's SOURCE came from (a submission, or an
+   * admin's own knowledge). False = an admin's maintenance card recorded them
+   * as stating the same fact: the pages were compiled from other sources, so
+   * the note may say things the team page does not.
+   */
+  fromSource: boolean;
 }
 
 export type TeamBrainCreateResult =
@@ -579,7 +586,7 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
     listTeamBrainPersonalLinks(userId: string, limit = 200): TeamBrainPersonalLink[] {
       const rows = this.db
         .prepare(
-          `SELECT id, kind, title, decided_at, personal_notes_json, changes_json FROM team_brain_proposals
+          `SELECT id, kind, path, title, decided_at, personal_notes_json, changes_json FROM team_brain_proposals
            WHERE proposer_user_id = ? AND personal_notes_json IS NOT NULL
              AND ((kind = 'propose' AND status = 'approved') OR (kind = 'direct' AND status = 'applied'))
            ORDER BY decided_at DESC, id LIMIT ?`,
@@ -587,6 +594,7 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
         .all(userId, Math.min(Math.max(1, limit), 500)) as Array<{
         id: string;
         kind: string;
+        path: string;
         title: string;
         decided_at: string | null;
         personal_notes_json: string | null;
@@ -609,6 +617,8 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
             approvedAt: r.decided_at,
             notes: decodePersonalNotes(r.personal_notes_json),
             teamPages: (decodeChangeset(changes)?.changes ?? []).map((c) => c.path),
+            // A maintenance direct card has no source, so no raw path (`path` = "").
+            fromSource: r.kind === "propose" || Boolean(r.path),
           };
         })
         .filter((l) => l.notes.length > 0);

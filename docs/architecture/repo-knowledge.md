@@ -125,7 +125,9 @@
   what goes into the personal brain vs the team brain lives there and nowhere else: `PERSONAL_KNOWLEDGE_DEFINITION`
   (capture WITHOUT asking first, then say what was saved), `TEAM_KNOWLEDGE_DEFINITION` (the four tests — moved
   here, re-exported from `teamBrainTools.ts`), `BRAIN_ROUTING_RULE` (decide the home first; a submission may
-  also live in the personal brain until approved and is linked via `personalNotes`), `BRAIN_ONE_HOME_RULE`
+  also live in the personal brain until approved and is linked via `personalNotes`), `BRAIN_LINK_CHECK_RULE`
+  ("BEFORE A TEAM CARD": search the personal brain for the topic before every team card and pass the notes
+  that state the same fact — the execution point of one-fact-one-home, #82), `BRAIN_ONE_HOME_RULE`
   (once approved the team page is canonical), `BRAIN_CONFLICT_RULE` (no precedence: show BOTH, labeled
   내 브레인 / 팀 브레인, and ask), `PROMOTED_NOTE_RULE` (turning an approved note into a link is ASKED in plain
   words with five required points and done only on a yes — never forced, never by the server).

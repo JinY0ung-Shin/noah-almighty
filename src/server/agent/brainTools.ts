@@ -98,8 +98,12 @@ async function personalNoteMark(
     const note = l.notes.find((n) => n.path === notePath)!;
     const changed = personalNoteBlobId(content) !== note.blob;
     const pages = l.teamPages.length > 0 ? (await Promise.all(l.teamPages.slice(0, 5).map((p) => teamPageLabel(config, p)))).join(", ") : "(the approving changeset is not on record)";
+    const on = l.approvedAt ? ` on ${l.approvedAt.slice(0, 10)}` : "";
     lines.push(
-      `PROMOTED: ${notePath} was submitted to the team brain and approved${l.approvedAt ? ` on ${l.approvedAt.slice(0, 10)}` : ""} (submission ${l.proposalId}). The canonical version is now the team page ${pages}. This note ${changed ? "HAS CHANGED since it was submitted — the changed part is not in the team brain" : "has not changed since it was submitted"}.`,
+      l.fromSource
+        ? `PROMOTED: ${notePath} was submitted to the team brain and approved${on} (submission ${l.proposalId}). The canonical version is now the team page ${pages}. This note ${changed ? "HAS CHANGED since it was submitted — the changed part is not in the team brain" : "has not changed since it was submitted"}.`
+        : // A maintenance card: the pages were compiled from other sources, the note only covers the same fact.
+          `PROMOTED: ${notePath} was recorded as stating the same fact as the team page ${pages}, by an admin's maintenance change applied${on} (change ${l.proposalId}). The canonical version is now the team page. This note was NOT that page's source — read the team page too: whatever only this note says is not in the team brain. This note ${changed ? "HAS CHANGED since the link was recorded" : "has not changed since the link was recorded"}.`,
     );
   }
   if (forOwner) lines.push("Nothing in this note changes automatically: follow PROMOTED NOTES in the Brain policy (ask the user, with all five points, before rewriting it).");
