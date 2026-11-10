@@ -1483,7 +1483,9 @@ body.col-resizing .canvas-html-frame {
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
-  width: min(100%, 480px);
+  /* Fills the bubble: a fixed 480px card left ~300px of an 800px assistant
+     bubble empty beside it, out of line with the text above. */
+  width: 100%;
   min-width: 0;
   padding: var(--s-3);
   border: 1px solid var(--line);
