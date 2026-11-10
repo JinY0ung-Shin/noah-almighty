@@ -94,9 +94,10 @@ describe("official system manual", () => {
     expect(index.text).not.toContain("curl -sS");
   });
 
-  it("no longer documents the retired manual /compact", () => {
+  it("documents /compact as the USER's command, not a tool of the avatar", () => {
     const page = readSystemManual("chat").text;
-    expect(page).not.toContain("/compact");
+    expect(page).toContain("sending \`/compact\` as its own message");
+    expect(page).toContain("The avatar cannot run it — suggest the command to the user.");
     expect(page).toContain("Editing an earlier message rewinds the conversation to it");
   });
 

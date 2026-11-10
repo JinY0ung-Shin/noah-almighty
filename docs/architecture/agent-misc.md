@@ -53,10 +53,11 @@
   list + Korean card copy (the client renders the 체험 시나리오 cards from it), while the English walkthrough
   prompts live server-only in `src/server/tourScenarios.ts` — an unknown slug fails with a Korean error
   instead of expanding, and trailing text after the slug rides along as a focus hint like `/learn`'s.
-- **The manual `/compact` is retired** (2026-10-29, pi migration): `expandChatSlashCommand` refuses it with a
-  Korean `error` exactly like `/new`, and a 다시 생성 of a legacy `/compact` row is refused with that same text (the
-  client hides the button via `isCompactCommandText`). Context compaction is pi's own; its `response.compaction`
-  event becomes the `compact` frame (see chat-sse-media). Text reaching pi is plain model input — no slash command runs there.
+- **`/compact [what to keep]` is the ONE command that is not a prompt** (back on pi since 2026-11-10; the SDK-era
+  one was retired 2026-10-29): `expandChatSlashCommand` returns `compact: {instructions}` and the turn runs NO
+  model — see chat-sse-media ("Manual `/compact`"). Only the HTTP chat route expands slash commands, so a
+  task-API body or a routine prompt saying `/compact` stays plain text. Text reaching pi is plain model input —
+  no slash command runs there, which is why a mid-turn `/compact` is refused (route + client) instead of steered.
 
 ## git remote work is MCP-only
 - The agent shell is the pi sandbox and holds no git credentials, so Bash `git clone/push`/`gh` can never

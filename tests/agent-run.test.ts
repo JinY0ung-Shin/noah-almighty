@@ -172,6 +172,9 @@ function fakeClient(steps: Step[]) {
     async input() {
       throw new Error("not used");
     },
+    async compact() {
+      throw new Error("not used");
+    },
     async listModels() {
       return [];
     },

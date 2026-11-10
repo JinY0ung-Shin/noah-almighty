@@ -587,8 +587,8 @@ function lastTurnOpenerIndex(messages: StoredMessage[]): number {
 
 /**
  * Whether 다시 생성 can re-run the latest turn — its opener exists, was not queued,
- * and is not a retired `/compact` row (refused server-side; the row can still be
- * EDITED into an ordinary message).
+ * and is not a `/compact` (re-running a compaction is refused server-side; the
+ * row can still be EDITED into an ordinary message).
  */
 export function canRegenerate(messages: StoredMessage[]): boolean {
   const anchor = messages[lastTurnOpenerIndex(messages)];
@@ -1217,6 +1217,12 @@ export async function sendSteer(paneId: string, rawText: string): Promise<void> 
   if (!pane || !pane.streaming || !pane.liveRunId || pane.steerSending) return;
   const message = rawText.trim();
   if (!message) return;
+  // /compact is a command of its own turn (the server refuses it mid-run).
+  // Refused before the draft is touched, so it stays put.
+  if (isCompactCommandText(message)) {
+    notify("/compact는 응답이 끝난 뒤에 보내 주세요.", "warn");
+    return;
+  }
   const runId = pane.liveRunId;
   updatePane(paneId, (target) => {
     target.draft = "";
@@ -2067,8 +2073,8 @@ function handleCompact(paneId: string, data: any): void {
     data?.trigger === "auto" ? "자동 요약" : data?.trigger === "manual" ? "수동 요약" : "";
   const preTokens = Number(data?.preTokens) || 0;
   const postTokens = Number(data?.postTokens) || 0;
-  // Before → after when both sizes are known (a /compact reports both, and so
-  // does an automatic compaction on CLIs that send post_tokens).
+  // Before → after when both sizes are known (a /compact reports both; pi's
+  // automatic compaction reports neither).
   const size =
     preTokens > 0 && postTokens > 0
       ? `이전 맥락 약 ${formatTokenCount(preTokens)}토큰 → ${formatTokenCount(postTokens)}토큰`
@@ -2077,10 +2083,8 @@ function handleCompact(paneId: string, data: any): void {
         : postTokens > 0
           ? `정리 후 약 ${formatTokenCount(postTokens)}토큰`
           : "";
-  // `error` is the SDK's English detail — a detail, never the row's label.
-  const detail = failed
-    ? String(data?.error || "").trim().slice(0, 400)
-    : [trigger, size].filter(Boolean).join(" · ");
+  // A failed row carries no detail (pi reports none; a /compact's bubble says why).
+  const detail = failed ? "" : [trigger, size].filter(Boolean).join(" · ");
   markTextBreak(paneId);
   ensureAgent(paneId, "main");
   updatePane(paneId, (pane) => {

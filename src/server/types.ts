@@ -1327,6 +1327,18 @@ export interface AgentRequest {
    */
   rewind?: AgentRewindInfo;
   /**
+   * This turn is the viewer's `/compact [instructions]`: no model turn runs.
+   * pi-gateway summarizes the conversation's session up to `resumeSessionId`
+   * (`POST /v1/responses/{id}/compact`) and commits the summary as a NEW
+   * response id, which the run reports through `onSessionId`/`onResumePoint`;
+   * the older ids keep the uncompacted history, so a rewind past the
+   * compaction still branches from the full context. The outcome rides
+   * `onCompact` and the chat route composes the Korean bubble from it. Set by
+   * the HTTP chat route only (a typed message) — never on headless,
+   * task-API or consultation runs.
+   */
+  compact?: { instructions: string };
+  /**
    * True when the viewer can send ADDITIONAL user messages while this turn is
    * still running (an interactive streaming chat with a live steer channel —
    * see `agent/steerChannel.ts`). Such a message reaches the model between

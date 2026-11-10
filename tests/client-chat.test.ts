@@ -1772,21 +1772,21 @@ describe("stream events applied to a pane", () => {
     expect(rows[1]).toMatchObject({ kind: "compact", detail: "자동 요약 · 정리 후 약 920토큰" });
   });
 
-  it("a failed compaction is a failed row carrying the SDK's English detail", async () => {
+  it("a failed compaction is a failed row with no detail", async () => {
     const id = seedPane();
     await driveEvents(id, [
+      // The server no longer sends `error`; a frame that still carries one (or a
+      // trigger / sizes) must not leak any of it into the row.
       ["compact", { id: "cmp-x", ok: false, error: "summary request failed: 429" }],
       ["compact", { id: "cmp-y", ok: false }],
+      ["compact", { id: "cmp-z", ok: false, trigger: "manual", preTokens: 18_049, postTokens: 1_378 }],
     ]);
     const rows = pane(id).liveTools;
-    expect(rows[0]).toMatchObject({
-      kind: "compact",
-      label: "맥락 정리에 실패했습니다",
-      detail: "summary request failed: 429",
-      status: "failed",
-    });
-    expect(rows[1]).toMatchObject({ label: "맥락 정리에 실패했습니다", status: "failed" });
-    expect(rows[1].detail).toBeUndefined();
+    expect(rows).toHaveLength(3);
+    for (const failedRow of rows) {
+      expect(failedRow).toMatchObject({ kind: "compact", label: "맥락 정리에 실패했습니다", status: "failed" });
+      expect(failedRow.detail).toBeUndefined();
+    }
   });
 
   it("ignores the retired plan / plan_review frames: no live plan state, no notification", async () => {
@@ -3847,40 +3847,66 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
   });
 });
 
-describe("the retired /compact in the chat pane", () => {
-  it("sends a typed /compact as a plain literal; the server's refusal restores the draft", async () => {
+describe("/compact in the chat pane", () => {
+  const NOTHING_TO_COMPACT = "지금은 정리할 대화 맥락이 없습니다. 메시지를 하나 보낸 뒤 다시 시도해 주세요.";
+  const MID_TURN_REFUSAL = "/compact는 응답이 끝난 뒤에 보내 주세요.";
+
+  it("sends a typed /compact as a plain literal; a server refusal restores the draft", async () => {
     const id = seedPane({ conversationId: "c", avatar: { id: "av1", alias: "노아", displayName: "Noah", isOwn: true } as any });
     const bodies: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/stream") {
         bodies.push(body(init));
-        return jsonRes({ error: "/compact는 더 이상 지원하지 않습니다. 대화가 길어지면 맥락은 자동으로 정리됩니다." }, 400);
+        return jsonRes({ error: NOTHING_TO_COMPACT }, 400);
       }
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
     await sendMessage(id, "/compact 결정 사항은 남겨줘");
+    // No client-side expansion: the server reads the literal and runs the command.
+    expect(bodies).toHaveLength(1);
     expect(bodies[0].message).toBe("/compact 결정 사항은 남겨줘");
+    // Refused like any other message: nothing stays in the transcript, the text
+    // goes back to the composer and the server's reason is shown.
     expect(pane(id).messages).toEqual([]);
     expect(pane(id).draft).toBe("/compact 결정 사항은 남겨줘");
-    expect(get(toasts).some((t) => t.message.includes("/compact는 더 이상 지원하지 않습니다"))).toBe(true);
+    expect(get(toasts).some((t) => t.message.includes(NOTHING_TO_COMPACT))).toBe(true);
   });
 
-  it("sends a mid-turn /compact like any other slash-leading steer", async () => {
+  it("refuses a mid-turn /compact before any request, leaving the draft where it was", async () => {
+    const id = seedPane({ streaming: true, liveRunId: "run-live", draft: "/compact 결정 사항은 남겨줘" });
+    const fetchFn = noFetch();
+    for (const text of ["/compact", "  /compact 결정 사항은 남겨줘", "/COMPACT"]) {
+      toasts.set([]);
+      await sendSteer(id, text);
+      expect(fetchFn).not.toHaveBeenCalled();
+      const p = pane(id);
+      expect(p.draft).toBe("/compact 결정 사항은 남겨줘");
+      expect(p.steerSending).toBeFalsy();
+      expect(p.steers ?? []).toEqual([]);
+      expect(get(toasts).map((t) => ({ message: t.message, kind: t.kind }))).toEqual([
+        { message: MID_TURN_REFUSAL, kind: "warn" },
+      ]);
+    }
+  });
+
+  it("still delivers a mid-turn message that only looks like /compact", async () => {
     const id = seedPane({ streaming: true, liveRunId: "run-live" });
     const bodies: any[] = [];
     useFetch((url, init) => {
       if (url === "/api/chat/runs/run-live/message") {
         bodies.push(body(init));
-        return jsonRes({ steer: { id: "s1", text: "/compact", state: "queued", createdAt: "t", followUp: false } });
+        return jsonRes({ steer: { id: `s${bodies.length}`, text: bodies[bodies.length - 1].message, state: "queued", createdAt: "t", followUp: false } });
       }
       return undefined;
     });
-    await sendSteer(id, "/compact");
-    expect(bodies).toEqual([{ message: "/compact" }]);
+    await sendSteer(id, "/compactify");
+    await sendSteer(id, "요약해줘 /compact");
+    expect(bodies).toEqual([{ message: "/compactify" }, { message: "요약해줘 /compact" }]);
+    expect(get(toasts).some((t) => t.message === MID_TURN_REFUSAL)).toBe(false);
   });
 
-  it("offers no 다시 생성 for a legacy /compact turn, but its row can still be edited", () => {
+  it("offers no 다시 생성 for a /compact turn, but its row can still be edited", () => {
     const messages = [row("u1", "user", "질문"), row("a1", "assistant", "답"), row("u2", "user", "/compact 결정 사항은 남겨줘"), row("a2", "assistant", "대화 맥락을 요약해 정리했습니다.")];
     expect(canRegenerate(messages)).toBe(false);
     expect(isRewindAnchor(messages[2])).toBe(true);

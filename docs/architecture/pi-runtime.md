@@ -158,6 +158,14 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    `response.input_consumed`, which marks it delivered. One pi did not deliver (`undelivered_input`) stays queued and
    goes with the rest as ONE follow-up turn after the response. Mechanics →
    [`chat-sse-media.md`](chat-sse-media.md) "Mid-turn user messages".
+9. **Manual compaction** — a typed `/compact` is not a turn: `compactPiSession` calls
+   `POST /v1/responses/{id}/compact` (`PiResponsesClient.compact`) and reports the NEW response id as the session.
+   The answer is an SSE stream like a turn's (`response.compaction` `in_progress` → `completed {id, tokens_*}` |
+   `failed {error.code}`), because a plain JSON call would die at fetch's 300 s header timeout; it shares the
+   stream's connect/idle deadlines and has its own 15 min cap (pi ends a compaction at its non-stream timeout
+   first). Nothing else of the run (capability plan, run token, instructions) is built — and since no run token
+   is sent, pi takes down a session it had to OPEN for the compaction, so the next turn opens it with its token.
+   Mechanics → [`chat-sse-media.md`](chat-sse-media.md) "Manual `/compact`".
 
 ## S1 degrades (what pi still lacks)
 

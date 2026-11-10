@@ -90,13 +90,35 @@
   `onTextFold` (headless routines, `POST /api/chat`) nothing folds and the final text is every block joined —
   the `AgentEvents` no-sink contract. Attachment anchors are therefore TAIL-relative on both sides
   (`currentTextAnchor` slices from the fold index).
-- **Manual `/compact` is retired (2026-10-29).** Typing it is refused like `/new`; a legacy `/compact`
-  row still renders, can be EDITED into ordinary text (a normal rewind), and refuses 다시 생성. Its old
-  assistant bubble (`대화 맥락을 요약해 정리했습니다…`) is plain stored text.
+- **Manual `/compact [what to keep]` = ONE pi call, no model turn** (2026-11-10). `ChatTurnContext.compact` →
+  `AgentRequest.compact` → `runPiAgent`'s `compactPiSession`: `POST /v1/responses/{id}/compact` on the
+  conversation's current response id as the run principal (no capability plan, run token, plugin roots,
+  working-repo lock or steer channel). pi summarizes the older history (its recent tail — 20k tokens, a quarter of a small model's
+  window — stays verbatim) and commits the summary as a NEW response id; the old ids keep the full history.
+  - **Success** → `onSessionId` + `onResumePoint` (the new id), `onCompact({ok: true, trigger: "manual",
+    preTokens, postTokens})`, and `usage.inputTokens = postTokens` so the badge drops (`postTokens` is pi's
+    ESTIMATE of the kept messages: one not below `preTokens` is dropped — no figure, the badge waits for the
+    next turn's usage). The route composes the
+    bubble (`compactResultText`) — no text streams. A rewind onto a row AFTER the compaction branches from the
+    summary; a rewind onto the `/compact` row or earlier branches from the unsummarized history.
+  - **Anything else changes nothing in pi**, so the conversation keeps its session and the row is stamped with
+    the point the `/compact` row sat on (`compactKeptPoint`): `reason` = `nothing` (`nothing_to_compact`:
+    too short or just compacted — a note in the bubble, NO activity row), `busy` (a 409: response in progress
+    or a pending question), `lost` (pi's own 404, or a session on a model pi no longer has — the next turn
+    self-heals from the stored history), `failed` (anything else, a 404 without pi's error body included: a
+    gateway with no such route). A thrown run and a stop leave the session alone too.
+  - **A `/compact` exchange is not a turn for `stoppedAnswer`** (`lastTurnEndRow` skips trailing command +
+    bubble pairs): a stopped `/compact` restates nothing, and one sent after a stopped answer does not hide it.
+  - **Refused before any write:** no pi session (`compactNoSessionRefusal`), images, as an edit's new text,
+    다시 생성 of a `/compact` row (the client hides it, `isCompactCommandText`), and as a mid-turn message.
+  - Available in every chat a person types in (own or colleague's avatar); never reachable from the task API
+    or a routine (their text is not slash-expanded). The avatar has no tool for it — `describe_system` and the
+    manual tell it to suggest the command.
 - **pi's automatic compaction is visible.** pi-gateway brackets it with `response.compaction`
   (`status: in_progress` → `completed` | `failed`); the pi event adapter shows the status line `맥락 정리 중…`
   while it runs and fires `onCompact({ ok, trigger: "auto" })` at the end, which the chat route emits as the
-  `compact` frame (server-minted id, deduped on replay) → the client's persisted `compact` activity row + chip.
+  `compact` frame (server-minted id, deduped on replay) → the client's persisted `compact` activity row + chip
+  (a manual one rides the same frame with `trigger: "manual"` and its sizes).
   The usage badge's window is pi's `usage.context_window` (`AgentUsage.contextWindow`).
 - **Tool gate: built-ins are pi's, MCP tools are gated per call at `/mcp`.** pi's built-ins
   (read/write/edit/bash/ls/find/grep) run in the RUN PRINCIPAL's own sandbox (viewer for a colleague chat, the

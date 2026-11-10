@@ -42,6 +42,12 @@ export const PI_DEFAULT_CONNECT_TIMEOUT_MS = 180_000;
 export const PI_DEFAULT_IDLE_TIMEOUT_MS = 120_000;
 export const PI_DEFAULT_TOTAL_TIMEOUT_MS = 60 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Hard cap on one manual compaction — a summarizing LLM call or two over the
+ * older history. pi ends it itself at its non-stream timeout (600 s by
+ * default), so this only has to outlast that.
+ */
+const PI_COMPACT_TIMEOUT_MS = 15 * 60_000;
 
 export interface PiGatewayConfig {
   /** Gateway origin (+ optional path prefix), e.g. `http://pi-gateway:8080`. */
@@ -56,6 +62,8 @@ export interface PiGatewayConfig {
   totalTimeoutMs?: number;
   /** Timeout of the small JSON calls (cancel, models, files). */
   requestTimeoutMs?: number;
+  /** Hard cap on one manual compaction's stream (`compact`). */
+  compactTimeoutMs?: number;
   /** Injected for tests; defaults to global fetch. */
   fetch?: typeof fetch;
 }
@@ -489,6 +497,15 @@ export interface PiFileContent {
   contentType: string;
 }
 
+/** `POST /v1/responses/{id}/compact` — the summary is committed as its own response. */
+export interface PiCompactResult {
+  /** The response id the NEXT turn continues from (`previous_response_id`). */
+  responseId: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  contextWindow?: number;
+}
+
 export interface PiStreamOptions {
   signal?: AbortSignal;
   /** Called once response headers arrived (the turn is admitted and running). */
@@ -508,6 +525,15 @@ export interface PiResponsesClient {
    * response's `undelivered_input`. 404/409: the response is not (or no longer) taking input.
    */
   input(responseId: string, user: string, input: { clientId: string; text: string }, signal?: AbortSignal): Promise<void>;
+  /**
+   * `POST /v1/responses/{id}/compact?user=` → pi summarizes the session's history up to that response NOW
+   * (its recent tail stays verbatim) and answers with an SSE stream (keepalives while the summary is written)
+   * that ends with the id of the new response holding the summary. The given id keeps the uncompacted history.
+   * Throws `conflict` with code `nothing_to_compact` (too little history, or just compacted), `conflict`
+   * otherwise (409: a response in progress or a pending question — the session is not at rest), `not_found`
+   * (404: pi no longer has it). Nothing is committed on a failure or when `signal` aborts the request.
+   */
+  compact(responseId: string, user: string, instructions: string, signal?: AbortSignal): Promise<PiCompactResult>;
   listModels(signal?: AbortSignal): Promise<PiModel[]>;
   /** A `present_file` item's bytes. `path` must be under `/workspace`. */
   fileContent(path: string, user: string, signal?: AbortSignal): Promise<PiFileContent>;
@@ -603,6 +629,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
   }
 
   async function openOnce(
+    url: URL,
     body: string,
     headers: Record<string, string>,
     controller: AbortController,
@@ -615,7 +642,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     }, connectTimeoutMs);
     connectTimer.unref?.();
     try {
-      const response = await doFetch(joinUrl(config.baseUrl, "/v1/responses"), {
+      const response = await doFetch(url, {
         method: "POST",
         headers,
         body,
@@ -636,17 +663,15 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     }
   }
 
-  async function* stream(request: PiResponseRequest, options: PiStreamOptions = {}): AsyncGenerator<PiStreamEvent> {
-    const body = JSON.stringify(buildResponsesBody(request));
-    if (Buffer.byteLength(body, "utf8") > PI_MAX_REQUEST_BYTES) {
-      throw new PiGatewayError("too_large", { message: "첨부 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다." });
-    }
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(request.headers ?? {})) {
-      if (!RESERVED_HEADERS.has(name.toLowerCase())) headers[name] = value;
-    }
-    Object.assign(headers, auth, { "Content-Type": "application/json", Accept: "text/event-stream" });
-
+  /** One POST answered with an SSE stream: open (connect deadline, optional open retry), then frames under the idle and total deadlines. */
+  async function* sseRequest(
+    url: URL,
+    body: string,
+    extraHeaders: Record<string, string>,
+    options: PiStreamOptions,
+    totalMs: number,
+  ): AsyncGenerator<PiStreamEvent> {
+    const headers = { ...extraHeaders, ...auth, "Content-Type": "application/json", Accept: "text/event-stream" };
     const parent = options.signal;
     let attemptController: AbortController | undefined;
     let dispose = () => {};
@@ -658,7 +683,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
         attemptController = linked.controller;
         dispose = linked.dispose;
         timeouts.kind = undefined;
-        return openOnce(body, headers, linked.controller, parent, timeouts);
+        return openOnce(url, body, headers, linked.controller, parent, timeouts);
       },
       { attempts: 1, ...options.retry, signal: parent },
     ).catch((error: unknown) => {
@@ -680,7 +705,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     const totalTimer = setTimeout(() => {
       timeouts.kind = "total";
       controller.abort(new Error("total timeout"));
-    }, totalTimeoutMs);
+    }, totalMs);
     totalTimer.unref?.();
     arm();
     try {
@@ -711,8 +736,54 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     }
   }
 
+  async function* stream(request: PiResponseRequest, options: PiStreamOptions = {}): AsyncGenerator<PiStreamEvent> {
+    const body = JSON.stringify(buildResponsesBody(request));
+    if (Buffer.byteLength(body, "utf8") > PI_MAX_REQUEST_BYTES) {
+      throw new PiGatewayError("too_large", { message: "첨부 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다." });
+    }
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(request.headers ?? {})) {
+      if (!RESERVED_HEADERS.has(name.toLowerCase())) headers[name] = value;
+    }
+    yield* sseRequest(joinUrl(config.baseUrl, "/v1/responses"), body, headers, options, totalTimeoutMs);
+  }
+
+  async function compact(responseId: string, user: string, instructions: string, signal?: AbortSignal): Promise<PiCompactResult> {
+    const url = joinUrl(config.baseUrl, `/v1/responses/${encodeURIComponent(responseId)}/compact`);
+    url.searchParams.set("user", user);
+    const body = JSON.stringify(instructions.trim() ? { instructions: instructions.trim() } : {});
+    const positive = (value: unknown): number | undefined => (typeof value === "number" && value > 0 ? value : undefined);
+    for await (const event of sseRequest(url, body, {}, { signal }, config.compactTimeoutMs ?? PI_COMPACT_TIMEOUT_MS)) {
+      if (event.type !== "response.compaction") continue;
+      const { status } = event.data;
+      if (status === "completed" && typeof event.data.id === "string" && event.data.id) {
+        const tokensBefore = positive(event.data.tokens_before);
+        const tokensAfter = positive(event.data.tokens_after);
+        const contextWindow = positive(event.data.context_window);
+        return {
+          responseId: event.data.id,
+          ...(tokensBefore ? { tokensBefore } : {}),
+          ...(tokensAfter ? { tokensAfter } : {}),
+          ...(contextWindow ? { contextWindow } : {}),
+        };
+      }
+      if (status === "failed") {
+        const error = isRecord(event.data.error) ? event.data.error : {};
+        const code = typeof error.code === "string" ? error.code : undefined;
+        const upstreamMessage = typeof error.message === "string" ? error.message.slice(0, 1000) : undefined;
+        // The stream is already 200: the failure's kind comes from pi's code.
+        const kind = code === "nothing_to_compact" ? "conflict" : code === "rate_limit" ? "rate_limited" : code === "timeout" ? "timeout" : "server";
+        throw new PiGatewayError(kind, { code, upstreamMessage });
+      }
+      if (status !== "in_progress") break;
+    }
+    // Ended (or went on) without a terminal event.
+    throw new PiGatewayError("protocol", { message: "pi-gateway의 맥락 정리 응답 형식이 올바르지 않습니다." });
+  }
+
   return {
     stream,
+    compact,
     async cancel(responseId, user, signal) {
       const response = await jsonCall("POST", `/v1/responses/${encodeURIComponent(responseId)}/cancel`, { user }, signal);
       const json = await readJson(response);

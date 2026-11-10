@@ -215,15 +215,28 @@ export interface MemoryEvent {
 }
 
 /**
- * pi-gateway summarized the session because it neared the model's context
- * window (`response.compaction`, completed or failed). The live "맥락 정리 중…"
- * status label is transient, so this event leaves the DURABLE activity-row
- * trace: a user who looked away still learns the conversation was summarized.
+ * pi-gateway summarized the session: on its own because it neared the model's
+ * context window (`response.compaction`, completed or failed — `auto`), or
+ * because the viewer typed `/compact` (`manual`, `AgentRequest.compact`). The
+ * live "맥락 정리 중…" status label is transient, so this event leaves the
+ * DURABLE activity-row trace: a user who looked away still learns the
+ * conversation was summarized.
  */
 export interface CompactEvent {
   ok: boolean;
-  /** pi compacts on its own; there is no manual trigger (the `/compact` command is retired). */
-  trigger: "auto";
+  trigger: "auto" | "manual";
+  /** Manual only: pi's context size before the summary. */
+  preTokens?: number;
+  /** Manual only: pi's estimate of the context left after it. */
+  postTokens?: number;
+  /**
+   * Manual only, when `ok` is false — why nothing was compacted:
+   * `nothing` = too little history yet, or it was just compacted (not a
+   * failure: the route leaves no activity row for it); `lost` = pi no longer
+   * has the session; `busy` = the session is not at rest (a response in
+   * progress, or a question waiting for its answer); `failed` = anything else.
+   */
+  reason?: "nothing" | "lost" | "busy" | "failed";
 }
 
 /**

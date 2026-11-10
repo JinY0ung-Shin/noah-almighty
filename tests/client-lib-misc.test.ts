@@ -491,14 +491,27 @@ describe("slash commands", () => {
     });
   });
 
-  it("no longer offers the retired /compact on any pane", () => {
-    expect(commandsForPane(otherPane).map((c) => c.name)).not.toContain("compact");
-    expect(commandsForPane(ownPane).map((c) => c.name)).not.toContain("compact");
-    // Typed, it is no menu command: the literal goes out and the server refuses it.
-    expect(resolveTypedSlashCommand(ownPane, "/compact 결정 사항은 남겨줘")).toBeNull();
+  it("offers /compact on every pane — a colleague's avatar as well as the owner's", () => {
+    // Not owner-only: compacting is about the viewer's own conversation.
+    expect(commandsForPane(otherPane).map((c) => c.name)).toContain("compact");
+    const compact = commandsForPane(ownPane).find((c) => c.name === "compact");
+    expect(compact).toMatchObject({ name: "compact", title: "대화 맥락 정리", argsLabel: "남길 내용" });
+    // What to keep is optional, so the menu never waits for it.
+    expect(compact?.ownerOnly).toBeUndefined();
+    expect(compact?.requiresArgs).toBeUndefined();
+    // No client-side expansion either: the literal goes out and the server runs it.
+    expect(compact?.prompt).toBeUndefined();
+
+    for (const pane of [ownPane, otherPane]) {
+      expect(resolveTypedSlashCommand(pane, "/compact 결정 사항은 남겨줘")).toMatchObject({
+        command: { name: "compact" },
+        args: "결정 사항은 남겨줘",
+      });
+      expect(resolveTypedSlashCommand(pane, "/compact")).toMatchObject({ command: { name: "compact" }, args: "" });
+    }
   });
 
-  it("recognizes a legacy /compact row's text, with or without what to keep", () => {
+  it("recognizes a /compact command's text, with or without what to keep", () => {
     expect(isCompactCommandText("/compact")).toBe(true);
     expect(isCompactCommandText("  /compact 결정 사항은 남겨줘")).toBe(true);
     expect(isCompactCommandText("/COMPACT")).toBe(true);
@@ -537,7 +550,11 @@ describe("slash commands", () => {
 
   it("filterSlashCommands matches across name/title/description/source and returns all on empty query", () => {
     expect(filterSlashCommands(SLASH_COMMANDS, "")).toBe(SLASH_COMMANDS);
-    expect(filterSlashCommands(SLASH_COMMANDS, "요약").map((c) => c.name)).toEqual(["summarize"]);
+    // /compact's description says it summarizes too, so "요약" finds both.
+    expect(filterSlashCommands(SLASH_COMMANDS, "요약").map((c) => c.name)).toEqual(["summarize", "compact"]);
+    expect(filterSlashCommands(SLASH_COMMANDS, "맥락").map((c) => c.name)).toEqual(["compact"]);
+    // argsLabel is searched as well.
+    expect(filterSlashCommands(SLASH_COMMANDS, "남길 내용").map((c) => c.name)).toEqual(["compact"]);
     expect(filterSlashCommands(SLASH_COMMANDS, "새 대화").map((c) => c.name)).toEqual(["new"]);
   });
 });

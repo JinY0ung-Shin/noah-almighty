@@ -39,6 +39,7 @@ import { piConversationSegment, piHostPath, piUserKey, piWorkspaceFor } from "..
 import {
   PiGatewayError,
   buildResponsesBody,
+  type PiCompactResult,
   type PiResponseRequest,
   type PiResponsesClient,
   type PiStreamEvent,
@@ -57,11 +58,21 @@ const dir = withTempDir("pi-runner");
 type Step = (req: PiResponseRequest) => PiStreamEvent[] | Error | Promise<PiStreamEvent[] | Error>;
 
 /** `acceptInput`: pi takes mid-turn input (`POST …/input` succeeds); otherwise every call is refused (404). */
-function fakeClient(steps: Step[], { acceptInput = false } = {}) {
+function fakeClient(
+  steps: Step[],
+  { acceptInput = false, compact }: { acceptInput?: boolean; compact?: () => PiCompactResult | Error } = {},
+) {
   const requests: PiResponseRequest[] = [];
   const inputs: { responseId: string; user: string; clientId: string; text: string }[] = [];
+  const compactions: { responseId: string; user: string; instructions: string }[] = [];
   let index = 0;
   const client: PiResponsesClient = {
+    async compact(responseId, user, instructions) {
+      compactions.push({ responseId, user, instructions });
+      const out = compact ? compact() : new Error("unexpected compact call");
+      if (out instanceof Error) throw out;
+      return out;
+    },
     async *stream(req) {
       requests.push(structuredClone(req));
       const step = steps[index++];
@@ -84,7 +95,7 @@ function fakeClient(steps: Step[], { acceptInput = false } = {}) {
       throw new Error("not used");
     },
   };
-  return { client, requests, inputs };
+  return { client, requests, inputs, compactions };
 }
 
 const ev = (type: string, data: Record<string, unknown>): PiStreamEvent => ({ type, data });
@@ -171,6 +182,90 @@ function recorder(extra: Partial<AgentEvents> = {}) {
 }
 const of = (calls: [string, unknown][], name: string) => calls.filter(([n]) => n === name).map(([, v]) => v);
 const inputText = (req: PiResponseRequest) => (req.input.kind === "prompt" ? req.input.text : "");
+
+// ---- /compact -----------------------------------------------------------------------------
+
+describe("runPiAgent: /compact (manual compaction)", () => {
+  it("asks pi to summarize the stored session, moves onto the new response and reports the sizes", async () => {
+    const { store, config, owner, base } = setup();
+    const fake = fakeClient([], { compact: () => ({ responseId: "resp_s1_4", tokensBefore: 28_200, tokensAfter: 1_900, contextWindow: 200_000 }) });
+    const rec = recorder({ onCompact: (event) => void rec.calls.push(["compact", event]) });
+    const response = await runPiAgent(
+      base({ message: "/compact 결정 위주로", resumeSessionId: "resp_s1_3", compact: { instructions: "결정 위주로" } }),
+      [],
+      config,
+      store,
+      rec.events,
+      undefined,
+      { client: fake.client },
+    );
+    // One pi call as the run principal — no model turn, no frozen instructions.
+    expect(fake.compactions).toEqual([{ responseId: "resp_s1_3", user: owner.id, instructions: "결정 위주로" }]);
+    expect(fake.requests).toEqual([]);
+    expect(store.hasConversationPiInstructions(owner.id, "conv-1")).toBe(false);
+    expect(of(rec.calls, "status")).toEqual(["맥락 정리 중…"]);
+    expect(of(rec.calls, "session")).toEqual(["resp_s1_4"]);
+    expect(of(rec.calls, "resume")).toEqual([{ sessionId: "resp_s1_4", uuid: "resp_s1_4" }]);
+    expect(of(rec.calls, "compact")).toEqual([{ ok: true, trigger: "manual", preTokens: 28_200, postTokens: 1_900 }]);
+    // The badge's context snapshot is the summarized size.
+    expect(response).toMatchObject({ runtime: "pi", text: "", usage: { inputTokens: 1_900, outputTokens: 0, contextWindow: 200_000 } });
+  });
+
+  it("drops an 'after' estimate that is not below the size it replaced (no figure, no badge move)", async () => {
+    const { store, config, base } = setup();
+    for (const sizes of [{ tokensBefore: 120, tokensAfter: 50_675 }, { tokensAfter: 900 }, { tokensBefore: 900, tokensAfter: 900 }]) {
+      const fake = fakeClient([], { compact: () => ({ responseId: "resp_s1_4", contextWindow: 32_768, ...sizes }) });
+      const rec = recorder({ onCompact: (event) => void rec.calls.push(["compact", event]) });
+      const response = await runPiAgent(base({ resumeSessionId: "resp_s1_3", compact: { instructions: "" } }), [], config, store, rec.events, undefined, {
+        client: fake.client,
+      });
+      // Still a successful compaction: the conversation moves onto the summary.
+      expect(of(rec.calls, "session")).toEqual(["resp_s1_4"]);
+      expect(of(rec.calls, "compact")).toEqual([{ ok: true, trigger: "manual", ...("tokensBefore" in sizes ? { preTokens: sizes.tokensBefore } : {}) }]);
+      expect(response.usage).toBeUndefined();
+    }
+  });
+
+  it("reports why nothing was compacted and keeps the session: nothing / busy / lost / failed", async () => {
+    const { store, config, base } = setup();
+    const outcome = async (error: Error, resumeSessionId = "resp_s1_3") => {
+      const fake = fakeClient([], { compact: () => error });
+      const rec = recorder({ onCompact: (event) => void rec.calls.push(["compact", event]) });
+      const response = await runPiAgent(base({ resumeSessionId, compact: { instructions: "" } }), [], config, store, rec.events, undefined, {
+        client: fake.client,
+      });
+      expect(of(rec.calls, "session")).toEqual([]);
+      expect(of(rec.calls, "resume")).toEqual([]);
+      expect(response.usage).toBeUndefined();
+      return { reason: (of(rec.calls, "compact")[0] as { reason?: string }).reason, calls: fake.compactions.length };
+    };
+    expect((await outcome(new PiGatewayError("conflict", { status: 409, code: "nothing_to_compact" }))).reason).toBe("nothing");
+    expect((await outcome(new PiGatewayError("conflict", { status: 409, code: "response_in_progress" }))).reason).toBe("busy");
+    expect((await outcome(new PiGatewayError("not_found", { status: 404, code: "404" }))).reason).toBe("lost");
+    expect((await outcome(new PiGatewayError("bad_request", { status: 400, code: "model_not_configured" }))).reason).toBe("lost");
+    // A 404 without pi's error body is a gateway that has no such route — not a lost session.
+    expect((await outcome(new PiGatewayError("not_found", { status: 404 }))).reason).toBe("failed");
+    expect((await outcome(new PiGatewayError("server", { code: "sdk_error" }))).reason).toBe("failed");
+    // A session id pi never issued is not sent at all.
+    expect(await outcome(new Error("never called"), "0b5e7a4c-sdk-session")).toEqual({ reason: "lost", calls: 0 });
+  });
+
+  it("a stop throws (the route's cancel path), and no outcome is reported", async () => {
+    const { store, config, base } = setup();
+    const abort = new AbortController();
+    const fake = fakeClient([], {
+      compact: () => {
+        abort.abort();
+        return new PiGatewayError("aborted");
+      },
+    });
+    const rec = recorder({ onCompact: (event) => void rec.calls.push(["compact", event]) });
+    await expect(
+      runPiAgent(base({ resumeSessionId: "resp_s1_3", compact: { instructions: "" } }), [], config, store, rec.events, abort, { client: fake.client }),
+    ).rejects.toMatchObject({ kind: "aborted" });
+    expect(of(rec.calls, "compact")).toEqual([]);
+  });
+});
 
 // ---- runPiAgent ---------------------------------------------------------------------------
 

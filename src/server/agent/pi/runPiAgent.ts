@@ -49,7 +49,7 @@ import type { McpServer as McpServerType } from "@modelcontextprotocol/sdk/serve
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AgentRequest, AgentResponse, AgentUsage, AppConfig, PluginRoot } from "../../types.js";
 import type { Store } from "../../store.js";
-import type { AgentEvents } from "../events.js";
+import type { AgentEvents, CompactEvent } from "../events.js";
 import logger from "../../logger.js";
 import { effortForModel } from "../../effortLevels.js";
 import { unknownArgumentProblem, type McpRunRegistry, type McpServerSource } from "../../mcpHttp/endpoint.js";
@@ -83,6 +83,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   PI_REASONING_EFFORTS,
   PiGatewayError,
+  type PiCompactResult,
   type PiReasoningEffort,
   type PiResponseRequest,
   type PiResponsesClient,
@@ -156,6 +157,9 @@ export async function runPiAgent(
   abortController: AbortController | undefined,
   deps: RunPiAgentDeps = {},
 ): Promise<AgentResponse> {
+  if (request.compact) {
+    return compactPiSession(piRunPrincipal(request), request.compact.instructions, request, config, store, events, abortController, deps);
+  }
   if (!request.avatarConsultation) {
     return runPiAgentAs(piRunPrincipal(request), request, pluginRoots, config, store, events, abortController, deps);
   }
@@ -167,6 +171,99 @@ export async function runPiAgent(
   } finally {
     endPiConsultationSandbox(config, principal);
   }
+}
+
+/**
+ * The viewer's `/compact` (`AgentRequest.compact`): no model turn, no tools, no
+ * run token — ONE pi call that summarizes the conversation's session up to its
+ * current response and commits the summary as a new response id. Success moves
+ * the conversation onto that id (`onSessionId` + `onResumePoint`) and reports
+ * the sizes; a refusal or failure reports its reason and changes nothing, so
+ * the caller keeps the session it had. Only a stop (the run's abort) throws.
+ */
+async function compactPiSession(
+  principal: string,
+  instructions: string,
+  request: AgentRequest,
+  config: AppConfig,
+  store: Store,
+  events: AgentEvents | undefined,
+  abortController: AbortController | undefined,
+  deps: RunPiAgentDeps,
+): Promise<AgentResponse> {
+  const client = deps.client ?? piServicesFor(store, config).client;
+  if (!client) throw new Error("pi-gateway is not configured (PI_GATEWAY_URL / PI_GATEWAY_API_KEY).");
+  const started = Date.now();
+  const response = (usage?: AgentUsage): AgentResponse => ({
+    kind: "text",
+    runtime: "pi",
+    summary: "맥락 정리",
+    // The chat route composes the bubble from the compact event.
+    text: "",
+    ...(usage ? { usage } : {}),
+  });
+  const refused = (reason: NonNullable<CompactEvent["reason"]>, error?: PiGatewayError): AgentResponse => {
+    agentLogger.info(
+      {
+        conversationId: request.conversationId,
+        reason,
+        ...(error ? { kind: error.kind, code: error.code, upstream: error.upstreamMessage } : {}),
+        durationMs: Date.now() - started,
+      },
+      "pi runtime: manual compaction did not run",
+    );
+    events?.onCompact?.({ ok: false, trigger: "manual", reason });
+    return response();
+  };
+  const previous = request.resumeSessionId;
+  if (!isPiResponseId(previous)) return refused("lost");
+  events?.onStatus?.("맥락 정리 중…");
+  let result: PiCompactResult;
+  try {
+    result = await client.compact(previous, principal, instructions, abortController?.signal);
+  } catch (error) {
+    if (abortController?.signal.aborted || !(error instanceof PiGatewayError)) throw error;
+    if (error.kind === "conflict") return refused(error.code === "nothing_to_compact" ? "nothing" : "busy", error);
+    // pi's own 404 carries an error code (a route this pi does not have carries
+    // none), and a session on a model pi no longer has is lost the same way:
+    // the next turn starts a new session from the stored history (isLostPiSession).
+    const lost = isLostPiSession(error) && (error.kind !== "not_found" || error.code !== undefined);
+    return refused(lost ? "lost" : "failed", error);
+  }
+  events?.onSessionId?.(result.responseId);
+  events?.onResumePoint?.({ sessionId: result.responseId, uuid: result.responseId });
+  // "Before" is the model's own usage, "after" pi's estimate of the kept
+  // messages. An estimate at or above what it replaced is not a size anyone
+  // should read (the estimate runs high on some text): the next turn's usage
+  // is the first honest figure then.
+  const tokensAfter =
+    result.tokensBefore && result.tokensAfter && result.tokensAfter < result.tokensBefore ? result.tokensAfter : undefined;
+  events?.onCompact?.({
+    ok: true,
+    trigger: "manual",
+    ...(result.tokensBefore ? { preTokens: result.tokensBefore } : {}),
+    ...(tokensAfter ? { postTokens: tokensAfter } : {}),
+  });
+  agentLogger.info(
+    {
+      conversationId: request.conversationId,
+      tokensBefore: result.tokensBefore ?? null,
+      tokensAfter: result.tokensAfter ?? null,
+      durationMs: Date.now() - started,
+    },
+    "pi runtime: manual compaction completed",
+  );
+  // The badge's context snapshot is now the summarized size (unknown → the
+  // badge keeps its last reading until the next turn).
+  return response(
+    tokensAfter
+      ? {
+          inputTokens: tokensAfter,
+          outputTokens: 0,
+          ...(result.contextWindow ? { contextWindow: Math.max(result.contextWindow, tokensAfter) } : {}),
+        }
+      : undefined,
+  );
 }
 
 async function runPiAgentAs(

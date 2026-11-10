@@ -355,6 +355,99 @@ describe("cancel / models / files", () => {
     expect(err.code).toBe("response_not_running");
   });
 
+  it("compacts a session with ?user= and the instructions; the stream's last event names the response to continue", async () => {
+    handler = (_req, res) => {
+      sse(res);
+      frame(res, "response.compaction", { status: "in_progress" });
+      res.write(": keepalive\n\n");
+      frame(res, "response.compaction", { status: "completed", id: "resp_e_3", tokens_before: 28_000, tokens_after: 1_900, context_window: 200_000 }, 1);
+      res.end();
+    };
+    await expect(client().compact("resp_e_2", "u1", "  결정 위주로  ")).resolves.toEqual({
+      responseId: "resp_e_3",
+      tokensBefore: 28_000,
+      tokensAfter: 1_900,
+      contextWindow: 200_000,
+    });
+    expect(seen[0]!.method).toBe("POST");
+    expect(seen[0]!.url).toBe("/v1/responses/resp_e_2/compact?user=u1");
+    expect(seen[0]!.headers.authorization).toBe("Bearer svc-key-1");
+    expect(seen[0]!.headers.accept).toBe("text/event-stream");
+    expect(JSON.parse(seen[0]!.body)).toEqual({ instructions: "결정 위주로" });
+
+    // No instructions → an empty body; unknown sizes are simply absent.
+    handler = (_req, res) => {
+      sse(res);
+      frame(res, "response.compaction", { status: "completed", id: "resp_e_4", tokens_before: 500, tokens_after: null, context_window: null });
+      res.end();
+    };
+    await expect(client().compact("resp_e_3", "u1", "")).resolves.toEqual({ responseId: "resp_e_4", tokensBefore: 500 });
+    expect(JSON.parse(seen[1]!.body)).toEqual({});
+  });
+
+  it("maps a compaction pi refused before the stream (409, 404) and one that failed inside it", async () => {
+    handler = (_req, res) => errorBody(res, 409, { message: "in progress", type: "invalid_request_error", code: "response_in_progress" });
+    const busy = await client().compact("resp_e_2", "u1", "").catch((e) => e);
+    expect(busy.kind).toBe("conflict");
+    expect(busy.code).toBe("response_in_progress");
+
+    handler = (_req, res) => errorBody(res, 404, { message: "Response not found", type: "api_error", code: "404" });
+    const lost = await client().compact("resp_e_2", "u1", "").catch((e) => e);
+    expect(lost.kind).toBe("not_found");
+    expect(lost.code).toBe("404");
+
+    const failing = (code: string) => {
+      handler = (_req, res) => {
+        sse(res);
+        frame(res, "response.compaction", { status: "in_progress" });
+        frame(res, "response.compaction", { status: "failed", error: { code, message: "detail in English" } }, 1);
+        res.end();
+      };
+      return client().compact("resp_e_2", "u1", "").catch((e) => e);
+    };
+    const nothing = await failing("nothing_to_compact");
+    expect(nothing.kind).toBe("conflict");
+    expect(nothing.code).toBe("nothing_to_compact");
+    expect(nothing.upstreamMessage).toBe("detail in English");
+    // The Korean message is the kind's own — pi's English detail never becomes it.
+    expect(nothing.message).not.toContain("English");
+    expect((await failing("rate_limit")).kind).toBe("rate_limited");
+    expect((await failing("timeout")).kind).toBe("timeout");
+    expect((await failing("sdk_error")).kind).toBe("server");
+  });
+
+  it("a compaction stream that ends without a result is a protocol error; a stop aborts it", async () => {
+    handler = (_req, res) => {
+      sse(res);
+      frame(res, "response.compaction", { status: "in_progress" });
+      res.end();
+    };
+    expect((await client().compact("resp_e_2", "u1", "").catch((e) => e)).kind).toBe("protocol");
+    handler = (_req, res) => {
+      sse(res);
+      frame(res, "response.compaction", { status: "completed" });
+      res.end();
+    };
+    expect((await client().compact("resp_e_2", "u1", "").catch((e) => e)).kind).toBe("protocol");
+
+    // Silence longer than the JSON-call timeout is fine while the stream is open; the compaction's own cap ends it.
+    handler = (_req, res) => {
+      sse(res);
+      frame(res, "response.compaction", { status: "in_progress" });
+    };
+    const capped = await client({ requestTimeoutMs: 10, compactTimeoutMs: 120 }).compact("resp_e_2", "u1", "").catch((e) => e);
+    expect(capped.kind).toBe("timeout");
+    expect(capped.timeoutKind).toBe("total");
+
+    const abort = new AbortController();
+    const pending = client().compact("resp_e_2", "u1", "", abort.signal).catch((e) => e);
+    setTimeout(() => abort.abort(), 30);
+    expect((await pending).kind).toBe("aborted");
+    // Leaving the stream closes the upstream request, which is what makes pi drop the compaction.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed.filter((url) => url.includes("/compact")).length).toBeGreaterThanOrEqual(2);
+  });
+
   it("lists models and downloads a presented file", async () => {
     handler = (req, res) => {
       if (req.url === "/v1/models") {

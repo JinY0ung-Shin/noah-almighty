@@ -40,6 +40,15 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "지금까지의 대화를 요약합니다.",
   },
   {
+    // The literal goes out as-is; the server asks pi-gateway to summarize the
+    // conversation's session — no answer is generated, and the summary REPLACES
+    // the older part of what the model sees next.
+    name: "compact",
+    title: "대화 맥락 정리",
+    argsLabel: "남길 내용",
+    description: "지금까지의 대화를 요약해 맥락(컨텍스트)을 줄입니다. 뒤에 적은 내용은 요약에 꼭 남길 것으로 전달돼요.",
+  },
+  {
     name: "learn",
     title: "세션 학습",
     description: "이번 대화에서 재사용할 지식을 추려, 저장 전에 먼저 확인을 받습니다.",
@@ -86,9 +95,10 @@ export function commandsForPane(pane: ChatPane | null): SlashCommand[] {
 }
 
 /**
- * Whether a text is the retired `/compact` command (with or without what to keep).
- * Older threads still hold such rows; the server refuses to re-run them, so 다시
- * 생성 is not offered on one (the row can still be EDITED into an ordinary message).
+ * Whether a text is the `/compact` command (with or without what to keep). It runs
+ * as its own turn, never as a mid-turn message (no slash command runs inside a
+ * turn), and its row is not re-runnable with 다시 생성 (the server refuses it; the
+ * row can still be EDITED into an ordinary message).
  */
 export function isCompactCommandText(text: string | null | undefined): boolean {
   return /^\/compact(?:\s|$)/i.test((text ?? "").trim());

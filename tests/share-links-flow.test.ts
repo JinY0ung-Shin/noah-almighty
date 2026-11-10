@@ -84,6 +84,9 @@ vi.mock("../src/server/agent/pi/responsesClient.js", async (importOriginal) => {
       async input() {
         throw new Error("not used");
       },
+      async compact() {
+        throw new Error("not used");
+      },
       async listModels() {
         return [];
       },

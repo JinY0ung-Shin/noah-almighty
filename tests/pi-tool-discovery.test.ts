@@ -90,6 +90,9 @@ function fakeClient(steps: ((req: PiResponseRequest) => PiStreamEvent[] | Promis
     async input() {
       throw new Error("not used");
     },
+    async compact() {
+      throw new Error("not used");
+    },
     async listModels() {
       return [];
     },

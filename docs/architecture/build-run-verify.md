@@ -143,6 +143,13 @@
   README "Data volume ownership" repair → `setup-host.sh` `ok`, Noah healthy, `backups/` created when retired
   data is present. Tear the dind and its volume down
   afterwards; leave `noahpi-dind` (the pi e2e instance) alone.
+  **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
+  (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
+  with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
+  Noah's published port from the host (`~/.noah-work/pi-compose/boot-1110/compact-e2e.mjs`; the first signup
+  is the admin — a second one waits for approval, so later runs log in). For a compaction to have anything
+  to summarize, the OLDER part must be a turn BEFORE the message that crosses pi's `keepRecentTokens`: pi cuts
+  at a message boundary and keeps the crossing message itself, so one huge first message is all "recent".
 - `docker build` and `docker run` DO work here (plain `docker build -t <unique tag> .` of the Noah image). The
   user's dev stack on the host is this checkout's own `docker compose up -d --build`; never run it while a
   standalone pi-gateway stack is up on the same daemon (`docker ps --filter label=com.docker.compose.service=sandboxd`).
