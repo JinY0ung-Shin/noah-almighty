@@ -154,6 +154,22 @@ describe("McpRunRegistry + /mcp/:server", () => {
     expect(registry.size).toBe(0);
   });
 
+  it("a retired server id answers with where to go instead, only to a valid run token", async () => {
+    const token = registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } });
+    // `web` (mcp__web__fetch) was removed 2026-11-10: an older conversation's frozen prompt may still call it.
+    const res = await rawInit("web", token);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toContain("MCP server 'web' was removed");
+    expect(body.error.message).toContain("mcp__web__fetch is gone");
+    expect(body.error.message).toContain("Do not retry");
+    // The redirect names only routes a run may have, and says what to do without them.
+    expect(body.error.message).toContain("mcp__browser__*");
+    expect(body.error.message).toContain("ask them to paste its content");
+    // No token: 401 like every other path — the retirement text is not a probe.
+    expect((await rawInit("web")).status).toBe(401);
+  });
+
   it("refuses a non-initialize request without a session and an unknown session id", async () => {
     const token = registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } });
     const noSession = await fetch(`${baseUrl}/mcp/repo`, {

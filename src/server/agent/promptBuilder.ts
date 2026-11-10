@@ -827,7 +827,7 @@ function piRuntimeSection(request: AgentRequest): string | null {
       ? "**Runtime: a temporary pi sandbox.** You run inside a Linux sandbox made for this one run (no sudo; nothing in it persists). "
       : "**Runtime: your own pi sandbox.** You run inside THIS user's Linux sandbox (no sudo; its files persist for this user across conversations). ") +
     (sandboxOwner ? `${sandboxOwner} ` : "") +
-    "It has no direct network: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), and only to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance; empty by default, which blocks everything). Direct TCP/UDP, DNS and raw SSH always fail, and a destination off the list answers `407 Request rejected by proxy` — report it as that operator's policy, never work around it. Noah's own tools (`mcp__web__fetch` and the rest) do not run in the sandbox and keep Noah's network. " +
+    "It has no direct network: HTTP(S) leaves only through pi-gateway's egress proxy (the sandbox's HTTP_PROXY/HTTPS_PROXY), and only to destinations the pi operator allowlisted (`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance; empty by default, which blocks everything). Direct TCP/UDP, DNS and raw SSH always fail, and a destination off the list answers `407 Request rejected by proxy` — report it as that operator's policy, never work around it. Noah's own tools (every `mcp__*` tool) do not run in the sandbox and keep Noah's network. " +
     folder +
     (pi.readOnlyBuiltins
       ? "Built-in tools (read-only): `read` (files and images), `ls`/`find`/`grep` (explore). "
@@ -839,7 +839,7 @@ function piRuntimeSection(request: AgentRequest): string | null {
     MCP_SEARCH_QUERY_LINE +
     "A refused call says why: do not retry it or look for a shell workaround. " +
     "The user cannot see files in the sandbox, so put the content in your reply or publish the file with the file-output tools when they are available. " +
-    "There is no web-search tool on this runtime (fetch a known URL with `mcp__web__fetch`). " +
+    "There is no web-search tool and no web-fetch tool on this runtime: read a page from your shell when you have one and the destination is on the pi operator's allowlist, or with the browser tools when this run has them; otherwise say you cannot open it and ask the user to paste the content. " +
     piRelayedMcpSentence(pi) +
     piAsyncToolsSentence(request) +
     PI_EFFORT_CLAMP_SENTENCE +
@@ -1085,32 +1085,14 @@ export function buildSystemPromptAppend(
       );
     }
   }
-  // Web fetch standing guidance (META-COGNITION): which proxy path external
-  // URLs take is deployment state the avatar cannot infer, so state it. The
-  // proxy snapshot is redacted to scheme://host:port (webFetchProxyState).
-  if (request.webFetchProxy?.egressPolicy === "domain-proxy") {
+  // Server egress (META-COGNITION): the deployment's proxy policy for Noah's
+  // own process is state the avatar cannot infer, so state it (the snapshot
+  // comes from serverProxyState, redacted to scheme://host:port).
+  if (request.serverProxy?.egressPolicy === "domain-proxy") {
     // The shell is not in Noah's container, so Noah's proxy is not its
     // boundary — pi's own egress proxy and allowlist are (piRuntimeSection).
     lines.push(
-      "Server egress: the deployment bootstrap reports a shared domain-blocking proxy policy for Noah's server and the tools that run there — `mcp__web__fetch`, the repo/git, Confluence and other `mcp__*` tools, and the relayed MCP servers (hex-ssh, plugin and shared servers): direct outbound connections and external DNS are blocked there and only proxied HTTP(S) is available. It does NOT govern your sandbox shell on this runtime — `bash`/curl/Python leave only through the pi sandbox's own egress proxy (see the runtime paragraph), and Noah's admin blocklist never applies to them. The user's browser bridge is outside both boundaries. A proxy denial on either side is an administrator policy, not a transient fetch error; report it instead of trying alternate IPs or tunnels. Read `mcp__system__read_manual` topic `network-policy` for scope and operator setup. This report does not independently audit the firewall or reveal the current blocklist.",
-    );
-  }
-  if (mcpToolGroupEnabled(request, "web")) {
-    const proxy = request.webFetchProxy;
-    const proxyNote = !proxy
-      ? ""
-      : proxy.httpsProxy || proxy.httpProxy
-        ? ` External (internet) URLs go through the corporate proxy (${[
-            proxy.httpsProxy ? `HTTPS via ${proxy.httpsProxy}` : "",
-            proxy.httpProxy ? `HTTP via ${proxy.httpProxy}` : "",
-          ]
-            .filter(Boolean)
-            .join(", ")}${proxy.noProxy ? `; NO_PROXY: ${proxy.noProxy}` : ""}).`
-        : " No HTTP_PROXY/HTTPS_PROXY is configured: intranet URLs are fetched directly, but external internet sites may be unreachable if this deployment requires a corporate proxy.";
-    lines.push(
-      "Web page fetch: when the user shares a URL or asks about an intranet/internet page, read it with `mcp__web__fetch` (owner/trusted-user conversations only; loopback and link-local/metadata addresses are blocked). " +
-        "There is no web-search tool, so fetch a known URL with it; it fetches plain http:// intranet pages as-is and honors the deployment's proxy and CA settings." +
-        proxyNote,
+      "Server egress: the deployment bootstrap reports a shared domain-blocking proxy policy for Noah's server and the tools that run there — the repo/git, Confluence and other `mcp__*` tools, and the relayed MCP servers (hex-ssh, plugin and shared servers): direct outbound connections and external DNS are blocked there and only proxied HTTP(S) is available. It does NOT govern your sandbox shell on this runtime — `bash`/curl/Python leave only through the pi sandbox's own egress proxy (see the runtime paragraph), and Noah's admin blocklist never applies to them. The user's browser bridge is outside both boundaries. A proxy denial on either side is an administrator policy, not a transient fetch error; report it instead of trying alternate IPs or tunnels. Read `mcp__system__read_manual` topic `network-policy` for scope and operator setup. This report does not independently audit the firewall or reveal the current blocklist.",
     );
   }
   // Keep live scope and safety standing; load procedural detail only when used.

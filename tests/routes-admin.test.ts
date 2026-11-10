@@ -485,8 +485,8 @@ describe("admin: MCP tool policy (one global policy)", () => {
     expect(initial.body).toEqual({ allowedMcpToolGroups: null });
 
     // Unknown id → 400 (strict — never silently dropped); non-array/omitted → 400.
-    await admin.agent.put("/api/admin/tool-policy").send({ allowedMcpToolGroups: ["web", "bogus"] }).expect(400);
-    await admin.agent.put("/api/admin/tool-policy").send({ allowedMcpToolGroups: "web" }).expect(400);
+    await admin.agent.put("/api/admin/tool-policy").send({ allowedMcpToolGroups: ["canvas", "bogus"] }).expect(400);
+    await admin.agent.put("/api/admin/tool-policy").send({ allowedMcpToolGroups: "canvas" }).expect(400);
     const bad = await admin.agent.put("/api/admin/tool-policy").send({}).expect(400);
     expect(bad.body.error).toContain("allowedMcpToolGroups");
     // The retired per-group route is gone.
@@ -495,16 +495,16 @@ describe("admin: MCP tool policy (one global policy)", () => {
     // Set an allowlist; duplicates are deduped by normalization.
     const set = await admin.agent
       .put("/api/admin/tool-policy")
-      .send({ allowedMcpToolGroups: ["ssh", "web", "ssh"] })
+      .send({ allowedMcpToolGroups: ["ssh", "canvas", "ssh"] })
       .expect(200);
-    expect(set.body).toEqual({ allowedMcpToolGroups: ["ssh", "web"] });
-    expect((await admin.agent.get("/api/admin/tool-policy").expect(200)).body.allowedMcpToolGroups).toEqual(["ssh", "web"]);
+    expect(set.body).toEqual({ allowedMcpToolGroups: ["ssh", "canvas"] });
+    expect((await admin.agent.get("/api/admin/tool-policy").expect(200)).body.allowedMcpToolGroups).toEqual(["ssh", "canvas"]);
     // Every user gets the same clamp (system always kept), on the store AND /api/me.
     for (const id of [admin.id, bob.id]) {
-      expect(services.store.allowedMcpToolGroupsForUser(id)).toEqual(["ssh", "web", "system"]);
+      expect(services.store.allowedMcpToolGroupsForUser(id)).toEqual(["ssh", "canvas", "system"]);
     }
     const me = await bob.agent.get("/api/me").expect(200);
-    expect(me.body.user.allowedMcpToolGroups).toEqual(["ssh", "web", "system"]);
+    expect(me.body.user.allowedMcpToolGroups).toEqual(["ssh", "canvas", "system"]);
     expect(me.body.user).not.toHaveProperty("groups");
 
     // [] blocks every optional group (distinct from null).
@@ -523,7 +523,7 @@ describe("admin: MCP tool policy (one global policy)", () => {
       .filter((e: { action: string }) => e.action === "set_tool_policy")
       .map((e: { detail: string }) => e.detail);
     expect(details).toEqual(
-      expect.arrayContaining(["MCP 도구 정책 = ssh,web", "MCP 도구 정책 = (모두 차단)", "MCP 도구 정책 = (제한 없음)"]),
+      expect.arrayContaining(["MCP 도구 정책 = ssh,canvas", "MCP 도구 정책 = (모두 차단)", "MCP 도구 정책 = (제한 없음)"]),
     );
   });
 });
@@ -636,7 +636,7 @@ describe("audit feed", () => {
     await request(app).get("/api/audit").expect(401);
 
     // Admin action that writes an audit row.
-    await admin.agent.put("/api/admin/tool-policy").send({ allowedMcpToolGroups: ["web"] }).expect(200);
+    await admin.agent.put("/api/admin/tool-policy").send({ allowedMcpToolGroups: ["canvas"] }).expect(200);
 
     const adminFeed = await admin.agent.get("/api/audit").expect(200);
     const adminActions = adminFeed.body.audit.map((e: { action: string }) => e.action);

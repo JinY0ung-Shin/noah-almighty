@@ -1540,9 +1540,13 @@ describe("scripts/pi-register-mcp.mjs", () => {
     const scriptPath = "../scripts/pi-register-mcp.mjs";
     const script = (await import(scriptPath)) as {
       NOAH_MCP_SERVER_NAMES: string[];
+      RETIRED_MCP_SERVER_NAMES: string[];
       brokerEntry: (name: string, url: string, timeoutSec: number) => unknown;
     };
     expect(script.NOAH_MCP_SERVER_NAMES).toEqual([...PI_MCP_SERVER_NAMES]);
+    // The web fetch tool is gone (2026-11-10): its broker id is deleted on the next run, never registered again.
+    expect(script.NOAH_MCP_SERVER_NAMES).not.toContain("web");
+    expect(script.RETIRED_MCP_SERVER_NAMES).toEqual(expect.arrayContaining(["group_brain", "group_repo", "web"]));
     expect(script.brokerEntry("repo", "http://10.0.0.1:48787/", 600)).toEqual({
       runIn: "broker",
       displayName: "Noah repo",

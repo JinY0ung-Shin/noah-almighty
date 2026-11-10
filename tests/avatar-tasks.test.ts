@@ -392,14 +392,14 @@ describe("avatar task API", () => {
 
   it("seeds a server-minted thread from the owner's composer defaults, never over its own", async () => {
     const { call, services, user } = await boot();
-    services.store.setChatDefaults(user.id, { model: "haiku", effort: "low", mcpToolGroups: ["web"] });
+    services.store.setChatDefaults(user.id, { model: "haiku", effort: "low", mcpToolGroups: ["canvas"] });
     const fresh = (await call("post", endpoint).send({ message: "기본값" }).expect(202)).body.task;
     dispatchAvatarTasks(services);
     await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, fresh.id)?.status).toBe("succeeded"));
-    expect(H.requests[0]).toMatchObject({ model: "haiku", effort: "low", mcpToolGroups: ["web", "system"] });
+    expect(H.requests[0]).toMatchObject({ model: "haiku", effort: "low", mcpToolGroups: ["canvas", "system"] });
     // A non-null request is persisted onto the thread, exactly as a first
     // interactive turn would leave it.
-    expect(services.store.getConversationMcpToolGroups(user.id, fresh.conversationId)).toEqual(["web"]);
+    expect(services.store.getConversationMcpToolGroups(user.id, fresh.conversationId)).toEqual(["canvas"]);
     expect(services.store.getConversationModel(user.id, fresh.conversationId)).toBe("haiku");
     // The thread's OWN selection outranks the owner default on the next task.
     services.store.setConversationModel(user.id, fresh.conversationId, "sonnet");

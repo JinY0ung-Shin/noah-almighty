@@ -48,7 +48,7 @@ import {
   type DeckMode,
   type DeckToolchainState,
 } from "../deckRender.js";
-import { webFetchProxyState } from "./webFetchTools.js";
+import { serverProxyState } from "./serverProxyState.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../chatFiles.js";
 import { readSystemManual } from "./systemManual.js";
 import { consultationHistoryText } from "./avatarDirectoryTools.js";
@@ -580,7 +580,6 @@ export function imageSourcesLine(
     ...(ctx.confluenceSaveToWorkspace
       ? ["mcp__confluence__get_attachment with `save_to_workspace: true` saves an attachment into `confluence/` (the result's `savedPath`)"]
       : []),
-    "a web page's images cannot be downloaded with mcp__web__fetch, which returns page text only",
   ];
   const use = ctx.piRuntime?.readOnlyBuiltins
     ? "This conversation is read-only (no write/edit/bash), so you can read those files here but not place them into a deck or document"
@@ -669,7 +668,7 @@ function runtimeLine(ctx: Pick<SystemToolsContext, "config" | "piRuntime">): str
       ? "Built-in tools: read/ls/find/grep only (read-only session: no write, edit or bash)"
       : "Built-in tools: read/write/edit/ls/find/grep/bash") +
     "; Noah's tools are reached with mcp_call (name `mcp__<server>__<tool>`; mcp_search when unsure of the arguments). " +
-    "No web-search tool (use mcp__web__fetch for a known URL). " +
+    "No web-search and no web-fetch tool (a page is read from the shell where the pi operator's allowlist permits it, or with the browser tools when this run has them). " +
     (pi?.nonInteractive ? `${PI_NO_ASK_USER_SENTENCE} ` : "") +
     "hex-ssh, plugin `.mcp.json` and admin 공용 MCP servers are relayed by Noah as `mcp__hex-ssh__<tool>`, `mcp__plugins__<server>__<tool>` and `mcp__shared__<server>__<tool>` (the `mcp__<server>__<tool>` form resolves too); the session's tool list is read when the pi session starts, so a server connected since appears only in a later session and a removed one is refused. " +
     "The system prompt is fixed when the conversation starts, so this tool is the source of CURRENT state"
@@ -881,7 +880,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                 ? `none — the current model does not use reasoning effort, so the level chosen for this conversation (${userEffort}) is not sent`
                 : `${effortName(userEffort)} (chosen for this conversation)`;
         const enabledMcpToolGroups = effectiveMcpToolGroups(ctx.enabledMcpToolGroups);
-        const webProxy = webFetchProxyState();
+        const serverProxy = serverProxyState();
         const enabledMcpToolGroupLabels = MCP_TOOL_GROUPS
           .filter((group) => enabledMcpToolGroups.includes(group.id))
           .map((group) => group.labelEn);
@@ -935,10 +934,10 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           ...rewindLines(ctx),
           `- runtime: ${runtimeLine(ctx)}`,
           ...piRunLines(ctx),
-          ...(webProxy.egressPolicy === "domain-proxy"
+          ...(serverProxy.egressPolicy === "domain-proxy"
             ? [
                 // The shell runs in the pi sandbox, outside Noah's proxy.
-                "- Server egress: bootstrap reports shared domain-proxy policy for Noah's server and the tools running there (mcp__web__fetch, repo/git, Confluence and other mcp__* tools, relayed hex-ssh/plugin/shared MCP servers); direct outbound connections and external DNS blocked there. NOT your sandbox shell: bash/curl/Python go only through pi-gateway's own egress proxy and its operator allowlist (SANDBOX_EGRESS_ALLOW on the pi-gateway instance, see the runtime line); Noah's 외부 통신 차단 blocklist never applies to them. User-PC browser traffic is outside both boundaries. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials.",
+                "- Server egress: bootstrap reports shared domain-proxy policy for Noah's server and the tools running there (repo/git, Confluence and other mcp__* tools, relayed hex-ssh/plugin/shared MCP servers); direct outbound connections and external DNS blocked there. NOT your sandbox shell: bash/curl/Python go only through pi-gateway's own egress proxy and its operator allowlist (SANDBOX_EGRESS_ALLOW on the pi-gateway instance, see the runtime line); Noah's 외부 통신 차단 blocklist never applies to them. User-PC browser traffic is outside both boundaries. Current blocklist/firewall are not independently audited here. Read manual topic network-policy; ask the deployment administrator about denials.",
               ]
             : []),
           `- Model in use: ${modelLine}`,
@@ -947,9 +946,8 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           "- Context compaction: automatic (pi-gateway summarizes the session near the model's context limit; an interactive chat shows a status line while it runs and a lasting \"context summarized\" activity row after). The user can also run it on demand by sending /compact [what to keep] as its own chat message — you have no tool for it, so suggest the command instead of offering to do it; it keeps the most recent part of the conversation verbatim and only works once the conversation is longer than that",
           `- Confluence host: ${ctx.config.confluenceUrl ? `set (mcp__confluence__* is READ-ONLY — no page creation, editing, or deletion exists; ${ctx.browserEnabled ? "to write, drive Confluence in the user's own browser with mcp__browser__* — including mcp__browser__copy_image then press_key paste (Ctrl+V; Cmd+V on macOS) to put an image into a page body, and mcp__browser__copy_text the same way for long body text or source, which a rich editor drops part of when typed" : "writing would need browser control, which is unavailable in this run"})` : "(none)"}`,
           `- Confluence PAT: ${secretNames.includes("CONFLUENCE_PAT") || secretNames.includes("CONFLUENCE_PERSONAL_ACCESS_TOKEN") ? "secret set" : "(none)"}`,
-          // Mirrors buildSystemPromptAppend's web-fetch proxy self-state (the
-          // shared webFetchProxyState helper; values already redacted).
-          `- Web fetch (mcp__web__fetch): ${enabledMcpToolGroups.includes("web") ? "enabled for this conversation" : "OFF for this conversation (web tool group deselected)"}; ${webProxy.httpsProxy || webProxy.httpProxy ? `external URLs go through the corporate proxy (${webProxy.httpsProxy ?? webProxy.httpProxy}${webProxy.noProxy ? `; NO_PROXY: ${webProxy.noProxy}` : ""})` : "no HTTP_PROXY/HTTPS_PROXY configured — intranet URLs direct; external sites may be unreachable if this deployment requires a proxy"}`,
+          // Redacted by serverProxyState (scheme://host:port only).
+          `- Server proxy env (HTTP_PROXY/HTTPS_PROXY of Noah's own process, used by the MCP servers Noah relays): ${serverProxy.httpsProxy || serverProxy.httpProxy ? `${serverProxy.httpsProxy ?? serverProxy.httpProxy}${serverProxy.noProxy ? `; NO_PROXY: ${serverProxy.noProxy}` : ""}` : "not set"}`,
           `- Admin-disabled skills: ${ctx.toolSkillPolicy?.disabledSkills.length ? ctx.toolSkillPolicy.disabledSkills.map((name) => `\`${name}\``).join(", ") + " (deployment-wide; they are never copied into your sandbox or served, so none of them is available)" : "(none)"}`,
           `- Knowledge repository: ${knowledgeRepo.repo || "(none)"}${knowledgeRepo.branch ? ` @ ${knowledgeRepo.branch}` : ""}`,
           `- Shared (communal) account: ${state.sharedAccount ? "yes — trusted teammates chatting with this avatar can also update the personal knowledge repository (write/commit); repo creation/connection stays owner-only" : "no — knowledge-repo writes are owner-only (toggle under Settings → Profile)"}`,
@@ -992,7 +990,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
                 ? "enabled (SSH_PRIVATE_KEY set)"
                 : "disabled (no SSH_PRIVATE_KEY secret)"
               : ctx.sshEnabled
-                ? `enabled — the hex-ssh tools are registered for this run${webProxy.egressPolicy === "domain-proxy" ? ", but this deployment's egress policy blocks direct outbound connections, so SSH connections will fail" : ""}. ${HEX_SSH_NO_TRANSFER_SENTENCE.trim()}`
+                ? `enabled — the hex-ssh tools are registered for this run${serverProxy.egressPolicy === "domain-proxy" ? ", but this deployment's egress policy blocks direct outbound connections, so SSH connections will fail" : ""}. ${HEX_SSH_NO_TRANSFER_SENTENCE.trim()}`
                 : `disabled for this run — ${
                     !secretNames.includes("SSH_PRIVATE_KEY")
                       ? "no SSH_PRIVATE_KEY secret"

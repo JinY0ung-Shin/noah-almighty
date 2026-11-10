@@ -50,7 +50,6 @@ export const NOAH_MCP_SERVER_NAMES = [
   "system",
   "todo",
   "confluence",
-  "web",
   "avatars",
   "skill_exchange",
   "ssh_identity",
@@ -70,9 +69,10 @@ export const NOAH_MCP_SERVER_NAMES = [
  * Broker ids an older Noah registered for a server that is gone. A normal run deletes such an entry when it
  * still points at THIS Noah (an earlier deployment registered it; left alone the broker keeps listing its tools
  * and every call fails), and never reuses the id. `group_brain`: the team second brain; `group_repo`: group
- * knowledge repositories — both removed 2026-10-30.
+ * knowledge repositories — both removed 2026-10-30. `web`: the server-side web fetch tool
+ * (`mcp__web__fetch`) — removed 2026-11-10.
  */
-export const RETIRED_MCP_SERVER_NAMES = ["group_brain", "group_repo"];
+export const RETIRED_MCP_SERVER_NAMES = ["group_brain", "group_repo", "web"];
 
 /**
  * The broker entry's `description` per id: what the service IS, in NOUNS only. pi shows its first line in
@@ -87,7 +87,6 @@ export const SERVER_DESCRIPTIONS = {
   system: "Noah itself: current capabilities and settings, the product manual, routines (scheduled tasks), notifications, plugins, conversations.",
   todo: "Persistent to-do list (할 일) of tasks.",
   confluence: "Confluence wiki pages and attachments.",
-  web: "Web pages and URLs fetched by the server.",
   avatars: "Colleagues' avatars.",
   skill_exchange: "Skill sharing between teammates' avatars.",
   ssh_identity: "The owner's SSH key pair.",

@@ -108,7 +108,7 @@ function seedLegacyDeployment(config: AppConfig) {
     "team",
     "Team",
     at,
-    JSON.stringify(["web", "personal_knowledge", "group_knowledge"]),
+    JSON.stringify(["canvas", "personal_knowledge", "group_knowledge"]),
     null, // pre-policy row: NULL = sharing on
   );
   db.prepare("INSERT INTO groups (id, name, created_at, allowed_mcp_tool_groups, avatar_sharing) VALUES (?, ?, ?, ?, ?)").run(
@@ -174,17 +174,17 @@ describe("single-team conversion (groups retired)", () => {
     expect(conversion[0][0]).toEqual({
       count: 2,
       usernames: ["offonly", "outsider"],
-      mcpToolPolicy: ["web", "personal_knowledge"],
+      mcpToolPolicy: ["canvas", "personal_knowledge"],
     });
     // The written policy is audited as a system action.
     const policyAudits = auditRows(store, "set_tool_policy");
     expect(policyAudits).toHaveLength(1);
     expect(policyAudits[0]).toMatchObject({ actor_user_id: null, actor_name: "system", status: "success" });
-    expect(policyAudits[0].detail).toContain("web,personal_knowledge");
+    expect(policyAudits[0].detail).toContain("canvas,personal_knowledge");
 
     // The (only) group policy is now the global one; the retired id is dropped.
-    expect(store.getMcpToolPolicy()).toEqual(["web", "personal_knowledge"]);
-    expect(store.allowedMcpToolGroupsForUser(seeded.member.id)).toEqual(["web", "personal_knowledge", "system"]);
+    expect(store.getMcpToolPolicy()).toEqual(["canvas", "personal_knowledge"]);
+    expect(store.allowedMcpToolGroupsForUser(seeded.member.id)).toEqual(["canvas", "personal_knowledge", "system"]);
 
     // Blocks: union across groups, one row per (owner, name), blocker kept.
     const blocks = db
@@ -226,8 +226,8 @@ describe("single-team conversion (groups retired)", () => {
     const db = raw(config);
     createLegacyGroupTables(db);
     const add = db.prepare("INSERT INTO groups (id, name, allowed_mcp_tool_groups) VALUES (?, ?, ?)");
-    add.run("a", "A", JSON.stringify(["web", "ssh", "personal_knowledge"]));
-    add.run("b", "B", JSON.stringify(["ssh", "web", "browser"]));
+    add.run("a", "A", JSON.stringify(["canvas", "ssh", "personal_knowledge"]));
+    add.run("b", "B", JSON.stringify(["ssh", "canvas", "browser"]));
     add.run("c", "C", null); // no policy: never narrows
     add.run("empty", "Empty", JSON.stringify([])); // NO members: restricted nobody, so it must not block everything now
     const member = db.prepare("INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')");
@@ -235,8 +235,8 @@ describe("single-team conversion (groups retired)", () => {
     db.prepare("DELETE FROM app_config WHERE key = ?").run(MARKER);
     db.close();
     const converted = new Store(config);
-    expect(converted.getMcpToolPolicy()).toEqual(["web", "ssh"]);
-    expect(auditRows(converted, "set_tool_policy")[0].detail).toContain("= web,ssh");
+    expect(converted.getMcpToolPolicy()).toEqual(["canvas", "ssh"]);
+    expect(auditRows(converted, "set_tool_policy")[0].detail).toContain("= canvas,ssh");
     converted.close();
 
     const config2 = configFor("no-policy");

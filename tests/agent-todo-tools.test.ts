@@ -584,7 +584,7 @@ describe("mcp__todo__* registration", () => {
   it("rides the always-on system family: an empty tool-group pick or the admin tool policy cannot drop it", async () => {
     const s = setup("reg-groups");
     expect((await registration(s, { ...s.baseRequest, mcpToolGroups: [] })).mounted).toBe(true);
-    s.store.setMcpToolPolicy(["web"]);
+    s.store.setMcpToolPolicy(["canvas"]);
     const restricted = await registration(s, s.baseRequest);
     expect(restricted.mounted).toBe(true);
     expect(restricted.allowedAll).toBe(true);

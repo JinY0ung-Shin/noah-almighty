@@ -1790,10 +1790,10 @@ describe("buildPrompt", () => {
     expect(system).toContain("mcp__system__read_manual");
   });
 
-  it("keeps shared server egress guidance when web tools are deselected", () => {
+  it("keeps shared server egress guidance when every optional tool group is deselected", () => {
     const system = buildSystemPromptAppend(req({
       mcpToolGroups: [],
-      webFetchProxy: {
+      serverProxy: {
         httpProxy: "http://172.30.247.2:3128",
         httpsProxy: "http://172.30.247.2:3128",
         noProxy: "localhost",
@@ -1806,8 +1806,8 @@ describe("buildPrompt", () => {
   });
 
   it("says Noah's egress proxy does not govern the sandbox shell on a pi run", () => {
-    const webFetchProxy = { httpsProxy: "http://172.30.247.2:3128", egressPolicy: "domain-proxy" as const };
-    const pi = buildSystemPromptAppend(req({ webFetchProxy, piRuntime: { conversationDir: "/workspace/c/x", shellSecretNames: [] } }));
+    const serverProxy = { httpsProxy: "http://172.30.247.2:3128", egressPolicy: "domain-proxy" as const };
+    const pi = buildSystemPromptAppend(req({ serverProxy, piRuntime: { conversationDir: "/workspace/c/x", shellSecretNames: [] } }));
     expect(pi).toContain("It does NOT govern your sandbox shell on this runtime");
     expect(pi).toContain("`SANDBOX_EGRESS_ALLOW` on the pi-gateway instance");
     expect(pi).toContain("407 Request rejected by proxy");
@@ -1815,7 +1815,7 @@ describe("buildPrompt", () => {
     expect(pi).not.toContain("(no network, no sudo");
     // pi is the only runtime: even without stamped runtime facts the egress
     // line never claims Noah's proxy governs the shell (the removed SDK wording).
-    const bare = buildSystemPromptAppend(req({ webFetchProxy }));
+    const bare = buildSystemPromptAppend(req({ serverProxy }));
     expect(bare).toContain("It does NOT govern your sandbox shell on this runtime");
     expect(bare).not.toContain("ALL local avatars and server tools, including Bash/curl/Python");
   });
@@ -1841,17 +1841,17 @@ describe("buildPrompt", () => {
     const p = buildPrompt(
       req({
         viewerIsOwner: true,
-        // Effective (already-clamped) selection: git_repo only. ssh+web were
+        // Effective (already-clamped) selection: git_repo only. ssh+confluence were
         // removed by the ADMIN policy; the rest by the user's own composer pick.
         mcpToolGroups: ["git_repo"],
-        adminBlockedMcpToolGroups: ["ssh", "web"],
+        adminBlockedMcpToolGroups: ["ssh", "confluence"],
       }),
       0,
     );
     // The user-deselected sentence lists exactly the user's own picks — the
     // admin-blocked pair is never (mis)attributed to the user...
     expect(p).toContain(
-      "in the chat composer: personal knowledge, Confluence, avatar discovery & consultation, visual canvas, browser control.",
+      "in the chat composer: personal knowledge, avatar discovery & consultation, visual canvas, browser control.",
     );
     // ...and the policy itself is never mentioned: the avatar only knows the
     // tools it has (owner decision — no policy meta-cognition).
@@ -1871,7 +1871,7 @@ describe("buildPrompt", () => {
           "browser",
           "system",
         ],
-        adminBlockedMcpToolGroups: ["ssh", "web"],
+        adminBlockedMcpToolGroups: ["ssh", "canvas"],
       }),
       0,
     );
@@ -2660,7 +2660,7 @@ describe("buildPrompt", () => {
     // Configured tools without the run flag (a plain colleague, no workspace): no offer.
     expect(buildPrompt(req(confluence), 0)).not.toContain("save_to_workspace");
     // The flag alone does not resurrect a Confluence section that is not there.
-    expect(buildPrompt(req({ confluenceSaveToWorkspace: true, mcpToolGroups: ["web"] }), 0)).not.toContain(
+    expect(buildPrompt(req({ confluenceSaveToWorkspace: true, mcpToolGroups: ["canvas"] }), 0)).not.toContain(
       "save_to_workspace",
     );
   });
@@ -3208,7 +3208,7 @@ describe("buildPrompt", () => {
       turn({
         viewerIsOwner: true,
         activeRepoName: "myrepo",
-        mcpToolGroups: ["web"],
+        mcpToolGroups: ["canvas"],
         piRuntime: { activeRepoDir: "/workspace/c/x/repos/myrepo", shellSecretNames: [] },
       }),
     ).not.toContain("Working repository");
@@ -3532,17 +3532,16 @@ describe("planMcpToolFamilies", () => {
   it("registers exactly the selected groups (in selection order) plus system", async () => {
     const { planMcpToolFamilies } = await import("../src/server/agent/runCapabilities.js");
     const { DEFAULT_MCP_TOOL_GROUPS } = await import("../src/shared/mcpToolGroups.js");
-    const plan = planMcpToolFamilies(["web", "personal_knowledge"]);
-    expect(plan.registered).toEqual(["web", "personal_knowledge", "system"]);
+    const plan = planMcpToolFamilies(["canvas", "personal_knowledge"]);
+    expect(plan.registered).toEqual(["canvas", "personal_knowledge", "system"]);
     expect(plan).toMatchObject({
       personalKnowledge: true,
-      web: true,
+      canvas: true,
       system: true,
       gitRepo: false,
       confluence: false,
       ssh: false,
       avatars: false,
-      canvas: false,
       browser: false,
     });
     expect(planMcpToolFamilies([]).registered).toEqual(["system"]);

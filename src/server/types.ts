@@ -1096,11 +1096,11 @@ export interface AgentAvatar {
 }
 
 /**
- * Deployment proxy env self-state for the web fetch tool (META-COGNITION).
- * Derived by `webFetchProxyState()` (webFetchTools.ts) with proxy URLs REDACTED
- * to scheme://host:port — credentials never enter a prompt. `null` = unset.
+ * Deployment proxy env self-state of Noah's own process (META-COGNITION).
+ * Derived by `serverProxyState()` (agent/serverProxyState.ts) with proxy URLs
+ * REDACTED to scheme://host:port — credentials never enter a prompt. `null` = unset.
  */
-export interface WebFetchProxyState {
+export interface ServerProxyState {
   httpProxy: string | null;
   httpsProxy: string | null;
   noProxy: string | null;
@@ -1473,11 +1473,11 @@ export interface AgentRequest {
    */
   confluenceSaveToWorkspace?: boolean;
   /**
-   * Redacted proxy env self-state for `mcp__web__fetch` guidance (set by
-   * `stampPromptRequest` from the live env). Undefined means "unknown" for direct
-   * unit calls — the prompt then omits the proxy detail sentence.
+   * Redacted proxy env self-state of Noah's own process (set by
+   * `stampPromptRequest` from the live env) — the prompt states the server
+   * egress policy from it. Undefined means "unknown" for direct unit calls.
    */
-  webFetchProxy?: WebFetchProxyState;
+  serverProxy?: ServerProxyState;
   /**
    * How many active teammates the avatar owner has (approved users other than
    * the owner — Noah serves ONE team). Injected into the prompt's team line

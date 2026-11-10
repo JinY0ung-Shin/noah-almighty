@@ -139,6 +139,7 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__todo__delete_todo: "할 일 삭제",
   mcp__todo__list_todos: "할 일 조회",
   mcp__todo__update_todo: "할 일 수정",
+  // Removed 2026-11-10; the label stays so older conversations still render the activity row.
   mcp__web__fetch: "웹 페이지 읽기",
   // hex-ssh (relayed by Noah, `agent/pi/mcpProxies.ts`): the admin panel's labels.
   ...Object.fromEntries(HEX_SSH_TOOL_INFOS.map((info) => [`mcp__${HEX_SSH_SERVER_NAME}__${info.name}`, info.label])),

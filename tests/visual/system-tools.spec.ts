@@ -29,9 +29,9 @@ test("system stays checked and locked with empty saved selection and old deny-al
   const system = panel.locator("label").filter({ hasText: "항상 사용" }).getByRole("checkbox");
   await expect(system).toBeChecked();
   await expect(system).toBeDisabled();
-  const web = panel.locator("label").filter({ hasText: "웹 읽기" }).getByRole("checkbox");
-  await expect(web).not.toBeChecked();
-  await expect(web).toBeDisabled();
-  await expect(page.locator(".composer-tools-btn")).toContainText("1/10");
+  const canvas = panel.locator("label").filter({ hasText: "캔버스" }).getByRole("checkbox");
+  await expect(canvas).not.toBeChecked();
+  await expect(canvas).toBeDisabled();
+  await expect(page.locator(".composer-tools-btn")).toContainText("1/8");
   expect(errors).toEqual([]);
 });

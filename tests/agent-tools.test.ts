@@ -75,17 +75,7 @@ import {
   CONFLUENCE_SERVER_NAME,
   CONFLUENCE_TOOL_NAMES,
 } from "../src/server/agent/confluenceTools.js";
-import {
-  buildWebFetchTools,
-  extractHtmlText,
-  webFetchProxyState,
-  WEB_FETCH_MAX_RESPONSE_BYTES,
-  WEB_FETCH_MAX_RESULT_CHARS,
-  WEB_FETCH_SERVER_NAME,
-  WEB_FETCH_TOOL_NAMES,
-  type WebFetchImpl,
-  type WebFetchResponse,
-} from "../src/server/agent/webFetchTools.js";
+import { serverProxyState } from "../src/server/agent/serverProxyState.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../src/server/chatFiles.js";
 import type { DeckToolchainState } from "../src/server/deckRender.js";
 import { piSandboxOwnerSentence, rewindTurnState } from "../src/server/agent/ownerState.js";
@@ -516,294 +506,14 @@ describe("confluence tools", () => {
 
 
 // ---------------------------------------------------------------------------
-// webFetchTools — proxy-aware intranet/internet web fetch
+// serverProxyState — Noah's own proxy self-state (the web fetch tool that
+// used to own it was removed 2026-11-10)
 // ---------------------------------------------------------------------------
 
-describe("web fetch tools", () => {
-  /** Minimal WebFetchResponse from a string body (headers matched lowercase). */
-  function stubResponse(
-    body: string,
-    init: {
-      status?: number;
-      statusText?: string;
-      contentType?: string | null;
-      headers?: Record<string, string>;
-      url?: string;
-    } = {},
-  ): WebFetchResponse {
-    const encoded = new TextEncoder().encode(body);
-    const headerMap: Record<string, string> = { ...(init.headers ?? {}) };
-    if (init.contentType !== null) {
-      headerMap["content-type"] = init.contentType ?? "text/html; charset=utf-8";
-    }
-    return {
-      status: init.status ?? 200,
-      statusText: init.statusText ?? "OK",
-      url: init.url,
-      headers: { get: (name: string) => headerMap[name.toLowerCase()] ?? null },
-      body: null,
-      arrayBuffer: async () => encoded.buffer as ArrayBuffer,
-    };
-  }
-
-  /** fetchImpl stub recording calls and answering from a queue. */
-  function stubFetch(responses: WebFetchResponse[]) {
-    const calls: { url: string; init: Parameters<WebFetchImpl>[1] }[] = [];
-    const impl: WebFetchImpl = async (url, init) => {
-      calls.push({ url, init });
-      const next = responses.shift();
-      if (!next) throw new Error("unexpected extra fetch");
-      return next;
-    };
-    return { calls, impl };
-  }
-
-  it("exposes the documented server + tool names", () => {
-    expect(WEB_FETCH_SERVER_NAME).toBe("web");
-    expect(WEB_FETCH_TOOL_NAMES).toContain("mcp__web__fetch");
-    const names = buildWebFetchTools({ elevated: true }).map((t) => t.name);
-    expect(names).toEqual(["fetch"]);
-  });
-
-  it("denies non-elevated viewers without touching the network", async () => {
-    const { calls, impl } = stubFetch([]);
-    const result = await callTool(
-      buildWebFetchTools({ elevated: false, fetchImpl: impl }),
-      "fetch",
-      { url: "http://wiki.corp/page" },
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("avatar owner or trusted user conversations");
-    expect(calls).toHaveLength(0);
-  });
-
-  it("blocks loopback/link-local/metadata addresses (also in URL-normalized forms)", async () => {
-    const blocked = [
-      "http://127.0.0.1:8080/x",
-      "http://localhost/x",
-      "https://169.254.169.254/latest/meta-data",
-      "http://[::1]:3000/",
-      // The WHATWG URL parser canonicalizes numeric hosts to 127.0.0.1.
-      "http://0x7f000001/",
-    ];
-    for (const url of blocked) {
-      const { calls, impl } = stubFetch([]);
-      const result = await callTool(
-        buildWebFetchTools({ elevated: true, fetchImpl: impl }),
-        "fetch",
-        { url },
-      );
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("blocked for web fetch");
-      expect(calls).toHaveLength(0);
-    }
-  });
-
-  it("rejects invalid URLs and non-http schemes", async () => {
-    const { impl } = stubFetch([]);
-    const tools = buildWebFetchTools({ elevated: true, fetchImpl: impl });
-    const invalid = await callTool(tools, "fetch", { url: "not a url" });
-    expect(invalid.isError).toBe(true);
-    expect(invalid.content[0].text).toContain("Invalid URL");
-    const ftp = await callTool(tools, "fetch", { url: "ftp://intranet/x" });
-    expect(ftp.isError).toBe(true);
-    expect(ftp.content[0].text).toContain("only http:// and https://");
-  });
-
-  it("fetches plain-HTTP intranet pages as-is and extracts readable text", async () => {
-    const html = `<!doctype html><html><head><title>배포 가이드 &amp; 절차</title>
-      <style>body { color: red; }</style></head>
-      <body><script>var hidden = "SCRIPT-NOISE";</script>
-      <h1>배포 순서</h1><p>quantum content &lt;preserved&gt;</p>
-      <ul><li>step one</li><li>step two</li></ul>
-      <a href="/next">다음 문서</a></body></html>`;
-    const { calls, impl } = stubFetch([stubResponse(html)]);
-    const result = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: impl }),
-      "fetch",
-      { url: "http://wiki.corp:8090/page?x=1" },
-    );
-    expect(result.isError).not.toBe(true);
-    // No forced HTTPS upgrade: the exact plain-HTTP URL reaches the fetch layer.
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("http://wiki.corp:8090/page?x=1");
-    expect(calls[0].init.redirect).toBe("manual");
-    const text = result.content[0].text ?? "";
-    expect(text).toContain("URL: http://wiki.corp:8090/page?x=1");
-    expect(text).toContain("Status: 200");
-    expect(text).toContain("Title: 배포 가이드 & 절차");
-    expect(text).toContain("quantum content <preserved>");
-    expect(text).toContain("- step one");
-    expect(text).toContain("다음 문서 (http://wiki.corp:8090/next)");
-    expect(text).not.toContain("SCRIPT-NOISE");
-    expect(text).not.toContain("color: red");
-  });
-
-  it("pretty-prints JSON responses", async () => {
-    const { impl } = stubFetch([
-      stubResponse('{"name":"noah","tags":["a","b"]}', { contentType: "application/json" }),
-    ]);
-    const result = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: impl }),
-      "fetch",
-      { url: "http://api.corp/v1/info" },
-    );
-    expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('"name": "noah"');
-  });
-
-  it("windows long output and continues via offset", async () => {
-    const body = "A".repeat(WEB_FETCH_MAX_RESULT_CHARS + 5_000);
-    const tools = (impl: WebFetchImpl) => buildWebFetchTools({ elevated: true, fetchImpl: impl });
-    const first = await callTool(
-      tools(stubFetch([stubResponse(body, { contentType: "text/plain" })]).impl),
-      "fetch",
-      { url: "http://wiki.corp/long.txt" },
-    );
-    expect(first.isError).not.toBe(true);
-    expect(first.content[0].text).toContain(
-      `[showing chars 0–${WEB_FETCH_MAX_RESULT_CHARS} of ${body.length} — call again with offset=${WEB_FETCH_MAX_RESULT_CHARS} to continue]`,
-    );
-    const second = await callTool(
-      tools(stubFetch([stubResponse(body, { contentType: "text/plain" })]).impl),
-      "fetch",
-      { url: "http://wiki.corp/long.txt", offset: WEB_FETCH_MAX_RESULT_CHARS },
-    );
-    expect(second.content[0].text).toContain(
-      `[showing chars ${WEB_FETCH_MAX_RESULT_CHARS}–${body.length} of ${body.length} — end of content]`,
-    );
-  });
-
-  it("follows same-host redirects but reports cross-host ones", async () => {
-    // Same host: transparently followed.
-    const sameHost = stubFetch([
-      stubResponse("", { status: 302, headers: { location: "/moved" }, contentType: null }),
-      stubResponse("<html><body>after move</body></html>"),
-    ]);
-    const followed = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: sameHost.impl }),
-      "fetch",
-      { url: "http://wiki.corp/old" },
-    );
-    expect(followed.isError).not.toBe(true);
-    expect(sameHost.calls.map((c) => c.url)).toEqual([
-      "http://wiki.corp/old",
-      "http://wiki.corp/moved",
-    ]);
-    expect(followed.content[0].text).toContain("after move");
-
-    // Cross host: reported, not followed.
-    const crossHost = stubFetch([
-      stubResponse("", {
-        status: 302,
-        headers: { location: "https://other.example/final" },
-        contentType: null,
-      }),
-    ]);
-    const reported = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: crossHost.impl }),
-      "fetch",
-      { url: "http://wiki.corp/old" },
-    );
-    expect(reported.isError).not.toBe(true);
-    expect(reported.content[0].text).toContain("REDIRECT DETECTED");
-    expect(reported.content[0].text).toContain("https://other.example/final");
-    expect(crossHost.calls).toHaveLength(1);
-
-    // Redirect INTO a blocked address: refused.
-    const blocked = stubFetch([
-      stubResponse("", {
-        status: 302,
-        headers: { location: "http://169.254.169.254/latest" },
-        contentType: null,
-      }),
-    ]);
-    const refused = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: blocked.impl }),
-      "fetch",
-      { url: "http://wiki.corp/old" },
-    );
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toContain("Redirect blocked");
-  });
-
-  it("marks HTTP error statuses as tool errors but keeps the page excerpt", async () => {
-    const { impl } = stubFetch([
-      stubResponse("<html><body>사내 인증이 필요합니다</body></html>", {
-        status: 403,
-        statusText: "Forbidden",
-      }),
-    ]);
-    const result = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: impl }),
-      "fetch",
-      { url: "http://wiki.corp/private" },
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("HTTP 403");
-    expect(result.content[0].text).toContain("사내 인증이 필요합니다");
-  });
-
-  it("rejects binary content types", async () => {
-    const { impl } = stubFetch([
-      stubResponse("%PDF-1.7", { contentType: "application/pdf" }),
-    ]);
-    const result = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: impl }),
-      "fetch",
-      { url: "http://wiki.corp/doc.pdf" },
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Unsupported content type 'application/pdf'");
-  });
-
-  it("caps oversized streamed bodies instead of buffering them fully", async () => {
-    const chunk = new TextEncoder().encode("B".repeat(1024 * 1024));
-    let pulls = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        // Endless stream: only the byte cap stops the read.
-        controller.enqueue(chunk);
-      },
-    });
-    const res: WebFetchResponse = {
-      status: 200,
-      statusText: "OK",
-      headers: { get: (name) => (name.toLowerCase() === "content-type" ? "text/plain" : null) },
-      body: stream,
-      arrayBuffer: async () => new ArrayBuffer(0),
-    };
-    const result = await callTool(
-      buildWebFetchTools({ elevated: true, fetchImpl: async () => res }),
-      "fetch",
-      { url: "http://wiki.corp/huge.log" },
-    );
-    expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain(
-      `exceeded ${WEB_FETCH_MAX_RESPONSE_BYTES} bytes`,
-    );
-    expect(pulls).toBeLessThan(10);
-  });
-
-  it("surfaces the undici error cause on network failures", async () => {
-    const result = await callTool(
-      buildWebFetchTools({
-        elevated: true,
-        fetchImpl: async () => {
-          throw new Error("fetch failed", { cause: new Error("self signed certificate") });
-        },
-      }),
-      "fetch",
-      { url: "https://wiki.corp/page" },
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("fetch failed: self signed certificate");
-  });
-
-  it("redacts proxy credentials in webFetchProxyState", () => {
+describe("server proxy self-state", () => {
+  it("redacts proxy credentials in serverProxyState", () => {
     expect(
-      webFetchProxyState({
+      serverProxyState({
         HTTPS_PROXY: "http://user:s3cret@proxy.corp:3128",
         no_proxy: ".corp,intranet.example.com",
       }),
@@ -812,27 +522,18 @@ describe("web fetch tools", () => {
       httpsProxy: "http://proxy.corp:3128",
       noProxy: ".corp,intranet.example.com",
     });
-    expect(webFetchProxyState({ http_proxy: "http://proxy.corp:8080" })).toEqual({
+    expect(serverProxyState({ http_proxy: "http://proxy.corp:8080" })).toEqual({
       httpProxy: "http://proxy.corp:8080",
       httpsProxy: null,
       noProxy: null,
     });
-    expect(webFetchProxyState({})).toEqual({ httpProxy: null, httpsProxy: null, noProxy: null });
+    expect(serverProxyState({})).toEqual({ httpProxy: null, httpsProxy: null, noProxy: null });
   });
 
   it("only reports domain policy when explicitly marked by the deployment bootstrap", () => {
-    expect(webFetchProxyState({ NOAH_EGRESS_POLICY: "domain-proxy" }).egressPolicy).toBe("domain-proxy");
-    expect(webFetchProxyState({ NOAH_EGRESS_POLICY: "true" }).egressPolicy).toBeUndefined();
-    expect(webFetchProxyState({ HTTPS_PROXY: "http://proxy:3128" }).egressPolicy).toBeUndefined();
-  });
-
-  it("extractHtmlText keeps entity-encoded markup as inert text", () => {
-    const { title, text } = extractHtmlText(
-      "<html><head><title>T</title></head><body><p>&lt;script&gt;alert(1)&lt;/script&gt;</p></body></html>",
-      "http://wiki.corp/",
-    );
-    expect(title).toBe("T");
-    expect(text).toContain("<script>alert(1)</script>");
+    expect(serverProxyState({ NOAH_EGRESS_POLICY: "domain-proxy" }).egressPolicy).toBe("domain-proxy");
+    expect(serverProxyState({ NOAH_EGRESS_POLICY: "true" }).egressPolicy).toBeUndefined();
+    expect(serverProxyState({ HTTPS_PROXY: "http://proxy:3128" }).egressPolicy).toBeUndefined();
   });
 });
 
@@ -2231,11 +1932,10 @@ describe("system tools (avatar system management)", () => {
     const owner = (ctx: Partial<SystemToolsContext> = {}) =>
       describeText(s, { ...s.baseCtx, viewerIsOwner: true, ...ctx });
 
-    // A plain interactive run: the user's attachments + the web limitation.
+    // A plain interactive run: the user's attachments only.
     const plain = imagesLineOf(await owner());
     expect(plain).toBe(
-      `${IMAGES_PREFIX}files in the conversation scratch workspace — images the user attaches to a message are staged in \`attachments/\` (the user message lists their paths); ` +
-        "a web page's images cannot be downloaded with mcp__web__fetch, which returns page text only. " +
+      `${IMAGES_PREFIX}files in the conversation scratch workspace — images the user attaches to a message are staged in \`attachments/\` (the user message lists their paths). ` +
         "To put one into a deck, document or commit, copy that FILE (e.g. into the deck's `assets/`) instead of describing or redrawing it",
     );
 
@@ -3375,7 +3075,6 @@ describe("system tools (avatar system management)", () => {
     expect(body).toContain("Experimental features: (none enabled)");
     expect(body).toContain("Working repository: acme/service (opened via open_repo");
     // Tool groups off ⇒ the tools that ride them must report themselves OFF.
-    expect(body).toContain("Web fetch (mcp__web__fetch): OFF for this conversation");
     expect(body).toContain("Avatar consultation (mcp__avatars__ask_avatar): OFF for this conversation");
     expect(body).toContain("Skill exchange (mcp__skill_exchange__*): OFF for this conversation");
   });
@@ -3465,12 +3164,12 @@ describe("system tools (avatar system management)", () => {
       const tools = buildSystemTools(s.store, {
         ...s.baseCtx,
         viewerIsOwner: true,
-        enabledMcpToolGroups: ["web"],
       });
       const body = (await callTool(tools, "describe_system", {})).content[0].text ?? "";
-      expect(body).toContain("Web fetch (mcp__web__fetch): enabled for this conversation");
-      expect(body).toContain("external URLs go through the corporate proxy");
+      expect(body).toContain("Server proxy env (HTTP_PROXY/HTTPS_PROXY of Noah's own process, used by the MCP servers Noah relays): http://proxy.corp:3128");
       expect(body).toContain("NO_PROXY: .corp,localhost");
+      // The web fetch tool is gone: no line offers it.
+      expect(body).not.toContain("mcp__web__fetch");
       expect(body).not.toContain("s3cr3t");
     } finally {
       vi.unstubAllEnvs();

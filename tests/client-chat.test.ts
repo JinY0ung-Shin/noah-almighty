@@ -1214,7 +1214,7 @@ describe("opening a seeded or brand-new chat", () => {
           ],
           selectedModel: "deepseek/v3",
           selectedEffort: "high",
-          selectedMcpToolGroups: ["git_repo", "web"],
+          selectedMcpToolGroups: ["git_repo", "canvas"],
           // The same artifact is persisted once per version; only the last entry
           // (the current version) belongs in the panel.
           canvases: [
@@ -1240,7 +1240,7 @@ describe("opening a seeded or brand-new chat", () => {
       conversationId: "c9",
       model: "deepseek/v3",
       effort: "high",
-      mcpToolGroups: ["git_repo", "web"],
+      mcpToolGroups: ["git_repo", "canvas"],
       sideTab: null,
     });
     // Nothing picked yet: the panel shows the latest canvas.

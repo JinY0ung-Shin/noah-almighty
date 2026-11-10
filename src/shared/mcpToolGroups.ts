@@ -18,12 +18,6 @@ export const MCP_TOOL_GROUPS = [
     descriptionKo: "페이지 검색, 조회, 첨부/자산 가져오기",
   },
   {
-    id: "web",
-    labelKo: "웹 읽기",
-    labelEn: "web fetch",
-    descriptionKo: "사내·인터넷 웹 페이지 텍스트 가져오기",
-  },
-  {
     id: "ssh",
     labelKo: "SSH",
     labelEn: "SSH",
@@ -68,7 +62,8 @@ export function isMcpToolGroupId(value: unknown): value is McpToolGroupId {
 /**
  * Known ids only, deduplicated. A saved selection or policy may still name a
  * RETIRED id (`group_knowledge`, group knowledge repositories, retired
- * 2026-10-30); it is dropped here, never an error.
+ * 2026-10-30; `web`, the web fetch tool, removed 2026-11-10); it is dropped
+ * here, never an error. A retired id is never minted again.
  */
 export function normalizeMcpToolGroups(raw: unknown): McpToolGroupId[] {
   if (!Array.isArray(raw)) {

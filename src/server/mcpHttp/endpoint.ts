@@ -264,6 +264,8 @@ const RETIRED_SERVER_MESSAGES: Record<string, string> = {
     "MCP server 'group_repo' was removed: group knowledge repositories no longer exist. Tell the user group repositories were removed; use the personal repository (mcp__repo__*) or skill sharing (mcp__skill_exchange__*) instead.",
   group_brain:
     "MCP server 'group_brain' was removed with groups. The team now has ONE team brain: search it with mcp__brain__search (scope \"team\").",
+  web:
+    "MCP server 'web' was removed: Noah no longer fetches web pages from its own server (mcp__web__fetch is gone). Do not retry. Read the page from your shell when you have one and the destination is on the pi operator's allowlist, or with the browser tools (mcp__browser__*) when this run has them; otherwise tell the user you cannot open the page and ask them to paste its content.",
 };
 
 function refusedToolResult(tool: string, message?: string): CallToolResult {

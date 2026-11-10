@@ -177,7 +177,6 @@ export interface McpToolFamilyPlan {
   personalKnowledge: boolean;
   gitRepo: boolean;
   confluence: boolean;
-  web: boolean;
   ssh: boolean;
   avatars: boolean;
   canvas: boolean;
@@ -192,7 +191,6 @@ export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPla
     personal_knowledge: has("personal_knowledge"),
     git_repo: has("git_repo"),
     confluence: has("confluence"),
-    web: has("web"),
     ssh: has("ssh"),
     avatars: has("avatars"),
     canvas: has("canvas"),
@@ -204,7 +202,6 @@ export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPla
     personalKnowledge: byId.personal_knowledge,
     gitRepo: byId.git_repo,
     confluence: byId.confluence,
-    web: byId.web,
     ssh: byId.ssh,
     avatars: byId.avatars,
     canvas: byId.canvas,
@@ -306,12 +303,7 @@ export async function buildRunCapabilities(
     CONFLUENCE_SERVER_NAME,
     CONFLUENCE_TOOL_NAMES,
   } = await import("./confluenceTools.js");
-  const {
-    buildWebFetchServer,
-    webFetchProxyState,
-    WEB_FETCH_SERVER_NAME,
-    WEB_FETCH_TOOL_NAMES,
-  } = await import("./webFetchTools.js");
+  const { serverProxyState } = await import("./serverProxyState.js");
   const {
     buildAvatarDirectoryServer,
     AVATAR_DIRECTORY_SERVER_NAME,
@@ -400,7 +392,6 @@ export async function buildRunCapabilities(
   const personalKnowledgeToolsEnabled = familyPlan.personalKnowledge;
   const gitRepoToolsEnabled = familyPlan.gitRepo;
   const confluenceToolsEnabled = familyPlan.confluence;
-  const webFetchToolsEnabled = familyPlan.web;
   const sshToolsEnabled = familyPlan.ssh;
   const avatarDirectoryToolsEnabled = familyPlan.avatars;
   const canvasToolsEnabled = familyPlan.canvas;
@@ -1180,10 +1171,6 @@ export async function buildRunCapabilities(
       ? () => store.conversationOwner(conversationIdForLiveness) !== null
       : undefined,
   });
-  // Generic web fetch (intranet + internet, proxy-aware). Registration follows
-  // the tool-group picker; the HANDLER gates on `elevated`, so registration
-  // alone is not the gate.
-  const webFetchServer = buildWebFetchServer({ elevated: elevatedToolAccess });
   // App in-process MCP servers this run registers (hex-ssh, plugin and 공용
   // servers ride the relays, `piMcpProxies`; a plugin server named like one of
   // these sits out).
@@ -1198,9 +1185,6 @@ export async function buildRunCapabilities(
     ...(todoServer ? { [TODO_SERVER_NAME]: todoServer } : {}),
     ...(confluenceToolsEnabled
       ? { [CONFLUENCE_SERVER_NAME]: confluenceServer }
-      : {}),
-    ...(webFetchToolsEnabled
-      ? { [WEB_FETCH_SERVER_NAME]: webFetchServer }
       : {}),
     ...(avatarDirectoryToolsEnabled
       ? { [AVATAR_DIRECTORY_SERVER_NAME]: avatarDirectoryServer }
@@ -1236,7 +1220,6 @@ export async function buildRunCapabilities(
       // Its own entry on the SAME boolean as its registration (not in TODO_TOOL_NAMES).
       ...(todoDeleteActive ? [TODO_DELETE_TOOL_NAME] : []),
       ...(confluenceToolsEnabled ? CONFLUENCE_TOOL_NAMES : []),
-      ...(webFetchToolsEnabled ? WEB_FETCH_TOOL_NAMES : []),
       ...(avatarDirectoryToolsEnabled ? AVATAR_DIRECTORY_TOOL_NAMES : []),
       ...(avatarAskActive ? [AVATAR_ASK_TOOL_NAME] : []),
       ...(skillExchangeActive ? SKILL_EXCHANGE_TOOL_NAMES : []),
@@ -1273,7 +1256,7 @@ export async function buildRunCapabilities(
     hexSshViewerClass,
     hexSshPolicy,
     hexSshAllowedTools,
-    webFetchProxyState,
+    serverProxyState,
     ownerState,
     ownerSecrets,
     injectableSecretEnv,
@@ -1357,7 +1340,7 @@ export function stampPromptRequest(
 ): AgentRequest {
   const {
     ownerToolAccess,
-    webFetchProxyState,
+    serverProxyState,
     ownerState,
     ownerSecrets,
     runVisionEnabled,
@@ -1423,10 +1406,10 @@ export function stampPromptRequest(
     // get_attachment's save_to_workspace can land this run — ONE derivation,
     // the same boolean describe_system's ctx got.
     confluenceSaveToWorkspace,
-    // Web-fetch proxy self-state (META-COGNITION): redacted HTTP(S)_PROXY/
-    // NO_PROXY snapshot so the avatar knows whether external sites are
-    // reachable through the corporate proxy. Mirrored by describe_system.
-    webFetchProxy: webFetchProxyState(),
+    // Server proxy self-state (META-COGNITION): the redacted HTTP(S)_PROXY/
+    // NO_PROXY snapshot + the bootstrap-reported egress policy of Noah's own
+    // process. Mirrored by describe_system.
+    serverProxy: serverProxyState(),
     ...(ownerToolAccess
       ? { teammateCount: ownerState.teammateCount, reachableTeammateCount: ownerState.reachableTeammateCount }
       : {}),

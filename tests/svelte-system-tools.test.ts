@@ -56,22 +56,22 @@ describe("AdminToolPolicyPanel (global MCP tool policy)", () => {
     expect(save.disabled).toBe(true);
     expect(view.getByText(/선택 가능한 도구 묶음이 모두 차단됩니다/)).toBeTruthy();
 
-    await fireEvent.click(view.getByRole("checkbox", { name: /^웹 읽기/ }));
+    await fireEvent.click(view.getByRole("checkbox", { name: /^캔버스/ }));
     await waitFor(() => expect(save.disabled).toBe(false));
     await fireEvent.click(save);
     await waitFor(() => {
       const write = calls.find((c) => c.method === "PUT");
       expect(write?.url).toBe("/api/admin/tool-policy");
-      expect(JSON.parse(write!.body!)).toEqual({ allowedMcpToolGroups: ["web", "system"] });
+      expect(JSON.parse(write!.body!)).toEqual({ allowedMcpToolGroups: ["canvas", "system"] });
     });
-    await waitFor(() => expect(view.getByText("허용 2/9 — 저장됨")).toBeTruthy());
+    await waitFor(() => expect(view.getByText("허용 2/8 — 저장됨")).toBeTruthy());
     expect(save.disabled).toBe(true);
     // The admin's own composer reads the policy from /api/me.
     await waitFor(() => expect(calls.some((c) => c.url === "/api/me")).toBe(true));
   });
 
   it("starts unrestricted and clears a saved policy with null", async () => {
-    const { calls } = mockPolicy(["web", "system"]);
+    const { calls } = mockPolicy(["canvas", "system"]);
     const view = render(AdminToolPolicyPanel, { props: { active: true } });
     const toggle = (await view.findByRole("checkbox", { name: /MCP 도구 묶음 제한 사용/ })) as HTMLInputElement;
     expect(toggle.checked).toBe(true);

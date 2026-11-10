@@ -11,10 +11,10 @@ describe("official system manual", () => {
   it("keeps system available through old empty selections and restrictive policies", () => {
     expect(effectiveMcpToolGroups([])).toEqual(["system"]);
     expect(effectiveMcpToolGroups(undefined, [])).toEqual(["system"]);
-    expect(effectiveMcpToolGroups(["git_repo", "web"], ["web"])).toEqual(["web", "system"]);
-    const oldSelection = ["web"];
+    expect(effectiveMcpToolGroups(["git_repo", "canvas"], ["canvas"])).toEqual(["canvas", "system"]);
+    const oldSelection = ["canvas"];
     effectiveMcpToolGroups(oldSelection, []);
-    expect(oldSelection).toEqual(["web"]); // raw preferences are not overwritten
+    expect(oldSelection).toEqual(["canvas"]); // raw preferences are not overwritten
   });
 
   it("keeps procedures out of the prompt while retaining live scope and safety", () => {

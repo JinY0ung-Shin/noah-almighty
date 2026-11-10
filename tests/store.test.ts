@@ -401,14 +401,14 @@ describe("store app config (app-wide secrets)", () => {
     const user = store.createUser({ username: "crafty", displayName: "Crafty", password: "password123" });
     store.touchConversation(user.id, "c-craft", user.id, "hi");
     db.prepare("UPDATE conversations SET selected_mcp_tool_groups = ? WHERE id = ?").run(
-      JSON.stringify(["web", "craft_photocraft", "system", "craft_figcraft"]),
+      JSON.stringify(["canvas", "craft_photocraft", "system", "craft_figcraft"]),
       "c-craft",
     );
     db.prepare("UPDATE users SET mcp_tool_groups_default = ? WHERE id = ?").run(
       JSON.stringify(["canvas", "craft_vectorcraft"]),
       user.id,
     );
-    expect(store.getConversationMcpToolGroups(user.id, "c-craft")).toEqual(["web", "system"]);
+    expect(store.getConversationMcpToolGroups(user.id, "c-craft")).toEqual(["canvas", "system"]);
     expect(store.getUserById(user.id)!.mcpToolGroupsDefault).toEqual(["canvas"]);
   });
 
@@ -1602,8 +1602,9 @@ describe("admin MCP tool policy (one global policy)", () => {
 
   it("drops unknown/retired ids on read (a retired-only policy blocks, never fails open); malformed JSON reads as no restriction", () => {
     const store = makeStore("tp2");
-    store.setAppSecret("mcp_tool_policy", JSON.stringify(["group_knowledge", "web", "bogus"]));
-    expect(store.getMcpToolPolicy()).toEqual(["web"]);
+    store.setAppSecret("mcp_tool_policy", JSON.stringify(["group_knowledge", "web", "canvas", "bogus"]));
+    // `web` (the web fetch tool, removed 2026-11-10) is a retired id too: dropped, never an error.
+    expect(store.getMcpToolPolicy()).toEqual(["canvas"]);
     store.setAppSecret("mcp_tool_policy", JSON.stringify(["group_knowledge"]));
     expect(store.getMcpToolPolicy()).toEqual([]);
     store.setAppSecret("mcp_tool_policy", "{not json");
@@ -1611,7 +1612,7 @@ describe("admin MCP tool policy (one global policy)", () => {
   });
 
   it("a policy that can no longer be decrypted fails CLOSED (rotated SESSION_SECRET), warning once per stored value", () => {
-    makeStore("tp3", "first-secret").setMcpToolPolicy(["web"]);
+    makeStore("tp3", "first-secret").setMcpToolPolicy(["canvas"]);
     const rotated = makeStore("tp3", "second-secret");
     const warn = vi.spyOn(logger, "warn");
     const unreadableWarnings = () =>

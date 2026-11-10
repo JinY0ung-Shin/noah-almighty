@@ -253,7 +253,7 @@ describe("run capability plan", () => {
     vi.spyOn(env.store, "allowedMcpToolGroupsForUser").mockReturnValue([]);
     const run = await plan(env, env.baseRequest);
     expect(run.servers).toContain("system");
-    expect(run.servers).not.toContain("web");
+    expect(run.servers).not.toContain("canvas");
     expect(run.servers).not.toContain("git_repo");
     expect(run.allowed).toContain("mcp__system__read_manual");
     expect(run.allowed).toContain("mcp__system__describe_system");

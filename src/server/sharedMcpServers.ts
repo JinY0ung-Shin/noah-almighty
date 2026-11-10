@@ -74,7 +74,7 @@ const RESERVED_SERVER_NAMES: ReadonlySet<string> = new Set([
   "ssh_trust",
   "system",
   "todo",
-  "web",
+  "web", // retired 2026-11-10 (server-side web fetch tool); reserved forever
   "claude",
   "noah",
 ]);

@@ -213,33 +213,30 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   `ctx.viewerIsOwner` (= `ownerToolAccess` = owner chat OR owner routine); `repoTools` (personal knowledge
   repo) splits READ (`list_files`/`read_file`, gated on `ctx.elevated` = owner OR trusted
   teammate) vs WRITE/commit/create (owner-only); `gitRepoTools` splits owner vs elevated; `confluenceTools`
-  and `webFetchTools` gate on `ctx.elevated`; `sshTrustTools` and `search_avatars` are intentionally
+  gates on `ctx.elevated`; `sshTrustTools` and `search_avatars` are intentionally
   UNGATED (fingerprints aren't secrets; directory search is all-viewer read-only) while its sibling
   `ask_avatar` in the SAME file is owner-driven (see the consultation section below). Don't "normalize"
   these.
 - **Second-brain read tools (`brainTools`):** a read-only RECALL server (`search`/`get_note`) over the
   personal knowledge-repo clone, gating reads on `ctx.elevated`. The team brain (`groupBrainTools`) was
   removed 2026-10-30. There is NO brain WRITE tool — route writes through `mcp__repo__write_file` + `commit`.
-- **Web fetch (`webFetchTools.ts`, server `web`, tool-group id `web`):** one `mcp__web__fetch` tool that
-  fetches from Noah's process, NOT the sandbox — pi has no WebFetch/WebSearch built-in, and the sandbox's only
-  way out is pi's egress allowlist, so this is the avatar's one web reader (plain-HTTP intranet pages included).
-  Proxy: `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` via undici's `EnvHttpProxyAgent` — must use
-  undici's OWN `fetch` (node's global fetch is a different bundled undici and rejects the dispatcher).
-  Live-verified: undici tunnels EVERY proxied request via `CONNECT` (even `http://` targets; curl uses
-  absolute-form GET instead), so a corporate proxy that only allows `CONNECT :443` refuses proxied
-  plain-HTTP to EXTERNAL port-80 sites. Intranet http bypasses the proxy via `NO_PROXY`/direct, so this
-  bites rarely — check the proxy's CONNECT port policy before blaming the tool.
-  Private CAs: `NODE_EXTRA_CA_CERTS` (node-native) and `GITHUB_CA_CERT` (process-wide
-  `tls.setDefaultCACertificates`, tlsCa.ts) both cover it. Guards: handler gates on `ctx.elevated`;
-  loopback + link-local/metadata (169.254.x, `::1`, `localhost`, v4-mapped) refused while PRIVATE ranges
-  (10.x/172.16-31/192.168) are deliberately allowed; same-host redirects followed (≤5) but cross-host
-  redirects REPORTED for an explicit re-fetch (it re-runs the guard);
-  2MB streamed body cap; 20k-char result window with `offset` continuation; charset from the header or a
-  `<meta charset>` sniff (KR intranets still serve euc-kr). HTML→text is deliberately dependency-free
-  (entities decoded AFTER tag-strip; links kept as `label (abs-url)`). Proxy self-state comes from ONE
-  helper, `webFetchProxyState()` (values redacted to scheme://host:port — proxy creds never enter a
-  prompt), read by BOTH `buildSystemPromptAppend` (`AgentRequest.webFetchProxy`, stamped by `stampPromptRequest`)
-  and `describe_system` — the Confluence-style deployment-fact sync.
+- **Web fetch is REMOVED (user, 2026-11-10).** The `mcp__web__fetch` tool (`webFetchTools.ts`, server `web`,
+  tool-group id `web`) fetched URLs from Noah's own process: it was the one tool that let page-derived text
+  drive requests from inside Noah's container (loopback guard bypassable through `[::ffff:127.0.0.1]`, no
+  DNS-resolved check). Nothing replaces it server-side — a page is read in the user's own browser
+  (`mcp__browser__*`) or from the sandbox shell where pi's `SANDBOX_EGRESS_ALLOW` permits, and both
+  metacognition surfaces say there is no web-search AND no web-fetch tool. The broker id `web` is in
+  `RETIRED_MCP_SERVER_NAMES` (`pi-register-mcp.mjs` deletes it on the next `up`), `/mcp` answers a call from
+  an older frozen conversation with a "was removed" redirect (`RETIRED_SERVER_MESSAGES`), the tool-group id
+  is dropped from saved selections/policies on read (`normalizeMcpToolGroups`; a policy that allowed only
+  `web` stays restrictive), and `web` stays a reserved shared-MCP name. The `mcp__web__fetch` activity label
+  stays in `sdkToolPresentation.ts` so older transcripts render. `undici` STAYS a direct dependency: the egress
+  bootstrap (`docker/egress/proxy-bootstrap.cjs`) loads the app's pinned copy.
+  **Never mint `web` / `mcp__web__*` again.** What survived is the proxy self-state: ONE helper,
+  `serverProxyState()` (`agent/serverProxyState.ts`, values redacted to scheme://host:port — proxy creds
+  never enter a prompt), read by BOTH `buildSystemPromptAppend` (`AgentRequest.serverProxy`, stamped by
+  `stampPromptRequest`; only the `domain-proxy` egress policy is stated) and `describe_system` (the egress
+  line + a `Server proxy env` line for the MCP relays).
 - **Images for documents and decks: ONE describe_system line plus short standing text, on the same run
   flags (2026-09-30).** Every image the avatar is shown can now be a FILE it places into a deck, document
   or commit, all under the conversation's sandbox folder `/workspace/c/<conv-seg>/` (its host view is the turn's
@@ -249,8 +246,7 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   decks: …` from ONE helper, `imageSourcesLine`, in the owner and non-owner branches (the
   `deckCapabilityLine` pattern). It names the folder's sandbox path when `SystemToolsContext.scratchWorkspaceDir`
   is set. It lists attachments unless the run is `headless`, captures only when `browserEnabled` and vision
-  is on (at most 30 per RUN), and Confluence only when `confluenceSaveToWorkspace` holds, and it always
-  says `mcp__web__fetch` returns text only. It ends by telling the run to copy the FILE into the deliverable —
+  is on (at most 30 per RUN), and Confluence only when `confluenceSaveToWorkspace` holds. It ends by telling the run to copy the FILE into the deliverable —
   unless the run's pi session is read-only (`PiRuntimeFacts.readOnlyBuiltins`, a colleague chat, see
   [`pi-runtime.md`](pi-runtime.md)), which is told it can read the files but not place them (the owner-side write
   tools refuse a non-owner either way). The deck line's `read-only` tail (`DeckAuthoringStatus`) and the vision

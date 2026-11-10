@@ -151,8 +151,8 @@ function selectAllInstruction(platform: BrowserToolsContext["viewerPlatform"]): 
 
 const DENIED =
   "Browser control only works when the user is talking to their OWN avatar. Tell the user plainly that " +
-  "you cannot control their browser in this conversation, and continue with the tools you do have " +
-  "(mcp__web__fetch reads a page without controlling the browser). There is no shell or fetch workaround.";
+  "you cannot control their browser in this conversation, and continue with the tools you do have. " +
+  "There is no shell or fetch workaround.";
 
 /**
  * Page text is ATTACKER-CONTROLLED input, not instructions. Neutralize it
