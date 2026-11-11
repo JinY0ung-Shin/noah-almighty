@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { get } from "svelte/store";
+import { get } from "../src/client/src/lib/store.js";
 import {
   autosize,
   clickOutside,

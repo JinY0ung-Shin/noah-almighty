@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 import { isOpenTodo, type TodoItem, type TodoListResponse } from "../../src/shared/todos.js";
 
-// The chat screen's 할 일 card (TodoOverlay.svelte) picks its presentation from the
+// The chat screen's 할 일 card (TodoOverlay.tsx) picks its presentation from the
 // chat column's measured width: pinned at the top-right of a ≥1000px column, a
 // popover above the composer when narrower, a full-width sheet at ≤860px. These are
 // geometry checks (no screenshots): the card stays inside .chat-body, never covers

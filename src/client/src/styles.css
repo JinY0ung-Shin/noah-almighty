@@ -40,7 +40,7 @@
   flex: none;
 }
 
-.svelte-fallback-pad {
+.view-fallback-pad {
   padding: var(--s-5);
 }
 
@@ -67,7 +67,7 @@
   box-shadow: var(--shadow-sm);
 }
 
-.svelte-rail-toggle {
+.rail-open-toggle {
   position: fixed;
   top: calc(var(--s-3) + env(safe-area-inset-top, 0px));
   left: calc(var(--s-3) + env(safe-area-inset-left, 0px));
@@ -87,7 +87,7 @@
   text-align: left;
 }
 
-.svelte-rail-streaming {
+.rail-streaming-note {
   display: flex;
   align-items: center;
   gap: var(--s-2);

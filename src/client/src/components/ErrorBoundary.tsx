@@ -39,7 +39,7 @@ export class ViewBoundary extends Component<ViewBoundaryProps, BoundaryState> {
   render(): ReactNode {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="svelte-fallback-pad">
+      <div className="view-fallback-pad">
         <div className="warn-box" role="alert">
           이 화면을 표시하지 못했습니다. 다른 메뉴는 계속 사용할 수 있습니다.{" "}
           <button className="linkish" type="button" onClick={() => this.setState({ error: null })}>

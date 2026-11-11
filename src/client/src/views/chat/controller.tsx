@@ -1,4 +1,4 @@
-// The chat view's state and handlers — everything ChatView.svelte kept in its
+// The chat view's state and handlers — everything ChatView.tsx kept in its
 // <script>. ONE instance per mounted ChatView (`useChatController`), read by
 // the pane components (Transcript.tsx, Composer.tsx) as `ctx`.
 //

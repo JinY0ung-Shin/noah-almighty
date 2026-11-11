@@ -1,7 +1,7 @@
 // Matching a LEARNED skill copy to the share it came from (#skill-share).
 // Shared client↔server on purpose: the learn authorization (skillTransfer.ts),
 // the agent's update resolution (agent/skillExchangeTools.ts) and the 스킬 배우기
-// update badge (SkillsView.svelte) all join copies to shares, and three
+// update badge (SkillsView.tsx) all join copies to shares, and three
 // hand-written versions of this rule drifted apart once already.
 
 /** One resolution: the single copy, several equally plausible ones, or none. */

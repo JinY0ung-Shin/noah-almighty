@@ -15,7 +15,7 @@ describe("the client never reads the OS motion setting", () => {
     return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) return sources(path);
-      return /\.(css|svelte|tsx?)$/.test(entry.name) ? [path] : [];
+      return /\.(css|tsx?)$/.test(entry.name) ? [path] : [];
     });
   }
 

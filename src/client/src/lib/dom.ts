@@ -102,7 +102,7 @@ function copyHost(origin: Element | null | undefined, active: Element | null): H
   const near = origin?.closest<HTMLElement>(DIALOG_SELECTOR) ?? active?.closest<HTMLElement>(DIALOG_SELECTOR);
   if (near) return near;
   // No hint from the button or the focus: the top-most open modal (DOM order is
-  // the stacking order — see App.svelte) traps focus all the same.
+  // the stacking order — see App.tsx) traps focus all the same.
   const modals = document.querySelectorAll<HTMLElement>(MODAL_SELECTOR);
   return modals.length ? modals[modals.length - 1] : document.body;
 }

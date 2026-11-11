@@ -1,4 +1,4 @@
-// One source for the icon set. `Icon.svelte` renders these inline; the
+// One source for the icon set. `Icon.tsx` renders these inline; the
 // imperative DOM helpers in `dom.ts` (code-block copy button, copied flash)
 // build the same markup as a string. Keeping both on this map is what stops the
 // two copies from drifting apart.
@@ -75,7 +75,7 @@ export const ICON_PATHS: Record<string, string> = {
 /**
  * The same icon as a standalone `<svg>` string, for the places that build DOM
  * imperatively instead of through a Svelte component. Mirrors the wrapper
- * attributes in `Icon.svelte` — change one, change both.
+ * attributes in `Icon.tsx` — change one, change both.
  */
 export function iconSvg(name: string, size = 18): string {
   return (

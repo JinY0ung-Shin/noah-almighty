@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 import { isOpenTodo, type TodoItem, type TodoStatus } from "../../src/shared/todos.js";
 
-// The 할 일 tab (TodosView.svelte): geometry facts, no screenshots. The editor's
+// The 할 일 tab (TodosView.tsx): geometry facts, no screenshots. The editor's
 // 상태 control — four segments in the editor's fixed measure, down to its 300px
 // floor — stays on one row inside the pane at desktop, laptop, stacked and phone
 // widths (and in the dark theme); the page never scrolls sideways; the seven filter

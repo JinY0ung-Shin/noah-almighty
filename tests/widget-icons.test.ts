@@ -22,7 +22,7 @@ const ok = (src: string) => {
 };
 
 describe("widget icon names", () => {
-  it("are exactly the icons Icon.svelte draws — add or remove one in BOTH places", () => {
+  it("are exactly the icons Icon.tsx draws — add or remove one in BOTH places", () => {
     expect([...WIDGET_ICON_NAMES].sort()).toEqual(Object.keys(ICON_PATHS).sort());
     expect(new Set(WIDGET_ICON_NAMES).size).toBe(WIDGET_ICON_NAMES.length);
     // every name draws something, and none is reachable through Object.prototype

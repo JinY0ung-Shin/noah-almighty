@@ -1,8 +1,8 @@
-// The 인라인 UI gallery's samples (views/UiGalleryView.svelte, `#/uiGallery`):
+// The 인라인 UI gallery's samples (views/UiGalleryView.tsx, `#/uiGallery`):
 // one small ANSWER per thing an avatar can draw in its answer text. Each
 // `source` is exactly what an avatar would write — Markdown with component
 // tags — and the gallery draws it with the chat's own renderer
-// (components/widget/AnswerUi.svelte), so the page cannot show something a real
+// (components/widget/AnswerUi.tsx), so the page cannot show something a real
 // answer would not.
 //
 // The component table (src/shared/widget/spec.ts) is the grammar; this file is

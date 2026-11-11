@@ -34,7 +34,7 @@ const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString(
 
 /**
  * One mock for both tests. Every endpoint the boot path touches must be answered
- * with its real shape — an unhandled route falls through to `{}` and App.svelte
+ * with its real shape — an unhandled route falls through to `{}` and App.tsx
  * throws on `$appState.knowledgeRequests.filter`, which shows up as a passing
  * test with a Svelte error in the log.
  */

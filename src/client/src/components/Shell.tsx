@@ -1054,7 +1054,7 @@ export default function Shell({
 
       <button
         ref={railToggle}
-        className="icon-button rail-toggle svelte-rail-toggle"
+        className="icon-button rail-toggle rail-open-toggle"
         type="button"
         aria-label="메뉴 열기"
         aria-controls="rail"
@@ -1251,7 +1251,7 @@ export default function Shell({
 
         <div className="rail-footer">
           {streaming ? (
-            <div className="svelte-rail-streaming">
+            <div className="rail-streaming-note">
               <span className="spinner"></span>
               <span>응답 중</span>
             </div>

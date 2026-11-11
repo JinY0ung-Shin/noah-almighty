@@ -6,7 +6,7 @@
 // avatar's mcp__todo__* call finishes (and the card motion it alone may
 // trigger), and storage-failure tolerance.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { get } from "svelte/store";
+import { get } from "../src/client/src/lib/store.js";
 
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import {

@@ -287,7 +287,7 @@ export default function App() {
               <ActiveView />
             </ViewBoundary>
           ) : (
-            <div className="svelte-fallback-pad muted" role="status">
+            <div className="view-fallback-pad muted" role="status">
               화면을 준비하는 중…
             </div>
           )}

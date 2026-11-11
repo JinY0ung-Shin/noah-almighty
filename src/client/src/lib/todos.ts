@@ -215,7 +215,7 @@ export const TODO_OVERLAY_LIMIT = 8;
  * transcript pads its right side by clamp(24, 2×328 + 800 + 24 − W, 328) — 328 =
  * card 300 + its 16px right offset + a 12px gap, 24 = the transcript's own side
  * padding, 800 = `--transcript-max` (the `:global(.chat-body:has(...))` rule in
- * TodoOverlay.svelte). From W = 1456 up nothing moves; down to 1152 the full
+ * TodoOverlay.tsx). From W = 1456 up nothing moves; down to 1152 the full
  * 800px column shifts left to clear the card; below that the column narrows to
  * W − 352 with the card 12px beside it — 648px at this threshold, the narrowest
  * a pinned layout gives the conversation. Narrower hosts (split panes, an open

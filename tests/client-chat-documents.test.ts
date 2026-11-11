@@ -3,7 +3,7 @@
 // validation branch, judged BEFORE a byte is read), how a refusal is worded,
 // reading the bytes, and what `sendMessage` posts, shows and restores.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { get } from "svelte/store";
+import { get } from "../src/client/src/lib/store.js";
 
 import { regenerate, sendMessage, submitRewindEdit, startRewindEdit, setRewindEditDraft } from "../src/client/src/lib/chat.js";
 import {

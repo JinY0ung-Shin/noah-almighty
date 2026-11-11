@@ -16,5 +16,5 @@
   // client-importing tests are typechecked under tsconfig.client.json (Bundler
   // resolution) — under NodeNext they'd drag src/client's extensionless imports
   // into this program and fail (TS2835).
-  "exclude": ["src/client/**", "tests/client-*.test.ts", "tests/svelte-*.test.ts", "tests/react-*.test.tsx"]
+  "exclude": ["src/client/**", "tests/client-*.test.ts", "tests/react-*.test.tsx"]
 }
