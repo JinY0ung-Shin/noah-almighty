@@ -1,3 +1,5 @@
+import { assertAllowedGitSource, GitSourceRefusedError } from "../gitSourcePolicy.js";
+import { marketplaceCloneUrl } from "../marketplace.js";
 import {
   GROUP_REPOS_RETIRED_SENTENCE,
   PI_NO_ASK_USER_SENTENCE,
@@ -1396,6 +1398,17 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
         const repo = args.repo.trim();
         if (!repo || !looksLikeRepo(repo)) {
           return text("repo must be in owner/repo or git/https URL format.", true);
+        }
+        // Same source policy as the HTTP route (routes/plugins.ts): Noah clones a
+        // plugin inside its own server, so a path into Noah's directories or a
+        // loopback / internal-service host is refused BEFORE the row is stored.
+        try {
+          await assertAllowedGitSource(marketplaceCloneUrl(repo, ctx.config.githubHost), ctx.config, { resolve: true });
+        } catch (error) {
+          if (error instanceof GitSourceRefusedError) {
+            return text(`${error.message} The plugin was NOT added.`, true);
+          }
+          throw error;
         }
         const plugin = store.addPlugin(ctx.avatarUserId, {
           repo,

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type Response } from "express";
+import { type NextFunction, type Request, type Response } from "express";
 import logger from "../logger.js";
 import {
   knowledgeRepoSkillSources,
@@ -17,7 +17,7 @@ import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { catalogModelIds } from "../agent/pi/modelCatalog.js";
 import { workspaceDirFor } from "../workspace.js";
 import type { ScheduleError } from "../routineSchedule.js";
-import type { AuthenticatedRequest } from "../auth.js";
+import { sessionTokenFromRequest, type AuthenticatedRequest } from "../auth.js";
 
 export interface AppServices {
   config: AppConfig;
@@ -65,6 +65,192 @@ export function requestOrigin(req: AuthenticatedRequest): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * STRICT same-origin proof for a mutating call (pi's admin panel proxy, which
+ * injects an ambient admin key). `Sec-Fetch-Site` (every current browser sends
+ * it) must say `same-origin`; without it, `Origin`'s host must be this
+ * request's Host (the scheme is not compared: behind a TLS-terminating proxy
+ * Noah sees http). Neither header → refused.
+ */
+export function sameOrigin(req: Request): boolean {
+  const site = req.get("sec-fetch-site");
+  if (site) return site === "same-origin";
+  const origin = req.get("origin");
+  const host = req.get("host");
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+/** `host[:port]` folded for comparison: case and a default port (80/443) are ignored. */
+function foldHost(host: string): string {
+  return host.trim().toLowerCase().replace(/:(?:80|443)$/, "");
+}
+
+/**
+ * Whether an `Origin` header names THIS app: its host is the host the browser
+ * used to reach us — the request's own origin as `requestOrigin` computes it
+ * behind the proxy (first `x-forwarded-host`, else `Host`), or the raw `Host`.
+ * The scheme is not compared (`sameOrigin` above: behind a TLS-terminating
+ * proxy Noah sees http). A page on another origin can forge neither header: a
+ * cross-origin request carrying a custom one is preflighted, and Noah answers
+ * no CORS preflight.
+ */
+function originIsOwnHost(req: Request, origin: string): boolean {
+  let originHost: string;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    originHost = foldHost(url.host);
+  } catch {
+    return false; // `null` (opaque origin) and anything unparsable
+  }
+  if (!originHost) return false;
+  const own = requestOrigin(req as AuthenticatedRequest);
+  const candidates = [own ? new URL(own).host : "", req.get("host") ?? ""];
+  return candidates.some((candidate) => candidate !== "" && foldHost(candidate) === originHost);
+}
+
+/**
+ * Why a state-changing request must be refused as coming from ANOTHER site, or
+ * null when it may proceed. Decided from what the BROWSER says, in this order:
+ *
+ * 1. `Sec-Fetch-Site` present → `same-origin` and `none` (typed/extension-made)
+ *    pass; `same-site` (a sibling app on the same registrable domain — the case
+ *    `SameSite=Lax` does not stop) and `cross-site` are refused.
+ * 2. else `Origin` present → must name this app (`originIsOwnHost`). This is the
+ *    live path on a plain-HTTP deployment: browsers send fetch metadata only to
+ *    trustworthy (https / localhost) URLs, but `Origin` on every non-GET.
+ * 3. neither header → pass (curl, tests, non-browser clients): a browser cannot
+ *    be made to omit both on a cross-site POST.
+ *
+ * The order matters: under `npm run dev` Vite serves the page on :5173 and
+ * proxies `/api` to :48787, so `Origin` and `Host` differ while
+ * `Sec-Fetch-Site` is `same-origin`.
+ *
+ * Before all of that: an `Origin` the OPERATOR listed in `TRUSTED_ORIGINS`
+ * passes, whatever `Sec-Fetch-Site` says. That list is the recovery for a
+ * deployment where Noah cannot recognise its own address (a reverse proxy that
+ * rewrites `Host` without `X-Forwarded-Host`), and naming an origin there is the
+ * operator saying "this is Noah" — so it also outranks `same-site`/`cross-site`.
+ */
+export function crossSiteMutationReason(req: Request, trustedOrigins: ReadonlySet<string> = new Set()): string | null {
+  if (trustedOrigins.size > 0) {
+    const claimed = normalizedOrigin(req.get("origin"));
+    if (claimed && trustedOrigins.has(claimed)) return null;
+  }
+  const site = req.get("sec-fetch-site")?.trim().toLowerCase();
+  if (site) return site === "same-origin" || site === "none" ? null : `sec-fetch-site=${site.slice(0, 32)}`;
+  const origin = req.get("origin");
+  if (origin === undefined) return null;
+  return originIsOwnHost(req, origin) ? null : "origin";
+}
+
+/** An `Origin` header value as `scheme://host[:port]` (default port dropped), or null when it is not an http(s) origin. */
+function normalizedOrigin(origin: string | undefined): string | null {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+const REFUSAL_LOG_INTERVAL_MS = 60_000;
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/** The external task API: personal API keys only, session cookies never count there. */
+const BEARER_ONLY_API_PREFIX = "/api/v1/avatar/tasks";
+export const CROSS_SITE_REFUSED_MESSAGE =
+  "다른 사이트에서 보낸 요청은 처리할 수 없습니다. Noah 화면에서 다시 시도해 주세요.";
+
+/**
+ * The ONE same-origin gate for every cookie-authenticated state change
+ * (mounted once in app.ts, ahead of every router): a POST/PUT/PATCH/DELETE
+ * that a browser reports as coming from another site is answered 403 before
+ * any route runs. `SameSite=Lax` plus JSON bodies do not cover a body-less POST
+ * from a sibling app on the same registrable domain.
+ *
+ * Not checked: safe methods (a GET must never change state); the bearer-only
+ * task API, where cookies never count; and any request that carries
+ * `Authorization: Bearer` and NO session cookie — nothing ambient rides it, so
+ * it is not a CSRF target. Login and signup ARE checked (login CSRF).
+ *
+ * `trustedOrigins` (env `TRUSTED_ORIGINS`, `config.ts`) is the operator's
+ * recovery when Noah cannot recognise its own address; `invalid` entries are
+ * logged once here, at boot, and ignored. Every refusal says WHAT differed in
+ * one warning — the request's `Origin` and `Sec-Fetch-Site`, the origin Noah
+ * computed for itself, the `Host`/`X-Forwarded-Host` it computed it from,
+ * method and path; never a cookie, a token, a query string or a body — so the
+ * log alone tells the operator which origin to list. The same
+ * (Origin, Sec-Fetch-Site, own origin) is logged at most once a minute. The
+ * limiter's state lives in this closure: one per app, nothing module-level.
+ */
+export function createCrossSiteMutationGuard(
+  options: { trustedOrigins?: readonly string[]; invalid?: readonly string[]; now?: () => number } = {},
+): (req: Request, res: Response, next: NextFunction) => void {
+  const trusted = new Set(options.trustedOrigins ?? []);
+  const now = options.now ?? Date.now;
+  if (options.invalid && options.invalid.length > 0) {
+    logger.warn(
+      { ignored: options.invalid.map((entry) => entry.slice(0, 200)) },
+      "TRUSTED_ORIGINS: ignored entries that are not a plain http(s) origin (scheme://host[:port], no path, no wildcard)",
+    );
+  }
+  if (trusted.size > 0) {
+    logger.info({ trustedOrigins: [...trusted] }, "same-origin gate: state-changing requests from TRUSTED_ORIGINS are accepted");
+  }
+  const lastLogged = new Map<string, number>();
+
+  return (req, res, next) => {
+    if (!MUTATING_METHODS.has(req.method)) {
+      next();
+      return;
+    }
+    const pathname = req.path.toLowerCase();
+    if (pathname === BEARER_ONLY_API_PREFIX || pathname.startsWith(`${BEARER_ONLY_API_PREFIX}/`)) {
+      next();
+      return;
+    }
+    if (/^bearer\s/i.test(req.get("authorization") ?? "") && !sessionTokenFromRequest(req)) {
+      next();
+      return;
+    }
+    const reason = crossSiteMutationReason(req, trusted);
+    if (!reason) {
+      next();
+      return;
+    }
+    const origin = req.get("origin")?.slice(0, 200) ?? null;
+    const secFetchSite = req.get("sec-fetch-site")?.slice(0, 32) ?? null;
+    const ownOrigin = requestOrigin(req as AuthenticatedRequest);
+    const key = `${origin}|${secFetchSite}|${ownOrigin}`;
+    const at = now();
+    if (at - (lastLogged.get(key) ?? -Infinity) >= REFUSAL_LOG_INTERVAL_MS) {
+      // Bounded: the key is client-chosen, so a flood of distinct origins must not grow the map.
+      if (lastLogged.size >= 500) lastLogged.clear();
+      lastLogged.set(key, at);
+      logger.warn(
+        {
+          method: req.method,
+          path: req.path,
+          reason,
+          origin,
+          secFetchSite,
+          ownOrigin,
+          host: req.get("host")?.slice(0, 200) ?? null,
+          forwardedHost: req.get("x-forwarded-host")?.slice(0, 200) ?? null,
+        },
+        "refused a state-changing request from another origin. If `origin` is this Noah's own address (a reverse proxy that rewrites Host without X-Forwarded-Host), add it to TRUSTED_ORIGINS and restart; otherwise this is a cross-site request and the refusal is correct",
+      );
+    }
+    apiError(res, 403, CROSS_SITE_REFUSED_MESSAGE);
+  };
 }
 
 /**

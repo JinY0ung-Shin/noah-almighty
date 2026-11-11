@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Router, type Response } from "express";
-import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
+import { hashPassword, requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
 import { sanitizeName } from "../marketplace.js";
@@ -250,25 +250,37 @@ export function createAdminRouter(deps: RouterDeps): Router {
   );
 
   // Admin password reset. Also force-logs-out the target so the old password's
-  // sessions can't linger. The actor's own sessions are untouched.
+  // sessions can't linger. The actor's own sessions are untouched. Hashing is
+  // awaited here (crypto.scrypt on the threadpool), never run inside the store.
   router.post(
     "/api/admin/users/:id/password",
     requireAuth(store),
     requireAdmin,
-    (req: AuthenticatedRequest, res) => {
-      const password = typeof req.body?.password === "string" ? req.body.password : "";
-      if (password.length < MIN_PASSWORD_LENGTH) {
-        apiError(res, 400, "비밀번호는 8자 이상이어야 합니다.");
-        return;
+    async (req: AuthenticatedRequest, res, next) => {
+      try {
+        const password = typeof req.body?.password === "string" ? req.body.password : "";
+        if (password.length < MIN_PASSWORD_LENGTH) {
+          apiError(res, 400, "비밀번호는 8자 이상이어야 합니다.");
+          return;
+        }
+        // Checked before hashing: an unknown id must not cost a scrypt run.
+        if (!store.getUserById(req.params.id)) {
+          apiError(res, 404, "사용자를 찾을 수 없습니다.");
+          return;
+        }
+        // False = the account was deleted while the digest was being derived.
+        if (!store.setPasswordHash(req.params.id, await hashPassword(password))) {
+          apiError(res, 404, "사용자를 찾을 수 없습니다.");
+          return;
+        }
+        const revoked = store.revokeAllSessions(req.params.id);
+        auditAs(req, "reset_password", `reset password for ${req.params.id} (revoked ${revoked} sessions)`);
+        logger.warn({ actorId: req.user!.id, targetId: req.params.id }, "admin reset password");
+        res.json({ ok: true });
+      } catch (error) {
+        // Express 4 does not catch a rejected async handler.
+        next(error);
       }
-      if (!store.setPassword(req.params.id, password)) {
-        apiError(res, 404, "사용자를 찾을 수 없습니다.");
-        return;
-      }
-      const revoked = store.revokeAllSessions(req.params.id);
-      auditAs(req, "reset_password", `reset password for ${req.params.id} (revoked ${revoked} sessions)`);
-      logger.warn({ actorId: req.user!.id, targetId: req.params.id }, "admin reset password");
-      res.json({ ok: true });
     },
   );
 

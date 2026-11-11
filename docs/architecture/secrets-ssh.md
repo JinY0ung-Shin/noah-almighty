@@ -4,6 +4,18 @@
 > The encrypted vault, git credentials, SSH identity/trust, sandboxed Python, and on-prem GitHub CA wiring.
 
 ## Secrets / SSH (`crypto.ts` / `gitCredentials.ts` / `sshIdentity.ts` / `sshTrust.ts` / `pythonExec.ts`)
+- **Password hashing is ASYNCHRONOUS (2026-11-11).** `hashPassword`/`verifyPassword` (`auth.ts`) use
+  `crypto.scrypt` on the libuv threadpool — `scryptSync` stalled the event loop, and every SSE stream with
+  it, on each login. The stored format is unchanged (`saltHex:hashHex`, 16-byte salt, 64-byte hash, default
+  cost; verification derives the STORED hash's length and compares with `timingSafeEqual`), so every
+  existing digest verifies as before; a digest with no hash bytes never verifies. **Hashing never runs
+  inside the store:** routes await `hashPassword` and pass the digest (`createUser({ passwordHash })`,
+  `setPasswordHash`); `verifyLogin` is async and re-reads the row after the derivation (a suspension,
+  deletion or reset that landed meanwhile is honoured). `hashPasswordSync` exists only for
+  `createUser({ password })` — fixtures and scripts that cannot await; never call it from a route. Express
+  4 does not catch a rejected async handler, so the three routes (`signup`, `login`, admin password reset)
+  forward errors with `next(error)`. The threadpool is shared with fs and DNS (4 threads by default): a
+  login burst queues there instead of blocking the loop.
 - **Secret-at-rest tiers:** passwords → scrypt (`auth.ts`), session tokens → sha256, **reversible**
   secrets (e.g. per-user git tokens) → AES-256-GCM in `crypto.ts` (keyed from `SESSION_SECRET`). Never
   serialize secrets through `toUser`. App-WIDE secrets (not user-scoped) go in the `app_config` KV table

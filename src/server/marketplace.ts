@@ -166,12 +166,19 @@ async function resolveTarget(destination: string, ref?: string): Promise<string>
  * raw ref and `reset --hard <branch>` errors on every clone and refresh. We add
  * `--no-single-branch` so all branches' remote-tracking refs exist (still
  * shallow), and the existing `fetch --all` keeps them current on refresh (git-03).
+ *
+ * This is the transfer only. The SOURCE policy (`assertAllowedGitSource`,
+ * gitSourcePolicy.ts) belongs to the caller that knows the app config — every
+ * caller cloning a USER-named source runs it first and hands over the config it
+ * returns as `sourceConfig` (no redirects / pinned addresses for a host that is
+ * not the configured git host), which rides the environment next to the auth.
  */
 export async function syncGitRepo(
   url: string,
   destination: string,
   ref?: string,
   token?: string,
+  sourceConfig: GitConfigPairs = [],
 ): Promise<void> {
   assertSafeArg(url, "repo");
   // The ref reaches `git reset --hard <ref>` (via resolveTarget's fallback) and
@@ -180,7 +187,7 @@ export async function syncGitRepo(
   if (ref !== undefined) {
     assertSafeArg(ref, "ref");
   }
-  const auth = gitAuthConfig(url, token);
+  const auth: GitConfigPairs = [...gitAuthConfig(url, token), ...sourceConfig];
   const git = (...args: string[]) =>
     execFileAsync("git", ["-C", destination, ...args], { timeout: 120_000, env: serverGitEnv() });
 

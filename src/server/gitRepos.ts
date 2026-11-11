@@ -11,8 +11,10 @@ import {
   sanitizeName,
   scrubGitError,
   serverGitEnv,
+  type GitConfigPairs,
 } from "./marketplace.js";
 import { tokenForGitUrl } from "./gitCredentials.js";
+import { assertAllowedGitSource } from "./gitSourcePolicy.js";
 import { withRepoLock } from "./gitMutex.js";
 import { assertSafeGitValue, safeIdentity, safePushBranch } from "./repoGitGuards.js";
 import { git, currentBranch, originUrl } from "./repoGitCore.js";
@@ -89,8 +91,17 @@ async function checkoutBranch(repoRoot: string, branch: string): Promise<void> {
   }
 }
 
-async function pullRebase(ctx: GitRepoContext, repoRoot: string, url: string): Promise<void> {
-  const auth = gitAuthConfig(url, ctx.token ?? undefined);
+/**
+ * Command-scoped git config for a transfer with the registered origin: the auth
+ * header plus what the source policy asks for (`gitSourcePolicy.ts` — no
+ * redirects and pinned addresses for a host that is not the configured one).
+ */
+function transferConfig(ctx: GitRepoContext, url: string, sourceConfig: GitConfigPairs): GitConfigPairs {
+  return [...gitAuthConfig(url, ctx.token ?? undefined), ...sourceConfig];
+}
+
+async function pullRebase(ctx: GitRepoContext, repoRoot: string, url: string, sourceConfig: GitConfigPairs): Promise<void> {
+  const auth = transferConfig(ctx, url, sourceConfig);
   await git(repoRoot, ["fetch", "--prune", "--tags", "origin"], undefined, auth);
   try {
     if (ctx.branch) {
@@ -131,8 +142,8 @@ async function pullRebase(ctx: GitRepoContext, repoRoot: string, url: string): P
  * diverged, where `pullRebase` would re-create the local commits with new SHAs.
  * No upstream ref yet (a branch origin does not have) = nothing to update.
  */
-async function pullFastForwardOnly(ctx: GitRepoContext, repoRoot: string, url: string): Promise<void> {
-  const auth = gitAuthConfig(url, ctx.token ?? undefined);
+async function pullFastForwardOnly(ctx: GitRepoContext, repoRoot: string, url: string, sourceConfig: GitConfigPairs): Promise<void> {
+  const auth = transferConfig(ctx, url, sourceConfig);
   await git(repoRoot, ["fetch", "--prune", "--tags", "origin"], undefined, auth);
   if (ctx.branch) await checkoutBranch(repoRoot, ctx.branch);
   const upstream = ctx.branch ? `origin/${ctx.branch}` : "@{upstream}";
@@ -199,7 +210,13 @@ async function ensureGitRepoCloneLocked(
   assertSafeGitValue(ctx.branch, "branch");
   const url = marketplaceCloneUrl(ctx.repo, ctx.config.githubHost);
   assertSafeGitValue(url, "repo");
-  const auth = gitAuthConfig(url, ctx.token ?? undefined);
+  // Source policy on EVERY use (gitSourcePolicy.ts): a repo registered before
+  // the policy existed with a source it refuses — another user's clone, a
+  // loopback host — is refused here with the same message, never silently
+  // skipped, even when its clone already exists and nothing would be fetched.
+  // The host itself is resolved further down, only when this call is about to
+  // use the network (a clone or a sync).
+  await assertAllowedGitSource(url, ctx.config);
 
   if (await pathExists(path.join(repoRoot, ".git"))) {
     const existing = await originUrl(repoRoot);
@@ -223,6 +240,8 @@ async function ensureGitRepoCloneLocked(
   }
 
   if (!(await pathExists(path.join(repoRoot, ".git")))) {
+    const source = await assertAllowedGitSource(url, ctx.config, { resolve: true });
+    const auth = transferConfig(ctx, url, source.gitConfig);
     await fs.mkdir(path.dirname(repoRoot), { recursive: true });
     const args = ["clone"];
     if (ctx.branch) {
@@ -240,8 +259,9 @@ async function ensureGitRepoCloneLocked(
   }
 
   if (options.sync) {
-    if (options.fastForwardOnly) await pullFastForwardOnly(ctx, repoRoot, url);
-    else await pullRebase(ctx, repoRoot, url);
+    const source = await assertAllowedGitSource(url, ctx.config, { resolve: true });
+    if (options.fastForwardOnly) await pullFastForwardOnly(ctx, repoRoot, url, source.gitConfig);
+    else await pullRebase(ctx, repoRoot, url, source.gitConfig);
   }
   return repoRoot;
 }
@@ -286,7 +306,9 @@ export async function pushGitRepoDetailed(ctx: GitRepoContext): Promise<GitRepoP
   return withRepoLock(repoRoot, async () => {
     await ensureGitRepoCloneLocked(ctx, repoRoot);
     const url = marketplaceCloneUrl(ctx.repo, ctx.config.githubHost);
-    const auth = gitAuthConfig(url, ctx.token ?? undefined);
+    // The push is the network use: resolve the host now (an existing clone was not resolved above).
+    const source = await assertAllowedGitSource(url, ctx.config, { resolve: true });
+    const auth = transferConfig(ctx, url, source.gitConfig);
     const branch = safePushBranch(ctx.branch || (await currentBranch(repoRoot)) || "HEAD");
     const head = (await git(repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
     const { stdout } = await git(repoRoot, ["push", "--porcelain", "origin", `HEAD:${branch}`], undefined, auth);

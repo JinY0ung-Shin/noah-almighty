@@ -1,4 +1,3 @@
-import { hashPassword } from "../auth.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import type {
   AdminPresence,
@@ -149,14 +148,18 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
       };
     }
 
-    /** Admin password reset. Returns false if the user doesn't exist. */
-    setPassword(userId: string, password: string): boolean {
+    /**
+     * Admin password reset. Takes the DIGEST (`hashPassword`, awaited by the
+     * route — hashing never runs inside the store, where it would block the
+     * event loop), never the password. Returns false if the user doesn't exist.
+     */
+    setPasswordHash(userId: string, passwordHash: string): boolean {
       if (!this.userRowById(userId)) {
         return false;
       }
       this.db
         .prepare("UPDATE users SET password_hash = ? WHERE id = ?")
-        .run(hashPassword(password), userId);
+        .run(passwordHash, userId);
       return true;
     }
 

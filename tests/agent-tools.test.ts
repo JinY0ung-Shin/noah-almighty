@@ -2777,6 +2777,17 @@ describe("system tools (avatar system management)", () => {
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toContain("owner/repo");
 
+    // The source policy runs BEFORE the row is stored: Noah clones a plugin in
+    // its own server, so a loopback host or a path into Noah's own directories
+    // is refused and nothing is added.
+    for (const repo of ["http://127.0.0.1:9/x.git", "https://[::ffff:127.0.0.1]/x.git", `${s.config.dataDir}/someone/clone/.git`]) {
+      const refused = await callTool(tools, "add_plugin", { repo });
+      expect(refused.isError, repo).toBe(true);
+      expect(refused.content[0].text, repo).toContain("Refused git source");
+      expect(refused.content[0].text, repo).toContain("The plugin was NOT added.");
+    }
+    expect(s.store.listPlugins(s.owner.id)).toHaveLength(0);
+
     const added = await callTool(tools, "add_plugin", {
       repo: "owner/plugin",
       ref: "main",

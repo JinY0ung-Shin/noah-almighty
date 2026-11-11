@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import { type AuthenticatedRequest } from "./auth.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadTrustedOrigins } from "./config.js";
 import logger from "./logger.js";
 import { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
-import { type AppServices, type ObservedModelHolder, type RouterDeps } from "./routes/_shared.js";
+import { createCrossSiteMutationGuard, type AppServices, type ObservedModelHolder, type RouterDeps } from "./routes/_shared.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createProfileRouter } from "./routes/profile.js";
 import { createPluginsRouter } from "./routes/plugins.js";
@@ -164,6 +164,14 @@ export function createApp(services = createServices()) {
     });
     next();
   });
+
+  // ---- Same-origin gate ---------------------------------------------------
+  // Every state-changing request a browser reports as coming from another site
+  // is refused here, once, before any router (routes/_shared.ts). /mcp and the
+  // pi admin proxy are mounted above and carry their own checks. TRUSTED_ORIGINS
+  // is the operator's recovery when Noah cannot recognise its own address.
+  const trustedOrigins = loadTrustedOrigins();
+  app.use(createCrossSiteMutationGuard({ trustedOrigins: trustedOrigins.origins, invalid: trustedOrigins.invalid }));
 
   // Per-domain routers (split from the original monolithic createApp closure).
   // Mounted in the SAME order the routes were registered before so relative

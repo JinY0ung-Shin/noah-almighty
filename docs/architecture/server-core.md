@@ -14,6 +14,47 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   **`createApp`/`createServices`/`expandChatSlashCommand`/`AppServices` are still imported from `app.ts`**
   (re-exported) — don't change those import paths. No module-level mutable state in routes or services: thread
   it through `deps`.
+- **ONE same-origin gate for every cookie-authenticated state change** (`refuseCrossSiteMutation`,
+  `routes/_shared.ts`, mounted once in `app.ts` after the request log and before every router; `/mcp` and
+  the pi admin proxy are mounted above it with their own checks). `SameSite=Lax` + JSON bodies do not stop
+  a body-less POST from a sibling app on the same registrable domain. For POST/PUT/PATCH/DELETE it decides
+  from what the BROWSER says, in this order (`crossSiteMutationReason`):
+  1. `Sec-Fetch-Site` present → `same-origin` and `none` pass; `same-site`, `cross-site` and any other
+     value → 403.
+  2. else `Origin` present → its host must be this app's: the host of `requestOrigin(req)` (first
+     `x-forwarded-host`, else `Host`) or the raw `Host`; scheme not compared, default ports folded;
+     `null`/unparsable → 403. **This is the live path on a plain-HTTP deployment** — browsers send fetch
+     metadata only to trustworthy (https/localhost) URLs but `Origin` on every non-GET. A reverse proxy
+     that rewrites `Host` WITHOUT sending `X-Forwarded-Host` would make every mutating request 403 there
+     (the same headers already decide the extension bundle's host pattern and share-link URLs).
+  3. neither header → pass (curl, tests, non-browser clients).
+  The order matters: under `npm run dev` Vite serves :5173 and proxies `/api` to :48787, so `Origin` ≠
+  `Host` while `Sec-Fetch-Site` is `same-origin`. Not checked: safe methods; `/api/v1/avatar/tasks*`
+  (bearer-only, cookies never count); any request with `Authorization: Bearer` and NO session cookie.
+  Login and signup ARE checked (login CSRF). Refusal = 403 `다른 사이트에서 보낸 요청은…` (never 401 —
+  the client logs out on 401). The path test is case-insensitive like Express routing. `sameOrigin`
+  (strict: `same-origin` only, no header → refused) moved here unchanged and still gates the pi admin
+  proxy.
+  - **Recovery without a code change: `TRUSTED_ORIGINS`** (`parseTrustedOrigins`/`loadTrustedOrigins`,
+    `config.ts`; read once in `createApp` and handed to `createCrossSiteMutationGuard` — deliberately NOT
+    an `AppConfig` field). The deployment is unreachable from here, and the failure mode above takes LOGIN
+    with it. Procedure for the operator: (1) saves/logins answer 403 `다른 사이트에서 보낸 요청은…` after an
+    upgrade; (2) the log has `refused a state-changing request from another origin` with `origin` (what the
+    browser sent), `secFetchSite`, `ownOrigin` (what Noah computed), `host`, `forwardedHost`, `method`,
+    `path` — never a cookie, token, query string or body; (3) if `origin` is this Noah's own address, put it
+    in `TRUSTED_ORIGINS` (comma-separated `scheme://host[:port]`) and restart; (4) better, fix the proxy
+    (`X-Forwarded-Host` or pass `Host` through) and remove it. A listed origin passes BEFORE the
+    `Sec-Fetch-Site` step — also when the browser says `same-site`/`cross-site` — because listing it is the
+    operator saying "this is Noah"; so it must only name addresses that serve this Noah (a listed sibling
+    app could change state with a signed-in user's session). Entries that are not a plain http(s) origin
+    (wildcard, path, credentials, other scheme) are ignored with ONE boot warning — never widen, never
+    stop the boot of an instance that is already locked out. The refusal warning is limited to once a
+    minute per (Origin, Sec-Fetch-Site, own origin), in the guard's closure (≤ 500 keys). **Not applied to
+    the pi admin proxy:** `sameOrigin` there is unchanged — that surface injects an ambient pi ADMIN key,
+    its lock-out predates this gate and does not block login, and its second check (`fromPanel`, `Referer`
+    host = `Host`) would need the same widening. The browser extension never calls Noah's HTTP API (no `fetch` in `extension/`); the SPA's calls
+  are same-origin `fetch`es and there is no `<form action>` — a new cross-origin caller must be
+  bearer-only or join the exemptions.
 - **PPT share links** have their own router (`routes/shareLinks.ts`, `createShareLinksRouter`, mounted right
   after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY

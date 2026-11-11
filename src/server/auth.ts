@@ -12,22 +12,57 @@ export interface AuthenticatedRequest extends Request {
 
 // ---- Password hashing (scrypt) -----------------------------------------
 
-/** Hash a password as `${saltHex}:${hashHex}` using scrypt with a random salt. */
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64);
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_HASH_BYTES = 64;
+
+/** `crypto.scrypt` (libuv threadpool, default cost parameters) as a promise. */
+function scrypt(password: string, salt: Buffer, keylen: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, keylen, (error, derived) => (error ? reject(error) : resolve(derived)));
+  });
+}
+
+/**
+ * Hash a password as `${saltHex}:${hashHex}` using scrypt with a random salt.
+ * Asynchronous: scrypt takes tens of milliseconds, and the synchronous variant
+ * stalled the event loop — every SSE stream with it — on each login. Every
+ * REQUEST path uses this one and hands the digest to the store.
+ */
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.randomBytes(PASSWORD_SALT_BYTES);
+  const hash = await scrypt(password, salt, PASSWORD_HASH_BYTES);
   return `${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
-/** Verify a password against a `${saltHex}:${hashHex}` digest in constant time. */
-export function verifyPassword(password: string, stored: string): boolean {
+/**
+ * {@link hashPassword}, blocking — the SAME digest format and parameters. Only
+ * for callers that are not serving requests and cannot await (the store's
+ * `createUser({ password })` used by fixtures and scripts). Never call it from
+ * a route: it blocks the event loop for the whole derivation.
+ */
+export function hashPasswordSync(password: string): string {
+  const salt = crypto.randomBytes(PASSWORD_SALT_BYTES);
+  const hash = crypto.scryptSync(password, salt, PASSWORD_HASH_BYTES);
+  return `${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+/**
+ * Verify a password against a `${saltHex}:${hashHex}` digest in constant time
+ * (asynchronous, see {@link hashPassword}). The derived length is the stored
+ * hash's own length, so every digest ever written keeps verifying; a digest
+ * with no hash bytes (corrupt hex) never verifies.
+ */
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [saltHex, hashHex] = stored.split(":");
   if (!saltHex || !hashHex) {
     return false;
   }
   const salt = Buffer.from(saltHex, "hex");
   const expected = Buffer.from(hashHex, "hex");
-  const actual = crypto.scryptSync(password, salt, expected.length);
+  if (expected.length === 0) {
+    return false;
+  }
+  const actual = await scrypt(password, salt, expected.length);
   if (actual.length !== expected.length) {
     return false;
   }

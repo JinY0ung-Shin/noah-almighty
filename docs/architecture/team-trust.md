@@ -41,6 +41,28 @@
   every later self-service signup is created suspended with no session (202, the client shows the
   pending-approval notice) until an admin activates it. Never reintroduce a mode that skips approval —
   it would hand trust (`isTrustedFor`) to anyone who can reach Noah.
+- **Signup hardening (2026-11-11, `routes/auth.ts`).** Self-service signup past the first account is
+  bounded four ways; the FIRST account (admin bootstrap) is exempt from all but the name format:
+  - **Reserved names** (`usernamePolicy.ts`, `isReservedUsername`): admin/administrator/root/system/noah/
+    support/security/null/undefined/me/api and close variants — case-insensitive, separators `._-`
+    ignored, a numeric suffix ignored (`admin2`), look-alike digits folded (`adm1n`, `r00t`). Whole-name
+    match only (`noah.kim` is fine). 400 `사용할 수 없는 사용자명입니다…`, identical whether or not the
+    name exists. Existing accounts are never judged (an instance whose admin is `admin` keeps working).
+  - **Case-insensitive uniqueness for NEW names** (`store.usernameTaken`, `COLLATE NOCASE`; usernames are
+    ASCII): enforced in `createUser`, the only path that creates a user — there is no rename path. The
+    column stays `TEXT UNIQUE` (case-sensitive) and **no row is rewritten**: accounts that already differ
+    only by case keep working. **Login resolves the name EXACTLY as stored** (`userRowByUsername`,
+    case-sensitive, after trim) — unchanged.
+  - **Instance-wide caps** (`SIGNUP_LIMITS`, counted from the users table so they survive restarts):
+    `perHour` 50 accounts created in the last hour, `pending` 100 signups awaiting approval — 429. A
+    pending signup is DERIVED, not stored: `suspended = 1` and `last_seen_at = created_at` (never held a
+    session), so an account suspended after use is not counted and existing rows read correctly.
+    Approving or deleting entries frees room. The per-address limiter stays (20 / 10 min) but is ONE
+    bucket for everyone behind a reverse proxy (no `trust proxy`). The values are constants — moving them
+    to env needs `config.ts`.
+  - The caps are checked before the name (a refused flood learns nothing about taken names and costs no
+    scrypt run) and again, with the first-account test, in the same tick as the insert: hashing is now
+    awaited, so parallel signups could otherwise slip past a cap or both become the bootstrap admin.
 - Because every signed-in user is now an approved teammate, the share-link "signup is OPEN" audience
   caveat is gone everywhere (`FileOutputToolsContext.signupOpen` removed) — see
   [`share-links.md`](share-links.md).

@@ -140,6 +140,51 @@ function parsePositiveInt(value: string, fallback: number): number {
   return value && Number.isInteger(n) && n >= 1 ? n : fallback;
 }
 
+/**
+ * `TRUSTED_ORIGINS`: comma-separated origins (`scheme://host[:port]`, http or
+ * https) that the same-origin gate on state-changing requests accepts as this
+ * Noah's OWN address (`createCrossSiteMutationGuard`, routes/_shared.ts). The
+ * operator's way out when a reverse proxy rewrites `Host` without sending
+ * `X-Forwarded-Host`, so Noah cannot tell that the browser's `Origin` is itself
+ * and answers every save — and every login — with 403.
+ *
+ * Each entry is normalized to its origin (lowercase host, default port
+ * dropped, a trailing `/` tolerated). Anything else — a wildcard, a path, a
+ * non-http(s) scheme, something unparsable — is returned in `invalid` and
+ * ignored (the caller logs it once at boot): a typo must never widen the gate,
+ * and never stop the boot of an instance that is already locked out.
+ */
+export function parseTrustedOrigins(raw: string): { origins: string[]; invalid: string[] } {
+  const origins = new Set<string>();
+  const invalid: string[] = [];
+  for (const entry of raw.split(",").map((part) => part.trim()).filter(Boolean)) {
+    let url: URL | null = null;
+    try {
+      url = new URL(entry);
+    } catch {
+      url = null;
+    }
+    const plainOrigin =
+      url !== null &&
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.hostname !== "" &&
+      !url.hostname.includes("*") &&
+      url.username === "" &&
+      url.password === "" &&
+      (url.pathname === "/" || url.pathname === "") &&
+      url.search === "" &&
+      url.hash === "";
+    if (url && plainOrigin) origins.add(url.origin);
+    else invalid.push(entry);
+  }
+  return { origins: [...origins], invalid };
+}
+
+/** {@link parseTrustedOrigins} of this process's `TRUSTED_ORIGINS`. */
+export function loadTrustedOrigins(): { origins: string[]; invalid: string[] } {
+  return parseTrustedOrigins(env("TRUSTED_ORIGINS"));
+}
+
 export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const isProduction = process.env.NODE_ENV === "production";
   const dataDir = overrides.dataDir ?? env("APP_DATA_DIR", path.join(process.cwd(), "data"));

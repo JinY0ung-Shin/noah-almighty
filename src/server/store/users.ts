@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { hashPassword, hashToken, verifyPassword } from "../auth.js";
+import { hashPasswordSync, hashToken, verifyPassword } from "../auth.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import { normalizeExperimentalFeatures } from "../experimentalFeatures.js";
 import { CURRENT_RELEASE_ID } from "../releaseNotes.js";
@@ -128,15 +128,29 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         : [];
     }
 
-    createUser(input: {
-      username: string;
-      displayName: string;
-      password: string;
-    }): User {
+    /**
+     * Create an account. The FIRST one becomes the admin.
+     *
+     * - The password arrives as a DIGEST (`passwordHash`, from the awaited
+     *   `hashPassword`) on every request path, so no scrypt run blocks the event
+     *   loop inside the store. The plain `password` form hashes synchronously and
+     *   is only for callers that are not serving requests (fixtures, scripts).
+     * - A NEW username must not match an existing one case-insensitively
+     *   (`Admin` next to `admin`). Existing rows are never rewritten: accounts
+     *   that already differ only by case keep working, and login stays an exact
+     *   match (`verifyLogin`).
+     */
+    createUser(
+      input: { username: string; displayName: string } & (
+        | { password: string; passwordHash?: undefined }
+        | { passwordHash: string; password?: undefined }
+      ),
+    ): User {
       const username = input.username.trim();
-      if (this.userRowByUsername(username)) {
+      if (this.usernameTaken(username)) {
         throw new Error("DUPLICATE_USERNAME");
       }
+      const passwordHash = input.passwordHash ?? hashPasswordSync(input.password);
       const timestamp = now();
       const id = crypto.randomUUID();
       const isFirstUser = this.count("SELECT COUNT(*) AS c FROM users") === 0;
@@ -153,7 +167,7 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         insertUser.run({
           id,
           username,
-          password_hash: hashPassword(input.password),
+          password_hash: passwordHash,
           display_name: input.displayName.trim() || username,
           created_at: timestamp,
           // Seed new accounts as caught-up: the "what's new" dialog is for
@@ -172,6 +186,36 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.toUser(this.userRowById(id)!);
     }
 
+    /**
+     * Whether a NEW account may not take this name: some account already has it,
+     * compared case-insensitively (usernames are ASCII — `[\w.-]` at the signup
+     * route — which is exactly what SQLite's NOCASE folds). Only a gate for new
+     * names; it never resolves a login.
+     */
+    usernameTaken(username: string): boolean {
+      return (
+        this.count("SELECT COUNT(*) AS c FROM users WHERE username = ? COLLATE NOCASE", username.trim()) > 0
+      );
+    }
+
+    /** Accounts created at or after `sinceIso` (the signup route's hourly cap). */
+    countUsersCreatedSince(sinceIso: string): number {
+      return this.count("SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", sinceIso);
+    }
+
+    /**
+     * Signups still waiting for an admin: suspended accounts that never held a
+     * session. `createUser` stamps `last_seen_at = created_at` and only an
+     * authenticated request moves it (`getUserBySessionToken`), so an account an
+     * admin suspended AFTER it was in use is not counted. Derived, not stored —
+     * no schema change, and it reads existing rows correctly.
+     */
+    countPendingSignups(): number {
+      return this.count(
+        "SELECT COUNT(*) AS c FROM users WHERE suspended = 1 AND (last_seen_at IS NULL OR last_seen_at = created_at)",
+      );
+    }
+
     getUserByUsername(username: string): User | null {
       const row = this.userRowByUsername(username);
       return row ? this.toUser(row) : null;
@@ -187,19 +231,30 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.count("SELECT COUNT(*) AS c FROM users") > 0;
     }
 
-    verifyLogin(username: string, password: string): User | "suspended" | null {
+    /**
+     * Resolve a login. The name is matched EXACTLY (case-sensitive, as stored),
+     * so two older accounts that differ only by case each keep their own login.
+     * Asynchronous because the scrypt verification runs on the threadpool; the
+     * row is re-read afterwards so a suspension, deletion or password reset that
+     * landed during the derivation is honoured.
+     */
+    async verifyLogin(username: string, password: string): Promise<User | "suspended" | null> {
       const row = this.userRowByUsername(username.trim());
       if (!row) {
         return null;
       }
-      if (!verifyPassword(password, row.password_hash)) {
+      if (!(await verifyPassword(password, row.password_hash))) {
+        return null;
+      }
+      const current = this.userRowById(row.id);
+      if (!current || current.password_hash !== row.password_hash) {
         return null;
       }
       // Verify the password first so a wrong password can't probe suspension state.
-      if (row.suspended === 1) {
+      if (current.suspended === 1) {
         return "suspended";
       }
-      return this.toUser(row);
+      return this.toUser(current);
     }
 
     // ---- Roles ------------------------------------------------------------

@@ -12,7 +12,7 @@
   `gitRepos` uses `--porcelain -uall`, threaded via the `extraStatusArgs` param. The knowledge-repo
   variant misses files inside otherwise-untracked dirs — a **latent bug flagged for a deliberate
   decision** (T3.7), NOT something to "fix" incidentally.
-- **Git safety is TWO separate layers — don't merge them.**
+- **Git safety is THREE separate layers — don't merge them.**
   1. **Arg-safety: ONE validator, every clone path.** `assertSafeGitValue` (`repoGitGuards.ts`,
      re-exported via `repoGitCore.ts`) rejects leading-dash values and `scheme::` remote-helper syntax
      (`ext::sh -c …`). Used by `gitRepos.ts`, `knowledgeRepo.ts`, and
@@ -27,8 +27,74 @@
      which (since `looksLikeRepo` accepts anything ending in `.git`) let any authenticated user point their
      knowledge repo at `dataDir/knowledge/<otherUserId>/.git` and read another user's private repo back
      through `/contents`, `/note`, `/graph` and the agent read tools. Was T3.11.
-  When you add a repo entry point, decide which layer it needs: arg-safety ALWAYS, host policy only if the
-  feature promises an internal-host-only source.
+  3. **Registered-repo source policy: `assertAllowedGitSource` (`gitSourcePolicy.ts`), `mcp__git_repo__*`
+     only.** Noah clones a registered repo in ITS OWN container (DB, every user's clones, the team-brain
+     vault, secrets), so the source decides what Noah's git reads or connects to. Before 2026-11-11 an owner
+     run could `register_repo` another user's clone / knowledge clone / the vault by path (also through a
+     symlink or `file://`) and get its files, and git connected to loopback in every spelling
+     (`2130706433`, `0x7f.1`, `[::ffff:127.0.0.1]`, `0.0.0.0`…). Refused now:
+     - a **local path** (or `file://` URL, host ignored, path percent-decoded — as git reads it) whose
+       lexical OR symlink-resolved location is inside a Noah-managed root: `dataDir`,
+       `pi.workspacesDir`, `defaultPluginsDir`, the app root (`process.cwd()`). A path that does not exist
+       yet is judged by its nearest existing ancestor; the four spellings git itself tries (`p`, `p.git`,
+       `p/.git`, `p.git/.git`) are all judged. A relative path resolves against Noah's cwd, so a bare word
+       (`foo`) is refused as inside the app root. A local repo anywhere else stays a legitimate source.
+     - a **host** that IS loopback (`127/8`, `::1`, `localhost`, `*.localhost`), link-local
+       (`169.254/16`, `fe80::/10`), `0.0.0.0/8` or `::` — in any `inet_aton` form (decimal/octal/hex,
+       1–4 parts) and inside an IPv6 one (mapped `::ffff:`, compatible `::a.b.c.d`, NAT64 `64:ff9b::`) —
+       or, on a path about to use the network (`resolve`: clone, sync, push), a name that RESOLVES to one
+       (every returned address is checked). RFC 1918 and every other range stay allowed (the internal git
+       host is private). The host is read BOTH as git does (authority up to the last `@`, percent-decoded)
+       and as Node's URL does, each reading judged; a URL with a backslash/whitespace/control character
+       is refused as unreadable (the `gitHostFromSource` differential).
+     - a host[:port] that is one of **Noah's own internal services** (`internalServices`: `PI_GATEWAY_URL`,
+       `NOAH_MCP_PUBLIC_URL`, `NOAH_EGRESS_CONTROL_URL`) — they sit on private addresses the classes above
+       allow on purpose. Matched by name or literal address (any spelling) on every use, and on network
+       paths also by what the source and the service RESOLVE to (another name for pi-gateway, its bare
+       container address). The port must match (the transport's default when none is written:
+       80/443/22/9418), so ssh to the same box or another port on it is not refused. Reason text:
+       `host '<h>' is one of Noah's own internal services`.
+     - **The configured git host is never judged** (`gitHostFromSource(source) === config.githubHost`,
+       exact host[:port]) — an instance whose git host is on loopback keeps working. No other loopback
+       use exists in the code or tests.
+     - **Where:** `register_repo` checks before anything is stored (a refused source never becomes or
+       replaces a row), and `ensureGitRepoCloneLocked` + `pushGitRepoDetailed` check on EVERY use — so a
+       row registered before the policy with a refused source is refused at sync/open/commit/push/read
+       with the SAME message (`GitSourceRefusedError`, returned verbatim by `sourceRefusal` in
+       `gitRepoTools.ts`), never skipped or deleted; `list_repos`/`remove_repo` still work on it. Static
+       checks run on every use; the DNS lookup only where the network is used, and a lookup that fails
+       or exceeds 5 s passes (git reports its own error — required for the egress-proxy mode, where the
+       Noah container resolves nothing).
+     - **Transfer config** (`AllowedGitSource.gitConfig`, rides `serverGitEnv` next to the auth header):
+       for an http(s) host that is NOT the configured one, `http.followRedirects=false` (git's default
+       `initial` follows a 302 on `info/refs`, which sent git to `127.0.0.1` in a local test) and, after
+       a successful lookup, `http.curloptResolve=host:port:addrs` (git ≥ 2.37) pins the connection to the
+       checked addresses. Consequence: an external repo that answers with a redirect (renamed GitHub
+       repo, `http://`→`https://`, a GitLab URL without `.git`) now fails with `The requested URL
+       returned error: 301/302` — re-register it under its final URL. The configured host keeps git's
+       default redirect behaviour.
+     - **Plugins run the same policy (2026-11-11).** `POST /api/me/plugins` accepted anything
+       `looksLikeRepo` likes (a path ending in `.git`), so another user's clone or the vault could be added
+       and its files landed in `dataDir/plugins/<adder>/…`. Now: the route checks at entry (400, Korean —
+       `gitSourceRefusalKorean(error)` keyed on `GitSourceRefusedError.code`, naming no path or address);
+       `syncPluginRepoWithStatus` (`plugins.ts`) checks statically BEFORE the clone-once cache can answer
+       and with `resolve` before the transfer, passing `gitConfig` to `syncGitRepo` (`sourceConfig`);
+       `loadAvatarPluginRoots` never falls back to the cached clone of a refused source (it warns in Korean
+       and skips). `/contents` and `/refresh` answer 400 for such a row; the row and its clone are not
+       deleted (the owner's DELETE removes both). The bundled `defaultPluginsDir` is read in place, never
+       through the clone path, so it is unaffected; there is no operator-configured local marketplace
+       path. `mcp__system__add_plugin` (`systemTools.ts`) still stores without the entry check — the sync
+       point refuses it, so nothing is cloned or loaded, but the row is created.
+     - **Residual, by design or not closable here:** private-network hosts Noah does not know from its
+       config (other compose services, anything else on RFC 1918) stay reachable as a blind
+       `GET …/info/refs` — RFC 1918 is allowed on purpose; ssh/git transports are not pinned (rebinding
+       between check and connect); with `HTTP(S)_PROXY` the PROXY resolves and connects, so only the
+       literal checks bind and the pin is unused; the knowledge clone path (`knowledgeRepo.ts`) relies on
+       its own internal-host gate, not this policy.
+  When you add a repo entry point, decide which layers it needs: arg-safety ALWAYS, host policy only if the
+  feature promises an internal-host-only source, the source policy whenever a USER-named source is cloned
+  inside Noah's container (`syncGitRepo` is transfer-only: its caller runs the policy and passes
+  `sourceConfig`). Offline tests keep their bare remotes OUTSIDE the test's `dataDir`.
 - **`withRepoLock` (`gitMutex.ts`) is NOT reentrant by key** — a fn running under `withRepoLock(key,…)`
   must never call it again for the same key (deadlock). Outer ops call the `*Locked` internals directly.
 - **`commitAndPushClone` self-heals around the remote:** before pushing it fetches and REBASES local

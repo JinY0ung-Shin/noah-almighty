@@ -23,6 +23,8 @@ import {
 } from "./pi/piRepoCopy.js";
 import { activeRepoHolder, type RunRepoLocks } from "../activeRepoLock.js";
 import { RepoReadError, grepRepo, listRepoFiles, readRepoFile } from "../gitRepoRead.js";
+import { assertAllowedGitSource, GitSourceRefusedError } from "../gitSourcePolicy.js";
+import { marketplaceCloneUrl } from "../marketplace.js";
 import {
   configureGitRepoIdentity,
   defaultGitRepoName,
@@ -112,6 +114,15 @@ const ELEVATED_ONLY = "This git repo tool can only be used in a conversation wit
 
 function errorMessage(error: unknown): string {
   return decodeExecError(error).message;
+}
+
+/**
+ * The source policy's refusal (gitSourcePolicy.ts) as the tool result, word for
+ * word — the same message at registration and at every later use of a repo
+ * whose registered source is refused. Null for any other error.
+ */
+function sourceRefusal(error: unknown): ReturnType<typeof text> | null {
+  return error instanceof GitSourceRefusedError ? text(error.message, true) : null;
 }
 
 function renderRepo(repo: ReturnType<Store["listGitRepos"]>[number]): string {
@@ -268,12 +279,13 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     return { clone: await ensureGitRepoClone(repoCtx), name: repoCtx.name };
   };
   const readFailure = (error: unknown) =>
+    sourceRefusal(error) ??
     text(error instanceof RepoReadError ? error.message : `Could not read the repository: ${errorMessage(error)}`, true);
 
   const tools = [
     tool(
       "register_repo",
-      "Register a general git repository in this avatar owner's repo list and create a local working clone. repo accepts owner/repo, an https URL, a git URL, or a local bare repo path. If branch is specified, subsequent sync/commit/push target that branch; if left empty, the repository's default branch is used. NEW-BRANCH NOTE: a branch that does NOT yet exist on origin cannot be cloned/checked out here, so this call ERRORS (e.g. \"'origin/<branch>' is not a commit\") — but creating a remote branch is the job of `mcp__git_repo__push`, not this tool. The branch you pass is still saved on an ALREADY-registered repo even when this checkout step errors (only a brand-new registration is rolled back on failure), so the normal flow to start a new branch is: set the new branch name here, ignore the checkout error, then commit your local HEAD and `mcp__git_repo__push` — push creates the branch on origin. (Alternatively, create the branch on the remote first, then register.) Public repo clone/sync is attempted without a token, and a token is only used if one exists for the configured internal host or github.com. (owner only)",
+      "Register a general git repository in this avatar owner's repo list and create a local working clone. repo accepts owner/repo, an https URL, a git URL, or a local bare repo path. SOURCE POLICY: Noah clones it inside its own server, so a source is REFUSED (nothing is registered) when it is a local path inside Noah's own directories (another user's clone or working copy, the data directory, the team brain), or a URL whose host is — or resolves to — a loopback, link-local (169.254.0.0/16, fe80::/10) or 0.0.0.0/8 address; the configured git host and private-network hosts are fine, and a host other than the configured one must answer without an HTTP redirect. If branch is specified, subsequent sync/commit/push target that branch; if left empty, the repository's default branch is used. NEW-BRANCH NOTE: a branch that does NOT yet exist on origin cannot be cloned/checked out here, so this call ERRORS (e.g. \"'origin/<branch>' is not a commit\") — but creating a remote branch is the job of `mcp__git_repo__push`, not this tool. The branch you pass is still saved on an ALREADY-registered repo even when this checkout step errors (only a brand-new registration is rolled back on failure), so the normal flow to start a new branch is: set the new branch name here, ignore the checkout error, then commit your local HEAD and `mcp__git_repo__push` — push creates the branch on origin. (Alternatively, create the branch on the remote first, then register.) Public repo clone/sync is attempted without a token, and a token is only used if one exists for the configured internal host or github.com. (owner only)",
       {
         repo: z.string().describe("The git repository to register. e.g. owner/repo, https://github.com/owner/repo.git, /path/to/repo.git"),
         name: z.string().optional().describe("A short name to use in the conversation. If empty, it is auto-generated from the repo name."),
@@ -290,6 +302,15 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
         // upserted before the clone, and an already-existing registration is NOT
         // rolled back on the checkout error, so a later push can create that branch.
         const existed = Boolean(store.getGitRepo(ctx.avatarUserId, name));
+        // Source policy at the ENTRY point, before anything is stored: a refused
+        // source never becomes (or replaces) a registration.
+        try {
+          await assertAllowedGitSource(marketplaceCloneUrl(args.repo, ctx.config.githubHost), ctx.config, { resolve: true });
+        } catch (error) {
+          const refused = sourceRefusal(error);
+          if (refused) return refused;
+          throw error;
+        }
         try {
           const record = store.upsertGitRepo(ctx.avatarUserId, name, args.repo, args.branch || null);
           const repoCtx = gitRepoContextFromRecord(store, record, ctx.config);
@@ -298,6 +319,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           return text(`Registered and synced the git repo: ${renderRepo(store.getGitRepo(ctx.avatarUserId, name)!)}.`);
         } catch (error) {
           if (!existed) store.deleteGitRepo(ctx.avatarUserId, name);
+          const refused = sourceRefusal(error);
+          if (refused) return refused;
           return text(
             `Failed to register/sync git repo: ${errorMessage(error)}\nCheck the repo address, branch name, and access permissions. If you named a branch that does not exist on origin yet, that is expected — the branch setting is still saved for an already-registered repo, so you can now commit and push (push creates the new branch on origin). A private repo requires the token under Settings → Git credentials. Do not work around this with Bash \`git clone\` — the shell has no git credentials.`,
             true,
@@ -381,6 +404,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           try {
             await ensureGitRepoClone(repoCtx, { sync: true, fastForwardOnly: source !== null });
           } catch (error) {
+            const refused = sourceRefusal(error);
+            if (refused) return refused;
             const message = errorMessage(error);
             return text(message.startsWith("Not synced:") ? message : `Sync failed: ${message}\nDo not work around this with Bash git — the shell has no git credentials.`, true);
           }
@@ -415,6 +440,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
           }
           return text(`Synced the git repo: ${repoCtx.name}.${forwarded}`);
         } catch (error) {
+          const refused = sourceRefusal(error);
+          if (refused) return refused;
           return text(
             args.from?.trim()
               ? `Sync failed: ${errorMessage(error)}\nCheck that both repos are registered and reachable (list_repos), then sync again. Do not work around this with Bash git — the shell has no git credentials.`
@@ -493,6 +520,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
               ` Work there with absolute paths; save with mcp__git_repo__commit (name='${repoCtx.name}', message), then mcp__git_repo__push.`,
           );
         } catch (error) {
+          const refused = sourceRefusal(error);
+          if (refused) return refused;
           return text(
             `Failed to open the working repository: ${errorMessage(error)}\nCheck the repo is registered (list_repos) and reachable. Do not work around this with git in the sandbox — it has no credentials and no network.`,
             true,
@@ -535,6 +564,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
                 : ""),
           );
         } catch (error) {
+          const refused = sourceRefusal(error);
+          if (refused) return refused;
           return text(
             `push failed: ${errorMessage(error)}\nCheck remote write permission, token, and whether the branch is protected (even a public repo needs write permission to push). If it was rejected because origin moved and the commits were brought in with sync_repo 'from', sync again WITH the same 'from' (fast-forward only) — a sync without it rebases them and changes their SHAs. Do not work around this with Bash \`git push\` — the shell has no git credentials.`,
             true,
@@ -596,6 +627,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
                 );
             }
           } catch (error) {
+            const refused = sourceRefusal(error);
+            if (refused) return refused;
             return text(
               `Commit failed: ${errorMessage(error)}\nDo not work around this with git in the sandbox — it has no credentials and Noah never reads its commits.`,
               true,

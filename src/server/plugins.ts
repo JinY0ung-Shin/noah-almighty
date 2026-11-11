@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { marketplaceCloneUrl, pathExists, sanitizeName, scrubGitError, syncGitRepo } from "./marketplace.js";
+import { assertAllowedGitSource, gitSourceRefusalKorean, GitSourceRefusedError } from "./gitSourcePolicy.js";
 import { tokenForGitUrl, type GitTokenSet } from "./gitCredentials.js";
 import {
   ensureClone,
@@ -773,6 +774,14 @@ export async function loadAvatarPluginRoots(
         );
       }
     } catch (error) {
+      // A refused SOURCE is not a failed refresh: its cached clone (made before
+      // the policy existed) holds what the policy exists to keep out, so it is
+      // never loaded.
+      if (error instanceof GitSourceRefusedError) {
+        onWarn?.(`${plugin.repo}: 불러오지 않았습니다 — ${gitSourceRefusalKorean(error)}`);
+        logger.warn({ repo: plugin.repo, code: error.code }, "plugin source refused by the git source policy");
+        continue;
+      }
       // A refresh/clone failure is non-fatal if we already have a cached clone.
       // Scrub the error: the git auth header (token) is embedded in its argv.
       const detail = scrubGitError(error);
@@ -814,6 +823,12 @@ export async function syncPluginRepoWithStatus(
   userTokens?: string | null | GitTokenSet,
 ): Promise<PluginSyncOutcome> {
   const destination = pluginClonePath(userId, plugin.repo, config);
+  const url = marketplaceCloneUrl(plugin.repo, config.githubHost);
+  // Source policy on EVERY use (gitSourcePolicy.ts), before the clone-once cache
+  // can answer: a plugin stored with a source the policy refuses — another
+  // user's clone or the team-brain vault by path, a loopback host — throws
+  // GitSourceRefusedError here, so its clone is never handed out, cached or not.
+  await assertAllowedGitSource(url, config);
   if (force) {
     forgetClone(destination);
   }
@@ -828,11 +843,14 @@ export async function syncPluginRepoWithStatus(
 
   let sync = existing;
   if (!sync) {
-    const url = marketplaceCloneUrl(plugin.repo, config.githubHost);
     const token = tokenForGitUrl(url, config, userTokens);
-    sync = syncGitRepo(url, destination, plugin.ref ?? undefined, token).then(() => {
-      clonedPaths.add(destination);
-    });
+    // The network use: the host is resolved now, and the transfer carries what
+    // the policy asks for (no redirects / pinned addresses off the configured host).
+    sync = assertAllowedGitSource(url, config, { resolve: true })
+      .then((source) => syncGitRepo(url, destination, plugin.ref ?? undefined, token, source.gitConfig))
+      .then(() => {
+        clonedPaths.add(destination);
+      });
     syncingPaths.set(destination, sync);
     const clearInFlight = () => {
       if (syncingPaths.get(destination) === sync) {

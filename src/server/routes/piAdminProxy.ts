@@ -4,7 +4,7 @@ import { Router, type Request, type Response } from "express";
 import { sessionTokenFromRequest, type AuthenticatedRequest } from "../auth.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import logger from "../logger.js";
-import type { RouterDeps } from "./_shared.js";
+import { sameOrigin, type RouterDeps } from "./_shared.js";
 
 /**
  * pi-gateway's own admin panel (LLM servers, models, prompts, MCP, tools,
@@ -206,25 +206,6 @@ function jsonBodyUser(body: Buffer): string {
 function piError(res: Response, status: number, code: string, message: string): void {
   res.status(status).setHeader("cache-control", "no-store");
   res.json({ error: { code, message } });
-}
-
-/**
- * Same-origin proof for a mutating call. `Sec-Fetch-Site` (every current
- * browser sends it) must say `same-origin`; without it, `Origin`'s host must be
- * this request's Host (the scheme is not compared: behind a TLS-terminating
- * proxy Noah sees http). Neither header → refused.
- */
-function sameOrigin(req: Request): boolean {
-  const site = req.get("sec-fetch-site");
-  if (site) return site === "same-origin";
-  const origin = req.get("origin");
-  const host = req.get("host");
-  if (!origin || !host) return false;
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
 }
 
 /**

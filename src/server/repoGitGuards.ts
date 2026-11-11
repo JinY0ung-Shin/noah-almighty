@@ -29,7 +29,10 @@ const REMOTE_HELPER_RE = /^[a-z0-9+.-]*::/i;
  * This is arg-safety ONLY. It deliberately does NOT judge the transport or host
  * (a bare local path is a legitimate repo source — `register_repo` accepts one by
  * design, and the offline tests clone from local bare remotes). Source/host
- * POLICY belongs at the entry point that claims it: see `isInternalGitSource`.
+ * POLICY belongs at the entry point that claims it: `isInternalGitSource`
+ * (knowledge repo: internal host only) and `assertAllowedGitSource`
+ * (gitSourcePolicy.ts — a registered repo: no path inside Noah's own
+ * directories, no loopback / link-local / 0.0.0.0/8 host).
  */
 export function assertSafeGitValue(value: string | null | undefined, what: string): void {
   if (value == null) {

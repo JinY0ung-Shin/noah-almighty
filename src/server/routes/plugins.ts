@@ -3,7 +3,8 @@ import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import { forgetClone, inspectRepoContents, pluginClonePath, syncPluginRepoWithStatus } from "../plugins.js";
-import { scrubGitError } from "../marketplace.js";
+import { marketplaceCloneUrl, scrubGitError } from "../marketplace.js";
+import { assertAllowedGitSource, gitSourceRefusalKorean, GitSourceRefusedError } from "../gitSourcePolicy.js";
 import { apiError, looksLikeRepo, safeString, type RouterDeps } from "./_shared.js";
 
 // ---- Plugins ---------------------------------------------------------
@@ -14,17 +15,35 @@ export function createPluginsRouter({ config, store }: RouterDeps): Router {
     res.json({ plugins: store.listPlugins(req.user!.id) });
   });
 
-  router.post("/api/me/plugins", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const repo = safeString(req.body?.repo);
-    if (!repo || !looksLikeRepo(repo)) {
-      apiError(res, 400, "repo는 owner/repo 또는 git/https URL 형식이어야 합니다.");
-      return;
+  router.post("/api/me/plugins", requireAuth(store), async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const repo = safeString(req.body?.repo);
+      if (!repo || !looksLikeRepo(repo)) {
+        apiError(res, 400, "repo는 owner/repo 또는 git/https URL 형식이어야 합니다.");
+        return;
+      }
+      // Source policy at the ENTRY point (gitSourcePolicy.ts): Noah clones a
+      // plugin repo in its own container, so a path inside Noah's directories
+      // (`looksLikeRepo` accepts anything ending in `.git`) or a loopback /
+      // link-local / internal-service host never becomes a stored plugin. The
+      // sync path (plugins.ts) checks again on every use.
+      try {
+        await assertAllowedGitSource(marketplaceCloneUrl(repo, config.githubHost), config, { resolve: true });
+      } catch (error) {
+        if (!(error instanceof GitSourceRefusedError)) throw error;
+        logger.warn({ userId: req.user!.id, code: error.code }, "plugin add refused by the git source policy");
+        apiError(res, 400, gitSourceRefusalKorean(error));
+        return;
+      }
+      const ref = safeString(req.body?.ref) || undefined;
+      const label = safeString(req.body?.label) || undefined;
+      const plugin = store.addPlugin(req.user!.id, { repo, ref, label });
+      logger.info({ userId: req.user!.id, pluginId: plugin.id, repo }, "plugin added");
+      res.json({ plugin });
+    } catch (error) {
+      // Express 4 does not catch a rejected async handler.
+      next(error);
     }
-    const ref = safeString(req.body?.ref) || undefined;
-    const label = safeString(req.body?.label) || undefined;
-    const plugin = store.addPlugin(req.user!.id, { repo, ref, label });
-    logger.info({ userId: req.user!.id, pluginId: plugin.id, repo }, "plugin added");
-    res.json({ plugin });
   });
 
   router.patch("/api/me/plugins/:id", requireAuth(store), (req: AuthenticatedRequest, res) => {
@@ -85,6 +104,11 @@ export function createPluginsRouter({ config, store }: RouterDeps): Router {
       const contents = await inspectRepoContents(sync.path);
       res.json({ contents });
     } catch (error) {
+      // A plugin stored before the source policy with a source it refuses.
+      if (error instanceof GitSourceRefusedError) {
+        apiError(res, 400, gitSourceRefusalKorean(error));
+        return;
+      }
       const detail = scrubGitError(error);
       apiError(res, 502, `저장소를 가져오지 못했습니다: ${detail}`);
     }
@@ -102,6 +126,10 @@ export function createPluginsRouter({ config, store }: RouterDeps): Router {
       const updated = store.markPluginSynced(req.user!.id, req.params.id);
       res.json({ plugin: updated });
     } catch (error) {
+      if (error instanceof GitSourceRefusedError) {
+        apiError(res, 400, gitSourceRefusalKorean(error));
+        return;
+      }
       const detail = scrubGitError(error);
       apiError(res, 502, `새로고침 실패: ${detail}`);
     }

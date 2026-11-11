@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
 import {
   type GitRepoContext,
@@ -36,8 +37,16 @@ import { signup, makeBareRemote, withTempDir } from "./helpers.js";
 // non-https URLs, so a local path needs no credentials.
 
 let tempDir: string;
+// Seeded remotes live OUTSIDE the data root (`tempDir`): a registered git repo
+// may not be sourced from a path inside Noah's own directories
+// (gitSourcePolicy.ts), and a real remote never is.
+let remotesDir: string;
 const getTempDir = withTempDir("routes-repo", () => {
   tempDir = getTempDir();
+  remotesDir = fs.mkdtempSync(path.join(os.tmpdir(), "noah-routes-repo-remotes-"));
+});
+afterEach(() => {
+  fs.rmSync(remotesDir, { recursive: true, force: true });
 });
 
 function bootstrap() {
@@ -58,15 +67,16 @@ async function newUser(app: ReturnType<typeof createApp>, username: string) {
 /**
  * Create a bare remote on `main`, seeded with the given repo-relative files, and
  * return its path. The seed working tree is committed and pushed so a subsequent
- * clone has a real `main` branch to track.
+ * clone has a real `main` branch to track. It is created under `remotesDir`,
+ * outside the data root (the first argument is kept for the call sites only).
  */
 function seedRemote(
-  dataDir: string,
+  _dataDir: string,
   name: string,
   files: Record<string, string>,
 ): string {
-  const remote = makeBareRemote(path.join(dataDir, `${name}.git`));
-  const seed = path.join(dataDir, `${name}-seed`);
+  const remote = makeBareRemote(path.join(remotesDir, `${name}.git`));
+  const seed = path.join(remotesDir, `${name}-seed`);
   fs.mkdirSync(seed, { recursive: true });
   const g = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
   g("init", "-q");
@@ -484,7 +494,7 @@ describe("plugins routes", () => {
       .expect(200);
     expect(contents.body.contents.kind).toBe("single");
 
-    const bad = store.addPlugin(userId, { repo: path.join(config.dataDir, "missing.git") });
+    const bad = store.addPlugin(userId, { repo: path.join(remotesDir, "missing.git") });
     await agent.get(`/api/me/plugins/${bad.id}/contents`).expect(502);
   });
 
@@ -503,7 +513,7 @@ describe("plugins routes", () => {
       .expect(200);
     expect(refreshed.body.plugin.lastSyncedAt).toBeTruthy();
 
-    const bad = store.addPlugin(userId, { repo: path.join(config.dataDir, "missing2.git") });
+    const bad = store.addPlugin(userId, { repo: path.join(remotesDir, "missing2.git") });
     await agent.post(`/api/me/plugins/${bad.id}/refresh`).expect(502);
   });
 });
