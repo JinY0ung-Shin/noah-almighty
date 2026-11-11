@@ -14,6 +14,7 @@ import {
   LOCAL_DEMO_SCENARIOS,
   LOCAL_DEMO_UI_ANSWER,
   LOCAL_DEMO_UI_BLOCKS,
+  LOCAL_DEMO_UI_MERMAID,
   LOCAL_DEMO_UI_FENCED_SOURCE,
   parseLocalCanvasSubmission,
   parseLocalDemoCommand,
@@ -439,6 +440,11 @@ describe("local runtime: demo ui (inline UI in the answer text)", () => {
     // A tag shown AS SOURCE: inside a code fence, where the client must not draw it.
     expect(LOCAL_DEMO_UI_ANSWER).toContain(`\n\`\`\`\n${LOCAL_DEMO_UI_FENCED_SOURCE}\n\`\`\`\n`);
     expect(LOCAL_DEMO_UI_FENCED_SOURCE.startsWith("<stat ")).toBe(true);
+    // A diagram: a ```mermaid fence (drawn in place by the client), labels with punctuation quoted.
+    expect(LOCAL_DEMO_UI_ANSWER).toContain(`\n## 5. 다이어그램\n`);
+    expect(LOCAL_DEMO_UI_ANSWER).toContain(`\n\`\`\`mermaid\n${LOCAL_DEMO_UI_MERMAID}\n\`\`\`\n`);
+    expect(LOCAL_DEMO_UI_MERMAID).toMatch(/^flowchart LR\n/);
+    expect(LOCAL_DEMO_UI_MERMAID).toContain('A["질문 (채팅)"]');
     // Every tag line of a block starts at the top level (indent ≤ 3 spaces would
     // still be a tag; none is indented 4+, which Markdown reads as code).
     for (const source of Object.values(LOCAL_DEMO_UI_BLOCKS)) {

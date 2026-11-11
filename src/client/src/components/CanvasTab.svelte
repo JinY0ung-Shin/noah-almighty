@@ -18,6 +18,7 @@
     submitCanvasEdit,
   } from "../lib/chat";
   import { queueCanvasRenderReport } from "../lib/canvasReport";
+  import { renderMermaidSvg } from "../lib/mermaidRender";
   import { renderVegaSvg } from "../lib/vegaCanvas";
   import { shadowSvg } from "../lib/shadowSvg";
   import { copyText } from "../lib/dom";
@@ -230,19 +231,10 @@
     }
     if (target.contentType === "mermaid") {
       try {
-        const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "strict",
-          theme: resolvedTheme === "dark" ? "dark" : "default",
-          // Labels as SVG <text>: by default flowchart/class/state/ER/mindmap/kanban
-          // put them in <foreignObject> HTML, which the svg-profile sanitize below
-          // strips — every node rendered as an empty box.
-          htmlLabels: false,
-        });
-        const { svg } = await mermaid.render(`canvas-mmd-${target.id}-${token}`, target.content);
+        // The same renderer a ```mermaid block of an answer uses (lib/mermaidRender.ts).
+        const svg = await renderMermaidSvg(target.content, resolvedTheme === "dark");
         if (token !== renderToken) return; // a newer render won
-        showRendered({ svg: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } }) });
+        showRendered({ svg });
       } catch (err) {
         if (token !== renderToken) return;
         renderError = mermaidRenderError(err);

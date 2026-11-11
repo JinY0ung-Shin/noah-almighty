@@ -34,6 +34,13 @@ export interface StreamBlock {
   /** Position of the block; a finished block keeps both its key and its html. */
   key: number;
   html: string;
+  /**
+   * The block is still being written — the last one of a healed (live) text,
+   * unless it is a code fence whose closing line has come. What draws a block
+   * differently once it is whole (a ```mermaid diagram, `lib/mermaidBlock.ts`)
+   * waits for this to go. Never set on a finished block.
+   */
+  open?: boolean;
 }
 
 export interface StreamMarkdownStats {
@@ -87,6 +94,17 @@ function blankLineBefore(src: string, end: number): boolean {
   return i >= 0 && src[i] === "\n";
 }
 
+/** A fenced code block whose closing fence is there: nothing more can be written into it. */
+function isClosedFence(token: Token): boolean {
+  if (token.type !== "code") return false;
+  const raw = token.raw.replace(/\n+$/, "");
+  const opening = /^ {0,3}(`{3,}|~{3,})/.exec(raw);
+  const lastLine = raw.lastIndexOf("\n");
+  if (!opening || lastLine < 0) return false;
+  const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(raw.slice(lastLine + 1));
+  return Boolean(closing && closing[1][0] === opening[1][0] && closing[1].length >= opening[1].length);
+}
+
 function renderTokens(tokens: Token[]): string {
   return sanitizeMarkdownHtml(marked.parser(tokens) as string);
 }
@@ -109,11 +127,12 @@ export function createStreamMarkdown(): StreamMarkdown {
     tailCache = new Map();
   }
 
-  function whole(text: string): StreamBlock[] {
+  function whole(text: string, open = false): StreamBlock[] {
     stats.whole += 1;
     stats.rendered += 1;
     const html = renderMarkdown(text);
-    return html ? [{ key: 0, html }] : [];
+    if (!html) return [];
+    return open ? [{ key: 0, html, open }] : [{ key: 0, html }];
   }
 
   function render(input: string | null | undefined, options: { heal?: boolean } = {}): StreamBlock[] {
@@ -142,16 +161,16 @@ export function createStreamMarkdown(): StreamMarkdown {
       offsets.push(offset);
       offset += token.raw.length;
     }
-    if (offset !== tail.length) return whole(text);
+    if (offset !== tail.length) return whole(text, heal);
 
     let last = tokens.length - 1;
     while (last >= 0 && isSpace(tokens[last])) last -= 1;
 
     if (hasLinkDefinitions(tokens)) {
       // A definition reaches every block, the finished ones included.
-      if (!heal || last < 0) return whole(text);
+      if (!heal || last < 0) return whole(text, heal);
       const healed = healMarkdownTail(tokens[last].raw);
-      return whole(text.slice(0, stablePrefix.length + offsets[last]) + healed);
+      return whole(text.slice(0, stablePrefix.length + offsets[last]) + healed, true);
     }
 
     let firstHtml = tokens.length;
@@ -212,6 +231,8 @@ export function createStreamMarkdown(): StreamMarkdown {
     }
     let lastOpen = open.length - 1;
     while (lastOpen >= 0 && isSpace(open[lastOpen])) lastOpen -= 1;
+    // Judged on the text as WRITTEN (the healing closes an open fence for display).
+    const writing = heal && last >= cut && !isClosedFence(tokens[last]);
 
     const blocks = stable.slice();
     for (let i = 0; i < open.length && i < htmlFrom; i += 1) {
@@ -225,23 +246,24 @@ export function createStreamMarkdown(): StreamMarkdown {
       } else {
         html = htmlOf(open[i]);
       }
-      if (html) blocks.push({ key: blocks.length, html });
+      if (html) blocks.push(isLast && writing ? { key: blocks.length, html, open: true } : { key: blocks.length, html });
     }
     if (htmlFrom < open.length) {
       // Raw HTML: one block to the end, sanitized as a unit — and as content
       // that follows the blocks before it, which is what it is in the whole text.
       const follows = blocks.some((block) => block.html !== "");
-      if (follows && !blocks.some((block) => block.html.trim())) return whole(text);
+      if (follows && !blocks.some((block) => block.html.trim())) return whole(text, heal);
       const html = sanitizeMarkdownHtml(marked.parser(open.slice(htmlFrom)) as string, { forceBody: follows });
       stats.rendered += 1;
-      if (html) blocks.push({ key: blocks.length, html });
+      // One block to the end of the text: all of it counts as being written.
+      if (html) blocks.push(heal ? { key: blocks.length, html, open: true } : { key: blocks.length, html });
     }
     tailCache = nextCache;
 
     // `renderMarkdown` shows the source in a <pre> when markdown made nothing
     // of it; the same text must not vanish here.
     // (A tail the healing hid on purpose is not that case.)
-    if (!healedAway && text.trim() && !blocks.some((block) => block.html.trim())) return whole(text);
+    if (!healedAway && text.trim() && !blocks.some((block) => block.html.trim())) return whole(text, heal);
     return blocks;
   }
 

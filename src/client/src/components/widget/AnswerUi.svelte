@@ -36,6 +36,7 @@
   import { queueInlineUiReport } from "../../lib/canvasReport";
   import { sendWidgetMessage } from "../../lib/chat";
   import { copyText, markdownBlocks } from "../../lib/dom";
+  import { diagramProblems } from "../../lib/mermaidBlock";
   import { notify, readState } from "../../lib/state";
   import { createStreamMarkdown, type StreamBlock, type StreamMarkdown } from "../../lib/streamMarkdown";
   import { theme } from "../../lib/theme";
@@ -214,7 +215,7 @@
     // Read from the arguments: on the update where `streaming` turns false the
     // answer is finished NOW (a mirror set by a later reactive statement still said otherwise).
     streamingNow = nextStreaming;
-    if (!nextStreaming) reportProblems([...staticProblems(doc), ...collectWidgetProblems(doc, drawn)]);
+    if (!nextStreaming) reportProblems([...staticProblems(doc), ...collectWidgetProblems(doc, drawn), ...knownDiagramIssues()]);
     if (refocus) void restoreFocus();
   }
 
@@ -253,7 +254,7 @@
   function noteLatest(isLatest: boolean): void {
     const became = isLatest && !wasLatest;
     wasLatest = isLatest;
-    if (became && doc && !streamingNow) reportProblems(staticProblems(doc));
+    if (became && doc && !streamingNow) reportProblems([...staticProblems(doc), ...knownDiagramIssues()]);
   }
 
   // The static check walks the whole document: once per finished text.
@@ -268,6 +269,26 @@
       checked = [];
     }
     return checked;
+  }
+
+  // A ```mermaid block in one of the answer's Markdown runs that could not be
+  // drawn (lib/mermaidBlock.ts). It can fail while the end of the answer is still
+  // draining in, when nothing is reported yet — so it is kept and goes out with
+  // the answer's own problems. They belong to the text they were found in and
+  // to what it grows into (a closed fence does not change), never to another text.
+  let diagramIssues: string[] = [];
+  let diagramIssuesText = "";
+  function continuesDiagramText(): boolean {
+    return (parsedText ?? "").startsWith(diagramIssuesText);
+  }
+  function onDiagramProblem(problem: string): void {
+    if (!continuesDiagramText()) diagramIssues = [];
+    diagramIssuesText = parsedText ?? "";
+    if (!diagramIssues.includes(problem)) diagramIssues.push(problem);
+    reportProblems([problem]);
+  }
+  function knownDiagramIssues(): string[] {
+    return continuesDiagramText() ? diagramIssues : [];
   }
 
   function reportProblems(errors: string[]): void {
@@ -409,7 +430,7 @@
 {#each pieces as piece (piece.key)}
   {#if piece.kind === "md"}
     <!-- Only the run that ends the text is still being written, so only it is healed. -->
-    <div class="md" use:markdownBlocks={blocks(piece.key, piece.text, streaming && piece.tail)}>{#if caret && piece.tail}<span class="stream-caret" aria-hidden="true"></span>{/if}</div>
+    <div class="md" use:diagramProblems={onDiagramProblem} use:markdownBlocks={blocks(piece.key, piece.text, streaming && piece.tail)}>{#if caret && piece.tail}<span class="stream-caret" aria-hidden="true"></span>{/if}</div>
   {:else if piece.kind === "ui"}
     <div class="wg-root answer-ui">
       {#each piece.nodes as v (v.key)}<WidgetNode {v} {ctx} />{/each}

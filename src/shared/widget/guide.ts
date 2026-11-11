@@ -72,6 +72,8 @@ Charts — a chart the user only needs to SEE also goes here, in the answer, not
 \`<chart type="bar" data={[{ month: "1월", sales: 120, cost: 80 }, { month: "2월", sales: 150, cost: 90 }]} xKey="month" series={[{ key: "sales", label: "매출" }, { key: "cost", label: "비용" }]} unit="만원" title="월별 매출과 비용" />\`
 \`type\`: bar | line | area | pie | donut, plus \`stacked\` and \`horizontal\`. Anything else (scatter, heatmap, layered marks): a whole Vega-Lite spec with inline values — \`<chart spec={{ mark: "point", data: { values: rows }, encoding: { … } }} />\`.
 
+Diagrams — a flow, sequence, state or ER diagram the user only needs to SEE goes in the answer too, as an ordinary \`\`\`mermaid fenced code block (not a tag): the app draws it in place once the fence is closed, with a toggle to its source. Double-quote every label that contains punctuation: \`A["Login (SSO)"] -->|"POST /api"| B\`.
+
 Example
 {@state qty = 2}
 {@const total = qty * 12000}

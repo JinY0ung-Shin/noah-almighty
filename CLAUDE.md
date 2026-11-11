@@ -142,8 +142,9 @@ These are the invariants the project is built around. New work should reinforce 
   the avatar on its next turn. ONE table is the grammar (`src/shared/widget/spec.ts`). **What a control
   will do is a declared prop the user can see before pressing** (`send`/`<submit>` = their next chat
   message, never a `/` command; `href`) — never a free action, a remote/`data:` load or anything evaluated
-  outside the interpreter. A chart the user only looks at goes here too; the canvas is for a side-panel
-  artifact. → `chat-sse-media.md` ("Inline UI").
+  outside the interpreter. A chart the user only looks at goes here too, and a diagram is a ` ```mermaid `
+  code block of the answer that the client's Markdown draws in place — never a tag; the canvas is for a
+  side-panel artifact. → `chat-sse-media.md` ("Inline UI").
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

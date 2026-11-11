@@ -2145,6 +2145,7 @@ describe("system tools (avatar system management)", () => {
     expect(on).toContain("a SIDE-PANEL artifact worked on with the user");
     expect(on).toContain("contentType markdown | vega | mermaid | svg | html.");
     expect(on).toContain("A chart, table or calculator the user only needs to see or operate in the answer is inline UI (next line), not a canvas");
+    expect(on).toContain("a diagram they only need to see is a ```mermaid fenced code block in the answer");
     expect(on).not.toContain("widget");
     expect(on).not.toContain("실험 기능, so `show` refuses");
 
@@ -2168,6 +2169,7 @@ describe("system tools (avatar system management)", () => {
     };
     const AVAILABLE =
       "- Inline UI: AVAILABLE in this run — write UI tags directly in your ANSWER TEXT (a chart, a table, a dashboard of figures, a calculator or what-if, a quiz, choices to pick from) and the user's app draws them in place while the answer streams; no tool call, nothing opens in the side panel. " +
+      "A diagram to look at goes in the answer the same way, as a ```mermaid fenced code block that is drawn in place once its fence is closed. " +
       'The grammar is the "Inline UI" section of your instructions; the full reference — and the whole grammar when your instructions have no such section — is mcp__system__read_manual topic `inline-ui`';
     const not = (reason: string) =>
       `- Inline UI: NOT available in this run — ${reason}. Answer in plain Markdown and write no UI tags, even where your instructions describe inline UI: they would reach the reader as raw text`;

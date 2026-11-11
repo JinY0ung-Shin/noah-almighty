@@ -3,6 +3,7 @@
 // horizontally-scrollable tables) the way enhanceCodeBlocks() used to.
 
 import { iconSvg } from "./icons";
+import { syncMermaidBlocks } from "./mermaidBlock";
 
 // Built from the shared icon map so these imperative copies can't drift from
 // what <Icon name="copy" /> renders elsewhere.
@@ -374,14 +375,19 @@ function enhanceRendered(root: ParentNode): void {
 // re-emitted, and `updateState` re-emits the whole appState on every SSE token.
 // Without the identity check, each message already in a long transcript paid two
 // querySelectorAll passes per streamed token (see renderMarkdownCached).
+//
+// A ```mermaid block is drawn as its diagram here (lib/mermaidBlock.ts): this
+// html is whole, so no fence in it is still being written.
 export function enhanceMarkdown(node: HTMLElement, param?: unknown) {
   let last = param;
   enhanceRendered(node);
+  syncMermaidBlocks(node);
   return {
     update(next?: unknown) {
       if (next === last) return;
       last = next;
       enhanceRendered(node);
+      syncMermaidBlocks(node);
     },
     destroy() {
       /* nothing to tear down */
@@ -394,10 +400,13 @@ export interface HtmlBlock {
   key: number | string;
   /** Sanitized html — it is inserted as is. */
   html: string;
+  /** Still being written (`lib/streamMarkdown.ts`): a ```mermaid block in it stays code. */
+  open?: boolean;
 }
 
 interface MountedBlock {
   html: string;
+  open: boolean;
   nodes: ChildNode[];
 }
 
@@ -452,6 +461,9 @@ function patchCodeBlock(current: ChildNode[], fresh: ChildNode[]): boolean {
  * unchanged) — and a code block's wrapper, which `{@html}` does not know about,
  * is removed with its block instead of being left behind.
  *
+ * A ```mermaid block is drawn as its diagram (lib/mermaidBlock.ts) once its
+ * block is no longer `open`; while it is being written it is a code block.
+ *
  * The blocks sit BEFORE anything Svelte renders inside `node` (the stream caret).
  */
 export function markdownBlocks(node: HTMLElement, blocks: readonly HtmlBlock[] = []) {
@@ -480,16 +492,28 @@ export function markdownBlocks(node: HTMLElement, blocks: readonly HtmlBlock[] =
     for (let i = 0; i < next.length; i += 1) {
       const current = mounted[i];
       const html = next[i].html;
-      if (current && current.html === html) continue;
+      const open = next[i].open === true;
+      if (current && current.html === html) {
+        // The same html, but the block is finished now (the stream ended, or
+        // its closing fence came): a diagram in it may be drawn.
+        if (current.open !== open) {
+          current.open = open;
+          syncMermaidBlocks(current.nodes, open);
+        }
+        continue;
+      }
       const fresh = build(html);
       if (current && patchCodeBlock(current.nodes, fresh)) {
         current.html = html;
+        current.open = open;
+        syncMermaidBlocks(current.nodes, open);
         continue;
       }
       const before = nextNode(i);
       if (current) for (const old of current.nodes) old.remove();
       for (const child of fresh) node.insertBefore(child, before);
-      mounted[i] = { html, nodes: fresh };
+      mounted[i] = { html, open, nodes: fresh };
+      syncMermaidBlocks(fresh, open);
     }
     for (let i = next.length; i < mounted.length; i += 1) {
       for (const old of mounted[i].nodes) old.remove();

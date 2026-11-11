@@ -32,6 +32,13 @@ describe("inlineUiPromptSpec", () => {
     expect(brief).toContain(INLINE_UI_REPORT_TITLE);
   });
 
+  it("sends a diagram to a ```mermaid fenced block in the answer — not to a tag, not to a canvas", () => {
+    expect(brief).toContain("as an ordinary ```mermaid fenced code block (not a tag)");
+    expect(brief).toContain('`A["Login (SSO)"] -->|"POST /api"| B`');
+    // A fence is not inline UI: an answer that holds only a diagram is plain Markdown.
+    expect(containsInlineUi('그림입니다.\n\n```mermaid\nflowchart LR\n  A --> B\n```\n')).toBe(false);
+  });
+
   it("its examples are valid inline UI", () => {
     const example = brief.slice(brief.indexOf("{@state qty"), brief.indexOf("\n\nEvery prop"));
     expect(checkWidget(example)).toMatchObject({ ok: true });

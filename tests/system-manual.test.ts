@@ -103,6 +103,9 @@ describe("official system manual", () => {
     );
     expect(page).toContain("The former contentType `widget` is retired — `show` refuses it");
     expect(page).toContain("For a side-panel DATA CHART use `vega`");
+    // A diagram to look at is written in the answer; the canvas type is the side-panel one.
+    expect(page).toContain("A DIAGRAM the user only needs to SEE is not a canvas either: write it in your answer as a ```mermaid fenced code block");
+    expect(page).toContain("For a side-panel flow/sequence/graph DIAGRAM use `mermaid`");
     for (const stale of ["| `widget`", "canvas-widget", "EXPERIMENTAL", "실험 기능", "For something the user OPERATES"]) {
       expect(page).not.toContain(stale);
     }
@@ -141,6 +144,7 @@ describe("official system manual", () => {
     expect(page).toContain("In your FINAL answer text. Text written before a tool call is folded into the reasoning view, where tags are not drawn.");
     expect(page).toContain("A tag starts on its own line at the TOP LEVEL of the answer, indented at most 3 spaces");
     expect(page).toContain("Never inside a fenced code block");
+    expect(page).toContain("- A diagram is not a tag: a fenced code block whose language is `mermaid` is drawn in place.");
     expect(page).toContain("Top-level text between tags is ordinary Markdown, and STATIC");
     // Document structure + the two things that only work in a handler.
     for (const piece of ["{@state name = expr}", "{@const name = expr}", "{#each list as item, index}", "{#if cond}", "TOP LEVEL only"]) {

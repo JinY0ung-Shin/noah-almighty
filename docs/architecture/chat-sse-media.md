@@ -657,6 +657,36 @@
   anything else; exactly one of the two (`oneOf`). Both go through `renderVegaSvg` (inline data only, AST
   evaluator, sanitized SVG in a shadow root), re-rendered per animation frame behind a token guard and
   skipped when the spec is unchanged.
+- **A DIAGRAM is a ` ```mermaid ` code block of the answer, not a tag (2026-11-11, the user's pick over a
+  `<mermaid>` component).** It is the form a model writes anyway, so it also works in a conversation whose
+  frozen prompt predates it, and the component table and the `inline-ui` manual page are untouched (mermaid's
+  `{ }` and `-->` would have needed a raw-text child kind in the parser). It is a property of the client's
+  Markdown, not of inline UI: `lib/dom.ts` calls `syncMermaidBlocks` (`lib/mermaidBlock.ts`) after it wraps a
+  `<pre>` — in `enhanceMarkdown` (a whole render: every block is final) and in `markdownBlocks` (a live
+  answer) — so every surface that renders Markdown through them draws it (answers with or without UI tags,
+  the thinking and plan cards, routine results and prompts). **A block that is still being written stays
+  code**: `StreamBlock.open` (`lib/streamMarkdown.ts`) marks the last block of a healed text unless it is a
+  fence whose closing line has come (judged on the text as written — the healing closes an open fence for
+  display), and `markdownBlocks` re-syncs a block whose html is the same but whose `open` changed. Everything
+  is kept ON the wrapper element (`data-diagram` = `code` | `drawing` | `drawn` | `failed`, a `.code-view`
+  소스 toggle, a `.code-diagram` shadow host, a note), never in the html, so the "same html as a whole
+  render" bar holds. Results are cached by (theme, source) — an answer is mounted up to three times (live
+  bubble → drain → stored message) and a hit draws in the same task; a failed parse is cached too. Drawn, the
+  block takes the page's surface (mermaid draws for the app's light/dark background, not the fixed dark code
+  surface — the `--code-*` set is re-pointed for that state only); 소스 on, or a failure, is an ordinary code
+  block. One renderer serves this and the `mermaid` canvas (`lib/mermaidRender.ts`: `securityLevel: strict`,
+  SVG-text labels, DOMPurify, `suppressErrorRendering` — without it a failed parse leaves mermaid's "Syntax
+  error" picture under `<body>`); a theme flip redraws every diagram through ONE store subscription.
+  **Nothing checks the source before it is on screen** (the canvas's server-side `mermaidCheck` has no tool
+  call to ride), so a diagram that cannot be drawn keeps its source with one line saying why and bubbles a
+  `diagramerror` event; the `diagramProblems` action hands its ENGLISH line to the inline-UI render report
+  (`AnswerUi` keeps a failure that lands while the answer still drains in; ChatView reports for the plain
+  stored answer) — latest answer only, to the avatar's next turn. A library that did not LOAD
+  (`MermaidLoadError`) is not the avatar's mistake: nothing is reported, nothing is cached, and the note
+  carries 다시 그리기. The avatar hears of the form from the inline UI brief ("Diagrams"), the canvas section,
+  both describe_system lines and the `canvas-operations` page; the `mermaid` CANVAS stays for a side-panel
+  diagram worked on with the user. Pinned by `tests/client-mermaid-block.test.ts` and, in a real browser
+  under the app's CSP, `tests/visual/inline-ui.spec.ts`.
 - **`<svg>` is a drawing bound to state, checked THREE times.** `src/shared/widget/svg.ts` is its grammar: an
   allowlist of 20 elements and of attributes per element, every VALUE validated by SHAPE and re-emitted from
   the parsed form — never a blocklist. (1) the static check, (2) `svgRender.ts` re-validates the EVALUATED

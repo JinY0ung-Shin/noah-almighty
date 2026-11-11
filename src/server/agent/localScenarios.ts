@@ -441,6 +441,17 @@ export const LOCAL_DEMO_UI_BLOCKS: Readonly<Record<"calculator" | "dashboard" | 
 /** A tag shown AS SOURCE inside a code fence: the client must not draw it. */
 export const LOCAL_DEMO_UI_FENCED_SOURCE = '<stat label="이 태그는" value="그려지지 않습니다" />';
 
+/**
+ * A diagram written the way an avatar writes one in an answer: a ```mermaid
+ * fenced code block, which the client draws in place once the fence is closed
+ * (client `lib/mermaidBlock.ts`). Labels with punctuation are double-quoted.
+ */
+export const LOCAL_DEMO_UI_MERMAID = `flowchart LR
+  A["질문 (채팅)"] --> B{"그림이 더 나은가?"}
+  B -->|"예"| C["답변 본문에 다이어그램"]
+  B -->|"아니오"| D["평범한 Markdown"]
+  C --> E["소스 버튼으로 원문 확인"]`;
+
 /** The whole `demo ui` answer: Markdown with the UI blocks written in it. */
 export const LOCAL_DEMO_UI_ANSWER = `# 로컬 시연: 인라인 UI
 
@@ -475,6 +486,14 @@ ${UI_TABLE}
 
 \`\`\`
 ${LOCAL_DEMO_UI_FENCED_SOURCE}
+\`\`\`
+
+## 5. 다이어그램
+
+\`mermaid\` 코드 블록은 블록이 닫히는 순간 **다이어그램으로** 그려져야 합니다. 머리줄의 **소스**를 누르면 원문으로 바뀝니다.
+
+\`\`\`mermaid
+${LOCAL_DEMO_UI_MERMAID}
 \`\`\`
 
 끝입니다. 1번의 버튼을 누르면 local 스텁이 받은 메시지를 \`[local] …\`로 되돌려 줍니다.

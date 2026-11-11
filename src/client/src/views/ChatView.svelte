@@ -68,6 +68,8 @@
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
   import { hasSideTabs } from "../lib/sidePanel";
   import { containsInlineUi } from "../../../shared/widget/detect";
+  import { queueInlineUiReport } from "../lib/canvasReport";
+  import { diagramProblems } from "../lib/mermaidBlock";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
@@ -1245,6 +1247,26 @@
     for (let i = messages.length - 1; i >= 0; i -= 1) if (messages[i].role === "assistant") return messages[i].id;
     return null;
   }
+  // A ```mermaid block of a stored answer that could not be drawn (lib/mermaidBlock.ts):
+  // nothing checked it before it was on screen, so the avatar hears of it with its
+  // next turn — the same report an answer with inline UI makes, for the
+  // conversation's latest answer only.
+  function reportDiagramProblem(item: ChatPane, message: StoredMessage, problem: string): void {
+    if (message.id !== latestAnswerId(item.messages)) return;
+    const paneId = item.id;
+    const messageId = message.id;
+    const content = messageText(message);
+    queueInlineUiReport({
+      conversationId: item.conversationId,
+      messageId,
+      content,
+      errors: [problem],
+      stillCurrent: () => {
+        const now = readState().chatPanes.find((candidate) => candidate.id === paneId);
+        return Boolean(now) && !now!.streaming && latestAnswerId(now!.messages) === messageId;
+      },
+    });
+  }
   function runtimeBadge(message: StoredMessage): string | null {
     const runtime = message.response?.runtime;
     if (runtime === "local") return "로컬";
@@ -1649,7 +1671,7 @@
                 {:else}
                   {#each segmentAttachments(messageText(message), message.attachments) as seg, segIndex (segIndex)}
                     {#if seg.text}
-                      <div class="md" use:enhanceMarkdown={seg.text}>{@html renderMarkdownCached(seg.text)}</div>
+                      <div class="md" use:diagramProblems={(problem) => reportDiagramProblem(item, message, problem)} use:enhanceMarkdown={seg.text}>{@html renderMarkdownCached(seg.text)}</div>
                     {/if}
                     {#if seg.atts.length}
                       {@render attachmentCards(item, seg.atts, message.attachments)}

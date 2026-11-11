@@ -949,6 +949,7 @@
   gap: var(--s-1);
 }
 .code-block .code-wrap,
+.code-block .code-view,
 .code-block .code-copy {
   height: 28px;
   display: grid;
@@ -960,7 +961,8 @@
   font-size: var(--t-xs);
   transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
 }
-.code-block .code-wrap {
+.code-block .code-wrap,
+.code-block .code-view {
   padding: 0 var(--s-2);
   white-space: nowrap;
 }
@@ -968,16 +970,19 @@
   width: 28px;
 }
 .code-block .code-wrap:hover,
+.code-block .code-view:hover,
 .code-block .code-copy:hover {
   background: var(--code-overlay-strong);
   color: var(--code-fg);
 }
 .code-block .code-wrap:focus-visible,
+.code-block .code-view:focus-visible,
 .code-block .code-copy:focus-visible {
   outline: 2px solid var(--code-fg);
   outline-offset: 1px;
 }
-.code-block .code-wrap[aria-pressed="true"] {
+.code-block .code-wrap[aria-pressed="true"],
+.code-block .code-view[aria-pressed="true"] {
   background: var(--code-overlay);
   border-color: var(--code-overlay-strong);
   color: var(--code-fg);
@@ -991,6 +996,60 @@
 .code-block .code-copy svg {
   width: 15px;
   height: 15px;
+}
+/* A ```mermaid block drawn as its diagram (lib/mermaidBlock.ts). The header stays
+   (language · 소스 · copy). While the DIAGRAM shows, the block takes the page's own
+   surface: mermaid draws for the app's light or dark background, not for the
+   fixed dark code surface — so the --code-* set is re-pointed at the app's
+   tokens for that state only. 소스 on, or a diagram that could not be drawn, is
+   an ordinary code block again. */
+.code-block [hidden] {
+  display: none;
+}
+.code-block[data-diagram="drawn"]:not(.code-source-on) {
+  --code-fg: var(--text);
+  --code-fg-muted: var(--muted);
+  --code-overlay: var(--bg-subtle);
+  --code-overlay-strong: var(--line);
+  --code-ok: var(--accent);
+  --code-danger: var(--danger);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.md .code-block[data-diagram="drawn"]:not(.code-source-on) > pre,
+.code-block[data-diagram="drawn"]:not(.code-source-on) > pre,
+.code-block[data-diagram="drawn"]:not(.code-source-on) .code-wrap,
+.code-block.code-source-on > .code-diagram {
+  display: none;
+}
+.code-diagram {
+  padding: var(--s-2) var(--s-4) var(--s-4);
+  text-align: center;
+  overflow-x: auto;
+}
+.code-diagram-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-4) 0;
+  color: var(--code-danger);
+  font-size: var(--t-xs);
+  overflow-wrap: anywhere;
+}
+.code-block .code-diagram-retry {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--code-fg);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.code-block .code-diagram-retry:focus-visible {
+  outline: 2px solid var(--code-fg);
+  outline-offset: 2px;
 }
 .md pre code {
   background: none;
@@ -1837,7 +1896,8 @@ button.composer-bridge:focus-visible {
     width: 44px;
     height: 44px;
   }
-  .code-block .code-wrap {
+  .code-block .code-wrap,
+  .code-block .code-view {
     min-width: 44px;
     height: 44px;
   }

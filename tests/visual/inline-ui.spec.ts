@@ -87,7 +87,7 @@ function assistantMessage(id: string, text: string) {
   };
 }
 
-async function mockApp(page: Page, options: { stored?: boolean; streamText?: string } = {}): Promise<{ reports: { messageId: string; errors: string[] }[] }> {
+async function mockApp(page: Page, options: { stored?: boolean; storedText?: string; streamText?: string } = {}): Promise<{ reports: { messageId: string; errors: string[] }[] }> {
   const streamText = options.streamText ?? DASHBOARD;
   const reports: { messageId: string; errors: string[] }[] = [];
   await page.addInitScript(() => {
@@ -162,7 +162,7 @@ async function mockApp(page: Page, options: { stored?: boolean; streamText?: str
       body = {
         messages: [
           { id: "m-1", conversationId: CONVERSATION_ID, role: "user", content: "매출 보여줘", response: null, createdAt: "2026-11-11T03:00:00.000Z" },
-          ...(options.stored === false ? [] : [assistantMessage("m-a1", DASHBOARD)]),
+          ...(options.stored === false ? [] : [assistantMessage("m-a1", options.storedText ?? DASHBOARD)]),
         ],
         canvases: [],
       };
@@ -303,11 +303,157 @@ test("the demo runtime's inline UI answer draws whole and reports nothing", asyn
   await expect(bubble.locator(".wg-chart .canvas-svg .mark-arc path").first()).toBeVisible();
   await expect(bubble.getByRole("slider").first()).toBeVisible();
   await expect(bubble.locator("pre code").filter({ hasText: LOCAL_DEMO_UI_FENCED_SOURCE })).toHaveCount(1);
+  // The ```mermaid block of the demo is a diagram; the fenced tag above stays a plain code block.
+  await expect(bubble.locator(".code-block[data-diagram]")).toHaveCount(1);
+  await expect(bubble.locator('.code-block[data-diagram="drawn"] .code-diagram')).toBeVisible();
   // Markdown between the blocks is still Markdown.
   await expect(bubble.locator("> .md h2").first()).toBeVisible();
   // Nothing the browser could not draw: no error node, and no report queued for the avatar.
   await expect(bubble.locator(".wg-error")).toHaveCount(0);
   await expect(bubble.locator(".canvas-render-error")).toHaveCount(0);
+  await page.waitForTimeout(1800);
+  expect(reports).toEqual([]);
+  expect(await leaks(page)).toEqual([]);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+// A diagram is not a tag: the avatar writes a ```mermaid code block and the block
+// draws itself in place (lib/mermaidBlock.ts). In a real browser: mermaid under
+// the app's CSP, the drawing inside a shadow root, the source one press away,
+// nothing of mermaid's left under <body> — for a plain answer (no inline UI),
+// for one that streams, and for a Markdown run of an answer that holds UI.
+const FLOW = `flowchart LR
+  A["로그인 (SSO)"] --> B{"승인됨?"}
+  B -->|"예"| C["홈"]
+  B -->|"아니오"| D["대기"]`;
+const DIAGRAM_ANSWER = `로그인 흐름은 이렇습니다.\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n\n승인 전에는 대기 화면에 머뭅니다.`;
+const BROKEN_ANSWER = "그림입니다.\n\n```mermaid\nflowchart LR\n  A[로그인 (SSO)] --> B\n```\n\n끝.";
+
+/** The text mermaid drew, read through the block's shadow root. */
+const diagramText = (page: Page, nth = 0) =>
+  page.evaluate((index) => {
+    const host = document.querySelectorAll(".message.assistant .bubble .code-diagram")[index];
+    return host?.shadowRoot?.querySelector("svg")?.textContent ?? "";
+  }, nth);
+const mermaidLeftovers = (page: Page) => page.evaluate(() => document.querySelectorAll('body > [id^="dnoah-mmd"], body > svg').length);
+
+test("a stored answer's mermaid block is drawn in place, with its source one press away", async ({ page }) => {
+  const { reports } = await mockApp(page, { storedText: DIAGRAM_ANSWER });
+  await openConversation(page);
+  const block = page.locator(".message.assistant .bubble .code-block").first();
+  await expect(block).toHaveAttribute("data-diagram", "drawn", { timeout: 20_000 });
+
+  // The diagram shows, the <pre> does not; the prose around it is ordinary Markdown.
+  await expect(block.locator(".code-diagram")).toBeVisible();
+  await expect(block.locator("pre")).toBeHidden();
+  await expect.poll(() => diagramText(page)).toContain("로그인 (SSO)");
+  expect(await diagramText(page)).toContain("승인됨?");
+  await expect(block.locator(".code-lang")).toHaveText("Mermaid");
+  await expect(page.locator(".message.assistant .bubble > .md > p").first()).toHaveText("로그인 흐름은 이렇습니다.");
+  // The drawing does not overflow the bubble.
+  const fits = await block.evaluate((el) => {
+    const svg = el.querySelector(".code-diagram")!.shadowRoot!.querySelector("svg")!;
+    return svg.getBoundingClientRect().width <= el.getBoundingClientRect().width + 1 && svg.getBoundingClientRect().height > 40;
+  });
+  expect(fits).toBe(true);
+
+  // 소스: the source instead of the diagram, and back. 줄바꿈 belongs to the source view.
+  const toggle = block.getByRole("button", { name: "소스" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(block.getByRole("button", { name: "줄바꿈" })).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(block.locator("pre code")).toBeVisible();
+  await expect(block.locator("pre code")).toContainText('A["로그인 (SSO)"] --> B{"승인됨?"}');
+  await expect(block.locator(".code-diagram")).toBeHidden();
+  await expect(block.getByRole("button", { name: "줄바꿈" })).toBeVisible();
+  await toggle.click();
+  await expect(block.locator(".code-diagram")).toBeVisible();
+  await expect(block.locator("pre")).toBeHidden();
+
+  // The theme flips: the diagram is drawn again in the other palette.
+  const before = await block.evaluate((el) => el.querySelector(".code-diagram")!.shadowRoot!.innerHTML);
+  await page.evaluate(() => {
+    localStorage.setItem("noah-theme", "dark");
+    window.dispatchEvent(new StorageEvent("storage", { key: "noah-theme", newValue: "dark" }));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "대화 열기: 매출 대화" }).click();
+  const dark = page.locator(".message.assistant .bubble .code-block").first();
+  await expect(dark).toHaveAttribute("data-diagram", "drawn", { timeout: 20_000 });
+  const after = await dark.evaluate((el) => el.querySelector(".code-diagram")!.shadowRoot!.innerHTML);
+  expect(after).not.toBe(before);
+
+  await page.waitForTimeout(1800);
+  expect(reports).toEqual([]);
+  expect(await mermaidLeftovers(page)).toBe(0);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+test("a streaming answer keeps its mermaid block as code until the fence closes, then draws it", async ({ page }) => {
+  const { reports } = await mockApp(page, { stored: false, streamText: DIAGRAM_ANSWER });
+  await page.addInitScript(() => {
+    // A diagram must never be drawn from half a source: every state the block goes through is recorded.
+    const states: string[] = [];
+    (window as unknown as { __diagramStates: string[] }).__diagramStates = states;
+    new MutationObserver(() => {
+      for (const block of document.querySelectorAll<HTMLElement>(".code-block[data-diagram]")) {
+        const code = block.querySelector("pre > code")?.textContent ?? "";
+        const entry = `${block.dataset.diagram}:${code.includes('D["대기"]') ? "whole" : "partial"}`;
+        if (states[states.length - 1] !== entry) states.push(entry);
+      }
+    }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-diagram"] });
+  });
+  await openConversation(page);
+  const composer = page.locator(".composer textarea").first();
+  await composer.fill("로그인 흐름 그려 줘");
+  await composer.press("Enter");
+
+  const block = page.locator(".message.assistant .bubble .code-block").last();
+  await expect(block).toHaveAttribute("data-diagram", "drawn", { timeout: 20_000 });
+  await expect.poll(() => diagramText(page)).toContain("대기");
+  await expect(page.locator(".message.assistant .bubble").last()).toContainText("승인 전에는 대기 화면에 머뭅니다.");
+  const states = await page.evaluate(() => (window as unknown as { __diagramStates: string[] }).__diagramStates);
+  // Drawn only from the whole source — never "drawing"/"drawn" while it was partial.
+  expect(states.filter((state) => state.endsWith(":partial") && !state.startsWith("code:"))).toEqual([]);
+  expect(states).toContain("drawn:whole");
+
+  await page.waitForTimeout(1800);
+  expect(reports).toEqual([]);
+  expect(await mermaidLeftovers(page)).toBe(0);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+test("a mermaid block that does not parse keeps its source, says why, and is reported to the avatar", async ({ page }) => {
+  const { reports } = await mockApp(page, { storedText: BROKEN_ANSWER });
+  await openConversation(page);
+  const block = page.locator(".message.assistant .bubble .code-block").first();
+  await expect(block).toHaveAttribute("data-diagram", "failed", { timeout: 20_000 });
+  await expect(block.locator("pre code")).toBeVisible();
+  await expect(block.locator("pre code")).toContainText("A[로그인 (SSO)] --> B");
+  await expect(block.locator(".code-diagram-note")).toContainText("다이어그램을 그리지 못해 소스를 표시합니다 (상세: Parse error on line 2)");
+  await expect(block.getByRole("button", { name: "소스" })).toBeHidden();
+  await expect(block.locator(".code-diagram")).toBeHidden();
+
+  await expect.poll(() => reports.length, { timeout: 5000 }).toBe(1);
+  expect(reports[0]!.messageId).toBe("m-a1");
+  expect(reports[0]!.errors).toHaveLength(1);
+  expect(reports[0]!.errors[0]).toMatch(/^```mermaid block: the diagram could not be drawn and the user sees its source instead — Parse error on line 2: /);
+  // Mermaid's "Syntax error in text" picture is not left at the bottom of the app.
+  expect(await mermaidLeftovers(page)).toBe(0);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+test("a mermaid block next to inline UI is drawn too, in the answer's Markdown run", async ({ page }) => {
+  const { reports } = await mockApp(page, { storedText: `${DASHBOARD}\n\n구조는 이렇습니다.\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n` });
+  await openConversation(page);
+  await expect(page.locator(UI).first()).toBeVisible();
+  const block = page.locator('.message.assistant .bubble .code-block[data-diagram]');
+  await expect(block).toHaveCount(1);
+  await expect(block).toHaveAttribute("data-diagram", "drawn", { timeout: 20_000 });
+  await expect.poll(() => diagramText(page)).toContain("로그인 (SSO)");
+  // The fenced UI source above it is still a plain code block.
+  await expect(page.locator(".message.assistant .bubble pre code").filter({ hasText: '<chart type="bar" data={rows} />' })).toBeVisible();
   await page.waitForTimeout(1800);
   expect(reports).toEqual([]);
   expect(await leaks(page)).toEqual([]);

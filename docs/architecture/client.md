@@ -128,7 +128,9 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   block whose html changed — no wrapper element per block, so the DOM is the whole-render tree and `.md`
   CSS applies unchanged. `lib/streamHeal.ts` closes the open tail FOR DISPLAY ONLY (`**`, backticks, a
   half-typed link, a table still arriving, a marker line with no meaning yet); stored text, copied text and
-  attachment anchors (`bubbleSegments.ts`, raw length) never see it.
+  attachment anchors (`bubbleSegments.ts`, raw length) never see it. A block still being written carries
+  `open` (not its html): a ` ```mermaid ` block is drawn as its diagram only once that is gone
+  (`lib/mermaidBlock.ts` — [chat-sse-media.md](chat-sse-media.md) § Inline UI).
   `lib/streamReveal.ts` paces what is shown (EMA arrival rate, ~0.25 s behind, ≤ 3× catch-up, word
   boundaries, injectable clock): `pane.liveText` is ALWAYS the full text and the reveal store only says how
   many characters show, so 중지 / an error / a text fold / a delivered steer / the finalizer cannot lose or
