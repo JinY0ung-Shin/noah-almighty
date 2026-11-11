@@ -12,7 +12,7 @@ const ROOT = process.cwd();
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
 /** pi-gateway's compose (pinned commit): its services, its networks, and every `${VAR}` it reads. */
-const PI_SERVICES = ["sandbox-image", "egress-proxy", "sandboxd", "mcp-broker", "gateway"];
+const PI_SERVICES = ["sandbox-image", "egress-proxy", "jaeger", "sandboxd", "mcp-broker", "gateway"];
 const PI_NETWORKS = ["edge", "control", "broker-egress", "proxy-egress"];
 const PI_COMPOSE_VARIABLES = [
   "APT_MIRROR_URL",
@@ -99,6 +99,26 @@ describe("docker-compose.yml — pi-gateway is included from its submodule, neve
     for (const name of egressServices.filter((n) => n !== "noah-almighty")) {
       expect(PI_SERVICES, `docker-compose.egress.yml service ${name}`).not.toContain(name);
     }
+  });
+
+  it("lets a closed network name pi's trace-store image, defaulting to exactly what pi pins", () => {
+    const pi = read("vendor/pi-gateway/docker-compose.yml");
+    // The list above is hand-kept: it must be pi's actual services at the pin.
+    const piServices = [...block(pi, "services", 0).matchAll(/^ {2}([a-z][\w-]*):$/gm)].map((m) => m[1]);
+    expect(piServices.sort()).toEqual([...PI_SERVICES].sort());
+    const pinned = /^ {2}jaeger:\n(?:.*\n)*? {4}image: (\S+)$/m.exec(pi)?.[1];
+    expect(pinned, "pi's compose pins the jaeger image").toMatch(/^jaegertracing\/jaeger:\d+\.\d+\.\d+$/);
+    const jaeger = block(block(override, "services", 0), "jaeger", 2);
+    // Only the image is overridden — the hardening, volumes and the control-only network stay pi's.
+    expect(jaeger.split("\n").filter((line) => line.trim() && !line.trim().startsWith("#"))).toEqual([
+      "  jaeger:",
+      `    image: \${NOAH_PI_JAEGER_IMAGE:-${pinned}}`,
+    ]);
+    expect(read(".env.example")).toContain(`# NOAH_PI_JAEGER_IMAGE=registry.corp.example/${pinned}`);
+    // Tracing is on by default: pi sets JAEGER_HOST for its three services and Noah's override leaves it.
+    expect(pi.match(/^ {6}JAEGER_HOST: jaeger$/gm)).toHaveLength(3);
+    expect(override).not.toMatch(/^\s*JAEGER_HOST:/m);
+    expect(compose).not.toMatch(/JAEGER_HOST/);
   });
 
   it("keeps Noah's .env keys that pi also reads to the documented shared set", () => {

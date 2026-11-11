@@ -217,7 +217,24 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   `agent_end`, nested tools carry the `agentId`), the same-origin gate with and without `TRUSTED_ORIGINS`, and —
   when pi's System One (the optional `mcp_search` decision model) matters — that `mcp_search` returns Noah
   tools in the model's order, falls back to BM25 when it is removed or fails, and that
-  `/admin/api/systemone/calls` is admin-only through Noah's proxy.
+  `/admin/api/systemone/calls` is admin-only through Noah's proxy. **Since pi `8930c49` (tracing)** the stack
+  has a sixth pi service, `jaeger`: check that it is up on `control` only with no published port, that a turn
+  leaves a trace (`GET /admin/api/history/<session>/traces` through Noah's proxy as an admin; a member gets
+  403), that the trace JSON contains NO text of the prompt or of a tool's arguments (send a unique marker and
+  grep for it), that neither the Noah container nor a sandbox can reach `jaeger:16686`/`:4318`, and that
+  `NOAH_PI_JAEGER_IMAGE` really swaps the image (retag it inside the dind and point the variable there).
+  Run 2026-11-11 at `8930c49` (`~/.noah-work/boot-test-2026-11-11c/`, scripts `70-`…`74-`): all PASS, and
+  it showed: `docker ps` lists the image's EXPOSEd ports for `jaeger` WITHOUT a mapping (`->`) — judge by
+  `PortBindings` being empty, not by an empty column; turns made while `jaeger` is stopped complete normally
+  but their traces are LOST and no service logs an export warning (the traces route answers 503
+  `trace_store_unavailable`), so a dead trace store is not visible in the logs; Jaeger itself logs a steady
+  `[::1]:4317 connection refused` warning (its self-telemetry, a pi-side config gap — bounded by log
+  rotation); changing `NOAH_PI_JAEGER_IMAGE` in `.env` also recreates the Noah container (the whole `.env` is
+  its `env_file`); pi's security-check has no jaeger target unless given `--internal jaeger:4318 --internal
+  jaeger:16686`. Footprint after 60 traces / 432 spans: 36 MiB RSS, 1.5 MB on `jaeger-data` (the 7-day TTL and
+  growth under real load were not measured). Finding a conversation's trace: pi's session id is not Noah's
+  conversation id — `messages.sdk_session_id` holds `resp_<pi session uuid>_<turn>`, and
+  `GET /admin/api/history?user=<Noah user id>` lists that user's pi sessions.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

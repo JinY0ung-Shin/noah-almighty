@@ -551,7 +551,13 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   `pi-sandbox-image` service FROM pi's own `sandbox-image`; the gateway's `SESSION_IDLE_SECONDS` from
   `NOAH_PI_SESSION_IDLE_SECONDS`, default 1800 — a reloaded idle session re-lists every Noah server, so pi's 300
   turned every 5-minute pause into a session start, see README "Sizing pi-gateway"; the broker's `noah-mcp`
-  address). A pi-gateway bump
+  address; the trace store's image, `NOAH_PI_JAEGER_IMAGE` — since pi `8930c49` pi's stack has a `jaeger`
+  service (one OpenTelemetry trace per turn: names, durations, token counts, error kinds — no prompt, tool
+  argument or result; `control` network only, 7 days on `jaeger-data`) whose image pi pins by its Docker Hub
+  name with no variable, so ONLY the image is overridden and its default must equal pi's pin
+  (`tests/infra-compose.test.ts`). Tracing is ON by default — pi sets `JAEGER_HOST` on its three services and
+  Noah does not unset it; a bump that changes the pinned jaeger version fails that test until the default
+  follows). A pi-gateway bump
   moves the submodule (`git -C vendor/pi-gateway checkout <pushed commit>` + commit the gitlink) and re-runs the
   boot test.
 - **`pi-setup`** — a one-shot service (`FROM` Noah's image, uid 10001 = the owner of pi's `admin_api_key` secret,

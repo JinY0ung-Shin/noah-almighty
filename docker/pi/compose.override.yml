@@ -53,6 +53,15 @@ services:
       additional_contexts:
         pi-go-builder: service:pi-go-builder
 
+  # pi's trace store (one trace per turn: LLM calls, tool runs, time spent in sandboxd / mcp-broker — names,
+  # durations and token counts only, never prompts or tool arguments). pi's compose pins the image by its
+  # Docker Hub name and gives no variable for it, so on a closed network point this at the corporate
+  # registry's copy. The default here must equal the image pi's compose pins (a test keeps them equal).
+  # Tracing stays ON by default: pi's compose sets JAEGER_HOST=jaeger on gateway, sandboxd and mcp-broker,
+  # and nothing here unsets it.
+  jaeger:
+    image: ${NOAH_PI_JAEGER_IMAGE:-jaegertracing/jaeger:2.23.0}
+
 networks:
   # broker ↔ Noah only. Internal: no route out, and no sandbox is ever attached (sandboxes have no network).
   # The default subnet sits in 172.16.0.0/16, OUTSIDE Docker's default auto-allocation pools
