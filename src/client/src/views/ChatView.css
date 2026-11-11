@@ -1,0 +1,229 @@
+/* ChatView.tsx — the view's own styles, scoped by hand: `.cmp-chat-view` sits on every top-level
+   element the view renders. `:where(:not(.md *))` keeps every rule OUT of rendered Markdown (answers,
+   thinking and plan bodies, a canvas's markdown): that HTML is the avatar's and may carry class names,
+   and before the React move a component style never matched it. The cards' own `.md` bodies are not
+   descendants of a `.md`, so they keep their rules. `:where` adds no specificity. */
+/* The 할 일 overlay switch in the composer hint row. Its chrome is the MCP
+   도구 buttons' own rule (30-agent-md-composer.css joins it there);
+   only the icon layout and the accent-filled "shown" state live here. */
+.composer-todo-btn:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+.composer-todo-btn[aria-pressed="true"]:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  color: var(--accent-strong);
+  border-color: var(--accent-soft-strong);
+  background: var(--accent-soft);
+}
+/* The avatar changed the list: the number pops once (`todo-count-pop`,
+   30-agent-md-composer.css). inline-block only while popping — a transform
+   needs it, and the resting row stays exactly as laid out. */
+:root:not([data-motion="reduce"]) .composer-todo-count.is-popping:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: inline-block;
+  animation: todo-count-pop 360ms var(--ease-out);
+}
+.composer-todo-overdue:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  color: var(--warn);
+  font-weight: 600;
+}
+.composer-todo-dot:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+/* A deck card and its 공유 링크 control, kept together as ONE item of the
+   attachment strip. */
+.msg-file-share:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  max-width: 100%;
+}
+/* 여기서부터 다시: an earlier user message edited in place. While editing, the
+   accent bubble turns into a neutral field — accent marks actions and state, not
+   a surface you type into — at the bubble's full allowed width, with the images
+   it carries still on top. Flex column: the bubble's `pre-wrap` would otherwise
+   render the template whitespace between the parts. */
+.message.user:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) .bubble.rewind-editing {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  white-space: normal;
+}
+.rewind-editor-input:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  color: var(--text);
+  padding: var(--s-2) var(--s-2-5);
+  font: inherit;
+  font-size: var(--t-md);
+  line-height: 1.6;
+}
+.rewind-editor-hint:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.3;
+}
+.rewind-editor-actions:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+}
+/* Plan card (retired plan mode): a distinct, collapsible card inside an OLDER
+   assistant bubble that still carries a stored plan (response.plan). Read-only. */
+.plan-card:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  margin: var(--s-2) 0;
+  overflow: hidden;
+}
+.plan-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: var(--t-sm);
+  min-width: 0;
+}
+.plan-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::-webkit-details-marker {
+  display: none;
+}
+/* Composes the global `.tag` base (geometry + type scale); only the colour and
+   weight deltas that make it read as an accent badge live here. */
+.plan-card-badge:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  font-weight: 700;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  letter-spacing: 0.02em;
+}
+.plan-card-hint:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+.plan-card-body:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  padding: 0 var(--s-3) var(--s-2);
+  min-width: 0;
+  max-width: 100%;
+}
+/* Reasoning (extended-thinking) view. Deliberately muted and secondary to the
+   answer — collapsed by default on completed bubbles, expanded live so the user
+   sees the chain of thought stream (esp. while the answer text is still empty). */
+.thinking-card:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  margin: var(--s-2) 0;
+  overflow: hidden;
+}
+.thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: var(--t-sm);
+  min-width: 0;
+}
+.thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::-webkit-details-marker {
+  display: none;
+}
+/* Chevron affordance (right when closed, down when open) — the badge alone
+   doesn't read as expandable on a collapsed card. */
+.thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::after {
+  content: "";
+  margin-left: auto;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s var(--ease-out);
+}
+.thinking-card[open]:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) .thinking-card-head:where(:not(.md *))::after {
+  transform: rotate(45deg);
+}
+/* Composes the global `.tag` base (geometry + type scale); only the colour and
+   weight deltas that make it read as a muted, secondary badge live here. */
+.thinking-card-badge:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  font-weight: 700;
+  background: var(--line);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+/* Live reasoning indicator: shown on the collapsed card while thinking deltas
+   stream, so a closed-by-default card still signals the avatar is thinking. */
+.thinking-card-hint:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+/* Self-contained spinner: the base `.spinner` rule is scoped to `.stream-status`.
+   `spin` is a global keyframe. */
+.thinking-card-spin:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+/* Dim the card while reasoning is active so a collapsed card reads as
+   "working in the background" rather than as finished content. */
+/* Elapsed reasoning time: fixed-width digits so the header does not shift
+   every second. */
+.thinking-card-time:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+.thinking-card-active:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  opacity: 0.78;
+}
+.thinking-card-body:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
+  padding: 0 var(--s-3) var(--s-2);
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  /* One step below the answer prose (.bubble is var(--t-md)) — reasoning stays
+     secondary to the answer. */
+  font-size: var(--t-base);
+}

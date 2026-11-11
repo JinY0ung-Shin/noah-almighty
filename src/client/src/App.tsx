@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import AuthView from "./components/AuthView";
 import ConfirmationDialog from "./components/ConfirmationDialog";
+import { ViewBoundary } from "./components/ErrorBoundary";
 import OnboardingModal from "./components/OnboardingModal";
 import PromptModal from "./components/PromptModal";
 import Shell from "./components/Shell";
@@ -282,7 +283,9 @@ export default function App() {
         />
         <main id="main" className="main" tabIndex={-1} inert={mobileRailOpen} aria-busy={!ActiveView}>
           {ActiveView ? (
-            <ActiveView />
+            <ViewBoundary resetKey={state.view}>
+              <ActiveView />
+            </ViewBoundary>
           ) : (
             <div className="svelte-fallback-pad muted" role="status">
               화면을 준비하는 중…

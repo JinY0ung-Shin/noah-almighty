@@ -323,7 +323,10 @@ export default function ExploreView() {
           </div>
         ) : !state.avatars.length ? (
           <div className="empty-note">
-            팀원의 아바타가 아직 없습니다. {TEAM_HINT}{" "}
+            {/* `.empty-note` is `white-space: pre-line`: the line breaks are part of the copy. */}
+            팀원의 아바타가 아직 없습니다.{"\n"}
+            {TEAM_HINT}
+            {"\n"}
             <button className="linkish small" type="button" onClick={() => goView("settings", "profile")}>
               내 아바타 공개 범위 설정
             </button>

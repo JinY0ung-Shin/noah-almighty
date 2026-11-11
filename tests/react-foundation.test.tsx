@@ -10,6 +10,7 @@ import { useRef, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ConfirmationDialog from "../src/client/src/components/ConfirmationDialog";
+import { AppBoundary, ViewBoundary } from "../src/client/src/components/ErrorBoundary";
 import Modal from "../src/client/src/components/Modal";
 import RevealableInput from "../src/client/src/components/RevealableInput";
 import Toasts from "../src/client/src/components/Toasts";
@@ -531,5 +532,66 @@ describe("ConfirmationDialog", () => {
     fireEvent.click(within(next).getByRole("button", { name: "취소" }));
     await expect(second!).resolves.toBe(false);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* ErrorBoundary — a render error must not blank the whole app         */
+/* ------------------------------------------------------------------ */
+
+describe("ErrorBoundary", () => {
+  // Read when Bomb RENDERS (not captured in a prop), so a retry sees the current value.
+  let armed = true;
+  function Bomb() {
+    if (armed) throw new Error("render exploded");
+    return <p>정상 화면</p>;
+  }
+
+  it("keeps the rest of the app on screen when a view throws, and recovers on retry or on another view", () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    armed = true;
+    function Host({ view }: { view: string }) {
+      return (
+        <>
+          <nav>레일</nav>
+          <ViewBoundary resetKey={view}>
+            <Bomb />
+          </ViewBoundary>
+        </>
+      );
+    }
+    const view = render(<Host view="todos" />);
+    expect(screen.getByText("레일")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("이 화면을 표시하지 못했습니다");
+    expect(logged).toHaveBeenCalled();
+
+    // Still broken: retry shows the message again instead of looping or blanking.
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    armed = false;
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+    expect(screen.getByText("정상 화면")).toBeTruthy();
+
+    armed = true;
+    view.rerender(<Host view="todos" />);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    armed = false;
+    view.rerender(<Host view="inbox" />); // another view: the error is forgotten with the old one
+    expect(screen.getByText("정상 화면")).toBeTruthy();
+    logged.mockRestore();
+  });
+
+  it("offers a reload when something outside a view throws", () => {
+    armed = true;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <AppBoundary>
+        <Bomb />
+      </AppBoundary>,
+    );
+    expect(screen.getByRole("alert").textContent).toContain("화면을 표시하지 못했습니다");
+    expect(screen.getByRole("button", { name: "새로 고침" })).toBeTruthy();
+    logged.mockRestore();
   });
 });

@@ -5,6 +5,7 @@ import "@vitejs/plugin-react/preamble";
 import "./styles.css";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { AppBoundary } from "./components/ErrorBoundary";
 import { applyMotionPref } from "./lib/motion";
 import { initNotifications } from "./lib/notifications";
 
@@ -20,7 +21,11 @@ applyMotionPref();
 
 // No <StrictMode>: its development-only second run of every effect would boot
 // the app twice and re-run effects that consume one-shot state.
-createRoot(target).render(<App />);
+createRoot(target).render(
+  <AppBoundary>
+    <App />
+  </AppBoundary>,
+);
 
 // Register the minimal service worker that backs OS notifications (answer-complete
 // and input-needed). Permission itself is requested later, on a user gesture.

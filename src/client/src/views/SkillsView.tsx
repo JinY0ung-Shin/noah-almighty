@@ -545,8 +545,9 @@ export default function SkillsView() {
               </div>
             ) : !learnable.length ? (
               <div className="empty-note">
-                아직 공유된 스킬이 없습니다. 팀원이 스킬을 공유하면 여기에 보여요. 대화 중에 아바타에게 "공유된 스킬
-                찾아줘"라고 요청할 수도 있습니다.
+                {/* `.empty-note` is `white-space: pre-line`: the line break is part of the copy. */}
+                아직 공유된 스킬이 없습니다. 팀원이 스킬을 공유하면 여기에 보여요.{"\n"}
+                대화 중에 아바타에게 "공유된 스킬 찾아줘"라고 요청할 수도 있습니다.
               </div>
             ) : !filtered.length ? (
               <div className="empty-note">
@@ -669,8 +670,8 @@ export default function SkillsView() {
               </div>
             ) : !mySkills.length ? (
               <div className="empty-note">
-                아직 지식 저장소에 스킬이 없습니다. 대화에서 아바타에게 "○○ 스킬 만들어줘"라고 요청하면 스킬을 만들 수
-                있어요.
+                아직 지식 저장소에 스킬이 없습니다. 대화에서 아바타에게 "○○ 스킬 만들어줘"라고{"\n"}
+                요청하면 스킬을 만들 수 있어요.
               </div>
             ) : (
               <>
