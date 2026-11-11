@@ -7,7 +7,7 @@
 // Every response's {todayKst, counts} then replaces the snapshot, so the counts
 // and the overdue/today buckets always come from the server's KST clock.
 
-import { writable } from "svelte/store";
+import { writable } from "./store";
 import { ApiError, api } from "./api";
 import { persistTodoOverlayOpen } from "./layout";
 import { goView } from "./nav";

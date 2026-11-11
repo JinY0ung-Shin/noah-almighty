@@ -1,4 +1,4 @@
-import { get } from "svelte/store";
+import { get } from "./store";
 import { appState, updateState } from "./state";
 import type { ClientState } from "./state";
 import type { AdminTab, SettingsTab, ViewName } from "./types";

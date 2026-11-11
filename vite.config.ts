@@ -1,10 +1,15 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
   root: "src/client",
   publicDir: "public",
-  plugins: [svelte()],
+  // Both compilers while the client moves from Svelte to React: `index.html`
+  // is still the Svelte app (the one `vite build` ships); `react.html` is the
+  // React app as far as it has been ported — dev server only, same hash routes
+  // (http://localhost:5173/react.html#/chat).
+  plugins: [svelte(), react({ include: /\.tsx$/ })],
   server: {
     port: 5173,
     strictPort: false,

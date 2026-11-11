@@ -1,5 +1,6 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { svelteTesting } from "@testing-library/svelte/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -30,6 +31,18 @@ export default defineConfig({
           include: ["tests/svelte-*.test.ts"],
           environment: "jsdom",
           setupFiles: ["tests/setup-dom.ts"],
+        },
+      },
+      {
+        // React component tests (the client is moving from Svelte to React; a
+        // ported component's tests move from tests/svelte-*.test.ts to
+        // tests/react-*.test.tsx with it).
+        plugins: [react({ include: /\.tsx$/ })],
+        test: {
+          name: "react",
+          include: ["tests/react-*.test.tsx"],
+          environment: "jsdom",
+          setupFiles: ["tests/setup-dom.ts", "tests/setup-react.ts"],
         },
       },
     ],

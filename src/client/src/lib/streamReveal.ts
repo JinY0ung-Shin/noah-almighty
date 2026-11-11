@@ -23,7 +23,7 @@
 //  - At the end of a turn the remainder drains within DRAIN_SECONDS, on the
 //    stored message that replaced the live bubble (`handoff`).
 
-import { writable, type Readable } from "svelte/store";
+import { writable, type Readable } from "./store";
 import { prefersReducedMotion } from "./motion";
 
 /** Seconds of text the reveal deliberately trails the arrival by — what absorbs the bursts. */

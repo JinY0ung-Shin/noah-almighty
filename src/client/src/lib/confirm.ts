@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable } from "./store";
 
 export type ConfirmTone = "default" | "danger";
 
